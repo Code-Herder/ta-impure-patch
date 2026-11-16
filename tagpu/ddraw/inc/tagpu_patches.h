@@ -100,4 +100,11 @@ void tagpu_seed_run(unsigned int seed);
    report rather than play with other bytes. Set once at install; read anywhere after. */
 #define TAGPU_SIGHTCAP_STOCK 20u
 unsigned int tagpu_sightcap(void);
+
+/* The validated program of unit def `def`'s script: the blob at def +0x18E that the COB load bound to the def's
+   model (cob_bind_loaded_model), found in the validated files the read hook keeps; NULL for none -- a scriptless
+   type, or a build whose read hook is not installed. It lives as long as the blob: the level, freed only by the
+   teardown on the game thread (cob_free_blob). */
+struct TagpuCobProgram;
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def);
 #endif

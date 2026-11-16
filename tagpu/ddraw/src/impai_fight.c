@@ -14,6 +14,8 @@
      E3  every weapon slot starts loaded (the slot is zeroed at creation, 0x49E099), counts down once a tick
          whether or not it has a target (AutoAim 0x49E1A0, 0x49E1C8..0x49E1D2), and after a shot reloads for
          floor(floor((100 - 6L) reload / 100) (120 - floor(20 hp / maxhp)) / 100) ticks (0x49E48D..0x49E4EE);
+         and the shot waits for the aim script's return as well, which a script can time past the reload (THE
+         SCRIPTED RELOAD, tasim_cobfire.h): a slot's volleys come at the longer of the two (IMPAI_FTYPE.rl);
      E4  what guides a shot (impai_fight.h, the kinds);
      E5  an area blast hurts a unit within aoe/2 of its box (0x49A120: R = aoe >> 1 at 0x49A152, the falloff
          e + (1 - e)(d/R - 1)^2 at 0x49A3B6..0x49A3E0);
@@ -193,13 +195,23 @@ static void hit_of(const IMPAI_FIT* p, const IMPAI_FWEAPON* w, int32_t range, co
         *p1 = sigmoid(h[IMPAI_FH_BIAS] + h[IMPAI_FH_LEAD] * (vt * tf / rhit));
 }
 
-/* the volleys' reload of weapon w at an entry's health hp_frac / 65535 (E3, 0x49E48D..0x49E4EE), the level
-   factor (100 - 6L) at L = 0: at least 1. At most 120 x 65535 / 100 = 78642 ticks. */
-static int32_t reload_of(const IMPAI_FWEAPON* w, uint16_t hp_frac)
+/* the volleys' reload of weapon w in a slot whose script times it at `scripted` ticks (IMPAI_FTYPE.rl, 0 none), at
+   an entry's health hp_frac / 65535: the countdown's (E3, 0x49E48D..0x49E4EE, the level factor (100 - 6L) at L = 0)
+   or the script's, whichever is longer -- the shot waits for both (THE SCRIPTED RELOAD), and the script's sleeps
+   do not scale with health; at least 1. At most 120 x 65535 / 100 = 78642 ticks. */
+static int32_t reload_of(const IMPAI_FWEAPON* w, uint16_t scripted, uint16_t hp_frac)
 {
     const int32_t h20 = (int32_t)((uint32_t)hp_frac * 20u / 65535u);
     int32_t rl = w->reload > 1 ? w->reload : 1;
     rl = (120 - h20) * rl / 100;
+    if (rl < (int32_t)scripted) rl = scripted;
+    return rl > 1 ? rl : 1;
+}
+
+/* the ticks between slot k's volleys at full health: its weapon's reload, or its script's interval past it */
+static int32_t slot_reload(const IMPAI_FTYPE* t, int k, const IMPAI_FWEAPON* w)
+{
+    const int32_t rl = w->reload > t->rl[k] ? w->reload : t->rl[k];
     return rl > 1 ? rl : 1;
 }
 
@@ -224,7 +236,7 @@ int impai_fight_rate(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, unsigned i, un
         if (!hurts(ti, k, w, tj) || (d = damage_on(c, w, j)) <= 0 || (reach = reach_of(c, w)) <= 0) continue;
         hit_of(p, w, reach, tj, &p0, &p1);
         dmg = tj->hp && (float)d > (float)tj->hp ? (float)tj->hp : (float)d;
-        r += (float)(w->burst > 1 ? w->burst : 1) * dmg * p1 / (float)(w->reload > 1 ? w->reload : 1);
+        r += (float)(w->burst > 1 ? w->burst : 1) * dmg * p1 / (float)slot_reload(ti, k, w);
         if (reach > longest) longest = reach;
     }
     *rate = r;
@@ -367,7 +379,7 @@ static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSI
             if (!any) continue;
             x->we[slot] = (uint8_t)e;
             x->wrange[slot] = range;
-            x->wreload[slot] = reload_of(w, xin->e[e].hp_frac);
+            x->wreload[slot] = reload_of(w, ti->rl[k], xin->e[e].hp_frac);
             x->wburst[slot] = w->burst > 1 ? w->burst : 1;
             x->wready[slot] = 0;
             x->nw++;

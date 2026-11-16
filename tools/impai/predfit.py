@@ -35,10 +35,11 @@ with the images `tasim_run defs` prints for the same install (tools/tasim/native
 (compare_defs, which names the fields left to other comparisons); type 0, the engine's reserved `None`, has no
 files to compare with. With --setup NAME the launch plays the compat setup's own folder (tools/tasim/engrun.py
 SetupWorker) and the files compared are that folder's, which the offline loader reads through its profile as the game
-does. FILE is `impai-fight-content/3`: the names and the three tables' bytes in hex, as the DLL holds them, the setup
+does. FILE is `impai-fight-content/4`: the names and the three tables' bytes in hex, as the DLL holds them, the setup
 (null for retail), the checks passed (`checked`) and the launch's reads (`engine_reads`), written only when every
-check passed (an earlier FILE is removed first). A `/2` file, retail's from before the setup, is read as retail's. A
-`/1` file is refused: its weapon kind bytes are the first form's, whose values mean other kinds.
+check passed (an earlier FILE is removed first). A `/3` file is read with 40-byte types, every slot's scripted
+reload 0 -- what its DLL ran --, and a `/2` file, retail's from before the setup, as retail's `/3`. A `/1` file is
+refused: its weapon kind bytes are the first form's, whose values mean other kinds.
 
 THE PACING. `content`'s launch runs NO DRAW (tareplay.NODRAW_LEVER), as the AI tools' GDI games do; --draw
 renders every frame. Its level stays held, so every frame draws either way.
@@ -153,8 +154,11 @@ sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
 import native  # noqa: E402
 
-SCHEMA = "impai-fight-content/3"
-SCHEMAS_READ = ("impai-fight-content/2", SCHEMA)    # /2 is /3 of retail without `setup`, `checked`, `engine_reads`
+SCHEMA = "impai-fight-content/4"
+# /3 is /4 with 40-byte types, before IMPAI_FTYPE.rl (THE SCRIPTED RELOAD): read with every rl 0, which is what its
+# DLL ran, no script timing any slot; /2 is /3 of retail without `setup`, `checked`, `engine_reads`
+SCHEMAS_READ = ("impai-fight-content/2", "impai-fight-content/3", SCHEMA)
+FTYPE_BYTES_3 = 40                       # IMPAI_FTYPE in /2 and /3
 CHECKED = ("digest", "files")                        # what a content file passed: cmd_content's checks
 PARAMS = TREE / "tagpu" / "ddraw" / "src" / "impai_fitparams.c"
 KINDS = ("straight", "ballistic", "homing", "dropped")      # IMPAI_FK_*, in order
@@ -177,7 +181,7 @@ PASS = 0.90
 MIN_DECISIVE = 40
 MIN_KIND_DECISIVE = 20
 FSIDE_TYPES = 16
-SIZES = [40, 36, 8, 130, 44, 16, 90408]  # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
+SIZES = [60, 36, 8, 130, 44, 16, 90408]  # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
 # an IMPAI_FENTRY is type, n, hp_frac and flags; a reference fight's entries carry no flag
 SIDE = struct.Struct("<" + "HHHH" * FSIDE_TYPES + "BB")
 RESULT = struct.Struct("<fffH2x")
@@ -195,6 +199,9 @@ PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h
 PEEK_BATCH = 200
 RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
 FW_SLOTS = 10                            # IMPAI_FW_SLOTS: an FTYPE's weapon slots
+RL_AT = 40                               # IMPAI_FTYPE.rl's offset
+RL_SLOTS = 3                             # TASIM_FIRE_SLOTS: the slots the engine starts an aim script for
+WF_TURRET, WF_VLAUNCH = 1 << 19, 1 << 4  # +0x111 turret and vlaunch, the slots that wait on an aim script
 FWEAPONS = 4096                          # IMPAI_FWEAPONS: the fight content's weapon rows, the bound of a slot's id
 WF_STOCKPILE, WF_INTERCEPTOR = 1 << 28, 1 << 30   # TASIM_WF_* (tasim_roles.h): a slot the fight content leaves out
 WF_NOTTOAIR = 1 << 31                    # TASIM_WF_NOTTOAIR: Impure's datakey in an FWEAPON's flags, no file bit
@@ -272,7 +279,13 @@ class Content:
         doc = json.loads(Path(path).read_text())
         if doc.get("schema") not in SCHEMAS_READ:
             raise CouldNotRun(f"{path}: not {' or '.join(SCHEMAS_READ)}")
-        return cls(doc["names"], bytes.fromhex(doc["ftype"]), bytes.fromhex(doc["fweapon"]),
+        t = bytes.fromhex(doc["ftype"])
+        if doc["schema"] != SCHEMA:
+            if len(t) % FTYPE_BYTES_3:
+                raise CouldNotRun(f"{path}: its types are not whole {FTYPE_BYTES_3}-byte rows")
+            pad = bytes(SIZES[0] - FTYPE_BYTES_3)
+            t = b"".join(t[k:k + FTYPE_BYTES_3] + pad for k in range(0, len(t), FTYPE_BYTES_3))
+        return cls(doc["names"], t, bytes.fromhex(doc["fweapon"]),
                    bytes.fromhex(doc["fdmg"]), doc.get("setup"), doc.get("checked", CHECKED))
 
     def enter_root(self):
@@ -843,7 +856,8 @@ def compare_defs(content: Content) -> list:
     (tasim_roles_slot_antiair), which roles_check.py sees only through the damage against air and against the
     ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the model's top (def +0x16E), which the model load
     writes and no image carries, so it belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
-    its flags."""
+    its flags. The scripted reload `rl` is the type's own script's (tasim_cobfire.c), which no image carries: a slot's
+    is held to its form -- 0, or past its weapon's reload on a slot 0..2 whose weapon is turret or vlaunch."""
     rc, out, err = native.run("defs", setup=content.setup)
     if rc:
         raise CouldNotRun(f"tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
@@ -893,6 +907,15 @@ def compare_defs(content: Content) -> list:
         for k in range(FW_SLOTS if exp is not None else 0):
             if got[k] != exp[k]:
                 fails.append(f"{name} weapon{k + 1}: engine weapon {got[k]} files {exp[k]}")
+        rl = struct.unpack_from(f"<{FW_SLOTS}H", row, RL_AT)
+        for k in range(FW_SLOTS):
+            if not rl[k]:
+                continue
+            wrow = content.w[got[k] * SIZES[1]:(got[k] + 1) * SIZES[1]] if got[k] < content.nw else b""
+            if k >= RL_SLOTS or not got[k] or len(wrow) < SIZES[1] or \
+                    not struct.unpack_from("<I", wrow, 24)[0] & (WF_TURRET | WF_VLAUNCH) or \
+                    rl[k] <= struct.unpack_from("<H", wrow, 8)[0]:
+                fails.append(f"{name} weapon{k + 1}: a scripted reload {rl[k]} where none can be")
     used = set()
     for i in range(1, content.nt):
         used |= {x for x in struct.unpack_from(f"<{FW_SLOTS}H", content.t, i * SIZES[0] + 12) if x}
@@ -1422,16 +1445,16 @@ def synthetic_content(seed=7):
                                    r.randint(0, 700), r.randint(0, 900), k, nd, nrows, kind, 0))
         dmg += rows
         nd += nrows
-    types = [bytes(40)]
+    types = [bytes(SIZES[0])]
     names = ["NONE"]
     for i in range(1, 31):
         ws = [0] * 10
         for s in range(r.randint(1, 2)):
             ws[s] = r.randint(1, 60)
         mobile = i <= 26
-        types.append(struct.pack("<Ifi10H4BH2B", r.randint(1500, 9000), float(r.randint(60, 900)),
+        types.append(struct.pack("<Ifi10H4BH2B10H", r.randint(1500, 9000), float(r.randint(60, 900)),
                                  round(r.uniform(0.6, 2.6) * 65536) if mobile else 0, *ws, 0, r.randint(2, 4),
-                                 r.randint(2, 4), 1 if mobile else 0, 0, 6 if mobile else 1, 255))
+                                 r.randint(2, 4), 1 if mobile else 0, 0, 6 if mobile else 1, 255, *([0] * 10)))
         names.append(f"SYN{i}")
     return Content(names, b"".join(types), b"".join(weapons), dmg)
 
@@ -1441,7 +1464,7 @@ def synthetic_fights(lib: Lib, content: Content, theta, seed=11):
     RATIOS to side A, so that most are close enough for the coefficients to move their outcome."""
     import random
     r = random.Random(seed)
-    value = [struct.unpack_from("<f", content.t, i * 40 + 4)[0] for i in range(content.nt)]
+    value = [struct.unpack_from("<f", content.t, i * SIZES[0] + 4)[0] for i in range(content.nt)]
     fights = []
     for k in range(SYN_FIGHTS):
         def side(structures):

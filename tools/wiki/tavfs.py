@@ -128,6 +128,10 @@ PROFILE_STRINGS = (
     ("gui_ext",           0x502828, (0x42D824, 0x41AD17)),   # "GUI", at the same two sites
     ("features",          0x502C7C, (0x422324,)),        # the feature listing 0x4BCB50 at 0x422310..0x422331
     ("feature_pattern",   0x502C88, (0x42231F,)),        # its filter
+    ("scripts",           0x503740, (0x42D8DF,)),        # a type's script, built by 0x4290F0 at 0x42D8D2..0x42D8EF
+    ("script_ext",        0x503EC8, (0x42D8D5,)),        # "COB", its extension
+    ("objects",           0x5036E4, (0x42D753,)),        # a type's model, built at 0x42D74D..0x42D766 from +0x80
+    ("object_ext",        0x5036F0, (0x42D74D,)),        # "3DO", its extension
     ("copyright",         0x5038CC, (0x42AABF,)),        # the pre-scan's Copyright reference (strstr at 0x42AB0C)
     ("copyright_year",    0x50390C, (0x42AAB7,)),        # the year template strstr finds in it
     ("copyright_default", 0x5037BC, (0x42B0E6,)),        # the value an FBI without `Copyright` is compared as
@@ -149,7 +153,8 @@ PROFILE_NAME = 64            # a folder, pattern, extension or language, its NUL
 COPYRIGHT_KEYS = ("copyright", "copyright_default")
 # The profile file's name keys, in the order write_profile writes them (tools/tasim/tasim_load.h, tasim-profile/1).
 PROFILE_NAMES = ("units", "all_pattern", "unit_ext", "weapons", "weapon_pattern", "tdf_ext", "gamedata", "moveinfo",
-                 "sidedata", "download", "gui", "gui_ext", "features", "feature_pattern")
+                 "sidedata", "download", "gui", "gui_ext", "features", "feature_pattern", "scripts", "script_ext",
+                 "objects", "object_ext")
 
 # The Patch Loader (vendor/Total-Annihilation-Patch-Loader): its DllMain exits the game unless the 10 bytes at
 # 0x410000 are retail's and either 0x4FF618 names DDRAW.dll or the version bytes are 3 and 1 (dllmain.c).

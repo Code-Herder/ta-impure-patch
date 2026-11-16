@@ -62,6 +62,8 @@ class Profile(unittest.TestCase):
         self.assertEqual((p["version_major"], p["version_minor"], p["archive_only"]), (3, 1, 1))
         self.assertEqual((p["all_pattern"], p["unit_ext"], p["tdf_ext"], p["gui_ext"]), ("*", "FBI", "TDF", "GUI"))
         self.assertEqual((p["features"], p["feature_pattern"], p["language"]), ("features", "*.tdf", "english"))
+        self.assertEqual((p["scripts"], p["script_ext"], p["objects"], p["object_ext"]),
+                         ("scripts", "COB", "objects3d", "3DO"))
         self.assertEqual(p["copyright"].find(p["copyright_year"]), 10)
         self.assertEqual(p["mounts"], [])
 

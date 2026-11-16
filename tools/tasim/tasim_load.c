@@ -11,6 +11,8 @@
 #include "tagpu_hpi.h"
 #include "tagpu_tdf.h"
 #include "tagpu_vfs.h"
+#include "tagpu_cob_safe.h"
+#include "tasim_cobfire.h"
 #include "tasim_fixed.h"
 #include "tasim_load.h"
 
@@ -833,7 +835,7 @@ static const PKEY PROFILE_KEYS[] = {
     PPATH(root), PTEXT(image), PTEXT(language), { "mount", PK_MOUNT, 0, 0, 0, 0 },
     PTEXT(units), PTEXT(all_pattern), PTEXT(unit_ext), PTEXT(weapons), PTEXT(weapon_pattern), PTEXT(tdf_ext),
     PTEXT(gamedata), PTEXT(moveinfo), PTEXT(sidedata), PTEXT(download), PTEXT(gui), PTEXT(gui_ext), PTEXT(features),
-    PTEXT(feature_pattern),
+    PTEXT(feature_pattern), PTEXT(scripts), PTEXT(script_ext), PTEXT(objects), PTEXT(object_ext),
     PNUMBER(version_major, -128, 127), PNUMBER(version_minor, -128, 127), PNUMBER(archive_only, 0, 1),
     PTEXT(copyright), PTEXT(copyright_year), PTEXT(copyright_default),
 };
@@ -990,6 +992,85 @@ static void read_definitions(Load* D)
     tagpu_vfs_enum(v, D->p->features, D->p->feature_pattern, 1, each_feature_file, D);
 }
 
+#define TURRET_VLAUNCH ((1u << 19) | (1u << 4))  /* +0x111 turret and vlaunch: the slots AutoAim starts an aim script for */
+#define MODEL_NODES    65536u                              /* a tree past this is no model the load would finish */
+
+/* 0x45AE80's count of the model file `b` of `n` bytes, 1 + the child's + the sibling's from the root at 0 (a node's
+   +0x2C sibling, +0x30 child, 0 for none); 0 for a node past the file or a tree past MODEL_NODES, which a cycle
+   is. The walk keeps its own stack, so a deep tree costs no recursion. */
+static uint32_t model_nodes(const unsigned char* b, uint32_t n)
+{
+    uint32_t* stack = (uint32_t*)malloc(MODEL_NODES * sizeof *stack);
+    uint32_t top = 0, count = 0;
+    if (!stack) return 0;
+    stack[top++] = 0;
+    while (top) {
+        const uint32_t at = stack[--top];
+        uint32_t sib, child;
+        if (at > n || n - at < 0x34u || ++count > MODEL_NODES) { count = 0; break; }
+        memcpy(&sib, b + at + 0x2C, 4);
+        memcpy(&child, b + at + 0x30, 4);
+        if ((sib && top >= MODEL_NODES) || (child && top + (sib != 0) >= MODEL_NODES)) { count = 0; break; }
+        if (sib) stack[top++] = sib;
+        if (child) stack[top++] = child;
+    }
+    free(stack);
+    return count;
+}
+
+/* Each type's slots 0..2 rated by its script (tasim_load.h, WHAT IT LOADS): 0 where the engine starts no aim script,
+   the weapon's reloadtime where the type has no validated script or the probe cannot rate it. Every file is read
+   whole and freed before the next type's. */
+static void load_scripted_reloads(Load* D)
+{
+    TASIM_INSTALL* L = D->L;
+    const TASIM_PROFILE* p = D->p;
+    int i;
+    for (i = 0; i < L->nu; i++) {
+        const TASIM_UNITDEF* u = &L->u[i];
+        const TASIM_WEAPONDEF* w[TASIM_FIRE_SLOTS];
+        uint32_t* srl = L->srl + (size_t)i * TASIM_FIRE_SLOTS;
+        TagpuCobProgram* prog;
+        unsigned char *script, *model;
+        TAGPU_VFILE f;
+        char why[160];
+        uint32_t most = 0, pieces = 0, size;
+        size_t bytes;
+        void* work;
+        unsigned k;
+        int any = 0;
+        for (k = 0; k < TASIM_FIRE_SLOTS; k++) {
+            const int32_t id = u->weaponid[k];
+            w[k] = id >= 0 && id < TS_WEAPON_IDS ? L->ids[id] : NULL;
+            if (w[k] && w[k]->reloadtime > most) most = w[k]->reloadtime;
+            if (w[k] && (w[k]->flags & TURRET_VLAUNCH)) {
+                srl[k] = w[k]->reloadtime;
+                any = 1;
+            }
+        }
+        if (!any || !tagpu_vfs_find_built(L->vfs, p->scripts, u->unitname, p->script_ext, &f) ||
+            !(script = tagpu_vfs_load(L->vfs, &f, FILE_CAP, why, sizeof why)))
+            continue;
+        size = f.size;
+        if (tagpu_vfs_find_built(L->vfs, p->objects, u->objectname, p->object_ext, &f) &&
+            (model = tagpu_vfs_load(L->vfs, &f, FILE_CAP, why, sizeof why)) != NULL) {
+            pieces = model_nodes(model, f.size);
+            free(model);
+        }
+        if ((prog = tagpu_cob_program(script, size, why, sizeof why)) != NULL) {
+            if (tagpu_cob_bind_model(prog, pieces, why, sizeof why) &&
+                (work = malloc(bytes = tasim_cobfire_work(prog))) != NULL) {
+                for (k = 0; k < TASIM_FIRE_SLOTS; k++)
+                    if (w[k] && (w[k]->flags & TURRET_VLAUNCH))
+                        srl[k] = tasim_cobfire_interval(prog, k, w[k]->reloadtime, most, work, bytes);
+                free(work);
+            }
+            tagpu_cob_program_free(prog);
+        }
+        free(script);
+    }
+}
+
 int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
 {
     Load D;
@@ -1009,8 +1090,9 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
     L->opt_first = (int32_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->opt_first);
     L->opt_count = (int32_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->opt_count);
     L->rep = (TS_REPORT*)calloc(1, sizeof *L->rep);
+    L->srl = (uint32_t*)calloc((size_t)TASIM_LOAD_UNITS * TASIM_FIRE_SLOTS, sizeof *L->srl);
     if (!L->u || !L->key || !L->keyed || !L->w || !L->ids || !L->dmg_first || !L->dmg_count || !L->f ||
-        !L->opt_first || !L->opt_count || !L->rep) {
+        !L->opt_first || !L->opt_count || !L->rep || !L->srl) {
         fprintf(stderr, "tasim_load: out of memory\n");
         return -1;
     }
@@ -1022,6 +1104,7 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
             tasim_unitdef_refusals(&L->u[i], L->rep);
         }
         if (!D.err) load_build_options(&D);
+        if (!D.err) load_scripted_reloads(&D);
     }
     if (!D.err && in->features && load_engine_rows(L->rep, in->features) < 0) D.err = 1;
     free(D.ent);
@@ -1053,7 +1136,7 @@ void tasim_load_free(TASIM_INSTALL* L)
 {
     if (L->vfs) tagpu_vfs_close(L->vfs);
     free(L->u); free(L->key); free(L->keyed); free(L->w); free(L->ids); free(L->dmg_first); free(L->dmg_count);
-    free(L->dmg); free(L->f); free(L->opt_first); free(L->opt_count); free(L->opt); free(L->rep);
+    free(L->dmg); free(L->f); free(L->opt_first); free(L->opt_count); free(L->opt); free(L->rep); free(L->srl);
     memset(L, 0, sizeof *L);
 }
 

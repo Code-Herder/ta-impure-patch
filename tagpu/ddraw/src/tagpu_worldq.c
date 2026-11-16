@@ -15,6 +15,8 @@
 #include "tagpu_datakeys.h"
 #include "impai_table.h"
 #include "tasim_class.h"
+#include "tasim_cobfire.h"
+#include "tagpu_patches.h"
 
 SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic stock-place-basic sweep-basic stock-sweep-basic");
 
@@ -1546,6 +1548,39 @@ int tagpu_worldq_role_count(void)
    each. Build options: a builder's (+0x241 bit 6, the bit the classifier's factory test reads) are what
    `options` answers for it, without the builder itself, as the file filler leaves a builder's own type out.
    BOUND: every option is a type below n, else the fill fails; they are packed into opt[0..optcap). */
+#define WF_TURRET (1u << 19)    /* +0x111 `turret`: AutoAim's aim path (0x49E205..0x49E20B) */
+
+/* THE SCRIPTED RELOAD of slot k of `def`, its weapon record wr (tasim_cobfire.h): the ticks between its shots as the
+   type's own script times them under AutoAim, at least the weapon's reload +0xE4. The reload itself for a slot past
+   the three the engine starts an aim script for (0x509688), a weapon that starts none -- neither `turret` (bit 19)
+   nor `vlaunch` (bit 4): AutoAim's tests at 0x49E208 and 0x49E342 --, or a type with no validated program
+   (tagpu_cob_def_program). SetMaxReloadTime's argument is the largest reload of the def's first three slots, as
+   0x49E089..0x49E14B takes it. On the LOADER thread in the level init, where the COB load (0x42D8EF, inside the
+   unit-data load 0x42D2E0) has bound every def's script and the game thread waits: the program lives until the
+   teardown. BOUND: three probes a type, each TASIM_FIRE_SPAN ticks of the VM's bounded steps. */
+static uint32_t slot_reload(const char* def, unsigned k, const char* wr, int nw)
+{
+    const uint32_t reload = *(const uint16_t*)(wr + 0xE4);
+    const uint32_t flags = *(const uint32_t*)(wr + 0x111);
+    const TagpuCobProgram* prog;
+    uint32_t most = 0, got;
+    unsigned j;
+    size_t bytes;
+    void* work;
+    if (k >= TASIM_FIRE_SLOTS || !(flags & (WF_TURRET | TASIM_WF_VLAUNCH))) return reload;
+    if (!(prog = (const TagpuCobProgram*)tagpu_cob_def_program(def))) return reload;
+    for (j = 0; j < TASIM_FIRE_SLOTS; j++) {
+        const char* w = tagpu_weapons_type_weapon(def, j);
+        const int wi = w ? tagpu_limits_weapon_index(w) : -1;
+        if (wi > 0 && wi < nw && *(const uint16_t*)(w + 0xE4) > most) most = *(const uint16_t*)(w + 0xE4);
+    }
+    bytes = tasim_cobfire_work(prog);
+    if (!(work = tagpu_sim_scratch(bytes))) return reload;
+    got = tasim_cobfire_interval(prog, k, reload, most, work, bytes);
+    tagpu_sim_scratch_free(work);
+    return got;
+}
+
 int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t* opt, unsigned optcap)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -1602,7 +1637,7 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
             if (!w) break;
             if ((wi = tagpu_limits_weapon_index(w)) <= 0 || wi >= nw) continue;
             o->range = *(const int32_t*)(w + 0xDC);
-            o->reload_ticks = (float)*(const uint16_t*)(w + 0xE4);
+            o->reload_ticks = (float)slot_reload(d, (unsigned)k, w, nw);
             o->burst = *(const uint16_t*)(w + 0xEA);
             o->damage_default = *(const uint16_t*)(w + 0xD4);
             if (isnan(wair[wi])) {
@@ -1842,6 +1877,8 @@ int tagpu_worldq_fight_in(const TASIM_ROLE_IN* rin, const TASIM_ROLE_OUT* rout, 
             flags = *(const uint32_t*)(wr + 0x111);
             if (flags & (TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR)) continue;
             o->w[k] = (uint16_t)wi;
+            if (rin[i].w[k].reload_ticks > (float)*(const uint16_t*)(wr + 0xE4))
+                o->rl[k] = (uint16_t)(rin[i].w[k].reload_ticks < 65535.0f ? rin[i].w[k].reload_ticks : 65535.0f);
             if (tasim_roles_slot_antiair(&rin[i], k)) o->air |= (uint16_t)(1u << k);
             if ((unsigned)wi + 1 > top) top = (unsigned)wi + 1;
             if (seen[wi]) continue;

@@ -187,6 +187,41 @@ static void submerged_types(void)
     }
 }
 
+/* THE SCRIPTED RELOAD (impai_fight.c, E3): a slot's script interval past its weapon's reload paces the slot -- the
+   rate halves at twice the reload, and a target of three volleys' hp dies later -- and one at or below the reload
+   changes nothing. On small_content's types, the target's hp raised to three of the shooter's volleys. */
+static void scripted_reload(const IMPAI_FCONTENT* c, const IMPAI_FIT* sure, IMPAI_FTYPE* t)
+{
+    static const uint16_t RL[] = { 0, 100, 300, 600 };
+    float rate[4];
+    uint16_t steps[4];
+    int32_t range;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r;
+    IMPAI_FSTATS st;
+    unsigned k;
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    a.ne = b.ne = 1;
+    a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 65535;
+    b.e[0].type = 2; b.e[0].n = 1; b.e[0].hp_frac = 65535;
+    t[2].hp = 2400;
+    for (k = 0; k < 4; k++) {
+        t[1].rl[0] = RL[k];
+        if (impai_fight_rate(c, sure, 1, 2, &rate[k], &range) ||
+            impai_fight_run(c, sure, &a, &b, 100, &s_work, &r, &st) || st.killed[1] != 1)
+            fail("a scripted reload's run", (int)k);
+        steps[k] = r.steps;
+        printf("scripted reload %u: rate %.4f, the target dies in %u steps\n", (unsigned)RL[k], rate[k], steps[k]);
+    }
+    t[1].rl[0] = 0;
+    t[2].hp = 800;
+    if (rate[1] != rate[0] || rate[2] != rate[0] || steps[1] != steps[0] || steps[2] != steps[0])
+        fail("a scripted reload at or below the weapon's changed the fight", -1);
+    if (fabsf(rate[3] * 2.0f - rate[0]) > 1e-6f * rate[0] || steps[3] <= steps[0])
+        fail("a scripted reload of twice the weapon's did not pace the slot", -1);
+}
+
 /* The kind table, the first volley and the reach cap, on a content of their own: a static shooter type 1
    with a straight weapon 1 (reach 500, 800 damage, reload 300), a static target type 2 of 800 hp, and a
    ballistic weapon 2 of range 2000 at 5 px a tick. */
@@ -237,6 +272,8 @@ static void small_content(void)
     c.gravity = 65537;
     if (impai_fight_rate(&c, &sure, 2, 1, &rate, &range) || range != 2000) fail("the ballistic reach past the bound", -1);
     printf("reach: 200 at gravity 8155, 2000 at 0 and 65537\n");
+    c.gravity = 8155;
+    scripted_reload(&c, &sure, t);
 }
 
 /* THE CHASE WALKS TO ITS FIRST ARMED SLOT'S REACH (impai_fight.c, chase_reach): a mover with a 260-px weapon

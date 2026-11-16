@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tasim_cobfire.h"
 #include "tasim_keys.h"
 #include "tasim_load.h"
 #include "tasim_roles.h"
@@ -84,7 +85,9 @@ static void fill_unit(const TASIM_INSTALL* L, int i, const uint16_t* air, int na
         TASIM_ROLE_WEAPON* o = &r->w[k];
         if (d->weaponid[k] == TS_NONE || !(w = L->ids[d->weaponid[k]])) continue;
         o->range = w->range;
-        o->reload_ticks = (float)w->reloadtime;
+        /* the engine filler's reload: a slot the engine starts an aim script for, rated by its script */
+        o->reload_ticks = (float)(k < (int)TASIM_FIRE_SLOTS && L->srl[(size_t)i * TASIM_FIRE_SLOTS + (unsigned)k]
+                                      ? L->srl[(size_t)i * TASIM_FIRE_SLOTS + (unsigned)k] : w->reloadtime);
         o->burst = w->burst;
         o->damage_default = w->damage;
         o->damage_air = air_damage(L, d->weaponid[k], air, nair);
@@ -243,7 +246,8 @@ static void print_profile(const TASIM_PROFILE* p)
         { "weapons", p->weapons }, { "weapon_pattern", p->weapon_pattern }, { "tdf_ext", p->tdf_ext },
         { "gamedata", p->gamedata }, { "moveinfo", p->moveinfo }, { "sidedata", p->sidedata },
         { "download", p->download }, { "gui", p->gui }, { "gui_ext", p->gui_ext }, { "features", p->features },
-        { "feature_pattern", p->feature_pattern } };
+        { "feature_pattern", p->feature_pattern }, { "scripts", p->scripts }, { "script_ext", p->script_ext },
+        { "objects", p->objects }, { "object_ext", p->object_ext } };
     int i;
     printf("\"profile\":{\"root\":");
     jstr(p->root);

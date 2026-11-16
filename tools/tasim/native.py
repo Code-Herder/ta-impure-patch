@@ -38,6 +38,8 @@ TEST_EXE = HERE / "tests" / "rolestest-native.exe"
 FEATURES = HERE / "engine-features.tsv"
 STRICT = ["-std=c99", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror"]
 OURS = ["src/tasim_roles.c", "src/tasim_keys.c", "src/tasim_fixed.c"]
+# the scripted reload's probe and the script VM it runs (tasim_load.c, load_scripted_reloads)
+PROBE = ["src/tasim_cobfire.c", "src/tagpu_cobvm.c", "src/tagpu_cob_safe.c"]
 DRIVER = [str(HERE / "tasim_run.c"), str(HERE / "tasim_load.c")]
 FILES = ["src/tagpu_vfs.c", "src/tagpu_hpi.c", "src/tagpu_tdf.c", "src/tagpu_buildmenu.c",
          "src/tagpu_guifile.c"]
@@ -66,16 +68,17 @@ def objects(tmp, opt, san):
 
 
 def build():
-    srcs = OURS + FILES + DRIVER + ["src/lodepng.c", str(HERE / "tasim_load.h"), "src/tasim_roles.h",
+    srcs = OURS + PROBE + FILES + DRIVER + ["src/lodepng.c", str(HERE / "tasim_load.h"), "src/tasim_roles.h",
                                     "src/tasim_keys.h", "src/tasim_fixed.h", "src/tagpu_tdf.h",
-                                    "src/tagpu_vfs.h", "src/tagpu_buildmenu.h"]
+                                    "src/tagpu_vfs.h", "src/tagpu_buildmenu.h", "src/tasim_cobfire.h",
+                                    "inc/tagpu_cobvm.h", "inc/tagpu_cob_safe.h"]
     if not stale(EXE, srcs):
         return EXE
     print(f"native: building {EXE.name}", file=sys.stderr, flush=True)
     with tempfile.TemporaryDirectory() as tmp:
         objs = objects(tmp, "-O2", [])
         subprocess.run(["gcc", *STRICT, "-O2", "-Iinc", "-Isrc", f"-I{HERE}", "-o", str(EXE),
-                        *DRIVER, *OURS, *objs, "-lm"], cwd=DDRAW, check=True)
+                        *DRIVER, *OURS, *PROBE, *objs, "-lm"], cwd=DDRAW, check=True)
     return EXE
 
 

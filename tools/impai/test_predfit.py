@@ -33,7 +33,7 @@ def test_split_is_by_stem():
 
 
 def test_scenario_fight():
-    c = predfit.Content(["NONE", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["NONE", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     doc = {"units": [
         {"id": "a0", "type": "ARMPW", "owner": 0, "pos": [100, 0], "orders": [{"cmd": "attack", "target": "b0"}]},
         {"id": "a1", "type": "armpw", "owner": 0, "pos": [100, 40], "health": 50},
@@ -77,7 +77,7 @@ def test_judge_counts_decisive_only():
 
 def test_content_is_written_and_read_back(tmp_path):
     """cmd_content's end, offline: the tables checked and written, and Content.load reads the same bytes."""
-    t = bytes(range(40)) * 3
+    t = bytes(range(predfit.SIZES[0])) * 3
     w = bytes(36) * 2
     d = bytes(8)
     names = ["None", "ARMPW", "CORAK"]
@@ -114,11 +114,11 @@ def _defs_case():
     units = [("ARMPW", 300, 1 << 16, 2, 2, [1] + [-1] * 9), ("CORAK", 350, 1 << 15, -3, 300, [1, -1, 2] + [-1] * 7),
              ("ARMNUKE", 5000, 0, 6, 6, [3] + [-1] * 9)]
     engine_slots = {"ARMPW": [1] + [0] * 9, "CORAK": [1, 0, 2] + [0] * 7, "ARMNUKE": [0] * 10}
-    t = bytes(40)
+    t = bytes(predfit.SIZES[0])
     doc = {"counts": {"weapon_slots": 4096}, "units": [], "weapons": []}
     for un, hp, speed, fx, fz, slots in units:
-        t += struct.pack("<Ifi10HBBBBHBB", hp, 1.0, speed, *engine_slots[un], 0, min(max(fx, 0), 255),
-                         min(max(fz, 0), 255), 0, 0, 0, 0)
+        t += struct.pack("<Ifi10HBBBBHBB10H", hp, 1.0, speed, *engine_slots[un], 0, min(max(fx, 0), 255),
+                         min(max(fz, 0), 255), 0, 0, 0, 0, *([0] * 10))
         doc["units"].append({"unitname": un, "slots": slots, "image": [
             _row(0x1FA, 4, hp), _row(0x192, 4, speed), _row(0x14A, 2, fx), _row(0x14C, 2, fz)]})
     weapons = [(1, "EMG", 0, [["ARMPW", 10], ["corak", 7], ["DEFAULT", 5]]), (2, "GUN2", 0, []),
@@ -155,11 +155,19 @@ def test_compare_defs_names_each_field():
     """one difference at a time, each named; CORAK's weapon3 behind its empty weapon2, the stockpile left out,
     the NOTTOAIR bit and a [DAMAGE] name differing only by case all pass"""
     import struct
+    R = predfit.SIZES[0]
     cases = [
-        ("footprintx", lambda t, w, d, doc: t.__setitem__(40 + 33, 3)),
-        ("CORAK footprintz", lambda t, w, d, doc: t.__setitem__(80 + 34, 254)),
-        ("CORAK weapon3", lambda t, w, d, doc: struct.pack_into("<H", t, 80 + 12 + 4, 0)),
-        ("ARMNUKE weapon1", lambda t, w, d, doc: struct.pack_into("<H", t, 120 + 12, 3)),
+        ("footprintx", lambda t, w, d, doc: t.__setitem__(R + 33, 3)),
+        ("CORAK footprintz", lambda t, w, d, doc: t.__setitem__(2 * R + 34, 254)),
+        ("CORAK weapon3", lambda t, w, d, doc: struct.pack_into("<H", t, 2 * R + 12 + 4, 0)),
+        ("ARMNUKE weapon1", lambda t, w, d, doc: struct.pack_into("<H", t, 3 * R + 12, 3)),
+        # a scripted reload on a slot whose weapon is no turret, past slot 2, at or below the reload
+        ("ARMPW weapon1: a scripted reload 40", lambda t, w, d, doc: struct.pack_into("<H", t, R + 40, 40)),
+        ("CORAK weapon4: a scripted reload 40", lambda t, w, d, doc: struct.pack_into("<H", t, 2 * R + 40 + 6, 40)),
+        ("ARMPW weapon1: a scripted reload 30", lambda t, w, d, doc: (
+            struct.pack_into("<I", w, 36 + 24, predfit.WF_NOTTOAIR | predfit.WF_TURRET),
+            doc["weapons"][0]["image"][-1].__setitem__(2, predfit.WF_TURRET.to_bytes(4, "little").hex()),
+            struct.pack_into("<H", t, R + 40, 30))),
         ("CORAK weapon1", lambda t, w, d, doc: doc["units"][1].__setitem__("slots", [2, -1, 2] + [-1] * 7)),
         ("EMG accuracy", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 20, 301)),
         ("EMG spray", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 22, 99)),
@@ -220,7 +228,7 @@ def _ref(tmp_path, stem, played, a_pos, b_pos, winners, mod=None, gravity=None):
 def test_each_reference_on_its_own_arena(tmp_path):
     arenas = predfit.fight_arenas()
     land, naval = arenas[""][0], arenas["naval"][0]
-    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
     _ref(tmp_path, "naval-001", naval["map"], naval["a"], naval["b"], ["B"] * 25)
     gravity = {land["map"]: 8155, naval["map"]: 8155}
@@ -248,7 +256,7 @@ def test_a_packed_reference_is_its_kinds_twin(tmp_path):
     arenas = predfit.fight_arenas()
     (land, packed_land), (naval, packed_naval) = arenas[""], arenas["naval"]
     assert (packed_land["map"], packed_naval["map"]) == ("impure-calib-land", "impure-calib-naval")
-    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     _ref(tmp_path, "group-001", packed_land["map"], land["a"], land["b"], ["A"] * 25, gravity=8155)
     _ref(tmp_path, "naval-001", packed_naval["map"], naval["a"], naval["b"], ["B"] * 25, gravity=8155)
     _ref(tmp_path, "naval-002", packed_land["map"], naval["a"], naval["b"], ["B"] * 25, gravity=8155)
@@ -267,8 +275,9 @@ def test_a_packed_reference_is_its_kinds_twin(tmp_path):
 
 def test_a_reference_of_another_setup_is_refused_by_name(tmp_path):
     land = predfit.fight_arenas()[""][0]
-    retail = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
-    mod = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"", setup="twilight-2.0b98")
+    retail = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
+    mod = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"",
+                          setup="twilight-2.0b98")
     _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
     _ref(tmp_path, "group-002", land["map"], land["a"], land["b"], ["A"] * 25, mod="retail")
     _ref(tmp_path, "group-003", land["map"], land["a"], land["b"], ["A"] * 25, mod="twilight-2.0b98", gravity=8155)
@@ -283,7 +292,7 @@ def test_a_reference_of_another_setup_is_refused_by_name(tmp_path):
 
 def test_the_gravity_the_lanes_read_against_the_table(tmp_path):
     land = predfit.fight_arenas()[""][0]
-    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     for stem, g in (("group-001", 8155), ("group-002", 9000), ("group-003", 0), ("group-004", 70000)):
         _ref(tmp_path, stem, land["map"], land["a"], land["b"], ["A"] * 25, gravity=g)
     fights, _skipped, refused = predfit.load_fights(tmp_path / "refs", c, {land["map"]: 8155})
@@ -297,7 +306,7 @@ def test_the_gravity_the_lanes_read_against_the_table(tmp_path):
 
 
 def test_a_content_file_of_either_schema_is_read(tmp_path):
-    t, w, d, names = bytes(40 * 3), bytes(36), b"", ["None", "ARMPW", "CORAK"]
+    t, w, d, names = bytes(predfit.SIZES[0] * 3), bytes(36), b"", ["None", "ARMPW", "CORAK"]
     dll = tmp_path / "ddraw.dll"
     dll.write_bytes(b"dll")
     digest = predfit.Content(names, t, w, d).digest()
@@ -307,11 +316,16 @@ def test_a_content_file_of_either_schema_is_read(tmp_path):
                                   reads=reads) == 0
     doc = json.loads(out.read_text())
     assert (doc["schema"], doc["setup"], doc["checked"], doc["engine_reads"]) == \
-        ("impai-fight-content/3", "twilight-2.0b98", ["digest", "files"], reads)
+        ("impai-fight-content/4", "twilight-2.0b98", ["digest", "files"], reads)
     back = predfit.Content.load(out)
     assert (back.setup, back.checked) == ("twilight-2.0b98", ["digest", "files"])
+    # a /3 file's types are 40 bytes, read with every scripted reload 0
+    t3 = bytes(range(40)) * 3
+    (tmp_path / "c3old.json").write_text(json.dumps(dict(doc, schema="impai-fight-content/3", ftype=t3.hex())))
+    back = predfit.Content.load(tmp_path / "c3old.json")
+    assert back.nt == 3 and back.t == b"".join(t3[k:k + 40] + bytes(20) for k in range(0, 120, 40))
     old = {k: v for k, v in doc.items() if k not in ("setup", "checked", "engine_reads")}
-    (tmp_path / "c2.json").write_text(json.dumps(dict(old, schema="impai-fight-content/2")))
+    (tmp_path / "c2.json").write_text(json.dumps(dict(old, schema="impai-fight-content/2", ftype=bytes(120).hex())))
     back = predfit.Content.load(tmp_path / "c2.json")
     assert (back.setup, back.checked, back.names) == (None, ["digest", "files"], names)
     (tmp_path / "c1.json").write_text(json.dumps(dict(old, schema="impai-fight-content/1")))
@@ -490,7 +504,7 @@ def test_check_refuses_another_reference_set(tmp_path, monkeypatch, capsys):
     """`check` runs only on the reference set and content its coefficients name: another set or another content
     could not run (exit 2), naming both; the named pair passes on to the margins"""
     import pytest
-    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     fights = [{"ref": "group-001@x/c.json", "id": "group-001"}]
     named = predfit.refset_hash(fights)
 
@@ -532,7 +546,7 @@ def test_an_evaluation_runs_on_another_set_and_reports_the_margins(tmp_path, mon
     """`check --evaluation` runs coefficients on another reference set and content, says it is no check of the
     fit, exits 0 whatever the agreement and writes what packcheck's T4 reads; without it the same file could not
     run"""
-    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(predfit.SIZES[0] * 3), bytes(36), b"")
     fights = [{"ref": "group-001@x/c.json", "id": "group-001", "kind": "group", "area": "group/land/t1/x",
                "W": 1.0, "n": 25, "map": "x"}]
 

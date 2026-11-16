@@ -1187,6 +1187,27 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   runs after AutoAim in the unit's turn ([cob](cob.md), *AutoAim's starts*), so the first pass that
   sees it is the next tick's, and the reload does not delay the aim: the start runs at any reload
   (`0x49E3AE` tests it after).
+- **The shot clears the aim, so the script times the next one** [DISASSEMBLED 2026-11-15]. When the
+  turret fire's shot path returns non-zero -- `0x49CDE0` at `0x49D76E` or `0x49C9C0` at `0x49D77E`, which start
+  FirePrimary through `0x4B0940` with run-now 0 ([cob](cob.md), `0x49CB94`) -- it stores 0 in the result `+0x8`
+  (`0x49D78E`) and clears the state's bit 0 (`0x49D795..0x49D797`); the vertical-launch fire does the same
+  (`+0x8` at `0x49DD33`, bit 0 at `0x49DD36..0x49DD38`). The next pass therefore starts the aim script again, and the
+  next shot waits for both the countdown and that script's non-zero return: a turret never fires on two
+  consecutive ticks, and **a script that holds its aim fires at its own rate**. Escalation's
+  `reloadtime=0.125; //script timed` weapons are that case: FirePrimary raises a static, sleeps 150 ms and then
+  a static of 2 250 ms before lowering it, and the aim script loops `while (busy) sleep 150` before
+  `return (1)`, so ARMSAM's missiles come every 76 ticks against a declared 3 -- the interval the shots of its
+  games measured, 2.53 s, and the one ImpAI's probe of its script gives (`tasim_cobfire.c`, THE SCRIPTED RELOAD,
+  [impai](../modules/impai.html)). The probe's sweep of every unit with a turret or vertical-launch slot in its
+  first three (MEASURED 2026-11-15, the still target ahead): retail CORMSHIP 270 → 317 ticks and nothing else;
+  Escalation 204 slots, the median 2.5 times the declared reload, at most 34 times; Total Mayhem 29 (ARMBH's
+  EMG 12 → 76: its aim waits on a flag the fire holds until the barrel's slow recoil return ends); TA Zero 2;
+  TA Twilight none.
+- **SetMaxReloadTime** is started once at the unit's creation with the largest reload of its three slots in
+  milliseconds: `0x49E089..0x49E14B` takes the most `+0xE4` of the slots, `0x49E14F..0x49E17A` scales it by
+  1000 / 30 (`0x88888889`, `sar 4`), and `0x49E186` starts the script by name (`0x509704`) with that one
+  argument through `0x4B0A70` [DISASSEMBLED 2026-11-15]. A script that times its fire by it reads the declared
+  reload, not the interval.
 - `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`, `ret 8`: returns at once when the slot's target
   `+0x0` is already none, (0, `0x8000`) (`0x48A106..0x48A116`); else stores none and starts COB
   `TargetCleared` (`0x48A118..0x48A149`). Standing_FireOrder calls it for each slot whose `+0x1B` has

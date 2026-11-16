@@ -27,6 +27,11 @@
        default 0, a dword);
      - every <features>\**\<feature_pattern> section, the first file enumerated holding a name keeping it
        (LoadFeature, engine/map.md);
+     - each type's script <scripts>\<unitname>.<script_ext> as the level's load reads it (0x42D8D2..0x42D8EF),
+       validated (tagpu_cob_program, as Impure's read hook validates it) and bound to its model's node count, the
+       tree of <objects>\<objectname>.<object_ext> (0x42D74D..0x42D766) counted as 0x45AE80 counts the template's
+       [INFERRED: the template is the file's tree, node for node], and each turret or vlaunch slot of the first
+       three rated by its script (THE SCRIPTED RELOAD, tasim_cobfire.h), as the engine filler rates it;
      - each builder's build options by the sidebar's page rule (tagpu_buildmenu) over its <gui> pages and the
        <download> entries, every section of a download file by position, its page count as the def load probes it,
        and for a page with no file of its own every side's "<prefix>DL" page, as ImpAI merges the menus of the sides
@@ -40,7 +45,8 @@
    name of its own. The file is UTF-8: the line `tasim-profile/1`, then `key<TAB>value` lines -- `root` (absolute),
    `image` (its description), `language`, `mount` once per archive in mount order (absolute, 0..TAGPU_VFS_ARCSANE of
    them), `units`, `all_pattern`, `unit_ext`, `weapons`, `weapon_pattern`, `tdf_ext`, `gamedata`, `moveinfo`,
-   `sidedata`, `download`, `gui`, `gui_ext`, `features`, `feature_pattern`, `version_major` and `version_minor`
+   `sidedata`, `download`, `gui`, `gui_ext`, `features`, `feature_pattern`, `scripts`, `script_ext`, `objects`,
+   `object_ext`, `version_major` and `version_minor`
    (decimal, -128..127), `archive_only` (0 or 1), `copyright`, `copyright_year` and `copyright_default`. Every key but
    `mount` appears exactly once. tasim_profile_read takes nothing on tavfs's word: it refuses an unknown, repeated or
    missing key, a line without a TAB, a CR in a value and a value past its bound -- empty or not shorter than its
@@ -71,6 +77,8 @@ typedef struct {
     char  gamedata[TASIM_PROFILE_NAME], moveinfo[TASIM_PROFILE_NAME], sidedata[TASIM_PROFILE_NAME];
     char  download[TASIM_PROFILE_NAME], gui[TASIM_PROFILE_NAME], gui_ext[TASIM_PROFILE_NAME];
     char  features[TASIM_PROFILE_NAME], feature_pattern[TASIM_PROFILE_NAME];
+    char  scripts[TASIM_PROFILE_NAME], script_ext[TASIM_PROFILE_NAME];
+    char  objects[TASIM_PROFILE_NAME], object_ext[TASIM_PROFILE_NAME];
     int   version_major, version_minor;        /* signed bytes, as 0x42B06C and 0x42B083 movsx them   */
     int   archive_only;                        /* 0x50289C nonzero                                    */
     char  copyright[TASIM_PROFILE_TEXT], copyright_year[5], copyright_default[TASIM_PROFILE_TEXT];
@@ -112,6 +120,9 @@ typedef struct {
     int32_t*                opt_first;      /* by u's row: its build options' first in `opt`, and how many    */
     int32_t*                opt_count;
     uint16_t*               opt;            /* rows of `u`                                                    */
+    uint32_t*               srl;            /* by u's row, TASIM_FIRE_SLOTS a row: slot k's scripted reload,
+                                               0 for a slot the engine starts no aim script for, else at least
+                                               its weapon's reloadtime                                         */
     int                     nopt, capopt;
     TS_REPORT*              rep;
 } TASIM_INSTALL;

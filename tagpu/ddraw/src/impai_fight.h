@@ -44,7 +44,7 @@ enum { IMPAI_FK_STRAIGHT, IMPAI_FK_BALLISTIC, IMPAI_FK_HOMING, IMPAI_FK_DROPPED,
                                       hurts it                                                         */
 #define IMPAI_FT_COMMANDER 0x08u
 
-typedef struct IMPAI_FTYPE {         /* one unit type, its def index the row, 40 bytes                    */
+typedef struct IMPAI_FTYPE {         /* one unit type, its def index the row, 60 bytes                    */
     uint32_t hp;                     /* maxdamage, def +0x1FA                                              */
     float    value;                  /* metal + energy / TASIM_ROLES_R, the classifier's value            */
     int32_t  speed;                  /* maxvelocity, def +0x192, 16.16 px a tick                           */
@@ -56,6 +56,9 @@ typedef struct IMPAI_FTYPE {         /* one unit type, its def index the row, 40
                                         category that makes a slot anti-air is the def's                   */
     uint8_t  role;                   /* TASIM_ROLE, for the merge of a side past IMPAI_FSIDE_TYPES         */
     uint8_t  klass;                  /* impai_class_of (impai_table.h), IMPAI_K_NONE for no army class     */
+    uint16_t rl[IMPAI_FW_SLOTS];     /* slot k's scripted interval between shots in ticks, past its weapon's
+                                        reload (THE SCRIPTED RELOAD, tasim_cobfire.h); 0 when its script
+                                        times nothing past the reload, or was not run                       */
 } IMPAI_FTYPE;
 
 typedef struct IMPAI_FWEAPON {       /* one weapon record, its index the row, 36 bytes                     */
@@ -73,7 +76,7 @@ typedef struct IMPAI_FWEAPON {       /* one weapon record, its index the row, 36
 
 typedef struct IMPAI_FDMG { uint16_t type, pad; int32_t dmg; } IMPAI_FDMG;   /* a [DAMAGE] row, 8 bytes */
 
-typedef char impai_ftype_bytes[sizeof(IMPAI_FTYPE) == 40 ? 1 : -1];
+typedef char impai_ftype_bytes[sizeof(IMPAI_FTYPE) == 60 ? 1 : -1];
 typedef char impai_fweapon_bytes[sizeof(IMPAI_FWEAPON) == 36 ? 1 : -1];
 typedef char impai_fdmg_bytes[sizeof(IMPAI_FDMG) == 8 ? 1 : -1];
 

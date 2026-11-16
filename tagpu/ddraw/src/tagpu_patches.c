@@ -11938,6 +11938,23 @@ static void __cdecl cob_free_blob(void* blob)
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
 }
 
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def)
+{
+    const void* blob;
+    const TagpuCobProgram* program = NULL;
+    CobFile* f;
+    /* the read hook and its lock exist only once lim_sites installed them, which a limits state above 0 proves:
+       an early return there sets it to -1 */
+    if (!def || !tagpu_limits_in()) return NULL;
+    blob = *(void* const*)(def + 0x18E);
+    if (!blob) return NULL;
+    EnterCriticalSection(&s_cobLock);
+    f = cob_find(blob);
+    if (f) program = f->program;
+    LeaveCriticalSection(&s_cobLock);
+    return program;
+}
+
 static void* cob_bind_loaded_model(char* def, void* blob)
 {
     char* ta = *(char**)0x00511DE8u;
@@ -12891,6 +12908,13 @@ char* tagpu_limits_weapon0(void)
 }
 
 static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
+
+/* the stock build installs no read hook, so it holds no validated program */
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def)
+{
+    (void)def;
+    return NULL;
+}
 
 #endif /* TAGPU_LIMITS_STOCK */
 

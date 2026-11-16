@@ -95,7 +95,8 @@ PROFILE = {
     "image": "synthetic", "language": "english", "units": "unitsX", "all_pattern": "*", "unit_ext": "FBI",
     "weapons": "weaponX", "weapon_pattern": "weaponY\\*.tdf", "tdf_ext": "TDF", "gamedata": "gamedatX",
     "moveinfo": "moveinfo", "sidedata": "sidedata", "download": "downloadX", "gui": "guiX", "gui_ext": "GUI",
-    "features": "features", "feature_pattern": "*.tdf", "version_major": "3", "version_minor": "1",
+    "features": "features", "feature_pattern": "*.tdf", "scripts": "scripts", "script_ext": "COB",
+    "objects": "objects3d", "object_ext": "3DO", "version_major": "3", "version_minor": "1",
     "archive_only": "1", "copyright": REFERENCE, "copyright_year": "0000",
     "copyright_default": "Run to the Village! Warn your brother!",
 }
