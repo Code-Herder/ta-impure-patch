@@ -45,8 +45,8 @@ blocks, the new pairs and their maps, seating, start schema, stall rule, the hol
 reads from the level's end, the judge with the value at the limit, the points, the interval, the targets, the
 ladder's curtailment and the ordering's looks, the row checks with each yard verdict, `row`, `--setup` and its
 commanders, the cheat flag and the judge per setup, a game's end on a fake instance in each way a game ends, a level
-not seeded from its game's seed, a persona row's lever, and `play`'s stop and curtailment on fake lanes, offline;
-under the shared venv also the bounds' integration and a recorded game's value at the limit). A pair is a list of
+not seeded from its game's seed, a persona row's lever, the mirror's pairs, rows and judging, and `play`'s stop
+and curtailment on fake lanes, offline; under the shared venv also the bounds' integration and a recorded game's value at the limit). A pair is a list of
 game ids `bar-<pair>-<map>-<sides>-<n>`:
 
 | pair | A | B | Difficulty | games |
@@ -55,6 +55,7 @@ game ids `bar-<pair>-<map>-<sides>-<n>`:
 | `eoh`, `noh` | ImpAI Easy, Normal (the level lever) | OTA AI | Hard | 12 blocks, 120 |
 | `ne`, `hn` | ImpAI Normal, Hard (the level lever) | ImpAI Easy, Normal | Hard | 10 blocks, 100 |
 | `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
+| `m:<row>`, `n:<row>` | ImpAI Hard; ImpAI on Normal's row (the persona lever) | ImpAI on a persona row (the persona lever) | Hard | 10 blocks, 100, on the development pool |
 | `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
 | `dry` | OTA AI | OTA AI | Hard | 10 |
 
@@ -70,11 +71,50 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   194.4 s (*The rate*).
 - **The persona rows**: the calibration ladder L0 (softest) to L5 (Hard's, no limits), each the nine integers the
   persona lever `tagpu_impai_persona.on` takes (`level_lever.py --persona`; L1 and L3 are the DLL's Easy and
-  Normal, `IMPAI_PERSONAS` in `impai_react.c`), in `PERSONA_ROWS`. A calibration game writes its seat's row to
+  Normal, `IMPAI_PERSONAS` in `impai_react.c`), in `PERSONA_ROWS`. A game on a row writes its seat's row to
   that lever beside the level lever's `hard`, and could not run unless the seat's `impai: persona` line at its init
   names the same nine integers `from=lever`. Each result carries every ImpAI seat's persona as logged
   (`persona`). A row between two is a new entry under a new name; a row's games resume and are judged only on its
-  own nine integers.
+  own nine integers. The fields, in the lever's order: the economy's and the military's looks (ticks between
+  decisions, multiples of 15 up to 150), the reaction (ticks from a decision to its orders, at most the shorter
+  look less 15), each manager's budget (actions a minute and burst), and its attention (builders busy at once,
+  operations at once); a budget or attention of 0 is no limit ([the brain](brain.html), *The plan and the
+  personas*). The rows beyond L0..L5:
+
+  | row | look eco, mil | react | apm/burst eco, mil | att eco, mil | what it is |
+  |---|---|---|---|---|---|
+  | L01 | 75, 120 | 60 | 7/2, 10/2 | 3, 1 | between L0 and L1 |
+  | L0a | 105, 150 | 90 | 3/1, 4/1 | 2, 1 | below L0 on every axis it can go below |
+  | L0b | 150, 150 | 135 | 2/1, 3/1 | 1, 1 | below L0a: the lever's harshest looks, reaction and attention |
+  | Hlook | 150, 150 | 0 | none | none | Hard with L0b's looks alone |
+  | Hreact | 150, 150 | 135 | none | none | Hlook with L0b's reaction: against Hlook, the reaction's own cost |
+  | Happm | 15, 30 | 0 | 2/1, 3/1 | none | Hard with L0b's budgets alone |
+  | Hatt | 15, 30 | 0 | none | 1, 1 | Hard with L0b's attention alone |
+
+  The military's look 150 and attention 1 are the lever's limits already at L0, so L0a goes below it on the
+  others; the reaction cannot be cut alone, since it needs a look 15 longer, hence Hreact beside Hlook.
+- **The mirror**: against OTA AI at Hard every row from L0 to L5 took 0.53 to 0.74 of the points with no
+  gradient, and Hard against Normal was futile (`hn` 33 won, 34 lost, 33 at the cap; MEASURED 2026-11-15, round 3
+  at 57d39d71), so the levels are separated by ImpAI against ImpAI. `m:<row>` puts ImpAI on the row as B against
+  ImpAI Hard as A; `n:<row>` puts A on Normal's row (`NORMAL_ROW`, the DLL's L3 until the calibration chooses
+  one), through the lever too, so that once Normal is chosen it decides Easy. Every ImpAI seat sits at the level
+  lever's `hard`, its row from the persona lever and checked `from=lever`. A mirror pair plays 10 blocks on the
+  development pool, so no row is chosen on the maps that judge it, and is judged as `ne` and `hn` are: A's wins
+  of its first 100, the curtailment and the ordering. MEASURED 2026-11-15, the 57d39d71 build, the first two
+  blocks of four rows (20 games each; won counts a cap won by value):
+
+  | pair | A won | A lost | at the cap: A, B, drawn | points | t over map means |
+  |---|---|---|---|---|---|
+  | `m:L1` | 15 | 2 | 5, 2, 1 | 0.775 | 1.98 |
+  | `m:L0b` | 14 | 0 | 1, 0, 6 | 0.850 | 3.81 |
+  | `m:Hlook` | 10 | 3 | 2, 1, 6 | 0.650 | 2.06 |
+  | `m:Happm` | 15 | 0 | 4, 0, 5 | 0.875 | 4.74 |
+
+  No row loses 90 of 100 to Hard at this rate: even L0b, the harshest, drew 6 of its 20 at the cap, every one on
+  Steel Jungle or Lava Alley, where 24 of the 33 caps of the four rows lie. The budgets alone (Happm) cost B as
+  much as every axis at L0b's harshness; the looks alone (Hlook) the least. Two blocks are no look of the
+  ordering, so these t judge nothing. Each row played as one `bar.py play` at 10 lanes in 6.6 to 9.4 min on the
+  reference setup.
 
 - **The seed**: each game's own, a function of its id alone -- the first four bytes of the SHA-256 of
   `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
@@ -93,8 +133,8 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
   under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large). These five
   judge (`BAR_MAPS`). **The development pool** (`DEV_MAPS`), each the runner-up of its kind in the same survey, is
-  where the calibration rows play and the tuning tournament's tier B: **Acid Foursome** (land, 3 % under sea),
-  **Steel Jungle** (mixed, 44 %), **Luschaven** (sea, 65 %), **Gasplant Plain** (small), **Lava Alley** (large).
+  where the calibration rows and the mirror play and the tuning tournament's tier B: **Acid Foursome** (land, 3 %
+  under sea), **Steel Jungle** (mixed, 44 %), **Luschaven** (sea, 65 %), **Gasplant Plain** (small), **Lava Alley** (large).
   MEASURED 2026-11-14: each of the five reads ten start positions from its `.ota` through tavfs, and
   `bar-p:L0-acidfoursome-ac-1` played on Acid Foursome to its cap.
 - **A game**: `scenarios/impai/bar.json` filled -- an idle human with no unit, the two players in seats 1 and 2,
@@ -245,15 +285,16 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
       with a stall. A calibration row: its 4 blocks' points read against both -- above Easy's band a harsher row,
       below it a softer one; below Normal's floor a softer row -- and no verdict, since one row can be a candidate
       for either level.
-    - `ne`, `hn`: 90 wins of their first 100 games. **The curtailment**: at the 11th of those not won the pair has
-      failed for certain; `judge` says so whatever is left, and `play` starts none of the pair's games after it
-      (`--no-curtail` plays on).
-    - **The ordering**, for `ne` and `hn`, printed beside the ladder and judging nothing (the verdict left if the
+    - `ne`, `hn` and the mirror's pairs: 90 wins of their first 100 games. **The curtailment**: at the 11th of
+      those not won the pair has failed for certain; `judge` says so whatever is left, and `play` starts none of
+      the pair's games after it (`--no-curtail` plays on).
+    - **The ordering**, for the same pairs, printed beside the ladder and judging nothing (the verdict left if the
       ladder is relaxed): three looks at the pair's first 4, 8 and 12 blocks, each the t of the map means against
       a share of ½ and the O'Brien–Fleming t bound of a two-sided 10 % test over three looks on five maps (6.398,
       3.099, 2.253; on ten maps 4.010, 2.458, 1.918; `OBF_T`, which the venv's test checks by integrating the
       joint normal). "better" or "worse" at the bound, "futile" at an earlier look whose conditional power under
-      the current trend is below 0.20, read to the first look that gives one.
+      the current trend is below 0.20, read to the first look that gives one. Before the first look it prints the
+      t of the blocks complete, which judges nothing.
 - **The row checks**: `bar.py check b4|b5 DIR…` scores A2b's rows (the A2 specification's section 9) from the
   results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound -- b4 27 000, at least
   four games on two maps; b5 36 000, a game on each of the five maps. `bar.py row b4|b5 --lanes L [--out DIR]`
