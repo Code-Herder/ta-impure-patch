@@ -846,7 +846,8 @@ static int patch_free(IMPAI_DEC* d, const SNAP_PATCH* p)
 
 /* The builder's class's label where it stands (impai_reach_unit, THE UNIT'S OWN LABEL), which a reach test of it
    compares: -1 for no test -- a VTOL builder, one with no class of the world's, a level with no labels for it -- 0
-   off the grid or where neither its first cell's block nor its centre's has a label, which reaches nothing. */
+   off the grid or where neither its first cell's block nor its centre's has a label and the blocks round them
+   carry none or two (THE LABEL BESIDE), which reaches nothing. */
 static int builder_label(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_TINFO* t = &d->in->ti[b->type];

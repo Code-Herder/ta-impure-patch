@@ -599,7 +599,8 @@ int  impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz);
 /* THE UNIT'S OWN LABEL: class c's label for a unit at (x, z), 16.16 px, whose footprint is fx x fz cells -- the label
    of the block holding its footprint's first cell, the cell the class map's code describes a unit by (worldq.h's
    passable: the footprint is folded in at the cell it starts at), as the set-position 0x48A9F0 rounds it, (x - fx x
-   8 px + 8 px) >> 4 px (0x48AA00..0x48AA32); that block's 0, its centre's block's. -1 and 0 as impai_reach_at. */
+   8 px + 8 px) >> 4 px (0x48AA00..0x48AA32); that block's 0, its centre's block's; both 0, the one label the blocks
+   round the first cell's block carry (THE LABEL BESIDE, impai_maps.c). -1 and 0 as impai_reach_at. */
 int  impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz);
 /* the first block in ring order within `radius` rings of (bx, bz) whose class-c label is `label`, into (ox,
    oz): 1, or 0 for none. Off-grid blocks are skipped. BOUND: at most (2 radius + 1)^2 label reads */

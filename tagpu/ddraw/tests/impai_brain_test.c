@@ -1674,8 +1674,10 @@ static void check_assist_help(void)
 /* THE UNIT'S OWN LABEL (impai_maps.c, impai_reach_unit): check_assist_help's world with no constructor, so the frame is
    the commander's to help, the commander at (328, 320) px -- its centre in block (10, 10), its first cell (20, 19) in
    block (10, 9) -- and the labels: (a) everywhere 1: it helps; (b) its centre's block 0, as beside a feature's ring:
-   it helps still, by its first cell's block; (c) both blocks 0: it reaches nothing and is given no help. */
-static int own_label_helps(int centre, int first)
+   it helps still, by its first cell's block; (c) both blocks 0, the blocks round them 1, as a commander standing
+   where a feature stood at the level init: it helps, by the label beside (THE LABEL BESIDE); (d) the blocks round
+   them 0 too: it reaches nothing and is given no help. */
+static int own_label_helps(int centre, int first, int ring)
 {
     IMPAI_BRAIN_OUT out;
     FUNIT* f;
@@ -1683,6 +1685,7 @@ static int own_label_helps(int centre, int first)
     reach_world(0);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     for (x = 0; x < (int)(sizeof s_labels / sizeof s_labels[0]); x++) s_labels[x] = 1;
+    for (x = 0; x < 9; x++) s_labels[(8 + x / 3) * (FW_W / 2) + 9 + x % 3] = (uint16_t)ring;
     s_labels[10 * (FW_W / 2) + 10] = (uint16_t)centre;
     s_labels[9 * (FW_W / 2) + 10] = (uint16_t)first;
     s_w.unit[1].pos[0] = 328 << 16;
@@ -1703,11 +1706,22 @@ static int own_label_helps(int centre, int first)
 
 static void check_own_label(void)
 {
-    const int a = own_label_helps(1, 1), b = own_label_helps(0, 1), c = own_label_helps(0, 0);
-    printf("the unit's own label: helps with every block labelled %d, the centre's block unlabelled %d, both %d\n",
-           a, b, c);
-    CHECK(a == 1 && b == 1 && c == 0, "the commander's label is its first cell's block: %d %d %d", a, b, c);
-    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "both blocks unlabelled read 0");
+    const int a = own_label_helps(1, 1, 1), b = own_label_helps(0, 1, 1), c = own_label_helps(0, 0, 1),
+              e = own_label_helps(0, 0, 0);
+    printf("the unit's own label: helps with every block labelled %d, the centre's block unlabelled %d, both, the "
+           "blocks round labelled %d, those too %d\n", a, b, c, e);
+    CHECK(a == 1 && b == 1 && c == 1 && e == 0, "the commander's label is its first cell's block, else the one "
+          "round it: %d %d %d %d", a, b, c, e);
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "both blocks and those round them "
+          "unlabelled read 0");
+    s_labels[8 * (FW_W / 2) + 9] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 3, "both blocks unlabelled: the label "
+          "beside, (9, 8)'s");
+    s_labels[10 * (FW_W / 2) + 11] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 3, "two blocks beside, one label");
+    s_labels[10 * (FW_W / 2) + 9] = 4;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "two labels beside read 0");
+    s_labels[8 * (FW_W / 2) + 9] = s_labels[10 * (FW_W / 2) + 11] = s_labels[10 * (FW_W / 2) + 9] = 0;
     s_labels[9 * (FW_W / 2) + 10] = 5;
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 5, "the first cell's block's label");
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 336 << 16, 2, 2) == 0, "past the edge, one block: (10, 10)'s");
@@ -1715,6 +1729,10 @@ static void check_own_label(void)
     s_labels[10 * (FW_W / 2) + 10] = 7;
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 7,
           "the centre's block stands in for the first cell's unlabelled one");
+    s_labels[8 * (FW_W / 2) + 9] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 7,
+          "the centre's block before the blocks beside, another label among them");
+    s_labels[8 * (FW_W / 2) + 9] = 0;
     s_labels[10 * (FW_W / 2) + 10] = 0;
     s_labels[9 * (FW_W / 2) + 10] = 1;
     s_labels[9 * (FW_W / 2) + 9] = 6;
