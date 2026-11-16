@@ -202,7 +202,7 @@ count toward the verdict. A result with no seed was played before each game had 
   each played and scored -- in order, and its points as THE INTERVAL over its map means: each map's mean points
   one observation, since games on one map are correlated, the estimate their mean and the two-sided 90 % t
   interval beside it (T95, df = maps - 1).
-- eoh: its 12 blocks' points in EASY_BAND (0.50..0.75); noh: at least NORMAL_MIN (0.90); each with no game in which
+- eoh: its 12 blocks' points at least EASY_BAND's floor (0.50; above 0.75 is accepted); noh: at least NORMAL_MIN (0.90); each with no game in which
   A stalled. A calibration row: its 4 blocks' points read against both, which way the row moves, and no verdict.
 - ne and hn: LADDER_WINS (90) wins of their first 100 games, a game at the cap won by value counted and a draw
   not. THE CURTAILMENT: once LADDER_MISS (11) of those games are not won the pair has failed for certain, and
@@ -339,8 +339,10 @@ PAUSED = r"pause: (?:paused at GameTime (\d+)(?: \(units of seat \d+ <= \d+\))?\
 VULKAN = "vulkan"                       # the default renderer's name in a result
 # THE VALUE AT THE LIMIT: the lead a seat's value at the cap must reach to win the game; less is a draw
 VALUE_LEAD = 1.3
-# THE TARGETS, each on a pair's points over its maps (THE POINTS): Easy's band and Normal's floor against OTA AI
-# at Hard; the ladder's wins in its first LADDER_GAMES games, and the games not won that fail it for certain
+# THE TARGETS, each on a pair's points over its maps (THE POINTS): Easy's floor and Normal's floor against OTA AI
+# at Hard; the ladder's wins in its first LADDER_GAMES games, and the games not won that fail it for certain.
+# Easy has a floor and no ceiling: the owner accepts an Easy stronger than 0.75 (research/notes/impai/bar.md, The
+# rules); EASY_BAND's upper end is still printed, as where the calibration's rows would aim, and judges nothing.
 EASY_BAND, NORMAL_MIN = (0.50, 0.75), 0.90
 LADDER_WINS, LADDER_GAMES = 90, 100
 LADDER_MISS = LADDER_GAMES - LADDER_WINS + 1
@@ -1552,7 +1554,7 @@ def _ids(lst, n=12) -> str:
 def judge_blocks(pair: str, rs) -> tuple:
     """(failed, lacking) of a block pair's results (THE BLOCKS), its lines printed: each game at the cap scored by
     value (by_value); the points over the blocks complete, every game of each played and scored, with THE
-    INTERVAL over its map means; and its rule. eoh: its 12 blocks' points in EASY_BAND; noh: at least NORMAL_MIN;
+    INTERVAL over its map means; and its rule. eoh: its 12 blocks' points at least EASY_BAND's floor; noh: at least NORMAL_MIN;
     each with no stall; a calibration row: its 4 blocks' points read against both, a verdict on neither; ne and
     hn: LADDER_WINS wins in their first LADDER_GAMES games, failed for certain at LADDER_MISS games not won (THE
     CURTAILMENT), and THE ORDERING, which is reported and judges nothing."""
@@ -1613,8 +1615,9 @@ def judge_blocks(pair: str, rs) -> tuple:
         return 0, 1
     if pair in ("eoh", "noh"):
         if pair == "eoh":
-            met = EASY_BAND[0] <= mean <= EASY_BAND[1]
-            print(f"  Easy's band {EASY_BAND[0]:.2f}..{EASY_BAND[1]:.2f}: {'met' if met else 'missed'}")
+            met = mean >= EASY_BAND[0]
+            print(f"  Easy's floor {EASY_BAND[0]:.2f}: {'met' if met else 'missed'}"
+                  + (f" (above the band's {EASY_BAND[1]:.2f}, accepted)" if mean > EASY_BAND[1] else ""))
         else:
             met = mean >= NORMAL_MIN
             print(f"  Normal's floor {NORMAL_MIN:.2f}: {'met' if met else 'missed'}")

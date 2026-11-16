@@ -6,8 +6,11 @@ What ImpAI must win before it becomes the default AI. The owner judges the stock
 
 - **Every level plays OTA AI at Hard** (owner's decision, 2026-11-14): **Hard wins 100 of 100** games (`hota`) --
   a single loss is a defect to diagnose and fix, not noise to average away; **Normal takes at least 90 % of the
-  points** (`noh`, 120 games); **Easy takes 50 to 75 % of them** (`eoh`, 120 games), the point estimate judged and
-  its t90 interval reported. A game's points are 1 for a win, ½ for a draw, 0 for a loss. The earlier rule, each
+  points** (`noh`, 120 games); **Easy takes at least 50 % of them** (`eoh`, 120 games), the point estimate judged
+  and its t90 interval reported. Easy has no ceiling: the owner accepts an Easy that takes more than the earlier
+  band's 75 %, as long as the levels stay ordered -- Easy easier than Normal, Normal easier than Hard, which the
+  ladder below measures (owner's decision, 2026-11-15, after round 3 measured Easy at 0.996 of the points); `judge` still prints
+  where a point estimate stands against 0.75, for the calibration's rows. A game's points are 1 for a win, ½ for a draw, 0 for a loss. The earlier rule, each
   level against OTA AI on its own Difficulty in 100 of 100 (`eota` Easy against Easy, `nota` Normal against
   Medium), is what `judge` still asks of those pairs when they are played.
 - **Adjacent levels stay distinct:** ImpAI Normal beats ImpAI Easy, and Hard beats Normal, in at least 90 of 100
