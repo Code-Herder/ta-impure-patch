@@ -4,7 +4,7 @@ champion, by a sequential test on the same seeds.
 
     tools/impai/margin.py judge BASE TEST [--mode improve|notworse]
     tools/impai/margin.py run --base DLL --test DLL --mode improve|notworse --out DIR [--lanes L] [--blocks N]
-    tools/impai/margin.py asn [--mode improve|notworse]
+    tools/impai/margin.py asn [--mode improve|notworse] [--width W] [--alpha A] [--runs R]
 
 WHY. ImpAI wins every fair game against OTA AI, so a count of wins no longer tells two DLLs apart. The time a game
 takes to win does, in every game, and on the same seed the two arms play the same game until their code differs.
@@ -16,20 +16,27 @@ sequence. They are played in blocks of BLOCK ids, both arms of a block together.
 
 THE MEASURE of a seat-game is its time to win: the `end_tick` of a game ImpAI won, the cap for a game at the cap
 (a draw at one look included), and none for a loss. A TEST loss is never averaged away: it fails the test
-outright, as Hard's 100 of 100 rules. A pair's sign: TEST better when its time is shorter than BASE's by more
+outright, as Hard's 100 of 100 rules. A pair's score: 1, TEST better, when its time is shorter than BASE's by more
 than TIE_BAND ticks (300: a decision at Hard is 75-150 ticks, and identical code ends on the same tick), or BASE
-lost and TEST did not; worse when longer by more than the band; otherwise -- inside the band, or both at the cap
--- a tie, which is dropped.
+lost and TEST did not; 0, worse, when longer by more than the band; otherwise -- inside the band, or both at the
+cap -- 0.5, a tie.
 
 THE PAIRING, by id and seed (as paired.py pairs): a TEST result pairs with the BASE result of the same id, and
 each states the seed it played. A pair whose seeds differ, a result with no partner, an id twice in one arm, or a
 game that could not run, and the test COULD NOT JUDGE. A result whose id is not in ORDER is not read.
 
-THE SEQUENTIAL TEST is Wald's SPRT on the sign of the non-tied pairs, a binomial in p = P(TEST better), alpha =
-beta = 0.05: the log-likelihood ratio of H1 to H0 against the bounds ln(beta / (1 - alpha)) and ln((1 - beta) /
-alpha), +-ln 19.
-    improve    H0 p = 0.5 against H1 p = 0.6: accept, TEST is better; reject, it is not measurably better.
-    notworse   H0 p = 0.4 against H1 p = 0.5: accept, TEST is not worse (a fix batch's pass); reject, worse.
+THE SEQUENTIAL TEST is a GSPRT on the mean pair score s, the normal approximation engine-testing frameworks use:
+over n pairs of mean m and variance v,
+
+    LLR = n (s1 - s0) (2 m - s0 - s1) / (2 v)
+
+against the bounds ln(beta / (1 - alpha)) and ln((1 - beta) / alpha), +-ln 19 at alpha = beta = 0.05.
+    improve    H0 s = 0.50 against H1 s = 0.55: accept, TEST is better; reject, it is not measurably better.
+    notworse   H0 s = 0.45 against H1 s = 0.50: accept, TEST is not worse (a fix batch's pass); reject, worse.
+A tie scores 0.5 and stays in: it lowers the variance, so a run of ties is evidence the arms play alike rather
+than no evidence. THE FLOOR: m and v are taken over the pairs and one pseudo-pair, half a pair better and half a
+pair worse. It moves no mean and gives v the spread of one non-tied pair, so an all-tie run divides by no zero and
+one block cannot decide it: 16 ties read +-1.44, 32 read +-5.45 (the bound is first reached at 24).
 The test is read after each whole block, in ORDER, both arms' every game of it played: the first block at which
 the ratio reaches a bound decides, and the blocks after it are not read. With every block of ORDER read and no
 bound reached, the verdict is NO DECISION. The verdict is a function of the games' results alone.
@@ -40,12 +47,15 @@ value B) at each GameTime both games reached.
 
 `run` copies both DLLs into DIR first, so a DLL rebuilt elsewhere mid-run changes no game, and refuses a DIR whose
 copies differ from the DLLs it is given. It then plays block after block -- one `bar.py play` an arm, both at
-once, each under the run lock with L lanes -- judges after each, and stops at a verdict, at the end of ORDER, or
-after its first N blocks (`--blocks`: a run in pieces, each resumed by the next, the games played skipped). A
-block with a game that could not run is played once more (bar.py's resume plays only those). It registers one
-runs-viewer run, a step a block (tools/tarun.py), whose id the games inherit (TARUN_RUN).
+once, each under the run lock with L lanes (at most MAX_LANES: a GDI lane weighs 2 of the lock's 28 slots, so
+two arms of 7 fill it) -- judges after each, and stops at a verdict, at the end of ORDER, or after its first N
+blocks (`--blocks`: a run in pieces, each resumed by the next, the games played skipped). A block with a game that
+could not run is played once more (bar.py's resume plays only those). It registers one runs-viewer run, a step a
+block (tools/tarun.py), whose id the games inherit (TARUN_RUN).
 
-`asn` prints the SPRT's operating characteristic and expected number of non-tied pairs (Wald's ASN) by true p.
+`asn` simulates the test (seeded): for each true mean score and tie rate, the share of runs that accept, reject
+or reach CAP_PAIRS with no decision, the mean pairs played under the cap, and the mean pairs the open-ended test
+would play. --width and --alpha set other hypotheses (s1 - s0, and alpha = beta) to price them.
 
 Exit 0 accept, 1 reject or a TEST loss, 2 could not judge (or run), 3 no decision (yet, or at the end of ORDER)."""
 import argparse
@@ -71,10 +81,12 @@ BLOCK = 16
 CAP_PAIRS = 200
 ORDER_SEED = 20261115
 ALPHA = BETA = 0.05
-MODES = {"improve": (0.5, 0.6), "notworse": (0.4, 0.5)}
+MODES = {"improve": (0.50, 0.55), "notworse": (0.45, 0.50)}
 VERDICTS = {"improve": ("TEST is better", "TEST is not measurably better"),
             "notworse": ("TEST is not worse", "TEST is worse")}
+PSEUDO = 0.5                # THE FLOOR: the weight of the pseudo-pair's better half, and of its worse half
 VALUE_TIMES = (15000, 30000)
+MAX_LANES = 7
 ACCEPT, REJECT, COULD_NOT, UNDECIDED = 0, 1, 2, 3
 
 
@@ -99,15 +111,18 @@ def blocks() -> list:
     return [o[i:i + BLOCK] for i in range(0, len(o), BLOCK)]
 
 
-def bounds() -> tuple:
+def bounds(alpha: float = ALPHA, beta: float = BETA) -> tuple:
     """(lower, upper) of the log-likelihood ratio: ln(beta / (1 - alpha)), ln((1 - beta) / alpha)"""
-    return math.log(BETA / (1 - ALPHA)), math.log((1 - BETA) / ALPHA)
+    return math.log(beta / (1 - alpha)), math.log((1 - beta) / alpha)
 
 
-def steps(mode: str) -> tuple:
-    """(the ratio's step for a pair TEST won, for one TEST lost): ln(p1 / p0), ln((1 - p1) / (1 - p0))"""
-    p0, p1 = MODES[mode]
-    return math.log(p1 / p0), math.log((1 - p1) / (1 - p0))
+def llr(better: int, ties: int, worse: int, s0: float, s1: float) -> float:
+    """THE SEQUENTIAL TEST's ratio over these counts, with THE FLOOR's pseudo-pair"""
+    b, d, w = better + PSEUDO, ties, worse + PSEUDO
+    n = b + d + w
+    m = (b + 0.5 * d) / n
+    v = (b * (1 - m) ** 2 + d * (0.5 - m) ** 2 + w * m ** 2) / n
+    return n * (s1 - s0) * (2 * m - s0 - s1) / (2 * v)
 
 
 def time_to_win(r: dict):
@@ -167,16 +182,17 @@ def pairs(base: dict, test: dict) -> dict:
 
 def verdict(base: dict, test: dict, mode: str) -> dict:
     """The test over two arms' results (THE SEQUENTIAL TEST): {"exit", "verdict", "blocks" read, "pairs" read,
-    "better", "worse", "ties", "llr", "trace" [(block, llr)], "losses" (TEST's), "unread" blocks}. CouldNotJudge
-    as THE PAIRING says."""
+    "better", "worse", "ties", "mean" score, "llr", "trace" [(block, llr)], "losses" (TEST's), "unread" pairs}.
+    CouldNotJudge as THE PAIRING says."""
     ps = pairs(base, test)
     lo, hi = bounds()
-    up, down = steps(mode)
-    out = {"mode": mode, "bounds": (lo, hi), "better": 0, "worse": 0, "ties": 0, "llr": 0.0, "trace": [],
-           "blocks": 0, "pairs": 0, "losses": sorted(g for g, (_b, t) in ps.items() if t.get("outcome") == "B"),
-           "read": []}
+    s0, s1 = MODES[mode]
+    out = {"mode": mode, "bounds": (lo, hi), "better": 0, "worse": 0, "ties": 0, "llr": 0.0, "mean": None,
+           "trace": [], "blocks": 0, "pairs": 0, "read": [],
+           "losses": sorted(g for g, (_b, t) in ps.items() if t.get("outcome") == "B")}
     if out["losses"]:
-        out.update(exit=REJECT, verdict=f"TEST lost {len(out['losses'])} game(s): a loss fails the test outright")
+        out.update(exit=REJECT, verdict=f"TEST lost {len(out['losses'])} game(s): a loss fails the test outright",
+                   unread=[])
         return out
     decided = None
     for k, ids in enumerate(blocks(), 1):
@@ -186,9 +202,10 @@ def verdict(base: dict, test: dict, mode: str) -> dict:
             b, t = ps[g]
             s = sign(time_to_win(b), time_to_win(t))
             out["better" if s > 0 else "worse" if s < 0 else "ties"] += 1
-            out["llr"] += up if s > 0 else down if s < 0 else 0.0
             out["read"].append(g)
         out["blocks"], out["pairs"] = k, out["pairs"] + len(ids)
+        out["llr"] = llr(out["better"], out["ties"], out["worse"], s0, s1)
+        out["mean"] = (out["better"] + 0.5 * out["ties"]) / out["pairs"]
         out["trace"].append((k, out["llr"]))
         if out["llr"] >= hi or out["llr"] <= lo:
             decided = out["llr"] >= hi
@@ -230,10 +247,10 @@ def judge(base_dir: Path, test_dir: Path, mode: str) -> int:
     except CouldNotJudge as e:
         print(f"margin judge: COULD NOT JUDGE: {e}")
         return COULD_NOT
-    p0, p1 = MODES[mode]
-    print(f"margin judge ({mode}: H0 p = {p0}, H1 p = {p1}, alpha = beta = {ALPHA}; tie band {TIE_BAND} ticks)")
+    s0, s1 = MODES[mode]
+    print(f"margin judge ({mode}: H0 s = {s0}, H1 s = {s1}, alpha = beta = {ALPHA}; tie band {TIE_BAND} ticks)")
     print(f"  {v['blocks']} blocks read, {v['pairs']} pairs: TEST better {v['better']}, worse {v['worse']}, "
-          f"ties {v['ties']}")
+          f"ties {v['ties']}" + (f"; mean score {v['mean']:.4f}" if v["mean"] is not None else ""))
     print(f"  log-likelihood ratio {v['llr']:+.3f}, bounds [{v['bounds'][0]:+.3f}, {v['bounds'][1]:+.3f}]; by block: "
           + " ".join(f"{k}:{x:+.2f}" for k, x in v["trace"]))
     if v.get("unread"):
@@ -246,37 +263,69 @@ def judge(base_dir: Path, test_dir: Path, mode: str) -> int:
     return v["exit"]
 
 
-# ---- the expected cost (Wald) ----
+# ---- the expected cost (simulated) ----
 
-def oc_asn(p: float, mode: str) -> tuple:
-    """(L(p), E[N]): the probability the SPRT accepts H0 at a true p, and its expected number of non-tied pairs,
-    by Wald's approximations: L = (A^h - 1) / (A^h - B^h) with h != 0 the root of p a^h + (1 - p) b^h = 1, and E[N]
-    = (L ln B + (1 - L) ln A) / E[z], or -ln A ln B / E[z^2] where E[z] = 0."""
-    up, down = steps(mode)
-    lo, hi = bounds()
-    ez = p * up + (1 - p) * down
-    if abs(ez) < 1e-12:
-        return hi / (hi - lo), -lo * hi / (p * up * up + (1 - p) * down * down)
+OPEN_LIMIT = 4000           # the open-ended test's simulated runs stop here, counted at the limit
 
-    def f(h):
-        return p * math.exp(h * up) + (1 - p) * math.exp(h * down) - 1
-    a, b = (1e-9, 60.0) if ez < 0 else (-60.0, -1e-9)
-    for _ in range(200):
-        m = (a + b) / 2
-        if (f(a) < 0) == (f(m) < 0):
-            a = m
+
+def simulate(mean: float, tie: float, s0: float, s1: float, alpha: float, runs: int, rng) -> dict:
+    """The test on `runs` simulated runs whose pairs score 1, 0.5 and 0 with chances mean - tie/2, tie and
+    1 - mean - tie/2, read after each block as `verdict` reads: {"accept", "reject", "none"} shares at CAP_PAIRS,
+    "pairs" (the mean played under the cap), "open" (the mean the open-ended test plays) and "open_none" (the share
+    still undecided at OPEN_LIMIT)."""
+    pb, pt = mean - tie / 2, tie
+    lo, hi = bounds(alpha, alpha)
+    sizes = [len(b) for b in blocks()]
+    sizes += [BLOCK] * ((OPEN_LIMIT - sum(sizes)) // BLOCK)
+    tally = {"accept": 0, "reject": 0, "none": 0, "pairs": 0, "open": 0, "open_none": 0}
+    for _ in range(runs):
+        c, n, capped = [0, 0, 0], 0, None
+        for size in sizes:
+            for _ in range(size):
+                u = rng.random()
+                c[0 if u < pb else 1 if u < pb + pt else 2] += 1
+            n += size
+            x = llr(c[0], c[1], c[2], s0, s1)
+            done = "accept" if x >= hi else "reject" if x <= lo else None
+            if capped is None and (done or n >= CAP_PAIRS):
+                capped = done or "none"
+                tally[capped] += 1
+                tally["pairs"] += n
+            if done:
+                break
         else:
-            b = m
-    h = (a + b) / 2
-    L = (math.exp(h * hi) - 1) / (math.exp(h * hi) - math.exp(h * lo))
-    return L, (L * lo + (1 - L) * hi) / ez
+            tally["open_none"] += 1
+        tally["open"] += n
+    return {k: v / runs for k, v in tally.items()}
 
 
-def cmd_asn(mode: str) -> int:
-    print(f"{mode}: true p, P(accept H1), expected non-tied pairs (Wald)")
-    for p in (0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8):
-        L, n = oc_asn(p, mode)
-        print(f"  p {p:.2f}: accept {1 - L:.3f}, pairs {n:.0f}")
+def asn_rows(mode: str, width: float = None, alpha: float = ALPHA, runs: int = 1000, seed: int = 1) -> list:
+    """[(mean, tie, simulate's dict)] over true means 0.400-0.600 by 0.025 and tie rates 0, 0.3, 0.6, 0.9, where
+    the chances exist; the mode's hypotheses, or with `width` s1 - s0 = width about the mode's shared edge 0.5."""
+    s0, s1 = MODES[mode]
+    if width is not None:
+        s0, s1 = (0.5, 0.5 + width) if mode == "improve" else (0.5 - width, 0.5)
+    rng = random.Random(seed)
+    rows = []
+    for i in range(9):
+        mean = 0.4 + 0.025 * i
+        for tie in (0.0, 0.3, 0.6, 0.9):
+            if mean - tie / 2 >= -1e-12 and 1 - mean - tie / 2 >= -1e-12:
+                rows.append((mean, tie, simulate(mean, tie, s0, s1, alpha, runs, rng)))
+    return rows
+
+
+def cmd_asn(mode: str, width: float, alpha: float, runs: int) -> int:
+    s0, s1 = MODES[mode]
+    if width is not None:
+        s0, s1 = (0.5, 0.5 + width) if mode == "improve" else (0.5 - width, 0.5)
+    print(f"{mode}: H0 s = {s0:.3f}, H1 s = {s1:.3f}, alpha = beta = {alpha}; {runs} simulated runs a row, "
+          f"blocks of {BLOCK}, cap {CAP_PAIRS} pairs")
+    print("  mean   tie   accept  reject  none@cap  pairs(capped)  pairs(open)")
+    for mean, tie, r in asn_rows(mode, width, alpha, runs):
+        print(f"  {mean:.3f}  {tie:.1f}   {r['accept']:.3f}   {r['reject']:.3f}   {r['none']:.3f}     "
+              f"{r['pairs']:6.0f}        {r['open']:6.0f}" + (f"  ({r['open_none']:.3f} open at {OPEN_LIMIT})"
+                                                               if r["open_none"] else ""))
     return 0
 
 
@@ -370,11 +419,15 @@ def main(argv=None) -> int:
     r.add_argument("--base", required=True)
     r.add_argument("--test", required=True)
     r.add_argument("--out", required=True)
-    r.add_argument("--lanes", type=int, default=4, help="lanes an arm (2 slots a lane; both arms at once)")
+    r.add_argument("--lanes", type=int, default=6, choices=range(1, MAX_LANES + 1), metavar=f"1..{MAX_LANES}",
+                   help="lanes an arm (a GDI lane weighs 2 of the lock's 28 slots; both arms at once)")
     r.add_argument("--blocks", type=int, default=None,
                    help="play the order's first N blocks at most: a run in pieces, each resumed by the next "
                         "(the games already played are skipped)")
-    s = sub.add_parser("asn", help="the expected cost by true p")
+    s = sub.add_parser("asn", help="the expected cost by true mean score and tie rate (simulated)")
+    s.add_argument("--width", type=float, default=None, help="s1 - s0 about 0.5 (default: the mode's 0.05)")
+    s.add_argument("--alpha", type=float, default=ALPHA, help="alpha = beta")
+    s.add_argument("--runs", type=int, default=1000, help="simulated runs a row")
     for x in (j, s):
         x.add_argument("--mode", choices=sorted(MODES), default="improve")
     r.add_argument("--mode", choices=sorted(MODES), required=True)
@@ -382,7 +435,7 @@ def main(argv=None) -> int:
     if a.verb == "judge":
         return judge(a.base, a.test, a.mode)
     if a.verb == "asn":
-        return cmd_asn(a.mode)
+        return cmd_asn(a.mode, a.width, a.alpha, a.runs)
     return run(a)
 
 

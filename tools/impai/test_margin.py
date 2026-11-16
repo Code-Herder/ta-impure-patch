@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """test_margin -- the paired margin test offline: the order and its blocks, the pairing's refusals (a seed
 mismatch, a result with no partner, an id twice in one arm, a game that could not run), the tie band and each
-pair's sign, the loss rule, the SPRT's arithmetic against hand-computed references, its stopping rule (the first
-block at a bound decides, the blocks after it unread, no decision at the end of the order), Wald's operating
-characteristic and expected pairs against a seeded simulation, and `run` on a fake player: it stops at the
-verdict, plays a block with a game that could not run once more, and refuses a directory of other DLLs. No game
-runs and no scipy is needed.
+pair's sign, the loss rule, the GSPRT's ratio against hand-computed references, its floor (no pair, and runs of
+ties), identical games accepting NOT-WORSE and rejecting IMPROVE at the second block, its stopping rule (the first
+block at a bound decides, the blocks after it unread, no decision at the end of the order), the simulated cost's
+error rates at the hypotheses, and `run` on a fake player: it stops at the verdict, plays a block with a game
+that could not run once more, and refuses a directory of other DLLs. No game runs and no scipy is needed.
 
     python3 tools/impai/test_margin.py"""
 import json
@@ -91,71 +91,101 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(margin.time_to_win(result("bar-hota-pincushion-aa-1", "cap", draw=True)), bar.CAP)
         self.assertIsNone(margin.time_to_win(result("bar-hota-pincushion-aa-1", "B")))
 
-    def test_a_test_loss_fails_outright(self):
-        base, test = arms([(40000, 20000)] * 15 + [(30000, None)] + [(40000, 20000)] * 16)
-        v = margin.verdict(base, test, "improve")
-        self.assertEqual((v["exit"], v["losses"]), (margin.REJECT, [margin.order()[15]]))
-        self.assertIn("a loss fails the test outright", v["verdict"])
+
+def block(better, ties, worse):
+    """one block's (BASE end, TEST end) pairs: `better` TEST better, `ties` ties, `worse` TEST worse"""
+    return [(40000, 30000)] * better + [(30000, 30100)] * ties + [(30000, 40000)] * worse
 
 
-class TestSprt(unittest.TestCase):
+class TestGsprt(unittest.TestCase):
     def test_the_arithmetic(self):
         self.assertEqual(margin.bounds(), (pytest_approx(-LN19), pytest_approx(LN19)))
-        self.assertEqual(margin.steps("improve"), (pytest_approx(math.log(1.2)), pytest_approx(math.log(0.8))))
-        self.assertEqual(margin.steps("notworse"), (pytest_approx(math.log(1.25)),
-                                                    pytest_approx(math.log(5 / 6))))
-        # one block: 10 TEST better, 4 worse, 2 ties
-        base, test = arms([(40000, 30000)] * 10 + [(30000, 40000)] * 4 + [(30000, 30100)] * 2)
+        self.assertEqual(margin.bounds(0.1, 0.1), (pytest_approx(-math.log(9)), pytest_approx(math.log(9))))
+        # 10 better, 2 ties, 4 worse, improve, by hand: with the pseudo-pair n = 17, m = 11.5 / 17 = 0.67647,
+        # v = (10.5 * 0.32353^2 + 2 * 0.17647^2 + 4.5 * 0.67647^2) / 17 = 0.18945,
+        # LLR = 17 * 0.05 * (1.35294 - 1.05) / (2 * 0.18945) = 0.67961
+        self.assertAlmostEqual(margin.llr(10, 2, 4, 0.50, 0.55), 0.67961, places=5)
+        # 8 better, 4 ties, 4 worse, notworse: m = 10.5 / 17 = 0.61765, v = 0.17734, LLR = 0.68373
+        self.assertAlmostEqual(margin.llr(8, 4, 4, 0.45, 0.50), 0.68373, places=5)
+        # 26 better, 2 ties, 4 worse, improve: m = 27.5 / 33 = 0.83333, v = 0.12374, LLR = 4.11153
+        self.assertAlmostEqual(margin.llr(26, 2, 4, 0.50, 0.55), 4.11153, places=5)
+        base, test = arms(block(10, 2, 4))
         v = margin.verdict(base, test, "improve")
-        self.assertEqual((v["better"], v["worse"], v["ties"], v["blocks"]), (10, 4, 2, 1))
-        self.assertAlmostEqual(v["llr"], 10 * math.log(1.2) + 4 * math.log(0.8))     # 0.9306
-        self.assertEqual(v["exit"], margin.UNDECIDED)
+        self.assertEqual((v["better"], v["worse"], v["ties"], v["blocks"], v["exit"]), (10, 4, 2, 1, margin.UNDECIDED))
+        self.assertAlmostEqual(v["llr"], margin.llr(10, 2, 4, 0.50, 0.55))
+        self.assertAlmostEqual(v["mean"], 11 / 16)
         self.assertIn("no decision yet after 1 blocks", v["verdict"])
 
+    def test_the_floor(self):
+        # no pair at all: the pseudo-pair alone, m = 0.5, v = 0.25 -- no division by zero
+        self.assertAlmostEqual(margin.llr(0, 0, 0, 0.45, 0.50), 0.005)
+        # n ties: m = 0.5, v = 0.25 / (n + 1), LLR = +-0.005 (n + 1)^2 -- 16 read 1.445, 24 3.125, 32 5.445
+        for n, x in ((16, 1.445), (23, 2.88), (24, 3.125), (32, 5.445)):
+            self.assertAlmostEqual(margin.llr(0, n, 0, 0.45, 0.50), x)
+            self.assertAlmostEqual(margin.llr(0, n, 0, 0.50, 0.55), -x)
+
+    def test_identical_games_accept_notworse_and_reject_improve_in_the_second_block(self):
+        base, test = arms([(30000, 30000)] * 48)                         # every pair the same end tick
+        for mode, ex, verdict in (("notworse", margin.ACCEPT, "TEST is not worse"),
+                                  ("improve", margin.REJECT, "TEST is not measurably better")):
+            v = margin.verdict(base, test, mode)
+            self.assertEqual((v["exit"], v["blocks"], v["pairs"], v["ties"], v["verdict"]),
+                             (ex, 2, 32, 32, verdict))
+            self.assertEqual(len(v["unread"]), 16)
+            self.assertAlmostEqual(abs(v["trace"][0][1]), 1.445)        # one block cannot decide
+            self.assertAlmostEqual(abs(v["llr"]), 5.445)
+
+    def test_a_test_loss_fails_outright_whatever_the_scores(self):
+        base, test = arms(block(16, 0, 0)[:15] + [(30000, None)] + block(16, 0, 0))
+        for mode in margin.MODES:
+            v = margin.verdict(base, test, mode)
+            self.assertEqual((v["exit"], v["losses"], v["blocks"]), (margin.REJECT, [margin.order()[15]], 0))
+            self.assertIn("a loss fails the test outright", v["verdict"])
+
     def test_the_first_block_at_a_bound_decides_and_the_rest_is_not_read(self):
-        # improve: 16 better in block 1 (2.917 < ln 19 = 2.944), 1 more in block 2 crosses; block 3 not read
-        base, test = arms([(40000, 30000)] * 17 + [(30000, 30000)] * 15 + [(30000, 40000)] * 16)
+        # improve: block 1 reads 0.68, block 2's 16 better take it to 4.11; block 3 (all worse) is not read
+        base, test = arms(block(10, 2, 4) + block(16, 0, 0) + block(0, 0, 16))
         v = margin.verdict(base, test, "improve")
-        self.assertEqual((v["exit"], v["blocks"], v["pairs"]), (margin.ACCEPT, 2, 32))
-        self.assertAlmostEqual(v["llr"], 17 * math.log(1.2))
+        self.assertEqual((v["exit"], v["blocks"], v["pairs"], v["verdict"]), (margin.ACCEPT, 2, 32, "TEST is better"))
+        self.assertAlmostEqual(v["llr"], 4.11153, places=5)
         self.assertEqual(len(v["unread"]), 16)
-        self.assertEqual(v["verdict"], "TEST is better")
-        # notworse: 16 worse in a block, -16 ln(6/5) = -2.917; the 17th crosses ln(1/19)
-        base, test = arms([(30000, 40000)] * 17 + [(30000, 30000)] * 15)
+        # notworse: a block of 16 worse reads -13.27, past ln(1/19) in one block
+        base, test = arms(block(0, 0, 16))
         v = margin.verdict(base, test, "notworse")
-        self.assertEqual((v["exit"], v["blocks"], v["verdict"]), (margin.REJECT, 2, "TEST is worse"))
+        self.assertEqual((v["exit"], v["blocks"], v["verdict"]), (margin.REJECT, 1, "TEST is worse"))
+        self.assertAlmostEqual(v["llr"], -13.268, places=3)
         # an incomplete block is not read
-        base, test = arms([(40000, 30000)] * 20)
+        base, test = arms(block(10, 2, 4) + block(4, 0, 0))
         v = margin.verdict(base, test, "improve")
         self.assertEqual((v["blocks"], v["pairs"], len(v["unread"]), v["exit"]), (1, 16, 4, margin.UNDECIDED))
 
     def test_no_decision_at_the_end_of_the_order(self):
-        base, test = arms([(30000, 30000)] * margin.CAP_PAIRS)            # identical games: every pair a tie
-        for mode in margin.MODES:
+        # a mean near the midpoint of the hypotheses keeps the ratio near 0 through every block, the last (8 pairs,
+        # 4 better and 4 worse) included
+        b, w = block(1, 0, 0), block(0, 0, 1)
+        for mode, pattern in (("notworse", (b + w) * 7 + block(0, 1, 1)), ("improve", (w + b) * 7 + block(1, 1, 0))):
+            base, test = arms(pattern * 13)
             v = margin.verdict(base, test, mode)
-            self.assertEqual((v["exit"], v["ties"], v["llr"]), (margin.UNDECIDED, 200, 0.0))
+            self.assertEqual((v["exit"], v["blocks"], v["pairs"]), (margin.UNDECIDED, 13, margin.CAP_PAIRS))
+            self.assertLess(max(abs(x) for _k, x in v["trace"]), 1.0)             # the bounds are +-2.944
             self.assertIn("NO DECISION", v["verdict"])
 
-    def test_the_operating_characteristic_and_the_expected_pairs(self):
-        for mode, (p0, p1) in margin.MODES.items():
-            self.assertAlmostEqual(margin.oc_asn(p0, mode)[0], 1 - margin.ALPHA, places=6)   # L(p0) = 1 - alpha
-            self.assertAlmostEqual(margin.oc_asn(p1, mode)[0], margin.BETA, places=6)        # L(p1) = beta
-        # against a seeded simulation of the open-ended test (Wald ignores the overshoot: within 12 %)
-        rng = random.Random(7)
-        up, down = margin.steps("improve")
-        lo, hi = margin.bounds()
-        for p in (0.5, 0.6, 0.7):
-            ns, acc = [], 0
-            for _ in range(3000):
-                x, n = 0.0, 0
-                while lo < x < hi:
-                    x += up if rng.random() < p else down
-                    n += 1
-                ns.append(n)
-                acc += x >= hi
-            L, en = margin.oc_asn(p, "improve")
-            self.assertLess(abs(sum(ns) / len(ns) - en) / en, 0.12, p)
-            self.assertLess(abs(acc / 3000 - (1 - L)), 0.03, p)
+    def test_the_simulated_cost(self):
+        rng = random.Random(3)
+        # all ties: every run decides at the second block, as the floor says
+        r = margin.simulate(0.5, 1.0, 0.45, 0.50, margin.ALPHA, 50, rng)
+        self.assertEqual((r["accept"], r["pairs"], r["open"]), (1.0, 32, 32))
+        # at H0 and H1 the open-ended test errs about alpha (the normal approximation and the block steps: 0.035)
+        for mode, (s0, s1) in margin.MODES.items():
+            r0 = margin.simulate(s0, 0.3, s0, s1, margin.ALPHA, 600, rng)
+            r1 = margin.simulate(s1, 0.3, s0, s1, margin.ALPHA, 600, rng)
+            self.assertLess(r0["accept"], margin.ALPHA + 0.035, mode)
+            self.assertGreater(r1["accept"] + r1["none"], 1 - margin.ALPHA - 0.035, mode)
+            self.assertLessEqual(r1["pairs"], margin.CAP_PAIRS)
+            self.assertGreater(r1["open"], r1["pairs"])                  # the cap cuts the open-ended test
+        rows = margin.asn_rows("notworse", runs=5)
+        self.assertEqual(len(rows), 9 * 4 - 4)                           # tie 0.9 needs 0.45 <= mean <= 0.55
+        self.assertEqual({t for _m, t, _r in rows}, {0.0, 0.3, 0.6, 0.9})
 
 
 class TestRun(unittest.TestCase):
@@ -192,13 +222,13 @@ class TestRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
             play, played = self.fake(lambda i: (40000, 30000))
             self.assertEqual(self.run_(d, play), margin.ACCEPT)
-            self.assertEqual(played, [1, 2])                            # 17 better pairs decide in block 2
+            self.assertEqual(played, [1])                               # 16 better pairs read +13.27
 
     def test_a_block_with_a_game_that_could_not_run_is_played_once_more(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
             play, played = self.fake(lambda i: (40000, "cnr" if i == 3 else 30000))
             self.assertEqual(self.run_(d, play), margin.ACCEPT)
-            self.assertEqual(played, [1, 1, 2])
+            self.assertEqual(played, [1, 1])
 
     def test_a_directory_of_other_dlls_is_refused(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
