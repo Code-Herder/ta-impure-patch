@@ -24,6 +24,8 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
     n:<row> ImpAI on Normal's row NORMAL_ROW against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard:
            THE MIRROR, which decides Easy's row once Normal's is chosen
     h:<m>  ImpAI Hard against OTA AI, Difficulty Hard, OTA AI's production times m (the income lever): THE HANDICAP
+    g:<a>.<b> ImpAI against ImpAI, Difficulty Hard, A on the settings a and B on b, each a PERSONA_ROWS row or H,
+           the DLL's Hard with no persona lever: THE GAUNTLET
     dry   OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
            rate before ImpAI fights
 
@@ -37,8 +39,13 @@ game n = 2b - 1 (A at the map's first start) and 2b (its second) of each map, wi
 map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each once every four blocks.
 `ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games and a list cut there is
 whole blocks. The blocks a pair is played to are its run set's: eoh and noh 12 (120 games), ne and hn 10, a
-calibration row 4, a mirror pair 10, a handicap pair 2 (`ids --blocks N` for more, as THE ORDERING's third look asks
-of the ladder's).
+calibration row 4, a mirror pair 10, a handicap pair 2, a gauntlet pair 2 (`ids --blocks N` for more, as THE
+ORDERING's third look asks of the ladder's).
+
+THE GAUNTLET. `g:<a>.<b>` seats ImpAI on two settings, each through the persona lever (H: none, the DLL's Hard), every
+ImpAI seat at the level lever's `hard`, and plays the development pool, so no settings row is chosen on the maps
+that judge it. tools/impai/gauntlet.py plays a candidate's pairs against a pool of earlier champions and judges
+them; `judge` reports a gauntlet pair's points and judges nothing.
 
 THE HANDICAP. `h:<m>` gives OTA AI's seat the income lever tagpu_impai_income.on at m (tagpu/ddraw/src/
 tagpu_income.c: the seat's production times m at every economy pass, m three places in 1.000..8.000), so one
@@ -339,6 +346,11 @@ NORMAL_ROW = "L3"                       # Normal's row: the DLL's, until the cal
 HANDICAP = "h:"
 HANDICAP_RX = re.compile(r"h:([1-8]\.[0-9]{3})")
 HANDICAP_BLOCKS = 2
+# THE GAUNTLET: `g:<a>.<b>`, ImpAI on the settings a as A against ImpAI on b as B, each a PERSONA_ROWS row or
+# HARD_ROW, the DLL's Hard with no persona lever. A gauntlet pair is GAUNTLET_BLOCKS of its blocks by default.
+GAUNTLET = "g:"
+HARD_ROW = "H"
+GAUNTLET_BLOCKS = 2
 # THE BLOCKS: a block is every map of its pool played once from each start, 10 games on five maps; block b plays
 # game n = 2b - 1 (A at the first start) and 2b (A at the second) of each map, with the side pairing
 # BLOCK_SIDES[(the map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each
@@ -472,6 +484,9 @@ def pair_spec(pair: str) -> tuple:
     if pair.startswith(HANDICAP):
         income_of(pair)
         return "hard", ("impai", "hard", None), ("ai", None, None)
+    if pair.startswith(GAUNTLET):
+        a, b = gauntlet_rows(pair)
+        return "hard", ("impai", "hard", PERSONA_ROWS.get(a)), ("impai", "hard", PERSONA_ROWS.get(b))
     kind = next((k for k in (CALIBRATION, MIRROR, NORMAL_MIRROR) if pair.startswith(k)), None)
     row = pair[len(kind):] if kind else None
     if row not in PERSONA_ROWS:
@@ -495,14 +510,31 @@ def income_of(pair: str):
     return float(m.group(1))
 
 
+def gauntlet_rows(pair: str) -> tuple:
+    """(a, b), the settings of a gauntlet pair `g:<a>.<b>` (THE GAUNTLET); BarError for any other pair or a
+    setting that is neither a PERSONA_ROWS row nor HARD_ROW."""
+    rows = pair[len(GAUNTLET):].split(".") if pair.startswith(GAUNTLET) else []
+    if len(rows) != 2 or any(r != HARD_ROW and r not in PERSONA_ROWS for r in rows):
+        raise BarError(f"no pair {pair!r}: a gauntlet pair is {GAUNTLET}<a>.<b>, each {HARD_ROW} or a row of "
+                       f"{', '.join(PERSONA_ROWS)}")
+    return rows[0], rows[1]
+
+
+def gauntlet_pair(a: str, b: str) -> str:
+    """The gauntlet pair of A on the settings `a` against B on `b`; BarError for a setting no pair takes."""
+    pair = f"{GAUNTLET}{a}.{b}"
+    gauntlet_rows(pair)
+    return pair
+
+
 def handicap_pair(mult: float) -> str:
     """The handicap pair of OTA AI's multiplier `mult`, rounded to the lever's three places."""
     return f"{HANDICAP}{round(mult, 3):.3f}"
 
 
 def persona_pair(pair: str) -> bool:
-    """A pair that plays a persona row: a calibration row or a mirror pair."""
-    return pair.startswith((CALIBRATION, MIRROR, NORMAL_MIRROR))
+    """A pair that plays a persona row: a calibration row, a mirror pair or a gauntlet pair."""
+    return pair.startswith((CALIBRATION, MIRROR, NORMAL_MIRROR, GAUNTLET))
 
 
 def ladder_pair(pair: str) -> bool:
@@ -520,6 +552,8 @@ def run_blocks(pair: str) -> int:
     """The blocks a block pair is played to: its run set's."""
     if pair.startswith(HANDICAP):
         return HANDICAP_BLOCKS
+    if pair.startswith(GAUNTLET):
+        return GAUNTLET_BLOCKS
     return BLOCKS.get(pair) or (CALIBRATION_BLOCKS if pair.startswith(CALIBRATION) else MIRROR_BLOCKS)
 
 
@@ -1760,6 +1794,10 @@ def judge_blocks(pair: str, rs) -> tuple:
         print(f"  against OTA AI at x{income_of(pair):.3f}: {'at or above' if mean >= 0.5 else 'below'} half the "
               f"points, reported; the ladder (ladder.py) reads every look's games together")
         return 0, 0
+    if pair.startswith(GAUNTLET):
+        a, b = gauntlet_rows(pair)
+        print(f"  {a} against {b}: A's points reported; the gauntlet (gauntlet.py) judges a candidate's pairs together")
+        return 0, 0
     easy = ("in it" if EASY_BAND[0] <= mean <= EASY_BAND[1] else
             "above it, a harsher row" if mean > EASY_BAND[1] else "below it, a softer row")
     normal = "at or above it" if mean >= NORMAL_MIN else "below it, a softer row"
@@ -1980,10 +2018,39 @@ def default_out(a, what=None) -> Path:
     return a.out or TREE / ".data" / "impai" / "bar" / name
 
 
+def settings_override(items: list) -> dict:
+    """{A or B: the persona lever's row or None} of `play --persona` items `<seat>=<settings>`, each a PERSONA_ROWS
+    row or HARD_ROW (no persona: the DLL's own level); BarError for any other item or a seat named twice."""
+    out = {}
+    for item in items or []:
+        seat, _, row = item.partition("=")
+        if seat not in ("A", "B") or seat in out or (row != HARD_ROW and row not in PERSONA_ROWS):
+            raise BarError(f"--persona {item!r}: <A|B>=<{HARD_ROW} or a row of {', '.join(PERSONA_ROWS)}>, a seat once")
+        out[seat] = PERSONA_ROWS.get(row)
+    return out
+
+
+def with_settings(game: dict, override: dict) -> dict:
+    """`game` with each seat of `override` on its settings (settings_override): the id, and so the seed, unchanged,
+    so two settings play the same games; a result carries the seat's persona, which game_kept compares, so a result
+    of other settings is never kept. BarError for a seat ImpAI does not play."""
+    if not override:
+        return game
+    seats = {s: dict(v) for s, v in game["seats"].items()}
+    for s, persona in override.items():
+        if seats[s]["ai"] != "impai":
+            raise BarError(f"{game['id']}: --persona {s}: seat {s} is {seats[s]['ai']}, not ImpAI")
+        seats[s].pop("persona", None)
+        if persona:
+            seats[s]["persona"] = persona
+    return dict(game, seats=seats)
+
+
 def cmd_play(a) -> int:
     values = [int(t) for t in a.values.split(",") if t] if a.values else []
-    return play_games([dict(parse_id(g), cap=a.cap, setup=a.setup, values=values) for g in read_ids(a.ids)], a,
-                      default_out(a))
+    override = settings_override(a.persona)
+    return play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override)
+                       for g in read_ids(a.ids)], a, default_out(a))
 
 
 def cmd_row(a) -> int:
@@ -2056,6 +2123,9 @@ def main(argv=None) -> int:
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "
                          "shorter piece's; the bar's games end at 81 000")
+    pl.add_argument("--persona", action="append", default=[], metavar="SEAT=SETTINGS",
+                    help=f"play seat A or B on the persona row SETTINGS, or {HARD_ROW} for none, in every game, the "
+                         f"ids and seeds unchanged (the paired margin test's settings arms)")
     pl.add_argument("--values", default=None, metavar="T,T",
                     help="also read every seat's value at these GameTimes from each game's recording, those the "
                          "game reached before its end (`values` in the result; the paired margin test's report)")

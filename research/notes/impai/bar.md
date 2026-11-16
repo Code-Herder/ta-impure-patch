@@ -57,6 +57,7 @@ game ids `bar-<pair>-<map>-<sides>-<n>`:
 | `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
 | `m:<row>`, `n:<row>` | ImpAI Hard; ImpAI on Normal's row (the persona lever) | ImpAI on a persona row (the persona lever) | Hard | 10 blocks, 100, on the development pool |
 | `h:<m>` | ImpAI Hard | OTA AI, its production × m (the income lever) | Hard | 2 blocks, 20: a look of the handicap ladder |
+| `g:<a>.<b>` | ImpAI on the settings a (a persona row, or `H`: none, the DLL's Hard) | ImpAI on the settings b | Hard | 2 blocks, 20, on the development pool: a member of the champion gauntlet |
 | `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
 | `dry` | OTA AI | OTA AI | Hard | 10 |
 
@@ -439,6 +440,12 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`). Each block is
   one admission of the run lock an arm, both arms at once, and about 5 min of play at 6 lanes an arm on the
   reference setup; a run is as many of those as it takes to decide, about 7 for a batch that changes nothing.
+- **Settings instead of builds**: `--base-row` and `--test-row` put each arm's ImpAI seat on a persona row (or `H`,
+  none) through `bar.py play --persona A=<row>`, which keeps the ids and so the seeds. Two rows of one DLL are
+  then compared on the same games as two DLLs are. A run writes its rows to `rows.json` and refuses a directory
+  whose rows differ, and `judge` with rows refuses a result whose ImpAI seat played another persona. MEASURED
+  2026-11-16: `bar-hota-pincushion-aa-1` played with `--persona A=L3` to GameTime 3 600 logged
+  `impai: persona seat=1 ... from=lever` on L3's values, with the id's own seed (1873460876).
 - **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the mean score, the ratio by block, its
   bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
   decision.
@@ -504,6 +511,75 @@ the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\*
     a separated set, the report's edges, and a run on a fake player (a threshold bracketed and fitted, a draw's half
     point, the resume, a missing game played once more then could not judge, another DLL refused); also the `h:`
     pair's spec, its lever lines, the cheat flag and a kept result's multiplier.
+
+## The champion gauntlet
+
+A candidate that beats the last champion can still lose to an older one: strength among settings need not be
+transitive. The gauntlet plays the candidate against a pool of earlier champions directly, ImpAI against ImpAI in
+one build, so a regression that only one of them exposes shows. `tools/impai/gauntlet.py`; `test_gauntlet.py`
+holds it offline.
+
+- **The settings** of a seat are a persona row (`PERSONA_ROWS`, the persona lever) or `H`, none: the DLL's Hard.
+  Tuned tables join them once the table lever's files are versioned; the lever is per seat already
+  (`tagpu_impai_table.on`, which `bar.py play` writes from a seat's `table`).
+- **The games**: against each pool member P the candidate C plays `g:<C>.<P>`, C as A: 2 blocks by default, 20
+  games on the development pool, every map from both starts and every side pairing, so each row sits in both seats
+  and on every start. A game's points are C's (a win 1, a draw or a cap with no lead in value 0.5, a loss 0).
+- **The verdict**, a member at a time: C's mean points m over n games and the one-sided 95 % interval
+  m ± 1.645 × 0.5 / √n. The 0.5 is the most a game's points can spread, so the interval never claims more than the
+  games show, whatever share were draws. **beats** when the interval's low end is above one half, **loses** when
+  its high end is below, **even** otherwise. At 20 games the half-width is 0.184: a member is beaten from 0.684
+  of the points. **The gauntlet fails when C loses to any member**, and says which it beats and which it is even
+  with.
+- **How it runs**: a piece a block, one `bar.py play` on 10 lanes, through `batch.py`'s `play_stage`, as the
+  ladder's looks are. One gauntlet is one build, one candidate, one pool and one block count: `gauntlet.json` in
+  the run's directory holds each member's verdict as it is judged, so `run` again goes on from the first member
+  not judged, and refuses a directory of another gauntlet or DLL. A member with a game that could not run is
+  played once more, then the run stops, could not judge. `gauntlet.py judge DIR` reads the verdicts again from the
+  games.
+- MEASURED 2026-11-16: `bar-g:L3.L0b-acidfoursome-ac-1` played to GameTime 3 600 (27.8 s at one lane) logged both
+  seats' persona lines `from=lever`, seat 1 on L3's values and seat 2 on L0b's.
+
+**Code against code is designed, not built.** It would play two builds' brains in one game, and there are two
+ways to do it.
+
+- **Two processes, a network game** (each peer's DLL runs the ImpAI seat its own peer added, and only that one:
+  [entering the game](engine-seam.html); `netai_check.py` proves it on Two Continents):
+  - *What exists*: `twopeers.py` walks two instances into one battle room under the run lock and a leased
+    DirectPlay port, each peer adds its AI seat, and `--netai impai` on both makes both ImpAI.
+  - *What it needs*: a DLL a peer (`TwoPeers` takes one); the bar's maps rather than Two Continents in the lobby
+    walk; something for the two peers' own commanders, which every network game seats beside the AIs (each
+    allied to its own peer's AI, or killed at the start; that a dead peer's process still runs its AI seat is
+    [INFERRED], not measured); the outcome read from both peers' logs.
+  - *Its cost*: a network game cannot turbo and plays variable batches at speed 20, about 60 ticks a second
+    (MEASURED in the multiplayer recorder's runs, [the multiplayer slice](../tadr-port/demo-recorder-multiplayer-slice.html));
+    the 80 mirror games kept end at a mean GameTime of 62 641 (33 of them at the cap, MEASURED 2026-11-16 from
+    their results), so a game takes about 17 min plus 39 to 46 s of launch and lobby ([INFERRED] in
+    [the compatibility suite](../compat/suite.html)), on two GDI instances, 4 slots. That is about 72 slot-minutes a game, where a skirmish mirror game takes 6.6 to 9.4 (20 games in 6.6
+    to 9.4 min at 10 lanes, above): **8 to 11 times the cost**, 7 games at once on the lock's 28 slots, and
+    20 games in about 55 min against 8. And **no pairing**: a network game is not deterministic, so an id does
+    not replay its game, and two builds cannot be compared seed by seed. A gauntlet member then needs its games
+    judged unpaired, as this gauntlet already judges them.
+- **One process, a two-brain build**: brain Y's sources compiled beside brain X's, every global renamed, with the
+  seat choosing its brain. Skirmish speed and exact pairing stay. Its cost is the interface, which moves with the
+  brain:
+  - the seam (`tagpu_impai.c`) calls 57 global symbols of the brain and its engine-free helpers (`impai_*.c`,
+    `tagpu_worldq.c`, `tasim_snap.c`, `tagpu_placegeo.c`), eight other modules call 14 of them
+    (`tagpu_place.c`, `tagpu_resource.c`, `tagpu_skirmish.c`, `tagpu_sweep.c`, `tagpu_wikisim.c`, `tasim_place.c`,
+    `tasim_worldq.c`, `dllmain.c`; MEASURED from the objects' symbol tables), and the seam itself installs 19
+    engine sites ([the hook map](../modules/hook-map.html));
+  - of the 201 commits that changed `impai_*.c` since 2026-11-08, 91 also changed the seam and 112 a shared header
+    (`impai.h` or `worldq.h`), MEASURED from the log on 2026-11-16. Two arbitrary builds therefore rarely share
+    one seam, and a two-brain build must carry both seams and dispatch each of the 19 sites per seat;
+  - the replay tables double, and a two-brain game replays only on its own two-brain DLL.
+
+  It is cheap to run and dear to keep: every brain change that touches the seam or a shared header breaks it,
+  unless the interface is frozen as a versioned ABI, which is a rule on the brain's development and so the
+  owner's decision.
+- **The recommendation**: the network game, since it works for any two builds without constraining the brain.
+  Its 8 to 11 times the cost suits a gauntlet's few members, not a tuning loop. Its first step is a
+  `netai_check.py`-sized proof that two peers with two DLLs each play their own ImpAI seat to an end on a bar
+  map.
 
 ## When the default flips
 

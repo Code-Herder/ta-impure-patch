@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""margin.py -- the paired margin test: whether a candidate DLL wins its games against OTA AI faster than the
-champion, by a sequential test on the same seeds.
+"""margin.py -- the paired margin test: whether a candidate DLL, or a candidate settings row, wins its games against
+OTA AI faster than the champion, by a sequential test on the same seeds.
 
-    tools/impai/margin.py judge BASE TEST [--mode improve|notworse]
+    tools/impai/margin.py judge BASE TEST [--mode improve|notworse] [--base-row ROW] [--test-row ROW]
     tools/impai/margin.py run --base DLL --test DLL --mode improve|notworse --out DIR [--lanes L] [--blocks N]
+                              [--base-row ROW] [--test-row ROW]
     tools/impai/margin.py asn [--mode improve|notworse] [--width W] [--alpha A] [--runs R]
 
 WHY. ImpAI wins every fair game against OTA AI, so a count of wins no longer tells two DLLs apart. The time a game
@@ -43,6 +44,12 @@ The test is read after each whole block from the MIN_BLOCKS'th on, in ORDER, bot
 the first block at which the ratio reaches a bound decides, and the blocks after it are not read. With every block
 of ORDER read and no bound reached, the verdict is NO DECISION. The verdict is a function of the games' results
 alone.
+
+THE SETTINGS. `--base-row` and `--test-row` put each arm's ImpAI seat on a persona row (bar.py's PERSONA_ROWS) or
+on H, none: `bar.py play --persona A=<row>`, the ids and so the seeds unchanged, so two rows of one DLL (BASE and
+TEST the same file) are compared on the same games as two DLLs are; an arm that names none plays H. `run` writes
+the rows to DIR/rows.json at its first block and refuses a DIR whose rows differ; `judge` with rows refuses a
+result whose ImpAI seat played another persona than its arm's row.
 
 REPORTED, not judged: the paired mean of ln(end_tick), TEST - BASE, over the pairs both arms won; and with the
 results' `values` (`bar.py play --values`, which `run` asks at VALUE_TIMES), the paired mean of ln(value A /
@@ -167,8 +174,9 @@ def read_arm(root: Path) -> dict:
     return out
 
 
-def pairs(base: dict, test: dict) -> dict:
-    """{id: (BASE result, TEST result)} of ORDER's ids either arm holds (THE PAIRING)."""
+def pairs(base: dict, test: dict, rows: dict = None) -> dict:
+    """{id: (BASE result, TEST result)} of ORDER's ids either arm holds (THE PAIRING); with `rows` (THE SETTINGS),
+    each arm's ImpAI seat must carry its row's persona."""
     want = set(order())
     out = {}
     for gid in sorted((set(base) | set(test)) & want):
@@ -180,15 +188,20 @@ def pairs(base: dict, test: dict) -> dict:
         for arm, r in (("BASE", b), ("TEST", t)):
             if r.get("outcome") in (None, "could_not_run"):
                 raise CouldNotJudge(f"{gid}: {arm}'s game could not run: {r.get('reason', '')}")
+            if rows is not None:
+                want_p = bar.PERSONA_ROWS.get(rows[arm.lower()])
+                got_p = ((r.get("seats") or {}).get("A") or {}).get("persona")
+                if got_p != want_p:
+                    raise CouldNotJudge(f"{gid}: {arm}'s ImpAI played the persona {got_p}, not {rows[arm.lower()]}'s")
         out[gid] = (b, t)
     return out
 
 
-def verdict(base: dict, test: dict, mode: str) -> dict:
+def verdict(base: dict, test: dict, mode: str, rows: dict = None) -> dict:
     """The test over two arms' results (THE SEQUENTIAL TEST): {"exit", "verdict", "blocks" read, "pairs" read,
     "better", "worse", "ties", "mean" score, "llr", "trace" [(block, llr)], "losses" (TEST's), "unread" pairs}.
     CouldNotJudge as THE PAIRING says."""
-    ps = pairs(base, test)
+    ps = pairs(base, test, rows)
     lo, hi = bounds()
     s0, s1 = MODES[mode]
     out = {"mode": mode, "bounds": (lo, hi), "better": 0, "worse": 0, "ties": 0, "llr": 0.0, "mean": None,
@@ -244,15 +257,16 @@ def reported(base: dict, test: dict, ids) -> dict:
     return out
 
 
-def judge(base_dir: Path, test_dir: Path, mode: str) -> int:
+def judge(base_dir: Path, test_dir: Path, mode: str, rows: dict = None) -> int:
     try:
         base, test = read_arm(base_dir), read_arm(test_dir)
-        v = verdict(base, test, mode)
+        v = verdict(base, test, mode, rows)
     except CouldNotJudge as e:
         print(f"margin judge: COULD NOT JUDGE: {e}")
         return COULD_NOT
     s0, s1 = MODES[mode]
-    print(f"margin judge ({mode}: H0 s = {s0}, H1 s = {s1}, alpha = beta = {ALPHA}; tie band {TIE_BAND} ticks)")
+    print(f"margin judge ({mode}: H0 s = {s0}, H1 s = {s1}, alpha = beta = {ALPHA}; tie band {TIE_BAND} ticks)"
+          + (f"; settings: BASE {rows['base']}, TEST {rows['test']}" if rows else ""))
     print(f"  {v['blocks']} blocks read, {v['pairs']} pairs: TEST better {v['better']}, worse {v['worse']}, "
           f"ties {v['ties']}" + (f"; mean score {v['mean']:.4f}" if v["mean"] is not None else ""))
     print(f"  log-likelihood ratio {v['llr']:+.3f}, bounds [{v['bounds'][0]:+.3f}, {v['bounds'][1]:+.3f}]; by block: "
@@ -355,8 +369,28 @@ def fix_dlls(out: Path, base: Path, test: Path) -> dict:
     return got
 
 
-def play_block(k: int, ids: list, dlls: dict, out: Path, lanes: int) -> int:
-    """Both arms of block k, one `bar.py play` each, at once: the worse exit code."""
+def fix_rows(out: Path, base_row, test_row):
+    """THE SETTINGS of a run, {base, test: row} or None when neither arm names one (each arm's ImpAI as its pair
+    plays it): written at the first run as out/rows.json and refused when a later run names others. A row is a
+    PERSONA_ROWS row or bar.HARD_ROW."""
+    rows = None if base_row is None and test_row is None else {
+        "base": base_row or bar.HARD_ROW, "test": test_row or bar.HARD_ROW}
+    for r in (rows or {}).values():
+        if r != bar.HARD_ROW and r not in bar.PERSONA_ROWS:
+            raise CouldNotJudge(f"no settings row {r!r}: {bar.HARD_ROW} or one of {', '.join(bar.PERSONA_ROWS)}")
+    f = out / "rows.json"
+    if f.exists():
+        if json.loads(f.read_text()) != rows:
+            raise CouldNotJudge(f"{f} names other settings than {rows}: a run's arms are fixed at its first block")
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(rows) + "\n")
+    return rows
+
+
+def play_block(k: int, ids: list, dlls: dict, out: Path, lanes: int, rows: dict = None) -> int:
+    """Both arms of block k, one `bar.py play` each, at once: the worse exit code. With `rows` (THE SETTINGS) each
+    arm's ImpAI seat plays its row (`bar.py play --persona A=<row>`)."""
     f = out / "blocks" / f"block-{k:02d}.ids"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("\n".join(ids) + "\n")
@@ -366,7 +400,8 @@ def play_block(k: int, ids: list, dlls: dict, out: Path, lanes: int) -> int:
             procs.append(subprocess.Popen(
                 [sys.executable, str(HERE / "bar.py"), "play", "--ids", str(f), "--lanes", str(lanes),
                  "--dll", str(dlls[arm]), "--out", str(out / arm),
-                 "--values", ",".join(str(t) for t in VALUE_TIMES)], cwd=str(TREE)))
+                 "--values", ",".join(str(t) for t in VALUE_TIMES)]
+                + (["--persona", f"A={rows[arm]}"] if rows else []), cwd=str(TREE)))
         return max(p.wait() for p in procs)
     except KeyboardInterrupt:
         for p in procs:
@@ -382,6 +417,7 @@ def run(a, play=play_block) -> int:
     out = Path(a.out)
     try:
         dlls = fix_dlls(out, Path(a.base), Path(a.test))
+        rows = fix_rows(out, getattr(a, "base_row", None), getattr(a, "test_row", None))
     except (CouldNotJudge, OSError) as e:
         print(f"margin run: COULD NOT RUN: {e}")
         return COULD_NOT
@@ -393,8 +429,8 @@ def run(a, play=play_block) -> int:
         for k, ids in enumerate(bs, 1):
             jr.start("margin", f"block {k}")
             for attempt in (1, 2):
-                prc = play(k, ids, dlls, out, a.lanes)
-                rc = judge(out / "base", out / "test", a.mode)
+                prc = play(k, ids, dlls, out, a.lanes, rows)
+                rc = judge(out / "base", out / "test", a.mode, rows)
                 if rc != COULD_NOT or attempt == 2 or prc == 0:
                     break
                 print(f"margin run: block {k} again, for its games that could not run")
@@ -435,9 +471,15 @@ def main(argv=None) -> int:
     for x in (j, s):
         x.add_argument("--mode", choices=sorted(MODES), default="improve")
     r.add_argument("--mode", choices=sorted(MODES), required=True)
+    for x in (j, r):
+        x.add_argument("--base-row", default=None, metavar="ROW",
+                       help=f"THE SETTINGS: BASE's ImpAI on this persona row, or {bar.HARD_ROW} for none")
+        x.add_argument("--test-row", default=None, metavar="ROW", help="TEST's, likewise")
     a = p.parse_args(argv)
     if a.verb == "judge":
-        return judge(a.base, a.test, a.mode)
+        rows = None if a.base_row is None and a.test_row is None else {
+            "base": a.base_row or bar.HARD_ROW, "test": a.test_row or bar.HARD_ROW}
+        return judge(a.base, a.test, a.mode, rows)
     if a.verb == "asn":
         return cmd_asn(a.mode, a.width, a.alpha, a.runs)
     return run(a)
