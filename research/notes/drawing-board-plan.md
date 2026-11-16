@@ -2,9 +2,9 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 and 2 — the local
-board and its network channel — are built and verified on the branch
-([board](modules/board.html)); landings 3 to 6 are not.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 3 — the local
+board, its network channel and the allies' pointers — are built and verified on the branch
+([board](modules/board.html)); landings 4 to 6 are not.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -112,7 +112,8 @@ landings' notes as each one uses them.
    network game, paused and running. **Built.** The minimap ping went to landing 4 with the
    minimap's marks; the lifetime is counted in game ticks, so paused marks no longer fade.
 3. **Ally cursors**, from the POV cache: the arrow and name in the world and the dot on the
-   minimap, drawn 200 ms behind and interpolated between the last two samples.
+   minimap, drawn 200 ms behind and interpolated between the last two samples. **Built**, through
+   the playback's perspective clock and the board's marker table.
 4. **Finding marks.** Marks on the minimap and the new marker's ping there, the edge arrows, `Ctrl`+`\`, and each ally's controls
    (mute and last marker). Where those controls live is shown to the owner in a mockup first.
 5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings.

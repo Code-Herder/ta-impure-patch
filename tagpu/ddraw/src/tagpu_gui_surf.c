@@ -2425,6 +2425,36 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 }
             }
         }
+        /* THE ALLIES' POINTERS (the drawing board's cursor records, tagpu_board.c), over the view
+           box: a dot in the ally's colour on a black square. A world point maps into the box the
+           base picture was drawn on as the engine's minimap arm maps the other way,
+           world = (pointer - box) * extent / box (0x498DD5..0x498E2A, the extent main+0x1422B /
+           +0x1422F); the point is data, clamped to the extent before it is scaled. */
+        if (pal && pk->map_pxw > 0 && pk->map_pxh > 0) {
+            const TAGPU_PK_BOARD* bh = tagpu_pk_board(pk);
+            const TAGPU_PK_BDMARK* bm = bh ? tagpu_pk_bdmarks(pk) : NULL;
+            const int black = bh ? bh->black : 0;
+            unsigned k;
+            for (k = 0; bm && k < pk->n_bdmark; k++) {
+                float bk[4] = { 0.0f, 0.0f, 0.0f, 1.0f }, fc[4];
+                int ci = bm[k].colour, wx = bm[k].x, wz = bm[k].z;
+                float cx, cy;
+                if (!(bm[k].flags & TAGPU_PK_BDM_CURSOR)) continue;
+                if (wx < 0) wx = 0; else if (wx > pk->map_pxw) wx = pk->map_pxw;
+                if (wz < 0) wz = 0; else if (wz > pk->map_pxh) wz = pk->map_pxh;
+                cx = (float)mx + (float)((double)wx * mw / pk->map_pxw);
+                cy = (float)my + (float)((double)wz * mh / pk->map_pxh);
+                fc[0] = pal[4 * ci] / 255.0f; fc[1] = pal[4 * ci + 1] / 255.0f;
+                fc[2] = pal[4 * ci + 2] / 255.0f; fc[3] = 1.0f;
+                bk[0] = pal[4 * black] / 255.0f;
+                bk[1] = pal[4 * black + 1] / 255.0f;
+                bk[2] = pal[4 * black + 2] / 255.0f;
+                mir_sdraw(TAGPU_GUISK_FLAT, (cx - 2.5f) * kx, (cy - 2.5f) * ky, (cx + 2.5f) * kx,
+                          (cy + 2.5f) * ky, 0, 0, 0, 0, bk, 0);
+                mir_sdraw(TAGPU_GUISK_FLAT, (cx - 1.5f) * kx, (cy - 1.5f) * ky, (cx + 1.5f) * kx,
+                          (cy + 1.5f) * ky, 0, 0, 0, 0, fc, 0);
+            }
+        }
     }
     /* only when something was actually drawn: with `mmbase` set and
        `nominimap` also set, both blocks above are skipped and the heartbeat

@@ -279,4 +279,13 @@ int tagpu_rec_mp_economy(unsigned native, TAGPU_REC_ECON* out);
    when no capture point runs. A game with no channel drops the queue. Game thread. */
 void tagpu_rec_mp_board_frame(void);
 
+/* One contributing human's pointer, as the channel's camera and cursor samples (RECMP_POV, five a
+   second) put it now: `seat` in this peer's numbering, the world point under it. */
+typedef struct { unsigned seat; int32_t x, h, z; } TAGPU_REC_CURSOR;
+/* The roster's pointers on the world view or the minimap at the channel's tick, through the
+   perspective clock (persp_sample): one sample period (RECMP_POV_EVERY ticks, 200 ms at 30 a
+   second) behind, interpolated between the last two samples when both are on the world view.
+   The controlled player's own included. At most `cap`; 0 with no channel. Game thread. */
+unsigned tagpu_rec_mp_cursors(TAGPU_REC_CURSOR* out, unsigned cap);
+
 #endif

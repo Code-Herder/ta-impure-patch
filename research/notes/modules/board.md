@@ -26,7 +26,11 @@ ones it does. A new
 marker with text from a seat the player sees writes `Name: text` as a chat line in that seat's
 colour, at most one line a seat each 30 ticks.
 
-Ally cursors, the minimap, the edge arrows and the settings are the later landings of
+**Allies' pointers.** In a network game each ally's pointer is drawn where it is on the world: an
+arrow in the ally's colour with a black edge, the ally's name below and right of it, and a dot in
+the same colour on the minimap. A pointer on the HUD is not drawn. A watcher sees every player's.
+
+The minimap's marks, the edge arrows and the settings are the later landings of
 [the plan](../drawing-board-plan.html).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -149,6 +153,28 @@ consumption with it.
 as the live game drops rather than refuses one, so a malformed body cannot end a recording. The
 file tools read them (`tools/replay/recmp_file.py`, `board_ops`).
 
+## The allies' pointers (`tagpu_rec_mp_cursors`, `tagpu_board_fill`)
+
+No new traffic: the channel already carries every contributing human's camera and cursor five
+times a second (`RECMP_POV`, `tagpu_recpov.h`) into the live cache the recorder keeps for its
+recording (`tagpu_recmp_pov.h`, two samples an actor). `tagpu_rec_mp_cursors` reads it on the
+channel's game thread at the channel's tick through the playback's own perspective clock
+(`persp_sample`, `tagpu_persp.h`): one sample period (6 ticks, 200 ms) behind, so the two samples
+around the shown moment are in hand, and interpolated between them when both are on the world
+view; a pointer whose shown sample is on neither the world nor the minimap is left out. The board
+puts each seat the player sees, other than the player's own, after the markers as a
+`TAGPU_PK_BDMARK` with `TAGPU_PK_BDM_CURSOR`, its text the seat's name (`tagpu_share_name`); the
+table's cap is the store's 256 markers plus `TAGPU_PK_BD_CURSORS` (10), so a full store never
+crowds a pointer out. Only Impure peers on the channel contribute: an AI and a watcher (not a
+roster actor) have no pointer.
+
+The marker pass draws the replay overlay's arrow (`OV_ARROW`, its tip at the world point) filled in
+the ally's colour over the same arrow in black a screen pixel either way, then the name plate,
+after every marker. The GUI's minimap compose (`tagpu_gui_surf.c`, after the view box) maps the
+world point into the box the base picture was drawn on, the inverse of the engine's minimap arm
+(`world = (pointer - box) * extent / box`, `0x498DD5..0x498E2A`, [input](../engine/input.html)),
+the point clamped to the extent first, and draws a 3-pixel dot on a 5-pixel black square.
+
 ## The packet
 
 The packet carries the board by value (`tagpu_packet_pub.c`, `fill_board`): `TAGPU_PK_BOARD` (the
@@ -218,6 +244,11 @@ Two-player network games on Two Continents, both cameras pinned to one eye, MEAS
   same rows. The level's lines: the joiner `segs=956 erases=2 outbox_full=243`, the host
   `received=958 refused=0`; both channels `failed=00000000`, both recordings read to their end.
 
+Allies' pointers, MEASURED 2026-11-16 in the same games: allied, the joiner's pointer at (600, 350)
+drew on the host at (600, 350) as a red arrow named `BD-J`, and as a red dot inside the host's view
+box on the minimap; on the side panel it was not drawn, and back on the world at (300, 250) it
+was; not allied, the host drew none.
+
 Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
 there and back, each truncation and malformed field refused, the renumbering, the store's rights,
 eraser radius, ring, lifetime, a tick that goes back and the oldest marker's replacement — and
@@ -225,8 +256,11 @@ reads the body it writes with `recmp_file.board_ops`.
 
 ## Gaps
 
-- No ally cursors, minimap marks or pings, edge arrows, per-ally mute, settings, or marks in a
-  replay yet — landings 3 to 6 of the plan.
+- No minimap marks or pings, edge arrows, per-ally mute, settings, or marks in a replay yet —
+  landings 4 to 6 of the plan.
+- Allies' pointers freeze while the game is paused: their samples are taken at capture points.
+- The pointer's motion between samples was not measured frame by frame; the interpolation is the
+  playback's, which `tools/replay/persp_test.py` checks.
 - Two peers editing one marker at once can end with different text on each: each applies its own
   operation at once and the other's when it arrives.
 - A watcher's own marks are sent only when the channel's roster has an actor for the watcher's

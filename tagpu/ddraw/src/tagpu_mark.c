@@ -1320,9 +1320,10 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
 #define BD_STEM      20.0                      /* the stem's height                          */
 #define BD_PLATE_H   15.0                      /* the plate's height                         */
 #define BD_BOX_MIN   120.0                     /* the text box's least width                 */
+#define BD_CUR_QUADS 16                        /* an ally's pointer: 5 arrows of 5 triangles, a plate */
 #define MAXBDC       65536
 #define MAXBDK       (2 * MAXBDC)
-#define MAXBDQ       (((int)TAGPU_PK_MAX_BDMARK * 6 + 16) * QUADV)
+#define MAXBDQ       (((int)TAGPU_PK_MAX_BDMARK * 6 + (int)TAGPU_PK_BD_CURSORS * BD_CUR_QUADS + 16) * QUADV)
 #define MAXBDX       (8192 * QUADV)            /* glyphs, the markers' and the box's         */
 static float s_bdc[MAXBDC * MVST];
 static float s_bdk[MAXBDK * MVST];
@@ -1421,6 +1422,48 @@ static void bd_pin(double x, double y, int col, int black)
     bd_rect(x - BD_HEAD * p, y - (BD_STEM + 2.0 * BD_HEAD) * p, x + BD_HEAD * p, y - BD_STEM * p, col);
 }
 
+/* the pointer arrow, its tip at (0, 0), in screen px: the replay's overlays and the board's
+   allies draw it (gather_overlay, bd_cursor) */
+#define OV_ARROW_N   7
+static const float OV_ARROW[OV_ARROW_N][2] = {
+    { 0, 0 }, { 0, 15 }, { 4, 11 }, { 7, 17 }, { 9, 16 }, { 6, 10 }, { 11, 10 } };
+static const unsigned char OV_ARROW_TRI[5][3] = {
+    { 0, 1, 2 }, { 0, 2, 5 }, { 0, 5, 6 }, { 2, 3, 4 }, { 2, 4, 5 } };
+
+static void bd_tri(double ax, double ay, double bx, double by, double cx, double cy, int col)
+{
+    float c = (float)col / 255.0f;
+    if (s_nbdq + 3 > MAXBDQ) { s_bdover++; return; }
+    put_at(s_bdq, s_nbdq + 0, (float)ax, (float)ay, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 1, (float)bx, (float)by, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 2, (float)cx, (float)cy, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    s_nbdq += 3;
+}
+
+/* AN ALLY'S POINTER: the replay overlay's arrow (OV_ARROW, its tip at the world point), filled in
+   the ally's colour over the same arrow in black at a screen pixel either way, and the ally's name
+   in that colour on a black plate below and right of it. */
+static void bd_cursor(double x, double y, int col, int black, const char* name, unsigned len)
+{
+    static const double off[5][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { 0, 0 } };
+    const double p = s_px;
+    int k, j;
+    for (j = 0; j < 5; j++)
+        for (k = 0; k < 5; k++) {
+            const float* a = OV_ARROW[OV_ARROW_TRI[k][0]];
+            const float* b = OV_ARROW[OV_ARROW_TRI[k][1]];
+            const float* c = OV_ARROW[OV_ARROW_TRI[k][2]];
+            double ox = x + off[j][0] * p, oy = y + off[j][1] * p;
+            bd_tri(ox + a[0] * p, oy + a[1] * p, ox + b[0] * p, oy + b[1] * p, ox + c[0] * p,
+                   oy + c[1] * p, j < 4 ? black : col);
+        }
+    if (len) {
+        double l = x + 12.0 * p, t = y + 14.0 * p, w = bd_text_w(name, len) + 8.0 * p;
+        bd_rect(l, t, l + w, t + BD_PLATE_H * p, black);
+        bd_text(l + 4.0 * p, t + 3.0 * p, name, len, col);
+    }
+}
+
 static void gather_board(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
@@ -1453,7 +1496,7 @@ static void gather_board(const TAGPU_FXVIEW* v)
         const TAGPU_PK_BDMARK* m = &mk[i];
         double x, y;
         float fx, fy;
-        if (!bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
+        if ((m->flags & TAGPU_PK_BDM_CURSOR) || !bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
         fx = (float)x; fy = (float)y;
         snap_device(&fx, &fy);
         bd_pin(fx, fy, m->colour, black);
@@ -1472,6 +1515,15 @@ static void gather_board(const TAGPU_FXVIEW* v)
             bd_pin(fx, fy, h->colour, black);
             bd_plate(fx, fy, h->text, h->len, black, white, h->colour, blink);
         }
+    }
+    for (i = 0; i < pk->n_bdmark; i++) {
+        const TAGPU_PK_BDMARK* m = &mk[i];
+        double x, y;
+        float fx, fy;
+        if (!(m->flags & TAGPU_PK_BDM_CURSOR) || !bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
+        fx = (float)x; fy = (float)y;
+        snap_device(&fx, &fy);
+        bd_cursor(fx, fy, m->colour, black, m->text, m->len);
     }
     if ((h->flags & TAGPU_PK_BD_ERASE) && (h->flags & TAGPU_PK_BD_PEN)) {
         double cx, cy, xs[32], ys[32];
@@ -1508,11 +1560,6 @@ static void gather_board(const TAGPU_FXVIEW* v)
    vertex is made, so no triangle carries a far coordinate, and every line
    goes through put_line's TAGPU_LINE_FAR bound and the viewport clip. The
    buckets hold the acquire's TAGPU_PK_MAX_OVERLAY items of either kind. */
-#define OV_ARROW_N   7
-static const float OV_ARROW[OV_ARROW_N][2] = {
-    { 0, 0 }, { 0, 15 }, { 4, 11 }, { 7, 17 }, { 9, 16 }, { 6, 10 }, { 11, 10 } };
-static const unsigned char OV_ARROW_TRI[5][3] = {
-    { 0, 1, 2 }, { 0, 2, 5 }, { 0, 5, 6 }, { 2, 3, 4 }, { 2, 4, 5 } };
 #define OV_SEG       16
 #define OV_REACH     32
 #define MAXOVT       ((int)TAGPU_PK_MAX_OVERLAY * 5 * 3)      /* arrow triangle verts     */

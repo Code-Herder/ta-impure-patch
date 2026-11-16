@@ -569,9 +569,13 @@ typedef struct TAGPU_PK_BDMARK {
 } TAGPU_PK_BDMARK;
 
 #define TAGPU_PK_BDM_EDIT   1u  /* the text box edits it: the box is its label  */
+#define TAGPU_PK_BDM_CURSOR 2u  /* not a marker: an ally's pointer, its text the
+                                   ally's name (tagpu_rec_mp_cursors); never with
+                                   EDIT                                          */
 
 #define TAGPU_PK_MAX_BDSEG  4096u
-#define TAGPU_PK_MAX_BDMARK 256u
+#define TAGPU_PK_BD_CURSORS 10u /* a pointer a seat, after every marker          */
+#define TAGPU_PK_MAX_BDMARK (256u + TAGPU_PK_BD_CURSORS)
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns

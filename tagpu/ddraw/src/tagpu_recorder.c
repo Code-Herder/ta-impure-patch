@@ -95,6 +95,7 @@
 #include "tagpu_recmp_chat_inbox.h"
 #include "tagpu_recmp_text.h"
 #include "tagpu_recmp_pov.h"
+#include "tagpu_persp.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_reccodec.h"
@@ -5929,6 +5930,27 @@ void tagpu_rec_mp_board_frame(void)
     while (tagpu_recmp_head_kind(s_mp_channel) == RECMP_MARK &&
            tagpu_recmp_take_at(s_mp_channel, &packet, s_mp_tick) == 1)
         mp_mark_apply(&packet, s_mp_tick);
+}
+
+unsigned tagpu_rec_mp_cursors(TAGPU_REC_CURSOR* out, unsigned cap)
+{
+    unsigned i, k, n = 0;
+    if (!s_mp_channel || !s_mp_pov || !s_mp_advanced || !s_mp_tid || GetCurrentThreadId() != s_mp_tid)
+        return 0;
+    for (i = 0; i < s_mp_roster.count && n < cap; i++) {
+        RecMpPovState st;
+        RecPov pov[2], at;
+        unsigned tick[2];
+        if (!tagpu_recmp_pov_get(s_mp_pov, s_mp_roster.actor[i].origin, &st) || !st.count ||
+            st.count > 2) continue;
+        for (k = 0; k < st.count; k++) { pov[k] = st.sample[k].pov; tick[k] = st.sample[k].applied_tick; }
+        if (persp_sample(st.count, pov, tick, s_mp_tick, &at) == PERSP_NONE ||
+            !(at.flags & (REC_POV_WORLD | REC_POV_MINIMAP))) continue;
+        out[n].seat = s_mp_roster.actor[i].seat;
+        out[n].x = at.cur_x; out[n].h = at.cur_h; out[n].z = at.cur_z;
+        n++;
+    }
+    return n;
 }
 
 /* The controlled player's click as its actor's RECMP_CLICK. A refused publication refuses the

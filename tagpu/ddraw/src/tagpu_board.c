@@ -681,6 +681,25 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
         o->flags = (uint8_t)(s_box.open && s_box.id == m->id ? TAGPU_PK_BDM_EDIT : 0);
         o->len = (uint8_t)text_copy(o->text, m->text, m->len);
     }
+    /* THE ALLIES' POINTERS, after every marker: the store holds at most TAGPU_BS_MARKS markers, so
+       the TAGPU_PK_BD_CURSORS records past them are always free for these */
+    {
+        TAGPU_REC_CURSOR cur[TAGPU_PK_BD_CURSORS];
+        unsigned nc = tagpu_rec_mp_cursors(cur, TAGPU_PK_BD_CURSORS), me = (unsigned)w.player;
+        for (i = 0; i < nc; i++) {
+            char name[TAGPU_PK_BD_TEXT + 1];
+            TAGPU_PK_BDMARK* o;
+            if (cur[i].seat >= 10 || cur[i].seat == me || !(see >> cur[i].seat & 1u)) continue;
+            if (*nm >= maxm) { *cut = 1; break; }
+            o = &marks[(*nm)++];
+            memset(o, 0, sizeof *o);
+            o->x = cur[i].x; o->h = cur[i].h; o->z = cur[i].z;
+            o->colour = col[cur[i].seat];
+            o->flags = TAGPU_PK_BDM_CURSOR;
+            if (tagpu_share_name(cur[i].seat, name, sizeof name))
+                o->len = (uint8_t)text_copy(o->text, name, (unsigned)strlen(name));
+        }
+    }
     return 1;
 }
 
