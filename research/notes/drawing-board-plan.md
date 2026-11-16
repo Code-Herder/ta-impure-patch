@@ -2,8 +2,9 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landing 1, the local board,
-is built and verified on the branch ([board](modules/board.html)); landings 2 to 6 are not.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 and 2 — the local
+board and its network channel — are built and verified on the branch
+([board](modules/board.html)); landings 3 to 6 are not.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -30,7 +31,7 @@ were read as guides only. Every fact the code rests on comes from our own disass
 | Mute | Per ally, on the local player's screen only: cursor, markers, lines. A muted ally's erase removes only their own marks | TADR, new |
 | Lifetime | Markers and lines fade after 60 s; an option keeps them until erased | BAR, TADR |
 | Sender | Every message names its seat | BAR |
-| Spam limit | One player's marks are dropped once more than 25 arrive less than 50 ms apart | BAR |
+| Spam limit | A new marker's chat line at most once a seat each 30 ticks; the marks are bounded by the store, the body and the channel's queue rather than by a rate. BAR's rule (a player's marks dropped once more than 25 arrive less than 50 ms apart) would drop an ordinary fast stroke here, which is sent once a frame | BAR, changed |
 | Watchers | See every player's marks and cursors; their own marks reach only other watchers | BAR |
 | Replays | Marks are recorded; the replay HUD gets a Marks switch beside Cursors, Clicks, Selections and Chat | BAR, Impure |
 
@@ -107,11 +108,12 @@ landings' notes as each one uses them.
 2. **Allies receive it.** `RECMP_MARK` everywhere a kind is listed (`tagpu_recmp.c`'s two lists,
    the stream ledger, the journal, the history's `semantic()`, `mp_apply`,
    `tools/replay/recmp_file.py`, `recmp_cut_test.c`), `RECMP_START_VERSION` raised, the paused
-   take, the ally and watcher filter, the chat line, the minimap ping and the spam limit. Verified
-   in a two-player network game, paused and running.
+   take, the ally and watcher filter, the chat line and the spam limit. Verified in a two-player
+   network game, paused and running. **Built.** The minimap ping went to landing 4 with the
+   minimap's marks; the lifetime is counted in game ticks, so paused marks no longer fade.
 3. **Ally cursors**, from the POV cache: the arrow and name in the world and the dot on the
    minimap, drawn 200 ms behind and interpolated between the last two samples.
-4. **Finding marks.** Marks on the minimap, the edge arrows, `Ctrl`+`\`, and each ally's controls
+4. **Finding marks.** Marks on the minimap and the new marker's ping there, the edge arrows, `Ctrl`+`\`, and each ally's controls
    (mute and last marker). Where those controls live is shown to the owner in a mockup first.
 5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings.
 6. **Replays.** The history keeps the marks so a seek restores them; the replay HUD's Marks switch.

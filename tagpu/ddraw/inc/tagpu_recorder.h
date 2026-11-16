@@ -272,4 +272,11 @@ typedef struct {
 } TAGPU_REC_ECON;
 int tagpu_rec_mp_economy(unsigned native, TAGPU_REC_ECON* out);
 
+/* The drawing board's half of the contribution channel, every frame from the in-play handler
+   (tagpu_board.c): the player's queued operations sent as RECMP_MARK at the channel's capture
+   tick, then every RECMP_MARK at the head of the delivered queue applied, up to the first packet
+   of another kind -- which keeps delivery order and lets marks arrive while the game is paused,
+   when no capture point runs. A game with no channel drops the queue. Game thread. */
+void tagpu_rec_mp_board_frame(void);
+
 #endif

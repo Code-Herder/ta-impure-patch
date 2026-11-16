@@ -2008,10 +2008,10 @@ Owner decisions, 2026-10-06: 4a, each player's explored map (above); 4b,
 chat played back with its audiences, every message in full-map mode and only
 what a player received in that player's view, with a hide-chat toggle; 4c,
 every player's camera, cursor, clicks and selections recorded and shown as
-overlays, in skirmish recordings too (the human seat). Pings and drawings are
-dropped until Impure has such a feature: stock TA has none [INFERRED: no ping
-or marker message found; TADR's markers are not ported], and a future one
-follows chat's audience rules.
+overlays, in skirmish recordings too (the human seat). Stock TA has no ping or
+drawing [INFERRED: no ping or marker message found]; Impure's drawing board
+([board](../modules/board.html)) contributes its operations as kind 16 below,
+and each viewer is shown its own team's.
 
 4c is its own plan, [demo-recorder-perspective-streams.md](demo-recorder-perspective-streams.md).
 Its skirmish landings 4c-1 to 4c-3 record the human seat in the primary stream
@@ -2024,6 +2024,7 @@ run between two peers ([4c-4 as built](demo-recorder-perspective-streams.md#4c-4
 | 13 | `RECMP_POV` | one `RecPov`, 32 bytes: view, applied zoom, camera centre, cursor | at most every 6 ticks (5 Hz), when it changed and the transmit queue has 64 free slots |
 | 14 | `RECMP_CLICK` | one `RecClick`, 20 bytes | from the click redirects, at the channel's capture tick |
 | 15 | `RECMP_SELECT` | a `RecSel` head and at most 670 `(slot, birth)` entries | the whole selection, BEGIN to END, when it changed other than by a death |
+| 16 | `RECMP_MARK` | the drawing board's operations, `tagpu_boardwire.h`: a version, the sender's seat, then POINT, EDIT, MOVE, DELETE, LINE and ERASE in the sender's numbering of the seats | every frame the player has drawn, at the channel's capture tick; taken at the capture point or, at the head of the queue, between two (format 29) |
 
 Every payload's player byte is 0xFF, since the origin names the actor. A
 selection's slots lie in the actor's roster block. A seal is refused while a

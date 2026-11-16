@@ -297,6 +297,47 @@ int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
     return n;
 }
 
+/* the level gates of player(), without its controlled-record tests: the main block or NULL */
+static char* level_main(void)
+{
+    if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing() ||
+        !tagpu_packet_pub_level_open()) return NULL;
+    return *(char**)(uintptr_t)TA_MAIN;
+}
+
+unsigned tagpu_share_board_seen(void)
+{
+    char* ta = level_main();
+    const char* me;
+    const unsigned char* info;
+    unsigned c, j, mask, watching;
+    if (!ta || (c = (unsigned char)ta[OFF_CONTROLLED]) >= PLAYERS) return 0;
+    me = ta + OFF_PLAYERS + c * PL_STRIDE;
+    info = *(const unsigned char* const*)(me + PL_INFO);
+    if (!*(const unsigned*)(me + PL_ACTIVE) || !info) return 0;
+    watching = (info[PI_WATCH] & 0x40) != 0;
+    mask = 1u << c;
+    for (j = 0; j < PLAYERS; j++) {
+        const char* rec = ta + OFF_PLAYERS + j * PL_STRIDE;
+        const unsigned char* other = *(const unsigned char* const*)(rec + PL_INFO);
+        if (j == c || !*(const unsigned*)(rec + PL_ACTIVE) || !other) continue;
+        if (watching) { mask |= 1u << j; continue; }
+        if (other[PI_WATCH] & 0x40) continue;
+        if (me[PL_ALLY + j] == 1 && (me[PL_ALLIED_BY + j] == 1 || rec[PL_ALLY + c] == 1)) mask |= 1u << j;
+    }
+    return mask;
+}
+
+int tagpu_share_name(unsigned index, char* out, unsigned cap)
+{
+    char* ta = level_main();
+    if (!ta || index >= PLAYERS || !cap) return 0;
+    if (cap > NAME_LEN + 1) cap = NAME_LEN + 1;
+    memcpy(out, ta + OFF_PLAYERS + index * PL_STRIDE + PL_NAME, cap - 1);
+    out[cap - 1] = 0;
+    return 1;
+}
+
 int tagpu_share_stored(float out[2])
 {
     Me m;

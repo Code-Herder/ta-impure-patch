@@ -27,7 +27,7 @@ def run(output):
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_text_test.c",
                      TREE / "tagpu/ddraw/src/tagpu_recmp_text.c",
                      *(TREE / f"tagpu/ddraw/src/{name}.c" for name in
-                       ("tagpu_recmp_players", "tagpu_recmp_history", "tagpu_recmp_file_state",
+                       ("tagpu_recmp_players", "tagpu_recmp_history", "tagpu_boardwire", "tagpu_recmp_file_state",
                         "tagpu_recmp_stream", "tagpu_recmp_units", "tagpu_recmp_named",
                         "tagpu_recmp_roots", "tagpu_recmp_orders", "tagpu_recmp_explored", "tagpu_recmp_pov",
                         "crc32")),

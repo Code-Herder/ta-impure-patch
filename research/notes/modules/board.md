@@ -13,10 +13,18 @@ Hold **`\`** over the world view and draw on the ground:
 
 In the text box, the engine font's glyphs `0x20..0x7E` type, up to 60; Backspace deletes, Return
 keeps the text and Esc drops it; a click anywhere closes it as Esc does. A line or marker is gone
-60 s after it was made. The level's end clears everything.
+after 60 s of game time (1800 ticks), so a paused game keeps its marks. The level's end clears
+everything.
 
-This is the local half: what one player draws is drawn on their own screen only. The channel to
-allies, their cursors, the minimap and the settings are the later landings of
+**Who sees what.** Each player sees their own marks, their mutual allies' and, as a watcher,
+everyone's; a watcher's marks are seen by watchers alone (`tagpu_share_board_seen`, the alliance
+rule of the allied panel). An ally may edit, move, delete and erase any mark the player sees; any
+other seat's operations change only that seat's own marks. In a network game every peer receives
+every player's operations, whoever sees them, so every peer's recording holds them all. A new
+marker with text from a seat the player sees writes `Name: text` as a chat line in that seat's
+colour, at most one line a seat each 30 ticks.
+
+Ally cursors, the minimap, the edge arrows and the settings are the later landings of
 [the plan](../drawing-board-plan.html).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -72,18 +80,62 @@ a second press there can be the double click that deletes that marker alone.
 **A marker's hit** is its pin: from its ground point to 30 screen px above, 9 either side; the
 nearest the viewer wins when pins overlap.
 
-## The store and the packet
+## The operations and the store (`tagpu_boardwire.c`, `tagpu_boardstore.c`, pure C)
 
-Markers by id (the owner's seat in the top byte, a per-seat sequence below), 256 of them, the
-oldest replaced when full; line segments in a ring of 4096 that drops the oldest. Each keeps its
-owner and its birth time (`GetTickCount`). Nothing here is read by the simulation and nothing here
-writes engine memory; `thread-split.allow` lists the file as `publisher presentation`.
+Every change to the marks is an **operation** — POINT (a new marker), EDIT (its text), MOVE,
+DELETE, LINE (one segment), ERASE (a point the eraser passed) — applied by one state machine,
+`tagpu_boardstore_apply(store, seat, op, tick, may)`. The player's own gestures apply theirs at
+once; the channel's arrive in delivery order; a replay will apply a recording's. The same
+operations at the same ticks under the same masks give the same marks.
+
+The store keeps markers by id — the maker's seat in the top byte and the maker's sequence below,
+never 0 — 256 of them, the oldest replaced when full; and line segments in a ring of 4096 that
+drops the oldest. Each keeps its owner and its birth tick (`main+0x38A47`, GameTime). `may` is a
+bit per seat whose marks the operation may change besides its own seat's. A POINT whose id exists
+changes nothing. Nothing here is read by the simulation and nothing here writes engine memory;
+`thread-split.allow` lists `tagpu_board.c` as `publisher presentation`, and the two pure files
+name no engine memory.
+
+A gesture's operation is queued for the channel only when it changed something here: a peer
+applies it under its own masks, which never let it change more than it changed here.
+
+## In a network game (`tagpu_recorder.c`, the contribution channel)
+
+The operations travel as the contribution kind **`RECMP_MARK` (16)**, whose body is
+`tagpu_boardwire.h`'s: a version byte, the sender's seat, then whole operations. It runs where the
+channel runs — every network game between Impure peers, recording or not
+([recorder](recorder.html)) — and `RECMP_START_VERSION` 4 keeps an older peer from taking a game
+whose first mark it would refuse.
+
+**Every frame**, from the in-play handler (`tagpu_rec_mp_board_frame`, on the channel's own game
+thread, after its first advance): the queued operations go out as bodies of at most
+`RECMP_BODY_MAX` bytes, four a frame at most and only while the transmit queue keeps 64 slots
+free, at the channel's capture tick; then every `RECMP_MARK` at the head of the delivered queue is
+taken and applied, up to the first packet of another kind. **That keeps delivery order** — the
+capture point takes everything else as before, marks included when one is queued behind another
+kind — and lets marks arrive while the game is paused, when no capture point runs. Their
+application tick is the last capture point's, which no later take is below.
+
+**The sender's numbering.** Every peer is its own record 0, so a seat number means nothing across
+peers. A body names its seat and its markers' owners as its sender numbers them; the receiver
+checks that the sender's own roster gives the packet's origin that seat, and renumbers the body's
+seat and every marker id's owner through the channel's seat map (`tagpu_recmp_seat_map`,
+`tagpu_boardwire_reseat`) before applying it. A marker id thus keeps its owner and sequence on
+every peer. A body that fails any of this is dropped and counted, never refused: the board is
+display state, and a refusal would end every other kind's consumption with it.
+
+**Recordings.** The journal keeps the bodies as sent; format 29 is format 28 with them
+(`tagpu_recfmt.h`), and the history accepts a well-formed body of a source its roster names. The
+file tools read them (`tools/replay/recmp_file.py`, `board_ops`).
+
+## The packet
 
 The packet carries the board by value (`tagpu_packet_pub.c`, `fill_board`): `TAGPU_PK_BOARD` (the
 key, the pen, the text box and its text, this player's colour, the GUI black), at most 4096
-`TAGPU_PK_BDSEG` and 256 `TAGPU_PK_BDMARK`, each segment and marker with its owner's colour, read
-from the seat's logo (`tagpu_packet_pub_player_logo`, `tagpu_replay_logo_colour`, cached per logo
-for the level). The fill drops what has outlived the 60 s first. A cut sets
+`TAGPU_PK_BDSEG` and 256 `TAGPU_PK_BDMARK` of the seats the player sees, each segment and marker
+with its owner's colour, read from the seat's logo (`tagpu_packet_pub_player_logo`,
+`tagpu_replay_logo_colour`, cached per logo for the level). The fill drops what has outlived the
+lifetime first. A cut sets
 `TAGPU_PK_TRUNC_BOARD`. The acquire (`tagpu_packet.c`) bounds every coordinate to
 ±`TAGPU_PK_PLACE_COORD`, every text to its length with glyphs in range and a NUL, the flags to their
 bits and the counts to the caps, so the marker pass reads them as given.
@@ -125,11 +177,34 @@ MEASURED 2026-11-15:
 - everything made more than 60 s before a frame was gone from it; the level's end logged
   `board: level end marks=0 segs=1 erases=0 dropped=0`.
 
+Two-player network games on Two Continents, both cameras pinned to one eye, MEASURED 2026-11-16:
+
+- **allied** (`mp_lobby.sh --allies`): the host's line and its marker `Hi` drew on the joiner,
+  with the chat line `BD-H: Hi` led by the host's colour, and the joiner's pin on the host;
+- **paused** (the tick held at 626 on both): the joiner's line drew on the host, and the host's
+  drag on the joiner's pin moved it on both screens; after the pause both channels read
+  `failed=00000000` with nothing refused;
+- **not allied**: each peer logged the other's bodies (`recmp: remote marks …`) and drew none of
+  them, and no chat line came;
+- both peers recorded (format 29, 0 corrections); `tarec.py check` read each to its end, the
+  contributions through `recmp_file.History`, and the host's file played in the game past its
+  marks' ticks with nothing refused.
+
+Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
+there and back, each truncation and malformed field refused, the renumbering, the store's rights,
+eraser radius, ring, lifetime, a tick that goes back and the oldest marker's replacement — and
+reads the body it writes with `recmp_file.board_ops`.
+
 ## Gaps
 
-- Local only: allies see nothing yet, and there are no ally cursors, minimap marks, edge arrows or
-  settings — landings 2 to 6 of the plan.
-- The lifetime is wall time, so marks fade while the game is paused.
+- No ally cursors, minimap marks or pings, edge arrows, per-ally mute, settings, or marks in a
+  replay yet — landings 3 to 6 of the plan.
+- Two peers editing one marker at once can end with different text on each: each applies its own
+  operation at once and the other's when it arrives.
+- A watcher's own marks are sent only when the channel's roster has an actor for the watcher's
+  seat; not measured.
+- The spam limit is the chat line's (one a seat each 30 ticks); the marks themselves are bounded by
+  the store, the body and the channel's queue, not by a rate.
 - The key is fixed at `VK_OEM_5`, which types `\` on a US layout and another key elsewhere.
 - No real-mouse run yet: the measurements are tacli's injected input on the shield's path. The
   real window-procedure path shares the module's calls but was not driven; the removal of the draw
