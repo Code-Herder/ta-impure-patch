@@ -22,6 +22,8 @@ struct HUDLAY {
     HUDGLOBALS  g;
     int         max_hot;        /* tagpu_hudlay_max_hot */
     int         live_hot;       /* the live HUD's part of it (live())                         */
+    int         allies_hot;     /* the allies' ribbon's (allies()): a chip a seat, and give()'s
+                                   plate, sliders and Send                                    */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
     HUDTEXTW    measure;        /* tagpu_hudlay_measure; NULL until given            */
@@ -117,6 +119,14 @@ static int part_index(const HUDLAY* l, const char* name)
     for (i = 0; i < l->nparts; i++)
         if (!strcmp(l->part[i].name, name)) return i;
     return -1;
+}
+
+/* the depth of a nine-slice part's top edge in units: a plate's title band (picker_one's), which a
+   title is centred in whatever the layout's pads are */
+static double band(C* c, const char* part)
+{
+    int k = part_index(c->l, part);
+    return k >= 0 && c->l->part[k].kind == HK_NINE ? c->l->part[k].slice[0] / c->l->part[k].scale : 0;
 }
 
 /* a part at box b; `opacity` < 1 for a disabled control */
@@ -826,14 +836,28 @@ static void takeover(C* c, R tb)
    every target is held to the recording's last GameTime, which is before G -- so t < T exactly
    in the past (tagpu_hudstate.c, present_live). ---------- */
 
+/* The live rewind's button, in the top bar's own pixels beside the sprocket: the live HUD's, and
+   the allies' ribbon's while the rewind is idle (hud.js `live`, `allies`). */
+static void rewind_button(C* c, int down)
+{
+    const HUDSTATE* st = c->st;
+    const TJV* E = obj(c, obj(c, obj(c, c->L, "proposed"), "live"), "entry");
+    double k = st->top / num(c, E, "bar"), es = num(c, E, "s") * k;
+    BTN b;
+    memset(&b, 0, sizeof b);
+    b.key = "rewind";
+    c->top = 1;
+    button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), down);
+    c->top = 0;
+}
+
 static void live(C* c)
 {
     const HUDSTATE* st = c->st;
-    const TJV *Lv = obj(c, obj(c, c->L, "proposed"), "live"), *E = obj(c, Lv, "entry"), *S = obj(c, Lv, "strip");
+    const TJV *Lv = obj(c, obj(c, c->L, "proposed"), "live"), *S = obj(c, Lv, "strip");
     const TJV *Sb = obj(c, S, "button"), *trs = arr(c, S, "transport"), *acts = arr(c, S, "actions");
     const TJV *Tr = obj(c, S, "track"), *fill = obj(c, Tr, "fill"), *ph = obj(c, Tr, "playhead");
     const TJV *Nw = obj(c, S, "now"), *Tm = obj(c, S, "time");
-    double k = st->top / num(c, E, "bar"), es = num(c, E, "s") * k;
     double x, w, y, h, pad, gap, ih, cx, right = 0, tw, th, ends, p = st->T > 0 ? st->t / st->T : 0;
     char t0[16], t1[16], tx[48];
     BTN b;
@@ -841,11 +865,7 @@ static void live(C* c)
     R tb;
     int i;
 
-    memset(&b, 0, sizeof b);
-    b.key = "rewind";
-    c->top = 1;
-    button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
-    c->top = 0;
+    rewind_button(c, st->rw_down);
     if (!st->live_open) return;
     c->top = 1;
 
@@ -1585,8 +1605,9 @@ static void picker(C* c)
     clock_s(t0, sizeof t0, st->t);
     snprintf(s, sizeof s, "Take over at\xC2\xA0%s\xC2\xA0" "as", t0);     /* NO-BREAK SPACEs */
     memset(&p, 0, sizeof p);
-    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y + pad,
-                   w - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), th), str(c, Ti, "style"), &p, 0, 0);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y,
+                   w - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), band(c, str(c, Pk, "part"))),
+         str(c, Ti, "style"), &p, 0, 0);
     for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
         const HUDSEAT* q = &st->seat[k];
         R rb = box(x + pad, y + pad + th + k * (rh + rg), w - 2 * pad, rh);
@@ -1620,6 +1641,173 @@ static void picker(C* c)
         snprintf(s, sizeof s, "replaces F%d, the one watched least recently", r->id);
         text(c, s, box(lx, y0 + line, lw, line), str(c, Wr, "style"), &p, wrgb, 0);
     }
+}
+
+/* ---- a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under
+   the top bar in the allies' order, wrapping to another row under it when one is full, the last
+   row right-aligned too. A chip is a control: its plate, the player's colour down its left edge,
+   the name, and a cell a resource with the storage as a strip along its bottom; with the rates
+   known, `+income` at the cell's left and `-spending` at its right in the signs' colours, and while
+   the ally shares the resource, a mark at its share level across the strip. Its lamp is always
+   drawn, dark; while a resource is under `stall` of its storage and, with the rates known, its
+   spending is above its income, it blinks: lit for the first half of every `period` of the wall
+   clock (st->wall) and dark for the second; its parts carry their glow, `glow` round the painting's
+   box -------------------------------------------------------------------------------------------- */
+
+static void give(C* c, const HUDSEAT* q, R cb);
+
+static void allies(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *Ce = obj(c, A, "cell"), *Lp = obj(c, A, "lamp");
+    const TJV *Nm = obj(c, A, "name"), *Sb = obj(c, Ce, "strip"), *Rt = obj(c, Ce, "rates"), *Mk = obj(c, Ce, "mark");
+    double mw = num(c, Mk, "w"), mover = num(c, Mk, "over"), munder = num(c, Mk, "under"), medge = num(c, Mk, "edge");
+    uint32_t mrgb = hexrgb(str(c, Mk, "colour")), mergb = hexrgb(str(c, Mk, "edge_colour"));
+    double w = num(c, A, "w"), h = num(c, A, "h"), gap = num(c, A, "gap"), r = num(c, A, "r");
+    double ch = num(c, Ce, "h"), cg = num(c, Ce, "gap"), stall = num(c, Lp, "stall");
+    double period = num(c, Lp, "period"), glow = num(c, Lp, "glow");
+    double per_ = floor((st->W - r - st->panel - num(c, A, "l") + gap) / (w + gap));
+    int per = per_ >= 1 ? (int)per_ : 1, lit = period > 0 && fmod(st->wall, period) < period / 2, k, j;
+    int open = -1;
+    R ob = box(0, 0, 0, 0);
+    F f = frame(c->l, w, h, NULL);
+    char key[HUD_KEYLEN];
+    PL p;
+
+    if (st->rewind) rewind_button(c, 0);
+    for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
+        const HUDSEAT* q = &st->seat[k];
+        int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;
+        R b = box(st->W - r - w - (m - 1 - k % per) * (w + gap), st->top + num(c, A, "t") + row * (h + gap), w, h);
+        if (k == st->give) { open = k; ob = b; }
+        /* an ally who is out of the game takes no give: its chip is drawn disabled, and its click
+           is the HUD's and runs nothing */
+        if (q->out) {
+            hot(c, b, "ally_off");
+            group_begin(c, num(c, A, "off"));
+        } else {
+            snprintf(key, sizeof key, "ally:%d", q->id);
+            hot(c, b, key);
+        }
+        art(c, str(c, A, "part"), b, 1);
+        memset(&p, 0, sizeof p);
+        p.hasw = 1; p.w = num(c, obj(c, A, "stripe"), "w"); p.ax = 'l';
+        solid(c, at(place(c, &f, &p), b.x, b.y), q->colour, 1);
+        p = spec(Nm);
+        text(c, q->name, at(place(c, &f, &p), b.x, b.y), str(c, Nm, "style"), &p, 0, 0);
+        for (j = 0; j < 2; j++) {
+            double v = j ? q->e : q->m, max = j ? q->emax : q->mmax, fr = max > 0 ? v / max : 0;
+            double in = j ? q->ei : q->mi, out = j ? q->eo : q->mo, lv = j ? q->es : q->ms;
+            R cb, sb;
+            F cf;
+            p = spec(Ce);
+            p.pad[1] += j * (ch + cg);
+            cb = at(place(c, &f, &p), b.x, b.y);
+            cf = frame(c->l, cb.w, cb.h, NULL);
+            p = spec(Sb);
+            sb = at(place(c, &cf, &p), cb.x, cb.y);
+            /* the lamp: under `stall` of storage, and with the rates known, spending above income */
+            if (max > 0 && v < stall * max && (!q->rates || out > in)) stalled = 1;
+            art(c, str(c, Ce, "part"), cb, 1);
+            if (fr > 0) solid(c, box(sb.x, sb.y, sb.w * (fr < 1 ? fr : 1), sb.h), c->l->g.res_rgb[j], 1);
+            /* the ally's share level, while it shares this resource: a mark across the strip, edged */
+            if (max > 0 && lv >= 0 && lv <= max) {
+                R mb = box(sb.x + sb.w * lv / max - mw / 2, sb.y - mover, mw, sb.h + mover + munder);
+                solid(c, box(mb.x - medge, mb.y - medge, mb.w + 2 * medge, mb.h + 2 * medge), mergb, 1);
+                solid(c, mb, mrgb, 1);
+            }
+            /* its income and spending, with the rates known */
+            if (q->rates) {
+                char s[24], t[24];
+                R tb;
+                p = spec(Rt);
+                tb = at(place(c, &cf, &p), cb.x, cb.y);
+                s[0] = '+';
+                rate(s + 1, sizeof s - 1, in);
+                snprintf(t, sizeof t, "\xe2\x88\x92");
+                rate(t + 3, sizeof t - 3, out);
+                p.centre = 0;
+                text(c, s, tb, str(c, Rt, "style"), &p, c->l->g.pos_rgb, 0);
+                p.centre = 2;
+                text(c, t, tb, str(c, Rt, "style"), &p, c->l->g.neg_rgb, 0);
+            }
+        }
+        {
+            R lb;
+            p = spec(Lp);
+            lb = at(place(c, &f, &p), b.x, b.y);
+            art(c, str(c, Lp, stalled && lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
+        }
+        if (q->out) group_end(c);
+    }
+    if (open >= 0) give(c, &st->seat[open], ob);
+}
+
+/* The give panel under the chip cb of ally q: the title, the ally's stored value and storage a
+   resource, a slider a resource from 0 to what the player can give (give_max) at the amount asked
+   (give_amt), the amount beside it, and Send, disabled while both amounts are 0. The panel is the
+   HUD's whole, a control under its own. */
+static void give(C* c, const HUDSEAT* q, R cb)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *G = obj(c, A, "give");
+    const TJV *Ti = obj(c, G, "title"), *In = obj(c, G, "info"), *Rw = obj(c, G, "row"), *Nm = obj(c, G, "num");
+    const TJV *Tr = obj(c, G, "track"), *Ph = obj(c, Tr, "playhead"), *Sd = obj(c, G, "send");
+    const TJV *tp = arr(c, Ti, "pad"), *ip = arr(c, In, "pad"), *rp = arr(c, Rw, "pad"), *fp = arr(c, obj(c, Tr, "fill"), "pad");
+    double pad = num(c, G, "pad"), gw = num(c, G, "w"), th = num(c, Ti, "h"), line = num(c, In, "line");
+    double rh = num(c, Rw, "h"), rg = num(c, Rw, "gap"), nw = num(c, Nm, "w"), ends = num(c, Tr, "ends");
+    double sw = num(c, Sd, "w"), sh = num(c, Sd, "h"), pw = num(c, Ph, "w");
+    double h = pad + th + tj_num(tj_at(ip, 1), 0) + 2 * line + tj_num(tj_at(ip, 3), 0) + 2 * (rg + rh) + num(c, Sd, "gap") + sh + pad;
+    double x = fmin(fmax(cb.x + num(c, G, "dx"), st->panel + num(c, A, "l")), st->W - num(c, A, "r") - gw);
+    double y0 = cb.y + cb.h + num(c, G, "gap"), x0 = pad + tj_num(tj_at(rp, 0), 0), x1 = gw - pad - tj_num(tj_at(rp, 2), 0);
+    double tw = x1 - x0 - nw - num(c, Nm, "gap"), y;
+    char s[96], v0[24], v1[24];
+    int j;
+    PL p;
+    BTN b;
+
+    hot(c, box(x, y0, gw, h), "give");
+    art(c, str(c, G, "part"), box(x, y0, gw, h), 1);
+    memset(&p, 0, sizeof p);
+    snprintf(s, sizeof s, "Give to %s", q->name);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y0, gw - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0),
+                   band(c, str(c, G, "part"))), str(c, Ti, "style"), &p, 0, 0);
+    y = pad + th + tj_num(tj_at(ip, 1), 0);
+    for (j = 0; j < 2; j++) {
+        k1(v0, sizeof v0, j ? q->e : q->m);
+        k1(v1, sizeof v1, j ? q->emax : q->mmax);
+        snprintf(s, sizeof s, "%s %s / %s", j ? "Energy" : "Metal", v0, v1);
+        text(c, s, box(x + pad + tj_num(tj_at(ip, 0), 0), y0 + y + j * line,
+                       gw - 2 * pad - tj_num(tj_at(ip, 0), 0) - tj_num(tj_at(ip, 2), 0), line), str(c, In, "style"), &p, 0, 0);
+    }
+    y += 2 * line + tj_num(tj_at(ip, 3), 0);
+    for (j = 0; j < 2; j++) {
+        double amt = st->give_amt[j], max = st->give_max[j], f = max > 0 ? amt / max : 0, f0 = tj_num(tj_at(fp, 0), 0);
+        double f1 = tj_num(tj_at(fp, 1), 0), fw = tw - f0 - tj_num(tj_at(fp, 2), 0);
+        R tb, phb;
+        F tf = frame(c->l, tw, rh, NULL);
+        PL pl;
+        y += rg;
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        tb = box(x + x0, y0 + y, tw, rh);
+        art(c, str(c, Tr, "part"), tb, 1);
+        if (f > 0) solid(c, box(tb.x + f0, tb.y + f1, fw * f, rh - f1 - tj_num(tj_at(fp, 3), 0)), c->l->g.res_rgb[j], 1);
+        memset(&pl, 0, sizeof pl);
+        pl_pad(&pl, tj_get(Ph, "pad"));
+        phb = place(c, &tf, &pl);
+        art(c, str(c, Ph, "part"), box(tb.x + along(tw, ends, f) - pw / 2, tb.y + phb.y, pw, phb.h), 1);
+        hot(c, box(tb.x + ends, tb.y, tw - 2 * ends, rh), j ? "give_e" : "give_m");
+        k1(v0, sizeof v0, amt);
+        pl = spec(Nm);
+        text(c, v0, box(x + x1 - nw, y0 + y, nw, rh), str(c, Nm, "style"), &pl, c->l->g.res_rgb[j], 0);
+        y += rh;
+    }
+    memset(&b, 0, sizeof b);
+    b.key = "give_send";
+    b.textspec = obj(c, Sd, "text");
+    b.text = "send";
+    b.off = !(st->give_amt[0] > 0) && !(st->give_amt[1] > 0) ? num(c, Sd, "off") : 0;
+    button(c, &b, Sd, box(x + gw - pad - num(c, Sd, "pad") - sw, y0 + y + num(c, Sd, "gap"), sw, sh), 0);
 }
 
 /* ---- the toast: a short message in a dark box centred across the screen, above everything. The
@@ -1703,7 +1891,8 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     out->track_x0 = out->track_x1 = 0;
     if (err && errn) err[0] = 0;
     /* the live HUD or the replay's, and the toast over either (hud.js `draw`) */
-    if (st->live) live(&c);
+    if (st->allies) allies(&c);
+    else if (st->live) live(&c);
     else {
         dock(&c);
         column(&c);
@@ -1726,8 +1915,9 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
    (composeGrid, composeNine). An `xtile` part's x bands are each one period of a seamless tile
    (seamband.py): drawn as a whole number of copies at about their painted length, each copy an
    equal share of the drawn band, its edges whole pixels; a 9-slice's middle row by row at its
-   edge's scale, as CSS border-image-repeat `round` sizes it. A 9-slice's edges are whole device
-   pixels (edge_px). */
+   edge's scale, as CSS border-image-repeat `round` sizes it, and none when the middle is shorter than
+   half a tile, the two edges then meeting in their own proportion. A 9-slice's edges are whole
+   device pixels (edge_px). */
 float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 {
     float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
@@ -1819,6 +2009,11 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         if (k->xtile) {
             double st = k->slice[0] > 0 && t > 0 ? t / k->slice[0] : 0, sb = k->slice[2] > 0 && b > 0 ? b / k->slice[2] : 0;
             double sm = st > 0 ? st : sb > 0 ? sb : px * f / k->scale;
+            /* A MIDDLE SHORTER THAN HALF ITS TILE IS NOT DRAWN: one copy squeezed into it would show as
+               a band of the tile at many times its density (a give slider's groove, 17 units of a
+               161-unit tile). The tile is seamless, so the two edges meet where it would have joined
+               them, sharing the box in their own proportion. */
+            if (le + r > 0 && dx[2] - dx[1] < mw * sm / 2) dx[1] = dx[2] = x + tagpu_hud_snap((float)(w * le / (le + r)));
             m[0] = copies(dx[2] - dx[1], mw * (st > 0 ? st : sm), cap / 3 - 3);
             m[1] = copies(dx[2] - dx[1], mw * sm, cap / 3 - 3);
             m[2] = copies(dx[2] - dx[1], mw * (sb > 0 ? sb : sm), cap / 3 - 3);
@@ -2034,7 +2229,10 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     l->live_hot = 3;
     if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
     if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
-    return c.bad ? -1 : n > l->live_hot ? n : l->live_hot;
+    l->allies_hot = HUD_MAXSEAT + 5;                            /* a chip a seat; give(): the plate,
+                                                                   two sliders, Send; the rewind's button */
+    if (l->live_hot > n) n = l->live_hot;
+    return c.bad ? -1 : n > l->allies_hot ? n : l->allies_hot;
 }
 
 /* a build's controls against its HUD's bound: a hot() site the bound has no term for */
@@ -2186,6 +2384,22 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* the watched lane's Back to main recording held: its pressed part */
     strcpy(st->held, "main");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "held way back's build", err, errn)) goto done;
+    /* the allies' ribbon: every seat, so it wraps at the self-test's 1280 units, beside the idle
+       rewind's button; every chip has its lamp, the first two stalled */
+    st->live = st->live_open = st->rw_down = st->rw_arm = 0;
+    st->allies = 1; st->rewind = 1; st->wall = 0; st->give = -1;
+    for (i = 0; i < HUD_MAXSEAT; i++) { st->seat[i].id = i; st->seat[i].m = i < 2 ? 1.0f : 50.0f; }
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies build", err, errn)) goto done;
+    /* the lamps dark, the second seat out of the game (P1 above), the give panel open on the
+       first, its Send held; then with nothing asked, Send disabled */
+    st->wall = 0.75f;
+    st->give = 0; st->give_amt[0] = 50; st->give_amt[1] = 0; st->give_max[0] = 100; st->give_max[1] = 0;
+    strcpy(st->held, "give_send");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' give build", err, errn)) goto done;
+    st->give_amt[0] = 0;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' give build, nothing asked", err, errn)) goto done;
+    st->give = -1;
+    st->allies = 0;
     /* the live HUD: the button alone, then the strip open with Play from here armed */
     st->H = 720; st->live = 1;
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live build", err, errn)) goto done;

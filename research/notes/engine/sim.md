@@ -42,12 +42,17 @@ the measured runs and what they mean for the design are in the
   Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
   `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
-  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, 5 none (the Start's test
-  `0x479760` above) [INFERRED: filled from the skirmish key `Player<N>AllyGroup`] — seats with equal groups start
-  allied: the skirmish keys `Player<N>AllyGroup` 1, 2 and 1 for seats 0, 1 and 2 gave the player
-  records' alliance rows (PlayerInfo `+0x108`, [units](units.html)) of records 0 and 2 a 1 for each
-  other and none for record 1 (MEASURED 2026-11-11, `scenarios/sensor-view.json`; every seat's key
-  held 5 before it was written, and what 5 means is not established) — `+0xC` metal, `+0x10` energy,
+  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group: the settings load reads the
+  skirmish key `Player%dAllyGroup` (format at `0x5043C4`, pushed at `0x430D03`) into `+8`, and 5
+  when the key is absent (`0x430D3C`); the seat fill's tests `0x47A863..0x47A872`, in its loop to
+  `0x47A87E`, mark two seats allied (to `0x47A8CC`) when their groups are equal, the other seat's controller `+0` is not 0 and
+  the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11), which the Start's test
+  `0x479760` above passes over too. The scenario format writes
+  it as `setup.players[].ally_group` ([scenario format](../scenario-format.md)). Groups 1, 2 and 1
+  for seats 0, 1 and 2 gave the player records' alliance rows (PlayerInfo `+0x108`,
+  [units](units.html)) `01 00 01`, `00 01 00` and `01 00 01`, and a later load with no groups each
+  record's own byte only (MEASURED 2026-11-11, `scenarios/sensor-view.json` then
+  `scenarios/sensor-preview.json` on one instance) — `+0xC` metal, `+0x10` energy,
   `+0x14` the colour (read by the fill and the seat setup below); how the screen's buttons cycle
   them, and `+0x224` (the clicked seat) and `+0x228` (`SkirmishDifficulty`): [the GUI](ui.html),
   *The SKIRMISH screen's handler*. Past them, the loader's type-2
@@ -72,7 +77,7 @@ the measured runs and what they mean for the design are in the
   seat in `main+0x2A43` and `main+0x2A42` (`0x47A798..0x47A7DE`); controller 2 does the same with
   type 2 and leaves those two bytes; anything else calls `0x464290(seat, 0)`. Then a human or AI
   record is marked allied (`+0x108 + j` = 1, `0x47A890`) to every active entry j with the same `+8`
-  group other than group 5 (`0x47A83C..0x47A89E`). The demo recorder writes the two bytes into its
+  group other than group 5 (`0x47A83C..0x47A89E`; the seat loop from `0x47A82F`). It writes the rows alone: the mirror `+0x113` holds only the record's own byte (`0x464342`), so in a skirmish "j allies me" is j's row, both ways for a shared group. The demo recorder writes the two bytes into its
   header's RT_OPTIONS, `main+0x2A42` (controlled) as byte 18 and `+0x2A43` (viewed) as byte 19
   (`tagpu_recorder.c`, READ), which is where a takeover's fork names the seat it was played as:
   the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the fork, whose
@@ -230,16 +235,18 @@ drops its orders and pauses its planners 30 to 329 ticks, drawing the simulation
 not.
 
 **Impure's exemption for ImpAI** (`tagpu_impai.c`, [ImpAI in the engine](../modules/impai.html)).
-Each of sixteen type tests, rows 1 to 14, 17 and `0x406FC3`, becomes a 5-byte `jmp` to a stub of
-its own (the rest of the site NOPs). Rows 15 and 16 stay stock: the respawn creates only the
+Each of fourteen type tests, rows 1 to 12, 17 and `0x406FC3`, becomes a 5-byte `jmp` to a stub of
+its own (the rest of the site NOPs). Rows 13 and 14 are not ImpAI's: the always-on fix `ai_untaxed`
+makes the `jne` inside each a `jmp` to the full credit (`0x464C0A`, `0x464D3A`;
+[engine patches](../modules/engine-patches.html)), so every give to an AI is credited in full, an
+ImpAI seat's included. Rows 15 and 16 stay stock: the respawn creates only the
 controlled player's commander (the owner byte `main+0x2A42`, pushed at `0x4653D2`), never an ImpAI
 seat's. The stub runs the site's own compare, copied from the site,
 and its `jne` to the unscaled branch; for a type-2 record it bounds the record to one of main's ten
 (offset below `0xCEE`, divisible by `0x14B`) and, when ImpAI's seat table marks it, jumps to the
 unscaled branch, else to S. It restores `EAX`, `ECX` and `EDX`, touches no x87 register and calls
-nothing. Zero to two values are live on the FPU stack at a site, none at rows 13, 14 and 18: the
-transfers empty it with `fstp st(0)` (`0x464B88`, `0x464CB8`) before their calls of `0x401220` and
-`0x401260`, and the on-hit handler `0x406F80` loads no x87 value before `0x406FC3` (DISASSEMBLED). At every one of the 32 targets the flags are dead: the first instruction that touches them
+nothing. Zero to two values are live on the FPU stack at a site, none at row 18: the on-hit handler
+`0x406F80` loads no x87 value before `0x406FC3` (DISASSEMBLED). At every one of the 28 targets the flags are dead: the first instruction that touches them
 writes them or is a call (`0x401504: sub eax,ebx` behind the jumps at `0x4014C8`; `0x4016C5` passes
 `fcomp`/`fnstsw` before its `test ah,0x40`), and no direct branch of `.text` lands inside a site
 (DISASSEMBLED, the linear sweep, 49 473 direct branches). The stubs install at attach with the seam
@@ -717,8 +724,9 @@ engine's own seeders: the simulation RNG at `0x49719D` (the counter's two dwords
 loader thread's stream at `0x4971AE` (its argument popped at `0x4971B8`), and the game thread's
 re-seeded at the loader thread's start (`0x4982CA`; WinMain's `time()` call is `0x49E8B2`; srand's
 store `0x4E486C`), so every level a harness plays starts
-from the same states (`tagpu_patches.c`, *A harness's random streams*), and a clearing scenario apply
-seeds them again from the wire's seed (`tagpu_seed_run`); a player's launch, `tacli launch
+from the same states (`tagpu_patches.c`, *A harness's random streams*; the shatter's own stream,
+`s_shatterRng`, is put back at its start there too), and a clearing scenario apply
+seeds them again from the wire's seed (`tagpu_seed_run`, which puts the shatter's back at its start); a player's launch, `tacli launch
 --defaults` and the compatibility suite keep stock's. After the srand call the loader writes eax (`0x4971B3`) and ecx (`0x4971C1`) before
 reading them, and edx on each way of its mode dispatch (`0x4971F1`, `0x4973C6`, `0x497468`, the call
 at `0x4974FC`). A takeover or a seek writes the simulation RNG from the recording (`replay-globals.tsv`'s

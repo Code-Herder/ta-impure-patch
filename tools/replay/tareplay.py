@@ -3802,15 +3802,6 @@ def counts_options(fix):
     return ["--cob-exact"]
 
 
-def image_gate_options(fx):
-    """The images gate's owner-approved known gap: the stock cosmetic pools, on the fixtures
-    tarec.STOCK_COSMETIC_FIXTURES names and on the stock-limits build alone
-    (demo-recorder-completeness.md)."""
-    if fx["name"] in tarec.STOCK_COSMETIC_FIXTURES and fx["fix"].get("dll") == "stock":
-        return ["--stock-cosmetic-pools"]
-    return []
-
-
 def codec_check(info, decline=False):
     """The live recording's stream codec, from `tarec info`'s output: a stream block whose check
     decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
@@ -3904,7 +3895,7 @@ def checks(fx):
         for view in views + [n2]:
             compare(f"the paused twin's simulation: {view.stem}", "compare-dumps", rec,
                     n1, view, files=[n1, view])
-        compare(f"the images gate at {Ts[0]}", "images-gate", *image_gate_options(fx),
+        compare(f"the images gate at {Ts[0]}", "images-gate",
                 rec, l1, lT, n1, n2, p1, pT, r1, q1,
                 *views, files=[l1, lT, n1, n2, p1, pT, r1, q1, *views])
     for proc, d in (("L", lT), ("P", pT)):
@@ -5714,6 +5705,18 @@ def changed_lines(path, base):
     return out
 
 
+# A sim file's SIM_FEATURE needs tagpu_simreg.h above it, so a new file's include lines precede
+# its first feature; tafeat.features_of counts no preprocessor line as code either. Only a new
+# file's: in a file the base has, a changed include can swap one header for another whose macros
+# differ, and that is a changed line like any other (skip_include).
+INCLUDE_RX = re.compile(r"\s*#\s*include\b")
+
+
+def skip_include(line, new_file):
+    """a changed line the walk passes over: an include line of a file the base does not have"""
+    return new_file and bool(INCLUDE_RX.match(line))
+
+
 def landing_plan(base):
     """What the landing must reach: (fixtures, functions {(src, fn): (feature, builds)}, regions
     {key: ([(src, fn)...], builds, what)}, problems, why, gated) -- `builds` the builds that compile
@@ -5763,7 +5766,13 @@ def landing_plan(base):
         bl = tafeat.builds(text)
         quiet = tafeat.comment_or_directive_lines(text)
         prelude = frozenset()
+        src = text.split("\n")
+        new_file = subprocess.run(["git", "-C", str(TREE), "cat-file", "-e",
+                                   f"{merge_base(base)}:{path}"],
+                                  capture_output=True).returncode != 0
         for ln in sorted(changed_lines(path, base)):
+            if skip_include(src[ln - 1] if ln <= len(src) else "", new_file):
+                continue
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
             if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it
@@ -5883,8 +5892,10 @@ def mp_takeover_at(rec):
 
 
 def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False):
-    """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
-    and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
+    """The two-player game on one coverage build: recorded by two humans, allied both ways, and two
+    AIs, each human's opponent, with chat and a selection and a click from each human, so the
+    allies' ribbon reads each human's economy from the contribution channel
+    (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
     Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
     memory cap, which it names on its last line, the line a failed step reports.
@@ -5913,7 +5924,8 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select", "--label", MP_LABELS[build], *(("--impai",) if impai else ())], log)
+                  "--chat", "--select", "--allies", "--label", MP_LABELS[build],
+                  *(("--impai",) if impai else ())], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")

@@ -494,7 +494,7 @@
     },
     {
       "name": "tazero-alpha5",
-      "about": "TA Zero Alpha 5 as TA Forever installs it, with Impure's ddraw.dll copied over the folder's: its own exe imports ZDRAW.dll (TADR 2025.4.24 under Zero's name) and ZPLAYX.dll (the recorder), and ZDRAW's DllMain loads Impure from inside its start-up; the exe keeps its settings under Software\\TA Zero",
+      "about": "TA Zero Alpha 5 as TA Forever installs it (its map pack included), with Impure's ddraw.dll copied over the folder's: its own exe imports ZDRAW.dll (TADR 2025.4.24 under Zero's name) and ZPLAYX.dll (the recorder), and ZDRAW's DllMain loads Impure from inside its start-up; the exe keeps its settings under Software\\TA Zero",
       "add": [
         {
           "fixture": "tademoz",
@@ -510,6 +510,10 @@
         },
         {
           "fixture": "tazero-taz31-120526",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-mappack",
           "files": "*"
         },
         {
@@ -539,6 +543,61 @@
       },
       "calib": {
         "end_type": "ARMT1SOLAR"
+      }
+    },
+    {
+      "name": "tazero-wildhunt",
+      "about": "tazero-alpha5's folder with 6P Wild Hunt from TA Forever's map vault, its battle fought there: 65,029 terrain tiles, near the u16 tile index's 65,536, a map whose terrain the atlas must hold whole",
+      "add": [
+        {
+          "fixture": "tademoz",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-base",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-alpha5",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-taz31-120526",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-mappack",
+          "files": "*"
+        },
+        {
+          "fixture": "tadr-2025.4.24-zero",
+          "files": "*"
+        },
+        {
+          "fixture": "map-6p-wild-hunt",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "tadr_started": true
+      },
+      "registry_roots": [
+        "Software\\TA Zero"
+      ],
+      "content": {
+        "units": [
+          "GOKCOMMANDER",
+          "GOKT1AAHOVER",
+          "GOKT1AIRPAD"
+        ]
+      },
+      "no_network_game": "the folder's network game is tazero-alpha5's; this row is its battle on the big map",
+      "scenarios": {
+        "battle": "compat-battle-tazero-wildhunt",
+        "host": "compat-mp-host-tazero",
+        "join": "compat-mp-join-tazero"
       }
     },
     {

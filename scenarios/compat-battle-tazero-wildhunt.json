@@ -1,0 +1,113 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The compat suite's big-map battle for TA Zero (tools/compat/tacompat.py, setup tazero-wildhunt): compat-battle-tazero.json's fight -- 150 Marines and 50 Scorpions against 200 Grunts, the ARM commander held behind them -- moved to the central plateau of 6P Wild Hunt, a map of 65,029 tiles from TA Forever's vault, near the u16 tile index's 65,536",
+  "seed": 20260901,
+  "on_error": "abort",
+  "setup": {
+    "map": "6P Wild Hunt",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "arm_wave",
+      "owner": 0,
+      "at": [
+        3300,
+        4000
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 20,
+        "spacing": 40,
+        "jitter": 6
+      },
+      "composition": [
+        {
+          "type": "ARMT1INFKBOT",
+          "count": 150
+        },
+        {
+          "type": "ARMT1ASTANK",
+          "count": 50
+        }
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "attack",
+          "to": [
+            4700,
+            4000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "core_wave",
+      "owner": 1,
+      "at": [
+        4700,
+        4000
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 20,
+        "spacing": 40,
+        "jitter": 6
+      },
+      "composition": [
+        {
+          "type": "CORET1ASKBOT",
+          "count": 200
+        }
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "attack",
+          "to": [
+            3300,
+            4000
+          ]
+        }
+      ]
+    }
+  ],
+  "units": [
+    {
+      "id": "hero",
+      "type": "ARMCOMMANDER",
+      "owner": 0,
+      "pos": [
+        3100,
+        4000
+      ],
+      "facing": 90,
+      "health": 60,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "center_on": "hero"
+  }
+}

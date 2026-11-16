@@ -1,8 +1,8 @@
 #ifndef TAGPU_FORMATION_H
 #define TAGPU_FORMATION_H
 /* tagpu_formation.c -- formation move: drag the button that gives orders and the selected units
-   spread evenly along the dragged path instead of all heading for one point. Interface Type 1:
-   a right drag with units selected; either type: a left drag with Move armed. Shift appends each
+   spread evenly along the dragged path instead of all heading for one point. Either Interface
+   Type: a right drag with units selected, and a left drag with Move armed. Shift appends each
    unit's slot to its own queue. A drag shorter than the threshold is stock's click. Every
    function here runs on the GAME thread; the render thread sees the dots only as the packet's
    copied table. Toggled by `formation=` in impure.cfg (tagpu_formation.on / .off). */

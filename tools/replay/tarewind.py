@@ -161,7 +161,8 @@ def run(t, w, fx, out):
 
         d = hud_show(lambda d: "rewind" in hud_keys(d), "the rewind button")
         st = d["state"]
-        check("hud idle", st.get("mode") == "live" and st["rw"]["state"] == "idle" and
+        # an idle rewind is the live HUD's button, or the allies' ribbon's when the game has an ally
+        check("hud idle", st.get("mode") in ("live", "allies") and st["rw"]["state"] == "idle" and
               not hud_keys(d) & {"live", "rew", "live_play"},
               f"mode {st.get('mode')}, rewind {st['rw']['state']}, controls {sorted(hud_keys(d))}")
         d, _, _ = open_strip("the button's open")

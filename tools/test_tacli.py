@@ -1205,6 +1205,14 @@ class ScenarioWire(unittest.TestCase):
                                           health=60, stance="hold")]))
         self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - - - -", lines)
 
+    def test_a_cloaked_unit_carries_the_cloak_key(self):
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - - - cloak=1",
+                      self.wire(scn(units=[unit(type="ARMSPY", cloaked=True)])))
+
+    def test_cloaked_false_is_the_engines_default(self):
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - - -",
+                      self.wire(scn(units=[unit(type="ARMSPY", cloaked=False)])))
+
     def test_unset_fields_are_dashes_not_guesses(self):
         self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - - -", self.wire(scn(units=[unit()])))
 
@@ -1558,6 +1566,33 @@ class LoadComposition(unittest.TestCase):
     def test_a_player_with_nothing_but_a_slot_still_names_its_controller(self):
         self.assertEqual(self.flags([{"slot": 5}]), ["5:2:::::5"])
 
+    def test_an_ally_group_is_the_sixth_field(self):
+        self.assertEqual(self.flags([{"slot": 2, "side": "arm", "ally_group": 1}]),
+                         ["2:2:0::::1"])
+
+    def test_no_ally_group_writes_the_engines_no_group(self):
+        # The registry store persists across loads: leaving the key alone would
+        # inherit the previous scenario's alliance, so absent is written as 5.
+        self.assertTrue(self.flags([{"slot": 0, "controller": "human"}])[0].endswith(":5"))
+
+    def setup_player(self, **fields):
+        return tacli._scn_setup({"setup": {"players": [dict(slot=0, **fields)]}},
+                                "t")["players"][0]
+
+    def test_ally_groups_zero_to_four_are_accepted(self):
+        for group in range(5):
+            with self.subTest(group=group):
+                self.assertEqual(self.setup_player(ally_group=group)["ally_group"], group)
+
+    def test_an_absent_ally_group_parses_as_none(self):
+        self.assertIsNone(self.setup_player()["ally_group"])
+
+    def test_the_no_group_value_and_beyond_are_refused(self):
+        # 5 is the engine's "no group": a scenario says it by naming no group.
+        for group in (5, 9):
+            with self.subTest(group=group), refuses(self):
+                self.setup_player(ally_group=group)
+
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
 
@@ -1570,7 +1605,7 @@ class LoadComposition(unittest.TestCase):
         # the group an earlier scenario wrote would otherwise stay in the store, and seats that
         # all inherit one group make the Start refuse (0x479760)
         self.assertEqual(self.flags([{"slot": 0, "controller": "human"},
-                                     {"slot": 1, "controller": "ai", "ally": 2}]),
+                                     {"slot": 1, "controller": "ai", "ally_group": 2}]),
                          ["0:1:::::5", "1:2:::::2"])
 
     def test_the_difficulty_is_a_word_and_absent_leaves_the_screen_alone(self):
@@ -1648,12 +1683,12 @@ class PlayerSpecs(unittest.TestCase):
         self.assertEqual(tacli.player_keys("0:1::::4000"),
                          [("Player0Controller", "1"), ("Player0Energy", "4000")])
 
-    def test_the_seventh_field_is_the_alliance_group(self):
-        self.assertEqual(tacli.player_keys("0:1:0:3:1000:1000:2")[-1], ("Player0AllyGroup", "2"))
+    def test_the_ally_group_is_the_sixth_field(self):
+        self.assertEqual(tacli.player_keys("2:2:0::::1")[-1], ("Player2AllyGroup", "1"))
 
-    def test_an_eighth_field_is_refused(self):
+    def test_a_seventh_field_is_refused(self):
         with refuses(self):
-            tacli.player_keys("0:1:0:3:1000:1000:2:9")
+            tacli.player_keys("0:1:0:3:1000:1000:1:9")
 
     def test_every_flag_the_compiler_emits_parses(self):
         # The one seam between the two halves: setup.players compiles to these
@@ -1661,7 +1696,7 @@ class PlayerSpecs(unittest.TestCase):
         setup = tacli._scn_setup({"setup": {"players": [
             {"slot": 0, "controller": "human", "side": "arm", "color": 0,
              "metal": 5000, "energy": 5000},
-            {"slot": 1, "controller": "ai", "side": "core"},
+            {"slot": 1, "controller": "ai", "side": "core", "ally_group": 2},
             {"slot": 2, "color": 4},
             {"slot": 3, "energy": 2000},
             {"slot": 9, "controller": "off"}]}}, "t")

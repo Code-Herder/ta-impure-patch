@@ -248,6 +248,42 @@ while the window is open. MEASURED 2026-10-25 on the Vulkan lane at 1920 × 1080
 **The key ring's indices** `0x51F48E` (enqueue) and `0x51F492` (dequeue) are what the game test
 reads to show no key reached the engine while the window was open (`tools/wiki_regression.py`).
 
+### The in-game ALLIES dialog: Tab, TABMENU, `LIVEALLY<i>` [DISASSEMBLED + MEASURED 2026-11-15]
+
+**The path is Tab → `TABMENU.GUI` → `ALLIES` → `ALLIES.GUI`, in a network game only.** The in-game
+key dispatcher's Tab case (`0x49615B`) calls `0x495010`, which loads `TABMENU.GUI` (`0x5094B0`,
+`0x495099`) and installs its handler `0x494740` (`0x4950A4`); with the menu already up it closes
+it. Tab reaches `0x495010` only when GetGameingType `0x435100(main+0x391E9)` is 3, a network game
+(`0x496144`), and `main+0x37EBE` bit 2 is clear (`0x49614E`); any other game type opens the game options `0x460CC0` instead (`0x4961B7`), so a
+skirmish's Tab is `ARMOPT.GUI`. `0x494740` compares the pressed gadget's name exactly
+(`0x49FD60`): `OPTIONS` → `0x460CC0`, `SHARE` → `0x4936F0`, `CONTROL` → `0x4466B0`, `ALLIES`
+(`0x509490`, `0x4947ED`) → the dialog's loader `0x4478B0` (`0x494808`, its one caller). `ALLIES`
+and `SHARE` are active only in a network game (`0x4950FA`), for a player who is not a watcher
+(PlayerInfo `+0x9B` bit 6), with another player present (`0x4950C6..0x495127`); otherwise
+inactive (`0x49518C..0x4951CC`). The dialog's own code tests no game type: a direct call of
+`0x4478B0` would build it in a skirmish [INFERRED].
+
+**The loader `0x4478B0`** loads `ALLIES.GUI` (`0x505CA4`, `0x4478C9`), installs the handler
+`0x447150`, renames each gadget `ALLYx`/`TEAMICONSx` to `ALLY0..`/`TEAMICONS0..` in file order
+(`0x4478E3..0x447993`) and calls the row builder `0x447380(0)`, the refresh `0x446FB0` (its other
+callers are the handler, `0x447285`, and the `0x23` receiver, `0x454CF8`) and `0x446A50`.
+**`0x447380`** lists each record 0..9 that is active, not a watcher, of type 1..3, `+0x146` ≠ 10
+and PlayerInfo `+0x96` ≠ 0xFF (the controlled player too, for argument 0), in compacted rows, and
+renames row r's `PLAYER<r>` to `LIVEPLYR<i>` and `ALLY<r>` to **`LIVEALLY<i>`, i the player
+record's index** (`0x4476A3`, `0x4477A4`); it greys `LIVEALLY<i>` when the record's lobby team
+`+0x13F` equals the controlled player's and is not 5 (`0x4477A9..0x4477D1`). **The handler
+`0x447150`** finds the `LIVEALLY<i>` pressed (`0x4471AF..0x4471D7`), requires record i active,
+type 1..3, `+0x146` ≠ 10, flips the controlled record's byte `+0x108 + i` (`0x447225`), calls the
+setter `0x452960(me DPID, i DPID, new, 0)` (`0x447235`) and posts "allied with" / "broke alliance
+with" (`0x505CD4`, `0x505CC0`). Nothing excludes i = the controlled player, whose row is greyed
+unless it has no team. `VICTORY` (`0x505CB0`) and `OK` (`0x502AE8`, which writes the allied
+victory to PlayerInfo `+0x9D` bit 1) are the dialog's other gadgets. MEASURED 2026-11-15 (a
+two-peer game, `tools/mp_allysight.py`): on the joiner, Tab put `TABMENU.GUI` on top with `OPTIONS`,
+`SHARE`, `ALLIES`, `CANCEL` and `CONTROL`; `ALLIES` put `ALLIES.GUI` up with `LIVEALLY0..2` and
+`ALLY3..9`; `LIVEALLY1` (the host, record 1 on the joiner) then `OK` broke the alliance, and the
+host's allied sight followed at its next players phase. The other `xor 1` of a row, `0x447F7E`, is
+the battle room's (`LOUNGE2.GUI`, handler `0x447B10`), not this dialog.
+
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per
@@ -706,6 +742,47 @@ type, which `0x41AB5D` tests whatever the gadget's commonattribs:
   call, `0x41ABCC`). If neither acts and the shown unit is selected, it is the factory's queue:
   `0x4AB6B0` (`return gi+0x58`) chooses the sign, +1 for the left button and −1 for the right,
   and Shift (`0x4C1B80(0xF9)`) makes it ±5, for `0x419B00` (`0x41AC3C`).
+
+**The factory branch, byte for byte** [DISASSEMBLED 2026-11-15]:
+
+```
+0x41ABFA  68 F9 00 00 00   push 0xF9               ; Shift, 0x4C1B80's id
+0x41ABFF  E8 <rel32>       call 0x4C1B80
+0x41AC04  85 C0            test eax,eax
+0x41AC06  57               push edi
+0x41AC07  74 18            je 0x41AC21             ; no Shift
+0x41AC09  E8 <rel32>       call 0x4AB6B0           ; rel32 at 0x41AC0A; 1 = left button
+0x41AC0E  83 F8 01         cmp eax,1
+0x41AC11  75 04            jne 0x41AC17
+0x41AC13  6A 05            push 5                  ; Shift + left
+0x41AC15  EB 1F            jmp 0x41AC36
+0x41AC17  6A FB            push -5                 ; Shift + right
+0x41AC19  8D 54 24 48      lea edx,[esp+0x48]      ; the name
+0x41AC1D  55 52            push ebp; push edx
+0x41AC1F  EB 1B            jmp 0x41AC3C
+0x41AC21  E8 <rel32>       call 0x4AB6B0           ; rel32 at 0x41AC22
+0x41AC26  83 F8 01         cmp eax,1
+0x41AC29  75 09            jne 0x41AC34
+0x41AC2B  50               push eax                ; 1, the left button
+0x41AC2C  8D 44 24 48      lea eax,[esp+0x48]
+0x41AC30  55 50            push ebp; push eax
+0x41AC32  EB 08            jmp 0x41AC3C
+0x41AC34  6A FF            push -1                 ; the right button
+0x41AC36  8D 4C 24 48      lea ecx,[esp+0x48]
+0x41AC3A  55               push ebp
+0x41AC3B  51               push ecx
+0x41AC3C  E8 <rel32>       call 0x419B00           ; (name, unit, amount), stdcall, ret 0xC
+```
+
+After it the
+handler reads only `ebp` and `edi` (`0x41AC41..0x41AC74`: the structure test on `[ebp+0x110]`,
+the label refresh `0x4199B0(edi, ebp)`, the redraw `0x49FA90`, `0x4AB0A0(edi)`) and never `eax`.
+**The amounts are the two immediates `0x41AC14` and `0x41AC18`**, which TADR's keyboard hook
+rewrites to 100 and −100 while Ctrl is down. Impure redirects the call instead
+([factory queue](../modules/factory-queue.html)). The count has no bound to raise: it is the dword
+`+0x3A` of a count node, which `0x43B0B0` adds to unchecked ([recorder](recorder.html)), and the
+label `0x4199B0` writes is the button's `text[128]` at `+0xB6`
+([gadgets](../gui-gadgets.html)), which any count fits.
 
 **Negative result: `0x4AB6B0` has exactly two callers,** `0x41AC09` and `0x41AC21`, both in this
 factory branch. The structure arm, STOP, PREV, NEXT, ORDERS and BUILD read no button, and **no
@@ -1606,7 +1683,7 @@ clip.
 | **`0x4C7580`** | **textured-quad stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[8], int uv[8])` — **FOUR** screen vertices and their texture coordinates (`cmp ecx,0x4` at `0x4C7676`, stride 8; `uv == NULL` synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)`), **MEASURED** `(214,94)(233,94)(233,113)…` with uv `(1,1)(31,1)(31,31)…` — *the first three only; the count was corrected from three to four 2026-09-21* | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
 | `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
 | `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
-| `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
+| `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers; a NULL ctx is the back buffer, through `0x4C5E70` (`0x4BF70E`) [DISASSEMBLED 2026-11-14] | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
 | `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **four** edges of one box — top `(l,t)-(r,t)`, right `(r,t)-(r,b)`, bottom `(l,b)-(r,b)`, left `(l,t)-(l,b)`, in that order — each through `0x4BEC70`, which READS THE DESTINATION; the two groups of four calls are **mutually exclusive arms** on `ctx == NULL` (below); its ONE caller `0x4A16F0` runs it **six times** over expanding rectangles at levels 31, 28, 24, 19, 13, 6, which is the glow (below) | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
@@ -2242,7 +2319,7 @@ PANELBOT[0]. The other art and the block's rules:
   bits 0 and 1 are both set (`0x46A88F..0x46A8A0`) it tiles **PANELBOT of the viewed side** (the
   side byte at `0x46A8A6..0x46A8D5`, the slot `main+0x14833 + 4s`) from x `0x81` at y
   `0x4B6710() − 0x20`, each frame's hotspot added, until x reaches the screen width
-  (`0x46A8E0..0x46A929`); then its own readouts, which this map has not read. **After a replay
+  (`0x46A8E0..0x46A929`); then the readouts of the hovered unit `main+0x2CBA` (next item). **After a replay
   takeover of a seat of the other side the strip stays the load's** while the top bar takes the
   taken seat's side (MEASURED 2026-11-01 on the reference setup, Impure's Vulkan lane: a CORE seat
   taken over on an ARM load, `main+0x2A42` = `+0x2A43` = 1 after it; against the takeover of the
@@ -2251,6 +2328,26 @@ PANELBOT[0]. The other art and the block's rules:
   45 056 and 16 128). Why the strip does not follow the viewed side is not read [INFERRED: `main+0x3923B` bits 0
   and 1 are not both set in that frame, so `0x46A860` tiles nothing and the strip is the chrome
   painted at the load; the bits were not read].
+- **The hovered unit's readouts and their five owner tests** [DISASSEMBLED 2026-11-15]. Each
+  compares an owner with the viewed player `main+0x2A43` and shows more for the viewer's own unit:
+  `0x46AC85` (27 bytes, the unit's `+0xFF`): the unit's order target (`0x439DD0`) goes into the
+  memo `main+0x37E60`, else word `[esp+0x5A]` stays 0 (exits `0x46ACA0` / `0x46ACC8`, which reads
+  `edx` as main); `0x46B013` (32, the owner record's `+0x146`): the health bar even when the def
+  hides damage (`+0x241 & 0x4000`), `esi` loaded with the unit `[esp+0x24]` first (exits
+  `0x46B048` / `0x46B033`); `0x46B10E` (32, the unit's `+0xFF`, or the debug bit `main+0x3923B & 2`):
+  the four resource numbers `+0xCC +0xD0 +0xE4 +0xE8` (`0x46B12E..0x46B2B3`), the kills line
+  (from `0x46B2B8`, whose first test is `+0x110` bit 31) and the status text (`0x46B3B3`), else none of them (`0x46B445`);
+  `0x46B457` (32, the owner record's `+0x146`): the stockpile bar and the target block, else the
+  panel returns (`0x46B8EA`); `0x46B611` (28, the TARGET's owner record, `esi` the target): its
+  health bar when its def hides damage (exits `0x46B642` / `0x46B62D`). The resource block's
+  calls leave the stack as they found it (`sprintf` cleaned by the caller, `0x4C13A0` `ret 8`,
+  `0x4C14F0` `ret 0x14`) and it writes no local read after it, and the kills line and the status
+  text each set their own colours (`0x4C13F0`, then `0x4C13A0`) before they draw
+  (`0x46B37F..0x46B394`, `0x46B40C..0x46B414`), so `0x46B2B8` can be entered past it. **A remote unit's resource numbers are 0**: only the owner's
+  economy pass `0x401360` fills them (its settle `0x401B37..0x401BAC`; its one caller `0x46555A`
+  runs for records of type 1 or 2), and every create zeroes them (`0x401070` at `0x485D0A`).
+  Impure passes the tests for an ally (`tagpu_allypanel.c`, [allied
+  sharing](../modules/allied-sharing.md), *The unit panel*).
 - **The in-game wiki composes both bars by these rules** (`tagpu_wikibar.c`, `tools/wiki/mockup/bar.js`,
   held equal byte for byte by `tools/wiki/barcheck.mjs` and pixel-exact against a capture of the
   game's frame); [the in-game wiki](../ingame-wiki.html), *The game frame on the stage*.
@@ -2416,7 +2513,9 @@ unit array `[main+0x14357, main+0x1435B]` (inclusive, stride `0x118`). A unit ge
 model `+0xA6` is not 0 (`0x466E4E`) **and** one of: no LOS mode (`main+0x14281 & 3` clear,
 `0x466E14..0x466E1D`), the watcher bit 9 of `main+0x37F2F` (`0x466E23..0x466E32`), a radar or
 sonar contact (`+0x110 & 0x300`, `0x466E64..0x466E6A`), or an owner byte `+0xFF` equal to the
-viewed record `main+0x2A43` (`0x466E6F..0x466E7D`). The dot is frame PlayerInfo `+0x96` (the
+viewed record `main+0x2A43` (`0x466E6F..0x466E7D`; under Impure's allied sharing also an owner the
+snapshot S shares with the viewed record, the site's `jne 0x46718C` the only exit to the next
+unit and both earlier tests jumping past it to `0x466E83` from `0x466E62` and `0x466E6D`; eax, ecx and edx are rewritten past it, at `0x466E83`, `0x466E87` and `0x466E91`, [allied sharing](../modules/allied-sharing.html)). The dot is frame PlayerInfo `+0x96` (the
 owner's logo colour) of `radlogo` `main+0x147DF`, fetched by `0x4B7F30` at `0x466EFB` and blitted
 by `0x4B7F90`; the unit whose `+0xA8` equals the hovered id `main+0x2CBA` also gets frame 0 of
 `radlogohigh` `main+0x147E3` (`0x466F11..0x466F37`). Each dot is appended to the **radar list**

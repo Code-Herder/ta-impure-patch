@@ -36,7 +36,7 @@ void tagpu_modprint_start(void);
 /* Whether anything has asked for the print yet: before that, this process has not been near a network game. */
 int  tagpu_modprint_started(void);
 /* GAME THREAD: the print, waiting for the walk and starting it first if nothing has. An ordering: nothing here times out. NULL only if memory ran
-   out, and then this player sends none and is compared with nobody. */
+   out, and then this player sends none: a current host refuses it as an older build (tagpu_recorder.c, mp_join_admit). */
 const MODPRINT* tagpu_modprint_wait(void);
 
 #endif

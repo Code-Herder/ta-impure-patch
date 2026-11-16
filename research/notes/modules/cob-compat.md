@@ -62,12 +62,9 @@ in the combined run. Focused native replays pass the corrected camera/selection 
 worker catalogue invalidation and isolated trace coverage. The whole rerun after disk cleanup,
 approved UI rows and scenario seat-count repair finishes all 37 fixtures: 1479 checks pass,
 including 519 exact paused comparisons and 36 strict image gates. All 17 resource image gates
-and stock rewind checks pass. The sole failure is native cosmetic-pool state in the unchanged
-stock secondary-orders control, reproduced in a fresh worker. Seek clears those pools, whose
-record layouts remain unimplemented. The owner approved only this native control's three
-cosmetic-pool ranges as an explicit unlisted-image known gap on 2026-10-06; all other bytes,
-all resource fixtures and ordinary state/order/effect/restore checks retain their policy.
-The saved comparisons pass with the option and still fail without it. The new whole gate
+and stock rewind checks pass. A seek empties the engine's effect pools, which the recording
+does not carry, and the images gate classes them as effects in every recording
+([recorder completeness](../tadr-port/demo-recorder-completeness.md)). The new whole gate
 passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates,
 with 11/11 changed function/region requirements reached and a passing note on `cfe3771f`.
 Its native control at T301 accepts zero cosmetic bytes and also passes the default strict

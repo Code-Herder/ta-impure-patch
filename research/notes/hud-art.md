@@ -642,7 +642,8 @@ DLL emits textured quads.
     - **For a grid part,** the painted band length is the band's design length.
     - **For a 9-slice,** it is the middle's painted width at its row's edge scale: the top and
       middle rows at the top edge's drawn width over its slice, the bottom row at the bottom
-      edge's. This is how CSS `border-image-repeat: round` sizes the tile.
+      edge's. This is how CSS `border-image-repeat: round` sizes the tile. A middle shorter than half
+      its tile is not drawn, unlike CSS: the two edges meet, sharing the box in their own proportion.
     - In the DLL each copy is one more quad with the band's own texture coordinates.
 - **The mockup composes every part itself,** on a canvas of the snapped box's size
   (`composeGrid`, `composeNine`, `composeTile`, and `composePiece` for a whole part or an icon),

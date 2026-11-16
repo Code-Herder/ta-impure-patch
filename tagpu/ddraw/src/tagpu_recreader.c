@@ -2667,8 +2667,8 @@ static int snapshot_records(RecReader* r, const RecBlock* blk, const RecIndexEnt
             }
             w->tick = blk->last;
         } else if (r->h.has_frame &&
-                   (hd.kind == RK_IMAGE || hd.kind == RK_SIGHT || hd.kind == RK_COUNTS ||
-                    hd.kind == RK_COUNT_NAME)) {
+                   (hd.kind == RK_IMAGE || hd.kind == RK_SIGHT || hd.kind == RK_SIGHTW ||
+                    hd.kind == RK_COUNTS || hd.kind == RK_COUNT_NAME)) {
             /* Comparison evidence in a dump, not restored simulation state. The record's
                length has been bounded by the checked block above. */
         } else if (hd.kind == RK_TICK || !apply(r, hd.kind, b, hd.len, &events) || events) {

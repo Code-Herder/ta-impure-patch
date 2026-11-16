@@ -62,7 +62,7 @@ def main():
         exe = next(p for p in g.dir.iterdir() if p.name.lower() == "totala.exe")
         kept, tmp, old = (exe.with_name(exe.name + s) for s in (".pre-4gb", ".4gb.tmp", ".4gb-old"))
         original = exe.read_bytes()
-        exe.unlink()                # an instance's exe may be shared with others: this test's is its own
+        exe.unlink()                # the bit off, whatever an earlier run of this test left in the instance
         exe.write_bytes(original)
         report(not fields(original)[0], "the folder's exe starts with the bit off")
         ms.install_by_hand(g, MOD)

@@ -46,6 +46,10 @@
 #define PL_MEXPENSE   0xA0
 #define PL_MAXENERGY  0xA4         /* float fMaxEnergyStorage                     */
 #define PL_MAXMETAL   0xA8         /* float fMaxMetalStorage                      */
+#define PL_INFO       0x27         /* PlayerInfo*                                 */
+#define PL_SHARE_M    0xE4         /* float: the metal share level                */
+#define PL_SHARE_E    0xE8         /* float: the energy share level               */
+#define PI_SHARE      0x97         /* u16: bit 2 shares metal, bit 4 energy       */
 #define PL_FIRSTUNIT  0x67         /* UnitStruct* first/last of this player's     */
 #define PL_LASTUNIT   0x6B         /* units, INCLUSIVE, stepping UNIT_STRIDE      */
 #define PL_BASESTORE_E 0xDC        /* float base energy storage, and              */
@@ -188,6 +192,9 @@ typedef void  (__stdcall* PFN_ORDER)(int actionIndex, int shift, void* unit, voi
 #define SpawnFeatureOnMap ((PFN_SPAWNFEAT)  0x00423C50u)
 #define ScriptAction_Type2Index ((PFN_TYPE2INDEX) 0x0043F0E0u)
 #define ORDERS_NewMainOrder2Unit ((PFN_ORDER) 0x0043AFC0u)
+typedef unsigned char* (__attribute__((thiscall))* PFN_ACTION)(void* out, const char* name);
+#define ScriptAction_ByName ((PFN_ACTION) 0x00438760u)
+#define ACTION_CLOAK_ON 0x00502774u    /* "CLOAK_ON", the string the CLOAK button pushes */
 
 /* 0x424840, the BurnAll walker: no argument, a plain `ret` at 0x42488D. It walks the
    main+0x14233 x main+0x14237 cells of the feature grid (stride 0xD from main+0x14287) and
@@ -1134,6 +1141,41 @@ static void apply_switches(char* ta)
     g_sw_after = *sw;
 }
 
+/* A player's share levels, as the share tick and the console's SetShareMetal/ShareMetal write
+   them (tagpu_sharetick.c): the level at +0xE4/+0xE8, at most the storage, and the bit in
+   PlayerInfo +0x97 -- set to share, clear and the level 0 for off. A record this peer controls, an
+   AI's too: the auto-share runs on the peer that controls the giver (tagpu_patches.c,
+   ai_autoshare), so a level set for a remote record (+0x73 = 3) would act nowhere and is refused.
+   Nothing is broadcast: in a network game the other peers' copies of the bits stay as they were,
+   and the gives arrive as the engine sends them. */
+static void apply_share(char* pl, int i)
+{
+    static const int off[2] = { PL_SHARE_M, PL_SHARE_E }, cap[2] = { PL_MAXMETAL, PL_MAXENERGY };
+    static const unsigned short bit[2] = { 2, 4 };
+    unsigned char* info = *(unsigned char**)(pl + PL_INFO);
+    unsigned short bits;
+    int k;
+    if (!info) return;
+    if (pl[PL_TYPE] == 3) {
+        if (g_wire.pl[i].share[0] != TASIM_WIRE_UNSET || g_wire.pl[i].share[1] != TASIM_WIRE_UNSET)
+            scnlogf("scenario: player %d's share levels refused: another peer controls it",
+                    g_wire.pl[i].slot);
+        return;
+    }
+    memcpy(&bits, info + PI_SHARE, 2);
+    for (k = 0; k < 2; k++) {
+        float level, storage;
+        if (g_wire.pl[i].share[k] == TASIM_WIRE_UNSET) continue;
+        memcpy(&storage, pl + cap[k], 4);
+        level = g_wire.pl[i].share[k] < 0 ? 0.0f : (float)g_wire.pl[i].share[k];
+        if (level > storage) level = storage;
+        memcpy(pl + off[k], &level, 4);
+        if (g_wire.pl[i].share[k] < 0) bits &= (unsigned short)~bit[k];
+        else bits |= bit[k];
+    }
+    memcpy(info + PI_SHARE, &bits, 2);
+}
+
 /* Player resources. TA's economy pass 0x401360, once every 30 ticks for each local player,
    recomputes storage from the units a player owns and clamps current to it; current itself
    is carried forward (plus production, less expense), not refilled (0x401AB3..0x401B27,
@@ -1213,6 +1255,8 @@ static void apply_players(char* ta)
             *(float*)(pl + PL_ENERGY) = want;
             g_pl_got_energy[i] = (int)*(float*)(pl + PL_ENERGY);
         }
+
+        apply_share(pl, i);
     }
 }
 
@@ -1379,6 +1423,54 @@ static int create_one(const TASIM_WIRE_UNIT* wu, scn_unit* u, int alt, unsigned 
     dress_unit(wu, u);
     tagpu_kill_flush();
     return 1;
+}
+
+/* `cloaked`: the order the stock CLOAK button gives each selected unit, by the same two calls --
+   the order byte by name through 0x438760 ("CLOAK_ON" at 0x502774, pushed at 0x41A77E) and
+   0x43AFC0 without Shift, which with Shift cancels a matching queued order (0x48CF30 ->
+   0x48D1F4). Its handler 0x403070 sets +0x110 bit 11 only for a def with +0x245 bit 13; the
+   owner's economy pass then pays the cloak's cost and sets +0x10E bit 2 while no enemy is near
+   (0x4017E1..0x401872), and 0x48B090 sends that byte to the peers (0x11). DISASSEMBLED. The byte is
+   looked up by name each time: it is the name's rank in the sorted vector 0x512344, not a constant. */
+static void cloak_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u, int i)
+{
+    unsigned char act = 0;
+    char* pl = player_at(ta_base(), wu->owner);
+
+    /* The order runs and the cost is paid only where the owner is local: the unit tick runs a
+       record's orders only for type 1 or 2 (0x48AEB5..0x48AECD), the economy pass skips type 3
+       (0x4017CF), and the order root sends nothing to the peers. On another peer's unit it would
+       leave this copy's bit 11 and order node out of step with the owner's. */
+    if (!pl || pl[PL_TYPE] == 3)
+    {
+        g_failed++;
+        scn_err("unit %d (%.20s): cloaked refused: another peer controls player %d",
+                i, wu->type, wu->owner);
+        return;
+    }
+    ScriptAction_ByName(&act, (const char*)ACTION_CLOAK_ON);
+    if (!act)
+    {
+        g_failed++;
+        scn_err("unit %d (%.20s): the engine has no CLOAK_ON order", i, wu->type);
+        return;
+    }
+    ORDERS_NewMainOrder2Unit(act, 0, u->unit, 0, 0, 0, 0);
+}
+
+/* After issue_orders, never before: an order issued without Shift destroys every queued node
+   whose flags lack 0x4 when its own lack 0x40 (0x43ADC0, 0x43AE0E..0x43AE59), and Cloak_On's
+   record (0x4FC4F4, flags 0x10060) lacks 0x4, so a scenario order would wipe a cloak issued
+   first, before its handler ever ran. Cloak_On carries 0x40 and 0x20: it goes to the head of the
+   list and wipes nothing, so the orders survive it. Only a unit made at the apply: the wire refuses
+   `cloak=1` on a scheduled create (tasim_wire.c, unit_keys). */
+static void cloak_units(void)
+{
+    int i;
+
+    for (i = 0; i < g_wire.nunits; i++)
+        if (g_units[i].ok && g_units[i].unit && g_wire.units[i].cloak)
+            cloak_unit(&g_wire.units[i], &g_units[i], i);
 }
 
 static void create_units(void)
@@ -2925,6 +3017,7 @@ static void apply_now(void)
     reset_weapon_scans(ta);
     create_features();
     issue_orders();
+    cloak_units();
     resolve_camera();
 
     g_delayed_result = g_ndelay;

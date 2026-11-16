@@ -7,7 +7,7 @@ outline of their union. Under them, and independent of them, BAR's sensor view: 
 jammer coverage of the viewed player and its allies, always, as dashed outlines of each kind's union
 laid on the ground, by the engine's own emitter rule; and while a building that will emit is
 placed, the sensor preview: its coverage merged into those outlines, the arcs it adds drawn
-brighter, whether or not the view is on. The rings replace the engine's `ShowRanges` circles while
+wider (a jammer's brighter), whether or not the view is on. The rings replace the engine's `ShowRanges` circles while
 they are on.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -22,7 +22,7 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 | `tagpu_packet.h`, `tagpu_packet.c`, `tagpu_packet_pub.c` (`fill_range`) | game / render | `TAGPU_PK_RANGE` (one 24-byte header) and `TAGPU_PK_RING` (32 bytes a ring, at most 4096, 128 KB) in the frame packet; the acquire's bounds |
 | `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight; the sensors' union outlines built as paths and laid on the ground — the arcs a building being placed adds marked per segment — their dashes, the jammers' fills and the on/off animation; 64-byte instances, 32-byte path points (`TAGPU_RGPT`) and the draw list |
 | `tagpu_range_comp.h` → `inc/spirv/tagpu_range_comp.spv.h` | GPU | the reach, a compute pass: one workgroup a ring |
-| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a jammer disc's extent cut and water test); the sensor paths' own pair `SVS`/`SFS`, a dashed band along a path, the segments a building being placed adds at their own alpha |
+| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a jammer disc's extent cut and water test); the sensor paths' own pair `SVS`/`SFS`, a dashed band along a path with each dash in its halo, the segments a building being placed adds at their own width and alpha |
 | `tagpu_vk_range.c/.h` | render | the Vulkan pass: the per-slot reach cache, the dispatch, the stencil union, the per-slot path buffer |
 | `tagpu_terr.c/.h` (`tagpu_terr_heights`) | render | hands the terrain pass's height mirror to a later reader on the render thread: the ground the sensor outlines are laid on |
 | `tagpu_weapons.c` (`tagpu_weapons_type_weapon`) | game | a unit type's weapon `idx` (weapon1..3, then the extra-weapons record), NULL past the type's count; reads only and builds nothing |
@@ -58,17 +58,17 @@ whatever `ranges` says. The fill runs while any of `ranges`, `rangesensor` and `
 (and the lane draws, *The lane*), and sets the header's `TAGPU_PK_RG_SVIEW` while `sensorview` is.
 
 **Allied**, for the rings (`allied`): the viewed player itself, or an owner whose byte in the
-viewed player's alliance row `+0x108 + owner` is 1. **For the sensors the alliance must hold both
-ways** (`ally_both`): that byte, and the owner's own row toward the viewed player, `+0x108 +
-viewer` of the owner's record (the owner bounded below ten first, since it indexes the player
-array). The rows are one-way, and the radar pass shares contacts by the **owner's** row toward the
-viewer (`0x4674BA..0x4674C5`) and then the owner's ShareRadar bit, PlayerInfo `+0x97` bit `0x40`
-(`0x4674D2`); the viewer's row alone would draw the coverage of a player who allies nobody back.
-The ShareRadar bit is not read: an ally's coverage shows whether or not it shares radar.
+viewed player's alliance row `+0x108 + owner` is 1. **For the sensors, the owners whose contacts the
+radar pass gives the viewed player** (`tagpu_allysight_contacts`, [allied sharing](allied-sharing.html),
+*Contacts*): the viewed player itself, and every owner allied with it both ways — each record's
+row byte toward the other non-zero, the snapshot S the radar pass itself answers by, which walks
+those owners' radar and sonar units for the viewed player and skips their jammers. The rows are
+one-way, so the viewer's row alone would draw the coverage of a player who allies nobody back. The
+ShareRadar bit is not read, by the pass or by the view.
 
 **The sensor layer** (`TAGPU_PK_RL_SENSOR`, drawn first, under everything below):
 
-- **the view**, under `sensorview`, always: every unit of the viewed player **and of its allies both ways**
+- **the view**, under `sensorview`, always: every unit of the viewed player **and of the owners it shares contacts with**
   — alive and not dying (`unit_at`) — in each of the four kinds whose distance, a signed word, is
   above 0: radar def `+0x204`, sonar `+0x206`, radar jam `+0x20A`, sonar jam `+0x20C` (classes
   `RC_RADAR` .. `RC_SONARJAM`). A unit **activated** (`+0x10E` bit 0) is published plain; a radar
@@ -205,8 +205,10 @@ BAR's sensor widgets on the engine's coverage rule: the view is `gui_sensor_rang
 `gui_sensor_ranges_sonar.lua` (their `sensor_ranges_los` shaders' colours) for radar and sonar and
 `gui_sensor_ranges_jammer_preview.lua`'s always-shown layer for the jammers. The preview is not
 BAR's: the placed building's disc joins its kind's union in the view's look, and the arcs it adds
-to the outline draw brighter (*The preview*, below). `tools/tascene-ranges.js`'s `DASH`,
-`SENSOR_LINE`, `JAMMER` and `NEW_GAIN` are the same tables as `tagpu_range.c`'s, and its
+to the outline draw wider, a jammer's brighter (*The preview*, below). Nor is the radar and sonar
+line's opacity and halo: at BAR's alpha the line is lost on pale ground (Comet Catcher's grey
+plateau). `tools/tascene-ranges.js`'s `DASH`, `SENSOR_LINE`, `HALO`, `JAMMER`, `NEW_WIDEN` and
+`NEW_GAIN` are the same tables as `tagpu_range.c`'s, and its
 `sensorCircles`, `bands` and per-segment `segNew` draw the preview by the same rule. Sensors take
 no camera fade, highlight or dimming. Every width, dash and speed is BAR's px of a screen times its `lineScale`,
 (screen height in device px + 500) / 1300, so they hold on screen at every zoom.
@@ -243,7 +245,7 @@ s0 dividing the path's length evenly so every level closes round a loop, the coa
 dashes along a path at least four spacings long. The zoom picks the level, its octave, held 0.65 of an octave past a boundary, so
 the spacing on screen stays within about a factor of two; a level change fades the dashes it drops
 or adds over 300 ms and moves none. Nine levels are drawn a frame. Radar and sonar: dashes 4 px
-long every 11 px at level 0, a band 1.5 px wide, moving 9 px a second on screen; the jammers'
+long every 11 px at level 0, a band 2 px wide, moving 9 px a second on screen; the jammers'
 dashes 5 px every 11 px, moving 6 px a second the other way round. **The two clocks are BAR's**:
 the radar and sonar dashes advance with the game (`tick`, a thirtieth of a second at normal speed),
 so they stop on pause and run faster at a higher game speed; the jammers' dashes and the level
@@ -251,7 +253,14 @@ fades run on the wall clock. A step back in time, or one of more than
 a second (30 ticks on the game's clock), moves nothing.
 
 **The view.** Radar and sonar: a dashed band just **outside** each kind's union, radar green
-(0, 1, 0) and sonar light blue (0.5, 0.7, 0.9) at alpha 0.16 and 0.17 times the dash's gain of 2.5.
+(0, 1, 0) and sonar light blue (0.5, 0.7, 0.9), opaque, **each dash in a black halo** at alpha
+0.8, 0.75 px wide on every side of it (`HALO_W`, `HALO_A`), so the line reads on pale ground as on
+dark: on dark ground the halo disappears and the colour carries the line. The halo is drawn in
+the same fragment as the dash (`SFS`): the band's geometry reaches the halo's width beyond both
+edges, the dash's cover is taken again with the dash grown by that width at each end and the band
+widened by it, and the halo is what that cover adds under the dash, black, so it only darkens.
+The `SLINE` instance carries the halo's width in game px in `w[2]` and its alpha in `w[3]`; the
+jammer band has neither.
 The jammers: a **red fill** of the union, (0.62, 0.35, 0.33) at 0.85 of BAR's alpha 0.17 — one
 stencil bit a kind, so an overlap fills once; each disc short of its circle by the band's width,
 so **the fill stops where the band starts**; and a dashed band just **inside** the union, (1.0,
@@ -265,13 +274,18 @@ coverage of that kind and the new disc, in the view's look — radar and sonar a
 outside the union, a jammer's disc filled in the same colour as the others and the dashed band
 inside. A kind is drawn while `sensorview` is on **or** the placed building adds it
 (`kind_shown`), so with the view off placing shows the merged outline of the building's kinds and
-nothing else, and idle shows nothing. **The arcs the new disc adds draw brighter**: each of their
-segments takes the band's alpha × `NEW_GAIN` 2.5, at most 1 — radar 0.40 and sonar 0.425 reach
-1.0, the jammer band 0.8 reaches 1.0 — in the same colour, with the same dashes moving the same
-way, so the dashes run on through the junction between a bright arc and a faint one. The `SLINE`
-instance carries that alpha in `w[1]`, and `SVS` takes it for a segment whose start point's `new`
-is set. **A site whose disc lies wholly inside the existing coverage adds no arc**, so the outline
-stays as it was and nothing is bright. The new disc's edge inside the existing coverage is not
+nothing else, and idle shows nothing. **The arcs the new disc adds stand out**: a radar or sonar
+line, already opaque, draws them **`NEW_WIDEN` 1.75 times as wide** (3.5 px against 2, halo
+included round them); the jammer band draws them at its alpha × `NEW_GAIN` 2.5, at most 1 (0.8
+reaches 1.0). Same colour, same dashes moving the same way, so the dashes run on through the
+junction between a new arc and an existing one. **The width is a point's, not a segment's**: a
+point's `new` is 1 when the segment from it is new and 0.5 when only the segment ending at it is
+(`make_path`), and every point at 0.5 or more stands at the new width, so the two segments meeting
+at a junction place one corner there and the existing one tapers to it — the band's edge, its
+halo and its rim run on unbroken, with the width interpolated across the segment (`vW`). The
+`SLINE` instance carries the width factor in `b[2]` and the alpha in `w[1]`; `SVS` takes the
+alpha for a segment whose start point's `new` is 1. **A site whose disc lies wholly inside the existing
+coverage adds no arc**, so the outline stays as it was and nothing stands out. The new disc's edge inside the existing coverage is not
 drawn, and the existing coverage keeps the view's look. Only the cursor's site previews: the other
 sites of a Shift-drag line do not. After the click the outline drops back to the existing coverage
 at once; the tower under construction is not activated (`+0x10E` bit 0), so its coverage draws
@@ -435,7 +449,7 @@ are full ([settings](settings.html) §2.12).
 | `rangeshift` | `off` | the attack rings only while Shift is held |
 | `rangecursor` | `on` | the rings of the unit under the cursor |
 | `sensorview` | `on` | the sensor view: the radar, sonar and jammer coverage of the viewed player and its allies, always; independent of `ranges` |
-| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed, merged into its kinds' outlines with the arcs it adds brighter, whether or not `sensorview` is on; independent of `ranges` |
+| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed, merged into its kinds' outlines with the arcs it adds wider (a jammer's brighter), whether or not `sensorview` is on; independent of `ranges` |
 | `rangeally` | `nuke` | the allied defenses' classes: a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none` |
 | `rangeenemy` | `ground,air,nuke,cannon` | the enemy defenses' classes, the same spelling |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`, the Alt+. map; at most 64 types, `n` 1..16, each mask inside 2ⁿ − 1 |
@@ -458,9 +472,9 @@ layers' counts, the instances and draws. The scenarios:
   preview. Player 2 (Arm AI), the ally: the radar tower `arad` (6900, 12650), overlapping `rad2`'s
   so the two merge, and the sonar station `ason` in the water. Player 1 (Core AI), the enemy: the
   radar tower `crad` and the mobile radar jammer `spec` (CORSPEC), whose coverage is never drawn.
-  **The alliance is not part of the scenario format**: it is the skirmish key `Player<N>AllyGroup`
-  in the instance's registry store, written before the load — seats with equal groups start allied
-  ([sim](../engine/sim.html), the skirmish settings' `+8`).
+  The file declares the alliance: seats 0 and 2 in `ally_group` 1, seat 1 in 2 — seats with
+  equal groups start allied ([scenario format](../scenario-format.md); [sim](../engine/sim.html),
+  the skirmish settings' `+8`).
 - `scenarios/sensor-preview.json` — Two Continents with true LOS: the site (6750, 11900) on the
   eastern hill, an Arm radar tower switched on when built (`radA`), a second one to switch off
   with its button (`radOff`), an air plant (`ap`) that emits its 500 of radar only while a build
@@ -480,9 +494,8 @@ floor, 0.0802 on 1792×1016): the heartbeat read `atk=2/0 sel=1 inst=8 draws=7` 
 weapon's faint inner one.
 
 **MEASURED 2026-11-11** on `scenarios/sensor-view.json` (the reference setup, Vulkan, 1920×1080,
-true LOS), with `Player0AllyGroup` 1, `Player2AllyGroup` 1 and `Player1AllyGroup` 2 in the
-instance's registry store (every seat read 5 before): the alliance rows `+0x108` read record 0
-`01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …`. `+0x10E` bit 0 of the spawned sensor
+true LOS), with groups 1, 2 and 1 for seats 0, 1 and 2 in the instance's registry store: the
+alliance rows `+0x108` read record 0 `01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …`. `+0x10E` bit 0 of the spawned sensor
 units: `rad`, `rad2`, `arad`, `ason`, `seer`, `jam`, `sjam`, `scram`, `crad` and `spec` 1; `peep`
 (an ARMPEEP on the ground) and `ck` 0. The heartbeat over the scene: `rings=11 sensor=10 paths=5
 pts=3150 … inst=8 draws=8`; placing an ARMRAD, `rings=14 sensor=11`; *Sensor
@@ -497,8 +510,19 @@ its ally's coverage as the live game does; `--perspective 1` only Core's (`senso
 default viewer, with full visibility and no perspective, drew no rings and no sensors at all (the
 census's `range=0`).
 
-**MEASURED 2026-11-11, the preview**, on `scenarios/sensor-preview.json` (the reference setup,
-Vulkan, 1920×1080, `--defaults`), the commander selected and an ARMRAD armed from its build page 2.
+**MEASURED 2026-11-15, the halo and the widened arcs**, on Comet Catcher (two ARMRAD on the pale
+plateau at (1500, 5600) and (2700, 5100), an ARMCK; the reference setup, Vulkan, 1920×1080,
+`--defaults`), the presented window captured: at zoom 0.5 every radar dash opaque green in its
+black outline, readable on the grey plateau where the alpha-0.40 line had been all but lost; with
+an ARMRAD armed and the pointer south-east of the coverage at zoom 0.3 (heartbeat `rings=4
+sensor=3 paths=1 pts=766`), the arcs the new disc adds drawn wider in the same outline, the band
+tapering into them over the existing segment at each junction with no step. The browser lab draws
+the same at 3840×2160.
+
+**MEASURED 2026-11-11, the preview**, under the earlier look (BAR's alpha, the added arcs at
+alpha × 2.5; the halo and the widening replaced it), on `scenarios/sensor-preview.json` (the
+reference setup, Vulkan, 1920×1080, `--defaults`), the commander selected and an ARMRAD armed
+from its build page 2.
 At zoom 0.5 with the pointer on the site (6750, 11900), the heartbeat read `rings=9 sensor=5
 paths=2`, and the outline grew to take in the new disc's circle with its arcs bright. At zoom 0.3
 with the pointer north of the coverage, the right-hand arc was bright above its crossing with the

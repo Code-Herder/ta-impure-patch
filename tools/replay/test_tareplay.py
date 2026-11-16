@@ -172,11 +172,13 @@ class CapRefusalFailsTheGame(unittest.TestCase):
         self.assertEqual((fx["procs"], fx["problems"]), ({"W": "ran"}, []))
 
 
-class NativeCosmeticImagePolicy(unittest.TestCase):
+class EffectPoolsImageGate(unittest.TestCase):
+    """The engine's effect pools are not recorded: the images gate classes them as effects, in
+    every recording, and stays strict one byte outside them."""
     RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
               (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))
 
-    def gate(self, positions, accepted=False, name="stock-secondary-orders", cap=300):
+    def gate(self, positions, name="stock-battle-allied"):
         names = ("l1", "lT", "n1", "n2", "p1", "pT", "r1", "q1")
         images = {name: {0: bytearray(tarec.REC_MAIN_BYTES),
                          1: bytearray(tarec.REC_DATA_BYTES)} for name in names}
@@ -185,76 +187,41 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
         gen = Mock()
         gen.coverage.return_value = {}
         output = io.StringIO()
-        with patch.object(tarec, "header_only", return_value={"projectiles": cap}), \
-                patch.object(tarec, "dump_images", side_effect=lambda name: (
+        with patch.object(tarec, "dump_images", side_effect=lambda name: (
                     201 if name in ("lT", "pT") else 101, "digest", images[name])), \
                 patch.object(tarec, "blocks", return_value=([(0, 0, 0, b"header")], None)), \
                 patch.object(tarec, "header", return_value={"frame": 202}), \
                 patch.object(tarec, "globals_list", return_value=(gen, [], [], "digest")), \
                 redirect_stdout(output):
             result = tarec.cmd_images_gate(f"{name}.imprec", ("l1", "lT"), ("n1", "n2"),
-                                          ("p1", "pT"), "r1", "q1",
-                                          stock_cosmetic_pools=accepted)
+                                          ("p1", "pT"), "r1", "q1")
         return result, output.getvalue()
 
-    def test_default_still_fails_inside_all_three_pools(self):
-        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
-        result, output = self.gate(positions)
-        self.assertEqual(result, 1)
-        self.assertIn("6 bytes FAIL", output)
+    def test_the_ranges_are_the_ones_a_seek_clears(self):
+        self.assertEqual(tarec.EFFECT_POOLS, self.RANGES)
 
-    def test_approved_pool_boundaries_are_reported_as_known_gap(self):
+    def test_every_pool_boundary_is_effects(self):
         positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
-        result, output = self.gate(positions, accepted=True)
-        self.assertEqual(result, 0)
-        self.assertIn("6 native cosmetic-pool bytes", output)
-        self.assertIn("known-gap", output)
+        for name in ("stock-battle-allied", "battle-allied", "stock-secondary-orders"):
+            with self.subTest(name=name):
+                result, output = self.gate(positions, name)
+                self.assertEqual(result, 0, output)
+                self.assertIn("PASS", output)
 
     def test_adjacent_bytes_and_unit_state_remain_strict(self):
         for which, lo, hi in self.RANGES:
             for at in (lo - 1, hi):
                 with self.subTest(which=which, at=at):
-                    result, output = self.gate([(which, lo), (which, at)], accepted=True)
+                    result, output = self.gate([(which, lo), (which, at)])
                     self.assertEqual(result, 1)
                     self.assertIn("1 bytes FAIL", output)
-        self.assertEqual(self.gate([(0, 0x1B63)], accepted=True)[0], 1)
+        self.assertEqual(self.gate([(0, 0x1B63)])[0], 1)
 
-    def test_other_fixture_and_guarded_cap_are_refused(self):
-        self.assertEqual(self.gate([], accepted=True, name="stock-resource-mex")[0], 2)
-        self.assertEqual(self.gate([], accepted=True, cap=3000)[0], 2)
-        self.assertEqual(self.gate([], accepted=True, name="impai-fight")[0], 2)
-
-    def test_stock_impai_fight_takes_the_same_pools_at_the_stock_cap(self):
-        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
-        result, output = self.gate(positions, accepted=True, name="stock-impai-fight")
-        self.assertEqual(result, 0)
-        self.assertIn("accepted 6 native cosmetic-pool bytes for stock-impai-fight", output)
-        self.assertEqual(self.gate([(0, 0x1491A)], accepted=True, name="stock-impai-fight")[0], 1)
-        self.assertEqual(self.gate([], accepted=True, name="stock-impai-fight", cap=3000)[0], 2)
-
-    def test_the_exception_is_exactly_three_fixtures_and_three_ranges(self):
-        # a widening of either is the owner's decision, so it shows as a diff here
-        self.assertEqual(tarec.STOCK_COSMETIC_FIXTURES,
-                         ("stock-secondary-orders", "stock-impai-fight", "stock-impai-naval"))
-        self.assertEqual(tarec.STOCK_COSMETIC_POOLS, self.RANGES)
-
-    def test_harness_only_selects_named_stock_fixtures(self):
-        for name, dll, accepted in (("stock-secondary-orders", "stock", True),
-                                   ("stock-secondary-orders", "normal", False),
-                                   ("stock-impai-fight", "stock", True),
-                                   ("stock-impai-naval", "stock", True),
-                                   ("impai-fight", "normal", False),
-                                   ("impai-naval", "normal", False),
-                                   ("stock-resource-mex", "stock", False),
-                                   ("resource-upgrade", "normal", False)):
-            with self.subTest(name=name, dll=dll):
-                self.assertEqual(tareplay.image_gate_options({"name": name, "fix": {"dll": dll}}),
-                                 ["--stock-cosmetic-pools"] if accepted else [])
-
-    def test_cli_refuses_exception_on_other_commands(self):
-        with redirect_stderr(io.StringIO()):
-            self.assertEqual(tarec.main(["tarec", "check", "missing.imprec",
-                                         "--stock-cosmetic-pools"]), 2)
+    def test_the_old_exception_flag_is_gone(self):
+        with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            self.assertNotEqual(tarec.main(["tarec", "images-gate", "missing.imprec",
+                                            "--stock-secondary-cosmetics"]), 0)
+        self.assertFalse(hasattr(tareplay, "image_gate_options"))
 
 
 class OpaqueGlobals(unittest.TestCase):
@@ -2144,12 +2111,24 @@ class RewindPolicy(unittest.TestCase):
             self.assertEqual(self.compare(key, True)[0], 1)
         self.assertEqual(self.compare((0x480B57, 0, 0), True, puppet=True)[0], 1)
 
+    def test_the_sight_byte_is_the_wide_counter_capped(self):
+        from types import SimpleNamespace
+        w = SimpleNamespace(sight={0: bytearray([0, 255, 3]), 1: bytearray([7])},
+                            sightw={0: [0, 300, 3]})
+        self.assertEqual(tarec.sight_wide_faults(w), [])
+        w.sightw[0][2] = 4
+        faults = tarec.sight_wide_faults(w)
+        self.assertEqual(len(faults), 1)
+        self.assertIn("first 2: byte 3, W 4", faults[0])
+        w.sightw[1] = [7, 7]
+        self.assertIn("2 cells, its byte counters 1", tarec.sight_wide_faults(w)[1])
+
     def test_seated_sight_remains_exact(self):
         from types import SimpleNamespace
         def world():
             return SimpleNamespace(lists={}, players=[bytearray(tarec.REC_PLAYER_IMAGE)
                 for _ in range(tarec.REC_PLAYERS)], sight={0: bytearray(b"a"), 4: bytearray(b"b")},
-                ctl=[], view=[0, 0], units={})
+                sightw={4: [98]}, ctl=[], view=[0, 0], units={})
         a, b = world(), world()
         b.sight[0] = bytearray(b"c")
         b.sight.pop(4)
@@ -2157,6 +2136,7 @@ class RewindPolicy(unittest.TestCase):
         tarec.fork_view(a, b, h, h)
         self.assertNotIn(4, a.sight)
         self.assertNotIn(4, b.sight)
+        self.assertNotIn(4, a.sightw)
         self.assertNotEqual(a.sight[0], b.sight[0])
 
 
@@ -2429,6 +2409,17 @@ class Features(unittest.TestCase):
                              [("one", 2, 3), ("two", 4, 5)])
             self.assertEqual(tafeat.feature_at(feats, "src/x.c", 5)["name"], "two")
             self.assertIsNone(tafeat.feature_at(feats, "src/x.c", 1))
+
+    def test_an_include_line_needs_no_feature(self):
+        for line in ('#include "tagpu_simreg.h"', '  #  include <windows.h>'):
+            self.assertTrue(tareplay.INCLUDE_RX.match(line), line)
+        for line in ("#define X 1", "static int includes;", "#if INCLUDED"):
+            self.assertFalse(tareplay.INCLUDE_RX.match(line), line)
+
+    def test_only_a_new_files_include_line_is_passed_over(self):
+        self.assertTrue(tareplay.skip_include('#include "tagpu_simreg.h"', True))
+        self.assertFalse(tareplay.skip_include('#include "tagpu_limits_stock.h"', False))
+        self.assertFalse(tareplay.skip_include("#define X 1", True))
 
     def test_unfeatured_and_malformed(self):
         with tempfile.TemporaryDirectory() as d:

@@ -44,12 +44,14 @@
 #define TASIM_SUBJ_SEL  2                       /* whatever is selected when it applies               */
 
 /* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>
-    [at=<n>] [slot=<p>]`: the two keys optional, in that order. They are the engine lane's alone (the packed
-   calibration lane). This parser takes them in every build; refusing them is the tasim_run interface's
-   contract, which T1 builds where tasim's world consumes a wire: a wire with an `at` other than 0 or with a
-   `slot` exits 2 with "scheduled and placed creates are the engine lane's". Until then
+    [at=<n>] [slot=<p>] [cloak=1]`: the three keys optional, in that order. `at` and `slot` are the engine
+   lane's alone (the packed calibration lane). This parser takes them in every build; refusing them is the
+   tasim_run interface's contract, which T1 builds where tasim's world consumes a wire: a wire with an `at`
+   other than 0 or with a `slot` exits 2 with "scheduled and placed creates are the engine lane's". Until then
    tools/tasim/tests/fake_tasim.py stands in for tasim_run and refuses so
-   (research/notes/modules/tasim-calibration.md, *The tasim_run interface*). */
+   (research/notes/modules/tasim-calibration.md, *The tasim_run interface*). `cloak=1` is a scenario's
+   `cloaked`: the applier gives the unit the CLOAK button's order after the wire's orders, so it is refused on
+   a unit with an `at` other than 0. A key and not a column, so a wire without it keeps its bytes. */
 typedef struct {
     char type[TASIM_WIRE_NAMELEN];
     int  owner, x, y;
@@ -65,6 +67,7 @@ typedef struct {
     int  slot;                                  /* the position in its owner's block,
                                                    0..TASIM_WIRE_SLOT_MAX; TASIM_WIRE_UNSET = the
                                                    first free slot, as every create without it        */
+    int  cloak;                                 /* 1: the CLOAK_ON order (`cloak=1`); 0 none          */
 } TASIM_WIRE_UNIT;
 
 /* `feat <ord> <type> <x> <y> <height> <facing>` */
@@ -91,10 +94,13 @@ typedef struct {
     int  queue;                                 /* 1: issued with Shift, joining its subject's list   */
 } TASIM_WIRE_ORDER;
 
-/* `player <slot> [metal=<n>] [energy=<n>] [ai=off] [mstore=<f> estore=<f>]` */
+/* `player <slot> [metal=<n>] [energy=<n>] [share_metal=<n>] [share_energy=<n>] [ai=off]
+    [mstore=<f> estore=<f>]` */
 typedef struct {
     int   slot;                                 /* 0..9                                               */
     int   metal, energy;                        /* TASIM_WIRE_UNSET = unchanged                       */
+    int   share[2];                             /* share_metal=, share_energy=: TASIM_WIRE_UNSET
+                                                   unchanged, -1 sharing off, else the share level    */
     int   aioff;                                /* `ai=off`                                           */
     int   hasstore;                             /* bit 0 mstore=, bit 1 estore=: 0 or 3 once parsed   */
     float mstore, estore;                       /* finite and 0 or more                               */

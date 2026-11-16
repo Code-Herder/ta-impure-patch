@@ -57,10 +57,11 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
 
-/* The handicap rows keep the ids of engine/sim.md's table, 1 to 18, though rows 15 and 16, the
-   Deathmatch respawn's two grants, have no site: no ImpAI seat can reach them (HSITES). */
+/* The handicap rows keep the ids of engine/sim.md's table, 1 to 18, though rows 13 to 16 have no
+   site: the transfers' 13 and 14 are the engine fix ai_untaxed's, and the Deathmatch respawn's two
+   grants 15 and 16 no ImpAI seat can reach (HSITES). */
 #define IMPAI_ROWS 18
-#define IMPAI_HSITES 16        /* the fifteen Difficulty tests ImpAI exempts and 0x406FC3 */
+#define IMPAI_HSITES 14        /* the thirteen Difficulty tests ImpAI exempts and 0x406FC3 */
 enum { HIT_SCALED, HIT_EXEMPT };
 
 /* What went in at attach. `avail`: every site ImpAI needs is in, so a level may mark seats;
@@ -2830,14 +2831,18 @@ static void __fastcall impai_ai_command(char* rec, void* edx_unused, int type)
     ((PFN_SetType)(uintptr_t)VA_SET_TYPE)(rec, type);
 }
 
-/* The Difficulty handicap's exemption: sixteen type tests of the engine skip a record ImpAI
+/* The Difficulty handicap's exemption: fourteen type tests of the engine skip a record ImpAI
    plays. RUNS on a puppet: the stubs run there and take stock's branch by the site's own
    compare, every recorded record being type 3. */
 SIM_FEATURE(impai_handicap, SIM_PUPPET_RUNS, "impai-handicap");
 
-/* The sixteen sites (engine/sim.md, Difficulty and the AI handicap; the hook map, The AI seat):
+/* The fourteen sites (engine/sim.md, Difficulty and the AI handicap; the hook map, The AI seat):
    rows 1-17 scale a type-2 record's resources by main+0x37EEE, row 18 is the on-hit handler
-   0x406F80's commander purge. Rows 15 and 16, the Deathmatch respawn's grants 0x465437 and
+   0x406F80's commander purge. Rows 13 and 14, the transfers' credit to a type-2 recipient
+   (0x464C06 energy, 0x464D36 metal), are no site of ImpAI's: the engine fix ai_untaxed
+   (tagpu_patches.c) makes the `jne` inside each a `jmp` (0x464C0A, 0x464D3A), so every give to an
+   AI is credited in full, an ImpAI seat's included, and those bytes are no longer stock's for this
+   install's byte match. Rows 15 and 16, the Deathmatch respawn's grants 0x465437 and
    0x4654A3, stay stock: the respawn 0x4653D9 creates its commander for the controlled player only
    (the owner pushed at 0x4653D2 is the byte main+0x2A42, DISASSEMBLED), a record that is type 2
    only after the AI command, which clears its mark (impai_ai_command), so no ImpAI seat ever
@@ -2871,14 +2876,12 @@ static const HSITE HSITES[] = {
     { 0x0041BBB1u, 10,  6, 4, 0, { CMP2_EAX, 0x75, 0x37 } },             /* 10 unbuild refund          */
     { 0x004238C4u, 11,  5, 3, 0, { CMPBL, 0x75, 0x2E } },                /* 11 reclaim payout energy   */
     { 0x00423918u, 12,  5, 3, 0, { CMPBL, 0x75, 0x38 } },                /* 12 reclaim payout metal    */
-    { 0x00464C06u, 13,  6, 4, 1, { CMP2_ECX, 0x75, 0x32 } },             /* 13 energy transfer         */
-    { 0x00464D36u, 14,  6, 4, 1, { CMP2_ECX, 0x75, 0x34 } },             /* 14 metal transfer          */
     { 0x00486CDAu, 17,  6, 4, 1, { CMP2_ECX, 0x75, 0x38 } },             /* 17 reclaimed unit's credit */
     { 0x00406FC3u, 18,  6, 4, 0, { CMP2_EAX, 0x75, 0x2D } },             /* 18 on-hit commander purge  */
 };
 #define NSITES ((int)(sizeof HSITES / sizeof HSITES[0]))
 #define STUB_ROOM 96u          /* one stub's bytes, rounded up: the longest is 86 */
-_Static_assert(sizeof HSITES / sizeof HSITES[0] == IMPAI_HSITES, "the fifteen handicap sites and 0x406FC3");
+_Static_assert(sizeof HSITES / sizeof HSITES[0] == IMPAI_HSITES, "the thirteen handicap sites and 0x406FC3");
 _Static_assert(IMPAI_HSITES * STUB_ROOM <= 0x1000, "every stub fits the one page");
 
 /* The level-end line's counts, ` <row>=<scaled>/<exempt>` for each site in row order, into
@@ -2939,10 +2942,9 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
      itself has already read [rec+0x73]).
    - Stock is preserved. The site's own compare and branch run first, so a record stock does not
      scale is not scaled. EAX, ECX and EDX are restored before either exit; no x87 register is
-     touched (zero to two values are live on the FPU stack at a site, none at rows 13, 14 and 18:
-     0x464B88 and 0x464CB8 empty it with `fstp st(0)` before a call, and 0x406F80 holds no x87
-     value, DISASSEMBLED); nothing is called. The `inc` before each exit writes only the flags,
-     and the flags are dead at all 32 exits: from every U and S the first instruction that
+     touched (zero to two values are live on the FPU stack at a site, none at row 18: 0x406F80
+     holds no x87 value, DISASSEMBLED); nothing is called. The `inc` before each exit writes only
+     the flags, and the flags are dead at all 28 exits: from every U and S the first instruction that
      touches them writes them (sub, cmp, test, xor) or is a call, directly or through one jmp,
      and 0x4016C5 passes only fcomp/fnstsw before its `test ah` (DISASSEMBLED). No direct branch
      in .text lands inside a site, and every site starts and ends on an instruction (the linear
@@ -2953,7 +2955,7 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
      game thread's first step through the loader's done bit (0x497C62, tested 0x498342); later
      only by the recorder's restore and the AI command, both on the game thread between steps,
      and by the level end's clear in the teardown. The sites run inside the step on the game
-     thread, between steps on it (console Give, the SHARE dialog, a self-destruct), or on the
+     thread, between steps on it (a self-destruct), or on the
      loader thread after 0x4919C8. The one earlier path is the loader's early pump 0x49727D,
      which in a network load can remove a player and so destroy its units (scout I1 of the ImpAI
      plan, function-level reachability; in a skirmish the pump returns at once, 0x453D4B). It
@@ -3097,7 +3099,7 @@ void tagpu_impai_levers(void)
    the only caller of tagpu_impai_level_end; so no site is in on a level whose seat table nobody
    cleared and wrote, nor between levels with a table nobody cleared. Then every site is
    compared -- the seam 0x465031, the AI command's two calls 0x4162F4 and 0x4162FE, the
-   sixteen type tests and the site test's bit at 0x47D3D1 -- and only when every one is stock
+   fourteen type tests and the site test's bit at 0x47D3D1 -- and only when every one is stock
    are the stubs built and every site written; a write that fails puts back every site already
    written. Only then does WQ_SITE_SEAT get its thunk. Otherwise nothing is written,
    s_install.avail stays 0, and each level says why. */

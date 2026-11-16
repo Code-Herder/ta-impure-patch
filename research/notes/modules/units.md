@@ -227,7 +227,20 @@ The gather draws a unit the engine would draw for the player and no other. After
    model is wholly under water with no sonar contact (`+0x110` bit 9, `0x465B30..0x465B59`). The
    waterline clip below runs on the depth-plane path only, which no stationary building takes, so
    without this test such a structure was drawn whole.
-4. **The fog at the anchor tile**: unexplored is refused; grey refuses a foreign unit.
+
+**No anchor-tile test.** The draw-list test is the only sight question a unit is asked, because
+it is the engine's: HotUnits lists a foreign unit when **any** of four box points is in sight, and
+the engine then draws it whole and paints the fog overlay `0x4848E0` over it after the units
+(`0x469D8E`, [render](../engine/render.html), *The two world spans*), greying what lies in grey
+cells and blackening what lies in unexplored ones. Every unit and wreck the pass draws takes the
+fog per pixel the same way (`uFog` bit 0: grey in grey, discarded over the terrain's black in
+unexplored); `uFog` bit 1, which hides a fragment in grey, is the effects' and never a unit's.
+A building whose corner is in sight is therefore drawn whole, coloured where it is seen and grey
+where it is not, as `tagpu_gdi.on` draws it.
+
+**MEASURED 2026-11-14** on `scenarios/fog-edge-structures.json` (True LOS, 1920 × 1080, zoom 1, a
+Peewee ringed by six foreign ARMSOLARs at 230 to 360 world units): GDI draws all six whole, split
+grey and colour along the fog's edge, and the pass does the same.
 
 A refused unit that is a radar or sonar contact (`+0x110 & 0x300`) with a model is drawn as its
 radar dot instead ([strategic icons](icons.html), *Radar dots*), and the radar pick's

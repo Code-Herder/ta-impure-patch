@@ -43,6 +43,9 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
         q->mi = (float)tj_num(tj_get(r, "mi"), 0); q->mo = (float)tj_num(tj_get(r, "mo"), 0);
         q->e = (float)tj_num(tj_get(r, "e"), 0); q->emax = (float)tj_num(tj_get(r, "emax"), 0);
         q->ei = (float)tj_num(tj_get(r, "ei"), 0); q->eo = (float)tj_num(tj_get(r, "eo"), 0);
+        q->id = (int)tj_num(tj_get(e, "i"), 0);
+        q->rates = tj_is(tj_get(e, "rates"), TJ_TRUE);
+        q->ms = (float)tj_num(tj_get(r, "ms"), -1); q->es = (float)tj_num(tj_get(r, "es"), -1);
     }
     v = tj_get(S, "teams");
     for (e = v ? v->first : NULL; e && st->nteam < HUD_MAXSEAT; e = e->next, st->nteam++)
@@ -101,6 +104,23 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
         st->live = 1;
         st->live_open = st->rw_down = tj_is(tj_get(v, "open"), TJ_TRUE);
         st->rw_arm = (int)tj_num(tj_get(tj_get(S, "rw"), "arm"), 0);
+    }
+    /* a network game's allies: the mockup's state and the game's dump both carry `allies` and the
+       lamps' clock `wall` */
+    st->allies = tj_is(tj_get(S, "allies"), TJ_TRUE);
+    st->rewind = st->allies && tj_is(tj_get(S, "rewind"), TJ_TRUE);
+    st->wall = (float)tj_num(tj_get(S, "wall"), 0);
+    /* the give panel: the ally it is open on by its index `i`, which the build finds in `seats` */
+    st->give = -1;
+    v = tj_get(S, "give");
+    if (tj_is(v, TJ_OBJ)) {
+        int i;
+        for (i = 0; i < st->nseat; i++)
+            if (st->seat[i].id == (int)tj_num(tj_get(v, "i"), -1)) st->give = i;
+        for (i = 0; i < 2; i++) {
+            st->give_amt[i] = (float)tj_num(tj_at(tj_get(v, "amt"), i), 0);
+            st->give_max[i] = (float)tj_num(tj_at(tj_get(v, "max"), i), 0);
+        }
     }
     v = tj_get(S, "stats");
     if (v) {

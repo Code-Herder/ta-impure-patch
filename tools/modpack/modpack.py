@@ -1329,9 +1329,14 @@ def cmd_install(a):
                 shutil.rmtree(built, ignore_errors=True)
                 fresh.rename(built)
         shutil.rmtree(dest, ignore_errors=True)
-        dest.mkdir(parents=True)
-        for p in built.iterdir():
-            (dest / p.name).symlink_to(p)
+        # hard links, never symlinks: under Wine DeleteFileW and MoveFileExW act on a symlink's target, so the
+        # game's swap or removal of mods\<id>\ would delete the shared result; a hard link's name is only its own.
+        # Across file systems, a copy.
+        try:
+            shutil.copytree(built, dest, copy_function=os.link)
+        except OSError:
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(built, dest)
     else:
         build(dest, gamedir)
     print(f"{a.id}: installed into {dest}")
@@ -1662,6 +1667,17 @@ SHOW_BLOCKS, SHOW_TEXT, SHOW_COLS, SHOW_LINE, SHOW_BY, SHOW_SITE = 64, 6144, 4, 
 URL_RE = re.compile(r"https://[^\s\"<>]{1,200}")
 
 
+def face_chars() -> set:
+    """The characters every HUD face carries (art/hud/fonts/, cut by tools/hudart/fonts.py): the Mods screen draws a
+    showcase's text in them, and draws nothing for a character they lack."""
+    sys.path.insert(0, str(ROOT / "tools" / "wiki"))
+    import wikilaycheck  # noqa: E402 -- its cmap reader, the standard library's only
+    have = None
+    for f in sorted((ROOT / "art" / "hud" / "fonts").glob("*.ttf")):
+        have = wikilaycheck.cmap(f) if have is None else have & wikilaycheck.cmap(f)
+    return have or set()
+
+
 def check_show(n: str, s) -> list:
     if s is None:
         return []
@@ -1703,6 +1719,11 @@ def check_show(n: str, s) -> list:
             errs.append(f"{n}: show.about has a block of {max(lines)} bytes, past {SHOW_LINE}")
         blocks += len(strs) if isinstance(b, dict) and "list" in b else 1
         text += sum(len(x.encode()) + 1 for x in strs)
+    have = face_chars()
+    lack = sorted({ch for ch in json.dumps(s, ensure_ascii=False) if ord(ch) > 0x7E and ord(ch) not in have})
+    if lack:
+        errs.append(f"{n}: show has characters the HUD faces lack, which the screen would draw as nothing: "
+                    + ", ".join(f"{ch} U+{ord(ch):04X}" for ch in lack))
     if blocks > SHOW_BLOCKS:
         errs.append(f"{n}: show.about has {blocks} blocks, past {SHOW_BLOCKS}")
     if text > SHOW_TEXT:
@@ -1715,7 +1736,8 @@ def check_options(n: str, o) -> list:
     errs = []
     if not isinstance(o, dict):
         return [f"{n}: a mod has no options"]
-    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool))):
+    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool)),
+                             ("mega_map_wheel", lambda v: v in ("wheel", "ctrl+wheel"))):
         p = o.get(name)
         if not isinstance(p, dict) or not isinstance(p.get("allowed"), bool):
             errs.append(f"{n}: option {name} does not say whether it is allowed")
@@ -1724,6 +1746,9 @@ def check_options(n: str, o) -> list:
             errs.append(f"{n}: option {name} is off with no reason")
         if not default_ok(p.get("default")):
             errs.append(f"{n}: option {name} has no default")
+        # a locked option is held at its default, and a resource option a mod forbids is off
+        elif not p["allowed"] and name != "mega_map_wheel" and p["default"] not in (0, False):
+            errs.append(f"{n}: option {name} is off with a default that is not off")
     p = o.get("resource_snapping")
     if isinstance(p, dict):
         d, top = p.get("default"), p.get("max")

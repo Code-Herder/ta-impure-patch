@@ -1,0 +1,5 @@
+{"format":"ta-scenario/1","seed":20261115,"on_error":"abort",
+ "setup":{"map":"Two Continents","clear_existing":false,"switches":{"noshake":true},
+  "players":[{"slot":0,"controller":"human","side":"arm","color":0,"metal":3000,"energy":3000,"ally_group":1},
+             {"slot":1,"controller":"ai","side":"arm","color":1,"ally_group":1},
+             {"slot":2,"controller":"ai","side":"core","color":2,"ally_group":2}]}}

@@ -244,6 +244,10 @@ typedef struct TAGPU_REPLAY_PLAYER {
     unsigned allies;                /* bit j: the alliance row marks recorded seat j */
 } TAGPU_REPLAY_PLAYER;
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
+/* A player's colour as a palette index, from its logo (PlayerInfo +0x96): the middle pixel of that
+   frame of the engine's colour sequence, the logo bounded by the sequence's own count; 59, a grey,
+   when there is none. GAME thread, while the main block exists. */
+unsigned tagpu_replay_logo_colour(unsigned logo);
 /* The army value of one finished unit of each type, by the type's index (a unit's +0xA6), for the
    stats window's walker (tagpu_hudmarks.c): its metal cost when the type moves and is not a
    commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.

@@ -171,7 +171,7 @@ from this run; `tacli ab` removes the old `.ppm` before it arms, so take capture
 
 ```bash
 tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black
-tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --vsync off
+tools/tacli scenario load <i> <scenario> --restart --res 1024x768 --vsync off   # no range ring in view
 sleep 10
 tools/tacli ab <i> terr -o /tmp/terr-B.ppm          # "terr: 2048x1536 -> /tmp/terr-B.ppm"
 ```
@@ -192,6 +192,19 @@ capture time out; it never returns a stale file.
   nothing (`native.on=nosuchunit`) or the unit pass draws too; features need `native.on … wrecks`
   and a camera with the 3D wreck off screen. The readout needs the font, which `markown` produces:
   launch with `mark.on`, then `arm <i> mark.on=off` and wait a few seconds before arming the `.ab`.
+- **A range ring in view refuses every world capture.** The range pass draws whenever a ring is
+  published — a selected unit's, the unit under the cursor's, a defense's — and has no lever: its
+  switch is `impure.cfg`'s `ranges`, which the store does not read under `tagpu_defaults.off`
+  (every launch without `--defaults`), so there it is on. The census then reads `range=1` beside
+  the armed pass and the capture is refused with `1 A/B levers claimed this frame and 2 passes
+  drew into it`; a skirmish of a few parked units (`feat-forest`) is enough. The HUD pass is not
+  counted against a world capture: it records after the world target is composited.
+- **Where a ring is in view, compare the presented windows instead.** Launch both builds on a
+  private Xvfb (`tacli create <i> --display :N`, *See it on a private Xvfb* below), load the same
+  scenario, pin the camera (`tacli eye <i> X Y`) and the zoom, and capture each with
+  `import -display :N -window <id> out.png`, the id being `window[0]` of `tacli ls --json`. The
+  ring's dashes animate, so pixels on the ring differ between any two captures: locate them and
+  exclude that band, and count the rest as the difference.
 - **The lever latches until its file goes away**, and a file already there re-arms nothing, which
   is why `ab` removes it first. Armed before a `--restart` it is consumed before the pass is
   ready: capture after the load.

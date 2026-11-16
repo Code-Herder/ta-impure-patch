@@ -21,19 +21,17 @@ commanders' own terms are the whole income, and the Difficulty scales them for O
 ImpAI's energy income must be above 0; a metal income of 0 on both seats (a commander with no
 metalmake) passes and is reported. Each launch also checks the setup it measures: main+0x37EEE
 holds the Difficulty, records 1 and 2 are controller 2, the level init's line names seat 2 only,
-the seat table marks record 2 and not record 1, the sixteen handicap sites begin with E9 and
+the seat table marks record 2 and not record 1, the fourteen handicap sites begin with E9 and
 the Deathmatch respawn's two type tests, rows 15 and 16, are stock (80)
 (tagpu_impai.c).
 
 Then the rows that need more than the commanders. The launch applies the `impai-handicap` test
 group's economy structures (impai-handicap-economy.json: a solar collector, a wind generator, a
 metal extractor, a metal maker and a tidal generator for each computer seat) and two Fleas for the
-human seat (impai-handicap-purge.json), orders each Flea to attack the computer seat's commander
-nearest it, and the human seat gives each computer seat 100 energy and 100 metal (`+give`, the
-console's Give, mask 1). Every handicap stub counts the type-2 records that take each of its exits
+human seat (impai-handicap-purge.json) and orders each Flea to attack the computer seat's
+commander nearest it. Every handicap stub counts the type-2 records that take each of its exits
 (tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
-every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 and the purge's
-18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
+every row of REACHED -- the economy's 1 to 5, 7 and 8 and the purge's 18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
 record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's. A row
 counts once per pass of its site, so a seat with more units of a kind counts more on that row (ImpAI
 builds a second wind generator early: at Hard, GameTime 961, row 4 counted 30 scaled and 53 exempt);
@@ -125,7 +123,8 @@ reaches the scaled count at Hard too.
 Every row's counts are printed, and the rows this test does not reach are named with their
 reason: 9 and 10, the refunds of a cancelled build and of an unbuild, which no step here scripts;
 6 needs a mobile unit with a negative EnergyUse, which no unit of the retail game has, and
-handicap_row6.py reaches it on Escalation. Rows 15 and 16 have no site: ImpAI leaves the
+handicap_row6.py reaches it on Escalation. Rows 13 to 16 have no site: the transfers' 13 and 14
+credit every AI in full by the engine fix ai_untaxed (tagpu_patches.c), and ImpAI leaves the
 Deathmatch respawn's grants stock (tagpu_impai.c, HSITES).
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
@@ -160,7 +159,7 @@ OTA, IMPAI = 1, 2                       # the scenario's records
 STRUCTURES = "impai-handicap-economy.json"
 ATTACKERS = "impai-handicap-purge.json"
 ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_packet_pub.c)
-REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
+REACHED = (1, 2, 3, 4, 5, 7, 8, 18)          # structures, commanders and the Fleas' hits
 RECLAIMS = "impai-handicap-reclaims.json"
 RECLAIMED = (11, 12, 17)                # the rows a seat's own reclaim orders reach
 # The reclaims' bound. Once it holds, the longer reclaim, the radar tower's, is at most 37 + 23 + 34 + 96 =
@@ -208,12 +207,12 @@ DESC_BEGIN, DESC_END, DESC_STRIDE, DESC_NAME = 0x512344, 0x512348, 0x19, 0x15
 U_X, U_Z = 0x6C, 0x74                   # the position's integer halves, world units (engine/units.md)
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
-ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
+ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18)   # the rows with a site
 HIT_ROWS = 18                           # s_diag.hits[IMPAI_ROWS][2], u32 (tagpu_impai.c)
 HITS_BYTES = HIT_ROWS * 2 * 4
 PEEK_MAX = 256                          # bytes one x<N> read may ask (tagpu_peek.c)
 SITES = (0x401435, 0x4014B2, 0x4014F3, 0x40157F, 0x4015F3, 0x40167C, 0x4016F2, 0x401753,
-         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x486CDA, 0x406FC3)
+         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x486CDA, 0x406FC3)
 STOCK = (0x465437, 0x4654A3)            # rows 15 and 16, `cmp byte [eax+0x73],2`: 80 78 73 02
 
 
@@ -389,15 +388,12 @@ def attack_commanders(c, out):
 
 
 def rows_reached(c, instance, hits_at, out):
-    """The structures, the Fleas' attacks and the gives, then the level advanced until every
+    """The structures and the Fleas' attacks, then the level advanced until every
     REACHED row has sent a record down both exits; the list of failed checks and the Fleas with their
     commanders."""
     apply(instance, STRUCTURES)
     apply(instance, ATTACKERS)
     fleas = attack_commanders(c, out)
-    for seat in (OTA, IMPAI):
-        for what in ("energy", "metal"):
-            c.type(f"+give {seat} 100 {what}")
     start = c.tick
     hits = counts(c, hits_at)
     dead = []

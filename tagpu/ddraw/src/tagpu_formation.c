@@ -10,9 +10,10 @@
    (tagpu_route.c has the routing's bytes):
 
    - the right-press branch's stub at 0x49939B sees every record no earlier branch diverted, in
-     every mode (tagpu_formation_right). Interface Type 1, nothing armed: it defers a right press
-     that only moves units, follows the moves, and commits at the release. Stock gives that order
-     at the press (0x499100 -> 0x48CF30 at 0x4991F5); a deferred one is given at the release.
+     every mode (tagpu_formation_right). Nothing armed, it defers a right press over the ground
+     with movers selected, follows the moves, and commits at the release. Stock answers that
+     press at the press -- at Interface Type 1 with the order (0x499100 -> 0x48CF30 at
+     0x4991F5), at Type 0 by deselecting (0x499189) -- and a deferred one at the release.
    - the click route's stub at 0x4993BF hands it a mode-2 (Move armed) record
      (tagpu_formation_button): the left press and release of a drag, in either Interface Type.
    - the before-observer on the handler's entry ends the gesture when a record is handled in
@@ -113,6 +114,7 @@ static int s_actOk;
 
 static struct {
     int active, button, mode, itype;
+    int moves;                     /* a Type-0 right gesture: Move's orders, stock's is a deselect */
     int keep;                      /* mode 2: main+0x2CC6 bit 5 at the press, a Shift-kept Move */
     int shed;                      /* the engine disarmed that Move while the button was held   */
     int press[6];                  /* the press record, by value                               */
@@ -350,6 +352,10 @@ static void preview(void)
    stock either). Any other answer -- a reclaim under the pointer, say -- leaves the press to
    stock, unchanged; so does a right press Quick Build's gate on 0x499100 would turn into a build
    (tagpu_resource_quick_right), which the player sees as the build ghost under the pointer.
+   A Type-0 right press (`moves`) is not an order in stock -- 0x499100 deselects there
+   (0x499172..0x499196) -- so it is asked as Move is, mode 2, and a unit Move would give QMOVE
+   (a factory's rally) is left out: the gesture moves units, and a factory keeps its rally. A
+   Ctrl press is the arm's other branch, 0x41CC60 (0x49917A), and stays stock's.
    The scan fills s_g's unit lists as it goes; the gesture exists only once s_g.active is set,
    at the end. */
 static int admit(char* ta, const int* rec, int button, int mode, int itype)
@@ -357,8 +363,11 @@ static int admit(char* ta, const int* rec, int button, int mode, int itype)
     TagpuWorld w;
     const int32_t* p = (const int32_t*)(ta + M_POINT);
     unsigned region = (unsigned char)ta[M_REGION], slot, n = 0, nq = 0;
+    const int moves = button == FB_RIGHT && !itype;
+    const unsigned asked = moves ? 2u : (unsigned)mode;
     if (!(region & 0x02) || (region & 0x08)) return 0;
     if (rec[2] & (button == FB_RIGHT ? MK_LBUTTON : MK_RBUTTON)) return 0;
+    if (moves && (rec[2] & MK_CONTROL)) return 0;
     if (*(const uint16_t*)(ta + M_HOVER)) return 0;
     if (mode == 2) {
         unsigned c = (unsigned char)ta[M_CURSOR];
@@ -370,18 +379,18 @@ static int admit(char* ta, const int* rec, int button, int mode, int itype)
         char* u = participant(&w, slot);
         unsigned char a;
         if (!u) continue;
-        a = resolve((unsigned)mode, u, p);
+        a = resolve(asked, u, p);
         if (a == s_act[A_MOVE] || a == s_act[A_VTOL]) {
             if (n == FORM_MAX_UNITS) return 0;
             s_g.part[n].slot = (uint16_t)slot; s_g.part[n].action = a; n++;
         } else if (a == s_act[A_QMOVE] && mode == 2) {
             if (nq == FORM_MAX_UNITS) return 0;
             s_g.qslot[nq++] = (uint16_t)slot;
-        } else if (a) return 0;
+        } else if (a && !(moves && a == s_act[A_QMOVE])) return 0;
     }
     if (!n) return 0;
     s_g.n = n; s_g.nq = nq;
-    s_g.active = 1; s_g.button = button; s_g.mode = mode; s_g.itype = itype;
+    s_g.active = 1; s_g.button = button; s_g.mode = mode; s_g.itype = itype; s_g.moves = moves;
     s_g.keep = mode == 2 && ((unsigned char)ta[M_REGION] & 0x20); s_g.shed = 0;
     memcpy(s_g.press, rec, sizeof s_g.press);
     snap_take(ta, &s_g.at_press);
@@ -422,9 +431,10 @@ static void track(const char* ta, const int* rec)
    call and of the resource module's gate on them; both clicks read the record only at +8
    (0x49917A; 0x498F70 passes it on to 0x419670, 0x48C7F0, 0x48CF30, which read +8 alone). The
    one arm of either click that writes a Snap field is 0x499100's Interface Type 0 minimap arm
-   (main+0x2CBE and +0x2CC6 bit 4, 0x49919D..0x4991B4), which a replay never reaches: a right
-   gesture exists only at Type 1 and is dropped when the type changes. So restoring the fields
-   undoes only this function's own writes. The
+   (main+0x2CBE and +0x2CC6 bit 4, 0x49919D..0x4991B4), which a replay never reaches: that arm
+   is taken only with region bit 1 clear (0x499172), and every Snap replayed has it set -- the
+   press is admitted only in the world view, and track and commit take a Snap only there. So
+   restoring the fields undoes only this function's own writes. The
    render thread reads none of them (it reads the frame packet), and the recorder leaves
    main+0x2AA7..+0x2CC6 out of a recording (replay-globals.tsv), so the transient values are
    invisible to both. tagpu_resource_mouse re-samples Quick Build's raw point from the restored
@@ -444,6 +454,23 @@ static void replay(char* ta, const int rec6[6], const Snap* s, int button, int s
     else (button == FB_RIGHT ? s_clickRight : s_clickLeft)(copy);
     snap_put(ta, &cur);
     if (tagpu_vpwide_mouse_world_live()) tagpu_resource_mouse();
+}
+
+/* One participant's order through 0x43ADC0: re-derived from its slot first, and under Shift
+   refused when its list already holds FORM_LIST_CAP nodes (counted in *listcap). 1 when it
+   was ordered. */
+static unsigned order_one(const TagpuWorld* w, unsigned slot, unsigned char act, int shift,
+                          const FormPt* at, unsigned* listcap)
+{
+    char* u = participant(w, slot);
+    unsigned qlen = 0;
+    if (!u) return 0;
+    if (shift) {
+        (void)queue_end(w, u, &qlen);
+        if (qlen >= FORM_LIST_CAP) { (*listcap)++; return 0; }
+    }
+    ((Order)VA_ORDER)(act, shift, u, NULL, at, 0, 0);
+    return 1;
 }
 
 /* THE RELEASE. The participants are re-derived from their slots (the selection may have
@@ -494,25 +521,22 @@ static void commit(char* ta, const int* rec)
         live++;
     }
     if (live <= 1) {
-        replay(ta, rec, &s_g.at_last, (int)button, shed);
+        /* BAR's single-unit rule: stock's click at the release point. A Type-0 right click is
+           a deselect, so there the one unit is given the move instead, to the path's end. */
+        if (s_g.moves) {
+            if (live) issued = order_one(&w, s_cSlot[0], s_cAct[0], shift, &s_g.node[s_g.m - 1],
+                                         &listcap);
+            s_cListCap += listcap;
+        } else replay(ta, rec, &s_g.at_last, (int)button, shed);
         s_cSingle++;
-        tagpu_logf("formation: single button=%s units=%u", button == FB_RIGHT ? "right" : "left",
-                   live);
+        tagpu_logf("formation: single button=%s units=%u issued=%u", button == FB_RIGHT ? "right" :
+                   "left", live, s_g.moves ? issued : live);
         return;
     }
     form_slots(s_g.node, s_g.m, live, s_target);
     algo = form_assign(s_start, s_target, live, s_slotOf);
-    for (i = 0; i < live; i++) {
-        char* u = participant(&w, s_cSlot[i]);
-        unsigned qlen = 0;
-        if (!u) continue;
-        if (shift) {
-            (void)queue_end(&w, u, &qlen);
-            if (qlen >= FORM_LIST_CAP) { listcap++; continue; }
-        }
-        ((Order)VA_ORDER)(s_cAct[i], shift, u, NULL, &s_target[s_slotOf[i]], 0, 0);
-        issued++;
-    }
+    for (i = 0; i < live; i++)
+        issued += order_one(&w, s_cSlot[i], s_cAct[i], shift, &s_target[s_slotOf[i]], &listcap);
     if (mode == 2) {
         /* A unit with no mover (a factory) gets stock's own call for it: 0x48CF30 hands QMOVE
            to 0x43AFC0 with the click's point unshifted, QMove's descriptor lacking the group
@@ -559,7 +583,7 @@ int tagpu_formation_right(const int* rec, unsigned msg)
     case WM_RBUTTONDOWN:
         /* another press of the gesture's own button is a release the handler never saw */
         drop("other");
-        if (itype != 1 || mode != 1 || !formation_on()) return 0;
+        if (mode != 1 || !formation_on()) return 0;
         return admit(ta, rec, FB_RIGHT, 1, itype);
     case WM_LBUTTONDOWN:
         /* the other button cancels the gesture (BAR); a left gesture's own press is the click

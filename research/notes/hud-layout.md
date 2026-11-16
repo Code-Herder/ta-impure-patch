@@ -218,7 +218,13 @@ device pixels** wide, as CSS snaps a border width (floored, a thinner one drawn 
 over button at 4K and HUD 150 has a top edge of 8.81 px drawn 8, which makes its top and middle rows
 five copies of 199 px and its bottom row (10.67 px, drawn 10) four of 248 — MEASURED 2026-10-23 against
 Chrome's `border-image`, where the exact widths gave four in every row and the scratches fell up to
-55 px apart. Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
+55 px apart. **A 9-slice's middle shorter than half its tile is not drawn:** one copy there would
+squeeze the tile many times over (the give panel's slider, 17 units of `live_groove`'s 161-unit
+tile, showed a band at nine times its density mid-track), so the two edges meet instead, sharing
+the box in their own proportion and so drawn wider than painted, up to about 1.55 times for
+`live_groove` just under the threshold; the tile is seamless, so they join as the tile would have
+joined them. CSS `round` keeps at least one copy; our composers do not. The live strip's track
+crosses it at 4:3 and 5:4 under HUD 150 (about 213 and 193 units). Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
 by one rule (`tagpu_hud_snap`, `snapPx` in `hud.js`), counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
 proportion this way; `tools/hudart/seamband.py` makes the band and sets the flag. The game
 (`tagpu_hudlay_expand`) and the mockup (`composeGrid`, `composeNine`, which draw the part on a canvas
@@ -466,7 +472,9 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
   over button, from the transport plate's left: `pad`, the title `title.h`, a row of `row.h` and
   `row.gap` for each player, the warning when shown, then `pad` again.
 - **The title** reads "Take over at m:ss as", with no-break spaces round the time, inset by
-  `title.pad` in `title.style`. The time is the playhead's, `t`, in game as in the mockup: the
+  `title.pad` in `title.style` and centred down the plate's title band: the depth of
+  `picker_one`'s top slice, read from the kit (hud.js `band`, C `band`), so the text follows the
+  art whatever `pad` and `title.h` are. The give panel's title is centred the same way. The time is the playhead's, `t`, in game as in the mockup: the
   world a takeover starts from is the one on screen.
 - **A row** is the part `row.part` (`row.pressed` while held), keyed `takeas:<i>` with i the
   row's index, as a column row's is. In it, the player's colour as a stripe `stripe.w` wide inset

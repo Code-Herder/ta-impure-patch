@@ -4,8 +4,8 @@
     python3 tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]
 
 Each case's verdict is the game's own: START's grayed state read from the running battle room, a click on it placed by the
-display server, and both sides reaching play or staying in the room. --old-dll is an Impure build from before the fingerprint,
-which stands for a player with the key and no print. --film records the gameplay case's host from its start."""
+display server, and both sides reaching play or staying in the room. --old-dll is an Impure build from before the fingerprint
+(v0.5's release DLL), which stands for a player with the key and no print: `stock` and `older` check that the host refuses them and says so. --film records the gameplay case's host from its start."""
 import argparse
 import json
 import re
@@ -200,20 +200,39 @@ def cosmetic(work):
         report("Cosmetic test" in a[-1][2] if a else False, f"the host's label names it: {a[-1:]}")
 
 
+def refused(p, why):
+    """The joiner is sent back and the host's battle room says so, once; the host stays in its room."""
+    joined = True
+    try:
+        t.lobby_to_ready(p.host["name"], p.join["name"], PORT)
+    except (t.Lobby, SystemExit) as e:
+        joined = False
+        print(f"      the walk ended: {str(e)[:160]}", flush=True)
+    # an older joiner can reach the room for a moment before the host's refusal lands: wait for the line and for the joiner to leave
+    end = time.time() + 60
+    while time.time() < end and not ("modgate: said:" in log_of(p.host) and "LOUNGE2" not in screen(p.join)):
+        time.sleep(2)
+    time.sleep(3)
+    p.shot("host", "refused")
+    p.shot("join", "refused")
+    said = re.findall(r"modgate: said: (.*)", log_of(p.host))
+    report("LOUNGE2" not in screen(p.join), f"the joiner is not in the room (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
+    report(len(said) == 1 and said[0].endswith("refused: " + why), f"the host was told once, {why}: {said}")
+    report("LOUNGE2" in screen(p.host), f"the host stayed in its room: {screen(p.host)[:40]}")
+
+
 def stock(_work):
-    """A joiner whose data is stock's 21 bytes: taken, and compared with nobody."""
+    """A joiner whose data is stock's 21 bytes: refused, and the host told it is not running Impure."""
     p = Pair("stock", setup("managed-prota"), setup("managed-prota"))
     (p.join["gamedir"] / "tagpu_modprint_stock.on").write_text("")
     with p:
-        report(start_and_play(p), "a host of this build and a joiner sending stock's 21 bytes start")
-        report("modgate:" not in log_of(p.host), "that joiner was not named")
+        refused(p, "not running Impure")
 
 
 def older(old):
-    """A player who sends no print, joining: compared with nobody, as without the fingerprint."""
+    """An older Impure joining, whose data has the key and no print: refused, and the host told it is an older build."""
     with Pair("older", setup("managed-prota"), setup("managed-prota"), join_dll=old) as p:
-        report(start_and_play(p), "a host of this build and an older joiner start")
-        report("modgate:" not in log_of(p.host), "the older player was not named")
+        refused(p, "older Impure build")
 
 
 def olderhost(old):
@@ -232,7 +251,7 @@ def olderhost(old):
 def main():
     a = argparse.ArgumentParser(description=__doc__)
     a.add_argument("--only", choices=["dropin", "gameplay", "cosmetic", "stock", "older", "olderhost"])
-    a.add_argument("--old-dll", default=str(Path(t.main_checkout()) / "tagpu/ddraw/ddraw.dll"))
+    a.add_argument("--old-dll", help="an Impure build from before the fingerprint, v0.5's ddraw.dll or older; `older` and `olderhost` need it")
     a.add_argument("--film", type=Path)
     args = a.parse_args()
     global FILM, PORT, LEASE
@@ -248,7 +267,10 @@ def main():
     PORT = LEASE.port
     OUT.mkdir(parents=True, exist_ok=True)
     old = OUT / "older-ddraw.dll"
-    shutil.copy2(args.old_dll, old)
+    if args.only in (None, "older", "olderhost"):
+        if not args.old_dll:
+            a.error("--old-dll is needed for the older and olderhost cases")
+        shutil.copy2(args.old_dll, old)
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
         if args.only in (None, "dropin"):

@@ -232,9 +232,11 @@ def flow(display):
     report(s["tab"] == 1 and "ProTA" not in names and "Escalation" in names and "Total Mayhem" in names, f"Explore lists what is not installed: {names}")
     g.click(f"row:{row_of(s, 'Escalation')}")
     s = g.settled(lambda s: s["opts"])
-    report(all(o["locked"] and o["reason"] for o in s["opts"]), f"Escalation's options are locked with its reason: {s['opts'][0]['reason']}")
+    locked = [(o["label"], bool(o["locked"] and o["reason"])) for o in s["opts"]]
+    report(locked == [("Resource snapping radius", True), ("Quick Build", True), ("Mega map wheel", False)],
+           f"Escalation's resource options are locked with its reason, its wheel is the player's: {locked}")
     k = [h["key"] for h in s["hits"]]
-    report(not any(x.startswith("opt:") for x in k), "a locked option takes no click")
+    report(not any(x.startswith("opt:") for x in k), "an option takes no click")
     g.shot("explore-locked")
 
     g.click("tab:2")
@@ -246,7 +248,8 @@ def flow(display):
     s = g.settled(lambda s: s["tab"] == 0)
     g.click(f"row:{row_of(s, 'ProTA')}")
     s = g.settled(lambda s: s["opts"])
-    report([(o["label"], o["value"], o["locked"]) for o in s["opts"]] == [("Resource snapping radius", "3", 0), ("Quick Build", "On", 0)],
+    report([(o["label"], o["value"], o["locked"]) for o in s["opts"]] ==
+           [("Resource snapping radius", "3", 0), ("Quick Build", "On", 0), ("Mega map wheel", "Wheel", 0)],
            f"ProTA's options show the mod's values: {[(o['label'], o['value']) for o in s['opts']]}")
     # the Mods screen sets no game setting: its controls are the list's, the tabs, the footer's and the close button
     others = [h["key"] for h in s["hits"] if not h["key"].startswith(("tab:", "row:", "act:", "scroll:", "link:")) and h["key"] not in ("close", "back", "confirm", "updateall")]
@@ -303,7 +306,7 @@ def flow(display):
     # the mod running now: its options read from the profile module's own store
     g.click(f"row:{row_of(s, 'ProTA')}")
     s = g.settled(lambda s: s["opts"])
-    report([o["value"] for o in s["opts"]] == ["3", "On"] and not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]),
+    report([o["value"] for o in s["opts"]] == ["3", "On", "Wheel"] and not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]),
            f"the running mod's options show its values and take no click: {[o['value'] for o in s['opts']]}")
     g.click("close")
     s = g.settled(lambda s: not s["open"])

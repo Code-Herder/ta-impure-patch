@@ -152,21 +152,24 @@ function defenseRings(T) {
 // flat circles on x/z, no terrain blocking, no radar cells.
 //   * THE VIEW, always on: every own and allied emitter. Radar and sonar are
 //     gui_sensor_ranges_radar.lua / _sonar.lua's colours on the outline of each
-//     kind's union: a dashed band just outside it. Jammers are
+//     kind's union: a dashed band just outside it, opaque, each dash in a
+//     dark halo (HALO). Jammers are
 //     gui_sensor_ranges_jammer_preview.lua's always-shown allied layer: a
 //     dashed band just inside the union's outline, the union inside it
 //     filled. The outline is the circles' uncovered arcs chained into loops
 //     (see `loops`), dashed along each loop (see DASH).
 //   * THE PREVIEW of a building being placed is not BAR's: the building's disc
 //     joins its kinds' unions in the view's look -- with the view on or off --
-//     and the arcs it adds to the outline draw brighter (NEW_GAIN), so the
-//     outline shows the coverage the building would give.
+//     and the arcs it adds to the outline draw wider (NEW_WIDEN; a jammer's
+//     brighter, NEW_GAIN), so the outline shows the coverage the building
+//     would give.
 const SENSOR_KINDS = ["radar", "sonar", "radarjam", "sonarjam"];
 const WATER_KIND = { radar: false, sonar: true, radarjam: false, sonarjam: true };
-// sensor_ranges_los.vert/.frag.glsl with the radar and sonar defines
+// sensor_ranges_los.vert/.frag.glsl's colours with the radar and sonar
+// defines, opaque: BAR's alpha (0.16, 0.17) is lost on pale ground
 const SENSOR_LINE = {
-  radar: { c: [0.0, 1.0, 0.0], a: 0.16 },
-  sonar: { c: [0.5, 0.7, 0.9], a: 0.17 },
+  radar: { c: [0.0, 1.0, 0.0] },
+  sonar: { c: [0.5, 0.7, 0.9] },
 };
 // THE DASHES (radar, sonar and the jammer's band) are the waypoint dots'
 // level of detail (tascene-view.html ordspace=lod) on a circle. Every dash is
@@ -181,16 +184,23 @@ const SENSOR_LINE = {
 // x lineScale, lineScale = (vsy + 500) / 1300 (BAR's): the band's width, the
 // dash length and level-0 spacing, px; speed px/s
 const DASH = {
-  line: { w: 1.5, len: 4, space: 11, speed: 9, gain: 2.5 },   // gain: the dash's opacity x the kind's
+  line: { w: 2.0, len: 4, space: 11, speed: 9 },
   jam:  { len: 5, space: 11, speed: 6 },
 };
+// THE HALO round every radar and sonar dash: `w` px x lineScale beyond the
+// dash on every side, black at `a`, so the line reads on pale ground as on
+// dark (Comet Catcher's grey plateau hid the plain green)
+const HALO = { w: 0.75, c: [0, 0, 0], a: 0.8 };
+// the arcs a building being placed adds to a radar or sonar line: the band
+// this many times as wide (the line is opaque, so it cannot grow brighter)
+const NEW_WIDEN = 1.75;
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
 // gui_sensor_ranges_jammer_preview.lua shaderConfig
 const JAMMER = { allied: [0.62, 0.35, 0.33], a: 0.17, alliedRel: 0.85,
                  outline: [1.0, 0.32, 0.22], dashA: 0.8,
                  w: 1.2, wElmo: 0.89 };   // band width: px at 1080p + elmos
-// the arcs a building being placed adds to an outline: the band's alpha
-// times this, at most 1
+// the arcs a building being placed adds to a jammer's band: the band's
+// alpha times this, at most 1
 const NEW_GAIN = 2.5;
 
 // a type's sensors that will emit once built: a value above 0 on a def that
@@ -248,15 +258,15 @@ void main() {
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
-layout(location=1) in float aAcross;// px from the path, -0.5 .. width + 0.5
+layout(location=1) in float aAcross;// px from the path, -0.5 - halo .. width + 0.5 + halo
 layout(location=2) in float aArc;   // along the path on the map, in zoom-1 px
 layout(location=3) in float aVis;
-layout(location=4) in float aW;     // the band's width, px
+layout(location=4) in float aW;     // the band's width at this point, px
 layout(location=5) in float aS0;    // the path's level-0 dash spacing, zoom-1 px
 layout(location=6) in float aTop;   // its coarsest level (4..8 dashes along it)
 uniform vec2 uCanvas;
-out float vAcross; out float vArc; out float vVis;
-flat out float vW; flat out float vS0; flat out float vTop;
+out float vAcross; out float vArc; out float vVis; out float vW;
+flat out float vS0; flat out float vTop;
 void main() {
   vAcross = aAcross; vArc = aArc; vVis = aVis; vW = aW; vS0 = aS0; vTop = aTop;
   gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
@@ -265,7 +275,7 @@ const SLINE_FS = `#version 300 es
 precision highp float;
 precision highp int;
 in float vAcross; in float vArc; in float vVis;
-flat in float vW; flat in float vS0; flat in float vTop;
+in float vW; flat in float vS0; flat in float vTop;
 uniform vec3 uCol;
 uniform float uA;
 uniform float uShift;        // zoom-1 px the dashes have moved along
@@ -273,15 +283,18 @@ uniform float uZoom;
 uniform float uDash;         // a dash's length, px
 uniform int uFine, uLevel;   // the finest level drawn; the zoom's level
 uniform float uOp[${DASH_SPAN + 1}];  // opacity of levels uFine .. uFine + ${DASH_SPAN}
+uniform float uHaloW;        // the halo's width, px; 0: none
+uniform vec4 uHalo;          // its colour, premultiplied
 out vec4 o;
-// a dash's cover at this fragment, times its level's opacity
-float dashes() {
+// a dash's cover at this fragment, the dash grown by \`grow\` px at each end,
+// times its level's opacity
+float dashes(float grow) {
   // a circle whose coarsest level is finer than the zoom's draws that level whole
   int top = int(vTop + 0.5), f = top < uLevel ? top : uFine;
   float s = vS0 * exp2(float(f));
   float u = (vArc + uShift) / s, n = floor(u + 0.5);
   float d = abs(u - n) * s * uZoom;                    // px from the dash's centre
-  float cover = clamp(uDash * 0.5 - d + 0.5, 0.0, 1.0);
+  float cover = clamp(uDash * 0.5 + grow - d + 0.5, 0.0, 1.0);
   if (cover <= 0.0) return 0.0;
   if (top < uLevel) return cover;
   // the dash's level: the coarsest its index belongs to
@@ -291,11 +304,18 @@ float dashes() {
   else for (int k = 0; k < 16 && (m & 1) == 0; k++) { m >>= 1; lv++; }
   return cover * uOp[clamp(lv - uFine, 0, ${DASH_SPAN})];
 }
+// the dash over its halo: the dash's band, and the band uHaloW wider on
+// each side with the dash grown as much at each end
 void main() {
   float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0) * uA * vVis;
-  a *= dashes();
-  if (a <= 0.0) discard;
-  o = vec4(uCol * a, a);
+  a *= dashes(0.0);
+  vec4 c = vec4(uCol * a, a);
+  if (uHaloW > 0.0) {
+    float h = clamp(vAcross + uHaloW + 0.5, 0.0, 1.0) * clamp(vW + uHaloW + 0.5 - vAcross, 0.0, 1.0) * vVis;
+    c += uHalo * (h * dashes(uHaloW) * (1.0 - a));
+  }
+  if (c.a <= 0.0) discard;
+  o = c;
 }`;
 const LINE_VS = `#version 300 es
 precision highp float;
@@ -544,7 +564,7 @@ function create(ctx) {
   const SEA_U = ["uHeight", "uGrid", "uView", "uSea", "uCanvasH", "uWater"];
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol", ...SEA_U]);
   const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uShift",
-                            "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
+                            "uZoom", "uDash", "uFine", "uLevel", "uOp", "uHaloW", "uHalo"]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
   // 10-19, 14 being the height map the Classic++ light reads)
   const TEX_UNIT = 20;
@@ -1144,12 +1164,13 @@ function create(ctx) {
     const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
     return { s0: L / (nTop * 2 ** top), top };
   }
-  // a band `width` px wide along a path, outside its circles (side 1) or
-  // inside (-1): the segments a building being placed adds when `fresh` is 1,
-  // the others when 0
-  function sline(path, width, side, space, zoom, fresh) {
-    const arr = memo(path, `line${width},${side},${space},${fresh}`, () => {
-      const s0 = sN; buildLine(path, width, side, lattice(path, space, zoom), zoom, fresh);
+  // a band `width` px wide along a path, `freshW` at every point touching a
+  // segment a building being placed adds, outside its circles (side 1) or
+  // inside (-1), with room for a halo `halo` px wide on each side: the
+  // segments a building being placed adds when `fresh` is 1, the others when 0
+  function sline(path, width, freshW, halo, side, space, zoom, fresh) {
+    const arr = memo(path, `line${width},${freshW},${halo},${side},${space},${fresh}`, () => {
+      const s0 = sN; buildLine(path, width, freshW, halo, side, lattice(path, space, zoom), zoom, fresh);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1157,21 +1178,26 @@ function create(ctx) {
     }
     sBuf.set(arr, sN); sN += arr.length;
   }
-  // the quads between consecutive points, from the path out to `width` on
-  // `side`: neighbouring quads share their edge, so no pixel is drawn twice
-  // and the position along the path runs on unbroken
-  function buildLine(path, width, side, lat, zoom, fresh) {
+  // the quads between consecutive points, from the path out to the band's
+  // width on `side` and `halo` beyond both edges: neighbouring quads share
+  // their edge, so no pixel is drawn twice and the position along the path
+  // runs on unbroken. A point touching a fresh segment is `freshW` wide, so
+  // an existing segment beside one tapers to it and their corner stays one.
+  function buildLine(path, width, freshW, halo, side, lat, zoom, fresh) {
     const { n, scr, vis, nrm, along, closed, segNew } = path, s0 = lat.s0, top = lat.top;
-    const lo = -0.5, hi = width + 0.5;
-    for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const segs = closed ? n : n - 1;
+    const wAt = (k) => (segNew[k] || segNew[closed ? (k + n - 1) % n : k - 1] ? freshW : width);
+    for (let i = 0; i < segs; i++) {
       const j = (i + 1) % n;
       if ((!vis[i] && !vis[j]) || segNew[i] !== fresh) continue;
       const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
       const nx0 = nrm[i * 2] * side, ny0 = nrm[i * 2 + 1] * side, nx1 = nrm[j * 2] * side, ny1 = nrm[j * 2 + 1] * side;
       const a0 = along[i] / zoom, a1 = along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
-      const P = (x, y, nx, ny, d, a, v) => pushS(x + nx * d, y + ny * d, d, a, v, width, s0, top);
-      P(x0, y0, nx0, ny0, lo, a0, v0); P(x0, y0, nx0, ny0, hi, a0, v0); P(x1, y1, nx1, ny1, hi, a1, v1);
-      P(x1, y1, nx1, ny1, hi, a1, v1); P(x0, y0, nx0, ny0, lo, a0, v0); P(x1, y1, nx1, ny1, lo, a1, v1);
+      const w0 = wAt(i), w1 = wAt(j);
+      const P = (x, y, nx, ny, d, a, v, w) => pushS(x + nx * d, y + ny * d, d, a, v, w, s0, top);
+      const lo = -0.5 - halo, hi0 = w0 + 0.5 + halo, hi1 = w1 + 0.5 + halo;
+      P(x0, y0, nx0, ny0, lo, a0, v0, w0); P(x0, y0, nx0, ny0, hi0, a0, v0, w0); P(x1, y1, nx1, ny1, hi1, a1, v1, w1);
+      P(x1, y1, nx1, ny1, hi1, a1, v1, w1); P(x0, y0, nx0, ny0, lo, a0, v0, w0); P(x1, y1, nx1, ny1, lo, a1, v1, w1);
     }
   }
   // THE DASH LEVEL (see DASH): the zoom's octave, held DASH_HYST past a
@@ -1201,8 +1227,9 @@ function create(ctx) {
     lod.t = t;
   }
   const uOpArr = new Float32Array(DASH_SPAN + 1);
-  // `dash` the DASH row, `sign` the direction the dashes run
-  function slineDraw(rgb, a, zoom, dash, sign) {
+  // `dash` the DASH row, `sign` the direction the dashes run, `halo` the
+  // halo's width in px (0: none)
+  function slineDraw(rgb, a, zoom, dash, sign, halo) {
     if (!sN) return;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -1220,6 +1247,8 @@ function create(ctx) {
     gl.uniform1i(LSU.uFine, fine);
     gl.uniform1i(LSU.uLevel, lod.k);
     gl.uniform1fv(LSU.uOp, uOpArr);
+    gl.uniform1f(LSU.uHaloW, halo);
+    gl.uniform4f(LSU.uHalo, HALO.c[0] * HALO.a, HALO.c[1] * HALO.a, HALO.c[2] * HALO.a, HALO.a);
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
@@ -1240,12 +1269,13 @@ function create(ctx) {
     if (fresh) circs.unshift({ u: ghost, r: radiusOf(ghost, kind) });
     return { circs, fresh };
   }
-  // a band along every path, the existing segments at `a` and the ones the
-  // building being placed adds at a x NEW_GAIN
-  function bands(paths, width, side, space, zoom, rgb, a, dash, sign) {
+  // a band along every path: the existing segments `width` wide at `a`, the
+  // ones the building being placed adds at `freshA`, `freshW` wide at every
+  // point touching them
+  function bands(paths, width, freshW, halo, side, space, zoom, rgb, a, freshA, dash, sign) {
     for (const fresh of [0, 1]) {
-      for (const path of paths) sline(path, width, side, space, zoom, fresh);
-      slineDraw(rgb, fresh ? Math.min(1, a * NEW_GAIN) : a, zoom, dash, sign);
+      for (const path of paths) sline(path, width, freshW, halo, side, space, zoom, fresh);
+      slineDraw(rgb, fresh ? freshA : a, zoom, dash, sign, halo);
     }
   }
 
@@ -1254,9 +1284,9 @@ function create(ctx) {
     const { circs, fresh } = sensorCircles(kind, ghost);
     if (!circs.length) return;
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
-    const ls = (GH + 500) / 1300;
-    bands(outline(circs, water, proj, fresh), DASH.line.w * ls, 1, DASH.line.space * ls, zoom,
-          st.c, Math.min(1, st.a * DASH.line.gain), "line", -1);
+    const ls = (GH + 500) / 1300, w = DASH.line.w * ls;
+    bands(outline(circs, water, proj, fresh), w, w * NEW_WIDEN, HALO.w * ls, 1, DASH.line.space * ls,
+          zoom, st.c, 1, 1, "line", -1);
   }
   // THE JAMMER LAYER: a dashed band along the inside of the union's outline,
   // and the union inside the band filled
@@ -1273,8 +1303,8 @@ function create(ctx) {
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 0, -1, water ? [proj, zoom] : null);
     const ls = (GH + 500) / 1300;
-    bands(outline(circs, water, proj, fresh), wpx, -1, DASH.jam.space * ls, zoom,
-          JAMMER.outline, JAMMER.dashA, "jam", 1);
+    bands(outline(circs, water, proj, fresh), wpx, wpx, 0, -1, DASH.jam.space * ls, zoom,
+          JAMMER.outline, JAMMER.dashA, Math.min(1, JAMMER.dashA * NEW_GAIN), "jam", 1);
   }
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
   // lines

@@ -935,6 +935,10 @@ struct TAGPU_VKRJOB {
     VkImage        dstImg;                  /* ...and its restored twin       */
     VkImageView    dstView;
     int            dstW, dstH;
+    /* THE ARRAY LAYER each view names, for every barrier, clear and copy this
+       job records on the two images: 0 unless `tagpu_vk_restore_job_layers`
+       said otherwise, which only a consumer with a layered atlas does */
+    int            srcLayer, dstLayer;
     /* THE MIP CHAIN, and only for a consumer whose twin has one: `chainN` is 0
        everywhere else and every mip path below is then a single compare. The
        views are the CONSUMER's -- a view of level i+1 written and a view of
@@ -1211,6 +1215,7 @@ static void dst_ready(struct TAGPU_VKRJOB* g)
     memset(&cc, 0, sizeof cc);
     memset(&rg, 0, sizeof rg);
     rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; rg.levelCount = 1; rg.layerCount = 1;
+    rg.baseArrayLayer = (uint32_t)g->dstLayer;
     mb.srcQueueFamilyIndex = mb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     mb.image = g->dstImg;
     mb.subresourceRange = rg;
@@ -1252,6 +1257,7 @@ static void dst_layout(struct TAGPU_VKRJOB* g, int toGeneral)
     mb.image = g->dstImg;
     mb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     mb.subresourceRange.levelCount = 1;
+    mb.subresourceRange.baseArrayLayer = (uint32_t)g->dstLayer;
     mb.subresourceRange.layerCount = 1;
     if (toGeneral) {
         mb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1621,6 +1627,13 @@ static int job_chain_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     return 1;
 }
 
+void tagpu_vk_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLayer)
+{
+    if (!j) return;
+    j->srcLayer = srcLayer < 0 ? 0 : srcLayer;
+    j->dstLayer = dstLayer < 0 ? 0 : dstLayer;
+}
+
 int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
                                int mips, int dim,
                                const VkImageView* attach, const VkImageView* sample)
@@ -1686,6 +1699,8 @@ int tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames,
     if (!j || !j->core) return 0;
     return tagpu_rcore_job_add_nbhd(&s_sched, j->core, frames, count);
 }
+
+double tagpu_vk_restore_budget_ms(void) { return tagpu_rcore_budget_ms(); }
 
 void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs)
 {
@@ -1963,6 +1978,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         memset(rg, 0, sizeof rg);
         rg[0].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg[0].imageSubresource.baseArrayLayer = (uint32_t)g->dstLayer;
         rg[0].imageSubresource.layerCount = 1;
         rg[0].imageExtent.width = (uint32_t)g->dumpW;
         rg[0].imageExtent.height = (uint32_t)g->dumpH;
@@ -1975,6 +1991,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
             rg[nrg].bufferOffset = (VkDeviceSize)tagpu_gaf_mip_off(g->chainDim, L);
             rg[nrg].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             rg[nrg].imageSubresource.mipLevel = (uint32_t)L;
+            rg[nrg].imageSubresource.baseArrayLayer = (uint32_t)g->dstLayer;
             rg[nrg].imageSubresource.layerCount = 1;
             rg[nrg].imageExtent.width = (uint32_t)dl;
             rg[nrg].imageExtent.height = (uint32_t)dl;
@@ -1987,6 +2004,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
            transition that names one level leaves the others in whatever layout
            they were, and the copy would then read them from the wrong one. */
         mb.subresourceRange.levelCount = (uint32_t)nrg;
+        mb.subresourceRange.baseArrayLayer = (uint32_t)g->dstLayer;
         mb.subresourceRange.layerCount = 1;
         /* SHADER_READ_ONLY in and SHADER_READ_ONLY out: OUT and the mip
            reduction leave the image there and the consumer's own draw expects
@@ -2009,6 +2027,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
             memset(&sr, 0, sizeof sr);
             sr.bufferOffset = g->dumpSrcOff;
             sr.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            sr.imageSubresource.baseArrayLayer = (uint32_t)g->srcLayer;
             sr.imageSubresource.layerCount = 1;
             sr.imageExtent.width = (uint32_t)g->srcW;
             sr.imageExtent.height = (uint32_t)g->srcH;
@@ -2017,6 +2036,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
             sb.image = g->srcImg;
             sb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             sb.subresourceRange.levelCount = 1;
+            sb.subresourceRange.baseArrayLayer = (uint32_t)g->srcLayer;
             sb.subresourceRange.layerCount = 1;
             sb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -2090,6 +2110,7 @@ static void chain_step(VkCommandBuffer cb, struct TAGPU_VKRJOB* g)
         mb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         mb.subresourceRange.baseMipLevel = (uint32_t)L;
         mb.subresourceRange.levelCount = 1;
+        mb.subresourceRange.baseArrayLayer = (uint32_t)g->dstLayer;
         mb.subresourceRange.layerCount = 1;
         /* in: whatever read or copied this level before (the consumer's
            sample, a dump) is done before it is overwritten */

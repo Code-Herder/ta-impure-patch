@@ -11,13 +11,14 @@ suppressed does not imply those conveniences survive; each needs Impure's own im
 
 ## Summary
 
-Twenty-five setups: sixteen game folders as a player has them — the retail 3.1 game, what a mod or
+Twenty-six setups: seventeen game folders as a player has them — the retail 3.1 game, what a mod or
 patch install puts next to it, and Impure's `ddraw.dll` — and nine checks of the harness and the renderer
 (`retail+tadr1-recorder`, `mayhem-11.3.0-net`, `gui-stress`, `pass-refused`, `pass-refused-gdi`,
 `pass-full`, `pass-full-gdi`, `pass-card-full`, `wiki-stage-refused`).
 
-**Fifteen of the sixteen player setups meet the goal in full, on both platforms: Impure runs, and
-none of TADR's code runs.** The retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside
+**Fifteen of the sixteen player setups measured on both platforms meet the goal in full there:
+Impure runs, and none of TADR's code runs.** The seventeenth, `tazero-wildhunt` (TA Zero on 6P
+Wild Hunt, below), meets it on Wine; it has not been run on Windows. The retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside
 files nothing loads, all three Patch Loader routes, **Total Mayhem 11.3.0 and ProTA 4.8** as
 installed, and — since the T2 landing — the four routes whose exe imports TADR instead of
 DirectDraw: the 3.9.02 exe with two builds of TADR, and **Escalation GOLD 10.2.0** with and without
@@ -63,7 +64,8 @@ and every patch Impure adds adds runs.
 | `gammata-ota` | gammata's OTA drop-in | known gap: `impure-not-loaded` (`ddraw_custom.dll` is what its tdraw loads); 37 places of the game's code lead into TADR, and 4 of the exe's import slots — the other 15 surprising slots lead into `ddraw_custom.dll`, which is cnc-ddraw and not TADR | the same, 10 places |
 | `escalation` | Escalation GOLD 10.2.0 as installed | **meets goal**: `TAESC`'s `DllMain` loaded Impure and the rest of it did not run, the recorder's entry point inert, the exe's one `TAESC` import redirected, and the exe file's own path budget at `0x0040EAD6` kept; 441 runs, **0 into TADR**; battle fought; network game played | **meets goal**: the same, 451 runs, 0 into TADR |
 | `escalation+tadr-dev` | Escalation with TADR's current Escalation build | **meets goal**: the same, with TADR's Escalation build beside it; 442 runs and **0 into TADR**; battle fought; network game played | **meets goal**: the same, 443 runs, 0 |
-| `tazero-alpha5` | TA Zero Alpha 5 as TA Forever installs it: its exe imports `ZDRAW` (TADR 2025.4.24) and `ZPLAYX` | **meets goal** (2026-09-28): `ZDRAW`'s `DllMain` loaded Impure and the rest of it did not run; the exe file's unit ceiling of 5000 replaced with 1500 ([the takeover](takeover.md), part 2); 442 runs, **0 into TADR**; GoK and Arm commanders; its own battle (`compat-battle-tazero`) fought; network game played, each peer holding both GoK commanders | **meets goal** (2026-09-28): the same, 448 runs, 0 into TADR |
+| `tazero-alpha5` | TA Zero Alpha 5 as TA Forever installs it, its map pack (`TA_Zero_Map_Pack_v1f`) included: its exe imports `ZDRAW` (TADR 2025.4.24) and `ZPLAYX` | **meets goal** (2026-09-28): `ZDRAW`'s `DllMain` loaded Impure and the rest of it did not run; the exe file's unit ceiling of 5000 replaced with 1500 ([the takeover](takeover.md), part 2); 442 runs, **0 into TADR**; GoK and Arm commanders; its own battle (`compat-battle-tazero`) fought; network game played, each peer holding both GoK commanders | **meets goal** (2026-09-28): the same, 448 runs, 0 into TADR |
+| `tazero-wildhunt` | `tazero-alpha5`'s folder with 6P Wild Hunt from TA Forever's map vault (65,029 terrain tiles, near the `u16` tile index's 65,536), its battle fought there (`compat-battle-tazero-wildhunt`, on the central plateau); no network game (`no_network_game`: that folder's is `tazero-alpha5`'s) | **meets goal** (Wine, 2026-11-14, 176 s): the battle fought with the terrain drawn (census `terr=1` to its end). It catches the black terrain this map showed: a DLL with the 64-column atlas reads UNEXPECTED, `the terrain pass refused its hand-over: vk: terr: a 2176x32742 tile atlas is outside what this pass carries - nothing drawn` | not run |
 | `twilight-2.0b98` | TA Twilight v2.0 Beta 98 as TA Forever installs it: the 3.9.02-shaped exe, TADR v2026.6.8 | **meets goal** (2026-09-28): the 3.9.02 route; 443 runs, **0 into TADR**; battle fought; network game played. Its `dsound.dll` proxy is Wine's built-in here | **meets goal** (2026-09-28): the same, 441 runs, 0 into TADR; its `DSOUND.dll` proxy loaded from the folder, and no site of the game's code leads into it |
 | `retail+tadr1-recorder` | **the check that the evidence can fire**: `retail+tadr1` with `tagpu_takeover.off` | the recorder runs, as it must: its log, **and 31 places** of the game leading into it — 28 sites of its code and the exe's 3 DirectPlay slots; battle fought | the same, **6 sites** — the six the entry point installs, the rest being the DirectPlay path's, which a start-up-only run never reaches |
 | `mayhem-11.3.0-net` | **the check of the safety net**: Mayhem with `tagpu_takeover.off` | refused by the net: 18 of 402 sites rewritten (2026-09-29), none of them the extra weapons'; 12 places lead into TADR — the exe's two `DirectDrawCreate` calls, its 3 DirectPlay slots and the recorder's six sites | the same, 8 places |
@@ -91,6 +93,18 @@ check has seen.
 **On Windows, 2026-09-28** (`4f90a409f918`, the build on local main, 165 s): both new setups
 **meet the goal** — `ZDRAW`'s and TADR v2026.6.8's `DllMain` loaded Impure, their start line the
 only trace of TADR, 448 and 441 changed runs of the game's code with none into TADR, and no box.
+
+**TA Zero's maps, and the one script it ships that Impure refuses.** TA Forever's tazero install
+takes Zero's map pack after Alpha 5 (`TA_Zero_Maps.ufo`: Zero's eighteen maps and the `TAZ_*`
+features they and TA Forever's Zero maps name), so `tazero-alpha5` carries it as the fixture
+`tazero-mappack`; without it 6P Wild Hunt stops at load with `Record "TAZ_Raindance_Metal1"
+missing from feature files`. Every TA Zero game announces one rejected type in chat at entry:
+`COB: ZZZ (welcome.to/yankspankers), type 270 disabled. Script ZZZ.COB: piece index exceeds model
+allocation`. ZZZ is the recorder drop-in's demo tower (`TADEMOZ.ufo`, TA Forever's first tazero
+package): its script declares four pieces (`base`, `plasturret`, `bouy`, `light`) over a model of
+three (`plasground`, `plasbase`, `plasturret`), and its `Killed` explodes piece 3. No build menu of
+the install names it (no `download/*.tdf` and no `.gui`). It is the malformed-content quarantine
+the [COB evidence](../tadr-port/cob.md) records in Mayhem, ProTA, TA Zero and Twilight alike.
 
 **What the two takeover-off harness checks buy.** A goal of "no TADR code" is worth nothing
 from a check that cannot see any. The recorder control disables the takeover and requires
@@ -188,8 +202,9 @@ any of the other 8 from the map list does the same.
 
 **Not established yet:** whether stock Mayhem (its own `ddraw.dll`, no Impure) shows the same box
 from the same key. The folder to answer it was built on Windows on 2026-09-27 and not yet run to the
-SKIRMISH screen. The suite does not see any of this: its battle stage writes `Two Continents` into
-the setup's `registry_roots` before the game starts, and the Windows runner has no battle stage.
+SKIRMISH screen. The suite does not see any of this: its battle stage writes its battle scenario's
+map — `Two Continents` for every setup but `tazero-wildhunt` — into the setup's `registry_roots`
+before the game starts, and the Windows runner has no battle stage.
 
 **The fix: a map with no terrain is left out of the list, and never kept as the saved map.** The
 one list builder, `0x434BF0` — the skirmish list and the multiplayer battle room's alike — now asks,

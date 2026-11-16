@@ -24,6 +24,16 @@ static int option(const TJV* o, int* allowed, char* reason)
     return 1;
 }
 
+/* mega_map_wheel's default: 1 when the plain wheel engages the mega map */
+static int binding(const TJV* v, int* out)
+{
+    const char* b = tj_str(v, "");
+    if (!strcmp(b, "wheel")) *out = 1;
+    else if (!strcmp(b, "ctrl+wheel")) *out = 0;
+    else return 0;
+    return 1;
+}
+
 static int bad(char* err, size_t errn, const char* id, const char* what)
 {
     if (err && errn) snprintf(err, errn, "catalog: %s: %s", id, what);
@@ -50,18 +60,23 @@ int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* 
     }
     m = tj_get(tagpu_json_root(d), "mods");
     for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next) {
-        const TJV* opts, *snap, *quick;
+        const TJV* opts, *snap, *quick, *wheel;
         if (strcmp(tj_str(tj_get(m, "id"), ""), id)) continue;
         memset(out, 0, sizeof *out);
         opts = tj_get(m, "options");
         snap = tj_get(opts, "resource_snapping");
         quick = tj_get(opts, "quick_build");
+        wheel = tj_get(opts, "mega_map_wheel");
         if (!option(snap, &out->manual, out->manual_reason) ||
             !whole(tj_get(snap, "default"), 0, MODRULES_RADIUS_MAX, &out->radius) ||
             !whole(tj_get(snap, "max"), 0, MODRULES_RADIUS_MAX, &out->maximum) || out->radius > out->maximum)
             ret = bad(err, errn, id, "resource_snapping is missing or out of range");
         else if (!option(quick, &out->quick, out->quick_reason) || !flag(tj_get(quick, "default"), &out->quick_default))
             ret = bad(err, errn, id, "quick_build is missing or out of range");
+        else if ((!out->manual && out->radius) || (!out->quick && out->quick_default))
+            ret = bad(err, errn, id, "a resource option is off with a default that is not off");
+        else if (!option(wheel, &out->wheel, out->wheel_reason) || !binding(tj_get(wheel, "default"), &out->wheel_default))
+            ret = bad(err, errn, id, "mega_map_wheel is missing or out of range");
         else
             ret = 1;
         break;

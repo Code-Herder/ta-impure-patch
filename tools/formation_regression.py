@@ -3,7 +3,7 @@
 path, and each unit takes one of the slots spaced evenly along it.
 
     formation_regression.py <instance> core      cases (a)-(j) below
-    formation_regression.py <instance> type0     Interface Type 0: (k) and (l)
+    formation_regression.py <instance> type0     Interface Type 0: (k), (k'), (k'') and (l)
     formation_regression.py <instance> preview   the dots held mid-drag: the marker pass's count;
                                                  with --gdi, a shot of them and GDI's blit count
     formation_regression.py <instance> replay    the formation-basic test group's gestures
@@ -30,7 +30,9 @@ The cases (core), the eight mobiles selected unless named, Interface Type 1:
   the module-off Shift click's orders; (q) a long right drag from where Quick Build shows its
   ghost builds as the click does, with no formation line; (j) the level's counters (`level end`,
   listcap=0).
-(type0) (k) a right press deselects at the press, no gesture; (l) Move armed and a left drag form up.
+(type0) (k) a right click deselects at the release, not the press (`short`); (k') a right drag forms
+  up as (a), the selection kept; (k'') one mobile and the lab: the mobile moves to the release point
+  (`single`), the lab given nothing; (l) Move armed and a left drag form up.
 
 What each commit orders is computed here: the path from the world point main+0x2CAA read after the
 press and each move, the starts from the units (or their queues' ends under Shift), and the slots
@@ -374,7 +376,7 @@ def formation_line(line):
         formation: commit button=right mode=1 itype=1 units=8 qmove=0 nodes=2 len=600 thr=27
                    shift=0 algo=h issued=8 listcap=0
         formation: short button=right len=5 thr=27
-        formation: single button=right units=1
+        formation: single button=right units=1 issued=1
         formation: drop reason=other
         formation: level end commits=.. short=.. single=.. drops=.. listcap=.. gdi=..
     With FORM_RX (the install's verdict), this is where the module's line format is written down."""
@@ -1050,8 +1052,11 @@ def core(f, a):
 
 def type0(f, a):
     """Interface Type 0 through PREFS (resource_regression.mex's steps; the next launch forces
-    Type 1 again): (k) a right press deselects at the press, no gesture; (l) Move armed and a
-    left drag form up as (a)."""
+    Type 1 again). Stock deselects on a Type-0 right press (0x499189); with the module on the
+    press is deferred: (k) a right click deselects at the release (`short`); (k') a right drag
+    forms up as (a) and keeps the selection; (k'') one mobile and the lab: the mobile moves to
+    the release point (`single`), the lab given nothing; (l) Move armed and a left drag form up
+    as (a)."""
     f.keys("tab")
     f.call("ui", "click", "PREFS")
     f.call("ui", "click", "SPEEDS")
@@ -1061,20 +1066,39 @@ def type0(f, a):
     f.until(lambda: f.itype() == 0, "PREFS did not reach Interface Type 0")
     f.hold()
     f.eye(*EYE)
-    what = "(k) a Type-0 right press"
+    what = "(k) a Type-0 right click"
     f.select(*MOBILES)
+    before = f.queues(MOBILES)
     start = f.mark()
     f.aim(1300, 6150)
     f.press("rbutton")
-    assert not f.selection(MOBILES), f"{what}: the press did not deselect"
+    assert f.selection(MOBILES) == set(MOBILES), f"{what}: the deferred press deselected"
     f.lift("rbutton")
-    assert not f.any_line(start), f"{what}: the module logged {f.any_line(start)}"
+    assert not f.selection(MOBILES), f"{what}: the release did not deselect"
+    assert f.queues(MOBILES) == before, f"{what}: orders changed"
+    got = f.lines(start)
+    assert [k for k, _ in got] == ["short"], f"{what}: the formation lines {got}, want one short"
+    f.select(*MOBILES)
+    commit_case(f, "(k') a Type-0 right drag", ((1100, 6200), (1700, 6200)))
+    assert f.selection(MOBILES) == set(MOBILES), "(k') the drag changed the selection"
+    what = "(k'') Type 0, one mobile and the lab"
+    f.select("pw1", "lab")
+    lab = f.queue("lab")
+    nodes, start = f.drag("rbutton", ((1150, 6300), (1600, 6300)))
+    got = [(n, p) for n, p, _ in f.queue("pw1")]
+    want = [(f.order_name["move"], tuple(nodes[-1]))]
+    assert got == want, f"{what}: pw1's orders {got}, want {want}"
+    assert f.queue("lab") == lab, f"{what}: the lab's orders changed: {f.queue('lab')}"
+    assert f.selection(("pw1", "lab")) == {"pw1", "lab"}, f"{what}: the drag changed the selection"
+    got = f.lines(start)
+    assert [k for k, _ in got] == ["single"] and got[0][1].get("units") == 1 and \
+        got[0][1].get("issued") == 1, f"{what}: the formation lines {got}, want one single units=1 issued=1"
     f.select(*MOBILES)
     f.arm_move()
     commit_case(f, "(l) Type 0, Move armed, a left drag", ((1100, 6200), (1700, 6200)),
                 button="lbutton")
     assert f.mode() == 1, f"(l) mode {f.mode()} after the release"
-    print("formation-type0: (k) and (l) passed")
+    print("formation-type0: (k), (k'), (k'') and (l) passed")
 
 
 def centre(f, at):

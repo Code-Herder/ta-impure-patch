@@ -91,10 +91,6 @@
   timeline N, read across each fork it descends from. check, compare and compare --puppet take --exact: the
   world built from the exact records instead of the stream (exact_blocks).
 
-  images-gate alone takes --stock-cosmetic-pools: the owner-approved native cosmetic-pool known
-  gap for the fixtures STOCK_COSMETIC_FIXTURES names, at the native 300-projectile cap. Other bytes
-  stay strict.
-
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
@@ -124,8 +120,9 @@ carries each stream block's exact records after it, as an RB_EXACT block. A file
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
-every cell and, after the world, the players' sight counters (RK_SIGHT) and the main block and
-.data whole (RK_IMAGE). A recording's snapshot
+every cell and, after the world, the players' sight counters (RK_SIGHT, and after each record's
+its wide counters, RK_SIGHTW, where allied sight keeps them: u32 cells, of which the byte is
+min(W, 255)) and the main block and .data whole (RK_IMAGE). A recording's snapshot
 carries only the cells and the wreck records that differ from its segment's first iteration's grid
 and pool, the base and the wreck base, which a reader takes from the stream, and none of a table's
 spans that are all zero. A table is paired with the
@@ -215,7 +212,7 @@ def mapped_bytes(w, h):
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
  RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD, RK_EV_TURN, RK_EV_LINK,
- RK_EV_PLACE) = range(63)
+ RK_EV_PLACE, RK_SIGHTW) = range(64)
 REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
@@ -808,6 +805,7 @@ class World:
         self.mnext = 0                  # RK_MAPPED's next offset: len(mapped) once it is whole
         self.images = {}                # a dump's main block (0) and .data (1)
         self.sight = {}                 # a dump's sight counters, by player record
+        self.sightw = {}                # ... and its wide counters, where allied sight keeps them
         self.counts = None              # a dump's counts: {(site, caller, aux): n}
         self.cmeta = None               # their (overflow, sinks counted, counting)
         self.cnames = {}                # the scripts' names by their FNV-1a
@@ -1267,6 +1265,12 @@ class World:
             if p >= REC_PLAYERS or len(b) <= 8 or off != len(cnt):
                 raise Unreadable(f"record {p}'s sight counters out of order at +0x{off:X}")
             cnt += b[8:]
+        elif kind == RK_SIGHTW:
+            p, off = b[0], struct.unpack_from("<I", b, 4)[0]
+            cnt = self.sightw.setdefault(p, [])
+            if p >= REC_PLAYERS or len(b) <= 8 or (len(b) - 8) % 4 or off != len(cnt):
+                raise Unreadable(f"record {p}'s wide sight counters out of order at cell {off}")
+            cnt.extend(struct.unpack_from(f"<{(len(b) - 8) // 4}I", b, 8))
         elif kind == RK_COUNTS:
             over, sinks, on, n = struct.unpack_from("<IIII", b)
             if len(b) != 16 + 16 * n or (self.cmeta and self.cmeta != (over, sinks, on)):
@@ -1454,6 +1458,19 @@ class World:
             if diff:
                 note(f"record {p}'s sight counters: {len(diff)} cells differ, the first +0x"
                      f"{diff[0]:X}: recording {a[diff[0]]}, dump {b[diff[0]]}")
+        for p in sorted(set(self.sightw) | set(other.sightw)) if sight else ():
+            a, b = self.sightw.get(p), other.sightw.get(p)
+            if a is None or b is None or len(a) != len(b):
+                note(f"record {p}'s wide sight counters: {len(a) if a is not None else 'none'} in "
+                     f"the recording, {len(b) if b is not None else 'none'} in the dump")
+                continue
+            diff = [i for i in range(len(a)) if a[i] != b[i]]
+            if diff:
+                note(f"record {p}'s wide sight counters: {len(diff)} cells differ, the first "
+                     f"{diff[0]}: recording {a[diff[0]]}, dump {b[diff[0]]}")
+        for who, w in (("recording", self), ("dump", other)) if sight else ():
+            for line in sight_wide_faults(w):
+                note(f"the {who}'s {line}")
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -2891,6 +2908,24 @@ def cmd_pov_eye(path, n, view, seat):
     return 0
 
 
+def sight_wide_faults(w):
+    """Every record of a dump whose wide sight counters (tagpu_allysight.c) disagree with its
+    byte counters: for each cell the engine's byte is min(W, 255), since every write of a record
+    whose counters allied sight keeps goes through W. One line a record, with the first cell."""
+    out = []
+    for p in sorted(w.sightw):
+        wide, cnt = w.sightw[p], w.sight.get(p)
+        if cnt is None or len(cnt) != len(wide):
+            out.append(f"record {p}'s wide sight counters: {len(wide)} cells, its byte counters "
+                       f"{len(cnt) if cnt is not None else 'none'}")
+            continue
+        bad = [i for i in range(len(wide)) if cnt[i] != min(wide[i], 255)]
+        if bad:
+            out.append(f"record {p}'s sight counters: {len(bad)} cells are not min(W, 255), the "
+                       f"first {bad[0]}: byte {cnt[bad[0]]}, W {wide[bad[0]]}")
+    return out
+
+
 def dump_world(path, h):
     """A dump's world, read with its own header's tables and the recording's dimensions."""
     dbl, dstop = blocks(path)
@@ -3019,6 +3054,7 @@ def fork_view(a, b, ha, hb):
             if i not in seats:
                 w.players[i] = bytearray(REC_PLAYER_IMAGE)
                 w.sight.pop(i, None)
+                w.sightw.pop(i, None)
             elif ctl_a.get(i) != ctl_b.get(i):
                 w.players[i][REC_INFO_AT + INFO_TYPE] = 0
         w.ctl = [0] * REC_PLAYERS
@@ -3876,18 +3912,17 @@ def image_group(which, at):
     return best[2] if best else "not mapped"
 
 
-GATE_CLASSES = ("presentation", "host-variant", "load-constant", "known-gap", "FAIL")
-# The stock pools a seek does not restore: the explosions (count and 300 x 0x54 records), the
-# debris records (300 x 0x34) with each record's own vertex (300 x 0x60) and face (300 x 0xC0)
-# blocks, and the 100 flying-piece slots, upper ends exclusive.
-STOCK_COSMETIC_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
-                        (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
-# The fixtures the owner approved, 2026-10-06 and 2026-11-13; adding one is the owner's decision.
-STOCK_COSMETIC_FIXTURES = ("stock-secondary-orders", "stock-impai-fight", "stock-impai-naval")
+GATE_CLASSES = ("presentation", "host-variant", "load-constant", "effects", "FAIL")
+# THE ENGINE'S EFFECT POOLS, which the recording does not carry (the owner's decision, 2026-11-15:
+# exact explosions are not wanted): the explosion count and its 300 records, the 300 debris
+# records and their vertex and face blocks, and the 100 flying-piece slots -- exactly what
+# tagpu_effects_clear resets at a seek (tagpu_patches.c). A raised build keeps its own pools on
+# the DLL's heap, outside these images, and its engine copies stay unwritten.
+EFFECT_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
+                (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
 
 
-def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
-                    stock_cosmetic_pools=False):
+def cmd_images_gate(path, live, twin, playing, second, seek, views=()):
     """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
     replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
     the fresh seek to T1 is, in this order:
@@ -3895,16 +3930,10 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
                      camera, the zoom, the menu and the cursor moved): the viewer's own
       host-variant   two playings on one host differ there (P against R at T1)
       load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
-      known-gap      only the native cosmetic-pool exception, on STOCK_COSMETIC_FIXTURES alone
+      effects        the engine's effect pools (EFFECT_POOLS), which a seek empties
       FAIL           anything else, labelled by who wrote it in play.
     A bit equal at both ends of [T1, Tlast] on each machine counts as unwritten in play: the window
     cannot see a write that was undone inside it. Exit 1 on any FAIL."""
-    h = header_only(path)
-    if stock_cosmetic_pools and (Path(path).stem not in STOCK_COSMETIC_FIXTURES or
-                                 h["projectiles"] != 300):
-        print("native cosmetic-pool exception requires one of "
-              f"{', '.join(STOCK_COSMETIC_FIXTURES)} at the stock cap")
-        return 2
     (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
     got = {}
     for name, d in (("l1", l1), ("lT", lT), ("n1", n1), ("n2", n2), ("p1", p1), ("pT", pT),
@@ -3925,7 +3954,7 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
     gen, rows, slots, digest = globals_list(got["l1"][1])
     cov = gen.coverage(rows)
     im = {k: v[2] for k, v in got.items()}
-    tally, fails, accepted = {}, [], 0
+    tally, fails, effects = {}, [], 0
     for which, where in ((0, "main"), (1, "data")):
         L1, LT, N1, N2 = im["l1"][which], im["lT"][which], im["n1"][which], im["n2"][which]
         P1, PT, R1, Q1 = im["p1"][which], im["pT"][which], im["r1"][which], im["q1"][which]
@@ -3941,17 +3970,13 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
             host = bits & ~pres & (P1[i] ^ R1[i])
             const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
             fail = bits & ~pres & ~host & ~const
-            # A seek clears these native pools and no record carries them. The owner's exception
-            # covers exactly STOCK_COSMETIC_POOLS on STOCK_COSMETIC_FIXTURES; every other image
-            # bit and every record and effect comparison stays strict. See
-            # demo-recorder-completeness.md, the owner-approved known gap.
-            gap = fail if stock_cosmetic_pools and any(
-                which == pool and lo <= i < hi for pool, lo, hi in STOCK_COSMETIC_POOLS) else 0
-            fail &= ~gap
-            accepted += bool(gap)
+            fx = fail if any(which == pool and lo <= i < hi
+                             for pool, lo, hi in EFFECT_POOLS) else 0
+            fail &= ~fx
+            effects += bool(fx)
             group = image_group(which, i)
             t = tally.setdefault((which, group), [0, 0, 0, 0, 0])
-            for k, m in enumerate((pres, host, const, gap, fail)):
+            for k, m in enumerate((pres, host, const, fx, fail)):
                 if m:
                     t[k] += 1
             if fail:
@@ -3984,9 +4009,6 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
               f"{hexs(4)}, playing {hexs(5)}, seek {hexs(6)}")
     if len(runs) > 200:
         print(f"  ... and {len(runs) - 200} runs more")
-    if stock_cosmetic_pools:
-        print(f"  accepted {accepted} native cosmetic-pool bytes for {Path(path).stem}; "
-              "all other bytes checked")
     return 1 if fails else 0
 
 
@@ -4136,12 +4158,6 @@ def main(argv):
     import devpy
     devpy.ensure()
     timeline = 0
-    stock_cosmetic_pools = "--stock-cosmetic-pools" in argv
-    if stock_cosmetic_pools:
-        if argv[1:2] != ["images-gate"]:
-            print("--stock-cosmetic-pools requires images-gate", file=sys.stderr)
-            return 2
-        argv = [a for a in argv if a != "--stock-cosmetic-pools"]
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
@@ -4250,8 +4266,7 @@ def main(argv):
             return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek, timeline)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
-                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:],
-                                   stock_cosmetic_pools)
+                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:])
         if argv[1] == "scan":
             return cmd_scan(argv[2], argv[3])
         if argv[1] == "counts":

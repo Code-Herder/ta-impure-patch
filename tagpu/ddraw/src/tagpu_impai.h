@@ -7,7 +7,7 @@
    wrapper: the seats impure.cfg gives ImpAI (`seatai` in a skirmish, `netai` for the computer seats
    this peer adds in a network game) are played by ImpAI -- its observation and its brain, then the
    stock weapon scan -- and every other seat by the stock tick. Which seats are ImpAI's is SIM_STATE,
-   written at the level init. Sixteen Difficulty type tests skip those seats, and the console's `AI`
+   written at the level init. Fourteen Difficulty type tests skip those seats, and the console's `AI`
    takes a seat from ImpAI. */
 
 /* DllMain, before tagpu_simreg_attach closes the lever list: ImpAI's test levers -- the self-checks,
@@ -17,7 +17,7 @@ void tagpu_impai_levers(void);
 /* DllMain, after tagpu_reclaim_init and tagpu_replay_init: when replay's sites are in -- among
    them the level init's PLAYERS call, the only caller of tagpu_impai_level_init -- and the
    teardown wrap is in, the only caller of tagpu_impai_level_end, byte-matches every site and
-   writes them all: the seam 0x465031, the AI command's 0x4162F4 and 0x4162FE, the sixteen
+   writes them all: the seam 0x465031, the AI command's 0x4162F4 and 0x4162FE, the fourteen
    handicap sites and the site test's bit 0x47D3D1, with the thunk WQ_SITE_SEAT calls. Otherwise
    nothing is written, ImpAI is unavailable and every level says why. */
 void tagpu_impai_init(void);

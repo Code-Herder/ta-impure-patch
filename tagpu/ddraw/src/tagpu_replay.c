@@ -78,6 +78,7 @@
 #include "tagpu_replay_layout.h"
 #include "tagpu_puppet.h"
 #include "tagpu_impai.h"
+#include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
 #include "tagpu_limits.h"
@@ -5986,9 +5987,12 @@ static int sight_records_drop(char* ta)
    0x4816A0(0) otherwise. Under true LOS 0x4816A0 re-stamps the live units in-line, at the
    positions the host holds, iteration T's: where the recording machine's command found them,
    between the same two steps [INFERRED: a typed command runs between two ticks' unit passes].
-   One departure from the command: the temporary sight records are dropped first
+   The temporary sight records are dropped first, through the engine's expiry in the old mode
    (sight_records_drop), at the cost of at most 2 s of the viewed seat's death vision, under a
-   seat's view only. V's counters and map bit then go back (sight_fill), as at the first step. */
+   seat's view only; the command ends with none as well: with allied sight installed its 0x4816A0
+   empties their count main+0x14277 before the refill (tagpu_allysight.c, rebuild_hook), so this
+   reaches that hook with a count of 0. V's counters and map bit then go back (sight_fill), as at
+   the first step. */
 static void los_react(char* ta, const RecWorld* W)
 {
     const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
@@ -6255,7 +6259,7 @@ static int book_state(char* u, const unsigned char* ib, Books* b)
 static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t los,
                       const uint16_t* circles, unsigned char* rec, Books* b)
 {
-    if (!(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
+    if ((los & LOS_TRUE) && !(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
         b->refused++;
         return 0;
     }
@@ -6967,11 +6971,16 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      words and byte, the def's sight, the static sight grid and LosType bits 1-2. Without bit 1
      no counter carries a stamp (R5 filled them, and every removal is gated on bit 1: 0x48263C,
      0x482757, 0x486838..0x486842), so the three are written alone.
-     THE BOUND, first: in the circle the image's radius index must be below the frame table's
-     count, since 0x4B7F30 returns NULL past it and both the stamp and the removal dereference the
-     answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table refuses every unit in
-     the circle (OFF_CIRCLES). A refused unit keeps the three R8 left, which describe its own
-     stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
+     THE BOUND, first: with bit 1 in the circle the image's radius index must be below the frame
+     table's count, since 0x4B7F30 returns NULL past it and both the stamp and the removal
+     dereference the answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table
+     refuses every unit in the circle (OFF_CIRCLES). The bound is the image's alone: the emitter
+     clamps its own index below the count (0x4826CF..0x4826DE), and the recording names a byte the
+     host never computed. Without bit 1 no walk runs and nothing reads the byte, and a byte from
+     one mode never reaches a walk of another: every LosType change goes through the rebuild
+     0x4816A0 (los_react, sk_sight_reset), which with bit 1 set zeroes each unit's byte before it
+     stamps again (0x481808..0x48181A). A refused unit keeps the three R8 left, which describe its
+     own stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
      can store (0x4825EA..0x4825F2).
    The water, state and stamp halves are book_water, book_state and book_stamp. In playback,
@@ -7578,8 +7587,8 @@ static void poison_end(void)
 
 /* Every table the recording carries into the declaration it pairs with, or skipped (named once a
    playback, or by each seek); then each sim file that owns an invariant its layouts cannot express
-   re-establishes it, before anything runs. The air pool's lock is held over the writes
-   (tagpu_patches.h). THE TABLES: on a puppet host the recording is the only writer of every table
+   re-establishes it, before anything runs. The air pool's lock and allied sight's are held over the
+   writes (tagpu_patches.h, tagpu_allysight.c). THE TABLES: on a puppet host the recording is the only writer of every table
    it carries at every tick boundary -- at each capture point and each frame visit after a step,
    every recorded table this build pairs holds the recording's values for the iteration the host
    holds, less the fields its layout keeps. Host writers in between (a replayed death's credit, a
@@ -7592,6 +7601,7 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
     unsigned i;
     int poison;
     tagpu_patches_restore_begin();
+    tagpu_allysight_restore_begin();
     poison = seek && s_seek.poison && poison_begin();
     if (poison) poison_fill();
     for (i = 0; i < h->ntab && i < W->ntab; i++) {
@@ -7610,6 +7620,11 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
     if (poison) poison_check();
     c->repaired += tagpu_patches_restored();
     c->repaired += tagpu_weapons_restored();
+    /* the allies' shared sight: S is written here and only here on a puppet host, so the sight
+       counters move to the recording's S before anything stamps again (tagpu_allysight.c, THE
+       REPLAY'S TABLE WRITE). After the air pool's lock is released: the migration runs engine
+       code. */
+    c->repaired += tagpu_allysight_restored();
     if (poison) poison_end();
 }
 
@@ -8639,11 +8654,11 @@ static int seek_run(char* ta)
        T where a playing shows those of P+1, until the next pass at P+30, which R15 schedules on
        both (O14); display state on a puppet host. In a seat's view, the recording's viewed
        record's included, the minimap fog R14 composited is T's where a playing shows that of
-       its last pass until the next (O14). In a takeover the bits are also its AIs' input: each
-       local seat's acquisition scan 0x40AA40 puts every non-allied unit with bit 8 on its radar
-       list (0x40AB3F..0x40AB5C), and the acquisition records TK1 makes start with +0xED 0
-       (0x40918B, 0x4092DC), so each scans in iteration T's players phase (0x40B2D6..0x40B2E5)
-       and reads the bits written here, as the recording's scans read them until its next pass.
+       its last pass until the next (O14). In a takeover too the bits are display state only: each
+       local seat's acquisition 0x40AA40 computes its own contacts from the world at the moment it
+       runs (tagpu_seatcontact.c) and reads none of bits 8-10, so the fork's AIs take nothing
+       from them; the acquisition records TK1 makes start with +0xED 0 (0x40918B, 0x4092DC), so
+       each scans in iteration T's players phase (0x40B2D6..0x40B2E5), on T's restored world.
        THE ORDERING: nothing after this writes bits 8-10 before the capture point of T -- R14c,
        TK4a (0x48BD00 clears bits 4, 6 and 7 only; 0x466DC0 reads) and the tick loop to 0x4954ED:
        one level of callees DISASSEMBLED, the rest MEASURED (2026-10-11, tenseat taken over at
@@ -10988,7 +11003,7 @@ int tagpu_replay_seek_request(unsigned T)
    and only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. */
 #define OV_GREY      59             /* a player with no colour                                */
 
-static unsigned logo_colour(unsigned logo)
+unsigned tagpu_replay_logo_colour(unsigned logo)
 {
     const char* ta = ta_main();
     const unsigned char *seq, *f;
@@ -11014,7 +11029,7 @@ static const unsigned char* seat_colours(void)
         memset(s_ov.col, OV_GREY, sizeof s_ov.col);
         for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
             if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
-                s_ov.col[h->seats[i].index] = (unsigned char)logo_colour(h->seats[i].logo);
+                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_replay_logo_colour(h->seats[i].logo);
         s_ov.col_ok = 1;
     }
     return s_ov.col;

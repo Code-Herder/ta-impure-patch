@@ -11,7 +11,7 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
 |---|---|
 | Display | **All instances windowed (cnc-ddraw `windowed=true fullscreen=false`) on the real display**, NVIDIA GL. Not Xvfb/Xephyr (software GL, unwatchable). Human interference solved properly by the phase-1.1 input firewall, not by hiding windows. |
 | Windows | **1:1** (client area = game res), CLI auto-tiles via the per-instance store's `window=` (`write_placement`). Default `--res 1024x768` (known-good; formulas verified), `--res WxH` free choice. **Every tile lands inside the screen** and slots are held by *running* instances only — corrected 2026-09-02, see below. |
-| Isolation | `tagpu/instances/<id>/{gamedir,prefix}` (gitignored). Gamedir = fresh symlink mirror + instance-private files, among them **TA's registry key**, `tacli-state/registry.txt` (§"The registry: a store per instance"). Prefix = **`cp -al` hardlink clone** of the template `wineprefix/`: its registry hives stay **one inode** with the template's and every other instance's (wine rewrites a hive in place, so the link never breaks), which is why TA's key is not kept there. Separate prefix ⇒ separate wineserver ⇒ `wineserver -k` kills one instance only. |
+| Isolation | `tagpu/instances/<id>/{gamedir,prefix}` (gitignored). Gamedir = fresh symlink mirror + instance-private files, among them **its own copy of `TotalA.exe`** (`own_exe`, at create and every launch: Wine's `MoveFileExW`/`DeleteFileW` act on a link's target, so a game that renames its exe -- the Mods screen's large-address swap -- would move the Steam install's) and **TA's registry key**, `tacli-state/registry.txt` (§"The registry: a store per instance"). Prefix = **`cp -al` hardlink clone** of the template `wineprefix/`: its registry hives stay **one inode** with the template's and every other instance's (wine rewrites a hive in place, so the link never breaks), which is why TA's key is not kept there. Separate prefix ⇒ separate wineserver ⇒ `wineserver -k` kills one instance only. |
 | Sound | Default **off** via per-instance `totala.ini` `[Preferences] NoDirectSound=1` (official mechanism, see `cmdline-options.md`); `--sound` omits it. No wine audio-driver registry hacks. |
 | Intro | Instance mirror **omits `Data/1.ZRB` + `Data/2.zrb` symlinks** — the `0x425ECF` find-file gate skips playback gracefully — and `PlayMovie` is written 0 at every launch, so a first launch does not add the cinematic. No patch, no keystrokes. `3/4/5.zrb` stay linked. `create --intro` (sticky, `intro` in `instance.json`) keeps the two, and the intro `1.zrb` plays at every launch; on such an instance the main menu's **INTRO** button plays the cinematic `2.zrb` (`tacli ui <i> click INTRO`). |
 | Resolution | Registry `DisplaymodeWidth/Height` written into the instance's registry store pre-launch (stock exe has no res switches). |
@@ -371,10 +371,11 @@ in place at that moment, and a hive has no end marker to prove the copy whole. C
 construction means copying from hive files no wineserver ever opens, a snapshot outside every
 prefix — which would also fix what a private prefix starts from at the snapshot's contents.
 
-- **How the DLL finds it.** `gamedir/TotalA.exe` is a symlink into the Steam install, yet
-  `GetModuleFileNameW(NULL)` names the gamedir: a launch logs `registry: TEST MODE, entered by the
-  -xtacli-test token and the tacli-state folder beside TotalA.exe -- its registry is …`, and the
-  Steam folder has no `tacli-state` [MEASURED 2026-09-26, wine 9.0]. tacli passes the token first on the command
+- **How the DLL finds it.** `GetModuleFileNameW(NULL)` names the gamedir: a launch logs
+  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder beside
+  TotalA.exe -- its registry is …`, and the Steam folder has no `tacli-state` [MEASURED
+  2026-09-26, wine 9.0, when the exe was still a link into Steam; it held for a link, and holds
+  for the instance's own copy]. tacli passes the token first on the command
   line whenever the DLL serves the store, so a store the DLL cannot find ends the game at attach
   instead of running it on the shared registry.
 - **The store is served only with both signals.** The folder without the token is a launch

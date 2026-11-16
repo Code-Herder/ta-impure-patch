@@ -220,7 +220,14 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
     above 0, and else TidalGenerator `+0x1D6` × `main+0x14267` when TidalGenerator is above 0: the
     wind test `0x401561` jumps to the tidal test `0x4015BC` only when WindGenerator is not above 0,
     and both wind arms jump past it to `0x4016C5` (`0x4015A6`, `0x4015B7`), so a unit with both
-    produces only its wind (`0x401550..0x4016B5`);
+    produces only its wind (`0x401550..0x4016B5`, the tidal arm popping its product at `0x4016C3`).
+    **An AI's yield is scaled by difficulty** [DISASSEMBLED 2026-11-15]: when the unit's player
+    record (`+0xEC`) is active and its controller `+0x73` is 2, `main+0x37EEE` 0 takes the double
+    −0.5 at `0x4FC488` and 1 takes −0.7 at `0x4FC480`, and `fsubp st(1),st` subtracts the scaled
+    product from `+0xBC`, adding 0.5× or 0.7× of it; any other difficulty adds it whole (wind
+    `0x40157B..0x4015B7`, tidal `0x4015EB..0x401612` and `0x401695..0x4016B3`; the zero compared
+    against is `ebx`, cleared at `0x40136B`). The weather report shows the unscaled yield
+    ([top bar](../modules/topbar.md));
   - **a mobile unit** active or moving (`+0x10E` bit 0, or `+0x110 & 0xC`, `0x401617..0x401622`)
     requests or produces its EnergyUse the same way (`0x401641..0x401668`, `0x401670..0x4016B5`);
   - **a finished unit** (`+0x104` = 0.0, `0x4016C5..0x4016D6`) of either kind produces its
@@ -1605,10 +1612,14 @@ layouts exist. The bounded native storage is
 `main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
-These measurements identify an existing cosmetic-pool snapshot gap. The pools' fullness is not
-irrelevant to the simulation: the explosion cap gates the shatter's sim-RNG draws (*The caps gate
-the simulation's random numbers*, below). The debris pool cannot be full at a shatter's scan while
-its count equals the explosion cap (*The shatter and the effect pools' bounds*, below).
+These measurements identify the pools' gap at a seek. The pools are not recorded, by the owner's
+decision (2026-11-15): the images gate classes a difference in these three ranges as `effects` in
+every recording (`tarec.py` `EFFECT_POOLS`) and stays strict one byte outside them. The simulation
+does not read the pools' contents, and their fullness no longer decides its random numbers: the
+shatter's eight draws, the only sim-RNG calls reached after a pool test, come from a generator of
+their own (*The caps gate the simulation's random numbers*, below). The debris pool cannot be full
+at a shatter's scan while its count equals the explosion cap (*The shatter and the effect pools'
+bounds*, below).
 
 **MEASURED 2026-11-13, `stock-impai-fight` at T1 2251** (saved gate dumps, `tarec.py`). The live
 game and the playing hold count 1 and a written extent of 70 records; the fresh seek holds count 0
@@ -1620,16 +1631,7 @@ pointers, heap addresses of each process. **The raised build has the same gap**,
 gate: its seek clears `s_expl`, no record carries it, and the gate reads only the main block and
 the exe's `.data`.
 
-The owner approved exactly these three ranges as a known-gap exception for the native
-unlisted-image check of `stock-secondary-orders` (2026-10-06) and `stock-impai-fight`
-(2026-11-13) alone. Every other image bit, test group and state/order/effect-call/restore check
-retains its existing policy. Snapshot layouts for these pools remain unimplemented; see
-[recorder completeness](../tadr-port/demo-recorder-completeness.html).
-
-The subsequent whole run samples this control at T301: the image gate accepts zero cosmetic
-bytes and also passes without the option. Earlier T451 dumps still fail the default comparator
-and pass only with the approved option. The full 37-fixture gate passes with 11/11 changed
-function/region requirements reached; these outcomes do not fill the pool-layout gap.
+See [recorder completeness](../tadr-port/demo-recorder-completeness.html).
 
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
@@ -1767,10 +1769,16 @@ carries from one game to the next.
 unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` would skip the draws that
 follow, but no build reaches that exit: a debris record is always free below the explosion cap
 while the two pools are the same size (*The shatter and the effect pools' bounds*, below). Otherwise
-it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
+it **draws the sim RNG `0x4B6C30` eight times for each eligible primitive of the piece** (vertex count 4, flag bit 0 clear, not the selection primitive, `0x421784..0x4217A1`; the loop `0x421D4D..0x421D66`): six at
 `0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
 between. So the explosion cap decides how many sim-RNG draws a death makes. Below the stock caps the raised build makes the same draws in the same order; past
-them, the raised build draws where stock would have stopped.
+them, the raised build draws where stock would have stopped. **In Impure these eight calls draw
+from a generator of their own** (`shatter_rand`, `tagpu_patches.c`, [engine
+patches](../modules/engine-patches.html)), so neither cap decides how many numbers the simulation
+draws: the effect pools are not recorded and a seek empties them, which would otherwise send a
+takeover, fork or rewind on with a different stream. The drawn values feed only the piece's
+explosion record (velocity `+0x34..+0x3C`, spin `+0x40..+0x48`). DISASSEMBLED 2026-11-15: of the
+129 calls of `0x4B6C30`, these are the only ones reached after a test of a pool.
 
 **The flying-piece cap gates no draw.** The live spawner is `0x481140`, reached through the
 function-pointer table entry at `0x4FD6CC` (`.rdata`, among `0x480xxx`/`0x481xxx` handlers), not

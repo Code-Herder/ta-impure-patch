@@ -283,7 +283,8 @@ self-test's map are both built by it.
 - **FILL and OUT** read the input through one function, `nbAt` (`tagpu_restore_comp.h`): a window
   texel is in the centre or in exactly one neighbour, flipped across an edge side. OUT needs it
   too, because the network predicts a residual, and the input at a ring texel is the neighbour's.
-- **Nothing is uploaded per key.** The window reads the RGBA base atlas the terrain already has.
+- **Nothing is uploaded per key.** The window reads the base atlas the terrain already has — its R8
+  indices, through the engine's table (the restorer's R8 source form, `srcBase` 0).
 
 ### The keys and the atlas (D5)
 
@@ -375,8 +376,13 @@ schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tag
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
   counted across the slice, and is passed over for the rest of it, which the other jobs keep —
   except that its batch in flight runs on at the full budget while another job waits behind it;
-  with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
-  the six consumers and three probes.
+  with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 16: the terrain's
+  jobs — one a page of its atlas, up to `TAGPU_TERR_MAX_PAGES` 8 — the five other consumers and
+  the three probes, which `tagpu_vk_terr.c` holds at compile time. A paged terrain shares the
+  slice among its pages: each page with frames queued is capped at an equal share of the budget
+  (`rjobs_share`, the last page left uncapped), so the pages paint together, each centre-out,
+  rather than one after another in slot order, and the restored picture — which stands once every
+  page has painted — appears after every page's first batch.
 - **The dump waits for the feed** (`tagpu_vk_restore_job_feeding`): a queue that drains between
   feeds is not a finished picture.
 
@@ -497,9 +503,14 @@ a choice, and landing 2 is built on them:
 
 - **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
-- **The atlas stays within the device's limits**: in today's 64-column layout Seven Islands would
-  be about 35,000 px tall, past the 16384 most devices allow, so the neighbourhood atlas is laid
-  out near square instead (*Landing 2, as built*).
+- **The atlas stays within the device's limits**: in a 64-column layout Seven Islands' neighbourhood
+  atlas would be about 35,000 px tall, past the 16384 most devices allow, so it is laid out near
+  square instead (*Landing 2, as built*). The tile atlas itself is as many columns as the device's
+  limit allows, at most 256, in pages of as many rows as the limit allows, a layer a page: one page
+  of at most 8704 × 8704 on a device of 8704 or more, at most 5 at Vulkan's floor of 4096
+  ([terrain-depth](terrain-depth.html) §7.1). A paged map restores per tile, one job a page each
+  painting its own layer (`tagpu_vk_restore_job_layers`); the neighbourhood atlas, one image whose
+  frames read any tile, is taken only on a map of one page.
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a

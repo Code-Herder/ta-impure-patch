@@ -468,8 +468,11 @@ static int rules_of(int mod, MODRULES* r, const char** id)
         r->maximum = p->maximum;
         r->quick = p->quick;
         r->quick_default = p->quick_default;
+        r->wheel = p->wheel;
+        r->wheel_default = p->wheel_default;
         lstrcpynA(r->manual_reason, "This mod does not allow it.", sizeof r->manual_reason);
         lstrcpynA(r->quick_reason, "This mod does not allow it.", sizeof r->quick_reason);
+        lstrcpynA(r->wheel_reason, "This mod sets it.", sizeof r->wheel_reason);
         *id = tagpu_profiles_name();
         return 1;
     }
@@ -499,6 +502,11 @@ static void build_options(int mod)
         const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_QUICK);
         const int on = r.quick && (have >= 0 ? have : r.quick_default);
         add_opt("Quick Build", on ? "On" : "Off", r.quick ? NULL : r.quick_reason);
+    }
+    {
+        const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_WHEEL);
+        const int plain = r.wheel && have >= 0 ? have : r.wheel_default;
+        add_opt("Mega map wheel", plain ? "Wheel" : "Ctrl+wheel", r.wheel ? NULL : r.wheel_reason);
     }
 }
 

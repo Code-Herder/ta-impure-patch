@@ -139,12 +139,41 @@ tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
 tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
+tools/mp_lobby.sh --allies h1 j1                     # every player allied to every other, both ways
 tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
 Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
 uppercased instance name for TA's ten-character nickname field, and refuses a longer
 name before it walks any menu.
+
+**Allies in a network game** come from the battle room, not from a scenario: `ally_group` and
+`--player`'s sixth field write the skirmish key only. `--allies` presses `ALLY1..ALLYn-1` on every
+peer (each screen lists its own player on row 0); one team for everybody is refused at Start
+("Can not start game with all players on the same team"). Check with
+`tacli peek <i> '*0x511DE8+0x1C6B:x2'`, the record's alliance row, `01 01` when allied both ways.
+**Every peer numbers itself record 0** and the others after it, so a record index (the ribbon's
+`ally:<n>` key, a peek offset) is per peer: read the name at record `+0x2B` before trusting one.
+**In play, `tab` opens `TABMENU.GUI`** with the stock `SHARE` (`TRANSFER RESOURCES`: `PLYRLIST`, the
+`METAL` and `ENERGY` sliders, `OK`) and `ALLIES` dialogs. `ALLIES` lists the player on row 0 and
+the others as `LIVEALLY1..`; a cycle reading `3/4` is allied, one click turns it to `2/4`, not
+allied, and its `OK` sends the change. A SHARE give of all of one peer's metal and energy puts it
+under 2 % of storage for about 20 s (the commander's +1.0 metal a second refills it), which is how
+the allies' ribbon's lamp is seen. The ribbon is the HUD's and hit in client pixels, so only
+`tacli click --device` reaches a chip; a plain `tacli click` passes under it to the world. A chip
+opens the give panel; place it, its sliders and Send from `proposed.allies` in
+`art/hud/layout.json` at the window's height / 720 pixels a unit (the chips are right-aligned, so
+one chip fewer moves every chip and the panel). Touch `tagpu_replayhud.dump` in the gamedir and
+`tagpu_replayhud.json`'s `"give"` reads the panel's state: the ally, the amounts asked, the
+sliders' ends. A dump's ally carries `"rates"` (the contribution channel's numbers) and `res.ms`/`res.es`
+(its share levels, `null` while not sharing). `tagpu_modprint_stock.on` in the HOST's gamedir before
+launch refuses the channel for the game (every peer logs `no contributions`); on a joiner it gets
+that joiner refused by the host as not running Impure. For lasting spending
+on the host: `ctrl+c` selects the commander, then its build menu's `ARMMAKR` (a metal maker draws
+60 energy a second) and a plain click on the ground. Read stored values with `tacli peek <i> '*0x511DE8+<off>:x4'` as raw bytes (record
+`r` at `0x1B63 + r·0x14B`, metal `+0x98`, energy `+0x8C`); `:4` prints an integer, not the float.
+**A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
+2026-11-14 on Xvfb with two windows); give the spending role to the host.
 
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
@@ -1009,7 +1038,8 @@ block that reads to its last complete block.
   another run holds counted once, whether its load shows yet or not -- would pass the machine's
   threads (`tools/runlock-load.cfg`), unless no other run holds a slot. A bare
   `flock(1)` on `tareplay.lock` still excludes every run but waits outside the queue.
-- **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
+- **The replay gate of a feature's landing on main** is `tools/replay/tareplay.py landing`
+  (`--base main`, `-j N`); its local landings skip it:
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
   changed function no test group reached (in each build that compiles the changed line: the

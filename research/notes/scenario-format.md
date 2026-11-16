@@ -46,7 +46,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Mechanism | **Runtime spawn from inside the fork**, calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`. Not a `.sav` writer, not a generated `.ota` mission. |
 | Menus | **No menu navigation by the agent**: `scenario load` drives `ui click SINGLE → Skirmish → Start` internally, each step auto-waiting and reporting the screen it landed on. Not an engine bypass — the Start button *is* map load, player setup and start positions, so it gets pressed rather than reimplemented. |
 | File ownership | **Self-contained.** `setup` carries map, players, resolution, unit limit, switches; the entity list carries the situation. `load` = launch + apply (always a clean start); `apply` = mutate a live game, ignoring `setup`. Two verbs, two unambiguous meanings. |
-| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, fire state, stock), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
+| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, fire state, stock, cloaked), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
 | Coordinates | **World units, one space**, exactly what `roster` / `eye` / `click` already speak: `pos: [x, y]` on the eye plane, optional `height` (default: engine snaps to terrain). No normalized space, no tile space. Out-of-map is a validation error. |
 | Facing | **Degrees, `0` = TA's own default build facing** (heading word `0x8000`, *not* `0x0000`). Omitted = engine default. |
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
@@ -142,6 +142,19 @@ unit names by scanning the live definition table. This design follows its recipe
     `+0x111` bit 28): any other is an error naming the unit. The write is followed by the stock's
     build-menu relabel `0x41C150`, as each engine writer's is. The result's `units[i].stock` reads
     it back.
+- `cloaked` (`true`) gives the unit the order the stock CLOAK button gives: the applier looks up
+  `CLOAK_ON` by name (`0x438760`, the string at `0x502774` the button pushes at `0x41A77E`) and
+  issues it through `0x43AFC0` without Shift, after the scenario's orders. Its handler sets `+0x110`
+  bit 11 only for a type that can cloak (def `+0x245` bit 13); the owner's economy pass then sets
+  `+0x10E` bit 2 when it can take the type's whole `CloakCost` (def `+0x1DA`; `CloakCostMoving`,
+  `+0x1DE`, for a moving unit) out of the player's current energy at once, and clears it when it
+  cannot (`0x401806..0x401872`), and `0x48B090` sends that byte to the other peers (`0x11`).
+  DISASSEMBLED 2026-11-15. **The seat needs that much energy stored**: ARMSPY's 210 is more than a
+  Guardian's 200 of storage, and a scenario that clears the commanders has no other storage
+  (`clear_existing`, above), so `allied-sight.json` gives its spy's seat an energy storage and a
+  fusion plant. In a network game a unit of a player another peer controls is refused by name: its
+  orders run and its cloak is paid only on its owner's machine (`0x48AEC6..0x48AECD`, `0x4017CF`),
+  and the order reaches no peer. `false` or absent leaves the engine's default (`init_cloaked`).
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group. An order whose handle names a unit that was not created
@@ -177,7 +190,7 @@ unit names by scanning the live definition table. This design follows its recipe
   (*The delayed orders*, `tagpu_scenario.c`); an entry the watch cancels leaves the chain's later
   entries to join whatever list the unit holds.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
-  `fire`, `stock`, `orders`) may sit on a group, where it applies to every member.
+  `fire`, `stock`, `cloaked`, `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
   the camera, so there is one rule for the word.
 - Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded. A `line`'s optional
@@ -190,6 +203,14 @@ unit names by scanning the live definition table. This design follows its recipe
   of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
   bounded it `1..10` and so could not name the human seat a plain launch uses.)
   When `setup.players` is present, an `owner` outside it is an error.
+- **`share_metal`, `share_energy`** on a player set its share levels as the share tick does, at
+  `apply` and at `load`: the level at record `+0xE4`/`+0xE8` (at most the storage) and the bit in
+  PlayerInfo `+0x97` (2 metal, 4 energy); `-1` turns sharing off. Any player this peer controls, an
+  AI's too, since the auto-share runs on the peer that controls the giver; a remote player's
+  (`+0x73` = 3) is refused with a log line. Nothing is broadcast, so in a network game the other
+  peers' copies of the bits stay as they were. The share tick clears the controlled
+  player's bits at the level's first in-play draw, so a fixture sets the controlled player's in a
+  later step.
 - **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the
   seat fill walks (engine map, *Seating a level*); its default is 4. `scenario load` sets the count
   (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one ([CLI surface](#cli-surface)). MEASURED 2026-10-06: `replay-tenseat-load.json`
@@ -200,6 +221,23 @@ unit names by scanning the live definition table. This design follows its recipe
   (`+0x73` 0, so no control-group table `+0x78`) is refused as `player slot N has no seat in this
   game`: the create files every unit into its owner's groups and would fault at `0x4802DD`
   ([units](engine/units.md), the `+0x78` row).
+- **A player's keys** are `slot` (required), `controller` (`human`, `ai`, `impai`, `off`; `ai`
+  when absent), `side` (`arm`, `core`), `color` (0..9), `metal` and `energy` (the starting
+  resources, a launch-time setting: see below) and `ally_group` (0..4), which compile to
+  `--player`'s six fields in that order, `N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`;
+  and the apply's `share_metal`/`share_energy` (above), `ai` (`off`) and `storage` (below).
+- **`ally_group`: seats with the same group start allied.** It is the skirmish key
+  `Player<N>AllyGroup`, which the settings load reads into the settings entry's `+8`, 5 when the key
+  is absent, and the seat fill allies two seats whose groups are equal when the other seat's
+  controller is not 0 and the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11:
+  `0x430D03`, `0x430D3C`, `0x47A863..0x47A872`; [the simulation step](engine/sim.md), *The skirmish
+  settings*). A scenario names 0..4, and **a declared player without a group is written as 5**,
+  never left alone: the registry store persists across loads, so a seat left alone would inherit
+  the previous scenario's alliance. A slot the scenario does not declare keeps whatever group it
+  had, which matters only if a later launch seats it without declaring it. MEASURED 2026-11-11 on
+  one instance: `scenarios/sensor-view.json`'s groups 1, 2, 1 gave the player records' alliance
+  rows (`+0x108`) `01 00 01`, `00 01 00`, `01 00 01`; `scenarios/sensor-preview.json` loaded next,
+  with no groups, gave each record its own byte only.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -662,16 +700,20 @@ end
 
 The calibration keys ride on their own lines and columns: `clearfeat 1` and `objective off|on`
 when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
-both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line, or
+both or neither), beside `metal=`/`energy=` and the share levels `share_metal=`/`share_energy=`
+(`-` unchanged, below 0 sharing off); and ` after=<n>` (1–255) last on an `order` line, or
 before a closing ` queue` (*Queued orders*). The
 weapon keys are the unit line's last two columns, `<fire>` a token (`hold` / `return` / `at_will`)
 and `<stock>` 0–200, each `-` when unset, and `buildweapon`'s amount is its target, `count <n>`
 (1–200), which no other order takes. The parser refuses an unknown `player` key and any column
 past an order's or a unit's end.
 
-Two optional keys may follow `<stock>` on a unit line, in this order: ` at=<n>` (0–65535), the
-ticks after the apply at which the unit is created, and ` slot=<p>` (0–65535), the position in
-its owner's unit block it is created in. They are the packed calibration lane's
+Three optional keys may follow `<stock>` on a unit line, in this order: ` at=<n>` (0–65535), the
+ticks after the apply at which the unit is created, ` slot=<p>` (0–65535), the position in its
+owner's unit block it is created in, and ` cloak=1`, a unit's `cloaked`, refused with an `at` other
+than 0 since the cloak is issued at the apply. `cloak` is a key and not a column so that a wire
+without it keeps its bytes, which the calibration's references are keyed by. `at` and `slot` are
+the packed calibration lane's
 ([tasim-calibration](modules/tasim-calibration.html), *The packed lane*): `tacli` writes them only
 when an expanded unit carries them, the JSON schema has neither, and the `tasim_run` interface
 refuses a wire that uses them (*The tasim_run interface* there: tasim takes it on in T1, and its
@@ -825,10 +867,7 @@ load reads the settings block's `+0x118` (`[main+0x29A0]+0x118`, the choice the 
 starts seat i takes the map's `StartPos(i+1)` ([sim](engine/sim.html), *Seating a level*).
 Omitted, the screen keeps its own choice.
 
-**A player's `ally`**, 0 to 5, is the skirmish key's `Player<N>AllyGroup`, written before the
-launch as `--player`'s seventh field: seats of one group start allied (MEASURED 2026-11-11, the
-records' `+0x108` bytes). 5 is no group, and an omitted `ally` writes 5, so a scenario never
-inherits the group an earlier one left in the instance's store. The SKIRMISH Start refuses a game
+**One `ally_group` for every seat is refused.** The SKIRMISH Start refuses a game
 whose enabled seats all share one group other than 5 ("All players may not be in the same allied
 group.", `0x479760`; [sim](engine/sim.html), *Seating a level*): two seats cannot be allies. `load`
 reads the settings block just before it clicks Start and dies naming that refusal rather than
@@ -1123,7 +1162,8 @@ line reading `Wreckage M:564` and `Rocko: Under Attack`. The `shootall` A/B is *
 - **Skirmish registry state is sticky, by design.** What a run does not name it inherits
   from the run before — that is TA's own model (the setup screen remembers), and it is
   already true of `side` and `color`. A scenario that wants a specific figure has to say
-  so; `load --json` reports the exact `--player` flags it launched with, in
+  so. The ally group is the exception: a declared player always writes one, 5 when the
+  scenario names none, because an inherited alliance changes what every seat sees; `load --json` reports the exact `--player` flags it launched with, in
   `loaded.players`, so the answer is never a guess.
 - **"From nothing" includes the instance.** `scenario load dojoD one-unit` on a name that
   had never existed cloned the prefix, mirrored the gamedir, launched, drove the shell and

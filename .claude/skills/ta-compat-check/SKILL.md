@@ -82,7 +82,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   end it too), and every watch gives up after 30 min, deciding nothing. A run is classified on its
   first box and the `ErrorLog.txt` file: a second box is not seen.
 - **The battle stage** (Wine only, on by default, 60 s of game time): every setup without a lever that
-  reaches the main menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
+  reaches the main menu clicks through to a skirmish and applies its battle scenario — `scenarios/200v200.json`
+  unless the setup's `scenarios` names another — on the map that scenario's `setup.map` names, saved as
+  `SkirmishMap` before the game starts (Two Continents but for `tazero-wildhunt`'s 6P Wild Hunt).
   Collisions between two patchers show where the limits are *used*, not at start-up: Impure
   v0.2.3 beside Total Mayhem 11.3.0 reached the menu and crashed on the first skirmish load, which
   a start-up-only run passes. **The units must be seen, not only made**: after the scenario, the
@@ -90,6 +92,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
   exist but that Impure cannot see passes everything else. The header read is the first logged
   after the applier's `scenario: applied=` line, so it is of a frame that holds the units.
+  **The terrain must be drawn**: a battle fails when the terrain pass refused its tile atlas
+  (`vk: terr: a WxH tile atlas is outside what this pass carries - nothing drawn`) or no
+  `vk: census` after the applier counts the terrain — a black viewport under units that still draw.
 - **Every player has a commander**, before the battle's scenario clears the map and on each
   peer of the network game: `tacli units` reports the engine's seats in the game (`players`,
   from its player records) and its living commanders (the FBI `commander` bit), and every
@@ -252,7 +257,10 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
 - `content`: `{"units": [...]}`, three unit types only this mod defines (list the mod's archives'
   `units*/*.fbi` against retail's) — every setup that ships a mod's own content carries one.
 - `no_network_game`: why a setup plays none, in words and from a run; its column reads `no mp`.
-  No setup carries it today.
+  `tazero-wildhunt` carries it: its folder's network game is `tazero-alpha5`'s.
+- `scenarios`: the setup's own `battle`, `host` and `join` scenarios. The battle's `setup.map` is
+  the skirmish's map, so a setup that needs a map of its own (`tazero-wildhunt`: 6P Wild Hunt, a
+  fixture of its own) names a battle scenario on it; the network game is on Two Continents.
 - `levers`: files put in the game folder — a name for an empty switch file, or
   `{"file": name, "text": contents}` for a setting. A setup with one checks a mechanism,
   not a player's folder, and plays no battle and no network game: `gui-stress` writes `reseedstress=120` into

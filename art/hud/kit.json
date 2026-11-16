@@ -344,6 +344,14 @@
    "kind": "icon",
    "scale": 3.75
   },
+  "lamp_off": {
+   "kind": "whole",
+   "scale": 5.014
+  },
+  "lamp_on": {
+   "kind": "whole",
+   "scale": 5.1
+  },
   "lane": {
    "kind": "nine",
    "scale": 7.444,
@@ -419,12 +427,12 @@
   },
   "live_groove": {
    "kind": "nine",
-   "scale": 7.545,
+   "scale": 7.491,
    "slice": [
-    24.941,
-    553,
-    23.556,
-    553
+    24.706,
+    549,
+    23.333,
+    549
    ],
    "xtile": true
   },
@@ -445,7 +453,7 @@
   },
   "pick_row": {
    "kind": "nine",
-   "scale": 7.525,
+   "scale": 7.526,
    "slice": [
     8.98,
     104,

@@ -203,8 +203,29 @@ def instance_names(tag, label=""):
     return token + "H", token + "J"
 
 
+def dump_stacks(instances, owned, output):
+    """Every thread's stack of each peer's Wine processes, before a failed game is stopped: a
+    peer that stopped stepping (a freeze seen 2026-11-11, the joiner's private session open hung
+    in its second DirectPlay join and its game thread stopped at tick 10, not reproduced since)
+    then fails with its cause beside its log."""
+    for name in owned:
+        prefix = instances / name / "prefix"
+        if not prefix.is_dir():
+            continue
+        with (output / f"{name}-stacks.txt").open("w") as f:
+            for command in ("info proc", "bt all"):
+                f.write(f"=== winedbg {command}\n")
+                f.flush()
+                try:
+                    subprocess.run(["winedbg", "--command", command], stdout=f,
+                                   stderr=subprocess.STDOUT, timeout=60,
+                                   env=dict(os.environ, WINEPREFIX=str(prefix)))
+                except (OSError, subprocess.SubprocessError) as error:
+                    f.write(f"winedbg failed: {error}\n")
+
+
 def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None,
-        impai=False):
+        impai=False, allies=False):
     """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
     memory cap refused it an allocation (talog.cap_failure), read from its whole log once the game
     has ended, whether the game passed or not."""
@@ -264,8 +285,8 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 if hashlib.sha256((game / "ddraw.dll").read_bytes()).hexdigest() != digest:
                     raise RuntimeError("fixture DLL changed")
             host, join = owned
-            command("bash", TREE / "tools/mp_lobby.sh", "--map", "Two Continents", *owned,
-                    env=dict(os.environ, MP_NO_START="1"))
+            command("bash", TREE / "tools/mp_lobby.sh", "--map", "Two Continents",
+                    *(["--allies"] if allies else []), *owned, env=dict(os.environ, MP_NO_START="1"))
             for _ in range(2):
                 command(sys.executable, cli, "ui", host, "click", "PLAYER2")
             command(sys.executable, cli, "ui", join, "click", "PLAYER3")
@@ -395,6 +416,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 wait_for(lambda: written() > before, "the exit wrote no coverage", 30)
                 shutil.copyfile(game / "replays/cover-native-birth.bin", output / f"cover-{name}.bin")
             audit(recording, output)
+        except Exception:               # a failure, not an interrupt: an interrupted run stops
+            dump_stacks(instances, owned, output)   # its games at once, with the run lock held
+            raise
         finally:
             for name in owned:
                 game = instances / name / "gamedir"
@@ -440,6 +464,9 @@ def main():
                         help="the instances' names carry it: one each game a run plays at once")
     parser.add_argument("--impai", action="store_true",
                         help="both hosted AIs ImpAI's, by the battle room's first step (netai=impai)")
+    parser.add_argument("--allies", action="store_true",
+                        help="the two humans allied both ways (each still fights its own AI): the "
+                             "allies' ribbon reads each other's economy from the channel")
     args = parser.parse_args()
     tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
                           suite="replay")  # host, joiner
@@ -453,7 +480,7 @@ def main():
     refused, failed = {}, False
     try:
         run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
-            args.label, refused, args.impai)
+            args.label, refused, args.impai, args.allies)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
         failed = True

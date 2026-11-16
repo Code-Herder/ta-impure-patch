@@ -63,13 +63,13 @@
 
 /* ---- the producer ------------------------------------------------------------------------- */
 
-/* tagpu_terr.c's atlas layout, which the terrain pass's vertex stage is written for (`CELL_PITCH`
-   34, `CELL_BORDER` 1, 64 tiles a row): each tile in a cell with a replicated one-texel border */
+/* tagpu_terr.c's atlas layout, which the terrain pass's vertex stage is written for (tagpu_terr.h,
+   tagpu_terr_atlas_layout): each tile in a cell with a replicated one-texel border, as many a row as
+   the device allows and at most 256, in pages of as many rows as the device allows */
 #define TILE_PX     32
 #define CELL_BORDER 1
 #define CELL_PITCH  (TILE_PX + 2 * CELL_BORDER)
-#define ATLAS_COLS  64
-#define ATLAS_W     (ATLAS_COLS * CELL_PITCH)
+typedef char wikiworld_pitch_is_the_shared_one[CELL_PITCH == TAGPU_TERR_CELL_PITCH ? 1 : -1];
 #define DEPTH_SCALE 512.0f              /* the mockup's pack `depth.scale` (tools/wiki/gfx.py)     */
 #define TERR_ENC    0.10f               /* tagpu_terr.c TERR_ENC: under every other band           */
 #define FATLAS_DIM  512                 /* the features' frames: a deposit and a vent are ~64 px   */
@@ -157,8 +157,8 @@ static const unsigned char* s_sframe[WIKISCENE_FEATS][2][WIKISCENE_SUBS];  /* [f
 static WSCENEWRECK        s_wreck[WIKISCENE_WRECKS];
 static const WIKI3DFEAT*  s_wfeat[WIKISCENE_WRECKS];
 static int                s_nwreck;
-static unsigned char*     s_tatlas;     /* ATLAS_W x s_tatlasH palette indices                    */
-static int                s_tatlasH;
+static unsigned char*     s_tatlas;     /* s_tatlasW x s_tatlasH palette indices                  */
+static int                s_tatlasW, s_tatlasH, s_tatlasPageH;
 static unsigned           s_tatlasSerial;
 /* THE STAGE'S TILE MAP, the terrain draw's: every 32-px cell's tile index (the scene's cells,
    WSCENECELL), `s_tmW` x `s_tmH`, and the serial the Vulkan lane re-uploads it on */
@@ -253,7 +253,7 @@ static int verts(int b, const WSCENEQUAD* q, int n)
 static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
 {
     WSCENEGROUND g;
-    int i, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
+    int i, cols, pageRows, pages, w, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
     unsigned char* atlas;
     memset(s_sframe, 0, sizeof s_sframe);
     s_nwreck = 0;
@@ -294,27 +294,29 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
         return "the ground's cells are not its tile grid";
 
     /* THE TERRAIN ATLAS, tagpu_terr.c `ensure_atlas`'s layout over the description's tile set */
-    rows = (st->ntile + ATLAS_COLS - 1) / ATLAS_COLS;
+    if (!tagpu_terr_atlas_layout(st->ntile, maxdim, &cols, &pageRows, &pages))
+        return "the tile atlas is larger than the device's images";
+    w = cols * CELL_PITCH;
+    rows = (st->ntile + cols - 1) / cols;
     h = rows * CELL_PITCH;
-    if (maxdim <= 0 || h > maxdim) return "the tile set is taller than the device's images";
-    if (!(atlas = (unsigned char*)calloc((size_t)ATLAS_W * h, 1))) return "no memory for the terrain atlas";
+    if (!(atlas = (unsigned char*)calloc((size_t)w * h, 1))) return "no memory for the terrain atlas";
     for (i = 0; i < st->ntile; i++) {
         const unsigned char* src = st->tiles + (size_t)i * TILE_PX * TILE_PX;
-        unsigned char* cell = atlas + (size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W + (size_t)(i % ATLAS_COLS) * CELL_PITCH;
-        unsigned char* dst = cell + (size_t)CELL_BORDER * ATLAS_W + CELL_BORDER;
+        unsigned char* cell = atlas + (size_t)(i / cols) * CELL_PITCH * w + (size_t)(i % cols) * CELL_PITCH;
+        unsigned char* dst = cell + (size_t)CELL_BORDER * w + CELL_BORDER;
         int r;
         for (r = 0; r < TILE_PX; r++) {
-            unsigned char* row = dst + (size_t)r * ATLAS_W;
+            unsigned char* row = dst + (size_t)r * w;
             memcpy(row, src + (size_t)r * TILE_PX, TILE_PX);
             row[-1] = row[0];
             row[TILE_PX] = row[TILE_PX - 1];
         }
         memcpy(cell, dst - CELL_BORDER, CELL_PITCH);
-        memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W, dst + (size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER, CELL_PITCH);
+        memcpy(cell + (size_t)(CELL_PITCH - 1) * w, dst + (size_t)(TILE_PX - 1) * w - CELL_BORDER, CELL_PITCH);
     }
     free(s_tatlas);
     s_tatlas = atlas;
-    s_tatlasH = h;
+    s_tatlasW = w; s_tatlasH = h; s_tatlasPageH = pageRows * CELL_PITCH;
     s_tatlasSerial++;
     s_tmW = st->w / 2;
     s_tmH = map_rows / 2;
@@ -880,7 +882,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         else
             tagpu_logf("wiki3d: stage %s.%s: the ground in 3D - %d tiles, %d cells, %d feature quad(s) and %d "
                        "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->scene, st->ntile,
-                       s_scene.ncell, s_scene.nbody, s_scene.nshadow, ATLAS_W, s_tatlasH, s_fatlas.n);
+                       s_scene.ncell, s_scene.nbody, s_scene.nshadow, s_tatlasW, s_tatlasH, s_fatlas.n);
     }
     s_ground = st && st == s_stage && v->h == s_stageRows && s_groundOk;
 
@@ -946,11 +948,12 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_terr.zoomCx = (float)s_scene.gw * 0.5f; s_terr.zoomCy = (float)s_scene.gh * 0.5f;
         s_terr.depthScale = DEPTH_SCALE;
         s_terr.enc = TERR_ENC;
-        s_terr.texelW = 1.0f / (float)ATLAS_W; s_terr.texelH = 1.0f / (float)s_tatlasH;
+        s_terr.texelW = 1.0f / (float)s_tatlasW; s_terr.texelH = 1.0f / (float)s_tatlasPageH;
         s_terr.fog = s_fogHave;
         s_terr.norm = 1.0f;
         s_terr.mapPxW = (float)((v->w / 2) * 32); s_terr.mapPxH = (float)((v->h / 2) * 32);
-        s_terr.atlas = s_tatlas; s_terr.atlasW = ATLAS_W; s_terr.atlasH = s_tatlasH;
+        s_terr.atlas = s_tatlas; s_terr.atlasW = s_tatlasW; s_terr.atlasH = s_tatlasH;
+        s_terr.atlasPageH = s_tatlasPageH;
         s_terr.atlasSerial = s_tatlasSerial;
         s_terr.pal = tagpu_pal_engine(); s_terr.palSerial = tagpu_pal_engine_serial();
         s_terr.vpL = 0; s_terr.vpT = 0; s_terr.vw = s_scene.gw; s_terr.vh = s_scene.gh;
@@ -1303,4 +1306,14 @@ int tagpu_wikiworld_restore_job_dst_live(const TAGPU_VKRJOB* j)
 void tagpu_wikiworld_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
 {
     (void)d; (void)j;
+}
+
+void tagpu_wikiworld_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLayer)
+{
+    (void)j; (void)srcLayer; (void)dstLayer;
+}
+
+double tagpu_wikiworld_restore_budget_ms(void)
+{
+    return 0.0;
 }

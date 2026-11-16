@@ -19,6 +19,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_settings.h"
 #include "tagpu_weapons.h"
+#include "tagpu_allysight.h"
 #include "tagpu_log.h"
 #include "dd.h"
 #include "render_vk.h"
@@ -154,21 +155,6 @@ static int allied(const World* w, int owner)
     return *(const unsigned char*)(w->player + PL_ALLY + owner) == 1;
 }
 
-/* whose sensor coverage the view draws: the viewed player's, and that of a
-   player allied BOTH WAYS. The rows are one-way, and the radar pass reads the
-   owner's row toward the viewer (0x4674BA..0x4674C5), so the viewer's row
-   alone would draw the coverage of a player who allies nobody back -- an
-   enemy, to the engine. The owner indexes the player array, so it is bounded
-   to the engine's ten records first. */
-static int ally_both(const World* w, int owner)
-{
-    const char* rec;
-    if (owner == (int)w->viewer) return 1;
-    if (owner < 0 || owner >= PLAYER_COUNT || !allied(w, owner)) return 0;
-    rec = w->ta + OFF_PLAYERS + owner * PLAYER_STRIDE;
-    return *(const unsigned char*)(rec + PL_ALLY + w->viewer) == 1;
-}
-
 /* what the engine shows the viewed player: its own units, and every other one
    UnitInPlayerLOS passes -- the test HotUnits takes (0x48BC42..0x48BC56) */
 static int shown(const World* w, char* u)
@@ -278,13 +264,14 @@ static int defense_rings(const char* def, RDEF* out)
    sonar emitter of a player is one of its units, alive, not dying
    (`unit_at`) and activated (U_ACTIVATION bit 0), whose def has the kind's
    distance above 0 (0x467521..0x467542). What is drawn is that test applied
-   to the viewed player and its allies (`allied`), BAR's meaning: an ally's
-   radar does not extend the viewed player's own pass, and the jammers are
-   counted by the same test although the pass's jammer loop
-   0x4675EC..0x46766C walks every OTHER owner's activated jammers
-   (0x4675F5..0x467600), so a player's own jam only the other players'
-   passes. An enemy's coverage is never drawn, and an ally's needs no line
-   of sight. Activation is the engine's state, not the type's: a radar
+   to the viewed player and to every owner whose contacts the pass gives it
+   (tagpu_allysight_contacts: allied both ways), whose radar and sonar the
+   pass walks for the viewed player as its own. The jammers are counted by
+   the same test although the pass's jammer loop 0x4675EC..0x46766C walks
+   only the jammers of the other owners -- neither the viewed player's own
+   nor those it shares with -- so a player's jam only its enemies' passes.
+   An enemy's coverage is never drawn, and an ally's needs no line of
+   sight. Activation is the engine's state, not the type's: a radar
    switched off emits nothing, and a factory emits while its build order runs
    (BuildingBuild 0x402640 sets it at 0x4027AE). A radar or sonar unit that is
    alive and switched off is published too, flagged OFF, so the render thread
@@ -522,7 +509,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             emit(&s, 0, ghost, &r[k], TAGPU_PK_RL_DEF_ALLY);
         }
         /* its sensors: the draw merges each into its kind's union and
-           brightens the arcs it adds */
+           marks the arcs it adds (tagpu_range.c NEW_WIDEN, NEW_GAIN) */
         if (sensor && will_emit(ghostDef))
             for (k = 0; k < 4; k++) {
                 int rad = sensor_radius(ghostDef, k, ghost[1]);
@@ -588,8 +575,19 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             char* u = unit_at(&w, i);
             char* def;
             int32_t pos[3];
-            int k, on;
-            if (!u || !ally_both(&w, owner_of(u)) || !(def = unit_def(&w, u))) continue;
+            int k, on, owner;
+            /* the coverage of exactly the owners whose radar and sonar the radar pass walks
+               for the viewed player: its own, and those allied sharing adds
+               (tagpu_allysight_contacts, which bounds the owner byte below ten). Without the
+               radar pass's sites that is the viewer's own alone, as in stock TA: its pass
+               walks only the viewer's emitters (0x46750E), and the ShareRadar test of its
+               loop 1 (0x4674BA) gives the viewer an ally's own units, never the contacts an
+               ally's radar makes, so no allied coverage is drawn. */
+            if (!u) continue;
+            owner = owner_of(u);
+            if ((owner != (int)w.viewer && !tagpu_allysight_contacts((unsigned)owner, w.viewer)) ||
+                !(def = unit_def(&w, u)))
+                continue;
             on = (*(const unsigned char*)(u + U_ACTIVATION) & UA_ON) != 0;
             unit_pos(u, pos);
             for (k = 0; k < 4; k++) {

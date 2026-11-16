@@ -72,7 +72,7 @@ def die(msg):
 TNT_HDR = "<3i2I I 2i I i I i 4i"
 TILE_PX = 32
 TILE_BYTES = 0x400
-ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
+ATLAS_COLS = 64                      # the pack's own layout; the DLL's is the device's (restorediff)
 # THE GUARD RAIL, copied from tagpu_terr.c (CELL_BORDER / CELL_PITCH). Cells sit
 # one texel apart and that texel is a COPY of the cell's last row/column. A
 # fragment centre landing exactly on a quad's far edge interpolates v to exactly
@@ -319,7 +319,8 @@ GLSL_ES_HEADER = ("#version 300 es\n"
                   "precision highp int;\n"
                   "precision highp sampler2D;\n"
                   "precision highp usampler2D;\n"        # the fog source (tagpu_glsl.h); the terrain's tile map and keys
-                  "precision highp sampler2DShadow;\n")   # the Classic++ shadow map's compare view
+                  "precision highp sampler2DShadow;\n"    # the Classic++ shadow map's compare view
+                  "precision highp sampler2DArray;\n")    # the terrain's atlases, a layer a page (tagpu_terr.h)
 
 
 def _unescape(lit: str) -> str:
@@ -1520,9 +1521,30 @@ def cmd_shot(args):
 
 # The in-game proof (renderers.md 4c Q8): tagpu_restoredump.on makes the DLL
 # write the terrain's finished twin once, as raw RGBA in the terrain pass's
-# layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's atlas
-# with the Q2 bar -- same tiles, same 2176-wide 34-pitch cells, same order, so
-# the file diffs byte for byte with no re-layout.
+# per-tile layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's
+# atlas with the Q2 bar -- same tiles, same order, each tile read where its own
+# atlas puts it: the DLL's as many cells a row as the device allowed, at most 256
+# (tagpu_terr.h tagpu_terr_atlas_layout), which the `# atlas W H` line of the
+# `.idx` beside the dump names; the pack's its own `cols`; both on 34-texel
+# cells with a one-texel guard ring. A map the DLL pages (more tiles than the
+# device's square) is restored by one job a page, each dumping its own layer
+# as tagpu_restore_terr<p>_vk.rgba, which is not the whole atlas and which this
+# refuses by its size: it holds a one-page map, every map on a device of 8704
+# or more.
+DLL_CELL_PITCH, DLL_CELL_BORDER = 34, 1  # tagpu_terr.h TAGPU_TERR_CELL_PITCH, tagpu_terr.c CELL_BORDER
+
+
+def dll_atlas_width(dump: Path) -> int:
+    """The width of the atlas the DLL dumped, from the `# atlas W H` line of its `.idx`."""
+    idx = dump.with_suffix(".idx")
+    try:
+        for line in idx.read_text().splitlines():
+            p = line.split()
+            if len(p) == 4 and p[:2] == ["#", "atlas"]:
+                return int(p[2])
+    except OSError:
+        pass
+    die(f"{idx}: no `# atlas W H` line -- the restorer writes it beside every dump")
 
 def cmd_restorediff(args):
     pack = Path(args.pack).resolve()
@@ -1535,32 +1557,41 @@ def cmd_restorediff(args):
     ref = (pack / atlas["rgba"]).read_bytes()
     dump = Path(args.dump).expanduser()
     got = dump.read_bytes()
-    W, H = atlas["w"], atlas["h"]
-    if len(got) != W * H * 4:
-        die(f"{dump}: {len(got)} bytes, but the pack's atlas is {W}x{H} RGBA = {W * H * 4} bytes "
-            f"(a different map, or a different tile count: the dump names its size in tagpu.log)")
+    W = atlas["w"]
     pitch, border, cols, tiles = atlas.get("pitch", 32), atlas.get("border", 0), atlas["cols"], atlas["tiles"]
+    DW = dll_atlas_width(dump)
+    dcols = DW // DLL_CELL_PITCH
+    if dcols < 1 or dcols > 256 or DW % DLL_CELL_PITCH:
+        die(f"{dump}: an atlas {DW} wide is not whole 34-texel cells, 1 to 256 of them")
+    DH = (tiles + dcols - 1) // dcols * DLL_CELL_PITCH
+    if len(got) != DW * DH * 4:
+        die(f"{dump}: {len(got)} bytes, but {tiles} tiles in the DLL's layout are {DW}x{DH} RGBA = {DW * DH * 4} bytes "
+            f"(a different map, a different tile count, or a neighbourhood atlas: the dump names its size in tagpu.log)")
+    if border < 1:
+        die(f"{pack}: the pack's atlas has no guard ring (border {border}); rebuild it with `tascene build`")
     hist = [0] * 256
     inner = differing = ring = ring_bytes = 0
     worst, worst_n = -1, 0
     for i in range(tiles):
         ax, ay = (i % cols) * pitch + border, (i // cols) * pitch + border
+        gx = (i % dcols) * DLL_CELL_PITCH + DLL_CELL_BORDER
+        gy = (i // dcols) * DLL_CELL_PITCH + DLL_CELL_BORDER
         n = 0
-        for y in range(-border, 32 + border):
-            row = (ay + y) * W
+        for y in range(-DLL_CELL_BORDER, 32 + DLL_CELL_BORDER):
             ey = min(max(y, 0), 31)
-            for x in range(-border, 32 + border):
-                o = (row + ax + x) * 4
+            for x in range(-DLL_CELL_BORDER, 32 + DLL_CELL_BORDER):
+                o = ((gy + y) * DW + gx + x) * 4
                 if 0 <= x < 32 and 0 <= y < 32:
+                    q = ((ay + y) * W + ax + x) * 4
                     for c in range(3):
-                        d = abs(got[o + c] - ref[o + c])
+                        d = abs(got[o + c] - ref[q + c])
                         inner += 1
                         if d:
                             differing += 1
                             n += 1
                             hist[d] += 1
                 else:
-                    e = ((ay + ey) * W + ax + min(max(x, 0), 31)) * 4
+                    e = ((gy + ey) * DW + gx + min(max(x, 0), 31)) * 4
                     for c in range(3):
                         ring_bytes += 1
                         if got[o + c] != got[e + c]:

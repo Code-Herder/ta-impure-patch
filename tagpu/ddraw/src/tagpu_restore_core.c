@@ -605,6 +605,8 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     return units;
 }
 
+double tagpu_rcore_budget_ms(void) { return s_opt.budget; }
+
 void tagpu_rcore_job_budget(TAGPU_RCORE* j, int prio, double capMs)
 {
     if (!j || !j->used) return;

@@ -187,9 +187,10 @@ pool is a record class of the exclusion file, `proj`, whose pointers are IDs.
 ### Impure's own state: declared where it is defined
 
 Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Of the
-files that read the engine, seven are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`,
-`tagpu_datakeys.c`, `tagpu_cobtrace.c`, `tagpu_puppet.c`, `tagpu_impai.c` and `tagpu_worldq.c` —
-and every other is `presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`
+files that read the engine, ten are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`,
+`tagpu_datakeys.c`, `tagpu_cobtrace.c`, `tagpu_puppet.c`, `tagpu_impai.c`, `tagpu_worldq.c`,
+`tagpu_nodraw.c`, `tagpu_allysight.c` and `tagpu_seatcontact.c` — and every other is
+`presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`
 and the two files it calls outside itself, `tasim_snap.c` and `tagpu_placegeo.c`, is listed too,
 with the class `engine-free`, for its `sim` scope alone: its functions read only their arguments,
 yet their answers are ImpAI's orders. The class grants no engine read --
@@ -229,6 +230,7 @@ costs a replay that silently differs.
 | `SIM_TRANSIENT` | nothing carried from one tick to the next: at every tick boundary each byte is back at its value from load (an empty queue, a free hold, a cleared flag) or is written before anything reads it (a scratch buffer) | the harness resets it to its value from load at a snapshot, as a fresh process holds it, and the round trip must still match |
 | `SIM_PRIVATE` | diagnostics the simulation never reads, in one struct per feature (`s_hitDiag`, `g_diag`, …), so every use says so | ignores it |
 | `SIM_INSTALL` | what Impure writes while installing — in DllMain, and in the start-up checks at the first DirectDraw call — and never during a game: trampolines, code pages, site tables, TLS indices, levers, locks | the harness hashes it after install and fails by name when a game changes it; locks (`SIM_LOCK`) are left out of that hash |
+| `SIM_REBUILT` | what the simulation reads and a game changes, but which the code that builds it live builds again on every host from the engine's own events. **An owner-approved loosening for one table only**: the wide sight counters W of [allied sharing](../modules/allied-sharing.html) (`tagpu_allysight.c` `s_wide`), which every sight stamp and removal builds and whose `u8` twins, the engine's own counters, are themselves unrecorded and re-derived (the `+0x7C` row of `replay-layout.tsv`) | does not record or restore it; a dump carries it after each player's sight counters (`RK_SIGHTW`), so `tarec compare-dumps` and the round trip compare it, and check that each counter byte is `min(W, 255)` |
 
 Neither "empty at every snapshot" nor "never read by a later tick" fits both kinds of transient
 memory: a scratch buffer keeps its last bytes after the call that used it, and a free hold's zero
@@ -387,16 +389,26 @@ the harness have to:
 - the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
   written anywhere the recorder reads.
 
-**MEASURED 2026-10-05: native cosmetic pools after seek.** The resource landing's whole
-rerun passes 1479 checks and 36 image gates; the unchanged `stock-secondary-orders` control
-alone fails 514 unlisted image bytes in native explosions, debris and flying-piece slots.
-Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
-order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
-reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
-the native paths empty the explosion pool, records included, the debris records with their blocks
-and the flying-piece slots, as every level load does. The raised
-engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
-are implemented.
+**The engine's effect pools are not recorded** (the owner's decision, 2026-11-15: exact
+explosions are not wanted). A seek empties them through `tagpu_effects_clear`
+(`tagpu_patches.c`): the particle layers, the explosions, the debris records and the
+flying-piece slots, so a sought game shows no explosion, debris or flying piece that was in the
+air at T, and the playing makes the next ones as the recording's events start them. On the stock
+build those pools are in the images: the explosion count and its 300 records `main[0x1491B,
+0x1AB8F)`, the 300 debris records and their vertex and face blocks `main[0x1AB9F, 0x33A0F)`, and
+the 100 slots `.data[0x511DF0, 0x511F80)`. The images gate classes a difference there as
+`effects`, in every recording, and stays strict one byte outside them (`tarec.py`
+`EFFECT_POOLS`, `test_tareplay.py` `EffectPoolsImageGate`). The raised build keeps its pools on
+the DLL's heap (`SIM_ENGINE`, excluded by `tagpu_simreg_recorded`), outside the images. **Why
+leaving them out keeps the simulation exact** (DISASSEMBLED 2026-11-15): no simulation code reads a
+byte of the pools, nothing reached from their add, tick or draw writes simulation state, and of the
+129 calls of the simulation RNG `0x4B6C30` only the shatter `0x421700`'s eight, made for each eligible primitive, were reached
+after a test of a pool (the explosion cap `0x42176F`, a free debris record `0x4217EE..0x421808`):
+an always-on fix (`tagpu_patches.c` `shatter_rng`, [engine patches](../modules/engine-patches.html))
+points them at a generator of their own whose four bytes are recorded, so the pools' fullness never
+changes the simulation's stream and a takeover after a seek continues on the recording's. The
+game thread's C-runtime `rand`, which the particle code and the meteor shower share, is the
+known gap of [the meteor shower](../engine/sim.html) and is not this one's.
 
 **MEASURED 2026-11-13: `stock-impai-fight` at T1 2251** (the saved dumps of an ImpAI gate run,
 read with `tarec.py`). The live game and the playing hold explosion count 1 and a written extent of
@@ -407,44 +419,14 @@ under-reports this gap. Between the live game and the playing, 338 bytes differ 
 inside a record's two sequence pointers (`+0x0C`, `+0x18`), which are heap addresses of each
 process: a byte-exact restore of the pool could not pass either.
 
-**Owner-approved known gap, 2026-10-06 (`stock-secondary-orders`) and 2026-11-13
-(`stock-impai-fight`, `stock-impai-naval`, and the debris records' vertex and face blocks).** Only
-these three test groups, `tarec.STOCK_COSMETIC_FIXTURES`, on their
-native 300-projectile build, enable `images-gate --stock-cosmetic-pools` (`tareplay.py`,
-`image_gate_options`). Otherwise failing
-unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x33A0F)` (the debris
-records and each record's own vertex and face blocks) and
-`.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
-The address scope is 125444 bytes; it is not the measured number of differences. Adjacent bytes,
-other test groups and raised-limit recordings retain the strict gate. No recorder layout,
-positive globals row, unit/player/order comparison, paused comparison, restore check or
-root/sink effect comparison changes. The saved dumps pass only with this explicit option and
-the default still fails them: `stock-secondary-orders`' whole-run and focused dumps by 514 and
-469 bytes, `stock-impai-fight`'s by 301 bytes, which the option accepts. The policy tests in
-`test_tareplay.py` (`NativeCosmeticImagePolicy`) pin the three names, the three ranges, the cap and
-the command. **The raised build has the same gap and the gate cannot see it**: a raised seek clears
-`s_expl` as stock's clears its pool, no record carries `s_expl`, and `images-gate` reads only the
-main block and the exe's `.data`, where the raised build leaves `main+0x1491B` unwritten. This
-exception does not establish that pool fullness is irrelevant to simulation: the explosion cap
-(`0x42176F`) decides how many sim-RNG draws a shatter makes; the debris pool's no-free exit
-(`0x421802`) is unreachable while its records number the explosion cap
-([the engine map](../engine/weapons.html), *The shatter and the effect pools' bounds*). The restore
-itself is open (*Open items*, *A seek drops the effects in flight*).
-
-**Why the blocks are in the gap.** A shatter writes its debris record's vertex and face blocks,
+**Why the blocks are in the range.** A shatter writes its debris record's vertex and face blocks,
 `main[0x1E88F,0x33A0F)` (300 × 0x60 vertices, 300 × 0xC0 faces), and no record carries them, so a
 process that seeks — a fresh one included, whether or not its clear empties them — holds none of
 what the shatters before the seek's tick wrote. Whether the gate sees it depends on its drawn tick:
 with debris in flight there and later shatters rewriting those blocks inside the window the bytes
-FAIL; otherwise the window test reads them load-constant. The explosion pool behaves the same way:
+differ; otherwise the window test reads them load-constant. The explosion pool behaves the same way:
 the tick's compaction (`0x421111..0x42113A`, `rep movs`, then the count decremented) leaves the
 old last record as a stale copy past the count, which `stock-impai-naval`'s gate named at 32 bytes.
-
-The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
-37 image gates, with coverage reaching all 11 changed function/region requirements. Its
-native control's T301 checkpoint accepts zero cosmetic bytes and also passes the default
-strict comparator. That checkpoint does not erase the earlier reproduced T451 gap. All
-17 resource image gates remain strict. The passing note is on `cfe3771f` (2026-10-06).
 
 ### Events
 
@@ -1144,8 +1126,9 @@ cannot see an address recorded as a value; the scan looks for one instead.
   of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
   changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
   The landing tier's reach includes **the two-player game**, on each build, whenever the recorder
-  or its multiplayer half changed: two humans and two AIs with chat, a selection and a click from
-  each human, `tarec check` on its recording, and the recording played to its end
+  or its multiplayer half changed: two humans, allied both ways (`--allies`, so the allies' ribbon
+  reads each one's economy from the contribution channel), and two AIs, each human's opponent,
+  with chat, a selection and a click from each human, `tarec check` on its recording, and the recording played to its end
   (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
   both builds at once beside the test groups' lanes. A change to ImpAI's files or to the battle
   room's ImpAI step (`impai_*`, `tagpu_impai.*`, `tagpu_skirmish.c`) plays it too, in its **ImpAI
@@ -1300,6 +1283,7 @@ region with whether its fixtures reach it.
 | 2026-10-23 | **On a multiplayer playing the contest marks are the host's footprint writers' alone, and its contests keep the engine's own rule** (the owner; this extends the 2026-10-12 row's exception and decides what that row left "Not decided"). The grid's unit slots and yard bits on a multiplayer segment are already the host engine's (`s_engine_cells`); `unit_put` and `states_put` now choose their masks by `s_engine_cells` too, so the playing writes neither `+0x110` bit 26 nor 27 there and the stamp, the clear and the re-claim are the marks' one writer, as on a skirmish segment that holds its cells. Why: each owner's image carries its own machine's marks, for its own grid at its own times, so writing them beside the host's grid left a host contest unmarked (MEASURED at GameTime 1016 of the r2 four-seat recording: cell (157, 82) named unit 10 and none of the 43 units carried a mark), and the clear's hand-back to a loser (`0x47D29C..0x47D2C4`) and the re-claim's (`0x47C798..0x47C7A6`) act only on marks. The contests keep the type-3 rule: every puppet seat is type 3, so the newcomer takes a held cell, as each owner's machine gives a cell up to a remote unit; no single rule is the composed world's. **The loosening accepted with it**: in a multiplayer segment `recmp_compare.py` (its dumps and `--fork`'s first iteration) and `tarec compare-dumps --seek` check the unit slots, yard bits and marks by the occupancy rule of the 2026-10-12 row, whose contest form is now the rule's only form, and take the dump's marks into the expected world: the marks are no longer compared with the owners' images, and a loser's cell may name the holder that took it. Why: two live mobile units of one layer that overlap share a cell's one slot, so the clause "every footprint cell of a live mobile unit names it" cannot hold there whatever the order (the r2 recording's pair 10 and 1503, iterations 1015..1024, 10 of 1,346), and a seek's slot-order creates give the cell to the other unit than the playing's history does. Two straight playings of one multiplayer file are still compared byte for byte. The 2026-10-12 row's "Not decided" sentence stays as history. |
 | 2026-10-23 | **A straight playing makes the step's footprint and chain calls in the recording machine's order** (format 26, the fix of the 2026-10-12 row's residual for every playing but a seek; `tagpu_recfmt.h`, *THE CONTEST ORDER*, and [the engine map](../exe-reverse-engineering.md), *The order of a step's footprint and chain calls*): the recording machine makes the stamp, the clear and the re-claim in its unit tick's turns, ascending by slot, and the calls from outside the tick after them, so the recording carries the turn a top-level footprint event was made in (`RK_EV_TURN`, only where no reader infers it) every acting attach `0x48AB70` at its place (`RK_EV_LINK`) and every unit Teleport's handler moves, at its set-position call `0x406BC0` (`RK_EV_PLACE`), which a playing makes there with the handler's flare `0x471FD0` before it, counted as the handler's own call -- Teleport being an order handler, which runs on the owner's machine alone (the `teleport` test group, and `stock-teleport` on the stock-limits build). On a skirmish segment that holds its cells the playing reads image T+1 before it plays step T's events and, before each footprint event of key K, places every unit below slot K at its next recorded position through the set-position, so the host makes the same calls in the same order on the same state, and every cell's holder, both marks and every chain follow by induction. What the recording machine did that no key orders -- a turn out of slot order, a footprint or attach call from a site the recorder does not know, a Teleport move of a unit that is not alive -- is counted in the recording, and the harness fails any (*L: the footprint calls no playing can order*). On the playing's side the harness fails a step the order could not hold, a refused Teleport move or carry link, and on a recording that holds its cells it could not run a playing that applied steps and played none in the order, and fails one whose steps played in the order and held out of it do not add up to the steps it applied -- every such step is counted as one or the other (`co_engage`), so a playing the order skipped, for every step or for some, cannot pass (*P: the contest order played*, and R's and Q's). **Nothing is loosened**: the 2026-10-12 row's "Nothing else is loosened" stays true, and the seek's residual is unchanged -- a seek still makes its units in slot order, and its cells are still checked by the occupancy rule. MEASURED 2026-10-23: the `contest-waves` test group, whose P lane fails on format 25 in 4 runs of 4, passes L, P and R; its recording has 26 steps where a unit of a lower slot moves beside a footprint event of a later turn, and two playings are EQUAL to it at each of those steps' T+1; the `teleport` test group's 12 moves play at their place, its counts EQUAL with the flare live 8 and puppet 8 (`sink 0x471FD0 from 0x406BA4`), and its recording counts no unordered call. An event made in turn s after s's own relink -- the walk class's and the water state's run-now COB passes run after it (0x43DD5D, 0x43DD65), and the reaper's death -- is keyed s+1, so a playing places s before it: MEASURED 2026-10-24, slice-walkers keyed 2 events so, both a unit's death after its own relink, its P and R EQUAL; carry-links, transport-pad, yard-lab, contest-waves and teleport keyed none; and the `transport-turn` test group (`scenarios/replay-transport-turn.gen.py`) keys attaches so: 40 hover transports, each blocked by a scout car that leaves in the window of its TransportPickup's first attach, so the step the car frees the row the transport relinks into it and its walk class's StartMoving pass runs the pickup's thread, whose boom wait ended in that step's slice, to its attach -- MEASURED 2026-10-24, `tareplay.py run transport-turn`: 6 links keyed their carrier's slot + 1, the recorder's count of events made after their turn unit's relink 6, 0 unordered, P and R EQUAL at 91, 121, 151 and 181, the contest order played on P, R and Q, all 53 checks passed (4 such links in an earlier recording of the same combs). What it cannot show: an attach and its carrier's relink commute (the attach moves the child between chains and writes no cell, the relink re-files only the carrier, on a bucket change), so a build with the next-slot keying removed passes the group as well; the order would show for a drop into the bucket its carrier has just entered (the detach pushes the child at that bucket's front, `0x47CB40` at `0x48ACDC`), which no group makes. A drop comb built the same way did not make one either (MEASURED 2026-10-24: 22 drops, none in a step its carrier relinked in, since a hover transport drifts sideways by up to 14 wu while it creeps to the car and pushes on it, and a sideways relink re-files its bucket before the row frees): the drop's order stays unmeasured. A key is RCS_OTHER's and sets no events flag, so the lossy filter takes the step's first key, link or move as the end of the iteration's images, as it takes the first event (`tagpu_reclossy.c`, *A REFRESH'S WRITES*), and the writer ends the file where a stream block puts a record between a key and its event. MEASURED 2026-10-24: a filter that ended the images at the first event alone wrote a refresh's cells and lists between a key and its event, which every reader refuses (a contest key before `RK_CELLS`, kind 33) -- `tenseat` at GameTime 181, `forest-circle` at 1501 and `stock-limits`, wherever a refresh's first event was a keyed one; that filter run again over `forest-circle`'s exact records (`RB_EXACT`) makes the refusal at 1501, this one makes a stream `tarec check` reads to its end, every change explained, and so for `tenseat`'s. |
 | 2026-10-23 | **The recorded view's contact bits are the recording's** (the owner, amending D1 of 2026-09-30 in that one perspective; not a loosening): when the host views the recording's own viewed player, a playing writes every unit's `+0x110` bits 8–10 from the image it holds after every step, at the capture point and the frame visit (`contacts_put`), as the seek and a change of view already did after their pass. The engine's pass there did not have the recording machine's inputs: it saw the units made or killed after the recording machine's pass of the same step (the frame tail's applier, the SHARE give), and in multiplayer each remote unit at its owner's position. Every other perspective keeps the engine's pass, as D1 has it. **The residual accepted with it** (a known display gap, no reorder and no format change): in any other perspective the radar picture covers a unit made after a pass step's players phase up to 30 ticks early, and in multiplayer follows the owners' positions; under true LOS the minimap's fog shows such a unit's sight one pass early in every view [INFERRED]. The `contact-waves` test group carries the class. |
+| 2026-11-11 | **The wide sight counters are a class of their own, `SIM_REBUILT`** (the owner, for allied sharing's W alone; a loosening): not recorded, rebuilt on the host by the live code, compared in the sight dump. `SIM_STATE` would carry every cell any unit's sight touches, for every receiving grid, every tick, and a seek's R12 would put a W that already holds the temporary records' stamps before R14a stamps them again. The engine's own u8 counters are already handled this way (the `+0x7C` row, `dump_sight`); W is the same counters, wider. The alliance snapshot S that decides where each stamp goes stays `SIM_STATE`. Rejected: W as `SIM_ENGINE` beside the `+0x7C` row, a flag used outside its meaning. |
 | 2026-11-13 | **A takeover's fresh ImpAI seat is left out of `compare-fork` at the fork's first capture** (a loosening the owner decided for ImpAI's A4 d4, extending D2 (c), the same seat's change of controller): D2 gains (e), the rows of `s_seat`, `s_brain` and `s_mil` and the `s_job` rows of the unit block of each seat the takeover newly gave ImpAI, which `seat_fresh` starts as a level start does. The seats are the fork's header's ImpAI seats (`RT_PLAYER` byte 15) that the parent segment's header does not mark, never a test group's list; the mask applies at the capture at `fork_at` alone, so every later capture, every other seat and every other table compare in full (`tarec.py`, `fork_view`, `fork_fresh_seats`; [ImpAI's decisions](../impai/decisions.html)). The test groups are `impai-takeover-fresh` and `stock-impai-takeover-fresh`. |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
@@ -1391,11 +1375,11 @@ the viewed record's radar pass on T's world (R14b) and then, when P is the recor
 record (a takeover views P from TK1 on), put `+0x110` bits 8–10 back from the recording through
 `rw_contacts`, since the pass a playing holds read its step's globals mid-step and no image
 reproduces it (the skirmish slice's O14: the tenseat fixture's LOS command at GameTime 900 leaves
-images 901..930 with LosType 6 and the contacts a LosType-4 pass set). Those bits are the fork's AI
-input: the acquisition scan `0x40AA40` puts every non-allied unit with bit 8 on each local seat's
-radar list (`0x40AB3F..0x40AB5C`), and the acquisition records TK1 makes start with `+0xED` 0
-(`0x40918B`, `0x4092DC`), so each scans in iteration T's players phase, before the next radar pass,
-and reads the recorded bits as the recording's AIs read them until its next pass. The bound is
+images 901..930 with LosType 6 and the contacts a LosType-4 pass set). Those bits are display state:
+no acquisition reads them (each seat's `0x40AA40` computes its own contacts from the world when it
+runs, [allied sharing](../modules/allied-sharing.html), *Per-seat contacts*), so a fork's AIs, whose
+acquisition records TK1 makes with `+0xED` 0 (`0x40918B`, `0x4092DC`) and which therefore scan in
+iteration T's players phase, read T's restored world, as the recording's read theirs. The bound is
 `rw_contacts`' (a slot below the array's count, live in the image, whose host slot holds a live unit
 of the image's type; only the three masked bits written); the ordering is that nothing after R14b
 writes bits 8–10 before the capture point of T (R14c, TK4a's `0x48BD00` clears bits 4, 6 and 7

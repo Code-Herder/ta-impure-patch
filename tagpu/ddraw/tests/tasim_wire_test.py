@@ -193,6 +193,17 @@ CASES = [
     ("slot-repeated", V1 + "unit 0 A 1 1 2 - - - - - - - - slot=5\nunit 1 A 0 1 2 - - - - - - - - slot=5\n"
      "unit 2 A 1 1 2 - - - - - - - - at=60 slot=5\nend\n",
      "line 4: unit 2 asks for slot 5 of player 1, which unit 0 asks for"),
+    # `cloak=1`, a scenario's `cloaked`, after at= and slot=, on a unit made at the apply alone
+    ("ok-cloak", V1 + "unit 0 A 0 1 2 - - - - - - - - cloak=1\n"
+     "unit 1 A 1 1 2 - - - - - - - - at=0 slot=3 cloak=1\nunit 2 A 0 1 2 - - - - - - - -\nend\n", None),
+    ("cloak-scheduled", V1 + "unit 0 A 0 1 2 - - - - - - - - at=30 cloak=1\nend\n",
+     "line 2: unit 0: cloak=1 is the apply's, and the unit is made at=30"),
+    ("cloak-value", V1 + "unit 0 A 0 1 2 - - - - - - - - cloak=2\nend\n", "line 2: unit 0 `cloak=2` wants cloak=1"),
+    ("cloak-before-slot", V1 + "unit 0 A 0 1 2 - - - - - - - - cloak=1 slot=3\nend\n",
+     "line 2: unit 0: `slot=3` is repeated or out of order (cloak= comes last)"),
+    # a player's share levels: `-` unchanged, below 0 sharing off (-1), else the level
+    ("ok-share", V1 + "player 0 share_metal=500 share_energy=-\nplayer 1 share_metal=-5 share_energy=0\nend\n",
+     None),
     ("order-cross-at", V1 + "unit 0 A 0 1 2 - - - - - - - - at=30\nunit 1 A 1 1 2 - - - - - - - - at=60\n"
      "order 0 attack unit 1\nend\n",
      "order 0: its subject is created at=30 and its target unit 1 at=60; an order's subject and unit target are "
@@ -224,12 +235,19 @@ ORDINALS = {"ok-ordinals-unchecked": ["cam 3 -3 0 pin 0", "order 0 subj 0 -1 [] 
             "ok-queue": [" kind 2 1 0 tlive 0 [] after 0 queue 0\n", " kind 2 2 0 tlive 0 [] after 0 queue 1\n",
                          " kind 2 0 0 tlive 0 [] after 5 queue 0\n", " kind 2 2 0 tlive 0 [] after 5 queue 1\n",
                          "order 4 subj 0 0 [] cmd ", "order 5 subj 0 0 [] cmd "],
-            # each unit's at and slot, unset as `-` is (TASIM_WIRE_UNSET)
-            "ok-at-slot": [" at 0 slot -2147483648\n", " at 0 slot 0\n", " at 65535 slot 65535\n",
-                           "unit 3 [A] 1 1 2 ", " at 30 slot 7\nunit 4 [A] 0 ", " at 30 slot -2147483648\norder 0 "],
+            # each unit's at and slot, unset as `-` is (TASIM_WIRE_UNSET), and no cloak
+            "ok-at-slot": [" at 0 slot -2147483648 cloak 0\n", " at 0 slot 0 cloak 0\n",
+                           " at 65535 slot 65535 cloak 0\n", "unit 3 [A] 1 1 2 ", " at 30 slot 7 cloak 0\nunit 4 [A] 0 ",
+                           " at 30 slot -2147483648 cloak 0\norder 0 "],
             # tacli's own writer, from an expanded scenario whose units carry the keys (tacli_keys_wire)
-            "tacli-at-slot.wire": [" at 0 slot -2147483648\nunit 1 ", " at 0 slot 12\nunit 2 ",
-                                   " at 30 slot -2147483648\nunit 3 ", " at 60 slot 3\n"]}
+            "tacli-at-slot.wire": [" at 0 slot -2147483648 cloak 0\nunit 1 ", " at 0 slot 12 cloak 0\nunit 2 ",
+                                   " at 30 slot -2147483648 cloak 0\nunit 3 ", " at 60 slot 3 cloak 0\n"],
+            # `cloak=1` after the other keys or alone, and a unit without it
+            "ok-cloak": [" at 0 slot -2147483648 cloak 1\nunit 1 ", " at 0 slot 3 cloak 1\nunit 2 ",
+                         " at 0 slot -2147483648 cloak 0\n"],
+            # a share level as given, `-` unchanged, below 0 off
+            "ok-share": ["player 0 metal -2147483648 energy -2147483648 share 500 -2147483648 ",
+                         "player 1 metal -2147483648 energy -2147483648 share -1 0 "]}
 
 
 def tacli_keys_wire(cli, exp):

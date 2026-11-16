@@ -959,15 +959,24 @@ pipeline, so the two teardowns are independent.
   oracle's copy — and `GENERAL` for life: written as storage, sampled and copied as `GENERAL`, one
   layout and nothing to track), two sets a slot (base and restored) from its own pool with
   `tagpu_vk_chain_dsl()`, written in the slot's `prepare` before their first use in that command
-  buffer, and a 16-byte host-visible counter buffer a slot.
+  buffer, and a host-visible reducer buffer a slot: the four counters' 16 bytes, and in the
+  terrain's the engine's table as 256 words at `CNT_PALOFF` 256 after them (`CNT_BYTES`, 1 280
+  bytes; 256 because the specification caps `minStorageBufferOffsetAlignment` at 256).
 - **The set's bindings**: 0 the atlas's level 0, `SHADER_READ_ONLY_OPTIMAL`; 1..5 one storage view a
-  chain level; 6 the counters, four uints, the check mode's two pairs; 7 the table form's source
-  rects, two uints a cell. The terrain names its counters at 7, which the grid form never reads.
+  chain level; 6 the counters, four uints, the check mode's two pairs; 7 table form 1's source
+  rects, two uints a cell, or table form 2's 256 palette words. The terrain's base chain names its
+  palette words at 7, its restored chain the counters, which the plain grid form never reads.
 - `tagpu_vk_chain_record` records one reduction: **range** mode (cells `first .. first+count−1`,
   row-major over `cols`, one dispatch of up to 1 024 workgroups along x), **list** mode (`count`
-  cells `x | y << 16`, 24 a push), the **table** form (range mode only: each cell's source rect and
-  valid size from binding 7), and `check` 1 or 2 to compare instead of write. `tagpu_vk_chain_clear`
-  empties a chain, all five levels.
+  cells `x | y << 16`, 24 a push), table form 1 (range mode only: each cell's source rect and
+  valid size from binding 7; the feature frames), table form 2 (the grid's cells over an R8 atlas
+  of palette indices, each texel's colour `Src.r[k]`, `R | G << 8 | B << 16`, alpha 255 — the entry
+  `tagpu_pal_expand` gives index `k`; the terrain's base atlas), and `check` 1 or 2 to compare
+  instead of write. `tagpu_vk_chain_clear`
+  empties a chain, all five levels of every layer, and `tagpu_vk_chain_begin` takes a fresh
+  chain out of `UNDEFINED` over every layer too. A dispatch reduces one layer: the set names a
+  2D view of one source layer and storage views of that layer's levels, which is how the
+  terrain's paged chains reduce a page a dispatch ([terrain & depth](../terrain-depth.html) §7.1).
 - The seam calls `tagpu_vk_chain_down` and `tagpu_vkw_chain_down` after every pass's `_down`: a
   set may not be written once its layout is gone. Both calls run on the live device behind the
   seam's `vkDeviceWaitIdle`, and the next device is asked again.
@@ -985,7 +994,8 @@ written as `(k + 0.25)/255`, which stores `k` under a truncating and a rounding 
 - **The bound.** A workgroup reads only its own cell's 32 × 32 interior — in the table form only
   the `tw × th` of it its tile covers, so no texel of another frame or of a frame's border — and
   writes only its own cell's block at each level, so no tile is mixed with another and no two
-  workgroups write one texel. A workgroup past `count` returns whole; `wg` is uniform across it, so
+  workgroups write one texel. In table form 2 the word it reads is `round(r · 255)` of an R8 texel,
+  at most 255, inside the 256 words the caller binds. A workgroup past `count` returns whole; `wg` is uniform across it, so
   every `barrier()` stays in uniform control flow. A level texel whose block holds no valid texel
   is written 0, and nothing samples it.
 - **The C mirror** is `tagpu_chain_ref`, edit both or neither. `tools/replay/chain_test.py` builds it
@@ -1039,7 +1049,8 @@ check has been read, of a chain current once the frame's work is recorded:
   stale chain: a missed key, a missed clear, a map change.
 - **The GPU's arithmetic against C**: 16 base cells, `c_j = j · cells / 16`, every level, are copied
   out (21 824 bytes, a host-visible buffer that exists only while the lever does) and compared with
-  `tagpu_chain_ref` over the hand-over's level-0 bytes expanded as the upload expands them — only
+  `tagpu_chain_ref` over the hand-over's level-0 bytes expanded through its palette
+  (`tagpu_pal_expand`), as the features' upload and the terrain's table form 2 expand them — only
   while the atlas, the palette and, for the features, the allocation are still the ones reduced
   from (`skipped` otherwise).
 - The lines and what must read 0: the `ta-drive` skill's `references/levers.md`, *The heartbeats*.
@@ -1050,13 +1061,15 @@ check has been read, of a chain current once the frame's work is recorded:
 
 **Cost.**
 
-- **Device-local memory**: a terrain chain is 29.5 % of its atlas (341 texels a 1 156-texel cell):
-  7.0 MB for Two Continents' per-tile base, about 57 MiB for its neighbourhood atlas, asked of the
-  restorer's memory rule (D10) before it is made. The feature chains are fixed: 2 × 11.2 MB, plus a
+- **Device-local memory**: a terrain chain is 29.5 % of an RGBA8 atlas on its grid (341 texels a
+  1 156-texel cell): 7.0 MB for Two Continents' base, 89 MB for 6P Wild Hunt's 65,029 tiles, about
+  57 MiB for Two Continents' neighbourhood atlas, the restored one asked of the restorer's memory
+  rule (D10) before it is made. The feature chains are fixed: 2 × 11.2 MB, plus a
   64 KB source-rect buffer and a 64 KB table a slot.
-- **Mapped memory**: a 16-byte host-visible counter buffer a slot in each pass that has the chains
-  up, mapped for the slot's life — new, and small — and the oracle's 21 824-byte copy a slot only
-  while the lever exists. The feature table and rects go through the slot's existing bounded
+- **Mapped memory**: a host-visible reducer buffer a slot in each pass that has the chains up
+  (16 bytes in the feature pass, 1 280 in the terrain's), mapped for the slot's life, and the
+  oracle's 21 824-byte copy a slot only while the lever exists. The terrain writes its table words
+  in the slot's `prepare`, after the slot's fence, so no submitted reduction still reads them. The feature table and rects go through the slot's existing bounded
   staging (`tagpu_vk_stage_take`), so they add no mapping.
 - **Heap and statics**: the terrain's place → key map (`s_nbAt`, 4 B a key, 175 KB on Two
   Continents' 43 658 keys) and its list of cells for a slice's pushes; the feature allocation's two

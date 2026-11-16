@@ -163,10 +163,13 @@ The owner's decisions:
   after that frame's step and its capture point `0x4954ED` have started the recording. The open is
   refused, as one with no recording is ("Rewind refused"), only if the arm still stands at that
   visit, as it does while a test's pause holds the level; **else the replay HUD**
-  while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
+  while the playback is live (`tagpu_replay_live`) and its span is known; **else the allies'
+  ribbon** in a network game while the player in play has a mutual ally (`tagpu_share_allies`,
+  [share](modules/share.md), *The allies' ribbon*); else nothing. The
   rewind is asked first because a rewind into the past plays the recording as puppets, where
-  `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
-  `mode` saying which.
+  `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in each mode, its
+  `mode` saying which (`TAGPU_PK_HUD_REPLAY`, `_LIVE`, `_ALLIES`); the allies' record carries the
+  clock, the scale and the allies as its seats, each `seat` the player's record index.
 - **On GDI, or once the Vulkan lane has handed the session to it, a replay has no on-screen
   controls**: no record is filled, the marker walker never starts (it starts from the fill), so
   there is no stats window either, the engine's `PAUSED` icon shows while paused, and the
@@ -495,8 +498,8 @@ The owner's decisions:
   In a skirmish the alliances are the SKIRMISH screen's: the seat fill `0x47A760` marks allied
   every human or AI seat that shares an alliance group other than 5 (the store at `0x47A890`;
   [engine map](exe-reverse-engineering.md), *The seat fill*). The group is saved in the registry as
-  `Skirmish\Player<N>AllyGroup` ([command-line options](cmdline-options.md)) [INFERRED: the
-  registry value reaching the settings entry's `+8` is not traced].
+  `Skirmish\Player<N>AllyGroup` ([command-line options](cmdline-options.md)), which the settings
+  load reads into the settings entry's `+8` (`0x430D03`, DISASSEMBLED 2026-11-11).
 - **The rates** — a row's income and spending — read one decimal below 100 in magnitude and whole
   numbers from 100, rounded half up as JavaScript's `Math.round` rounds (`rate` and `js_round`,
   `tagpu_hudlay.c`; `rate`, `hud.js`). A resource bar whose storage is 0 is empty.

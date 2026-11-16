@@ -13,7 +13,7 @@ folder it stays on the whitebox. research/notes/ingame-wiki-3d-stage-plan.md sec
 One tascene-format pack a stage, one stage per scene of a wiki entry, `gfx/<entry>.<scene>/scene.json` and its
 binaries:
 
-  terrain/   the stage description's tile set as tagpu_terr.c's R8 atlas (64 tiles a row, 34-texel pitch), its
+  terrain/   the stage description's tile set as an R8 atlas on tagpu_terr.c's 34-texel cells, 64 tiles a row (the pack's own layout), its
              tile map (one u16 a 32-unit tile, an index into that set) and a zero height grid (the stage is flat)
   features/  the description's 2D features: their frames in an R8 atlas, the anchors, the definitions
   units/     every unit type the entry names: its model as the engine holds it, in tascene's mesh format, one mesh

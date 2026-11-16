@@ -89,6 +89,22 @@ function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
   return t;
 }
 
+// A TEXTURE_2D_ARRAY of `layers` layers of w x h, `data` the layers one after
+// another: what the terrain shader's sampler2DArray reads (tagpu_terr.h, a
+// layer a page). The lab's atlas is one page.
+function texArray(gl, unit, internal, w, h, layers, format, type, data) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, internal, w, h, layers, 0, format, type, data);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
 // CLASSIC IS tagpu's ONE FULL-COLOUR PATH with assets=0 light=0
 // (uRestored 0, uLambert 0), so it samples what the game's Classic samples:
 // the BASE ATLAS -- every index expanded to its palette colour, alpha 0 at a
@@ -149,15 +165,16 @@ function shadeK(pal, shd, rows, neutral) {
 // world point and UVs from those and uOrigin, uTexel -- exactly, every term an
 // integer far below 2^24.
 //
-// `atlas` is the pack's map.atlas (w, h, cols, tiles) and `r8` its indices; the
-// base atlas goes to texture unit 16, the program's sampler for it, the tile
-// map to unit 7 and the neighbourhood keys -- one zero texel: this lane has no
+// `atlas` is the pack's map.atlas (w, h, cols, pitch, tiles) and `r8` its
+// indices; the base atlas goes to texture unit 16 as a one-layer R8 array --
+// the shader's uBase, read through the palette on unit 1 -- the tile map to
+// unit 7 and the neighbourhood keys -- one zero texel: this lane has no
 // restored atlas, so uNbhd is 0 and the shader never reads it -- to unit 8.
-// THE MIP CHAINS (tagpu_chain.h) are the DLL's alone: the lab draws at uLod 0
-// with uRestChain 0, today's picture, and names both chain samplers on unit
-// 16 -- a sampler2D, as they are. Never on unit 2, 7 or 8: those hold
-// usampler2D textures, and two sampler types on one unit fail WebGL's
-// draw-time validation.
+// THE MIP CHAINS (tagpu_chain.h) and the restored atlas are the DLL's alone:
+// the lab draws at uLod 0 with uRestored 0 and uRestChain 0, today's picture,
+// and names those three samplers on unit 16 -- a sampler2DArray, as they are.
+// Never on unit 2, 7 or 8: those hold usampler2D textures, and two sampler
+// types on one unit fail WebGL's draw-time validation.
 function classicTerrain(gl, vs, fs, atlas, r8, pal) {
   const prog = program(gl, vs, fs, "terrain");
   const vao = gl.createVertexArray();
@@ -175,10 +192,13 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
                                 "uCols", "uArea", "uMirror", "uAtlasN", "uNbhd", "uNbCols",
                                 "uTileMap", "uKeys",
                                 "uLambert", "uRestored", "uBase", "uHDim",
-                                "uShadowOn", "uLod", "uRestChain", "uChainBase", "uChainRest"]);
+                                "uShadowOn", "uLod", "uRestChain", "uChainBase", "uChainRest",
+                                "uAtlasRGB", "uAtlasCols", "uPageRows"]);
   nameShadowUnits(gl, prog);
-  tex2D(gl, 16, gl.RGBA8, atlas.w, atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
-        baseAtlas(pal, r8, atlas.w, atlas.h, null, 0));
+  // the terrain's base atlas is its INDICES, which the shader looks up in uPal
+  // (taBase), on one page: every row of the pack's atlas is layer 0. Unit 16
+  // also stands in for the samplers this lab never reads (uAtlasRGB, the chains).
+  texArray(gl, 16, gl.R8, atlas.w, atlas.h, 1, gl.RED, gl.UNSIGNED_BYTE, r8);
   const tmTex = tex2D(gl, 7, gl.R16UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_SHORT, new Uint16Array([0]));
   tex2D(gl, 8, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
   gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
@@ -215,6 +235,8 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       gl.uniform2i(U.uArea, areaC, areaR);
       gl.uniform1i(U.uMirror, 0);
       gl.uniform1i(U.uAtlasN, atlas.tiles);
+      gl.uniform1i(U.uAtlasCols, atlas.cols);
+      gl.uniform1i(U.uPageRows, Math.max(1, Math.floor(atlas.h / atlas.pitch)));
       gl.uniform1i(U.uNbhd, 0); gl.uniform1i(U.uNbCols, 1);
       gl.uniform1i(U.uTileMap, 7); gl.uniform1i(U.uKeys, 8);
       // the lab's counts: the cells on the map, and of those the ones whose
@@ -253,6 +275,7 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
       gl.uniform1i(U.uLod, 0); gl.uniform1i(U.uRestChain, 0);
       gl.uniform1i(U.uChainBase, 16); gl.uniform1i(U.uChainRest, 16);
+      gl.uniform1i(U.uAtlasRGB, 16);
       gl.bindVertexArray(vao);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
       gl.bindVertexArray(null);

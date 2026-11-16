@@ -45,14 +45,16 @@ static void dump(const char* name, const TASIM_WIRE* w, const TASIM_WIRE_ERRS* e
     for (i = 0; i < w->npl; i++)
     {
         const TASIM_WIRE_PLAYER* p = &w->pl[i];
-        printf("player %d metal %d energy %d aioff %d hasstore %d mstore %08x estore %08x\n", p->slot, p->metal,
-               p->energy, p->aioff, p->hasstore, (unsigned)bits(p->mstore), (unsigned)bits(p->estore));
+        printf("player %d metal %d energy %d share %d %d aioff %d hasstore %d mstore %08x estore %08x\n", p->slot,
+               p->metal, p->energy, p->share[0], p->share[1], p->aioff, p->hasstore, (unsigned)bits(p->mstore),
+               (unsigned)bits(p->estore));
     }
     for (i = 0; i < w->nunits; i++)
     {
         const TASIM_WIRE_UNIT* u = &w->units[i];
-        printf("unit %d [%s] %d %d %d %d %d %d %d %d %d %d %d at %d slot %d\n", i, u->type, u->owner, u->x, u->y,
-               u->height, u->facing, u->health, u->stance, u->nano, u->kills, u->fire, u->stock, u->at, u->slot);
+        printf("unit %d [%s] %d %d %d %d %d %d %d %d %d %d %d at %d slot %d cloak %d\n", i, u->type, u->owner, u->x,
+               u->y, u->height, u->facing, u->health, u->stance, u->nano, u->kills, u->fire, u->stock, u->at, u->slot,
+               u->cloak);
     }
     for (i = 0; i < w->nfeats; i++)
     {

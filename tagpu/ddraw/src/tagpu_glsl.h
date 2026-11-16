@@ -68,8 +68,11 @@
    flash and the feature shadows.
 
    uFog bit0 = fog on, bit1 = this draw HIDES in grey rather than darkening:
-   the engine never draws units or effects outside LOS, while terrain,
-   features and wreckage stay visible, in grey (TAGPU_GLSL_FOG_GREY_RGB). */
+   the effects' rule, which the engine gates by LOS at each effect's own
+   point. Terrain, features, wreckage and units stay visible in grey
+   (TAGPU_GLSL_FOG_GREY_RGB): whether a unit draws at all is decided per unit
+   by the engine's draw list (0x465AC0), and the overlay 0x4848E0 then greys
+   the unit's pixels that lie in grey cells, so a unit never takes bit1. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform usampler2D uFogSrc;\n"   /* R32UI: 16 cells a texel, 2 bits each */ \
     "uniform ivec2 uFogSize;\n"       /* the map in cells; (0,0) = no source */ \
@@ -267,7 +270,7 @@
    that fragment to one of the two quads sharing the edge -- measured on this
    stack, to the upper/left one -- and its interpolated u (or v) is then
    exactly u1, which VK_FILTER_NEAREST resolves to the first texel of the NEXT
-   atlas cell. On terrain that is the unrelated tile 64 cells later (the blue
+   atlas cell. On terrain that is the unrelated tile one atlas row on (the blue
    hairlines along tile edges at zoom 0.25); on a GAF sprite it is the packer's
    gutter (the black hairline down the right of every tree).
 

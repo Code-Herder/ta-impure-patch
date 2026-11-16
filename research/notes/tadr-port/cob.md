@@ -724,10 +724,8 @@ failed separate refusal UI samples, a stale catalogue and trace reach. Focused n
 replays now pass after correcting those paths. The completed whole run passes all 37 fixtures,
 1480 checks, 519 exact paused comparisons and all 37 image gates, reaching all 11 changed
 function/region requirements. The passing note is on `cfe3771f`; `landing --check` passes.
-All 17 resource image gates remain strict. Only the native stock secondary-orders control has
-the owner-approved cosmetic-pool known-gap option, accepting zero bytes at this run's T301
-checkpoint; the earlier T451 gap remains reproduced. Cosmetic-pool snapshot layouts remain
-separate work; see [recorder completeness](demo-recorder-completeness.md).
+All 17 resource image gates remain strict outside the engine's effect pools, which the
+recording does not carry; see [recorder completeness](demo-recorder-completeness.md).
 `resource-core-upgrade` and `stock-resource-mex` enable the existing COB trace lever
 only in unrecorded native save/load preflights, then restore it before L. Their coverage
 exercises allocator observation in both builds without displacing its recorder counter.

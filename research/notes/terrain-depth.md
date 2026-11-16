@@ -696,10 +696,47 @@ Three things fall out of §2 exactly as predicted:
   failure mode is that bug, reproduced and fixed.
 
 **The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
-nothing changes it afterwards. A `GL_TEXTURE_2D_ARRAY` is not viable — Two Continents
-has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` texture of
-32×32 cells on a **34-texel pitch**, 64 per row: **2176×2720 for 5062 tiles (5.9 MB)**,
-sized from the count and capped at `GL_MAX_TEXTURE_SIZE`. The spare texel on each side
+nothing changes it afterwards. A layer a tile is not viable — Two Continents has **5062
+tiles** against the usual 2048-layer cap — so the tiles are 32×32 cells of R8 on a **34-texel
+pitch**, as many a row as the device's 2D image limit allows and **at most 256**, and the rows go
+in **pages** of as many rows as the limit allows, a page a layer of a 2D array image
+(`tagpu_terr.h`: `TAGPU_TERR_CELL_PITCH`, `TAGPU_TERR_ATLAS_COLS`, `TAGPU_TERR_MAX_PAGES`,
+`tagpu_terr_atlas_layout`): `cols = min(256, limit / 34)`, `pageRows = min(rows, limit / 34)`,
+tile `t` at column `t % cols` of row `r = t / cols`, which is row `r % pageRows` of layer
+`r / pageRows`. The vertex stage splits the index the same way by `uAtlasCols` and `uPageRows`,
+which the consumer takes from the hand-over's `atlasW / 34` and `atlasPageH / 34`. **The tile map
+names a tile by a `u16`**, so a map has at most 65,536 tiles, which fill at most 256 rows of 256:
+on a device whose limit is 8704 or more every map is **one page**, 8704 wide and never taller —
+**8704×680 for Two Continents' 5062 tiles (5.9 MB)**, 8704×8670 for 6P Wild Hunt's 65,029 (75.5 MB;
+a TA Zero map from TA Forever's vault, 254×257 cells) — and a compile-time check in `tagpu_terr.h`
+holds `65536 / 256 × 34 ≤ 8704`. **Under 8704 a map with more tiles than the limit's square
+pages**: a device of 8192 holds 240 × 240 = 57,600 tiles a page and puts Wild Hunt on 2 pages,
+one of Vulkan's floor, 4096, holds 120 × 120 = 14,400 and puts it on 5, and 5 is the most any map
+takes at the floor (547 rows of 120), under `TAGPU_TERR_MAX_PAGES`' 8. A device under the floor
+is not a conformant Vulkan device and gets no atlas (`terr: a 2D image limit of L is under
+Vulkan's floor of 4096 - no terrain atlas for N tiles`).
+**The CPU atlas is one tall image whatever the device** — the virtual atlas, `cols` wide and every
+row tall — and only the device's copy is paged: the upload sends each page's band of rows into
+its layer (`tagpu_vk_stage_copy_layer`), so the producer, the restore frames and the dump checker
+keep one coordinate system, and a row's page is arithmetic on its `y`. **There is no fallback to
+the engine's terrain on Vulkan**: the Vulkan renderer never presents the engine's 8bpp frame, so a
+terrain pass that draws nothing leaves the viewport black (MEASURED 2026-11-14 on the reference
+setup: 6P Wild Hunt with the atlas refused, 88.5 % of the viewport black), which is why every map
+has to fit every device rather than be refused by one.
+A device change that moves the layout is a new layout of the same map, so it drops the running
+restore with the atlas: the restore's frames and neighbourhoods are rectangles in the old one.
+Both producers take the layout from that one function — `tagpu_terr.c` `ensure_atlas` for the
+game, `tagpu_wikiworld.c` for the wiki's stage — and the consumer, `tagpu_vk_terr.c`'s `prepare`,
+refuses a hand-over whose width is not whole 34-texel columns (1 to 256) or whose page is not whole
+rows, whose width or page height is past the device's own limit, which needs more than
+`TAGPU_TERR_MAX_PAGES` pages, or which holds more tiles than its cells (`vk: terr: a WxH tile atlas
+in pages of P is outside what this pass carries - nothing drawn`).
+`tagpu_vk.on`'s `maxdim=N` plays a smaller device on a larger one (`tagpu_vk_max_image_dim`
+reports `min(limit, N)`, never under 4096), which is how the paged layouts are run here. `ensure_atlas` itself
+never clamps: every tile of the set has its cell (`s_atlasN` is the set's count), so the tile
+map's `K cells past the atlas` (`terr: tile map WxH copied …`) counts only cells whose index is
+at or above the set's own count — 0 on 6P Wild Hunt, MEASURED 2026-11-14 on the reference
+setup. The spare texel on each side
 is the cell's own outermost row/column repeated — a guard rail, not padding, and §7.6's
 fifth failure mode is why. A map change is a new level — the packet's `level_gen`
 moving — or the `TILE_SET` pointer or its count moving. `TILE_SET` is as immutable as
@@ -747,13 +784,22 @@ where the supersampling stops being enough.
   while the base chain is not current (`s_lodOk`).
 - **The layout.** Each terrain atlas — the base atlas, and under Classic++ the restored one (per
   tile or per neighbourhood key) — has a separate 5-level RGBA8 image with one 16-texel **cell** per
-  34-texel atlas cell, on the atlas's own grid (`cols = atlasW/34`, `rows = atlasH/34`; an atlas
-  that is not a whole multiple gets no chain). Image level `k` holds tile level `k+1`, `16 >> k`
+  34-texel atlas cell, on the atlas's own grid (`cols = atlasW/34`, `rows` a page's, and a layer
+  a page as the atlas has; an atlas that is not a whole multiple gets no chain). Each page is
+  reduced by its own dispatch through its own descriptor set, page `p`'s level views naming layer
+  `p` alone, and the oracle reads each of its 16 cells from the layer its row is on. Image level `k` holds tile level `k+1`, `16 >> k`
   texels a cell side. A whole-atlas chain would mix tiles from level 1 on, because the 34-texel
   pitch puts a 2×2 block across the guard texel and the neighbour. A cell is 341 texels against
-  the atlas cell's 1 156, so a chain is 29.5 % of its atlas: 64 × 80 cells, 7.0 MB, for Two
-  Continents' per-tile base; 209 × 209 cells, about 57 MiB, for its 192 MB neighbourhood atlas
-  [the sizes' arithmetic].
+  the atlas cell's 1 156, so a chain is 29.5 % of an RGBA8 atlas on its grid: 256 × 20 cells,
+  7.0 MB, for Two Continents' base (whose R8 atlas is 5.9 MB); 256 × 255 cells, 89 MB, for 6P
+  Wild Hunt's (`chain base 4096x4080 (5 levels) reduced, 65280 cells`); 209 × 209 cells, about
+  57 MiB, for Two Continents' 192 MB neighbourhood atlas [the sizes' arithmetic].
+- **The base chain reads indices.** The base atlas is the tile atlas's R8 indices, so its
+  reduction runs the reducer's table form 2: each level-0 texel is looked up in the engine's
+  table, 256 words the pass writes into the slot's reducer buffer at offset 256
+  (`CNT_PALOFF` in `tagpu_vk_terr.c`) and binds as binding 7 of the base chain's set, and is then
+  reduced as an RGBA8 texel of alpha 255 ([modules/vulkan-backend](modules/vulkan-backend.html),
+  *The mip chains' reducer*). The restored chain reads its RGBA8 atlas directly.
 - **The reduction** is the integer mean of the level-0 bytes at every level, one rounding a level
   and none compounded: over a level-L block `B` and its texels `O` with alpha ≥ 128,
   `rgb = (Σ_O rgb + |O|/2) / |O|` and `a = (|O|·255 + |B|/2) / |B|`. A base tile has no hole, so it
@@ -1013,7 +1059,7 @@ a quad's far edge falls exactly on a fragment centre. The rasteriser must give t
 fragment to exactly one of the two quads sharing the edge, and — measured on this stack,
 not assumed — it gives it to the **upper/left** one. Its interpolated `u`/`v` is then
 exactly `u1`/`v1`, and `GL_NEAREST` reads `floor(u1·W)`: the first texel of the next
-atlas cell. On terrain the next cell down the atlas is tile index **+64**, an unrelated
+atlas cell. On terrain the next cell down the atlas is the tile one atlas row on, an unrelated
 tile, so the sample is an arbitrary other piece of the map — blue over forest, because
 Two Continents' tile set is mostly water. On a GAF sprite it is the shelf packer's
 **gutter**, which `glTexImage2D(…, NULL)` had never written: index 0, a real palette
@@ -1032,7 +1078,7 @@ why every earlier check, all of them at or near 1×, was clean.
 
 **Two fixes, because there are two halves.** *Padding* stops the sample leaving the cell:
 every terrain cell now sits on a **34-texel pitch with its outermost row and column
-repeated on all four sides** (`CELL_PITCH`, atlas 2176×2720 for 5062 tiles), and every
+repeated on all four sides** (`CELL_PITCH`; Two Continents' 5062 tiles make an 8704×680 atlas), and every
 GAF frame gets the same 1-texel border (the packer advances `w+2`/`h+2` and uploads the
 bordered block, instead of reserving one gutter and never writing it). That is also what
 a **filtered** sampler will need the day this stops being `GL_NEAREST`, which is the

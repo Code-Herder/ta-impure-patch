@@ -433,10 +433,10 @@ landing tier asks each build that compiles a changed function to reach it. The s
 scenario where no weapon fires -- `resource-snapping.json`'s setup, the human seat's builders and
 one idle combat unit, the AI seat a lone solar collector across the map, with the advanced
 constructor patrolling to the map's corner and back all level so that the declined blocks carry
-images and the stock build reaches the frames' plain path -- because a seek on the stock-limits build leaves the engine's
-own explosion, debris and flying-piece pools empty (the owner-approved known gap in
-`demo-recorder-completeness.md`, scoped to `stock-secondary-orders`): a battle there fails the
-strict images gate whenever its T1 finds an explosion alive.
+images and the stock build reaches the frames' plain path. A seek empties the engine's
+explosion, debris and flying-piece pools, which the recording does not carry; the images gate
+classes those bytes as effects in every recording (`demo-recorder-completeness.md`, *The engine's
+effect pools are not recorded*).
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` or `RBF_REFRESH` on a block that

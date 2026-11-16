@@ -96,7 +96,11 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   over the whole viewport, so drawing it with no key fill to invert against would hide every
   engine overlay and still look right. Arming `terr.on` after launch does nothing visible —
   relaunch. Expect `terr: atlas built
-  2176x<h> for <n> tiles`, `terr: height grid WxH uploaded` (without it Classic++ terrain draws
+  <w>x<h> for <n> tiles, <p> page(s) of <r> rows` (`<w>` is 8704 — 256 tiles a row, `<h>` at most
+  8704 for any map, one page — on a device whose 2D image limit is 8704 or more, and 34 × ⌊limit /
+  34⌋ wide under it, with a map of more tiles than that square split into pages of ⌊limit / 34⌋
+  rows, at most 5 at the floor of 4096; the device draws a page a layer, and `vk: terr: restoring
+  the tile atlas HERE - N tiles over WxH xP` names the pages), `terr: height grid WxH uploaded` (without it Classic++ terrain draws
   unlit), `terr: tile map WxH copied for level N (serial S, K cells past the atlas)` once a level,
   and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
   restored atlas. Its heartbeat, every 60 frames: `terr: grid=CxR tile0=(x,y) frac=(fx,fy)
@@ -168,7 +172,7 @@ fixture that only arms the pass produces no picture:
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
 | labels | `+showranges`, typed into the chat |
 | cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement. The one draw with the fog off: over fogged ground it stays undarkened, which is what an A/B of the post-fog draw needs on screen. `mark.on=nocursor` hands both back to the engine and draws neither |
-| formation dots | `order.on` too, and a **held** formation drag: Interface Type 1 with two or more mobile units selected and no unit under the press, `pmove:x0,y0`, `down:rbutton`, `pmove:x1,y1`, capture, `up:rbutton` (or Move armed and the left button, at either type); `tagpu_formation.off` or a bare launch (`tagpu_defaults.off`) turns the move off |
+| formation dots | `order.on` too, and a **held** formation drag: two or more mobile units selected and no unit under the press, `pmove:x0,y0`, `down:rbutton`, `pmove:x1,y1`, capture, `up:rbutton` (or Move armed and the left button, at either type); `tagpu_formation.off` or a bare launch (`tagpu_defaults.off`) turns the move off |
 
 `scenarios/marker-mix.json` is the fixture that opens all of them except the labels. It has
 three tanks at 30, 65 and 100 % health and a Commander, on open ground
@@ -213,12 +217,15 @@ Driving the camera at a zoom other than 1:
   the view centre and `99999 99999` the extent's SE corner (`8768 8864` on Painted Desert at
   1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
   area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
-- **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
-  Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back cuts to the floor
+- **The mega map is the other wheel** (the mod's play option `mega_map_wheel`, the *Mega map wheel*
+  row): Ctrl+wheel for the stock game, Escalation, TA Zero and Twilight, the plain wheel for Total
+  Mayhem and ProTA, and the player's `mega_map_wheel=wheel|ctrl+wheel` in `profiles\<id>.ini` over
+  either. The game logs the rule in force on `profiles: <mod> <ver>: … wheel=<allowed>/<default>`. A mega notch back cuts to the floor
   with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
   left, holding the point under the pointer (`megazoom=mouse`) or centring it (`megazoom=tadr`; the in-game panel's *Mega map zoom in* row). A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
-  wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
-  control launch always has Ctrl+wheel as the mega map.
+  wheel:-1 up:ctrl` (the shield must be on), or a bare `wheel:-1` where the plain wheel is the
+  binding (Mayhem or ProTA under `--defaults`). The binding counts only under `--defaults`; a tacli
+  control launch always has Ctrl+wheel as the mega map, whatever the mod.
 - **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
   extent fits the true viewport, bounded so the widened rect's four edges stay int16. The game
   thread logs it when it changes (a level's first draw, a resize): `zoom: floor 0.0346 (fit 0.0346)
@@ -237,7 +244,7 @@ Driving the camera at a zoom other than 1:
   `research/notes/modules/icons.md`). Three `impure.cfg` keys, read live, no menu row:
   `iconscale` (100, 75, 125, 150, 200: size, percent of BAR's), `icondist` (100, 50, 75, 150, 200:
   where icons take over, percent of BAR's distance) and `iconfade` (33, 0, 67: the fade band; 0 is
-  a hard switch). Like `wheel=`, the store counts only under `--defaults`; a tacli control launch
+  a hard switch). Like the wheel's binding, the store counts only under `--defaults`; a tacli control launch
   draws at 100/100/33. With those, 1x shows no icon on any frame up to about 2600 px tall, and at
   1920x1080 COMBAT starts to fade in below z 0.409 and is opaque below 0.274 (the module's table
   has every class). Read `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z=
@@ -402,7 +409,7 @@ of ours draws, no golden source is captured, and every `tacli` verb except `eye`
 
 | lever | what |
 |---|---|
-| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel) |
+| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel), and `maxdim=N`, a test lever read once per device before the first image is sized (arm before launch): every pass sees the device's 2D image limit as `min(limit, N)`, never under 4096 (`vk: the device's 2D image limit L, played as N`) — the smaller-device layouts run on a larger card. `tacli arm <i> vk.on=maxdim=8192` |
 | `vk.off` | **ignored** on the Vulkan backend (the log says so) |
 | `tagpu_vk.gpus` | the GPU row's device list (one launch behind); the choice is `gpu=` in `impure.cfg` — `references/modules.md` |
 | `ss.off` | the 2x supersample off, and the lever over the Supersampling row. Live: the world target (`gw*ss x gh*ss`) is rebuilt on the next frames — `vk: world: frame N: 1024x768 target (1024x768 at ss=1)` after arming it on a running game |
@@ -481,7 +488,7 @@ that map's size.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
 - `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the session goes to GDI.
 - `tagpu_vkfull.on`: the driver's own no, `VK_ERROR_OUT_OF_DEVICE_MEMORY` from `vkAllocateMemory`. A number K (or nothing, 0): K allocations pass, one is refused, the file is consumed. `keep`: every one. `wiki`: only while the wiki's stage is being prepared. An allocation is what it needs to meet, so a rebuild is the usual way in: write it beside `tagpu_passrefuse.on`.
-- `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print.
+- `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print, so a current host refuses it. `--old-dll` is an Impure build from before the fingerprint (v0.5's release DLL), which a current host refuses as an older build; `stock` and `older` check the refusal and the host's battle-room line.
 - `tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]` plays the screen on a private display and holds the run lock. `hosted` alone downloads from the real hosts, so it runs only when named.
 
 ## The heartbeats: what must read zero

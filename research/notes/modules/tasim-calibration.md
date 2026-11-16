@@ -896,6 +896,7 @@ GameTime in every lane-launch (MEASURED on the first packed run: all four lane-l
 at GameTime 2, 302, 632 and 1052 to the same values), and two runs share their wind whenever their
 GameTime windows overlap, in one batch or in two launches. The applier therefore seeds the simulation RNG,
 the game thread's CRT stream, the wind and the meteors from the wire's seed at every apply that clears,
+and puts the shatter's stream `s_shatterRng` back at its start, a constant, so R6 finds it at run 0's value,
 after the clear and before the creates (`tagpu_scenario.c`, `apply_now`; `tagpu_patches.c`,
 `tagpu_seed_run`), and draws the seed's wind there and then, so it is in force from step t0 + 1's
 projectile tick on (*The wind at the apply* there): from the apply on, a run's or a batch's

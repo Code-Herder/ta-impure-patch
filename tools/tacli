@@ -163,7 +163,7 @@ def ere_quote(s: str) -> str:
 # everything else in the Steam dir is symlinked.
 PRIVATE_FILES = {
     "ddraw.dll", "totala.ini",
-    "TotalA.exe",  # symlinked to Steam, but listed so we handle it explicitly
+    "TotalA.exe",  # a copy of the Steam exe, never a link: own_exe says why
     # The DLL's settings store (renderers.md 2.10b), per instance: a symlink
     # to the template's would be one store shared by every instance.
     "impure.cfg", "impure.cfg.tmp",
@@ -575,9 +575,9 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         # ErrorLog.txt is TA's crash report. It matches no other rule here — not
         # private, not tagpu*, and .txt rather than .log — so without this it
         # would be symlinked through whenever the template carried one, and every
-        # instance would share a single file. TA writes it next to the EXE, and the exe is symlinked
-        # into each gamedir, so leaving it out of the mirror is all it takes to
-        # make it per-instance by construction.
+        # instance would share a single file. TA writes it next to the EXE, which is in
+        # the gamedir, so leaving it out of the mirror is all it takes to make it
+        # per-instance by construction.
         # log/ is the DLL's log directory (tagpu_log.h): one per gamedir, created by the
         # DLL at attach; a template that carries one must not share it.
         # tacli-state/ holds the instance's registry store (seed_regstore): one linked
@@ -607,13 +607,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
             continue
         dst.symlink_to(src)
 
-    # TotalA.exe: link to the pristine Steam executable (never modified; patches are
-    # applied at runtime from the fork's DllMain).
-    exe_src = (TEMPLATE_GAMEDIR / "TotalA.exe")
-    exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
-    exe_dst = inst.gamedir / "TotalA.exe"
-    if not (exe_dst.exists() or exe_dst.is_symlink()):
-        exe_dst.symlink_to(exe_src)
+    own_exe(inst)
 
     write_totala_ini(inst, sound)
     ensure_store(inst)
@@ -928,6 +922,35 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
                     + "".join(f"{k}={v}\r\n" for k, v in prefs))
 
 
+def own_exe(inst: Instance):
+    """TotalA.exe as the instance's own copy of the Steam executable, never a link. The game
+    renames and replaces its own exe -- the Mods screen's large-address swap (tagpu_modmem.c)
+    for a mod whose entry says `memory`, and the swap's rollback -- and Wine's MoveFileExW
+    and DeleteFileW act on a link's TARGET (MEASURED 2026-11-14: a rename of a link moved the
+    file it named and left the link dangling), so a link hands those to the Steam install
+    every instance runs. Run at create and at every launch: a link an older tacli left is
+    replaced, and an instance's own copy, swapped or not, is kept as the player's would be."""
+    exe_src = TEMPLATE_GAMEDIR / "TotalA.exe"
+    exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
+    exe_dst = inst.gamedir / "TotalA.exe"
+    if not exe_src.is_file():
+        die(f"no TotalA.exe to give {inst.name}: {exe_src} is missing -- check the Steam install "
+            f"against pristine/manifest.md5")
+    if exe_dst.is_symlink():
+        exe_dst.unlink()
+    if not exe_dst.exists():
+        # a swap the game left half done keeps the exe under one of these names; the DLL names it
+        # to the player, and a fresh copy here would hide it
+        left = [n for n in ("TotalA.exe.4gb-old", "TotalA.exe.4gb.tmp") if (inst.gamedir / n).exists()]
+        if left:
+            die(f"{inst.name} has no TotalA.exe but has {', '.join(left)}: a large-address swap was "
+                f"interrupted; rename the file back to TotalA.exe, or `tacli rm {inst.name}`")
+        tmp = exe_dst.with_name("TotalA.exe.tacli-tmp")
+        shutil.copyfile(exe_src, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, exe_dst)
+
+
 def deploy_dll(inst: Instance):
     """Pin a copy of the fork: rebuilds never disturb a running instance."""
     if not BUILT_DLL.exists():
@@ -1141,16 +1164,21 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # `Metal`/`Energy` are TA's starting resources, and measured 2026-09-01 they set
 # the player's **storage** as well as the level — which is exactly why writing
 # them into a running game does not stick (the engine recomputes storage from
-# owned units every tick and clamps the level to it). `AllyGroup`: seats with the
-# same group start allied -- 1, 1 and 2 allied players 0 and 2 and not 1, by the
-# player records' +0x108 bytes (measured 2026-11-11; scenarios/sensor-view.json)
-# -- and 5 is no group: every seat read 5 before it was written, and the SKIRMISH
-# Start's alliance test passes over it (0x479760, SCN_NO_ALLY).
+# owned units every tick and clamps the level to it).
+# `AllyGroup`: the skirmish settings load reads `Player%dAllyGroup` (format at
+# 0x5043C4) at 0x430D03 into the settings entry's +8, 5 when the key is absent
+# (0x430D3C); the seat fill allies two seats whose groups are equal when the other
+# seat's controller is non-zero and the group is not 5 (0x47A863..0x47A872), so 5
+# is "no group" (DISASSEMBLED 2026-11-11). MEASURED 2026-11-11
+# (scenarios/sensor-view.json): groups 1, 2, 1 on seats 0..2 gave the player
+# records' +0x108 rows 01 00 01 / 00 01 00 / 01 00 01. The SKIRMISH Start's alliance
+# test passes over 5 too (0x479760, SCN_NO_ALLY).
 PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy", "AllyGroup")
+PLAYER_SPEC = "N:controller[:side[:color[:metal[:energy[:allygroup]]]]]"
 
 
 def player_keys(spec: str):
-    """`N:controller[:side[:color[:metal[:energy[:ally]]]]]` -> registry values to write.
+    """`N:controller[:side[:color[:metal[:energy[:allygroup]]]]]` -> registry values to write.
 
     An **empty field is "leave that key alone"**, so a colour can be set without
     naming a side (`0:1::3`) — the fields are positional and there is no other
@@ -1161,9 +1189,9 @@ def player_keys(spec: str):
     if not (2 <= len(parts) <= len(PLAYER_KEYS) + 1 and parts[0].isdigit()
             and parts[1].isdigit()
             and all(p == "" or p.isdigit() for p in parts[2:])):
-        die(f"--player {spec!r}: say "
-            f"N:controller[:side[:color[:metal[:energy[:ally]]]]]], numbers only "
-            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE)")
+        die(f"--player {spec!r}: say {PLAYER_SPEC}, numbers only "
+            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE, allygroup "
+            f"0..4 or 5 for none)")
     names = PLAYER_KEYS
     return [(f"Player{parts[0]}{names[i - 1]}", parts[i])
             for i in range(1, len(parts)) if parts[i] != ""]
@@ -2080,6 +2108,7 @@ def _launch(args) -> dict:
         dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
             f"killed {killed} stale dplaysvr.exe (port {port} freed)" if killed
             else f"no stale dplaysvr.exe on port {port}")
+    own_exe(inst)
     if not args.keep_dll:
         deploy_dll(inst)
     apply_prefix_settings(inst)
@@ -4876,6 +4905,7 @@ def _scn_entity_body(node, where, default=None):
                            aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
         "fire": _scn_str(node, "fire", where, choices=SCN_FIRES, default=d.get("fire")),
         "stock": _scn_int(node, "stock", where, 0, SCN_STOCK_MAX, d.get("stock")),
+        "cloaked": _scn_bool(node, "cloaked", where, d.get("cloaked")),
         "orders": _scn_orders(node, where, d.get("orders")),
     }
 
@@ -4936,7 +4966,7 @@ def _scn_setup(doc, label):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
                   optional=("controller", "side", "color", "metal", "energy", "ai",
-                            "storage", "ally"))
+                            "storage", "ally_group", "share_metal", "share_energy"))
         slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
@@ -4949,8 +4979,10 @@ def _scn_setup(doc, label):
             "color": _scn_int(p, "color", pw, 0, 9),
             "metal": _scn_int(p, "metal", pw, 0, 1000000),
             "energy": _scn_int(p, "energy", pw, 0, 1000000),
-            # the skirmish key's Player<N>AllyGroup: seats of one group start allied
-            "ally": _scn_int(p, "ally", pw, 0, 5),
+            # 5 is the engine's "no group" (PLAYER_KEYS), so a scenario names 0..4.
+            "ally_group": _scn_int(p, "ally_group", pw, 0, 4),
+            "share_metal": _scn_int(p, "share_metal", pw, -1, 1000000),
+            "share_energy": _scn_int(p, "share_energy", pw, -1, 1000000),
             # "off": the console's AI toggle on an AI seat at the apply; the seat's units
             # keep their orders and no planner runs
             "ai": _scn_str(p, "ai", pw, choices=("off",)),
@@ -5134,7 +5166,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: groups[{i}]"
         _scn_keys(g, w, required=("at", "composition", "pattern"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "fire", "stock", "orders"))
+                            "kills", "stance", "fire", "stock", "cloaked", "orders"))
         given = _scn_str(g, "id", w, raw=True)
         gid = claim(given or f"group{i}", "group", w, bool(given))
         composition = []
@@ -5158,7 +5190,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: units[{i}]"
         _scn_keys(u, w, required=("type", "pos"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "fire", "stock", "orders"))
+                            "kills", "stance", "fire", "stock", "cloaked", "orders"))
         given = _scn_str(u, "id", w, raw=True)
         norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
                               "type": _scn_type(u, w, unit_names, "unit", lenient),
@@ -5267,6 +5299,7 @@ def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
             "health": body["health"], "nanoframe": body["nanoframe"],
             "kills": body["kills"],
             "stance": body["stance"], "fire": body["fire"], "stock": body["stock"],
+            "cloaked": body["cloaked"],
             "orders": body["orders"], "group": group}
 
 
@@ -5374,6 +5407,9 @@ def _scn_wire(exp) -> str:
         keys = []
         if p["metal"] is not None or p["energy"] is not None:
             keys += [f"metal={_f(p['metal'])}", f"energy={_f(p['energy'])}"]
+        if p.get("share_metal") is not None or p.get("share_energy") is not None:
+            keys += [f"share_metal={_f(p.get('share_metal'))}",
+                     f"share_energy={_f(p.get('share_energy'))}"]
         if p.get("ai") == "off":
             keys.append("ai=off")
         if p.get("storage") is not None:
@@ -5388,9 +5424,11 @@ def _scn_wire(exp) -> str:
                  "<stance> <nano%> <kills> <fire> <stock>")
     for i, u in enumerate(exp["units"]):
         # `at` and `slot` (optional trailing keys) are the packed calibration lane's (tools/tasim),
-        # which sets them on the expanded units; the JSON scenario schema has neither
+        # which sets them on the expanded units; the JSON scenario schema has neither. `cloak=1` is
+        # `cloaked`, a key rather than a column so that a wire without it keeps its bytes
         keys = (f" at={u['at']}" if u.get("at") is not None else "") + \
-               (f" slot={u['slot']}" if u.get("slot") is not None else "")
+               (f" slot={u['slot']}" if u.get("slot") is not None else "") + \
+               (" cloak=1" if u.get("cloaked") else "")
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
                      f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
                      f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])} "
@@ -5840,17 +5878,21 @@ SCN_TNTFILE = 0x204
 
 
 def _scn_player_flags(setup) -> list:
-    """setup.players -> the `--player N:controller[:side[:color[:metal[:energy[:ally]]]]]` launch flags.
+    """setup.players -> the `--player` launch flags (PLAYER_SPEC).
 
     One numbering, one path: the same strings a human would type, so a scenario
     and a hand-driven launch cannot disagree about what slot 0 means.
+
+    The ally group is always written, 5 ("no group") when the scenario names
+    none: the instance's registry store persists across loads, so a seat left
+    alone would inherit the previous scenario's alliance.
     """
     flags = []
     for p in setup["players"]:
+        group = SCN_NO_ALLY if p["ally_group"] is None else p["ally_group"]
         fields = [SCN_CONTROLLERS[p["controller"]],
                   "" if p["side"] is None else SCN_SIDES[p["side"]],
-                  p["color"], p["metal"], p["energy"],
-                  SCN_NO_ALLY if p.get("ally") is None else p["ally"]]
+                  p["color"], p["metal"], p["energy"], group]
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
@@ -5962,7 +6004,7 @@ def _scn_start_refusal(inst: Instance):
     if first is not None and all(g == first for _, g in enabled):
         return (f"every enabled seat ({', '.join(str(i) for i, _ in enabled)}) is in alliance group "
                 f"{first}: the Start refuses it with \"All players may not be in the same allied "
-                f"group.\" (0x479760); give one seat another group, or none (omit its ally)")
+                f"group.\" (0x479760); give one seat another group, or none (omit its ally_group)")
     return None
 
 
@@ -7710,11 +7752,12 @@ def build_parser():
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
                    help="per-player unit cap in totala.ini (20-1500; 1500 when unset)")
     l.add_argument("--player", action="append",
-                   help="N:controller[:side[:color[:metal[:energy[:ally]]]]] (controller "
+                   help=f"{PLAYER_SPEC} (controller "
                         "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "
                         "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
                         "are the skirmish starting resources, and set storage too. "
-                        "Ally is the seat's AllyGroup: seats of one group start allied")
+                        "Seats with the same allygroup 0..4 start allied; 5 is no "
+                        "group.")
     l.add_argument("--seatai", type=seatai_type, default=None, metavar="SEATS",
                    help="the computer seats ImpAI plays, written into impure.cfg's `seatai` "
                         "for this launch: `none`, or seats 0-9 comma-separated (1,3). Every "

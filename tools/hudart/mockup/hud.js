@@ -84,6 +84,8 @@ const HUD = (() => {
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
+  // the depth of a nine-slice part's top edge: a plate's title band, which a title is centred in
+  const band = part => K[part] && K[part].kind === 'nine' ? K[part].slice[0] / K[part].scale : 0;
   // a part at box b; `cls` adds classes (hot, pressed, off, face), `data` adds data- attributes
   function art(part, b, inner = '', cls = '', data, style = '') {
     const k = K[part];
@@ -278,7 +280,7 @@ const HUD = (() => {
     const ty = st.H - st.frame.bottom - D.h - T.gap - T.h, ps = st.seats, wn = full ? 2 : 0;
     const h = Pk.pad + Pk.title.h + ps.length * (R.h + R.gap) + (wn ? Pk.warn.pad[1] + wn * Pk.warn.line + Pk.warn.pad[3] : 0) + Pk.pad;
     const b = { x: st.frame.panel + D.transport.l, y: ty - Pk.gap - h, w: Pk.w, h };
-    let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: Pk.pad, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: Pk.title.h }, Pk.title.style);
+    let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: 0, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: band(Pk.part) }, Pk.title.style);
     ps.forEach((p, k) => {
       const y = Pk.pad + Pk.title.h + k * (R.h + R.gap), rb = { x: Pk.pad, y, w: Pk.w - 2 * Pk.pad, h: R.h }, F = frame(rb.w, R.h);
       // a player out of the game cannot be taken: the column's dim rule, the one the game's takeover refuses by too
@@ -322,6 +324,86 @@ const HUD = (() => {
     for (const q of S.actions) { inner += button({ act: q.act, text: { ...S.text, html: q.text } }, S.button, { x: cx, y: S.pad, w: q.w, h: ih }, st,
       q.act === 'live_play' && !!st.rw && st.rw.arm === 2); cx += q.w + S.gap; }
     return h + `<div class="box" data-act="live" style="${rect({ x, y, w, h: S.h })}">` + art(S.part, zero(w, S.h)) + inner + `</div>`;
+  }
+
+  /* ---- proposed, a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under the top
+     bar in the allies' order, wrapping to another row under it when one is full, the last row right-aligned too. A chip
+     is a control: its plate, the player's colour down its left edge, the name, and a cell a resource with the storage as
+     a strip along its bottom. Its lamp is always drawn, dark; while either resource is under `stall` of its storage it
+     blinks, lit for the first half of every `period` by the wall clock the state carries (st.wall, seconds) and dark for
+     the second; its parts carry their glow, `glow` round the painting's box ---- */
+  function allies(st) {
+    const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
+    const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
+    const lit = P.period > 0 && st.wall % P.period < P.period / 2, F = frame(A.w, A.h);
+    // a recorded skirmish's idle rewind: its button in the top bar's corner, beside the chips under the bar
+    const E = L.proposed.live.entry, k = st.frame.top / E.bar;
+    let h = st.rewind ? button({ act: 'rewind' }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, false) : '', open = null;
+    st.seats.forEach((p, k) => {
+      const row = Math.floor(k / per), m = Math.min(per, n - row * per);
+      const b = { x: st.W - A.r - A.w - (m - 1 - k % per) * (A.w + A.gap), y: st.frame.top + A.t + row * (A.h + A.gap), w: A.w, h: A.h };
+      if (st.give && st.give.i === p.i) open = { p, b };
+      let inner = `<div class="box" style="${rect(place(F, { w: A.stripe.w, ax: 'l' }))};background:${p.colour}"></div>`
+        + text(esc(p.name), place(F, A.name), A.name.style, A.name);
+      let stall = false;
+      ['m', 'e'].forEach((res, j) => {
+        const cb = place(F, { ...C, pad: [C.pad[0], C.pad[1] + j * (C.h + C.gap), C.pad[2], C.pad[3]] }), sb = place(frame(cb.w, cb.h), C.strip);
+        const v = p.res[res], max = p.res[res + 'max'], f = max > 0 ? Math.min(1, Math.max(0, v / max)) : 0;
+        // the lamp: under `stall` of storage, and with the rates known, spending above income
+        if (max > 0 && v < P.stall * max && (!p.rates || p.res[res + 'o'] > p.res[res + 'i'])) stall = true;
+        inner += art(C.part, cb);
+        if (f > 0) inner += `<div class="box" style="${rect({ x: cb.x + sb.x, y: cb.y + sb.y, w: sb.w * f, h: sb.h })};background:${L.resource[res]}"></div>`;
+        // the ally's share level, while it shares this resource: a mark across the strip, edged
+        const lv = p.res[res + 's'], M = C.mark;
+        if (lv != null && max > 0 && lv >= 0 && lv <= max) {
+          const mb = { x: cb.x + sb.x + sb.w * lv / max - M.w / 2, y: cb.y + sb.y - M.over, w: M.w, h: sb.h + M.over + M.under };
+          inner += `<div class="box" style="${rect({ x: mb.x - M.edge, y: mb.y - M.edge, w: mb.w + 2 * M.edge, h: mb.h + 2 * M.edge })};background:${M.edge_colour}"></div>`
+            + `<div class="box" style="${rect(mb)};background:${M.colour}"></div>`;
+        }
+        // its income and spending, with the rates known
+        if (p.rates) { const tb = place(frame(cb.w, cb.h), C.rates), r = { x: cb.x + tb.x, y: cb.y + tb.y, w: tb.w, h: tb.h };
+          inner += text('+' + rate(p.res[res + 'i']), r, C.rates.style, { ...C.rates, align: 'l' }, L.signs.pos)
+            + text('−' + rate(p.res[res + 'o']), r, C.rates.style, { ...C.rates, align: 'r' }, L.signs.neg); }
+      });
+      { const lb = place(F, P);
+        inner += art(stall && lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
+      // an ally who is out of the game takes no give: its chip is drawn disabled, and its click is the HUD's and runs nothing
+      h += `<div class="box" ${p.out ? 'data-act="ally_off"' : `data-act="ally" data-seat="${p.i}"`} style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
+        + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
+    });
+    return h + (open ? give(st, open.p, open.b) : '');
+  }
+  /* the give panel under the chip `b` of ally `p`: the title, the ally's stored value and storage a resource, a slider a
+     resource from 0 to what the player can give (st.give.max) at the amount asked (st.give.amt), the amount beside it,
+     and Send, disabled while both amounts are 0. The panel is the HUD's whole, a control under its own */
+  function give(st, p, cb) {
+    const A = L.proposed.allies, G = A.give, Tr = G.track, R = G.row, N = G.num, Sd = G.send;
+    const h = G.pad + G.title.h + G.info.pad[1] + 2 * G.info.line + G.info.pad[3] + 2 * (R.gap + R.h) + Sd.gap + Sd.h + G.pad;
+    const x = Math.min(Math.max(cb.x + G.dx, st.frame.panel + A.l), st.W - A.r - G.w), b = { x, y: cb.y + cb.h + G.gap, w: G.w, h };
+    const x0 = G.pad + R.pad[0], x1 = G.w - G.pad - R.pad[2], tw = x1 - x0 - N.w - N.gap;
+    let inner = text(`Give to ${esc(p.name)}`, { x: G.pad + G.title.pad[0], y: 0, w: G.w - 2 * G.pad - G.title.pad[0] - G.title.pad[2], h: band(G.part) }, G.title.style);
+    let y = G.pad + G.title.h + G.info.pad[1];
+    ['m', 'e'].forEach((res, j) => {
+      inner += text(`${j ? 'Energy' : 'Metal'} ${k1(p.res[res])} / ${k1(p.res[res + 'max'])}`,
+        { x: G.pad + G.info.pad[0], y: y + j * G.info.line, w: G.w - 2 * G.pad - G.info.pad[0] - G.info.pad[2], h: G.info.line }, G.info.style);
+    });
+    y += 2 * G.info.line + G.info.pad[3];
+    ['m', 'e'].forEach((res, j) => {
+      y += R.gap;
+      const amt = st.give.amt[j], max = st.give.max[j], f = max > 0 ? Math.min(1, Math.max(0, amt / max)) : 0;
+      const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: R.h - fp[1] - fp[3] };
+      const phb = place(frame(tw, R.h), { pad: Tr.playhead.pad }), pw = Tr.playhead.w;
+      inner += `<div class="box" style="${rect({ x: x0, y, w: tw, h: R.h })}">` + art(Tr.part, zero(tw, R.h))
+        + (f > 0 ? `<div class="box" style="${rect({ ...fb, w: fb.w * f })};background:${L.resource[res]}"></div>` : '')
+        + art(Tr.playhead.part, { x: Tr.ends + (tw - 2 * Tr.ends) * f - pw / 2, y: phb.y, w: pw, h: phb.h })
+        + `<div class="box" data-act="give_${res}" style="${rect({ x: Tr.ends, y: 0, w: tw - 2 * Tr.ends, h: R.h })}"></div></div>`
+        + text(k1(amt), { x: x1 - N.w, y, w: N.w, h: R.h }, N.style, N, L.resource[res]);
+      y += R.h;
+    });
+    const none = !(st.give.amt[0] > 0) && !(st.give.amt[1] > 0);
+    inner += button({ act: 'give_send', text: { ...Sd.text, html: 'send' }, off: none ? Sd.off : 0 }, Sd,
+      { x: G.w - G.pad - Sd.pad - Sd.w, y: y + Sd.gap, w: Sd.w, h: Sd.h }, st);
+    return `<div class="box" data-act="give" style="${rect(b)}">` + art(G.part, zero(G.w, h)) + inner + `</div>`;
   }
 
   /* Teams are told apart only when one of them has two players: a free-for-all, every player alone, has no
@@ -512,7 +594,8 @@ const HUD = (() => {
      unless the box is smaller than both together, when all four shrink by one factor; a tiled fill one piece
      repeating along x at its height's scale. An xtile part's x band is one period of a seamless tile, repeated a
      whole number of times at about its painted length, each copy an equal share of the band with whole-pixel edges;
-     a 9-slice's middle row by row at that row's edge scale. Every part but a tiled fill keeps its pieces (`quads`:
+     a 9-slice's middle row by row at that row's edge scale, and not at all when it is shorter than half a tile, the
+     two edges then meeting in their own proportion. Every part but a tiled fill keeps its pieces (`quads`:
      destination x0, y0, x1, y1 in its pixels, source u0, v0, u1, v1 in the part's), which tools/hudart/laycheck.py
      compares with the DLL's. ---- */
   // a device coordinate rounded to the whole pixel an edge is drawn on, as tagpu_hud_snap rounds it in the DLL: half up,
@@ -620,6 +703,8 @@ const HUD = (() => {
     if (k.xtile) {
       // a row's tile is the painted middle at its edge's scale: the top row and the middle at the top edge's, the bottom row at the bottom's
       const ts = st > 0 && t > 0 ? t / st : 0, bs = sb > 0 && b > 0 ? b / sb : 0, ms = ts > 0 ? ts : bs > 0 ? bs : px * f / k.scale;
+      // a middle shorter than half its tile is not drawn: the seamless tile lets the two edges meet, sharing the box in their own proportion
+      if (l + r > 0 && dx[2] - dx[1] < mw * ms / 2) dx[1] = dx[2] = snapPx(Wd * l / (l + r));
       m = [ts > 0 ? ts : ms, ms, bs > 0 ? bs : ms].map(sc => copies(dx[2] - dx[1], mw * sc));
     }
     const quads = [];
@@ -776,7 +861,7 @@ const HUD = (() => {
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
     hintOn = null;
-    el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
+    el.innerHTML = (st.allies ? allies(st) : st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
       + (st.toast ? toast(st) : '');
     compose(el, px);
   }

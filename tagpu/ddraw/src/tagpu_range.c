@@ -72,22 +72,29 @@ static const float DEF_WATER[4] = { 0.48f, 0.67f, 1.0f, 0.30f };
    tools/tascene-ranges.js draws them (its DASH, SENSOR_LINE and JAMMER
    tables are these):
    - THE VIEW, under `sensorview`: radar and sonar as
-     gui_sensor_ranges_radar.lua / _sonar.lua's colours on a dashed band just
-     outside each kind's union; the jammers as
+     gui_sensor_ranges_radar.lua / _sonar.lua's colours, opaque, on a dashed
+     band just outside each kind's union, each dash in a dark halo; the
+     jammers as
      gui_sensor_ranges_jammer_preview.lua's always-shown layer, a dashed band
      just inside the union and the union inside the band filled;
    - THE PREVIEW of a building being placed is not BAR's: the building's disc
      joins its kinds' unions in the view's look -- whether the view is on or
-     not -- and the arcs it adds to the outline draw brighter (`NEW_GAIN`),
-     so the outline shows the coverage the building would give.
+     not -- and the arcs it adds to the outline draw wider (`NEW_WIDEN`; a
+     jammer's brighter, `NEW_GAIN`), so the outline shows the coverage the
+     building would give.
    Every width, dash and speed is BAR's px of a screen scaled by its
    lineScale, (screen height + 500) / 1300, so they hold on screen at every
    zoom; the device's px reach the game frame through `devPx`. */
 enum { SK_RADAR = 0, SK_SONAR, SK_RADARJAM, SK_SONARJAM, SK_N };
 static const int SK_WATER[SK_N] = { 0, 1, 0, 1 };   /* sonar finds targets at or below the sea (0x4678E6) */
 
-/* sensor_ranges_los's colours, the alpha times the dash's gain of 2.5 */
-static const float VIEW_COL[2][4] = { { 0.0f, 1.0f, 0.0f, 0.40f }, { 0.5f, 0.7f, 0.9f, 0.425f } };
+/* sensor_ranges_los's colours, opaque: at BAR's alpha the line is lost on
+   pale ground (Comet Catcher's grey plateau) */
+static const float VIEW_COL[2][4] = { { 0.0f, 1.0f, 0.0f, 1.0f }, { 0.5f, 0.7f, 0.9f, 1.0f } };
+/* THE HALO round every radar and sonar dash: HALO_W px beyond the dash on
+   every side, black at HALO_A, so the line reads on pale ground as on dark */
+#define HALO_W         0.75f
+#define HALO_A         0.8f
 /* THE DASHES are the route dots' level of detail (tagpu_order.c) on a path:
    every dash is `len` long on screen at every zoom; where they stand is
    pinned to the map, on a lattice of levels -- level j a dash every s0 x 2^j
@@ -100,7 +107,7 @@ static const float VIEW_COL[2][4] = { { 0.0f, 1.0f, 0.0f, 0.40f }, { 0.5f, 0.7f,
 typedef struct { float w, len, space, speed, sign; } DASHROW;
 enum { DR_LINE = 0, DR_JAM };
 static const DASHROW DASH[2] = {
-    /* line */ { 1.5f, 4.0f, 11.0f, 9.0f, -1.0f },
+    /* line */ { 2.0f, 4.0f, 11.0f, 9.0f, -1.0f },
     /* jam  */ { 0.0f, 5.0f, 11.0f, 6.0f,  1.0f },
 };
 #define DASH_SPAN     8            /* levels kept either side of the zoom's    */
@@ -114,8 +121,10 @@ static const float JAM_OUTLINE[4] = { 1.0f, 0.32f, 0.22f, 0.8f };
 #define JAM_ALLIED_REL 0.85f
 #define JAM_W          1.2f
 #define JAM_W_ELMO     0.89f
-/* the arcs a building being placed adds to an outline: its band's alpha
-   times this, at most 1 (radar 0.40 and sonar 0.425 reach 1.0) */
+/* the arcs a building being placed adds: a radar or sonar line's band this
+   many times as wide (the line is opaque, so it cannot grow brighter); a
+   jammer's band its alpha times NEW_GAIN, at most 1 */
+#define NEW_WIDEN      1.75f
 #define NEW_GAIN       2.5f
 /* a jammer disc: the finer of the two counts tagpu_vk_range.c carries, for a
    coverage circle of up to 2880 px (ARMARAD's radar, the largest sensor) */
@@ -461,6 +470,14 @@ static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nc
         q->n[2] = inMap && !(water && ground_at(G, x, z) > G->sea) ? 1.0f : 0.0f;
         q->n[3] = newFirst && k < segs && s_owner[k + 1] == 0 ? 1.0f : 0.0f;
     }
+    /* a point that only ENDS a new segment stands at the new width too (0.5),
+       so the two segments meeting at a junction place one corner there and
+       the band tapers over the existing segment instead of stepping */
+    for (k = 0; k < n; k++) {
+        int pk = closed ? (k + n - 1) % n : k - 1;
+        if (s_pts[first + k].n[3] < 0.75f && pk >= 0 && s_pts[first + pk].n[3] > 0.75f)
+            s_pts[first + k].n[3] = 0.5f;
+    }
     s_pts[first].p[3] = 0.0f;
     for (k = 0; k < segs; k++) {
         int j = (k + 1) % n;
@@ -725,10 +742,11 @@ static int put_sdisc(const RITEM* it, float r, float alt, const float rgb[3], fl
 /* a path's band: `side` 1 outside its circles, -1 inside; dashed on `row`'s
    lattice -- its coarsest level puts 4..8 dashes along it, and s0 divides its
    length evenly, so the pattern closes round a loop. The segments a building
-   being placed adds (their start point's n[3]) take `col`'s alpha times
-   NEW_GAIN, at most 1. */
+   being placed adds (their start point's n[3]) are `nw` times as wide at
+   alpha `na`; `halo` game px of HALO_A black round every dash, 0 for none. */
+typedef struct { float nw, na, halo; } SBAND;
 static void put_spath(const SPATH* p, float side, float width, int row, const float col[4],
-                      float space, float dashLen)
+                      float space, float dashLen, const SBAND* bd)
 {
     TAGPU_RGINST* o;
     int first = s_ninst;
@@ -743,19 +761,19 @@ static void put_spath(const SPATH* p, float side, float width, int row, const fl
     if (shift < 0.0) shift += L;
     o = &s_inst[s_ninst++];
     o->c[0] = (float)p->first; o->c[1] = (float)p->nseg; o->c[2] = side; o->c[3] = width;
-    o->b[0] = (float)s0; o->b[1] = (float)top; o->b[2] = 0.0f; o->b[3] = (float)shift;
+    o->b[0] = (float)s0; o->b[1] = (float)top; o->b[2] = bd->nw; o->b[3] = (float)shift;
     memcpy(o->col, col, sizeof o->col);
-    o->w[0] = dashLen; o->w[1] = fminf(col[3] * NEW_GAIN, 1.0f); o->w[2] = 0.0f; o->w[3] = 0.0f;
+    o->w[0] = dashLen; o->w[1] = bd->na; o->w[2] = bd->halo; o->w[3] = bd->halo > 0.0f ? HALO_A : 0.0f;
     put_draw(TAGPU_RG_SLINE, 0, first, p->nseg);
 }
 
 static void put_paths(int set, int kind, float side, float width, int row, const float col[4],
-                      float space, float dashLen)
+                      float space, float dashLen, const SBAND* bd)
 {
     int k;
     for (k = 0; k < s_npaths; k++)
         if (s_paths[k].set == set && s_paths[k].kind == kind)
-            put_spath(&s_paths[k], side, width, row, col, space, dashLen);
+            put_spath(&s_paths[k], side, width, row, col, space, dashLen, bd);
 }
 
 /* THE SENSOR LAYER, in its draw order: the jammers' fills and bands, then
@@ -768,6 +786,8 @@ static void draw_sensors(const RITEM* const* L, int n, const GROUND* G, int view
 {
     float hDev = gh * devPx, ls = (hDev + 500.0f) / 1300.0f;
     float wLine = DASH[DR_LINE].w * ls / devPx;
+    const SBAND lineBd = { NEW_WIDEN, 1.0f, HALO_W * ls / devPx };
+    const SBAND jamBd = { 1.0f, fminf(JAM_OUTLINE[3] * NEW_GAIN, 1.0f), 0.0f };
     float wJam = JAM_W * hDev / 1080.0f / devPx + JAM_W_ELMO * zoom, wE = wJam / zoom;
     float space[2], dashLen[2];
     int kind, k, first, newMask = 0, cur;
@@ -806,12 +826,13 @@ static void draw_sensors(const RITEM* const* L, int n, const GROUND* G, int view
                 put_sdisc(L[k], fmaxf(1.0f, L[k]->range - wE), surface_at(G, L[k]->x, L[k]->z),
                           JAM_ALLIED, JAM_A * JAM_ALLIED_REL);
         put_draw(TAGPU_RG_DISC, 1 << kind, first, SENSOR_SEGS);
-        put_paths(PS_JAM, kind, -1.0f, wJam, DR_JAM, JAM_OUTLINE, space[DR_JAM], dashLen[DR_JAM]);
+        put_paths(PS_JAM, kind, -1.0f, wJam, DR_JAM, JAM_OUTLINE, space[DR_JAM], dashLen[DR_JAM],
+                  &jamBd);
     }
     for (kind = SK_RADAR; kind <= SK_SONAR; kind++)
         if (kind_shown(kind, view, newMask))
             put_paths(PS_VIEW, kind, 1.0f, wLine, DR_LINE, VIEW_COL[kind], space[DR_LINE],
-                      dashLen[DR_LINE]);
+                      dashLen[DR_LINE], &lineBd);
 }
 
 void tagpu_range_render(const TAGPU_FXVIEW* v)

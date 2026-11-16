@@ -172,10 +172,11 @@ tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480 (the shell 
 ```
 
 **Skirmish settings come from the registry, no clicking**: `--map "Two Continents"`,
-`--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy[:ally]]]]]`, controller 0=off 1=human
-2=AI, side 0=ARM 1=CORE, ally the seat's AllyGroup -- seats of one group start allied, 5 is none,
-and the Start refuses when every enabled seat shares one group; an empty field leaves that key
-alone, a scenario's omitted `ally` writes 5), `--los`, `--mapping`, `--unit-limit` (20–1500). Metal and energy are the starting resources **and set storage** — the only way
+`--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`, controller
+0=off 1=human 2=AI, side 0=ARM 1=CORE, seats with the same allygroup 0..4 start allied and 5 is
+no group, and the Start refuses when every enabled seat shares one group; an empty field leaves
+that key alone, a scenario's omitted `ally_group` writes 5), `--los`, `--mapping`,
+`--unit-limit` (20–1500). Metal and energy are the starting resources **and set storage** — the only way
 to set them. All sticky per instance. Not sticky: `--seatai 1,3` names the computer seats ImpAI
 plays for this launch (`impure.cfg`); every launch without it writes `none`. No `TotalA.exe` switch sets a game rule; raw switches go
 through `--arg=-t --arg=120`, and `-r`/`-d` are refused. **`Mapping` and `LineOfSight` are

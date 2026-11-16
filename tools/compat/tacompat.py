@@ -139,7 +139,7 @@ OUTCOMES = ("impure-active", "impure-inactive", "impure-not-loaded", "impure-ref
             "tadr-refused", "loader-refused", "crash", "battle-crash", "other-box", "exited",
             "no-result")
 REFUSED_EXIT = 0xC1
-BATTLE_MAP = "Two Continents"          # scenarios/200v200.json's setup.map
+BATTLE_MAP = "Two Continents"          # the network game's map: scenarios/compat-mp-*.json's setup.map
 # Whether any of TADR's code ran, from what each part leaves in the GAME FOLDER. tdraw.dll
 # writes tdrawlog.txt from its DllMain, and says there when it has written its engine patches
 # (the old limit crack, the 2026 EngineLimits). The recorder -- tplayx.dll, or the 2006
@@ -1192,12 +1192,12 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())
-    # The skirmish map the battle is built for (scenarios/200v200.json), saved under every root the
+    # The skirmish map the battle is built for (`battle_map`), saved under every root the
     # game may read (known_roots), now that the folder holds its exe. The SKIRMISH screen loads the
     # saved map's preview the moment it opens, so a map the setup lacks is a box before any gadget
     # can pick another; the battle reads the root in the game's memory before it walks in.
     roots = known_roots(setup, gamedir)
-    seed_battle_map(prefix, roots)
+    seed_battle_map(prefix, roots, battle_map(setup))
     return {"name": name, "gamedir": gamedir, "prefix": prefix, "roots": roots}
 
 
@@ -1595,6 +1595,37 @@ def scenarios(setup) -> dict:
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
 
 
+def battle_map(setup) -> str:
+    """The map the setup's battle scenario names (its `setup.map`), whose ground its coordinates
+    are chosen for: one fact, read where it is written."""
+    sc = json.loads((TREE / "scenarios" / f"{scenarios(setup)['battle']}.json").read_text())
+    return sc["setup"]["map"]
+
+
+def terrain_drew(gamedir: Path) -> "str | None":
+    """Why the terrain did not draw in the battle, or None. Two facts, neither a sample of one
+    frame: no tile atlas was refused, by the pass (`vk: terr: a WxH tile atlas in pages of P is
+    outside what this pass carries - nothing drawn`) or by the producer (`terr: a 2D image limit of
+    L is under Vulkan's floor ... - no terrain atlas`) -- either is a black viewport under units that
+    still draw, since Vulkan never shows the engine's own terrain -- and at least one `vk: census`
+    line after the applier's counts the
+    terrain pass. A run with no census after the applier is not on the Vulkan lane and has nothing
+    to judge."""
+    try:
+        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+    except OSError:
+        return "tagpu.log is unreadable"
+    refused = re.search(r"^(vk: terr: a \d+x\d+ tile atlas (in pages of \d+ )?is outside what this pass "
+                        r"carries|terr: a 2D image limit of \d+ is under Vulkan's floor).*$", text, re.M)
+    if refused:
+        return f"the terrain pass refused its tile atlas: {refused.group(0)[:160]}"
+    at = text.rfind("scenario: applied=")
+    census = re.findall(r"^vk: census: .*\(terr=(\d+) ", text[at:] if at >= 0 else "", re.M)
+    if census and all(n == "0" for n in census):
+        return f"no census of the battle has the terrain pass ({len(census)} of them, terr=0)"
+    return None
+
+
 # THE SIDE PANEL AFTER A DESELECT, against the engine's own surface. Selecting a unit opens
 # the orders panel over the side panel; deselecting restores what was under it by a copy out
 # of a save-under the engine frees in the same call. The UI layer used to lose that copy and
@@ -1863,7 +1894,7 @@ class GameSlots:
 
 
 def wine_skirmish(name, proc) -> "str | None":
-    """From the main menu into a skirmish on the saved map (BATTLE_MAP), through tacli's gadget
+    """From the main menu into a skirmish on the saved map (`battle_map`), through tacli's gadget
     layer; None once the game screen is up, else why it did not come up."""
     # A CLICK WAITS FOR ITS SCREEN. A mod with more content than stock takes longer between
     # these screens than a click's own patience allows, and Escalation goes from Skirmish
@@ -2072,6 +2103,9 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 break
         except Stalled as e:
             return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})"}
+    why = terrain_drew(gamedir)
+    if why:
+        return {"ok": False, "hud": hud, "why": f"{why} ({applied})"}
     return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog}
 
 
@@ -2574,7 +2608,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                         proc.wait(timeout=15)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                    seed_battle_map(prefix, [root])
+                    seed_battle_map(prefix, [root], battle_map(setup))
                     inst["roots"] = inst["roots"] + [root]
                     proc = launch()
                     if not wine_menu(inst["name"], proc, display, seen, boxes, t0):
@@ -3200,12 +3234,12 @@ def known_roots(setup, gamedir: Path) -> list:
     return [r for i, r in enumerate(roots) if r and r.lower() not in {x.lower() for x in roots[:i] if x}]
 
 
-def seed_battle_map(prefix: Path, roots):
-    """The battle's map as the saved skirmish map under each of `roots`."""
+def seed_battle_map(prefix: Path, roots, map_name: str):
+    """The battle's map, `map_name` (`battle_map`), as the saved skirmish map under each of `roots`."""
     env = dict(os.environ, WINEPREFIX=str(prefix))
     for root in roots:
         subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
-                        "/t", "REG_SZ", "/d", BATTLE_MAP, "/f"], env=env, capture_output=True, timeout=120)
+                        "/t", "REG_SZ", "/d", map_name, "/f"], env=env, capture_output=True, timeout=120)
     subprocess.run(["wineserver", "-w"], env=env, timeout=60)
 
 

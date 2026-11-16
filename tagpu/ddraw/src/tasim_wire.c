@@ -375,10 +375,10 @@ static int queue_joins_chain(const TASIM_WIRE* w, const TASIM_WIRE_ORDER* o, int
     return 1;
 }
 
-/* A unit line's optional keys after its last column: `at=<n>`, then `slot=<p>`, each at most once and in that
-   order. Two units of one owner never ask for one slot: the applier creates each request in the slot it names or
-   not at all, so a repeat could only be refused later, at its create. The walk back is bounded by the units already
-   parsed. */
+/* A unit line's optional keys after its last column: `at=<n>`, then `slot=<p>`, then `cloak=1`, each at most once
+   and in that order; `cloak=1` only on a unit made at the apply (tasim_wire.h). Two units of one owner never ask
+   for one slot: the applier creates each request in the slot it names or not at all, so a repeat could only be
+   refused later, at its create. The walk back is bounded by the units already parsed. */
 static int unit_keys(const TASIM_WIRE* w, TASIM_WIRE_UNIT* u, char* cur, int line, int ord, TASIM_WIRE_ERRS* errs)
 {
     char* t;
@@ -386,6 +386,7 @@ static int unit_keys(const TASIM_WIRE* w, TASIM_WIRE_UNIT* u, char* cur, int lin
 
     u->at = 0;
     u->slot = TASIM_WIRE_UNSET;
+    u->cloak = 0;
     t = tasim_wire_tok(&cur);
     if (t && !strncmp(t, "at=", 3))
     {
@@ -408,6 +409,28 @@ static int unit_keys(const TASIM_WIRE* w, TASIM_WIRE_UNIT* u, char* cur, int lin
     if (t && (!strncmp(t, "at=", 3) || !strncmp(t, "slot=", 5)))
     {
         tasim_wire_err(errs, "line %d: unit %d: `%.24s` is repeated or out of order (at= comes before slot=)",
+                             line, ord, t);
+        return 0;
+    }
+    if (t && !strncmp(t, "cloak=", 6))
+    {
+        if (strcmp(t + 6, "1"))
+        {
+            tasim_wire_err(errs, "line %d: unit %d `%.24s` wants cloak=1", line, ord, t);
+            return 0;
+        }
+        if (u->at)
+        {
+            tasim_wire_err(errs, "line %d: unit %d: cloak=1 is the apply's, and the unit is made at=%d",
+                                 line, ord, u->at);
+            return 0;
+        }
+        u->cloak = 1;
+        t = tasim_wire_tok(&cur);
+    }
+    if (t && (!strncmp(t, "at=", 3) || !strncmp(t, "slot=", 5) || !strncmp(t, "cloak=", 6)))
+    {
+        tasim_wire_err(errs, "line %d: unit %d: `%.24s` is repeated or out of order (cloak= comes last)",
                              line, ord, t);
         return 0;
     }
@@ -615,6 +638,7 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
             w->pl[w->npl].slot = slot;
             w->pl[w->npl].metal = TASIM_WIRE_UNSET;
             w->pl[w->npl].energy = TASIM_WIRE_UNSET;
+            w->pl[w->npl].share[0] = w->pl[w->npl].share[1] = TASIM_WIRE_UNSET;
             w->pl[w->npl].aioff = 0;
             w->pl[w->npl].hasstore = 0;
             w->pl[w->npl].mstore = w->pl[w->npl].estore = 0.0f;
@@ -646,6 +670,8 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                 }
                 if (!strcmp(k, "metal"))       w->pl[w->npl].metal = v;
                 else if (!strcmp(k, "energy")) w->pl[w->npl].energy = v;
+                else if (!strcmp(k, "share_metal") || !strcmp(k, "share_energy"))
+                    w->pl[w->npl].share[k[6] == 'e'] = v == TASIM_WIRE_UNSET ? v : v < 0 ? -1 : v;
                 else
                 {
                     tasim_wire_err(errs, "line %d: unknown player key `%.24s`", line, k);

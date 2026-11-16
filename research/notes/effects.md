@@ -64,8 +64,8 @@ Line colours go through the byte table `main+0xDCB[color]` → palette index.
 be non-zero; otherwise `PositionInPlayerMapped 0x408090` = the MAPPED bit. Explosions
 are **not** gated (only anchor-in-viewport-rect), the later fog overlay darkens them.
 (**Since G13b there is no later fog overlay** — `terrown` suppresses `0x4848E0` and our
-own passes apply the rule per fragment. Effects *hide* in grey rather than darken, which
-is the engine's behaviour for anything that is not terrain furniture: features.md §9.)
+own passes apply the rule per fragment. Effects *hide* in grey rather than darken, as each
+is gated by LOS at its own point; units are greyed like terrain: features.md §9.)
 
 | `RenderType` | Stock example | Engine draw |
 |---|---|---|

@@ -939,9 +939,12 @@ typedef struct TAGPU_PK_HUDFORK {
                                    the chain that plays; its Delete armed        */
     uint8_t  pad[2];
 } TAGPU_PK_HUDFORK;
-/* What the HUD shows: the replay's controls, or a live recorded skirmish's
-   rewind (tagpu_hudstate_mode) */
-enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2 };
+/* What the HUD shows: the replay's controls, a live recorded skirmish's
+   rewind, or a network game's allies (tagpu_hudstate_mode). ALLIES carries
+   `now`, `scale`, `held`, `toast`, the give panel and the allies as `seat`,
+   each `seat` its player record's index and `lost` the ally out of the game
+   (tagpu_share_allies), and the allies' rates; nothing else */
+enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2, TAGPU_PK_HUD_ALLIES = 3 };
 typedef struct TAGPU_PK_HUD {
     uint32_t now;               /* GameTime, which runs on past the recording    */
     uint32_t first, last;       /* the chain that plays: its root's first
@@ -986,8 +989,9 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  fork_max;          /* REC_FORK_LIMIT                                */
     TAGPU_PK_HUDFORK fork[TAGPU_PK_HUD_FORKS];
     /* THE LIVE REWIND (tagpu_hudstate.c, tagpu_hudinput.c) */
-    uint8_t  mode;              /* TAGPU_PK_HUD_*: a replay plays, or a live
-                                   recorded skirmish                             */
+    uint8_t  mode;              /* TAGPU_PK_HUD_*: a replay plays, a live
+                                   recorded skirmish, or a network game with
+                                   allies                                        */
     uint8_t  rw_state;          /* TAGPU_REPLAY_RWS_*                            */
     uint8_t  rw_arm;            /* Play from here: 0, 1 snapping back to rw_R,
                                    2 armed                                       */
@@ -997,6 +1001,20 @@ typedef struct TAGPU_PK_HUD {
     uint32_t rw_R;              /* where Play from here starts                   */
     uint32_t rw_evict;          /* the fork Play from here would delete;
                                    UINT32_MAX none                               */
+    /* THE ALLIES' GIVE PANEL (tagpu_hudinput.c), ALLIES mode */
+    int8_t   give;              /* the record index of the ally it is open on;
+                                   -1 closed                                     */
+    uint8_t  rewind;            /* ALLIES: the live rewind's button is offered     */
+    uint8_t  pad5[2];
+    float    give_amt[2];       /* metal, energy asked                           */
+    float    give_max[2];       /* what the player can give: the sliders' ends   */
+    /* THE ALLIES' RATES, ALLIES mode: bit i set when seat[i]'s stored values,
+       storages and rates are the contribution channel's; their share levels,
+       metal and energy, -1 when none is drawn: not sharing, no channel, or a
+       level outside 0..storage (tagpu_share_allies) */
+    uint16_t ally_rates;
+    uint8_t  pad6[2];
+    float    ally_share[TAGPU_PK_HUD_SEATS][2];
 } TAGPU_PK_HUD;
 
 /* The stats window's samples, while it is open: the chosen measure's, one row

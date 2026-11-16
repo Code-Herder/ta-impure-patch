@@ -36,12 +36,16 @@
 #include "tagpu_worldq.h"
 #include "tagpu_route.h"
 #include "tagpu_sweep.h"
+#include "tagpu_factoryq.h"
 #include "tagpu_formation.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
+#include "tagpu_allysight.h"
+#include "tagpu_allypanel.h"
+#include "tagpu_seatcontact.h"
 #include "tagpu_impai.h"
 #include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
@@ -295,6 +299,28 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x48AAC0), installed whole or not at all. */
         tagpu_puppet_init();
 
+        /* tagpu: allied sight (tagpu_allysight.h): allies share their sight, their death vision,
+           their explored map and their radar and sonar contacts, their jammers spare each other
+           and their cloaked and submerged units stay visible, and the sight counters never wrap.
+           Prologue detours on the stamp 0x482270, the removal 0x481D50, the explored map's stamp
+           0x481930, the sight rebuild 0x4816A0 and the players init 0x464990, three call stubs
+           in the stamp's body and redirects of the calls 0x49555F and 0x486845; then the radar
+           pass's four sites with the minimap's dot test, and UnitInPlayerLOS's owner test, each
+           set byte-matched and all-or-nothing, disjoint from every detour above. */
+        tagpu_allysight_init();
+
+        /* tagpu: the unit panel shows an ally's unit as the player's own (tagpu_allypanel.h):
+           the panel 0x46A860's five owner tests 0x46AC85, 0x46B013, 0x46B10E, 0x46B457 and
+           0x46B611 also pass for an owner tagpu_allysight_shares names, byte-matched and all or
+           none, disjoint from every site above; a remote ally's resource numbers stay hidden. */
+        tagpu_allypanel_init();
+
+        /* tagpu: every seat targets with its own and its allies' contacts (tagpu_seatcontact.h):
+           the acquisition 0x40AA40's two calls 0x40AD3E and 0x40B2E9 redirected, its radar read
+           0x40AB3F and UnitInPlayerLOS's sonar gate 0x465B30, byte-matched and all or none,
+           disjoint from every site above. */
+        tagpu_seatcontact_init();
+
         /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine
            (0x4B08C0, 0x4B0DA0, 0x4B19D0, 0x4B1A99 and the RNG call at
@@ -394,6 +420,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_sweep_init();
         /* after tagpu_rec_init: it decodes the clicks' call sites the recorder rewrites */
         tagpu_formation_init();
+        /* the build menu's queue call (tagpu_factoryq.h); no ordering need */
+        tagpu_factoryq_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
            observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its
