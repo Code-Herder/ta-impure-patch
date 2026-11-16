@@ -1,0 +1,13 @@
+landing-review: drawing board landing 2 (marks over the contribution channel), 2c002ad8..e8c0d1a9, fixes in 8e8a2c0b
+level: high (two fresh read-only reviewers: general correctness; the channel, recordings and replay)
+findings (all verified against the code, all fixed in 8e8a2c0b):
+- MEDIUM: a received op applied under the RECEIVER's rights -> a watcher's or a non-transitive ally's screen erased more than the sender did. Fix: EDIT/MOVE/DELETE/ERASE carry the sender's rights mask (renumbered with the seats); applied cut to what the receiver sees.
+- MEDIUM: in a pause a mark behind another kind at the queue head waits, while the sender kept sending ~1 body a frame -> 256-slot receive queue fills -> consumption ends (recording, allied resources). Fix: at most 2 bodies a capture tick (a pause holds the tick); an op the 16 KB outbox cannot hold is not drawn either.
+- LOW: unseen seats' marks shared the store and evicted seen ones. Fix: not stored.
+- LOW: marks could hold the transmit queue at 192/256. Fix: half the queue left to the capture point.
+- LOW: the history/recmp_file refused a malformed MARK the live game drops -> a writer fail. Fix: opaque record of a known source.
+- LOW: channel-side drops never reported. Fix: counted in the board's refused=.
+- LOW: the draw key's release was never taken (was = key state, already up). Fix: was = s_held.
+- LOW docs: format 28 / start version 3 in four notes; "each viewer is shown its own team's" (no playback yet). Fixed.
+checked sound: journal ticks of between-B2 takes, the head peek's ordering, send tick == capture tick, the seat-map direction and ownership check, every kind list, mixed builds (start version equality), read_op bounds, reseat, the chat sink 0x463CA0's arguments (disassembled).
+verified after the fixes: allied 2-player network game, an erase across peers, a 300-step and a 900-step flood in pauses (joiner segs=956 erases=2 outbox_full=243; host received=958 refused=0), both channels failed=00000000, both recordings 0 corrections and read by tarec check; board_test.py PASS; build clean (thread-split, sim-state).
