@@ -20,7 +20,7 @@
 
    A REMOTE ally's resource numbers are left out: only the owner's economy pass 0x401360 fills them
    (its settle 0x401B37..0x401BAC; its one caller 0x46555A runs for records of type 1 or 2), and
-   every create, the network's included, zeroes them (0x401070 at 0x485D0A), so on this machine a
+   every create, the network's included, zeroes them (0x401070 at 0x485D0A), so on this peer a
    unit of a record of type 3 reads 0 for ever. Such a unit enters the panel at the kills line
    0x46B2B8: the resource block's calls leave the stack as they found it (sprintf cleaned by the
    caller, 0x4C13A0 ret 8, 0x4C14F0 ret 0x14) and write no local read after it, and the kills line
