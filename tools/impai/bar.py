@@ -20,12 +20,15 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
     hn     ImpAI Hard   against ImpAI Normal (the level lever, Difficulty Hard)
     p:<row> ImpAI Hard on the persona row PERSONA_ROWS[row] (the persona lever) against OTA AI, Difficulty Hard:
            a calibration row
+    m:<row> ImpAI Hard (no limits) against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard: THE MIRROR
+    n:<row> ImpAI on Normal's row NORMAL_ROW against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard:
+           THE MIRROR, which decides Easy's row once Normal's is chosen
     dry    OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
            rate before ImpAI fights
 
 eota, nota and hota are 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A
 at the map's first start in games 1, 3 and 5 and its second in 2 and 4; the dry run is the five maps, sides ac, two
-games each. eoh, noh, ne, hn and the calibration rows are played in THE BLOCKS. A game's id is
+games each. eoh, noh, ne, hn, the calibration rows and the mirror are played in THE BLOCKS. A game's id is
 `bar-<pair>-<map>-<sides>-<n>`, so a piece is a list of ids.
 
 THE BLOCKS. A block is every map of the pair's pool played once from each start, 10 games on five maps: block b is
@@ -33,14 +36,22 @@ game n = 2b - 1 (A at the map's first start) and 2b (its second) of each map, wi
 map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each once every four blocks.
 `ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games and a list cut there is
 whole blocks. The blocks a pair is played to are its run set's: eoh and noh 12 (120 games), ne and hn 10, a
-calibration row 4 (`ids --blocks N` for more, as THE ORDERING's third look asks of ne and hn).
+calibration row 4, a mirror pair 10 (`ids --blocks N` for more, as THE ORDERING's third look asks of the ladder's).
 
-THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), each nine integers as the
-persona lever tagpu_impai_persona.on takes them (tools/impai/level_lever.py; L1 and L3 are the DLL's Easy and
-Normal, impai_react.c IMPAI_PERSONAS). A calibration game writes its seat's row to that lever beside the level
-lever's `hard` and could not run unless the seat's `impai: persona` line at its init names the same row `from=lever`;
-each result carries every ImpAI seat's persona as logged (`persona`). A row between two is a new entry under a new
-name: a row's games are resumed only on the same nine integers (game_kept) and judged only with them.
+THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), and the rows between and
+below them (L01, L0a, L0b) and those that cut one axis from Hard's (Hlook, Hreact, Happm, Hatt), each nine
+integers as the persona lever tagpu_impai_persona.on takes them (tools/impai/level_lever.py; L1 and L3 are the
+DLL's Easy and Normal, impai_react.c IMPAI_PERSONAS). A game of a persona row writes its seat's row to that lever
+beside the level lever's `hard` and could not run unless the seat's `impai: persona` line at its init names the
+same row `from=lever`; each result carries every ImpAI seat's persona as logged (`persona`). A row between two is
+a new entry under a new name: a row's games are resumed only on the same nine integers (game_kept) and judged only
+with them.
+
+THE MIRROR. Against OTA AI at Hard every row from L0 to L5 takes 0.53 to 0.74 of the points with no gradient
+(round 3 at 57d39d71), and Hard against Normal was futile (hn 33 won, 34 lost, 33 at the cap), so the levels are
+separated by ImpAI against ImpAI: `m:<row>` puts B on the row and A at Hard, and `n:<row>` puts A on NORMAL_ROW,
+the row Normal plays, through the lever too. A mirror pair is judged as the ladder is (THE VERDICT): A's wins of
+its first 100 games, THE CURTAILMENT and THE ORDERING.
 
 THE SEED. Every bar game plays from its own seed, a function of its id alone (game_seed: the first four bytes of
 the SHA-256 of `bar.py seed <id>`), so a game is the same game whenever it is played and no two games of the bar
@@ -58,8 +69,8 @@ the median of its class by area): Pincushion (land), Red Triangle (sea), Trout F
 Mania (small), Plains and Passes (large). The development pool (DEV_MAPS), each the runner-up of its kind in the
 same survey, on which the calibration rows and the tuning tournament's tier B play, so that no row or table is
 chosen on the maps that judge it: Acid Foursome (land, 3 % under sea), Steel Jungle (mixed, 44 %), Luschaven (sea,
-65 %), Gasplant Plain (small), Lava Alley (large). A calibration row plays the development pool, every other pair
-the bar's.
+65 %), Gasplant Plain (small), Lava Alley (large). A calibration row and a mirror pair play the development pool,
+every other pair the bar's.
 
 A GAME. The template scenarios/impai/bar.json, filled: the map, the Difficulty, seat 0 an idle human with no unit,
 A and B in seats 1 and 2 (A in seat 1 when it plays the first start, seat k standing at StartPos(k + 1)), each a
@@ -204,15 +215,16 @@ count toward the verdict. A result with no seed was played before each game had 
   interval beside it (T95, df = maps - 1).
 - eoh: its 12 blocks' points at least EASY_BAND's floor (0.50; above 0.75 is accepted); noh: at least NORMAL_MIN (0.90); each with no game in which
   A stalled. A calibration row: its 4 blocks' points read against both, which way the row moves, and no verdict.
-- ne and hn: LADDER_WINS (90) wins of their first 100 games, a game at the cap won by value counted and a draw
-  not. THE CURTAILMENT: once LADDER_MISS (11) of those games are not won the pair has failed for certain, and
-  `judge` says so whatever is left unplayed; `play` starts none of that pair's games after it (`--no-curtail`
-  plays on, for THE ORDERING's later looks).
-- THE ORDERING, for ne and hn, reported beside the ladder and judging nothing (the verdict that remains if the
-  ladder is relaxed): THE LOOKS at its first 4, 8 and 12 blocks (ORDER_LOOKS), each the t of the map means
+- ne, hn and the mirror pairs: LADDER_WINS (90) wins of their first 100 games, a game at the cap won by value
+  counted and a draw not. THE CURTAILMENT: once LADDER_MISS (11) of those games are not won the pair has failed
+  for certain, and `judge` says so whatever is left unplayed; `play` starts none of that pair's games after it
+  (`--no-curtail` plays on, for THE ORDERING's later looks).
+- THE ORDERING, for the same pairs, reported beside the ladder and judging nothing (the verdict that remains if
+  the ladder is relaxed): THE LOOKS at its first 4, 8 and 12 blocks (ORDER_LOOKS), each the t of the map means
   against a share of 1/2 and the look's O'Brien-Fleming t bound for three looks on that many maps (OBF_T, two-sided
   10 %): "better" or "worse" at the bound, "futile" at an earlier look whose conditional power under the current
-  trend is below FUTILITY (0.20), read to the first look that gives one.
+  trend is below FUTILITY (0.20), read to the first look that gives one; before the first look, the t of the
+  blocks complete, which judges nothing.
 
 THE ROW CHECKS. `check b4` and `check b5` score A2b's rows from the results (a2-spec.md section 9): ImpAI Hard
 against OTA AI Hard (the pair hota), each game played to the row's bound, given to `play` as `--cap` (b4: 27 000,
@@ -281,8 +293,9 @@ PAIRS = {   # Difficulty, A (controller, level), B (controller, level)
 LADDER = ("ne", "hn")
 # THE PERSONA ROWS: the calibration ladder, each `<look_eco>,<look_mil>,<react>,<apm_eco>,<burst_eco>,<apm_mil>,
 # <burst_mil>,<att_eco>,<att_mil>` as the persona lever takes it (level_lever.py --persona). L1 and L3 are the
-# DLL's Easy and Normal (impai_react.c, IMPAI_PERSONAS), L5 its Hard. A pair `p:<row>` plays ImpAI at Hard on that
-# row against OTA AI at Hard; a row between two of these is a new entry here, under a new name.
+# DLL's Easy and Normal (impai_react.c, IMPAI_PERSONAS), L5 its Hard; a rate or an attention of 0 is no limit.
+# A pair `p:<row>` plays ImpAI at Hard on that row against OTA AI at Hard, `m:<row>` and `n:<row>` against ImpAI
+# (THE MIRROR); a row between two of these is a new entry here, under a new name.
 PERSONA_ROWS = {
     "L0": "75,150,60,5,2,7,2,3,1",
     "L1": "60,90,45,10,3,15,3,4,2",
@@ -290,16 +303,35 @@ PERSONA_ROWS = {
     "L3": "30,45,15,24,4,36,6,8,3",
     "L4": "15,30,0,40,6,80,10,12,4",
     "L5": "15,30,0,0,0,0,0,0,0",
+    # between L0 and L1: L0's reaction and attention, a military look and budgets between the two
+    "L01": "75,120,60,7,2,10,2,3,1",
+    # below L0 on every axis: the economy's look 105, the reaction 90, the budgets 3/1 and 4/1, 2 builders busy
+    # (the military's look 150 and attention 1 are already the lever's harshest)
+    "L0a": "105,150,90,3,1,4,1,2,1",
+    # the lever's harshest looks, reaction and attention, and budgets of 2 and 3 actions a minute
+    "L0b": "150,150,135,2,1,3,1,1,1",
+    # one axis cut from Hard's no limits, at L0b's harshness: the looks alone; the looks and the reaction (the
+    # reaction cannot be cut alone: it is at most the shorter look less 15), so Hreact against Hlook is the
+    # reaction's own cost; the budgets alone; the attention alone
+    "Hlook": "150,150,0,0,0,0,0,0,0",
+    "Hreact": "150,150,135,0,0,0,0,0,0",
+    "Happm": "15,30,0,2,1,3,1,0,0",
+    "Hatt": "15,30,0,0,0,0,0,1,1",
 }
 CALIBRATION = "p:"                      # a calibration pair's name: `p:<row>`
+# THE MIRROR: ImpAI against ImpAI, B on a persona row through the lever. `m:<row>`: A at Hard (no limits);
+# `n:<row>`: A on Normal's row, NORMAL_ROW, through the lever too. Each is judged as the ladder is.
+MIRROR, NORMAL_MIRROR = "m:", "n:"
+NORMAL_ROW = "L3"                       # Normal's row: the DLL's, until the calibration chooses another
 # THE BLOCKS: a block is every map of its pool played once from each start, 10 games on five maps; block b plays
 # game n = 2b - 1 (A at the first start) and 2b (A at the second) of each map, with the side pairing
 # BLOCK_SIDES[(the map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each
 # once every four blocks. A pair's run is its blocks in order, so its first k blocks are its first 10 k games.
-# The blocks a pair is played to: T's targets 12, L's ladder 10, C's calibration rows 4.
+# The blocks a pair is played to: T's targets 12, L's ladder 10 and the mirror's as many, C's calibration rows 4.
 BLOCK_SIDES = ("aa", "ac", "ca", "cc")
 BLOCKS = {"eoh": 12, "noh": 12, "ne": 10, "hn": 10}
 CALIBRATION_BLOCKS = 4
+MIRROR_BLOCKS = 10
 CAP = 81000
 # Ticks between two looks at the units alive. The look does not find a game's end: the units clause of every hold
 # does, pausing at the frame visit after the step in which a seat's count reached 0 (Lane.hold), so a longer step
@@ -409,26 +441,50 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
 # ---- the game list ----
 
 def pair_spec(pair: str) -> tuple:
-    """(Difficulty, A, B) of `pair`, each seat (controller, level, persona): a pair of PAIRS, or a calibration
-    pair `p:<row>`, ImpAI at Hard on that PERSONA_ROWS row against OTA AI at Hard. BarError for no such pair."""
+    """(Difficulty, A, B) of `pair`, each seat (controller, level, persona): a pair of PAIRS; a calibration pair
+    `p:<row>`, ImpAI at Hard on that PERSONA_ROWS row against OTA AI at Hard; or a mirror pair (THE MIRROR),
+    `m:<row>`, ImpAI at Hard against ImpAI on that row, or `n:<row>`, ImpAI on NORMAL_ROW against ImpAI on that
+    row, every ImpAI seat at the level lever's `hard` and a row through the persona lever. BarError for no such
+    pair."""
     if pair in PAIRS:
         diff, a, b = PAIRS[pair]
         return diff, a + (None,), b + (None,)
-    row = pair[len(CALIBRATION):] if pair.startswith(CALIBRATION) else None
+    kind = next((k for k in (CALIBRATION, MIRROR, NORMAL_MIRROR) if pair.startswith(k)), None)
+    row = pair[len(kind):] if kind else None
     if row not in PERSONA_ROWS:
-        raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}, or {CALIBRATION}<row> of "
-                       f"{', '.join(PERSONA_ROWS)}")
-    return "hard", ("impai", "hard", PERSONA_ROWS[row]), ("ai", None, None)
+        raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}, or {CALIBRATION}, {MIRROR} or {NORMAL_MIRROR}<row> "
+                       f"of {', '.join(PERSONA_ROWS)}")
+    if kind == CALIBRATION:
+        return "hard", ("impai", "hard", PERSONA_ROWS[row]), ("ai", None, None)
+    a = PERSONA_ROWS[NORMAL_ROW] if kind == NORMAL_MIRROR else None
+    return "hard", ("impai", "hard", a), ("impai", "hard", PERSONA_ROWS[row])
+
+
+def persona_pair(pair: str) -> bool:
+    """A pair that plays a persona row: a calibration row or a mirror pair."""
+    return pair.startswith((CALIBRATION, MIRROR, NORMAL_MIRROR))
+
+
+def ladder_pair(pair: str) -> bool:
+    """A pair judged by the ladder's rules (THE VERDICT): ne, hn and the mirror's."""
+    return pair in LADDER or pair.startswith((MIRROR, NORMAL_MIRROR))
 
 
 def block_pair(pair: str) -> bool:
-    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's and the calibration's."""
-    return pair in BLOCKS or pair.startswith(CALIBRATION)
+    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's, the calibration's and the
+    mirror's."""
+    return pair in BLOCKS or persona_pair(pair)
+
+
+def run_blocks(pair: str) -> int:
+    """The blocks a block pair is played to: its run set's."""
+    return BLOCKS.get(pair) or (CALIBRATION_BLOCKS if pair.startswith(CALIBRATION) else MIRROR_BLOCKS)
 
 
 def pool(pair: str) -> dict:
-    """The maps a pair plays by default: a calibration row the development pool's, every other pair the bar's."""
-    return DEV_MAPS if pair.startswith(CALIBRATION) else BAR_MAPS
+    """The maps a pair plays by default: a persona row's pairs the development pool's, so that no row is chosen on
+    the maps that judge it; every other pair the bar's."""
+    return DEV_MAPS if persona_pair(pair) else BAR_MAPS
 
 
 def ids(pair: str, maps=None, blocks=None) -> list:
@@ -439,7 +495,7 @@ def ids(pair: str, maps=None, blocks=None) -> list:
     if pair == "dry":
         return [f"bar-dry-{m}-ac-{n}" for m in maps for n in (1, 2)]
     if block_pair(pair):
-        nb = blocks or BLOCKS.get(pair, CALIBRATION_BLOCKS)
+        nb = blocks or run_blocks(pair)
         return [f"bar-{pair}-{m}-{BLOCK_SIDES[(list(MAPS).index(m) + b - 1) % 4]}-{2 * b - 1 + second}"
                 for b in range(1, nb + 1) for m in maps for second in (0, 1)]
     return [f"bar-{pair}-{m}-{s}-{n}" for m in maps for s in ("aa", "ac", "ca", "cc") for n in range(1, 6)]
@@ -1503,7 +1559,7 @@ def not_won(rs) -> list:
 def curtailed(pair: str, rs) -> bool:
     """THE CURTAILMENT: a ladder pair has failed for certain once LADDER_MISS games of its first LADDER_GAMES are
     not won."""
-    first = set(ids(pair)[:LADDER_GAMES]) if pair in LADDER else set()
+    first = set(ids(pair)[:LADDER_GAMES]) if ladder_pair(pair) else set()
     return len(not_won([r for r in rs if r["id"] in first])) >= LADDER_MISS
 
 
@@ -1564,14 +1620,14 @@ def judge_blocks(pair: str, rs) -> tuple:
     """(failed, lacking) of a block pair's results (THE BLOCKS), its lines printed: each game at the cap scored by
     value (by_value); the points over the blocks complete, every game of each played and scored, with THE
     INTERVAL over its map means; and its rule. eoh: its 12 blocks' points at least EASY_BAND's floor; noh: at least NORMAL_MIN;
-    each with no stall; a calibration row: its 4 blocks' points read against both, a verdict on neither; ne and
-    hn: LADDER_WINS wins in their first LADDER_GAMES games, failed for certain at LADDER_MISS games not won (THE
-    CURTAILMENT), and THE ORDERING, which is reported and judges nothing."""
+    each with no stall; a calibration row: its 4 blocks' points read against both, a verdict on neither; ne, hn
+    and the mirror pairs: LADDER_WINS wins in their first LADDER_GAMES games, failed for certain at LADDER_MISS
+    games not won (THE CURTAILMENT), and THE ORDERING, which is reported and judges nothing."""
     _diff, *seats = pair_spec(pair)
     # the pair's pool, and any other map its games were played on: a block is every one of them
     maps = [m for m in MAPS if m in pool(pair) or any(map_of(r) == m for r in rs)]
     by_id = {r["id"]: r for r in rs}
-    want = BLOCKS.get(pair, CALIBRATION_BLOCKS)
+    want = run_blocks(pair)
     plan = ids(pair, maps, max([want] + [block_of(g) for g in by_id]))
     stray = sorted(set(by_id) - set(plan))
     other = [r["id"] for r in rs if r["id"] not in stray and any(
@@ -1615,7 +1671,7 @@ def judge_blocks(pair: str, rs) -> tuple:
         print(f"  points: {mean:.3f} of A's over {min(complete, want)} blocks"
               + (f", t90 [{mean - half:.3f}, {mean + half:.3f}]" if half is not None else "")
               + f" over {len(maps)} map means (" + ", ".join(f"{m} {x:.2f}" for m, x in zip(maps, means)) + ")")
-    if pair in LADDER:
+    if ladder_pair(pair):
         lacked, failed = ladder_verdict(pair, rs)
         order(pair, plan, by_id, maps, complete)
         return failed, lacked
@@ -1661,14 +1717,17 @@ def ladder_verdict(pair: str, rs) -> tuple:
 
 def order(pair: str, plan, by_id, maps, complete: int):
     """THE ORDERING of a ladder pair, printed: at each look whose blocks (ORDER_LOOKS) are complete, the t of its
-    map means against a share of 1/2, the look's bound and its verdict, to the first that gives one."""
+    map means against a share of 1/2, the look's bound and its verdict, to the first that gives one; at a look not
+    yet reached, the t of the blocks complete, which judges nothing."""
     looks, m = len(ORDER_LOOKS), len(maps)
     if (looks, m) not in OBF_T:
         print(f"  ordering: no bounds for {m} maps")
         return
     for k, blocks in enumerate(ORDER_LOOKS, 1):
         if complete < blocks:
-            print(f"  ordering: look {k} at {blocks * 2 * m} games not yet read ({complete} blocks complete)")
+            so_far = (f"; t {t_stat(map_means([by_id[g] for g in plan if block_of(g) <= complete], maps)):.2f} "
+                      f"over the {complete} complete, no look" if complete and m > 1 else "")
+            print(f"  ordering: look {k} at {blocks * 2 * m} games not yet read ({complete} blocks complete{so_far})")
             return
         t = t_stat(map_means([by_id[g] for g in plan if block_of(g) <= blocks], maps))
         verdict, bound, cp = look(k, looks, m, t)
@@ -1918,7 +1977,7 @@ def main(argv=None) -> int:
     i.add_argument("--maps", default=None)
     i.add_argument("--blocks", type=int, default=None,
                    help="a block pair's blocks (THE BLOCKS); by default its run set's: eoh and noh 12, ne and hn "
-                        "10, a calibration row 4")
+                        "10, a calibration row 4, a mirror pair 10")
     pl = sub.add_parser("play", help="play a list of games on L lanes")
     pl.add_argument("--ids", required=True, help="a file of ids, a comma list, or a pair's name")
     pl.add_argument("--cap", type=int, default=CAP,
