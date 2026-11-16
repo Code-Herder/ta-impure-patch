@@ -24,3 +24,14 @@ verdict*).
 **No ImpAI change lands on headless results alone.** Rung 2 confirms every headless gain, because an AI tuned in a simulator learns that simulator's mistakes. [Calibration](calibration.html) keeps tasim close enough that the two agree.
 
 The rung 2 speeds are the turbo measurements in [Sim step and clock](../engine/sim.html): k = 1, battles from 64 ticks/s (twelve games at once) to 230 (one), against about 60 at game speed 20. A 20-minute game is 36,000 ticks.
+
+## Per brain batch and at milestones
+
+ImpAI wins every fair game against OTA AI, so a broad win count no longer tells whether a brain change helped. Each brain batch runs, in this order:
+
+1. **The regression set**: the brain writer's known-hard games (the bar's former non-wins), every one a win.
+2. **The win check**: the 40 `hota` games of the broad set, every one a win (Hard's 100 of 100).
+3. **The paired margin test** against the last accepted build: the same `hota` ids, then `noh`, in blocks of 16, an SPRT on the sign of the time-to-win difference; *stronger?* for a change meant to strengthen, *not worse?* for a fix batch. A loss in the candidate fails it outright.
+4. **The fair mod setups**, 12 games.
+
+The full bar (500-780 games), the handicap ladder and the 16 games against the setups whose stock AI cheats run at milestones only: before the default flips and before every `v*` tag. Every batch of games registers one run in the runs viewer (`tools/tarun.py`), its games nested under it.

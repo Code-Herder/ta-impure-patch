@@ -18,11 +18,23 @@ The order of work and each landing's exit test. Research step L0 runs beside S1;
 | ~~**T2**~~ | *stopped:*  tasim, combat: every ground and sea weapon kind, damage, wrecks, fire, experience, self-destruct, the commander's explosion, the game's end | the duel, brawl, naval and base-assault scenarios are in band |
 | **A2** | (two parts: A2a the fight predictor, fitted to engine fights; A2b the rest) ImpAI fights: the fight predictor, the military manager, the three levels; the default flips to ImpAI | the predictor's 90 % check against engine duels; [the bar](bar.html) at every level |
 | ~~**T3**~~ | *stopped:*  tasim, air and specials: flight, bombers, transports, cloak, stealth, stockpiles, nukes and interceptors, kamikaze | those scenarios in band; no unmodelled key left in the base game |
-| **A3** | ImpAI adapts: role composition, response tables, the tournament harness that tunes them, air play | a tuned table beats the hand-written one in the engine tournament, and the win holds at rung 2 |
+| **A3** | ImpAI keeps improving once it beats OTA AI every game: the paired margin test, the champion gauntlet (settings per seat, then code against code), the handicap ladder, an exploiter suite, automatic tuning of the hand-set constants; role composition, response tables and air play are what it tunes (*A3, how ImpAI keeps improving*, below) | a tuned build beats the hand-written one in the gauntlet by the margin test, and the handicap ladder's break-even rises |
 | ~~**T4**~~ | *stopped:*  tasim, Impure's engine and the mods: extra weapons, raised limits, the defect patches, the TADR sim fixes; the compatibility-suite mods | no key of a supported mod unmodelled; each mod's calibration subset in band |
 | **A4** | ImpAI everywhere: network games, every supported mod | the compatibility suite and a two-player recorded game with ImpAI seats come back clean |
 
 Every landing follows the repository's rules: review at the level the diff calls for, the documentation pass, and replay test groups for any landing that changes simulation code. This plan does not repeat them.
+
+## Next, in order
+
+The plan of record from 2026-11-15 on. Each item names what closes it; the [roadmap page](https://claude.ai/artifact/MUcwBo6NzUdRjquhRHbfqQ) is a view of this section, not its source.
+
+1. **Per-seat contacts.** Merge local `main` (per-seat radar and sonar, `tagpu_seatcontact_scan`, [allied sharing](../modules/allied-sharing.html), *For a skirmish AI*) and take ImpAI's contacts from the scan for its own seat. Closed when no ImpAI read of `+0x110` bits 8-10 or of the radar pass for the viewed player is left, and the regression set and the `hota` win check pass on the merged build.
+2. **The levels ordered.** Round 3 (57d39d71) met Hard 100 of 100, Normal 1.000 and Easy 0.996 (no ceiling, [the bar](bar.html), *The rules*), but Hard and Normal split their ladder 33 to 34 with 33 at the cap. Choose Normal's and Easy's persona rows from the calibration rows (the pre-registered fallback: harsher limits first) so `hn` and `ne` each reach 90 of 100; if no row does, the owner decides. Closed when both ladders pass.
+3. **The mods batch (A4).** Weapons rated by their real fire rate where a script times it; anti-air bought against air seen; energy per metal from each mod's own costs; TA Zero's tech graph; Lava Mania's expansion; ProTA's predictor against defences. Closed when the fair mod setups win every game and the retail regression set does not regress; the setups whose stock AI cheats are tracked apart.
+4. **The faster per-batch loop** ([testing](testing.html), *Per brain batch and at milestones*): `tools/impai/margin.py`, its tests and its live self-check. Closed when it decides a batch.
+5. **The closing gates on the final build**: the full bar, the replay landing gate, the compatibility suite with ImpAI seats (the Windows half on the owner's desktop, asked first).
+6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
+7. **A3**, below.
 
 ## Where it stands
 
@@ -45,3 +57,21 @@ On the branch `worktree-Bar_game_AI` (not `main`, not published), 2026-11-14.
 | T1b, T1c, T1d, T2, T3, T4 | stopped 2026-11-12 | kept from them: the RNG stream (41 433 recorded engine draws reproduced), the pathfinder and T2's combat arithmetic as standalone modules |
 
 The run lock is a weighted lock of 28 slots (`tools/runlock.py`), so independent game runs play side by side.
+
+## A3, how ImpAI keeps improving
+
+Once ImpAI wins every fair game, counting wins measures nothing; A3's tools each keep a measure that still moves.
+
+| Tool | What it measures | What it needs |
+|---|---|---|
+| The paired margin test | a candidate against the last accepted build on the same seeds, by time to win, stopping when a sequential test decides | `margin.py` (*Next*, 4) |
+| The champion gauntlet | a build against a pool of earlier ones, so an intransitive regression shows | settings per seat today (the persona lever); code against code needs two-process network games or a two-brain build |
+| The handicap ladder | OTA AI's income bonus at which ImpAI Hard falls to 50 %: a strength number past 100 % wins | an income bonus per seat |
+| The exploiter suite | scripted air rushes, naval turtles, artillery creep, commander rushes; mid-game puzzles cut from recordings | the scenario and fork tools |
+| Automatic tuning | SPSA or CMA-ES over the hand-set constants (wave thresholds, the lead's 2.5 / 2.0, persona rows) | the paired test |
+
+**A learned component** replaces a rule only when the rules are exhausted, and only where it fits:
+
+- *The signs*: brain batches stop finding concrete defects; the paired test keeps answering "no difference" and tuning stops moving the margin; fixes start breaking one another. None holds on 2026-11-15: every batch still finds defects.
+- *Where*: the fight predictor first (already a fitted model; 91 % on retail down to 74 % on Mayhem; labelled fights in every recording), then who is ahead (in place of the lead's set thresholds), then army composition against what was seen.
+- *The constraints*: deterministic integer or fixed-point weights, so replays stay exact; small enough for the 32-bit DLL; inputs only what the seat can see; it ships only when it beats the rule it replaces in the paired test.

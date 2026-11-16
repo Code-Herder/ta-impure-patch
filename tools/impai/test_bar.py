@@ -1162,9 +1162,11 @@ class TestProtocol(unittest.TestCase):
         rc, text = self.judge(by_map("eoh", three))                       # 0.6 of the points: in Easy's band
         self.assertEqual(rc, 0)
         self.assertIn("points: 0.600 of A's over 12 blocks, t90 [0.078, 1.122] over 5 map means", text)
-        self.assertIn("Easy's band 0.50..0.75: met", text)
-        rc, text = self.judge(by_map("eoh", three + ("lavamania",)))       # 0.8: above it
-        self.assertEqual((rc, "Easy's band 0.50..0.75: missed" in text), (1, True))
+        self.assertIn("Easy's floor 0.50: met", text)
+        rc, text = self.judge(by_map("eoh", three + ("lavamania",)))       # 0.8: above the band, accepted
+        self.assertEqual((rc, "Easy's floor 0.50: met (above the band's 0.75, accepted)" in text), (0, True))
+        rc, text = self.judge(by_map("eoh", ("pincushion", "redtriangle")))  # 0.4: below the floor
+        self.assertEqual((rc, "Easy's floor 0.50: missed" in text), (1, True))
         rs = by_map("eoh", three)
         rs[7]["stalls"] = {"A": [{"from": 1807, "to": 5407, "economy": True, "army": False}]}
         rc, text = self.judge(rs)                                          # in the band, but a stall
