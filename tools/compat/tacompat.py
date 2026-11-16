@@ -2973,8 +2973,9 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports, impai=False) -> dict:
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, None, None, port,
-                      scenarios(setup), impai)
+        # THE CLAIM needs a pulse of each ImpAI seat's: its game is played past IMPAI_CLAIM_TICKS
+        out = play_mp(setup["_inst"], join, max(seconds, -(-IMPAI_CLAIM_TICKS // TICKS_PER_S)) if impai else seconds,
+                      None, None, port, scenarios(setup), impai)
         out["port"] = port
         return out
     except SystemExit as e:                     # dpport refused the files: say so, as a result
@@ -3143,8 +3144,13 @@ IMPAI_NOFIT = re.compile(r"^impai: (fight none: .*do not fit the tables.*|menus 
 IMPAI_CONTENT = re.compile(r"^impai: (threat types=.*|tinfo mex=.*|menus side=.*|reach classes=.*)$", re.M)
 IMPAI_WORK = re.compile(r"^impai: work seat=(\d+) ticks=(\d+) refused=(\d+)", re.M)
 IMPAI_COULD_NOT = re.compile(r"^impai: .*could not.*$", re.M)
-# research/notes/impai/player.md: one line a game minute an ImpAI seat
-IMPAI_PULSE = re.compile(r"^impai: pulse seat=(\d+) t=(\d+) .*$", re.M)
+# research/notes/impai/player.md: one line a game minute an ImpAI seat, its counts since the level began: the
+# units it completed, the military's and the economy's orders (tagpu_impai.c, impai_pulse)
+IMPAI_PULSE = re.compile(r"^impai: pulse seat=(\d+) t=(\d+) built=(\d+) mroots=(\d+) eroots=(\d+) .*$", re.M)
+# THE CLAIM an ImpAI seat is held to wherever one plays (the stage, the network game): by its last pulse it gave
+# orders and completed a unit -- the seat played, which a turn taken alone does not show. The first pulse is at
+# a game minute, so a game of ImpAI's is played past IMPAI_CLAIM_TICKS (the network game's soak is raised to it).
+IMPAI_CLAIM_TICKS = 2 * 1800 + 300
 # a network game's seat line (tagpu_impai.c, the level init)
 IMPAI_NET_LINE = re.compile(r"^impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) "
                             r"records; other peers' AI seats (\S+), ImpAI's (\S+)", re.M)
@@ -3264,15 +3270,36 @@ def impai_seating(inst, roots, scen_map: str, seat_ai: str):
     store_set(inst["gamedir"], "seatai", str(IMPAI_SEAT) if seat_ai == "impai" else "none")
 
 
+def impai_pulses(text: str) -> dict:
+    """{seat: [(t, built, orders), ...]} of a log's pulse lines, orders the military's and the economy's."""
+    out = {}
+    for s, t, built, mroots, eroots in IMPAI_PULSE.findall(text):
+        out.setdefault(int(s), []).append((int(t), int(built), int(mroots) + int(eroots)))
+    return out
+
+
+def impai_claim_misses(pulses: dict, seat: int, who: str) -> list:
+    """THE CLAIM of one ImpAI seat from its pulses (impai_pulses): it wrote one, and by its last it had given
+    orders and completed a unit."""
+    got = pulses.get(seat)
+    if not got:
+        return [f"{who}: ImpAI's seat {seat} wrote no pulse (none before a game minute; the game ended first?)"]
+    t, built, orders = got[-1]
+    miss = []
+    if not orders:
+        miss.append(f"{who}: ImpAI's seat {seat} gave no order by GameTime {t}")
+    if not built:
+        miss.append(f"{who}: ImpAI's seat {seat} completed no unit by GameTime {t}")
+    return miss
+
+
 def impai_stage_read(text: str) -> dict:
     """What a stage game's tagpu.log says of ImpAI: the level init's seat line, why a seat was not
     ImpAI's, the content lines, each seat's work line, any `could not` line, the pulse lines and whether
     the level end was written."""
     seats = IMPAI_SEATS_LINE.findall(text)
     work = {int(s): (int(t), int(r)) for s, t, r in IMPAI_WORK.findall(text)}
-    pulses = {}
-    for s, t in IMPAI_PULSE.findall(text):
-        pulses.setdefault(int(s), []).append(int(t))
+    pulses = impai_pulses(text)
     return {"installed": bool(IMPAI_INSTALLED.search(text)),
             "marks": seat_list(seats[-1][0]) if seats else None, "live": int(seats[-1][1]) if seats else None,
             "why": IMPAI_WHY.findall(text), "content": IMPAI_CONTENT.findall(text), "work": work,
@@ -3309,6 +3336,8 @@ def impai_stage_misses(st: dict, seat_ai: str, survey: bool = False) -> tuple:
         miss.append(f"ImpAI marked {st['marks']}, not the stage's record {IMPAI_SEAT}")
     if available and not survey and not st["work"].get(IMPAI_SEAT, (0, 0))[0]:
         miss.append(f"ImpAI's seat {IMPAI_SEAT} took no turn")
+    if available and not survey:
+        miss += impai_claim_misses(st["pulses"], IMPAI_SEAT, "the stage")
     return available, miss
 
 
@@ -3339,7 +3368,9 @@ def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
         return {"ok": False, "available": None, "why": why}
     roots = inst["roots"]
     impai_seating(inst, roots, scen["setup"]["map"], seat_ai)
-    return play_impai(inst, seconds, path, scen, seat_ai, roots)
+    # THE CLAIM needs a pulse of ImpAI's seat: a game is played past IMPAI_CLAIM_TICKS (the survey plays none)
+    return play_impai(inst, max(seconds, -(-IMPAI_CLAIM_TICKS // TICKS_PER_S)) if seconds else 0, path, scen,
+                      seat_ai, roots)
 
 
 def peek_values(name, *specs) -> "list | None":
@@ -3529,7 +3560,8 @@ def impai_mp_misses(texts: dict) -> list:
     """The network stage with an ImpAI seat on each peer (`--mp-impai`), from each peer's tagpu.log: each
     peer's level init read `netai=impai`, marked exactly one record -- the computer seat it added, named
     ImpAI: by the battle room's first step -- at Hard whatever the peer's Difficulty, and counted exactly one
-    AI seat another peer runs, the other's, ImpAI's by its name."""
+    AI seat another peer runs, the other's, ImpAI's by its name; and THE CLAIM of the seat each peer's ImpAI
+    played (impai_claim_misses), read on that peer, where ImpAI runs it."""
     miss = []
     for role, text in texts.items():
         got = IMPAI_NET_LINE.findall(text)
@@ -3547,6 +3579,8 @@ def impai_mp_misses(texts: dict) -> list:
             miss.append(f"{role}: other peers' AI seats {remote}, not the other peer's one")
         elif rimpai != remote:
             miss.append(f"{role}: other peers' ImpAI seats {rimpai}, not the other peer's ImpAI seat {remote}")
+        if len(seat_list(marks)) == 1:
+            miss += impai_claim_misses(impai_pulses(text), seat_list(marks)[0], role)
     return miss
 
 

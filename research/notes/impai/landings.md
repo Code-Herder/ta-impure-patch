@@ -38,6 +38,11 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
 3. **The mods batch (A4).** Weapons rated by their real fire rate where a script times it; anti-air bought against air seen; energy per metal from each mod's own costs; TA Zero's tech graph; Lava Mania's expansion; ProTA's predictor against defences. Closed when the fair mod setups win every game and the retail regression set does not regress; the setups whose stock AI cheats are tracked apart.
 4. **The faster per-batch loop** ([testing](testing.html), *Per brain batch and at milestones*): `tools/impai/margin.py`, its tests and its live self-check. Closed when it decides a batch.
 5. **The closing gates on the final build**: the full bar, the replay landing gate, the compatibility suite with ImpAI seats (the Windows half on the owner's desktop, asked first).
+    - **The suite** plays ImpAI with `tacompat.py wine --impai [SECONDS] --mp-impai`.
+        - It holds every ImpAI seat, in the stage and on each peer of the network game, to the claim: by its last pulse the seat gave orders and completed a unit ([the suite](../compat/suite.md)).
+        - That covers every player's setup where Impure runs. `gammata-ota` does not load Impure today (its known gap), so it plays neither. `tazero-wildhunt` plays no network game, only the stage.
+    - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
+        - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
 6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
 7. **A3**, below.
 
