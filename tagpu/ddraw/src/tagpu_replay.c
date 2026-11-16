@@ -5618,6 +5618,10 @@ static int mp_follow(const Lv* L, unsigned T)
         return 0;
     }
     if (seg) locals_set(local, T, "the segment's own humans and AIs");
+    /* a takeover's skirmish segment carries no marks, and the store holds the previous playhead's:
+       emptied, or marks of another timeline or tick would stay drawn (a multiplayer segment's
+       mp_rebuild empties and recomposes it) */
+    if (!here) tagpu_board_replay_clear();
     s_mp.on = here;
     s_engine_cells = here || held;
     s_cells_held = held;

@@ -3274,7 +3274,7 @@ def takeover(c, shots, res):
 PLAYERS = "players"
 PL_KEYS = ("pl", "sight", "follow", "tog", "folded", "stat_open", "stat_team", "stat_measure", "npt", "period", "base",
            "team", "cam", "top_side")                   # (p2) the record's players block, but its samples
-PL_SWITCHES = ("cursors", "clicks", "selections", "chat")  # (p4) the Players set's switches, replay.js TOG's names
+PL_SWITCHES = ("cursors", "clicks", "selections", "chat", "marks")  # (p4) the Players set's switches, replay.js TOG's names
 PL_INERT = ("jump:1", "sight:1", "follow:1", "cursors", "stats", "takeover")   # (p4) pressed on Watching: none acts
 PL_EMBLEM = 76                                          # a watching frame's emblems' first column, Wg less this
 M0P_FIGS = ("fig-p2-topbar.png", "fig-p5-minimap-sight1.png")   # (p3) M0-P2's top bar and M0-P5's minimap, for the eye

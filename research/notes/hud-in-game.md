@@ -64,7 +64,7 @@ device space where the dump said it was drawn, through `tacli hud`):
   added and removed, with `replays\index.dat` changed each time; the scale button through 100,
   125, 150, 75 and back to 100, written to `impure.cfg`; a team folded and unfolded;
 - the switches, each logging its line (`replay: overlay cursors off` … `replay: chat
-  hidden`; the Marks switch, added later, `replay: overlay marks off`);
+  hidden`; `replay: overlay marks off` for Marks);
 - hover showing a row's Jump, Sight and Follow; Sight on seat 2, then Sight again (record 10, the
   full map); Follow, then Follow again (`follow ended: free cam`); Jump; on a seat whose camera
   was not recorded, the toast "Camera was not recorded" (seen in a capture);

@@ -71,7 +71,7 @@ const WikiFrame = (() => {
   const YESORNO = { x: 112, y: 118, w: 400, h: 100, title: [25, 25, 350, 20], yes: [80, 55, 95, 20], no: [225, 55, 95, 20] };
   /* THE OVERLAY SWITCHES' bits (tagpu_hudlay.h HUD_TOG_*, replay.js TOG), all on outside a players replay; a click
      shows REC_CLICK_SHOW ticks (tagpu_replay.c) */
-  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16 }, CLICK_SHOW = 15;
+  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16, marks: 32 }, CLICK_SHOW = 15;
   /* THE STATS WINDOW's measures by the record's index (replay.js MEASURES, layout.json window.measures), and its place
      and the team groups' colours where hudState is given no HUD layout: layout.json's window.x, window.y and
      chart.teams, which a page and a check pass from the file itself */
@@ -163,7 +163,7 @@ const WikiFrame = (() => {
      viewport (THE EYE). Under a players replay's Sight, the watcher's view is the viewed seat's (sightView). */
   function view(gv, layout, side, mode = 'watch', cursor = false, human = 0, ov = {}) {
     if (!gv || !gv.map) return null;
-    const M = gv.map, n = (+M.w || 1) * (+M.h || 1), P = ov.players || null, tog = P ? P.tog : TOG.cursors | TOG.clicks | TOG.selections | TOG.chat;
+    const M = gv.map, n = (+M.w || 1) * (+M.h || 1), P = ov.players || null, tog = P ? P.tog : TOG.cursors | TOG.clicks | TOG.selections | TOG.chat | TOG.marks;
     // a seat whose overlays the view carries: every seat to the watcher, the human seat in the past
     const mine = k => mode === 'watch' || k === human;
     let v;
@@ -479,12 +479,12 @@ const WikiFrame = (() => {
       W: Wg * k, H: HUD_H, frame: { panel: SIDE_W * k, top: BAR * k, bottom: BAR * k },
       t, T, playing: !live && !!rec.playing, speed: rec.speed / 10, hud: 1,
       seats, teams, folded: [], scroll: 0, sight: -1, follow: -1, markers,
-      toggles: { cursors: true, clicks: true, selections: true, chat: true, stats: false },
+      toggles: { cursors: true, clicks: true, selections: true, chat: true, marks: true, stats: false },
       toast: rec.toast, stats: { open: false }, ends: T, len: T, fillTo: T, forks: [],
       ...(pl ? {
         sight: rec.sight, follow: rec.follow, folded: teams.map((_, j) => j).filter(j => rec.folded >> j & 1),
         toggles: { cursors: !!(rec.tog & TOG.cursors), clicks: !!(rec.tog & TOG.clicks), selections: !!(rec.tog & TOG.selections),
-          chat: !!(rec.tog & TOG.chat), stats: !!rec.stat_open },
+          chat: !!(rec.tog & TOG.chat), marks: !!(rec.tog & TOG.marks), stats: !!rec.stat_open },
         stats: { open: !!rec.stat_open, x: hud ? hud.window.x : WINDOW.x, y: hud ? hud.window.y : WINDOW.y,
           measure: MEASURES[rec.stat_measure] || MEASURES[0], split: rec.stat_team && headed(teams) ? 'team' : 'player',
           groups: statGroups(rec, seats, teams, markers, hud ? hud.chart.teams : TEAM_COLOURS),

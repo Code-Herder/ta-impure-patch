@@ -178,14 +178,22 @@ recording's GameTime, *THE CLOCK* in `tagpu_replay.c`). Both the recording machi
 tails are not. A body that is not one shows nothing and never stops the playing.
 
 **Every seat is stored**, each operation under the rights it carried: the viewer can change the
-Sight at any time, so the store holds what every peer would have held, and the fill picks. Nothing
+Sight at any time, so one store holds every seat's marks, and the fill picks the seen ones. A live
+peer stored only the seats its player saw, under rights cut to them, and nothing its player had
+muted; the replay's store is the union, and shares its 256 markers and 4096 segments among every
+seat (*Gaps*). Nothing
 is said in chat, pinged or counted as received, and the pointers, edge arrows, text box and pen
 are not drawn: the playback has no gestures of the viewer's (`live()` refuses a puppet seat and
 the viewer's record 10).
 
 **The seek** empties the store (`tagpu_board_replay_clear`) together with the seat maps at
 `mp_rebuild` and in `mp_begin`, and the rebuild's composing applies every body up to the target
-again, so the board after a seek is the board the playing would have reached.
+again, so in the recording's own segment the board after a seek is the board the playing would
+have reached. A seek or timeline switch into a takeover's skirmish segment empties it
+(`mp_follow`): that segment carries no marks.
+
+**A takeover** starts from the board as it stood: the store is the playback's, and the taken seat's
+live board draws what that seat sees of it (`shown_seats`), then takes the player's own gestures.
 
 **Who is shown** (`replay_seen`): in the full view (Sight off) every seat; with a seat's Sight,
 what that seat saw — its own, its mutual allies' and, for a watcher, every seat's
@@ -378,7 +386,8 @@ brought it back; at about 2076 the host's marks and the pin (60 s after 141) wer
 joiner's line was not; seeks back from the recording's end to 100 and from 334 to 128 rebuilt
 each state. Not allied: the
 full view drew both seats' marks, the host's Sight only the host's line, the joiner's only the
-joiner's line and pin, and the full view both again.
+joiner's line and pin, and the full view both again; a takeover as the host at 400 drew the
+host's line and not the joiner's marks.
 
 Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
 there and back, each truncation and malformed field refused, the renumbering, the store's rights,
@@ -393,8 +402,13 @@ reads the body it writes with `recmp_file.board_ops`.
   recorded player's pointer is the replay's own cursor overlay. The markers' dots on the replay's
   minimap come from the same packet records but were not looked at.
 - A replay's lifetime is the viewer's setting, not the one each recorded player had.
-- A recording stopped before its level's end keeps no contributions, its marks included: the
-  writer flushes them every 2 MB and at the end.
+- A recording stopped before its level's end keeps none of the contributions, marks included, made
+  since its last flush: the writer flushes them every 2 MB and at the end.
+- A replay's store holds every seat's marks in one store, so where several teams draw a lot a
+  Sight seat's older marks are replaced sooner than on that seat's machine, a seat seen only
+  later shows marks its peer had dropped, and the recorded players' mutes are not reproduced.
+- A takeover timeline shows no marks, not even those made before its fork: its skirmish segment
+  carries none, and the parent's are not composed into it.
 - The lifetime is each player's own setting and is not sent, so allies with different settings
   see different boards, and an edit or move of a marker one peer has already dropped does nothing
   there.
