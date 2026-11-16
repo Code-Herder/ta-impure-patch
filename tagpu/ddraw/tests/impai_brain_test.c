@@ -9394,16 +9394,16 @@ static void check_yard_walk(void)
 }
 
 /* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
-   (27..30, 26..33), and a constructor idle with a lone Park stands on it at cell (28, 28), clear of the lab grown by
-   its half-size. (a) It is moved off the way and the lab along the line from the lab's centre through it, pushed
-   past the way's end (THE WAY OFF), (448, 579) -- never north, through the lab, where every point off the way lay
-   before. (b) With no way kept it is left where it stands. (c) With a second factory, cells (26..31, 35..40), over
-   that point, it goes to the next candidate clear of both and not through the lab: west, (349, 368), since the
-   line east, to (579, 368), clips the lab's south-east corner. */
+   (27..30, 26..33), and a constructor idle with a lone Park stands on it at (456, 456), clear of the lab grown by
+   its half-size. (a) THE WAY OFF's rings round it, south first -- the line from the lab's centre through it --
+   then south-east and south-west: the nearest ring with a point off the way, 64 px out, gives south-west,
+   (411, 501); south and south-east still touch the way. (b) With no way kept it is left where it stands.
+   (c) With a second factory, cells (21..26, 29..34), over that point, the same ring's next point clear of both
+   and not through the lab: east, (520, 456). */
 static void check_yard_way(void)
 {
     static const char* const NAME[3] = { "its way kept", "no way kept", "a factory south" };
-    static const int32_t WANT[3][2] = { { 448, 579 }, { 0, 0 }, { 349, 368 } };
+    static const int32_t WANT[3][2] = { { 411, 501 }, { 0, 0 }, { 520, 456 } };
     IMPAI_BRAIN_OUT out;
     int c;
     for (c = 0; c < 3; c++) {
@@ -9427,7 +9427,7 @@ static void check_yard_way(void)
             w->r[0][0] = 27; w->r[0][1] = 26; w->r[0][2] = 30; w->r[0][3] = 33;
             s_st.nway = 1;
         }
-        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 26, 35, 1);
+        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 21, 29, 1);
         CHECK(decide(&out) == 0, "decide");
         moved = last_move(0, 2, &x, &z);
         printf("the yard, a constructor on the way, %s: moved %d to (%d, %d), yard %u, ways %u\n", NAME[c], moved, x, z,
@@ -9440,34 +9440,55 @@ static void check_yard_way(void)
 
 /* THE WAY OFF (impai_build.c): a constructor idle with a lone Park inside the waiting lab's footprint, at (464, 336),
    north of its centre (464, 368) -- where round 3's stood (impai_build.c, THE WAY OFF's WHY). (a) It is moved out of
-   the lab's one exit, south, to (464, 448), never north through the lab. (b) The exit's block, (14, 14), on another
-   reach label: no point beyond the exit is on the constructor's own label, so it is left where it stands. */
+   the lab's one exit, south, to (464, 448), never north through the lab. (b) The blocks straight south of the exit,
+   column 14 from row 13, on no label, as past Steel Jungle ac-7's way: the first ring's next direction,
+   south-west, (442, 438). (c) Every block from row 13 south on another label: no point beyond the exit's line is
+   on the constructor's own label, so it is left where it stands. (d) The lab's yard map with no exit cell: it is
+   searched round itself and tested on the region and its label alone, north, (464, 272). (e) The constructor
+   flying: round itself, the region alone, north over the lab, (464, 272). (f) Its own block on no label: held to
+   none, south out of the exit, (464, 448). (g) Standing just east of the lab, at (520, 368), its own block
+   (16, 11) and the blocks west of column 16 on its label, every other block on another: each point on its label
+   lies where the straight line crosses the lab, so it is left where it stands. */
 static void check_yard_off(void)
 {
-    static const char* const NAME[2] = { "the exit open", "the exit on another label" };
+    static const char* const NAME[7] = { "the exit open", "straight out on no label", "the exit on another label",
+                                         "no exit", "flying", "no label of its own", "east of the lab" };
+    static const int32_t WANT[7][2] = { { 464, 448 }, { 442, 438 }, { 0, 0 }, { 464, 272 }, { 464, 272 },
+                                        { 464, 448 }, { 0, 0 } };
+    static uint16_t keep[sizeof s_labels / sizeof s_labels[0]];
+    const uint32_t vtol = s_ti[T_CONS].flags;
     IMPAI_BRAIN_OUT out;
     int c;
-    for (c = 0; c < 2; c++) {
-        const size_t blk = (size_t)14 * (FW_W / 2) + 14;
-        const uint16_t keep = s_labels[blk];
+    for (c = 0; c < 7; c++) {
         FUNIT* u;
         int32_t x = 0, z = 0;
-        int moved;
+        int moved, bx, bz;
         yard_world();
-        if (c) s_labels[blk] = 3;
+        memcpy(keep, s_labels, sizeof keep);
+        for (bz = 13; (c == 1 || c == 2) && bz < FW_H / 2; bz++)
+            for (bx = 0; bx < FW_W / 2; bx++)
+                if (c == 2 || bx == 14) s_labels[(size_t)bz * (FW_W / 2) + bx] = (uint16_t)(c == 2 ? 3 : 0);
+        for (bz = 0; c == 6 && bz < FW_H / 2; bz++)
+            for (bx = 16; bx < FW_W / 2; bx++)
+                if (bx != 16 || bz != 11) s_labels[(size_t)bz * (FW_W / 2) + bx] = 3;
+        if (c == 3) s_w.defs[T_FACTORY].yard[5 * 6 + 2] = s_w.defs[T_FACTORY].yard[5 * 6 + 3] = 0x2F;
+        if (c == 4) s_ti[T_CONS].flags |= IMPAI_TF_VTOL;
+        if (c == 5) s_labels[(size_t)10 * (FW_W / 2) + 14] = 0;
         u = &s_w.unit[2];
-        u->pos[0] = (int32_t)((uint32_t)464 << 16);
-        u->pos[2] = (int32_t)((uint32_t)336 << 16);
+        u->pos[0] = (int32_t)((uint32_t)(c == 6 ? 520 : 464) << 16);
+        u->pos[2] = (int32_t)((uint32_t)(c == 6 ? 368 : 336) << 16);
         u->list[0].action = A_PARK;
         u->list[0].flags = 0x1001;
         u->list[0].target = (uint16_t)WQ_NONE;
         u->n = 1;
         CHECK(decide(&out) == 0, "decide");
-        s_labels[blk] = keep;
+        memcpy(s_labels, keep, sizeof keep);
+        s_ti[T_CONS].flags = vtol;
         moved = last_move(0, 2, &x, &z);
         printf("the way off, %s: moved %d to (%d, %d), yard %u\n", NAME[c], moved, x, z, out.yard);
-        CHECK(c ? !moved && !out.yard : moved && x == 464 && z == 448 && out.yard == 1,
-              "the constructor inside the lab, %s: (%d, %d)", NAME[c], x, z);
+        CHECK(c == 2 || c == 6 ? !moved && !out.yard
+                               : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1,
+              "the constructor by the lab, %s: (%d, %d)", NAME[c], x, z);
     }
 }
 
@@ -10359,7 +10380,12 @@ static int queued_of(int from, int type)
    (h) THE GOVERNOR'S CONSTRUCTOR, with no constructor finished, of a lab making the CK and the CH: the CH while
        the CK reaches no patch, the CK -- the better workertime for its value -- while it does;
    (i) the extractor water-only, minwaterdepth 20, over the dry patches: the CH reaches them but builds nothing on
-       them, so no plant. */
+       them, so no plant;
+   (j) the seat judged naval, its commander -- busy with another hand's moves -- the only builder of a shipyard
+       that makes a sea raider: the reach's want is THE CHOICE's, the hover plant, and never the sea plant's, which
+       no idle builder could order (Steel Jungle ca-1's seat);
+   (k) a lab frame beside the finished lab, and (l) a lab frame alone: no plant, since a frame's constructors are
+       not yet the seat's to judge. */
 static void check_metal_reach(void)
 {
     static const uint16_t LABMENU2[] = { T_CONS, C_CH, C_AK };
@@ -10419,6 +10445,25 @@ static void check_metal_reach(void)
     s_ti[T_MEX].flags &= ~IMPAI_TF_WATER;
     s_w.defs[T_MEX].e.minwater = 0;
     CHECK(!out.plant && !n[C_HP], "(i) a water-only extractor over dry patches: no plant");
+    {
+        static const uint16_t SYMENU2[] = { C_CS, C_HRAID };
+        mr_world(1);
+        menu_set(&s_w, C_SY, SYMENU2, (int)(sizeof SYMENU2 / sizeof SYMENU2[0]));
+        s_ti[C_HRAID].klass = IMPAI_K_SRAIDER;
+        plant_builder(1, T_COM, 20, 20, 1);
+        s_umil.naval = 1;
+        plant_decide("the reach, a naval seat", &out, n);
+        s_umil.naval = 0;
+        s_ti[C_HRAID].klass = IMPAI_K_LRAIDER;
+        CHECK(out.plant == C_HP && n[C_HP] == 1 && !n[C_SY], "(j) a naval seat short of the reach: the hover plant");
+    }
+    for (c = 0; c < 2; c++) {
+        mr_world(1);
+        if (c) s_w.unit[10].live = 0;
+        unit_add(&s_w, 12, T_FACTORY, 40, 40, 0);
+        plant_decide(c ? "the reach, a lab frame alone" : "the reach, a lab frame beside the lab", &out, n);
+        CHECK(!out.plant && !n[C_HP], "(%c) a plant frame standing: no plant, plant %u", c ? 'l' : 'k', out.plant);
+    }
 }
 
 /* THE CHOICE (impai_econ.c) over the seat's menus, the build tech, the reach, the wet anchor and the ties */

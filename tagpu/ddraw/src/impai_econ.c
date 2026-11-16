@@ -291,7 +291,9 @@ static int reaches(const IMPAI_DEC* d, uint32_t mask, unsigned type)
      class at the base (base_label: the label most blocks round the anchor carry; a VTOL type and a class with no
      labels reach every block) and an extractor of the type's own menu fits the patch's ground (choose_mex,
      impai_mex_at: a water extractor where the patch lies deep enough, the land one elsewhere).
-   - THE SEAT IS SHORT of reach (impai_econ_metal_short) past its first factory while MORE PATCHES LIE OPEN than
+   - THE SEAT IS SHORT of reach (impai_econ_metal_short) past its first FINISHED factory, with no plant frame
+     standing -- a frame's constructors are not yet the seat's to judge, and a frame interrupted in the opening
+     would otherwise read as a seat cut off from the metal on any map --, while MORE PATCHES LIE OPEN than
      the seat has extractors, built, framed or ordered, and neither a finished constructor of the seat's (the
      commander apart: THE COMMANDER'S REACH holds it near the anchor) nor a constructor type on the menu of one of
      its finished factories reaches one. The count is the seat's own measure of what it is cut off from: a patch
@@ -366,7 +368,7 @@ static void metal_judge(IMPAI_DEC* d)
 
 int impai_econ_metal_short(IMPAI_DEC* d)
 {
-    if (d->count[IMPAI_C_FACTORY] < 1) return 0;
+    if (d->done[IMPAI_C_FACTORY] < 1 || d->count[IMPAI_C_FACTORY] != d->done[IMPAI_C_FACTORY]) return 0;
     metal_judge(d);
     return d->mr_open && !d->mr_units && !d->mr_make;
 }

@@ -363,9 +363,9 @@ void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
 int  impai_econ_sea_able(IMPAI_DEC* d);
-/* THE METAL'S REACH (impai_econ.c): 1 past the seat's first factory when more patches lie open than it has
-   extractors and no constructor it has or its finished factories make reaches one; judges mr_open, mr_units and
-   mr_make on the way */
+/* THE METAL'S REACH (impai_econ.c): 1 past the seat's first finished factory, with no plant frame standing, when
+   more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
+   one; judges mr_open, mr_units and mr_make on the way */
 int  impai_econ_metal_short(IMPAI_DEC* d);
 /* 1 when a plant on the menus of the seat's builders, placed on its ground, makes a constructor that reaches an
    open patch (THE METAL'S REACH) */

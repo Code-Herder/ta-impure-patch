@@ -1033,8 +1033,9 @@ static void walk_checks(IMPAI_DEC* d)
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
      the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
      region, on the builder's own reach label, not through the plant) is walking off already, and leaves its list
-     with no order (`yard_left`); a point order through the plant is no walk off, and the builder is moved again. WHY: the census lists such a builder idle (THE
-     HAND-BACK), so the rule gave it the move again at every decision until it was off, each time one action of
+     with no order (`yard_left`); a point order through the plant is no walk off, and the builder is moved again.
+     WHY: the census lists such a builder idle (THE HAND-BACK), so the rule gave it the move again at every
+     decision until it was off, each time one action of
      the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
      orders of an Easy seat's game (bar-eota-pincushion-ac-1) and 539 of 766 of a Normal one's
      (bar-nota-troutfarm-ca-2), the factories and the other builders starved of actions from GameTime 15 000 and
@@ -1283,7 +1284,7 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = !mil || mil->naval >= 0;
-    int plant_metal, tech_metal = 0;
+    int plant_metal, plant_reach = 0, tech_metal = 0;
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
          SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
@@ -1401,19 +1402,24 @@ static void economy(IMPAI_DEC* d)
     /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory.
        THE REACHING PLANT (impai_econ.c, THE METAL'S REACH): with no constructor of the seat's reaching the open
        patches, more of them than its extractors, and a plant on its menus whose constructor does, that plant is
-       wanted whatever the income, below the factory lists' IMPAI_IDLE_CAP, and THE CHOICE's further plant is only
-       such a plant (mr_only) */
+       wanted whatever the income, below the factory lists' IMPAI_IDLE_CAP (plant_reach), and THE CHOICE's further
+       plant is only such a plant (mr_only). The want is THE CHOICE's alone, never the sea plant's: a naval seat's
+       yard waits on plant_metal as before, and while it is not wanted the reaching plant is the next one. WHY:
+       with the want fed to want_sea, a naval Steel Jungle seat whose only builder of a shipyard was its
+       commander, busy every decision, wanted the yard from GameTime 11 707 to the end and never ran THE CHOICE,
+       which want_sea holds back, nor ordered the yard (MEASURED 2026-11-16, round 3's p:L5 ca-1 with a diagnostic
+       build at 1322160c: `naval=1 chose=none sea_site=-`) */
     plant_metal = d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
                   ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
     if (d->count[IMPAI_C_FACTORY] >= 1 && !d->pending[IMPAI_C_FACTORY] && impai_econ_metal_short(d) &&
         impai_econ_reach_plant(d)) {
         d->mr_only = 1;
-        plant_metal |= d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
+        plant_reach = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
     }
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
-         (plant_metal && d->plant_e));
+         ((plant_metal || plant_reach) && d->plant_e));
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
        land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy
        stands where the land army cannot walk, so the seat wants its sea plant whatever its pacing and its factory
@@ -1461,7 +1467,7 @@ static void economy(IMPAI_DEC* d)
             sensor_want(d, m);
     }
     /* plant_e_need: the energy a pass short of THE ENERGY TERM, while a plant's metal is there and its energy is not */
-    if (!((plant_metal || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
+    if (!((plant_metal || plant_reach || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
        first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count

@@ -2224,6 +2224,7 @@ static void impai_content_clear(void)
     s_threat_n = 0;
     memset(s_tinfo, 0, sizeof s_tinfo);
     s_tinfo_n = 0;
+    s_e_per_m = 0.0f;
     memset(s_menu, 0, sizeof s_menu);
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
