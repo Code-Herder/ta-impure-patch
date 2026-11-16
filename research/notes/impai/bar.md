@@ -336,31 +336,45 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   both arms of a block at once, each arm under the run lock with its own lanes.
 - **The measure**: a seat-game's time to win -- its `end_tick` when ImpAI won, the cap (81 000) when the game
   reached it (a draw at one look included). **A TEST loss fails the test outright**, as Hard's 100 of 100 rules;
-  a BASE loss against a TEST win or cap is a pair TEST won. A pair is TEST's when TEST's time is shorter by more
-  than 300 ticks, BASE's when longer by more than 300, and otherwise -- inside the band, or both at the cap -- a
-  tie, which is dropped. The band: a decision at Hard is 75 to 150 ticks, and identical code ends on the same tick.
+  a BASE loss against a TEST win or cap is a pair TEST won. A pair scores 1 when TEST's time is shorter by more
+  than 300 ticks, 0 when longer by more than 300, and otherwise -- inside the band, or both at the cap -- 0.5, a
+  tie. The band: a decision at Hard is 75 to 150 ticks, and identical code ends on the same tick.
 - **The pairing**, as `paired.py` pairs: by id, each result stating its seed; seeds that differ, a result with no
   partner, an id twice in one arm or a game that could not run, and the test could not judge.
-- **The test**: Wald's SPRT on the sign of the non-tied pairs, a binomial in p, the chance TEST wins a pair; α =
-  β = 0.05, so the log-likelihood ratio's bounds are ±ln 19 (±2.944). **IMPROVE** (a change meant to make ImpAI
-  stronger) tests p = 0.5 against p = 0.6: accept, TEST is better; reject, it is not measurably better.
-  **NOT-WORSE** (a fix batch) tests p = 0.4 against p = 0.5: accept, TEST is not worse -- the batch's pass;
-  reject, it is worse. The ratio is read after each whole block, in order: the first block at which it reaches a
-  bound decides, and the blocks after it are not read; with all 200 pairs read and no bound reached the verdict
-  is NO DECISION. The verdict is a function of the results alone.
-- **The cost**, from Wald's approximations (`margin.py asn`), in non-tied pairs:
+- **The test**: a GSPRT on the mean pair score, the normal approximation engine-testing frameworks use: over n
+  pairs of mean m and variance v, LLR = n (s1 − s0)(2m − s0 − s1) / (2v), against ±ln 19 (±2.944, α = β = 0.05).
+  **IMPROVE** (a change meant to make ImpAI stronger) tests s = 0.50 against s = 0.55: accept, TEST is better;
+  reject, it is not measurably better. **NOT-WORSE** (a fix batch) tests s = 0.45 against s = 0.50: accept, TEST
+  is not worse -- the batch's pass; reject, it is worse. A tie stays in at 0.5 and lowers v, so a run of ties is
+  evidence that the arms play alike; a sign test that drops ties cannot decide identical code at all. The ratio
+  is read after each whole block, in order: the first block at which it reaches a bound decides, and the blocks
+  after it are not read; with all 200 pairs read and no bound reached the verdict is NO DECISION. The verdict is
+  a function of the results alone.
+- **The floor**: m and v are taken over the pairs and one pseudo-pair, half a pair better and half worse. It moves
+  no mean and gives v the spread of one non-tied pair, so a run with no pair or all ties divides by no zero, and
+  one block cannot decide: n ties read ±0.005 (n + 1)², 1.44 at 16, the bound first at 24, 5.45 at 32. A whole
+  pseudo-pair each way would read 2.89 at 32 ties, and identical code would take a third block.
+- **The cost**, simulated (`margin.py asn`: 2000 seeded runs a row, blocks of 16, every row in its output), by the
+  true mean score and the share of pairs tied. NOT-WORSE, at its hypotheses' midpoint 0.475 and at 0.50 (a batch
+  that changes nothing measurable); IMPROVE at 0.50 and at its midpoint 0.525 mirror these within the simulation's
+  noise, accept and reject swapped:
 
-  | true p | 0.40 | 0.45 | 0.50 | 0.55 | 0.60 | 0.65 | 0.70 |
-  |---|---|---|---|---|---|---|---|
-  | IMPROVE: P(accept) | 0.000 | 0.003 | 0.050 | 0.495 | 0.950 | 0.998 | 1.000 |
-  | IMPROVE: expected pairs | 48 | 72 | 130 | 213 | 132 | 73 | 49 |
-  | NOT-WORSE: P(accept) | 0.050 | 0.505 | 0.950 | 0.997 | 1.000 | 1.000 | 1.000 |
-  | NOT-WORSE: expected pairs | 132 | 213 | 130 | 72 | 48 | 36 | 29 |
+  | true mean, ties | accept | reject | no decision at 200 | pairs played | pairs, no cap |
+  |---|---|---|---|---|---|
+  | 0.475, 0.3 | 0.061 | 0.073 | 0.866 | 193 | 697 |
+  | 0.475, 0.6 | 0.157 | 0.155 | 0.688 | 178 | 432 |
+  | 0.500, 0.0 | 0.117 | 0.007 | 0.875 | 194 | 588 |
+  | 0.500, 0.3 | 0.231 | 0.009 | 0.759 | 186 | 418 |
+  | 0.500, 0.6 | 0.512 | 0.023 | 0.465 | 162 | 246 |
+  | 0.500, 0.9 | 0.963 | 0.011 | 0.026 | 76 | 78 |
+  | 0.550, 0.3 | 0.823 | 0.000 | 0.177 | 140 | 151 |
+  | 0.600, 0.3 | 0.995 | 0.001 | 0.005 | 87 | 87 |
 
-  Each tie costs a pair without moving the ratio, so the games played are twice the non-tied pairs over the
-  share of pairs not tied. A run is cut at 200 pairs, below the expected count midway between the hypotheses: a
-  true p near 0.55 (IMPROVE) or 0.45 (NOT-WORSE) ends at the cap as NO DECISION about half the time. The seeded
-  simulation in `test_margin.py` holds the approximations to within 12 %.
+  Hypotheses 0.05 apart need about 420 pairs at a third of pairs tied to decide a batch that changes nothing, so
+  the 200-pair cap ends most such runs with NO DECISION: 76 % at 0.50, 87 % at the midpoint. Wider hypotheses or
+  a larger α cut it (`asn --width`, `--alpha`; at 0.50 with 0.3 tied, no cap): width 0.06, 285 pairs; α = β =
+  0.1, 294; both, 204; width 0.10, 115; width 0.10 and α = β = 0.1, 87. With few non-tied pairs the normal
+  approximation errs a little above α: 0.067 at 0.45 with 0.9 tied.
 - **Reported, not judged**: the paired mean of ln(`end_tick`), TEST − BASE, over the pairs both arms won; and
   the paired mean of ln(value A / value B) at GameTimes 15 000 and 30 000, from the results' `values` (`bar.py
   play --values`, which `run` asks: each seat's value at each GameTime the game reached before its end, read from
@@ -368,18 +382,21 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   measurement of every recording, which `run` does not make.
 - **`margin.py run --base DLL --test DLL --mode improve|notworse --out DIR [--lanes L] [--blocks N]`** copies
   both DLLs into DIR first -- a DLL rebuilt elsewhere mid-run changes no game -- and refuses a DIR whose copies
-  differ from the DLLs given. It plays block after block, one `bar.py play` an arm at once, judges after each, and
+  differ from the DLLs given. It plays block after block, one `bar.py play` an arm at once with L lanes each (1 to
+  7, default 6: a GDI lane weighs 2 of the run lock's 28 slots, so two arms of 7 fill it), judges after each, and
   stops at a verdict, at the end of the order or after the order's first N blocks (a run in pieces: the next
   resumes it, its games played skipped). A block with a game that could not run is played once more. It is one
   runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`).
-- **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the ratio by block, its bounds, the
-  reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no decision.
-- **Identical code decides nothing**: a seed replays a game exactly, so the same DLL in both arms ties every pair
-  and NOT-WORSE never accepts. MEASURED 2026-11-15, the 57d39d71 build as BASE and TEST, NOT-WORSE, `--blocks 2`
-  at 4 lanes an arm: 32 pairs, 32 ImpAI wins an arm, all 32 on the same `end_tick` (27 556 to 74 829) with the
-  same values, ratio +0.000 after each block, exit 3. The two blocks played in 10 and 6.5 min beside other runs
-  on the reference setup. A change that alters play diverges its games from the first different decision, so
-  its pairs tie only when both reach the cap.
+- **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the mean score, the ratio by block, its
+  bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
+  decision.
+- **Identical code**: a seed replays a game exactly, so the same DLL in both arms ties every pair, and the test
+  accepts NOT-WORSE (rejects IMPROVE) at the second block. MEASURED 2026-11-15, the 57d39d71 build as BASE and
+  TEST, NOT-WORSE, at 4 lanes an arm: 32 pairs, 32 ImpAI wins an arm, all 32 on the same `end_tick` (27 556 to
+  74 829) with the same values; ratio +1.45 after block 1, +5.45 after block 2, TEST is not worse. Played again
+  from nothing at 6 lanes an arm, every game ended on the same tick as before and the verdict was the same; the
+  two blocks played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters
+  play diverges its games from the first different decision, so its pairs tie only when both reach the cap.
 
 ## When the default flips
 
