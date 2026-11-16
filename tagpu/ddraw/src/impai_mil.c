@@ -1123,6 +1123,22 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
     return 1;
 }
 
+/* THE FOE'S STARTS: 1 when start k can hold an enemy's base -- it is not the seat's own (the start nearest the
+   anchor) and, where the level seated its starts (WQ_START.seated, the engine's fixed-starts rule), the record
+   seated there is neither the seat's nor an ally's (IMPAI_VIEW.seat, allies). A start the level left empty
+   (WQ_SEATED_NONE) holds no base; at a level whose starts were random (seated 0) any record may stand at any other
+   start. The estimate (est_start), the scouting's points (next_point, starts_reached) and the base threat's sides
+   (nearer_anchor) read this one test, as the economy's held ground reads the same rule (impai_build.c,
+   start_foe). The seated record is data: one past WQ_SEATS holds no base. */
+static int start_foe(const MDEC* d, int k)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const int32_t s = d->starts[k].seated, r = s - 1;
+    if (k == d->own_start) return 0;
+    if (!s) return 1;
+    return s > 0 && r < WQ_SEATS && !(v && (r == (int32_t)v->seat || ((v->allies >> r) & 1u)));
+}
+
 /* THE STARTS LOOKED AT, the estimate before any enemy structure is known (EST_START): the start position nearest the
    seat's own start, other than its own, whose sweep cell no army unit of the seat has stood in (IMPAI_MIL.swept)
    and whose cell centre the land army reaches (land_block, the sweep's own half), ties to the lower index; with
@@ -1135,10 +1151,10 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
    s_mil and s_job). A start the land army cannot reach is skipped, so an island start never holds the estimate
    while one the army can walk to has not been looked at; a level with no reach map tests no reach. RESIDUAL: the
    reach is tested at the cell's centre, so a start whose cell centre is water or a cliff the army cannot stand on
-   is taken as out of reach although its shore may not be. A start the level left empty (WQ_START.seated
-   WQ_SEATED_NONE, the engine's fixed-starts rule, as THE HELD GROUND reads it) is no candidate at all: no base
-   stands there. -1 when every other start is empty, and the seat has no estimate, as on a level of one start.
-   BOUND: the starts (STARTS), each one cell read and one land_block; the army once (land_reach). */
+   is taken as out of reach although its shore may not be. Only a start that can hold an enemy's base (THE FOE'S
+   STARTS, start_foe) is a candidate at all. -1 when no other start can, and the seat has no estimate, as on a
+   level of one start. BOUND: the starts (STARTS), each one cell read and one land_block; the army once
+   (land_reach). */
 static int est_start(const MDEC* d)
 {
     LANDREACH lr;
@@ -1149,7 +1165,7 @@ static int est_start(const MDEC* d)
         const int c = sweep_cell(d, d->starts[k].x, d->starts[k].z);
         const uint32_t y = dist(d->starts[k].x, d->starts[k].z, d->ax, d->az);
         int32_t cx, cz;
-        if (k == d->own_start || d->starts[k].seated == WQ_SEATED_NONE) continue;
+        if (!start_foe(d, k)) continue;
         if (best < 0 || y < bd) { best = k; bd = y; }
         sweep_centre(d, c, &cx, &cz);
         if (!d->st->swept[c] && (open < 0 || y < od) && (!d->in->reach || land_block(d, &lr, cx >> 5, cz >> 5, 0))) {
@@ -1492,7 +1508,8 @@ static void contacts(MDEC* d)
 
 /* 1 when member e, at da px from the anchor, stands nearer the anchor than its own side's base: than every known
    enemy structure of its owner (of every foe for a contact never identified), else, with none known, every start
-   position but the seat's own; with neither, 1. Squared distances, exact. `st` lists the enemy structures. */
+   position that can hold an enemy's base (THE FOE'S STARTS); with neither, 1. Squared distances, exact. `st` lists
+   the enemy structures. */
 static int nearer_anchor(const MDEC* d, const MENEMY* e, uint32_t da, const int16_t* st, int nst)
 {
     const uint64_t da2 = (uint64_t)da * da;
@@ -1507,7 +1524,7 @@ static int nearer_anchor(const MDEC* d, const MENEMY* e, uint32_t da, const int1
     if (known) return 1;
     for (k = 0; k < d->nstarts; k++) {
         const int64_t dx = (int64_t)d->starts[k].x - e->x, dz = (int64_t)d->starts[k].z - e->z;
-        if (k != d->own_start && (uint64_t)(dx * dx + dz * dz) <= da2) return 0;
+        if (start_foe(d, k) && (uint64_t)(dx * dx + dz * dz) <= da2) return 0;
     }
     return 1;
 }
@@ -2629,19 +2646,19 @@ static void raid(MDEC* d)
     d->out->raids++;
 }
 
-/* The next scouting point of a unit of `type` at (ux, uz): start positions round the list from scout_next, the
-   seat's own and every one the unit does not reach (unit_reaches) skipped -- first those whose sweep cell no army
-   unit of the seat has stood in (THE STARTS LOOKED AT, est_start), then any --, at most 2 nstarts looks; -1 for
-   none, scout_next unchanged. WHY FIRST: a trip ends at its first contact, so a start the round order put third was
-   never reached on Trout Farm while the trips looked at the same two again (est_start). BOUND: scout_next is
-   recorded state, taken modulo the count before it indexes the list. */
+/* The next scouting point of a unit of `type` at (ux, uz): start positions round the list from scout_next, those
+   that can hold no enemy's base (THE FOE'S STARTS) and every one the unit does not reach (unit_reaches) skipped --
+   first those whose sweep cell no army unit of the seat has stood in (THE STARTS LOOKED AT, est_start), then any
+   --, at most 2 nstarts looks; -1 for none, scout_next unchanged. WHY FIRST: a trip ends at its first contact, so a
+   start the round order put third was never reached on Trout Farm while the trips looked at the same two again
+   (est_start). BOUND: scout_next is recorded state, taken modulo the count before it indexes the list. */
 static int next_point(MDEC* d, unsigned type, int32_t ux, int32_t uz)
 {
     int n, pass;
     for (pass = 0; pass < 2; pass++)
         for (n = 0; n < d->nstarts; n++) {
             const int k = (d->st->scout_next % d->nstarts + n) % d->nstarts;
-            if (k == d->own_start || (!pass && d->st->swept[sweep_cell(d, d->starts[k].x, d->starts[k].z)]) ||
+            if (!start_foe(d, k) || (!pass && d->st->swept[sweep_cell(d, d->starts[k].x, d->starts[k].z)]) ||
                 !unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z))
                 continue;
             d->st->scout_next = (uint8_t)((k + 1) % d->nstarts);
@@ -2650,21 +2667,22 @@ static int next_point(MDEC* d, unsigned type, int32_t ux, int32_t uz)
     return -1;
 }
 
-/* the start positions other than the seat's own that a unit of `type` at (ux, uz) reaches (unit_reaches) */
+/* the start positions that can hold an enemy's base (THE FOE'S STARTS) that a unit of `type` at (ux, uz) reaches
+   (unit_reaches) */
 static int starts_reached(const MDEC* d, unsigned type, int32_t ux, int32_t uz)
 {
     int k, n = 0;
     for (k = 0; k < d->nstarts; k++)
-        n += k != d->own_start && unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z);
+        n += start_foe(d, k) && unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z);
     return n;
 }
 
 /* SCOUTING: every scout_period, or while the estimate rests on no enemy structure, and with no scout out: the
    dearest scout-class unit of a FORM squad, else its cheapest unit among the fastest quarter of speeds, goes as a
-   squad of one to the start positions other than the seat's own, from scout_next on, round the list, those no
-   army unit has stood in first (next_point), of those it reaches; with none it does not go. Once its legs
-   have visited every start it reaches, the next leg is the sweep's cell (sweep_goal) with ties to the nearest the
-   scout. It ends at the third point, at a contact, or with no point left it reaches. */
+   squad of one to the start positions that can hold an enemy's base (THE FOE'S STARTS), from scout_next on, round
+   the list, those no army unit has stood in first (next_point), of those it reaches; with none it does not go.
+   Once its legs have visited every start it reaches, the next leg is the sweep's cell (sweep_goal) with ties to
+   the nearest the scout. It ends at the third point, at a contact, or with no point left it reaches. */
 static void scouting(MDEC* d)
 {
     int k, s, pick = -1, fastest = 0;

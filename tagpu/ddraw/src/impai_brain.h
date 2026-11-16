@@ -96,8 +96,9 @@ typedef struct IMPAI_DEC {
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     uint8_t       fbusy_q[IMPAI_IDLE_CAP];      /* 1: that busy factory's head is a BuildingBuild (THE YARD)  */
-    /* THE WAY OFF's points of the decision: one a builder THE YARD moves off a region or whose walk off it trusts,
-       and each such builder leaves its list, so at most the idle and helper lists' 2 x IMPAI_IDLE_CAP */
+    /* THE WAY OFF's points of the decision: one a builder -- an idle builder's live walk (THE WALKS FIRST), or a
+       builder THE YARD moves off a region, its own point replaced --, so at most the idle and helper lists'
+       2 x IMPAI_IDLE_CAP */
     IMPAI_WAYTO   way_to[2 * IMPAI_IDLE_CAP];
     int           nway_to;
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
@@ -445,12 +446,16 @@ int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* 1 when a unit of `type` standing at px (x, z) touches region g: lies inside one of its rectangles grown by the
    type's half-size (impai_build.c, THE YARD's move) */
 int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
-/* 1 when px (x, z) is a point builder b leaves region g for (impai_build.c, THE WAY OFF): off g, on b's class's own
-   reach label, clear of the seat's buildings and builders and of the decision's other points, and reached from
-   where b stands without crossing g's plant */
+/* THE WALK OFF's trust in b's walk to px (x, z) (impai_build.c, THE WAY OFF): off g, on b's class's own reach
+   label, clear of the seat's buildings and of what holds still -- the decision's other points and the idle builders
+   on no walk --, and reached from where b stands without crossing g's plant */
 int  impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z);
-/* the point (x, z) px builder b leaves a yard for this decision, into IMPAI_DEC.way_to */
+/* the point (x, z) px builder b leaves a yard for this decision, into IMPAI_DEC.way_to: b's own point replaced,
+   one a builder */
 void impai_way_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t x, int64_t z);
+/* 1 while b's job is the economy's walk (impai_brain.c, THE WALK OFF): job NONE, its type b's, its order time at
+   most WALK_OFF_T ago */
+int  impai_walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */

@@ -5553,7 +5553,8 @@ static void check_mil_estimate(void)
    nothing known: (a) the nearer other start, (3216, 1616); (b) a tank standing at it, its sweep cell stood in: the
    farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks);
    (h) the nearer start left empty by the level (WQ_SEATED_NONE), nothing stood in: the farther start; (j) both
-   other starts left empty: no estimate, the block left IMPAI_NO_ANCHOR.
+   other starts left empty: no estimate, the block left IMPAI_NO_ANCHOR; THE FOE'S STARTS, every start seated: (k)
+   the nearer seated by an ally: the farther; (l) both seated by foes: the nearer.
    THE BASE'S FLOOR (lead): (d) an enemy extractor's ghost known and the thirty tanks: the lead; (e) the seat's own
    extractors worth more than the tanks' two thirds: the enemy's sum is at least its base, and no lead; (f) the
    same, every sweep cell of the map stood in now: the floor is gone, and the lead; (g) the same, the stamps
@@ -5565,12 +5566,18 @@ static void check_mil_starts_looked(void)
     IMPAI_MIL_OUT o;
     int c, n, k;
     float vt = 0.0f, vm, army_v = 0.0f, e_one = 0.0f, base_v = 0.0f;
-    for (c = 0; c < 5; c++) {
+    for (c = 0; c < 7; c++) {
         mil_world();
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 3;
-        if (c >= 3) s_w.starts[1].seated = WQ_SEATED_NONE;
+        if (c == 3 || c == 4) s_w.starts[1].seated = WQ_SEATED_NONE;
         if (c == 4) s_w.starts[2].seated = WQ_SEATED_NONE;
+        if (c >= 5) {
+            s_w.starts[0].seated = 1;
+            s_w.starts[1].seated = c == 5 ? 3 : 2;
+            s_w.starts[2].seated = 4;
+            s_allies = c == 5 ? 1u << 2 : 0;
+        }
         for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
         if (c == 1 || c == 2) own(40, M_TANK, 3216 / 16, 1616 / 16);
         if (c == 2) own(41, M_TANK, 7216 / 16, 3216 / 16);
@@ -5581,7 +5588,7 @@ static void check_mil_starts_looked(void)
                s_mil.ebz * 32 + 16, s_mil.est_seen);
         CHECK(s_mil.est_seen == EST_START &&
               (c == 4   ? s_mil.ebx == IMPAI_NO_ANCHOR && s_mil.ebz == IMPAI_NO_ANCHOR
-               : c == 1 || c == 3 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32
+               : c == 1 || c == 3 || c == 5 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32
                                   : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
               "the starts looked at, case %d", c);
     }
@@ -5645,7 +5652,8 @@ static void check_mil_starts_looked(void)
 
 /* RAIDS AND SCOUTING: a tank, three raiders and a scout, too few for a wave; the remembered extractor is raided by
    the three raiders (the fastest type), and scouting sends the scout over the start positions, three legs, then
-   back to FORM. */
+   back to FORM. Every start seated, start 2 by an ally (THE FOE'S STARTS): the legs pass it -- start 3 first, then
+   start 1, then the sweep's cell, two starts reached. */
 static void check_mil_raid_scout(void)
 {
     static const WQ_START STARTS[] = { { 328, 328, 0, 0 }, { 6000, 328, 1, 0 }, { 328, 3000, 2, 0 }, { 6000, 3000, 3, 0 } };
@@ -5692,6 +5700,30 @@ static void check_mil_raid_scout(void)
            s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
     CHECK(s >= 0 && s_mil.sq[s].tx == 6000 / 32 && s_mil.sq[s].tz == 3000 / 32,
           "the scout passes the start already looked at: start 3 first");
+    /* every start seated, start 2 by an ally */
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 4;
+    for (k = 0; k < 4; k++) s_w.starts[k].seated = 1 + k;
+    s_allies = 1u << 2;
+    own(1, M_TANK, 24, 24);
+    own(7, M_SCOUT, 30, 30);
+    s_mil.scout_next = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the allied start's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    CHECK(s >= 0, "a scout goes with an ally's start");
+    for (leg = 0; leg < 3 && s >= 0; leg++) {
+        const int32_t x = s_mil.sq[s].tx * 32 + 16, z = s_mil.sq[s].tz * 32 + 16;
+        int at = -1;
+        for (k = 0; k < 4; k++)
+            if (s_mil.sq[s].tx == STARTS[k].x / 32 && s_mil.sq[s].tz == STARTS[k].z / 32) at = k;
+        printf("scout leg %d, start 2 an ally's: (%d, %d), start %d\n", leg, x, z, at);
+        CHECK(at == (leg == 0 ? 3 : leg == 1 ? 1 : -1), "scout leg %d past the ally's start: start %d", leg, at);
+        s_w.unit[7].pos[0] = x << 16;
+        s_w.unit[7].pos[2] = z << 16;
+        s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "a scout leg's decision runs");
+    }
 }
 
 /* the commander given ARMCOM's retail costs (armcom.fbi: 29 854 metal, 34 125 energy), so its value, 30 423, is
@@ -9369,18 +9401,27 @@ static void check_yard_clear(void)
    -- its job's cell's centre, (472, 456) -- would put it: the first ring's points and the next ring's south touch
    it, so the next ring's south-west, (419, 461). (e) The move of (a) with no job of the economy's: moved, one
    order, to (464, 448). (f) The walk of (a), given now, another constructor idle at (456, 440), on its point:
-   moved where it touches neither that constructor nor its last point, the next ring's south-west, (419, 461). */
+   moved where it touches neither that constructor nor its last point, the next ring's south-west, (419, 461).
+   (g) The same, the other constructor on a live walk of its own to (648, 648): it holds not still, and the walk of
+   (a) is trusted -- given nothing. (h) The move of (e), another constructor idle far off at (648, 648), off the
+   region and so given no turn there, on a live walk to (464, 448): the walks first hold that point, and the first is moved
+   where it does not touch it, the next ring's south, (464, 480). (i) The walk of (a), given now, a constructor
+   helping the lab -- its one order a guard of it -- standing on its point at (456, 440): a helper may be passing
+   through, and the walk is trusted -- given nothing. */
 static void check_yard_walk(void)
 {
-    static const char* const NAME[6] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
-                                         "a walk lapsed", "a move not the economy's", "a point another stands on" };
-    static const int32_t TO[6][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
-                                      { 464, 448 } };
-    static const int32_t WANT[6][2] = { { 0, 0 }, { -1, -1 }, { -1, -1 }, { 419, 461 }, { 464, 448 }, { 419, 461 } };
+    static const char* const NAME[9] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
+                                         "a walk lapsed", "a move not the economy's", "a point another stands on",
+                                         "a point another walks from", "a point another walks to",
+                                         "a point a helper stands on" };
+    static const int32_t TO[9][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
+                                      { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 } };
+    static const int32_t WANT[9][2] = { { 0, 0 },     { -1, -1 },   { -1, -1 },   { 419, 461 }, { 464, 448 },
+                                        { 419, 461 }, { 0, 0 },     { 464, 480 }, { 0, 0 } };
     IMPAI_BRAIN_OUT out;
     int32_t x = 0, z = 0;
     int c, moved, n, left = 0;
-    for (c = 0; c < 6; c++) {
+    for (c = 0; c < 9; c++) {
         FUNIT* u;
         yard_world();
         s_w.gametime = 3000;
@@ -9391,7 +9432,7 @@ static void check_yard_walk(void)
         u->list[0].pos[0] = (int32_t)((uint32_t)TO[c][0] << 16);
         u->list[0].pos[2] = TO[c][1] >= 0 ? (int32_t)((uint32_t)TO[c][1] << 16) : s_w.unit[3].pos[2];
         u->n = 1;
-        if (c == 0 || c == 2 || c == 3 || c == 5) {
+        if (c == 0 || c == 2 || c == 3 || c == 5 || c == 6 || c == 8) {
             s_job[2].kind = IMPAI_JOB_NONE;
             s_job[2].type = T_CONS;
             s_job[2].build = s_job[2].target = (uint16_t)WQ_NONE;
@@ -9399,7 +9440,36 @@ static void check_yard_walk(void)
             s_job[2].cz = (int16_t)((TO[c][1] >= 0 ? TO[c][1] : s_w.unit[3].pos[2] >> 16) >> 4);
             s_job[2].since = (uint32_t)s_w.gametime - (c == 3 ? 901u : 0u);
         }
-        if (c == 5) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+        if (c == 5 || c == 6) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+        if (c == 7) unit_add(&s_w, 4, T_CONS, 40, 40, 1);
+        if (c == 8) {
+            FUNIT* h;
+            unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+            h = &s_w.unit[4];
+            h->list[0].action = A_GUARD;
+            h->list[0].target = 3;
+            h->n = 1;
+            s_job[4].kind = IMPAI_JOB_ASSIST;
+            s_job[4].type = T_CONS;
+            s_job[4].build = (uint16_t)WQ_NONE;
+            s_job[4].target = 3;
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
+        if (c == 6 || c == 7) {
+            const int32_t wx = c == 6 ? 648 : 464, wz = c == 6 ? 648 : 448;
+            FUNIT* w = &s_w.unit[4];
+            w->list[0].action = A_MOVE;
+            w->list[0].target = (uint16_t)WQ_NONE;
+            w->list[0].pos[0] = (int32_t)((uint32_t)wx << 16);
+            w->list[0].pos[2] = (int32_t)((uint32_t)wz << 16);
+            w->n = 1;
+            s_job[4].kind = IMPAI_JOB_NONE;
+            s_job[4].type = T_CONS;
+            s_job[4].build = s_job[4].target = (uint16_t)WQ_NONE;
+            s_job[4].cx = (int16_t)(wx >> 4);
+            s_job[4].cz = (int16_t)(wz >> 4);
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
         CHECK(decide(&out) == 0, "decide");
         left = out.yard_left;
         if (!c) {
@@ -9411,8 +9481,9 @@ static void check_yard_walk(void)
         n = count_unit(2, -1);
         printf("the yard, %s: orders %d, moved %d to (%d, %d), yard %u, left %d\n", NAME[c], n, moved, x, z, out.yard,
                left);
-        if (!c)
-            CHECK(!n && !out.yard && left == 2, "the constructor walking off the yard is given nothing: %d orders", n);
+        if (!c || c == 6 || c == 8)
+            CHECK(!n && !out.yard && left == (c ? 1 : 2), "the constructor walking off the yard, %s, is given nothing: "
+                  "%d orders", NAME[c], n);
         else if (WANT[c][0] >= 0)
             CHECK(moved && n == 1 && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && !left,
                   "the constructor, %s: moved to (%d, %d)", NAME[c], x, z);
@@ -9422,6 +9493,33 @@ static void check_yard_walk(void)
                   "the constructor %s is moved off it, out of the south exit: (%d, %d)",
                   c == 1 ? "sent onto the yard" : "walking through the lab", x, z);
     }
+}
+
+/* THE WAY OFF's points of the decision (impai_build.c, impai_way_to): one a builder -- a builder recorded again
+   replaces its own point --, so every builder of the idle and helper lists recorded twice, as THE WALKS FIRST and a
+   move can, fills the 2 x IMPAI_IDLE_CAP points exactly, each its second point, none dropped. */
+static void check_way_to_one(void)
+{
+    static IMPAI_DEC dd;
+    IMPAI_BRAIN_IN bi;
+    IMPAI_UNITREF a;
+    int k, ok = 1;
+    memset(&dd, 0, sizeof dd);
+    memset(&bi, 0, sizeof bi);
+    memset(&a, 0, sizeof a);
+    bi.ti = s_ti;
+    bi.nti = FW_DEFS;
+    dd.in = &bi;
+    a.type = T_CONS;
+    for (k = 0; k < 2 * IMPAI_IDLE_CAP; k++) {
+        a.slot = (uint16_t)(1 + k);
+        impai_way_to(&dd, &a, 32 * k, 16);
+        impai_way_to(&dd, &a, 32 * k, 48);
+    }
+    for (k = 0; k < dd.nway_to; k++)
+        if (dd.way_to[k].slot != 1 + k || dd.way_to[k].x != 32 * k || dd.way_to[k].z != 48) ok = 0;
+    printf("the decision's points, every builder twice: %d points\n", dd.nway_to);
+    CHECK(ok && dd.nway_to == 2 * IMPAI_IDLE_CAP, "one point a builder, its last: %d points", dd.nway_to);
 }
 
 /* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
@@ -12350,18 +12448,24 @@ static void check_mil_attack_room(void)
    of the anchor, nearer owner 1's tank 400 px west of it than the anchor is. The tank stands nearer the anchor
    than any structure of its own side: a threat, and the FORM squad defends. With no structure known the start
    positions stand in: the tank 400 px west is a threat, and one 1 376 px west, 128 px from the enemy start and
-   inside the anchor box, is none. */
+   inside the anchor box, is none -- and a threat when the level seated an ally at that start (THE FOE'S STARTS):
+   no enemy's base stands there. */
 static void check_mil_two_sides(void)
 {
     static const WQ_START STARTS[] = { { 4104, 2056, 0, 0 }, { 2600, 2056, 1, 0 } };
     IMPAI_MIL_OUT o;
     int k, round;
-    for (round = 0; round < 3; round++) {
+    for (round = 0; round < 4; round++) {
         mil_world();
         s_st.ax = 256;
         s_st.az = 128;
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 2;
+        if (round == 3) {
+            s_w.starts[0].seated = 1;
+            s_w.starts[1].seated = 3;
+            s_allies = 1u << 2;
+        }
         for (k = 0; k < 12; k++) own(1 + k, M_TANK, 250 + 2 * (k % 6), 140 + 2 * (k / 6));
         if (round == 0) {
             static const int X[4] = { 40, 60, 440, 460 };
@@ -12373,7 +12477,7 @@ static void check_mil_two_sides(void)
                 }
             }
         }
-        enemy(1310, M_TANK, round == 2 ? 170 : 231, 128, IMPAI_LOS, 1);
+        enemy(1310, M_TANK, round >= 2 ? 170 : 231, 128, IMPAI_LOS, 1);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the two sides decision runs");
         printf("two sides, round %d: ebx %d threats=%u defends=%u\n", round, s_mil.ebx, o.threats, o.defends);
         if (round == 0)
@@ -12381,6 +12485,7 @@ static void check_mil_two_sides(void)
                   "the centre of both sides' structures 96 px west of the anchor, the west tank a threat");
         if (round == 1) CHECK(o.threats == 1 && o.defends == 1, "no structure known: the starts stand in");
         if (round == 2) CHECK(o.threats == 0 && !o.defends, "a tank beside its own start: no threat");
+        if (round == 3) CHECK(o.threats == 1, "a tank beside an ally's start: a threat");
     }
 }
 
@@ -13873,6 +13978,7 @@ int main(void)
     check_surplus_mex();
     check_yard_clear();
     check_yard_walk();
+    check_way_to_one();
     check_yard_way();
     check_yard_off();
     check_ctech();

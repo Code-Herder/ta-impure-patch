@@ -1032,14 +1032,20 @@ static void walk_checks(IMPAI_DEC* d)
      decision orders it again.
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
      the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
-     region, on the builder's own reach label, clear of the seat's buildings and builders, not through the
-     plant), given by the economy within WALK_OFF_T (its job NONE, its cell the point's within a cell, its order
-     time at most WALK_OFF_T ago), is walking off already, and leaves its list with no order (`yard_left`); its
-     point joins the decision's. Any other is moved again: a point order through the plant, one to a point
-     another builder now stands on, or a walk the engine has not ended in WALK_OFF_T -- a move to a point a unit
-     cannot stand on never ends (impai_build.c, THE WAY OFF), and trusted for ever it held its factory for good.
-     So a builder that cannot leave is moved once a WALK_OFF_T, never to the point it last failed by (THE LAST
-     POINT NOT AGAIN).
+     region, on the builder's own reach label, clear of the seat's buildings and of what holds still -- the
+     decision's points and the idle builders on no walk; a helper, a jobbed builder or the commander passing by
+     does not end a walk --, not through the plant), given by the economy within WALK_OFF_T (impai_walk_live: its
+     job NONE, its type the builder's, its order time at most WALK_OFF_T ago; and its cell the point's within a
+     cell), is walking off already, and leaves its list with no order (`yard_left`). Any other is moved again: a
+     point order through the plant, one to a point another builder now stands still on, or a walk the engine has
+     not ended in WALK_OFF_T -- a move to a point a unit cannot stand on never ends (impai_build.c, THE WAY OFF),
+     and trusted for ever it held its factory for good. So a builder that cannot leave is moved once a
+     WALK_OFF_T, never to the point it last failed by (THE LAST POINT NOT AGAIN).
+   - THE WALKS FIRST: before the decision moves any builder off a region, the point of every idle builder's live
+     economy walk (impai_walk_live, its one order a point order) joins the decision's (impai_way_to), so no builder
+     is sent beside a walk whose turn in the lists comes later, or that has left the region and has no turn. A
+     builder moved again replaces its own point (one point a builder), so the decision's points stay within the
+     idle and helper lists' 2 x IMPAI_IDLE_CAP.
      WHY: the census lists such a builder idle (THE HAND-BACK), so the rule gave it the move again at every
      decision until it was off, each time one action of
      the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
@@ -1056,33 +1062,52 @@ static void walk_checks(IMPAI_DEC* d)
      factory's next product is the help's, which ends with the product (THE ASSIST, impai_build.c), and no help
      targets a waiting factory: it has no frame. The army keeps off yards and ways where it is sent (impai_mil.c,
      travel_point's yard rule).
-   BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX frames and its at most
-   2 x IMPAI_IDLE_CAP listed builders, two head reads and at most one move a builder, within the roots the factories
+   BOUND: the walks first once a decision, at most IMPAI_IDLE_CAP head and order reads; at most IMPAI_IDLE_CAP
+   factories, each against the census's IMPAI_NANO_MAX frames and its at most 2 x IMPAI_IDLE_CAP listed builders,
+   two head reads and at most one move a builder (THE WAY OFF's search, impai_build.c), within the roots the factories
    leave (THE FACTORIES' ROOTS) less the root THE RELEASE keeps (impai_release_keep, impai_econ.c); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
    IMPAI_WAY_RECTS. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen, and the builders by its factory
    are moved off a yard that is producing, one move each; a builder held in by what this rule does not move -- an
    enemy, a wreck, a unit of a plant with no kept way -- is moved once a WALK_OFF_T, and its factory waits. */
 #define WALK_OFF_T 900          /* GameTime ticks a walk off is trusted for: 30 s, a 900-px walk at 1 px a tick */
 
-static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
+int impai_walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    return j->kind == IMPAI_JOB_NONE && j->type == b->type && j->since && d->now - j->since <= WALK_OFF_T;
+}
+
+/* the point of b's one order when it is a point order -- naming no unit, no build, not the unit's idle behaviour
+   (idle_head) --, px, into (*x, *z): 1, else 0 */
+static int walk_point(IMPAI_DEC* d, const IMPAI_UNITREF* b, int* x, int* z)
 {
     WQ_ORDER o;
-    const IMPAI_JOB* j = &d->in->job[b->slot];
     const int h = d->q->ops->head(d->q, b->slot, &o);
-    int x, z, dcx, dcz;
     if (!(h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
           o.action != d->act_build && o.action != d->act_vtol_build &&
           d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1))
         return 0;
-    x = o.pos[0] >> 16;
-    z = o.pos[2] >> 16;
+    *x = o.pos[0] >> 16;
+    *z = o.pos[2] >> 16;
+    return 1;
+}
+
+static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    int x, z, dcx, dcz;
+    if (!impai_walk_live(d, b) || !walk_point(d, b, &x, &z)) return 0;
     dcx = (x >> 4) - j->cx;
     dcz = (z >> 4) - j->cz;
-    if (j->kind != IMPAI_JOB_NONE || j->type != b->type || !j->since || d->now - j->since > WALK_OFF_T ||
-        dcx < -1 || dcx > 1 || dcz < -1 || dcz > 1 || !impai_way_off(d, b, g, x, z))
-        return 0;
-    impai_way_to(d, b, x, z);
-    return 1;
+    return dcx >= -1 && dcx <= 1 && dcz >= -1 && dcz <= 1 && impai_way_off(d, b, g, x, z);
+}
+
+/* THE WALKS FIRST (THE YARD): the decision's points open with every idle builder's live economy walk to a point */
+static void walks_first(IMPAI_DEC* d)
+{
+    int k, x, z;
+    for (k = 0; k < d->nidle; k++)
+        if (impai_walk_live(d, &d->idle[k]) && walk_point(d, &d->idle[k], &x, &z)) impai_way_to(d, &d->idle[k], x, z);
 }
 
 static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)
@@ -1133,7 +1158,7 @@ static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG
 static void yard_clear(IMPAI_DEC* d)
 {
     const int keep = impai_release_keep(d);
-    int f, k;
+    int f, k, first = 1;
     for (f = 0; f < d->nfbusy && d->roots + keep < d->root_cap; f++) {
         const IMPAI_STRUCT* s = NULL;
         IMPAI_YARDREG g;
@@ -1144,6 +1169,10 @@ static void yard_clear(IMPAI_DEC* d)
         for (k = 0; k < d->nframes; k++)
             if (inside(&s->r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
         if (k < d->nframes) continue;
+        if (first) {
+            walks_first(d);
+            first = 0;
+        }
         yard_region(d, s, &g);
         d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, &g, 1, keep);
         d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, &g, 0, keep);
