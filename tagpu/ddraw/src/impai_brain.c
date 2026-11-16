@@ -1031,15 +1031,17 @@ static void walk_checks(IMPAI_DEC* d)
      region (impai_yard_holds) is moved off (impai_yard_leave) and leaves its list, so no later rule of this
      decision orders it again.
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
-     the unit's idle behaviour (idle_head) -- to a point off the region is walking off already, as the move above
-     sends it, and leaves its list with no order (`yard_left`). WHY: the census lists such a builder idle (THE
+     the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
+     region, on the builder's own reach label, not through the plant) is walking off already, and leaves its list
+     with no order (`yard_left`); a point order through the plant is no walk off, and the builder is moved again. WHY: the census lists such a builder idle (THE
      HAND-BACK), so the rule gave it the move again at every decision until it was off, each time one action of
      the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
      orders of an Easy seat's game (bar-eota-pincushion-ac-1) and 539 of 766 of a Normal one's
      (bar-nota-troutfarm-ca-2), the factories and the other builders starved of actions from GameTime 15 000 and
      31 600 to the end; in the Hard games the same builder was moved at 5 to 8 decisions in a row while it walked.
      So a builder is ordered off a region once a walk; one that cannot leave keeps its walk, and its factory waits
-     on what holds it in.
+     on what holds it in. A WALK THROUGH THE PLANT IS NONE: the move's point is chosen so that the builder never
+     has to cross the plant (impai_build.c, THE WAY OFF), and an order that would is not trusted as a walk off.
    - The commander inside THE COMMANDER'S WINDOW is in neither list and is left to the military; an idle builder
      whose BUILD or reclaim the job checks have not ended is left to them, as the ladder leaves it; a helper whose
      ASSIST the walk check ended this decision has its turn back, its one order of the decision; a busy builder
@@ -1060,7 +1062,7 @@ static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG
     return h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
            o.action != d->act_build && o.action != d->act_vtol_build &&
            d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1 &&
-           !impai_yard_holds(d, g, b->type, o.pos[0] >> 16, o.pos[2] >> 16);
+           impai_way_off(d, b, g, o.pos[0] >> 16, o.pos[2] >> 16);
 }
 
 static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)
@@ -1095,6 +1097,7 @@ static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG
     int k, i;
     g->r[0] = s->r;
     g->n = 1;
+    g->type = s->type;
     for (k = 0; k < st->nway && k < IMPAI_WAYS; k++) {
         const IMPAI_WAYREC* w = &st->way[k];
         if (w->type != s->type || w->cx != s->r.x0 || w->cz != s->r.z0) continue;

@@ -9227,7 +9227,8 @@ static void check_surplus_mex(void)
     s_milp = NULL;
 }
 
-/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor.
+/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor,
+   its yard's one exit the south edge's cells 2 and 3 (THE WAY OUT's `c`, 0x2D; the rest `C` with 0x02, 0x2F).
    (a) No frame on its yard, the constructor at the lab's centre with an ASSIST of it under a guard: one decision
        moves it off the yard grown by its half-size, its job ended, one yard move counted.
    (b) The product's frame on the yard: no move.
@@ -9240,6 +9241,9 @@ static void yard_world(void)
     FUNIT* f;
     int x, z;
     reach_world(1);
+    s_w.defs[T_FACTORY].yarded = 1;
+    memset(s_w.defs[T_FACTORY].yard, 0x2F, 36);
+    s_w.defs[T_FACTORY].yard[5 * 6 + 2] = s_w.defs[T_FACTORY].yard[5 * 6 + 3] = 0x2D;
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
     f = &s_w.unit[3];
@@ -9347,23 +9351,26 @@ static void check_yard_clear(void)
 }
 
 /* THE WALK OFF (impai_brain.c, THE YARD): the constructor at the waiting lab's centre, handed back, its one order a
-   move. (a) The move's point lies off the yard -- the walk the rule gives -- so it is given nothing, at this decision
-   and the next, each counted in yard_left. (b) The point lies on the yard: it is moved off, one order. */
+   move. (a) The move's point lies off the yard beyond its south exit, (464, 448) -- the walk the rule gives -- so it
+   is given nothing, at this decision and the next, each counted in yard_left. (b) The point lies on the yard: it is
+   moved off, one order. (c) The point lies off the yard west of it, (320, 368), through the lab's west wall (THE WAY
+   OFF): no walk off, so it is moved, out of the south exit. */
 static void check_yard_walk(void)
 {
-    static const char* const NAME[2] = { "a walk off the yard", "a move onto the yard" };
+    static const char* const NAME[3] = { "a walk off the yard", "a move onto the yard", "a walk through the lab" };
+    static const int32_t TO[3][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 } };
     IMPAI_BRAIN_OUT out;
     int32_t x = 0, z = 0;
     int c, moved, n, left = 0;
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 3; c++) {
         FUNIT* u;
         yard_world();
         memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
         u = &s_w.unit[2];
         u->list[0].action = A_MOVE;
         u->list[0].target = (uint16_t)WQ_NONE;
-        u->list[0].pos[0] = (int32_t)((uint32_t)(c ? 27 * 16 : 20 * 16) << 16);
-        u->list[0].pos[2] = s_w.unit[3].pos[2];
+        u->list[0].pos[0] = (int32_t)((uint32_t)TO[c][0] << 16);
+        u->list[0].pos[2] = TO[c][1] >= 0 ? (int32_t)((uint32_t)TO[c][1] << 16) : s_w.unit[3].pos[2];
         u->n = 1;
         CHECK(decide(&out) == 0, "decide");
         left = out.yard_left;
@@ -9379,20 +9386,24 @@ static void check_yard_walk(void)
         if (!c)
             CHECK(!n && !out.yard && left == 2, "the constructor walking off the yard is given nothing: %d orders", n);
         else
-            CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && out.yard == 1 && !left,
-                  "the constructor sent onto the yard is moved off it");
+            CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && z >= 26 * 16 && x >= 28 * 16 && x < 30 * 16 &&
+                      out.yard == 1 && !left,
+                  "the constructor %s is moved off it, out of the south exit: (%d, %d)",
+                  c == 1 ? "sent onto the yard" : "walking through the lab", x, z);
     }
 }
 
 /* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
    (27..30, 26..33), and a constructor idle with a lone Park stands on it at cell (28, 28), clear of the lab grown by
-   its half-size. (a) It is moved off the way and the lab: the candidates south of the lab lie on the way, so it goes
-   to the north one, (464, 253). (b) With no way kept it is left where it stands. (c) With a second factory, cells
-   (26..31, 12..17), over that north point, it goes to the next candidate clear of both, east, (579, 368). */
+   its half-size. (a) It is moved off the way and the lab along the line from the lab's centre through it, pushed
+   past the way's end (THE WAY OFF), (448, 579) -- never north, through the lab, where every point off the way lay
+   before. (b) With no way kept it is left where it stands. (c) With a second factory, cells (26..31, 35..40), over
+   that point, it goes to the next candidate clear of both and not through the lab: west, (349, 368), since the
+   line east, to (579, 368), clips the lab's south-east corner. */
 static void check_yard_way(void)
 {
-    static const char* const NAME[3] = { "its way kept", "no way kept", "a factory north" };
-    static const int32_t WANT[3][2] = { { 464, 253 }, { 0, 0 }, { 579, 368 } };
+    static const char* const NAME[3] = { "its way kept", "no way kept", "a factory south" };
+    static const int32_t WANT[3][2] = { { 448, 579 }, { 0, 0 }, { 349, 368 } };
     IMPAI_BRAIN_OUT out;
     int c;
     for (c = 0; c < 3; c++) {
@@ -9416,7 +9427,7 @@ static void check_yard_way(void)
             w->r[0][0] = 27; w->r[0][1] = 26; w->r[0][2] = 30; w->r[0][3] = 33;
             s_st.nway = 1;
         }
-        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 26, 12, 1);
+        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 26, 35, 1);
         CHECK(decide(&out) == 0, "decide");
         moved = last_move(0, 2, &x, &z);
         printf("the yard, a constructor on the way, %s: moved %d to (%d, %d), yard %u, ways %u\n", NAME[c], moved, x, z,
@@ -9424,6 +9435,39 @@ static void check_yard_way(void)
         CHECK(c == 1 ? !moved && !out.yard
                      : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == 1,
               "the constructor on the way, %s: (%d, %d)", NAME[c], x, z);
+    }
+}
+
+/* THE WAY OFF (impai_build.c): a constructor idle with a lone Park inside the waiting lab's footprint, at (464, 336),
+   north of its centre (464, 368) -- where round 3's stood (impai_build.c, THE WAY OFF's WHY). (a) It is moved out of
+   the lab's one exit, south, to (464, 448), never north through the lab. (b) The exit's block, (14, 14), on another
+   reach label: no point beyond the exit is on the constructor's own label, so it is left where it stands. */
+static void check_yard_off(void)
+{
+    static const char* const NAME[2] = { "the exit open", "the exit on another label" };
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 2; c++) {
+        const size_t blk = (size_t)14 * (FW_W / 2) + 14;
+        const uint16_t keep = s_labels[blk];
+        FUNIT* u;
+        int32_t x = 0, z = 0;
+        int moved;
+        yard_world();
+        if (c) s_labels[blk] = 3;
+        u = &s_w.unit[2];
+        u->pos[0] = (int32_t)((uint32_t)464 << 16);
+        u->pos[2] = (int32_t)((uint32_t)336 << 16);
+        u->list[0].action = A_PARK;
+        u->list[0].flags = 0x1001;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->n = 1;
+        CHECK(decide(&out) == 0, "decide");
+        s_labels[blk] = keep;
+        moved = last_move(0, 2, &x, &z);
+        printf("the way off, %s: moved %d to (%d, %d), yard %u\n", NAME[c], moved, x, z, out.yard);
+        CHECK(c ? !moved && !out.yard : moved && x == 464 && z == 448 && out.yard == 1,
+              "the constructor inside the lab, %s: (%d, %d)", NAME[c], x, z);
     }
 }
 
@@ -13544,6 +13588,7 @@ int main(void)
     check_yard_clear();
     check_yard_walk();
     check_yard_way();
+    check_yard_off();
     check_ctech();
     check_ctech_mex();
     check_ctech_step();

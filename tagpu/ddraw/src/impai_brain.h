@@ -30,8 +30,9 @@ typedef struct IMPAI_SENSE { int32_t x, z; uint16_t radar, sonar; } IMPAI_SENSE;
 enum { IMPAI_SENSE_NONE, IMPAI_SENSE_RADAR, IMPAI_SENSE_SONAR };
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 /* THE YARD's region of a waiting factory (impai_brain.c, THE YARD): its footprint, r[0], then the rectangles of its
-   kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used */
-typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; } IMPAI_YARDREG;
+   kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used; the factory's type, whose exits
+   THE WAY OFF reads */
+typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_t type; } IMPAI_YARDREG;
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
@@ -418,6 +419,9 @@ int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* 1 when a unit of `type` standing at px (x, z) touches region g: lies inside one of its rectangles grown by the
    type's half-size (impai_build.c, THE YARD's move) */
 int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
+/* 1 when px (x, z) is a point builder b leaves region g for (impai_build.c, THE WAY OFF): off g, on b's class's own
+   reach label, and reached from where b stands without crossing g's plant */
+int  impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z);
 int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */
