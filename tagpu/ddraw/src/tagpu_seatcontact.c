@@ -3,7 +3,8 @@ SIM_FEATURE(seat_contacts, SIM_PUPPET_RUNS, "battle battle-allied battle-los sto
 /* Every seat targets with its own contacts and its allies', never the viewed player's.
 
    THE ENGINE. The periodic acquisition 0x40AA40 (thiscall on a seat's acquisition record, plain
-   `ret`; its only calls are 0x40AD3E and 0x40B2E9, and no pointer to it is in the image) lists, for
+   `ret`; its only calls are 0x40B2E9 and 0x40AD3E, the latter inside 0x40AD20, which nothing
+   reaches, and no pointer to it is in the image) lists, for
    one seat, the enemy units it may target. Its radar list takes a unit whose +0x110 bit 8 is set
    (0x40AB3F) and its sight list asks UnitInPlayerLOS 0x465AC0(seat, unit) (0x40AB11), which
    passes a submerged unit on bit 9 (0x465B30). Bits 8 and 9 are written only by the radar pass
@@ -159,7 +160,7 @@ typedef struct Visitor {
     char* begin;
     unsigned slots;
     int pos[3];
-    int32_t rt2, s2;                              /* (R + 2 * height)^2 and S^2, as 0x467560..  */
+    int32_t rt2, s2;                              /* (R + 2 * height)^2 and S^2, as 0x46755E.. */
     int jam;                                      /* B_JAM_RADAR or B_JAM_SONAR for a jammer    */
     unsigned seatbit;
 } Visitor;

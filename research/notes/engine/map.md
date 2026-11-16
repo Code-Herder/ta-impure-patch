@@ -1721,7 +1721,10 @@ counted (`recorder: N footprint calls a playing cannot put in their order`).
 ### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `PositionInPlayerMapped 0x408090` [DISASSEMBLED + MEASURED 2026-09-25]
 
 **The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, body `0x465AC0..0x465E1E`,
-writes nothing but its own stack (nor does its helper `0x408090`); it compares the unit's owner
+writes nothing but its own stack (nor does its helper `0x408090`); **its two explored-map reads take
+the viewed player's bit, not the `player` argument's**: `0x4080E0` in `0x408090` (`mov cl,[ecx+0x2A43]`)
+and `0x465E00` (`mov cl,[ebx+0x2A43]`), both reached only when LosType bit 1 (true LOS) is clear
+[DISASSEMBLED 2026-11-15]; it compares the unit's owner
 pointer `+0x96` with `player` as a value, tests the cloak byte `+0x10E`, then reads the def
 `+0x92` at `+0x15E..+0x17E` [DISASSEMBLED 2026-11-09]. It has seven callers: `0x40AB11`
 (in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,

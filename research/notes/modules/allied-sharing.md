@@ -5,8 +5,9 @@ death vision of their units and their explored map, in skirmish and in network g
 seats as with human ones: a unit acquires and fires at what only an ally sees, the fog and the
 minimap fog open where an ally sees, and the cull draws what an ally sees. They share their radar
 and sonar contacts: an ally's radar and sonar mark enemies on your radar picture, an ally's jammers
-do not jam you, and an ally's units keep their dot on the minimap. An ally's cloaked or submerged
-units stay in sight. The engine's one-byte sight counters never wrap: a cell under more than 255
+do not jam you, and an ally's units keep their dot on the minimap. Every seat, human or AI, targets
+with its own contacts and its allies', never the viewed player's. An ally's cloaked or submerged
+units stay in sight, and the unit panel shows an ally's unit as your own. The engine's one-byte sight counters never wrap: a cell under more than 255
 stamps reads 255, not 0.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -16,7 +17,9 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 ## The owner's decisions
 
 1. Always between allies (TA's alliance rows `+0x108`), ignoring TA's ShareRadar and ShareLOS bits.
-2. Share sight, radar and sonar contacts and allied minimap dots; the unit panel is deferred.
+2. Share sight, radar and sonar contacts and allied minimap dots. The unit panel shows an ally's
+   unit as your own; a remote ally's four resource numbers stay hidden, since your machine never
+   computes them (a local AI ally's show).
 3. Units target what only an ally sees: a simulation change, so allied AIs target what you see.
 4. Allied jammers stop jamming you.
 5. An alliance counts only when it is held both ways (the sensor view's rule).
@@ -27,7 +30,10 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 8. Allied cloaked and submerged units stay visible.
 9. The counters do not wrap: the engine's byte holds `min(W, 255)` of a wide count W kept beside it.
    Valid because every engine reader of the counters tests the byte against zero (*The readers*).
-10. AI seats keep targeting by the viewed player's radar picture.
+10. Every seat targets with its own contacts and its allies', computed when it acquires; the
+    viewed player is no exception. Sonar is per seat too. Only the seat's own targeting facility
+    lets it fire on a radar contact (stock's rule, unchanged). Under Permanent or Circular LOS the
+    sight test still reads the viewed player's explored map (*Gaps*).
 
 A one-way alliance shares nothing in either direction, including the radar a stock ShareRadar giver
 handed out one way. In a network game the rows between two *other* players can be stale on your
@@ -66,6 +72,8 @@ commander fell to 0 while J's at AI2's commander stayed 1, and after J allied H 
 | `tagpu_allysight.c/.h` | game, loader | S and W, the hooks, the walk, the migration, the replay's pair; `sim` in `thread-split.allow` |
 | `tagpu_replay.c` `tables_put` | game | calls `tagpu_allysight_restore_begin` / `_restored` around the table write |
 | `tagpu_recorder.c` `dump_sight` | game | writes each kept record's W after its counters (`RK_SIGHTW`) |
+| `tagpu_seatcontact.c/.h` | game | each seat's contacts at its acquisition; the scan for a skirmish AI; `sim` |
+| `tagpu_allypanel.c/.h` | game | the unit panel's owner tests; `presentation` |
 | `tagpu_rangeown.c` | game | the sensor view draws the coverage of the owners `tagpu_allysight_contacts` names |
 | `tools/replay/tarec.py` | — | reads `RK_SIGHTW`; `compare-dumps` compares W as it compares the counters, and checks `u8 = min(W, 255)` in each dump |
 
@@ -143,10 +151,61 @@ It runs for the viewed record only. Four sites make it share (`ally_radar`), eac
   the viewed player's own units; here, an ally's too. Loop 1 gives every allied unit bits 8 and 9,
   so this site decides only for an allied unit an enemy jams on both kinds.
 
-AI seats keep targeting by the viewed player's bit 8 (`0x40AB3F..0x40AB5C`, decision 10), which now
-holds the allies' contacts. **The sensor view** (`tagpu_rangeown.c`, [range rings](range-rings.html))
+These bits are the display's. No seat targets by them: *Per-seat contacts*, below. **The sensor view** (`tagpu_rangeown.c`, [range rings](range-rings.html))
 draws the coverage of the viewed player and of every owner `tagpu_allysight_contacts` names — the
 owners whose radar the pass walks for the viewer.
+
+## Per-seat contacts
+
+The acquisition `0x40AA40` builds one seat's target lists every 30 ticks: the units in sight
+(`UnitInPlayerLOS`) and the radar contacts (`+0x110` bit 8). Only the radar pass writes bits 8 and
+9, and it runs for the viewed player alone, so stock gives every seat the viewed player's radar
+picture: an AI targets what the human's radar sees and its own radar towers give it nothing
+([units](../engine/units.html), *The acquisition*). `seat_contacts` (`tagpu_seatcontact.c`) gives
+each acquisition its own seat's contacts instead:
+
+- **At the acquisition's start** (its two calls `0x40AD3E` and `0x40B2E9`, redirected), four
+  bitmaps over the unit slots are built for the seat by the radar pass's own rules and the engine's
+  own bucket walk `0x47E890`: radar and sonar from the emitters of the seat's block and of every
+  owner whose contacts it receives (`tagpu_allysight_contacts`), radar and sonar jamming from every
+  jammer of any other owner. The emitter visitor is `0x467840`'s, rule for rule.
+- **The radar read** (`0x40AB3F`) takes a unit when it is a radar contact not radar-jammed, or when
+  its origin cell is lit for the seat and it is not cloaked: the pass's fifth loop, on the seat's
+  counters under true LOS and the seat's explored-map bit otherwise, with the map-edge row of
+  `tagpu_patches.c`'s shear fix.
+- **The sonar gate** (`0x465B30`) answers per seat (sonar and not sonar-jammed) for the seat whose
+  acquisition is running, and with bit 9 for every other caller: the display keeps the bits.
+- **State**: the bitmaps and the scope are `SIM_TRANSIENT`, built at the acquisition's start and
+  closed at its end. Nothing is recorded: the inputs are the units, the records, S and the explored
+  map, all of which the recording carries or rebuilds.
+
+The viewed player's own seat acquires by the same rules, so nothing the simulation reads depends on
+who is viewed, and a contact counts from the moment the seat acquires rather than from the viewed
+player's last pass. Only the seat's own targeting facility (`acq+0x79`, the list's consumer
+`0x40AD80`) lets it fire on a radar contact, as in stock.
+
+### For a skirmish AI
+
+An AI must know what its seat knows and nothing more: its own and its allies' sight and contacts,
+never the viewed player's. `tagpu_seatcontact_scan(seat, out, n)` gives exactly what the
+acquisition uses, per unit slot: `TAGPU_SEAT_CONTACT` (the radar list takes it),
+`TAGPU_SEAT_SONAR` (a sonar contact) and `TAGPU_SEAT_SEES` (`UnitInPlayerLOS` for the seat, its sonar
+answered per seat). One call costs one radar pass plus one `UnitInPlayerLOS` per live unit; call it
+once per decision cycle, on the game thread, never from inside an acquisition. An AI that keeps its
+own copy of the radar pass must walk the emitters of every owner `tagpu_allysight_contacts` names for
+its seat and skip their jammers, or call this instead; reading `+0x110` bits 8–10 reads the viewed
+player's picture.
+
+## The unit panel
+
+The panel `0x46A860` shows the hovered unit, and five of its tests show more for the viewed
+player's own units ([ui](../engine/ui.html), *The hovered unit's readouts*): the order target, the
+health bar of a def that hides damage, the resource numbers with the kills line and the status
+text, the stockpile bar with the target block, and the target's own health bar. `tagpu_allypanel.c`
+passes each also for an owner `tagpu_allysight_shares` names. For a remote ally (owner record
+`+0x73` = 3) the stub enters past the four resource numbers, at the kills line, with the colour the
+resource block would have set: its numbers are always 0 on your machine. A display only: the panel
+writes nothing the simulation reads.
 
 ## Visibility
 
@@ -195,6 +254,10 @@ icons).
 | `UnitInPlayerLOS`'s owner test `0x465ACE` | 1 for a unit whose owner S shares with the player |
 | the destructor's call `0x486845` | the removal only when the unit holds a stamp: under the ray fan the destructor removes unconditionally, and a unit whose height byte is 0 holds none (the replay's `book_stamp` rule) |
 | the temporary records' expiry's call `0x482161` | the removal only when the record holds a stamp: under the ray fan the add `0x482910` zeroes the record's byte `+0xB` and stamps only through the emitter, which leaves it 0 and stamps nothing when the reused slot's stale words name the new cell (`0x48261F..0x48262E`) or the cell is past the grid; the expiry removes every record past its time |
+| the acquisition's calls `0x40AD3E`, `0x40B2E9` | builds the seat's contact bitmaps, runs the acquisition, closes the scope (`tagpu_seatcontact.c`) |
+| the acquisition's radar read `0x40AB3F` | the seat's own contact, not bit 8 |
+| `UnitInPlayerLOS`'s sonar gate `0x465B30` | the seat's own sonar during its acquisition, bit 9 otherwise |
+| the unit panel's tests `0x46AC85`, `0x46B013`, `0x46B10E`, `0x46B457`, `0x46B611` | pass for an ally; a remote ally's resource numbers skipped (`tagpu_allypanel.c`) |
 
 ## On a puppet host
 
@@ -211,7 +274,9 @@ recording's; R14a's temporary records are made after it. `ally_share` (the playe
 act on a puppet. `ally_radar` runs: in the recording's viewed record `contacts_put` overwrites bits
 8–10 from the image after the pass, in any other view the pass's bits stand, and no simulation reads
 them on a puppet host (`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*). `ally_visible` runs: its
-answer follows S, which the recording writes.
+answer follows S, which the recording writes. `seat_contacts` runs where the acquisition runs, and on a
+puppet host no seat has an acquisition record (`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*):
+it runs there only for a seat taken over, whose acquisition is then the host's own.
 
 W is `SIM_REBUILT`, the one declaration the class may have (the link's `sim-state-check.sh` and the
 registry's attach refuse any other by name): never recorded, rebuilt on every host by the stamps,
@@ -257,6 +322,12 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
   a failed two-player gate game now saves both peers' stacks (`recmp_create_begin_test.py`,
   `dump_stacks`).
 - A remote human ally's machine never makes your death vision (decision 7).
+- Under Permanent or Circular LOS (true LOS off), `UnitInPlayerLOS` reads the viewed player's bit of
+  the explored map (`0x4080E0`, `0x465E00`), so a seat's sight list there takes what the viewed
+  player has explored. The radar read's own sight test uses the seat's bit.
+- The radar pass's watcher rule (PlayerInfo `+0x9B` bit 6: every unit a contact) has no per-seat
+  counterpart; a watching seat has no acquisition record.
+- A remote ally's unit shows no resource numbers in the unit panel (decision 2).
 - The install is all-or-nothing but not fail-closed: a machine whose exe bytes do not match the
   sites runs stock sight, and its peers are not told: the fingerprint that admits a joiner names
   the game's files ([mods](mods.html), *The fingerprint*), not which of Impure's modules installed.

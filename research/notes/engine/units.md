@@ -1247,7 +1247,8 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   `0x5119C0[seat]`, [recorder.md](recorder.md), `0x40B320`'s row), plain `ret`, nothing in `eax` read
   after it (`0x40AD43`, `0x40B2EE`). Its two calls are `0x40AD3E` (in `0x40AD20`) and `0x40B2E9`
   (in `0x40B2C0`), each `mov ecx,esi; call`; no pointer to it is in the image (a byte search for
-  `40 AA 40 00` finds none). Both run it once 30 ticks have passed since `+0xED`.
+  `40 AA 40 00` finds none). Both run it once 30 ticks have passed since `+0xED`; `0x40AD20` itself
+  is never reached (no call, jump or pointer, the bits 8–10 row above), so `0x40B2E9` is the live one.
 - **The record.** `+0x00` the seat's player record; `+0x04` the seat's map bit; three vectors of
   unit pointers, each `{+0 allocator, +4 begin, +8 end, +0xC capacity}` and 4-byte elements
   (`0x408F30`'s `sar eax,2`): **`+0x05` the units in sight**, **`+0x15` the radar contacts**,
@@ -1258,7 +1259,8 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   `add ecx,0x118`): a unit alive (`+0x110` bit 28) and not dying (bit 14) whose owner the seat
   is not allied with (`cmp byte [seatrec + owner's +0x146 + 0x108],0` at `0x40AB05`) goes on the
   sight list when `UnitInPlayerLOS 0x465AC0(seatrec, unit)` passes and its `+0x110` bit 15 is clear
-  (`0x40AB0F..0x40AB36`), then on the radar list when its `+0x110` bit 8 is set (`0x40AB3F..0x40AB5C`).
+  (`0x40AB0F..0x40AB36`), then on the radar list when its `+0x110` bit 8 is set (`0x40AB3F..0x40AB5C`, the push
+  `0x408F30` from `0x40AB50`).
   At `0x40AB3F` `ecx` is the unit (the skip path `0x40AC81` steps it), `esi` the record, `ebx` 1;
   `eax` and `edx` are reloaded on both exits. Branches into `0x40AB3F..0x40AB4F`: `0x40AB1C`,
   `0x40AB27`, both at its first byte.
