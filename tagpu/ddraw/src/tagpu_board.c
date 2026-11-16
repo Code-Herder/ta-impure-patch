@@ -44,6 +44,9 @@
 #define M_FIELD    0x57D       /* i32 the active textfield's index, -1 none                    */
 #define M_SCREENS  0x37EBE     /* u16: 0x865 the options stack, chat, share and the rest       */
 #define M_SCREENS2 0x2BEE      /* u8: 0xE0                                                      */
+#define M_EYE_X    0x1431F     /* i32 pair: the camera's eye (OFF_EYE_X)                        */
+#define M_VIEW_W   0x37E37     /* i32 pair: the 1x view; its centre is eye + view / 2 at every
+                                  zoom (tagpu_zoom.c, the camera's range)                       */
 #define GUI_BLACK  0x00
 
 #define STEP_PX    6.0         /* screen px a line moves before it adds a segment: a corner of
@@ -55,11 +58,16 @@
 #define SAYS       8           /* the chat lines a frame owes                                   */
 #define SAY_TICKS  30u         /* one chat line a seat at most per this many ticks              */
 #define CHAT_LINE  0x00463CA0u /* stdcall (text, flags, u16, row): a chat line, 0x40 bytes kept */
+#define RECENT_MS  10000u      /* a new marker's edge arrow lasts this long                     */
+#define PING_MS    2000u       /* its minimap ping                                              */
+#define ACT_MS     700u        /* an ally is drawing or erasing this long after its last stroke */
+#define EDGE_PX    30.0        /* screen px from the view's edge to an edge arrow's anchor      */
+#define EDGE_HIT_PX 16.0       /* screen px a click may be from that anchor                     */
 
 typedef int (__stdcall* GroundHeight)(const int*);
 
 enum { G_NONE, G_LINE, G_MOVE, G_ERASE };
-enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN };
+enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN, E_LAST, E_EDGE };
 
 static int      s_armed;
 static unsigned s_vk = 0xDC;           /* VK_OEM_5, the key that types `\` on a US layout */
@@ -107,6 +115,16 @@ static unsigned      s_logoHave;       /* a bit per logo whose colour is cached 
 
 static unsigned s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cFull, s_cIn, s_cBad;
 
+static unsigned s_mute;                /* a bit per seat this player has muted               */
+static struct { uint32_t id; DWORD at; } s_recent[TAGPU_PK_BD_RECENT];   /* new markers, a ring */
+static unsigned s_recentAt;
+static uint32_t s_lastOf[TAGPU_BW_SEATS];   /* each seat's last new marker                   */
+static uint32_t s_lastAny;             /* the last new marker another seat placed            */
+static struct { DWORD at; unsigned op; } s_act[TAGPU_BW_SEATS];   /* each seat's last stroke */
+static struct { int32_t a[2]; uint32_t id; } s_edge[TAGPU_PK_BD_RECENT];  /* the last fill's */
+static unsigned s_nedge;
+static int      s_edgeHit = -1;        /* the edge arrow a taken press is on                 */
+
 static void say_lines(void);
 
 /* ------------------------------------------------------------------ gates ---- */
@@ -144,6 +162,21 @@ static double zoom(void)
 {
     double z = (double)tagpu_zoom_level();
     return z >= TAGPU_ZOOM_FLOOR_LO && z <= 16.0 ? z : 1.0;
+}
+
+/* The world the view shows, as the projected plane (x, z - h / 2): its centre and half extents in
+   world px. 0 for a view of no sane size. */
+static int view_rect(const char* ta, double* cx, double* cy, double* hw, double* hh)
+{
+    const int* e = (const int*)(ta + M_EYE_X);
+    const int* v = (const int*)(ta + M_VIEW_W);
+    const double z = zoom();
+    if (v[0] <= 0 || v[1] <= 0 || v[0] > 16384 || v[1] > 16384) return 0;
+    *cx = e[0] + v[0] * 0.5;
+    *cy = e[1] + v[1] * 0.5;
+    *hw = v[0] * 0.5 / z;
+    *hh = v[1] * 0.5 / z;
+    return 1;
 }
 
 /* THE HOLD IS THE KEY'S STATE, NOT A MESSAGE'S. A release can reach something else first: as
@@ -203,7 +236,7 @@ static int local(const char* ta, unsigned seat, TagpuBoardOp* op)
     }
     did = tagpu_boardstore_apply(&s_store, seat, op, game_tick(ta), op->may);
     if (did == TAGPU_BS_NONE) return 0;
-    if (op->op == TAGPU_BW_POINT) s_cMarks++;
+    if (op->op == TAGPU_BW_POINT) { s_cMarks++; s_lastOf[seat] = op->id; }
     else if (op->op == TAGPU_BW_LINE) s_cSegs++;
     else if (op->op == TAGPU_BW_ERASE) s_cErase++;
     s_out[0] = TAGPU_BW_VERSION;
@@ -327,6 +360,18 @@ static void remember(int right, const int32_t p[3], DWORD at, int valid)
     l->valid = valid;
 }
 
+/* The camera centred on a marker the store still holds: the eye is the point less half the 1x view
+   at every zoom, handed to the zoom's next apply as the scenario camera is (tagpu_zoom_place_eye,
+   which clamps it to the range in force). */
+static void jump_to(char* ta, uint32_t id)
+{
+    const TagpuBoardMark* m = id ? tagpu_boardstore_find(&s_store, id) : NULL;
+    const int* v = (const int*)(ta + M_VIEW_W);
+    int ex, ey;
+    if (!m || v[0] <= 0 || v[1] <= 0) return;
+    tagpu_zoom_place_eye(ta, m->x - v[0] / 2, m->z - (int)floor(m->h * 0.5) - v[1] / 2, &ex, &ey);
+}
+
 static void press(const char* ta, int ev, DWORD at, unsigned seat, const int32_t p[3], int on)
 {
     TagpuBoardMark* m;
@@ -447,6 +492,16 @@ void tagpu_board_record(const int* rec, unsigned msg)
     s_penOn = on;
     if (on) memcpy(s_pen, p, sizeof s_pen);
     for (i = 0; i < s_nev; i++) {
+        if (s_ev[i] == E_LAST) {
+            jump_to(w.ta, s_lastAny && tagpu_boardstore_find(&s_store, s_lastAny) ? s_lastAny
+                                                                                 : s_lastOf[w.player]);
+            continue;
+        }
+        if (s_ev[i] == E_EDGE) {
+            if (s_edgeHit >= 0 && (unsigned)s_edgeHit < s_nedge) jump_to(w.ta, s_edge[s_edgeHit].id);
+            s_edgeHit = -1;
+            continue;
+        }
         /* a press off the world view is a press the window procedure took on the last record's
            region: it ends what it would start, and no more */
         if (!on && (s_ev[i] == E_LDOWN || s_ev[i] == E_RDOWN || s_ev[i] == E_MDOWN)) continue;
@@ -461,6 +516,20 @@ void tagpu_board_record(const int* rec, unsigned msg)
 }
 
 /* ------------------------------------------------------------ the window ---- */
+
+/* the edge arrow under the pointer, as the last record placed it, within EDGE_HIT_PX: its index in
+   the last fill's, or -1 */
+static int edge_at(const char* ta)
+{
+    const int32_t* q = (const int32_t*)(ta + M_POINT);
+    const double z = zoom(), px = (double)(q[0] >> 16), py = (double)(q[2] >> 16) - floor((q[1] >> 16) * 0.5);
+    unsigned i;
+    for (i = 0; i < s_nedge; i++) {
+        double dx = (px - s_edge[i].a[0]) * z, dy = (py - s_edge[i].a[1]) * z;
+        if (dx * dx + dy * dy <= EDGE_HIT_PX * EDGE_HIT_PX) return (int)i;
+    }
+    return -1;
+}
 
 static void queue(int ev)
 {
@@ -479,7 +548,12 @@ int tagpu_board_key(unsigned vk, int up)
         int was = s_held;
         if (up) { s_held = 0; return was; }
         if (s_held) return 1;
-        if ((ta = main_block()) && live(&w) && !keyboard_taken(ta)) { s_held = 1; return 1; }
+        if ((ta = main_block()) && live(&w) && !keyboard_taken(ta)) {
+            /* with Ctrl: the camera to the last marker another player placed, and no hold */
+            if (key_down(VK_CONTROL)) { queue(E_LAST); return 1; }
+            s_held = 1;
+            return 1;
+        }
         if (!s_box.open) return 0;
     }
     if (s_box.open) {
@@ -532,7 +606,17 @@ int tagpu_board_mouse(unsigned msg)
     s_taken[b] = 0;
     /* a press anywhere closes an open text box, as Esc does, before it does anything else */
     if (s_box.open) s_box.open = 0;
-    if (!holding() || !(ta = main_block()) || !live(&w) || !pointer_on_world(ta)) return 0;
+    if (!(ta = main_block()) || !live(&w) || !pointer_on_world(ta)) return 0;
+    if (!holding()) {
+        /* AN EDGE ARROW. A left press on one, as the last record placed the pointer, is the
+           board's: the camera goes to its marker and the engine never sees the click */
+        int k = b == 0 ? edge_at(ta) : -1;
+        if (k < 0) return 0;
+        s_edgeHit = k;
+        s_taken[0] = 1;
+        queue(E_EDGE);
+        return 1;
+    }
     s_taken[b] = 1;
     queue(b == 0 ? E_LDOWN : b == 1 ? E_RDOWN : E_MDOWN);
     return 1;
@@ -590,11 +674,27 @@ int tagpu_board_apply(const void* body, unsigned bytes)
     /* A SEAT THIS PLAYER DOES NOT SEE IS NOT STORED: its marks would take slots from the ones this
        player sees, the store's oldest first. One this player sees changes what its sender's rights
        allowed, cut to what this player sees. */
+    /* A MUTED SEAT changes only its own marks here, and says and pings nothing. */
     while (at < bytes && (next = tagpu_boardwire_next(b, bytes, at, &op)) != 0) {
         s_cIn++;
         if (see >> seat & 1u) {
-            int did = tagpu_boardstore_apply(&s_store, seat, &op, game_tick(ta), op.may & see);
-            if (did == TAGPU_BS_NEW && seat != me) say_later(ta, seat, &op);
+            int muted = (s_mute >> seat & 1u) != 0;
+            int did = tagpu_boardstore_apply(&s_store, seat, &op, game_tick(ta),
+                                             muted ? 0u : op.may & see);
+            if (seat != me && (op.op == TAGPU_BW_LINE || op.op == TAGPU_BW_ERASE)) {
+                s_act[seat].at = GetTickCount();
+                s_act[seat].op = op.op;
+            }
+            if (did == TAGPU_BS_NEW && seat != me) {
+                s_lastOf[seat] = op.id;
+                if (!muted) {
+                    s_lastAny = op.id;
+                    s_recent[s_recentAt % TAGPU_PK_BD_RECENT].id = op.id;
+                    s_recent[s_recentAt % TAGPU_PK_BD_RECENT].at = GetTickCount();
+                    s_recentAt++;
+                    say_later(ta, seat, &op);
+                }
+            }
         }
         at = next;
     }
@@ -634,15 +734,68 @@ static unsigned char seat_colour(const char* ta, unsigned seat)
     return s_logoCol[logo];
 }
 
+/* a new marker's minimap ping: what is left of its PING_MS, in 1..TAGPU_PK_BD_PING; 0 for none */
+static uint8_t ping_of(uint32_t id, DWORD now)
+{
+    unsigned i;
+    for (i = 0; i < TAGPU_PK_BD_RECENT; i++)
+        if (s_recent[i].id == id && now - s_recent[i].at < PING_MS)
+            return (uint8_t)(1u + (PING_MS - 1u - (now - s_recent[i].at)) * (TAGPU_PK_BD_PING - 1u) / PING_MS);
+    return 0;
+}
+
+/* THE EDGE ARROWS, after every other record: a new marker of the last RECENT_MS whose point lies
+   off the view gets an arrow where the line from the view's centre to it crosses the view's edge,
+   EDGE_PX screen px inside it. The anchors are kept for the press that hits one (edge_at), so the
+   arrow drawn and the arrow clicked are the same numbers. At most TAGPU_PK_BD_RECENT. */
+static void edges(const char* ta, unsigned see, const unsigned char col[10], DWORD now,
+                  TAGPU_PK_BDMARK* marks, unsigned maxm, unsigned* nm, int* cut)
+{
+    double cx, cy, hw, hh, m;
+    unsigned i;
+    s_nedge = 0;
+    if (!view_rect(ta, &cx, &cy, &hw, &hh)) return;
+    m = EDGE_PX / zoom();
+    if (hw <= m || hh <= m) return;
+    for (i = 0; i < TAGPU_PK_BD_RECENT; i++) {
+        const TagpuBoardMark* k;
+        TAGPU_PK_BDMARK* o;
+        double dx, dy, tx, ty, t, a;
+        if (!s_recent[i].id || now - s_recent[i].at >= RECENT_MS ||
+            !(k = tagpu_boardstore_find(&s_store, s_recent[i].id)) || !(see >> k->owner & 1u))
+            continue;
+        dx = (double)k->x - cx;
+        dy = (double)k->z - floor(k->h * 0.5) - cy;
+        if (fabs(dx) <= hw && fabs(dy) <= hh) continue;            /* on the view: no arrow */
+        tx = fabs(dx) > 0.0 ? (hw - m) / fabs(dx) : 1e30;
+        ty = fabs(dy) > 0.0 ? (hh - m) / fabs(dy) : 1e30;
+        t = tx < ty ? tx : ty;
+        if (*nm >= maxm) { *cut = 1; return; }
+        o = &marks[(*nm)++];
+        memset(o, 0, sizeof *o);
+        o->x = (int32_t)floor(cx + dx * t);
+        o->z = (int32_t)floor(cy + dy * t);
+        o->colour = col[k->owner];
+        o->flags = TAGPU_PK_BDM_EDGE;
+        a = atan2(dy, dx) / 6.283185307179586 * 256.0;
+        o->dir = (uint8_t)((int)floor(a + 0.5) & 255);
+        s_edge[s_nedge].a[0] = o->x;
+        s_edge[s_nedge].a[1] = o->z;
+        s_edge[s_nedge].id = k->id;
+        s_nedge++;
+    }
+}
+
 int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, unsigned* ns,
                      TAGPU_PK_BDMARK* marks, unsigned maxm, unsigned* nm, int* cut)
 {
     TagpuWorld w;
     unsigned char col[10];
     unsigned i, k, see;
+    const DWORD now = GetTickCount();
     *ns = *nm = 0;
     if (!live(&w)) return 0;
-    see = seen();
+    see = seen() & ~s_mute;             /* a muted seat's marks and pointer are not drawn */
     for (k = 0; k < 10; k++) col[k] = seat_colour(w.ta, k);
     /* the lifetime first, so neither table carries what is gone */
     tagpu_boardstore_expire(&s_store, game_tick(w.ta));
@@ -662,7 +815,7 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
     for (i = 0; i < s_store.nseg; i++) {
         const TagpuBoardSeg* g = &s_store.seg[(s_store.head + i) % TAGPU_BS_SEGS];
         TAGPU_PK_BDSEG* o;
-        if (!g->live || !(see >> g->owner & 1u)) continue;
+        if (!g->live || !(see >> g->owner & 1u)) continue;   /* `see` has no muted seat */
         if (*ns >= maxs) { *cut = 1; break; }
         o = &segs[(*ns)++];
         memcpy(o->a, g->a, sizeof o->a); memcpy(o->b, g->b, sizeof o->b);
@@ -680,6 +833,7 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
         o->colour = col[m->owner];
         o->flags = (uint8_t)(s_box.open && s_box.id == m->id ? TAGPU_PK_BDM_EDIT : 0);
         o->len = (uint8_t)text_copy(o->text, m->text, m->len);
+        o->ping = ping_of(m->id, now);
     }
     /* THE ALLIES' POINTERS, after every marker: the store holds at most TAGPU_BS_MARKS markers, so
        the TAGPU_PK_BD_CURSORS records past them are always free for these */
@@ -702,10 +856,16 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
             o->x = cur[i].x; o->h = cur[i].h; o->z = cur[i].z;
             o->colour = col[cur[i].seat];
             o->flags = TAGPU_PK_BDM_CURSOR;
-            if (tagpu_share_name(cur[i].seat, name, sizeof name))
+            if (tagpu_share_name(cur[i].seat, name, sizeof name)) {
+                /* the activity after the name while the ally's strokes keep arriving */
+                if (now - s_act[cur[i].seat].at < ACT_MS && s_act[cur[i].seat].at)
+                    strncat(name, s_act[cur[i].seat].op == TAGPU_BW_ERASE ? " erasing..." : " drawing...",
+                            sizeof name - 1 - strlen(name));
                 o->len = (uint8_t)text_copy(o->text, name, (unsigned)strlen(name));
+            }
         }
     }
+    edges(w.ta, see, col, now, marks, maxm, nm, cut);
     return 1;
 }
 
@@ -722,6 +882,13 @@ void tagpu_board_level_end(void)
     s_nsay = 0;
     s_said = 0;
     s_logoHave = 0;
+    s_mute = 0;
+    memset(s_recent, 0, sizeof s_recent);
+    memset(s_lastOf, 0, sizeof s_lastOf);
+    memset(s_act, 0, sizeof s_act);
+    s_lastAny = 0;
+    s_nedge = 0;
+    s_edgeHit = -1;
     s_cMarks = s_cSegs = s_cErase = s_cDrop = s_cFull = s_cIn = s_cBad = 0;
     tagpu_board_cancel();
     s_lastL.valid = s_lastR.valid = 0;

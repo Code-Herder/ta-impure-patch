@@ -1320,7 +1320,8 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
 #define BD_STEM      20.0                      /* the stem's height                          */
 #define BD_PLATE_H   15.0                      /* the plate's height                         */
 #define BD_BOX_MIN   120.0                     /* the text box's least width                 */
-#define BD_CUR_QUADS 16                        /* an ally's pointer: 5 arrows of 5 triangles, a plate */
+#define BD_CUR_QUADS 16                        /* an ally's pointer: 5 arrows of 5 triangles, a plate;
+                                                  also room for an edge arrow's 2 triangles     */
 #define MAXBDC       65536
 #define MAXBDK       (2 * MAXBDC)
 #define MAXBDQ       (((int)TAGPU_PK_MAX_BDMARK * 6 + (int)TAGPU_PK_BD_CURSORS * BD_CUR_QUADS + 16) * QUADV)
@@ -1464,6 +1465,23 @@ static void bd_cursor(double x, double y, int col, int black, const char* name, 
     }
 }
 
+/* AN EDGE ARROW: a triangle 18 screen px long pointing `dir` (256ths of a turn from +x toward +y,
+   the projected plane's z), in the marker's colour on a black one 2 px larger, its centre at the
+   anchor the fill placed inside the view's edge. */
+static void bd_edge(double x, double y, unsigned dir, int col, int black)
+{
+    const double p = s_px, a = 6.283185307179586 * (double)(dir & 255u) / 256.0;
+    const double ux = cos(a), uy = sin(a), nx = -uy, ny = ux;
+    int j;
+    for (j = 0; j < 2; j++) {
+        const double g = j ? 0.0 : 2.0;
+        bd_tri(x + ux * (11.0 + g) * p, y + uy * (11.0 + g) * p,
+               x - ux * (7.0 + g) * p + nx * (8.0 + g) * p, y - uy * (7.0 + g) * p + ny * (8.0 + g) * p,
+               x - ux * (7.0 + g) * p - nx * (8.0 + g) * p, y - uy * (7.0 + g) * p - ny * (8.0 + g) * p,
+               j ? col : black);
+    }
+}
+
 static void gather_board(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
@@ -1496,7 +1514,8 @@ static void gather_board(const TAGPU_FXVIEW* v)
         const TAGPU_PK_BDMARK* m = &mk[i];
         double x, y;
         float fx, fy;
-        if ((m->flags & TAGPU_PK_BDM_CURSOR) || !bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
+        if ((m->flags & (TAGPU_PK_BDM_CURSOR | TAGPU_PK_BDM_EDGE)) ||
+            !bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
         fx = (float)x; fy = (float)y;
         snap_device(&fx, &fy);
         bd_pin(fx, fy, m->colour, black);
@@ -1524,6 +1543,15 @@ static void gather_board(const TAGPU_FXVIEW* v)
         fx = (float)x; fy = (float)y;
         snap_device(&fx, &fy);
         bd_cursor(fx, fy, m->colour, black, m->text, m->len);
+    }
+    for (i = 0; i < pk->n_bdmark; i++) {
+        const TAGPU_PK_BDMARK* m = &mk[i];
+        double x, y;
+        float fx, fy;
+        if (!(m->flags & TAGPU_PK_BDM_EDGE) || !bd_anchor(v, m->x, 0, m->z, &x, &y)) continue;
+        fx = (float)x; fy = (float)y;
+        snap_device(&fx, &fy);
+        bd_edge(fx, fy, m->dir, m->colour, black);
     }
     if ((h->flags & TAGPU_PK_BD_ERASE) && (h->flags & TAGPU_PK_BD_PEN)) {
         double cx, cy, xs[32], ys[32];

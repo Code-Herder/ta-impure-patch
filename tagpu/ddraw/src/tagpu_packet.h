@@ -560,22 +560,33 @@ typedef struct TAGPU_PK_BDSEG {
 
 /* 80 B, one marker, at most TAGPU_PK_MAX_BDMARK */
 typedef struct TAGPU_PK_BDMARK {
-    int32_t  x, h, z;         /* where it stands, world px                      */
+    int32_t  x, h, z;         /* where it stands, world px; an EDGE arrow's
+                                 anchor, h 0                                    */
     uint8_t  colour;          /* its owner's palette index                      */
     uint8_t  flags;           /* TAGPU_PK_BDM_*                                 */
     uint8_t  len;             /* its text's length, 0..TAGPU_PK_BD_TEXT         */
-    uint8_t  pad;
-    char     text[TAGPU_PK_BD_TEXT + 4];
+    uint8_t  ping;            /* a marker's minimap ping, 0 none, else what is
+                                 left of it in 1..TAGPU_PK_BD_PING              */
+    char     text[TAGPU_PK_BD_TEXT + 1];
+    uint8_t  dir;             /* EDGE: where the arrow points, 256ths of a turn
+                                 from +x toward +z                              */
+    uint8_t  pad[2];
 } TAGPU_PK_BDMARK;
 
 #define TAGPU_PK_BDM_EDIT   1u  /* the text box edits it: the box is its label  */
 #define TAGPU_PK_BDM_CURSOR 2u  /* not a marker: an ally's pointer, its text the
                                    ally's name (tagpu_rec_mp_cursors); never with
                                    EDIT                                          */
+#define TAGPU_PK_BDM_EDGE   4u  /* not a marker: the arrow at the view's edge
+                                   toward a new marker off the view, at its
+                                   anchor, pointing `dir`; alone                 */
+#define TAGPU_PK_BD_PING    250u
 
 #define TAGPU_PK_MAX_BDSEG  4096u
 #define TAGPU_PK_BD_CURSORS 10u /* a pointer a seat, after every marker          */
-#define TAGPU_PK_MAX_BDMARK (256u + TAGPU_PK_BD_CURSORS)
+#define TAGPU_PK_BD_RECENT  16u /* new markers kept for edge arrows and pings: at
+                                   most this many records carry either           */
+#define TAGPU_PK_MAX_BDMARK (256u + TAGPU_PK_BD_CURSORS + TAGPU_PK_BD_RECENT)
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns

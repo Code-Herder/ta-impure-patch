@@ -733,7 +733,9 @@ static const char* frame_valid(const void* rec)
         for (k = 0; k < p->n_bdmark; k++)
             if (!board_coord(m[k].x) || !board_coord(m[k].h) || !board_coord(m[k].z) ||
                 (m[k].flags != 0u && m[k].flags != TAGPU_PK_BDM_EDIT &&
-                 m[k].flags != TAGPU_PK_BDM_CURSOR) || !board_text_ok(m[k].text, m[k].len))
+                 m[k].flags != TAGPU_PK_BDM_CURSOR && m[k].flags != TAGPU_PK_BDM_EDGE) ||
+                m[k].ping > TAGPU_PK_BD_PING || (m[k].ping && m[k].flags > TAGPU_PK_BDM_EDIT) ||
+                !board_text_ok(m[k].text, m[k].len))
                 return "board marker";
     }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
