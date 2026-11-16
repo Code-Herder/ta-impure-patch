@@ -14,6 +14,12 @@ the peers that hold them:
     AI2's counters on H at J's commander  the same alliance the other way, on the AI's own peer
     H's counters at AI2's commander     never: no ally of H sees there, and sharing is not transitive
     J's view: E's +0x110 bit 8          a contact only through AI2's shared radar
+    AI2's radar list on H takes E       always: its own tower, whoever the viewed player is
+    AI3's radar list on J, J's commander  never: AI3 does not sense it (stock lists every unit
+                                        of the viewed player, J, there)
+
+On J the tool also hovers AI2's tower and saves the unit panel (panel-J.png): with the alliance,
+a remote ally's unit shows no resource numbers but its kills and status.
 
 and in `allied`, an alliance changed in the middle of the game: J opens the in-game ALLIES dialog
 (Tab, then ALLIES: a network game's only, 0x496144, 0x4950FA) and clears its row toward H
@@ -81,6 +87,32 @@ class Run:
         if not grid or not cols:
             return None
         return self.peek(name, f"{grid + (z >> 5) * cols + (x >> 5):X}:1")[0]
+
+    def radar_list(self, name, record):
+        """the unit slots on `record`'s acquisition radar list: the record *(0x5119C0 + 4r), its
+        vector of unit pointers at +0x15 (begin +0x19, end +0x1D)"""
+        acq = 0x5119C0 + 4 * record
+        units, b, e = self.peek(name, f"*0x511DE8+{UNITS:X}:4", f"*{acq:X}+19:4", f"*{acq:X}+1D:4")
+        if not units or not b or e is None or e < b or (e - b) // 4 > 256:
+            return None
+        ptrs = self.peek(name, *[f"{a:X}:4" for a in range(b, e, 4)]) if e > b else []
+        return {(p - units) // U_STRIDE for p in ptrs if p and p >= units}
+
+    def hover(self, name, slot, wx, wz):
+        """put the pointer on unit `slot` at world (wx, wz): the eye 300 left of it and 200 above,
+        then up the screen from the unit's ground row until the hovered unit, the u16 id at
+        main+0x2CBA, is the unit's own id +0xA8"""
+        self.tacli("eye", name, wx - 300, wz - 200)
+        time.sleep(1)
+        (units,) = self.peek(name, f"*0x511DE8+{UNITS:X}:4")
+        (uid,) = self.peek(name, f"{units + slot * U_STRIDE + 0xA8:X}:2") if units else (None,)
+        for dy in range(0, 200, 8):
+            self.tacli("keys", name, f"pmove:428,{232 - dy}")
+            time.sleep(0.5)
+            (hov,) = self.peek(name, "*0x511DE8+2CBA:2")
+            if uid is not None and hov == uid:
+                return True
+        return False
 
     def contact(self, name, slot):
         (units,) = self.peek(name, f"*0x511DE8+{UNITS:X}:4")
@@ -162,6 +194,14 @@ def play(run, variant, out, dll, port, display):
         e = next(u for u in run.roster(J) if u["type"].upper() == "ARMSOLAR" and
                  abs(u["world"][0] - (tx + E_OFFSET)) < 64 and abs(u["world"][1] - tz) < 64)
 
+        e_on_h = next(u for u in run.roster(H) if u["type"].upper() == "ARMSOLAR" and
+                      abs(u["world"][0] - (tx + E_OFFSET)) < 64 and abs(u["world"][1] - tz) < 64)
+        tower_on_j = next(u for u in run.roster(J) if u["type"].upper() == "ARMRAD" and
+                          abs(u["world"][0] - tx) < 64 and abs(u["world"][1] - tz) < 64)
+        ai2_list, ai3_list = run.radar_list(H, 2), run.radar_list(J, 3)
+        if run.hover(J, tower_on_j["engine_index"], tx, tz):
+            run.tacli("shot", J, "-o", out / "panel-J.png")
+
         shared = variant == "allied"
         checks = [
             ("H's counters at J's commander", run.counter(H, 0, jx, jz), shared),
@@ -169,6 +209,10 @@ def play(run, variant, out, dll, port, display):
             ("AI2's counters on H at J's commander", run.counter(H, 2, jx, jz), shared),
             ("H's counters at AI2's commander", run.counter(H, 0, ax, az), False),
             ("J's view: E a contact", run.contact(J, e["engine_index"]), shared),
+            ("AI2's radar list on H takes E",
+             None if ai2_list is None else e_on_h["engine_index"] in ai2_list, True),
+            ("AI3's radar list on J takes J's commander",
+             None if ai3_list is None else on_j[0]["engine_index"] in ai3_list, False),
         ]
         if shared:
             toggle_ally(run, J, h_on_j)
