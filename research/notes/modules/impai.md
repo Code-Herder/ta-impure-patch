@@ -400,16 +400,15 @@ scenario's stem:
   truth's loss within 2 %, its margins within 0.05 and the check (at prior 0 the search stops on a step 3.7 %
   above the truth's loss).
 
-**The fitted coefficients** (`impai_fitparams.c`, MEASURED 2026-11-13) are fitted to the training half of the
+**The fitted coefficients** (`impai_fitparams.c`, MEASURED 2026-11-15) are fitted to the training half of the
 re-targeting references, reference set `defcfcdb2359` (`.data/calib-rt/refs`: 284 graded fights, defence 30,
-duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `3D002F542F3F142E` -- the
-content whose submarines stand on the sea floor (`SUBMERGED`, above). The cross-validation, run on the content
-before it, chooses **prior 300 with homing held** (validation loss 14047; the neighbours 14252 at 100 and 14800
-at 1000), and the final fit at that choice, best of 6 seeds, loss 3055 (3096 on the content before), keeps
-straight bias 2.07 and lead −0.74, ballistic bias 1.68 and lead −1.63, focus 0.27, splash 0.81 and tau 0.231,
-each within 0.004 of the fit on the content before (MEASURED 2026-11-14); homing stays at (2, −1) and dropped,
-which no training fight fires, at its start. **The check** passes 114/122 (93.4 %) of the check half's decisive
-fights, 224/243 of all. On the compatibility setups' references (`check --evaluation`, MEASURED 2026-11-14) the
+duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `F5E639B5925C8734` -- the
+content whose submarines stand on the sea floor (`SUBMERGED`, above) and whose weapons a script times fire at the
+script's rate (*The scripted reload*). The cross-validation, run on an earlier content, chooses **prior 300 with
+homing held** (validation loss 14047; the neighbours 14252 at 100 and 14800 at 1000), and the final fit at that
+choice, best of 6 seeds, loss 3055, keeps straight bias 2.08 and lead −0.67, ballistic bias 1.66 and lead −1.63,
+focus 0.27, splash 0.81 and tau 0.229; homing stays at (2, −1) and dropped, which no training fight fires, at its
+start. On the compatibility setups' references (`check --evaluation`, MEASURED 2026-11-14) the
 naval fights' check half agrees on 18 of 19 decisive fights in Total Mayhem 11.3 and 13 of 15 in TA Zero, against
 12 and 9 on the content and coefficients before.
 
@@ -421,11 +420,11 @@ and 4/4 of the one stalemate. The re-targeting protocol emptied the classes the 
 and those score lower than the one-order references' did (296/316): the fights that end are no longer the easy
 ones. Group, the kind ImpAI decides most, is below 90 % in the cross-validation at every candidate (85.8 % to 88.9 %).
 
-**The check** (MEASURED 2026-11-13, run once on the check half after the fit): **PASS, 113/122 (92.6 %)** of the
-decisive check-half fights; group 64/69 (92.8 %), the one kind with 20 or more decisive fights, passes its own 90 %;
-defence 13/15, duel 19/19 and naval 17/19 are too few to judge. The training half scores 109/121 (90.1 %) and all
-284 fights 222/243 (91.4 %). The nine fights it gets wrong: defence-001 and -021, group-017, -020, -042, -062 and
--080, naval-012 and -021. The check's 92.6 % sits above the cross-validation's 88.4 % and inside its interval; the
+**The check** (MEASURED 2026-11-15, run once on the check half after the fit): **PASS, 113/122 (92.6 %)** of the
+decisive check-half fights; group 63/69 (91.3 %), the one kind with 20 or more decisive fights, passes its own 90 %;
+defence 13/15, duel 19/19 and naval 18/19 are too few to judge. The training half scores 110/121 (90.9 %) and all
+284 fights 223/243 (91.8 %). The nine fights it gets wrong: defence-001 and -021, group-017, -020, -042, -057, -062
+and -080, naval-012. The check's 92.6 % sits above the cross-validation's 88.4 % and inside its interval; the
 cross-validation is the estimate to plan with, and with group under 90 % there it is no margin. The check half
 is not clean of the design: the re-targeting protocol was diagnosed on two of its fights, group-141 and naval-012
 ([decisions](../impai/decisions.html), *The re-targeting corpus*); naval-012 is still one it gets wrong.
