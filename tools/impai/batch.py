@@ -24,9 +24,10 @@ value; a game's stalls are reported, not judged.
 HOW IT RUNS. Every game but the margin test's is played with TEST's DLL, through `bar.py play --dll`, in
 pieces: each piece one `bar.py play` of one setup's games, at most one game a lane, so a piece is one wave of
 games and ends well inside DEADLINE. The regression set, the hota games and the mods play beside each other --
-a game in both the regression set and the hota games is played once -- and the held-out games beside them; every
-piece is launched at once and the run lock admits them as its slots allow. A piece that runs DEADLINE seconds
-after its admission is stopped (SIGTERM, bar.py's stop), and its gate could not run. FAIL FAST: once a game of
+a game in both the regression set and the hota games is played once -- and the held-out games beside them; the
+pieces are launched in their order, LAUNCH_GAP apart, and the run lock admits them in it as its slots allow (a
+piece asks its lanes, so two base pieces fill the 28 slots). A piece that runs DEADLINE seconds after its
+admission is stopped (SIGTERM, bar.py's stop), and its gate could not run. FAIL FAST: once a game of
 a gate has ended in anything but a win, the gate has failed, every gating piece still playing is stopped
 (SIGINT) and the margin test is not played; the held-out piece plays on. A piece with a game that could not run
 is played once more (bar.py's resume plays only those). The margin test is played only once every other gate
@@ -72,6 +73,7 @@ BASE_LANES = 7                  # a piece's lanes on the base game: two pieces f
 SETUP_LANES = 4                 # on a mod setup: one wave of its four games
 DEADLINE = 600                  # seconds a piece may play after its admission
 POLL = 5
+LAUNCH_GAP = 2                  # seconds between two launches, so the run lock sees the pieces in their order
 PASS, FAIL, UNRUN = "pass", "fail", "unrun"
 EXIT = {PASS: 0, FAIL: 1, UNRUN: 2}
 
@@ -212,10 +214,14 @@ def held_out(games, out: Path) -> list:
 
 
 def play_stage(ps: list, launch, clock, sleep, failed_now) -> tuple:
-    """Every piece of `ps` launched at once and watched to its end: (the first gate failed, if any; the pieces
-    that ran past DEADLINE). A piece past DEADLINE after its admission is stopped with SIGTERM; once failed_now()
-    names a gate, every gating piece still playing is stopped with SIGINT."""
-    live = [dict(p, h=launch(p), admit=None, end=None, termed=False) for p in ps]
+    """Every piece of `ps` launched, in order and LAUNCH_GAP apart, and watched to its end: (the first gate
+    failed, if any; the pieces that ran past DEADLINE). A piece past DEADLINE after its admission is stopped with
+    SIGTERM; once failed_now() names a gate, every gating piece still playing is stopped with SIGINT."""
+    live = []
+    for k, p in enumerate(ps):
+        if k:
+            sleep(LAUNCH_GAP)
+        live.append(dict(p, h=launch(p), admit=None, end=None, termed=False))
     failed, overran = None, []
     while any(p["end"] is None for p in live):
         sleep(POLL)
