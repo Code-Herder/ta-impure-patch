@@ -119,6 +119,7 @@ PAGES = [
     ("modules/range-rings",               "Weapon range rings", "Modules"),
     ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
     ("modules/impai",                     "ImpAI in the engine", "Modules"),
+    ("modules/income-lever",              "The income lever", "Modules"),
     ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
     ("modules/log-g16-pose-race",         "Log: pose race (frozen)", "Modules"),
     ("modules/log-frame-packet",          "Log: frame packet (frozen)", "Modules"),

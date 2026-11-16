@@ -56,6 +56,7 @@ game ids `bar-<pair>-<map>-<sides>-<n>`:
 | `ne`, `hn` | ImpAI Normal, Hard (the level lever) | ImpAI Easy, Normal | Hard | 10 blocks, 100 |
 | `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
 | `m:<row>`, `n:<row>` | ImpAI Hard; ImpAI on Normal's row (the persona lever) | ImpAI on a persona row (the persona lever) | Hard | 10 blocks, 100, on the development pool |
+| `h:<m>` | ImpAI Hard | OTA AI, its production × m (the income lever) | Hard | 2 blocks, 20: a look of the handicap ladder |
 | `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
 | `dry` | OTA AI | OTA AI | Hard | 10 |
 
@@ -448,6 +449,58 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   as above, +5.78 after block 1 (not read) and +21.78 after block 2, TEST is not worse; the blocks at 6 lanes
   played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters play diverges
   its games from the first different decision, so its pairs tie only when both reach the cap.
+
+## The handicap ladder
+
+Once ImpAI wins every fair game, wins stop measuring. The ladder's number keeps moving: **m\***, the multiplier on
+OTA AI's production at which ImpAI Hard takes half the points on the bar's five maps (a win 1, a draw 0.5, a game at
+the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\* rises.
+
+- **The lever.** `h:<m>` arms OTA AI's seat with the income lever, `tagpu_impai_income.on` at m: its production
+  times m at every economy pass, gives excluded ([the income lever](../modules/income-lever.html)).
+  - m is written with three places in 1.000..8.000, the lever's own precision, so one multiplier is one pair and
+    its games one set of seeds.
+  - A game could not run unless the level init's `income: seat=` lines name exactly the seats it armed, at their
+    multipliers.
+  - The cheat flag reads an armed seat's income divided by m.
+  - `judge` reports an `h:` pair's points and judges nothing.
+- **The method** (`tools/impai/ladder.py run --dll DLL --tag TAG`) works in x = log2(m), over the bracket [0, 3]
+  (×1 to ×8).
+  - Each look plays the bracket's midpoint, rounded to the lever's places, as the pair's two blocks: 20 games,
+    every map from both starts and every side pairing.
+  - Points of at least one half move the low end up to the look; less move the high end down.
+  - After six looks, a logistic p(x) = 1 / (1 + e^((x − c)/s)) is fitted over all 120 games, points as fractional
+    outcomes. A weak prior on log s (median 0.4, one unit of spread) keeps the fit finite when the looks separate
+    wins from losses outright.
+  - The result is m\* = 2^c with its 90 % interval from the fit's curvature, said to lie beyond ×8 or below ×1
+    when it does.
+- **Why bisection with a fit.** SIMULATED (`ladder.py simulate`, 300 runs a cell, the true point uniform in log2
+  0.3..2.7, ties 0.3). The figures are the RMSE of log2 m\*:
+
+  | slope (log2 m a logit unit) | 6 looks × 20 games | the last midpoint alone | 6 looks × 10 games |
+  |---|---|---|---|
+  | 0.15 | 0.030 (±2 %) | 0.049 | 0.042 |
+  | 0.3 | 0.057 (±4 %) | 0.091 | 0.078 |
+  | 0.5 | 0.091 (±6.5 %) | 0.136 | 0.122 |
+
+  In the design's simulation (looks of 16 games, no ties), a fixed grid of six with the same fit came out between
+  the two: 0.106 at slope 0.3, against 0.117 for the midpoint and 0.074 for bisection with the fit. The bisection
+  spends its games near the half point, where a game says most about c. The slope is not known before a run; the
+  fit measures it.
+- **How it runs.**
+  - A look is two pieces, one `bar.py play` a block on ten lanes. Each is one wave of ten games, well inside
+    batch.py's 600-s deadline (games to the cap took at most 346 s on the mirror's run). They are launched in order
+    through batch.py's piece runner, which stops a piece past the deadline.
+  - The DLL is copied into the run's directory at its first look, and a different one is refused, so one ladder is
+    one build.
+  - `<out>/ladder.json` keeps every finished look, so `run` again goes on from the first look not finished.
+  - A look with a game that could not run, or a cap not scored, is played once more; if it still lacks one, the run
+    stops, could not judge (exit 2).
+  - Six looks are 120 games, about twelve admissions of the run lock.
+  - Its tests, offline (`test_ladder.py`): the bisection, the multiplier's rounding, the fit on simulated games and on
+    a separated set, the report's edges, and a run on a fake player (a threshold bracketed and fitted, a draw's half
+    point, the resume, a missing game played once more then could not judge, another DLL refused); also the `h:`
+    pair's spec, its lever lines, the cheat flag and a kept result's multiplier.
 
 ## When the default flips
 

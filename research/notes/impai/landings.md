@@ -71,7 +71,7 @@ Once ImpAI wins every fair game, counting wins measures nothing; A3's tools each
 |---|---|---|
 | The paired margin test | a candidate against the last accepted build on the same seeds, by time to win, stopping when a sequential test decides | `margin.py` (*Next*, 4) |
 | The champion gauntlet | a build against a pool of earlier ones, so an intransitive regression shows | settings per seat today (the persona lever); code against code needs two-process network games or a two-brain build |
-| The handicap ladder | OTA AI's income bonus at which ImpAI Hard falls to 50 %: a strength number past 100 % wins | an income bonus per seat |
+| The handicap ladder | m*, OTA AI's income multiplier at which ImpAI Hard falls to half the points: a strength number that rises past ×1 | `ladder.py` over the income lever, `bar.py`'s `h:<m>` ([the bar](bar.html), *The handicap ladder*; [the income lever](../modules/income-lever.html)) |
 | The exploiter suite | scripted air rushes, naval turtles, artillery creep, commander rushes; mid-game puzzles cut from recordings | the scenario and fork tools |
 | Automatic tuning | SPSA or CMA-ES over the hand-set constants (wave thresholds, the lead's 2.5 / 2.0, persona rows) | the paired test |
 
