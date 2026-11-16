@@ -1109,12 +1109,17 @@ static void yard_clear(IMPAI_DEC* d)
    says so, so the order the two managers run in can never decide which kind of plant takes the slot -- a land
    plant cannot take the slot the sea plant was judged for because the economy ran first. A military that
    refuses every decision holds the seat at one factory; its level-end line's `refused=` shows it. THE SEA PLANT
-   takes factory_per_m's pacing like any second factory: a plant started on the commander's own income alone
-   spends the storage the economy runs on and holds its builder on a frame it cannot finish (MEASURED
-   2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass emptied the seat's
-   metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607). It is wanted only while some
-   builder offers one (impai_econ_sea_able): without that a seat none of whose builders can build one would
-   hold its second factory for ever. */
+   TAKES THE LAND PLANT'S METAL (plant_metal): factory_per_m's pacing, or the surplus that pays a further plant's
+   price (plant_m), so whatever lets a land plant come past the first lets the sea plant come first, and a land
+   plant never takes the slot a naval judgement asked a yard for. The pacing holds: a plant started on the
+   commander's own income alone spends the storage the economy runs on and holds its builder on a frame it cannot
+   finish (MEASURED 2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass
+   emptied the seat's metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607); the surplus
+   pays the plant out of what the seat does not spend (MEASURED 2026-11-15, round 3 at 57d39d71, b5's Red Triangle
+   ac-1 and Trout Farm ca-1: the second plant came on the surplus at a steady income of 6.59 and 6.53 a pass
+   against factory_per_m's 8.00, judged naval, while the sea plant asked the pacing alone -- a land plant, no sea
+   search, no yard). It is wanted only while some builder offers one (impai_econ_sea_able): without that a seat
+   none of whose builders can build one would hold its second factory for ever. */
 /* THE DEFENCE'S POINT (impai_econ.c, THE GROUND DEFENCES): the anchor moved rally_px towards the pressing member's
    block, as the military's rally point is moved towards the enemy base, or that block itself when nearer. The
    block is recorded data: an int16 block, at most 2^20 px from the anchor, so the product below stays within
@@ -1320,8 +1325,7 @@ static void economy(IMPAI_DEC* d)
     d->sea_far = (uint8_t)(mil && mil->dry);
     d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
     d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP
-                              : d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) &&
+                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_metal) &&
                   !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'

@@ -942,15 +942,19 @@ the enemy; with no free squad the lead's wave waits, and the members kept home a
 order, not its strongest; the margin was measured on twelve games of one opponent, the stock AI, and the evidence
 on four.
 
-**The sea plant** is the seat's next factory after its first, inside `factory_max`, or the finish's in a dry hunt
-(above). The second factory waits for the
-judgement (`naval >= 0`), an ordering: the two managers' order cannot decide which kind of plant takes the slot.
+**The sea plant** is the seat's next factory after its first, or the finish's in a dry hunt (above). The second
+factory waits for the judgement (`naval >= 0`), an ordering: the two managers' order cannot decide which kind of
+plant takes the slot.
 
-- *Wanted* when naval, no water factory stands, is a frame or is at a builder's head, one factory stands, nothing
+- *Wanted* when naval, no water factory stands, is a frame or is at a builder's head, a factory stands, nothing
   stalls, the seat's refusals are below `IMPAI_SEA_REFUSALS` (16) and some builder type of the census offers one
-  (`impai_econ_sea_able`, at most 8 types' menus), and the metal income passes `factory_per_m`'s pacing as for any
-  second factory: a plant begun on the commander's own income empties the store the economy runs on ([decisions](decisions.html),
-  *The naval rule's two design calls*).
+  (`impai_econ_sea_able`, at most 8 types' menus), on **the land plant's metal**: `factory_per_m`'s pacing inside
+  `factory_max`, or the surplus that pays a further plant's price (*In a surplus the factories are paced by what
+  they spend*) -- so whatever lets a land plant come lets the sea plant come first. A plant begun on the
+  commander's own income empties the store the economy runs on ([decisions](decisions.html), *The naval rule's two
+  design calls*); with the pacing alone, a land plant the surplus paid for took the slot on Red Triangle and Trout
+  Farm, judged naval, with no sea search (b5 at 57d39d71, the second plant at a steady 6.59 and 6.53 a pass
+  against the pacing's 8.00, MEASURED 2026-11-15).
 - *Chosen*: the least value among the menu's water factories whose own menu offers a sea army type.
 - *Placed* by its own search, once a decision, its answer shared by the decision's builders: centre blocks in ring
   order around the anchor within `comm_r` (`FAR_PATCH_K` x `comm_r` in a dry hunt), whose centre carries one of the sea class's labels within 48 blocks of

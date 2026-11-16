@@ -10630,6 +10630,16 @@ static void check_sea_plant(void)
     coast_world(C_COAST, -1, 9);
     sea_decide("COAST, not judged", &sy, &land);
     CHECK(!sy && !land, "the second factory waits for the judgement");
+    /* THE LAND PLANT'S METAL: an income of 6, below factory_per_m's 8, the store full and the lab asking 2 of the
+       3 unspent -- the surplus pays a further plant: naval, the shipyard; not naval, the land plant */
+    for (k = 0; k < 2; k++) {
+        coast_world(C_COAST, !k, 6);
+        s_w.econ[0].metal_out = 3.0f;
+        factory_busy(2, E_CK, 2.0f, 5.0f);
+        sea_decide(k ? "COAST, not naval, a surplus" : "COAST, a surplus", &sy, &land);
+        CHECK(k ? !sy && land == 1 : sy == 1 && !land, "a surplus that pays a further plant: %s",
+              k ? "the land plant" : "the sea plant, not a land one");
+    }
     coast_world(C_SHALLOW, 1, 9);
     sea_decide("SHALLOW", &sy, &land);
     CHECK(!sy && land == 1, "no water deep enough: the land factory in the same decision");
