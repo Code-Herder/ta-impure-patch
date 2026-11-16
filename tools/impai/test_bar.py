@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""test_bar -- the bar harness offline: its game list and each game's seed, the blocks, the targets' and the
-calibration rows' pairs and their maps, the seating a game id gives, the start schema it reads from an .ota, the
-stall rule, the holds' end at the cap, what a result reads from the level's end, the judge (a game at the cap
-scored by value at the limit; the points, the interval over map means, the targets, the ladder's curtailment and
-the ordering's looks, its bounds checked by integration where scipy is installed; `play` stopping a ladder pair
+"""test_bar -- the bar harness offline: its game list and each game's seed, the blocks, the targets', the
+calibration rows' and the mirror's pairs and their maps, the new persona rows (below L0, or one axis cut from
+Hard's), the seating a game id gives, the start schema it reads from an .ota, the stall rule, the holds' end at the
+cap, what a result reads from the level's end, the judge (a game at the cap scored by value at the limit; the
+points, the interval over map means, the targets, the ladder's curtailment and the ordering's looks, a mirror pair
+judged as the ladder, the bounds checked by integration where scipy is installed; `play` stopping a ladder pair
 that has failed) and the b4 and b5 checks over synthetic results
 (b5's yard from the second-factory line, each verdict); `--setup` (a setup's commanders from its sidedata, its
 games marked with it and kept to a directory of their own, a setup that plays no ImpAI game refused); the cheat
 flag (a setup flagged by its games' evidence alone, and judged apart); a game's end on a fake instance (THE END's
 scenario, the level run to its teardown's lines, the game stopped, the play's lines cut at the apply, the cheat
 flag's evidence from the recording, the recording kept or deleted, the log kept for every non-win, a level not
-seeded from its game's seed, each seat's value at the cap from the recording, a persona row's lever and a game
-that did not play it); `row` on fake games; and `play` on fake lanes: a game that could not run, and a run
+seeded from its game's seed, each seat's value at the cap from the recording, a persona row's lever, a mirror
+game's two seats on theirs, and a game that did not play its row); `row` on fake games; and `play` on fake
+lanes: a game that could not run, and a run
 stopped by SIGINT. No game runs. Where the shared .data holds it, a recorded game's value at the limit, each seat's
 from its recording and the ImpAI seat's equal to its pulse (zstandard: the shared venv).
 
@@ -175,6 +177,45 @@ class TestBar(unittest.TestCase):
                 bar.parse_id(bad)
         with self.assertRaises(bar.BarError):
             bar.ids("p:L9")
+
+    def test_the_mirror_seats_impai_against_impai_with_b_on_a_row(self):
+        g = bar.parse_id("bar-m:L0b-acidfoursome-ac-2")
+        self.assertEqual((g["difficulty"], g["seats"], g["start"]),
+                         ("hard", {"A": {"ai": "impai", "level": "hard"},
+                                   "B": {"ai": "impai", "level": "hard", "persona": bar.PERSONA_ROWS["L0b"]}}, 1))
+        g = bar.parse_id("bar-n:Hatt-lavaalley-ca-1")
+        self.assertEqual(g["seats"], {"A": {"ai": "impai", "level": "hard", "persona": bar.PERSONA_ROWS["L3"]},
+                                      "B": {"ai": "impai", "level": "hard", "persona": bar.PERSONA_ROWS["Hatt"]}})
+        self.assertEqual(bar.NORMAL_ROW, "L3")                           # the DLL's Normal, until one is chosen
+        for pair in ("m:L1", "n:L0a"):
+            gs = bar.ids(pair)
+            self.assertEqual(len(gs), 100)                               # ten blocks, as the ladder
+            self.assertEqual({bar.parse_id(x)["map"] for x in gs}, set(bar.DEV_MAPS))
+            self.assertTrue(bar.block_pair(pair) and bar.ladder_pair(pair))
+            self.assertEqual([x.replace(pair, "p:L1") for x in bar.ids(pair, blocks=2)], bar.ids("p:L1", blocks=2))
+        self.assertFalse(bar.ladder_pair("p:L1"))
+        self.assertTrue(bar.ladder_pair("hn"))
+        self.assertNotEqual(bar.game_seed("bar-m:L1-acidfoursome-ac-1"), bar.game_seed("bar-p:L1-acidfoursome-ac-1"))
+        for bad in ("bar-m:L9-acidfoursome-ac-1", "bar-n:-acidfoursome-ac-1", "bar-m-acidfoursome-ac-1"):
+            with self.assertRaises(bar.BarError):
+                bar.parse_id(bad)
+
+    def test_the_new_rows_lie_below_l0_or_cut_one_axis_from_hards(self):
+        rows = {k: [int(x) for x in v.split(",")] for k, v in bar.PERSONA_ROWS.items()}
+        axes = {"look": (0, 1), "react": (2,), "apm": (3, 4, 5, 6), "att": (7, 8)}
+        for row, cut in (("Hlook", {"look"}), ("Hreact", {"look", "react"}), ("Happm", {"apm"}), ("Hatt", {"att"})):
+            self.assertEqual({a for a, ix in axes.items() if any(rows[row][i] != rows["L5"][i] for i in ix)}, cut,
+                             row)
+        self.assertEqual(rows["Hreact"][:2], rows["Hlook"][:2])          # Hreact against Hlook: the reaction alone
+
+        def harsher(a, b):
+            """every field of row a as harsh as b's or harsher: a look or reaction no shorter, a rate, burst or
+            attention no larger and not 0 (0 is no limit), and at least one field strictly so"""
+            ok = all(a[i] >= b[i] for i in (0, 1, 2)) and all(0 < a[i] <= b[i] for i in range(3, 9))
+            return ok and a != b
+        self.assertTrue(harsher(rows["L0a"], rows["L0"]))
+        self.assertTrue(harsher(rows["L0b"], rows["L0a"]))
+        self.assertTrue(harsher(rows["L0"], rows["L01"]) and harsher(rows["L01"], rows["L1"]))
 
     def test_every_game_has_its_own_seed_and_keeps_it(self):
         every = [gid for pair in list(bar.PAIRS) + [f"p:{r}" for r in bar.PERSONA_ROWS] for gid in bar.ids(pair)]
@@ -964,6 +1005,28 @@ class TestEnd(unittest.TestCase):
         self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends), "bar-hota-pincushion-ac-1")
         self.assertFalse((gamedir / "tagpu_impai_persona.on").exists())   # a game on no row clears the lever
 
+    def test_a_mirror_game_puts_b_alone_on_its_row_and_both_seats_at_hard(self):
+        gid = "bar-m:L0b-acidfoursome-ac-1"                              # A in seat 1, B in seat 2
+        row, hard = bar.PERSONA_ROWS["L0b"], bar.PERSONA_ROWS["L5"]
+        ends = [eco_end(1), mil_end(1), eco_end(2), mil_end(2), "impai: handicap rows scaled/exempt gametime=9000:"]
+        alive = lambda T, s: 0 if s == 2 and T >= 9000 else 5           # noqa: E731
+        r = self.play(self.lane(alive, ends, play_lines=[persona_line(1, hard, "level"), persona_line(2, row)]), gid)
+        self.assertEqual((r["outcome"], r["persona"]), ("A", {"A": {"row": hard, "from": "level"},
+                                                                "B": {"row": row, "from": "lever"}}))
+        gamedir = self.tmp / "gamedir"
+        self.assertEqual((gamedir / "tagpu_impai_persona.on").read_text(), f"2={row}\n")
+        self.assertEqual((gamedir / "tagpu_impai_level.on").read_text(), "1=hard\n2=hard\n")
+        with self.assertRaisesRegex(self.R.CouldNotRun, "seat B did not play its persona"):
+            self.play(self.lane(alive, ends, play_lines=[persona_line(1, hard, "level"),
+                                                         persona_line(2, row, "level")]), gid)
+        # n:<row>: A on Normal's row through the lever too, B on its own
+        gid = "bar-n:L0b-acidfoursome-ac-2"                              # A in seat 2, B in seat 1
+        normal = bar.PERSONA_ROWS[bar.NORMAL_ROW]
+        r = self.play(self.lane(lambda T, s: 0 if s == 1 and T >= 9000 else 5, ends,
+                                play_lines=[persona_line(1, row), persona_line(2, normal)]), gid)
+        self.assertEqual((r["outcome"], r["persona"]["A"]), ("A", {"row": normal, "from": "lever"}))
+        self.assertEqual((gamedir / "tagpu_impai_persona.on").read_text(), f"2={normal}\n1={row}\n")
+
     def test_a_level_not_seeded_from_its_games_seed_could_not_run(self):
         gid = "bar-hota-pincushion-ac-1"
         ends = [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"]
@@ -1225,6 +1288,23 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("ladder: 96 of its first 100 won, 90 asked", text)
         self.assertIn("ordering: look 1 at 40 games", text)
+
+    def test_a_mirror_pair_is_judged_as_the_ladder_is(self):
+        m = bar.ids("m:L0b", blocks=12)
+        rc, text = self.judge([won(g, "B" if i < 11 else "A") for i, g in enumerate(m[:30])])
+        self.assertEqual(rc, 1)
+        self.assertIn("m:L0b: 19 of 30 won by A", text)
+        self.assertIn("ladder: curtailed, failed for certain: 11 of its first 100 games not won", text)
+        rc, text = self.judge([won(g) for g in m[:40]])
+        self.assertIn("ordering: look 1 at 40 games: t inf, bound 6.398: better", text)
+        lost = [g for g in m[:20] if bar.parse_id(g)["map"] in ("acidfoursome", "steeljungle")]
+        rc, text = self.judge([won(g, "B" if g in lost else "A") for g in m[:20]])   # two blocks, two maps lost
+        self.assertEqual(rc, 2)
+        self.assertIn("ladder: 12 won of the 20 scored of its first 100; lacks games", text)
+        self.assertIn("ordering: look 1 at 40 games not yet read (2 blocks complete; t 0.41 over the 2 complete, "
+                      "no look)", text)
+        self.assertNotIn("as Easy", text)                                # a calibration row's lines, not the mirror's
+        self.assertEqual(self.play(["--ids", "m:L0b"]), bar.ids("m:L0b")[:11])
 
     def play(self, argv, kept=()):
         """bar.main(play argv) with play_all faked to lose every game it is given, in order, unless give_up: the
