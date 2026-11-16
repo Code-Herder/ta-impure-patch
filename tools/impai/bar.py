@@ -387,6 +387,7 @@ MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ (.*)")
 MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) scout=(\d+)")   # tasks begun
 LEVEL_END = "impai: handicap rows"      # every level end writes it, whoever plays (tagpu_impai_level_end)
 REC_START = re.compile(r"recorder: recording (?!timeline )(.+?\.imprec) from GameTime")
+REC_FORK = re.compile(r"recorder: recording timeline \d+ of (.+?\.imprec) from GameTime")    # a takeover's fork
 REC_CLOSED = re.compile(r"recorder: writer: (.+?\.imprec) closed:")
 RUN_SEEDS = re.compile(r"enginefix: run seeds before the creates: the wire's seed (\d+) at GameTime")      # tagpu_seed_run: only a DLL that seeds before the creates names this form
 # the second-factory decision (tagpu_impai.c, THE SECOND FACTORY): at the decision that orders it, or at the level
@@ -1060,12 +1061,13 @@ def cheat_evidence(rs) -> list:
     return out
 
 
-def recording_of(lines):
+def recording_of(lines, fork: bool = False):
     """(the recording's path as the recorder logged it, its writer closed) of a launch's log; None when it
-    recorded nothing"""
+    recorded nothing. `fork`: the file a takeover appended its timeline to, not a new recording."""
     rec = None
+    start = REC_FORK if fork else REC_START
     for ln in lines:
-        m = REC_START.search(ln)
+        m = start.search(ln)
         if m:
             rec = m.group(1)
     if rec is None:
@@ -1118,6 +1120,20 @@ class Lane:
         table, _ = json.JSONDecoder().raw_decode(o[o.index("{"):])     # stderr's lines follow stdout's
         return ({u["id"]: u["name"] for u in table["units"]},
                 {u["id"]: (float(u["cost"][0]), float(u["cost"][1])) for u in table["units"]})
+
+    def hand_to_stock_ai(self, rec: int) -> None:
+        """Player record `rec`, a human's after a takeover, handed to OTA AI on the held level: cheats on, then the
+        console's `AI` command typed as a chat line (0x416280: type 1 becomes 2; research/notes/modules/impai.md,
+        *The `AI` command*), checked by the record's controller byte `+0x73` reading 2. OTA AI starts on it as it
+        starts on every other seat a takeover gives it: afresh. ImpAI's seats keep playing what they knew."""
+        R = self.R
+        rc, o = R.tacli("switches", self.w.name, "cheats=on", timeout=R.ACK_S)
+        if rc:
+            raise R.CouldNotRun(f"switches cheats=on: {R.last(o)}")
+        R.step(self.w, "type", f"+ai {rec}")
+        got = self.peek(0x1B63 + 0x14B * rec + 0x73, 1)
+        if got != 2:
+            raise R.CouldNotRun(f"the AI command left record {rec} of controller {got}, not OTA AI's 2")
 
     def peek(self, off: int, size: int) -> int:
         R = self.R
@@ -1199,8 +1215,12 @@ class Lane:
             raise BarError(f"{game['id']} is a game of {setup_label(game.get('setup'))}; this lane plays "
                            f"{setup_label((self.setup or {}).get('name'))}")
         install = self.read_install()
-        doc = game_doc(dict(game, difficulty=res["difficulty"]),
-                       start_positions(map_name(game["map"]), vfs=install["vfs"]), install["commanders"])
+        # A SITUATION's own scenario (tools/impai/exploit.py), or the bar's game; a takeover's is the recorded
+        # game's, which only the end reads
+        doc = game.get("doc") or game_doc(dict(game, difficulty=res["difficulty"]),
+                                          start_positions(map_name(game["map"]), vfs=install["vfs"]),
+                                          install["commanders"])
+        takeover = game.get("takeover")
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
         levels = [f"{seat[s]}={game['seats'][s]['level']}" for s in ("A", "B")
@@ -1226,19 +1246,41 @@ class Lane:
         income = {s: game["seats"][s]["income"] for s in ("A", "B") if game["seats"][s].get("income")}
         self.lever(level_lever.INCOME_LEVER, [f"{seat[s]}={m:.3f}" for s, m in income.items()])
         self.log = R.Log(self.w)
-        rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
-                        timeout=R.LAUNCH_TIMEOUT)
-        if rc:
-            raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
+        if takeover:
+            # A PUZZLE: the recording taken over at T as OTA AI's seat, the level held at the refresh at or before T
+            # (tacli replay takeover; tagpu_replay.c THE TAKEOVER), then that seat handed back to OTA AI below. The
+            # idle human cannot take it: the takeover refuses a player with no unit.
+            rc, o = R.tacli("replay", "takeover", self.w.name, takeover["recording"], "--at", takeover["at"],
+                            "--player", takeover["player"], "--defaults", "--restart", "--keep-dll",
+                            "--timeout", R.ACK_S, "--json", timeout=R.LAUNCH_TIMEOUT + R.ACK_S)
+            try:
+                got = json.loads(o[o.index("{"):])
+            except ValueError:
+                got = {}
+            if rc or not got.get("taken") or not got.get("held"):
+                raise R.CouldNotRun(f"replay takeover at {takeover['at']}: "
+                                    f"{got.get('line') or got.get('timeout') or R.last(o)}")
+        else:
+            rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
+                            timeout=R.LAUNCH_TIMEOUT)
+            if rc:
+                raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
         T = R.held_start(self.w, self.log)
+        if takeover:
+            self.hand_to_stock_ai(takeover["player"])
         if self.types is None:
             self.types, self.costs = self.type_table()
         res["commander_death"] = self.peek(CMDR_DEATH, 4)
         cap = res["cap"]
         outcome, end = "cap", cap
         looks = []
+        # A SITUATION's waves: each scenario applied on the level held at its GameTime, its units added
+        waves = sorted((int(t), str(f)) for t, f in game.get("waves") or ())
         while True:
-            T = self.hold(next_hold(T, cap), (seat["A"], seat["B"]))
+            want = next_hold(T, cap)
+            if waves and waves[0][0] < want:
+                want = waves[0][0]
+            T = self.hold(want, (seat["A"], seat["B"]))
             alive = {s: self.peek(REC + seat[s] * STRIDE + ALIVE, 2) for s in ("A", "B")}
             looks = (looks + [{"at": T, "seats": {s: {"alive": alive[s]} for s in ("A", "B")}}])[-2:]
             if not alive["A"] or not alive["B"]:
@@ -1249,6 +1291,11 @@ class Lane:
                 break
             if T >= cap:
                 break
+            while waves and waves[0][0] <= T:
+                _t, f = waves.pop(0)
+                rc, o = R.tacli("scenario", "apply", self.w.name, f, timeout=300)
+                if rc:
+                    raise R.CouldNotRun(f"the wave {Path(f).name} at {T}: {R.last(o)}")
         looks[-1]["seats"] = self.look(seat)
         res["looks"] = looks
         R.say(f"lane {self.j}: {game['id']}: at {T}: " + ", ".join(
@@ -1283,7 +1330,15 @@ class Lane:
         res["level_end_at"] = level_end_at(lines)
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
-        src = self.recording()
+        src = self.recording(fork=bool(takeover))
+        if takeover:
+            # the fork is the recording's timeline 1, which the evidence's reader, timeline 0's, does not read: a
+            # puzzle is judged by its looks alone
+            res["wall_s"] = round(time.monotonic() - t0, 1)
+            res["recording"] = self.file_recording(game["id"], src, bool(game.get("recordings")))
+            self.keep_log(game["id"])
+            R.say(f"lane {self.j}: {game['id']}: {outcome} at {end} ({res['wall_s']} s)")
+            return res
         # the values asked at fixed GameTimes (`play --values`), each one the game reached before its end: an
         # iteration at or after the end can hold the end scenario's clear
         ts = sorted(t for t in game.get("values") or () if 0 < t < end)
@@ -1326,11 +1381,12 @@ class Lane:
         self.w.stop(hard=True)
         return n
 
-    def recording(self) -> Path:
+    def recording(self, fork: bool = False) -> Path:
         """The launch's recording in the instance's replays folder, made and closed (its writer's `closed` line, the
-        line that says the file is whole): CouldNotRun otherwise, since THE CHEAT FLAG and a diagnosis read it."""
+        line that says the file is whole): CouldNotRun otherwise, since THE CHEAT FLAG and a diagnosis read it.
+        `fork`: the instance's copy of a taken-over recording, its fork appended."""
         R = self.R
-        rec = recording_of(self.log.lines)
+        rec = recording_of(self.log.lines, fork)
         if rec is None:
             raise R.CouldNotRun("the game made no recording")
         if not rec[1]:

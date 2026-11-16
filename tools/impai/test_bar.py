@@ -498,6 +498,13 @@ class TestLevelEnd(unittest.TestCase):
         self.assertIsNone(bar.recording_of(["recorder: recording timeline 2 of x.imprec from GameTime 5 (parent 0)"]))
         self.assertIsNone(bar.recording_of([]))
 
+    def test_a_takeovers_recording_is_the_file_its_fork_went_into(self):
+        fork = ["recorder: recording timeline 1 of replays\\x.imprec from GameTime 62701 (parent 0): 15001 slots",
+                "recorder: writer: replays\\x.imprec closed: 18450 iterations to GameTime 81150"]
+        self.assertEqual(bar.recording_of(fork, fork=True), ("replays\\x.imprec", True))
+        self.assertIsNone(bar.recording_of(fork))
+        self.assertIsNone(bar.recording_of(REC_LINES, fork=True))
+
     def test_the_holds_end_at_the_cap_whatever_it_is(self):
         for cap in (bar.CAP, 27000, 36000, 4500):
             T, holds = 1, []

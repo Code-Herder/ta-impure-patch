@@ -581,6 +581,60 @@ ways to do it.
   `netai_check.py`-sized proof that two peers with two DLLs each play their own ImpAI seat to an end on a bar
   map.
 
+## The exploiter suite
+
+Short situations, each hunting one blind spot, faster and more pointed than whole games. `tools/impai/exploit.py
+run --dll DLL --tag TAG` plays them through the bar's lanes (seats, seeds, holds, results and end) under the run
+lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`games/`, `scenarios/`,
+`verdicts.json`); `test_exploit.py` holds it offline on a fake player.
+
+- **The scripted opponent** is seat B with its AI off from the load (the scenario's `ai: "off"`: a type-1 seat whose
+  units keep the orders they are given and no planner runs), so it is exactly the units the situation places.
+  Its pressure comes in **waves**: scenarios applied without a clear on the level held at their GameTime, each unit
+  created with an `attack` order on ImpAI's ground (TA has no attack-move; an attack on the ground advances and
+  engages). The opponent has no economy. OTA AI has no lever for a forced build list, and a persona limits ImpAI's
+  attention rather than its plan, so placed units are the cheapest honest script: no DLL change.
+- **The situations**, each ImpAI Hard as A in seat 1 at Difficulty Hard:
+
+  | situation | map | the opponent | verdict, at the cap |
+  |---|---|---|---|
+  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), flown at ImpAI's start | ImpAI's commander lives to 18 000 |
+  | `naval-turtle` | Gods of War | its commander and two light laser towers on another island | ImpAI has killed all of it by 20 000 |
+  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000 | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
+  | `commander-rush` | Acid Foursome | its commander alone, a quarter of the way from ImpAI's start, ordered at the load to attack ImpAI's commander | ImpAI's commander lives to 6 000 |
+
+- **The puzzles** are real positions. `exploit.py cut RESULTS_DIR... --out FILE` takes every bar game against OTA AI
+  that ImpAI did not win and whose recording was kept. A game OTA AI won is taken over 18 000 ticks before its end,
+  and ImpAI must still hold a unit at the end (`survives`); a game at the cap is taken over 18 000 ticks before the
+  cap, and ImpAI must end it (`kills`). The takeover (`tacli replay takeover`) is at OTA AI's seat: the idle human
+  holds no unit, which the takeover refuses, and the seat taken becomes a human's. The lane hands it straight back
+  to OTA AI with the console's `AI` command (cheats on; `0x416280` makes type 1 type 2) and reads the record's
+  controller byte back as 2, so OTA AI starts afresh there, as on every seat a takeover gives it, and ImpAI plays
+  on from what it knew. The takeover starts at the recording's refresh at or before the GameTime. `run --puzzles FILE` plays them beside the situations. A recording can
+  be taken over only by a DLL that declares the recorder tables of the build that made it (R0's table check), so
+  puzzles are cut from the games of the build under test, or of one with its tables; another build's takeover is
+  refused, and the puzzle could not run.
+- **One situation is one launch.** A clear removes the units, but ImpAI's seat memory is cleared only at a level's
+  init (`tagpu_impai.c`), so a second situation in the same level would start from the first one's knowledge; and
+  fights are never packed into one level ([tasim calibration](../modules/tasim-calibration.html), *The packed lane*).
+  The seed of each is its id's, so a situation replays exactly.
+- **The verdict**: `commander` (ImpAI's seat not eliminated and no commander lost), `kills` (the opponent's seat
+  holds no unit before the cap), `survives` (ImpAI's seat holds a unit at the cap), `value` (`commander`, and its
+  value at the cap at least the opponent's, or the opponent gone). A situation that could not run, or a value not
+  read, could not run, never a failure. Exit 0 every situation passed, 1 one failed, 2 one could not run.
+
+MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes: the four situations in 47 s of play
+each at most (under a minute from admission to verdict), three passed and one failed. The commander rush ended at
+3 582 with the opponent's commander dead. The air rush passed on its commander, but 20 of the opponent's 26 units
+were still alive at the cap, ImpAI having completed three anti-air units. The artillery creep passed on value, 33 777
+against 26 828, 12 of the opponent's 17 units killed. **The naval turtle failed**: at the cap ImpAI had a shipyard,
+one naval unit and no attack, and the commander and both towers stood untouched.
+The nine puzzles cut from that build's own games of the batch (`batch/c1dc2e70/base`: the eight held-out `p:L5`
+games and `bar-hota-redtriangle-cc-1`, all at the cap) were each taken over at 62 701, the refresh before 62 971, and
+played to 80 971 in 30 to 55 s of play, four lanes, 1.6 min from admission: **one passed** (Steel Jungle `ca-2`,
+the opponent gone at 75 906), **eight failed**, the opponent still holding units at the cap. Lava Alley `ca-4`
+ended with ImpAI at 8 units against 146.
+
 ## When the default flips
 
 At A2, once Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the 90 % ladder and the
