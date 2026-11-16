@@ -1464,7 +1464,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_park = q->ops->action(q, WQ_ACT_PARK);
     d->act_on = q->ops->action(q, WQ_ACT_ACTIVATE);
     d->act_off = q->ops->action(q, WQ_ACT_DEACTIVATE);
-    d->e_per_m = in->plan->e_per_m;
+    d->e_per_m = in->e_per_m > 0.0f && in->e_per_m < 1e6f ? in->e_per_m : in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     /* THE MEMORY'S COUNT IS DATA, as every recorded field is: a restored nfmem past IMPAI_FEATS is held to it before

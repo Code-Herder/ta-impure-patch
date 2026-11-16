@@ -893,6 +893,9 @@ static IMPAI_EXEC*        s_xp;
 static IMPAI_REACT_COUNTS s_rc;
 
 static int s_dec_acts = -1;        /* decide's action budget, -1 none */
+/* the content's price of metal decide passes (IMPAI_BRAIN_IN.e_per_m): 0, the plan's, unless a case sets it */
+static float s_dec_epm;
+
 static int decide(IMPAI_BRAIN_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
@@ -916,6 +919,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.mil = s_milp;
     in.view = s_viewp;
     in.tv = s_tvp;
+    in.e_per_m = s_dec_epm;
     if (s_xp) {
         in.q = impai_exec_view(&xv, &q, s_xp, s_persona, (uint32_t)s_w.gametime, IMPAI_SRC_ECO, &s_rc);
         in.acts = impai_exec_acts(s_xp, IMPAI_SRC_ECO, s_persona, (uint32_t)s_w.gametime);
@@ -1643,6 +1647,58 @@ static void check_assist_help(void)
     CHECK(count_unit(2, A_GUARD) == 0 && count_unit(2, A_HELPBUILD) == 1 && s_job[2].kind == IMPAI_JOB_ASSIST &&
               s_job[2].target == 4,
           "the constructor helps the product's frame");
+}
+
+/* THE UNIT'S OWN LABEL (impai_maps.c, impai_reach_unit): check_assist_help's world with no constructor, so the frame is
+   the commander's to help, the commander at (328, 320) px -- its centre in block (10, 10), its first cell (20, 19) in
+   block (10, 9) -- and the labels: (a) everywhere 1: it helps; (b) its centre's block 0, as beside a feature's ring:
+   it helps still, by its first cell's block; (c) both blocks 0: it reaches nothing and is given no help. */
+static int own_label_helps(int centre, int first)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* f;
+    int x, z;
+    reach_world(0);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    for (x = 0; x < (int)(sizeof s_labels / sizeof s_labels[0]); x++) s_labels[x] = 1;
+    s_labels[10 * (FW_W / 2) + 10] = (uint16_t)centre;
+    s_labels[9 * (FW_W / 2) + 10] = (uint16_t)first;
+    s_w.unit[1].pos[0] = 328 << 16;
+    s_w.unit[1].pos[2] = 320 << 16;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+    s_w.econ[0].energy = 500;
+    s_w.econ[0].energy_in = 1000;
+    CHECK(decide(&out) == 0, "decide");
+    return count_unit(1, A_HELPBUILD);
+}
+
+static void check_own_label(void)
+{
+    const int a = own_label_helps(1, 1), b = own_label_helps(0, 1), c = own_label_helps(0, 0);
+    printf("the unit's own label: helps with every block labelled %d, the centre's block unlabelled %d, both %d\n",
+           a, b, c);
+    CHECK(a == 1 && b == 1 && c == 0, "the commander's label is its first cell's block: %d %d %d", a, b, c);
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "both blocks unlabelled read 0");
+    s_labels[9 * (FW_W / 2) + 10] = 5;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 5, "the first cell's block's label");
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 336 << 16, 2, 2) == 0, "past the edge, one block: (10, 10)'s");
+    s_labels[9 * (FW_W / 2) + 10] = 0;
+    s_labels[10 * (FW_W / 2) + 10] = 7;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 7,
+          "the centre's block stands in for the first cell's unlabelled one");
+    s_labels[10 * (FW_W / 2) + 10] = 0;
+    s_labels[9 * (FW_W / 2) + 10] = 1;
+    s_labels[9 * (FW_W / 2) + 9] = 6;
+    CHECK(impai_reach_unit(&s_reach, 0, 312 << 16, 320 << 16, 2, 2) == 6,
+          "a footprint 2 across at x 312: its first cell 19, block 9, west of its centre's cell 20");
+    s_labels[9 * (FW_W / 2) + 9] = 1;
 }
 
 /* THE HELP REFUSED (impai_brain.c): check_assist_help's world, its constructor given the help on the product's
@@ -9702,6 +9758,101 @@ static void check_ctech_mex(void)
           "a plant's build tech counts only its constructors that build an extractor");
 }
 
+/* THE EXTRACTOR STEP (impai_tinfo.c) on TA Zero's shape: the commander builds a tech-1 extractor (0.001307), a
+   tech-1 plant and the tech-2 plant itself, so the graph reads every type tech 1; the tech-2 plant's constructor
+   builds an extractor of twice the commander's (0.002614), the tech-1 plant's one of 1.14 times (TA Twilight's
+   ARMAMEX against its commander's). The tech-2 constructor and plant are 2, the tech-1 ones 1, the commander 1. With
+   no commander's extractor there is no step, and nothing is raised. */
+static void check_ctech_step(void)
+{
+    enum { Y_COM = 1, Y_MEX1, Y_MEX2, Y_AMEX, Y_P1, Y_C1, Y_P2, Y_C2, Y_N };
+    static const uint16_t COM[] = { Y_MEX1, Y_P1, Y_P2 }, C1[] = { Y_AMEX, Y_MEX1 }, C2[] = { Y_MEX2 },
+                          P1[] = { Y_C1 }, P2[] = { Y_C2 };
+    static const uint8_t CAT[Y_N] = { 0, IMPAI_C_OTHER, IMPAI_C_MEX, IMPAI_C_MEX, IMPAI_C_MEX, IMPAI_C_FACTORY,
+                                      IMPAI_C_CONS, IMPAI_C_FACTORY, IMPAI_C_CONS };
+    static const float GAIN[Y_N] = { 0, 0, 0.001307f, 0.002614f, 0.00149f, 0, 0, 0, 0 };
+    TASIM_ROLE_IN in[Y_N];
+    TASIM_ROLE_OUT roles[Y_N];
+    IMPAI_TINFO ti[Y_N];
+    int t, pass;
+    for (pass = 0; pass < 2; pass++) {
+        memset(in, 0, sizeof in);
+        memset(roles, 0, sizeof roles);
+        memset(ti, 0, sizeof ti);
+        for (t = 1; t < Y_N; t++) {
+            roles[t].tech = 1;
+            ti[t].cat = CAT[t];
+            ti[t].mgain = GAIN[t];
+        }
+        roles[Y_COM].flags = pass ? 0u : TASIM_RF_COMMANDER;
+        in[Y_COM].build = COM;  in[Y_COM].nbuild = 3;
+        in[Y_C1].build = C1;  in[Y_C1].nbuild = 2;
+        in[Y_C2].build = C2;  in[Y_C2].nbuild = 1;
+        in[Y_P1].build = P1;  in[Y_P1].nbuild = 1;
+        in[Y_P2].build = P2;  in[Y_P2].nbuild = 1;
+        impai_tinfo_ctech(in, roles, Y_N, ti, Y_N);
+        printf("build tech, the extractor step%s: COM %u C1 %u P1 %u C2 %u P2 %u\n", pass ? " (no commander)" : "",
+               ti[Y_COM].ctech, ti[Y_C1].ctech, ti[Y_P1].ctech, ti[Y_C2].ctech, ti[Y_P2].ctech);
+        if (!pass)
+            CHECK(ti[Y_COM].ctech == 1 && ti[Y_C1].ctech == 1 && ti[Y_P1].ctech == 1 && ti[Y_C2].ctech == 2 &&
+                      ti[Y_P2].ctech == 2,
+                  "the tech-2 plant past the extractor step");
+        else
+            CHECK(ti[Y_C2].ctech == 1 && ti[Y_P2].ctech == 1, "no commander's extractor, no step");
+    }
+}
+
+/* THE CONTENT'S PRICE OF METAL (impai_tinfo.c, impai_tinfo_e_per_m): the lower median of energy per metal over the
+   tech-1 types of an army class that cost metal -- five priced (2, 4, 7, 9, 12: 7), a tech-2 type, a type of no
+   class and a free one beside them left out; four priced: the lower of the middle two. Then the keep it sets: the
+   commander alone with its store full and no stall, metal coming in at 20 and energy at 50: at the plan's 8 the
+   keep, 160, is past the energy income and its first build is an energy building; at a price of 1 the keep is 20,
+   below it, and no energy building is ordered. */
+static void check_content_price(void)
+{
+    enum { P_N = 9 };
+    static const float E[P_N] = { 0, 200, 400, 700, 900, 1200, 10000, 50, 300 };
+    static const float MC[P_N] = { 0, 100, 100, 100, 100, 100, 100, 100, 0 };
+    static const int TECH[P_N] = { 0, 1, 1, 1, 1, 1, 2, 1, 1 };
+    TASIM_ROLE_IN in[P_N];
+    TASIM_ROLE_OUT roles[P_N];
+    IMPAI_TINFO ti[P_N];
+    IMPAI_BRAIN_OUT out;
+    float five, four;
+    int t, c, k, ebuilds[2];
+    memset(in, 0, sizeof in);
+    memset(roles, 0, sizeof roles);
+    memset(ti, 0, sizeof ti);
+    for (t = 1; t < P_N; t++) {
+        in[t].cost_energy = E[t];
+        in[t].cost_metal = MC[t];
+        roles[t].tech = TECH[t];
+        ti[t].klass = t == 7 ? IMPAI_K_NONE : IMPAI_K_LASSAULT;
+    }
+    five = impai_tinfo_e_per_m(in, roles, ti, P_N, P_N);
+    four = impai_tinfo_e_per_m(in, roles, ti, P_N - 4, P_N);
+    printf("the content's price of metal: five priced %.2f, four %.2f\n", (double)five, (double)four);
+    CHECK(five == 7.0f && four == 4.0f, "the lower median: %g %g", (double)five, (double)four);
+    for (c = 0; c < 2; c++) {
+        reach_world(0);
+        s_w.econ[0].energy = s_w.econ[0].energy_max = 1000;
+        s_w.econ[0].metal = s_w.econ[0].metal_max = 1000;
+        s_w.econ[0].energy_in = 50;
+        s_w.econ[0].energy_out = 10;
+        s_w.econ[0].metal_in = 20;
+        s_dec_epm = c ? 1.0f : 0.0f;
+        CHECK(decide(&out) == 0, "decide");
+        ebuilds[c] = 0;
+        for (k = 0; k < s_w.nlog; k++)
+            ebuilds[c] += s_w.log[k].c.action == A_MOBILEBUILD && s_w.log[k].c.type < T_N &&
+                        s_ti[s_w.log[k].c.type].cat == IMPAI_C_ENERGY;
+    }
+    s_dec_epm = 0.0f;
+    printf("the content's price of metal, the keep: energy builds at the plan's %d, at a price of 1 %d\n", ebuilds[0],
+           ebuilds[1]);
+    CHECK(ebuilds[0] == 1 && ebuilds[1] == 0, "the keep follows the content's price: %d %d", ebuilds[0], ebuilds[1]);
+}
+
 /* one decision of the plant world; the plant builds it gave, by type, into n[C_N] */
 static void plant_decide(const char* name, IMPAI_BRAIN_OUT* out, int* n)
 {
@@ -12966,6 +13117,7 @@ int main(void)
     check_cmd_safe_orders();
     check_ring_raid();
     check_assist_help();
+    check_own_label();
     check_help_refused();
     check_commander_helps_factory();
     check_hold_assist();
@@ -13015,6 +13167,8 @@ int main(void)
     check_yard_way();
     check_ctech();
     check_ctech_mex();
+    check_ctech_step();
+    check_content_price();
     check_values();
     check_plant_choice();
     check_plant_gate();

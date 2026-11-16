@@ -824,14 +824,14 @@ static int patch_free(IMPAI_DEC* d, const SNAP_PATCH* p)
     return !(k < IMPAI_CLUSTERS_HALF && (d->foreign[k >> 3] >> (k & 7) & 1u));
 }
 
-/* The builder's class's label at its own block, which a reach test of it compares: -1 for no test -- a VTOL
-   builder, one with no class of the world's, a level with no labels for it -- 0 off the grid or on a block of
-   no label, which reaches nothing. */
+/* The builder's class's label where it stands (impai_reach_unit, THE UNIT'S OWN LABEL), which a reach test of it
+   compares: -1 for no test -- a VTOL builder, one with no class of the world's, a level with no labels for it -- 0
+   off the grid or where neither its first cell's block nor its centre's has a label, which reaches nothing. */
 static int builder_label(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_TINFO* t = &d->in->ti[b->type];
     if (!d->in->reach || (t->flags & IMPAI_TF_VTOL)) return -1;
-    return impai_reach_at(d->in->reach, t->mclass, b->pos[0] >> 21, b->pos[2] >> 21);
+    return impai_reach_unit(d->in->reach, t->mclass, b->pos[0], b->pos[2], t->fx, t->fz);
 }
 
 /* The reach labels of the builder's class at its block and at block (px, pz) agree, both nonzero; no test as

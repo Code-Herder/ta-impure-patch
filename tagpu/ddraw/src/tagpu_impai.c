@@ -791,6 +791,8 @@ static IMPAI_TINFO s_tinfo[TAGPU_LIM_TYPES];
 static unsigned    s_tinfo_n;
 SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 SIM_VAR(s_tinfo_n, SIM_CONTENT);
+static float       s_e_per_m;   /* THE CONTENT'S PRICE OF METAL (impai_tinfo_e_per_m), 0 for none */
+SIM_VAR(s_e_per_m, SIM_CONTENT);
 
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
@@ -800,6 +802,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     int t;
     const int got = tagpu_worldq_open_content(&c, &q) ? impai_tinfo_build(&q, roles, n, s_tinfo, TAGPU_LIM_TYPES) : -1;
     unsigned dguns = 0, attackers = 0, blasts = 0;
+    s_e_per_m = 0.0f;
     if (got <= 0) {
         memset(s_tinfo, 0, sizeof s_tinfo);
         tagpu_logf("impai: tinfo none: the content view could not be opened");
@@ -816,10 +819,11 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         blasts += s_tinfo[t].blast_r > 0;
     }
     impai_tinfo_ctech(in, roles, n, s_tinfo, got);
+    s_e_per_m = impai_tinfo_e_per_m(in, roles, s_tinfo, n, got);
     impai_tinfo_count(s_tinfo, got, k);
-    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u",
-               k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army,
-               dguns, attackers, blasts);
+    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u "
+               "e_per_m=%.3f", k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY],
+               k[IMPAI_C_CONS], army, dguns, attackers, blasts, (double)s_e_per_m);
 }
 
 /* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
@@ -1754,6 +1758,7 @@ static void impai_decide(int seat)
         in.njob = TAGPU_PK_DESIGN_SLOTS;
         in.ti = s_tinfo;
         in.nti = s_tinfo_n;
+        in.e_per_m = s_e_per_m;
         in.spots = s_cluster[seat];
         in.nspots = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
         in.reach = reach_view(&r) ? &r : NULL;

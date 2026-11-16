@@ -140,8 +140,31 @@ static int builds_mex(const TASIM_ROLE_IN* in, const IMPAI_TINFO* ti, int m, uns
     return 0;
 }
 
+/* THE EXTRACTOR STEP: an extractor extracting at least MEX_STEP times the best extractor a commander builds opens the
+   next tech's economy, whatever the build graph says. MEASURED 2026-11-15 on the five installs' menus (the best
+   extractor each plant's constructors can build, against the commanders'): every tech-1 plant within 1.14 times
+   (TA Twilight's tech-1 constructors' ARMAMEX, 0.00125 against 0.0011), every tech-2 plant at 2.0 times or more (TA
+   Zero's ARMT2MEX, 0.002614 against 0.001307; retail, Escalation, Total Mayhem and Twilight 2.8 to 3.4). */
+#define MEX_STEP 1.5f
+
+/* the best extraction (IMPAI_TINFO.mgain) of the extractors on any commander's menu; 0 for none. BOUND: n x the
+   longest list. */
+static float commander_mex(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, const IMPAI_TINFO* ti, int m)
+{
+    float best = 0.0f;
+    int t, k;
+    for (t = 1; t < m; t++) {
+        if (!(roles[t].flags & TASIM_RF_COMMANDER)) continue;
+        for (k = 0; k < in[t].nbuild; k++) {
+            const unsigned v = in[t].build[k];
+            if (v < (unsigned)m && ti[v].cat == IMPAI_C_MEX && ti[v].mgain > best) best = ti[v].mgain;
+        }
+    }
+    return best;
+}
+
 /* THE BUILD TECH. A builder's is the highest classifier tech among its build options (TASIM_ROLE_OUT.tech, 0
-   ignored); a factory's the highest build tech of the constructors (IMPAI_C_CONS) its menu holds that can build an
+   ignored), and at least 2 when one of them is an extractor past THE EXTRACTOR STEP; a factory's the highest build tech of the constructors (IMPAI_C_CONS) its menu holds that can build an
    extractor -- the constructors a plant's candidacy already asks for (impai_econ.c, THE CHOICE) --; anything
    else's 0 (owner's decision, 2026-11-14). The extractor test keeps out a builder that only lays mines, decoys or
    jammers: TA Zero's GoKT2AirJammer, classed a tech-2 constructor, made its air plant a tech-up candidate whose
@@ -154,19 +177,28 @@ static int builds_mex(const TASIM_ROLE_IN* in, const IMPAI_TINFO* ti, int m, uns
    tech (tasim_run roles), every constructor counted: CORLAB, CORVP, CORAP, CORSY, CORHP, ARMLAB, ARMVP, ARMAP, ARMSY
    and ARMHP are 1; CORALAB, CORAVP, CORAAP, ARMALAB, ARMAVP and ARMAAP 2; CORGANT 0, having no constructor; the
    commanders, the tech-1 constructors and CORCH/ARMCH 1. [INFERRED, not re-measured] the same with the extractor
-   test: every retail plant's constructors build an extractor. Factories are never IMPAI_C_CONS, so the second pass
+   test: every retail plant's constructors build an extractor. WHY THE STEP: the graph's distance counts factories
+   on the way from a commander, and a content whose commander builds its tech-2 plant itself has none: TA Zero's
+   ARMCOMMANDER builds ARMT2GF beside its tech-1 plants, so ARMT2GF, its ARMT2CONTANK and that one's ARMT2MEX all
+   read tech 1, no plant of the content scored above 1, and the seat ordered ARMT2GF (1 100 metal, 2 640 energy) as
+   a further tech-1 plant at 3 187 with three extractors and its energy store empty (MEASURED, the mods batch at
+   d665a00a, bar-nota-lavamania-ca-1). The extractor is the economy a tech-up exists to reach, and the step is
+   the content's own ratio against its commanders' extractors; it only raises, so a content whose graph already
+   separates its techs keeps them. Factories are never IMPAI_C_CONS, so the second pass
    reads only the first pass's rows. BOUND: the first pass n x the longest list; the second, for each factory's
    option, one more scan of that constructor's list, n x the longest list squared; an option at or past n, or at
    or past min(n, nti) for a row the second pass reads, is skipped. */
 void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
 {
     const int m = n < nti ? n : nti;
+    const float step = MEX_STEP * commander_mex(in, roles, ti, m);
     int t, k;
     for (t = 1; t < m; t++) {
         int b = 0;
         for (k = 0; k < in[t].nbuild; k++) {
             const unsigned v = in[t].build[k];
             if (v < (unsigned)n && roles[v].tech > b) b = roles[v].tech;
+            if (v < (unsigned)m && b < 2 && step > 0.0f && ti[v].cat == IMPAI_C_MEX && ti[v].mgain >= step) b = 2;
         }
         ti[t].ctech = (uint8_t)(b < 255 ? b : 255);
     }
@@ -180,6 +212,41 @@ void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int
         }
         ti[t].ctech = (uint8_t)c;
     }
+}
+
+/* type t is one THE CONTENT'S PRICE OF METAL counts: its energy per metal into *r */
+static int priced(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, const IMPAI_TINFO* ti, int t, float* r)
+{
+    if (ti[t].klass == IMPAI_K_NONE || roles[t].tech != 1 || !(in[t].cost_metal > 0.0f) ||
+        !(in[t].cost_energy >= 0.0f))
+        return 0;
+    *r = in[t].cost_energy / in[t].cost_metal;
+    return *r < 1e30f;
+}
+
+/* WHY THE MEDIAN OF THE ARMY: the keep is the energy income that lets the metal income be spent, and what a content
+   spends its metal on in the opening is its tech-1 army, each at its own price; a median is no hostage to one
+   outlier's price (retail's tech-1 builders' sum is 1.72 for the commander's 2 500 metal alone). MEASURED
+   2026-11-15 from the five installs' roles dumps (tasim_run roles), the median over the tech-1 mobile types of
+   the army roles: retail 8.63, Total Mayhem 8.65, TA Twilight 9.71, Escalation 12.07, TA Zero 2.40 -- against the
+   plan's one 8, which starved Escalation's energy-heavy opening and kept four times the energy TA Zero spends. */
+float impai_tinfo_e_per_m(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, const IMPAI_TINFO* ti, int n, int nti)
+{
+    const int m = n < nti ? n : nti;
+    int t, u, c = 0;
+    float r, s;
+    for (t = 1; t < m; t++) c += priced(in, roles, ti, t, &r);
+    for (t = 1; t < m; t++) {
+        int below = 0, at = 0;
+        if (!priced(in, roles, ti, t, &r)) continue;
+        for (u = 1; u < m; u++)
+            if (priced(in, roles, ti, u, &s)) {
+                below += s < r;
+                at += s <= r;
+            }
+        if (below <= (c - 1) / 2 && (c - 1) / 2 < at) return r;
+    }
+    return 0.0f;
 }
 
 /* ---- THE VALUES ----

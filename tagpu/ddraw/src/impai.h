@@ -268,10 +268,14 @@ void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t);
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
 /* Every type's build tech (IMPAI_TINFO.ctech) into ti[1 .. min(n, nti)) from the classifier's input and answer for
    the level's n types: a builder's the highest classifier tech among its build options -- the build menus merged
-   over the sides, the input the tech walk read --, a factory's the highest build tech of the constructors
+   over the sides, the input the tech walk read --, at least 2 with an extractor past THE EXTRACTOR STEP, a factory's the highest build tech of the constructors
    (IMPAI_C_CONS) its menu holds whose own options hold an extractor (IMPAI_C_MEX), anything else's 0 (impai_tinfo.c, the comment over it). BOUND: an option at or
    past n is skipped. */
 void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti);
+/* THE CONTENT'S PRICE OF METAL: the lower median of cost_energy / cost_metal over the types of ti[1 .. min(n, nti))
+   of an army class (IMPAI_TINFO.klass) that the classifier rates tech 1 and that cost metal: the energy a content's
+   opening army spends with each metal. 0 for none. BOUND: c^2 comparisons for c such types. */
+float impai_tinfo_e_per_m(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, const IMPAI_TINFO* ti, int n, int nti);
 
 /* THE VALUES (impai_tinfo.c, impai_tinfo_values): an army type's value per metal on the tech levels 1..QTECH, the
    fight predictor's equal-value margin against the field an enemy of that tech could build, in [-1, 1] */
@@ -482,7 +486,8 @@ typedef struct IMPAI_PLAN {
     uint16_t open_t;            /* ...or from this GameTime                                               */
     uint8_t  factory_max;       /* factories built in all                                                 */
     float    factory_per_m;     /* another factory per this metal income a pass                           */
-    float    e_per_m;           /* the energy income kept per metal income                                */
+    float    e_per_m;           /* the energy income kept per metal income, for a content with no figure of its
+                                   own (IMPAI_BRAIN_IN.e_per_m)                                            */
     uint8_t  cons_open, cons_max;    /* constructors the governor queues free of its rules; the most it keeps
                                         (impai_econ.c, THE GOVERNOR)                                        */
     uint8_t  army_per_cons;     /* past cons_open, army units each further constructor needs (THE ARMY'S SHARE) */
@@ -586,6 +591,11 @@ void impai_reach_top(IMPAI_TOPFN fn, const void* ctx, int w, int h, uint8_t* top
 int  impai_ring_at(int r, int i, int* dx, int* dz);
 /* the label of class c at block (bx, bz): -1 when the level has no labels for c, 0 off the grid */
 int  impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz);
+/* THE UNIT'S OWN LABEL: class c's label for a unit at (x, z), 16.16 px, whose footprint is fx x fz cells -- the label
+   of the block holding its footprint's first cell, the cell the class map's code describes a unit by (worldq.h's
+   passable: the footprint is folded in at the cell it starts at), as the set-position 0x48A9F0 rounds it, (x - fx x
+   8 px + 8 px) >> 4 px (0x48AA00..0x48AA32); that block's 0, its centre's block's. -1 and 0 as impai_reach_at. */
+int  impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz);
 /* the first block in ring order within `radius` rings of (bx, bz) whose class-c label is `label`, into (ox,
    oz): 1, or 0 for none. Off-grid blocks are skipped. BOUND: at most (2 radius + 1)^2 label reads */
 int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
@@ -630,6 +640,8 @@ typedef struct IMPAI_BRAIN_IN {
                                                        pref[t x pref_stride], nti of them                   */
     const IMPAI_TVALUE* tv;             /* the values, nti rows (impai_tinfo_values); NULL: every plant scores
                                            alike and the choice is the least value, the factories ungated     */
+    float              e_per_m;         /* THE CONTENT'S PRICE OF METAL (impai_tinfo_e_per_m), the energy income
+                                           kept per metal income; 0: the plan's                              */
 } IMPAI_BRAIN_IN;
 
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */

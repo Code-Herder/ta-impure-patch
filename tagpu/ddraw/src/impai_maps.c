@@ -125,6 +125,23 @@ int impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz)
     return l[(size_t)bz * r->bw + bx];
 }
 
+/* WHY THE FIRST CELL: the class map holds a footprint at the cell it starts at, so the cell a unit stands on as its
+   class sees it is its first cell. A unit's centre lies up to half its footprint past it, in another block whenever
+   the centre is within that of a block's edge, and that block can have no passable cell for the class at all -- a
+   feature's footprint beside it, folded in with its ring. MEASURED on ProTA's bar-nota-pincushion-ac-2 at 57d39d71:
+   the commander stopped at (3354, 5856), its first cell (209, 365) in block (104, 182), its centre in block
+   (104, 183), whose four cells a feature anchored at (204, 367) covers or rings [INFERRED: no passable cell, from
+   the feature grid]; every economy rule that reads the builder's label turned it down for the 37 139 ticks to the
+   game's end, 89 % of its idle decisions. The centre's block stands in when the first cell's has no label: a unit
+   the map changed under. */
+int impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz)
+{
+    const int32_t cx = (int32_t)(((int64_t)x - ((int64_t)fx * 0x80000) + 0x80000) >> 20);
+    const int32_t cz = (int32_t)(((int64_t)z - ((int64_t)fz * 0x80000) + 0x80000) >> 20);
+    const int l = impai_reach_at(r, c, cx >> 1, cz >> 1);
+    return l ? l : impai_reach_at(r, c, x >> 21, z >> 21);
+}
+
 int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox, int* oz)
 {
     const uint16_t* l = class_labels(r, c);
