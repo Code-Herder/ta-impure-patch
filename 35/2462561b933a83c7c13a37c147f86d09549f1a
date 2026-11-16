@@ -1,0 +1,9 @@
+landing-review: model=claude-opus-5-5 effort=high range=9ebd8cb8..35246256 fixes=5f9139c8 findings=6 acted=6 rejected=0 date=2026-11-16
+Drawing board landing 6 (multiplayer replays draw the marks; the HUD's Marks switch). One fresh read-only reviewer.
+1 MED a seek/timeline switch into a takeover's skirmish segment kept the previous playhead's marks -> mp_follow clears; takeover re-verified live.
+2 MED the browser twin (frame.js) lacked the Marks bit -> added; framecheck all equal.
+3 LOW board.md overstated the replay store (union, shared capacity) -> reworded + gap.
+4 LOW stale switch lists (wiki_regression PL_SWITCHES, plate.py spec, mockup comment) -> updated.
+5 LOW the stopped-recording gap contradicted the 2 MB flush -> reworded.
+6 LOW journal wording in hud-in-game.md -> present tense.
+The art refit's other parts (i_jump, i_selections, lamp_off, live_groove, live_one) are fit.py's measured output on current inputs; reviewed benign.
