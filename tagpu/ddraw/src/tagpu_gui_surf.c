@@ -2426,10 +2426,12 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             }
         }
         /* THE ALLIES' POINTERS (the drawing board's cursor records, tagpu_board.c), over the view
-           box: a dot in the ally's colour on a black square. A world point maps into the box the
-           base picture was drawn on as the engine's minimap arm maps the other way,
-           world = (pointer - box) * extent / box (0x498DD5..0x498E2A, the extent main+0x1422B /
-           +0x1422F); the point is data, clamped to the extent before it is scaled. */
+           box: a dot in the ally's colour on a black square, in the box the base picture was drawn
+           on. The engine's minimap arm maps the other way, (pointer - box) * extent / box
+           (0x498DDA..0x498E19, the extent main+0x1422B / +0x1422F), to a PROJECTED point: its y goes
+           to GetTPosition 0x484B50, which finds the ground point whose z - floor(h / 2) is that y
+           (0x484BD6..0x484BEB). So a ground point maps back from x and z - floor(h / 2), as the
+           world view projects it; the point is data, clamped to the extent before it is scaled. */
         if (pal && pk->map_pxw > 0 && pk->map_pxh > 0) {
             const TAGPU_PK_BOARD* bh = tagpu_pk_board(pk);
             const TAGPU_PK_BDMARK* bm = bh ? tagpu_pk_bdmarks(pk) : NULL;
@@ -2437,7 +2439,8 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             unsigned k;
             for (k = 0; bm && k < pk->n_bdmark; k++) {
                 float bk[4] = { 0.0f, 0.0f, 0.0f, 1.0f }, fc[4];
-                int ci = bm[k].colour, wx = bm[k].x, wz = bm[k].z;
+                int ci = bm[k].colour, wx = bm[k].x;
+                int wz = bm[k].z - (bm[k].h >= 0 ? bm[k].h / 2 : -((1 - bm[k].h) / 2));
                 float cx, cy;
                 if (!(bm[k].flags & TAGPU_PK_BDM_CURSOR)) continue;
                 if (wx < 0) wx = 0; else if (wx > pk->map_pxw) wx = pk->map_pxw;

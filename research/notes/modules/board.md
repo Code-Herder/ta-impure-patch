@@ -28,7 +28,8 @@ colour, at most one line a seat each 30 ticks.
 
 **Allies' pointers.** In a network game each ally's pointer is drawn where it is on the world: an
 arrow in the ally's colour with a black edge, the ally's name below and right of it, and a dot in
-the same colour on the minimap. A pointer on the HUD is not drawn. A watcher sees every player's.
+the same colour on the minimap. A pointer on the minimap is drawn at the ground point it hovers;
+one elsewhere on the HUD is not drawn. A watcher sees every player's.
 
 The minimap's marks, the edge arrows and the settings are the later landings of
 [the plan](../drawing-board-plan.html).
@@ -165,15 +166,19 @@ view; a pointer whose shown sample is on neither the world nor the minimap is le
 puts each seat the player sees, other than the player's own, after the markers as a
 `TAGPU_PK_BDMARK` with `TAGPU_PK_BDM_CURSOR`, its text the seat's name (`tagpu_share_name`); the
 table's cap is the store's 256 markers plus `TAGPU_PK_BD_CURSORS` (10), so a full store never
-crowds a pointer out. Only Impure peers on the channel contribute: an AI and a watcher (not a
-roster actor) have no pointer.
+crowds a pointer out of the table. Only human seats on the channel are sampled, so an AI has no
+pointer; a player never sees a watcher's, and whether another watcher does depends on the
+watcher's having a roster actor (not measured). A pointer is the sender's data, which the channel
+does not range-check: one past the packet's coordinate bound is left out.
 
 The marker pass draws the replay overlay's arrow (`OV_ARROW`, its tip at the world point) filled in
 the ally's colour over the same arrow in black a screen pixel either way, then the name plate,
-after every marker. The GUI's minimap compose (`tagpu_gui_surf.c`, after the view box) maps the
-world point into the box the base picture was drawn on, the inverse of the engine's minimap arm
-(`world = (pointer - box) * extent / box`, `0x498DD5..0x498E2A`, [input](../engine/input.html)),
-the point clamped to the extent first, and draws a 3-pixel dot on a 5-pixel black square.
+after every marker; when more than about 130 long marker labels overflow the glyph bucket, the
+pointers' name plates are the text that goes. The GUI's minimap compose (`tagpu_gui_surf.c`, after
+the view box) maps the ground point into the box the base picture was drawn on, the inverse of the
+engine's minimap arm (`(pointer - box) * extent / box`, `0x498DDA..0x498E19`,
+[input](../engine/input.html)), whose y is projected: the point's x and `z - floor(h / 2)`, clamped
+to the extent, then a 3-pixel dot on a 5-pixel black square.
 
 ## The packet
 

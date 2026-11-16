@@ -689,7 +689,13 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
         for (i = 0; i < nc; i++) {
             char name[TAGPU_PK_BD_TEXT + 1];
             TAGPU_PK_BDMARK* o;
-            if (cur[i].seat >= 10 || cur[i].seat == me || !(see >> cur[i].seat & 1u)) continue;
+            /* BOUND: a sample's pointer is the sender's data, which the channel does not range-check
+               (rec_pov_ok); one past the packet's coordinate bound would cost the acquire every
+               frame it is held, so it is left out here instead */
+            if (cur[i].seat >= 10 || cur[i].seat == me || !(see >> cur[i].seat & 1u) ||
+                cur[i].x < -TAGPU_BW_COORD || cur[i].x > TAGPU_BW_COORD ||
+                cur[i].h < -TAGPU_BW_COORD || cur[i].h > TAGPU_BW_COORD ||
+                cur[i].z < -TAGPU_BW_COORD || cur[i].z > TAGPU_BW_COORD) continue;
             if (*nm >= maxm) { *cut = 1; break; }
             o = &marks[(*nm)++];
             memset(o, 0, sizeof *o);

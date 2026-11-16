@@ -596,8 +596,9 @@ edges; [render](render.html), the build cursor's gate) and records which one it 
 The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the
 scroll extent (`main+0x1422B`/`+0x1422F`, the map less 32 and 128 px — §"Engine defects we
 patch"): `x = (px - box_x) * extentW / box_w` and `y = (py - box_y) * extentH / box_h`, signed
-32-bit multiply then `idiv`, the box's four words sign-extended (`0x498DDB..0x498E1A`, DISASSEMBLED
-2026-11-16); the drawing board's minimap dots invert it ([board](../modules/board.html)); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
+32-bit multiply then `idiv`, the box's four words sign-extended (`0x498DDA..0x498E19`, DISASSEMBLED
+2026-11-16) — a projected point: the y goes to `GetTPosition 0x484B50`, which finds the ground point
+whose `z - (h >> 1)` is that y (`0x484BD6..0x484BEB`); the drawing board's minimap dots invert it ([board](../modules/board.html)); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
 form already documented in `gpu-status.md` §2.3b. The tail converts the world point to a cell
 pair at `main+0x2C8E` (`>> 0x14`) and stores the **hovered feature id** as a WORD at
 `main+0x2CBC` — live: `0xFFFF` over open ground, `87` over a lab wreck.
