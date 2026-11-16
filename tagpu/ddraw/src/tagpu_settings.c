@@ -157,6 +157,7 @@ static const Key s_key[TS_NKEYS] = {
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
     { "marklife",    O_MARKLIFE, N(O_MARKLIFE), 60 },
+    { "drawkey",     NULL,       0,             0xDC },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -226,6 +227,7 @@ static int valid(TagpuSetting k, int v)
     if (k == TS_MONITOR) return v == -1 || (v >= 0 && v < s_monCount);
     if (k == TS_RESOLUTION) return res_ok(v);
     if (k == TS_RANGEALLY || k == TS_RANGEENEMY) return v >= 0 && v <= TS_RC_ALL;
+    if (k == TS_DRAWKEY) return tagpu_settings_drawkey_ok(v);
     for (i = 0; i < s_key[k].nopts; i++)
         if (s_key[k].opts[i].value == v) return 1;
     return 0;
@@ -322,6 +324,8 @@ static int serialise(char* b, int cap)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, cap - at, "resolution=%dx%d\r\n", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, cap - at, "resolution=native\r\n");
+        } else if (i == TS_DRAWKEY) {
+            k = _snprintf(b + at, cap - at, "drawkey=0x%02X\r\n", (unsigned)read_val(TS_DRAWKEY));
         } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY) {
             int v = read_val((TagpuSetting)i), c, n = 0;
             k = _snprintf(b + at, cap - at, "%s=", s_key[i].name);
@@ -700,6 +704,14 @@ static void parse_line(char* line)
                   "the default stands", s_key[t].name, v);
         return;
     }
+    if (!lstrcmpiA(k, "drawkey")) {
+        int vk;
+        char end;
+        /* a virtual key as a number, 0xDC or 220 */
+        if (sscanf(v, "%i%c", &vk, &end) == 1 && tagpu_settings_drawkey_ok(vk)) s_val[TS_DRAWKEY] = vk;
+        else slog("drawkey=%s is not a key the drawing board can take - the default 0xDC stands", v);
+        return;
+    }
     if (!lstrcmpiA(k, "reclaimkind")) {
         for (i = 0; i < 3 && lstrcmpiA(v, s_rkindName[i]); i++) {}
         if (i < 3) { s_rkind = i; s_rkindSet = 1; }
@@ -968,7 +980,7 @@ void tagpu_settings_attach(void)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, sizeof b - at, " resolution=%dx%d", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, sizeof b - at, " resolution=native");
-        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY)
+        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY || i == TS_DRAWKEY)
             k = _snprintf(b + at, sizeof b - at, " %s=0x%x", s_key[i].name,
                           (unsigned)read_val((TagpuSetting)i));
         else
@@ -1207,6 +1219,25 @@ int tagpu_settings_marklife(void)
 {
     int v;
     return tagpu_settings_get(TS_MARKLIFE, &v) ? v : s_key[TS_MARKLIFE].def;
+}
+
+int tagpu_settings_drawkey(void)
+{
+    int v;
+    return tagpu_settings_get(TS_DRAWKEY, &v) ? v : s_key[TS_DRAWKEY].def;
+}
+
+int tagpu_settings_drawkey_ok(int vk)
+{
+    if (vk < 0x08 || vk > 0xFE) return 0;
+    switch (vk) {
+    case VK_ESCAPE: case VK_TAB: case VK_RETURN: case VK_BACK:
+    case VK_SHIFT: case VK_CONTROL: case VK_MENU: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_LCONTROL: case VK_RCONTROL: case VK_LMENU: case VK_RMENU: case VK_LWIN: case VK_RWIN:
+    case VK_CAPITAL:
+        return 0;
+    }
+    return 1;
 }
 
 int tagpu_settings_fps(void)

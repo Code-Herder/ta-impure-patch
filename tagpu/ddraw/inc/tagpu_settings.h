@@ -69,6 +69,8 @@ typedef enum {
     TS_RANGEENEMY,  /* TS_RC_* bits: the enemy defenses' classes shown    */
     TS_MARKLIFE,    /* 60 | 0: the drawing board's marks fade after this many seconds of game
                        time, 0 until erased (tagpu_board.c) */
+    TS_DRAWKEY,     /* a virtual key tagpu_settings_drawkey_ok takes: the drawing board's key,
+                       0xDC (VK_OEM_5, `\` on a US layout) by default */
     TS_NKEYS
 } TagpuSetting;
 
@@ -239,6 +241,14 @@ int  tagpu_settings_radardots(void);
    60 when the store is ignored (tagpu_defaults.off) or not read. Each player's own: nothing sends
    it, so allies can keep marks for different times. Game thread, every frame. */
 int  tagpu_settings_marklife(void);
+/* The drawing board's key (TS_DRAWKEY), a virtual key: the store's; 0xDC when the store is ignored
+   or not read. Any thread. */
+int  tagpu_settings_drawkey(void);
+/* Whether `vk` may be the draw key: a keyboard key (0x08..0xFE) other than Esc, which ends a
+   binding; Tab, which opens the options; Return and Backspace, which the board's text box reads;
+   the modifiers (Shift, Ctrl, Alt, the Windows keys), which a held key's combinations need; and
+   Caps Lock, which toggles. */
+int  tagpu_settings_drawkey_ok(int vk);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing
    there is -- on, the present waits for the vertical blank and the limiter

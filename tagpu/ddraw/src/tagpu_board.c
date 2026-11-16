@@ -72,7 +72,8 @@ enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN, E_LAST, E_EDGE, E_SEAT };   /* E
                                                                              seat's last marker */
 
 static int      s_armed;
-static unsigned s_vk = 0xDC;           /* VK_OEM_5, the key that types `\` on a US layout */
+static int      s_bind;                /* the next key pressed becomes the draw key           */
+static unsigned s_bindUp;              /* the key a binding took, until its release           */
 static int      s_held;                /* the draw key is down                               */
 static int      s_taken[3];            /* the board took this button's press: its release too */
 
@@ -193,9 +194,12 @@ static int key_down(unsigned vk)
     return GetAsyncKeyState((int)vk) < 0;
 }
 
+/* the draw key, read at every use: a binding applies to the next key message */
+static unsigned draw_vk(void) { return (unsigned)tagpu_settings_drawkey(); }
+
 static int holding(void)
 {
-    if (s_held && !key_down(s_vk)) s_held = 0;
+    if (s_held && !key_down(draw_vk())) s_held = 0;
     return s_held;
 }
 
@@ -557,10 +561,33 @@ int tagpu_board_key(unsigned vk, int up)
 {
     const char* ta;
     TagpuWorld w;
-    /* the draw key first, the text box or not: its release ends the hold (taken when its press
+    /* THE BINDING first (tagpu_board_bind): the next key pressed that tagpu_settings_drawkey_ok
+       takes is the draw key; Esc ends the binding with the key unchanged; any other key goes on
+       as without one. The key the binding took is taken until its release, auto-repeats
+       included, so neither the engine nor a new hold sees it. */
+    if (s_bindUp && vk == s_bindUp) {
+        if (up) s_bindUp = 0;
+        return 1;
+    }
+    if (s_bind && !up) {
+        if (vk == VK_ESCAPE) {
+            s_bind = 0;
+            s_bindUp = vk;
+            return 1;
+        }
+        if (tagpu_settings_drawkey_ok((int)vk)) {
+            tagpu_settings_set(TS_DRAWKEY, (int)vk);
+            s_bind = 0;
+            s_bindUp = vk;
+            s_held = 0;
+            tagpu_logf("board: the draw key is vk 0x%02X", vk);
+            return 1;
+        }
+    }
+    /* the draw key next, the text box or not: its release ends the hold (taken when its press
        was), its auto-repeat is taken and types nothing, and a press over an open box starts a
        hold, so a click made with it is the board's */
-    if (vk == s_vk) {
+    if (vk == draw_vk()) {
         int was = s_held;
         if (up) { s_held = 0; return was; }
         if (s_held) return 1;
@@ -638,9 +665,14 @@ int tagpu_board_mouse(unsigned msg)
     return 1;
 }
 
+void tagpu_board_bind(int on) { s_bind = on != 0; }
+int  tagpu_board_binding(void) { return s_bind; }
+
 void tagpu_board_cancel(void)
 {
     s_held = 0;
+    s_bind = 0;
+    s_bindUp = 0;
     s_taken[0] = s_taken[1] = s_taken[2] = 0;
     s_nev = 0;
     s_box.open = 0;
@@ -929,6 +961,7 @@ void tagpu_board_level_end(void)
     s_said = 0;
     s_logoHave = 0;
     s_mute = 0;
+    s_bind = 0;
     memset(s_recent, 0, sizeof s_recent);
     memset(s_lastOf, 0, sizeof s_lastOf);
     memset(s_act, 0, sizeof s_act);
@@ -949,5 +982,5 @@ void tagpu_board_init(void)
     }
     tagpu_boardstore_clear(&s_store, (uint32_t)tagpu_settings_marklife() * TICKS_PER_S);
     s_armed = 1;
-    tagpu_logf("board: armed (key vk 0x%02X)", s_vk);
+    tagpu_logf("board: armed (key vk 0x%02X)", draw_vk());
 }

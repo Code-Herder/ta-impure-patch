@@ -2,10 +2,9 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 4 — the local
-board, its network channel, the allies' pointers and finding marks — and landing 5's lifetime
-setting are built and verified on the branch ([board](modules/board.html)); the draw key's binding
-and landing 6 are not.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 5 — the local
+board, its network channel, the allies' pointers, finding marks and the settings — are built and
+verified on the branch ([board](modules/board.html)); landing 6 is not.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -122,7 +121,8 @@ landings' notes as each one uses them.
    (mute and last marker), on the allies' ribbon (decision 7). **Built.** An ally out of the game
    has no row: the ribbon dims its chip as one group, and groups do not nest.
 5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings. The lifetime is
-   **built**; the key's press-to-bind row (decision 8) is not.
+   **built**, and so is the key's press-to-bind row (decision 8): a plain button whose caption is
+   the key's name; Esc, Tab, Return, Backspace, Caps Lock and the modifiers cannot be the key.
 6. **Replays.** The history keeps the marks so a seek restores them; the replay HUD's Marks switch.
 
 The landing on main runs the replay gate, as the recorder's channel changes.

@@ -1,6 +1,8 @@
 # Drawing board: lines and markers on the map
 
-Hold **`\`** over the world view and draw on the ground:
+Hold the draw key, **`\`** by default, over the world view and draw on the ground. The in-game
+panel's *Draw key* row binds another: click it, press the key (`drawkey=` in `impure.cfg`,
+[settings](settings.html)).
 
 | gesture (with `\` held) | does |
 |---|---|
@@ -37,8 +39,7 @@ one elsewhere on the HUD is not drawn. A watcher sees every player's.
 pings there. An ally's new marker off the view gets an arrow at the view's edge for 10 s; a click
 on the arrow moves the camera to it, and `Ctrl`+`\` moves it to the last one received. Each ally's
 chip on the allies' ribbon carries the ally's activity, a Mute and a Last marker
-(*Finding marks*, below). The draw key's binding and marks in a replay are the later landings of
-[the plan](../drawing-board-plan.html).
+(*Finding marks*, below). Marks in a replay are the plan's last landing ([the plan](../drawing-board-plan.html)).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
@@ -324,6 +325,12 @@ commander, disabled Last marker, and a second press brought them back; once the 
 Last marker was disabled; after a new marker, Last marker put it at the view centre; a press on the
 disabled Last marker opened no give panel, and one on the chip still did.
 
+The draw key, MEASURED 2026-11-16 in the same skirmish: the *Draw key* row read `\`, a click turned
+it to *Press a key*, `Q` turned it to `Q` and stored `drawkey=0x51`; with the panel closed, Q held
+drew a line and `\` held drew nothing; a binding ended by Esc kept `Q` with the panel still open,
+and a binding to `\` stored `drawkey=0xDC` (the log's `board: the draw key is vk 0x51`, then
+`0xDC`).
+
 The lifetime setting, MEASURED 2026-11-16 in a skirmish (`--defaults`): the panel's row stored
 `marklife=erased`; a line outlived 2440 ticks (81 s of game time); switching back to *Fade 60 s*
 removed it at once and stored `marklife=60`.
@@ -335,7 +342,7 @@ reads the body it writes with `recmp_file.board_ops`.
 
 ## Gaps
 
-- No marks in a replay yet, and the draw key is not rebindable — landings 5 and 6 of the plan.
+- No marks in a replay yet — landing 6 of the plan.
 - The lifetime is each player's own setting and is not sent, so allies with different settings
   see different boards, and an edit or move of a marker one peer has already dropped does nothing
   there.
@@ -355,7 +362,6 @@ reads the body it writes with `recmp_file.board_ops`.
   outbox meanwhile draws nothing more until then.
 - An alliance made mid-game does not bring back the new ally's earlier marks: a peer stores only
   the seats its player saw when each operation arrived.
-- The key is fixed at `VK_OEM_5`, which types `\` on a US layout and another key elsewhere.
 - No real-mouse run yet: the measurements are tacli's injected input on the shield's path. The
   real window-procedure path shares the module's calls but was not driven; the removal of the draw
   key's `WM_CHAR` and the hardware key poll are on that path only.

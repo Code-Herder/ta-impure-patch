@@ -27,7 +27,13 @@ int tagpu_board_char(unsigned ch);
 /* A mouse button message (WM_[LRM]BUTTON{DOWN,UP,DBLCLK}) the window procedure delivers: 1 when
    the board took it, and the engine must not see it. */
 int tagpu_board_mouse(unsigned msg);
-/* the window lost the keyboard or the mouse: the key, the gesture and the text box end */
+/* THE DRAW KEY'S BINDING (the in-game panel's Draw key row, tagpu_menu.c): bind(1) makes the next
+   key pressed that tagpu_settings_drawkey_ok takes the draw key, stored as TS_DRAWKEY; Esc ends
+   it unchanged, as do bind(0), the window losing the keyboard and the level's end. binding: it
+   waits for that key. Game thread. */
+void tagpu_board_bind(int on);
+int  tagpu_board_binding(void);
+/* the window lost the keyboard or the mouse: the key, the gesture, the text box and a binding end */
 void tagpu_board_cancel(void);
 
 /* The in-play handler's record at the right-press branch (tagpu_route.c): the world point and
