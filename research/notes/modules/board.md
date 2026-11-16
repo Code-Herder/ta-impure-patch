@@ -192,7 +192,7 @@ to the extent, then a 3-pixel dot on a 5-pixel black square.
 **The minimap.** The GUI's minimap compose draws every marker record of the packet over the view
 box: a marker a 4-pixel square and an ally's pointer a 3-pixel one, in the owner's colour on a
 black square 2 pixels larger, mapped as *The allies' pointers* says. A new marker from another seat
-pings: a square outline in its colour that grows from 4 to 16 pixels over 2 s of wall time
+pings: a square outline in its colour whose side grows from 8 to 32 pixels over 2 s of wall time
 (`PING_MS`, the record's `ping` counting down from `TAGPU_PK_BD_PING`). The quads are counted
 against `TAGPU_GUI_SDRAW_BOARD` (640), the sharp layer's room past its own 32, which a static assert
 holds above two quads a record and four a ping, so the board never costs the frame its cursor.
@@ -209,11 +209,15 @@ view `main+0x37E37`, its half extents the 1x view over twice the zoom. The fill 
 arrow on the game thread and keeps its anchor, so the arrow drawn and the arrow a click tests are
 the same numbers. A left press on the world view within 16 screen pixels of an anchor, with the
 draw key not held, is the board's: the engine never sees it, and the next frame moves the camera
-so the marker is at the view's centre (`tagpu_zoom_place_eye`).
+so the marker is at the view's centre. The press keeps the arrow's marker, not its place in the
+table, which every fill rebuilds. A jump goes through `tagpu_zoom_jump_eye`: the zoom's next
+apply writes the eye and the scroll target, clamped, and releases the engine's unit follow, so
+after a `Ctrl`+`C` the camera is not pulled back to the followed unit. An arrow whose anchor
+would fall outside the packet's coordinate bound (an eye out of range) is left out.
 
 **`Ctrl`+`\`** (the draw key with Ctrl down) starts no hold and moves the camera to the last new
-marker received while it is still on the board and its owner is not muted, else to the player's
-own last.
+marker received while it is still on the board and its owner is still seen and not muted, else to
+the player's own last.
 
 **The allies' ribbon** ([allied sharing](share.html), *The allies' ribbon*) gives each ally still
 in the game a row under its cells (`tagpu_board_ally`, by the chip's player record index):
@@ -223,7 +227,10 @@ in the game a row under its cells (`tagpu_board_ally`, by the chip's player reco
 - **Mute** (`amute:<index>`, pressed while on): the seat's lines, markers, pointer, pings, edge
   arrows and chat lines are not drawn on this screen, nor its activity. A muted seat's operations
   still arrive and still change its own marks, and change no one else's (the rights they apply
-  with are none). Unmuting shows the marks it kept. The level's end unmutes every seat, and Mute
+  with are none). The player's own gestures do not reach a muted seat's marks either: a press
+  finds only marks of seats shown (seen and not muted), and the rights the player's operations
+  carry are those seats, so an erase over a muted ally's hidden line leaves it on every peer.
+  Unmuting shows the marks it kept. The level's end unmutes every seat, and Mute
   is not saved;
 - **Last marker** (`alast:<index>`): moves the camera to that ally's last new marker while it is on
   the board and the ally is not muted, as `Ctrl`+`\` does. Without one it is drawn disabled, and
@@ -329,6 +336,9 @@ reads the body it writes with `recmp_file.board_ops`.
 ## Gaps
 
 - No marks in a replay yet, and the draw key is not rebindable — landings 5 and 6 of the plan.
+- The lifetime is each player's own setting and is not sent, so allies with different settings
+  see different boards, and an edit or move of a marker one peer has already dropped does nothing
+  there.
 - A watcher has no Mute and no Last marker: the allies' ribbon, which carries them, is a player's.
 - An ally out of the game has no board row on its chip, so it can no longer be muted or unmuted
   from there; its marks fade or stay as the lifetime says.

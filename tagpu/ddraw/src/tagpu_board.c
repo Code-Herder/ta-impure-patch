@@ -125,7 +125,7 @@ static uint32_t s_lastAny;             /* the last new marker another seat place
 static struct { DWORD at; unsigned op; } s_act[TAGPU_BW_SEATS];   /* each seat's last stroke */
 static struct { int32_t a[2]; uint32_t id; } s_edge[TAGPU_PK_BD_RECENT];  /* the last fill's */
 static unsigned s_nedge;
-static int      s_edgeHit = -1;        /* the edge arrow a taken press is on                 */
+static uint32_t s_edgeId;              /* the marker of the edge arrow a taken press is on   */
 
 static void say_lines(void);
 
@@ -205,6 +205,11 @@ static uint32_t game_tick(const char* ta) { return *(const uint32_t*)(ta + OFF_G
 
 /* the seats whose marks this player sees and whose marks their operations may change */
 static unsigned seen(void) { return tagpu_share_board_seen(); }
+/* THE SEATS THE PLAYER IS SHOWN: seen and not muted. Everything the player can act on is drawn
+   from these -- the marks a gesture finds, the rights an operation carries, a jump's target -- so
+   no gesture changes a mark the player cannot see. The store keeps a muted seat's marks
+   (tagpu_board_apply), and unmuting shows them. */
+static unsigned shown_seats(void) { return seen() & ~s_mute; }
 
 /* glyphs of the engine font's range, at most TAGPU_PK_BD_TEXT, NUL-terminated */
 static unsigned text_copy(char* dst, const char* src, unsigned len)
@@ -229,7 +234,7 @@ static int local(const char* ta, unsigned seat, TagpuBoardOp* op)
     unsigned char one[TAGPU_BW_OP_MAX];
     unsigned n, at;
     int did;
-    op->may = seen() & TAGPU_BW_MAY_ALL;
+    op->may = shown_seats() & TAGPU_BW_MAY_ALL;
     if (s_nout && s_out[1] != seat) s_nout = 0;           /* another seat's queue is not ours */
     at = s_nout ? s_nout : TAGPU_BW_HEAD;
     if (!(n = tagpu_boardwire_put(one, sizeof one, op, seat)) || at + n > OUTBOX) {
@@ -299,7 +304,7 @@ static TagpuBoardMark* mark_at(const int32_t p[3])
 {
     const double z = zoom();
     const double py = (double)p[2] - (double)(p[1] >> 1);
-    const unsigned see = seen();
+    const unsigned see = shown_seats();
     TagpuBoardMark* best = NULL;
     unsigned i;
     for (i = 0; i < TAGPU_BS_MARKS; i++) {
@@ -362,23 +367,22 @@ static void remember(int right, const int32_t p[3], DWORD at, int valid)
     l->valid = valid;
 }
 
-/* The camera centred on a marker the store still holds: the eye is the point less half the 1x view
-   at every zoom, handed to the zoom's next apply as the scenario camera is (tagpu_zoom_place_eye,
-   which clamps it to the range in force). */
-/* the marker `id` while it is on the board and its owner is not muted: what a jump may go to */
+/* the marker `id` while it is on the board and its owner is shown: what a jump may go to */
 static const TagpuBoardMark* shown(uint32_t id)
 {
     const TagpuBoardMark* m = id ? tagpu_boardstore_find(&s_store, id) : NULL;
-    return m && !(s_mute >> m->owner & 1u) ? m : NULL;
+    return m && (shown_seats() >> m->owner & 1u) ? m : NULL;
 }
 
+/* The camera centred on a marker shown: the eye is the point less half the 1x view at every zoom,
+   handed to the zoom's next apply (tagpu_zoom_jump_eye, which clamps it to the range in force and
+   releases the engine's unit follow, so a Ctrl+C does not pull the camera back). */
 static void jump_to(char* ta, uint32_t id)
 {
     const TagpuBoardMark* m = shown(id);
     const int* v = (const int*)(ta + M_VIEW_W);
-    int ex, ey;
     if (!m || v[0] <= 0 || v[1] <= 0) return;
-    tagpu_zoom_place_eye(ta, m->x - v[0] / 2, m->z - (int)floor(m->h * 0.5) - v[1] / 2, &ex, &ey);
+    tagpu_zoom_jump_eye(ta, m->x - v[0] / 2, m->z - (int)floor(m->h * 0.5) - v[1] / 2);
 }
 
 static void press(const char* ta, int ev, DWORD at, unsigned seat, const int32_t p[3], int on)
@@ -510,8 +514,8 @@ void tagpu_board_record(const int* rec, unsigned msg)
             continue;
         }
         if (s_ev[i] == E_EDGE) {
-            if (s_edgeHit >= 0 && (unsigned)s_edgeHit < s_nedge) jump_to(w.ta, s_edge[s_edgeHit].id);
-            s_edgeHit = -1;
+            jump_to(w.ta, s_edgeId);
+            s_edgeId = 0;
             continue;
         }
         /* a press off the world view is a press the window procedure took on the last record's
@@ -624,7 +628,7 @@ int tagpu_board_mouse(unsigned msg)
            board's: the camera goes to its marker and the engine never sees the click */
         int k = b == 0 ? edge_at(ta) : -1;
         if (k < 0) return 0;
-        s_edgeHit = k;
+        s_edgeId = s_edge[k].id;
         s_taken[0] = 1;
         queue(E_EDGE);
         return 1;
@@ -793,7 +797,7 @@ static void edges(const char* ta, unsigned see, const unsigned char col[10], DWO
     for (i = 0; i < TAGPU_PK_BD_RECENT; i++) {
         const TagpuBoardMark* k;
         TAGPU_PK_BDMARK* o;
-        double dx, dy, tx, ty, t, a;
+        double dx, dy, tx, ty, t, a, ax, az;
         if (!s_recent[i].id || now - s_recent[i].at >= RECENT_MS ||
             !(k = tagpu_boardstore_find(&s_store, s_recent[i].id)) || !(see >> k->owner & 1u))
             continue;
@@ -803,11 +807,18 @@ static void edges(const char* ta, unsigned see, const unsigned char col[10], DWO
         tx = fabs(dx) > 0.0 ? (hw - m) / fabs(dx) : 1e30;
         ty = fabs(dy) > 0.0 ? (hh - m) / fabs(dy) : 1e30;
         t = tx < ty ? tx : ty;
+        /* the anchor lies inside a view built from the engine's eye, which is read as it stands:
+           one past the packet's coordinate bound is left out, as a pointer is, rather than have
+           the acquire refuse the whole packet */
+        ax = floor(cx + dx * t);
+        az = floor(cy + dy * t);
+        if (ax < -TAGPU_BW_COORD || ax > TAGPU_BW_COORD || az < -TAGPU_BW_COORD || az > TAGPU_BW_COORD)
+            continue;
         if (*nm >= maxm) { *cut = 1; return; }
         o = &marks[(*nm)++];
         memset(o, 0, sizeof *o);
-        o->x = (int32_t)floor(cx + dx * t);
-        o->z = (int32_t)floor(cy + dy * t);
+        o->x = (int32_t)ax;
+        o->z = (int32_t)az;
         o->colour = col[k->owner];
         o->flags = TAGPU_PK_BDM_EDGE;
         a = atan2(dy, dx) / 6.283185307179586 * 256.0;
@@ -828,7 +839,7 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
     const DWORD now = GetTickCount();
     *ns = *nm = 0;
     if (!live(&w)) return 0;
-    see = seen() & ~s_mute;             /* a muted seat's marks and pointer are not drawn */
+    see = shown_seats();                /* a muted seat's marks and pointer are not drawn */
     /* the player's lifetime, read every frame: a change applies to the marks already made */
     s_store.life = (uint32_t)tagpu_settings_marklife() * TICKS_PER_S;
     for (k = 0; k < 10; k++) col[k] = seat_colour(w.ta, k);
@@ -923,7 +934,7 @@ void tagpu_board_level_end(void)
     memset(s_act, 0, sizeof s_act);
     s_lastAny = 0;
     s_nedge = 0;
-    s_edgeHit = -1;
+    s_edgeId = 0;
     s_cMarks = s_cSegs = s_cErase = s_cDrop = s_cFull = s_cIn = s_cBad = 0;
     tagpu_board_cancel();
     s_lastL.valid = s_lastR.valid = 0;

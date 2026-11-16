@@ -246,9 +246,9 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is 496×388: **two columns of `COL_W` 248** (`PANEL_W` = 2·`COL_W`), twenty-five
+The in-game panel is 496×388: **two columns of `COL_W` 248** (`PANEL_W` = 2·`COL_W`), twenty-six
 rows on a 24 px pitch filling the left column first (`row_pos`: `COL_ROWS` = `(R_COUNT + 1)/2` =
-13 on the left, 12 on the right), each row a label at `x0 + 12` (112 wide) beside a control at
+13 on each side), each row a label at `x0 + 12` (112 wide) beside a control at
 `x0 + 128` (108 wide), `x0` its column's left edge. The left column's last row (Mega map wheel)
 starts at `ROW_Y0 34 + ROW_PITCH 24 × 12 = 322` and ends at 340; a row's recess is
 `ROW_H + 2·PAD` = 22 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px
@@ -264,14 +264,18 @@ ORDERS buttons, that belongs to no GUI window: the engine draws it once a level 
 so a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
 304-px columns, two labels stayed through the close, a select and a deselect, and the engine's
 own surface (`tacli shot`) showed them too. The generated `.GUI` is written into a 24 KB buffer;
-the twenty-five rows take 16 190 bytes (the log's `rows=25 gui=16190`, 2026-11-11). *Formation move*, *Mega map zoom
-in*, *Radar dots* and the ten range-ring rows are this panel's alone: the front-end screen's two
+the twenty-six rows take 16 800 bytes (the log's `rows=26 gui=16800`, 2026-11-16). *Formation move*, *Mega map zoom
+in*, *Radar dots*, *Board marks* and the ten range-ring rows are this panel's alone: the front-end screen's two
 columns are full (`vis_shown`), so a player sets them in game or in `impure.cfg`. *Radar dots* (Zoomed out \|
 Always) is `radardots=` (`TS_RADARDOTS`, `zoomed` or `always`, default `always`): a radar
 contact's dot in the world view at every level, or only where the strategic icons come in
 ([strategic icons](icons.html), *Radar dots*); read every frame by the render thread and every
 hover query by the game thread, never greyed with the lane, held under `tagpu_defaults.off`,
-where it reads Zoomed out, and set to Always by Restore defaults.
+where it reads Zoomed out, and set to Always by Restore defaults. *Board marks* (Fade 60 s \|
+Until erased) is `marklife=` (`TS_MARKLIFE`, `60` or `erased`, default `60`): how long the drawing
+board's lines and markers stay, in seconds of game time ([board](board.html)); read every frame by
+the board on the game thread, never greyed, 60 under `tagpu_defaults.off`, and set to Fade 60 s by
+Restore defaults. It is each player's own: nothing sends it.
 `PANEL_W` and `PANEL_H` size the GAF frame header, the ground, the ramp, the border and the corner
 bolts, and the panel is **composed at runtime** from the player's install rather than shipped, so
 no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212; the columns, the row

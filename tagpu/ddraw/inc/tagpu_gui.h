@@ -366,9 +366,10 @@ typedef struct TAGPU_GUIHAND {
        reset. */
     unsigned             colRearm;
 
-    /* ---- the sharp layer's draws, BY VALUE: only the `nsdraw` used are
-       copied, and it retires the whole question of what they point into: the
-       op arena is reallocated per present, and this list is not in it. */
+    /* ---- the sharp layer's draws, BY VALUE: the producer fills only the
+       `nsdraw` used, and the hand-over copies the whole struct, which retires
+       the whole question of what they point into: the op arena is
+       reallocated per present, and this list is not in it. */
     int                  sharpW, sharpH;   /* 0 = no layer this frame        */
     int                  nsdraw;
     TAGPU_GUISDRAW       sdraw[TAGPU_GUI_SDRAW_MAX];

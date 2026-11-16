@@ -2430,8 +2430,8 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         }
         /* THE DRAWING BOARD ON THE MINIMAP (tagpu_board.c's marker records), over the view box:
            each marker a 4-px square and each ally's pointer a 3-px one, in its colour on a black
-           square 2 px larger, and a new marker's ping a square outline that grows to 16 px as
-           it ends. The box is the one the base picture was drawn on. The engine's minimap arm
+           square 2 px larger, and a new marker's ping a square outline whose side grows from 8 to
+           32 px as it ends (g is its half side, as r is the dot's). The box is the one the base picture was drawn on. The engine's minimap arm
            maps the other way, (pointer - box) * extent / box (0x498DDA..0x498E19, the extent
            main+0x1422B / +0x1422F), to a PROJECTED point: its y goes to GetTPosition 0x484B50,
            which finds the ground point whose z - floor(h / 2) is that y (0x484BD6..0x484BEB). So a

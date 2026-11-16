@@ -235,9 +235,9 @@ void tagpu_settings_icons(int* scale, int* dist, int* fade);
    distance. The store's, else 1; 0 under tagpu_defaults.off, whose frame is the stock one at 1x.
    Any thread; the render thread asks every frame, the pick every hover query. */
 int  tagpu_settings_radardots(void);
-/* The drawing board's lifetime (TS_MARKLIFE), seconds of game time, 0 until erased: the store's,
-   else 60, under every launch (the board is no pass of the play defaults). Game thread, every
-   frame. */
+/* The drawing board's lifetime (TS_MARKLIFE), seconds of game time, 0 until erased: the store's;
+   60 when the store is ignored (tagpu_defaults.off) or not read. Each player's own: nothing sends
+   it, so allies can keep marks for different times. Game thread, every frame. */
 int  tagpu_settings_marklife(void);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing
