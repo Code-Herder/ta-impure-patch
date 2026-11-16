@@ -1394,7 +1394,7 @@ static void economy(IMPAI_DEC* d)
    factories' turn holds -- a job's stop, an arrived walk's reclaim, the yard's step, the makers' switch -- waits at
    most one contested decision. A turn that stayed with the factories until they spent a root held all of that for
    as long as an idle factory stood unordered (poor, unscored, an empty menu, past the rows' cap or refused): the
-   yard's deadlock again (the high review of 1a9350ea..4c8727bd, MED-1); `turn_unspent=` on the eco line counts
+   yard's deadlock again; `turn_unspent=` on the eco line counts
    the factories' turns that spent nothing. A root the governor leaves on its turn is not lost: the builders take
    it. A turn back out of danger is never held by the factories' turn (order_mode: roots_max on a contested
    decision). WHY: unused actions stay in the bucket up to its burst, so a seat whose builders spent each action

@@ -974,7 +974,7 @@ static void naval(MDEC* d)
      which say where an enemy stood when the hunt began without it. Before the hunt any row and any fresh foe memory
      stamp, a contact included, and delay it. WHY THE GHOST: A GOAL GIVEN UP holds a ghost ashore out of the stamps
      for IMPAI_UNREACHED_T only; once that ring entry went, the ghost stamped the land again and ended the hunt, so
-     the seat was dry for two thirds of each such cycle (the high review of d665a00a..fd67c52d, MED-LOW-3).
+     the seat was dry for two thirds of each such cycle.
    - NEVER BEFORE THE WAR: with no land stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
      opening -- builds nothing for the finish. A land stamp of 0 later in the game means every enemy the seat has
      known stood where the land army does not reach -- across the water or on another island --, where the dry
@@ -1165,12 +1165,11 @@ static void dry_hunt(MDEC* d)
      the decision's own sum whenever that is larger. WHY: a mobile ghost lasts only until the seat's sight covers
      its last block (impai_know.c), so a raid that withdraws through lit ground is forgotten at once, and radar
      contacts come and go from decision to decision; counted as they stand, they moved the ratio across the
-     2-2.5 band and the lead in and out of THE FINISH'S END (the whole-brain coherence review at d665a00a). THE
+     2-2.5 band and the lead in and out of THE FINISH'S END. THE
      RAID MEMORY, IMPAI_MIL.raid_v at raid_t, is the same memory of the same sum less the rows of commander types
      (IMPAI_C_COMMANDER): what THE LEAD'S HOME FLOOR keeps home against. The ratio counts the commanders, the
      floor does not, as the home's value (home_v) leaves the seat's own out: a commander remembered, 24 109-30 423
-     at retail, made a floor larger than a home of 22 500 and held the lead's every wave at home (the high review
-     of d665a00a..fd67c52d, MED-1);
+     at retail, made a floor larger than a home of 22 500 and held the lead's every wave at home;
    - THE BASE'S FLOOR, a foe at a time: each foe the rows name, or one while they name none, counts at least the
      seat's own structures' value (own_sv) times the share of the map not looked over -- the sweep cells no army
      unit of the seat has stood in within IMPAI_DRY_T (unlooked): each foe is taken to have built the base the seat
@@ -1182,7 +1181,7 @@ static void dry_hunt(MDEC* d)
      number: the seat's own base, at the same GameTime on the same content, is the yardstick. WHY THE LOOKING:
      unbounded, the floor tied the lead to the seat's own base -- against one foe it began only while the seat's
      structures were at most 40 % of its value --, so a grown base ruled the lead out late in the game, when the
-     army has fought over the map (the high review of 1a9350ea..4c8727bd, MED-2). WHY THE WHOLE MAP: the ground
+     army has fought over the map. WHY THE WHOLE MAP: the ground
      round the structures known is where the seat's raids go, and a foe's base not found is anywhere else; held to
      the ground round its known structures, on bar-nota-lavamania-ca-2 (Escalation) the seat's raiders stood in 7
      of the 16 cells round two outlying extractors, the floor fell to a third and the lead began at GameTime 14 857
@@ -1205,8 +1204,7 @@ static void dry_hunt(MDEC* d)
    lost prediction also ends it at the next decision. WHY: the ratio is only as good as the rows, and a prediction
    lost is the enemy showing a strength the rows do not hold. WHY A KEPT ESTIMATE HOLDS IT: the lead's waves raze
    the last structures they know, and a lead ended there demoted the hunting ATTACKs at its end (THE FINISH'S END)
-   while the next structure seen began it again, so the army went out and back through the finish (the high review
-   of d665a00a..fd67c52d, MED-2); a kept estimate begins nothing, for the enemy has shown nothing since. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
+   while the next structure seen began it again, so the army went out and back through the finish; a kept estimate begins nothing, for the enemy has shown nothing since. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
    the lead at GameTime 8 235 at 2 352 against 914 -- the enemy's commander alone, ProTA's ARMCOM at 914, whose
    row stood in for the floor, the only enemy it had seen --, its rows held about a third of the enemy's
    structures for the rest of the game (4 886 against 14 630 at 45 000), the true ratio stayed between 0.61 and
@@ -2385,8 +2383,8 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
    movers are worth less than the base goes nowhere. INVARIANT, a bound: a wave in the lead leaves the home --
    every FORM, DEFEND and RETREAT unit in the anchor box and every tower there -- worth at least the enemy's
    raid memory, or with every member of the FORM squad in the box it had. WHY: the attention keeps nothing home
-   in the lead, so each wave took the whole FORM squad and the home stood empty whenever the waves were out (the
-   whole-brain coherence review at d665a00a, finding 6); out of the lead the attention's limit and the growing
+   in the lead, so each wave took the whole FORM squad and the home stood empty whenever the waves were out; out
+   of the lead the attention's limit and the growing
    threshold keep the FORM squad home between waves, and the recall answers a threat. RESIDUAL: with no free
    squad the lead's wave waits; the members kept are the box's first in the army's order, not its strongest.
    THE WAVE'S COUNT: an ATTACK whose wave added to waves[L] carries IMPAI_SQUAD.counted -- set here, cleared when a
@@ -2781,15 +2779,18 @@ static int home_holds(const MDEC* d, int s)
     return d->st->sq[s].task == IMPAI_SQ_DEFEND && d->base_threat && in_anchor_box(d, d->sq[s].x, d->sq[s].z);
 }
 
-/* AT THE RALLY: a FORM squad whose centroid stands within RALLY_PX of the rally point takes no retreat, and no
-   prediction is spent on it: it fights its contact. WHY: a retreat's point is the rally point, so a FORM squad
-   there that lost its prediction became RETREAT, was released to FORM again on arrival in the same decision
-   (release_arrived) and could be predicted again, each round spending a prediction, a retreat and a lost
-   prediction for the lead's evidence while the squad stood where it was (the high review of 4c8727bd..8c7b10a4,
-   LOW-5). A FORM squad farther out still falls back. */
-static int at_rally(const MDEC* d, int s)
+/* AT THE RALLY: a FORM squad whose centroid stands within RALLY_PX of the rally point, against a contact that
+   threatens the base (MCONTACT.threat), takes no retreat, and no prediction is spent on it: it fights its
+   contact. WHY: a retreat's point is the rally point, so a FORM squad there that lost its prediction became
+   RETREAT, was released to FORM again on arrival in the same decision (release_arrived) and could be predicted
+   again, each round spending a prediction, a retreat and a lost prediction for the lead's evidence while the
+   squad stood where it was. A FORM squad farther out still falls back. RESIDUAL: against a contact outside the
+   base that reaches the rally -- artillery out-ranging it -- the squad is still predicted, and on a loss sent back
+   to where it stands, a prediction each decision; its lost evidence is kept, which is what such a contact earns. */
+static int at_rally(const MDEC* d, int s, int c)
 {
-    return d->st->sq[s].task == IMPAI_SQ_FORM && dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX;
+    return d->st->sq[s].task == IMPAI_SQ_FORM && d->ct[c].threat &&
+           dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX;
 }
 
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
@@ -2871,7 +2872,7 @@ static void tasks(MDEC* d)
             SIDEIN a, b;
             float m;
             const int16_t e = counting_nearest(d, best, &w, d->sq[s].x, d->sq[s].z);
-            if (e >= 0 && !home_holds(d, s) && !at_rally(d, s)) {
+            if (e >= 0 && !home_holds(d, s) && !at_rally(d, s, best)) {
                 int32_t gap;
                 side_engaged(d, s, e, &a, &gap);
                 side_contact_counts(d, best, &w, &b);
@@ -3620,7 +3621,7 @@ static void orders(MDEC* d)
 #define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
 #define COM_STAY_MARGIN 0.5f    /* the margin the commander's own side must be predicted to win by for it to stand
                                    (THE STAND) [hand-written: the bar's to move]                               */
-_Static_assert(IMPAI_BLAST_SEEN_T == 2 * SAFE_TICKS, "the approach holds as long again as the flight's window");
+_Static_assert(IMPAI_BLAST_SEEN_T == 2 * SAFE_TICKS, "the approach holds up to as long again past the flight");
 #define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so a blast's keep,
                                        2^20 x (H + H + age) with H at most 150 + 135 and age at most
                                        IMPAI_BLAST_SEEN_T 600, stays below 2^20 x 1 170 < 2^31 (its sum is int64 all
@@ -3643,36 +3644,40 @@ static uint32_t blast_keep(const IMPAI_TINFO* ti, unsigned type, int32_t sp_own,
 /* THE BLAST'S APPROACH, the economy's half of THE BLAST (commander): 1 when the commander of type `ctype` at
    (cx, cz) px, sent to work at the point (x, z), would walk nearer to where a foe's commander was seen within the
    last IMPAI_BLAST_SEEN_T ticks, to within that commander's keep (blast_keep, the flight's own). THE WALK, not the site:
-   the commander works within its builddistance (WQ_DEF.reach) of the point, so a point within that of it walks
-   it nowhere and is never refused, and otherwise it walks straight towards the point until it is that far from
-   it, where the walk ends; the end is what is tested. Moving away or across is never refused. So no economy task
+   a task the commander works at works within its builddistance (WQ_DEF.reach) of the point, so a point within that
+   of it walks it nowhere and is never refused, and otherwise it walks straight towards the point until it is that
+   far from it, where the walk ends; a move (`to_point`: the turn back, a walk to a feature believed there) walks
+   to the point itself, so its end is the point. The end is what is tested. Moving away or across is never refused. So no economy task
    walks the commander towards a commander it fled or could meet within the blast while the sighting is recent.
    WHY: on bar-eota-lavamania-ac-2 at 1a9350ea the seat's commander, handed back 300 ticks after fleeing the
    enemy's commander seen 1 000 px off, walked 130 px towards where it was seen while the enemy's commander, unseen
    for 540 ticks, walked 550 px towards it; seen at 393 px, it died to the seat's army 302 ticks later and its
    blast took the seat's commander with it, 57 units against 14 (MEASURED 2026-11-15, the recording's units and
-   s_mil.foe). WHY IMPAI_BLAST_SEEN_T: the flight holds the commander SAFE_TICKS and the approach as long again after
-   its hand-back, which covers the 540 ticks measured; held to IMPAI_DRY_T instead, the keep grew to about
-   6 600 px at CORCOM's speed and refused every site nearer the foe than the commander for a minute and more (the
-   high review of 4c8727bd..8c7b10a4, MED-1). At most it is blast_r + 64 px + the two commanders' approach over
+   s_mil.foe). WHY IMPAI_BLAST_SEEN_T: it runs from the sighting, so it covers the flight's SAFE_TICKS and up to as
+   long again past the hand-back -- 15 to 300 ticks, by when in look_mil the flight began --, which covers the 540
+   ticks measured; held to IMPAI_DRY_T instead, the keep grew to about
+   6 600 px at CORCOM's speed and refused every site nearer the foe than the commander for a minute and more. At
+   most it is blast_r + 64 px + the two commanders' approach over
    2 H + 600 ticks. RESIDUAL: a commander unseen can come from where it was not seen, or after IMPAI_BLAST_SEEN_T; the
    military flees one seen within its keep (THE BLAST), straight away (THE FLIGHT); a walk that bends round the
    ground ends elsewhere than the straight line's end. BOUND: WQ_SEATS entries, a def read each, and the
    commander's def once. */
 int impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti, unsigned nti,
-                       const IMPAI_PERSONA* p, uint32_t now, int ctype, int32_t cx, int32_t cz, int32_t x, int32_t z)
+                       const IMPAI_PERSONA* p, uint32_t now, int ctype, int to_point, int32_t cx, int32_t cz,
+                       int32_t x, int32_t z)
 {
     const uint32_t H = p ? p->look_mil + p->react : 0;
     WQ_DEF def;
     int32_t sp_own, ex = x, ez = z;
-    uint32_t walk;
+    uint32_t walk, reach;
     int k;
     if (!q || !st || !v || !ti || !q->ops->def(q, ctype, &def)) return 0;
+    reach = to_point ? 0u : def.reach;
     walk = dist(cx, cz, x, z);
-    if (walk <= def.reach) return 0;
-    if (def.reach) {
-        ex = cx + (int32_t)((int64_t)(x - cx) * (int64_t)(walk - def.reach) / (int64_t)walk);
-        ez = cz + (int32_t)((int64_t)(z - cz) * (int64_t)(walk - def.reach) / (int64_t)walk);
+    if (walk <= reach) return 0;
+    if (reach) {
+        ex = cx + (int32_t)((int64_t)(x - cx) * (int64_t)(walk - reach) / (int64_t)walk);
+        ez = cz + (int32_t)((int64_t)(z - cz) * (int64_t)(walk - reach) / (int64_t)walk);
     }
     sp_own = speed_held(def.speed);
     for (k = 0; k < WQ_SEATS; k++) {

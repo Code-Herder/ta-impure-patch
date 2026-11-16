@@ -3489,7 +3489,8 @@ static void route_row(unsigned how, int bx, int bz, int range)
    counted (blast_refused); the walk south ends 817 px off, farther: the commander takes the south rock;
    (b) the same, seen IMPAI_BLAST_SEEN_T + 15 ticks ago: the memory says nothing, and it takes the east rock;
    (c) seen 300 ticks ago, a 300-metal rock 88 px east -- nearer the foe, inside the keep, but within the
-   builddistance, so it walks nowhere: never refused, and the commander takes it;
+   builddistance, so it walks nowhere: never refused, and the commander takes it; a move to it (to_point), which
+   walks to the rock itself, 720 px from the foe, is refused;
    (d) as (a), the foe's commander of a type whose speed reads 0 (the turret, classed a commander of blast_r 475):
    its approach takes the own commander's speed, the keep is 899 px again and the east rock is refused, where a
    foe speed of 0 would keep 569 px and pass the walk's end 600 px off. No foe memory at all refuses nothing, the
@@ -3527,6 +3528,14 @@ static void check_blast_approach(void)
         s_umil.foe[1].t = (uint32_t)s_w.gametime - (c == 1 ? IMPAI_BLAST_SEEN_T + 15u : 300u);
         s_milp = &s_umil;
         CHECK(decide(&out) == 0, "decide");
+        if (c == 2) {
+            WORLDQ q = { &FAKE, &s_w, 0 };
+            const uint32_t now = (uint32_t)s_w.gametime;
+            const unsigned nti = (unsigned)s_w.ndefs;
+            CHECK(!impai_blast_nearer(&q, &s_umil, s_viewp, s_ti, nti, s_persona, now, T_COM, 0, 328, 328, 416, 328) &&
+                      impai_blast_nearer(&q, &s_umil, s_viewp, s_ti, nti, s_persona, now, T_COM, 1, 328, 328, 416, 328),
+                  "%s: a task there walks nowhere, a move there walks to the rock", NAME[c]);
+        }
         s_milp = NULL;
         s_viewp = NULL;
         printf("the blast's approach, %s: the commander's job %u at (%d, %d), blast_refused %u com_free %u com_idle %u\n",
@@ -11625,13 +11634,15 @@ static void check_mil_retreat_members(void)
    (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point lies
    384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px south:
    no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction, as
-   check_mil_stay_or_go's (c). */
+   check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the submarine, a contact that
+   does not threaten the base (a structure is no base threat): one prediction. */
 static void check_mil_at_rally(void)
 {
+    static const char* const NAME[3] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally" };
     IMPAI_MIL_OUT o;
     int c, k;
-    for (c = 0; c < 2; c++) {
-        const int bx = c ? 180 : 40, bz = c ? 100 : 29;
+    for (c = 0; c < 3; c++) {
+        const int bx = c == 1 ? 180 : 40, bz = c == 1 ? 100 : 29;
         mil_world();
         gunship();
         s_st.ax = s_st.az = 20;
@@ -11642,15 +11653,15 @@ static void check_mil_at_rally(void)
         s_w.starts[1].index = 1;
         s_w.nstarts = 2;
         for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
-        enemy(1300, M_SUB, bx + 2, bz + 8, IMPAI_LOS, 1);
+        enemy(1300, c == 2 ? T_TURRET : M_SUB, bx + 2, bz + 8, IMPAI_LOS, 1);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rally decision runs");
-        mil_print(c ? "a submarine 2 400 px out" : "a submarine at the rally", &o, s_w.nlog);
+        mil_print(NAME[c], &o, s_w.nlog);
         if (!c)
             CHECK(!o.predictions && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && squad_task_of(3) == IMPAI_SQ_FORM,
                   "at the rally: %u predictions, %u retreats, tasks %d %d", o.predictions, o.retreats, squad_task_of(2),
                   squad_task_of(3));
         else
-            CHECK(o.predictions == 1, "out of the rally: %u predictions", o.predictions);
+            CHECK(o.predictions == 1, "%s: %u predictions", NAME[c], o.predictions);
     }
 }
 

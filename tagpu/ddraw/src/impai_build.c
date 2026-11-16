@@ -650,18 +650,25 @@ static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
 }
 
 /* 1 when b is the commander and THE COMMANDER'S SAFE DISTANCE refuses it the point (x, z), px, or THE BLAST'S
-   APPROACH does (impai_mil.c): a walk to the point that would take it nearer a foe's commander it could meet within
-   the blast; the decision's blast_hit marks the second, for the log's blast_refused= */
-static int cmd_refused(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z)
+   APPROACH does (impai_mil.c): a walk -- to its builddistance of the point, or with `to_point` (a move) to the point
+   itself -- that would take it nearer a foe's commander it could meet within the blast; the decision's blast_hit
+   marks the second, for the log's blast_refused= */
+static int cmd_refused_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z, int to_point)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return 0;
     if (cmd_unsafe(d, x, z)) return 1;
-    if (!impai_blast_nearer(d->q, in->mil, in->view, in->ti, in->nti, in->persona, d->now, b->type, b->pos[0] >> 16,
-                            b->pos[2] >> 16, x, z))
+    if (!impai_blast_nearer(d->q, in->mil, in->view, in->ti, in->nti, in->persona, d->now, b->type, to_point,
+                            b->pos[0] >> 16, b->pos[2] >> 16, x, z))
         return 0;
     d->blast_hit = 1;
     return 1;
+}
+
+/* cmd_refused_to for a task worked within the builddistance of (x, z): a site, a frame, a feature */
+static int cmd_refused(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z)
+{
+    return cmd_refused_to(d, b, x, z, 0);
 }
 
 /* the footprint centre of `type` at first cell (cx, cz) lies within `reach` px of the anchor */
@@ -734,7 +741,9 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
 }
 
 /* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
-   commander at a point THE COMMANDER'S SAFE DISTANCE refuses; a move of no job is not, and on a contested decision
+   commander at a point THE COMMANDER'S SAFE DISTANCE or THE BLAST'S APPROACH refuses (cmd_refused_to), a move --
+   mode 2, an explore or a walk to a feature believed there -- tested as a walk to the point itself, any other as
+   one to its builddistance of the point; a move of no job is not, and on a contested decision
    it may take the root the factories' turn reserves (impai_brain.c, THE FACTORIES' TURN). */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
                       int cx, int cz)
@@ -744,7 +753,7 @@ static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target
     WQ_CMD c;
     int a;
     if (d->roots >= (kind == IMPAI_JOB_NONE && d->contested ? d->roots_max : d->root_cap)) return 0;
-    if (kind != IMPAI_JOB_NONE && cmd_refused(d, b, pos[0] >> 16, pos[2] >> 16)) return 0;
+    if (kind != IMPAI_JOB_NONE && cmd_refused_to(d, b, pos[0] >> 16, pos[2] >> 16, mode == 2)) return 0;
     if ((a = d->q->ops->can(d->q, b->slot, mode, target, pos)) <= 0) return 0;
     memset(&c, 0, sizeof c);
     c.verb = WQ_CMD_NEW;
@@ -2289,7 +2298,7 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    as now, but what the seat knows of the threat round it stops at its sight, so a wreck on a battlefield the army
    left scored as safe as one beside the base; with every feature shown at 1a9350ea the broad check's reclaims
    ordered rose from 533 to 1 146 and the builders lost on them from 7 to 20, 52 % of the reclaims paid against 71 %
-   (MEASURED 2026-11-15; the high review of fd67c52d..1a9350ea, LOW-3). The decay prices the unknown: a rich
+   (MEASURED 2026-11-15). The decay prices the unknown: a rich
    feature long out of the seat's sight loses to a poorer one it sees.
    In score order, ties to the lower anchor cell, each is tested for THE ROUTE and the first IMPAI_RECLAIM_TRIES
    clear of it for b's reach (builder_near_side, the feature's larger side), and the first that passes is taken: a feature shown now is

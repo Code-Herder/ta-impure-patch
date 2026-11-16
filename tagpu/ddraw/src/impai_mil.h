@@ -69,16 +69,18 @@ size_t impai_mil_scratch_bytes(void);
    of the world, the scratch short), with nothing written. */
 int    impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out);
 /* how long a foe's commander seen is a blast to keep clear of (impai_mil.c, blast_keep): THE BLAST flees one seen
-   within look_mil, at most 150, and THE BLAST'S APPROACH keeps the economy off one seen within this, twice the
-   flight's window SAFE_TICKS; the approach of a foe's commander unseen grows over at most this many ticks */
+   within look_mil, at most 150, and THE BLAST'S APPROACH keeps the economy off one seen within this many ticks of
+   the sighting -- the flight's window SAFE_TICKS and up to as long again past its hand-back; the approach of a foe's
+   commander unseen grows over at most this many ticks */
 #define IMPAI_BLAST_SEEN_T 600
 
 /* THE BLAST'S APPROACH (impai_mil.c): 1 when the commander of type ctype at (cx, cz) px, sent to work at (x, z),
-   would walk -- to its builddistance of the point -- nearer to where a foe's commander was seen within the last
-   IMPAI_BLAST_SEEN_T ticks, and to within that commander's blast keep */
+   would walk -- to its builddistance of the point, or with `to_point` (a move) to the point itself -- nearer to
+   where a foe's commander was seen within the last IMPAI_BLAST_SEEN_T ticks, and to within that commander's blast
+   keep */
 int    impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti,
-                          unsigned nti, const IMPAI_PERSONA* p, uint32_t now, int ctype, int32_t cx, int32_t cz,
-                          int32_t x, int32_t z);
+                          unsigned nti, const IMPAI_PERSONA* p, uint32_t now, int ctype, int to_point, int32_t cx,
+                          int32_t cz, int32_t x, int32_t z);
 /* The task's letter in the pulse line: f, F, D, R, A, B (retreat: back), S */
 char   impai_mil_letter(unsigned task);
 

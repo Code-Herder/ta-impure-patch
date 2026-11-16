@@ -173,7 +173,7 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    THE KEPT UNLOCK (IMPAI_BRAIN.unlock): the choice runs only in a decision that wants a plant, and the wants are
    gates that lapse for a decision -- an energy stall, the hold, the steady income dipping under tech_m -- so an
    unlock read from this decision's choice alone came and went with them, and a factory the unlock is not on the
-   menu of made its own constructor in between (the coherence review's item 9). So the choice's unlock is kept
+   menu of made its own constructor in between. So the choice's unlock is kept
    until the next decision that runs the choice, whose answer replaces it (0 when it waits for none), and is
    dropped as soon as it is no unlock: a decision that does not run the choice keeps it only while plant_unlocks
    still names it -- a constructor type on the menu of a factory of the seat's with no finished unit -- so it ends
@@ -1302,8 +1302,7 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    holds the whole count below that --, so at least IMPAI_FINISH_ROWS rows hold units with a water weapon or are
    free, whatever the land army has grown to: the finish always has rows for the units that can hit what is left
    under the water. WHY: the dry menus offer water weapons alone, so a land army at 512 rows when the dry hunt began
-   left the finish's sea plant nothing to make for the rest of the game (the whole-brain coherence review at
-   d665a00a, finding 2). A level that cannot be dry keeps all IMPAI_ARMY_MAX rows for any type. Each order these
+   left the finish's sea plant nothing to make for the rest of the game. A level that cannot be dry keeps all IMPAI_ARMY_MAX rows for any type. Each order these
    rows refuse below IMPAI_ARMY_MAX is counted (IMPAI_BRAIN_OUT.finish_rows, `finish_rows=` on the eco line): the
    cap holds on every level that can be dry, whether or not the seat ever builds a sea plant, and a pick at the
    cap is refused outright rather than turned to a type with a water weapon -- a GAP the count measures. */

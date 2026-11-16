@@ -1433,8 +1433,8 @@ The economy diagnosis of the mod games at d665a00a
   the seat's commander towards an enemy commander it had fled 300 ticks before and could no longer see, and when
   that commander came into sight 393 px off the flight went to the structure farthest from it, across its line, so
   the gap barely opened before the seat's army killed it. The flight now takes the safe point that opens the gap
-  fastest, and for 600 ticks after a foe's commander is seen -- twice the flight's window, past the 540 the case
-  needed -- no economy task walks ours nearer to where it was seen and to within the flight's own keep; a site
+  fastest, and for 600 ticks from a foe's commander's sighting -- the flight's window and up to as long again past
+  its hand-back, past the 540 the case needed -- no economy task walks ours nearer to where it was seen and to within the flight's own keep; a site
   within the commander's builddistance walks it nowhere and is never refused, and moving away or across stays
   free. **Why the walk and the 600, not the site and the hunt's 5 400**: the high review of 4c8727bd..8c7b10a4
   (MED-1) found the keep, grown over 5 400 ticks, reached about 6 600 px and turned one sighting into a
