@@ -19,6 +19,16 @@ UNEXPECTED** (`CLAUDE.md` *Releases*). Run the Windows suite too when the owner 
 SSH session; say in the hand-over which platforms ran. A known gap does not block a release;
 an UNEXPECTED does, and so does a suite that could not run (exit 2).
 
+**ImpAI plays in the release run once it is the default AI (from b8 on):**
+
+```bash
+tools/compat/tacompat.py wine --dll <release ddraw.dll> --impai 300 --mp-impai
+```
+
+Every setup where Impure runs then plays an ImpAI stage and gives each peer of its network game an
+ImpAI seat. Each seat is held to the claim (by its last pulse it gave orders and completed a unit since its first, which counts the commander).
+300 s clears the claim's 130 s floor with margin and keeps the stage shorter than the bare 900.
+
 ## The loop
 
 ```bash
@@ -116,11 +126,11 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   `mp ok`, `mp FAILED`, `no mp` or `-` (not played). `--mp-impai` writes `netai=impai` on both
   peers, adds one computer seat on each (named `ImpAI:` by the battle room's first step) and also
   judges both peers' ImpAI seat lines, each naming the other's seat ImpAI's, and each peer's seat by
-  its last pulse: it gave orders and completed a unit (the game plays at least 130 s for it).
+  its last pulse: it gave orders and completed a unit since its first pulse (the game plays at least 130 s for it).
 - **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
   each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
   the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
-  lines, no `could not`, no refused turn, and by its last pulse it gave orders and completed a unit;
+  lines, no `could not`, no refused turn, and by its last pulse it gave orders and completed a unit since its first;
   at least 130 s for that pulse). The seats go under the registry root the game itself
   reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
   skirmish on another map, other seats or another Difficulty fails by name. The single-player

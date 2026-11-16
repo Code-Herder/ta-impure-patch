@@ -3147,9 +3147,12 @@ IMPAI_COULD_NOT = re.compile(r"^impai: .*could not.*$", re.M)
 # research/notes/impai/player.md: one line a game minute an ImpAI seat, its counts since the level began: the
 # units it completed, the military's and the economy's orders (tagpu_impai.c, impai_pulse)
 IMPAI_PULSE = re.compile(r"^impai: pulse seat=(\d+) t=(\d+) built=(\d+) mroots=(\d+) eroots=(\d+) .*$", re.M)
-# THE CLAIM an ImpAI seat is held to wherever one plays (the stage, the network game): by its last pulse it gave
-# orders and completed a unit -- the seat played, which a turn taken alone does not show. The first pulse is at
-# a game minute, so a game of ImpAI's is played past IMPAI_CLAIM_TICKS (the network game's soak is raised to it).
+# THE CLAIM an ImpAI seat is held to wherever one plays (the stage, the network game): by its last pulse it had
+# given orders and completed a unit since its first -- the seat played, which a turn taken alone does not show.
+# The first pulse is in the level's first 15 ticks and already counts the commander as completed (built=1,
+# MEASURED 2026-11-16, every seat of the suite's first ImpAI run), so the claim compares against it, never
+# against zero. The next pulses follow a game minute apart, so a game of ImpAI's is played past
+# IMPAI_CLAIM_TICKS (two game minutes and a margin; the stage's and the network game's length are raised to it).
 IMPAI_CLAIM_TICKS = 2 * 1800 + 300
 # a network game's seat line (tagpu_impai.c, the level init)
 IMPAI_NET_LINE = re.compile(r"^impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) "
@@ -3279,17 +3282,18 @@ def impai_pulses(text: str) -> dict:
 
 
 def impai_claim_misses(pulses: dict, seat: int, who: str) -> list:
-    """THE CLAIM of one ImpAI seat from its pulses (impai_pulses): it wrote one, and by its last it had given
-    orders and completed a unit."""
-    got = pulses.get(seat)
-    if not got:
-        return [f"{who}: ImpAI's seat {seat} wrote no pulse (none before a game minute; the game ended first?)"]
-    t, built, orders = got[-1]
+    """THE CLAIM of one ImpAI seat from its pulses (impai_pulses): a pulse after its first, and by its last it had
+    given orders and completed a unit since its first (IMPAI_CLAIM_TICKS)."""
+    got = pulses.get(seat) or []
+    if len(got) < 2:
+        return [f"{who}: ImpAI's seat {seat} wrote {len(got)} pulse(s), not one after the level's first"]
+    (t0, built0, _), (t, built, orders) = got[0], got[-1]
     miss = []
     if not orders:
         miss.append(f"{who}: ImpAI's seat {seat} gave no order by GameTime {t}")
-    if not built:
-        miss.append(f"{who}: ImpAI's seat {seat} completed no unit by GameTime {t}")
+    if built <= built0:
+        miss.append(f"{who}: ImpAI's seat {seat} completed no unit from GameTime {t0} to {t} "
+                    f"(built={built} at both)")
     return miss
 
 

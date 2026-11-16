@@ -122,7 +122,7 @@ names the gap). The hives are private because the store `tacli` keeps
   (the host `PLAYER2` twice, Unused → Blocked → AI; the joiner `PLAYER3` once), and the game is
   also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
   and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name; and each peer's own seat
-  is held to **the claim**: by its last pulse line (`impai: pulse`, once a game minute a seat, its counts since the level began) the seat gave orders (`mroots` + `eroots`) and completed a unit (`built`); a turn taken alone does not show that the seat played (`impai_claim_misses`). The claim needs a pulse, so the game is played
+  is held to **the claim**: by its last pulse line (`impai: pulse`, a seat's counts since the level began: one in the level's first 15 ticks, then one a game minute) the seat gave orders (`mroots` + `eroots`) and completed a unit since its first pulse (`built` above the first's, which already counts the commander, MEASURED 2026-11-16); a turn taken alone does not show that the seat played (`impai_claim_misses`). The claim needs a pulse, so the game is played
   past `IMPAI_CLAIM_TICKS` (3900, two game minutes and a margin) whatever `--mp` says. The peers' unit counts are not compared: the
   game is not lockstep — only a unit's owner decides its death and the other peer applies it when
   the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
@@ -169,7 +169,7 @@ names the gap). The hives are private because the store `tacli` keeps
   game time an end scenario keeps one unit of record 1 and turns it back on, so the level ends and
   its teardown writes ImpAI's level-end lines. **Judged by ImpAI's own lines**: the seat line
   marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
-  refused turn, record 1 took turns, and **the claim**: by its last pulse line (`impai: pulse`, once a game minute a seat, its counts since the level began) the seat gave orders (`mroots` + `eroots`) and completed a unit (`built`); a turn taken alone does not show that the seat played. The stage is played past
+  refused turn, record 1 took turns, and **the claim**: by its last pulse line (`impai: pulse`, a seat's counts since the level began: one in the level's first 15 ticks, then one a game minute) the seat gave orders (`mroots` + `eroots`) and completed a unit since its first pulse (`built` above the first's, which already counts the commander, MEASURED 2026-11-16); a turn taken alone does not show that the seat played. The stage is played past
   `IMPAI_CLAIM_TICKS` (130 s) whatever SECONDS says; the survey plays none and asks no claim. A seat line that marks nothing is **ImpAI unavailable**, the
   reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
   failure unless the setup's expectation says `"impai": "unavailable"`. **Content that did not fit is
