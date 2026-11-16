@@ -31,12 +31,13 @@ over n pairs of mean m and variance v,
     LLR = n (s1 - s0) (2 m - s0 - s1) / (2 v)
 
 against the bounds ln(beta / (1 - alpha)) and ln((1 - beta) / alpha), +-ln 19 at alpha = beta = 0.05.
-    improve    H0 s = 0.50 against H1 s = 0.55: accept, TEST is better; reject, it is not measurably better.
-    notworse   H0 s = 0.45 against H1 s = 0.50: accept, TEST is not worse (a fix batch's pass); reject, worse.
+    improve    H0 s = 0.50 against H1 s = 0.60: accept, TEST is better; reject, it is not measurably better.
+    notworse   H0 s = 0.40 against H1 s = 0.50: accept, TEST is not worse (a fix batch's pass); reject, worse.
 A tie scores 0.5 and stays in: it lowers the variance, so a run of ties is evidence the arms play alike rather
 than no evidence. THE FLOOR: m and v are taken over the pairs and one pseudo-pair, half a pair better and half a
-pair worse. It moves no mean and gives v the spread of one non-tied pair, so an all-tie run divides by no zero and
-one block cannot decide it: 16 ties read +-1.44, 32 read +-5.45 (the bound is first reached at 24).
+pair worse. It moves no mean and gives v the spread of one non-tied pair, so an all-tie run divides by no zero:
+n ties read +-(s1 - s0)^2 (n + 1)^2 / 0.5, which at the hypotheses' width 0.10 first reaches the bound at 12 ties
+-- one block of ties decides, at +-5.78.
 The test is read after each whole block, in ORDER, both arms' every game of it played: the first block at which
 the ratio reaches a bound decides, and the blocks after it are not read. With every block of ORDER read and no
 bound reached, the verdict is NO DECISION. The verdict is a function of the games' results alone.
@@ -81,7 +82,7 @@ BLOCK = 16
 CAP_PAIRS = 200
 ORDER_SEED = 20261115
 ALPHA = BETA = 0.05
-MODES = {"improve": (0.50, 0.55), "notworse": (0.45, 0.50)}
+MODES = {"improve": (0.50, 0.60), "notworse": (0.40, 0.50)}
 VERDICTS = {"improve": ("TEST is better", "TEST is not measurably better"),
             "notworse": ("TEST is not worse", "TEST is worse")}
 PSEUDO = 0.5                # THE FLOOR: the weight of the pseudo-pair's better half, and of its worse half
@@ -425,7 +426,7 @@ def main(argv=None) -> int:
                    help="play the order's first N blocks at most: a run in pieces, each resumed by the next "
                         "(the games already played are skipped)")
     s = sub.add_parser("asn", help="the expected cost by true mean score and tie rate (simulated)")
-    s.add_argument("--width", type=float, default=None, help="s1 - s0 about 0.5 (default: the mode's 0.05)")
+    s.add_argument("--width", type=float, default=None, help="s1 - s0 about 0.5 (default: the mode's 0.10)")
     s.add_argument("--alpha", type=float, default=ALPHA, help="alpha = beta")
     s.add_argument("--runs", type=int, default=1000, help="simulated runs a row")
     for x in (j, s):
