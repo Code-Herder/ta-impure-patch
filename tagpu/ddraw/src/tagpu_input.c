@@ -89,6 +89,8 @@ static int token_vk(const char* t)
     /* the game's own pause: in a network game it pauses every peer, where Tab only
        opens the options panel */
     if (!lstrcmpiA(t, "pause"))  return VK_PAUSE;
+    /* the drawing board's default key (tagpu_board.h), the key that types `\` on a US layout */
+    if (!lstrcmpiA(t, "backslash")) return VK_OEM_5;
     /* text entry (tacli ui fill): clearing a field means one backspace per
        character already in it. */
     if (!lstrcmpiA(t, "backspace") || !lstrcmpiA(t, "back")) return VK_BACK;

@@ -18,6 +18,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 #include "tagpu_board.h"
 #include "tagpu_route.h"
 #include "tagpu_engine.h"
@@ -39,10 +40,8 @@
 #define MARKS      TAGPU_PK_MAX_BDMARK
 #define SEGS       TAGPU_PK_MAX_BDSEG
 #define ERASE_R    48          /* world px: the eraser's radius                                */
-#define STEP_PX    6.0         /* screen px a line moves before it adds a segment              */
-#define STEP_MS    50u         /* ...and ms                                                    */
-#define MOVE_MS    100u        /* ms between two steps of a dragged marker's move              */
-#define ERASE_MS   50u         /* ms between two erases of a right drag                         */
+#define STEP_PX    6.0         /* screen px a line moves before it adds a segment: a corner of
+                                  the stroke is kept however fast the pointer moved             */
 #define DOUBLE_PX  4.0         /* screen px two presses of a double click may be apart          */
 #define LIFE_MS    60000u      /* a mark's lifetime: the owner's default, 60 s                 */
 #define PENDING    8
@@ -342,9 +341,14 @@ static void press(int ev, DWORD at, unsigned seat, const int32_t p[3])
         }
         remember(1, p, at, 1);
         s_g.kind = G_ERASE; s_g.at = at;
+        memcpy(s_g.last, p, sizeof s_g.last); s_g.haveLast = 1;
         erase_at(p);
         return;
     case E_LUP:
+        /* the stretch since the last step ends where the button came up */
+        if (s_g.kind == G_LINE && s_g.haveLast &&
+            (s_g.last[0] != p[0] || s_g.last[2] != p[2]))
+            seg_add(seat, s_g.last, p);
         if (s_g.kind == G_LINE || s_g.kind == G_MOVE) gesture_end();
         return;
     case E_RUP:
@@ -364,7 +368,7 @@ static void follow(DWORD now, unsigned seat, const int32_t p[3], int on_world)
         if (!s_g.haveLast) { memcpy(s_g.last, p, sizeof s_g.last); s_g.haveLast = 1; s_g.at = now; return; }
         dx = ((double)p[0] - s_g.last[0]) * z;
         dy = (((double)p[2] - (p[1] >> 1)) - ((double)s_g.last[2] - (s_g.last[1] >> 1))) * z;
-        if (dx * dx + dy * dy < STEP_PX * STEP_PX || (DWORD)(now - s_g.at) < STEP_MS) return;
+        if (dx * dx + dy * dy < STEP_PX * STEP_PX) return;
         seg_add(seat, s_g.last, p);
         memcpy(s_g.last, p, sizeof s_g.last);
         s_g.at = now;
@@ -377,11 +381,28 @@ static void follow(DWORD now, unsigned seat, const int32_t p[3], int on_world)
         m->x = p[0]; m->h = p[1]; m->z = p[2];
         return;
     }
-    case G_ERASE:
-        if (!on_world || (DWORD)(now - s_g.at) < ERASE_MS) return;
-        erase_at(p);
-        s_g.at = now;
+    case G_ERASE: {
+        /* the whole path since the last record, in steps of half the radius, so a fast swipe
+           passes over no line it crossed */
+        double dx, dz, len;
+        int k, n;
+        if (!on_world) { s_g.haveLast = 0; return; }
+        if (!s_g.haveLast) { memcpy(s_g.last, p, sizeof s_g.last); s_g.haveLast = 1; erase_at(p); return; }
+        dx = (double)p[0] - s_g.last[0]; dz = (double)p[2] - s_g.last[2];
+        len = sqrt(dx * dx + dz * dz);
+        if (len < 1.0) return;
+        n = (int)(len / (ERASE_R / 2)) + 1;
+        if (n > 256) n = 256;
+        for (k = 1; k <= n; k++) {
+            int32_t q[3];
+            q[0] = s_g.last[0] + (int32_t)(dx * k / n);
+            q[1] = p[1];
+            q[2] = s_g.last[2] + (int32_t)(dz * k / n);
+            erase_at(q);
+        }
+        memcpy(s_g.last, p, sizeof s_g.last);
         return;
+    }
     }
 }
 
@@ -422,16 +443,16 @@ int tagpu_board_key(unsigned vk, int up)
 {
     const char* ta;
     TagpuWorld w;
+    /* the draw key's release ends the hold whatever else is open, so a box opened while the
+       key was held cannot leave it held; the release is the board's when its press was */
+    int was = s_held;
+    if (up && vk == s_vk) s_held = 0;
     if (s_box.open) {
         if (!(ta = main_block()) || !live(&w)) { s_box.open = 0; return 0; }
         return up ? 1 : 2;
     }
     if (vk != s_vk) return 0;
-    if (up) {
-        int was = s_held;
-        s_held = 0;
-        return was;
-    }
+    if (up) return was;
     if (s_held) return 1;                       /* the key's own repeat */
     if (!(ta = main_block()) || !live(&w) || keyboard_taken(ta)) return 0;
     s_held = 1;

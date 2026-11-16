@@ -3119,10 +3119,12 @@ entry, on the game thread ([GUI gadgets](../gui-gadgets.html) §2.4.1).*
   `id == 2` record whose `assoc` equals the slider's (`0x4A3F37..0x4A3F4A`), tests no active
   flag, and returns 0 on a miss. The arrows' scan for their slider (`0x4A6FA4`) is the same
   shape for `id == 4`, and `GUI_FindGadgetByName 0x49FE60` loops to the same count.
-- **The engine has no wheel of its own.** Its window procedure dispatches `0x200..0x206` only
-  (the table at `0x4B5E3B`, the bound at `0x4B5E41`), so `WM_MOUSEWHEEL` falls to
-  `DefWindowProcA` ([gpu-status](../gpu-status.html) §2.3). Both wheels — the zoom's and the
-  list's — live in our window procedure.
+- **The engine has no wheel and no middle button of its own.** Its window procedure dispatches
+  `0x200..0x206` only: `lea eax,[esi-0x200]` at `0x4B5E3B`, the bound `cmp eax,6` at `0x4B5E41`
+  with `ja 0x4B5FA8` past it, and the jump through the table at `0x4B60F4` at `0x4B5E4A`
+  [DISASSEMBLED]. So `WM_MOUSEWHEEL` and the middle button's `0x207..0x209` fall to the default
+  arm ([gpu-status](../gpu-status.html) §2.3). Both wheels — the zoom's and the list's — and the
+  drawing board's middle click ([board](../modules/board.html)) live in our window procedure.
 
 ### SELMAP's map preview — `0x444A20` [DISASSEMBLED + MEASURED 2026-09-26]
 

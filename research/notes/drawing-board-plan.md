@@ -2,7 +2,8 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal; nothing built yet.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landing 1, the local board,
+is built and verified on the branch ([board](modules/board.html)); landings 2 to 6 are not.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -100,7 +101,9 @@ landings' notes as each one uses them.
 
 1. **The local board.** The key (`WM_CHAR` `0x5C` taken from the window procedure, `0x4966E7`'s
    entry left alone), the gestures, the text box, the store, lines, markers and the eraser drawn
-   on Vulkan. Works in a skirmish on one machine. Verified by injected input and captures.
+   on Vulkan. Works in a skirmish. Verified by injected input and captures. **Built.** What it
+   left for later: the lifetime is wall time (marks fade while paused), and the key is the virtual
+   key `VK_OEM_5`, not the character `\`.
 2. **Allies receive it.** `RECMP_MARK` everywhere a kind is listed (`tagpu_recmp.c`'s two lists,
    the stream ledger, the journal, the history's `semantic()`, `mp_apply`,
    `tools/replay/recmp_file.py`, `recmp_cut_test.c`), `RECMP_START_VERSION` raised, the paused
