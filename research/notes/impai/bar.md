@@ -45,8 +45,8 @@ blocks, the new pairs and their maps, seating, start schema, stall rule, the hol
 reads from the level's end, the judge with the value at the limit, the points, the interval, the targets, the
 ladder's curtailment and the ordering's looks, the row checks with each yard verdict, `row`, `--setup` and its
 commanders, the cheat flag and the judge per setup, a game's end on a fake instance in each way a game ends, a level
-not seeded from its game's seed, a persona row's lever, and `play`'s stop and curtailment on fake lanes, offline;
-under the shared venv also the bounds' integration and a recorded game's value at the limit). A pair is a list of
+not seeded from its game's seed, a persona row's lever, the mirror's pairs, rows and judging, and `play`'s stop
+and curtailment on fake lanes, offline; under the shared venv also the bounds' integration and a recorded game's value at the limit). A pair is a list of
 game ids `bar-<pair>-<map>-<sides>-<n>`:
 
 | pair | A | B | Difficulty | games |
@@ -55,6 +55,7 @@ game ids `bar-<pair>-<map>-<sides>-<n>`:
 | `eoh`, `noh` | ImpAI Easy, Normal (the level lever) | OTA AI | Hard | 12 blocks, 120 |
 | `ne`, `hn` | ImpAI Normal, Hard (the level lever) | ImpAI Easy, Normal | Hard | 10 blocks, 100 |
 | `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
+| `m:<row>`, `n:<row>` | ImpAI Hard; ImpAI on Normal's row (the persona lever) | ImpAI on a persona row (the persona lever) | Hard | 10 blocks, 100, on the development pool |
 | `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
 | `dry` | OTA AI | OTA AI | Hard | 10 |
 
@@ -70,11 +71,51 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   194.4 s (*The rate*).
 - **The persona rows**: the calibration ladder L0 (softest) to L5 (Hard's, no limits), each the nine integers the
   persona lever `tagpu_impai_persona.on` takes (`level_lever.py --persona`; L1 and L3 are the DLL's Easy and
-  Normal, `IMPAI_PERSONAS` in `impai_react.c`), in `PERSONA_ROWS`. A calibration game writes its seat's row to
+  Normal, `IMPAI_PERSONAS` in `impai_react.c`), in `PERSONA_ROWS`. A game on a row writes its seat's row to
   that lever beside the level lever's `hard`, and could not run unless the seat's `impai: persona` line at its init
   names the same nine integers `from=lever`. Each result carries every ImpAI seat's persona as logged
   (`persona`). A row between two is a new entry under a new name; a row's games resume and are judged only on its
-  own nine integers.
+  own nine integers. The fields, in the lever's order: the economy's and the military's looks (ticks between
+  decisions, multiples of 15 up to 150), the reaction (ticks from a decision to its orders, at most the shorter
+  look less 15), each manager's budget (actions a minute and burst), and its attention (builders busy at once,
+  operations at once); a budget or attention of 0 is no limit ([the brain](brain.html), *The plan and the
+  personas*). The rows beyond L0..L5:
+
+  | row | look eco, mil | react | apm/burst eco, mil | att eco, mil | what it is |
+  |---|---|---|---|---|---|
+  | L01 | 75, 120 | 60 | 7/2, 10/2 | 3, 1 | between L0 and L1 |
+  | L0a | 105, 150 | 90 | 3/1, 4/1 | 2, 1 | below L0 on every axis it can go below |
+  | L0b | 150, 150 | 135 | 2/1, 3/1 | 1, 1 | below L0a: the lever's harshest looks, reaction and attention |
+  | Hlook | 150, 150 | 0 | none | none | Hard with L0b's looks alone |
+  | Hreact | 150, 150 | 135 | none | none | Hlook with L0b's reaction: against Hlook, the reaction's own cost |
+  | Happm | 15, 30 | 0 | 2/1, 3/1 | none | Hard with L0b's budgets alone |
+  | Hatt | 15, 30 | 0 | none | 1, 1 | Hard with L0b's attention alone |
+
+  The military's look 150 and attention 1 are the lever's limits already at L0, so L0a goes below it on the
+  others; the reaction cannot be cut alone, since it needs a look 15 longer, hence Hreact beside Hlook.
+- **The mirror**: against OTA AI at Hard every row from L0 to L5 took 0.53 to 0.74 of the points with no
+  gradient, and Hard against Normal was futile (`hn` 33 won, 34 lost, 33 at the cap; MEASURED 2026-11-15, round 3
+  at 57d39d71), so the levels are separated by ImpAI against ImpAI. `m:<row>` puts ImpAI on the row as B against
+  ImpAI Hard as A; `n:<row>` puts A on Normal's row (`NORMAL_ROW`, the DLL's L3 until the calibration chooses
+  one), through the lever too, so that once Normal is chosen it decides Easy. Every ImpAI seat sits at the level
+  lever's `hard`, its row from the persona lever and checked `from=lever`. A mirror pair plays 10 blocks on the
+  development pool, so no row is chosen on the maps that judge it, and is judged as `ne` and `hn` are: A's wins
+  of its first 100, the curtailment and the ordering. MEASURED 2026-11-15, the 57d39d71 build, the first two
+  blocks of four rows (20 games each; won counts a cap won by value):
+
+  | pair | A won | A lost | at the cap: A, B, drawn | points | t over map means |
+  |---|---|---|---|---|---|
+  | `m:L1` | 15 | 2 | 5, 2, 1 | 0.775 | 1.98 |
+  | `m:L0b` | 14 | 0 | 1, 0, 6 | 0.850 | 3.81 |
+  | `m:Hlook` | 10 | 3 | 2, 1, 6 | 0.650 | 2.06 |
+  | `m:Happm` | 15 | 0 | 4, 0, 5 | 0.875 | 4.74 |
+
+  No row loses 90 of 100 to Hard at this rate: even L0b, the harshest, drew 6 of its 20 at the cap, every one on
+  Steel Jungle or Lava Alley, where 24 of the 33 caps of the four rows lie. Of the axes, on 20 games a row, the
+  budgets cost B the most -- alone (Happm) as much as every axis at L0b's harshness -- and the looks the least
+  (Hlook). Two blocks are no look of the ordering, so these t judge nothing. Each row played as one `bar.py play`
+  at 10 lanes in 6.6 to 9.4 min on the reference setup. The draws on those two maps are a weakness of the brain's,
+  so the rows are chosen in the mirror on the brain that ships, once its fix has landed.
 
 - **The seed**: each game's own, a function of its id alone -- the first four bytes of the SHA-256 of
   `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
@@ -93,8 +134,8 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
   under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large). These five
   judge (`BAR_MAPS`). **The development pool** (`DEV_MAPS`), each the runner-up of its kind in the same survey, is
-  where the calibration rows play and the tuning tournament's tier B: **Acid Foursome** (land, 3 % under sea),
-  **Steel Jungle** (mixed, 44 %), **Luschaven** (sea, 65 %), **Gasplant Plain** (small), **Lava Alley** (large).
+  where the calibration rows and the mirror play and the tuning tournament's tier B: **Acid Foursome** (land, 3 %
+  under sea), **Steel Jungle** (mixed, 44 %), **Luschaven** (sea, 65 %), **Gasplant Plain** (small), **Lava Alley** (large).
   MEASURED 2026-11-14: each of the five reads ten start positions from its `.ota` through tavfs, and
   `bar-p:L0-acidfoursome-ac-1` played on Acid Foursome to its cap.
 - **A game**: `scenarios/impai/bar.json` filled -- an idle human with no unit, the two players in seats 1 and 2,
@@ -245,15 +286,16 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
       with a stall. A calibration row: its 4 blocks' points read against both -- above Easy's band a harsher row,
       below it a softer one; below Normal's floor a softer row -- and no verdict, since one row can be a candidate
       for either level.
-    - `ne`, `hn`: 90 wins of their first 100 games. **The curtailment**: at the 11th of those not won the pair has
-      failed for certain; `judge` says so whatever is left, and `play` starts none of the pair's games after it
-      (`--no-curtail` plays on).
-    - **The ordering**, for `ne` and `hn`, printed beside the ladder and judging nothing (the verdict left if the
+    - `ne`, `hn` and the mirror's pairs: 90 wins of their first 100 games. **The curtailment**: at the 11th of
+      those not won the pair has failed for certain; `judge` says so whatever is left, and `play` starts none of
+      the pair's games after it (`--no-curtail` plays on).
+    - **The ordering**, for the same pairs, printed beside the ladder and judging nothing (the verdict left if the
       ladder is relaxed): three looks at the pair's first 4, 8 and 12 blocks, each the t of the map means against
       a share of ½ and the O'Brien–Fleming t bound of a two-sided 10 % test over three looks on five maps (6.398,
       3.099, 2.253; on ten maps 4.010, 2.458, 1.918; `OBF_T`, which the venv's test checks by integrating the
       joint normal). "better" or "worse" at the bound, "futile" at an earlier look whose conditional power under
-      the current trend is below 0.20, read to the first look that gives one.
+      the current trend is below 0.20, read to the first look that gives one. Before the first look it prints the
+      t of the blocks complete, which judges nothing.
 - **The row checks**: `bar.py check b4|b5 DIR…` scores A2b's rows (the A2 specification's section 9) from the
   results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound -- b4 27 000, at least
   four games on two maps; b5 36 000, a game on each of the five maps. `bar.py row b4|b5 --lanes L [--out DIR]`
@@ -343,38 +385,45 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   partner, an id twice in one arm or a game that could not run, and the test could not judge.
 - **The test**: a GSPRT on the mean pair score, the normal approximation engine-testing frameworks use: over n
   pairs of mean m and variance v, LLR = n (s1 − s0)(2m − s0 − s1) / (2v), against ±ln 19 (±2.944, α = β = 0.05).
-  **IMPROVE** (a change meant to make ImpAI stronger) tests s = 0.50 against s = 0.55: accept, TEST is better;
-  reject, it is not measurably better. **NOT-WORSE** (a fix batch) tests s = 0.45 against s = 0.50: accept, TEST
-  is not worse -- the batch's pass; reject, it is worse. A tie stays in at 0.5 and lowers v, so a run of ties is
+  **IMPROVE** (a change meant to make ImpAI stronger) tests s = 0.50 against s = 0.60: accept, TEST is better;
+  reject, it is not measurably better. **NOT-WORSE** (a fix batch) tests s = 0.40 against s = 0.50: accept, TEST
+  is not worse -- the batch's pass; reject, it is worse. The hypotheses are 0.10 apart because the test's job is
+  a clear slowdown, not a 5-point one: a batch already fails on any loss in the regression set and the 40 `hota`
+  games, and the full bar runs at milestones. A tie stays in at 0.5 and lowers v, so a run of ties is
   evidence that the arms play alike; a sign test that drops ties cannot decide identical code at all. The ratio
   is read after each whole block, in order: the first block at which it reaches a bound decides, and the blocks
   after it are not read; with all 200 pairs read and no bound reached the verdict is NO DECISION. The verdict is
   a function of the results alone.
 - **The floor**: m and v are taken over the pairs and one pseudo-pair, half a pair better and half worse. It moves
-  no mean and gives v the spread of one non-tied pair, so a run with no pair or all ties divides by no zero, and
-  one block cannot decide: n ties read ±0.005 (n + 1)², 1.44 at 16, the bound first at 24, 5.45 at 32. A whole
-  pseudo-pair each way would read 2.89 at 32 ties, and identical code would take a third block.
-- **The cost**, simulated (`margin.py asn`: 2000 seeded runs a row, blocks of 16, every row in its output), by the
-  true mean score and the share of pairs tied. NOT-WORSE, at its hypotheses' midpoint 0.475 and at 0.50 (a batch
-  that changes nothing measurable); IMPROVE at 0.50 and at its midpoint 0.525 mirror these within the simulation's
-  noise, accept and reject swapped:
+  no mean and gives v the spread of one non-tied pair, so a run with no pair or all ties divides by no zero. n
+  ties read ±(s1 − s0)² (n + 1)² / 0.5: at the width of 0.10 the bound is first reached at 12 ties (±5.78 at 16).
+- **The minimum sample**: the ratio is not read before block 2 (`MIN_BLOCKS`), whatever it reads at block 1: one
+  block of 16 seeds is too few to call a change not worse even when every game ties.
+  So identical code accepts NOT-WORSE at block 2 (±21.78), and so does any run whose first block is already past a
+  bound -- 16 pairs worse read −25.05 at block 1 and reject at block 2.
+- **The cost**, simulated (`margin.py asn`: 2000 seeded runs a row, blocks of 16, the minimum sample included,
+  every row in its output), by the true mean score and the share of pairs tied. NOT-WORSE, from a clear slowdown
+  (0.40, H0) through its hypotheses' midpoint 0.45 to a batch that changes nothing measurable (0.50, H1); IMPROVE
+  mirrors it, accept and reject swapped (at 0.50 with 0.3 tied: reject 0.866, no decision 0.108, 106 pairs; at
+  its midpoint 0.55, 0.372 no decision):
 
   | true mean, ties | accept | reject | no decision at 200 | pairs played | pairs, no cap |
   |---|---|---|---|---|---|
-  | 0.475, 0.3 | 0.061 | 0.073 | 0.866 | 193 | 697 |
-  | 0.475, 0.6 | 0.157 | 0.155 | 0.688 | 178 | 432 |
-  | 0.500, 0.0 | 0.117 | 0.007 | 0.875 | 194 | 588 |
-  | 0.500, 0.3 | 0.231 | 0.009 | 0.759 | 186 | 418 |
-  | 0.500, 0.6 | 0.512 | 0.023 | 0.465 | 162 | 246 |
-  | 0.500, 0.9 | 0.963 | 0.011 | 0.026 | 76 | 78 |
-  | 0.550, 0.3 | 0.823 | 0.000 | 0.177 | 140 | 151 |
-  | 0.600, 0.3 | 0.995 | 0.001 | 0.005 | 87 | 87 |
+  | 0.400, 0.3 | 0.029 | 0.864 | 0.108 | 103 | 112 |
+  | 0.425, 0.3 | 0.112 | 0.620 | 0.269 | 130 | 165 |
+  | 0.450, 0.0 | 0.231 | 0.278 | 0.492 | 158 | 280 |
+  | 0.450, 0.3 | 0.294 | 0.316 | 0.390 | 144 | 216 |
+  | 0.450, 0.6 | 0.421 | 0.402 | 0.177 | 114 | 136 |
+  | 0.500, 0.0 | 0.728 | 0.041 | 0.232 | 130 | 156 |
+  | 0.500, 0.3 | 0.860 | 0.034 | 0.107 | 104 | 113 |
+  | 0.500, 0.6 | 0.946 | 0.033 | 0.022 | 73 | 74 |
+  | 0.500, 0.9 | 0.999 | 0.002 | 0.000 | 36 | 36 |
+  | 0.550, 0.3 | 0.997 | 0.002 | 0.002 | 64 | 64 |
 
-  Hypotheses 0.05 apart need about 420 pairs at a third of pairs tied to decide a batch that changes nothing, so
-  the 200-pair cap ends most such runs with NO DECISION: 76 % at 0.50, 87 % at the midpoint. Wider hypotheses or
-  a larger α cut it (`asn --width`, `--alpha`; at 0.50 with 0.3 tied, no cap): width 0.06, 285 pairs; α = β =
-  0.1, 294; both, 204; width 0.10, 115; width 0.10 and α = β = 0.1, 87. With few non-tied pairs the normal
-  approximation errs a little above α: 0.067 at 0.45 with 0.9 tied.
+  A batch that changes nothing, with a third of pairs tied, decides in about 7 blocks (104 pairs) and ends at the
+  200-pair cap with NO DECISION 11 % of the time; at the midpoint, 39 %. `asn --width` and `--alpha` price other
+  hypotheses (at 0.50 with 0.3 tied, no cap: width 0.05, 418 pairs; width 0.10 with α = β = 0.1, 87). At the
+  hypotheses both errors stay below α in every simulated row of both modes, at most 0.041.
 - **Reported, not judged**: the paired mean of ln(`end_tick`), TEST − BASE, over the pairs both arms won; and
   the paired mean of ln(value A / value B) at GameTimes 15 000 and 30 000, from the results' `values` (`bar.py
   play --values`, which `run` asks: each seat's value at each GameTime the game reached before its end, read from
@@ -386,17 +435,19 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   7, default 6: a GDI lane weighs 2 of the run lock's 28 slots, so two arms of 7 fill it), judges after each, and
   stops at a verdict, at the end of the order or after the order's first N blocks (a run in pieces: the next
   resumes it, its games played skipped). A block with a game that could not run is played once more. It is one
-  runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`).
+  runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`). Each block is
+  one admission of the run lock an arm, both arms at once, and about 5 min of play at 6 lanes an arm on the
+  reference setup; a run is as many of those as it takes to decide, about 7 for a batch that changes nothing.
 - **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the mean score, the ratio by block, its
   bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
   decision.
 - **Identical code**: a seed replays a game exactly, so the same DLL in both arms ties every pair, and the test
-  accepts NOT-WORSE (rejects IMPROVE) at the second block. MEASURED 2026-11-15, the 57d39d71 build as BASE and
-  TEST, NOT-WORSE, at 4 lanes an arm: 32 pairs, 32 ImpAI wins an arm, all 32 on the same `end_tick` (27 556 to
-  74 829) with the same values; ratio +1.45 after block 1, +5.45 after block 2, TEST is not worse. Played again
-  from nothing at 6 lanes an arm, every game ended on the same tick as before and the verdict was the same; the
-  two blocks played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters
-  play diverges its games from the first different decision, so its pairs tie only when both reach the cap.
+  accepts NOT-WORSE (rejects IMPROVE) at the minimum sample, block 2. MEASURED 2026-11-15, the 57d39d71 build as
+  BASE and TEST, NOT-WORSE, two blocks at 4 lanes an arm and again from nothing at 6: 32 pairs, 32 ImpAI wins an
+  arm, all 32 on the same `end_tick` (27 556 to 74 829) with the same values in both arms and both runs. Judged
+  as above, +5.78 after block 1 (not read) and +21.78 after block 2, TEST is not worse; the blocks at 6 lanes
+  played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters play diverges
+  its games from the first different decision, so its pairs tie only when both reach the cap.
 
 ## When the default flips
 

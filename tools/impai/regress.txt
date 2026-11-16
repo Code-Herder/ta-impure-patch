@@ -1,0 +1,30 @@
+# ImpAI's regression set: the games a brain batch must still win, every one (tools/impai/batch.py).
+# One game a line: its bar id, then the setup it plays on (tools/compat/setups.json), none for the base game.
+# The games each brain batch has been verified on since d665a00a: the fourteen verification games, the extras
+# that capped or fell at an earlier build, and ProTA's two (research/notes/impai/testing.md, *Per brain batch
+# and at milestones*). A game replays exactly from its seed, so a game is listed once.
+
+# the fourteen verification games
+bar-eota-pincushion-ac-1
+bar-eota-troutfarm-cc-1
+bar-eota-troutfarm-cc-2
+bar-hota-redtriangle-aa-2
+bar-hota-redtriangle-ac-1
+bar-hota-redtriangle-ac-2
+bar-hota-troutfarm-aa-2
+bar-hota-troutfarm-ac-1
+bar-hota-troutfarm-ca-1
+bar-nota-troutfarm-aa-2
+bar-nota-troutfarm-ca-2
+bar-eota-redtriangle-ac-2
+bar-hota-troutfarm-aa-1
+bar-nota-plainspasses-ca-2
+
+# the extras (eota-troutfarm-cc-1 and hota-troutfarm-aa-1, extras too, are above)
+bar-eota-lavamania-ac-2
+bar-hota-pincushion-ac-2
+bar-hota-pincushion-ca-2
+
+# ProTA
+bar-nota-lavamania-ca-1 prota-4.8
+bar-nota-pincushion-ac-2 prota-4.8
