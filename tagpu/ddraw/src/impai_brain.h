@@ -36,6 +36,7 @@ typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
+#define IMPAI_MR_MEMO      16        /* constructor types THE METAL'S REACH remembers its answer for, a decision */
 #define IMPAI_PLANT_CANDS  16        /* the plant types the plant choice considers (impai_econ.c, THE CHOICE)   */
 #define IMPAI_GATE_TYPES   16        /* the factory types the army orders' gate reads (THE ARMY ORDERS)        */
 /* THE ARMY ORDERS' gated classes are classes 0 .. IMPAI_GATE_K - 1 (IMPAI_GATED, impai.h), the index of the
@@ -208,6 +209,13 @@ typedef struct IMPAI_DEC {
                                    the search reaches FAR_PATCH_K x comm_r, the commander as far           */
     uint8_t       sea_able;     /* in THE FINISH AT SEA, a builder offers a sea plant (impai_econ_sea_able)  */
     uint16_t      sea_type;
+    /* THE METAL'S REACH (impai_econ.c), judged at first use in a decision (mr_done): more patches lie open than the
+       seat has extractors (mr_open); a finished constructor of the seat's reaches one (mr_units); a constructor
+       type on a menu of its finished factories does (mr_make); THE REACHING PLANT stands on the seat's menus, so
+       the further plant is only one (mr_only); the constructor types already judged and their answers */
+    uint8_t       mr_done, mr_open, mr_units, mr_make, mr_only, nmr;
+    uint16_t      mr_type[IMPAI_MR_MEMO];
+    uint8_t       mr_val[IMPAI_MR_MEMO];
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     int           sea_untaken;                  /* a builder was refused the site (THE SITE NO BUILDER TAKES)  */
     int           blast_hit;                    /* THE BLAST'S APPROACH refused the commander a point          */
@@ -355,6 +363,13 @@ void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
 int  impai_econ_sea_able(IMPAI_DEC* d);
+/* THE METAL'S REACH (impai_econ.c): 1 past the seat's first factory when more patches lie open than it has
+   extractors and no constructor it has or its finished factories make reaches one; judges mr_open, mr_units and
+   mr_make on the way */
+int  impai_econ_metal_short(IMPAI_DEC* d);
+/* 1 when a plant on the menus of the seat's builders, placed on its ground, makes a constructor that reaches an
+   open patch (THE METAL'S REACH) */
+int  impai_econ_reach_plant(IMPAI_DEC* d);
 /* one more refusal of the sea plant, at most one a decision and one a fail_t (impai_build.c, THE SEA PLANT) */
 void impai_sea_refusal(IMPAI_DEC* d);
 /* THE REACH ABANDON's limit (impai_brain.c): the farthest, px, a builder of `btype` may stand from the centre of an
@@ -369,6 +384,10 @@ typedef struct IMPAI_MEX { uint16_t dry, wet; int16_t wet_min; } IMPAI_MEX;
 /* impai_build.c: each 1 when the builder was given its order. impai_build_spot: the extractor of `mex` for the
    ground at the patch impai_spot_pick gives */
 int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex);
+/* impai_build.c: the published patches that are open -- free of claims, failures and other players' buildings, on
+   held ground -- with their anchor's block on reach label `label` of class `mclass` (label -1: any) and, with mex,
+   an extractor of mex for their ground (THE METAL'S REACH). BOUND: nspots patches */
+int  impai_patch_open_to(IMPAI_DEC* d, unsigned mclass, int label, const IMPAI_MEX* mex);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` at the ring site nearest the defence's point (d->def_x, d->def_z; impai_econ.c, THE GROUND DEFENCES) */
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

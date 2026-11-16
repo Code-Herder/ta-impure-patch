@@ -1390,6 +1390,21 @@ static int patch_held(IMPAI_DEC* d, int px, int pz)
     return d->in->st->held[k >> 3] >> (k & 7) & 1;
 }
 
+int impai_patch_open_to(IMPAI_DEC* d, unsigned mclass, int label, const IMPAI_MEX* mex)
+{
+    unsigned i;
+    int n = 0;
+    for (i = 0; i < d->in->nspots; i++) {
+        const SNAP_PATCH* p = &d->in->spots[i];
+        const int px = (p->x0 + p->x1 + 1) * 8, pz = (p->z0 + p->z1 + 1) * 8;
+        if (!p->cells || !patch_free(d, p) || !patch_held(d, px, pz)) continue;
+        if (label >= 0 && (!d->in->reach || impai_reach_at(d->in->reach, mclass, p->ax >> 1, p->az >> 1) != label))
+            continue;
+        if (!mex || impai_mex_at(d, mex, px, pz)) n++;
+    }
+    return n;
+}
+
 /* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range; held:
    THE HELD GROUND only; the best patch's extractor into *type when type is not NULL (-1 with mex NULL, 0 with no
    patch) */

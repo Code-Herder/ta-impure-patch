@@ -708,6 +708,24 @@ held) spending about 25-36 metal a second of an income of 56-95, the store full,
 level above the seat's, and the further plant's, scored at the seat's own, only when they find none, so a seat with nothing above its highest tech is not held at its count
 by a tech-up no menu offers. **Gap**: the further plant is the plant choice's at or below the seat's highest tech,
 by its units' values; with no values the least value, a plant of tech 1 while one is the cheapest.
+**The metal's reach** (`impai_econ.c`, THE METAL'S REACH): a constructor type reaches the metal when an open patch
+-- free of claims, failures and other players' buildings, on held ground -- has its anchor block on the label its
+class carries at the base and an extractor of its own menu fits the patch's ground (a water extractor where the
+patch lies deep enough). Past its first factory the seat is **short** while more patches lie open than it has
+extractors (built, framed or ordered) and neither a finished constructor of its own -- the commander apart -- nor a
+constructor its finished factories make reaches one. While it is short and a plant of its build tech or lower on
+its builders' menus makes a constructor that does, that plant is wanted whatever the income (below the factory
+lists' 12), the plant choice's further pass takes only such a plant, whichever rule wanted it, and the governor's
+constructor is one that reaches the metal before one that does not while no finished constructor does. The count is
+the seat's measure of what it is cut off from: a patch on an island against a base holding the rest is not worth a
+plant. **Why**: Steel Jungle's 43 patches are all underwater ore features 64 to 75 below the sea, which the land
+classes' content maps reach none of; in round 3's eight Hard games against the stock AI's Hard there ImpAI's
+amphibious commander took one or two, its lab's and vehicle plant's constructors reached none, and it held one or two
+extractors for the whole game (a metal income of 2.7 to 8.4 a pass at the end) while the stock AI went to sea for
+six (MEASURED 2026-11-15, the patches read over the core's load of the map); the hover plant's constructor reaches
+all of them. **Gaps**: a water-only plant is a candidate only on a wet anchor, so a seat whose only reaching
+constructor comes from a shipyard waits on the sea plant's own rules; the open count is the seat's published
+patches, which a map of many small patches inflates.
 The military's table input `F_TECH` is still its highest factory's tech level over 3, the
 input A3's table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.

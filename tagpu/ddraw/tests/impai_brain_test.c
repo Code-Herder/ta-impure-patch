@@ -10315,6 +10315,112 @@ static void plant_reach(int split)
     s_umil.ebz = 10;
 }
 
+/* THE METAL'S REACH's world: the plant world with one lab standing at cells (30, 30) and an idle CK; the land
+   class's labels 1 everywhere but, when `cut`, 2 at the three patches' anchor blocks, the hover class's 1 whole --
+   no land constructor reaches a patch, the hover plant's CH every one; the estimate at block (50, 10). Income 1 a
+   pass: no plant is wanted for the income. */
+static void mr_world(int cut)
+{
+    const unsigned blocks = (FW_W / 2) * (FW_H / 2);
+    unsigned i;
+    plant_world();
+    for (i = 0; i < blocks; i++) s_plabels[i] = s_plabels[blocks + i] = 1;
+    if (cut)
+        for (i = 0; i < NPATCH; i++) s_plabels[(unsigned)(PATCHES[i].az >> 1) * (FW_W / 2) + (PATCHES[i].ax >> 1)] = 2;
+    memset(&s_reach, 0, sizeof s_reach);
+    s_reach.labels = s_plabels;
+    s_reach.at[0] = 0;
+    s_reach.at[1] = blocks;
+    s_reach.present = 3u;
+    s_reach.bw = FW_W / 2;
+    s_reach.bh = FW_H / 2;
+    s_umil.ebx = 50;
+    s_umil.ebz = 10;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    s_w.econ[0].metal_in = 1;
+}
+
+/* the constructors of `type` queued since log entry `from` */
+static int queued_of(int from, int type)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++) n += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == type;
+    return n;
+}
+
+/* THE METAL'S REACH (impai_econ.c) over the plant world's three patches:
+   (a) no land constructor reaches one, at an income no plant is wanted for: the hover plant, whose CH does;
+   (b) the land class reaching them: no plant;
+   (c) three extractors standing, as many as the open patches: no plant; two: the hover plant;
+   (d) a finished CH: no plant; (e) a hover plant standing: no plant;
+   (f) at the income the second plant is wanted for, the patches cut off: the hover plant, never the lab;
+   (g) the same with the hover plant of build tech 2, past the seat's 1: the lab, THE CHOICE's own;
+   (h) THE GOVERNOR'S CONSTRUCTOR, with no constructor finished, of a lab making the CK and the CH: the CH while
+       the CK reaches no patch, the CK -- the better workertime for its value -- while it does;
+   (i) the extractor water-only, minwaterdepth 20, over the dry patches: the CH reaches them but builds nothing on
+       them, so no plant. */
+static void check_metal_reach(void)
+{
+    static const uint16_t LABMENU2[] = { T_CONS, C_CH, C_AK };
+    IMPAI_BRAIN_OUT out;
+    int n[C_N], c, from;
+    mr_world(1);
+    plant_decide("the reach, the metal cut off", &out, n);
+    CHECK(n[C_HP] == 1 && out.plant == C_HP && out.plant_want == 2 && !n[T_FACTORY] && !n[C_VP],
+          "(a) the metal out of the land constructors' reach: the hover plant");
+    mr_world(0);
+    plant_decide("the reach, the metal reached", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(b) the metal in reach: no plant");
+    for (c = 3; c >= 2; c--) {
+        int k;
+        mr_world(1);
+        for (k = 0; k < c; k++) unit_add(&s_w, 20 + k, T_MEX, 60 + 2 * k, 60, 1);
+        plant_decide(c == 3 ? "the reach, three extractors held" : "the reach, two extractors held", &out, n);
+        CHECK(c == 3 ? !out.plant && !n[C_HP] : out.plant == C_HP && n[C_HP] == 1,
+              "(c) %d extractors against 3 open patches: plant %u", c, out.plant);
+    }
+    mr_world(1);
+    plant_builder(6, C_CH, 24, 26, 0);
+    plant_decide("the reach, a CH finished", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(d) a finished CH reaches the metal: no plant");
+    mr_world(1);
+    unit_add(&s_w, 11, C_HP, 40, 40, 1);
+    plant_decide("the reach, a hover plant standing", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(e) a hover plant standing makes the CH: no plant");
+    mr_world(1);
+    s_w.econ[0].metal_in = 30;
+    plant_decide("the reach, the second plant's income", &out, n);
+    CHECK(out.plant == C_HP && n[C_HP] == 1 && !n[T_FACTORY], "(f) the second plant, the metal cut off: the hover plant");
+    mr_world(1);
+    s_w.econ[0].metal_in = 30;
+    s_ti[C_HP].ctech = 2;
+    plant_decide("the reach, the hover plant past the build tech", &out, n);
+    s_ti[C_HP].ctech = 1;
+    CHECK(out.plant == T_FACTORY && n[T_FACTORY] == 1 && !n[C_HP],
+          "(g) the hover plant past the seat's build tech: the lab, THE CHOICE's own");
+    for (c = 1; c >= 0; c--) {
+        mr_world(c);
+        s_w.unit[4].live = 0;
+        menu_set(&s_w, T_FACTORY, LABMENU2, (int)(sizeof LABMENU2 / sizeof LABMENU2[0]));
+        from = s_w.nlog;
+        plant_decide(c ? "the reach, the governor, the metal cut off" : "the reach, the governor, the metal reached",
+                     &out, n);
+        printf("the reach, the governor, cut %d: CK %d CH %d queued\n", c, queued_of(from, T_CONS),
+               queued_of(from, C_CH));
+        CHECK(c ? queued_of(from, C_CH) == 1 && !queued_of(from, T_CONS)
+                : queued_of(from, T_CONS) == 1 && !queued_of(from, C_CH),
+              "(h) the governor's constructor, cut %d", c);
+    }
+    mr_world(1);
+    s_ti[T_MEX].flags |= IMPAI_TF_WATER;
+    s_w.defs[T_MEX].e.minwater = 20;
+    plant_decide("the reach, the extractor water-only", &out, n);
+    s_ti[T_MEX].flags &= ~IMPAI_TF_WATER;
+    s_w.defs[T_MEX].e.minwater = 0;
+    CHECK(!out.plant && !n[C_HP], "(i) a water-only extractor over dry patches: no plant");
+}
+
 /* THE CHOICE (impai_econ.c) over the seat's menus, the build tech, the reach, the wet anchor and the ties */
 static void check_plant_choice(void)
 {
@@ -13595,6 +13701,7 @@ int main(void)
     check_content_price();
     check_values();
     check_plant_choice();
+    check_metal_reach();
     check_plant_gate();
     check_military();
     check_reads_before_orders();

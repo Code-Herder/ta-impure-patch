@@ -1398,9 +1398,18 @@ static void economy(IMPAI_DEC* d)
         d->plant_e = e_room >= p_e;
         d->plant_e_need = p_e - e_room;
     }
-    /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory */
+    /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory.
+       THE REACHING PLANT (impai_econ.c, THE METAL'S REACH): with no constructor of the seat's reaching the open
+       patches, more of them than its extractors, and a plant on its menus whose constructor does, that plant is
+       wanted whatever the income, below the factory lists' IMPAI_IDLE_CAP, and THE CHOICE's further plant is only
+       such a plant (mr_only) */
     plant_metal = d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
                   ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
+    if (d->count[IMPAI_C_FACTORY] >= 1 && !d->pending[IMPAI_C_FACTORY] && impai_econ_metal_short(d) &&
+        impai_econ_reach_plant(d)) {
+        d->mr_only = 1;
+        plant_metal |= d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
+    }
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
