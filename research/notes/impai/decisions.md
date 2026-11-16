@@ -1433,8 +1433,13 @@ The economy diagnosis of the mod games at d665a00a
   the seat's commander towards an enemy commander it had fled 300 ticks before and could no longer see, and when
   that commander came into sight 393 px off the flight went to the structure farthest from it, across its line, so
   the gap barely opened before the seat's army killed it. The flight now takes the safe point that opens the gap
-  fastest, and for 5 400 ticks after a foe's commander is seen no economy task takes ours nearer to where it was
-  seen while within its blast keep grown by the time since; moving away or across stays free. **What it does not
-  do**: a commander never seen near ours can still arrive unseen; holding ours off every place an unseen commander
+  fastest, and for 600 ticks after a foe's commander is seen -- twice the flight's window, past the 540 the case
+  needed -- no economy task walks ours nearer to where it was seen and to within the flight's own keep; a site
+  within the commander's builddistance walks it nowhere and is never refused, and moving away or across stays
+  free. **Why the walk and the 600, not the site and the hunt's 5 400**: the high review of 4c8727bd..8c7b10a4
+  (MED-1) found the keep, grown over 5 400 ticks, reached about 6 600 px and turned one sighting into a
+  minute-long ban on every site nearer the foe than the commander, a site already in build range among them,
+  each accepted task moving the commander to the back of its comm_r disk, worst in the opening, while it is still
+  the main builder. **What it does not do**: a commander never seen near ours can still arrive unseen; holding ours off every place an unseen commander
   could be would hold it off its own base for most of a game, the economy's first builder lost to a risk the
   sighting already bounds. **Owner's decision wanted** if a stronger rule is preferred.

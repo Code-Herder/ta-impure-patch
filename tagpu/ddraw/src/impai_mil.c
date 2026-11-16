@@ -1711,11 +1711,13 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, in
 /* a range the threat table gives, as data: held to 0..RANGE_MAX */
 static int32_t range_held(int32_t range) { return range < 0 ? 0 : range > RANGE_MAX ? RANGE_MAX : range; }
 
-/* THE SIDE THAT FIGHTS squad s's stay-or-go (tasks) against the contact's member e: its members, and every army
-   unit of another squad holding ATTACK, RAID, DEFEND or FORM that stands within its own reach of e --
-   range_held(range) + REACH_PAD, the reach that engages a contact; *gap the side's front, its unit nearest e (THE
-   FRONT GAP). INVARIANT: no squad is predicted alone beside the seat's units in reach of the same enemy, so two
-   squads at one contact weigh the same units there and go or stay together. WHY: a wave that met the enemy's
+/* THE SIDE THAT FIGHTS squad s's stay-or-go (tasks) against the contact's member e: its members first, and then
+   every army unit of another squad holding ATTACK, RAID, DEFEND or FORM that stands within its own reach of e --
+   range_held(range) + REACH_PAD, the reach that engages a contact, whatever its squad's task is aimed at --;
+   *gap the side's front, its unit nearest e (THE FRONT GAP). INVARIANT: no squad is predicted alone beside the
+   seat's units in reach of its contact's member, and its own members are added before any other's, so a side
+   past SIDE_IN types drops a helper's type, never one of the squad's own. Two squads at one contact are still
+   weighed apart -- each from its own member e and its own front --, so they need not take one answer. WHY: a wave that met the enemy's
    commander and its towers was predicted alone and fell back while another of its layer fought the same contact
    -- 28 of the 35 retreats of bar-hota-pincushion-ca-2 at 1a9350ea had an ATTACK of the same layer within 1 024 px,
    a squad of 41 worth 9 755 beside two worth 9 133, and 414 units against 40 reached the cap (MEASURED 2026-11-15,
@@ -1724,20 +1726,23 @@ static int32_t range_held(int32_t range) { return range < 0 ? 0 : range > RANGE_
 static void side_engaged(const MDEC* d, int s, int16_t e, SIDEIN* out, int32_t* gap)
 {
     uint32_t best = 0x7FFFFFFFu;
-    int k;
+    int k, pass;
     memset(out, 0, sizeof *out);
-    for (k = 0; k < d->narmy; k++) {
-        const MUNIT* u = &d->army[k];
-        const uint32_t y = dist(u->x, u->z, d->en[e].x, d->en[e].z);
-        if (u->sq != s) {
-            unsigned t;
-            if (u->sq >= IMPAI_SQUADS) continue;
-            t = d->st->sq[u->sq].task;
-            if (t != IMPAI_SQ_ATTACK && t != IMPAI_SQ_RAID && t != IMPAI_SQ_DEFEND && t != IMPAI_SQ_FORM) continue;
-            if (y > (uint32_t)range_held(u->range) + REACH_PAD) continue;
+    for (pass = 0; pass < 2; pass++) {
+        for (k = 0; k < d->narmy; k++) {
+            const MUNIT* u = &d->army[k];
+            const uint32_t y = dist(u->x, u->z, d->en[e].x, d->en[e].z);
+            if ((u->sq == s) == pass) continue;
+            if (u->sq != s) {
+                unsigned t;
+                if (u->sq >= IMPAI_SQUADS) continue;
+                t = d->st->sq[u->sq].task;
+                if (t != IMPAI_SQ_ATTACK && t != IMPAI_SQ_RAID && t != IMPAI_SQ_DEFEND && t != IMPAI_SQ_FORM) continue;
+                if (y > (uint32_t)range_held(u->range) + REACH_PAD) continue;
+            }
+            side_add(out, u->type, hp_frac(u));
+            if (y < best) best = y;
         }
-        side_add(out, u->type, hp_frac(u));
-        if (y < best) best = y;
     }
     *gap = (int32_t)best;
 }
@@ -2776,14 +2781,26 @@ static int home_holds(const MDEC* d, int s)
     return d->st->sq[s].task == IMPAI_SQ_DEFEND && d->base_threat && in_anchor_box(d, d->sq[s].x, d->sq[s].z);
 }
 
+/* AT THE RALLY: a FORM squad whose centroid stands within RALLY_PX of the rally point takes no retreat, and no
+   prediction is spent on it: it fights its contact. WHY: a retreat's point is the rally point, so a FORM squad
+   there that lost its prediction became RETREAT, was released to FORM again on arrival in the same decision
+   (release_arrived) and could be predicted again, each round spending a prediction, a retreat and a lost
+   prediction for the lead's evidence while the squad stood where it was (the high review of 4c8727bd..8c7b10a4,
+   LOW-5). A FORM squad farther out still falls back. */
+static int at_rally(const MDEC* d, int s)
+{
+    return d->st->sq[s].task == IMPAI_SQ_FORM && dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX;
+}
+
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
    whatever the contact test finds, so the goal follows what the seat knows. A RAID ends first, before the
    contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known, or on arrival with
    none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
-   RETREAT also when every member has arrived at the rally point (arrived). Then the nearest contact within the
-   squad's reach that has a member entering its stay-or-go (THE STAY-OR-GO, member_counts) is predicted against
-   those members and the defences near it -- below retreat_margin the squad falls back to the rally point,
-   otherwise it fights; a DEFEND squad in the anchor box fights unpredicted (THE HOME HOLDS) --, and a FORM squad
+   RETREAT's members go back to FORM one by one as they arrive at the rally point (release_arrived). Then the
+   nearest contact within the squad's reach that has a member entering its stay-or-go (THE STAY-OR-GO,
+   member_counts) is predicted against those members and the defences near it -- below retreat_margin the squad
+   falls back to the rally point, otherwise it fights; a DEFEND squad in the anchor box (THE HOME HOLDS) and a FORM
+   squad at the rally point (AT THE RALLY) fight unpredicted --, and a FORM squad
    with none forms a wave. A contact with no member that enters is no
    contact for the squad: no retreat test, no fight, and a FORM squad under aircraft it can neither hurt nor
    outrun still forms its wave. Every prediction comes out of the plan's predict_max; a squad left without one
@@ -2854,7 +2871,7 @@ static void tasks(MDEC* d)
             SIDEIN a, b;
             float m;
             const int16_t e = counting_nearest(d, best, &w, d->sq[s].x, d->sq[s].z);
-            if (e >= 0 && !home_holds(d, s)) {
+            if (e >= 0 && !home_holds(d, s) && !at_rally(d, s)) {
                 int32_t gap;
                 side_engaged(d, s, e, &a, &gap);
                 side_contact_counts(d, best, &w, &b);
@@ -3034,7 +3051,7 @@ static int dgun_could(MDEC* d, int c);
    EMPTY HOME is a loss, margin -1, with none. Below retreat_margin the home is losing (MDEC.home_lost, which THE PRESSURE stamps), and unless a
    squad of L is on its way home (MDEC.coming), the ATTACK or RAID squad of L nearest a threat it can hurt -- its
    centroid to the threat's point -- becomes RETREAT (become, so it joins the layer's RETREAT squad when there is
-   one): it travels to the rally point, ends there when every member has arrived (tasks) and goes back to FORM,
+   one): it travels to the rally point, each member going back to FORM as it arrives there (release_arrived),
    which the defence makes DEFEND while a threat it can hurt stands. A RECALLED ATTACK GIVES ITS WAVE BACK when it
    counted (THE WAVE'S COUNT): waves[L] falls by one, held at 0, so a raid that brings a wave home leaves the layer's
    next threshold where it was (THE WAVE).
@@ -3603,46 +3620,77 @@ static void orders(MDEC* d)
 #define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
 #define COM_STAY_MARGIN 0.5f    /* the margin the commander's own side must be predicted to win by for it to stand
                                    (THE STAND) [hand-written: the bar's to move]                               */
-#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so THE BLAST's keep,
-                                       2^20 x (H + H + age) with H at most 150 + 135 and age at most 150, stays
-                                       below 2^20 x 720 < 2^31 (its sum is int64 all the same)                 */
+_Static_assert(IMPAI_BLAST_SEEN_T == 2 * SAFE_TICKS, "the approach holds as long again as the flight's window");
+#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so a blast's keep,
+                                       2^20 x (H + H + age) with H at most 150 + 135 and age at most
+                                       IMPAI_BLAST_SEEN_T 600, stays below 2^20 x 1 170 < 2^31 (its sum is int64 all
+                                       the same)                                                              */
 
 static int32_t speed_held(int32_t s) { return s < 0 ? 0 : s > SPEED_HELD ? SPEED_HELD : s; }
 
-/* THE BLAST'S APPROACH, the economy's half of THE BLAST (commander): 1 when the point (x, z) px lies nearer than the
-   commander at (cx, cz) to the point where a foe's commander was last seen, and within that commander's blast
-   keep grown by the ticks since -- its type's blast_r + BLAST_PAD_PX + its speed over the horizon look_mil + react
-   and the ticks since it was seen -- for IMPAI_DRY_T after the sighting. So no economy task walks the commander
-   towards a commander it fled or could meet within the blast, while the memory says anything of where it is;
-   moving away or across is never refused. WHY: on bar-eota-lavamania-ac-2 at 1a9350ea the seat's commander,
-   handed back 300 ticks after fleeing the enemy's commander seen 1 000 px off, walked 130 px towards where it was
-   seen while the enemy's commander, unseen for 540 ticks, walked 550 px towards it; seen at 393 px, it died to the
-   seat's army 302 ticks later and its blast took the seat's commander with it, 57 units against 14 (MEASURED
-   2026-11-15, the recording's units and s_mil.foe). RESIDUAL: a commander unseen can come from where it was not
-   seen; the military flees one seen within its keep (THE BLAST), straight away (THE FLIGHT). BOUND: WQ_SEATS
-   entries, one def read each. */
+/* THE KEEP from a foe's commander of `type` seen `age` ticks ago, both commanders' speeds sp_own and sp_foe held
+   (speed_held), over THE HORIZON H (commander): its blast_r + BLAST_PAD_PX + the own commander's approach over H
+   and the foe's over H + age, the age held to IMPAI_BLAST_SEEN_T; a foe speed that reads 0 takes the own commander's.
+   THE BLAST and THE BLAST'S APPROACH both keep this, so the flight and the economy read one distance. */
+static uint32_t blast_keep(const IMPAI_TINFO* ti, unsigned type, int32_t sp_own, int32_t sp_foe, uint32_t H, uint32_t age)
+{
+    if (!sp_foe) sp_foe = sp_own;
+    if (age > IMPAI_BLAST_SEEN_T) age = IMPAI_BLAST_SEEN_T;
+    return (uint32_t)ti[type].blast_r + BLAST_PAD_PX +
+           (uint32_t)(((int64_t)sp_own * H + (int64_t)sp_foe * (H + age)) >> 16);
+}
+
+/* THE BLAST'S APPROACH, the economy's half of THE BLAST (commander): 1 when the commander of type `ctype` at
+   (cx, cz) px, sent to work at the point (x, z), would walk nearer to where a foe's commander was seen within the
+   last IMPAI_BLAST_SEEN_T ticks, to within that commander's keep (blast_keep, the flight's own). THE WALK, not the site:
+   the commander works within its builddistance (WQ_DEF.reach) of the point, so a point within that of it walks
+   it nowhere and is never refused, and otherwise it walks straight towards the point until it is that far from
+   it, where the walk ends; the end is what is tested. Moving away or across is never refused. So no economy task
+   walks the commander towards a commander it fled or could meet within the blast while the sighting is recent.
+   WHY: on bar-eota-lavamania-ac-2 at 1a9350ea the seat's commander, handed back 300 ticks after fleeing the
+   enemy's commander seen 1 000 px off, walked 130 px towards where it was seen while the enemy's commander, unseen
+   for 540 ticks, walked 550 px towards it; seen at 393 px, it died to the seat's army 302 ticks later and its
+   blast took the seat's commander with it, 57 units against 14 (MEASURED 2026-11-15, the recording's units and
+   s_mil.foe). WHY IMPAI_BLAST_SEEN_T: the flight holds the commander SAFE_TICKS and the approach as long again after
+   its hand-back, which covers the 540 ticks measured; held to IMPAI_DRY_T instead, the keep grew to about
+   6 600 px at CORCOM's speed and refused every site nearer the foe than the commander for a minute and more (the
+   high review of 4c8727bd..8c7b10a4, MED-1). At most it is blast_r + 64 px + the two commanders' approach over
+   2 H + 600 ticks. RESIDUAL: a commander unseen can come from where it was not seen, or after IMPAI_BLAST_SEEN_T; the
+   military flees one seen within its keep (THE BLAST), straight away (THE FLIGHT); a walk that bends round the
+   ground ends elsewhere than the straight line's end. BOUND: WQ_SEATS entries, a def read each, and the
+   commander's def once. */
 int impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti, unsigned nti,
-                       const IMPAI_PERSONA* p, uint32_t now, int32_t cx, int32_t cz, int32_t x, int32_t z)
+                       const IMPAI_PERSONA* p, uint32_t now, int ctype, int32_t cx, int32_t cz, int32_t x, int32_t z)
 {
     const uint32_t H = p ? p->look_mil + p->react : 0;
+    WQ_DEF def;
+    int32_t sp_own, ex = x, ez = z;
+    uint32_t walk;
     int k;
-    if (!q || !st || !v || !ti) return 0;
+    if (!q || !st || !v || !ti || !q->ops->def(q, ctype, &def)) return 0;
+    walk = dist(cx, cz, x, z);
+    if (walk <= def.reach) return 0;
+    if (def.reach) {
+        ex = cx + (int32_t)((int64_t)(x - cx) * (int64_t)(walk - def.reach) / (int64_t)walk);
+        ez = cz + (int32_t)((int64_t)(z - cz) * (int64_t)(walk - def.reach) / (int64_t)walk);
+    }
+    sp_own = speed_held(def.speed);
     for (k = 0; k < WQ_SEATS; k++) {
         const IMPAI_FOE* f = &st->foe[k];
         const IMPAI_SEEN* r;
-        WQ_DEF def;
-        uint32_t age, keep, y;
-        int32_t px, pz, sp;
-        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || now < f->t || (age = now - f->t) > IMPAI_DRY_T)
+        WQ_DEF fdef;
+        uint32_t age, y;
+        int32_t px, pz;
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || now < f->t || (age = now - f->t) > IMPAI_BLAST_SEEN_T)
             continue;
         r = &v->rows[f->slot].seat[v->seat];
         if (r->type == WQ_NONE || r->type >= nti || ti[r->type].cat != IMPAI_C_COMMANDER) continue;
-        sp = speed_held(q->ops->def(q, (int)r->type, &def) ? def.speed : 0);
         px = f->bx * 32 + 16;
         pz = f->bz * 32 + 16;
-        keep = (uint32_t)ti[r->type].blast_r + BLAST_PAD_PX + (uint32_t)(((int64_t)sp * (H + age)) >> 16);
-        y = dist(x, z, px, pz);
-        if (y <= keep && y < dist(cx, cz, px, pz)) return 1;
+        y = dist(ex, ez, px, pz);
+        if (y <= blast_keep(ti, r->type, sp_own, speed_held(q->ops->def(q, (int)r->type, &fdef) ? fdef.speed : 0), H, age) &&
+            y < dist(cx, cz, px, pz))
+            return 1;
     }
     return 0;
 }
@@ -3656,6 +3704,7 @@ int impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v
 static void release_commander(MDEC* d)
 {
     IMPAI_JOB* j = &d->in->job[d->com];
+    if (j->kind == IMPAI_JOB_RECLAIM) d->out->rc_taken = 1;
     if (j->kind != IMPAI_JOB_NONE && j->kind != IMPAI_JOB_SQUAD) impai_job_end(j);
 }
 
@@ -3773,9 +3822,10 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both over THE HORIZON H = look_mil + react,
       the ticks from this decision until the next one's orders can move the commander -- the own commander's
       speed over H and the foe's over H plus the time since it was seen -- so the gap is still open when the
-      military can act again. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
-      own commander's. It flees straight away (THE FLIGHT), and the economy never walks it nearer to where a foe's
-      commander was seen while it could be within the blast (THE BLAST'S APPROACH, impai_blast_nearer). RESIDUAL: a
+      military can act again (blast_keep, which THE BLAST'S APPROACH keeps too). A speed is the type's maxvelocity
+      held to SPEED_HELD; a foe type whose speed reads 0 takes the own commander's. It flees straight away (THE
+      FLIGHT), and for IMPAI_BLAST_SEEN_T after the sighting the economy never walks it to within the keep nearer to where
+      the foe's commander was seen (THE BLAST'S APPROACH, impai_blast_nearer). RESIDUAL: a
       foe's commander faster than ours can follow it; one unseen can come from where it was not seen, and is fled
       only once seen; other large blasts -- fusion plants, the Krogoth -- are not kept clear of.
    2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
@@ -3829,9 +3879,8 @@ static void commander(MDEC* d)
             continue;
         r = &v->rows[f->slot].seat[v->seat];
         if (r->type == WQ_NONE || r->type >= d->in->nti || d->in->ti[r->type].cat != IMPAI_C_COMMANDER) continue;
-        if (!(sp = speed_held(type_speed(d, r->type)))) sp = sp_own;
-        keep = (uint32_t)d->in->ti[r->type].blast_r + BLAST_PAD_PX +
-               (uint32_t)(((int64_t)sp_own * H + (int64_t)sp * (H + age)) >> 16);
+        sp = speed_held(type_speed(d, r->type));
+        keep = blast_keep(d->in->ti, r->type, sp_own, sp, H, age);
         y = dist(f->bx * 32 + 16, f->bz * 32 + 16, d->com_x, d->com_z);
         if (y <= keep && (foe < 0 || y < foe_d)) {
             foe = k;

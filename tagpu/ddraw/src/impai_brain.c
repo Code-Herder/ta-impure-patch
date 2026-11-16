@@ -315,7 +315,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
     if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type) ||
         (job->help_until && job->help_type != type)) {
-        if (job->type != WQ_NONE && job->type != type && reclaim_job(job)) d->out->harvest_lost++;
+        if (job->type != WQ_NONE && job->type != type && job->kind == IMPAI_JOB_RECLAIM) d->out->harvest_lost++;
         job_clear(job);
     }
     t = &in->ti[type];
@@ -367,6 +367,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
        the window the commander is listed by the ordinary tests and by THE HAND-BACK. */
     if (cat == IMPAI_C_COMMANDER && in->mil &&
         (impai_com_safe(in->mil->safe_until, d->now) || impai_com_marked(in->mil->com_until, d->now, in->persona))) {
+        d->com_held = 1;
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
@@ -483,8 +484,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
 
 /* Over the seat's slot block in slot order, bounded by it and by IMPAI_CENSUS_MAX slots, which the engine's
    per-player ceiling never passes (impai.h). A slot whose unit is gone or of another type loses its job, and one
-   whose job was a reclaim or the walk to one counts in IMPAI_BRAIN_OUT.harvest_lost: the harvest's cost in
-   builders. Returns the units counted. */
+   whose job was an ordered reclaim (IMPAI_JOB_RECLAIM) counts in IMPAI_BRAIN_OUT.harvest_lost: the harvest's cost
+   in builders, among the reclaims ordered; a walk to one ordered none. Returns the units counted. */
 static int census(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -496,7 +497,7 @@ static int census(IMPAI_DEC* d)
     for (slot = first; slot <= last; slot++) {
         WQ_UNIT u;
         if (!d->q->ops->unit(d->q, slot, &u)) {
-            if (reclaim_job(&in->job[slot])) d->out->harvest_lost++;
+            if (in->job[slot].kind == IMPAI_JOB_RECLAIM) d->out->harvest_lost++;
             if (job_held(&in->job[slot])) job_clear(&in->job[slot]);
             continue;
         }
@@ -1507,6 +1508,14 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
         impai_sea_untaken(d);
         impai_econ_factories(d);
         if (d->contested) st->root_turn = 1;
+    }
+    /* THE COMMANDER'S IDLE SHARE, for the log: a commander outside the military's window that ends the decision
+       with no job is the economy's and given nothing, which THE BLAST'S APPROACH and THE COMMANDER'S SAFE DISTANCE
+       can cause */
+    out->blast_refused = (uint8_t)d->blast_hit;
+    if (d->commander.slot && !d->com_held) {
+        out->com_free = 1;
+        out->com_idle = in->job[d->commander.slot].kind == IMPAI_JOB_NONE;
     }
     out->sites = (uint16_t)d->sites;
     out->snaps = (uint16_t)d->snaps;

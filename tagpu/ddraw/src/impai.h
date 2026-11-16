@@ -848,10 +848,10 @@ typedef struct IMPAI_BRAIN_OUT {
        decision; the finished factories the census found idle, and all of them (impai_brain.c, census) */
     uint8_t  e_empty;
     uint16_t f_idle, f_all;
-    uint16_t stall_taken;               /* reclaimers THE STALL TAKES THE RECLAIMERS gave the stall's energy
-                                           (impai_econ.c, impai_econ_assign)                                   */
-    uint16_t harvest_lost;              /* builders the census found gone -- the slot empty or another type's --
-                                           while their job was a reclaim or the walk to one (impai_brain.c)     */
+    uint16_t stall_taken;               /* ordered reclaimers (IMPAI_JOB_RECLAIM) THE STALL TAKES THE
+                                           RECLAIMERS gave the stall's energy (impai_econ.c, impai_econ_assign) */
+    uint16_t harvest_lost;              /* builders the census found gone -- another type's in the slot --
+                                           while their job was an ordered reclaim (impai_brain.c)               */
     uint16_t rc_turned, rc_given_up, rc_replaced, rc_gone, rc_unsafe;
                                         /* how the ordered reclaims (IMPAI_JOB_RECLAIM, counted in `reclaims`)
                                            ended other than by the stall or a loss (impai_brain.c, THE RECLAIM'S
@@ -861,6 +861,11 @@ typedef struct IMPAI_BRAIN_OUT {
                                            COMMANDER'S SAFE DISTANCE refused, which ordered none               */
     uint16_t turn_unspent;              /* the factories' turns whose root the factories did not spend
                                            (impai_brain.c, THE FACTORIES' TURN)                                 */
+    uint8_t  blast_refused;             /* 1 when THE BLAST'S APPROACH refused the commander a point
+                                           (impai_build.c, cmd_refused)                                         */
+    uint8_t  com_free, com_idle;        /* 1 when the commander lives outside the military's window; and when,
+                                           so, it ends the decision with no job (impai_brain.c, THE COMMANDER'S
+                                           IDLE SHARE)                                                          */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;

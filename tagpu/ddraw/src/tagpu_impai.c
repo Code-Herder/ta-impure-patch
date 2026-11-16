@@ -1531,7 +1531,8 @@ static struct {
     unsigned e_empty[PLAYER_COUNT], f_idle[PLAYER_COUNT], f_all[PLAYER_COUNT], stall_taken[PLAYER_COUNT];
     unsigned harvest_lost[PLAYER_COUNT];
     unsigned rc_turned[PLAYER_COUNT], rc_given_up[PLAYER_COUNT], rc_replaced[PLAYER_COUNT], rc_unsafe[PLAYER_COUNT];
-    unsigned rc_gone[PLAYER_COUNT], turn_unspent[PLAYER_COUNT];
+    unsigned rc_gone[PLAYER_COUNT], turn_unspent[PLAYER_COUNT], blast_refused[PLAYER_COUNT], com_free[PLAYER_COUNT];
+    unsigned com_idle[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1840,6 +1841,9 @@ static void impai_decide(int seat)
     s_play.rc_unsafe[seat] += out.rc_unsafe;
     s_play.rc_gone[seat] += out.rc_gone;
     s_play.turn_unspent[seat] += out.turn_unspent;
+    s_play.blast_refused[seat] += out.blast_refused;
+    s_play.com_free[seat] += out.com_free;
+    s_play.com_idle[seat] += out.com_idle;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1867,6 +1871,7 @@ static struct {
     unsigned press[PLAYER_COUNT];
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
     unsigned stalled[PLAYER_COUNT], lead_t[PLAYER_COUNT];    /* goals given up; the GameTime the lead first held */
+    unsigned rc_taken[PLAYER_COUNT];    /* the commander's ordered reclaims a military order ended (rc_military=) */
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2078,14 +2083,19 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    (`finish_rows=`, impai_econ.c army_rows); the decisions with the energy store below IMPAI_E_EMPTY of its storage
    (`e_empty=`, of `decisions=`), and the finished factories the censuses found idle and in all (`f_idle=`,
    `f_all=`: the idle share is their ratio); the reclaimers THE STALL TAKES THE RECLAIMERS gave the stall's energy
-   (`stall_taken=`, impai_econ.c); the builders the census found gone while on a reclaim or the walk to one
-   (`harvest_lost=`, impai_brain.c, census); how the ordered reclaims ended otherwise: turned back from threat
-   (`rc_turned=`, THE WALK CHECK), given up (`rc_given_up=`), replaced by another hand's order (`rc_replaced=`) and
-   the feature seen gone (`rc_gone=`, THE RECLAIM'S CHECK: paid to the seat, which `reclaimed=` counts, or taken by
-   anything else) -- with `stall_taken=`, `harvest_lost=` and the jobs open at the game's end they make up
-   `reclaims=`, so the completion rate is `reclaimed=` against `reclaims=` less `stall_taken=`; the walks whose
-   arrival THE COMMANDER'S SAFE DISTANCE refused (`rc_unsafe=`), which ordered no reclaim; the factories' turns that
-   spent nothing (`turn_unspent=`, impai_brain.c THE FACTORIES' TURN); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
+   (`stall_taken=`, impai_econ.c), the ordered reclaims among them; the builders the census found gone while on an
+   ordered reclaim (`harvest_lost=`, impai_brain.c, census), which counts the builders the game's end removes too;
+   how the ordered reclaims ended otherwise: turned back from threat (`rc_turned=`, THE WALK CHECK), given up
+   (`rc_given_up=`), replaced by another hand's order (`rc_replaced=`), the feature seen gone (`rc_gone=`, THE
+   RECLAIM'S CHECK: paid to the seat, which `reclaimed=` counts, or taken by anything else) and ended by an order
+   of the military's to the commander (`rc_military=`, impai_mil.c release_commander) -- with `stall_taken=`,
+   `harvest_lost=` and the jobs open at the game's end they make up `reclaims=`, so the completion rate is
+   `reclaimed=` against `reclaims=` less `stall_taken=`; the walks whose arrival THE COMMANDER'S SAFE DISTANCE
+   refused (`rc_unsafe=`), which ordered no reclaim; the factories' turns that spent nothing (`turn_unspent=`,
+   impai_brain.c THE FACTORIES' TURN); the decisions in which THE BLAST'S APPROACH refused the commander a point
+   (`blast_refused=`, impai_build.c cmd_refused), and those that ended with the commander outside the military's
+   window and given no job (`com_idle=`) of those it lived outside it (`com_free=`: the idle share is their ratio);
+   the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
    the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and the
    waves each layer formed and the waves reset (`waves_l=`, `waves_s=`, `waves_a=`, `wave_resets=`). */
 static void impai_play_end(const char* ta, unsigned now)
@@ -2107,7 +2117,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
                    "pressed=%u poor=%u hold=%u held=%u released=%u yard=%u yard_left=%u help_refused=%u "
                    "makers_off=%u makers_on=%u finish_rows=%u e_empty=%u f_idle=%u f_all=%u stall_taken=%u harvest_lost=%u "
-                   "rc_turned=%u rc_given_up=%u rc_replaced=%u rc_gone=%u rc_unsafe=%u turn_unspent=%u",
+                   "rc_turned=%u rc_given_up=%u rc_replaced=%u rc_gone=%u rc_unsafe=%u rc_military=%u turn_unspent=%u "
+                   "blast_refused=%u com_idle=%u com_free=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2119,7 +2130,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.yard_left[i], s_play.help_refused[i], s_play.makers_off[i], s_play.makers_on[i],
                    s_play.finish_rows[i], s_play.e_empty[i], s_play.f_idle[i], s_play.f_all[i],
                    s_play.stall_taken[i], s_play.harvest_lost[i], s_play.rc_turned[i], s_play.rc_given_up[i],
-                   s_play.rc_replaced[i], s_play.rc_gone[i], s_play.rc_unsafe[i], s_play.turn_unspent[i]);
+                   s_play.rc_replaced[i], s_play.rc_gone[i], s_play.rc_unsafe[i], s_milp.rc_taken[i],
+                   s_play.turn_unspent[i], s_play.blast_refused[i], s_play.com_idle[i], s_play.com_free[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
@@ -2373,6 +2385,7 @@ static void impai_mil_turn(int seat)
     s_milp.cross[seat] += out.cross;
     s_milp.press[seat] += out.press;
     s_milp.stalled[seat] += out.stalled;
+    s_milp.rc_taken[seat] += out.rc_taken;
     if (out.lead && !s_milp.lead_t[seat]) {
         const unsigned now = (unsigned)q.ops->gametime(&q);
         s_milp.lead_t[seat] = now ? now : 1u;

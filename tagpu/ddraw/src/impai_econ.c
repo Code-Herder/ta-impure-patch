@@ -1037,14 +1037,16 @@ void impai_econ_assign(IMPAI_DEC* d)
          i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         const IMPAI_JOB* j = &in->job[b->slot];
-        int t, n;
+        int t, n, ordered;
         if (d->jobbed_idle[i] || (j->kind != IMPAI_JOB_RECLAIM && j->kind != IMPAI_JOB_RECLAIM_GO) || j->since == d->now)
             continue;
+        /* read before the build replaces the job: stall_taken counts the ordered reclaims, not the walks to one */
+        ordered = j->kind == IMPAI_JOB_RECLAIM;
         n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
         if (n > 0 && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;
             d->assigned++;
-            d->out->stall_taken++;
+            if (ordered) d->out->stall_taken++;
         }
     }
     /* the busy builders the decision leaves; the helpers' new tasks below change no count */

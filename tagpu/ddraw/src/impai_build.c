@@ -571,8 +571,9 @@ void impai_ways_keep(IMPAI_DEC* d)
    point -- a build's footprint centre in build_at, the target of an assist or a walk in order_mode, a reclaim's
    feature centre in reclaim_order -- so no task path, present or added, sends it there. order_mode's moves of
    no job, the turn back and the yard's step, leave danger or a yard and are never refused. THE BLAST'S APPROACH
-   is refused with it (impai_mil.c, impai_blast_nearer): a point nearer than the commander to where a foe's
-   commander was seen, within its blast keep grown by its age. The searches skip such a point themselves through
+   is refused with it (impai_mil.c, impai_blast_nearer): a walk to the point -- to the commander's builddistance
+   of it -- that ends nearer than the commander now to where a foe's commander was seen within IMPAI_BLAST_SEEN_T, and
+   within its blast keep; a point within the builddistance walks nowhere. The searches skip such a point themselves through
    the same test -- the ring, the spot (spot_pick), the assist, the reclaim, the sea plant's site --
    so another candidate is taken; and a walk to a remembered feature the draw shows there ends with no
    failure (impai_brain.c, THE RECLAIM'S CHECK).
@@ -649,13 +650,18 @@ static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
 }
 
 /* 1 when b is the commander and THE COMMANDER'S SAFE DISTANCE refuses it the point (x, z), px, or THE BLAST'S
-   APPROACH does (impai_mil.c): a point nearer a foe's commander it could meet within the blast */
+   APPROACH does (impai_mil.c): a walk to the point that would take it nearer a foe's commander it could meet within
+   the blast; the decision's blast_hit marks the second, for the log's blast_refused= */
 static int cmd_refused(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    return in->ti[b->type].cat == IMPAI_C_COMMANDER &&
-           (cmd_unsafe(d, x, z) || impai_blast_nearer(d->q, in->mil, in->view, in->ti, in->nti, in->persona, d->now,
-                                                      b->pos[0] >> 16, b->pos[2] >> 16, x, z));
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return 0;
+    if (cmd_unsafe(d, x, z)) return 1;
+    if (!impai_blast_nearer(d->q, in->mil, in->view, in->ti, in->nti, in->persona, d->now, b->type, b->pos[0] >> 16,
+                            b->pos[2] >> 16, x, z))
+        return 0;
+    d->blast_hit = 1;
+    return 1;
 }
 
 /* the footprint centre of `type` at first cell (cx, cz) lies within `reach` px of the anchor */

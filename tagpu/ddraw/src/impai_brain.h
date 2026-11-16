@@ -198,6 +198,8 @@ typedef struct IMPAI_DEC {
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     int           sea_untaken;                  /* a builder was refused the site (THE SITE NO BUILDER TAKES)  */
+    int           blast_hit;                    /* THE BLAST'S APPROACH refused the commander a point          */
+    int           com_held;                     /* the commander is the military's (THE COMMANDER'S WINDOW)    */
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;

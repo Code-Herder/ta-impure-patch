@@ -264,10 +264,15 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    entering the squad's **stay-or-go** is predicted against those members and the defences near it (the fight
    predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
    (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **The side
-   that fights** is the squad's members and every army unit of another ATTACK, RAID, DEFEND or FORM squad that
-   stands within its own range + 384 of the contact's member nearest the squad, so no squad is predicted alone
-   beside the seat's units fighting the same enemy, and two squads at one contact go or stay together; a RETREAT
-   is leaving and a SCOUT is one scout, so neither counts. **Why**: 28 of the 35 retreats of
+   that fights** is the squad's members first, then every army unit of another ATTACK, RAID, DEFEND or FORM squad
+   that stands within its own range + 384 of the contact's member nearest the squad, whatever its own squad is
+   doing, so no squad is predicted alone beside the seat's units in reach of the same enemy, and a side past the
+   predictor's 64 types drops a helper's type before one of the squad's own. Two squads at one contact are still
+   weighed apart, each from its own nearest member and front, so they need not take one answer; a RETREAT is
+   leaving and a SCOUT is one scout, so neither counts. **At the rally**: a FORM squad whose centroid stands
+   within 512 px of the rally point takes no retreat and spends no prediction -- the retreat's point is where it
+   stands, and the release on arrival (below) made it FORM again in the same decision, a prediction, a retreat and
+   a lost prediction spent each round. **Why the side**: 28 of the 35 retreats of
    `bar-hota-pincushion-ca-2` at 1a9350ea had an ATTACK of the same layer within 1 024 px -- a squad of 41 worth
    9 755 fell back from the enemy's commander and towers beside two squads worth 9 133 that stayed --, and the
    game reached the cap at 414 units against 40 (MEASURED 2026-11-15, the recording's `s_mil`). **The home
@@ -386,9 +391,16 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
      games ended with both commanders dying in one blast, 17 to 484 px apart. **The flight opens the gap**: of
      the anchor and the own structures within `comm_r`, those at least the keep from the threat are safe, and the
      commander walks to the safe one that opens the gap the most for each px walked, the farthest only when none
-     is safe. **The blast's approach**: for 5 400 ticks after a foe's commander is seen, no economy task walks
-     ours nearer to where it was seen while within its keep grown by the ticks since (`impai_blast_nearer`, the
-     economy's commander refusal and every search's skip); away or across is never refused. **Why**: on
+     is safe. **The blast's approach**: for 600 ticks after a foe's commander is seen (`IMPAI_BLAST_SEEN_T`,
+     twice the flight's window), no economy task walks ours nearer to where it was seen and to within the keep, the
+     flight's own (`blast_keep`) with the age in it held to the same 600 (`impai_blast_nearer`, the economy's
+     commander refusal and every search's skip). It is the walk that is tested, not the site: the commander works
+     within its builddistance of a site, so a site within that walks it nowhere and is never refused, and
+     otherwise the walk ends that far short of the site. Away or across is never refused; `blast_refused=` counts
+     the decisions it refused something, and `com_idle=` of `com_free=` the commander's idle share. **Why 600**:
+     held to the hunt's 5 400 ticks instead, the keep grew to about 6 600 px at CORCOM's speed and turned one
+     sighting into a minute-long ban on every site nearer the foe than the commander, the opening's worst (the high
+     review of 4c8727bd..8c7b10a4, MED-1); the measured case needed 540. **Why**: on
      `bar-eota-lavamania-ac-2` at 1a9350ea the Easy seat's commander, handed back after fleeing the enemy's
      commander seen 1 000 px off, walked 130 px towards where it was seen while that commander, unseen for 540
      ticks, walked 550 px towards it; seen at 393 px, ours fled north to the structure farthest from it, across
@@ -830,7 +842,12 @@ the seat's raids go, and a base not found is anywhere else. Held to that ground,
 the lead began at GameTime 14 857 at 4 987 against 1 833, the seat having stood in 50 of the map's 256 cells; on
 `bar-hota-redtriangle-ac-2` the army had stood in 91 of 256 at 42 000, which holds the floor to 0.64 of the seat's
 base and keeps the lead that game began at 41 527 with 61 744 against 8 349 (MEASURED 2026-11-15, the recordings'
-`s_mil` and `s_known`). **Gaps**: a cell the army cannot stand in -- sea for a land army, lava -- is never looked
+`s_mil` and `s_known`). **How near the truth**: over the fourteen games of the round at 8c7b10a4, sampled every
+3 000 ticks from GameTime 9 000 once a foe was known, the enemy's true value over the seat's estimate had a median
+of 1.04 and a 90th percentile of 7.2 with the floor, against 1.16 and 62 without it (79 samples); on ProTA's
+`bar-nota-pincushion-ac-2` (the broad check at 8c7b10a4) the seat's ratio stayed at most 2.46 and the true one at
+most 2.16, so the lead never began, as the truth says, where the builds before the floor began it at 2.8-4.1 on an
+enemy they underestimated (MEASURED 2026-11-15, the recordings' units, `s_mil` and `s_known`). **Gaps**: a cell the army cannot stand in -- sea for a land army, lava -- is never looked
 over, so on a map mostly out of its reach the floor keeps that share; a cell given up as a goal counts as looked
 over (*the goal's progress*).
 The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: it begins only while the

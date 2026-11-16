@@ -2971,20 +2971,22 @@ static void check_harvest(void)
 
 /* THE STALL TAKES THE RECLAIMERS (impai_econ.c): reclaim_world's metal stall, both builders sent to reclaim at 900;
    at 915 the energy store at 10 % of its storage, an energy stall: each reclaimer is given the wind generator, its
-   job a BUILD, and stall_taken counts them. With the commander's job given at 915 itself (THE RECLAIM'S CHECK's
+   job a BUILD, and stall_taken counts those whose job was an ordered reclaim (IMPAI_JOB_RECLAIM), not a walk to one
+   (RECLAIM_GO), which ordered none. With the commander's job given at 915 itself (THE RECLAIM'S CHECK's
    order on arrival) it keeps its reclaim and the constructor alone is taken; with the store at 50 %, no stall,
    both keep reclaiming. */
 static void check_stall_reclaimers(void)
 {
     static const char* const NAME[3] = { "an energy stall", "the commander's job given now", "no stall" };
     IMPAI_BRAIN_OUT out;
-    int k, i, n, wind[3];
+    int k, i, n, wind[3], ordered[3];
     for (k = 0; k < 3; k++) {
         reclaim_world(1);
         feat_add(22, 22, 2, 2, 20);
         feat_add(30, 30, 2, 2, 300);
         CHECK(decide(&out) == 0, "decide");
         CHECK(reclaim_orders(1) == 1 && reclaim_orders(2) == 1, "%s: both builders reclaim first", NAME[k]);
+        for (i = 1; i < 3; i++) ordered[i] = s_job[i].kind == IMPAI_JOB_RECLAIM;
         n = s_w.nlog;
         s_w.gametime = 915;
         s_w.econ[0].energy = k == 2 ? 500.0f : 100.0f;
@@ -2993,9 +2995,10 @@ static void check_stall_reclaimers(void)
         for (i = 0; i < 3; i++) wind[i] = 0;
         for (i = n; i < s_w.nlog; i++)
             if (s_w.log[i].c.type == T_WIND && s_w.log[i].c.unit <= 2) wind[s_w.log[i].c.unit]++;
-        printf("the stall's reclaimers, %s: wind commander %d constructor %d, stall_taken %u, jobs %u %u\n", NAME[k],
-               wind[1], wind[2], out.stall_taken, s_job[1].kind, s_job[2].kind);
-        CHECK(wind[1] == (k == 0) && wind[2] == (k < 2) && out.stall_taken == (unsigned)(k == 0 ? 2 : k == 1),
+        printf("the stall's reclaimers, %s: wind commander %d constructor %d, stall_taken %u, ordered %d %d, jobs %u %u\n",
+               NAME[k], wind[1], wind[2], out.stall_taken, ordered[1], ordered[2], s_job[1].kind, s_job[2].kind);
+        CHECK(wind[1] == (k == 0) && wind[2] == (k < 2) &&
+              out.stall_taken == (unsigned)((wind[1] && ordered[1]) + (wind[2] && ordered[2])),
               "%s: the reclaimers given the stall's energy", NAME[k]);
         CHECK((s_job[1].kind == IMPAI_JOB_BUILD) == (k == 0) && (s_job[2].kind == IMPAI_JOB_BUILD) == (k < 2),
               "%s: the jobs", NAME[k]);
@@ -3004,21 +3007,22 @@ static void check_stall_reclaimers(void)
     s_nspots = NPATCH;
 }
 
-/* THE HARVEST'S COST (impai_brain.c, census: IMPAI_BRAIN_OUT.harvest_lost): reclaim_world, and three jobs on slots
-   the census meets -- slot 20 empty with a RECLAIM job, slot 21 empty with a RECLAIM_GO job, slot 3 (the factory)
-   holding a constructor's RECLAIM job -- count 3; an empty slot with a BUILD job and one with an EXPLORE count
-   none; each job is cleared, so the next decision counts 0. */
+/* THE HARVEST'S COST (impai_brain.c, census: IMPAI_BRAIN_OUT.harvest_lost): reclaim_world, and jobs on slots the
+   census meets -- slot 20 empty with a RECLAIM job and slot 3 (the factory) holding a constructor's RECLAIM job
+   count 2; slot 21 empty with a RECLAIM_GO job and slot 2 (the constructor) holding a factory's RECLAIM_GO job,
+   walks that ordered no reclaim, an empty slot with a BUILD job and one with an EXPLORE count none; each job is
+   cleared, so the next decision counts 0. */
 static void check_harvest_lost(void)
 {
-    static const uint8_t KIND[5] = { IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_RECLAIM, IMPAI_JOB_BUILD,
-                                     IMPAI_JOB_EXPLORE };
-    static const uint16_t SLOT[5] = { 20, 21, 3, 22, 23 };
+    static const uint8_t KIND[6] = { IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_RECLAIM, IMPAI_JOB_BUILD,
+                                     IMPAI_JOB_EXPLORE, IMPAI_JOB_RECLAIM_GO };
+    static const uint16_t SLOT[6] = { 20, 21, 3, 22, 23, 2 };
     IMPAI_BRAIN_OUT out;
     int k;
     reclaim_world(1);
-    for (k = 0; k < 5; k++) {
+    for (k = 0; k < 6; k++) {
         IMPAI_JOB* j = &s_job[SLOT[k]];
-        j->type = T_CONS;
+        j->type = k == 5 ? T_FACTORY : T_CONS;
         j->build = j->target = (uint16_t)WQ_NONE;
         j->kind = KIND[k];
         j->cx = j->cz = 30;
@@ -3026,8 +3030,9 @@ static void check_harvest_lost(void)
     }
     CHECK(decide(&out) == 0, "decide");
     printf("the harvest's cost: harvest_lost %u\n", out.harvest_lost);
-    CHECK(out.harvest_lost == 3, "three builders gone on a reclaim: %u", out.harvest_lost);
+    CHECK(out.harvest_lost == 2, "two builders gone on an ordered reclaim: %u", out.harvest_lost);
     for (k = 0; k < 5; k++) CHECK(s_job[SLOT[k]].kind == IMPAI_JOB_NONE, "the gone builder's job %d cleared", k);
+    CHECK(s_job[2].type != T_FACTORY, "the replaced slot's job cleared");
     s_w.gametime += 15;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.harvest_lost == 0, "counted once: %u", out.harvest_lost);
@@ -3477,49 +3482,62 @@ static void route_row(unsigned how, int bx, int bz, int range)
 #define ROW_CELL21 19, 11, 100
 
 /* THE BLAST'S APPROACH (impai_mil.c, impai_blast_nearer; impai_build.c, cmd_refused): reclaim_world's commander at
-   (328, 328) px, a 300-metal rock 330 px east and a 100-metal rock 264 px south, a foe's commander remembered at
-   (1616, 336), 1 288 px east. (a) seen 800 ticks ago: its keep, 475 + 64 + 1 px a tick over 830 ticks, 1 369 px,
-   holds both rocks and the commander; the east rock lies nearer to it than the commander and the south rock, across
-   its line, 1 305 px off, farther, so the commander's search passes the east rock and takes the south one; (b) seen
-   IMPAI_DRY_T + 15 ticks ago: the memory says nothing, and the commander takes the east rock. */
+   (328, 328) px, builddistance 120, 1 px a tick, a foe's commander of the same speed remembered at (1136, 336),
+   808 px east, on Hard (H = 30): its keep is 475 + 64 + 30 + (30 + age), 899 px at age 300.
+   (a) seen 300 ticks ago, a 300-metal rock 328 px east and a 100-metal rock 264 px south: the walk east ends
+   208 px on, 600 px from the foe, inside the keep and nearer than the commander's 808: refused, and the decision
+   counted (blast_refused); the walk south ends 817 px off, farther: the commander takes the south rock;
+   (b) the same, seen IMPAI_BLAST_SEEN_T + 15 ticks ago: the memory says nothing, and it takes the east rock;
+   (c) seen 300 ticks ago, a 300-metal rock 88 px east -- nearer the foe, inside the keep, but within the
+   builddistance, so it walks nowhere: never refused, and the commander takes it;
+   (d) as (a), the foe's commander of a type whose speed reads 0 (the turret, classed a commander of blast_r 475):
+   its approach takes the own commander's speed, the keep is 899 px again and the east rock is refused, where a
+   foe speed of 0 would keep 569 px and pass the walk's end 600 px off. No foe memory at all refuses nothing, the
+   opening's case. */
 static IMPAI_MIL s_umil;
 static int a_reclaim(const IMPAI_JOB* j) { return j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO; }
 
 static void check_blast_approach(void)
 {
-    static const char* const NAME[2] = { "seen 800 ticks ago", "seen past IMPAI_DRY_T" };
+    static const char* const NAME[4] = { "seen 300 ticks ago", "seen past IMPAI_BLAST_SEEN_T",
+                                         "a rock within the builddistance", "a foe whose speed reads 0" };
     IMPAI_BRAIN_OUT out;
     int c, east;
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 4; c++) {
+        const unsigned foe = c == 3 ? T_TURRET : T_COM;
         reclaim_world(1);
         s_w.unit[2].live = 0;
         s_w.gametime = 20000;
         s_ti[T_COM].blast_r = 475;
-        east = feat_add(40, 20, 2, 2, 300);
+        s_ti[T_TURRET].cat = IMPAI_C_COMMANDER;
+        s_ti[T_TURRET].blast_r = 475;
+        CHECK(s_w.defs[T_TURRET].d.speed == 0 && s_w.defs[T_COM].d.speed == 1 << 16, "the speeds");
+        east = c == 2 ? feat_add(25, 20, 2, 2, 300) : feat_add(40, 20, 2, 2, 300);
         feat_add(20, 36, 2, 2, 100);
         route_row(0, 0, 0, 0);
-        s_rrows[41].seat[0].type = T_COM;
+        s_rrows[41].seat[0].type = (uint16_t)foe;
         s_rrows[41].seat[0].how = IMPAI_GHOST;
         s_rrows[41].seat[0].owner = 1;
-        s_rrows[41].seat[0].bx = 50;
+        s_rrows[41].seat[0].bx = 35;
         s_rrows[41].seat[0].bz = 10;
         impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
         s_umil.foe[1].slot = 41;
-        s_umil.foe[1].bx = 50;
+        s_umil.foe[1].bx = 35;
         s_umil.foe[1].bz = 10;
-        s_umil.foe[1].t = (uint32_t)s_w.gametime - (c ? IMPAI_DRY_T + 15u : 800u);
+        s_umil.foe[1].t = (uint32_t)s_w.gametime - (c == 1 ? IMPAI_BLAST_SEEN_T + 15u : 300u);
         s_milp = &s_umil;
         CHECK(decide(&out) == 0, "decide");
         s_milp = NULL;
         s_viewp = NULL;
-        printf("the blast's approach, %s: the commander's job %u at (%d, %d)\n", NAME[c], s_job[1].kind, s_job[1].cx,
-               s_job[1].cz);
-        if (!c)
-            CHECK(a_reclaim(&s_job[1]) && s_job[1].cz == 36, "%s: the commander passes the east rock for the south",
-                  NAME[c]);
+        printf("the blast's approach, %s: the commander's job %u at (%d, %d), blast_refused %u com_free %u com_idle %u\n",
+               NAME[c], s_job[1].kind, s_job[1].cx, s_job[1].cz, out.blast_refused, out.com_free, out.com_idle);
+        if (c == 0 || c == 3)
+            CHECK(a_reclaim(&s_job[1]) && s_job[1].cz == 36 && out.blast_refused == 1,
+                  "%s: the commander passes the east rock for the south, counted", NAME[c]);
         else
-            CHECK(a_reclaim(&s_job[1]) && s_job[1].cx == s_w.feat[east].ax, "%s: the commander takes the east rock",
-                  NAME[c]);
+            CHECK(a_reclaim(&s_job[1]) && s_job[1].cx == s_w.feat[east].ax && (c == 2 || !out.blast_refused),
+                  "%s: the commander takes the east rock", NAME[c]);
+        CHECK(out.com_free == 1 && out.com_idle == 0, "%s: the commander outside the window, given a job", NAME[c]);
     }
     s_spots = PATCHES;
     s_nspots = NPATCH;
@@ -5608,7 +5626,8 @@ static uint32_t from_anchor(int32_t x, int32_t z)
    - THE FLIGHT: with own structures 800 px west (inside comm_r) and 3 000 px east (past the contact and comm_r),
      the commander at the anchor flees twelve tanks west;
    - THE BLAST: an enemy commander of blast_r 475 seen 552 px off, twelve own tanks beside ours, both commanders
-     at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 904 px off it stays; seen 544 px east with
+     at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 584 px off, inside the keep by the own
+     commander's approach alone, it flees; 904 px off it stays; seen 544 px east with
      an own structure 960 px north, the farthest, and the anchor and a structure west, safe: it flees west (THE
      FLIGHT OPENS THE GAP);
    - THE LEASH: 1 696 px from the anchor once the seat has had a factory, past 1 024 + 512: home to the anchor;
@@ -5634,6 +5653,8 @@ static void check_mil_commander(void)
     s_w.gametime += 2;
     CHECK(decide(&bo) == 0, "the economy decides inside the window");
     for (k = from; k < s_w.nlog; k++) CHECK(s_w.log[k].c.unit != 1, "the economy orders the commander inside the window");
+    CHECK(bo.com_free == 0 && bo.com_idle == 0, "the commander inside the window counted free: com_free %u com_idle %u",
+          bo.com_free, bo.com_idle);
     s_milp = NULL;
 
     mil_world();
@@ -5690,10 +5711,22 @@ static void check_mil_commander(void)
         own(1, T_COM, 30, 20);
         for (k = 0; k < 12; k++) own(2 + k, M_TANK, 22 + 2 * (k % 6), 16 + 2 * (k / 6));
         enemy(1300, T_COM, far ? 86 : 64, 20, IMPAI_LOS, 1);
+        s_job[1].kind = IMPAI_JOB_RECLAIM;
+        s_job[1].type = T_COM;
         moved = com_case(far ? "an enemy commander 904 px off" : "an enemy commander 552 px off", &o, &x, &z);
+        CHECK(o.rc_taken == !far, "the flight ends the commander's ordered reclaim, counted: rc_taken %u", o.rc_taken);
         if (far) CHECK(!o.safe && !moved, "the commander keeps clear of a blast 904 px off");
         else CHECK(o.safe == 1 && moved && x < 488, "the commander does not keep clear of a blast 552 px off");
     }
+    mil_world();
+    armcom();
+    s_w.defs[T_COM].d.speed = 1 << 16;
+    s_ti[T_COM].blast_r = 475;
+    own(1, T_COM, 30, 20);
+    for (k = 0; k < 12; k++) own(2 + k, M_TANK, 22 + 2 * (k % 6), 16 + 2 * (k / 6));
+    enemy(1300, T_COM, 66, 20, IMPAI_LOS, 1);
+    moved = com_case("an enemy commander 584 px off", &o, &x, &z);
+    CHECK(o.safe == 1 && moved, "the commander does not keep clear of a blast 584 px off, inside its own approach");
 
     /* THE FLIGHT OPENS THE GAP: the enemy commander 544 px east, an own structure 960 px north (the farthest from it,
        a walk across its line), and the anchor 160 px and one more structure 448 px west, both safe and straight
@@ -11587,6 +11620,40 @@ static void check_mil_retreat_members(void)
           "every member arrived: FORM, and no RETREAT squad left");
 }
 
+/* AT THE RALLY (impai_mil.c, at_rally): check_mil_stay_or_go's three tanks and a submarine they cannot hurt but
+   outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at cell
+   (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point lies
+   384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px south:
+   no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction, as
+   check_mil_stay_or_go's (c). */
+static void check_mil_at_rally(void)
+{
+    IMPAI_MIL_OUT o;
+    int c, k;
+    for (c = 0; c < 2; c++) {
+        const int bx = c ? 180 : 40, bz = c ? 100 : 29;
+        mil_world();
+        gunship();
+        s_st.ax = s_st.az = 20;
+        s_w.starts[0].x = s_w.starts[0].z = 328;
+        s_w.starts[0].index = 0;
+        s_w.starts[1].x = 6416;
+        s_w.starts[1].z = 3216;
+        s_w.starts[1].index = 1;
+        s_w.nstarts = 2;
+        for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
+        enemy(1300, M_SUB, bx + 2, bz + 8, IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rally decision runs");
+        mil_print(c ? "a submarine 2 400 px out" : "a submarine at the rally", &o, s_w.nlog);
+        if (!c)
+            CHECK(!o.predictions && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && squad_task_of(3) == IMPAI_SQ_FORM,
+                  "at the rally: %u predictions, %u retreats, tasks %d %d", o.predictions, o.retreats, squad_task_of(2),
+                  squad_task_of(3));
+        else
+            CHECK(o.predictions == 1, "out of the rally: %u predictions", o.predictions);
+    }
+}
+
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by
    an ally (IMPAI_SHARED) is not remembered, one in the seat's own line of sight is; and a recorded entry of the
    seat's own is never a goal. */
@@ -12799,6 +12866,7 @@ static void check_military(void)
     check_mil_two_sides();
     check_mil_retreat_members();
     check_mil_side_engaged();
+    check_mil_at_rally();
     check_mil_foe_sight();
     check_mil_dgun();
     check_production();
