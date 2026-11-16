@@ -188,6 +188,11 @@ class Bar(unittest.TestCase):
         self.assertEqual(bar.cheat_evidence([fair]), [])
         cheat = res("bar-h:2.500-pincushion-cc-2", {"metal": 5.0, "energy": 125.0})
         self.assertEqual(len(bar.cheat_evidence([cheat])), 1)
+        late = res("bar-h:2.500-pincushion-cc-3", {"metal": 5.0, "energy": 125.0})
+        late["income_t1"]["at"] = 31
+        self.assertEqual(bar.cheat_evidence([late]), [])
+        late["income_t1"]["at"] = 30
+        self.assertEqual(len(bar.cheat_evidence([late])), 1)
 
     def test_a_kept_result_must_carry_its_multiplier(self):
         tmp = Path(tempfile.mkdtemp())

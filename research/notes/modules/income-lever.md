@@ -25,7 +25,7 @@ It does six things, in order:
 3. adds them to the stores `+0x8C`/`+0x98`;
 4. takes the consumption up to what is stored, keeping the fraction met (`0x401A4D..0x401AB1`);
 5. clamps each store to its maximum `+0xA4`/`+0xA8`, adding the excess to the double wasted `+0xCC`/`+0xD4`;
-6. zeroes the ledger's produced floats (`0x401BAE..0x401C16`).
+6. copies the ledger's `+0x00`/`+0x04` to `+0x10`/`+0x14` and `+0x18`/`+0x1C` to `+0x28`/`+0x2C`, then zeroes the produced floats (`0x401BAE..0x401C16`). The copies therefore carry the lever's bonus as well as the units' and the gives'. No reader of them is known: a scan of every load of a `+0xEC` pointer followed within eleven instructions by an access at `+0x10`, `+0x14`, `+0x28` or `+0x2C` finds only the reset's own write (`0x401BC0`) and a stack slot's (`0x4A6998`, `[esp+0xEC]`). The scan is not exhaustive: a pointer kept longer, or passed on, escapes it.
 
 **Each rate includes the player's ledger.** The ledger is the `+0xEC` record. Its produced float, `+0x00` for energy and `+0x18` for metal, is folded into the units' sum (`0x401914`/`0x401927`; `0x40191F`/`0x401954`). A transfer credits exactly that float on the recipient (`0x464C44`, `0x464D77`), so a give is counted as the recipient's production at its next pass.
 
@@ -77,7 +77,7 @@ Both play on Town & Country at Hard and are recorded and played as record, puppe
 
 MEASURED 2026-11-16, the reference setup: the assertion read energy 162.5 against 125.0 and metal 102.5 against 101.0. That is 100 given plus 2.5 × the commander's 25 and 1: exact, one pass late, the give unmultiplied. The group also covers the stock path: seat 2's pass and the human's go through the wrapper with no row.
 
-**`income-stall`, a stalled seat** (`scenarios/income-stall.json`). Seats 1 and 2 are CORE with the AI off, a base energy storage of 10 and nothing stored, and each has an Automatic Radar Targeting (EnergyUse 1300). Seat 1 has one solar collector, 45 energy a pass with its commander's, armed at ×5; seat 2 has ten, 225 a pass of its own. From GameTime 330, `income_check.py stall` advances 600 ticks and asserts that both seats' rates are equal and that seat 1 consumed what seat 2 consumed, within the two ends' phase (twice the rate plus the storage). A bonus credited after the pass would have been clamped to the storage of 10 and wasted, leaving seat 1 under a quarter of seat 2's.
+**`income-stall`, a stalled seat** (`scenarios/income-stall.json`). Seats 1 and 2 are CORE with the AI off, a base energy storage of 10 and nothing stored, and each has an Automatic Radar Targeting (EnergyUse 1300). Seat 1 has one solar collector, 45 energy a pass with its commander's, armed at ×5; seat 2 has ten, 225 a pass of its own. From GameTime 330, `income_check.py stall` advances 600 ticks and asserts that both seats' rates are equal and that seat 1 consumed what seat 2 consumed, within the two ends' phase: twice the sum of the rate and the storage. A bonus credited after the pass would have been clamped to the storage of 10 and wasted, leaving seat 1 under a quarter of seat 2's.
 
 MEASURED 2026-11-16, the reference setup: seat 1 consumed 4294.0 and seat 2 4304.0 over the 600 ticks (bound 470.0), each wasting 196.0. The effective multiplier in a stall is the armed one.
 

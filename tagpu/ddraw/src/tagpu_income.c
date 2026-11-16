@@ -31,7 +31,7 @@ SIM_FEATURE(income_mult, SIM_PUPPET_OWNER, "income-mult income-stall");
    reads it on the thread that is about to make that call, and touches nothing when it is NULL.
 
    STATE. s_bonus and s_prev, SIM_STATE rows by player, are cleared at every level init and s_bonus is set
-   from the lever only at a live skirmish level's, so a recording carries both and a replay, a round trip, a
+   from the lever only at a new skirmish's, in a test launch, so a recording carries both and a replay, a round trip, a
    seek or a takeover multiplies as recorded with no lever. On a puppet level the recording is the only
    writer, and the pass never runs for a puppet seat (type 3, 0x465539); the wrapper refuses one all the same.
 
@@ -198,8 +198,8 @@ void tagpu_income_init(void)
 }
 
 /* A new skirmish: GameingState's mode 2 and no saved game, the test the loader's seat setup makes
-   (0x4978DA..0x497902). GameingState is not NULL here: the loader body dereferenced it at 0x4971CD on the only
-   path into the level init (0x497CA1 -> 0x497581). */
+   (0x4978DA..0x497902). GameingState is not NULL here: the loader body called 0x435100, `mov eax,[ecx]`, on it
+   at 0x4971CD, on the only path into the level init (0x497CA1 -> 0x497581). */
 static int new_skirmish(char* ta)
 {
     char* gs = rdptr(ta + OFF_GSTATE);

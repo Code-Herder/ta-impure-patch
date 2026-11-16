@@ -382,6 +382,7 @@ RUN_SEEDS = re.compile(r"enginefix: run seeds before the creates: the wire's see
 SECOND = re.compile(r"impai: second seat=(\d+) gametime=(\d+) naval=(-?\d+) chose=(sea|land|none) "
                     r"sea_site=(found|none|refused|-)")
 PASS_TICKS = 30                         # an economy pass: the income a pass is what is produced in 30 ticks
+FIRST_BONUS = 31                        # the first economy pass an income-lever bonus reaches (tagpu_income.c)
 STALL_WINDOW, STALL_FROM = 3600, 1800
 LEVER_LEVEL, LEVER_TABLE = "tagpu_impai_level.on", "tagpu_impai_table.on"
 # the pause a hold waits for: at its T, or earlier by a seat's units clause; or its T not taken
@@ -988,7 +989,9 @@ def cheat_evidence(rs) -> list:
     """THE CHEAT FLAG over one setup's results: a line for each side on which an OTA AI seat's income at t=1
     exceeded an ImpAI seat's on that side (the first such pair of games), and one for the AI-only types OTA AI seats
     completed, with their counts and the first game of each; [] when there is none. Sides are compared with
-    themselves alone: a mod's sides' commanders can make different incomes (TA Zero's)."""
+    themselves alone: a mod's sides' commanders can make different incomes (TA Zero's). A seat the income lever armed
+    is read only from a first iteration before GameTime 31, the second economy pass, which its first bonus reaches
+    (FIRST_BONUS); a later one is left out, never compared."""
     impai, ota, types = {}, [], {}
     for r in rs:
         inc = r.get("income_t1") or {}
@@ -996,9 +999,11 @@ def cheat_evidence(rs) -> list:
             if s not in inc or s not in (r.get("seats") or {}):
                 continue
             side = r["sides"][s]
+            armed_late = r["seats"][s].get("income") and inc.get("at", 0) >= FIRST_BONUS
             if r["seats"][s]["ai"] == "impai":
-                impai.setdefault(side, (inc[s], r["id"]))
-            else:
+                if not armed_late:
+                    impai.setdefault(side, (inc[s], r["id"]))
+            elif not armed_late:
                 ota.append((side, r.get("difficulty", "hard"), inc[s], r["id"]))
             for name, n in ((r.get("ai_only") or {}).get(s) or {}).items():
                 if r["seats"][s]["ai"] != "impai":

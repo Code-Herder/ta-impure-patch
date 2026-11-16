@@ -1318,6 +1318,11 @@ the trace lever before L. Playback, restoration and seek use the ordinary counte
 
 ## Open items
 
+The takeover re-types a seat whose AI the console switched off (`ai: "off"`) as a computer seat: TK1 types every
+seat but P 2, where the recording holds 1 (MEASURED 2026-11-16, player image `+0x1E0` 01 recorded and 02 in the
+fork; [the takeover note](demo-recorder-s4-takeover.md#residuals)). No test group with such a seat asks for a
+takeover.
+
 For the skirmish slice: one, being looked at on its own. In the `contest-waves` test group a create
 made at a frame's tail, one tick before a drawn GameTime, differed in `+0x110` bit 8 -- a radar
 contact bit -- on P and R (MEASURED 2026-10-23 while that test group was built); it is not a
