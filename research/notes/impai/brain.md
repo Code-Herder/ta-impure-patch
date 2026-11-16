@@ -1037,9 +1037,15 @@ plant takes the slot.
   against the type, the anchor, the estimate's block and the search's radius, the only things besides the content
   it depends on.
 - *Built* by a builder that can reach the site (THE BUILDER'S REACH): it stands within MobileBuild's reach of the
-  footprint (builddistance plus both footprints, the engine's own abandon compare) or a block of its class's
-  component at its own block has its centre that near. One that cannot leaves the site to the decision's other
-  builders and counts the decision's refusal, as the commander's safe distance does.
+  footprint (builddistance plus both footprints, the engine's own abandon compare), or a block of its class's
+  component at its own block lies that near wherever on it the builder stands. A block's entries put a unit's
+  centre anywhere in a 32-px square offset by its footprint (the set-position 0x48A9F0 rounds the cell to within
+  8 px), so the block counts only when that square's farthest corner is within the limit. One that cannot leaves
+  the site to the decision's other builders and counts the decision's refusal, as the commander's safe distance
+  does. A block's centre alone admits sites no place on the block reaches: on Trout Farm's south start
+  (bar-hota-troutfarm-aa-1) it put an ARMSY site 152 px from a vehicle block's centre against a limit of 163, where
+  the vehicle stands 170 px off at best, and twelve land constructors' jobs walked to the shore and were abandoned
+  while the commander, whose class stands 11 px from the site, stood idle.
 - *Termination*: a decision whose search places nothing counts one refusal, whatever stopped it -- a refusal by the
   site test or the resolver, a builder's reach, the claims, the exploration, the fail ring, the decision's budgets
   -- and so does a
@@ -1073,8 +1079,10 @@ with it; no advanced sea plant on tech-up; no sea or air scouting; land plants k
 map, the table's shares not reweighted by reach (A4); mixed-layer predictions have no reference kind; the labels and
 tops are the level init's, so features destroyed or created later, and a saved game's, are not in them; the sea plant
 is at the earliest the second factory and with `factory_max` 1 there is none outside a dry hunt; any water factory counts as the sea
-plant, even one whose menu has no sea army type; the builder's reach is read at block centres, so a site up to 23 px past it may still be abandoned (its failure
-counted), and a builder whose builddistance passes 512 px is tested on the blocks within 512 px; a
+plant, even one whose menu has no sea army type; the builder's reach proves a place within the limit, not that the
+engine's walk ends there, so a build may still be abandoned (its failure counted); it is read on the block's whole
+square, so a block whose entries alone are within the limit is refused; a builder whose builddistance passes 512 px
+is tested on the blocks within 512 px; a
 seat whose military refuses every decision keeps one factory (the mil line's `refused=`); sea constructors build no
 tidal generator on a dry anchor; before any structure is seen the estimate is the nearest other start not known empty, so with random starts any
 start;

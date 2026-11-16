@@ -8823,7 +8823,7 @@ static void check_dry_wave(void)
    cell (40, 64) on class 2, which walks the sea floor as the engine's commanders' TANKDS2 walks water 100 deep
    (the move class's +0x08, tasim_run defs), a finished K-bot lab, stores full, the military's estimate at block
    (240, 32) */
-enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR, C_STRIP };
+enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR, C_STRIP, C_SPIT, C_SPIT_NEAR };
 static IMPAI_MIL s_smil;
 
 static void coast_world(int kind, int naval, float metal_in)
@@ -8839,13 +8839,17 @@ static void coast_world(int kind, int naval, float metal_in)
         water_add(&s_w, 64, 0, 79, 127, 40);
         water_add(&s_w, 80, 0, 127, 127, -10);
         water_add(&s_w, 128, 0, 511, 127, 40);
-    } else if (kind == C_FAR || kind == C_STRIP) {
+    } else if (kind == C_FAR || kind == C_STRIP || kind == C_SPIT || kind == C_SPIT_NEAR) {
         water_add(&s_w, 64, 0, 107, 127, -10);
         water_add(&s_w, 108, 0, 511, 127, 40);
+        if (kind != C_FAR) water_add(&s_w, 108, 0, 115, 127, 20);
         if (kind == C_STRIP) {
-            water_add(&s_w, 108, 0, 115, 127, 20);
             water_add(&s_w, 108, 56, 113, 57, -10);
             water_add(&s_w, 114, 62, 115, 63, -10);
+        }
+        if (kind == C_SPIT || kind == C_SPIT_NEAR) {
+            water_add(&s_w, 108, 70, 126, 71, -10);
+            water_add(&s_w, 125, kind == C_SPIT ? 66 : 64, 126, 69, -10);
         }
     } else
         water_add(&s_w, 64, 0, 511, 127, kind == C_SHALLOW ? 20 : 40);
@@ -11343,7 +11347,15 @@ static int build_unit(int from, int type)
    to within builddistance and half the frame's side, less than MobileBuild's reach that built from the shore
    (engine/orders.md, *HelpBuild's walk and its abandon*; builder_near) --; (n) dry, the commander already helping
    it: no order; (o) dry, the commander idle, a lab's frame of the seat's at cell (106, 64), past comm_r and nearer
-   it than the shipyard's: it helps the shipyard -- the rung is the sea plant's alone. */
+   it than the shipyard's: it helps the shipyard -- the rung is the sea plant's alone. THE BUILDER'S REACH again,
+   the commander held: on the SPIT coast the strip's shipyard site and a spit of the mainland's along cells
+   z 70..71 to a nub at x 125..126, z 66..69; (p) the nub's block (62, 33), its centre 93 px from the site's
+   centre, within CORCK's limit of 112, its square of the centres a CORCK on its entries stands at -- (1992, 1064)
+   to (2024, 1096) -- 126 px off at its far corner: no shipyard, the refusal counted; (q) on the SPIT_NEAR coast
+   the nub reaching z 64, its block (62, 32) whose square's far corner is 111 px off: the constructor's shipyard;
+   (r) (p) with a constructor of footprint 3 x 3, its limit 123: its square on the nub's block, pushed 16 px
+   out by its footprint -- (2000, 1072) to (2032, 1104) --, 138 px off at its far corner, where the block's own
+   square's far corner is 115 px off: no shipyard, the refusal counted. */
 static void far_world_at(int kind, int naval, int dry, int cons, float metal_in)
 {
     coast_world(kind, naval, metal_in);
@@ -11467,6 +11479,28 @@ static void check_sea_finish(void)
                       !(s_job[3].kind == IMPAI_JOB_ASSIST && s_job[3].target == 5),
                   "%s: the sea constructor helps it, the land constructor cannot reach it", NAME[k]);
         if (k == 3) CHECK(!orders_to(from, 1), "%s: no new order to the commander", NAME[k]);
+    }
+    far_world_at(C_SPIT, 1, 1, 1, 9);
+    com_window();
+    sea_decide("the finish, (p) the spit's nub, its block's centre within the limit", &sy, &land);
+    CHECK(!sy && s_st.sea_refused == 1,
+          "(p) a block whose centre is within the limit and its standing centres are not: no shipyard, one refusal");
+    far_world_at(C_SPIT_NEAR, 1, 1, 1, 9);
+    com_window();
+    from = s_w.nlog;
+    sea_decide("the finish, (q) the nub's block wholly within the limit", &sy, &land);
+    unit = build_unit(from, E_SY);
+    CHECK(sy == 1 && unit == 3, "(q) a block whose every standing centre is within the limit: the constructor's");
+    {
+        const int16_t fx = s_ti[E_CK].fx, fz = s_ti[E_CK].fz;
+        far_world_at(C_SPIT, 1, 1, 1, 9);
+        com_window();
+        s_ti[E_CK].fx = s_ti[E_CK].fz = 3;
+        sea_decide("the finish, (r) the spit's nub, a constructor of 3 x 3", &sy, &land);
+        s_ti[E_CK].fx = fx;
+        s_ti[E_CK].fz = fz;
+        CHECK(!sy && s_st.sea_refused == 1, "(r) a 3 x 3 constructor's square, pushed 16 px out of the block, past "
+              "the limit: no shipyard, one refusal");
     }
     s_milp = NULL;
 }

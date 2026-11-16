@@ -1916,19 +1916,43 @@ static uint32_t sea_radius(const IMPAI_DEC* d)
     return (d->sea_far ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
 }
 
+/* 1 when the 32-px square from (x0, z0) lies within lim of (px, pz): the corner of it farthest from the point does */
+static int square_within(int64_t x0, int64_t z0, int64_t px, int64_t pz, int64_t lim)
+{
+    const int64_t dx = px - x0 > x0 + 32 - px ? px - x0 : x0 + 32 - px;
+    const int64_t dz = pz - z0 > z0 + 32 - pz ? pz - z0 : z0 + 32 - pz;
+    return dx * dx + dz * dz <= lim * lim;
+}
+
 /* THE BUILDER'S REACH: 1 when builder b can stand within MobileBuild's reach of the footprint of `type` at first
    cell (cx, cz), so that the engine does not abandon the build for reach (THE REACH ABANDON, impai_brain.c): it
    stands within impai_reach_limit of the footprint's centre already, or a block carrying its class's label at its
-   own block (builder_label) has its centre within that limit; 1 too where builder_label has no test or the type
-   no limit. MEASURED on Trout Farm's west start (the map's class maps, the core's rules, tools/tasim/classcheck.py's
+   own block (builder_label) lies within that limit wherever on it the builder stands; 1 too where builder_label has
+   no test or the type no limit.
+   WHEREVER ON IT: a block carries the label of a passable entry in it (impai.h, THE REACH LABELS), and an entry
+   (x, z) is the class footprint with its top-left cell at (x, z) (tasim_class.h) -- the cell the set-position
+   0x48A9F0 gives a unit whose centre lies within 8 px either way of x x 16 + fx x 8 (impai.h, THE UNIT'S OWN LABEL).
+   So a builder of footprint bfx x bfz on either entry of block bx stands with its centre from bx x 32 + bfx x 8 - 8
+   to 32 px past it, and the block counts only when that square's corner farthest from the footprint's centre is
+   within the limit (square_within).
+   MEASURED on Trout Farm's west start (the map's class maps, the core's rules, tools/tasim/classcheck.py's
    inputs): the shipyard site nearest the anchor lies 225 px from the nearest cell a vehicle stands on, past
    ARMCV's limit of 163 (builddistance 40, 33 and 90 for the footprints), and 11 px from one the commander's class
    stands on; three games' land constructors walked to it and were abandoned 150 to 210 px short, four to six
-   times a game. RESIDUAL: a labelled block holds a cell the class stands on, not necessarily its centre
-   (impai.h, THE REACH LABELS), so a block within the limit by less than half its diagonal (23 px) may leave the
-   builder just past it -- that build is abandoned as before, its failure counted (THE SEA PLANT's termination)
-   and the builder held back by THE FAR RECORD; a limit past SEA_REACH_BLOCKS blocks reads those only, a refusal
-   on the safe side. BOUND: at most (2 SEA_REACH_BLOCKS + 1)^2 = 1089 label reads. */
+   times a game. And on its south start, in THE FINISH AT SEA of bar-hota-troutfarm-aa-1 (2026-11-16, the same
+   class maps, the recording's s_job): the ARMSY site at first cell (222, 362), centre (3616, 5856), was given on
+   a block's centre -- ARMCV's at (3568, 6000), 152 px off against its limit of 163, where the vehicle's two
+   entries stand its centre 170 and 173 px off; ARMCK's at (3600, 6000), 145 px off against 152, its one entry
+   161 px off. From GameTime 52 502 to the cap twelve land constructors' jobs walked to that site and those beside
+   it and were abandoned on the shore, one traced at 204 px, while the commander, whose class stands 11 px from the
+   centre, stood at the anchor; the stock AI's last base floated on the lake and the game reached the cap ahead.
+   RESIDUAL: the walk to the site is the engine's own move, so an admitted block proves a place within the limit
+   on the builder's component, not that the walk ends there -- such a build is abandoned as before, its failure
+   counted (THE SEA PLANT's termination) and the builder held back by THE FAR RECORD. The square is the block's,
+   not its passable entries', so a block whose entries all stand within the limit while its square does not is
+   refused, and the search passes the site (THE SITE NO BUILDER TAKES); the blocks past SEA_REACH_BLOCKS rings, or
+   past r for a builder's footprint wide enough to push its square a block out, are not read: both refusals on the
+   safe side. BOUND: at most (2 SEA_REACH_BLOCKS + 1)^2 = 1089 squares and as many label reads. */
 static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz)
 {
     const IMPAI_REACH* rc = d->in->reach;
@@ -1937,20 +1961,20 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
     const int pcx = (2 * cx + fx) * 8, pcz = (2 * cz + fz) * 8;
     const int l = builder_label(d, b);
     const int64_t lim = impai_reach_limit(d, b->type, fx, fz);
-    int r, bx, bz;
+    const IMPAI_TINFO* bt;
+    int r, bx, bz, bfx, bfz;
     if (l < 0 || lim < 0 || (int64_t)impai_dist_px(b->pos, pcx, pcz) <= lim) return 1;
     if (!l) return 0;
+    bt = &d->in->ti[b->type];
+    bfx = bt->fx > 0 ? bt->fx : 1;
+    bfz = bt->fz > 0 ? bt->fz : 1;
     r = lim / 32 + 1 < SEA_REACH_BLOCKS ? (int)(lim / 32) + 1 : SEA_REACH_BLOCKS;
     for (bz = (pcz >> 5) - r; bz <= (pcz >> 5) + r; bz++)
         for (bx = (pcx >> 5) - r; bx <= (pcx >> 5) + r; bx++) {
-            int32_t c[3];
-            if (bx < 0 || bz < 0 || bx >= rc->bw || bz >= rc->bh) continue;
-            c[0] = (int32_t)((uint32_t)(bx * 32 + 16) << 16);
-            c[1] = 0;
-            c[2] = (int32_t)((uint32_t)(bz * 32 + 16) << 16);
-            if ((int64_t)impai_dist_px(c, pcx, pcz) <= lim &&
-                impai_reach_at(rc, d->in->ti[b->type].mclass, bx, bz) == l)
-                return 1;
+            if (bx < 0 || bz < 0 || bx >= rc->bw || bz >= rc->bh ||
+                !square_within((int64_t)bx * 32 + bfx * 8 - 8, (int64_t)bz * 32 + bfz * 8 - 8, pcx, pcz, lim))
+                continue;
+            if (impai_reach_at(rc, bt->mclass, bx, bz) == l) return 1;
         }
     return 0;
 }
