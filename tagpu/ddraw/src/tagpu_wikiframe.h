@@ -257,7 +257,7 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
    0..nseat - 1 to 0xFF (named "Unknown seat", as the game's HUD names one); chain_last, fill_to
    and pick_R to 0..end; pick_evict -1 or an id of 1..RECR_TIMELINES - 1, else -1. Players: a
    record that is not pl has its whole block 0; sight and follow to -1..nseat - 1, else -1; tog to
-   the four overlay bits, folded to WIKI_SEATS bits, the flags to 0/1, stat_measure below
+   the five overlay bits, folded to WIKI_SEATS bits, the flags to 0/1, stat_measure below
    WIKI_STAT_MEASURES, else the first; npt to WIKI_STAT_PTS and every sample past it 0, each one
    kept through the stats window's finite test (tagpu_hudlay_stat_groups); period and base to
    0..WIKI_GAME_END_MAX; a team outside 0..WIKI_SEATS - 1 the seat's own index; cam to the

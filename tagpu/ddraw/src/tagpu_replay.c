@@ -93,6 +93,9 @@
 #include "tagpu_gaf.h"
 #include "tagpu_packet.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_board.h"
+#include "tagpu_boardwire.h"
+#include "tagpu_recmp_players.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -436,6 +439,7 @@ static struct {
     int             on;             /* ... and the reader stands in its multiplayer segment       */
     int             failed;
     RecMpLifecycle* life;
+    RecMpSeatMaps*  seats;          /* each origin's own roster, from its RECMP_SEATS (mp_mark)   */
     uint64_t        ordinal;        /* the last envelope the consumer was given                  */
     unsigned        slots;
     const struct Lv* L;             /* the step's level, for the action callback                 */
@@ -484,7 +488,8 @@ static int s_chat_hidden;           /* 1 = the HUD's Chat toggle is off (`chat h
 /* THE OVERLAYS' state (game thread only) */
 #define OV_RING 64                  /* the clicks held: the most recent, each with its tick      */
 static struct {
-    unsigned char    off[TAGPU_OV_CHAT];   /* a switched-off overlay, by TAGPU_OV_*: 0 is on      */
+    unsigned char    off[TAGPU_OV_N];      /* a switched-off overlay, by TAGPU_OV_*: 0 is on; the
+                                              chat's is s_chat_hidden                            */
     int              live;                 /* item, n and s_rsel are this playing's this frame   */
     int              col_ok;               /* col holds this playing's colours                   */
     unsigned char    col[TAGPU_PK_OV_PLAYERS];
@@ -4832,6 +4837,7 @@ static void mp_end(void)
     free(s_mp.s_unit);
     free(s_mp.s_list);
     if (s_mp.life) tagpu_recmp_lifecycle_end(s_mp.life);
+    if (s_mp.seats) tagpu_recmp_seats_end(s_mp.seats);
     free(s_mp.held);
     free(s_mp.live);
     free(s_mp.unit);
@@ -4884,6 +4890,8 @@ static int mp_begin(const Lv* L, const RecWorld* W)
     mp_end();
     s_mp.slots = W->slots;
     s_mp.life = tagpu_recmp_lifecycle_begin(&h->mp, &h->mp_seats, L->ndefs);
+    s_mp.seats = tagpu_recmp_seats_begin(&h->mp_seats);
+    tagpu_board_replay_clear();
     s_mp.held = calloc(W->slots, 1);
     s_mp.live = malloc(W->slots);
     s_mp.unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
@@ -5292,6 +5300,29 @@ static void mp_click(const MpHeld* e)
     ov_click_put(e->where.tick, &c);
 }
 
+/* THE BOARD'S MARKS, shown from their application tick as a click is. A body names its seat and
+   its markers' owners as its sender numbered the players, each peer its own record 0
+   (tagpu_boardwire.h); the sender's roster, which its RECMP_SEATS carried first, maps them to the
+   recording's (tagpu_recmp_seat_map), as the live game's mp_mark_apply maps them to its own. The
+   seat must be one that roster gives the envelope's origin. A body that is not one shows nothing:
+   the marks are display state, never a reason to stop the playing. */
+static void mp_mark(const MpHeld* e)
+{
+    static unsigned char body[RECMP_BODY_MAX];
+    const RecHeader* h = recr_header(s_rd);
+    RecMpRoster source;
+    uint8_t map[RECMP_ACTORS + 1];
+    unsigned seat, i, n;
+    if (!s_mp.seats || !tagpu_boardwire_check(e->body, e->bytes, &seat) ||
+        !tagpu_recmp_seats_get(s_mp.seats, e->packet.origin, &source, NULL) ||
+        !tagpu_recmp_seat_map(&source, &h->mp_seats, map))
+        return;
+    for (i = 0; i < source.count; i++)
+        if (source.actor[i].origin == e->packet.origin && source.actor[i].seat == seat) break;
+    if (i < source.count && (n = tagpu_boardwire_reseat(e->body, e->bytes, map, body, sizeof body)) != 0)
+        tagpu_board_replay_apply(body, n, e->where.tick);
+}
+
 /* a root batch the recorder's own unit tick made after its capture point */
 static int mp_post_capture(const MpHeld* e)
 {
@@ -5318,6 +5349,12 @@ static void mp_apply_held(const Lv* L, unsigned T, int image)
             mp_text(L, e);
         if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_CLICK)
             mp_click(e);
+        /* the rosters and marks in a seek's composing too: a seek rebuilds the board's store
+           from the first envelope, as it does the world */
+        if (s_mp.seats && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_SEATS)
+            tagpu_recmp_seats_put(s_mp.seats, &e->packet, e->body, e->bytes);
+        if (e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_MARK)
+            mp_mark(e);
     }
     memmove(s_mp.q, s_mp.q + i, (size_t)(s_mp.nq - i) * sizeof *s_mp.q);
     s_mp.nq -= i;
@@ -5497,6 +5534,9 @@ static int mp_rebuild(const Lv* L, unsigned T)
         mp_fail("no memory for the seek's owner consumer");
         return 0;
     }
+    if (s_mp.seats) tagpu_recmp_seats_end(s_mp.seats);
+    s_mp.seats = tagpu_recmp_seats_begin(&h->mp_seats);
+    tagpu_board_replay_clear();
     memcpy(s_mp.live, s_mp.s_live, s_mp.slots);
     memcpy(s_mp.unit, s_mp.s_unit, (size_t)s_mp.slots * REC_UNIT_IMAGE);
     memcpy(s_mp.player, s_mp.s_player, sizeof s_mp.player);
@@ -11178,12 +11218,12 @@ static void follow_visit(char* ta)
 
 #define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
 
-static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat" };
+static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat", "marks" };
 
 int tagpu_replay_overlay(int which)
 {
     if (which == TAGPU_OV_CHAT) return !s_chat_hidden;
-    return which >= 0 && which < TAGPU_OV_CHAT && !s_ov.off[which];
+    return which >= 0 && which < TAGPU_OV_N && !s_ov.off[which];
 }
 
 void tagpu_replay_overlay_set(int which, int on)
@@ -11193,12 +11233,12 @@ void tagpu_replay_overlay_set(int which, int on)
         tagpu_logf("replay: chat %s", s_chat_hidden ? "hidden" : "shown");
         return;
     }
-    if (which < 0 || which >= TAGPU_OV_CHAT) return;
+    if (which < 0 || which >= TAGPU_OV_N) return;
     s_ov.off[which] = (unsigned char)!on;
     tagpu_logf("replay: overlay %s %s", OV_NAME[which], on ? "on" : "off");
 }
 
-/* `overlay <cursors|clicks|selections|chat> <on|off>` */
+/* `overlay <cursors|clicks|selections|chat|marks> <on|off>` */
 static int overlay_trigger(const char* line)
 {
     char name[16], state[8];

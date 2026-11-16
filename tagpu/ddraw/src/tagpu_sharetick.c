@@ -308,10 +308,16 @@ static char* level_main(void)
 unsigned tagpu_share_board_seen(void)
 {
     char* ta = level_main();
+    return ta ? tagpu_share_board_seen_by((unsigned char)ta[OFF_CONTROLLED]) : 0;
+}
+
+unsigned tagpu_share_board_seen_by(unsigned c)
+{
+    char* ta = level_main();
     const char* me;
     const unsigned char* info;
-    unsigned c, j, mask, watching;
-    if (!ta || (c = (unsigned char)ta[OFF_CONTROLLED]) >= PLAYERS) return 0;
+    unsigned j, mask, watching;
+    if (!ta || c >= PLAYERS) return 0;
     me = ta + OFF_PLAYERS + c * PL_STRIDE;
     info = *(const unsigned char* const*)(me + PL_INFO);
     if (!*(const unsigned*)(me + PL_ACTIVE) || !info) return 0;

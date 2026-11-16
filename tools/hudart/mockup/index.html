@@ -61,7 +61,7 @@ const SEAT_COL = ['#233bcb', '#d32b00', '#fbfbfb', '#2f771b', '#7a3fb0', '#e8d20
 // the four overlay switches are on whenever a replay starts, and never saved; the stats window is closed whenever a
 // replay starts, and keeps its measure, its split and its place
 const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: false, sm: 'units', ss: 'player', sw: null,
-  ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
+  ov: { cursors: true, clicks: true, selections: true, chat: true, marks: true }, sight: -1, follow: -1, scroll: 0, toast: '',
   // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
   prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false,
@@ -336,7 +336,7 @@ layer.addEventListener('click', e => {
       toast(near >= 0 ? 'Bookmark removed' : `Bookmark at ${Math.floor(S.t / 60)}:${String(Math.round(S.t) % 60).padStart(2, '0')}`); break; }
     case 'uiscale': S.hud = UI_STEPS[(UI_STEPS.indexOf(S.hud) + 1) % UI_STEPS.length]; $('#hud').value = S.hud; save(); resize(); return;
     case 'leave': S.playing = false; toast('Leave this replay?'); break;
-    case 'cursors': case 'clicks': case 'selections': case 'chat': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
+    case 'cursors': case 'clicks': case 'selections': case 'chat': case 'marks': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
     case 'stats': S.stat = !S.stat; break;
     case 'fold': { const t = +a.dataset.team; S.fold = S.fold.includes(t) ? S.fold.filter(x => x !== t) : S.fold.concat(t); break; }
     case 'jump': case 'follow': { const i = +a.dataset.seat;

@@ -31,11 +31,12 @@
 
 static const unsigned SPEEDS[5] = { 5, 10, 20, 40, 80 };   /* 1/2x .. 8x; 10 = 1x                 */
 static const unsigned SCALES[4] = { 75, 100, 125, 150 };
-static const struct { const char* key; int ov; unsigned bit; } SWITCHES[4] = {
+static const struct { const char* key; int ov; unsigned bit; } SWITCHES[5] = {
     { "cursors",    TAGPU_OV_CURSORS,    HUD_TOG_CURSORS },
     { "clicks",     TAGPU_OV_CLICKS,     HUD_TOG_CLICKS },
     { "selections", TAGPU_OV_SELECTIONS, HUD_TOG_SELECTIONS },
     { "chat",       TAGPU_OV_CHAT,       HUD_TOG_CHAT },
+    { "marks",      TAGPU_OV_MARKS,      HUD_TOG_MARKS },
 };
 typedef char hud_key_fits[(TAGPU_PK_HUD_KEY == HUD_KEYLEN && TAGPU_PK_HUD_TOAST == HUD_TOASTLEN) ? 1 : -1];
 
@@ -882,7 +883,7 @@ static void act(const char* key)
     } else if (IS("scroll_down")) {
         scroll_by(1);
     } else {
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < (int)(sizeof SWITCHES / sizeof *SWITCHES); i++)
             if (k == strlen(SWITCHES[i].key) && !strncmp(key, SWITCHES[i].key, k))
                 tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
     }
@@ -1069,7 +1070,7 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     h->folded = (uint16_t)s_folded;
     h->scroll = (uint8_t)(s_scroll < 255 ? s_scroll : 255);
     h->toggles = 0;
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < (int)(sizeof SWITCHES / sizeof *SWITCHES); i++)
         if (tagpu_replay_overlay(SWITCHES[i].ov)) h->toggles |= (uint8_t)SWITCHES[i].bit;
     if (s_statOpen) h->toggles |= (uint8_t)HUD_TOG_STATS;
     h->stat_open = (uint8_t)s_statOpen;

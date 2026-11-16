@@ -23,7 +23,7 @@ static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "me
 static const char* const HUD_NAMES[WIKI_NHUD] = { "play", "speed", "rew", "fwd", "track", "bookmark", "leave", "leave:no",
                                                    "rewind", "live_play", "live_now", "takeover", "takeas", "lanes", "lane",
                                                    "main", "export", "delete", "jump", "sight", "follow", "cursors",
-                                                   "clicks", "selections", "chat", "stats", "close", "chip" };
+                                                   "clicks", "selections", "chat", "marks", "stats", "close", "chip" };
 /* sim.js's CHIPS, in WIKI_CHIP_* order */
 static const char* const CHIP_NAMES[WIKI_NCHIP] = { "player", "team", "metal", "energy", "units", "army", "kills", "losses",
                                                     "excess" };

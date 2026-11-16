@@ -200,7 +200,7 @@ enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_U
    own three, then the replay HUD's Take over set (tagpu_hudinput.c pick_act and lane_act): Take
    over, a picker row, the Forks bay, a lane, Back to main recording, a lane's Save as a replay and
    its Delete; then the Players set (tagpu_hudinput.c act): a row's Jump, Sight and Follow, the
-   four overlay switches, the stats window's button, its close and a chip. A replay entry's script
+   five overlay switches, the stats window's button, its close and a chip. A replay entry's script
    presses the replay HUD's, a live entry's the live HUD's, which share rew, fwd and track
    (tagpu_wikidata_hud_presses), a takeover entry's all three sets (tagpu_wikidata_hud_takeover), a
    players entry's the replay HUD's and the Players set (tagpu_wikidata_hud_players). leave:yes and a
@@ -210,8 +210,8 @@ enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_U
 enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
        WIKI_HUD_LEAVE_NO, WIKI_HUD_REWIND, WIKI_HUD_LIVE_PLAY, WIKI_HUD_LIVE_NOW, WIKI_HUD_TAKEOVER, WIKI_HUD_TAKEAS,
        WIKI_HUD_LANES, WIKI_HUD_LANE, WIKI_HUD_MAIN, WIKI_HUD_EXPORT, WIKI_HUD_DELETE, WIKI_HUD_JUMP, WIKI_HUD_SIGHT,
-       WIKI_HUD_FOLLOW, WIKI_HUD_CURSORS, WIKI_HUD_CLICKS, WIKI_HUD_SELECTIONS, WIKI_HUD_CHAT, WIKI_HUD_STATS,
-       WIKI_HUD_CLOSE, WIKI_HUD_CHIP, WIKI_NHUD,
+       WIKI_HUD_FOLLOW, WIKI_HUD_CURSORS, WIKI_HUD_CLICKS, WIKI_HUD_SELECTIONS, WIKI_HUD_CHAT, WIKI_HUD_MARKS,
+       WIKI_HUD_STATS, WIKI_HUD_CLOSE, WIKI_HUD_CHIP, WIKI_NHUD,
        WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_HUD_FOLD, WIKI_NPRESS };
 
 /* THE STATS WINDOW'S CHIPS a `chip` press names (sim.js's CHIPS, in its order): the two splits, then

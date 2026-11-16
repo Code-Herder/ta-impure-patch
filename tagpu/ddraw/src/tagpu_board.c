@@ -767,6 +767,24 @@ int tagpu_board_apply(const void* body, unsigned bytes)
     return 1;
 }
 
+int tagpu_board_replay_apply(const void* body, unsigned bytes, uint32_t tick)
+{
+    const unsigned char* b = (const unsigned char*)body;
+    TagpuBoardOp op;
+    unsigned seat, at = TAGPU_BW_HEAD, next;
+    if (!tagpu_boardwire_check(b, bytes, &seat)) return 0;
+    while (at < bytes && (next = tagpu_boardwire_next(b, bytes, at, &op)) != 0) {
+        tagpu_boardstore_apply(&s_store, seat, &op, tick, op.may);
+        at = next;
+    }
+    return 1;
+}
+
+void tagpu_board_replay_clear(void)
+{
+    tagpu_boardstore_clear(&s_store, (uint32_t)tagpu_settings_marklife() * TICKS_PER_S);
+}
+
 unsigned tagpu_board_outbox(unsigned char* body, unsigned cap)
 {
     TagpuBoardOp op;
@@ -879,16 +897,33 @@ static void edges(const char* ta, unsigned see, const unsigned char col[10], DWO
     }
 }
 
+/* A REPLAY'S AUDIENCE: what the recorded game showed the seat the Sight follows -- its own and its
+   mutual allies' marks, every seat's for a watcher (tagpu_share_board_seen_by) -- and every seat's
+   in the full view. 0 while the Marks switch is off. */
+static unsigned replay_seen(void)
+{
+    int sight;
+    if (!tagpu_replay_live() || !tagpu_replay_overlay(TAGPU_OV_MARKS)) return 0;
+    sight = tagpu_replay_sight();
+    return sight < 0 ? (1u << TAGPU_BW_SEATS) - 1u : tagpu_share_board_seen_by((unsigned)sight);
+}
+
 int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, unsigned* ns,
                      TAGPU_PK_BDMARK* marks, unsigned maxm, unsigned* nm, int* cut)
 {
     TagpuWorld w;
     unsigned char col[10];
     unsigned i, k, see;
+    int replay = 0;
     const DWORD now = GetTickCount();
     *ns = *nm = 0;
-    if (!live(&w)) return 0;
-    see = shown_seats();                /* a muted seat's marks and pointer are not drawn */
+    /* A replay draws what the recording holds: no gesture, pointer or edge arrow of the viewer's,
+       and the lines and markers of the seats the Sight shows */
+    if (!live(&w)) {
+        if (!s_armed || g_ddraw.renderer != vk_render_main || !(w.ta = (char*)main_block()) ||
+            !(see = replay_seen())) return 0;
+        replay = 1;
+    } else see = shown_seats();         /* a muted seat's marks and pointer are not drawn */
     /* the player's lifetime, read every frame: a change applies to the marks already made */
     s_store.life = (uint32_t)tagpu_settings_marklife() * TICKS_PER_S;
     for (k = 0; k < 10; k++) col[k] = seat_colour(w.ta, k);
@@ -896,9 +931,10 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
     tagpu_boardstore_expire(&s_store, game_tick(w.ta));
     if (s_box.open && s_box.id && !tagpu_boardstore_find(&s_store, s_box.id)) s_box.open = 0;
     memset(h, 0, sizeof *h);
-    h->flags = (uint8_t)((s_held ? TAGPU_PK_BD_HELD : 0) | (s_penOn ? TAGPU_PK_BD_PEN : 0) |
-                         (s_box.open ? TAGPU_PK_BD_BOX : 0) |
-                         (s_g.kind == G_ERASE && s_penOn ? TAGPU_PK_BD_ERASE : 0));
+    if (!replay)
+        h->flags = (uint8_t)((s_held ? TAGPU_PK_BD_HELD : 0) | (s_penOn ? TAGPU_PK_BD_PEN : 0) |
+                             (s_box.open ? TAGPU_PK_BD_BOX : 0) |
+                             (s_g.kind == G_ERASE && s_penOn ? TAGPU_PK_BD_ERASE : 0));
     h->colour = col[(unsigned)w.player < 10 ? (unsigned)w.player : 0];
     h->black = *(const unsigned char*)(w.ta + M_GUICOL + GUI_BLACK);
     memcpy(h->pen, s_pen, sizeof h->pen);
@@ -930,6 +966,7 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
         o->len = (uint8_t)text_copy(o->text, m->text, m->len);
         o->ping = ping_of(m->id, now);
     }
+    if (replay) return 1;
     /* THE ALLIES' POINTERS, after every marker: the store holds at most TAGPU_BS_MARKS markers, so
        the TAGPU_PK_BD_CURSORS records past them are always free for these */
     {

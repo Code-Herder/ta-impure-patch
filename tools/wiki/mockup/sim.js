@@ -1004,10 +1004,10 @@ const WikiSim = (() => {
      own three (rew, fwd and track are both HUDs', and mean the live HUD's in a live game), then the replay HUD's Take
      over set (tagpu_hudinput.c pick_act and lane_act): Take over, a picker row, the Forks bay, a lane, Back to main
      recording, a lane's Save as a replay and its Delete; then the Players set (tagpu_hudinput.c act): a row's
-     Jump, Sight and Follow, the four overlay switches, the stats window's button, its close and a chip */
+     Jump, Sight and Follow, the five overlay switches, the stats window's button, its close and a chip */
   const HUD_CONTROLS = ['play', 'speed', 'rew', 'fwd', 'track', 'bookmark', 'leave', 'leave:no', 'rewind', 'live_play', 'live_now',
     'takeover', 'takeas', 'lanes', 'lane', 'main', 'export', 'delete', 'jump', 'sight', 'follow', 'cursors', 'clicks',
-    'selections', 'chat', 'stats', 'close', 'chip'];
+    'selections', 'chat', 'marks', 'stats', 'close', 'chip'];
   const REPLAY_CONTROLS = HUD_CONTROLS.slice(0, 8), LIVE_CONTROLS = ['rewind', 'rew', 'fwd', 'track', 'live_play', 'live_now'];
   const TAKEOVER_CONTROLS = HUD_CONTROLS.slice(11, 18), PLAYERS_CONTROLS = HUD_CONTROLS.slice(18);
   /* the stats window's chips a `chip` press names, in tagpu_wikidata.h's WIKI_CHIP_* order: the two splits, then

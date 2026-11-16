@@ -57,13 +57,14 @@
 
  "column": {
   "r": 8, "t": 8, "w": 250, "gap": 2, "header_gap": 4, "dock_gap": 8, "act": "column",
-  "foot": {"part": "foot_one", "w": 204, "h": 35, "gap": 6,
+  "foot": {"part": "foot_one", "w": 244.078, "h": 35, "gap": 6,
    "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
    "buttons": [
     {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "tip": "Stats",               "icon": {"name": "stats", "w": 17, "h": 17}},
     {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "tip": "Players' cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
     {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "tip": "Players' clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
     {"in": "bay_selections", "act": "selections", "toggle": "selections", "tip": "Players' selections", "icon": {"name": "selections", "w": 17, "h": 17}},
+    {"in": "bay_marks",      "act": "marks",      "toggle": "marks",      "tip": "Players' marks",      "icon": {"name": "jump", "w": 17, "h": 17}},
     {"in": "bay_chat",       "act": "chat",       "toggle": "chat",       "tip": "Chat",                "icon": {"name": "chat", "w": 17, "h": 17}}
    ]},
   "scroll": {

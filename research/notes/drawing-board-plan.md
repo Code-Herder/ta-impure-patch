@@ -2,9 +2,9 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 5 — the local
-board, its network channel, the allies' pointers, finding marks and the settings — are built and
-verified on the branch ([board](modules/board.html)); landing 6 is not.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. All six landings — the local
+board, its network channel, the allies' pointers, finding marks, the settings and replays — are
+built and verified on the branch ([board](modules/board.html)); the landing on main remains.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -124,7 +124,10 @@ landings' notes as each one uses them.
    **built**, and so is the key's press-to-bind row (decision 8): a plain button whose caption is
    the key's name and no accelerator; Esc, Tab, Return, Backspace, the modifiers, the three lock
    keys, F10 and Print Screen cannot be the key.
-6. **Replays.** The history keeps the marks so a seek restores them; the replay HUD's Marks switch.
+6. **Replays.** A multiplayer recording's playback applies its marks, renumbered by each sender's
+   roster, and a seek rebuilds them; the full view shows every seat's, a Sight what that seat saw;
+   the replay HUD's Marks switch is a sixth foot-plate bay. **Built.** Skirmish recordings keep no
+   marks (decision 9).
 
 The landing on main runs the replay gate, as the recorder's channel changes.
 

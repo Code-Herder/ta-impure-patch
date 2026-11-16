@@ -52,6 +52,7 @@ typedef struct { float t; int kind; int seat; } HUDMARK;   /* seat < 0: a bookma
 #define HUD_TOG_CLICKS      4u
 #define HUD_TOG_SELECTIONS  8u
 #define HUD_TOG_CHAT        16u
+#define HUD_TOG_MARKS       32u
 unsigned tagpu_hudlay_toggle(const char* name);    /* 0: no such toggle */
 const char* tagpu_hudlay_toggle_name(unsigned bit);
 

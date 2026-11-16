@@ -51,6 +51,9 @@ int tagpu_share_give(unsigned index, float metal, float energy);
    record's; a watcher's marks are seen by watchers alone. 0 with no controlled player. Game
    thread. */
 unsigned tagpu_share_board_seen(void);
+/* the same audience for record `c` (below the ten), whoever controls the level: a replay's Sight
+   seat (tagpu_board.c). 0 for an inactive record. Game thread. */
+unsigned tagpu_share_board_seen_by(unsigned c);
 
 /* Record `index`'s name, NUL-terminated, into out[0..cap): 1, or 0 for no level in play or a
    record past the ten. Game thread. */

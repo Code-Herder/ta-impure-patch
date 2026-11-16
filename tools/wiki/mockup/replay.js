@@ -146,11 +146,11 @@ const WikiReplay = (() => {
      entry's viewer presses -- the replay HUD's, the Players set and a team row's fold, which only the player presses;
      the stats window's measures, the chips after the two splits in their order (layout.json window.measures), the one a
      replay starts on, and the samples a seat keeps: one at the walk's first tick and one every 30 GameTime to
-     GAME_END_MAX; the four overlay switches (tagpu_hudlay.h HUD_TOG_CURSORS, _CLICKS, _SELECTIONS, _CHAT), all on at a
+     GAME_END_MAX; the five overlay switches (tagpu_hudlay.h HUD_TOG_CURSORS, _CLICKS, _SELECTIONS, _CHAT, _MARKS), all on at a
      replay's start; a Sight request's "none" (-1 is the full map); the radar pass's 30-tick deadline */
   const PL_PRESSES = [...PRESSES, ...Sim.PLAYERS_CONTROLS, 'fold'];
   const MEASURES = Sim.CHIPS.slice(2), MEASURE0 = MEASURES.indexOf('units'), STAT_PTS = Math.trunc(Sim.GAME_END_MAX / RATE) + 1;
-  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16 }, TOG_ALL = 2 | 4 | 8 | 16, NOT_ASKED = -2, PASS = 30;
+  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16, marks: 32 }, TOG_ALL = 2 | 4 | 8 | 16 | 32, NOT_ASKED = -2, PASS = 30;
 
   /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h (sim.js holds the refresh grid, which its
      loader's kept forks are held to; simparity compares them case by case): the refresh interval, the live forks a

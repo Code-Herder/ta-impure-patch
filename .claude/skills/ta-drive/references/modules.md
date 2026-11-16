@@ -1092,7 +1092,8 @@ block that reads to its last complete block.
   items, <m> selected units`. Triggers: `follow <S>`, `follow free`, `jump <S>`, `pov`.
 - **The overlays** (the same recordings; Vulkan only, GDI draws none): every recorded player's
   cursor, click rings and selection rectangles, in that player's colour. `tacli replay overlay
-  <i> cursors|clicks|selections|chat on|off` is one of the replay HUD's four foot-plate switches;
+  <i> cursors|clicks|selections|chat|marks on|off` is one of the replay HUD's five foot-plate
+  switches (`marks`: the drawing board's lines and markers in a multiplayer recording);
   it waits for `replay: overlay <name> on|off`, or `replay:
   chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
   <name> on|off`, and `chat hide` / `chat show`.

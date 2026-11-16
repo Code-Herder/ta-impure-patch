@@ -256,10 +256,11 @@ int tagpu_replay_follow_request(int seat, int once);
 int tagpu_replay_followed(void);
 
 /* THE OVERLAYS, game thread only (tagpu_replay.c, THE OVERLAYS): every recorded player's cursor,
-   clicks and selection, built at the frame visit from the recording, and the four switches of the
-   HUD's foot plate -- the three overlays and the chat -- each on at every playing's start and
-   never saved. `which` is a TAGPU_OV_*; a switched-off overlay produces nothing. */
-enum { TAGPU_OV_CURSORS, TAGPU_OV_CLICKS, TAGPU_OV_SELECTIONS, TAGPU_OV_CHAT, TAGPU_OV_N };
+   clicks and selection, built at the frame visit from the recording, and the five switches of the
+   HUD's foot plate -- the three overlays, the chat and the drawing board's marks (tagpu_board.c)
+   -- each on at every playing's start and never saved. `which` is a TAGPU_OV_*; a switched-off
+   overlay produces nothing. */
+enum { TAGPU_OV_CURSORS, TAGPU_OV_CLICKS, TAGPU_OV_SELECTIONS, TAGPU_OV_CHAT, TAGPU_OV_MARKS, TAGPU_OV_N };
 int  tagpu_replay_overlay(int which);
 void tagpu_replay_overlay_set(int which, int on);
 /* The publisher's two reads, after the draw the frame visit precedes: this frame's cursor and

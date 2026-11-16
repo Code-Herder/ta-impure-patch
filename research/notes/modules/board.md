@@ -39,7 +39,11 @@ one elsewhere on the HUD is not drawn. A watcher sees every player's.
 pings there. An ally's new marker off the view gets an arrow at the view's edge for 10 s; a click
 on the arrow moves the camera to it, and `Ctrl`+`\` moves it to the last one received. Each ally's
 chip on the allies' ribbon carries the ally's activity, a Mute and a Last marker
-(*Finding marks*, below). Marks in a replay are the plan's last landing ([the plan](../drawing-board-plan.html)).
+(*Finding marks*, below).
+
+**In a replay** of a network game the marks are drawn as the game made them, from the recording:
+the full view shows every seat's, a seat's Sight what that seat saw. The replay HUD's *Marks*
+switch hides or shows them (*In a replay*, below). A skirmish recording has none.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
@@ -99,7 +103,7 @@ nearest the viewer wins when pins overlap.
 Every change to the marks is an **operation** — POINT (a new marker), EDIT (its text), MOVE,
 DELETE, LINE (one segment), ERASE (a point the eraser passed) — applied by one state machine,
 `tagpu_boardstore_apply(store, seat, op, tick, may)`. The player's own gestures apply theirs at
-once; the channel's arrive in delivery order; a replay will apply a recording's. The same
+once; the channel's arrive in delivery order; a replay applies a recording's. The same
 operations at the same ticks under the same masks give the same marks.
 
 The store keeps markers by id — the maker's seat in the top byte and the maker's sequence below,
@@ -160,6 +164,35 @@ consumption with it.
 (`tagpu_recfmt.h`). The history keeps any body of a source its roster names as an opaque record,
 as the live game drops rather than refuses one, so a malformed body cannot end a recording. The
 file tools read them (`tools/replay/recmp_file.py`, `board_ops`).
+
+## In a replay (`tagpu_replay.c`, `mp_mark`; `tagpu_board_replay_apply`)
+
+**What is applied.** A multiplayer recording's playback hands every envelope it composes to
+`mp_apply_held`, in ledger order. Each `RECMP_SEATS` envelope puts its origin's own roster into the
+playback's seat maps (`tagpu_recmp_seats_put`, destination the header's `mp_seats`), and each
+`RECMP_MARK` body is renumbered from its sender's numbering to the recording's by that roster —
+the seat must be one the roster gives the envelope's origin — as the live game's `mp_mark_apply`
+renumbers to its own, then applied by `tagpu_board_replay_apply` at its application tick (the
+recording's GameTime, *THE CLOCK* in `tagpu_replay.c`). Both the recording machine's own bodies
+(`RECMP_RECORD_PRODUCED`) and the ones it received (`RECMP_RECORD_CONSUMED`) are applied; proof
+tails are not. A body that is not one shows nothing and never stops the playing.
+
+**Every seat is stored**, each operation under the rights it carried: the viewer can change the
+Sight at any time, so the store holds what every peer would have held, and the fill picks. Nothing
+is said in chat, pinged or counted as received, and the pointers, edge arrows, text box and pen
+are not drawn: the playback has no gestures of the viewer's (`live()` refuses a puppet seat and
+the viewer's record 10).
+
+**The seek** empties the store (`tagpu_board_replay_clear`) together with the seat maps at
+`mp_rebuild` and in `mp_begin`, and the rebuild's composing applies every body up to the target
+again, so the board after a seek is the board the playing would have reached.
+
+**Who is shown** (`replay_seen`): in the full view (Sight off) every seat; with a seat's Sight,
+what that seat saw — its own, its mutual allies' and, for a watcher, every seat's
+(`tagpu_share_board_seen_by`, the live rule for any record). Off while the HUD's *Marks* switch is
+off (`TAGPU_OV_MARKS`, on at every playing's start, never saved; `tacli replay overlay <i> marks
+on|off`, trigger `overlay marks on|off`). The lifetime is the viewer's `marklife=`, counted in the
+recording's GameTime.
 
 ## The allies' pointers (`tagpu_rec_mp_cursors`, `tagpu_board_fill`)
 
@@ -335,6 +368,18 @@ The lifetime setting, MEASURED 2026-11-16 in a skirmish (`--defaults`): the pane
 `marklife=erased`; a line outlived 2440 ticks (81 s of game time); switching back to *Fade 60 s*
 removed it at once and stored `marklife=60`.
 
+Replays, MEASURED 2026-11-16 on two-player network games on Two Continents left through the menu
+(both recordings closed, 2195 and 605 iterations), each host recording played in a skirmish
+instance. Allied: the host drew a line at ticks 123..130, a marker `Hi`, the joiner a pin at 141,
+an erase across the host's line at 330 and a line at 461. Paused captures at about GameTime 147
+and 240 showed the whole line, `Hi` and the pin; at about 357 the line cut where the joiner
+erased; at about 483 the joiner's line too; the *Marks* switch off removed all of it and on
+brought it back; at about 2076 the host's marks and the pin (60 s after 141) were gone and the
+joiner's line was not; seeks back from the recording's end to 100 and from 334 to 128 rebuilt
+each state. Not allied: the
+full view drew both seats' marks, the host's Sight only the host's line, the joiner's only the
+joiner's line and pin, and the full view both again.
+
 Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
 there and back, each truncation and malformed field refused, the renumbering, the store's rights,
 eraser radius, ring, lifetime, a tick that goes back and the oldest marker's replacement — and
@@ -342,7 +387,14 @@ reads the body it writes with `recmp_file.board_ops`.
 
 ## Gaps
 
-- No marks in a replay yet — landing 6 of the plan.
+- A skirmish recording keeps no marks: the board's operations travel only on the network
+  channel, which a skirmish has none of.
+- A replay draws none of the board's pointers, activity, edge arrows or new-marker pings; each
+  recorded player's pointer is the replay's own cursor overlay. The markers' dots on the replay's
+  minimap come from the same packet records but were not looked at.
+- A replay's lifetime is the viewer's setting, not the one each recorded player had.
+- A recording stopped before its level's end keeps no contributions, its marks included: the
+  writer flushes them every 2 MB and at the end.
 - The lifetime is each player's own setting and is not sent, so allies with different settings
   see different boards, and an edit or move of a marker one peer has already dropped does nothing
   there.

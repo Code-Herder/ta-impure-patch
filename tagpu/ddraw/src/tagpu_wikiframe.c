@@ -515,7 +515,7 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
     } else {
         if (f->sight < -1 || f->sight >= f->nseat) f->sight = -1;
         if (f->follow < -1 || f->follow >= f->nseat) f->follow = -1;
-        f->tog &= HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+        f->tog &= WIKI_REPLAY_TOG_ALL;
         f->folded &= (1u << WIKI_SEATS) - 1;
         f->stat_open = (uint8_t)(f->stat_open != 0);
         f->stat_team = (uint8_t)(f->stat_team != 0);
@@ -687,7 +687,7 @@ void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int
                           const WIKIFRAMEOV* ov)
 {
     const WIKIREPLAYVIEW* P = ov ? ov->players : NULL;
-    const unsigned tog = P ? (unsigned)P->tog : HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+    const unsigned tog = P ? (unsigned)P->tog : WIKI_REPLAY_TOG_ALL;
     int i;
     v->frame = 1;
     v->cursor_shape = WIKI_CURSOR_N;
@@ -771,7 +771,7 @@ static void pl_state(const WIKIFRAMEREC* f, const HUDGLOBALS* gl, HUDSTATE* st)
         st->team_seat[t][st->team_n[t]++] = (uint8_t)k;
     }
     st->folded = f->folded & ((1u << st->nteam) - 1);
-    st->toggles = (f->tog & (HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT)) | (f->stat_open ? HUD_TOG_STATS : 0);
+    st->toggles = (f->tog & (WIKI_REPLAY_TOG_ALL)) | (f->stat_open ? HUD_TOG_STATS : 0);
     st->sight = f->sight;
     st->follow = f->follow;
     st->stats.open = f->stat_open;
@@ -817,7 +817,7 @@ void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, c
         st->team_seat[i][0] = (uint8_t)i;
     }
     st->nteam = st->nseat;
-    st->toggles = HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+    st->toggles = WIKI_REPLAY_TOG_ALL;
     for (i = 0; i < f->nmark && i < WIKIFRAME_MARKS; i++) {
         st->mark[i].t = (float)(f->mark[i].t / (double)TICK);
         st->mark[i].kind = f->mark[i].kind;

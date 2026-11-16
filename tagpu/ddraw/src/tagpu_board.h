@@ -49,6 +49,15 @@ int tagpu_board_apply(const void* body, unsigned bytes);
 /* a body the channel dropped before tagpu_board_apply: counted in the level's `refused=` */
 void tagpu_board_refused(void);
 
+/* A MULTIPLAYER REPLAY'S MARKS (tagpu_replay.c, mp_apply_held): a recorded RECMP_MARK body,
+   renumbered to the recording's seats, applied at its application tick `tick` as its seat's under
+   the rights it carries, whatever seat the viewer watches -- the fill picks what the Sight shows.
+   Nothing is said, pinged or counted as received. 0 for a body tagpu_boardwire_check refuses.
+   replay_clear empties the store: a seek, which then applies every body up to its target again.
+   Game thread. */
+int  tagpu_board_replay_apply(const void* body, unsigned bytes, uint32_t tick);
+void tagpu_board_replay_clear(void);
+
 /* THE ALLIES' RIBBON (tagpu_hudstate.c, tagpu_hudinput.c), by a seat's player record index.
    ally: its activity, TAGPU_PK_BDACT_*, NONE while muted; `*muted` whether this player has muted
    it, `*last` whether its last new marker is still on the board and shown. mute: its marks and

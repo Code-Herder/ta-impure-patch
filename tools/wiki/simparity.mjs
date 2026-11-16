@@ -1906,7 +1906,7 @@ function playersRefusalCases(pf, page) {
   for (const v of ['nope', 'Metal', 0, null]) r(`chip ${JSON.stringify(v)}`, 'refused', [{ at: 10, hud: 'chip', chip: v }]);
   r('chip without a chip', 'refused', [{ at: 10, hud: 'chip' }]);
   r('chip with a seat', 'refused', [{ at: 10, hud: 'chip', chip: 'metal', seat: 0 }]);
-  for (const c of ['cursors', 'clicks', 'selections', 'chat', 'stats', 'close'])
+  for (const c of ['cursors', 'clicks', 'selections', 'chat', 'marks', 'stats', 'close'])
     r(`${c} with a seat`, 'refused', [{ at: 10, hud: c, seat: 0 }]);
   for (const c of ['fold', 'leave:yes', 'takeover', 'takeas', 'lanes', 'live_now', 'rewind'])
     r(`${c}`, 'refused', [{ at: 10, hud: c, ...(c === 'takeas' || c === 'fold' ? { seat: 0 } : {}) }]);

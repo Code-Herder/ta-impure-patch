@@ -426,7 +426,7 @@ static void signed_text(C* c, const char* a, const char* b, R box_, const char* 
 
 /* ---- the controls -------------------------------------------------------------------------- */
 
-static const char* const TOGGLES[] = { "stats", "cursors", "clicks", "selections", "chat" };
+static const char* const TOGGLES[] = { "stats", "cursors", "clicks", "selections", "chat", "marks" };
 
 unsigned tagpu_hudlay_toggle(const char* name)
 {
@@ -2333,7 +2333,8 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     }
     st->nteam = 3;
     st->folded = 4;
-    st->toggles = HUD_TOG_STATS | HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+    st->toggles = HUD_TOG_STATS | HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT |
+                  HUD_TOG_MARKS;
     st->sight = 0; st->follow = -1;
     strcpy(st->toast, "toast");
     st->nmark = 3;

@@ -434,11 +434,12 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
 - **The whole column is a clickable**, `column.act` (`column`), from its top to the foot plate's
   bottom, under everything in it: a click on a row's body is the HUD's, and the wheel over it
   scrolls it.
-- **The foot plate** sits right-aligned, `foot.gap` below the list: five bays, `foot.w` × `foot.h`
-  (204 × 35). Their buttons are `stats`, which opens and closes the stats window, then the four
-  switches `cursors`, `clicks`, `selections` and `chat`; each of the five is a toggle drawn
-  pressed while on, with a hint (`tip`: "Stats", "Players' cursors", "Players' clicks",
-  "Players' selections", "Chat"). A `toggle` name the DLL does not know stops the build (`layout:
+- **The foot plate** sits right-aligned, `foot.gap` below the list: six bays, `foot.w` × `foot.h`
+  (244.078 × 35). Their buttons are `stats`, which opens and closes the stats window, then the five
+  switches `cursors`, `clicks`, `selections`, `marks` (the drawing board's lines and markers,
+  [board](modules/board.html)) and `chat`; each of the six is a toggle drawn pressed while on, with
+  a hint (`tip`: "Stats", "Players' cursors", "Players' clicks", "Players' selections", "Players'
+  marks", "Chat"). The Marks bay's icon is `jump`, the map pin. A `toggle` name the DLL does not know stops the build (`layout:
   no toggle '…'`).
 
 ### The header, the row and the hover strip
