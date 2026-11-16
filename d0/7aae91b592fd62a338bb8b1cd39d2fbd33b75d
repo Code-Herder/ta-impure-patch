@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5-5 effort=high range=f41f2061..d07aae91 fixes=7b2ae308 findings=9 acted=9 rejected=0 date=2026-11-16
+Drawing board landing 4 (finding marks, the ribbon's Mute and Last marker) and landing 5's lifetime setting. Two fresh read-only reviewers, the second on state written and cross-thread fields.
+1 MED the player's own gestures reached a muted ally's hidden marks (mark_at, local's may) -> shown_seats(); re-verified live: an erase over a muted marker left it on both peers.
+2 MED a jump did not release the engine's unit follow (place_eye releases nothing) -> tagpu_zoom_jump_eye; re-verified live after Ctrl+C.
+3 LOW shown() tested mute only, not seen() -> shown_seats().
+4 LOW the edge press kept an index into s_edge, rebuilt every fill -> the marker id.
+5 LOW an edge anchor was not bounded to TAGPU_BW_COORD -> skipped.
+6-9 docs: the ping's size (half extent), the hand-over comment, marklife under ignored defaults + settings.md + the per-player lifetime gap, the thread-split row and the misplaced jump comment.
