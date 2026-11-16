@@ -65,6 +65,13 @@ holds a record of the pair. In the same game J opened the in-game ALLIES dialog 
 `LIVEALLY<H's record on J>`, OK; engine/ui.md) and broke its alliance with H: H's counter at J's
 commander fell to 0 while J's at AI2's commander stayed 1, and after J allied H again it read 3.
 
+Each seat's acquisition takes its own contacts on the peer that hosts it. MEASURED 2026-11-15 in the
+same game, against a build without per-seat contacts: AI2's acquisition radar list on H took the AI3
+unit its own tower covers (the build without them did not, H being the viewed player there), and
+AI3's on J did not take J's commander (the build without them did: every unit of the viewed player
+carries bit 8). On J, hovering AI2's tower showed its status but no resource numbers, where the
+build without the panel showed its name and health bar alone.
+
 ## The files
 
 | file | thread | what |
