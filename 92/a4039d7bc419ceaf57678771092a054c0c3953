@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5-5 effort=high range=7b2ae308..92a4039d fixes=9ebd8cb8 findings=10 acted=10 rejected=0 date=2026-11-16
+Drawing board landing 5 (the draw key binds from the in-game panel). Two fresh read-only reviewers, the second on state written and keys held.
+1 MED (both) a plain button gets an engine quickkey from its caption (0x4A05E0 via 0x4A07D0 and GUI_Load) -> the row armed a binding on its own key; quickkey zeroed after every writer; re-verified live.
+2 LOW-MED a key held when the binding was armed was bound by its repeat and its release swallowed -> keys down at arming pass; re-verified with Left.
+3 LOW s_bindUp outlived a release the board did not see -> cleared from the key state and at level end.
+4 LOW F10, Print Screen, Num/Scroll Lock accepted -> refused.
+5 LOW %i read octal -> 0x-hex or decimal.
+6-10 docs: greyed under defaults.off (both rows), rows 32..443, 13-char caption, engine map 0x4A05E0 + the setter's caller, hook-map DRAWKEY row.
