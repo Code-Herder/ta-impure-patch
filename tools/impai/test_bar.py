@@ -862,17 +862,18 @@ class TestEnd(unittest.TestCase):
         self.T, self.events, self.Log = 1, events, Log
         return lane
 
-    def play(self, lane, gid, cap=27000, rec=None, units=()):
-        """Lane.play of game `gid` on the fake lane, its recording reading as `rec` (recording_evidence's shape;
-        by default each record's commander income and no death) and holding `units` alive at the iteration it is
-        asked for. self.read_at is that iteration."""
+    def play(self, lane, gid, cap=27000, rec=None, units=(), values=()):
+        """Lane.play of game `gid` on the fake lane (its `values` asked), its recording reading as `rec`
+        (recording_evidence's shape; by default each record's commander income and no death) and holding `units`
+        alive at every iteration it is asked for. self.read_at is the cap's, self.read_values the others'."""
         R, events = self.R, self.events
         rec = rec or {"at": 1, "income": {k: (1.0, 25.0) for k in range(10)}, "deaths": []}
-        self.applied, self.read_at = [], None
+        self.applied, self.read_at, self.read_values = [], None, None
 
-        def recording_evidence(path, R, at=None):
-            self.read_at = at
-            return dict(rec, units={"at": at, "units": list(units)}) if at is not None else rec
+        def recording_evidence(path, R, at=None, values=()):
+            self.read_at, self.read_values = at, list(values)
+            out = dict(rec, values={t: {"at": t, "units": list(units)} for t in values})
+            return dict(out, units={"at": at, "units": list(units)}) if at is not None else out
 
         def tacli(*a, **k):
             if a[:2] == ("scenario", "apply"):
@@ -885,7 +886,7 @@ class TestEnd(unittest.TestCase):
                 mock.patch.object(bar, "recording_evidence", recording_evidence), \
                 mock.patch.object(bar, "start_positions", lambda name, vfs=None: {2: (100, 100), 3: (900, 900)}):
             self.Log.seed = bar.game_seed(gid)
-            return lane.play(dict(bar.parse_id(gid), cap=cap))
+            return lane.play(dict(bar.parse_id(gid), cap=cap, values=list(values)))
 
     def files(self):
         return sorted(p.name for p in (self.tmp / "out").iterdir() if not p.name.endswith(".scenario.json")), \
@@ -934,8 +935,17 @@ class TestEnd(unittest.TestCase):
         self.assertEqual(r["end"]["A"]["tech_m"], 8.0)
         self.assertTrue(r["recording"].endswith(f"{gid}.imprec"))
         lane = self.lane(lambda T, s: 5, [eco_end(2), "impai: handicap rows scaled/exempt gametime=27015:"])
-        with self.assertRaisesRegex(self.R.CouldNotRun, "no value at the limit: .* type 40"):
+        with self.assertRaisesRegex(self.R.CouldNotRun, "no value of a seat's: .* type 40"):
             self.play(lane, gid, units=[(2, 40, 0.0)])                   # a type the level's table does not hold
+
+    def test_the_values_asked_at_fixed_gametimes_are_read_before_the_games_end(self):
+        gid = "bar-hota-pincushion-ac-1"                                 # A in seat 1, B in seat 2; won at 9000
+        lane = self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5,
+                         [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"])
+        r = self.play(lane, gid, units=[(1, 7, 0.0), (2, 9, 0.0)], values=(30000, 6000, 9000))
+        self.assertEqual((r["outcome"], self.read_at, self.read_values), ("A", None, [6000]))   # 9000 is its end
+        self.assertEqual(r["values"], {"6000": {"A": {"live": 60.0, "t": 6000}, "B": {"live": 60.0, "t": 6000}}})
+        self.assertNotIn("value", r)
 
     def test_a_persona_row_goes_to_its_lever_and_a_game_that_did_not_play_it_could_not_run(self):
         gid = "bar-p:L0-acidfoursome-ac-1"                               # A in seat 1
