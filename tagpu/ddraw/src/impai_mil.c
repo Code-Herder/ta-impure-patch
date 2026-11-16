@@ -759,6 +759,36 @@ static uint16_t substitute(const MDEC* d)
     return n ? types[n / 2] : (uint16_t)WQ_NONE;
 }
 
+_Static_assert(IMPAI_K_ASCOUT - IMPAI_K_FIGHTER + 1 == IMPAI_AIR_KS, "THE AIR HELD keeps every air class");
+
+/* THE AIR HELD: an aircraft is seen when it comes, and the picture counts a mobile enemy only while it is seen
+   (picture, below), so between raids the picture held no air, the table's anti-air share fell to 0 and the
+   anti-air structures' rule read none. Each air class's most value seen at once is held for IMPAI_AIR_HOLD ticks
+   after the seat last saw that much or more of it, and the picture counts the held value in the class's share and
+   the total, and in air_seen. MEASURED on TA Twilight's bar-nota-pincushion-ac-1 at d665a00a: the stock AI built
+   94 aircraft, ImpAI lost 221 of its 293 units to them and built 7 anti-air units and 3 anti-air structures. A held
+   value is the seat's own sight replayed, never what it did not see; a recorded value that is not a finite
+   non-negative number, or a tick past now, is let go. */
+static void air_held(MDEC* d, IMPAI_PICTURE_IN* pin)
+{
+    unsigned j;
+    d->st->air_seen = 0.0f;
+    for (j = 0; j < IMPAI_AIR_KS; j++) {
+        const unsigned k = IMPAI_K_FIGHTER + j;
+        float* held = &d->st->air_held[j];
+        uint32_t* t = &d->st->air_held_t[j];
+        const float seen = pin->kval[k];
+        if (!(*held >= 0.0f && *held < 1e30f) || seen >= *held || !(*t <= d->now && d->now - *t <= IMPAI_AIR_HOLD)) {
+            *held = seen;
+            *t = d->now;
+        } else {
+            pin->total += *held - seen;
+            pin->kval[k] = *held;
+        }
+        d->st->air_seen += pin->kval[k];
+    }
+}
+
 /* The seat's column of the knowledge rows, bounded by the view's row count: an enemy row is one whose owner is
    neither the seat nor an ally, or a radar contact never identified. Seen now (own sight, an ally's, or the
    radar pass) counts as present; a ghost counts only for a structure. Every type is held below nti before it
@@ -836,8 +866,6 @@ static void picture(MDEC* d)
             pin.total += e->value;
             if (e->mobile) {
                 if (t->klass < IMPAI_KS) pin.kval[t->klass] += e->value;
-                if (layer_of_class(t->klass < IMPAI_KS ? t->klass : 0) == TASIM_LAYER_AIR && t->klass < IMPAI_KS)
-                    d->st->air_seen += e->value;
                 mobile_value += e->value;
             } else {
                 if (th && th->dps_air > th->dps_ground) pin.aa_struct += e->value;
@@ -849,6 +877,7 @@ static void picture(MDEC* d)
             }
         }
     }
+    air_held(d, &pin);
     pin.own_extractors = (uint32_t)d->own_mex;
     pin.gametime = d->now;
     pin.tech = d->tech;

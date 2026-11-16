@@ -7083,6 +7083,44 @@ static void gunship(void)
     s_ft[M_AA].air = 1;
 }
 
+/* THE AIR HELD (impai_mil.c): four enemy gunships seen now beside a tank give the picture its gunship share and
+   air_seen; the gunships out of sight 300 ticks later, the share and air_seen are held; IMPAI_AIR_HOLD past the
+   last sighting they are let go; seen again and out of sight 300 ticks later, a recorded held value that is not a
+   number is let go at once. */
+static void check_air_held(void)
+{
+    IMPAI_MIL_OUT o;
+    float share[4], seen[4];
+    int c, k;
+    mil_world();
+    gunship();
+    s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
+    enemy(1300, M_TANK, 60, 60, IMPAI_LOS, 1);
+    for (c = 0; c < 4; c++) {
+        for (k = 0; k < 4; k++) enemy(1310 + k, M_SCOUT, 50 + 2 * k, 40, c ? IMPAI_GHOST : IMPAI_LOS, !c);
+        if (c == 1) s_w.gametime += 300;
+        if (c == 2) s_w.gametime += IMPAI_AIR_HOLD + 1;
+        if (c == 3) {
+            s_w.gametime += 300;
+            s_mil.air_held[IMPAI_K_GUNSHIP - IMPAI_K_FIGHTER] = NAN;
+        }
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the air held decision runs");
+        share[c] = s_mil.pic.f[IMPAI_F_GUNSHIP];
+        seen[c] = s_mil.air_seen;
+        if (c == 2) {
+            for (k = 0; k < 4; k++) enemy(1310 + k, M_SCOUT, 50 + 2 * k, 40, IMPAI_LOS, 1);
+            CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the air held decision runs");
+        }
+    }
+    printf("the air held: gunship share seen %.3f, out of sight %.3f, past the hold %.3f, a NaN held %.3f; "
+           "air_seen %.0f %.0f %.0f %.0f\n", (double)share[0], (double)share[1], (double)share[2], (double)share[3],
+           (double)seen[0], (double)seen[1], (double)seen[2], (double)seen[3]);
+    CHECK(share[0] > 0.0f && share[1] == share[0] && share[2] == 0.0f && share[3] == 0.0f,
+          "the air held: shares %g %g %g %g", (double)share[0], (double)share[1], (double)share[2], (double)share[3]);
+    CHECK(seen[0] == 4.0f * s_ti[M_SCOUT].value && seen[1] == seen[0] && seen[2] == 0.0f && seen[3] == 0.0f,
+          "the air held: air_seen %g %g %g %g", (double)seen[0], (double)seen[1], (double)seen[2], (double)seen[3]);
+}
+
 static void check_mil_stay_or_go(void)
 {
     static const char* const NAME[5] = { "a gunship over the wave", "twenty tanks against the wave",
@@ -13063,6 +13101,7 @@ static void check_military(void)
     check_mil_wave_plant();
     check_mil_recall();
     check_mil_recall_home();
+    check_air_held();
     check_mil_wave_layers();
     check_mil_arrival_cache();
     check_def_choice();

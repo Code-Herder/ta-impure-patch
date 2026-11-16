@@ -181,7 +181,14 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    median army type: early in a game the identified mobiles are the commander and its builders, which made every
    dot a commander with its D-gun (ARMCOM at 12 of 13 retreats on Lava Mania against TADR's install) or a target
    that deals nothing (CORCA, ProTA; MEASURED 2026-11-14). The air classes stay in: a dot carries no height, and
-   the stay-or-go (step 4) decides what a squad does about an aircraft. It fills A3's twelve features (`impai_picture_features`) and the enemy's mobile composition the type
+   the stay-or-go (step 4) decides what a squad does about an aircraft. **The air held** (`impai_mil.c`, THE AIR
+   HELD): each air class's most value seen at once is held for `IMPAI_AIR_HOLD` (5 400) ticks after the seat last
+   saw that much or more of it, and counts in the class's share, the total and `air_seen`, which the anti-air
+   structures' rule reads (one per `aa_struct_v`, at most `aa_struct_max`): an aircraft is seen when it comes, so
+   between raids the picture held no air, the anti-air share fell to 0 and the structures' rule read none -- on TA
+   Twilight's `bar-nota-pincushion-ac-1` at d665a00a the stock AI built 94 aircraft and ImpAI lost 221 of its 293
+   units to them, having built 7 anti-air units and 3 anti-air structures. With no air seen the anti-air share is
+   0, as the table's rows give it. It fills A3's twelve features (`impai_picture_features`) and the enemy's mobile composition the type
    choice weighs, and the enemy base's estimate: the value-weighted centre of the enemy structures known; with none
    known any longer, the last such centre, kept; before any was known, the start position nearest the seat's own
    that is not it (the starts are public). **Why the last centre**: a wave razes what it sees, and the rest of the

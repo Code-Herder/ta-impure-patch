@@ -688,6 +688,8 @@ typedef struct IMPAI_GOALFAIL {       /* 12 bytes                               
 #define IMPAI_SWEEP_SIDE 16
 #define IMPAI_SWEEP      (IMPAI_SWEEP_SIDE * IMPAI_SWEEP_SIDE)
 #define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land enemy known (impai_mil.c)          */
+#define IMPAI_AIR_KS     4              /* the air classes, IMPAI_K_FIGHTER .. IMPAI_K_ASCOUT                     */
+#define IMPAI_AIR_HOLD   5400           /* ticks THE AIR HELD keeps a class's value [hand-written: the bar's to move] */
 #define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
                                            bar's to move]                                                        */
 typedef struct IMPAI_FOE {            /* 12 bytes                                                              */
@@ -748,7 +750,11 @@ typedef struct IMPAI_MIL {
                                          the second factory                                                    */
     uint8_t  est_seen;                /* EST_*: what the estimate rests on (impai_mil.c, THE ENEMY BASE'S
                                          ESTIMATE); recorded data, compared with the values below only          */
-    float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
+    float    air_seen;                /* the seen enemy air value, the held included: the anti-air structures'
+                                         rule                                                                   */
+    float    air_held[IMPAI_AIR_KS];  /* THE AIR HELD (impai_mil.c): each air class's most value seen at once,
+                                         IMPAI_K_FIGHTER on, recorded data bounded where it is read            */
+    uint32_t air_held_t[IMPAI_AIR_KS];    /* the GameTime it was last seen at that much or more               */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
