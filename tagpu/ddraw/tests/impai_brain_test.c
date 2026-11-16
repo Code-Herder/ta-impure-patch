@@ -5551,7 +5551,9 @@ static void check_mil_estimate(void)
 
 /* THE STARTS LOOKED AT (impai_mil.c, est_start) on check_mil_estimate's three starts, thirty tanks at home and
    nothing known: (a) the nearer other start, (3216, 1616); (b) a tank standing at it, its sweep cell stood in: the
-   farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks).
+   farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks);
+   (h) the nearer start left empty by the level (WQ_SEATED_NONE), nothing stood in: the farther start; (j) both
+   other starts left empty: no estimate, the block left IMPAI_NO_ANCHOR.
    THE BASE'S FLOOR (lead): (d) an enemy extractor's ghost known and the thirty tanks: the lead; (e) the seat's own
    extractors worth more than the tanks' two thirds: the enemy's sum is at least its base, and no lead; (f) the
    same, every sweep cell of the map stood in now: the floor is gone, and the lead; (g) the same, the stamps
@@ -5563,12 +5565,14 @@ static void check_mil_starts_looked(void)
     IMPAI_MIL_OUT o;
     int c, n, k;
     float vt = 0.0f, vm, army_v = 0.0f, e_one = 0.0f, base_v = 0.0f;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 5; c++) {
         mil_world();
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 3;
+        if (c >= 3) s_w.starts[1].seated = WQ_SEATED_NONE;
+        if (c == 4) s_w.starts[2].seated = WQ_SEATED_NONE;
         for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
-        if (c >= 1) own(40, M_TANK, 3216 / 16, 1616 / 16);
+        if (c == 1 || c == 2) own(40, M_TANK, 3216 / 16, 1616 / 16);
         if (c == 2) own(41, M_TANK, 7216 / 16, 3216 / 16);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the starts' decision runs");
         s_w.gametime += 15;
@@ -5576,7 +5580,9 @@ static void check_mil_starts_looked(void)
         printf("the starts looked at, case %d: the estimate (%d, %d) est_seen %u\n", c, s_mil.ebx * 32 + 16,
                s_mil.ebz * 32 + 16, s_mil.est_seen);
         CHECK(s_mil.est_seen == EST_START &&
-              (c == 1 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32 : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
+              (c == 4   ? s_mil.ebx == IMPAI_NO_ANCHOR && s_mil.ebz == IMPAI_NO_ANCHOR
+               : c == 1 || c == 3 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32
+                                  : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
               "the starts looked at, case %d", c);
     }
     vt = s_ti[M_TANK].value;
@@ -9351,20 +9357,29 @@ static void check_yard_clear(void)
 }
 
 /* THE WALK OFF (impai_brain.c, THE YARD): the constructor at the waiting lab's centre, handed back, its one order a
-   move. (a) The move's point lies off the yard beyond its south exit, (464, 448) -- the walk the rule gives -- so it
-   is given nothing, at this decision and the next, each counted in yard_left. (b) The point lies on the yard: it is
-   moved off, one order. (c) The point lies off the yard west of it, (320, 368), through the lab's west wall (THE WAY
-   OFF): no walk off, so it is moved, out of the south exit. */
+   move, at GameTime 3 000. (a) The move's point lies off the yard beyond its south exit, (464, 448) -- the walk the
+   rule gives --, and its job is the economy's move there, given now: it is given nothing, at this decision and the
+   next, each counted in yard_left. (b) The point lies on the yard: it is moved off, one order. (c) The point lies
+   off the yard west of it, (320, 368), through the lab's west wall (THE WAY OFF): no walk off, so it is moved, out
+   of the south exit, though it is the economy's move given now. (d) The walk of (a) given WALK_OFF_T + 1 ticks ago: moved again, never where its last point
+   -- its job's cell's centre, (472, 456) -- would put it: the first ring's points and the next ring's south touch
+   it, so the next ring's south-west, (419, 461). (e) The move of (a) with no job of the economy's: moved, one
+   order, to (464, 448). (f) The walk of (a), given now, another constructor idle at (456, 440), on its point:
+   moved where it touches neither that constructor nor its last point, the next ring's south-west, (419, 461). */
 static void check_yard_walk(void)
 {
-    static const char* const NAME[3] = { "a walk off the yard", "a move onto the yard", "a walk through the lab" };
-    static const int32_t TO[3][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 } };
+    static const char* const NAME[6] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
+                                         "a walk lapsed", "a move not the economy's", "a point another stands on" };
+    static const int32_t TO[6][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
+                                      { 464, 448 } };
+    static const int32_t WANT[6][2] = { { 0, 0 }, { -1, -1 }, { -1, -1 }, { 419, 461 }, { 464, 448 }, { 419, 461 } };
     IMPAI_BRAIN_OUT out;
     int32_t x = 0, z = 0;
     int c, moved, n, left = 0;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 6; c++) {
         FUNIT* u;
         yard_world();
+        s_w.gametime = 3000;
         memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
         u = &s_w.unit[2];
         u->list[0].action = A_MOVE;
@@ -9372,6 +9387,15 @@ static void check_yard_walk(void)
         u->list[0].pos[0] = (int32_t)((uint32_t)TO[c][0] << 16);
         u->list[0].pos[2] = TO[c][1] >= 0 ? (int32_t)((uint32_t)TO[c][1] << 16) : s_w.unit[3].pos[2];
         u->n = 1;
+        if (c == 0 || c == 2 || c == 3 || c == 5) {
+            s_job[2].kind = IMPAI_JOB_NONE;
+            s_job[2].type = T_CONS;
+            s_job[2].build = s_job[2].target = (uint16_t)WQ_NONE;
+            s_job[2].cx = (int16_t)(TO[c][0] >> 4);
+            s_job[2].cz = (int16_t)((TO[c][1] >= 0 ? TO[c][1] : s_w.unit[3].pos[2] >> 16) >> 4);
+            s_job[2].since = (uint32_t)s_w.gametime - (c == 3 ? 901u : 0u);
+        }
+        if (c == 5) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
         CHECK(decide(&out) == 0, "decide");
         left = out.yard_left;
         if (!c) {
@@ -9385,6 +9409,9 @@ static void check_yard_walk(void)
                left);
         if (!c)
             CHECK(!n && !out.yard && left == 2, "the constructor walking off the yard is given nothing: %d orders", n);
+        else if (WANT[c][0] >= 0)
+            CHECK(moved && n == 1 && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && !left,
+                  "the constructor, %s: moved to (%d, %d)", NAME[c], x, z);
         else
             CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && z >= 26 * 16 && x >= 28 * 16 && x < 30 * 16 &&
                       out.yard == 1 && !left,
@@ -9396,17 +9423,20 @@ static void check_yard_walk(void)
 /* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
    (27..30, 26..33), and a constructor idle with a lone Park stands on it at (456, 456), clear of the lab grown by
    its half-size. (a) THE WAY OFF's rings round it, south first -- the line from the lab's centre through it --
-   then south-east and south-west: the nearest ring with a point off the way, 64 px out, gives south-west,
+   then south-west and south-east: the nearest ring with a point off the way, 64 px out, gives south-west,
    (411, 501); south and south-east still touch the way. (b) With no way kept it is left where it stands.
-   (c) With a second factory, cells (21..26, 29..34), over that point, the same ring's next point clear of both
-   and not through the lab: east, (520, 456). */
+   (c) With another plant's kept way, cells (22..26, 30..32), over that point -- its plant at cells (16..21,
+   34..39) --, the same ring's next point clear of every way: west, (392, 456). (d) With a solar, cells (22..25, 30..33), over it instead: the
+   same ring's next point the constructor touches no building at, west, (392, 456) -- a walk into the solar would
+   end at its edge, on the way. */
 static void check_yard_way(void)
 {
-    static const char* const NAME[3] = { "its way kept", "no way kept", "a factory south" };
-    static const int32_t WANT[3][2] = { { 411, 501 }, { 0, 0 }, { 520, 456 } };
+    static const char* const NAME[4] = { "its way kept", "no way kept", "another plant's way south-west",
+                                         "a solar south-west" };
+    static const int32_t WANT[4][2] = { { 411, 501 }, { 0, 0 }, { 392, 456 }, { 392, 456 } };
     IMPAI_BRAIN_OUT out;
     int c;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 4; c++) {
         IMPAI_WAYREC* w = &s_st.way[0];
         FUNIT* u;
         int32_t x = 0, z = 0;
@@ -9427,13 +9457,24 @@ static void check_yard_way(void)
             w->r[0][0] = 27; w->r[0][1] = 26; w->r[0][2] = 30; w->r[0][3] = 33;
             s_st.nway = 1;
         }
-        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 21, 29, 1);
+        if (c == 2) {
+            IMPAI_WAYREC* w2 = &s_st.way[1];
+            unit_add(&s_w, 5, T_FACTORY, 16, 34, 1);
+            memset(w2, 0, sizeof *w2);
+            w2->type = T_FACTORY;
+            w2->cx = 16;
+            w2->cz = 34;
+            w2->n = 1;
+            w2->r[0][0] = 22; w2->r[0][1] = 30; w2->r[0][2] = 26; w2->r[0][3] = 32;
+            s_st.nway = 2;
+        }
+        if (c == 3) unit_add(&s_w, 5, T_SOLAR, 22, 30, 1);
         CHECK(decide(&out) == 0, "decide");
         moved = last_move(0, 2, &x, &z);
         printf("the yard, a constructor on the way, %s: moved %d to (%d, %d), yard %u, ways %u\n", NAME[c], moved, x, z,
                out.yard, (unsigned)s_st.nway);
         CHECK(c == 1 ? !moved && !out.yard
-                     : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == 1,
+                     : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == (c == 2 ? 2 : 1),
               "the constructor on the way, %s: (%d, %d)", NAME[c], x, z);
     }
 }
@@ -9448,23 +9489,36 @@ static void check_yard_way(void)
    flying: round itself, the region alone, north over the lab, (464, 272). (f) Its own block on no label: held to
    none, south out of the exit, (464, 448). (g) Standing just east of the lab, at (520, 368), its own block
    (16, 11) and the blocks west of column 16 on its label, every other block on another: each point on its label
-   lies where the straight line crosses the lab, so it is left where it stands. */
+   lies where the straight line crosses the lab, so it is left where it stands. (h) A second constructor inside the
+   lab, at (464, 352): the first goes to (464, 448), and the second, never where it would touch the point the first
+   was sent to this decision, to the next ring's south, (464, 480). */
 static void check_yard_off(void)
 {
-    static const char* const NAME[7] = { "the exit open", "straight out on no label", "the exit on another label",
-                                         "no exit", "flying", "no label of its own", "east of the lab" };
-    static const int32_t WANT[7][2] = { { 464, 448 }, { 442, 438 }, { 0, 0 }, { 464, 272 }, { 464, 272 },
-                                        { 464, 448 }, { 0, 0 } };
+    static const char* const NAME[8] = { "the exit open", "straight out on no label", "the exit on another label",
+                                         "no exit", "flying", "no label of its own", "east of the lab",
+                                         "two inside" };
+    static const int32_t WANT[8][2] = { { 464, 448 }, { 442, 438 }, { 0, 0 }, { 464, 272 }, { 464, 272 },
+                                        { 464, 448 }, { 0, 0 }, { 464, 448 } };
     static uint16_t keep[sizeof s_labels / sizeof s_labels[0]];
     const uint32_t vtol = s_ti[T_CONS].flags;
     IMPAI_BRAIN_OUT out;
     int c;
-    for (c = 0; c < 7; c++) {
+    for (c = 0; c < 8; c++) {
         FUNIT* u;
-        int32_t x = 0, z = 0;
-        int moved, bx, bz;
+        int32_t x = 0, z = 0, x2 = 0, z2 = 0;
+        int moved, moved2 = 0, bx, bz;
         yard_world();
         memcpy(keep, s_labels, sizeof keep);
+        if (c == 7) {
+            unit_add(&s_w, 4, T_CONS, 28, 21, 1);
+            u = &s_w.unit[4];
+            u->pos[0] = (int32_t)((uint32_t)464 << 16);
+            u->pos[2] = (int32_t)((uint32_t)352 << 16);
+            u->list[0].action = A_PARK;
+            u->list[0].flags = 0x1001;
+            u->list[0].target = (uint16_t)WQ_NONE;
+            u->n = 1;
+        }
         for (bz = 13; (c == 1 || c == 2) && bz < FW_H / 2; bz++)
             for (bx = 0; bx < FW_W / 2; bx++)
                 if (c == 2 || bx == 14) s_labels[(size_t)bz * (FW_W / 2) + bx] = (uint16_t)(c == 2 ? 3 : 0);
@@ -9485,10 +9539,16 @@ static void check_yard_off(void)
         memcpy(s_labels, keep, sizeof keep);
         s_ti[T_CONS].flags = vtol;
         moved = last_move(0, 2, &x, &z);
+        if (c == 7) moved2 = last_move(0, 4, &x2, &z2);
         printf("the way off, %s: moved %d to (%d, %d), yard %u\n", NAME[c], moved, x, z, out.yard);
         CHECK(c == 2 || c == 6 ? !moved && !out.yard
-                               : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1,
+                               : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == (c == 7 ? 2 : 1),
               "the constructor by the lab, %s: (%d, %d)", NAME[c], x, z);
+        if (c == 7) {
+            printf("the way off, two inside, the second: moved %d to (%d, %d)\n", moved2, x2, z2);
+            CHECK(moved2 && x2 == 464 && z2 == 480, "(h) the second constructor clear of the first's point: (%d, %d)",
+                  x2, z2);
+        }
     }
 }
 

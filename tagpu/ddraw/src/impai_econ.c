@@ -293,7 +293,9 @@ static int reaches(const IMPAI_DEC* d, uint32_t mask, unsigned type)
      impai_mex_at: a water extractor where the patch lies deep enough, the land one elsewhere).
    - THE SEAT IS SHORT of reach (impai_econ_metal_short) past its first FINISHED factory, with no plant frame
      standing -- a frame's constructors are not yet the seat's to judge, and a frame interrupted in the opening
-     would otherwise read as a seat cut off from the metal on any map --, while MORE PATCHES LIE OPEN than
+     would otherwise read as a seat cut off from the metal on any map; THE ASSIST resumes a frame its builders
+     can reach (impai_build.c), and RESIDUAL: one none resumes holds the reach off while it stands --, while
+     MORE PATCHES LIE OPEN than
      the seat has extractors, built, framed or ordered, and neither a finished constructor of the seat's (the
      commander apart: THE COMMANDER'S REACH holds it near the anchor) nor a constructor type on the menu of one of
      its finished factories reaches one. The count is the seat's own measure of what it is cut off from: a patch

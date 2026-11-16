@@ -33,6 +33,9 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
    kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used; the factory's type, whose exits
    THE WAY OFF reads */
 typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_t type; } IMPAI_YARDREG;
+/* a point a builder leaves a yard for this decision, px, and the builder's half-size and slot (impai_build.c,
+   THE WAY OFF) */
+typedef struct IMPAI_WAYTO { int32_t x, z, h; uint16_t slot, pad; } IMPAI_WAYTO;
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
@@ -93,6 +96,10 @@ typedef struct IMPAI_DEC {
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     uint8_t       fbusy_q[IMPAI_IDLE_CAP];      /* 1: that busy factory's head is a BuildingBuild (THE YARD)  */
+    /* THE WAY OFF's points of the decision: one a builder THE YARD moves off a region or whose walk off it trusts,
+       and each such builder leaves its list, so at most the idle and helper lists' 2 x IMPAI_IDLE_CAP */
+    IMPAI_WAYTO   way_to[2 * IMPAI_IDLE_CAP];
+    int           nway_to;
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
     int           nbusy;                        /* finished builders at a job, not idle (THE ATTENTION)  */
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
@@ -439,8 +446,11 @@ int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
    type's half-size (impai_build.c, THE YARD's move) */
 int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
 /* 1 when px (x, z) is a point builder b leaves region g for (impai_build.c, THE WAY OFF): off g, on b's class's own
-   reach label, and reached from where b stands without crossing g's plant */
+   reach label, clear of the seat's buildings and builders and of the decision's other points, and reached from
+   where b stands without crossing g's plant */
 int  impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z);
+/* the point (x, z) px builder b leaves a yard for this decision, into IMPAI_DEC.way_to */
+void impai_way_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t x, int64_t z);
 int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */

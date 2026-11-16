@@ -1032,8 +1032,14 @@ static void walk_checks(IMPAI_DEC* d)
      decision orders it again.
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
      the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
-     region, on the builder's own reach label, not through the plant) is walking off already, and leaves its list
-     with no order (`yard_left`); a point order through the plant is no walk off, and the builder is moved again.
+     region, on the builder's own reach label, clear of the seat's buildings and builders, not through the
+     plant), given by the economy within WALK_OFF_T (its job NONE, its cell the point's within a cell, its order
+     time at most WALK_OFF_T ago), is walking off already, and leaves its list with no order (`yard_left`); its
+     point joins the decision's. Any other is moved again: a point order through the plant, one to a point
+     another builder now stands on, or a walk the engine has not ended in WALK_OFF_T -- a move to a point a unit
+     cannot stand on never ends (impai_build.c, THE WAY OFF), and trusted for ever it held its factory for good.
+     So a builder that cannot leave is moved once a WALK_OFF_T, never to the point it last failed by (THE LAST
+     POINT NOT AGAIN).
      WHY: the census lists such a builder idle (THE HAND-BACK), so the rule gave it the move again at every
      decision until it was off, each time one action of
      the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
@@ -1055,15 +1061,28 @@ static void walk_checks(IMPAI_DEC* d)
    leave (THE FACTORIES' ROOTS) less the root THE RELEASE keeps (impai_release_keep, impai_econ.c); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
    IMPAI_WAY_RECTS. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen, and the builders by its factory
    are moved off a yard that is producing, one move each; a builder held in by what this rule does not move -- an
-   enemy, a wreck, a unit of a plant with no kept way -- keeps its walk and its factory waits. */
+   enemy, a wreck, a unit of a plant with no kept way -- is moved once a WALK_OFF_T, and its factory waits. */
+#define WALK_OFF_T 900          /* GameTime ticks a walk off is trusted for: 30 s, a 900-px walk at 1 px a tick */
+
 static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
 {
     WQ_ORDER o;
+    const IMPAI_JOB* j = &d->in->job[b->slot];
     const int h = d->q->ops->head(d->q, b->slot, &o);
-    return h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
-           o.action != d->act_build && o.action != d->act_vtol_build &&
-           d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1 &&
-           impai_way_off(d, b, g, o.pos[0] >> 16, o.pos[2] >> 16);
+    int x, z, dcx, dcz;
+    if (!(h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
+          o.action != d->act_build && o.action != d->act_vtol_build &&
+          d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1))
+        return 0;
+    x = o.pos[0] >> 16;
+    z = o.pos[2] >> 16;
+    dcx = (x >> 4) - j->cx;
+    dcz = (z >> 4) - j->cz;
+    if (j->kind != IMPAI_JOB_NONE || j->type != b->type || !j->since || d->now - j->since > WALK_OFF_T ||
+        dcx < -1 || dcx > 1 || dcz < -1 || dcz > 1 || !impai_way_off(d, b, g, x, z))
+        return 0;
+    impai_way_to(d, b, x, z);
+    return 1;
 }
 
 static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)
@@ -1140,7 +1159,10 @@ static void yard_clear(IMPAI_DEC* d)
    refuses every decision holds the seat at one factory; its level-end line's `refused=` shows it. THE SEA PLANT
    TAKES THE LAND PLANT'S METAL (plant_metal): factory_per_m's pacing, or the surplus that pays a further plant's
    price (plant_m), so whatever lets a land plant come past the first lets the sea plant come first, and a land
-   plant never takes the slot a naval judgement asked a yard for. The pacing holds: a plant started on the
+   plant never takes the slot a naval judgement asked a yard for -- but THE REACHING PLANT (plant_reach, below),
+   which a seat none of whose constructors reaches the open metal is given whatever the judgement and the
+   income: a seat cut off from the metal cannot pay for the yard either. It counts against factory_max as any
+   plant, so the yard after it comes on the surplus (plant_m). The pacing holds: a plant started on the
    commander's own income alone spends the storage the economy runs on and holds its builder on a frame it cannot
    finish (MEASURED 2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass
    emptied the seat's metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607); the surplus

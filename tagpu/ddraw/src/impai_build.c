@@ -995,14 +995,24 @@ static int yards_hold(const IMPAI_DEC* d, int type, int64_t x, int64_t z)
    can walk to without crossing the plant, BY CONSTRUCTION, and impai_way_off is the one test of it, which both
    the move below and THE WALK OFF's trust in a standing move ask:
    - OFF THE REGION: b at the point touches neither the footprint g->r[0] nor the kept way's rectangles;
+   - OFF THE SEAT'S BUILDINGS AND BUILDERS: b at the point touches none of the census's buildings
+     (IMPAI_DEC.structs, frames included), none of the builders it lists -- idle, helping, jobbed, and the
+     commander -- where they stand, other than b, and none of the points this decision has already sent a
+     builder to or trusted its walk to (IMPAI_DEC.way_to). The engine's move to a point it cannot stand on never
+     ends: Move_Ground ends only on the goal reached (0x4031EB, engine/orders.md), and a mover stops short of a
+     structure's footprint and holds its move (MEASURED in the bar's cmdr run, engine/orders.md, Move_Ground).
+     WHY: on Lava Alley ca-4 two constructors on the CORVP's way, sent to points 25 and 66 px west, stood with
+     their moves from GameTime 30 614 to 36 014 and on, a third, idle, standing on both points, and the plant
+     waited with the store full; on Steel Jungle ac-7 two were sent within 28 px of each other, neither moved
+     (MEASURED 2026-11-16, diagnostic builds at c1dc2e70: `yard_left` 6 776 and 10 941 decisions);
    - ON b's OWN LABEL: the point's 32-px block carries b's class's reach label where b stands (builder_label:
      the content map's heights and features, no unit); a builder whose own blocks carry no label (0) is held to
      none, as one of a class with no labels, since every point would refuse it and its plant would wait for good;
    - NOT THROUGH THE PLANT: b INSIDE THE FOOTPRINT stands on the yard and leaves it through an EXIT (THE WAY OUT:
      an edge holding cells a product walks off; yard_exits, from the yard map alone): the point lies beyond an
      exit edge's line, on the side the exit opens to; b OUTSIDE it: the straight segment from b to the point
-     stays clear of the footprint's inside (segment_meets). A VTOL builder flies over the plant: only the region
-     is tested. A footprint with NO EXIT READABLE -- an air plant's pad, which holds none, a footprint past
+     stays clear of the footprint's inside (segment_meets). A VTOL builder flies over the plant and the
+     buildings: only the region and its label are tested. A footprint with NO EXIT READABLE -- an air plant's pad, which holds none, a footprint past
      WQ_FOOT_MAX, a yard map the WORLDQ cannot read -- tests b inside it on the region and its label alone: an exit
      it cannot see is no reason to hold its yard for good.
    WHY, MEASURED 2026-11-15 with a diagnostic build on four of round 3's p:L5 games (Lava Alley ca-4 and aa-8,
@@ -1049,34 +1059,124 @@ static int beyond_exit(const IMPAI_RECT* r, const IMPAI_EXITS* L, int k, int64_t
     }
 }
 
-/* THE WAY OFF's test with the plant's exits L already read (none needed for b outside the footprint) */
-static int way_off_with(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, const IMPAI_EXITS* L,
+#define WAY_OFF_NEAR 256        /* census buildings a search tests by index; past it, every building            */
+
+/* THE WAY OFF's terms for builder b, read once a search: the plant's exits (read only for b inside the footprint),
+   b's own label (builder_label), its half-size, and the census's buildings a point of the search can touch -- those
+   within `reach` px of the box (x0..x1, z0..z1) the search's points are taken round -- by index, nb -1 for every
+   building once more than WAY_OFF_NEAR are near, so a building is never left out */
+typedef struct WAY_OFF_CTX {
+    IMPAI_EXITS L;
+    int         label, nb, avoid;
+    int64_t     hb, ax, az;     /* avoid: the point px b is not sent to again (impai_yard_leave)             */
+    uint16_t    b[WAY_OFF_NEAR];
+} WAY_OFF_CTX;
+
+static void way_off_ctx(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x0, int64_t z0,
+                        int64_t x1, int64_t z1, int64_t reach, WAY_OFF_CTX* c)
+{
+    int k;
+    memset(&c->L, 0, sizeof c->L);
+    if (g->n >= 1 && !(d->in->ti[b->type].flags & IMPAI_TF_VTOL) &&
+        rect_holds(&g->r[0], 0, b->pos[0] >> 16, b->pos[2] >> 16))
+        yard_exits(d, g->type, &c->L);
+    c->label = builder_label(d, b);
+    c->hb = half_px(d, b->type);
+    c->avoid = 0;
+    c->ax = c->az = 0;
+    c->nb = 0;
+    for (k = 0; k < d->nstructs; k++) {
+        const IMPAI_RECT* r = &d->structs[k].r;
+        if (x0 >= ((int64_t)r->x1 + 1) * 16 + reach || x1 < (int64_t)r->x0 * 16 - reach ||
+            z0 >= ((int64_t)r->z1 + 1) * 16 + reach || z1 < (int64_t)r->z0 * 16 - reach)
+            continue;
+        if (c->nb == WAY_OFF_NEAR) {
+            c->nb = -1;
+            return;
+        }
+        c->b[c->nb++] = (uint16_t)k;
+    }
+}
+
+/* 1 when b at px (x, z) touches one of the census's buildings c names */
+static int way_off_built(const IMPAI_DEC* d, const WAY_OFF_CTX* c, int64_t x, int64_t z)
+{
+    const int n = c->nb < 0 ? d->nstructs : c->nb;
+    int k;
+    for (k = 0; k < n; k++)
+        if (rect_holds(&d->structs[c->nb < 0 ? k : c->b[k]].r, c->hb, x, z)) return 1;
+    return 0;
+}
+
+/* 1 when units of half-sizes ha and hb px centred at (ax, az) and (bx, bz) touch */
+static int touch(int64_t ax, int64_t az, int64_t ha, int64_t bx, int64_t bz, int64_t hb)
+{
+    const int64_t dx = ax > bx ? ax - bx : bx - ax, dz = az > bz ? az - bz : bz - az;
+    return dx < ha + hb && dz < ha + hb;
+}
+
+static int touch_ref(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_UNITREF* u, int64_t hb, int64_t x,
+                     int64_t z)
+{
+    return u->slot && u->slot != b->slot && (unsigned)u->type < d->in->nti &&
+           touch(x, z, hb, u->pos[0] >> 16, u->pos[2] >> 16, half_px(d, u->type));
+}
+
+/* 1 when b at px (x, z), half-size hb, touches another builder the census lists where it stands, the commander,
+   or a point the decision has sent another builder to (OFF THE SEAT'S BUILDINGS AND BUILDERS) */
+static int way_off_crowded(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t hb, int64_t x, int64_t z)
+{
+    int k;
+    for (k = 0; k < d->nway_to; k++)
+        if (d->way_to[k].slot != b->slot && touch(x, z, hb, d->way_to[k].x, d->way_to[k].z, d->way_to[k].h)) return 1;
+    for (k = 0; k < d->nidle; k++)
+        if (touch_ref(d, b, &d->idle[k], hb, x, z)) return 1;
+    for (k = 0; k < d->nhelpers; k++)
+        if (touch_ref(d, b, &d->helpers[k], hb, x, z)) return 1;
+    for (k = 0; k < d->njobbed; k++)
+        if (touch_ref(d, b, &d->jobbed[k], hb, x, z)) return 1;
+    return touch_ref(d, b, &d->commander, hb, x, z);
+}
+
+void impai_way_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t x, int64_t z)
+{
+    IMPAI_WAYTO* w;
+    if (d->nway_to >= (int)(sizeof d->way_to / sizeof d->way_to[0])) return;
+    w = &d->way_to[d->nway_to++];
+    w->x = (int32_t)x;
+    w->z = (int32_t)z;
+    w->h = (int32_t)half_px(d, b->type);
+    w->slot = b->slot;
+    w->pad = 0;
+}
+
+/* THE WAY OFF's test with its terms c read */
+static int way_off_with(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, const WAY_OFF_CTX* c,
                         int64_t x, int64_t z)
 {
     const IMPAI_RECT* r = &g->r[0];
     const IMPAI_TINFO* t = &d->in->ti[b->type];
     const int64_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
-    const int l = builder_label(d, b);
     int k;
     if (g->n < 1 || impai_yard_holds(d, g, b->type, x, z) || x < 0 || z < 0 || x > INT32_MAX || z > INT32_MAX)
         return 0;
-    if (l > 0 && impai_reach_at(d->in->reach, t->mclass, (int)(x >> 5), (int)(z >> 5)) != l) return 0;
+    if (c->label > 0 && impai_reach_at(d->in->reach, t->mclass, (int)(x >> 5), (int)(z >> 5)) != c->label) return 0;
     if (t->flags & IMPAI_TF_VTOL) return 1;
+    if (way_off_built(d, c, x, z) || way_off_crowded(d, b, c->hb, x, z) ||
+        (c->avoid && touch(x, z, c->hb, c->ax, c->az, c->hb)))
+        return 0;
     if (!rect_holds(r, 0, bx, bz)) return !segment_meets(r, bx, bz, x, z);
-    if (!L->n) return 1;
-    for (k = 0; k < L->n; k++)
-        if (beyond_exit(r, L, k, x, z)) return 1;
+    if (!c->L.n) return 1;
+    for (k = 0; k < c->L.n; k++)
+        if (beyond_exit(r, &c->L, k, x, z)) return 1;
     return 0;
 }
 
 int impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z)
 {
-    IMPAI_EXITS L;
-    memset(&L, 0, sizeof L);
-    if (g->n >= 1 && !(d->in->ti[b->type].flags & IMPAI_TF_VTOL) &&
-        rect_holds(&g->r[0], 0, b->pos[0] >> 16, b->pos[2] >> 16))
-        yard_exits(d, g->type, &L);
-    return way_off_with(d, b, g, &L, x, z);
+    WAY_OFF_CTX c;
+    way_off_ctx(d, b, g, x, z, x, z, half_px(d, b->type), &c);
+    return way_off_with(d, b, g, &c, x, z);
 }
 
 #define WAY_OFF_STEP  32        /* px between two rings of THE WAY OFF's search                                 */
@@ -1090,23 +1190,31 @@ static const int16_t WAY_DIR[8][2] = { { 0, -1024 }, { 724, -724 }, { 1024, 0 },
 /* THE YARD's move (impai_brain.c, THE YARD): builder b, when it touches region g -- a waiting factory's footprint,
    g->r[0], and its kept way out -- is moved off it, to a point THE WAY OFF accepts. THE SEARCH runs rings round
    its origins: for b inside the footprint, one origin an exit of the plant's type (yard_exits), on its edge's
-   line at the middle of its run, the first ring b's half-size plus 16 px out; for b outside it, a VTOL b, or b
-   inside a footprint with no exit readable, b's own position, the first ring 32 px out; each further ring WAY_OFF_STEP farther, WAY_OFF_RINGS of them. A ring
-   holds the eight directions of WAY_DIR from each origin, the preferred one first -- the exit's outward one, or
+   line at the middle of its run, the first ring b's half-size plus 16 px out, so b there clears the edge; for b
+   outside it, a VTOL b, or b inside a footprint with no exit readable, b's own position, the first ring
+   WAY_OFF_STEP out; each further ring WAY_OFF_STEP farther, WAY_OFF_RINGS of them. A ring holds the eight directions of WAY_DIR from each origin, the preferred one first -- the exit's outward one, or
    for b outside the one nearest the line from the footprint's centre through b -- then alternately clockwise and
    anticlockwise of it, each point held to the map. The first ring with a point THE WAY OFF accepts ends the
    search: its first such point that touches no factory and no kept way of the seat at all (yards_hold) is
    taken, else its first such point, so a builder is not moved onto another plant's yard or way when a clear one
-   is as near. Its job ends with the move (order_mode, job NONE). 1 when moved; 0 with no point accepted, b left
-   where it stands. WHY RINGS: a point pushed straight out of the exit met ground the builder's class cannot
+   is as near. Its job ends with the move (order_mode, job NONE, its cell the point's), and the point joins the
+   decision's (impai_way_to). THE LAST POINT NOT AGAIN: a b still on the region whose job is a move of the
+   economy's (job NONE, its type b's, its order time set) -- a walk off that lapsed (THE WALK OFF, impai_brain.c)
+   or one that ended and came back -- is not sent where that point would put it: the point did not take it off,
+   and the same search would choose it again. 1 when moved; 0 with no point accepted, b left where it stands.
+   RESIDUAL: only the last point is held off, so two points both closed by what the census does not list -- an
+   army unit, a busy builder, a feature the content map's block does not show -- can alternate, one WALK_OFF_T
+   each. WHY RINGS: a point pushed straight out of the exit met ground the builder's class cannot
    stand on past the way's end -- Steel Jungle ac-7's ARMVP, its exit south, the point at (9472, 4952) on no
    label, and its own product stood parked on its build point from GameTime 13 507 to the game's end, the
    factory waiting, the seat completing nothing (MEASURED 2026-11-16, a diagnostic build at 1322160c) -- while
    the ground beside the way is the builder's. Positions are recorded data: every product is of int64 terms of
    16-bit cells and pixels and WAY_DIR's 1024. BOUND: one yard map read of at most WQ_FOOT_MAX^2 bytes for b
-   inside the footprint; at most WAY_OFF_RINGS x WAY_OFF_ORIGINS x 8 points, each tested against g's at most 1 +
-   IMPAI_WAY_RECTS rectangles, one label read and one segment test or four exit tests, and in the last ring the
-   census's buildings and IMPAI_WAYS x IMPAI_WAY_RECTS kept rectangles for each accepted point. */
+   inside the footprint and one pass over the census's buildings (way_off_ctx); at most WAY_OFF_RINGS x
+   WAY_OFF_ORIGINS x 8 points, each tested against g's at most 1 + IMPAI_WAY_RECTS rectangles, one label read, the
+   at most WAY_OFF_NEAR buildings near the search (every building past them) and one segment test or four exit
+   tests, and in the last ring the census's buildings and IMPAI_WAYS x IMPAI_WAY_RECTS kept rectangles for each
+   accepted point. */
 int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
 {
     static const int8_t OUT_DIR[4] = { 0, 4, 6, 2 };    /* an exit's outward direction: north, south, west, east */
@@ -1116,14 +1224,15 @@ int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* 
     const int64_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
     const int64_t mw = (int64_t)d->m.w * 16 - 1, mh = (int64_t)d->m.h * 16 - 1;
     const int inside = g->n >= 1 && !(d->in->ti[b->type].flags & IMPAI_TF_VTOL) && rect_holds(r, 0, bx, bz);
-    IMPAI_EXITS L;
-    int64_t ox[WAY_OFF_ORIGINS], oz[WAY_OFF_ORIGINS], r0 = WAY_OFF_STEP;
+    WAY_OFF_CTX c;
+    int64_t ox[WAY_OFF_ORIGINS], oz[WAY_OFF_ORIGINS], r0 = WAY_OFF_STEP, x0 = bx, z0 = bz, x1 = bx, z1 = bz;
     int pref[WAY_OFF_ORIGINS], no = 0, ring, o, i, k;
     int64_t tx = -1, tz = -1;
     int32_t pos[3];
-    memset(&L, 0, sizeof L);
     if (g->n < 1 || mw < 0 || mh < 0 || !impai_yard_holds(d, g, b->type, bx, bz)) return 0;
     if (inside) {
+        IMPAI_EXITS L;
+        memset(&L, 0, sizeof L);
         yard_exits(d, g->type, &L);
         for (k = 0; k < L.n && no < WAY_OFF_ORIGINS; k++, no++) {
             const int along_x = L.edge[k] < 2;
@@ -1135,6 +1244,19 @@ int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* 
             pref[no] = OUT_DIR[L.edge[k]];
         }
         r0 = hb + 16;
+        x0 = (int64_t)r->x0 * 16;
+        z0 = (int64_t)r->z0 * 16;
+        x1 = ((int64_t)r->x1 + 1) * 16;
+        z1 = ((int64_t)r->z1 + 1) * 16;
+    }
+    way_off_ctx(d, b, g, x0, z0, x1, z1, r0 + (WAY_OFF_RINGS - 1) * WAY_OFF_STEP + hb + 1, &c);
+    {
+        const IMPAI_JOB* j = &d->in->job[b->slot];
+        if (j->kind == IMPAI_JOB_NONE && j->type == b->type && j->since) {
+            c.avoid = 1;
+            c.ax = (int64_t)j->cx * 16 + 8;
+            c.az = (int64_t)j->cz * 16 + 8;
+        }
     }
     if (!no) {
         int64_t best = INT64_MIN;
@@ -1158,7 +1280,7 @@ int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* 
                 int64_t px = ox[o] + WAY_DIR[k8][0] * rad / 1024, pz = oz[o] + WAY_DIR[k8][1] * rad / 1024;
                 px = px < 0 ? 0 : px > mw ? mw : px;
                 pz = pz < 0 ? 0 : pz > mh ? mh : pz;
-                if (!way_off_with(d, b, g, &L, px, pz)) continue;
+                if (!way_off_with(d, b, g, &c, px, pz)) continue;
                 if (tx < 0) {
                     tx = px;
                     tz = pz;
@@ -1176,7 +1298,9 @@ int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* 
     pos[1] = 0;
     pos[2] = (int32_t)((uint32_t)tz << 16);
     pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
-    return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
+    if (!order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4))) return 0;
+    impai_way_to(d, b, tx, tz);
+    return 1;
 }
 
 /* THE EXTRACTOR FOR THE PATCH. The type is chosen for the ground at the patch, never before it.

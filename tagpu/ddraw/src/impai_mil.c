@@ -923,13 +923,14 @@ static void picture(MDEC* d)
         d->st->ebz = (int16_t)((int32_t)(sz / sw) >> 5);
     } else if (impai_est_known(d->st) && d->st->ebx != IMPAI_NO_ANCHOR) {
         d->st->est_seen = EST_KEPT;
-    } else if (d->nstarts > 1) {
-        const int best = est_start(d);
+    } else {
+        const int best = d->nstarts > 1 ? est_start(d) : -1;
         d->st->est_seen = EST_START;
-        d->st->ebx = (int16_t)(d->starts[best].x >> 5);
-        d->st->ebz = (int16_t)(d->starts[best].z >> 5);
-    } else
-        d->st->est_seen = EST_START;
+        if (best >= 0) {
+            d->st->ebx = (int16_t)(d->starts[best].x >> 5);
+            d->st->ebz = (int16_t)(d->starts[best].z >> 5);
+        }
+    }
 }
 
 /* THE NAVAL JUDGEMENT, each decision right after the picture, so it follows the estimate as it moves:
@@ -1126,8 +1127,10 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
    s_mil and s_job). A start the land army cannot reach is skipped, so an island start never holds the estimate
    while one the army can walk to has not been looked at; a level with no reach map tests no reach. RESIDUAL: the
    reach is tested at the cell's centre, so a start whose cell centre is water or a cliff the army cannot stand on
-   is taken as out of reach although its shore may not be. BOUND: the starts (STARTS), each one cell read and one
-   land_block; the army once (land_reach). */
+   is taken as out of reach although its shore may not be. A start the level left empty (WQ_START.seated
+   WQ_SEATED_NONE, the engine's fixed-starts rule, as THE HELD GROUND reads it) is no candidate at all: no base
+   stands there. -1 when every other start is empty, and the seat has no estimate, as on a level of one start.
+   BOUND: the starts (STARTS), each one cell read and one land_block; the army once (land_reach). */
 static int est_start(const MDEC* d)
 {
     LANDREACH lr;
@@ -1138,7 +1141,7 @@ static int est_start(const MDEC* d)
         const int c = sweep_cell(d, d->starts[k].x, d->starts[k].z);
         const uint32_t y = dist(d->starts[k].x, d->starts[k].z, d->ax, d->az);
         int32_t cx, cz;
-        if (k == d->own_start) continue;
+        if (k == d->own_start || d->starts[k].seated == WQ_SEATED_NONE) continue;
         if (best < 0 || y < bd) { best = k; bd = y; }
         sweep_centre(d, c, &cx, &cz);
         if (!d->st->swept[c] && (open < 0 || y < od) && (!d->in->reach || land_block(d, &lr, cx >> 5, cz >> 5, 0))) {
