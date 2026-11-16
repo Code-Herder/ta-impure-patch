@@ -246,8 +246,9 @@ int  tagpu_settings_marklife(void);
 int  tagpu_settings_drawkey(void);
 /* Whether `vk` may be the draw key: a keyboard key (0x08..0xFE) other than Esc, which ends a
    binding; Tab, which opens the options; Return and Backspace, which the board's text box reads;
-   the modifiers (Shift, Ctrl, Alt, the Windows keys), which a held key's combinations need; and
-   Caps Lock, which toggles. */
+   the modifiers (Shift, Ctrl, Alt, the Windows keys), which a held key's combinations need; Caps,
+   Num and Scroll Lock, which toggle; F10, which arrives as WM_SYSKEYDOWN; and Print Screen, which
+   sends no key-down. */
 int  tagpu_settings_drawkey_ok(int vk);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing

@@ -705,10 +705,12 @@ static void parse_line(char* line)
         return;
     }
     if (!lstrcmpiA(k, "drawkey")) {
-        int vk;
+        int vk, n;
         char end;
-        /* a virtual key as a number, 0xDC or 220 */
-        if (sscanf(v, "%i%c", &vk, &end) == 1 && tagpu_settings_drawkey_ok(vk)) s_val[TS_DRAWKEY] = vk;
+        /* a virtual key as a number, 0xDC or 220; a leading 0 is not octal */
+        n = (v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) ? sscanf(v + 2, "%x%c", (unsigned*)&vk, &end)
+                                                          : sscanf(v, "%d%c", &vk, &end);
+        if (n == 1 && tagpu_settings_drawkey_ok(vk)) s_val[TS_DRAWKEY] = vk;
         else slog("drawkey=%s is not a key the drawing board can take - the default 0xDC stands", v);
         return;
     }
@@ -1234,7 +1236,8 @@ int tagpu_settings_drawkey_ok(int vk)
     case VK_ESCAPE: case VK_TAB: case VK_RETURN: case VK_BACK:
     case VK_SHIFT: case VK_CONTROL: case VK_MENU: case VK_LSHIFT: case VK_RSHIFT:
     case VK_LCONTROL: case VK_RCONTROL: case VK_LMENU: case VK_RMENU: case VK_LWIN: case VK_RWIN:
-    case VK_CAPITAL:
+    case VK_CAPITAL: case VK_NUMLOCK: case VK_SCROLL:
+    case VK_F10: case VK_SNAPSHOT:
         return 0;
     }
     return 1;

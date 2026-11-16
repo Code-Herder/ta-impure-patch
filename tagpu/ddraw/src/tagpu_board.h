@@ -28,8 +28,8 @@ int tagpu_board_char(unsigned ch);
    the board took it, and the engine must not see it. */
 int tagpu_board_mouse(unsigned msg);
 /* THE DRAW KEY'S BINDING (the in-game panel's Draw key row, tagpu_menu.c): bind(1) makes the next
-   key pressed that tagpu_settings_drawkey_ok takes the draw key, stored as TS_DRAWKEY; Esc ends
-   it unchanged, as do bind(0), the window losing the keyboard and the level's end. binding: it
+   key pressed that tagpu_settings_drawkey_ok takes the draw key, stored as TS_DRAWKEY -- a key
+   already down when it was armed does not count; Esc ends it unchanged, as do bind(0), the window losing the keyboard and the level's end. binding: it
    waits for that key. Game thread. */
 void tagpu_board_bind(int on);
 int  tagpu_board_binding(void);

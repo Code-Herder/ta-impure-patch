@@ -2887,7 +2887,18 @@ records 1 to the count `+0xB6` of `[top+4]`, `0x15B` bytes apart, comparing each
 bytes (`0x4E4760`, `0x4A0850`), into that record's `+0xB6`, sets `gi+0xCCA = 1` (`0x4A085E`) and
 calls `0x4A05E0(gi, index)` (`0x4A0868`). It never searches below the top screen, so it is called
 right after the opener has pushed YESORNO. One direct call in the image: `0x4265C9`. Impure calls
-it with `"TITLE"` to retitle Leave's question.
+it with `"TITLE"` to retitle Leave's question, and with `"DRAWKEY"` for the in-game panel's Draw
+key caption ([settings](../modules/settings.html)).
+
+**`0x4A05E0(gi, index)`: a button's accelerator from its caption** [DISASSEMBLED 2026-11-16,
+`0x4A05E0..0x4A07C4`]. Called by the label setter (`0x4A0868`), GUI_Load's build (`0x4A8B83`, and
+`0x4A9038` in the stage-1 build of `GUI_StageUpdateDraw`) and two setters at `0x4A09C0`/`0x4A09EB`
+(`0x4A0A57`, `0x4A0AF8`). For a type-1 button (none with `+0x1B` bit `0x10000`) whose stages
+`+0x136` are not 0 it clears the quickkey `+0x13A` (`0x4A065E..0x4A0668`); for a plain button
+(stages 0) it stores the first non-space character of the caption that no other button of the
+screen holds as its quickkey, compared through `tolower` (`0x4A06DA..0x4A07A2`). The button handler
+acts on a typed character matching it as on a click's release (`0x4A70FB..0x4A7129`), so a plain
+button whose caption changes gets a new key each time.
 
 **A screen's name, and a walk of the stack by name.** A screen's name is its record 0's,
 `[gm+4]+2`, 16 bytes: the field `GUICONTROL_IsOnTop 0x4AB060` compares, and `0x4A07D0` reads at

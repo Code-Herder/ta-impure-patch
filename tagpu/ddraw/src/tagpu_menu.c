@@ -1019,7 +1019,8 @@ static int common(char* b, int cap, int at, int id, int assoc, const char* name,
 
 /* THE DRAW KEY'S CAPTION: "Press a key" while the board's binding waits, else the key's name as
    the keyboard layout gives it, or its number; in the engine font's printable glyphs, without the
-   .GUI's separators `;` and `|`, and at most 23 characters, so it fits the button. */
+   .GUI's separators `;` and `|`, and at most 13 characters: the button's plate is drawn 120 px
+   wide whatever its width (gui-gadgets.md), and about 13 characters fit it. */
 static void drawkey_caption(char* out, int cap)
 {
     unsigned vk = (unsigned)tagpu_settings_drawkey();
@@ -1038,7 +1039,7 @@ static void drawkey_caption(char* out, int cap)
     if (scan) n = GetKeyNameTextA(lp, name, sizeof name);
     if (n <= 0) _snprintf(name, sizeof name, "Key 0x%02X", vk);
     name[sizeof name - 1] = 0;
-    for (i = 0; name[i] && i < 23 && i < cap - 1; i++)
+    for (i = 0; name[i] && i < 13 && i < cap - 1; i++)
         out[i] = name[i] < 0x20 || name[i] > 0x7E || name[i] == ';' || name[i] == '|' ? '?' : name[i];
     out[i] = 0;
 }
@@ -1321,6 +1322,28 @@ static int on_stack(char* main_p, void* gm)
    answered by `menu_accept`. */
 static unsigned s_dkShown;              /* the Draw key caption the panel shows (drawkey_tick) */
 
+/* THE DRAW KEY'S ROW HAS NO ACCELERATOR. The engine gives a plain button one: 0x4A05E0, which
+   GUI_Load's build (0x4A8B83, 0x4A9038) and the label setter 0x4A07D0 (0x4A0868) call, clears a
+   button's quickkey +0x13A when its stages +0x136 are not 0 and otherwise stores the first
+   character of its caption no other button holds (0x4A06DA..0x4A07A2); the button handler acts on
+   a typed character matching it as on a click's release (0x4A70FB..0x4A7129). The row is the
+   panel's one plain button, so its caption -- `\`, `Q` -- would be a key that arms a binding. So
+   its quickkey is zeroed after every writer this module causes: the panel's load and stage-1
+   build in slot_open and each caption in drawkey_tick, all on the game thread before its pump
+   takes the next key; drawkey_tick also zeroes it at every frame the panel is up. */
+static void drawkey_noaccel(char* gm)
+{
+    char* ctrls = gm ? *(char**)(gm + GM_CTRLS) : NULL;
+    int count, i;
+    if (!ctrls) return;
+    count = *(short*)(ctrls + 0xB6);
+    if (count <= 0 || count >= GUI_RECORDS) return;
+    for (i = 1; i <= count; i++) {
+        char* g = ctrls + (size_t)i * STRIDE;
+        if (g[0] == 1 && !memcmp(g + G_NAME, "DRAWKEY", 8)) g[0x13A] = 0;
+    }
+}
+
 static void slot_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
@@ -1372,6 +1395,7 @@ static void slot_open(char* main_p, int fresh)
        so the plane exists only now. Repaint it from the player's own install
        and ask for the redraw. */
     repaint_ground(ctrls);
+    drawkey_noaccel((char*)gm);
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
@@ -1997,11 +2021,13 @@ static void drawkey_tick(char* main_p)
     want = (unsigned)tagpu_settings_drawkey() | (tagpu_board_binding() ? 0x10000u : 0u);
     top = *(char**)(main_p + OFF_TOPGUI);
     /* only on our own screen while it is the top one: the setter writes the TOP screen */
-    if (want == s_dkShown || !top || *(void**)(top + GM_ONCMD) != (void*)tagpu_menu_oncommand) return;
-    memset(cap, 0, sizeof cap);
-    drawkey_caption(cap, sizeof cap);
-    ((set_label_fn)VA_SETLABEL)(main_p + OFF_GUIINFO, "DRAWKEY", cap);
-    s_dkShown = want;
+    if (want != s_dkShown && top && *(void**)(top + GM_ONCMD) == (void*)tagpu_menu_oncommand) {
+        memset(cap, 0, sizeof cap);
+        drawkey_caption(cap, sizeof cap);
+        ((set_label_fn)VA_SETLABEL)(main_p + OFF_GUIINFO, "DRAWKEY", cap);
+        s_dkShown = want;
+    }
+    drawkey_noaccel((char*)s_gm);
 }
 
 static void menu_tick(void)

@@ -122,7 +122,8 @@ landings' notes as each one uses them.
    has no row: the ribbon dims its chip as one group, and groups do not nest.
 5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings. The lifetime is
    **built**, and so is the key's press-to-bind row (decision 8): a plain button whose caption is
-   the key's name; Esc, Tab, Return, Backspace, Caps Lock and the modifiers cannot be the key.
+   the key's name and no accelerator; Esc, Tab, Return, Backspace, the modifiers, the three lock
+   keys, F10 and Print Screen cannot be the key.
 6. **Replays.** The history keeps the marks so a seek restores them; the replay HUD's Marks switch.
 
 The landing on main runs the replay gate, as the recorder's channel changes.

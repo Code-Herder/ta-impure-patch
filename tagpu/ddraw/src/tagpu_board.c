@@ -74,6 +74,7 @@ enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN, E_LAST, E_EDGE, E_SEAT };   /* E
 static int      s_armed;
 static int      s_bind;                /* the next key pressed becomes the draw key           */
 static unsigned s_bindUp;              /* the key a binding took, until its release           */
+static uint32_t s_bindHeld[8];         /* the keys down when the binding was armed: a bit a vk */
 static int      s_held;                /* the draw key is down                               */
 static int      s_taken[3];            /* the board took this button's press: its release too */
 
@@ -569,6 +570,15 @@ int tagpu_board_key(unsigned vk, int up)
         if (up) s_bindUp = 0;
         return 1;
     }
+    /* a release the board never saw -- a WM_SYSKEYUP under Alt, one the wiki took -- ends the
+       taking all the same, read from the key's state as the hold's is */
+    if (s_bindUp && !key_down(s_bindUp)) s_bindUp = 0;
+    /* A KEY ALREADY DOWN WHEN THE BINDING WAS ARMED is not the one pressed for it: its repeats and
+       its release go on as before, so the engine, which saw its press, sees its release too */
+    if (s_bind && vk < 256u && (s_bindHeld[vk >> 5] >> (vk & 31) & 1u)) {
+        if (up) s_bindHeld[vk >> 5] &= ~(1u << (vk & 31));
+        return 0;
+    }
     if (s_bind && !up) {
         if (vk == VK_ESCAPE) {
             s_bind = 0;
@@ -665,7 +675,14 @@ int tagpu_board_mouse(unsigned msg)
     return 1;
 }
 
-void tagpu_board_bind(int on) { s_bind = on != 0; }
+void tagpu_board_bind(int on)
+{
+    unsigned vk;
+    memset(s_bindHeld, 0, sizeof s_bindHeld);
+    if ((s_bind = on != 0))
+        for (vk = 0x08; vk < 0xFF; vk++)
+            if (key_down(vk)) s_bindHeld[vk >> 5] |= 1u << (vk & 31);
+}
 int  tagpu_board_binding(void) { return s_bind; }
 
 void tagpu_board_cancel(void)
@@ -962,6 +979,7 @@ void tagpu_board_level_end(void)
     s_logoHave = 0;
     s_mute = 0;
     s_bind = 0;
+    s_bindUp = 0;
     memset(s_recent, 0, sizeof s_recent);
     memset(s_lastOf, 0, sizeof s_lastOf);
     memset(s_act, 0, sizeof s_act);

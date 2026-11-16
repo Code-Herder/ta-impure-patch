@@ -258,7 +258,7 @@ under the last row, at 372, the Resource profile caption under it at 380, and th
 compile-time check (`menu_panel_fits_480`) refuses a build whose panel, hanging from engine row
 `BAR_H` 32, would end past row 480 — fourteen rows a column end at 444, fifteen would end at 468.
 **The width keeps it off the side bar**: a second check, `menu_panel_clears_side`, requires
-`SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel covers x 128..623 and rows 32..419
+`SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel covers x 128..623 and rows 32..443
 and never reaches the side bar. The reason is a strip of the side bar, between the minimap and the
 ORDERS buttons, that belongs to no GUI window: the engine draws it once a level and never again,
 so a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
@@ -274,21 +274,28 @@ hover query by the game thread, never greyed with the lane, held under `tagpu_de
 where it reads Zoomed out, and set to Always by Restore defaults. *Board marks* (Fade 60 s \|
 Until erased) is `marklife=` (`TS_MARKLIFE`, `60` or `erased`, default `60`): how long the drawing
 board's lines and markers stay, in seconds of game time ([board](board.html)); read every frame by
-the board on the game thread, never greyed, 60 under `tagpu_defaults.off`, and set to Fade 60 s by
-Restore defaults. It is each player's own: nothing sends it.
-*Draw key* is `drawkey=` (`TS_DRAWKEY`, a virtual key written `0x51`, read as hex or decimal,
-default `0xDC`, the key that types `\` on a US layout): the drawing board's key. It is the
-panel's one plain button (`stages=0`), whose caption is the key's name as the keyboard layout
-gives it (`GetKeyNameTextA`, the engine font's printable glyphs, `?` for `;` and `|`, at most 23
-characters). The generated `.GUI` carries the caption at attach; while the panel is up the menu's
-tick rewrites it through the engine's label setter `0x4A07D0` whenever the key or the binding
-changes (`drawkey_tick`). A click arms the board's binding (`tagpu_board_bind`) and the caption
-reads *Press a key*; the next key pressed that `tagpu_settings_drawkey_ok` takes is stored, and
-that key's press, repeats and release reach nothing else. Esc ends the binding with the key
-unchanged, as do a second click, the panel closing, the window losing the keyboard and the
-level's end; any other key the rule refuses — Tab, Return, Backspace, Caps Lock, the modifiers —
-goes on as without a binding. Never greyed, 0xDC under `tagpu_defaults.off`, and set back to
-0xDC by Restore defaults.
+the board on the game thread, greyed only under `tagpu_defaults.off`, where it reads 60, and set to
+Fade 60 s by Restore defaults. It is each player's own: nothing sends it.
+*Draw key* is `drawkey=` (`TS_DRAWKEY`, a virtual key written `0x51`, read as `0x`-prefixed hex or
+as decimal, a leading 0 not octal; default `0xDC`, the key that types `\` on a US layout): the
+drawing board's key. It is the panel's one plain button (`stages=0`), whose caption is the key's
+name as the keyboard layout gives it (`GetKeyNameTextA`, the engine font's printable glyphs, `?`
+for `;` and `|`, at most 13 characters: the plate is drawn 120 px wide whatever the button's
+width). The generated `.GUI` carries the caption at attach; while the panel is up the menu's tick
+rewrites it through the engine's label setter `0x4A07D0` whenever the key or the binding changes
+(`drawkey_tick`). **The row has no accelerator**: the engine gives a plain button one from its
+caption (`0x4A05E0`, [UI](../engine/ui.html)), so a caption of `\` or `Q` would make that key arm a
+binding; the menu zeroes the gadget's quickkey `+0x13A` after the panel's load, after each caption
+and at every frame the panel is up. A click arms the board's binding (`tagpu_board_bind`) and the
+caption reads *Press a key*; the next key pressed — not one already held when the binding was
+armed, whose repeats and release go on as before — that `tagpu_settings_drawkey_ok` takes is
+stored, and that key's press, repeats and release reach nothing else (a release the board does
+not see, under Alt or in the wiki, ends that from the key's state). Esc ends the binding with the
+key unchanged, as do a second click, the panel closing, the window losing the keyboard and the
+level's end; any other key the rule refuses goes on as without a binding: Tab, Return, Backspace,
+the modifiers, Caps, Num and Scroll Lock, F10 (a `WM_SYSKEYDOWN`) and Print Screen (no key-down).
+Greyed only under `tagpu_defaults.off`, where the key is 0xDC, and set back to 0xDC by Restore
+defaults.
 `PANEL_W` and `PANEL_H` size the GAF frame header, the ground, the ramp, the border and the corner
 bolts, and the panel is **composed at runtime** from the player's install rather than shipped, so
 no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212; the columns, the row
