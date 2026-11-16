@@ -515,6 +515,20 @@ the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\*
     a separated set, the report's edges, and a run on a fake player (a threshold bracketed and fitted, a draw's half
     point, the resume, a missing game played once more then could not judge, another DLL refused); also the `h:`
     pair's spec, its lever lines, the cheat flag and a kept result's multiplier.
+- **Measured.** The 57d39d71 brain with the lever cherry-picked (`ladder-base` 7621d396), on the bar's five maps,
+  2026-11-16, `.data/impai/runs/ladder/57d39d71/`. ImpAI Hard breaks even with OTA AI Hard at **m\* = ×1.95**
+  (90 % ×1.78..×2.14), slope 0.298 log2 a logit unit:
+
+  | look | ×m | points of 20 games |
+  |---|---|---|
+  | 1 | 2.828 | 0.150 |
+  | 2 | 1.682 | 0.650 |
+  | 3 | 2.181 | 0.525 |
+  | 4 | 2.484 | 0.200 |
+  | 5 | 2.328 | 0.225 |
+  | 6 | 2.253 | 0.300 |
+
+  The looks waited on the run lock beside other runs; the six took 2 h 10 min from the first admission.
 
 ## The champion gauntlet
 
