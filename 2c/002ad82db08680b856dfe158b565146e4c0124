@@ -1,0 +1,7 @@
+landing-review: model=claude-opus-5-5 effort=medium range=main..2c002ad8 findings=6 acted=6 rejected=0 date=2026-11-15
+1 HIGH draw-key hold stuck (WM_SYSKEYUP, wiki takes key-ups) -> hold polled from the key state, gesture ends with it; verified via the wiki.
+2 MED auto-repeat typed into the box -> draw key handled before the box, its WM_CHAR removed on the real path; repeat verified on the injected path.
+3 MED long segment vanished with both ends off screen -> same-side outcode test; verified at zoom 4.
+4 LOW release over the minimap added a cross-map segment -> release segment only on the world view.
+5 LOW board buckets not reset when the gather is skipped (passive) -> reset with the sweep's.
+6 LOW(doc) right double click unreachable (first press erased the pin) -> a press on a pin erases nothing there; verified.
