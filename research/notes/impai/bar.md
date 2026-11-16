@@ -445,7 +445,11 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   then compared on the same games as two DLLs are. A run writes its rows to `rows.json` and refuses a directory
   whose rows differ, and `judge` with rows refuses a result whose ImpAI seat played another persona. MEASURED
   2026-11-16: `bar-hota-pincushion-aa-1` played with `--persona A=L3` to GameTime 3 600 logged
-  `impai: persona seat=1 ... from=lever` on L3's values, with the id's own seed (1873460876).
+  `impai: persona seat=1 ... from=lever` on L3's values, with the id's own seed (1873460876). `--base-tune` and
+  `--test-tune` do the same for the tune lever's plan constants (`<name>=<int>,...`, `bar.py play --tune`), so a plan
+  `tune.py spsa` found is judged against the champion's hand-written plan on the champion's DLL: a run writes them
+  to `tunes.json`, and `judge` refuses a result whose ImpAI seat played other items than its arm's (none for an arm
+  that names none).
 - **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the mean score, the ratio by block, its
   bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
   decision.
@@ -637,45 +641,65 @@ ended with ImpAI at 8 units against 146.
 
 ## Automatic tuning
 
-`tools/impai/tune.py spsa` (`init`, `run`, `report`) tunes what a lever sets, by SPSA (`spsa.py`, Spall's gains,
-maximising): each iteration perturbs every coordinate at once, plays theta+ and theta- on **the same games** (the
-same ids, so the same seeds -- common random numbers; each arm's results apart under `games/<k>-<arm>/`), a new
-block each iteration, and steps along the difference. `test_spsa.py` holds it offline: the arithmetic on
-objectives whose optimum is known, its determinism and resume, the spaces, the objectives' values and a run on a
-fake player.
+`tools/impai/tune.py` holds two searches, each where its dimensions are: the levels' rows on one line, and SPSA
+over the brain's plan constants. `test_spsa.py` holds both offline: the arithmetic, the line, the fits, the
+determinism and resume of each run, and runs on fake players.
 
-- **The settings.** A persona row through the persona lever (*The persona rows*): nine coordinates in [0, 1], 0
-  the lever's harshest (L0b) and 1 Hard's (L5) on every axis, every point a row `impai_persona_ok` accepts and
-  every named row decoded back to itself. Or plan constants through **the tune lever** `tagpu_impai_tune.on`
+- **The levels' line** (`tune.py levels-line run --level normal|easy`). The levels need an order and two floors,
+  not the best row in nine dimensions, so the row is one number: harshness t in [0, 1] on a fixed line from L0b,
+  the lever's harshest row (t = 0), to Hard's (t = 1). The line is the persona space's diagonal -- each of the
+  nine integers moved in step from L0b's to Hard's and rounded, the looks in steps of 15, the budgets and the
+  attention on a log scale to none -- so every axis relaxes as t grows and every point is a row
+  `impai_persona_ok` accepts; the raw integers are not interpolated, since a budget or attention of 0 is no limit
+  and a straight line from L0b's 2 actions a minute to Hard's 0 would pass through 1. Normal's row is the strongest
+  Hard beats in at least 90 % of the mirror's games while it still takes 0.90 of the points against OTA AI at Hard;
+  Easy's the strongest Normal's row beats so while it takes 0.50.
+    - **The looks** are the handicap ladder's method (*The handicap ladder*): bisection on t, each look the mirror's
+      two blocks (20 games: `m:` ids with the row on B; Easy's `n:` with Normal's row on A) at the bracket's midpoint,
+      on blocks past those the confirmation plays; then a logistic fit over every look's game, the ladder's with its
+      slope prior in t. Six looks.
+    - **The order check.** Bisection and fit both rest on the line being monotone in strength, which is a measurement,
+      not a given: after every look, a pair of looks whose stronger row lost more, by more than 2.576 standard errors
+      of the difference, stops the run as **not monotone**, and the question goes back to the owner. A run that ends
+      states the order as measured.
+    - **The aim.** At the bound itself the 100-game confirmation passes only about half the time (90 of 100 at a true
+      0.90), so the row chosen is where the fit puts the stronger side's chance at 0.95, a little inside it.
+    - **The confirmations** at the row chosen: the mirror's 100 games (at least 90 won) and the calibration's 40
+      against OTA AI (at least the floor). Below the floor, no point on the line meets both bounds -- every lower t is
+      weaker on a monotone line -- and the question goes back to the owner, as does a t90 below 0 (even L0b is not
+      beaten 90 %; the mirror's two blocks of `m:L0b` had Hard at 14 of 20, every miss a draw at the cap, *The
+      mirror*).
+    - **Its error, SIMULATED** (`tune.py levels-line simulate`, 300 runs a slope, the true t90 uniform in [0.15,
+      0.85], rows as the line rounds them): six looks of 20 games put t90 within 0.020, 0.039 and 0.070 (RMSE) at
+      slopes 0.05, 0.1 and 0.2 in t a logit unit, against 0.030, 0.057 and 0.103 for the bracket's midpoint alone;
+      at the aim the true win share at the row chosen is 0.945, 0.940 and 0.926, and the 100-game mirror confirms it
+      in 91, 89 and 81 % of runs.
+    - **Its cost**: 120 games of looks and 140 of confirmation a level, 260, against the 1 600 of 40 SPSA iterations.
+      [INFERRED from the mirror's measured blocks, 6.6 to 9.4 min for ten games at ten lanes] A look is two pieces of
+      ten games at seven lanes, which the lock holds at once, about 10 to 16 min; a level about 2 to 3.5 hours, the
+      confirmation more than half of it.
+    - **Not run live**: the rows are chosen on the brain that ships, once its draws on Steel Jungle and Lava Alley
+      are fixed. A stopped run resumes where it stopped (`line.json`), on the DLL it began on; it is one runs-viewer
+      run with a step a look and one for the confirmation.
+- **SPSA over the plan constants** (`tune.py spsa`, `spsa.py`, Spall's gains, maximising): each iteration perturbs
+  every named constant at once, plays theta+ and theta- on **the same games** (the same ids, so the same seeds --
+  common random numbers; each arm's results apart under `games/<k>-<arm>/`), a new block each iteration, and steps
+  along the difference. The constants reach ImpAI's seat through **the tune lever** `tagpu_impai_tune.on`
   (`level_lever.py --tune`, `bar.py play --tune A=<name>=<int>,...`): 28 named constants of `IMPAI_PLAN` and the
   military's and economy's `#define`s, each a coordinate over its range, in integers (floats in thousandths). The
-  DLL's side of the tune lever is specified for the brain writer (`.data/impai/tune-lever-spec.md`: a plan a seat
-  in `IMPAI_MIL`, so SIM_STATE and recorded; `impai_plan_ok`; the lever applied where the persona's is, never on a
-  puppet or in a network game; the init line `impai: tune seat= from=lever ...` the lane checks) and **not built**:
-  until it is, every game of a lever objective could not run.
-- **The objectives.** `levels-normal` and `levels-easy` (below); `margin`, the arms paired on each game of the
-  margin test's block by its measure, the time to win (+1 where theta+ was better, -1 worse, 0 a tie); `handicap`,
-  A's points against OTA AI on its production times the champion's m* (`h:<m>`); `mirror`, A's points against
-  ImpAI Hard with no lever (`g:H.H`).
-- **The levels.** Normal's row is the strongest row Hard beats in at least 90 of 100 of the mirror's games while it
-  still scores 0.90 against OTA AI at Hard; Easy's the strongest Normal's row beats in 90 of 100 while it scores
-  0.50. Both bounds limit a row's strength, the mirror's from above and OTA AI's from below, so the search
-  maximises J = o - 4 max(0, 0.90 - w), o the row's points against OTA AI at Hard (`p:` ids, the row on A), w the
-  stronger side's share of the mirror's games won (`m:` or `n:` ids, the row on B): it climbs on OTA AI's points
-  until the mirror's bound binds and is held there, on the row that scores most against OTA AI where it binds.
-  `report` names the row and the checks that choose it -- the mirror's 100 games and the calibration's 40 played on
-  it (`bar.py play --persona B=<row>`, `A=<row>`); a row that fails OTA AI's floor there means no row of the box
-  meets both. **Not run live**: the rows are chosen on the brain that ships, and the mirror's draws on Steel Jungle
-  and Lava Alley (*The mirror*) are that brain's to fix first.
-- **A run** is fixed to the DLL it began on and plays an iteration's pieces -- each arm's games of each role, a
-  block of ten a piece -- through `batch.py`'s pieces under the run lock, each stopped past its ten minutes; a game
-  that could not run plays its pieces once more, and an iteration still missing one stops the run, unrun (exit 2).
-  The state (`spsa.json`) is written after each iteration, so a stopped run resumes at the iteration it was in, its
-  games kept; the same seed is the same run. It is one runs-viewer run, a step an iteration.
-- **Its cost** [INFERRED from the mirror's measured blocks, 6.6 to 9.4 min for ten games at ten lanes]: a levels
-  iteration is 40 games in four pieces, one at a time under the lock, about 30 to 38 min; the default 40
-  iterations about 20 to 25 hours. Each arm's ten mirror games estimate w to about ±0.1 (a binomial's spread at
-  0.9), which the gains' decay averages over the iterations.
+  DLL's side is specified for the brain writer (`.data/impai/tune-lever-spec.md`: a plan a seat in `IMPAI_MIL`, so
+  SIM_STATE and recorded; `impai_plan_ok`; the lever applied where the persona's is, never on a puppet or in a
+  network game; the init line `impai: tune seat= from=lever ...` the lane checks) and **not built**: until it is,
+  every game of it could not run.
+    - **The objectives**: `margin`, the arms paired on each game of the margin test's block by its measure, the time
+      to win (+1 where theta+ was better, -1 worse, 0 a tie); `handicap`, A's points against OTA AI on its
+      production times the champion's m* (`h:<m>`); `mirror`, A's points against ImpAI Hard with no lever (`g:H.H`).
+    - **A run** is fixed to the DLL it began on and plays an iteration's pieces through `batch.py`'s pieces under the
+      run lock, each stopped past its ten minutes; a game that could not run plays its pieces once more, and an
+      iteration still missing one stops the run, unrun (exit 2). The state (`spsa.json`) is written after each
+      iteration, so a stopped run resumes at the iteration it was in; the same seed is the same run.
+    - **The plan it finds is accepted against the champion** by the paired margin test with tune items on its TEST
+      arm (*The paired margin test*, `--test-tune`), on the champion's DLL.
 
 ## When the default flips
 

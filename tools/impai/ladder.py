@@ -95,10 +95,11 @@ def p_win(x: float, c: float, s: float) -> float:
     return 1.0 / (1.0 + math.exp(z)) if z < 700 else 0.0
 
 
-def nll(c: float, u: float, xs: list, ys: list) -> float:
-    """The negative quasi-log-likelihood of points `ys` at `xs` under (c, s = e^u), with the prior on u."""
+def nll(c: float, u: float, xs: list, ys: list, prior_s: float = PRIOR_S) -> float:
+    """The negative quasi-log-likelihood of points `ys` at `xs` under (c, s = e^u), with the prior on u (median
+    prior_s, PRIOR_SD of spread in log s)."""
     s = math.exp(u)
-    tot = 0.5 * ((u - math.log(PRIOR_S)) / PRIOR_SD) ** 2
+    tot = 0.5 * ((u - math.log(prior_s)) / PRIOR_SD) ** 2
     for x, y in zip(xs, ys):
         q = min(1 - 1e-12, max(1e-12, p_win(x, c, s)))
         tot -= y * math.log(q) + (1 - y) * math.log(1 - q)

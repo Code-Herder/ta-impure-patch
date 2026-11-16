@@ -213,14 +213,16 @@ class TestRun(unittest.TestCase):
         could not run on its first play"""
         played = []
 
-        def play(k, ids, dlls, out, lanes, rows=None):
+        def play(k, ids, dlls, out, lanes, rows=None, tunes=None):
             played.append(k)
-            self.rows_played = rows
+            self.rows_played, self.tunes_played = rows, tunes
             rc = 0
             for arm, j in (("base", 0), ("test", 1)):
                 (out / arm).mkdir(parents=True, exist_ok=True)
                 seats = ({"A": {"ai": "impai", "persona": bar.PERSONA_ROWS.get(rows[arm])}} if rows else
                          {"A": {"ai": "impai"}})
+                if tunes and tunes[arm]:
+                    seats["A"]["tune"] = tunes[arm]
                 for gid in ids:
                     x = times(margin.order().index(gid))[j]
                     if x == "cnr" and played.count(k) == 1:
@@ -231,12 +233,13 @@ class TestRun(unittest.TestCase):
             return rc
         return play, played
 
-    def run_(self, d, play, base=None, test=None, base_row=None, test_row=None):
+    def run_(self, d, play, base=None, test=None, base_row=None, test_row=None, base_tune=None, test_tune=None):
         import argparse
         dll = Path(d) / "x.dll"
         dll.write_bytes(b"dll")
         a = argparse.Namespace(out=str(Path(d) / "out"), base=str(base or dll), test=str(test or dll),
-                               mode="improve", lanes=1, base_row=base_row, test_row=test_row)
+                               mode="improve", lanes=1, base_row=base_row, test_row=test_row,
+                               base_tune=base_tune, test_tune=test_tune)
         with mock.patch("builtins.print"):
             return margin.run(a, play=play)
 
@@ -265,6 +268,40 @@ class TestRun(unittest.TestCase):
             self.assertEqual(self.run_(d, play, base_row="L2"), margin.COULD_NOT)
             (Path(d) / "x").mkdir()
             self.assertEqual(self.run_(str(Path(d) / "x"), play, base_row="L9"), margin.COULD_NOT)
+
+    def test_a_tuned_plan_against_the_champions(self):
+        # THE SETTINGS' plan constants: TEST with tune items, BASE with none (the hand-written plan), one DLL
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
+            play, played = self.fake(lambda i: (40000, 30000))
+            self.assertEqual(self.run_(d, play, test_tune="lead_in=3000,raid_min=2"), margin.ACCEPT)
+            want = {"base": {}, "test": {"lead_in": 3000, "raid_min": 2}}
+            self.assertEqual(self.tunes_played, want)
+            self.assertEqual(json.loads((Path(d) / "out" / "tunes.json").read_text()), want)
+            self.assertEqual(self.run_(d, play, test_tune="lead_in=3100"), margin.COULD_NOT)
+            (Path(d) / "x").mkdir()
+            self.assertEqual(self.run_(str(Path(d) / "x"), play, test_tune="lead_in=1"), margin.COULD_NOT)
+
+    def test_a_result_of_other_plan_constants_is_not_judged(self):
+        base, test = arms([(40000, 30000)] * margin.BLOCK)
+        for r in base.values():
+            r["seats"] = {"A": {"ai": "impai"}}
+        for r in test.values():
+            r["seats"] = {"A": {"ai": "impai", "tune": {"lead_in": 3000}}}
+        tunes = {"base": {}, "test": {"lead_in": 3000}}
+        self.assertEqual(len(margin.pairs(base, test, None, tunes)), margin.BLOCK)
+        with self.assertRaises(margin.CouldNotJudge):
+            margin.pairs(base, test, None, {"base": {}, "test": {"lead_in": 3100}})
+        with self.assertRaises(margin.CouldNotJudge):
+            margin.pairs(test, test, None, tunes)                    # BASE played items it names none of
+
+    def test_the_block_player_passes_each_arms_items(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch("subprocess.Popen") as popen:
+            popen.return_value.wait.return_value = 0
+            margin.play_block(1, ["x"], {"base": Path("b.dll"), "test": Path("t.dll")}, Path(d), 1, None,
+                              {"base": {}, "test": {"lead_in": 3000}})
+        base_cmd, test_cmd = (c.args[0] for c in popen.call_args_list)
+        self.assertNotIn("--tune", base_cmd)
+        self.assertEqual(test_cmd[test_cmd.index("--tune") + 1], "A=lead_in=3000")
 
     def test_a_result_of_another_row_is_not_judged(self):
         base, test = arms([(40000, 30000)] * margin.BLOCK)

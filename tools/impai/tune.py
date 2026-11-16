@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tune.py -- ImpAI tuned in the engine: the response table's tier A search, tier B race and tier C confirmation,
-and SPSA over what its levers set (the persona rows, the plan constants).
+the levels' persona rows on one line, and SPSA over the plan constants.
 
     tune.py tierA init --dir D --base TABLE --pictures FILE [--seed S] [--pop 10] [--gens 18] [--sigma 0.3]
     tune.py tierA next --dir D [--lanes L]       write the current piece's fights; say what it is
@@ -19,10 +19,14 @@ and SPSA over what its levers set (the persona rows, the plan constants).
 
     tune.py plan [--lanes L] [--gpu]             every tier's runner pieces, for the runner
 
-    tune.py spsa init --dir D --objective O [--seed S] [--iters N] [--start X] [--params P,..] [--normal-row R]
-                      [--handicap h:<m>] [--c C] [--a A]
+    tune.py spsa init --dir D --objective O --params P,.. [--seed S] [--iters N] [--start X] [--handicap h:<m>]
+                      [--c C] [--a A]
     tune.py spsa run --dir D --dll DLL [--lanes L]   play every iteration not yet played; resumes
     tune.py spsa report --dir D
+
+    tune.py levels-line run --dir D --dll DLL --level normal|easy [--normal-row R] [--looks 6] [--lanes 7]
+    tune.py levels-line report --dir D
+    tune.py levels-line simulate [--looks 6] [--games 20] [--slopes 0.05,0.1,0.2] [--runs 300] [--aim 0.95]
 
 L defaults to LANES, the GDI lanes the run lock's whole budget holds (tools/runlock-lanes.cfg). Run with the shared
 venv's interpreter (numpy). The design: research/notes/impai/brain.md, Adaptation.
@@ -67,21 +71,12 @@ THE RENDERER. The games tier B and C name are `tourney.py play`s, which render w
 `--gpu` on `tierB next` and `plan` puts `--gpu` in the commands they write, for a debugging run on the default
 renderer. A result is compared only with results of its own renderer (research/notes/modules/impai.md).
 
-SPSA (spsa.py) tunes settings that reach a seat through a lever, each iteration one theta+ and theta- played on the
-SAME games (common random numbers: the same ids, so the same seeds, each arm's results apart under
-games/<k>-<arm>/), a new block of games each iteration. The settings are a persona row (the levels, through the
-persona lever, as nine coordinates in [0, 1]: PersonaSpace) or plan constants (through the tune lever
-`tagpu_impai_tune.on`, level_lever.TUNE_PARAMS, each a coordinate over its range: PlanSpace; the DLL's side of it
-is specified for the brain writer in .data/impai/tune-lever-spec.md, and until a DLL reads it every game of a
-lever objective could not run). The objective O:
+SPSA (spsa.py) tunes the brain's plan constants, which reach a seat through the tune lever `tagpu_impai_tune.on`
+(level_lever.TUNE_PARAMS, each named constant a coordinate over its range: PlanSpace; the DLL's side of it is
+specified for the brain writer in .data/impai/tune-lever-spec.md, and until a DLL reads it every game could not
+run). Each iteration plays one theta+ and theta- on the SAME games (common random numbers: the same ids, so the
+same seeds, each arm's results apart under games/<k>-<arm>/), a new block of games each iteration. The objective O:
 
-    levels-normal   THE LEVELS: Normal's row, the strongest row Hard beats in at least LEVEL_WIN of the mirror's
-                    games (`m:` ids, the row on B) while it still scores LEVEL_FLOOR against OTA AI at Hard (`p:`
-                    ids, the row on A). J = o - LEVEL_K x max(0, LEVEL_WIN - w), o its points against OTA AI, w
-                    Hard's share of the mirror's games won: past the bound the search trades OTA AI's points for the
-                    mirror's, below it it climbs on OTA AI's, so it settles where the bound binds, on the row that
-                    scores most against OTA AI there. A block of each a game iteration and arm, 40 games.
-    levels-easy     the same for Easy's row against Normal's (`n:` ids, --normal-row on A), its floor 0.50
     margin          the arms paired on each of the margin test's block of games (margin.py's measure, the time to
                     win: +1 where theta+ was better, -1 worse, 0 a tie), the mean the difference
     handicap        A's points against OTA AI on its production times m (`h:<m>` ids, m the champion's m*)
@@ -92,15 +87,37 @@ pieces under the run lock, each stopped past its ten minutes; a game that could 
 more, and an iteration still missing one stops the run, unrun. The state (spsa.json: the configuration, the
 search, every iteration with its settings and its difference) is written whole after each iteration, so a run
 stopped anywhere resumes at the iteration it was in, and the same seed is the same run. A run is fixed to the DLL
-it began on and is one runs-viewer run, a step an iteration. The levels' row is chosen on the brain that ships:
-`report` names the row and the checks that choose it, the mirror's 100 games and the calibration's 40 played on it
-with `bar.py play --persona`.
+it began on and is one runs-viewer run, a step an iteration. A plan it finds is accepted against the champion's
+by the paired margin test, `margin.py run --test-tune ITEMS` on the champion's DLL.
 
-Exit 0 when the command ran, 1 when it failed or was refused, 2 when it could not run."""
+THE LEVELS' LINE (`levels-line`) chooses Normal's and Easy's persona rows in one dimension: harshness t in [0, 1]
+on a fixed line (line_row) from L0b, the lever's harshest row (t = 0), to Hard's (t = 1), every axis relaxing as t
+grows. Normal's row is the strongest Hard beats in at least LEVEL_WIN of the mirror's games while it still takes
+0.90 of the points against OTA AI at Hard; Easy's the strongest Normal's row beats so while it takes 0.50.
+- THE LOOKS, the ladder's method (ladder.py): bisection on t, each look the mirror's two blocks (`m:` ids, the row on
+  B; Easy's `n:`, Normal's row on A) at the bracket's midpoint, past the blocks the confirmation plays; a look where
+  the stronger side won at least LEVEL_WIN of its games moves the low end up. A look whose row a look has played
+  ends the looks (the bracket is inside the line's rounding).
+- THE ORDER CHECK after every look: bisection and fit both need the line monotone in strength, so a pair of looks
+  whose stronger row lost more, by more than LINE_MONO_Z standard errors, stops the run, NOT MONOTONE.
+- THE FIT over every look's games, the ladder's logistic with its prior on the slope in t units: t90, where the
+  stronger side's chance is LEVEL_WIN, and THE AIM, the row chosen where the fit puts it at LINE_AIM: at t90 itself
+  the 100-game confirmation could pass only about half the time (90 of 100 at a true 0.90), so the row is chosen a
+  little inside the bound (SIMULATED, `simulate`: at 0.95 the confirmation passes in 81 to 91 % of runs). A t90
+  below 0: no point on the line meets the mirror's bound.
+- THE CONFIRMATIONS at the row chosen: the mirror's 100 games (its run blocks; at least 90 won) and the calibration's
+  40 against OTA AI (`p:` ids, the row on A; at least the floor). A row below the floor means no point on the line
+  meets both bounds, since every lower t is weaker on a monotone line: the question goes back to the owner.
+The state (line.json) is written after each look; a stopped run resumes where it stopped. One runs-viewer run.
+
+Exit 0 when the command ran, 1 when it failed or was refused, 2 when it could not run; `levels-line run` exits 0
+when a row met both bounds, 1 when none on the line does, the line is not monotone or the confirmation's mirror
+refused the row, 2 when it could not run."""
 import argparse
 import hashlib
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -114,6 +131,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import bar  # noqa: E402
 import batch  # noqa: E402
 import cmaes  # noqa: E402
+import ladder  # noqa: E402
 import level_lever  # noqa: E402
 import margin  # noqa: E402
 import runlock  # noqa: E402
@@ -585,12 +603,9 @@ def cmd_plan(a) -> int:
 # ---- SPSA (tune.py spsa) ----
 
 SPSA_STATE = "spsa.json"
-LEVEL_WIN = 0.90            # the levels: the stronger side wins at least this share of the mirror's games
-LEVEL_FLOOR = {"levels-normal": 0.90, "levels-easy": 0.50}      # the row's points against OTA AI, confirmed after
 SPSA_PIECE = 10             # games a piece: one block, at most ten lanes, inside the ten minutes (bar.md, the mirror)
-LEVEL_K = 4.0               # the levels' penalty: points against OTA AI given up a unit of the win share missed
 NONE_AT = 0.98              # PERSONA SPACE: a budget or attention coordinate from here up is no limit
-OBJECTIVES = ("levels-normal", "levels-easy", "margin", "handicap", "mirror")
+OBJECTIVES = ("margin", "handicap", "mirror")
 
 
 class PersonaSpace:
@@ -685,17 +700,10 @@ def tune_item(items: dict) -> str:
 
 def spsa_roles(obj: str, k: int, handicap: str = None) -> dict:
     """{role: the game ids} iteration k plays for each arm: the same ids for theta+ and theta- (common random
-    numbers), a new block each iteration, so no iteration's games are another's. The levels: the mirror's block
-    k + 1 (Normal's: `m:`, Hard against the row; Easy's: `n:`, Normal's row against it) and the calibration pair's
-    (`p:`, the row against OTA AI at Hard), both on the development pool; the margin: the paired margin test's
-    block k (cycling through its order); the handicap: block k + 1 of `h:<m>`; the mirror: of `g:H.H`."""
+    numbers), a new block each iteration, so no iteration's games are another's: the margin's the paired margin
+    test's block k (cycling through its order); the handicap's block k + 1 of `h:<m>`; the mirror's of `g:H.H`."""
     def block(pair):
         return [g for g in bar.ids(pair, blocks=k + 1) if bar.block_of(g) == k + 1]
-    ref = bar.NORMAL_ROW
-    if obj == "levels-normal":
-        return {"mirror": block(bar.MIRROR + ref), "ota": block(bar.CALIBRATION + ref)}
-    if obj == "levels-easy":
-        return {"mirror": block(bar.NORMAL_MIRROR + ref), "ota": block(bar.CALIBRATION + ref)}
     if obj == "margin":
         bs = margin.blocks()
         return {"pairs": bs[k % len(bs)]}
@@ -706,14 +714,8 @@ def spsa_roles(obj: str, k: int, handicap: str = None) -> dict:
     raise TuneError(f"no objective {obj!r}: {', '.join(OBJECTIVES)}")
 
 
-def spsa_settings(obj: str, role: str, arm, normal_row: str = None) -> dict:
-    """{"persona": [...], "tune": [...]}: the `bar.py play` items that put an arm's settings `arm` (a persona row,
-    or tune items) on its seat in a role's games."""
-    if obj.startswith("levels-"):
-        if role == "ota":
-            return {"persona": [f"A={arm}"], "tune": []}
-        stronger = [f"A={normal_row}"] if obj == "levels-easy" else []
-        return {"persona": stronger + [f"B={arm}"], "tune": []}
+def spsa_settings(arm: dict) -> dict:
+    """{"persona": [], "tune": [...]}: the `bar.py play` items that put an arm's plan constants on ImpAI's seat A."""
     return {"persona": [], "tune": [f"A={tune_item(arm)}"]}
 
 
@@ -730,44 +732,10 @@ def spsa_points(results: dict, seat: str = "A"):
     return sum(pts) / len(pts), None
 
 
-def spsa_wins(results: dict):
-    """(the share of games A won, None) or (None, why)."""
-    won = []
-    for gid, r in results.items():
-        if r is None:
-            return None, f"{gid}: no result"
-        who, why = bar.outcome_of(r)
-        if who is None:
-            return None, f"{gid}: {why}"
-        won.append(who == "A")
-    return sum(won) / len(won), None
-
-
-def level_value(obj: str, mirror: dict, ota: dict):
-    """THE LEVELS' OBJECTIVE of a row: J = o - LEVEL_K x max(0, LEVEL_WIN - w), o its points against OTA AI at Hard,
-    w the share of the mirror's games the stronger side (Hard for Normal's row, Normal's row for Easy's) won.
-    Returns ({"J", "o", "w"}, None) or (None, why)."""
-    w, why = spsa_wins(mirror)
-    if w is None:
-        return None, why
-    o, why = spsa_points(ota)
-    if o is None:
-        return None, why
-    return {"J": o - LEVEL_K * max(0.0, LEVEL_WIN - w), "o": o, "w": w}, None
-
-
 def spsa_diff(obj: str, plus: dict, minus: dict):
     """(J(theta+) - J(theta-), detail) of an iteration from each arm's {role: {id: result}}, or (None, why). The
     margin's is the paired comparison of the two arms on each id (margin.py's measure, a game's time to win: +1
     where theta+ was better, -1 worse, 0 a tie), its mean; the others' a value of each arm."""
-    if obj.startswith("levels-"):
-        vp, why = level_value(obj, plus["mirror"], plus["ota"])
-        if vp is None:
-            return None, why
-        vm, why = level_value(obj, minus["mirror"], minus["ota"])
-        if vm is None:
-            return None, why
-        return vp["J"] - vm["J"], {"plus": vp, "minus": vm}
     if obj == "margin":
         signs = []
         for gid, rp in plus["pairs"].items():
@@ -802,40 +770,27 @@ class SpsaRun:
         self.state = json.loads((self.d / SPSA_STATE).read_text())
         cfg = self.state["config"]
         self.obj = cfg["objective"]
-        self.space = PersonaSpace() if self.obj.startswith("levels-") else PlanSpace(cfg["params"])
+        self.space = PlanSpace(cfg["params"])
         self.search = spsa.SPSA.from_state(self.state["search"])
 
     @staticmethod
-    def init(d: Path, objective: str, seed: int, iters: int, start=None, params=None, normal_row=None,
-             handicap=None, c: float = 0.15, a: float = None) -> "SpsaRun":
+    def init(d: Path, objective: str, seed: int, iters: int, start=None, params=None, handicap=None,
+             c: float = 0.15, a: float = None) -> "SpsaRun":
         d = Path(d)
         if (d / SPSA_STATE).exists():
             raise TuneError(f"{d} holds a run already: `spsa run` resumes it")
         if objective not in OBJECTIVES:
             raise TuneError(f"no objective {objective!r}: {', '.join(OBJECTIVES)}")
-        if objective.startswith("levels-"):
-            space = PersonaSpace()
-            start = start or ("L1" if objective == "levels-easy" else bar.NORMAL_ROW)
-            row = bar.PERSONA_ROWS.get(start, start)
-            why = level_lever.persona_error(f"1={row}")
-            if why:
-                raise TuneError(f"the start row {start} {why}")
-            x0 = space.encode(row)
-            if objective == "levels-easy":
-                normal_row = bar.PERSONA_ROWS.get(normal_row or bar.NORMAL_ROW, normal_row)
-                why = level_lever.persona_error(f"1={normal_row}")
-                if why:
-                    raise TuneError(f"Normal's row {normal_row} {why}")
-        else:
-            space = PlanSpace(params or ())
-            x0 = space.encode(start or {})
-            if objective == "handicap" and not (handicap and bar.HANDICAP_RX.fullmatch(handicap)):
-                raise TuneError("the handicap objective names its pair, `h:<m>` (the champion's m*, ladder.py)")
+        space = PlanSpace(params or ())
+        if start and level_lever.tune_error(1, start):
+            raise TuneError(f"the start {start} {level_lever.tune_error(1, start)}")
+        x0 = space.encode(start or {})
+        if objective == "handicap" and not (handicap and bar.HANDICAP_RX.fullmatch(handicap)):
+            raise TuneError("the handicap objective names its pair, `h:<m>` (the champion's m*, ladder.py)")
         search = spsa.SPSA(space.dim, seed, iters, x0, a=a, c=c)
         d.mkdir(parents=True, exist_ok=True)
         state = {"config": {"objective": objective, "seed": seed, "iters": iters,
-                            "params": list(getattr(space, "names", ())) if not objective.startswith("levels-") else [],
-                            "normal_row": normal_row, "handicap": handicap},
+                            "params": list(space.names), "handicap": handicap},
                  "search": search.state(), "iterations": [], "dll": None}
         save_json(d / SPSA_STATE, state)
         return SpsaRun(d)
@@ -853,7 +808,7 @@ class SpsaRun:
         out = []
         for arm, settings in (("plus", plus), ("minus", minus)):
             for role, ids in spsa_roles(self.obj, k, cfg.get("handicap")).items():
-                items = spsa_settings(self.obj, role, settings, cfg.get("normal_row"))
+                items = spsa_settings(settings)
                 for j in range(0, len(ids), SPSA_PIECE):
                     out.append({"name": f"k{k:03d}-{arm}-{role}-{j // SPSA_PIECE}", "setup": None, "gating": False,
                                 "lanes": min(lanes, SPSA_PIECE), "ids": ids[j:j + SPSA_PIECE],
@@ -935,38 +890,368 @@ def spsa_run(d: Path, dll: Path, lanes: int, launch=None, play=spsa_play) -> int
 
 
 def spsa_report(run: "SpsaRun") -> str:
-    """The run so far: each iteration's difference and the settings the search holds now; for the levels, the
-    row found and the checks that choose it (THE LEVELS in the module's docstring)."""
+    """The run so far: each iteration's difference and the plan constants the search holds now."""
     cfg = run.state["config"]
     lines = [f"spsa {run.obj}: {run.search.k} of {run.search.iters} iterations, seed {cfg['seed']}"]
     for it in run.state["iterations"]:
         lines.append(f"  {it['k']:3d}  diff {it['diff']:+.3f}  {json.dumps(it['detail'], sort_keys=True)}")
     now = run.settings(run.search.theta)
-    lines.append(f"now: {now}")
-    if run.obj.startswith("levels-"):
-        who = "Hard" if run.obj == "levels-normal" else f"Normal's row {cfg['normal_row']}"
-        lines.append(f"the row is chosen when {who} wins at least {round(100 * LEVEL_WIN)} of the 100 mirror games "
-                     f"against it (bar.py's `{bar.MIRROR if run.obj == 'levels-normal' else bar.NORMAL_MIRROR}` "
-                     f"ids, --persona B={now}) and it scores at least {LEVEL_FLOOR[run.obj]:.2f} against OTA AI at "
-                     f"Hard (`{bar.CALIBRATION}` ids, --persona A={now}); otherwise no row of the box meets both")
+    lines.append(f"now: {now}; accepted against the champion by `margin.py run --test-tune {tune_item(now)}`")
     return "\n".join(lines)
 
 
 def cmd_spsa(a) -> int:
     if a.sub == "init":
-        start = None
-        if a.start:
-            start = a.start if a.objective.startswith("levels-") else \
-                {n: int(v) for n, _, v in (kv.partition("=") for kv in a.start.split(",") if kv)}
+        start = {n: int(v) for n, _, v in (kv.partition("=") for kv in (a.start or "").split(",") if kv)}
         params = [p for p in (a.params or "").split(",") if p]
         run = SpsaRun.init(Path(a.dir), a.objective, a.seed, a.iters, start=start, params=params,
-                           normal_row=a.normal_row, handicap=a.handicap, c=a.c, a=a.a)
+                           handicap=a.handicap, c=a.c, a=a.a)
         print(f"tune spsa: {a.dir}: {a.objective}, {run.search.iters} iterations, starting at "
               f"{run.settings(run.search.theta)}")
         return 0
     if a.sub == "run":
         return spsa_run(Path(a.dir), Path(a.dll), a.lanes)
     print(spsa_report(SpsaRun(Path(a.dir))))
+    return 0
+
+
+# ---- THE LEVELS' LINE (tune.py levels-line) ----
+
+LINE_STATE = "line.json"
+LEVEL_WIN = 0.90            # the levels: the stronger side wins at least this share of the mirror's games
+LINE_LOOKS = 6
+LINE_BLOCKS = 2             # a look's blocks of the mirror: 20 games
+LINE_LANES = 7              # a piece's lanes: two pieces at once hold the lock's 28 slots
+LINE_PRIOR_S = 0.08         # the fit's prior median slope, in t a logit unit
+LINE_MONO_Z = 2.576         # a look pair breaks the line's order past this z (one-sided 0.5 %)
+LN9 = math.log(9.0)         # p(t) = LEVEL_WIN where (t - c) / s = -ln 9
+LINE_AIM = 0.95             # THE AIM: the row chosen is where the fit puts the stronger side's chance here
+LEVELS = {"normal": {"pair": bar.MIRROR, "floor": 0.90},       # the row's points against OTA AI at Hard, at least
+          "easy": {"pair": bar.NORMAL_MIRROR, "floor": 0.50}}
+
+
+def line_row(t: float) -> str:
+    """THE LINE: the persona row at harshness t in [0, 1], the persona space's diagonal from L0b (t = 0, every
+    coordinate 0, the lever's harshest) to L5 (t = 1, Hard's), so every axis relaxes as t grows and every point is a
+    row impai_persona_ok accepts. The raw integers are not interpolated: a budget or attention of 0 is no limit,
+    so a straight line from L0b's 2 actions a minute to Hard's 0 would pass through 1, harsher than either end."""
+    return PersonaSpace().decode([min(1.0, max(0.0, t))] * len(PersonaSpace.names))
+
+
+def line_bracket(looks: list) -> tuple:
+    """(lo, hi) the finished looks leave: a look where the stronger side won at least LEVEL_WIN of its games moves
+    lo up to its t, any other moves hi down."""
+    lo, hi = 0.0, 1.0
+    for lk in looks:
+        if lk["wins"] >= LEVEL_WIN * lk["games"]:
+            lo = max(lo, lk["t"])
+        else:
+            hi = min(hi, lk["t"])
+    return lo, hi
+
+
+def line_next(looks: list):
+    """(t, row) of the next look, the bracket's midpoint; None when its row is one a look has played, the bracket
+    closed below the line's resolution."""
+    lo, hi = line_bracket(looks)
+    t = (lo + hi) / 2
+    row = line_row(t)
+    return None if any(lk["row"] == row for lk in looks) else (t, row)
+
+
+def line_fit(ts: list, ys: list, aim: float = LINE_AIM) -> dict:
+    """THE FIT over every game: p(t) = 1 / (1 + exp((t - c) / s)), p the stronger side's chance of a win, with the
+    ladder's prior on log s (median LINE_PRIOR_S); t90, where p is LEVEL_WIN, = c - s ln 9; t_aim, where p is
+    `aim`, = c - s ln(aim / (1 - aim)), and its standard error by the delta method on the curvature at the minimum
+    (None where that is not positive definite)."""
+    if not ts:
+        raise TuneError("no game to fit")
+    f = lambda c, u: ladder.nll(c, u, ts, ys, LINE_PRIOR_S)  # noqa: E731
+    c, u = ladder._minimize(f, (sum(ts) / len(ts), math.log(LINE_PRIOR_S)), step=0.1)
+    h = 1e-4
+    fcc = (f(c + h, u) - 2 * f(c, u) + f(c - h, u)) / h ** 2
+    fuu = (f(c, u + h) - 2 * f(c, u) + f(c, u - h)) / h ** 2
+    fcu = (f(c + h, u + h) - f(c + h, u - h) - f(c - h, u + h) + f(c - h, u - h)) / (4 * h * h)
+    det = fcc * fuu - fcu * fcu
+    s = math.exp(u)
+    se = None
+    if det > 0 and fcc > 0:
+        icc, iuu, icu = fuu / det, fcc / det, -fcu / det          # the inverse of the curvature
+        g = (1.0, -s * math.log(aim / (1 - aim)))                  # d t_aim / d (c, u)
+        var = g[0] ** 2 * icc + g[1] ** 2 * iuu + 2 * g[0] * g[1] * icu
+        se = math.sqrt(var) if var > 0 else None
+    return {"c": c, "s": s, "t90": c - s * LN9, "t_aim": c - s * math.log(aim / (1 - aim)), "aim": aim, "se": se}
+
+
+def line_breaks(looks: list) -> list:
+    """THE ORDER CHECK: the look pairs (t_i < t_j, two rows) where the stronger side won a larger share at the
+    stronger row t_j, by more than LINE_MONO_Z standard errors of the difference. On a line monotone in strength
+    none is expected; one stops the run, since the bisection and the fit both rest on the order."""
+    out = []
+    for a in looks:
+        for b in looks:
+            if a["t"] < b["t"] and a["row"] != b["row"]:
+                pa, pb = a["wins"] / a["games"], b["wins"] / b["games"]
+                p = (a["wins"] + b["wins"]) / (a["games"] + b["games"])
+                se = math.sqrt(max(p * (1 - p), 1e-9) * (1 / a["games"] + 1 / b["games"]))
+                if (pb - pa) / se > LINE_MONO_Z:
+                    out.append((a["t"], pa, b["t"], pb))
+    return out
+
+
+def line_game_ids(level: str, k: int) -> list:
+    """Look k's ids (from 1): blocks past the mirror's run set, which the confirmation plays, so no look shares a
+    seed with it or with another look."""
+    pair = LEVELS[level]["pair"] + bar.NORMAL_ROW
+    first = bar.MIRROR_BLOCKS + LINE_BLOCKS * (k - 1) + 1
+    want = set(range(first, first + LINE_BLOCKS))
+    return [g for g in bar.ids(pair, blocks=first + LINE_BLOCKS - 1) if bar.block_of(g) in want]
+
+
+def line_items(level: str, role: str, row: str, normal_row: str = None) -> list:
+    if role == "ota":
+        return [f"A={row}"]
+    return ([f"A={normal_row}"] if level == "easy" else []) + [f"B={row}"]
+
+
+def line_pieces(name: str, ids: list, items: list, out: Path, lanes: int) -> list:
+    return [{"name": f"{name}-{j // SPSA_PIECE}", "setup": None, "gating": False, "lanes": lanes,
+             "ids": ids[j:j + SPSA_PIECE], "out": out, "persona": items, "tune": []}
+            for j in range(0, len(ids), SPSA_PIECE)]
+
+
+def line_read(ids: list, out: Path):
+    """({id: who won}, None) of the games, or (None, why) when one is missing, could not run or is not scored."""
+    got = {}
+    for gid in ids:
+        try:
+            r = json.loads((out / f"{gid}.json").read_text())
+        except (OSError, ValueError):
+            return None, f"{gid}: no result"
+        who, why = bar.outcome_of(r)
+        if who is None:
+            return None, f"{gid}: {why}"
+        got[gid] = who
+    return got, None
+
+
+def line_play(ps: list, launch, play, out: Path, ids: list):
+    """The pieces played, and once more when a game lacks a result: (results, None) or (None, why)."""
+    overran = play(ps, launch)
+    got, why = line_read(ids, out)
+    if got is None and not overran:
+        print(f"tune levels-line: played once more ({why})")
+        overran = play(ps, launch)
+        got, why = line_read(ids, out)
+    if got is None:
+        return None, f"pieces past {batch.DEADLINE} s: {', '.join(overran)}" if overran else why
+    return got, None
+
+
+def line_run(d: Path, dll: Path, level: str, normal_row: str = None, looks: int = LINE_LOOKS,
+             lanes: int = LINE_LANES, launch=None, play=spsa_play) -> int:
+    """THE RUN of a level (the module's docstring, THE LEVELS' LINE): the looks, the fit, the confirmations.
+    Exit 0 a row met both bounds, 1 none on the line does (or the line is not monotone, or the confirmation's
+    mirror refused the row: the owner's question), 2 could not run; a stopped run resumes where it stopped."""
+    import tarun
+    d, dll = Path(d), Path(dll)
+    st_path = d / LINE_STATE
+    if level not in LEVELS:
+        raise TuneError(f"no level {level!r}: normal or easy")
+    if level == "easy":
+        normal_row = bar.PERSONA_ROWS.get(normal_row or bar.NORMAL_ROW, normal_row)
+        why = level_lever.persona_error(f"1={normal_row}")
+        if why:
+            raise TuneError(f"Normal's row {normal_row} {why}")
+    try:
+        st = json.loads(st_path.read_text())
+    except (OSError, ValueError):
+        st = {"level": level, "normal_row": normal_row if level == "easy" else None, "dll": None, "looks": []}
+    if (st["level"], st["normal_row"]) != (level, normal_row if level == "easy" else None):
+        raise TuneError(f"{d} is a run of {st['level']} (Normal's row {st['normal_row']}), not of {level}")
+    if st["dll"] and st["dll"] != md5(dll):
+        print(f"tune levels-line: COULD NOT RUN: {dll} is another DLL than the one the run began on")
+        return 2
+    d.mkdir(parents=True, exist_ok=True)
+    st["dll"] = md5(dll)
+    save_json(st_path, st)
+    launch = launch or (lambda p: batch.Piece(p, dll, d / "logs"))
+    games = d / "games"
+    floor = LEVELS[level]["floor"]
+    jr = tarun.begin("tune", [("levels-line", [{"id": f"look {k}"} for k in range(1, looks + 1)]
+                               + [{"id": "confirm"}])],
+                     title=f"levels-line {level} {d.name}", pools={"main": 1}, gate=True)
+    try:
+        for lk in st["looks"]:
+            jr.finish("levels-line", f"look {lk['k']}", "pass", f"t {lk['t']:.3f}: {lk['wins']}/{lk['games']}")
+        while len(st["looks"]) < looks:
+            k = len(st["looks"]) + 1
+            nxt = line_next(st["looks"])
+            if nxt is None:
+                print(f"tune levels-line: look {k} would play a row again: the bracket is inside the line's "
+                      f"resolution; the fit takes the {k - 1} looks played")
+                for j in range(k, looks + 1):
+                    jr.finish("levels-line", f"look {j}", "skipped", "the bracket closed")
+                break
+            t, row = nxt
+            ids = line_game_ids(level, k)
+            out = games / f"look-{k}"
+            jr.start("levels-line", f"look {k}")
+            print(f"tune levels-line: look {k}: t {t:.4f}, row {row}, {len(ids)} games")
+            got, why = line_play(line_pieces(f"look-{k}", ids, line_items(level, "mirror", row, normal_row), out,
+                                             lanes), launch, play, out, ids)
+            if got is None:
+                jr.finish("levels-line", f"look {k}", "unrun", why)
+                jr.end("unrun")
+                print(f"tune levels-line: COULD NOT RUN: look {k} lacks a game ({why}); `run` again goes on from it")
+                return 2
+            wins = sum(1 for w in got.values() if w == "A")
+            st["looks"].append({"k": k, "t": t, "row": row, "ids": ids, "wins": wins, "games": len(ids)})
+            save_json(st_path, st)
+            jr.finish("levels-line", f"look {k}", "pass", f"t {t:.3f}: {wins}/{len(ids)}")
+            print(f"tune levels-line: look {k}: the stronger side won {wins} of {len(ids)}")
+            breaks = line_breaks(st["looks"])
+            if breaks:
+                st["verdict"] = "not monotone"
+                save_json(st_path, st)
+                jr.end("fail")
+                print(line_report(st))
+                return 1
+        ts = [lk["t"] for lk in st["looks"] for _ in range(lk["games"])]
+        ys = [1.0 if w == "A" else 0.0 for lk in st["looks"]
+              for w in line_read(lk["ids"], games / f"look-{lk['k']}")[0].values()]
+        st["fit"] = line_fit(ts, ys)
+        if st["fit"]["t90"] < 0.0:
+            st["verdict"] = "below the line"
+            save_json(st_path, st)
+            jr.finish("levels-line", "confirm", "skipped", "no point on the line meets the mirror's bound")
+            jr.end("fail")
+            print(line_report(st))
+            return 1
+        t = min(1.0, max(0.0, st["fit"]["t_aim"]))
+        row = line_row(t)
+        st["chosen"] = {"t": t, "row": row}
+        save_json(st_path, st)
+        jr.start("levels-line", "confirm")
+        mids = bar.ids(LEVELS[level]["pair"] + bar.NORMAL_ROW)
+        oids = bar.ids(bar.CALIBRATION + bar.NORMAL_ROW)
+        mout, oout = games / "confirm-mirror", games / "confirm-ota"
+        ps = (line_pieces("confirm-mirror", mids, line_items(level, "mirror", row, normal_row), mout, lanes)
+              + line_pieces("confirm-ota", oids, line_items(level, "ota", row), oout, lanes))
+        overran = play(ps, launch)
+        mgot, why = line_read(mids, mout)
+        ogot, owhy = line_read(oids, oout)
+        if (mgot is None or ogot is None) and not overran:
+            print(f"tune levels-line: the confirmation played once more ({why or owhy})")
+            overran = play(ps, launch)
+            mgot, why = line_read(mids, mout)
+            ogot, owhy = line_read(oids, oout)
+        if mgot is None or ogot is None:
+            why = f"pieces past {batch.DEADLINE} s: {', '.join(overran)}" if overran else (why or owhy)
+            jr.finish("levels-line", "confirm", "unrun", why)
+            jr.end("unrun")
+            print(f"tune levels-line: COULD NOT RUN: the confirmation lacks a game ({why}); `run` again goes on")
+            return 2
+        mwins = sum(1 for w in mgot.values() if w == "A")
+        opts = sum(bar.POINTS[w] for w in ogot.values()) / len(ogot)
+        st["confirm"] = {"mirror_wins": mwins, "mirror_games": len(mgot), "ota_points": opts,
+                         "ota_games": len(ogot), "floor": floor}
+        mirror_ok = mwins >= LEVEL_WIN * len(mgot)
+        st["verdict"] = ("chosen" if mirror_ok and opts >= floor else
+                         "the mirror refused the row" if not mirror_ok else "below the floor")
+        save_json(st_path, st)
+        jr.finish("levels-line", "confirm", "pass" if st["verdict"] == "chosen" else "fail",
+                  f"{mwins}/{len(mgot)}, OTA AI {opts:.3f}")
+        jr.end("pass" if st["verdict"] == "chosen" else "fail")
+        print(line_report(st))
+        return 0 if st["verdict"] == "chosen" else 1
+    except KeyboardInterrupt:
+        jr.end("stopped")
+        return 2
+
+
+def line_report(st: dict) -> str:
+    level = st["level"]
+    who = "Hard" if level == "normal" else f"Normal's row {st['normal_row']}"
+    lines = [f"levels-line {level}: the row {who} beats in at least {round(100 * LEVEL_WIN)} % of the mirror's games "
+             f"and that scores {LEVELS[level]['floor']:.2f} against OTA AI at Hard"]
+    for lk in sorted(st["looks"], key=lambda x: x["t"]):
+        lines.append(f"  look {lk['k']}: t {lk['t']:.4f}  {lk['row']:<28}  {who} won {lk['wins']:2d} of {lk['games']}")
+    breaks = line_breaks(st["looks"])
+    lines.append("the order: " + ("BROKEN, " + "; ".join(f"t {a:.3f} won {pa:.2f} < t {b:.3f} won {pb:.2f}"
+                                                         for a, pa, b, pb in breaks)
+                                 + ": the line is not monotone in strength, so neither the bisection nor the fit "
+                                   "holds; the question goes back to the owner" if breaks else
+                                 "every look's share falls as t grows, within the noise (monotone as measured)"))
+    fr = st.get("fit")
+    if fr:
+        band = f" +- {ladder.Z90 * fr['se']:.3f} (90 %)" if fr.get("se") else ""
+        lines.append(f"the fit: t90 {fr['t90']:.4f}, the aim {fr['aim']:.2f} at t {fr['t_aim']:.4f}{band}, slope "
+                     f"{fr['s']:.4f}")
+    v = st.get("verdict")
+    if v == "below the line":
+        lines.append(f"NO ROW: {who} wins less than {round(100 * LEVEL_WIN)} % even at t = 0, the lever's harshest "
+                     f"row: no point on the line meets the mirror's bound; the question goes back to the owner")
+    if st.get("confirm"):
+        c, ch = st["confirm"], st["chosen"]
+        lines.append(f"the row at t {ch['t']:.4f}: {ch['row']}: {who} won {c['mirror_wins']} of {c['mirror_games']}; "
+                     f"against OTA AI it took {c['ota_points']:.3f} of the points over {c['ota_games']}")
+        lines.append({"chosen": f"CHOSEN: {ch['row']}",
+                      "below the floor": f"NO ROW: at the largest t {who} still beats {round(100 * LEVEL_WIN)} %, the "
+                                         f"row takes {c['ota_points']:.3f} < {c['floor']:.2f} against OTA AI, and every "
+                                         f"lower t is weaker on a monotone line: no point on the line meets both "
+                                         f"bounds; the question goes back to the owner",
+                      "the mirror refused the row": f"NOT CHOSEN: the confirmation's mirror gave {who} "
+                                                    f"{c['mirror_wins']} of {c['mirror_games']}: the fit placed the "
+                                                    f"row too strong"}[v])
+    return "\n".join(lines)
+
+
+def line_simulate(looks: int, games: int, slope: float, runs: int, seed: int = 1, aim: float = LINE_AIM) -> dict:
+    """The method on simulated games, as ladder.simulate: the true t90 uniform in [0.15, 0.85], the stronger side's
+    chance p(t) logistic of slope `slope`; each look plays `games` games at the bracket's midpoint (rows as the
+    line rounds them: a row played again closes the bracket). {rmse, p90, mid_rmse} of t90 against the truth, the
+    mean true win share at the t chosen and the share of runs whose 100-game confirmation passes (90 of 100)."""
+    rng = random.Random(seed)
+    err, mid, p_at, conf = [], [], [], []
+    for _ in range(runs):
+        t90 = rng.uniform(0.15, 0.85)
+        c = t90 + slope * LN9
+        done, ts, ys = [], [], []
+        for k in range(looks):
+            nxt = line_next(done)
+            if nxt is None:
+                break
+            t, row = nxt
+            p = 1.0 / (1.0 + math.exp((t - c) / slope))
+            wins = sum(rng.random() < p for _ in range(games))
+            ts += [t] * games
+            ys += [1.0] * wins + [0.0] * (games - wins)
+            done.append({"k": k + 1, "t": t, "row": row, "wins": wins, "games": games})
+        fr = line_fit(ts, ys, aim)
+        err.append(fr["t90"] - t90)
+        lo, hi = line_bracket(done)
+        mid.append((lo + hi) / 2 - t90)
+        pt = 1.0 / (1.0 + math.exp((min(1.0, max(0.0, fr["t_aim"])) - c) / slope))
+        p_at.append(pt)
+        conf.append(sum(math.comb(100, j) * pt ** j * (1 - pt) ** (100 - j) for j in range(90, 101)))
+    rmse = lambda e: math.sqrt(sum(v * v for v in e) / len(e))  # noqa: E731
+    a = sorted(abs(v) for v in err)
+    return {"rmse": rmse(err), "p90": a[int(0.9 * (len(a) - 1))], "mid_rmse": rmse(mid),
+            "p_at": sum(p_at) / len(p_at), "confirm": sum(conf) / len(conf), "games": looks * games + 140}
+
+
+def cmd_levels_line(a) -> int:
+    if a.sub == "run":
+        return line_run(Path(a.dir), Path(a.dll), a.level, a.normal_row, a.looks, a.lanes)
+    if a.sub == "report":
+        print(line_report(json.loads((Path(a.dir) / LINE_STATE).read_text())))
+        return 0
+    for s in a.slopes:
+        r = line_simulate(a.looks, a.games, s, a.runs, a.seed, a.aim)
+        print(f"slope {s:.3f}: t90 rmse {r['rmse']:.4f} (90 % within {r['p90']:.4f}; the bracket alone "
+              f"{r['mid_rmse']:.4f}); the true win share at the t chosen {r['p_at']:.3f}; the 100-game mirror "
+              f"confirms {100 * r['confirm']:.0f} % of runs; {r['games']} games a level")
     return 0
 
 
@@ -1027,11 +1312,9 @@ def main(argv=None) -> int:
     s.add_argument("--objective", required=True, choices=OBJECTIVES)
     s.add_argument("--seed", type=int, default=1)
     s.add_argument("--iters", type=int, default=40)
-    s.add_argument("--start", default=None,
-                   help="the levels: a PERSONA_ROWS row or nine integers (Normal's: NORMAL_ROW; Easy's: L1); the "
-                        "lever's: name=int,... in place of the hand-written values")
-    s.add_argument("--params", default=None, help="the lever's: the constants tuned, comma-separated")
-    s.add_argument("--normal-row", default=None, help="levels-easy: Normal's row, the stronger side of its mirror")
+    s.add_argument("--start", default=None, help="name=int,...: where the search starts in place of the "
+                                                  "hand-written values")
+    s.add_argument("--params", required=True, help="the plan constants tuned, comma-separated")
     s.add_argument("--handicap", default=None, help="handicap: the pair h:<m> played, m the champion's m*")
     s.add_argument("--c", type=float, default=0.15)
     s.add_argument("--a", type=float, default=None)
@@ -1041,6 +1324,23 @@ def main(argv=None) -> int:
     s.add_argument("--lanes", type=int, default=SPSA_PIECE)
     s = sp.add_parser("report")
     s.add_argument("--dir", required=True)
+    ll = sub.add_parser("levels-line").add_subparsers(dest="sub", required=True)
+    s = ll.add_parser("run")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--dll", required=True)
+    s.add_argument("--level", required=True, choices=sorted(LEVELS))
+    s.add_argument("--normal-row", default=None, help="easy: Normal's row, the stronger side of its mirror")
+    s.add_argument("--looks", type=int, default=LINE_LOOKS)
+    s.add_argument("--lanes", type=int, default=LINE_LANES)
+    s = ll.add_parser("report")
+    s.add_argument("--dir", required=True)
+    s = ll.add_parser("simulate")
+    s.add_argument("--looks", type=int, default=LINE_LOOKS)
+    s.add_argument("--games", type=int, default=LINE_BLOCKS * 10)
+    s.add_argument("--slopes", type=lambda v: [float(x) for x in v.split(",")], default=[0.05, 0.1, 0.2])
+    s.add_argument("--runs", type=int, default=300)
+    s.add_argument("--seed", type=int, default=1)
+    s.add_argument("--aim", type=float, default=LINE_AIM)
     s = sub.add_parser("plan")
     s.add_argument("--lanes", type=int, default=LANES)
     s.add_argument("--gpu", action="store_true",
@@ -1049,7 +1349,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         return {"tierA": cmd_tier_a, "tierB": cmd_tier_b, "confirm": cmd_confirm, "plan": cmd_plan,
-                "spsa": cmd_spsa}[a.cmd](a)
+                "spsa": cmd_spsa, "levels-line": cmd_levels_line}[a.cmd](a)
     except (TuneError, tourney.TourneyError, tablefile.TableError, bar.BarError, OSError,
             json.JSONDecodeError) as e:
         print(f"tune: {e}")

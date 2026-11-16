@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Tests of the automatic tuning's SPSA, offline: the arithmetic (spsa.py) on objectives whose optimum is known,
+"""Tests of the automatic tuning, offline -- the levels' line (tune.py levels-line): the line, its bracket, its
+fit, its order check and its runs on a fake player (a level found and confirmed, a resume, a line not monotone,
+no row on the line); and SPSA: the arithmetic (spsa.py) on objectives whose optimum is known,
 its determinism and its resume; the persona and plan spaces and the tune lever's rules (tune.py, level_lever.py);
 the objectives' values; and `tune.py spsa run` on a fake player -- its common random numbers, its resume after a
 stop, its determinism from the seed and an iteration that could not run.
@@ -182,16 +184,6 @@ def result(gid, outcome, end=40000, cap=bar.CAP):
 
 
 class Objectives(unittest.TestCase):
-    def test_the_levels_value(self):
-        mirror = {f"m{i}": result(f"m{i}", "A" if i < 8 else "B") for i in range(10)}      # w 0.8
-        ota = {f"o{i}": result(f"o{i}", "A" if i < 9 else "cap") for i in range(10)}        # o 0.95
-        v, _ = tune.level_value("levels-normal", mirror, ota)
-        self.assertAlmostEqual(v["w"], 0.8)
-        self.assertAlmostEqual(v["o"], 0.95)
-        self.assertAlmostEqual(v["J"], 0.95 - tune.LEVEL_K * 0.1)
-        mirror["m9"] = None
-        self.assertIsNone(tune.level_value("levels-normal", mirror, ota)[0])
-
     def test_the_margin_is_the_arms_paired_on_each_id(self):
         plus = {"pairs": {"a": result("a", "A", 30000), "b": result("b", "A", 50000), "c": result("c", "B")}}
         minus = {"pairs": {"a": result("a", "A", 40000), "b": result("b", "A", 50100), "c": result("c", "A", 1)}}
@@ -199,38 +191,35 @@ class Objectives(unittest.TestCase):
         self.assertEqual(detail, {"better": 1, "ties": 1, "worse": 1})
         self.assertAlmostEqual(d, 0.0)
 
+    def test_the_points_objectives_are_each_arms_points(self):
+        plus = {"points": {f"g{i}": result(f"g{i}", "A" if i < 7 else "B") for i in range(10)}}
+        minus = {"points": {f"g{i}": result(f"g{i}", "A" if i < 4 else "B") for i in range(10)}}
+        d, _ = tune.spsa_diff("mirror", plus, minus)
+        self.assertAlmostEqual(d, 0.3)
+        minus["points"]["g0"] = None
+        self.assertIsNone(tune.spsa_diff("mirror", plus, minus)[0])
+
     def test_the_roles_share_their_ids_between_the_arms_and_move_on_each_iteration(self):
-        r0, r1 = tune.spsa_roles("levels-normal", 0), tune.spsa_roles("levels-normal", 1)
-        self.assertEqual(set(r0), {"mirror", "ota"})
-        self.assertTrue(all(g.startswith("bar-m:L3-") for g in r0["mirror"]))
-        self.assertTrue(all(g.startswith("bar-p:L3-") for g in r0["ota"]))
-        self.assertEqual(len(r0["mirror"]), 10)
-        self.assertFalse(set(r0["mirror"]) & set(r1["mirror"]))
-        self.assertTrue(all(g.startswith("bar-n:L3-") for g in tune.spsa_roles("levels-easy", 0)["mirror"]))
+        r0, r1 = tune.spsa_roles("mirror", 0), tune.spsa_roles("mirror", 1)
+        self.assertTrue(all(g.startswith("bar-g:H.H-") for g in r0["points"]))
+        self.assertEqual(len(r0["points"]), 10)
+        self.assertFalse(set(r0["points"]) & set(r1["points"]))
         self.assertEqual(len(tune.spsa_roles("margin", 0)["pairs"]), 16)
         self.assertTrue(all(g.startswith("bar-h:2.000-") for g in tune.spsa_roles("handicap", 0, "h:2.000")["points"]))
-
-    def test_the_settings_seat_each_arm(self):
-        self.assertEqual(tune.spsa_settings("levels-normal", "mirror", "R"), {"persona": ["B=R"], "tune": []})
-        self.assertEqual(tune.spsa_settings("levels-easy", "mirror", "R", "N"), {"persona": ["A=N", "B=R"], "tune": []})
-        self.assertEqual(tune.spsa_settings("levels-easy", "ota", "R", "N"), {"persona": ["A=R"], "tune": []})
-        self.assertEqual(tune.spsa_settings("margin", "pairs", {"lead_in": 3000}),
-                         {"persona": [], "tune": ["A=lead_in=3000"]})
-
-
-def strength(row: str) -> float:
-    """The fake world's strength of a persona row: its mean coordinate in the persona space, 0 harshest, 1 Hard's."""
-    return float(np.mean(tune.PersonaSpace().encode(row)))
+        self.assertEqual(tune.spsa_settings({"lead_in": 3000}), {"persona": [], "tune": ["A=lead_in=3000"]})
 
 
 def unit(*parts) -> float:
     return int.from_bytes(hashlib.sha256(" ".join(map(str, parts)).encode()).digest()[:4], "big") / 2 ** 32
 
 
+def plan_of(item: str) -> dict:
+    return {n: int(v) for n, _, v in (kv.partition("=") for kv in item.split("=", 1)[1].split(","))}
+
+
 class FakePlayer:
-    """Writes each piece's results as bar.py would, from the row its arm plays: Hard beats a row of strength s in
-    the mirror when a draw of the id falls below 1 - 0.3 s, and a row beats OTA AI when a draw falls below 0.5 +
-    0.5 s; so the stronger a row, the more it scores against OTA AI and the fewer mirror games Hard wins."""
+    """Writes each piece's results as bar.py would, from the plan constants its arm plays: A beats ImpAI Hard when a
+    draw of the id falls below 0.5 + 0.4 (1 - ((attack_margin - 250) / 350)^2), so the best attack margin is 250."""
 
     def __init__(self, stop_at=None, skip=None):
         self.played, self.stop_at, self.skip = [], stop_at, skip or set()
@@ -243,18 +232,19 @@ class FakePlayer:
             self.played.append(p["name"])
             out = Path(p["out"])
             out.mkdir(parents=True, exist_ok=True)
-            row = [x.split("=", 1)[1] for x in p["persona"] if x.startswith("B=" if p["role"] == "mirror" else "A=")][0]
-            s = strength(row)
+            plan = plan_of(p["tune"][0])
+            q = 0.5 + 0.4 * (1 - ((plan["attack_margin"] - 250) / 350) ** 2)
             for gid in p["ids"]:
                 if gid in self.skip:
                     continue
-                u = unit(gid, row)
-                win = (u < 1 - 0.3 * s) if p["role"] == "mirror" else (u < 0.5 + 0.5 * s)
+                win = unit(gid, p["tune"][0]) < q
                 (out / f"{gid}.json").write_text(json.dumps(result(gid, "A" if win else "B")))
         return []
 
 
 class Run(unittest.TestCase):
+    PARAMS = ["attack_margin", "retreat_margin"]
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
@@ -265,9 +255,9 @@ class Run(unittest.TestCase):
         with mock.patch.dict("os.environ", {"TARUN_DIR": str(self.tmp / "runs")}), mock.patch("builtins.print"):
             return tune.spsa_run(d, self.dll, 10, launch=lambda p: None, play=player)
 
-    def init(self, name, iters=4, seed=3):
+    def init(self, name, iters=4, seed=3, start=None):
         with mock.patch("builtins.print"):
-            return tune.SpsaRun.init(self.tmp / name, "levels-normal", seed, iters)
+            return tune.SpsaRun.init(self.tmp / name, "mirror", seed, iters, start=start, params=self.PARAMS)
 
     def state(self, name):
         return json.loads((self.tmp / name / tune.SPSA_STATE).read_text())
@@ -279,11 +269,11 @@ class Run(unittest.TestCase):
         st = self.state("a")
         self.assertEqual([it["k"] for it in st["iterations"]], [0, 1, 2, 3])
         self.assertEqual(st["search"]["k"], 4)
-        self.assertEqual(len(p.played), 4 * 4)                    # two arms x two roles, a block each
-        k0 = sorted((self.tmp / "a" / "games" / "k000-plus").glob("*.json"))
-        self.assertEqual([f.name for f in k0], sorted(f.name for f in (self.tmp / "a" / "games" / "k000-minus").glob("*.json")))
+        self.assertEqual(len(p.played), 4 * 2)                    # two arms, a block each
+        k0 = sorted(f.name for f in (self.tmp / "a" / "games" / "k000-plus").glob("*.json"))
+        self.assertEqual(k0, sorted(f.name for f in (self.tmp / "a" / "games" / "k000-minus").glob("*.json")))
         for it in st["iterations"]:
-            self.assertIsNone(level_lever.persona_error(f"1={it['plus']}"))
+            self.assertIsNone(level_lever.tune_error(1, it["plus"]))
             self.assertNotEqual(it["plus"], it["minus"])
 
     def test_the_same_seed_is_the_same_run(self):
@@ -291,8 +281,7 @@ class Run(unittest.TestCase):
         self.init("b")
         self.run_(self.tmp / "a", FakePlayer())
         self.run_(self.tmp / "b", FakePlayer())
-        strip = lambda st: [{k: v for k, v in it.items()} for it in st["iterations"]]   # noqa: E731
-        self.assertEqual(strip(self.state("a")), strip(self.state("b")))
+        self.assertEqual(self.state("a")["iterations"], self.state("b")["iterations"])
         self.init("c", seed=4)
         self.run_(self.tmp / "c", FakePlayer())
         self.assertNotEqual(self.state("a")["iterations"][0]["delta"], self.state("c")["iterations"][0]["delta"])
@@ -311,10 +300,10 @@ class Run(unittest.TestCase):
 
     def test_an_iteration_missing_a_game_plays_once_more_then_stops_unrun(self):
         self.init("a")
-        gid = tune.spsa_roles("levels-normal", 0)["ota"][3]
+        gid = tune.spsa_roles("mirror", 0)["points"][3]
         p = FakePlayer(skip={gid})
         self.assertEqual(self.run_(self.tmp / "a", p), 2)
-        self.assertEqual(len(p.played), 8)                         # the iteration's four pieces, twice
+        self.assertEqual(len(p.played), 4)                         # the iteration's two pieces, twice
         self.assertEqual(self.state("a")["iterations"], [])
 
     def test_another_dll_is_refused(self):
@@ -325,26 +314,195 @@ class Run(unittest.TestCase):
         with mock.patch("builtins.print"):
             self.assertEqual(tune.spsa_run(self.tmp / "a", other, 10, launch=lambda p: None, play=FakePlayer()), 2)
 
-    def test_the_search_moves_the_row_towards_the_mirrors_bound(self):
-        # the fake world: o = 0.5 + 0.5 s rises with strength, w = 1 - 0.3 s falls; the bound w >= 0.9 holds up to
-        # s = 1/3, so a search from the harshest row climbs towards s 1/3 and is held near it
-        with mock.patch("builtins.print"):
-            tune.SpsaRun.init(self.tmp / "a", "levels-normal", 7, 30, start="L0b")
+    def test_the_search_climbs_towards_the_best_constant(self):
+        # the fake world's best attack margin is 250; from the hand-written 100 the search climbs towards it
+        self.init("a", iters=30, seed=7)
         self.run_(self.tmp / "a", FakePlayer())
-        st = self.state("a")
-        s_end = strength(tune.PersonaSpace().decode(st["search"]["theta"]))
-        self.assertGreater(s_end, strength(bar.PERSONA_ROWS["L0b"]) + 0.1)
-        self.assertLess(s_end, 0.6)
+        end = tune.PlanSpace(self.PARAMS).decode(self.state("a")["search"]["theta"])["attack_margin"]
+        self.assertGreater(end, 160)
 
     def test_init_refusals(self):
+        self.init("a", iters=2)
         with mock.patch("builtins.print"):
-            tune.SpsaRun.init(self.tmp / "a", "levels-normal", 1, 2)
             with self.assertRaises(tune.TuneError):
-                tune.SpsaRun.init(self.tmp / "a", "levels-normal", 1, 2)
+                tune.SpsaRun.init(self.tmp / "a", "mirror", 1, 2, params=self.PARAMS)
             with self.assertRaises(tune.TuneError):
                 tune.SpsaRun.init(self.tmp / "b", "handicap", 1, 2, params=["lead_in"])
             with self.assertRaises(tune.TuneError):
-                tune.SpsaRun.init(self.tmp / "c", "levels-normal", 1, 2, start="150,150,150,0,0,0,0,0,0")
+                tune.SpsaRun.init(self.tmp / "c", "mirror", 1, 2, params=self.PARAMS, start={"attack_margin": 999})
+            with self.assertRaises(tune.TuneError):
+                tune.SpsaRun.init(self.tmp / "d", "levels-normal", 1, 2, params=self.PARAMS)
+
+
+def harsh_order(v: int) -> float:
+    """A budget's or attention's value in the order of strength: 0 is no limit, past every number."""
+    return float("inf") if v == 0 else float(v)
+
+
+class Line(unittest.TestCase):
+    def test_the_line_runs_from_the_harshest_row_to_hards_and_every_point_is_a_row(self):
+        self.assertEqual(tune.line_row(0.0), bar.PERSONA_ROWS["L0b"])
+        self.assertEqual(tune.line_row(1.0), bar.PERSONA_ROWS["L5"])
+        for i in range(201):
+            self.assertIsNone(level_lever.persona_error(f"1={tune.line_row(i / 200)}"))
+
+    def test_every_axis_relaxes_as_t_grows(self):
+        prev = None
+        for i in range(401):
+            v = [int(x) for x in tune.line_row(i / 400).split(",")]
+            look_e, look_m, react, apm_e, burst_e, apm_m, burst_m, att_e, att_m = v
+            now = (-look_e, -look_m, -react, harsh_order(apm_e), harsh_order(burst_e if apm_e else 0),
+                   harsh_order(apm_m), harsh_order(burst_m if apm_m else 0), harsh_order(att_e), harsh_order(att_m))
+            if prev:
+                self.assertTrue(all(b >= a for a, b in zip(prev, now)), (i, v))
+            prev = now
+
+    def test_the_bracket_moves_on_the_bound_and_closes_on_a_row_played(self):
+        looks = [{"t": 0.5, "row": tune.line_row(0.5), "wins": 18, "games": 20},
+                 {"t": 0.75, "row": tune.line_row(0.75), "wins": 17, "games": 20}]
+        self.assertEqual(tune.line_bracket(looks), (0.5, 0.75))
+        t, row = tune.line_next(looks)
+        self.assertAlmostEqual(t, 0.625)
+        self.assertEqual(tune.line_row(0.3), tune.line_row(0.3005))       # a bracket inside one row
+        same = [{"t": 0.3, "row": tune.line_row(0.3), "wins": 18, "games": 20},
+                {"t": 0.301, "row": tune.line_row(0.301), "wins": 10, "games": 20}]
+        self.assertIsNone(tune.line_next(same))
+
+    def test_the_fit_finds_the_bound_and_the_aim_lies_inside_it(self):
+        rng = np.random.default_rng(4)
+        c, s = 0.6, 0.08
+        ts, ys = [], []
+        for t in (0.2, 0.35, 0.45, 0.5, 0.55, 0.65):
+            p = 1 / (1 + np.exp((t - c) / s))
+            ts += [t] * 400
+            ys += list((rng.random(400) < p).astype(float))
+        fr = tune.line_fit(ts, ys)
+        self.assertAlmostEqual(fr["t90"], c - s * np.log(9), delta=0.02)
+        self.assertLess(fr["t_aim"], fr["t90"])
+        self.assertIsNotNone(fr["se"])
+
+    def test_the_order_check_names_a_reversed_pair_only_past_the_noise(self):
+        ok = [{"t": 0.2, "row": "a", "wins": 19, "games": 20}, {"t": 0.6, "row": "b", "wins": 17, "games": 20}]
+        self.assertEqual(tune.line_breaks(ok), [])
+        noise = [{"t": 0.2, "row": "a", "wins": 17, "games": 20}, {"t": 0.6, "row": "b", "wins": 19, "games": 20}]
+        self.assertEqual(tune.line_breaks(noise), [])
+        bad = [{"t": 0.2, "row": "a", "wins": 8, "games": 20}, {"t": 0.6, "row": "b", "wins": 20, "games": 20}]
+        self.assertEqual(len(tune.line_breaks(bad)), 1)
+
+    def test_the_looks_and_the_confirmation_share_no_seed(self):
+        conf = set(bar.ids(bar.MIRROR + bar.NORMAL_ROW))
+        seen = set()
+        for k in range(1, 7):
+            ids = tune.line_game_ids("normal", k)
+            self.assertEqual(len(ids), 20)
+            self.assertFalse(set(ids) & conf)
+            self.assertFalse(set(ids) & seen)
+            seen |= set(ids)
+        self.assertTrue(all(g.startswith("bar-n:L3-") for g in tune.line_game_ids("easy", 1)))
+        self.assertEqual(tune.line_items("easy", "mirror", "R", "N"), ["A=N", "B=R"])
+        self.assertEqual(tune.line_items("normal", "mirror", "R"), ["B=R"])
+        self.assertEqual(tune.line_items("easy", "ota", "R", "N"), ["A=R"])
+
+    def test_the_simulation_puts_the_bound_within_its_bracket(self):
+        r = tune.line_simulate(6, 20, 0.1, runs=40, seed=3)
+        self.assertLess(r["rmse"], 0.08)
+        self.assertGreater(r["p_at"], 0.9)
+        self.assertEqual(r["games"], 6 * 20 + 140)
+
+
+class LinePlayer:
+    """Writes each piece's results from the row its arm plays, at t the row's place on the line (its mean
+    coordinate): the stronger side wins a mirror game when a draw of the id falls below p(t), logistic through
+    `t90` of slope 0.08; the row scores against OTA AI when a draw falls below `ota(t)`."""
+
+    def __init__(self, t90=0.55, ota=lambda t: 0.97, stop_at=None, reverse=False):
+        self.t90, self.ota, self.stop_at, self.reverse, self.played = t90, ota, stop_at, reverse, []
+
+    def __call__(self, ps, launch):
+        for p in ps:
+            if self.stop_at and p["name"].startswith(self.stop_at):
+                raise KeyboardInterrupt
+            self.played.append(p["name"])
+            out = Path(p["out"])
+            out.mkdir(parents=True, exist_ok=True)
+            ota = p["name"].startswith("confirm-ota")
+            row = [x.split("=", 1)[1] for x in p["persona"] if x.startswith("A=" if ota else "B=")][0]
+            t = float(np.mean(tune.PersonaSpace().encode(row)))
+            if self.reverse:
+                t = 1 - t
+            for gid in p["ids"]:
+                u = unit(gid, row)
+                if ota:
+                    win = u < self.ota(t)
+                else:
+                    win = u < 1 / (1 + np.exp((t - (self.t90 + 0.08 * np.log(9))) / 0.08))
+                (out / f"{gid}.json").write_text(json.dumps(result(gid, "A" if win else "B")))
+        return []
+
+
+class LineRun(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.dll = self.tmp / "x.dll"
+        self.dll.write_bytes(b"dll")
+
+    def run_(self, player, level="normal", name="a", normal_row=None):
+        with mock.patch.dict("os.environ", {"TARUN_DIR": str(self.tmp / "runs")}), \
+                mock.patch("builtins.print") as said:
+            rc = tune.line_run(self.tmp / name, self.dll, level, normal_row, launch=lambda p: None, play=player)
+        self.said = "\n".join(str(c.args[0]) for c in said.call_args_list)
+        return rc
+
+    def state(self, name="a"):
+        return json.loads((self.tmp / name / tune.LINE_STATE).read_text())
+
+    def test_a_level_is_found_inside_the_bound_and_confirmed(self):
+        p = LinePlayer(t90=0.55)
+        self.assertEqual(self.run_(p), 0)
+        st = self.state()
+        self.assertEqual(len(st["looks"]), 6)
+        self.assertEqual(st["verdict"], "chosen")
+        self.assertLess(st["chosen"]["t"], 0.55 + 0.05)
+        self.assertEqual(st["confirm"]["mirror_games"], 100)
+        self.assertEqual(st["confirm"]["ota_games"], 40)
+        self.assertIn("monotone as measured", self.said)
+        self.assertIn("CHOSEN:", self.said)
+
+    def test_a_stopped_run_resumes_where_it_stopped(self):
+        whole = LinePlayer()
+        self.run_(whole, name="whole")
+        self.assertEqual(self.run_(LinePlayer(stop_at="look-3"), name="cut"), 2)
+        self.assertEqual(len(self.state("cut")["looks"]), 2)
+        p = LinePlayer()
+        self.assertEqual(self.run_(p, name="cut"), 0)
+        self.assertFalse(any(n.startswith(("look-1", "look-2")) for n in p.played))
+        self.assertEqual(self.state("cut")["looks"], self.state("whole")["looks"])
+        self.assertEqual(self.state("cut")["chosen"], self.state("whole")["chosen"])
+
+    def test_a_line_not_monotone_stops_and_says_so(self):
+        self.assertEqual(self.run_(LinePlayer(t90=0.3, reverse=True)), 1)
+        self.assertEqual(self.state()["verdict"], "not monotone")
+        self.assertIn("BROKEN", self.said)
+
+    def test_no_row_meets_the_mirrors_bound(self):
+        self.assertEqual(self.run_(LinePlayer(t90=-0.4)), 1)
+        self.assertEqual(self.state()["verdict"], "below the line")
+        self.assertIn("NO ROW", self.said)
+
+    def test_no_row_meets_both_bounds(self):
+        self.assertEqual(self.run_(LinePlayer(ota=lambda t: 0.3)), 1)
+        self.assertEqual(self.state()["verdict"], "below the floor")
+        self.assertIn("no point on the line meets both", self.said)
+
+    def test_easy_plays_against_normals_row_with_its_own_floor(self):
+        p = LinePlayer(ota=lambda t: 0.55)
+        self.assertEqual(self.run_(p, level="easy", normal_row="L3"), 0)
+        st = self.state()
+        self.assertEqual(st["normal_row"], bar.PERSONA_ROWS["L3"])
+        self.assertEqual(st["confirm"]["floor"], 0.50)
+        with self.assertRaises(tune.TuneError):
+            self.run_(p, level="normal")                               # the directory is Easy's
 
 
 if __name__ == "__main__":
