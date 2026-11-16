@@ -4631,10 +4631,11 @@ def mp_step(argv, log_path):
 
 def multiplayer_group(build, dll, out, keep):
     """The two-player game on one coverage build: recorded by two humans, allied both ways, and two
-    AIs, each human's opponent, with chat and a selection and a click from each human, so the
-    allies' ribbon reads each human's economy from the contribution channel
-    (recmp_create_begin_test.py, whose own checks fail
-    it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
+    AIs, each human's opponent, with chat, a selection and a click, and a drawing-board line and pin
+    from each human, so the allies' ribbon reads each human's economy from the contribution channel
+    and each peer applies the other's marks (recmp_create_begin_test.py, whose own checks fail
+    it), `tarec check` on its recording, and the recording played to its end with one seek back,
+    600 to 200, so a multiplayer seek composes again (recmp_play_test.py).
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
     is never read as "not reached"."""
     item = mp_item(build)
@@ -4655,7 +4656,7 @@ def multiplayer_group(build, dll, out, keep):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--port", MP_GAMES[build], "--chat", "--select", "--allies"], log)
+                  "--port", MP_GAMES[build], "--chat", "--select", "--marks", "--allies"], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
@@ -4664,7 +4665,7 @@ def multiplayer_group(build, dll, out, keep):
     J.start(item, "play")
     log = d / "play.log"
     rc = mp_step([HERE / "recmp_play_test.py", rec, "--out", d / "play", "--dll", dll, "--to-end",
-                  "--cover", "play"], log)
+                  "--seek", "600:200", "--cover", "play"], log)
     if rc:
         return failed("play", f"the playing failed: {tail(log)}", log)
     J.finish(item, "play", "pass")

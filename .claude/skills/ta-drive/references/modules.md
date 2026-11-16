@@ -269,8 +269,10 @@ applied mixed batches through synthetic seek and proof
 isolation. Native constructor ordering uses the coverage DLL:
 `python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
 It queues on the run lock, and its `cover-<instance>.bin` files, written at each game's exit, are
-what `tafeat.reached` reads. The landing tier plays it with `--chat --select`, the humans talking,
-selecting and clicking, then plays its recording with `recmp_play_test.py --cover`.
+what `tafeat.reached` reads. The landing tier plays it with `--chat --select --marks`, the humans talking,
+selecting and clicking and drawing a line and a pin on the drawing board (each peer must apply the
+other's), then plays its recording with `recmp_play_test.py --cover`, seeking from 600 back to 200
+on the way.
 `--reproduce` installs `tools/reproduce_fixture.py`'s archive (the stock trees and shrubs with
 `reproduce=100`, generated from the install, written only into the instances and `--out`) on
 both peers, and `--until T` keeps the game running to GameTime T before the host leaves: the
