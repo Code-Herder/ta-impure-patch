@@ -1,5 +1,5 @@
-landing-review: drawing board landing 2 (marks over the contribution channel), 2c002ad8..e8c0d1a9, fixes in 8e8a2c0b
-level: high (two fresh read-only reviewers: general correctness; the channel, recordings and replay)
+landing-review: model=claude-opus-5-5 effort=high range=2c002ad8..e8c0d1a9 fixes=8e8a2c0b findings=8 acted=8 rejected=0 date=2026-11-16
+Drawing board landing 2 (marks over the contribution channel). Two fresh read-only reviewers: general correctness; the channel, recordings and replay.
 findings (all verified against the code, all fixed in 8e8a2c0b):
 - MEDIUM: a received op applied under the RECEIVER's rights -> a watcher's or a non-transitive ally's screen erased more than the sender did. Fix: EDIT/MOVE/DELETE/ERASE carry the sender's rights mask (renumbered with the seats); applied cut to what the receiver sees.
 - MEDIUM: in a pause a mark behind another kind at the queue head waits, while the sender kept sending ~1 body a frame -> 256-slot receive queue fills -> consumption ends (recording, allied resources). Fix: at most 2 bodies a capture tick (a pause holds the tick); an op the 16 KB outbox cannot hold is not drawn either.
