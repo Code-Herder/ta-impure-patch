@@ -1481,18 +1481,24 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    ROOM: a ring that left a site for the commander's reach, for ground threat at the site or on the route, or
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
-   and switch the seat's plant type, for a raid that lasts a few decisions. */
-static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key)
+   and switch the seat's plant type, for a raid that lasts a few decisions.
+   COVER (impai_build_sensor): with cover above 0, a site whose footprint centre lies past cover px of the key is
+   skipped and is no lack of room, as the commander's reach is not. AT A POINT (`at`): the ring around the
+   rectangle `at` instead of the base box, grown by gap alone, each site on held ground (THE HELD GROUND), and
+   neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's. */
+static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
+                      uint32_t cover)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int gap = in->plan->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
-    const int grow = gap + st->ring_grow * (fx + gap);
+    const int grow = gap + (at ? 0 : st->ring_grow * (fx + gap));
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0;
-    if (d->has_bbox) box = d->bbox;
+    if (at) box = *at;
+    else if (d->has_bbox) box = d->bbox;
     else {
         const IMPAI_TINFO* ct = d->commander.slot ? &in->ti[d->commander.type] : NULL;
         box.x0 = st->ax;
@@ -1509,6 +1515,13 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         const int cx = d->ring[k].cx + gap / 2, cz = d->ring[k].cz + gap / 2;
         IMPAI_RECT r = impai_rect_at(d, type, cx, cz), wide = r;
         int alt = 0;
+        if (cover && key) {
+            const int64_t sx = (int64_t)(2 * cx + fx) * 8 - key[0], sz = (int64_t)(2 * cz + fz) * 8 - key[1];
+            if (sx * sx + sz * sz > (int64_t)cover * cover) {
+                beyond++;
+                continue;
+            }
+        }
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
         if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
@@ -1519,7 +1532,8 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             continue;
         }
         if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8) ||
-            (commander && cmd_refused(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
+            (commander && cmd_refused(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) ||
+            (at && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
             threat_skipped++;
             continue;
         }
@@ -1539,12 +1553,12 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             }
         }
         if (build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
-            st->ring_grow = 0;
+            if (!at) st->ring_grow = 0;
             return 1;
         }
         if (d->roots >= d->root_cap) return 0;
     }
-    if (beyond || threat_skipped) return 0;
+    if (at || beyond || threat_skipped) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
@@ -1553,13 +1567,34 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
 
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
-    return ring_build(d, b, type, NULL);
+    return ring_build(d, b, type, NULL, NULL, 0);
 }
 
 int impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const int32_t key[2] = { d->def_x, d->def_z };
-    return ring_build(d, b, type, key);
+    return ring_build(d, b, type, key, NULL, 0);
+}
+
+/* THE SENSORS' SITE (impai_econ.c, THE SENSORS): a site within three quarters of the type's distance of the want's
+   point, so the sensor covers it -- the base ring's, nearest the point first; then, for a constructor and a type
+   that stands on land, the ring around the point's cell, on held ground. 1 ordered, 0 not, -1 for the commander
+   when the base ring has no such site: the point is left to a constructor. The point is the anchor, an
+   extractor's centre or a point between the anchor and the estimate, all on the map, so its cell fits an int16;
+   a distance is a uint16, so cover x cover fits int64. */
+int impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    const int32_t key[2] = { d->sensor_x, d->sensor_z };
+    const uint32_t cover = (uint32_t)(d->want_sensor == IMPAI_SENSE_SONAR ? t->sonar : t->radar) * 3u / 4u;
+    IMPAI_RECT at;
+    if (!cover) return 0;
+    if (ring_build(d, b, type, key, NULL, cover)) return 1;
+    if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER) return -1;
+    if (t->flags & IMPAI_TF_WATER) return 0;
+    at.x0 = at.x1 = (int16_t)(d->sensor_x >> 4);
+    at.z0 = at.z1 = (int16_t)(d->sensor_z >> 4);
+    return ring_build(d, b, type, key, &at, cover);
 }
 
 int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)

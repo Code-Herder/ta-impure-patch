@@ -183,6 +183,7 @@ static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
     out->estore = econ_key(d->energy_storage);
     out->mstore = econ_key(d->metal_storage);
     out->building = !tasim_mobile(defs, t);
+    /* radar and sonar stay 0: the core's definitions carry no sensor keys */
     return 1;
 }
 

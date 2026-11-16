@@ -968,6 +968,28 @@ static void check_tinfo(void)
     printf("tinfo mex=%u energy=%u maker=%u factory=%u cons=%u commander=%u other=%u\n", n[IMPAI_C_MEX],
            n[IMPAI_C_ENERGY], n[IMPAI_C_MAKER], n[IMPAI_C_FACTORY], n[IMPAI_C_CONS], n[IMPAI_C_COMMANDER],
            n[IMPAI_C_OTHER]);
+    /* THE GAIN, NET OF THE TYPE'S OWN UPKEEP (impai_tinfo.c): an unarmed building making 5 and using 5 with a radar
+       of 1440 -- retail's ARMRAD -- is no energy building and keeps its radar; making 25 and using 5 it is one, of
+       gain 20 */
+    {
+        TASIM_ROLE_OUT roles[T_N];
+        int k;
+        for (k = 0; k < 2; k++) {
+            s_w.defs[T_TIDAL].e.tidal = 0;
+            s_w.defs[T_TIDAL].e.minwater = 0;
+            s_w.defs[T_TIDAL].e.energymake = k ? 25.0f : 5.0f;
+            s_w.defs[T_TIDAL].e.energyuse = 5.0f;
+            s_w.defs[T_TIDAL].e.radar = 1440;
+            roles_set(roles);
+            CHECK(content_set(&s_w, T_N, roles) == T_N, "tinfo, a radar of make %d", k ? 25 : 5);
+            printf("tinfo, make %d use 5 radar 1440: cat %u egain %g radar %u\n", k ? 25 : 5, s_ti[T_TIDAL].cat,
+                   (double)s_ti[T_TIDAL].egain, s_ti[T_TIDAL].radar);
+            CHECK(k ? s_ti[T_TIDAL].cat == IMPAI_C_ENERGY && s_ti[T_TIDAL].egain == 20.0f
+                    : s_ti[T_TIDAL].cat == IMPAI_C_OTHER && s_ti[T_TIDAL].radar == 1440,
+                  "the gain net of the upkeep: make %d", k ? 25 : 5);
+        }
+        brain_world();
+    }
 }
 
 /* THE ATTACK FACTS THROUGH THE FILLERS' MASK (impai_tinfo_attack): a role input built as both role fillers build
@@ -4881,6 +4903,8 @@ static void check_plan(void)
     CHECK(p->press_k > 0.0f && p->press_hold >= 2u * 150u,
           "the plan's pressure outlives the gap between two military decisions at the longest look");
     CHECK(p->def_max <= 4 && p->def_v > 0.0f, "the plan's ground defences: def_max <= 4, def_v > 0");
+    CHECK(p->sensor_max >= 1 && p->sensor_max <= IMPAI_SENSORS / 2, "the plan's sensors: 1 <= sensor_max <= %d",
+          IMPAI_SENSORS / 2);
     CHECK(p->queue_max <= p->roots / 2, "the plan's factory reserve within half its commands: %u of %u",
           p->queue_max, p->roots);
     CHECK(p->roots <= IMPAI_ROOTS_MAX && p->mil_roots <= IMPAI_MIL_ROOTS_MAX && p->rally_px <= p->comm_r,
@@ -7691,6 +7715,283 @@ static void check_def_want(void)
     n = def_decide(1, tw, at);
     printf("defence want, a metal stall: %d, %s\n", n, n ? def_name(tw[0]) : "none");
     CHECK(n == 1 && tw[0] == D_LLT, "defence want, a metal stall: the tower");
+    s_milp = NULL;
+}
+
+/* THE SENSORS (impai_econ.c). Three sensor types on the builders' menus: RAD, radar 800 px for 50, 20 energy a pass;
+   RADB, radar 1600 for 150, 90 energy, past the flows' 80 unless a case lowers it; SONAR, sonar 1200 for 60,
+   water-only. The anchor is the commander's cell (20, 20), two factories finished at (30, 30) and (40, 30) --
+   factory_max --, two constructors beside the anchor, the energy flows 100 in and 20 out, the map explored. */
+#define S_RAD  M_SUB
+#define S_RADB M_DEST
+#define S_SON  M_AA
+
+static void sensor_type(int t, const char* name, float cost, uint16_t radar, uint16_t sonar, float upkeep, int water)
+{
+    def_set(&s_w, t, name, 2, 2, 0, 0, cost, 0);
+    s_w.defs[t].e.energyuse = upkeep;
+    s_w.defs[t].e.radar = (int16_t)radar;
+    s_w.defs[t].e.sonar = (int16_t)sonar;
+    s_ti[t] = s_ti[T_TURRET];
+    s_ti[t].cat = IMPAI_C_OTHER;
+    s_ti[t].flags = (uint8_t)(water ? IMPAI_TF_WATER : 0u);
+    s_ti[t].value = cost;
+    s_ti[t].klass = IMPAI_K_NONE;
+    s_ti[t].radar = radar;
+    s_ti[t].sonar = sonar;
+    memset(&s_threat[t], 0, sizeof s_threat[t]);
+}
+
+static void sensor_world(void)
+{
+    static const uint16_t MENU[] = { T_MEX, T_SOLAR, T_FACTORY, S_RAD, S_RADB, S_SON };
+    int x, z;
+    gov_world(2);
+    s_w.econ[0].metal = 800.0f;
+    s_w.econ[0].metal_max = 1000.0f;
+    s_w.econ[0].metal_in = 5.0f;
+    s_w.econ[0].energy = 800.0f;
+    s_w.econ[0].energy_max = 1000.0f;
+    s_w.econ[0].energy_in = 100.0f;
+    s_w.econ[0].energy_out = 20.0f;
+    sensor_type(S_RAD, "RAD", 50.0f, 800, 0, 20.0f, 0);
+    sensor_type(S_RADB, "RADB", 150.0f, 1600, 0, 90.0f, 0);
+    sensor_type(S_SON, "SONAR", 60.0f, 0, 1200, 20.0f, 1);
+    menu_set(&s_w, T_CONS, MENU, (int)(sizeof MENU / sizeof MENU[0]));
+    menu_set(&s_w, T_COM, MENU, (int)(sizeof MENU / sizeof MENU[0]));
+    own(10, T_CONS, 24, 20);
+    own(11, T_CONS, 24, 24);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    s_mil.ebx = s_mil.ebz = IMPAI_NO_ANCHOR;
+    s_reach.sea_blocks = 0;
+}
+
+/* one decision: the sensors ordered, their count; the first one's type and footprint centre, px, and the unit
+   given it */
+static int s_sensor_unit;
+static int sensor_decide(uint16_t* type, int32_t* x, int32_t* z)
+{
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    const int from = s_w.nlog;
+    int k, n = 0;
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    memset(&in, 0, sizeof in);
+    in.q = &q;
+    in.st = &s_st;
+    in.pref = s_pref;
+    in.pref_stride = 1;
+    in.job = s_job; in.njob = FW_SLOTS;
+    in.ti = s_ti; in.nti = M_N;
+    in.spots = s_spots; in.nspots = s_nspots;
+    in.reach = &s_reach;
+    in.plan = &s_glv;
+    in.persona = s_persona;
+    in.acts = -1;
+    in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+    in.snap = &s_snap;
+    in.mil = &s_mil;
+    in.view = &v;
+    CHECK(impai_brain_decide(&in, &bo) == 0, "decide");
+    *type = 0;
+    *x = *z = -1;
+    s_sensor_unit = -1;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->action != A_MOBILEBUILD || (c->type != S_RAD && c->type != S_RADB && c->type != S_SON)) continue;
+        if (!n++) {
+            *type = c->type;
+            *x = c->pos[0] >> 16;
+            *z = c->pos[2] >> 16;
+            s_sensor_unit = c->unit;
+        }
+    }
+    CHECK(bo.sensors == (unsigned)n, "the decision's sensors= counts its orders: %u against %d", bo.sensors, n);
+    return n;
+}
+
+static int64_t sq_px(int32_t x, int32_t z, int32_t px, int32_t pz)
+{
+    return ((int64_t)x - px) * ((int64_t)x - px) + ((int64_t)z - pz) * ((int64_t)z - pz);
+}
+
+static const char* sensor_name(uint16_t t)
+{
+    return t == S_RAD ? "RAD" : t == S_RADB ? "RADB" : t == S_SON ? "SONAR" : "none";
+}
+
+/* WHICH TYPES ARE SENSORS: the radar and the sonar are; a tower with a radar beside its gun, a mobile unit and a
+   plant with a radar are not */
+static void check_sensor_struct(void)
+{
+    const IMPAI_BRAIN_IN in = { .ti = s_ti, .nti = M_N, .view = &(IMPAI_VIEW){ .threat = s_threat, .ntypes = M_N } };
+    IMPAI_TINFO keep[3];
+    uint16_t hit;
+    sensor_world();
+    keep[0] = s_ti[T_TURRET];
+    keep[1] = s_ti[M_RAIDER];
+    keep[2] = s_ti[T_FACTORY];
+    hit = s_threat[T_TURRET].hit_ground;
+    s_ti[T_TURRET].radar = s_ti[M_RAIDER].radar = s_ti[T_FACTORY].radar = 900;
+    s_threat[T_TURRET].hit_ground = 10;
+    printf("sensor types: RAD %d, SONAR %d, the tower %d, the raider %d, the plant %d\n",
+           impai_sensor_struct(&in, S_RAD), impai_sensor_struct(&in, S_SON), impai_sensor_struct(&in, T_TURRET),
+           impai_sensor_struct(&in, M_RAIDER), impai_sensor_struct(&in, T_FACTORY));
+    CHECK(impai_sensor_struct(&in, S_RAD) && impai_sensor_struct(&in, S_SON), "the radar and the sonar are sensors");
+    CHECK(!impai_sensor_struct(&in, T_TURRET), "a tower with a radar is a defence");
+    CHECK(!impai_sensor_struct(&in, M_RAIDER), "a mobile unit with a radar is no sensor structure");
+    CHECK(!impai_sensor_struct(&in, T_FACTORY), "a plant with a radar is a plant");
+    s_ti[T_TURRET] = keep[0];
+    s_ti[M_RAIDER] = keep[1];
+    s_ti[T_FACTORY] = keep[2];
+    s_threat[T_TURRET].hit_ground = hit;
+    s_milp = NULL;
+}
+
+/* THE TYPE: RADB, 1600^2 / 150, over RAD, 800^2 / 50 -- RAD by distance per value --, with both upkeeps within the
+   flows' 80; RADB's past them, RAD; both past them, none */
+static void check_sensor_type(void)
+{
+    static const struct { float rad, radb; uint16_t want; const char* what; } CASE[3] = {
+        { 20.0f, 50.0f, S_RADB, "the most coverage per value" },
+        { 20.0f, 90.0f, S_RAD, "RADB's upkeep past the flows" },
+        { 90.0f, 90.0f, 0, "every upkeep past the flows" } };
+    uint16_t t;
+    int32_t x, z;
+    int k, n;
+    for (k = 0; k < 3; k++) {
+        sensor_world();
+        s_w.defs[S_RAD].e.energyuse = CASE[k].rad;
+        s_w.defs[S_RADB].e.energyuse = CASE[k].radb;
+        n = sensor_decide(&t, &x, &z);
+        printf("sensor type, %s: %d ordered, %s\n", CASE[k].what, n, sensor_name(t));
+        CHECK(CASE[k].want ? n == 1 && t == CASE[k].want : n == 0, "sensor type, %s", CASE[k].what);
+    }
+    s_milp = NULL;
+}
+
+/* THE WANT, each a radar whose centre lies within 600 px (three quarters of RAD's 800) of its point, one a decision:
+   with nothing standing, the anchor; with a radar at the anchor, the nearer of two finished extractors 650 and
+   1290 px out; the far one alone, on a ring around it past the base ring's reach, by a constructor though the
+   commander is asked first; with the anchor covered and no extractor, the front half way to an estimate 1490 px
+   east; for a map with sea, the anchor for sonar, which the water-only sonar on a dry anchor cannot take and a land
+   one can; the anchor covered by a plant with a radar, none; the radar standing, none, and lost, wanted again --
+   each builder's orders done between the decisions.
+   Held back: four sensors standing (sensor_max), an energy stall -- with a radar of no upkeep and no energy type
+   on any menu, so neither the upkeep nor the stall's energy rung holds it back --, one of the two factories
+   unfinished. */
+static void check_sensor_want(void)
+{
+    const int32_t ax = 20 * 16 + 8, az = 20 * 16 + 8;
+    uint16_t t;
+    int32_t x, z, ex, ez, fx;
+    int n, k;
+    /* the anchor */
+    sensor_world();
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, nothing standing: %d %s at %d,%d (anchor %d,%d)\n", n, sensor_name(t), x, z, ax, az);
+    CHECK(n == 1 && t == S_RAD && sq_px(x, z, ax, az) <= 600 * 600, "one radar covering the anchor");
+    /* the nearer extractor */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    own(31, T_MEX, 100, 20);
+    own(32, T_MEX, 60, 20);
+    ex = 60 * 16 + 16;
+    ez = 20 * 16 + 16;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, extractors 650 and 1290 px out: %d %s at %d,%d (the nearer at %d,%d)\n", n, sensor_name(t),
+           x, z, ex, ez);
+    CHECK(n == 1 && sq_px(x, z, ex, ez) <= 600 * 600, "one radar covering the nearer extractor");
+    /* the far extractor alone, on its own ring */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    own(31, T_MEX, 100, 20);
+    ex = 100 * 16 + 16;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, one extractor 1290 px out: %d %s at %d,%d by unit %d (it at %d,%d)\n", n, sensor_name(t), x,
+           z, s_sensor_unit, ex, ez);
+    CHECK(n == 1 && sq_px(x, z, ex, ez) <= 600 * 600 && s_sensor_unit != 1,
+          "a radar on the far extractor's own ring, by a constructor");
+    /* the front */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_mil.ebx = (int16_t)(1800 / 32);
+    s_mil.ebz = (int16_t)(az / 32);
+    fx = ax + (s_mil.ebx * 32 + 16 - ax) / 2;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the front: %d %s at %d,%d (the front at %d,%d)\n", n, sensor_name(t), x, z, fx, az);
+    CHECK(n == 1 && sq_px(x, z, fx, az) <= 600 * 600, "a radar covering the front");
+    /* the sonar */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_reach.sea_blocks = 1;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, a map with sea, the sonar water-only on a dry anchor: %d\n", n);
+    CHECK(n == 0, "no water-only sonar on a dry anchor");
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_reach.sea_blocks = 1;
+    s_ti[S_SON].flags = 0;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, a map with sea, a land sonar: %d %s at %d,%d\n", n, sensor_name(t), x, z);
+    CHECK(n == 1 && t == S_SON && sq_px(x, z, ax, az) <= 900 * 900, "a sonar covering the anchor");
+    s_reach.sea_blocks = 0;
+    /* the plant's radar */
+    sensor_world();
+    s_ti[T_FACTORY].radar = 900;
+    n = sensor_decide(&t, &x, &z);
+    s_ti[T_FACTORY].radar = 0;
+    printf("sensor want, the anchor covered by the plant's radar: %d\n", n);
+    CHECK(n == 0, "a plant's radar covers the anchor");
+    /* standing, then lost */
+    sensor_world();
+    n = sensor_decide(&t, &x, &z);
+    CHECK(n == 1 && s_sensor_unit > 0, "the first radar");
+    own(30, t, (x - 16) / 16, (z - 16) / 16);
+    for (k = 1; k < s_w.top; k++) s_w.unit[k].n = 0;
+    s_w.gametime += 15;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the anchor covered: %d\n", n);
+    CHECK(n == 0, "nothing more to cover");
+    s_w.unit[30].live = 0;
+    for (k = 1; k < s_w.top; k++) s_w.unit[k].n = 0;
+    s_w.gametime += 15;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the radar lost: %d %s\n", n, sensor_name(t));
+    CHECK(n == 1 && t == S_RAD, "the radar lost is wanted again");
+    /* held back */
+    for (k = 0; k < 3; k++) {
+        static const char* const WHAT[3] = { "sensor_max standing", "an energy stall", "one factory unfinished" };
+        sensor_world();
+        if (k == 0) {
+            own(30, S_RAD, 120, 120);
+            own(31, S_RAD, 120, 100);
+            own(32, S_RAD, 100, 120);
+            own(33, S_RAD, 110, 110);
+        }
+        if (k == 1) {
+            static const uint16_t NO_ENERGY[] = { T_MEX, T_FACTORY, S_RAD };
+            s_w.econ[0].energy = 100.0f;
+            s_w.econ[0].energy_in = 10.0f;
+            s_w.econ[0].energy_out = 30.0f;
+            s_w.defs[S_RAD].e.energyuse = 0.0f;
+            menu_set(&s_w, T_CONS, NO_ENERGY, 3);
+            menu_set(&s_w, T_COM, NO_ENERGY, 3);
+        }
+        if (k == 2) s_w.unit[2].finished = 0;
+        n = sensor_decide(&t, &x, &z);
+        printf("sensor want, %s: %d\n", WHAT[k], n);
+        CHECK(n == 0, "sensor want, %s: none", WHAT[k]);
+    }
     s_milp = NULL;
 }
 
@@ -13142,6 +13443,9 @@ static void check_military(void)
     check_mil_arrival_cache();
     check_def_choice();
     check_def_want();
+    check_sensor_struct();
+    check_sensor_type();
+    check_sensor_want();
     check_reach_summary();
     check_naval();
     check_dry_hunt();

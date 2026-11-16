@@ -343,6 +343,11 @@ static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
     out->makesmetal = *(const uint8_t*)(d + 0x22D);
     out->building = d[0x22F] == 0;
     out->minwater = *(const int16_t*)(d + 0x1C0);
+    /* def +0x204 RadarDistance and +0x206 SonarDistance, the words the radar pass walks an emitter by, read signed
+       as the engine reads them (engine/keys.md, the sensor words; tagpu_seatcontact.c, D_RADAR and D_SONAR); a
+       negative one is no sensor */
+    out->radar = (int16_t)(*(const int16_t*)(d + 0x204) > 0 ? *(const int16_t*)(d + 0x204) : 0);
+    out->sonar = (int16_t)(*(const int16_t*)(d + 0x206) > 0 ? *(const int16_t*)(d + 0x206) : 0);
     return 1;
 }
 

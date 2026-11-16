@@ -810,6 +810,7 @@ static void picture(MDEC* d)
         MENEMY* e;
         if (!r->how || (r->how & IMPAI_OWN)) continue;
         if (ident && (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u))) continue;
+        if ((r->how & IMPAI_PASS) && !(r->how & IMPAI_NOW) && d->out->pass_rows < 0xFFFFu) d->out->pass_rows++;
         /* THE COMMANDER'S MEMORY (IMPAI_MIL.foe): a foe's commander in the seat's own line of sight now
            (IMPAI_LOS; the seat's own units' rows are skipped above). Never an ally's (IMPAI_SHARED): that is a
            position only, and may describe a unit that has left the slot since. owner is below WQ_SEATS by ident's
@@ -915,6 +916,7 @@ static void picture(MDEC* d)
        561 units against 74 (MEASURED 2026-11-15). est_seen is recorded data, read through impai_est_known, so a
        value past EST_KEPT reads as EST_START; every branch writes est_seen. */
     d->est_struct = sw > 0.0f;
+    d->out->est_struct = (uint8_t)d->est_struct;
     if (d->est_struct) {
         d->st->est_seen = EST_STRUCT;
         d->st->ebx = (int16_t)((int32_t)(sx / sw) >> 5);

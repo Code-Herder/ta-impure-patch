@@ -596,6 +596,61 @@ static int choose_def(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
+/* THE SENSORS. Past its sight a seat knows only its radar and sonar contacts (tagpu_worldq.c, THE SEAT'S RADAR
+   PASS: its own acquisition's), which feed its picture, the threat maps, the lead's evidence and the hunts; its
+   commander's and its army's own distances reach little past their sight. So once its factory_max plants are
+   finished the ladder stands sensor structures (impai_sensor_struct) by COVERAGE, NOT BY COUNT: a point is covered when it lies
+   within three quarters of the distance of a building of the seat's with a sensor of its kind, built, framed or
+   ordered (the census, sens: a plant with a radar covers too), and the want (impai_brain.c, sensor_want) is the
+   first point not covered of: the anchor; the finished extractors, nearest the anchor first; the front, the
+   anchor moved half way to the estimate of the enemy base, at most base_r; on a map with water a sea army class
+   can use, the anchor for sonar. One a decision, at most sensor_max standing, none in a stall or the hold, and a
+   tower lost is wanted again by the same rule. ONE TRY A DECISION: the first builder that tries the want ends it,
+   ordered or not, so a point no site serves does not spend every builder's site tests; the commander tries the
+   base ring alone and leaves the want to a constructor. A sensor is no army: the classes are mobile types', and
+   a sensor stands where it is built. THE PLANTS FIRST: the plants the
+   pacing asks for are the economy's, and a sensor bought before them delayed them -- the second plant 960 and 1740
+   ticks later on Red Triangle ac-1 and Trout Farm ca-1 with the want past the first factory (MEASURED 2026-11-15,
+   b5's two yard games to 12 000).
+   THE TYPE is the menu's sensor of the want's kind with the most coverage per value, distance^2 / value, ties to
+   the lower type, whose energy upkeep (energyuse) the seat's flows pay -- income less spending, before it is
+   built; once it runs, its upkeep is in the spending the energy rung keeps the income above (THE LADDER, 1.1
+   times energy_out) --, and a water-only type only on a wet anchor, where it takes the base ring alone. No unit
+   list: a content's sensors are its types with a radardistance or a sonardistance and no weapon.
+   THE SITE (impai_build.c, impai_build_sensor) covers the point BY CONSTRUCTION: a site whose footprint centre
+   lies past three quarters of the type's distance from the point is never taken. The base ring's sites first,
+   nearest the point first; then a ring around the point itself, on held ground only.
+   WHY: the brain had no rule for a sensor, and no seat ever built one (MEASURED 2026-11-15: the owner's game of
+   three Hard seats at 57d39d71, 20 minutes, no radar built), so beyond its sight a seat knew what its commander's
+   own radar reached. BOUND: the menu (WQ_TYPES_MAX), one economy-keys read for each sensor type of it. */
+static int choose_sensor(IMPAI_DEC* d, const uint16_t* menu, int n)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const float room = d->e.energy_in - d->e.energy_out;
+    const int wet = anchor_wet(d);
+    float best_s = 0.0f;
+    int k, best = 0;
+    for (k = 0; k < n; k++) {
+        const int t = menu[k];
+        const IMPAI_TINFO* ti;
+        WQ_DEF_ECON e;
+        uint32_t r;
+        float s;
+        if (!impai_sensor_struct(in, (unsigned)t)) continue;
+        ti = &in->ti[t];
+        r = d->want_sensor == IMPAI_SENSE_SONAR ? ti->sonar : ti->radar;
+        if (!r || !(ti->value > 0.0f)) continue;
+        if ((ti->flags & IMPAI_TF_WATER) && !wet) continue;
+        if (!d->q->ops->def_econ(d->q, t, &e) || !(e.energyuse <= 0.0f || e.energyuse <= room)) continue;
+        s = (float)r * (float)r / ti->value;
+        if (s > best_s || (s == best_s && best && t < best)) {
+            best_s = s;
+            best = t;
+        }
+    }
+    return best;
+}
+
 /* a factory's constructor: the most workertime per value among those whose own menu holds an extractor */
 static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
@@ -890,6 +945,14 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
         if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->want_aa = 0;
             return 1;
+        }
+        if (d->want_sensor && (t = choose_sensor(d, d->menu, n))) {
+            const int y = impai_build_sensor(d, b, t);
+            if (y >= 0) d->want_sensor = 0;
+            if (y > 0) {
+                d->out->sensors++;
+                return 1;
+            }
         }
     }
     if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);

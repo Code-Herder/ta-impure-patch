@@ -213,6 +213,7 @@ typedef struct WQ_DEF_ECON {
     uint8_t  makesmetal;
     uint8_t  building;                /* a type with no move class: one that stands where it is built    */
     int16_t  minwater;                /* minwaterdepth                                                   */
+    int16_t  radar, sonar;            /* radardistance and sonardistance, world px; 0 for none or below 0 */
 } WQ_DEF_ECON;
 
 /* ---- what a seat sees (ImpAI: research/notes/modules/impai.md, What a seat knows) ---- */

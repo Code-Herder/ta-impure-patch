@@ -56,6 +56,8 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  rc_taken;                            /* 1 when an order of the military ended the commander's
                                                      ordered reclaim (release_commander)                     */
     float    own_v, enemy_v;                      /* the seat's live value, and the enemy's as it knows it   */
+    uint16_t pass_rows;                           /* enemy rows held by a radar or sonar contact alone       */
+    uint8_t  est_struct;                          /* 1 when the base's estimate stands on structures known   */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's

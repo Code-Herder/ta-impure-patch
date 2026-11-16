@@ -1538,7 +1538,7 @@ static struct {
     unsigned harvest_lost[PLAYER_COUNT];
     unsigned rc_turned[PLAYER_COUNT], rc_given_up[PLAYER_COUNT], rc_replaced[PLAYER_COUNT], rc_unsafe[PLAYER_COUNT];
     unsigned rc_gone[PLAYER_COUNT], turn_unspent[PLAYER_COUNT], blast_refused[PLAYER_COUNT], com_free[PLAYER_COUNT];
-    unsigned com_idle[PLAYER_COUNT];
+    unsigned com_idle[PLAYER_COUNT], sensors[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1851,6 +1851,7 @@ static void impai_decide(int seat)
     s_play.blast_refused[seat] += out.blast_refused;
     s_play.com_free[seat] += out.com_free;
     s_play.com_idle[seat] += out.com_idle;
+    s_play.sensors[seat] += out.sensors;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1879,6 +1880,8 @@ static struct {
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
     unsigned stalled[PLAYER_COUNT], lead_t[PLAYER_COUNT];    /* goals given up; the GameTime the lead first held */
     unsigned rc_taken[PLAYER_COUNT];    /* the commander's ordered reclaims a military order ended (rc_military=) */
+    unsigned pass_sum[PLAYER_COUNT];    /* enemy rows held by a contact alone, summed over the decisions       */
+    unsigned base_t[PLAYER_COUNT];      /* the GameTime the base's estimate first stood on structures known    */
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2125,7 +2128,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "pressed=%u poor=%u hold=%u held=%u released=%u yard=%u yard_left=%u help_refused=%u "
                    "makers_off=%u makers_on=%u finish_rows=%u e_empty=%u f_idle=%u f_all=%u stall_taken=%u harvest_lost=%u "
                    "rc_turned=%u rc_given_up=%u rc_replaced=%u rc_gone=%u rc_unsafe=%u rc_military=%u turn_unspent=%u "
-                   "blast_refused=%u com_idle=%u com_free=%u",
+                   "blast_refused=%u com_idle=%u com_free=%u sensors=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2138,7 +2141,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.finish_rows[i], s_play.e_empty[i], s_play.f_idle[i], s_play.f_all[i],
                    s_play.stall_taken[i], s_play.harvest_lost[i], s_play.rc_turned[i], s_play.rc_given_up[i],
                    s_play.rc_replaced[i], s_play.rc_gone[i], s_play.rc_unsafe[i], s_milp.rc_taken[i],
-                   s_play.turn_unspent[i], s_play.blast_refused[i], s_play.com_idle[i], s_play.com_free[i]);
+                   s_play.turn_unspent[i], s_play.blast_refused[i], s_play.com_idle[i], s_play.com_free[i],
+                   s_play.sensors[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
@@ -2149,7 +2153,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u "
-                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u stalled=%u lead_t=%u",
+                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u stalled=%u lead_t=%u pass_mean=%.1f base_t=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2159,7 +2163,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.waves[i][TASIM_LAYER_LAND],
                    s_milp.waves[i][TASIM_LAYER_SEA], s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i],
-                   s_milp.stalled[i], s_milp.lead_t[i]);
+                   s_milp.stalled[i], s_milp.lead_t[i],
+                   s_milp.decisions[i] ? (double)s_milp.pass_sum[i] / (double)s_milp.decisions[i] : 0.0,
+                   s_milp.base_t[i]);
     }
 }
 
@@ -2393,6 +2399,11 @@ static void impai_mil_turn(int seat)
     s_milp.press[seat] += out.press;
     s_milp.stalled[seat] += out.stalled;
     s_milp.rc_taken[seat] += out.rc_taken;
+    s_milp.pass_sum[seat] += out.pass_rows;
+    if (out.est_struct && !s_milp.base_t[seat]) {
+        const unsigned now = (unsigned)q.ops->gametime(&q);
+        s_milp.base_t[seat] = now ? now : 1u;
+    }
     if (out.lead && !s_milp.lead_t[seat]) {
         const unsigned now = (unsigned)q.ops->gametime(&q);
         s_milp.lead_t[seat] = now ? now : 1u;

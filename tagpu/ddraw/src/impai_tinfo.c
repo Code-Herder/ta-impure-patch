@@ -22,7 +22,11 @@ static int unarmed(const TASIM_ROLE_OUT* r)
 /* THE CATEGORY, the first that holds: a commander (the def's commander tag); an extractor or a geothermal
    plant (WQ_DEF.kind, the snap's own rule); a factory (a standing builder); a constructor (a mobile builder
    that works); a metal maker (a building with makesmetal that uses energy); an energy building (a building
-   with no weapon and no makesmetal whose gain is above 0); anything else. */
+   with no weapon and no makesmetal whose gain is above 0); anything else. THE GAIN is net of the type's own
+   upkeep, energymake less energyuse (a negative energyuse, a solar collector's, is a gain), plus its wind and
+   tide: a sensor's make only offsets its use -- retail's ARMRAD makes 5 and uses 5, ARMSONAR 9 and 9 (MEASURED
+   2026-11-15, `native.py defs`, def +0x1C2 and +0x1C6) --, so it is no energy building, and the sensors' rule
+   (impai_econ.c, THE SENSORS) finds it in category OTHER. */
 static int category(const WQ_DEF* d, const WQ_DEF_ECON* e, const TASIM_ROLE_OUT* r, float egain)
 {
     const uint32_t rf = r ? r->flags : 0;
@@ -52,7 +56,7 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
         WQ_DEF_ECON e;
         float egain;
         if (!q->ops->def(q, t, &d) || !q->ops->def_econ(q, t, &e)) continue;
-        egain = e.energymake + (e.energyuse < 0 ? -e.energyuse : 0.0f) + e.wind * m.wind_mean + e.tidal * m.tide;
+        egain = e.energymake - e.energyuse + e.wind * m.wind_mean + e.tidal * m.tide;
         o->cat = (uint8_t)category(&d, &e, r, egain);
         o->tech = (uint8_t)(r && r->tech > 0 ? (r->tech < 255 ? r->tech : 255) : 0);
         o->flags = (uint8_t)(((r ? (r->flags & TASIM_RF_MOBILE) != 0 : (d.flags & WQ_DF_MOVER) != 0) ? IMPAI_TF_MOBILE : 0) |
@@ -67,6 +71,8 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
         o->workertime = d.workertime;
         o->fx = d.fx;
         o->fz = d.fz;
+        o->radar = (uint16_t)e.radar;
+        o->sonar = (uint16_t)e.sonar;
     }
     return n;
 }

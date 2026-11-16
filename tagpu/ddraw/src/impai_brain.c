@@ -39,6 +39,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .scout_period = 1800, .task_timeout = 2700,
     .aa_struct_v = 1000.0f, .dgun_reserve = 0.25f,
     .def_max = 4, .def_v = 600.0f,
+    .sensor_max = 4,
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, unsigned look)
@@ -301,6 +302,28 @@ static int handed_back(IMPAI_DEC* d, int slot, const IMPAI_JOB* job, int h, cons
            o->action != d->act_vtol_build && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
+/* THE SENSORS' census (impai_econ.c): a building of the seat's, `type` below nti, built, a frame or at a head --
+   one sensor structure more when it is one, and its coverage while the list has room when it has a radar or sonar
+   distance: a plant or a tower with a radar covers what a radar tower would. The last sensor_max places are kept
+   for sensor structures, so the ones the want counts are placed whatever other buildings carry a radar
+   (sensor_max at most IMPAI_SENSORS / 2: impai_brain_test.c, check_plan). A rectangle is cells, inclusive, so its
+   centre is (x0 + x1 + 1) x 8 px. */
+static void sens_add(IMPAI_DEC* d, unsigned type, const IMPAI_RECT* r)
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    const int sensor = impai_sensor_struct(d->in, type);
+    IMPAI_SENSE* s;
+    if (sensor && d->sens_n < 0xFFFFu) d->sens_n++;
+    if ((!t->radar && !t->sonar) || d->nsens >= IMPAI_SENSORS ||
+        (!sensor && d->nsens >= IMPAI_SENSORS - d->in->plan->sensor_max))
+        return;
+    s = &d->sens[d->nsens++];
+    s->x = ((int32_t)r->x0 + r->x1 + 1) * 8;
+    s->z = ((int32_t)r->z0 + r->z1 + 1) * 8;
+    s->radar = t->radar;
+    s->sonar = t->sonar;
+}
+
 static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -474,6 +497,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             IMPAI_STRUCT* s = &d->structs[d->nstructs++];
             s->slot = u->slot; s->type = (uint16_t)type; s->r = r; s->cat = (uint8_t)cat; s->finished = u->finished;
         }
+        sens_add(d, (unsigned)type, &r);
         if (!u->finished) {
             if (d->nnano < IMPAI_NANO_MAX) unit_ref(&d->nano[d->nnano++], u);
             if (cat == IMPAI_C_ENERGY) d->pe_extra += t->egain;
@@ -557,6 +581,7 @@ static void head_counts(IMPAI_DEC* d)
             continue;
         if (impai_aa_struct(in, c->type)) d->aa_n++;
         if (impai_def_struct(in, c->type)) d->def_n++;
+        sens_add(d, c->type, &c->r);
         if (in->ti[c->type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[c->type].egain;
     }
 }
@@ -1135,6 +1160,73 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
     d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
 }
 
+/* THE SENSORS' WANT (impai_econ.c, THE SENSORS): the first point of this order that no sensor of its kind covers --
+   none within three quarters of its distance --, into want_sensor and (sensor_x, sensor_z): the anchor; the
+   seat's finished extractors, nearest the anchor first; the front, the anchor moved half way to the military's
+   estimate of the enemy base and at most base_r; for sonar, the anchor, on a map where some sea army class has
+   water (IMPAI_REACH.sea_blocks). The estimate is recorded data, an int16 block, so every product below stays
+   within int64. BOUND: the census's structures, each against at most IMPAI_SENSORS sensors. */
+static int sensed(const IMPAI_DEC* d, int32_t x, int32_t z, int kind)
+{
+    int k;
+    for (k = 0; k < d->nsens; k++) {
+        const uint32_t r = kind == IMPAI_SENSE_SONAR ? d->sens[k].sonar : d->sens[k].radar;
+        const int64_t dx = (int64_t)x - d->sens[k].x, dz = (int64_t)z - d->sens[k].z, c = (int64_t)r * 3 / 4;
+        if (r && dx * dx + dz * dz <= c * c) return 1;
+    }
+    return 0;
+}
+
+static void sensor_set(IMPAI_DEC* d, int kind, int32_t x, int32_t z)
+{
+    d->want_sensor = kind;
+    d->sensor_x = x;
+    d->sensor_z = z;
+}
+
+static void sensor_want(IMPAI_DEC* d, const IMPAI_MIL* m)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const int32_t ax = in->st->ax * 16 + 8, az = in->st->az * 16 + 8;
+    int64_t best = -1;
+    int32_t bx = 0, bz = 0;
+    int i;
+    if (in->st->ax == IMPAI_NO_ANCHOR) return;
+    if (!sensed(d, ax, az, IMPAI_SENSE_RADAR)) {
+        sensor_set(d, IMPAI_SENSE_RADAR, ax, az);
+        return;
+    }
+    for (i = 0; i < d->nstructs; i++) {
+        const IMPAI_STRUCT* s = &d->structs[i];
+        const int32_t x = ((int32_t)s->r.x0 + s->r.x1 + 1) * 8, z = ((int32_t)s->r.z0 + s->r.z1 + 1) * 8;
+        const int64_t dd = ((int64_t)x - ax) * ((int64_t)x - ax) + ((int64_t)z - az) * ((int64_t)z - az);
+        if (s->cat != IMPAI_C_MEX || !s->finished || sensed(d, x, z, IMPAI_SENSE_RADAR)) continue;
+        if (best < 0 || dd < best) {
+            best = dd;
+            bx = x;
+            bz = z;
+        }
+    }
+    if (best >= 0) {
+        sensor_set(d, IMPAI_SENSE_RADAR, bx, bz);
+        return;
+    }
+    if (m && m->ebx != IMPAI_NO_ANCHOR) {
+        const int64_t dx = (int64_t)(m->ebx * 32 + 16) - ax, dz = (int64_t)(m->ebz * 32 + 16) - az;
+        const uint32_t de = impai_isqrt((uint64_t)(dx * dx + dz * dz));
+        const uint32_t f = de / 2 < in->plan->base_r ? de / 2 : in->plan->base_r;
+        if (de > 0) {
+            const int32_t fx = ax + (int32_t)(dx * f / de), fz = az + (int32_t)(dz * f / de);
+            if (!sensed(d, fx, fz, IMPAI_SENSE_RADAR)) {
+                sensor_set(d, IMPAI_SENSE_RADAR, fx, fz);
+                return;
+            }
+        }
+    }
+    if (in->reach && in->reach->sea_blocks && !sensed(d, ax, az, IMPAI_SENSE_SONAR))
+        sensor_set(d, IMPAI_SENSE_SONAR, ax, az);
+}
+
 /* metal as whole units held to 0..10^9: a store or storage read from the record is data; NaN, a negative value and
    anything below 1 read 0 */
 static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
@@ -1350,6 +1442,11 @@ static void economy(IMPAI_DEC* d)
         d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
                       (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
         if (d->want_def) def_point(d, m);
+        /* THE SENSORS (impai_econ.c): with factory_max plants finished, outside the stalls and the hold, below
+           sensor_max */
+        if (d->done[IMPAI_C_FACTORY] >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold &&
+            d->sens_n < plan->sensor_max)
+            sensor_want(d, m);
     }
     /* plant_e_need: the energy a pass short of THE ENERGY TERM, while a plant's metal is there and its energy is not */
     if (!((plant_metal || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;

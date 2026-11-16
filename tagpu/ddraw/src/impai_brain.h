@@ -24,6 +24,10 @@ typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cell
    feature, its rectangle anchored at the feature's anchor (impai_brain.c, census) */
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head, feat; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
+/* one of the seat's buildings with a radar or sonar distance (impai_econ.c, THE SENSORS): its footprint's centre,
+   px, and its distances */
+typedef struct IMPAI_SENSE { int32_t x, z; uint16_t radar, sonar; } IMPAI_SENSE;
+enum { IMPAI_SENSE_NONE, IMPAI_SENSE_RADAR, IMPAI_SENSE_SONAR };
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 /* THE YARD's region of a waiting factory (impai_brain.c, THE YARD): its footprint, r[0], then the rectangles of its
    kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used */
@@ -135,6 +139,13 @@ typedef struct IMPAI_DEC {
     uint16_t      def_n;
     int           want_def;
     int32_t       def_x, def_z;
+    /* THE SENSORS (impai_econ.c): the seat's sensor structures, built, frames and head orders, each once (sens_n);
+       the first IMPAI_SENSORS of its buildings with a radar or sonar distance, sensor structures or not (sens);
+       the want's kind (IMPAI_SENSE_*) and its point, px (impai_brain.c, sensor_want) */
+    IMPAI_SENSE   sens[IMPAI_SENSORS];
+    uint16_t      sens_n, nsens;
+    int           want_sensor;
+    int32_t       sensor_x, sensor_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
     int           explorer_live;
     float         pe_extra;                     /* the energy the seat's frames and build heads will add,
@@ -277,6 +288,18 @@ static inline int impai_def_struct(const IMPAI_BRAIN_IN* in, unsigned type)
            in->view->threat[type].hit_ground > 0;
 }
 
+/* 1 when `type` is a sensor structure (impai_econ.c, THE SENSORS): a building of category OTHER with a radar or
+   sonar distance and no reach of its own -- no ground reach and no anti-air rate --, so a tower carrying a radar
+   beside its gun is a defence, and a plant or an extractor with a radar is its category; 0 with no threat table */
+static inline int impai_sensor_struct(const IMPAI_BRAIN_IN* in, unsigned type)
+{
+    const IMPAI_TINFO* t;
+    if (!in->view || !in->view->threat || type >= (unsigned)in->view->ntypes || type >= in->nti) return 0;
+    t = &in->ti[type];
+    return !(t->flags & IMPAI_TF_MOBILE) && t->cat == IMPAI_C_OTHER && (t->radar || t->sonar) &&
+           !in->view->threat[type].hit_ground && !in->view->threat[type].dps_air;
+}
+
 /* 1 when `type` is a water factory, a plant placed on water only: what the seat's sea plant is */
 static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 {
@@ -348,6 +371,9 @@ int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` at the ring site nearest the defence's point (d->def_x, d->def_z; impai_econ.c, THE GROUND DEFENCES) */
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* `type` covering the sensor want's point (d->sensor_x, d->sensor_z; impai_econ.c, THE SENSORS): 1 ordered, 0 not,
+   -1 a site this builder never takes (impai_build.c) */
+int  impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S

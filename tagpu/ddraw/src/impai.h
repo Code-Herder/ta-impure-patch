@@ -217,7 +217,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
 #define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
 
-/* One type, 32 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 36 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
    ordered (DISASSEMBLED, engine/orders.md, *What each resolver mode answers*; impai_mil.c, can_attack) */
 #define IMPAI_TA_CANATTACK 0x01u    /* +0x245 bit 4 (0x43F154)                                             */
@@ -231,8 +231,8 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 
 typedef struct IMPAI_TINFO {
     uint8_t  cat, tech, flags, mclass;  /* IMPAI_C_*, the classifier's tech level, IMPAI_TF_*, WQ_DEF.mclass  */
-    float    egain;     /* energymake + max(0, -energyuse) + windgenerator x the wind's mean + tidalgenerator x
-                           the tide; for a maker, its energyuse: what it costs                                  */
+    float    egain;     /* energymake - energyuse + windgenerator x the wind's mean + tidalgenerator x the tide
+                           (impai_tinfo.c, THE GAIN); for a maker, its energyuse: what it costs                 */
     float    mgain;     /* metalmake + makesmetal; for an extractor, extractsmetal                              */
     float    value;     /* metal + energy / TASIM_ROLES_R                                                       */
     uint16_t workertime;
@@ -253,8 +253,10 @@ typedef struct IMPAI_TINFO {
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
     uint16_t blast_r;           /* half its ExplodeAs areaofeffect, px: the radius its death blast reaches
                                    (TASIM_ROLE_IN.explode_aoe); 0 none                                          */
+    uint16_t radar, sonar;      /* its radardistance and sonardistance, px (WQ_DEF_ECON): a sensor's coverage
+                                   (impai_econ.c, THE SENSORS)                                                  */
 } IMPAI_TINFO;
-_Static_assert(sizeof(IMPAI_TINFO) == 32, "IMPAI_TINFO is 32 bytes, as its comment says");
+_Static_assert(sizeof(IMPAI_TINFO) == 36, "IMPAI_TINFO is 36 bytes, as its comment says");
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
    tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is
@@ -532,7 +534,10 @@ typedef struct IMPAI_PLAN {
     uint8_t  def_max;           /* ground defences the base ring builds at most, against THE PRESSURE at the
                                    base (impai_econ.c, THE GROUND DEFENCES); at most 4                      */
     float    def_v;             /* the pressing value for each ground defence past the first              */
+    uint8_t  sensor_max;        /* sensor structures the seat stands at most, built, framed or ordered
+                                   (impai_econ.c, THE SENSORS)                                             */
 } IMPAI_PLAN;
+#define IMPAI_SENSORS 16        /* the buildings with a sensor a decision places for its coverage test     */
 extern const IMPAI_PLAN IMPAI_PLAN_ROW;
 #define IMPAI_MIL_ROOTS_MAX 48          /* the plan's mil_roots at most: impai_mil_decide refuses a plan past it */
 
@@ -886,6 +891,7 @@ typedef struct IMPAI_BRAIN_OUT {
                                            IDLE SHARE)                                                          */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
+    uint8_t  sensors;                   /* sensor structures ordered (impai_econ.c, THE SENSORS)                */
 } IMPAI_BRAIN_OUT;
 
 #define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs
