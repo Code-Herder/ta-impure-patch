@@ -243,13 +243,11 @@ typedef struct WQ_OBS {
                                    share, so a slot's reuse is told apart from its unit (WQ_RADAR_HIT)     */
 } WQ_OBS;
 
-/* A radar pass's answer, one nibble a slot (slot k: byte k / 2, the low nibble for an even k): the engine's
-   +0x110 bits 8 and 9 as the pass would leave them for the seat, whether a jammer reached the unit (bit 10),
-   and whether the pass's first loop kept the unit's bits (an own or shared unit), whose bit 10 the engine
-   does not clear. */
+/* A radar pass's answer, one nibble a slot (slot k: byte k / 2, the low nibble for an even k): the seat's radar
+   contact (its acquisition's radar list takes the unit) and its sonar contact, and whether the pass's first
+   loop kept the unit's bits (an own unit, or one of an owner whose contacts the seat receives). */
 #define WQ_RB_RADAR   0x1u
 #define WQ_RB_SONAR   0x2u
-#define WQ_RB_JAMMED  0x4u
 #define WQ_RB_KEPT    0x8u
 #define WQ_RADAR_BYTES(nslots) (((unsigned)(nslots) + 1u) / 2u)
 static inline unsigned wq_radar_bits(const uint8_t* bits, unsigned slot)

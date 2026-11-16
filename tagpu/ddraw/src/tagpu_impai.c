@@ -440,11 +440,13 @@ static void impai_observe_checks(int seat)
 #define VA_RADAR_PASS 0x00467440u   /* the radar pass: no argument, plain `ret`            */
 
 /* THE RADAR CHECK, the target of the call at 0x46556D under tagpu_impai_check.on alone: the engine's pass
-   runs, then ImpAI's copy (tagpu_worldq.c, wq_radar_step) for the same record, unbudgeted, and every live
-   unit's +0x110 bits 8 and 9 are compared with the copy's, and bit 10 where the pass's first loop cleared it
-   (WQ_RB_KEPT clear: an own or shared unit's bit 10 is older than the pass), and each bit's record with the
-   unit and block of now -- but for the seat's own units, whose record holds the incarnation alone
-   (worldq.h, WQ_RADAR_HIT). The site is reached only in the
+   runs, then ImpAI's pass (tagpu_worldq.c, wq_radar_step: the seat's acquisition contacts) for the same
+   record, and every live unit the pass's first loop does not keep has its +0x110 bits 8 and 9 compared with
+   ImpAI's radar and sonar, and each bit's record with the unit and block of now. For the viewed record the
+   two are one rule: the pass and the scan walk the same emitters and jammers (allied sharing's S in both,
+   tagpu_allysight.c and tagpu_seatcontact.c) and light by the same counters, and nothing runs between them.
+   A kept unit is not compared: a jammer clears its bits in the pass, which the scan does not report, and the
+   publish takes nothing from it. The site is reached only in the
    viewed record's turn (0x465565..0x46556B), so the record is main[0x2A43]. Same contract as 0x467440: no
    argument, a plain `ret`, the callee-saved registers kept. The players phase's run on the loader thread
    (0x497C10) passes through unchecked. */
@@ -478,7 +480,6 @@ static void impai_radar_check(void)
         for (slot = 1; slot < c.nslots; slot++) {
             const unsigned state = *(const unsigned*)(c.units + slot * UNIT_STRIDE + U_STATE);
             const unsigned v = wq_radar_bits(bits, slot);
-            const unsigned mask = v & WQ_RB_KEPT ? 3u : 7u;
             const WQ_RADAR_HIT* h = wq_hit(&hits, slot);
             WQ_OBS o;
             /* a pass in one call: each bit's record is the unit and block of now */
@@ -486,9 +487,9 @@ static void impai_radar_check(void)
             const int rec_ok = !(v & 3u) || seen == WQ_SEEN_OWN ||
                                (seen && h->known && o.birth_known && o.birth == h->birth && o.bx == h->bx &&
                                 o.bz == h->bz);
-            if (!(state & ST_ALIVE)) continue;
+            if (!(state & ST_ALIVE) || (v & WQ_RB_KEPT)) continue;
             s_obs.radar_eval++;
-            if (((state >> 8) & mask) != (v & mask) || !rec_ok) {
+            if (((state >> 8) & 3u) != (v & 3u) || !rec_ok) {
                 s_obs.radar_miss++;
                 if (!s_obs.radar_said) {
                     s_obs.radar_said = 1;
