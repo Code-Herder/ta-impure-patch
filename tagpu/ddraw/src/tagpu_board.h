@@ -43,6 +43,15 @@ int tagpu_board_apply(const void* body, unsigned bytes);
 /* a body the channel dropped before tagpu_board_apply: counted in the level's `refused=` */
 void tagpu_board_refused(void);
 
+/* THE ALLIES' RIBBON (tagpu_hudstate.c, tagpu_hudinput.c), by a seat's player record index.
+   ally: its activity, TAGPU_PK_BDACT_*, NONE while muted; `*muted` whether this player has muted
+   it, `*last` whether its last new marker is still on the board and shown. mute: its marks and
+   pointer hidden on this player's screen, or shown again; the level's end shows every seat again.
+   jump: the camera to its last new marker at the next frame, nothing when there is none shown. */
+int  tagpu_board_ally(unsigned seat, int* muted, int* last);
+void tagpu_board_mute(unsigned seat);
+void tagpu_board_jump(unsigned seat);
+
 /* The player's operations not yet sent, as one RECMP_MARK body of at most `cap` bytes, taken out
    of the queue: its bytes, 0 when none is queued. Game thread. */
 unsigned tagpu_board_outbox(unsigned char* body, unsigned cap);

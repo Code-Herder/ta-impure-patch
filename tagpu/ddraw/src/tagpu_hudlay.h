@@ -37,7 +37,11 @@ typedef struct {
     int      rates;             /* the allies' chips: mi, mo, ei, eo are known: drawn, and the
                                    lamp's rule takes them                                      */
     float    ms, es;            /* the allies' chips: the share levels; < 0 not sharing         */
+    int      mute;              /* the allies' chips: the board's Mute is on                   */
+    int      last;              /* the allies' chips: the ally has a last marker to jump to     */
+    int      act;               /* the allies' chips: HUD_ACT_*, what the ally does on the board */
 } HUDSEAT;
+enum { HUD_ACT_NONE, HUD_ACT_DRAW, HUD_ACT_ERASE };
 
 enum { HUD_MK_DEATH, HUD_MK_DEFEAT, HUD_MK_BOOKMARK };
 typedef struct { float t; int kind; int seat; } HUDMARK;   /* seat < 0: a bookmark */

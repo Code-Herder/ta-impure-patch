@@ -1037,9 +1037,15 @@ typedef struct TAGPU_PK_HUD {
        metal and energy, -1 when none is drawn: not sharing, no channel, or a
        level outside 0..storage (tagpu_share_allies) */
     uint16_t ally_rates;
-    uint8_t  pad6[2];
+    /* THE ALLIES' BOARD CONTROLS, ALLIES mode (tagpu_board_ally): bit i set when
+       seat[i] is muted on this player's board, when its last marker is still on
+       the board; its activity, TAGPU_PK_BDACT_* (any other value is none) */
+    uint16_t ally_mute;
     float    ally_share[TAGPU_PK_HUD_SEATS][2];
+    uint16_t ally_last;
+    uint8_t  ally_act[TAGPU_PK_HUD_SEATS];
 } TAGPU_PK_HUD;
+enum { TAGPU_PK_BDACT_NONE, TAGPU_PK_BDACT_DRAW, TAGPU_PK_BDACT_ERASE };
 
 /* The stats window's samples, while it is open: the chosen measure's, one row
    per seat in TAGPU_PK_HUD `seat` order, sample k at GameTime base + k * period

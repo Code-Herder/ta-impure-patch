@@ -180,8 +180,8 @@
              "text": {"style": "face_xs", "align": "c"}}
   },
   "allies": {
-   "about": "A network game's allies: a chip each, right-aligned under the top bar, wrapping to more rows when one is full (research/notes/modules/share.md). `t` and `r` place the first row from the top bar's lower edge and the screen's right, `l` the room kept from the side panel, `gap` between chips and rows. The chip: its plate, the player's colour as a stripe down its left edge, the name, and a cell a resource holding the storage as a strip along its bottom edge; with the allies' rates known, `cell.rates` the box the income (left) and spending (right) are written in, in the signs' colours, and while the ally shares a resource, `cell.mark` a mark `w` wide at the share level across the strip, `over` above it and `under` below, edged `edge` in `edge_colour`. The lamp's painting sits at the chip's top right, `glow` the room its parts carry round it, lit for half of every `period` seconds while a resource is under `stall` of its storage and, with the rates known, its spending is above its income.",
-   "part": "lanes_plate", "w": 85.333, "h": 45.333, "t": 4, "r": 6.667, "l": 4, "gap": 3.333,
+   "about": "A network game's allies: a chip each, right-aligned under the top bar, wrapping to more rows when one is full (research/notes/modules/share.md). `t` and `r` place the first row from the top bar's lower edge and the screen's right, `l` the room kept from the side panel, `gap` between chips and rows. The chip: its plate, the player's colour as a stripe down its left edge, the name, and a cell a resource holding the storage as a strip along its bottom edge; with the allies' rates known, `cell.rates` the box the income (left) and spending (right) are written in, in the signs' colours, and while the ally shares a resource, `cell.mark` a mark `w` wide at the share level across the strip, `over` above it and `under` below, edged `edge` in `edge_colour`. The lamp's painting sits at the chip's top right, `glow` the room its parts carry round it, lit for half of every `period` seconds while a resource is under `stall` of its storage and, with the rates known, its spending is above its income. The board's row (research/notes/modules/board.md) sits under the cells of every ally still in the game, `board.pad` and `board.h` its box in the chip: Mute (pressed while the ally's marks and pointer are hidden) and Last marker (disabled while the ally has none shown) at its right, each `button.w` square and `button.gap` apart, and what the ally is doing on the board, `act.drawing` or `act.erasing`, in the room to their left, `gap` before them.",
+   "part": "lanes_plate", "w": 85.333, "h": 59.333, "t": 4, "r": 6.667, "l": 4, "gap": 3.333,
    "stripe": {"w": 3.333},
    "name": {"pad": [8, 2, 13.667, 0], "h": 12.5, "ay": "t", "style": "header"},
    "cell": {"part": "pick_row", "pad": [8, 16.5, 4, 0], "h": 12.667, "ay": "t", "gap": 2,
@@ -190,6 +190,11 @@
             "mark": {"w": 1.333, "over": 1.333, "under": 0, "edge": 0.667, "colour": "#ff4a3a", "edge_colour": "#000000"}},
    "lamp": {"on": "lamp_on", "off": "lamp_off", "pad": [0, 4, 3.333, 0], "w": 9.333, "h": 6, "ax": "r", "ay": "t",
             "glow": 7, "stall": 0.02, "period": 0.9},
+   "board": {"pad": [8, 45.833, 4, 0], "h": 11, "ay": "t", "gap": 2,
+             "button": {"part": "lane_button", "pressed": "lane_button_down", "w": 11, "gap": 1.5, "icon": {"padf": 0.16}},
+             "mute": {"act": "amute", "icon": "sight", "tip": "Hide this ally's marks and pointer", "on_tip": "Show this ally's marks and pointer"},
+             "last": {"act": "alast", "icon": "jump", "tip": "Jump to this ally's last marker"},
+             "act": {"style": "num_sm", "drawing": "Drawing...", "erasing": "Erasing..."}},
    "off": 0.45,
    "give": {
     "about": "The give panel a press on a chip opens under it: `dx` from the chip's left, held between the side panel and the screen's right as the ribbon is, `gap` under the chip. The title, a line a resource with the ally's stored value and storage, a slider a resource with the amount beside it, and Send, which is disabled while both amounts are 0. A slider's track is the live strip's groove, its run `ends` inside each end, filled to the amount in the resource's colour.",

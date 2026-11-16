@@ -21,6 +21,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
 #include "tagpu_sharetick.h"
+#include "tagpu_board.h"
 #include "tagpu_log.h"
 #include "dd.h"
 
@@ -776,8 +777,10 @@ static void live_fill(TAGPU_PK_HUD* h)
 /* ---- the replay HUD ------------------------------------------------------------------------- */
 
 /* THE ALLIES' RIBBON: a chip opens the give panel on its ally, or closes it when it is open there;
-   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. The panel's plate,
-   its sliders and an out ally's chip (ally_off) take a click and run nothing. */
+   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. Its board row's
+   Mute and Last marker are the board's (tagpu_board_mute, tagpu_board_jump), by the chip's player
+   record index, which both bound. The panel's plate, its sliders, an out ally's chip and a
+   disabled Last marker (ally_off) take a click and run nothing. */
 static void allies_act(const char* key, size_t k, int n)
 {
     if (IS("ally") && n >= 0 && n < (int)TAGPU_PK_HUD_SEATS) {
@@ -787,6 +790,10 @@ static void allies_act(const char* key, size_t k, int n)
             s_giveAmt[0] = s_giveAmt[1] = 0;
             memcpy(s_giveName, s_name[n], sizeof s_giveName);
         }
+    } else if (IS("amute") && n >= 0) {
+        tagpu_board_mute((unsigned)n);
+    } else if (IS("alast") && n >= 0) {
+        tagpu_board_jump((unsigned)n);
     } else if (IS("give_send") && s_give >= 0) {
         if ((s_giveAmt[0] > 0 || s_giveAmt[1] > 0) && !tagpu_share_give((unsigned)s_give, s_giveAmt[0], s_giveAmt[1]))
             toast("Nothing given: giving is not available in this game");

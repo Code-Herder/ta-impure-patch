@@ -68,7 +68,8 @@
 typedef int (__stdcall* GroundHeight)(const int*);
 
 enum { G_NONE, G_LINE, G_MOVE, G_ERASE };
-enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN, E_LAST, E_EDGE };
+enum { E_LDOWN, E_LUP, E_RDOWN, E_RUP, E_MDOWN, E_LAST, E_EDGE, E_SEAT };   /* E_SEAT + seat: that
+                                                                             seat's last marker */
 
 static int      s_armed;
 static unsigned s_vk = 0xDC;           /* VK_OEM_5, the key that types `\` on a US layout */
@@ -364,9 +365,16 @@ static void remember(int right, const int32_t p[3], DWORD at, int valid)
 /* The camera centred on a marker the store still holds: the eye is the point less half the 1x view
    at every zoom, handed to the zoom's next apply as the scenario camera is (tagpu_zoom_place_eye,
    which clamps it to the range in force). */
-static void jump_to(char* ta, uint32_t id)
+/* the marker `id` while it is on the board and its owner is not muted: what a jump may go to */
+static const TagpuBoardMark* shown(uint32_t id)
 {
     const TagpuBoardMark* m = id ? tagpu_boardstore_find(&s_store, id) : NULL;
+    return m && !(s_mute >> m->owner & 1u) ? m : NULL;
+}
+
+static void jump_to(char* ta, uint32_t id)
+{
+    const TagpuBoardMark* m = shown(id);
     const int* v = (const int*)(ta + M_VIEW_W);
     int ex, ey;
     if (!m || v[0] <= 0 || v[1] <= 0) return;
@@ -494,8 +502,11 @@ void tagpu_board_record(const int* rec, unsigned msg)
     if (on) memcpy(s_pen, p, sizeof s_pen);
     for (i = 0; i < s_nev; i++) {
         if (s_ev[i] == E_LAST) {
-            jump_to(w.ta, s_lastAny && tagpu_boardstore_find(&s_store, s_lastAny) ? s_lastAny
-                                                                                 : s_lastOf[w.player]);
+            jump_to(w.ta, shown(s_lastAny) ? s_lastAny : s_lastOf[w.player]);
+            continue;
+        }
+        if (s_ev[i] >= E_SEAT) {
+            jump_to(w.ta, s_lastOf[s_ev[i] - E_SEAT]);
             continue;
         }
         if (s_ev[i] == E_EDGE) {
@@ -720,6 +731,27 @@ unsigned tagpu_board_outbox(unsigned char* body, unsigned cap)
 void tagpu_board_outbox_drop(void) { s_nout = 0; }
 
 void tagpu_board_refused(void) { s_cBad++; }
+
+int tagpu_board_ally(unsigned seat, int* muted, int* last)
+{
+    DWORD now = GetTickCount();
+    *muted = *last = 0;
+    if (seat >= TAGPU_BW_SEATS) return TAGPU_PK_BDACT_NONE;
+    *muted = (s_mute >> seat & 1u) != 0;
+    *last = shown(s_lastOf[seat]) != NULL;
+    if (*muted || !s_act[seat].at || now - s_act[seat].at >= ACT_MS) return TAGPU_PK_BDACT_NONE;
+    return s_act[seat].op == TAGPU_BW_ERASE ? TAGPU_PK_BDACT_ERASE : TAGPU_PK_BDACT_DRAW;
+}
+
+void tagpu_board_mute(unsigned seat)
+{
+    if (seat < TAGPU_BW_SEATS) s_mute ^= 1u << seat;
+}
+
+void tagpu_board_jump(unsigned seat)
+{
+    if (seat < TAGPU_BW_SEATS) queue(E_SEAT + (int)seat);
+}
 
 /* --------------------------------------------------------------- the fill ---- */
 

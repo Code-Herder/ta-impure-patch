@@ -13,8 +13,10 @@ Hold **`\`** over the world view and draw on the ground:
 
 In the text box, the engine font's glyphs `0x20..0x7E` type, up to 60; Backspace deletes, Return
 keeps the text and Esc drops it; a click anywhere closes it as Esc does. A line or marker is gone
-after 60 s of game time (1800 ticks), so a paused game keeps its marks. The level's end clears
-everything.
+after 60 s of game time (1800 ticks), so a paused game keeps its marks; the in-game panel's row
+*Board marks: Until erased* (`marklife=erased` in `impure.cfg`, `TS_MARKLIFE`) keeps them until
+they are erased. The board reads the setting every frame, so a change applies to the marks already
+made. The level's end clears everything.
 
 **Who sees what.** Each player sees their own marks, their mutual allies' and, as a watcher,
 everyone's; a watcher's marks are seen by watchers alone (`tagpu_share_board_seen`, the alliance
@@ -31,7 +33,11 @@ arrow in the ally's colour with a black edge, the ally's name below and right of
 the same colour on the minimap. A pointer on the minimap is drawn at the ground point it hovers;
 one elsewhere on the HUD is not drawn. A watcher sees every player's.
 
-The minimap's marks, the edge arrows and the settings are the later landings of
+**Finding marks.** Every marker and ally pointer is a dot on the minimap, and an ally's new marker
+pings there. An ally's new marker off the view gets an arrow at the view's edge for 10 s; a click
+on the arrow moves the camera to it, and `Ctrl`+`\` moves it to the last one received. Each ally's
+chip on the allies' ribbon carries the ally's activity, a Mute and a Last marker
+(*Finding marks*, below). The draw key's binding and marks in a replay are the later landings of
 [the plan](../drawing-board-plan.html).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -164,7 +170,8 @@ channel's game thread at the channel's tick through the playback's own perspecti
 around the shown moment are in hand, and interpolated between them when both are on the world
 view; a pointer whose shown sample is on neither the world nor the minimap is left out. The board
 puts each seat the player sees, other than the player's own, after the markers as a
-`TAGPU_PK_BDMARK` with `TAGPU_PK_BDM_CURSOR`, its text the seat's name (`tagpu_share_name`); the
+`TAGPU_PK_BDMARK` with `TAGPU_PK_BDM_CURSOR`, its text the seat's name (`tagpu_share_name`),
+followed by ` drawing...` or ` erasing...` while the ally's row on the ribbon shows it; the
 table's cap is the store's 256 markers plus `TAGPU_PK_BD_CURSORS` (10), so a full store never
 crowds a pointer out of the table. Only human seats on the channel are sampled, so an AI has no
 pointer; a player never sees a watcher's, and whether another watcher does depends on the
@@ -179,6 +186,52 @@ the view box) maps the ground point into the box the base picture was drawn on, 
 engine's minimap arm (`(pointer - box) * extent / box`, `0x498DDA..0x498E19`,
 [input](../engine/input.html)), whose y is projected: the point's x and `z - floor(h / 2)`, clamped
 to the extent, then a 3-pixel dot on a 5-pixel black square.
+
+## Finding marks (`tagpu_board.c`, `tagpu_gui_surf.c`, the allies' ribbon)
+
+**The minimap.** The GUI's minimap compose draws every marker record of the packet over the view
+box: a marker a 4-pixel square and an ally's pointer a 3-pixel one, in the owner's colour on a
+black square 2 pixels larger, mapped as *The allies' pointers* says. A new marker from another seat
+pings: a square outline in its colour that grows from 4 to 16 pixels over 2 s of wall time
+(`PING_MS`, the record's `ping` counting down from `TAGPU_PK_BD_PING`). The quads are counted
+against `TAGPU_GUI_SDRAW_BOARD` (640), the sharp layer's room past its own 32, which a static assert
+holds above two quads a record and four a ping, so the board never costs the frame its cursor.
+
+**New markers.** The board keeps the last 16 new markers that arrived from other seats the player
+sees and has not muted (`s_recent`, wall time), each seat's last new marker (`s_lastOf`) and the
+last of all (`s_lastAny`).
+
+**Edge arrows.** A marker of that ring younger than 10 s (`RECENT_MS`), still on the board, whose
+point lies off the view gets an arrow: a triangle in its owner's colour on a black one, pointing
+at it, where the line from the view's centre to the point crosses the view's edge, 30 screen
+pixels inside it. The view is the engine's: its centre the eye `main+0x1431F` plus half the 1x
+view `main+0x37E37`, its half extents the 1x view over twice the zoom. The fill computes each
+arrow on the game thread and keeps its anchor, so the arrow drawn and the arrow a click tests are
+the same numbers. A left press on the world view within 16 screen pixels of an anchor, with the
+draw key not held, is the board's: the engine never sees it, and the next frame moves the camera
+so the marker is at the view's centre (`tagpu_zoom_place_eye`).
+
+**`Ctrl`+`\`** (the draw key with Ctrl down) starts no hold and moves the camera to the last new
+marker received while it is still on the board and its owner is not muted, else to the player's
+own last.
+
+**The allies' ribbon** ([allied sharing](share.html), *The allies' ribbon*) gives each ally still
+in the game a row under its cells (`tagpu_board_ally`, by the chip's player record index):
+
+- `DRAWING...` or `ERASING...` in the ally's colour, for 700 ms (`ACT_MS`, wall time) after a line
+  or an erase of that seat arrives;
+- **Mute** (`amute:<index>`, pressed while on): the seat's lines, markers, pointer, pings, edge
+  arrows and chat lines are not drawn on this screen, nor its activity. A muted seat's operations
+  still arrive and still change its own marks, and change no one else's (the rights they apply
+  with are none). Unmuting shows the marks it kept. The level's end unmutes every seat, and Mute
+  is not saved;
+- **Last marker** (`alast:<index>`): moves the camera to that ally's last new marker while it is on
+  the board and the ally is not muted, as `Ctrl`+`\` does. Without one it is drawn disabled, and
+  its box is the control `ally_off`, which runs nothing, so the press does not open the give panel
+  under it.
+
+The ribbon draws only for a player in play with an ally, so a watcher, who sees every player's
+marks, has no Mute and no Last marker.
 
 ## The packet
 
@@ -254,6 +307,20 @@ drew on the host at (600, 350) as a red arrow named `BD-J`, and as a red dot ins
 box on the minimap; on the side panel it was not drawn, and back on the world at (300, 250) it
 was; not allied, the host drew none.
 
+Finding marks, MEASURED 2026-11-16 in allied games: the joiner's marker off the host's view drew
+an edge arrow in its colour and pinged on the host's minimap; a click on the arrow, and in another
+round `Ctrl`+`\`, put the marker at the host's view centre; while the joiner drew, its pointer's
+plate read `BD-J drawing...`. On the ribbon (HUD 100 % at 1024x768): during the joiner's stroke the
+host's chip read `DRAWING...` in red, gone 2 s later; Mute (`tacli hud bd-h click amute:1`) took
+the joiner's marker and pointer off the host's minimap, leaving the engine's own dot for its
+commander, disabled Last marker, and a second press brought them back; once the marker had faded
+Last marker was disabled; after a new marker, Last marker put it at the view centre; a press on the
+disabled Last marker opened no give panel, and one on the chip still did.
+
+The lifetime setting, MEASURED 2026-11-16 in a skirmish (`--defaults`): the panel's row stored
+`marklife=erased`; a line outlived 2440 ticks (81 s of game time); switching back to *Fade 60 s*
+removed it at once and stored `marklife=60`.
+
 Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
 there and back, each truncation and malformed field refused, the renumbering, the store's rights,
 eraser radius, ring, lifetime, a tick that goes back and the oldest marker's replacement — and
@@ -261,8 +328,10 @@ reads the body it writes with `recmp_file.board_ops`.
 
 ## Gaps
 
-- No minimap marks or pings, edge arrows, per-ally mute, settings, or marks in a replay yet —
-  landings 4 to 6 of the plan.
+- No marks in a replay yet, and the draw key is not rebindable — landings 5 and 6 of the plan.
+- A watcher has no Mute and no Last marker: the allies' ribbon, which carries them, is a player's.
+- An ally out of the game has no board row on its chip, so it can no longer be muted or unmuted
+  from there; its marks fade or stay as the lifetime says.
 - Allies' pointers freeze while the game is paused: their samples are taken at capture points.
 - The pointer's motion between samples was not measured frame by frame; the interpolation is the
   playback's, which `tools/replay/persp_test.py` checks.

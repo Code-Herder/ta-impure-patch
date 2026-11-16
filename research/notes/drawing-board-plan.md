@@ -2,9 +2,10 @@
 
 ## Status
 
-**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 3 — the local
-board, its network channel and the allies' pointers — are built and verified on the branch
-([board](modules/board.html)); landings 4 to 6 are not.** Allies
+**Decided with the owner 2026-11-15 on an interactive HTML proposal. Landings 1 to 4 — the local
+board, its network channel, the allies' pointers and finding marks — and landing 5's lifetime
+setting are built and verified on the branch ([board](modules/board.html)); the draw key's binding
+and landing 6 are not.** Allies
 draw on the map together: freehand lines, markers with or without text that anyone on the team can
 edit, move or delete, and an eraser. Each ally's cursor is shown live. Worked on
 `worktree-drawing_board`.
@@ -45,6 +46,9 @@ were read as guides only. Every fact the code rests on comes from our own disass
 | 4 | Default lifetime | **Fade after 60 s**; *until erased* is an option |
 | 5 | The key | **`\`, rebindable** |
 | 6 | Following an ally live | **No** |
+| 7 | Where each ally's Mute and Last-marker controls live (2026-11-16, on a mockup of three) | **On the allies' ribbon**: two buttons on each ally's chip and the activity line under its bars |
+| 8 | Rebinding the draw key (2026-11-16) | **A press-to-bind row** in the in-game gear panel: click it, press any key; `drawkey=` in `impure.cfg` |
+| 9 | What the replay landing covers (2026-11-16) | **Multiplayer replays and the HUD's Marks switch**; marks in skirmish recordings are a later landing |
 
 ## What the engine and our code give us
 
@@ -115,8 +119,10 @@ landings' notes as each one uses them.
    minimap, drawn 200 ms behind and interpolated between the last two samples. **Built**, through
    the playback's perspective clock and the board's marker table.
 4. **Finding marks.** Marks on the minimap and the new marker's ping there, the edge arrows, `Ctrl`+`\`, and each ally's controls
-   (mute and last marker). Where those controls live is shown to the owner in a mockup first.
-5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings.
+   (mute and last marker), on the allies' ribbon (decision 7). **Built.** An ally out of the game
+   has no row: the ribbon dims its chip as one group, and groups do not nest.
+5. **Settings.** Lifetime and the key in `impure.cfg` and the in-game settings. The lifetime is
+   **built**; the key's press-to-bind row (decision 8) is not.
 6. **Replays.** The history keeps the marks so a seek restores them; the replay HUD's Marks switch.
 
 The landing on main runs the replay gate, as the recorder's channel changes.
