@@ -11903,29 +11903,30 @@ static void check_layers(void)
     }
 }
 
-/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
-   base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
-   beside the base, nearer a structure of their own side than the anchor -- no base threat, so a FORM squad there
-   is no defence that holds (THE HOME HOLDS) -- which every squad there predicts it loses (retreats). After every
-   decision the table holds become's bound and no unit is left without a squad. Then a recorded table of three land
-   FORM squads and five ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks in the
+   field, 1 300 px from the anchor and as far from the rally point, and toggling an armed enemy tank 300 px from
+   the anchor; every third decision thirty enemy tanks stand beside the field army, nearer a structure of their own
+   side than the anchor -- no base threat --, which every squad there predicts it loses and, its members far from
+   where a retreat takes them (THE RETREAT HOME), retreats. After every decision the table holds become's bound and
+   no unit is left without a squad. Then a recorded table of three land FORM squads and five ATTACK squads: the
+   normalisation leaves one FORM and four ATTACK, every member in a squad. */
 static void check_mil_table(void)
 {
     IMPAI_MIL_OUT o;
     int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
     mil_world();
     enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
-    enemy(1298, T_SOLAR, 25, 55, IMPAI_GHOST, 1);
+    enemy(1298, T_SOLAR, 105, 55, IMPAI_GHOST, 1);
     for (i = 0; i < 60; i++) {
-        own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
-        own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
+        own(1 + 2 * i, M_TANK, 100 + (i % 10) * 2, 30 + (i / 10) * 2);
+        own(2 + 2 * i, M_RAIDER, 101 + (i % 10) * 2, 31 + (i / 10) * 2);
         if (i % 2) enemy(1300, M_TANK, 39, 20, IMPAI_LOS, 1);
         else {
             s_rows[1300].seat[0].how = 0;
             s_w.unit[1300].live = 0;
         }
         for (k = 0; k < 30; k++) {
-            if (i % 3 == 2) enemy(1310 + k, M_TANK, 16 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
+            if (i % 3 == 2) enemy(1310 + k, M_TANK, 100 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
             else {
                 s_rows[1310 + k].seat[0].how = 0;
                 s_w.unit[1310 + k].live = 0;
@@ -12444,20 +12445,26 @@ static void check_mil_retreat_members(void)
           "every member arrived: FORM, and no RETREAT squad left");
 }
 
-/* AT THE RALLY (impai_mil.c, at_rally): check_mil_stay_or_go's three tanks and a submarine they cannot hurt but
-   outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at cell
-   (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point lies
-   384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px south:
-   no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction, as
-   check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the submarine, a contact that
-   does not threaten the base (a structure is no base threat): one prediction. */
+/* AT THE RALLY and THE RETREAT HOME (impai_mil.c): check_mil_stay_or_go's three tanks and a submarine they cannot
+   hurt but outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at
+   cell (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point
+   lies 384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px
+   south: no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction,
+   lost, a retreat, as check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the
+   submarine, a contact that does not threaten the base (a structure is no base threat): one prediction. (d) The
+   tanks a RAID squad at the rally, its point 2 400 px out, the submarine 128 px south: one prediction, lost, every
+   member already where a retreat would release it -- no retreat, the squad still a RAID, and no order at the
+   submarine it lost to. (e) The same raid
+   2 400 px out: one prediction, a retreat. (f) The member's index is the one it takes in the layer's RETREAT squad
+   it would join (below). */
 static void check_mil_at_rally(void)
 {
-    static const char* const NAME[3] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally" };
+    static const char* const NAME[5] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally",
+                                         "a raid at the rally, a submarine", "a raid 2 400 px out, a submarine" };
     IMPAI_MIL_OUT o;
-    int c, k;
-    for (c = 0; c < 3; c++) {
-        const int bx = c == 1 ? 180 : 40, bz = c == 1 ? 100 : 29;
+    int c, k, from, at;
+    for (c = 0; c < 5; c++) {
+        const int out = c == 1 || c == 4, bx = out ? 180 : 40, bz = out ? 100 : 29;
         mil_world();
         gunship();
         s_st.ax = s_st.az = 20;
@@ -12467,17 +12474,51 @@ static void check_mil_at_rally(void)
         s_w.starts[1].z = 3216;
         s_w.starts[1].index = 1;
         s_w.nstarts = 2;
-        for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
+        if (c >= 3) {
+            squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, c == 3 ? 90 : 120, c == 3 ? 50 : 70);
+            for (k = 0; k < 3; k++) member(1 + k, M_TANK, bx + 2 * k, bz, 0);
+        } else
+            for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
         enemy(1300, c == 2 ? T_TURRET : M_SUB, bx + 2, bz + 8, IMPAI_LOS, 1);
+        from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rally decision runs");
-        mil_print(NAME[c], &o, s_w.nlog);
+        mil_print(NAME[c], &o, from);
+        for (k = from, at = 0; k < s_w.nlog; k++) at += s_w.log[k].c.target == 1300;
         if (!c)
             CHECK(!o.predictions && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && squad_task_of(3) == IMPAI_SQ_FORM,
                   "at the rally: %u predictions, %u retreats, tasks %d %d", o.predictions, o.retreats, squad_task_of(2),
                   squad_task_of(3));
-        else
+        else if (c == 3)
+            CHECK(o.predictions == 1 && !o.retreats && squad_task_of(2) == IMPAI_SQ_RAID && !at,
+                  "%s: %u predictions, %u retreats, task %d, %d orders at the submarine", NAME[c], o.predictions,
+                  o.retreats, squad_task_of(2), at);
+        else if (c == 2)
             CHECK(o.predictions == 1, "%s: %u predictions", NAME[c], o.predictions);
+        else
+            CHECK(o.predictions == 1 && o.retreats == 1, "%s: %u predictions, %u retreats", NAME[c], o.predictions,
+                  o.retreats);
     }
+    /* (f) the layer's RETREAT squad holds a tank 2 400 px out, slot 1, so a FORM tank, slot 2, joining it takes
+       index 1, spread point (610, 364) px; the FORM tank stands at (72, 360), 538 px from that point and 474 from
+       index 0's, 616 px from the rally: predicted, lost, and not home -- a retreat */
+    mil_world();
+    gunship();
+    s_st.ax = s_st.az = 20;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6416;
+    s_w.starts[1].z = 3216;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+    squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_LAND, 674 >> 5, 492 >> 5);
+    member(1, M_TANK, 180, 100, 0);
+    own(2, M_TANK, 4, 22);
+    enemy(1300, M_SUB, 4, 30, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the joined retreat's decision runs");
+    mil_print("a tank whose retreat joins the layer's", &o, from);
+    CHECK(o.predictions == 1 && o.retreats == 1, "a tank home at its own index, not at the index it joins at: %u "
+          "predictions, %u retreats", o.predictions, o.retreats);
 }
 
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by

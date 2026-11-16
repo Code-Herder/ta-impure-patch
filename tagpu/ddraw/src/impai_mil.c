@@ -433,14 +433,22 @@ static int op_full(const MDEC* d)
     return att && ops(d) >= (int)att;
 }
 
+/* the squad other than s of `task` on s's layer that s joins on becoming it (become): the lowest index; -1 none */
+static int task_squad(const MDEC* d, int s, unsigned task)
+{
+    int k;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if (k != s && d->st->sq[k].task == task && d->st->sq[k].layer == d->st->sq[s].layer) return k;
+    return -1;
+}
+
 static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t target)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
     int k, to = -1, others = 0;
     uint32_t best = 0;
     if (task == IMPAI_SQ_FORM || task == IMPAI_SQ_DEFEND || task == IMPAI_SQ_RETREAT) {
-        for (k = 0; k < IMPAI_SQUADS && to < 0; k++)
-            if (k != s && d->st->sq[k].task == task && d->st->sq[k].layer == q->layer) to = k;
+        to = task_squad(d, s, task);
     } else if (task == IMPAI_SQ_ATTACK) {
         for (k = 0; k < IMPAI_SQUADS; k++) {
             const IMPAI_SQUAD* a = &d->st->sq[k];
@@ -2770,6 +2778,17 @@ static int task_over(const MDEC* d, int s)
     return d->now - d->st->sq[s].since > (uint32_t)d->plan->task_timeout + travel_ticks(d, s);
 }
 
+/* 1 when army unit u, the n-th member of its RETREAT squad in the army's order, has arrived where the retreat takes
+   it (THE RETREAT RELEASES ON ARRIVAL) */
+static int member_home(MDEC* d, MUNIT* u, int n)
+{
+    int32_t px, pz;
+    int p;
+    travel_point(d, u, n, d->rx, d->rz, &px, &pz);
+    p = point_for(d, u->type, u->x, u->z, &px, &pz);
+    return p >= 0 && (!p || dist(u->x, u->z, px, pz) <= RALLY_PX);
+}
+
 /* THE RETREAT RELEASES ON ARRIVAL: each member of RETREAT squad s that has arrived -- within RALLY_PX of the point
    travel gives it, or given none, as arrived judges a member; one point_for cannot answer for stays -- joins its
    layer's FORM squad, and the squad holds the rest; a squad left with none is freed. INVARIANT: no member that has
@@ -2786,12 +2805,7 @@ static void release_arrived(MDEC* d, int s)
     int k, n = 0, form = -1;
     for (k = 0; k < d->narmy; k++) {
         MUNIT* u = &d->army[k];
-        int32_t px, pz;
-        int p;
-        if (u->sq != s) continue;
-        travel_point(d, u, n++, d->rx, d->rz, &px, &pz);
-        p = point_for(d, u->type, u->x, u->z, &px, &pz);
-        if (p < 0 || (p && dist(u->x, u->z, px, pz) > RALLY_PX)) continue;
+        if (u->sq != s || !member_home(d, u, n++)) continue;
         if (form < 0 && (form = squad_of(d, IMPAI_SQ_FORM, d->st->sq[s].layer)) < 0) return;
         join(d, u, form);
     }
@@ -2815,16 +2829,45 @@ static int home_holds(const MDEC* d, int s)
 
 /* AT THE RALLY: a FORM squad whose centroid stands within RALLY_PX of the rally point, against a contact that
    threatens the base (MCONTACT.threat), takes no retreat, and no prediction is spent on it: it fights its
-   contact. WHY: a retreat's point is the rally point, so a FORM squad there that lost its prediction became
-   RETREAT, was released to FORM again on arrival in the same decision (release_arrived) and could be predicted
-   again, each round spending a prediction, a retreat and a lost prediction for the lead's evidence while the
-   squad stood where it was. A FORM squad farther out still falls back. RESIDUAL: against a contact outside the
-   base that reaches the rally -- artillery out-ranging it -- the squad is still predicted, and on a loss sent back
-   to where it stands, a prediction each decision; its lost evidence is kept, which is what such a contact earns. */
+   contact. A FORM squad farther out is predicted, as every squad against any other contact. */
 static int at_rally(const MDEC* d, int s, int c)
 {
     return d->st->sq[s].task == IMPAI_SQ_FORM && d->ct[c].threat &&
            dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX;
+}
+
+/* THE RETREAT HOME: a squad of any task that loses its prediction while every member already stands where a
+   retreat would release it (member_home, the test THE RETREAT RELEASES ON ARRIVAL makes, each member at the index
+   it takes in the RETREAT squad it would become or join: become's merge keeps the army's order) takes no retreat
+   and, this decision, not the contact: no RETREAT, no lost prediction for the lead's evidence, and a FORM squad
+   forms its wave (form_attack, which waits while the squad has a contact); a RAID, an ATTACK and a DEFEND go on
+   with their task. INVARIANT: a squad that becomes a RETREAT holds a member the release does not hand back at
+   once, which walks; its members already home are handed back to FORM, where the next lost prediction holds them
+   here -- so no squad is sent back, round after round, to where it stands. WHY: such a squad became RETREAT, was
+   released to FORM in the same decision and was predicted again at the next, each round a prediction, a retreat
+   and a lost prediction, with no attack order and no wave formed while it stood where it was, for as long as a
+   contact stood within its reach -- range and REACH_PAD -- of there: on ProTA's Lava Mania
+   (bar-nota-lavamania-ca-2 at c1dc2e70) the rally stood at about (808, 2 150) px, 900 px short of the estimate,
+   and from GameTime 12 000 to 40 000 FORM squads were sent back 221 times, every one within 394 px of the rally
+   (median 113), and raids 108 times, 100 of them within 512 px, by contacts 411 to 845 px off; no attack was given
+   from 15 262 to 38 032 and the game reached the cap at 7 009 against 50 567. On hota Red Triangle cc-1 at the
+   same commit, the rally at about (4 190, 5 390) from GameTime 30 000 to 63 000, FORM squads were sent back 359
+   times, 344 within 512 px of it, and raids 229 times, 147 within 512 px, by contacts a median 626 and 516 px
+   off (MEASURED 2026-11-16, diagnostic builds logging each retreat, the rally from the recordings' anchor and
+   estimate). A squad
+   with a member still to walk home falls back as before, so a wave or a raid that meets a stronger force on its
+   way still does. RESIDUAL: a squad so held may stand within reach of the contact it lost to -- artillery
+   out-ranging the rally -- answered only by its units' own fire, and is predicted again at each decision, one of
+   the plan's predict_max. BOUND: the squad's members, point_for's cost each, once a lost prediction. */
+static int retreat_home(MDEC* d, int s)
+{
+    const int to = task_squad(d, s, IMPAI_SQ_RETREAT);
+    int k, n = 0;
+    for (k = 0; k < d->narmy; k++) {
+        const int sq = d->army[k].sq, i = sq == s || (to >= 0 && sq == to) ? n++ : -1;
+        if (sq == s && !member_home(d, &d->army[k], i)) return 0;
+    }
+    return 1;
 }
 
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
@@ -2835,8 +2878,9 @@ static int at_rally(const MDEC* d, int s, int c)
    nearest contact within the squad's reach that has a member entering its stay-or-go (THE STAY-OR-GO,
    member_counts) is predicted against those members and the defences near it -- below retreat_margin the squad
    falls back to the rally point, otherwise it fights; a DEFEND squad in the anchor box (THE HOME HOLDS) and a FORM
-   squad at the rally point (AT THE RALLY) fight unpredicted --, and a FORM squad
-   with none forms a wave. A contact with no member that enters is no
+   squad at the rally point against a base threat (AT THE RALLY) fight unpredicted, and a squad whose retreat would
+   end where it stands takes no retreat and not the contact (THE RETREAT HOME) --, and a FORM squad with none forms
+   a wave. A contact with no member that enters is no
    contact for the squad: no retreat test, no fight, and a FORM squad under aircraft it can neither hurt nor
    outrun still forms its wave. Every prediction comes out of the plan's predict_max; a squad left without one
    keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
@@ -2913,12 +2957,17 @@ static void tasks(MDEC* d)
                 if (predict(d, &a, &b, gap, squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s),
                             &m) == 0 &&
                     m < plan->retreat_margin) {
-                    become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
-                    d->out->retreats++;
-                    lost(d);
-                    continue;
+                    if (!retreat_home(d, s)) {
+                        become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
+                        d->out->retreats++;
+                        lost(d);
+                        continue;
+                    }
+                    best = -1;
                 }
             }
+        }
+        if (best >= 0) {
             d->sq[s].contact = best;
             continue;
         }

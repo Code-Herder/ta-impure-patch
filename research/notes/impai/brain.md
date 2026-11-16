@@ -299,10 +299,19 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    weighed apart, each from its own nearest member and front, so they need not take one answer; a RETREAT is
    leaving and a SCOUT is one scout, so neither counts. **At the rally**: a FORM squad whose centroid stands
    within 512 px of the rally point, against a contact that threatens the base, takes no retreat and spends no
-   prediction -- the retreat's point is where it stands, and the release on arrival (below) made it FORM again in
-   the same decision, a prediction, a retreat and a lost prediction spent each round. A contact outside the base
-   that reaches the rally -- artillery out-ranging it -- is still predicted, and a loss still sends the squad back
-   to where it stands, its lost evidence kept. **Why the side**: 28 of the 35 retreats of
+   prediction. **The retreat home**: a squad of any task that loses its prediction while every member already
+   stands where a retreat would release it (the release on arrival's own test, below, each member at the index it
+   takes in the RETREAT squad it would join) takes no retreat and, that decision, not the contact: no lost evidence for the lead, a FORM squad forms its wave, a RAID, an ATTACK and a
+   DEFEND go on with their task. Such a squad became RETREAT, was released to FORM in the same decision and was
+   predicted again at the next, for as long as a contact stood within its reach: on ProTA's Lava Mania
+   (`bar-nota-lavamania-ca-2` at c1dc2e70), the rally 900 px short of the estimate, FORM squads were sent back 221
+   times between GameTime 12 000 and 40 000, every one within 394 px of the rally, and raids 108 times, by contacts
+   411 to 845 px off; no attack was given from 15 262 to 38 032 and the game reached the cap at 7 009 against
+   50 567. On hota Red Triangle cc-1 at the same commit FORM squads were sent back 359 times from 30 000 to 63 000,
+   344 within 512 px of the rally, and raids 229 times (MEASURED 2026-11-16, diagnostic builds logging each
+   retreat). **Gap**: a squad so held may
+   stand within reach of the contact it lost to -- artillery out-ranging the rally -- answered only by its units'
+   own fire, and is predicted again at each decision. **Why the side**: 28 of the 35 retreats of
    `bar-hota-pincushion-ca-2` at 1a9350ea had an ATTACK of the same layer within 1 024 px -- a squad of 41 worth
    9 755 fell back from the enemy's commander and towers beside two squads worth 9 133 that stayed --, and the
    game reached the cap at 414 units against 40 (MEASURED 2026-11-15, the recording's `s_mil`). **The home
