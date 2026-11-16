@@ -110,6 +110,9 @@ static const Opt O_RADARDOTS[] = { {"always", 1}, {"zoomed", 0}, {"1", 1}, {"0",
    thread, so no value needs a restart. */
 static const Opt O_ONOFF[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
 static const char* const RC_NAME[5] = { "ground", "air", "nuke", "cannon", "lrpc" };
+/* The drawing board's marks: faded after 60 s of game time, or kept until erased (the owner's
+   choice of 2026-11-15; drawing-board-plan.md). Read every frame, so no value needs a restart. */
+static const Opt O_MARKLIFE[] = { {"60", 60}, {"erased", 0} };
 
 #define N(a) (int)(sizeof a / sizeof a[0])
 
@@ -153,6 +156,7 @@ static const Key s_key[TS_NKEYS] = {
     { "sensorview",  O_ONOFF, N(O_ONOFF), 1 },
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
+    { "marklife",    O_MARKLIFE, N(O_MARKLIFE), 60 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -1197,6 +1201,12 @@ int tagpu_settings_radardots(void)
     int v;
     if (s_ignored) return 0;
     return tagpu_settings_get(TS_RADARDOTS, &v) ? v : s_key[TS_RADARDOTS].def;
+}
+
+int tagpu_settings_marklife(void)
+{
+    int v;
+    return tagpu_settings_get(TS_MARKLIFE, &v) ? v : s_key[TS_MARKLIFE].def;
 }
 
 int tagpu_settings_fps(void)

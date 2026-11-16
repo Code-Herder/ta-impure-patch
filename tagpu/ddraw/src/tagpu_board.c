@@ -34,6 +34,7 @@
 #include "tagpu_boardstore.h"
 #include "tagpu_sharetick.h"
 #include "tagpu_recorder.h"
+#include "tagpu_settings.h"
 #include "dd.h"
 #include "render_vk.h"
 
@@ -52,7 +53,7 @@
 #define STEP_PX    6.0         /* screen px a line moves before it adds a segment: a corner of
                                   the stroke is kept however fast the pointer moved             */
 #define DOUBLE_PX  4.0         /* screen px two presses of a double click may be apart          */
-#define LIFE_TICKS 1800u       /* a mark's lifetime, 60 s of game time at 30 ticks a second    */
+#define TICKS_PER_S 30u       /* GameTime at normal speed: a lifetime in seconds of game time  */
 #define PENDING    8
 #define OUTBOX     16384u      /* the operations not yet sent, bytes, the body's head included  */
 #define SAYS       8           /* the chat lines a frame owes                                   */
@@ -796,6 +797,8 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
     *ns = *nm = 0;
     if (!live(&w)) return 0;
     see = seen() & ~s_mute;             /* a muted seat's marks and pointer are not drawn */
+    /* the player's lifetime, read every frame: a change applies to the marks already made */
+    s_store.life = (uint32_t)tagpu_settings_marklife() * TICKS_PER_S;
     for (k = 0; k < 10; k++) col[k] = seat_colour(w.ta, k);
     /* the lifetime first, so neither table carries what is gone */
     tagpu_boardstore_expire(&s_store, game_tick(w.ta));
@@ -876,7 +879,7 @@ void tagpu_board_level_end(void)
     if (s_cMarks || s_cSegs || s_cErase || s_cDrop || s_cFull || s_cIn || s_cBad)
         tagpu_logf("board: level end marks=%u segs=%u erases=%u dropped=%u outbox_full=%u received=%u "
                    "refused=%u", s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cFull, s_cIn, s_cBad);
-    tagpu_boardstore_clear(&s_store, LIFE_TICKS);
+    tagpu_boardstore_clear(&s_store, (uint32_t)tagpu_settings_marklife() * TICKS_PER_S);
     s_seq = 0;
     s_nout = 0;
     s_nsay = 0;
@@ -901,7 +904,7 @@ void tagpu_board_init(void)
         tagpu_logf("board: the router's right-press stub is not installed; the board is off");
         return;
     }
-    tagpu_boardstore_clear(&s_store, LIFE_TICKS);
+    tagpu_boardstore_clear(&s_store, (uint32_t)tagpu_settings_marklife() * TICKS_PER_S);
     s_armed = 1;
     tagpu_logf("board: armed (key vk 0x%02X)", s_vk);
 }

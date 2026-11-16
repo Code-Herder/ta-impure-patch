@@ -240,7 +240,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS,
+       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS, R_MARKLIFE,
        R_RANGES, R_RSHIFT, R_RCURSOR, R_RSVIEW, R_RSENSOR, R_RGROUND, R_RAIR, R_RNUKE, R_RCANNON, R_RLRPC, R_COUNT };
 
 /* the rows a column holds: the left one takes the odd row */
@@ -287,6 +287,9 @@ static const Row s_row[R_COUNT] = {
        icons come in (tagpu_icon.c, read every frame). The in-game panel's
        alone, as Mega map zoom in is. */
     { "RADARDOTS", "Radar dots",        "Zoomed out|Always",        2 },
+    /* how long the drawing board's lines and markers stay (tagpu_board.c, read every frame). The
+       in-game panel's alone, as Mega map zoom in is. */
+    { "MARKLIFE",  "Board marks",       "Fade 60 s|Until erased",   2 },
     /* the weapon range rings (tagpu_rangeown.c, which reads the store every
        frame): on, the attack rings only under Shift, the rings of the unit
        under the cursor -- BAR's gui_attackrange_gl4 options --, the own and
@@ -1103,6 +1106,7 @@ static void read_state(void)
     if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
         s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = tagpu_settings_radardots() ? 1 : 0;
+    s_stage[R_MARKLIFE] = tagpu_settings_marklife() ? 0 : 1;
     s_stage[R_RANGES]  = setting_or(TS_RANGES, 1) ? 1 : 0;
     s_stage[R_RSHIFT]  = setting_or(TS_RANGESHIFT, 0) ? 1 : 0;
     s_stage[R_RCURSOR] = setting_or(TS_RANGECURSOR, 1) ? 1 : 0;
@@ -1180,7 +1184,7 @@ static int row_greyed(int row)
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
         row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS ||
-        row == R_RANGES || row == R_RSVIEW || row == R_RSENSOR) return 0;
+        row == R_MARKLIFE || row == R_RANGES || row == R_RSVIEW || row == R_RSENSOR) return 0;
     /* the rings' own options bite only while the rings are on; the sensor
        rows are drawn whether or not they are */
     if (row > R_RANGES && row < R_COUNT) return s_stage[R_RANGES] == 0;
@@ -1513,6 +1517,7 @@ static void commit_one(int row)
     case R_WHEEL:   tagpu_profiles_set_wheel(s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     case R_RADARDOTS: tagpu_settings_set(TS_RADARDOTS, s_stage[R_RADARDOTS]); break;
+    case R_MARKLIFE: tagpu_settings_set(TS_MARKLIFE, s_stage[R_MARKLIFE] ? 0 : 60); break;
     case R_RANGES:  tagpu_settings_set(TS_RANGES, s_stage[R_RANGES]); break;
     case R_RSHIFT:  tagpu_settings_set(TS_RANGESHIFT, s_stage[R_RSHIFT]); break;
     case R_RCURSOR: tagpu_settings_set(TS_RANGECURSOR, s_stage[R_RCURSOR]); break;
@@ -2144,7 +2149,8 @@ static const short VC0_SLD[2] = { 244, 336 };
    one slot each, top down, closing up over the gaps they leave. */
 static int vis_shown(int row)
 {
-    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS && row < R_RANGES;
+    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS && row != R_MARKLIFE &&
+           row < R_RANGES;
 }
 
 /* how many of the first `rows` rows the front-end screen shows */
@@ -3007,6 +3013,7 @@ static void vis_restore(void)
     s_stage[R_WHEEL]   = tagpu_profiles_policy()->wheel_default;
     s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = 1;
+    s_stage[R_MARKLIFE] = 0;
     s_stage[R_RANGES]  = 1;
     s_stage[R_RSHIFT]  = 0;
     s_stage[R_RCURSOR] = 1;
@@ -3689,7 +3696,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 25 rows */
+    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 26 rows */
     static char gui[24576];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel
