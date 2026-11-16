@@ -137,6 +137,11 @@ class Piece:
                "--lanes", str(piece["lanes"]), "--dll", str(dll), "--out", str(piece["out"])]
         if piece["setup"]:
             cmd += ["--setup", piece["setup"]]
+        # a tuning's arm (tune.py spsa): its seats' persona rows and tune lever items, the ids and seeds unchanged
+        for item in piece.get("persona") or ():
+            cmd += ["--persona", item]
+        for item in piece.get("tune") or ():
+            cmd += ["--tune", item]
         with open(self.log, "a") as f:
             self.proc = subprocess.Popen(cmd, cwd=str(TREE), stdout=f, stderr=subprocess.STDOUT)
 

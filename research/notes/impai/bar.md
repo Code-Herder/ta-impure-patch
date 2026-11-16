@@ -635,6 +635,48 @@ played to 80 971 in 30 to 55 s of play, four lanes, 1.6 min from admission: **on
 the opponent gone at 75 906), **eight failed**, the opponent still holding units at the cap. Lava Alley `ca-4`
 ended with ImpAI at 8 units against 146.
 
+## Automatic tuning
+
+`tools/impai/tune.py spsa` (`init`, `run`, `report`) tunes what a lever sets, by SPSA (`spsa.py`, Spall's gains,
+maximising): each iteration perturbs every coordinate at once, plays theta+ and theta- on **the same games** (the
+same ids, so the same seeds -- common random numbers; each arm's results apart under `games/<k>-<arm>/`), a new
+block each iteration, and steps along the difference. `test_spsa.py` holds it offline: the arithmetic on
+objectives whose optimum is known, its determinism and resume, the spaces, the objectives' values and a run on a
+fake player.
+
+- **The settings.** A persona row through the persona lever (*The persona rows*): nine coordinates in [0, 1], 0
+  the lever's harshest (L0b) and 1 Hard's (L5) on every axis, every point a row `impai_persona_ok` accepts and
+  every named row decoded back to itself. Or plan constants through **the tune lever** `tagpu_impai_tune.on`
+  (`level_lever.py --tune`, `bar.py play --tune A=<name>=<int>,...`): 28 named constants of `IMPAI_PLAN` and the
+  military's and economy's `#define`s, each a coordinate over its range, in integers (floats in thousandths). The
+  DLL's side of the tune lever is specified for the brain writer (`.data/impai/tune-lever-spec.md`: a plan a seat
+  in `IMPAI_MIL`, so SIM_STATE and recorded; `impai_plan_ok`; the lever applied where the persona's is, never on a
+  puppet or in a network game; the init line `impai: tune seat= from=lever ...` the lane checks) and **not built**:
+  until it is, every game of a lever objective could not run.
+- **The objectives.** `levels-normal` and `levels-easy` (below); `margin`, the arms paired on each game of the
+  margin test's block by its measure, the time to win (+1 where theta+ was better, -1 worse, 0 a tie); `handicap`,
+  A's points against OTA AI on its production times the champion's m* (`h:<m>`); `mirror`, A's points against
+  ImpAI Hard with no lever (`g:H.H`).
+- **The levels.** Normal's row is the strongest row Hard beats in at least 90 of 100 of the mirror's games while it
+  still scores 0.90 against OTA AI at Hard; Easy's the strongest Normal's row beats in 90 of 100 while it scores
+  0.50. Both bounds limit a row's strength, the mirror's from above and OTA AI's from below, so the search
+  maximises J = o - 4 max(0, 0.90 - w), o the row's points against OTA AI at Hard (`p:` ids, the row on A), w the
+  stronger side's share of the mirror's games won (`m:` or `n:` ids, the row on B): it climbs on OTA AI's points
+  until the mirror's bound binds and is held there, on the row that scores most against OTA AI where it binds.
+  `report` names the row and the checks that choose it -- the mirror's 100 games and the calibration's 40 played on
+  it (`bar.py play --persona B=<row>`, `A=<row>`); a row that fails OTA AI's floor there means no row of the box
+  meets both. **Not run live**: the rows are chosen on the brain that ships, and the mirror's draws on Steel Jungle
+  and Lava Alley (*The mirror*) are that brain's to fix first.
+- **A run** is fixed to the DLL it began on and plays an iteration's pieces -- each arm's games of each role, a
+  block of ten a piece -- through `batch.py`'s pieces under the run lock, each stopped past its ten minutes; a game
+  that could not run plays its pieces once more, and an iteration still missing one stops the run, unrun (exit 2).
+  The state (`spsa.json`) is written after each iteration, so a stopped run resumes at the iteration it was in, its
+  games kept; the same seed is the same run. It is one runs-viewer run, a step an iteration.
+- **Its cost** [INFERRED from the mirror's measured blocks, 6.6 to 9.4 min for ten games at ten lanes]: a levels
+  iteration is 40 games in four pieces, one at a time under the lock, about 30 to 38 min; the default 40
+  iterations about 20 to 25 hours. Each arm's ten mirror games estimate w to about ±0.1 (a binomial's spread at
+  0.9), which the gains' decay averages over the iterations.
+
 ## When the default flips
 
 At A2, once Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the 90 % ladder and the

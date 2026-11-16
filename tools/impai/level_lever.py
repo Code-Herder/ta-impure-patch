@@ -5,6 +5,7 @@ content (tools/replay/fixtures.json) and the levels' calibration.
     tools/impai/level_lever.py tagpu/instances/x/gamedir 1=hard [2=easy ...]
     tools/impai/level_lever.py tagpu/instances/x/gamedir --persona 1=60,90,45,10,3,15,3,4,2 [--persona ...]
     tools/impai/level_lever.py tagpu/instances/x/gamedir --income 1=2.5 [--income ...]
+    tools/impai/level_lever.py tagpu/instances/x/gamedir --tune 1:attack_margin=150 [--tune ...]
 
 writes `tagpu_impai_level.on` with the level items given, `tagpu_impai_persona.on` with the personas given, one a
 line, and `tagpu_impai_income.on` with the income multipliers given: `<seat>=<m>`, m a decimal with at most three
@@ -20,6 +21,11 @@ would skip is refused here, so a lever never holds one. A game folder links the 
 a lever is never written through a path: whatever stands at its name is removed (a link, not its target) and the
 file is created anew by an open that refuses to follow a link or to find anything there, so a link that appears
 in between fails the open instead of taking the write.
+
+`--tune` writes `tagpu_impai_tune.on`, one `<seat>:<name>=<int>` a line: a seat's plan constant set in place of the
+DLL's hand-written value, for the automatic tuning (tune.py spsa). The names, ranges and integer encoding are
+TUNE_PARAMS', the interface specified for the brain writer (.data/impai/tune-lever-spec.md); a DLL that does not
+read the lever logs no `impai: tune` line, so a game that needs one could not run (bar.py).
 """
 import argparse
 import os
@@ -30,9 +36,52 @@ from pathlib import Path
 LEVER = "tagpu_impai_level.on"
 PERSONA_LEVER = "tagpu_impai_persona.on"
 INCOME_LEVER = "tagpu_impai_income.on"
+TUNE_LEVER = "tagpu_impai_tune.on"
 ITEM = re.compile(r"[0-9]=(easy|normal|hard)", re.IGNORECASE)
 INCOME = re.compile(r"[0-9]=([0-9]+)(?:\.([0-9]{1,3}))?")
 PERSONA = re.compile(r"[0-9]=([0-9]{1,6}(?:,[0-9]{1,6}){8})")
+TUNE = re.compile(r"([0-9]):([a-z_]{1,31})=(-?[0-9]{1,6})")
+
+# THE TUNE LEVER'S CONSTANTS: name -> (the hand-written value, the least, the most), each an integer; a constant the
+# DLL holds as a float is in thousandths (SCALE 1000), every other in its own unit. Where each lives and why its
+# range is what it is: .data/impai/tune-lever-spec.md. TUNE_ORDER names the pairs whose order must hold (the first
+# below the second; for the raid squad at most), as impai_plan_ok is to refuse a plan breaking one.
+TUNE_PARAMS = {
+    # the military (IMPAI_PLAN, impai_mil.c)
+    "attack_margin":   (100, -100, 400),
+    "retreat_margin":  (-50, -300, 100),
+    "wave_value":      (8000, 3000, 16000),
+    "lead_in":         (2500, 1500, 4000),
+    "lead_out":        (2000, 1200, 3500),
+    "press_k":         (1500, 500, 3000),
+    "press_hold":      (900, 300, 2700),
+    "rally_px":        (384, 128, 1024),
+    "scout_period":    (1800, 600, 5400),
+    "task_timeout":    (2700, 900, 5400),
+    "raid_min":        (3, 2, 5),
+    "raid_max":        (6, 3, 10),
+    "travel_cap":      (16200, 5400, 27000),
+    "com_stay_margin": (500, 0, 1000),
+    "aa_struct_v":     (1000, 250, 4000),
+    "def_max":         (4, 0, 4),
+    "def_v":           (600, 200, 2000),
+    "dgun_reserve":    (250, 0, 600),
+    # the economy (IMPAI_PLAN, impai_brain.c and impai_econ.c)
+    "open_mex":        (2, 1, 4),
+    "open_energy":     (2, 1, 4),
+    "open_t":          (1800, 600, 3600),
+    "factory_max":     (2, 1, 4),
+    "factory_per_m":   (8000, 4000, 16000),
+    "cons_max":        (12, 4, 20),
+    "army_per_cons":   (2, 1, 6),
+    "stall_pm":        (200, 50, 600),
+    "hold_fac":        (1, 1, 4),
+    "surplus_frac":    (800, 600, 950),
+}
+TUNE_SCALE = {n: 1000 for n in ("attack_margin", "retreat_margin", "wave_value", "lead_in", "lead_out", "press_k",
+                                "com_stay_margin", "dgun_reserve", "factory_per_m", "surplus_frac")}
+TUNE_ORDER = (("retreat_margin", "attack_margin", "below"), ("lead_out", "lead_in", "below"),
+              ("raid_min", "raid_max", "at most"), ("stall_pm", "surplus_frac", "below"))
 
 # impai_react.c: LOOK_MAX, APM_MAX, BURST_MAX; impai.h: IMPAI_IDLE_CAP, IMPAI_SQUADS
 LOOK_MAX, APM_MAX, BURST_MAX, IDLE_CAP, SQUADS = 150, 600, 60, 32, 16
@@ -69,6 +118,52 @@ def income_error(item: str) -> str | None:
     return None
 
 
+def tune_values(items: dict) -> dict:
+    """Every TUNE_PARAMS constant's value with `items` ({name: int}) in place of the hand-written ones."""
+    return {n: int(items.get(n, d)) for n, (d, _lo, _hi) in TUNE_PARAMS.items()}
+
+
+def tune_error(seat: int, items: dict) -> str | None:
+    """Why the DLL would refuse a seat's tune items {name: int}, or None when impai_plan_ok accepts the plan they
+    make with the hand-written values of the rest."""
+    if not 0 <= seat <= 9:
+        return f"seat {seat} is not one digit"
+    for n, v in items.items():
+        if n not in TUNE_PARAMS:
+            return f"names {n!r}, no constant of the lever"
+        _d, lo, hi = TUNE_PARAMS[n]
+        if not (isinstance(v, int) and lo <= v <= hi):
+            return f"has {n}={v} outside {lo}..{hi}"
+    vals = tune_values(items)
+    for lo_name, hi_name, how in TUNE_ORDER:
+        if vals[lo_name] > vals[hi_name] or (how == "below" and vals[lo_name] == vals[hi_name]):
+            return f"has {lo_name} {vals[lo_name]} not {how} {hi_name} {vals[hi_name]}"
+    return None
+
+
+def tune_lines(seat: int, items: dict) -> list[str]:
+    """The lever's lines of a seat's items, in TUNE_PARAMS' order."""
+    return [f"{seat}:{n}={items[n]}" for n in TUNE_PARAMS if n in items]
+
+
+def parse_tune(items: list[str]) -> dict:
+    """{seat: {name: int}} of `--tune` items `<seat>:<name>=<int>`; ValueError naming the first item refused."""
+    out = {}
+    for item in items:
+        m = TUNE.fullmatch(item)
+        if not m:
+            raise ValueError(f"{item} is not <seat>:<name>=<int>")
+        seat, name = int(m.group(1)), m.group(2)
+        if name in out.setdefault(seat, {}):
+            raise ValueError(f"{item} names {name} a second time for seat {seat}")
+        out[seat][name] = int(m.group(3))
+    for seat, its in out.items():
+        why = tune_error(seat, its)
+        if why:
+            raise ValueError(f"seat {seat} {why}")
+    return out
+
+
 def write_lever(gamedir: Path, name: str, items: list[str]) -> int:
     lever = gamedir / name
     lever.unlink(missing_ok=True)
@@ -91,9 +186,11 @@ def main(argv: list[str] | None = None) -> int:
                          "<att_eco>,<att_mil>")
     ap.add_argument("--income", action="append", default=[], metavar="SEAT=M",
                     help="<seat>=<m>: the seat's production times m, 1..8")
+    ap.add_argument("--tune", action="append", default=[], metavar="SEAT:NAME=INT",
+                    help=f"<seat>:<name>=<int>, a plan constant: {', '.join(TUNE_PARAMS)}")
     args = ap.parse_args(argv)
-    if not args.items and not args.persona and not args.income:
-        print("level_lever: name a level item, a --persona or an --income", file=sys.stderr)
+    if not args.items and not args.persona and not args.income and not args.tune:
+        print("level_lever: name a level item, a --persona, an --income or a --tune", file=sys.stderr)
         return 2
     if not args.gamedir.is_dir():
         print(f"level_lever: {args.gamedir} is not a folder", file=sys.stderr)
@@ -112,6 +209,13 @@ def main(argv: list[str] | None = None) -> int:
         if why:
             print(f"level_lever: --income {item} {why} (tagpu_income.c)", file=sys.stderr)
             return 2
+    try:
+        tune = parse_tune(args.tune)
+    except ValueError as e:
+        print(f"level_lever: --tune {e} (impai_plan_ok)", file=sys.stderr)
+        return 2
+    if tune and write_lever(args.gamedir, TUNE_LEVER, [ln for s in sorted(tune) for ln in tune_lines(s, tune[s])]):
+        return 2
     if args.items and write_lever(args.gamedir, LEVER, args.items):
         return 2
     if args.persona and write_lever(args.gamedir, PERSONA_LEVER, args.persona):

@@ -380,6 +380,9 @@ TABLE = re.compile(r"impai: table seat=(\d+) hash=([0-9a-f]{16}) from=(\w+)")
 # a seat's persona at its init, in the lever's order (tagpu_impai.c, impai_mil_init)
 PERSONA_LINE = re.compile(r"impai: persona seat=(\d+) level=\S+ look=(\d+),(\d+) react=(\d+) "
                           r"apm=(\d+)/(\d+),(\d+)/(\d+) att=(\d+),(\d+) from=(\w+)")
+# a seat's plan constants at its init when the tune lever set any (.data/impai/tune-lever-spec.md: every constant of
+# the lever's table, `<name>=<int>` in its integer encoding), `from=lever`; `from=row` when the lever set none
+TUNE_LINE = re.compile(r"impai: tune seat=(\d+) from=(lever|row) (.*)")
 # a seat the income lever armed, at the level init (tagpu_income.c, tagpu_income_level_init)
 INCOME_LINE = re.compile(r"income: seat=(\d+) mult=(\d+\.\d{3}) from=lever")
 ECO_END = re.compile(r"impai: eco seat=(\d+) (.*)")                       # the level end's (tagpu_impai.c)
@@ -445,7 +448,8 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     """The result of `game` already in `out`, or None: a game that ran (not could_not_run) on the same setup (THE
     SETUP; none for the base game) to the same cap, on the same renderer at the same pacing (a result that names
     none was drawn), from the same seed (THE SEED; none for a game that names none), each seat with the table it is
-    to play (a seat's table_hash, where the spec names one) and on the persona row it is to play (none for none)."""
+    to play (a seat's table_hash, where the spec names one), on the persona row and the tune lever's constants it
+    is to play (none for none)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
@@ -465,7 +469,7 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
         want = game["seats"][s].get("table_hash")
         if want and (r.get("tables") or {}).get(s) != want:
             return None
-        for key in ("persona", "income"):
+        for key in ("persona", "income", "tune"):
             if game["seats"][s].get(key) != ((r.get("seats") or {}).get(s) or {}).get(key):
                 return None
     return r
@@ -902,6 +906,25 @@ def personas(lines, seat: dict) -> dict:
     return out
 
 
+def tunes(lines, seat: dict) -> dict:
+    """{A, B: {"from": "lever" | "row", "values": {name: int}}} of each seat of `seat` from its tune line, its
+    first: the init's."""
+    by_seat = {v: k for k, v in seat.items()}
+    out = {}
+    for ln in lines:
+        m = TUNE_LINE.search(ln)
+        if m and int(m.group(1)) in by_seat:
+            vals = {}
+            for kv in m.group(3).split():
+                k, _, v = kv.partition("=")
+                try:
+                    vals[k] = int(v)
+                except ValueError:
+                    continue
+            out.setdefault(by_seat[int(m.group(1))], {"from": m.group(2), "values": vals})
+    return out
+
+
 def incomes(lines, seat: dict) -> dict:
     """{A, B: the multiplier} of each seat of `seat` the income lever armed, from its level init's line; a seat
     played at x1 is absent."""
@@ -1245,6 +1268,14 @@ class Lane:
         self.lever(level_lever.PERSONA_LEVER, persona)
         income = {s: game["seats"][s]["income"] for s in ("A", "B") if game["seats"][s].get("income")}
         self.lever(level_lever.INCOME_LEVER, [f"{seat[s]}={m:.3f}" for s, m in income.items()])
+        tune = {s: game["seats"][s]["tune"] for s in ("A", "B")
+                if game["seats"][s]["ai"] == "impai" and game["seats"][s].get("tune")}
+        for s, items in tune.items():
+            why = level_lever.tune_error(seat[s], items)
+            if why:
+                raise BarError(f"{game['id']}: the tune items of seat {s} {why} (impai_plan_ok)")
+        self.lever(level_lever.TUNE_LEVER,
+                   [ln for s, its in tune.items() for ln in level_lever.tune_lines(seat[s], its)])
         self.log = R.Log(self.w)
         if takeover:
             # A PUZZLE: the recording taken over at T as OTA AI's seat, the level held at the refresh at or before T
@@ -1323,6 +1354,11 @@ class Lane:
             if want and (got.get("row"), got.get("from")) != (want, "lever"):
                 raise R.CouldNotRun(f"seat {s} did not play its persona {want} from the lever (its persona line: "
                                     f"{got.get('row')} from {got.get('from')})")
+        for s, items in tune.items():
+            got = tunes(lines[:upto], seat).get(s)
+            if got != {"from": "lever", "values": level_lever.tune_values(items)}:
+                raise R.CouldNotRun(f"seat {s} did not play its tune items from the lever (its `impai: tune` line: "
+                                    f"{got or 'none, a DLL without the tune lever'})")
         armed = incomes(lines[:upto], seat)
         if armed != income:
             raise R.CouldNotRun(f"the income lever armed {armed or 'no seat'}, not {income or 'no seat'} (the "
@@ -2076,36 +2112,65 @@ def default_out(a, what=None) -> Path:
 
 def settings_override(items: list) -> dict:
     """{A or B: the persona lever's row or None} of `play --persona` items `<seat>=<settings>`, each a PERSONA_ROWS
-    row or HARD_ROW (no persona: the DLL's own level); BarError for any other item or a seat named twice."""
+    row, HARD_ROW (no persona: the DLL's own level) or the lever's nine integers themselves, held to
+    impai_persona_ok's rules (a tuning's candidate row); BarError for any other item or a seat named twice."""
     out = {}
     for item in items or []:
         seat, _, row = item.partition("=")
-        if seat not in ("A", "B") or seat in out or (row != HARD_ROW and row not in PERSONA_ROWS):
-            raise BarError(f"--persona {item!r}: <A|B>=<{HARD_ROW} or a row of {', '.join(PERSONA_ROWS)}>, a seat once")
-        out[seat] = PERSONA_ROWS.get(row)
+        literal = level_lever.PERSONA.fullmatch(f"1={row}") is not None
+        if seat not in ("A", "B") or seat in out or (row != HARD_ROW and row not in PERSONA_ROWS and not literal):
+            raise BarError(f"--persona {item!r}: <A|B>=<{HARD_ROW}, a row of {', '.join(PERSONA_ROWS)} or nine "
+                           f"integers>, a seat once")
+        if literal:
+            why = level_lever.persona_error(f"1={row}")
+            if why:
+                raise BarError(f"--persona {item!r} {why} (impai_persona_ok)")
+        out[seat] = PERSONA_ROWS.get(row, None if row == HARD_ROW else row)
     return out
 
 
-def with_settings(game: dict, override: dict) -> dict:
+def tune_override(items: list) -> dict:
+    """{A or B: {name: int}} of `play --tune` items `<seat>=<name>=<int>,...`, each seat's items held to the tune
+    lever's rules (level_lever.tune_error); BarError for any other item or a seat named twice."""
+    out = {}
+    for item in items or []:
+        seat, _, rest = item.partition("=")
+        if seat not in ("A", "B") or seat in out:
+            raise BarError(f"--tune {item!r}: <A|B>=<name>=<int>,..., a seat once")
+        try:
+            got = level_lever.parse_tune([f"1:{kv}" for kv in rest.split(",") if kv])
+        except ValueError as e:
+            raise BarError(f"--tune {item!r}: {e}") from e
+        out[seat] = got.get(1, {})
+    return out
+
+
+def with_settings(game: dict, override: dict, tune: dict = None) -> dict:
     """`game` with each seat of `override` on its settings (settings_override): the id, and so the seed, unchanged,
     so two settings play the same games; a result carries the seat's persona, which game_kept compares, so a result
     of other settings is never kept. BarError for a seat ImpAI does not play."""
-    if not override:
+    if not override and not tune:
         return game
     seats = {s: dict(v) for s, v in game["seats"].items()}
-    for s, persona in override.items():
+    for s, persona in (override or {}).items():
         if seats[s]["ai"] != "impai":
             raise BarError(f"{game['id']}: --persona {s}: seat {s} is {seats[s]['ai']}, not ImpAI")
         seats[s].pop("persona", None)
         if persona:
             seats[s]["persona"] = persona
+    for s, items in (tune or {}).items():
+        if seats[s]["ai"] != "impai":
+            raise BarError(f"{game['id']}: --tune {s}: seat {s} is {seats[s]['ai']}, not ImpAI")
+        seats[s].pop("tune", None)
+        if items:
+            seats[s]["tune"] = dict(items)
     return dict(game, seats=seats)
 
 
 def cmd_play(a) -> int:
     values = [int(t) for t in a.values.split(",") if t] if a.values else []
-    override = settings_override(a.persona)
-    return play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override)
+    override, tune = settings_override(a.persona), tune_override(a.tune)
+    return play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override, tune)
                        for g in read_ids(a.ids)], a, default_out(a))
 
 
@@ -2181,7 +2246,11 @@ def main(argv=None) -> int:
                          "shorter piece's; the bar's games end at 81 000")
     pl.add_argument("--persona", action="append", default=[], metavar="SEAT=SETTINGS",
                     help=f"play seat A or B on the persona row SETTINGS, or {HARD_ROW} for none, in every game, the "
-                         f"ids and seeds unchanged (the paired margin test's settings arms)")
+                         f"ids and seeds unchanged (the paired margin test's settings arms); SETTINGS may be the "
+                         f"lever's nine integers themselves")
+    pl.add_argument("--tune", action="append", default=[], metavar="SEAT=NAME=INT,...",
+                    help="play seat A or B with these plan constants through the tune lever in every game, the ids "
+                         "and seeds unchanged (tune.py spsa; level_lever.TUNE_PARAMS)")
     pl.add_argument("--values", default=None, metavar="T,T",
                     help="also read every seat's value at these GameTimes from each game's recording, those the "
                          "game reached before its end (`values` in the result; the paired margin test's report)")
