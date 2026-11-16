@@ -111,10 +111,11 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   | `m:Happm` | 15 | 0 | 4, 0, 5 | 0.875 | 4.74 |
 
   No row loses 90 of 100 to Hard at this rate: even L0b, the harshest, drew 6 of its 20 at the cap, every one on
-  Steel Jungle or Lava Alley, where 24 of the 33 caps of the four rows lie. The budgets alone (Happm) cost B as
-  much as every axis at L0b's harshness; the looks alone (Hlook) the least. Two blocks are no look of the
-  ordering, so these t judge nothing. Each row played as one `bar.py play` at 10 lanes in 6.6 to 9.4 min on the
-  reference setup.
+  Steel Jungle or Lava Alley, where 24 of the 33 caps of the four rows lie. Of the axes, on 20 games a row, the
+  budgets cost B the most -- alone (Happm) as much as every axis at L0b's harshness -- and the looks the least
+  (Hlook). Two blocks are no look of the ordering, so these t judge nothing. Each row played as one `bar.py play`
+  at 10 lanes in 6.6 to 9.4 min on the reference setup. The draws on those two maps are a weakness of the brain's,
+  so the rows are chosen in the mirror on the brain that ships, once its fix has landed.
 
 - **The seed**: each game's own, a function of its id alone -- the first four bytes of the SHA-256 of
   `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
@@ -395,29 +396,32 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   a function of the results alone.
 - **The floor**: m and v are taken over the pairs and one pseudo-pair, half a pair better and half worse. It moves
   no mean and gives v the spread of one non-tied pair, so a run with no pair or all ties divides by no zero. n
-  ties read ±(s1 − s0)² (n + 1)² / 0.5: at the width of 0.10 the bound is first reached at 12 ties, so one block
-  of ties decides (±5.78). At a width of 0.05 one block could not (±1.44 at 16, the bound first at 24).
-- **The cost**, simulated (`margin.py asn`: 2000 seeded runs a row, blocks of 16, every row in its output), by the
-  true mean score and the share of pairs tied. NOT-WORSE, from a clear slowdown (0.40, H0) through its
-  hypotheses' midpoint 0.45 to a batch that changes nothing measurable (0.50, H1); IMPROVE mirrors it, accept and
-  reject swapped (at 0.50 with 0.3 tied: reject 0.853, no decision 0.113, 104 pairs; at its midpoint 0.55, 0.370
-  no decision):
+  ties read ±(s1 − s0)² (n + 1)² / 0.5: at the width of 0.10 the bound is first reached at 12 ties (±5.78 at 16).
+- **The minimum sample**: the ratio is not read before block 2 (`MIN_BLOCKS`), whatever it reads at block 1: one
+  block of 16 seeds is too few to call a change not worse even when every game ties.
+  So identical code accepts NOT-WORSE at block 2 (±21.78), and so does any run whose first block is already past a
+  bound -- 16 pairs worse read −25.05 at block 1 and reject at block 2.
+- **The cost**, simulated (`margin.py asn`: 2000 seeded runs a row, blocks of 16, the minimum sample included,
+  every row in its output), by the true mean score and the share of pairs tied. NOT-WORSE, from a clear slowdown
+  (0.40, H0) through its hypotheses' midpoint 0.45 to a batch that changes nothing measurable (0.50, H1); IMPROVE
+  mirrors it, accept and reject swapped (at 0.50 with 0.3 tied: reject 0.866, no decision 0.108, 106 pairs; at
+  its midpoint 0.55, 0.372 no decision):
 
   | true mean, ties | accept | reject | no decision at 200 | pairs played | pairs, no cap |
   |---|---|---|---|---|---|
-  | 0.400, 0.3 | 0.031 | 0.866 | 0.103 | 101 | 110 |
-  | 0.425, 0.3 | 0.109 | 0.619 | 0.272 | 129 | 164 |
-  | 0.450, 0.0 | 0.238 | 0.276 | 0.486 | 157 | 275 |
-  | 0.450, 0.3 | 0.291 | 0.323 | 0.386 | 143 | 218 |
-  | 0.450, 0.6 | 0.420 | 0.410 | 0.170 | 111 | 132 |
-  | 0.500, 0.0 | 0.733 | 0.041 | 0.227 | 128 | 154 |
-  | 0.500, 0.3 | 0.850 | 0.033 | 0.118 | 105 | 115 |
-  | 0.500, 0.6 | 0.950 | 0.029 | 0.021 | 71 | 72 |
-  | 0.500, 0.9 | 0.999 | 0.001 | 0.000 | 29 | 29 |
-  | 0.550, 0.3 | 0.995 | 0.002 | 0.004 | 63 | 63 |
+  | 0.400, 0.3 | 0.029 | 0.864 | 0.108 | 103 | 112 |
+  | 0.425, 0.3 | 0.112 | 0.620 | 0.269 | 130 | 165 |
+  | 0.450, 0.0 | 0.231 | 0.278 | 0.492 | 158 | 280 |
+  | 0.450, 0.3 | 0.294 | 0.316 | 0.390 | 144 | 216 |
+  | 0.450, 0.6 | 0.421 | 0.402 | 0.177 | 114 | 136 |
+  | 0.500, 0.0 | 0.728 | 0.041 | 0.232 | 130 | 156 |
+  | 0.500, 0.3 | 0.860 | 0.034 | 0.107 | 104 | 113 |
+  | 0.500, 0.6 | 0.946 | 0.033 | 0.022 | 73 | 74 |
+  | 0.500, 0.9 | 0.999 | 0.002 | 0.000 | 36 | 36 |
+  | 0.550, 0.3 | 0.997 | 0.002 | 0.002 | 64 | 64 |
 
-  A batch that changes nothing, with a third of pairs tied, decides in about 7 blocks (105 pairs) and ends at the
-  200-pair cap with NO DECISION 12 % of the time; at the midpoint, 39 %. `asn --width` and `--alpha` price other
+  A batch that changes nothing, with a third of pairs tied, decides in about 7 blocks (104 pairs) and ends at the
+  200-pair cap with NO DECISION 11 % of the time; at the midpoint, 39 %. `asn --width` and `--alpha` price other
   hypotheses (at 0.50 with 0.3 tied, no cap: width 0.05, 418 pairs; width 0.10 with α = β = 0.1, 87). At the
   hypotheses both errors stay below α in every simulated row of both modes, at most 0.041.
 - **Reported, not judged**: the paired mean of ln(`end_tick`), TEST − BASE, over the pairs both arms won; and
@@ -438,12 +442,12 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
   decision.
 - **Identical code**: a seed replays a game exactly, so the same DLL in both arms ties every pair, and the test
-  accepts NOT-WORSE (rejects IMPROVE) at the first block. MEASURED 2026-11-15, the 57d39d71 build as BASE and
-  TEST, NOT-WORSE, two blocks at 4 lanes an arm and again from nothing at 6: 32 pairs, 32 ImpAI wins an arm,
-  all 32 on the same `end_tick` (27 556 to 74 829) with the same values in both arms and both runs. Judged at
-  the hypotheses above, block 1 reads +5.78, TEST is not worse; the blocks at 6 lanes played in 5.2 and 4.3 min
-  on the reference setup beside round 3 of the bar. A change that alters play diverges its games from the first
-  different decision, so its pairs tie only when both reach the cap.
+  accepts NOT-WORSE (rejects IMPROVE) at the minimum sample, block 2. MEASURED 2026-11-15, the 57d39d71 build as
+  BASE and TEST, NOT-WORSE, two blocks at 4 lanes an arm and again from nothing at 6: 32 pairs, 32 ImpAI wins an
+  arm, all 32 on the same `end_tick` (27 556 to 74 829) with the same values in both arms and both runs. Judged
+  as above, +5.78 after block 1 (not read) and +21.78 after block 2, TEST is not worse; the blocks at 6 lanes
+  played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters play diverges
+  its games from the first different decision, so its pairs tie only when both reach the cap.
 
 ## When the default flips
 

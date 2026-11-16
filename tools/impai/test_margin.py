@@ -2,7 +2,7 @@
 """test_margin -- the paired margin test offline: the order and its blocks, the pairing's refusals (a seed
 mismatch, a result with no partner, an id twice in one arm, a game that could not run), the tie band and each
 pair's sign, the loss rule, the GSPRT's ratio against hand-computed references, its floor (no pair, and runs of
-ties), identical games accepting NOT-WORSE and rejecting IMPROVE at the first block, its stopping rule (the first
+ties), identical games accepting NOT-WORSE and rejecting IMPROVE at the minimum sample, its stopping rule (the first
 block at a bound decides, the blocks after it unread, no decision at the end of the order), the simulated cost's
 error rates at the hypotheses, and `run` on a fake player: it stops at the verdict, plays a block with a game
 that could not run once more, and refuses a directory of other DLLs. No game runs and no scipy is needed.
@@ -131,15 +131,19 @@ class TestGsprt(unittest.TestCase):
             self.assertAlmostEqual(margin.llr(0, n, 0, 0.40, 0.50), x)
             self.assertAlmostEqual(margin.llr(0, n, 0, 0.50, 0.60), -x)
 
-    def test_identical_games_accept_notworse_and_reject_improve_in_the_first_block(self):
+    def test_identical_games_decide_at_the_minimum_sample_not_before(self):
         base, test = arms([(30000, 30000)] * 48)                         # every pair the same end tick
+        self.assertEqual(margin.MIN_BLOCKS, 2)
         for mode, ex, verdict in (("notworse", margin.ACCEPT, "TEST is not worse"),
                                   ("improve", margin.REJECT, "TEST is not measurably better")):
             v = margin.verdict(base, test, mode)
             self.assertEqual((v["exit"], v["blocks"], v["pairs"], v["ties"], v["verdict"]),
-                             (ex, 1, 16, 16, verdict))
-            self.assertEqual(len(v["unread"]), 32)
-            self.assertAlmostEqual(abs(v["llr"]), 5.78)
+                             (ex, 2, 32, 32, verdict))
+            self.assertEqual(len(v["unread"]), 16)
+            self.assertAlmostEqual(abs(v["trace"][0][1]), 5.78)         # past the bound at block 1, not read
+            self.assertAlmostEqual(abs(v["llr"]), 21.78)
+            b1, t1 = arms([(30000, 30000)] * 16)
+            self.assertEqual(margin.verdict(b1, t1, mode)["exit"], margin.UNDECIDED)
 
     def test_a_test_loss_fails_outright_whatever_the_scores(self):
         base, test = arms(block(16, 0, 0)[:15] + [(30000, None)] + block(16, 0, 0))
@@ -156,11 +160,17 @@ class TestGsprt(unittest.TestCase):
         self.assertEqual((v["exit"], v["blocks"], v["pairs"], v["verdict"]), (margin.ACCEPT, 2, 32, "TEST is better"))
         self.assertAlmostEqual(v["llr"], 7.55633, places=5)
         self.assertEqual(len(v["unread"]), 16)
-        # notworse: a block of 16 worse reads -25.05, past ln(1/19) in one block
+        # THE MINIMUM SAMPLE: a block of 16 worse reads -25.05, past ln(1/19), and is not read alone; the second
+        # block decides
         base, test = arms(block(0, 0, 16))
         v = margin.verdict(base, test, "notworse")
-        self.assertEqual((v["exit"], v["blocks"], v["verdict"]), (margin.REJECT, 1, "TEST is worse"))
+        self.assertEqual((v["exit"], v["blocks"], v["verdict"]),
+                         (margin.UNDECIDED, 1, "no decision yet after 1 blocks"))
         self.assertAlmostEqual(v["llr"], -25.0467, places=3)
+        base, test = arms(block(0, 0, 16) + block(0, 0, 16))
+        v = margin.verdict(base, test, "notworse")
+        self.assertEqual((v["exit"], v["blocks"], v["verdict"]), (margin.REJECT, 2, "TEST is worse"))
+        self.assertAlmostEqual(v["trace"][0][1], -25.0467, places=3)
         # an incomplete block is not read
         base, test = arms(block(10, 2, 4) + block(4, 0, 0))
         v = margin.verdict(base, test, "improve")
@@ -179,11 +189,11 @@ class TestGsprt(unittest.TestCase):
 
     def test_the_simulated_cost(self):
         rng = random.Random(3)
-        # all ties: every run decides where the floor says -- the second block at width 0.05, the first at 0.10
+        # all ties: every run decides at the minimum sample, the second block, at either width
         r = margin.simulate(0.5, 1.0, 0.45, 0.50, margin.ALPHA, 50, rng)
         self.assertEqual((r["accept"], r["pairs"], r["open"]), (1.0, 32, 32))
         r = margin.simulate(0.5, 1.0, *margin.MODES["notworse"], margin.ALPHA, 50, rng)
-        self.assertEqual((r["accept"], r["pairs"], r["open"]), (1.0, 16, 16))
+        self.assertEqual((r["accept"], r["pairs"], r["open"]), (1.0, 32, 32))
         # at H0 and H1 the open-ended test errs about alpha (the normal approximation and the block steps: 0.035)
         for mode, (s0, s1) in margin.MODES.items():
             r0 = margin.simulate(s0, 0.3, s0, s1, margin.ALPHA, 600, rng)
@@ -231,13 +241,13 @@ class TestRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
             play, played = self.fake(lambda i: (40000, 30000))
             self.assertEqual(self.run_(d, play), margin.ACCEPT)
-            self.assertEqual(played, [1])                               # 16 better pairs read +13.27
+            self.assertEqual(played, [1, 2])                            # block 1 is past the bound, not read
 
     def test_a_block_with_a_game_that_could_not_run_is_played_once_more(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):
             play, played = self.fake(lambda i: (40000, "cnr" if i == 3 else 30000))
             self.assertEqual(self.run_(d, play), margin.ACCEPT)
-            self.assertEqual(played, [1, 1])
+            self.assertEqual(played, [1, 1, 2])
 
     def test_a_directory_of_other_dlls_is_refused(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {"TARUN_DIR": d}):

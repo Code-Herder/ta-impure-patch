@@ -36,11 +36,13 @@ against the bounds ln(beta / (1 - alpha)) and ln((1 - beta) / alpha), +-ln 19 at
 A tie scores 0.5 and stays in: it lowers the variance, so a run of ties is evidence the arms play alike rather
 than no evidence. THE FLOOR: m and v are taken over the pairs and one pseudo-pair, half a pair better and half a
 pair worse. It moves no mean and gives v the spread of one non-tied pair, so an all-tie run divides by no zero:
-n ties read +-(s1 - s0)^2 (n + 1)^2 / 0.5, which at the hypotheses' width 0.10 first reaches the bound at 12 ties
--- one block of ties decides, at +-5.78.
-The test is read after each whole block, in ORDER, both arms' every game of it played: the first block at which
-the ratio reaches a bound decides, and the blocks after it are not read. With every block of ORDER read and no
-bound reached, the verdict is NO DECISION. The verdict is a function of the games' results alone.
+n ties read +-(s1 - s0)^2 (n + 1)^2 / 0.5, which at the hypotheses' width 0.10 first reaches the bound at 12 ties.
+THE MINIMUM SAMPLE: the ratio is not read before block MIN_BLOCKS (2), since one block of 16 seeds is too few to
+call a change not worse even when every game ties; one block of ties reads +-5.78 and two +-21.78.
+The test is read after each whole block from the MIN_BLOCKS'th on, in ORDER, both arms' every game of it played:
+the first block at which the ratio reaches a bound decides, and the blocks after it are not read. With every block
+of ORDER read and no bound reached, the verdict is NO DECISION. The verdict is a function of the games' results
+alone.
 
 REPORTED, not judged: the paired mean of ln(end_tick), TEST - BASE, over the pairs both arms won; and with the
 results' `values` (`bar.py play --values`, which `run` asks at VALUE_TIMES), the paired mean of ln(value A /
@@ -86,6 +88,7 @@ MODES = {"improve": (0.50, 0.60), "notworse": (0.40, 0.50)}
 VERDICTS = {"improve": ("TEST is better", "TEST is not measurably better"),
             "notworse": ("TEST is not worse", "TEST is worse")}
 PSEUDO = 0.5                # THE FLOOR: the weight of the pseudo-pair's better half, and of its worse half
+MIN_BLOCKS = 2              # THE MINIMUM SAMPLE: the ratio is not read before this block
 VALUE_TIMES = (15000, 30000)
 MAX_LANES = 7
 ACCEPT, REJECT, COULD_NOT, UNDECIDED = 0, 1, 2, 3
@@ -208,7 +211,7 @@ def verdict(base: dict, test: dict, mode: str) -> dict:
         out["llr"] = llr(out["better"], out["ties"], out["worse"], s0, s1)
         out["mean"] = (out["better"] + 0.5 * out["ties"]) / out["pairs"]
         out["trace"].append((k, out["llr"]))
-        if out["llr"] >= hi or out["llr"] <= lo:
+        if k >= MIN_BLOCKS and (out["llr"] >= hi or out["llr"] <= lo):
             decided = out["llr"] >= hi
             break
     out["unread"] = sorted(set(ps) - set(out["read"]))
@@ -281,13 +284,13 @@ def simulate(mean: float, tie: float, s0: float, s1: float, alpha: float, runs: 
     tally = {"accept": 0, "reject": 0, "none": 0, "pairs": 0, "open": 0, "open_none": 0}
     for _ in range(runs):
         c, n, capped = [0, 0, 0], 0, None
-        for size in sizes:
+        for k, size in enumerate(sizes, 1):
             for _ in range(size):
                 u = rng.random()
                 c[0 if u < pb else 1 if u < pb + pt else 2] += 1
             n += size
             x = llr(c[0], c[1], c[2], s0, s1)
-            done = "accept" if x >= hi else "reject" if x <= lo else None
+            done = None if k < MIN_BLOCKS else "accept" if x >= hi else "reject" if x <= lo else None
             if capped is None and (done or n >= CAP_PAIRS):
                 capped = done or "none"
                 tally[capped] += 1
