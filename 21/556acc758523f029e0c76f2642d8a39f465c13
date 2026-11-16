@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5-5 effort=medium range=8e8a2c0b..21556acc fixes=f41f2061 findings=5 acted=5 rejected=0 date=2026-11-16
+Drawing board landing 3 (allies' pointers). One fresh read-only reviewer.
+1 MED minimap dot used cur_z; the arm's y is projected (GetTPosition 0x484B50 matches z-(h>>1), 0x484BD6..0x484BEB) -> dot from z-floor(h/2); re-verified live, dot inside the view box.
+2 MED remote cur_x/h/z unbounded (rec_pov_ok does not range them); one past TAGPU_BW_COORD fails the acquire every frame -> left out in tagpu_board_fill.
+3 LOW doc: watcher pointer claim unmeasured -> stated as not measured.
+4 LOW doc: 'a pointer on the HUD is not drawn' -> minimap pointers are drawn.
+5 LOW glyph bucket overflow drops pointer names first -> documented (needs ~130 long labels).
+checked sound: MAXBDQ room (81 of 96 vertices a pointer), s_bdq a triangle list, reach/snap, len 0, flag check, palette index range, extent guards, applied_tick and s_mp_tick one clock, thread/lifetime of s_mp_pov, roster seat numbering.
