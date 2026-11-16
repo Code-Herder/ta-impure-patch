@@ -23,7 +23,8 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
     m:<row> ImpAI Hard (no limits) against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard: THE MIRROR
     n:<row> ImpAI on Normal's row NORMAL_ROW against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard:
            THE MIRROR, which decides Easy's row once Normal's is chosen
-    dry    OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
+    h:<m>  ImpAI Hard against OTA AI, Difficulty Hard, OTA AI's production times m (the income lever): THE HANDICAP
+    dry   OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
            rate before ImpAI fights
 
 eota, nota and hota are 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A
@@ -36,7 +37,16 @@ game n = 2b - 1 (A at the map's first start) and 2b (its second) of each map, wi
 map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each once every four blocks.
 `ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games and a list cut there is
 whole blocks. The blocks a pair is played to are its run set's: eoh and noh 12 (120 games), ne and hn 10, a
-calibration row 4, a mirror pair 10 (`ids --blocks N` for more, as THE ORDERING's third look asks of the ladder's).
+calibration row 4, a mirror pair 10, a handicap pair 2 (`ids --blocks N` for more, as THE ORDERING's third look asks
+of the ladder's).
+
+THE HANDICAP. `h:<m>` gives OTA AI's seat the income lever tagpu_impai_income.on at m (tagpu/ddraw/src/
+tagpu_income.c: the seat's production times m at every economy pass, m three places in 1.000..8.000), so one
+multiplier is one pair, its games their own seeds; a game could not run unless the level init's `income: seat=`
+lines name exactly the seats the game armed, at their multipliers (incomes). Its two blocks are one look of the
+handicap ladder (ladder.py), which finds the multiplier at which ImpAI Hard falls to half the points; `judge`
+reports a handicap pair's points and judges nothing. THE CHEAT FLAG reads an OTA AI seat's income divided by its
+multiplier.
 
 THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), and the rows between and
 below them (L01, L0a, L0b) and those that cut one axis from Hard's (Hlook, Hreact, Happm, Hatt), each nine
@@ -323,6 +333,12 @@ CALIBRATION = "p:"                      # a calibration pair's name: `p:<row>`
 # `n:<row>`: A on Normal's row, NORMAL_ROW, through the lever too. Each is judged as the ladder is.
 MIRROR, NORMAL_MIRROR = "m:", "n:"
 NORMAL_ROW = "L3"                       # Normal's row: the DLL's, until the calibration chooses another
+# THE HANDICAP: `h:<m>`, ImpAI Hard against OTA AI at Hard with OTA AI's production times m through the income
+# lever, m written with three places in 1.000..8.000 (the lever's own precision), so one multiplier is one pair and
+# its games one set of seeds. A look of the handicap ladder (ladder.py) is HANDICAP_BLOCKS of its blocks.
+HANDICAP = "h:"
+HANDICAP_RX = re.compile(r"h:([1-8]\.[0-9]{3})")
+HANDICAP_BLOCKS = 2
 # THE BLOCKS: a block is every map of its pool played once from each start, 10 games on five maps; block b plays
 # game n = 2b - 1 (A at the first start) and 2b (A at the second) of each map, with the side pairing
 # BLOCK_SIDES[(the map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each
@@ -352,6 +368,8 @@ TABLE = re.compile(r"impai: table seat=(\d+) hash=([0-9a-f]{16}) from=(\w+)")
 # a seat's persona at its init, in the lever's order (tagpu_impai.c, impai_mil_init)
 PERSONA_LINE = re.compile(r"impai: persona seat=(\d+) level=\S+ look=(\d+),(\d+) react=(\d+) "
                           r"apm=(\d+)/(\d+),(\d+)/(\d+) att=(\d+),(\d+) from=(\w+)")
+# a seat the income lever armed, at the level init (tagpu_income.c, tagpu_income_level_init)
+INCOME_LINE = re.compile(r"income: seat=(\d+) mult=(\d+\.\d{3}) from=lever")
 ECO_END = re.compile(r"impai: eco seat=(\d+) (.*)")                       # the level end's (tagpu_impai.c)
 MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ (.*)")
 MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) scout=(\d+)")   # tasks begun
@@ -433,8 +451,9 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
         want = game["seats"][s].get("table_hash")
         if want and (r.get("tables") or {}).get(s) != want:
             return None
-        if game["seats"][s].get("persona") != ((r.get("seats") or {}).get(s) or {}).get("persona"):
-            return None
+        for key in ("persona", "income"):
+            if game["seats"][s].get(key) != ((r.get("seats") or {}).get(s) or {}).get(key):
+                return None
     return r
 
 
@@ -449,15 +468,35 @@ def pair_spec(pair: str) -> tuple:
     if pair in PAIRS:
         diff, a, b = PAIRS[pair]
         return diff, a + (None,), b + (None,)
+    if pair.startswith(HANDICAP):
+        income_of(pair)
+        return "hard", ("impai", "hard", None), ("ai", None, None)
     kind = next((k for k in (CALIBRATION, MIRROR, NORMAL_MIRROR) if pair.startswith(k)), None)
     row = pair[len(kind):] if kind else None
     if row not in PERSONA_ROWS:
         raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}, or {CALIBRATION}, {MIRROR} or {NORMAL_MIRROR}<row> "
-                       f"of {', '.join(PERSONA_ROWS)}")
+                       f"of {', '.join(PERSONA_ROWS)}, or {HANDICAP}<m>")
     if kind == CALIBRATION:
         return "hard", ("impai", "hard", PERSONA_ROWS[row]), ("ai", None, None)
     a = PERSONA_ROWS[NORMAL_ROW] if kind == NORMAL_MIRROR else None
     return "hard", ("impai", "hard", a), ("impai", "hard", PERSONA_ROWS[row])
+
+
+def income_of(pair: str):
+    """OTA AI's income multiplier of a handicap pair `h:<m>` (THE HANDICAP), a float; None for any other pair.
+    BarError for an `h:` pair whose m is not three places in 1.000..8.000, the items the income lever takes
+    (level_lever.income_error)."""
+    if not pair.startswith(HANDICAP):
+        return None
+    m = HANDICAP_RX.fullmatch(pair)
+    if not m or level_lever.income_error(f"1={m.group(1)}"):
+        raise BarError(f"no pair {pair!r}: a handicap pair is {HANDICAP}<m>, m three places in 1.000..8.000")
+    return float(m.group(1))
+
+
+def handicap_pair(mult: float) -> str:
+    """The handicap pair of OTA AI's multiplier `mult`, rounded to the lever's three places."""
+    return f"{HANDICAP}{round(mult, 3):.3f}"
 
 
 def persona_pair(pair: str) -> bool:
@@ -471,13 +510,15 @@ def ladder_pair(pair: str) -> bool:
 
 
 def block_pair(pair: str) -> bool:
-    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's, the calibration's and the
-    mirror's."""
-    return pair in BLOCKS or persona_pair(pair)
+    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's, the calibration's, the
+    mirror's and the handicap's."""
+    return pair in BLOCKS or persona_pair(pair) or pair.startswith(HANDICAP)
 
 
 def run_blocks(pair: str) -> int:
     """The blocks a block pair is played to: its run set's."""
+    if pair.startswith(HANDICAP):
+        return HANDICAP_BLOCKS
     return BLOCKS.get(pair) or (CALIBRATION_BLOCKS if pair.startswith(CALIBRATION) else MIRROR_BLOCKS)
 
 
@@ -530,6 +571,8 @@ def parse_id(gid: str) -> dict:
         spec[s] = {"ai": ai, "level": level}
         if persona:
             spec[s]["persona"] = persona
+    if pair.startswith(HANDICAP):
+        spec["B"]["income"] = income_of(pair)
     return {"id": gid, "pair": pair, "map": m, "sides": {"A": SIDE[sides[0]], "B": SIDE[sides[1]]},
             "start": 0 if n % 2 else 1, "rep": n, "difficulty": diff, "seats": spec, "cap": CAP,
             "seed": game_seed(gid), "recordings": True}
@@ -823,6 +866,18 @@ def personas(lines, seat: dict) -> dict:
     return out
 
 
+def incomes(lines, seat: dict) -> dict:
+    """{A, B: the multiplier} of each seat of `seat` the income lever armed, from its level init's line; a seat
+    played at x1 is absent."""
+    by_seat = {v: k for k, v in seat.items()}
+    out = {}
+    for ln in lines:
+        m = INCOME_LINE.search(ln)
+        if m and int(m.group(1)) in by_seat:
+            out.setdefault(by_seat[int(m.group(1))], float(m.group(2)))
+    return out
+
+
 def read_result(lines, seat: dict, game: dict, outcome: str, end: int, upto: int = None) -> dict:
     """What a game's result takes from its launch's log, the level ended: each seat's table hash from its
     `impai: table` line; and for each ImpAI seat its persona (personas), its stalls, its level end (level_end),
@@ -944,7 +999,9 @@ def cheat_evidence(rs) -> list:
             if r["seats"][s]["ai"] == "impai":
                 impai.setdefault(side, (inc[s], r["id"]))
             else:
-                ota.append((side, r.get("difficulty", "hard"), inc[s], r["id"]))
+                # a handicap game's multiplier is the harness's, not the setup's: its income is read divided by it
+                k = r["seats"][s].get("income") or 1.0
+                ota.append((side, r.get("difficulty", "hard"), {key: v / k for key, v in inc[s].items()}, r["id"]))
             for name, n in ((r.get("ai_only") or {}).get(s) or {}).items():
                 if r["seats"][s]["ai"] != "impai":
                     got = types.setdefault(name, [0, r["id"]])
@@ -1129,6 +1186,8 @@ class Lane:
         self.lever(LEVER_LEVEL, levels)
         self.lever(LEVER_TABLE, tables)
         self.lever(level_lever.PERSONA_LEVER, persona)
+        income = {s: game["seats"][s]["income"] for s in ("A", "B") if game["seats"][s].get("income")}
+        self.lever(level_lever.INCOME_LEVER, [f"{seat[s]}={m:.3f}" for s, m in income.items()])
         self.log = R.Log(self.w)
         rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
                         timeout=R.LAUNCH_TIMEOUT)
@@ -1180,6 +1239,10 @@ class Lane:
             if want and (got.get("row"), got.get("from")) != (want, "lever"):
                 raise R.CouldNotRun(f"seat {s} did not play its persona {want} from the lever (its persona line: "
                                     f"{got.get('row')} from {got.get('from')})")
+        armed = incomes(lines[:upto], seat)
+        if armed != income:
+            raise R.CouldNotRun(f"the income lever armed {armed or 'no seat'}, not {income or 'no seat'} (the "
+                                f"`income: seat=` lines at the level init; tagpu_income.c)")
         res["level_end_at"] = level_end_at(lines)
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
@@ -1690,6 +1753,10 @@ def judge_blocks(pair: str, rs) -> tuple:
         if stalled:
             print(f"  stalls, each a failure (the no-stall rule): {_ids(stalled)}")
         return int(not met or bool(stalled)), 0
+    if pair.startswith(HANDICAP):
+        print(f"  against OTA AI at x{income_of(pair):.3f}: {'at or above' if mean >= 0.5 else 'below'} half the "
+              f"points, reported; the ladder (ladder.py) reads every look's games together")
+        return 0, 0
     easy = ("in it" if EASY_BAND[0] <= mean <= EASY_BAND[1] else
             "above it, a harsher row" if mean > EASY_BAND[1] else "below it, a softer row")
     normal = "at or above it" if mean >= NORMAL_MIN else "below it, a softer row"
