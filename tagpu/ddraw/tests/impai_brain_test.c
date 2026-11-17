@@ -8972,6 +8972,65 @@ static int stand_progress(int tx, int decisions)
     return -1;
 }
 
+/* THE SHELLING HOLDS THE GOAL (impai_mil.c, stand_off, orders): on the strait's world one tank, slot 20, of reach
+   600, on the west bank, and a turret of reach 300 remembered on the east bank 576 px from it, past 300 + STAND_PAD
+   and within the tank's reach; the squad's goal the turret's block, whose substitute on the west bank the tank
+   stands at, so it has arrived:
+   (a) the first decision: a ground attack at the turret's block, and the goal held -- no move on;
+   (b) decisions every 15 ticks: the goal held while the stall window lasts, then given up, the turret's block in
+       the land layer's unreached ring, within task_timeout + TRAVEL_CAP (16 200) of the start;
+   (c) the turret 720 px off, past the tank's reach from the bank: shelled, but no hold -- the arrived goal moves on
+       at the first decision. */
+static void check_mil_shell_ghost(void)
+{
+    IMPAI_MIL_OUT o;
+    int from, att, gnd, mv, mx, mz, i, k, ring = 0;
+    const uint32_t t0 = (uint32_t)IMPAI_DRY_T + 1000u;
+    stand_world(300);
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)t0;
+    s_mil.sq[1].since = t0;
+    s_mil.sq[1].closest = IMPAI_CLOSEST_NONE;
+    stand_tank(20, 236, 100);
+    s_mil.sq[1].tx = 136;
+    s_mil.sq[1].tz = 50;
+    enemy(1300, T_TURRET, 272, 100, IMPAI_GHOST, 0);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shelling's decision runs");
+    stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+    printf("the shelling holds the goal, (a): task %d, goal (%d, %d), ground attacks %d at (%d, %d)\n",
+           s_mil.sq[1].task, s_mil.sq[1].tx, s_mil.sq[1].tz, gnd, mx, mz);
+    CHECK(gnd == 1 && s_mil.sq[1].task == IMPAI_SQ_ATTACK && s_mil.sq[1].tx == 136 && s_mil.sq[1].tz == 50,
+          "(a) the ghost shelled, the goal held");
+    for (i = 1; i < 2000 && s_mil.sq[1].task == IMPAI_SQ_ATTACK && s_mil.sq[1].tx == 136; i++) {
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shelling's next decision runs");
+    }
+    for (k = 0; k < IMPAI_UNREACHED; k++)
+        ring |= s_mil.unreached[k].bx == 272 / 2 && s_mil.unreached[k].bz == 100 / 2;
+    printf("the shelling holds the goal, (b): goal left after %u ticks, the turret's block in the ring %d\n",
+           (unsigned)s_w.gametime - t0, ring);
+    CHECK((uint32_t)s_w.gametime - t0 > IMPAI_PLAN_ROW.task_timeout / 2 &&
+              (uint32_t)s_w.gametime - t0 <= IMPAI_PLAN_ROW.task_timeout + 16200u && ring,
+          "(b) the goal held for the stall window, then given up with the turret's block");
+    stand_world(300);
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)t0;
+    s_mil.sq[1].since = t0;
+    s_mil.sq[1].closest = IMPAI_CLOSEST_NONE;
+    stand_tank(20, 236, 100);
+    s_mil.sq[1].tx = 140;
+    s_mil.sq[1].tz = 50;
+    enemy(1300, T_TURRET, 281, 100, IMPAI_GHOST, 0);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shelling's (c) decision runs");
+    stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+    printf("the shelling holds the goal, (c) out of reach: task %d, goal (%d, %d), ground attacks %d\n",
+           s_mil.sq[1].task, s_mil.sq[1].tx, s_mil.sq[1].tz, gnd);
+    CHECK(gnd == 1 && !(s_mil.sq[1].task == IMPAI_SQ_ATTACK && s_mil.sq[1].tx == 140 && s_mil.sq[1].tz == 50),
+          "(c) shelled out of reach: the goal moved on");
+}
+
 static void check_mil_stand_progress(void)
 {
     const IMPAI_GOALFAIL* f = s_mil.unreached;
@@ -15654,6 +15713,7 @@ static void check_military(void)
     check_scout_sea_class();
     check_mil_stand_out();
     check_mil_stand_progress();
+    check_mil_shell_ghost();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();

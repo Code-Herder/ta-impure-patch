@@ -3989,7 +3989,14 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    range or must step out of it (defence_passed, which the fight's target_of reads too) -- and the shelling is no
    progress: a squad whose only work is shelling such defences stalls in task_timeout + its travel and gives up its
    goal and, with it, the last such defence it shelled (*ghost), which travel then passes -- lighting its block or
-   meeting it alive, seen. WHY: on Gods of War
+   meeting it alive, seen. THE SHELLING HOLDS THE GOAL: a member's ground attack on a remembered defence it has in
+   reach (in_reach) is counted (*shell), and while one is, an ATTACK that has arrived at its goal does not move on
+   (orders, move_on) but waits out the same stall window: the engine closes a member in to where its gun reaches
+   the point, so the shelling needs that time, and the window still ends it. WHY: on Gods of War the seat's
+   destroyers ground-attacked the remembered west tower from 388 to 548 px, the engine closing them in, and their
+   ATTACK moved on at its goal 90 to 690 ticks later, the tower unharmed at 750 hp, while three destroyers given
+   the same order from those points killed it within 600 ticks (MEASURED 2026-11-17, exploit-turtle-air and a
+   scratch roy-test at 386dd7a6). WHY THE STAND-OFF: on Gods of War
    the seat's first destroyer (reach 660 px) sailed to the water nearest its goal, the enemy commander, 231 px
    from a light laser tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks while it killed the
    tower (MEASURED 2026-11-17, exploit-naval-turtle at 75236135's code, GameTime 11 960..12 560). RESIDUALS: a
@@ -3997,7 +4004,8 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    off; a seen defence out of reach whose block is not given up is a candidate of the squad's fight (target_of) for
    a member the stand-off did not order, and the fight's attack counts as progress. BOUND: the enemy rows once, STAND_MAX defences kept nearest the squad's centroid, and each
    member against them twice (its nearest, and its move out's point), one substitute (point_for, cached) a member at most for each of the move out and in_reach.
-   Returns the members ordered at a defence that is progress. */
+   Returns the members ordered at a defence that is progress; *shell, the members shelling a remembered one in
+   reach. */
 #define STAND_PAD  64           /* [hand-written: the bar's to move] past a defence's reach                      */
 #define STAND_HYST 64           /* [hand-written: the bar's to move] the move out's point past STAND_PAD         */
 #define STAND_MAX  32           /* the defences one squad's stand-off weighs, the nearest its centroid           */
@@ -4082,7 +4090,7 @@ static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int
     return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
 }
 
-static int stand_off(MDEC* d, int s, int* ghost)
+static int stand_off(MDEC* d, int s, int* ghost, int* shell)
 {
     int16_t def[STAND_MAX];
     uint32_t dd[STAND_MAX];
@@ -4130,6 +4138,7 @@ static int stand_off(MDEC* d, int s, int* ghost)
         } else if (got <= 0 && best >= (uint32_t)(r + STAND_PAD)) {
             got = order(d, u->slot, WQ_CAN_ATTACK, (uint16_t)WQ_NONE, t->x, t->z);
             if (got > 0) *ghost = (int)(t - d->en);
+            if (got > 0 && !t->now && in_reach(d, u, t, own)) (*shell)++;
         }
         u->stand = (uint8_t)(got > 0);
     }
@@ -4312,7 +4321,8 @@ static void travel_home(MDEC* d, int s)
    chosen again (wave_goal); a goal the squad has not arrived at is taken, else -- no goal, or the same place, as a
    commander it sees but cannot attack or a structure it cannot hit -- the squad goes back to FORM. INVARIANT: an
    ATTACK squad never keeps a point it has arrived at while no member attacks, so it cannot hold an ATTACK slot
-   standing; and form_attack forms no wave at a point the squad has arrived at, so FORM cannot turn it straight
+   standing -- a member shelling a remembered defence in reach (THE SHELLING HOLDS THE GOAL) keeps it there only
+   until the goal's stall window ends it (goal_stalled, give_up); and form_attack forms no wave at a point the squad has arrived at, so FORM cannot turn it straight
    back. */
 static void move_on(MDEC* d, int s)
 {
@@ -4444,15 +4454,15 @@ static void orders(MDEC* d)
            water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
            back to FORM first (move_on), so it is never sent to where it stands. */
         const int fought = d->sq[s].contact >= 0 && q->task != IMPAI_SQ_RETREAT && q->task != IMPAI_SQ_SCOUT;
-        int ghost = -1;
-        const int stood = q->task == IMPAI_SQ_ATTACK ? stand_off(d, s, &ghost) : 0;
+        int ghost = -1, shell = 0;
+        const int stood = q->task == IMPAI_SQ_ATTACK ? stand_off(d, s, &ghost, &shell) : 0;
         if ((fought && fight(d, s) > 0) || stood) {
             if (q->task == IMPAI_SQ_ATTACK) goal_stalled(d, s, 1);
         } else {
             if (q->task == IMPAI_SQ_ATTACK) {
                 const int at = attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16);
-                if (at == 1) move_on(d, s);
-                else if (at == 0 && goal_stalled(d, s, 0)) {
+                if (at == 1 && !shell) move_on(d, s);
+                else if ((at == 0 || (at == 1 && shell)) && goal_stalled(d, s, 0)) {
                     if (ghost >= 0) unreached_add(d, q->layer, d->en[ghost].x >> 5, d->en[ghost].z >> 5);
                     give_up(d, s);
                 }

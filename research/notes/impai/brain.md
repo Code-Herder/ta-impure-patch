@@ -521,7 +521,14 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    ghost, or a seen one the member is neither in range of nor inside the reach of -- is attacked only while the
    squad's layer has not given its block up, by the stand-off or by the fight, and shelling it is no progress
    (*the goal's progress*), so a squad whose only work is such a defence gives its goal up in `task_timeout` + its
-   travel, and the defence's block with it, and travel then lights the block or meets the defence alive. Why: on
+   travel, and the defence's block with it, and travel then lights the block or meets the defence alive. **The
+   shelling holds the goal**: while a member ground-attacks a remembered defence it has in reach, an ATTACK that has
+   arrived at its goal does not move on but waits out that same stall window, since the engine closes the member in
+   to where its gun reaches the point and that takes time: on Gods of War the destroyers ground-attacked the
+   remembered west tower from 388 to 548 px and their ATTACK moved on at its goal 90 to 690 ticks later with the
+   tower unharmed, while three destroyers given the same order from those points killed it within 600 ticks, the
+   two farther ones closed in by the engine to about 400 px first (MEASURED 2026-11-17 at 386dd7a6, exploit-turtle-air
+   and a scratch situation). Why the stand-off: on
    Gods of War the first destroyer sailed to the water nearest its goal, the enemy commander, 231 px from a light
    laser tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks (MEASURED 2026-11-17 at 75236135's
    code). **Gaps**: a defence not yet seen is met at the member's sight, which can be inside its reach; mobile units
