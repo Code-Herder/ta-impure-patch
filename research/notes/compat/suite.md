@@ -123,7 +123,15 @@ names the gap). The hives are private because the store `tacli` keeps
   also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
   and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name; and each peer's own seat
   is held to **the claim**: by its last pulse line (`impai: pulse`, a seat's counts since the level began: one in the level's first 15 ticks, then one a game minute) the seat gave orders (`mroots` + `eroots`) and completed a unit since its first pulse (`built` above the first's, which already counts the commander, MEASURED 2026-11-16); a turn taken alone does not show that the seat played (`impai_claim_misses`). The claim needs a pulse, so the game is played
-  past `IMPAI_CLAIM_TICKS` (3900, two game minutes and a margin) whatever `--mp` says. The peers' unit counts are not compared: the
+  past `IMPAI_CLAIM_TICKS` (3900, two game minutes and a margin) whatever `--mp` says. **The fight stays off the
+  seats**: no unit either half places can stand within `WAVE_CLEAR` (1500 world pixels) of StartPos1..4, the starts
+  the game's four records take (fixed starts put record i at StartPos(i+1)). Every seat is its own team, so a wave
+  beside a computer seat's commander is an enemy inside ImpAI's 600-pixel safe distance, and the seat's only builder
+  flees: the claim would then measure the scenario. Both halves' waves stand on dry, level ground of Two Continents
+  around (7000, 6480), 2681 pixels from the nearest of those starts, and attack each other. `run_wine_mp` checks it
+  before each network game against the map in the setup's own files (`mp_wave_misses`; a wave too close fails the
+  game by name), and `tools/test_compat_impai.py` checks every setup's halves against the installed map.
+  The peers' unit counts are not compared: the
   game is not lockstep — only a unit's owner decides its death and the other peer applies it when
   the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
   two counts read at one GameTime differ by whatever is in flight, which depends on load. Nor are

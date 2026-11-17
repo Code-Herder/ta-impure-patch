@@ -43,6 +43,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import math
 import http.server
 import ntpath
 import os
@@ -166,6 +167,14 @@ MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
 # The battle and the two halves place stock unit types. A mod that replaces the factions (TA
 # Zero has no ARMPW) names its own in the setup's `scenarios`, the same three roles.
 DEFAULT_SCENARIOS = {"battle": "200v200", "host": MP_SCENARIOS[0], "join": MP_SCENARIOS[1]}
+# THE FIGHT STAYS OFF THE SEATS: no unit a network game's halves place can stand within WAVE_CLEAR world pixels
+# of a start one of its records takes -- StartPos1..MP_RECORDS of the map's schema for that many seats (fixed
+# starts put record i at StartPos(i + 1): two humans and, with --mp-impai, two computer seats). Every seat is
+# its own team, so a wave beside a computer seat's commander is an enemy inside its safe distance (ImpAI's is
+# 600), and the seat's only builder flees: the claim would measure the scenario, not the seat. Checked before
+# each network game against the setup's own map (wave_misses), and offline against the installed one.
+WAVE_CLEAR = 1500
+MP_RECORDS = 4
 # Each side's in-game panel is <side>MAIN.GUI, and a mod may add sides: TA Zero's third is GOK.
 # MAINMENU starts with MAIN, so the front end never matches.
 IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
@@ -1595,6 +1604,57 @@ def scenarios(setup) -> dict:
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
 
 
+def group_reach(group: dict) -> float:
+    """How far from its `at` any unit of a scenario group can stand: the formation's half extent (tacli's
+    _scn_points, `at` the formation's centre) plus its jitter in both axes -- a bound, not the placement."""
+    p, n = group["pattern"], sum(c.get("count", 1) for c in group["composition"])
+    spacing, jitter = p.get("spacing", 0), p.get("jitter", 0)
+    if p["kind"] == "grid":
+        cols = min(p["cols"], n) or 1
+        rows = -(-n // cols)
+        half = math.hypot((cols - 1) / 2 * spacing, (rows - 1) / 2 * spacing)
+    elif p["kind"] == "line":
+        half = (n - 1) / 2 * spacing
+    else:
+        half = math.hypot(p["size"][0] / 2, p["size"][1] / 2)
+    return half + jitter * math.sqrt(2)
+
+
+def wave_misses(scen: dict, starts: dict, records: int = MP_RECORDS, clear: float = WAVE_CLEAR) -> list:
+    """THE FIGHT STAYS OFF THE SEATS: each group and unit of `scen` that can stand within `clear` of
+    StartPos1..`records` ({N: (x, z)}, bar.start_positions), named; a start the map lacks is named too."""
+    miss = [f"the map has no StartPos{k}" for k in range(1, records + 1) if k not in starts]
+    where = [(g["id"], g["at"], group_reach(g)) for g in scen.get("groups", [])]
+    where += [(u.get("id", u["type"]), u["pos"], 0.0) for u in scen.get("units", [])]
+    for name, at, reach in where:
+        for k in range(1, records + 1):
+            if k in starts:
+                d = math.dist(at, starts[k]) - reach
+                if d < clear:
+                    miss.append(f"{name} at {at} can stand {max(d, 0):.0f} from StartPos{k} {starts[k]}, "
+                                f"inside {clear}")
+    return miss
+
+
+def mp_wave_misses(scens: dict, gamedirs: list) -> list:
+    """wave_misses of both halves of a network game, against the starts of their map as each peer's own files
+    hold it (tavfs.Vfs over the game folder, the engine's mount order); `could not` lines when a map is not
+    there to read."""
+    import tavfs
+    sys.path.insert(0, str(TREE / "tools" / "impai"))
+    import bar
+    miss = []
+    for role, gamedir in zip(("host", "join"), gamedirs):
+        scen = json.loads((TREE / "scenarios" / f"{scens[role]}.json").read_text())
+        try:
+            starts = bar.start_positions(scen["setup"]["map"], MP_RECORDS, tavfs.Vfs(Path(gamedir)))
+        except (bar.BarError, tavfs.VfsError, OSError) as e:
+            miss.append(f"{role}: could not read {scen['setup']['map']}'s starts: {e}")
+            continue
+        miss += [f"{role}: {scens[role]}: {m}" for m in wave_misses(scen, starts)]
+    return miss
+
+
 def battle_map(setup) -> str:
     """The map the setup's battle scenario names (its `setup.map`), whose ground its coordinates
     are chosen for: one fact, read where it is written."""
@@ -2972,6 +3032,10 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports, impai=False) -> dict:
         held = free_dplay_port(port, mine)
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
+                    "evidence": [], "port": port}
+        near = mp_wave_misses(scenarios(setup), [setup["_inst"]["gamedir"], join["gamedir"]])
+        if near:
+            return {"ok": False, "why": "the network game's waves are not clear of the seats: " + "; ".join(near),
                     "evidence": [], "port": port}
         # THE CLAIM needs a pulse of each ImpAI seat's: its game is played past IMPAI_CLAIM_TICKS
         out = play_mp(setup["_inst"], join, max(seconds, -(-IMPAI_CLAIM_TICKS // TICKS_PER_S)) if impai else seconds,

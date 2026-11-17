@@ -1,5 +1,7 @@
 """The compatibility suite's ImpAI checks, offline: what a stage game's and a network game's tagpu.log must say of
-an ImpAI seat -- its seat lines, and THE CLAIM: by its last pulse it gave orders and completed a unit."""
+an ImpAI seat -- its seat lines, and THE CLAIM: by its last pulse it gave orders and completed a unit since its first;
+and THE FIGHT STAYS OFF THE SEATS: the network game's waves stand clear of every start its records take."""
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -81,6 +83,80 @@ class Claim(unittest.TestCase):
 
     def test_the_claim_needs_two_game_minutes(self):
         self.assertGreater(tacompat.IMPAI_CLAIM_TICKS, 2 * 1800)
+
+
+SCENARIOS = Path(__file__).resolve().parents[1] / "scenarios"
+
+
+def install_starts(mapname):
+    """{N: (x, z)} of `mapname` in the installed game, None when no install is found to read."""
+    sys.path[:0] = [str(Path(__file__).parent / "wiki"), str(Path(__file__).parent / "impai")]
+    import tavfs
+    import bar
+    try:
+        return bar.start_positions(mapname, tacompat.MP_RECORDS, tavfs.Vfs(tavfs.find_install(None)))
+    except (tavfs.VfsError, bar.BarError, OSError, SystemExit):
+        return None
+
+
+def halves():
+    """[(host, join)] of every network game's halves: the default pair and each setup's own."""
+    out = {(tacompat.DEFAULT_SCENARIOS["host"], tacompat.DEFAULT_SCENARIOS["join"])}
+    for s in tacompat.SETUPS:
+        sc = tacompat.scenarios(s)
+        out.add((sc["host"], sc["join"]))
+    return sorted(out)
+
+
+def load(name):
+    return json.loads((SCENARIOS / f"{name}.json").read_text())
+
+
+class Waves(unittest.TestCase):
+    STARTS = {1: (0, 0), 2: (5000, 0), 3: (0, 5000), 4: (5000, 5000)}
+
+    def wave(self, at):
+        return {"groups": [{"id": "w", "at": at, "pattern": {"kind": "grid", "cols": 6, "spacing": 40, "jitter": 6},
+                            "composition": [{"type": "CORAK", "count": 30}]}]}
+
+    def test_a_wave_inside_the_clearance_of_a_start_is_named(self):
+        miss = tacompat.wave_misses(self.wave([400, 0]), self.STARTS)
+        self.assertEqual(len(miss), 1)
+        self.assertIn("StartPos1", miss[0])
+
+    def test_the_reach_of_the_formation_counts(self):
+        # 6 x 5 at 40 with a jitter of 6: hypot(100, 80) = 128.1 from its centre to a corner unit, 8.5 more for the jitter
+        self.assertAlmostEqual(tacompat.group_reach(self.wave([0, 0])["groups"][0]), 128.06 + 8.49, places=1)
+        self.assertTrue(tacompat.wave_misses(self.wave([1500 + 130, 0]), self.STARTS))
+        self.assertEqual(tacompat.wave_misses(self.wave([1500 + 140, 0]), self.STARTS), [])
+
+    def test_only_the_seated_records_starts_are_kept_clear(self):
+        starts = {**self.STARTS, 5: (2500, 2500)}
+        self.assertEqual(tacompat.wave_misses(self.wave([2500, 2500]), starts), [])
+        self.assertTrue(tacompat.wave_misses(self.wave([2500, 2500]), starts, records=5))
+
+    def test_a_start_the_map_lacks_is_named(self):
+        self.assertEqual(tacompat.wave_misses({"groups": []}, {1: (0, 0)}),
+                         ["the map has no StartPos2", "the map has no StartPos3", "the map has no StartPos4"])
+
+    def test_each_half_attacks_the_other_halfs_wave(self):
+        for host, join in halves():
+            h, j = load(host)["groups"], load(join)["groups"]
+            for mine, theirs in ((h, j), (j, h)):
+                for g in mine:
+                    to = [o["to"] for o in g.get("orders", []) if o["cmd"] == "attack"]
+                    self.assertTrue(to, f"{g['id']} attacks nothing")
+                    self.assertTrue(any(tacompat.math.dist(to[0], t["at"]) <= tacompat.group_reach(t) for t in theirs),
+                                    f"{host}/{join}: {g['id']} attacks {to[0]}, not the other half's wave")
+
+    def test_every_half_is_clear_of_the_seats_on_the_installed_map(self):
+        for host, join in halves():
+            for name in (host, join):
+                scen = load(name)
+                starts = install_starts(scen["setup"]["map"])
+                if starts is None:
+                    self.skipTest("no installed game to read the map's starts from")
+                self.assertEqual(tacompat.wave_misses(scen, starts), [], name)
 
 
 if __name__ == "__main__":
