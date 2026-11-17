@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=c1dc2e70..6357756c (fix review) findings=6 (L6) fixed-in=9142e90f, confirmed closed by fix-review-b3e84cac; report .data/impai/runs/reviews/fix-review-6357756c.md date=2026-11-16
