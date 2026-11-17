@@ -556,7 +556,7 @@ function drawTech() {
   frameClear();
   const g = stage.getContext('2d'), W = stage.width, H = stage.height;
   g.setTransform(1, 0, 0, 1, 0, 0);
-  g.fillStyle = '#16180f'; g.fillRect(0, 0, W, H);
+  WikiTech.ground(g, W, H, techU());
   const d = techData(), M = techModel();
   const say = t => { g.fillStyle = '#b7b7ae'; g.font = `${(9 * techU()).toFixed(1)}px sans-serif`; g.textAlign = 'center';
     g.fillText(t, W / 2, H / 2); g.textAlign = 'start'; };

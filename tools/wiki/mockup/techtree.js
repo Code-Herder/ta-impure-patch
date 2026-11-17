@@ -94,6 +94,10 @@ const WikiTech = (() => {
     ICON: 13, IGAP: 1, PER: 8,   // the icons under the header, PER a row
     FOOT: 9,                     // the footer line
     EDGE_Y: 15,                  // where an edge meets a card: the header's middle
+    R: 2,                        // a card's corner radius
+    SEG: 24,                     // the pieces an edge's curve is drawn in
+    DASHES: 64,                  // the most pieces a dashed edge is cut in, half of them drawn
+    DOT: 16,                     // the stage's dot grid: its pitch, in units of the window, not of the tree
   };
   const cardH = n => C.HEAD + (n ? Math.ceil(n / C.PER) * (C.ICON + C.IGAP) + C.IGAP : 0) + C.FOOT;
 
@@ -151,11 +155,36 @@ const WikiTech = (() => {
   }
 
   /* ---- THE DRAWING ----
+     The look is the research tree's prototype's (tools/wiki/techtree-prototype, commit 3b92ed28): cards with rounded
+     corners and a soft shadow, a black line under the header, and each card joined to its children by an S-curve from
+     the header's middle; the stage a dot grid. Every length is the prototype's CSS pixel halved, its card being 236 px
+     to our 118 units.
      `o`: {cam, s (canvas pixels a unit), sel (the selected unit or null), all (every builder's edge, not only the
      walk's), pic (key -> a loaded image or null), font (role -> CSS font at 1 unit, scaled here)}. The selected unit's
      card, the walk to it and its card's children and parents are lit; every other card is dimmed. */
-  const INK = { bg: '#2a2c25', head: '#33352d', rim: '#56594c', text: '#e2e2da', muted: '#9a9d8e',
-    edge: '#5b6050', also: '#6a7058', path: '#7fc4e8', kid: '#9fd68a', sel: '#e8c66a', up: '#c98ae0', pic: '#000' };
+  const INK = { bg: '#22251e', rim: '#4a4d42', line: '#000000', text: '#d8d8c8', muted: '#8f9384', edge: '#4b5040',
+    also: '#6a7058', path: '#7fc4e8', kid: '#9fd68a', sel: '#e8c66a', up: '#d58ae8', pic: '#000000',
+    stage: '#151713', dot: '#2a2d25', shadow: '#00000088' };
+  const DIM = 0.28;                 // a card the selection does not light (the prototype's opacity)
+  /* A COLOUR SEEN THROUGH `a` OVER THE STAGE, as one opaque colour. A card's shapes overlap (the corners' discs over its
+     rectangles, the rim under the fill), so drawn translucent each overlap would show darker; mixed first, the card fades
+     as one layer, as the prototype's CSS opacity fades it. Under a card is only the stage: the edges run between cards. */
+  const mix = (hex, a) => {
+    if (a >= 1) return hex;
+    const c = parseInt(hex.slice(1, 7), 16), st = parseInt(INK.stage.slice(1), 16);
+    let out = 0;
+    for (const sh of [16, 8, 0]) out |= Math.round(((c >> sh) & 255) * a + ((st >> sh) & 255) * (1 - a)) << sh;
+    return '#' + out.toString(16).padStart(6, '0');
+  };
+  /* THE GROUND: the stage's fill and its dot grid, fixed to the canvas as the prototype's CSS background is (a pan or a
+     zoom moves the tree over it), a dot every DOT units from the canvas's corner, one unit square, whole pixels */
+  function ground(g, W, H, s) {
+    g.fillStyle = INK.stage; g.fillRect(0, 0, W, H);
+    const p = C.DOT * s, d = Math.max(1, Math.round(s));
+    g.fillStyle = INK.dot;
+    for (let y = 0; Math.round(y) < H; y += p)
+      for (let x = 0; Math.round(x) < W; x += p) g.fillRect(Math.round(x), Math.round(y), d, d);
+  }
   function draw(g, M, L, o) {
     const { cam, s } = o, z = cam.z;
     /* EVERY EDGE ON A WHOLE PIXEL: a rectangle's corners are rounded to canvas pixels and its size is the difference,
@@ -168,32 +197,49 @@ const WikiTech = (() => {
     const lit = k => k === h || onPath.has(k) || kids.has(k) || pars.has(k);
     g.save();
     g.lineCap = 'butt';
-    // the edges first, under the cards: the walk's (each card to its parent card) and, lit or with `all`, every other
-    // builder of a card's unit
-    const edge = (a, b, style, w) => {
-      const [ax, ay, aw] = L.pos[a], [bx, by] = L.pos[b], mx = (ax + aw + bx) / 2;
+    /* THE EDGES first, under the cards: the walk's (each card to its parent card) and, lit or with `all`, every other
+       builder of a card's unit, dashed. Each is the prototype's cubic from the parent's right edge to the child's left at
+       the headers' middles, its two handles at the midpoint's x, drawn as SEG straight pieces; two cards level are joined
+       by one line, undashed. */
+    const edge = (a, b, style, w, dashed) => {
+      const [ax, ay, aw] = L.pos[a], [bx, by] = L.pos[b];
       g.strokeStyle = style; g.lineWidth = Math.max(1, Math.round(w * z));
-      g.beginPath();
       // a line one pixel wide sits on a pixel's centre
       const o = g.lineWidth % 2 ? 0.5 : 0;
-      g.moveTo(X(ax + aw), Y(ay + C.EDGE_Y) + o); g.lineTo(X(mx) + o, Y(ay + C.EDGE_Y) + o);
-      g.lineTo(X(mx) + o, Y(by + C.EDGE_Y) + o); g.lineTo(X(bx), Y(by + C.EDGE_Y) + o);
-      g.stroke();
+      const x1 = X(ax + aw), y1 = Y(ay + C.EDGE_Y) + o, x2 = X(bx), y2 = Y(by + C.EDGE_Y) + o, mx = (x1 + x2) / 2;
+      // an edge wholly off the canvas is not drawn, as a card is not
+      if (Math.max(x1, x2) < 0 || Math.min(x1, x2) > g.canvas.width || Math.max(y1, y2) < 0 || Math.min(y1, y2) > g.canvas.height) return;
+      /* DASHED BY ITS OWN PIECES: every other one, each a stroke of its own -- as many pieces as dashes of the
+         prototype's 2 units fit along it (its x and y extents, at least its length), at least 8 and at most DASHES, so
+         a dashed edge is at most DASHES / 2 lines at any zoom (a dash pattern in pixels would be one line a dash, and a
+         long edge zoomed in thousands, past what the stage's op list holds) */
+      const dl = Math.max(2, Math.round(2 * z));
+      const n = !dashed ? C.SEG : 2 * Math.min(C.DASHES / 2, Math.max(4, Math.round((Math.abs(x2 - x1) + Math.abs(y2 - y1)) / (2 * dl))));
+      const pt = [[x1, y1]];
+      if (y1 === y2 && !dashed) pt.push([x2, y2]);
+      else
+        for (let i = 1; i <= n; i++) {
+          const t = i / n, u = 1 - t, a0 = u * u * u, a1 = 3 * u * u * t, a2 = 3 * u * t * t, a3 = t * t * t;
+          pt.push([a0 * x1 + (a1 + a2) * mx + a3 * x2, (a0 + a1) * y1 + (a2 + a3) * y2]);
+        }
+      if (dashed)
+        for (let i = 0; i + 1 < pt.length; i += 2) { g.beginPath(); g.moveTo(...pt[i]); g.lineTo(...pt[i + 1]); g.stroke(); }
+      else { g.beginPath(); g.moveTo(...pt[0]); for (const p of pt.slice(1)) g.lineTo(...p); g.stroke(); }
     };
     const lines = [];
     for (const k of M.spine) {
       if (M.sp[k]) {
         const path = onPath.has(k) && onPath.has(M.sp[k]), kid = M.sp[k] === h || (k === h && pars.has(M.sp[k]));
-        lines.push([M.sp[k], k, path ? INK.path : kid ? INK.kid : INK.edge, path ? 1.5 : 1, path || kid ? 2 : focus ? 0 : 1]);
+        lines.push([M.sp[k], k, path ? INK.path : kid ? INK.kid : INK.edge, path ? 1.5 : kid ? 1.25 : 1, false, path || kid ? 2 : 1]);
       }
       for (const p of M.units[k].parents) {
         if (p === M.sp[k] || !M.sp.hasOwnProperty(p)) continue;
         const kid = p === h || (k === h && pars.has(p));
-        if (kid || o.all) lines.push([p, k, kid ? INK.kid : INK.also, 1, kid ? 2 : 0]);
+        if (kid || o.all) lines.push([p, k, kid ? INK.kid : INK.also, kid ? 1.25 : 1, !kid, kid ? 2 : 0]);
       }
     }
-    lines.sort((a, b) => a[4] - b[4]);
-    for (const [a, b, st, w, rank] of lines) { g.globalAlpha = focus && !rank ? 0.35 : 1; edge(a, b, st, w); }
+    lines.sort((a, b) => a[5] - b[5]);
+    for (const [a, b, st, w, dashed] of lines) edge(a, b, st, w, dashed);
     g.globalAlpha = 1;
     // the cards
     const font = (role, px) => o.font(role).replace(/\d+(\.\d+)?px/, `${px * z}px`);
@@ -222,21 +268,50 @@ const WikiTech = (() => {
         g.drawImage(im, bx, by, bw, bh);
       }
     };
+    /* A ROUNDED RECTANGLE of whole pixels, filled: three rectangles and a disc at each corner (a HUD op list has no
+       path, but rectangles and discs) */
+    const rrect = (x, y, w, h, r, col) => {
+      if (w <= 0 || h <= 0) return;
+      r = Math.max(0, Math.min(r, Math.floor(w / 2), Math.floor(h / 2)));
+      g.fillStyle = col;
+      g.fillRect(x + r, y, w - 2 * r, h);
+      g.fillRect(x, y + r, r, h - 2 * r);
+      g.fillRect(x + w - r, y + r, r, h - 2 * r);
+      if (r > 0)
+        for (const [px, py] of [[x + r, y + r], [x + w - r, y + r], [x + r, y + h - r], [x + w - r, y + h - r]]) {
+          g.beginPath(); g.arc(px, py, r, 0, 2 * Math.PI); g.fill();
+        }
+    };
+    /* A SOFT SHADOW, CSS's box-shadow 0 1u 3u: the canvas casts it from a rectangle drawn FAR off the canvas and carried
+       back by its offset, so only the shadow lands (a HOP_SOLID with HOPF_DROP, painted outside its box) */
+    const FAR = 1 << 20;
+    const shadow = (x, y, w, h, a) => {
+      g.save();
+      g.globalAlpha = a; g.shadowColor = INK.shadow; g.shadowBlur = 3 * z; g.shadowOffsetX = FAR; g.shadowOffsetY = z;
+      g.fillStyle = '#000000'; g.fillRect(x - FAR, y, w, h);
+      g.restore();
+    };
     g.textBaseline = 'alphabetic';
     for (const k of M.spine) {
       const [x, y, w, hh] = L.pos[k], u = M.units[k];
       if (X(x + w) < 0 || Y(y + hh) < 0 || X(x) > g.canvas.width || Y(y) > g.canvas.height) continue;
-      g.globalAlpha = focus && !lit(k) ? 0.3 : 1;
+      const a = focus && !lit(k) ? DIM : 1;
+      g.globalAlpha = 1;
       const [cx, cy, cw, ch] = box(x, y, w, hh);
-      g.fillStyle = INK.bg; g.fillRect(cx, cy, cw, ch);
-      g.fillStyle = INK.head; g.fillRect(...box(x, y, w, C.HEAD));
+      /* THE CARD: its shadow (the prototype's 0 2px 6px #0008), the selected card's halo (its 2 px ring outside the
+         rim), the rim, the fill inside the rim, and the line under the header -- each a rounded rectangle of whole
+         pixels, mixed with the stage when the card is dimmed */
+      const r = Math.max(1, Math.round(C.R * z)), lw = Math.max(1, Math.round(0.5 * z));
+      shadow(cx, cy, cw, ch, a);
+      if (k === h) { const hw = Math.max(1, Math.round(z)); rrect(cx - hw, cy - hw, cw + 2 * hw, ch + 2 * hw, r + hw, INK.sel); }
       const rim = k === h ? INK.sel : onPath.has(k) ? INK.path : kids.has(k) || pars.has(k) ? INK.kid : INK.rim;
-      const lw = Math.max(1, Math.round((k === h ? 1.5 : 0.75) * z)), ho = lw / 2;
-      g.strokeStyle = rim; g.lineWidth = lw;
-      g.strokeRect(cx + ho, cy + ho, cw - lw, ch - lw);
+      rrect(cx, cy, cw, ch, r, mix(rim, a));
+      rrect(cx + lw, cy + lw, cw - 2 * lw, ch - 2 * lw, r - lw, mix(INK.bg, a));
+      g.fillStyle = mix(INK.line, a); g.fillRect(cx + lw, Y(y + C.HEAD), cw - 2 * lw, lw);
+      g.globalAlpha = a;
       picAt(k, x + C.PAD, y + C.PAD, C.PIC);
       const tx = x + C.PAD * 2 + C.PIC, tw = w - (tx - x) - C.PAD;
-      g.fillStyle = INK.text; clip(u.title, tx, y + 10, tw, 'title', 8);
+      g.fillStyle = INK.text; clip(u.title, tx, y + 10, tw, 'title', 7);
       g.fillStyle = INK.muted; clip(u.description, tx, y + 18, tw, 'body', 5.5);
       g.fillStyle = u.upgradable ? INK.up : INK.muted;
       clip(`${u.kind.toUpperCase()} · T${u.tier}${u.upgrades.length ? ` · ${u.upgrades.length} UP` : ''}`, tx, y + 26, tw, 'label', 5);
@@ -261,6 +336,6 @@ const WikiTech = (() => {
     g.restore();
   }
 
-  return { model, layout, fit, hit, draw, pathTo, home, cardIcons, isUpgrade, KINDS, C, MARGIN };
+  return { model, layout, fit, hit, draw, ground, pathTo, home, cardIcons, isUpgrade, KINDS, C, MARGIN, INK };
 })();
 if (typeof module !== 'undefined') module.exports = WikiTech;

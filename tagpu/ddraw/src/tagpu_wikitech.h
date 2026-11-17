@@ -62,6 +62,10 @@ typedef struct {
 #define WT_PER    8         /* icons a row                                        */
 #define WT_FOOT   9.0
 #define WT_EDGE_Y 15.0      /* where an edge meets a card                         */
+#define WT_R      2.0       /* a card's corner radius                             */
+#define WT_SEG    24        /* the pieces an edge's curve is drawn in             */
+#define WT_DASHES 64        /* the most pieces a dashed edge is cut in, half drawn */
+#define WT_DOT    16.0      /* the stage's dot grid: its pitch, in window units   */
 #define WT_MARGIN 8.0       /* units round the fitted tree                        */
 
 /* Side `side` of `t` made into a tree and laid out: 1, or 0 with nothing allocated when the side
@@ -113,16 +117,12 @@ typedef struct {
     void*   measure_ctx;
 } WTART;
 
-/* techtree.js draw, call for op, into `o` (emptied first): the tree under camera `cam` on the stage's
-   canvas -- `stage` in HUD units, snapped to device pixels by tagpu_wikistage_canvas, `u` device
-   pixels a unit -- with `sel` the selected unit's order index (-1 none) and `all` every builder's
-   edge. Every op clips to the canvas; a picture is a HOP_PIC of the unit's WIKITECH picture. */
-void tagpu_wikitech_draw(const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art, HUDRECT stage,
-                         double u, WIKISTAGEOPS* o);
-
-/* wiki.js drawTech: the stage the entry shows, into `o` (emptied first) -- its fill, then the tree
-   as tagpu_wikitech_draw draws it, or with no tree (`T` NULL) the message `msg` centred at nine
-   units, in the description's style. */
+/* wiki.js drawTech, call for op, into `o` (emptied first): the stage's ground (techtree.js ground: its
+   fill and its dot grid), then the tree as techtree.js draw draws it under camera `cam` -- with `sel`
+   the selected unit's order index (-1 none) and `all` every builder's edge -- or with no tree (`T`
+   NULL) the message `msg` centred at nine units, in the description's style. The canvas is `stage`
+   in HUD units, snapped to device pixels by tagpu_wikistage_canvas, `u` device pixels a unit; every
+   op clips to it, and a picture is a HOP_PIC of the unit's WIKITECH picture. */
 void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
                           HUDRECT stage, double u, WIKISTAGEOPS* o);
 

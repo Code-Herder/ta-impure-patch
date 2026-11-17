@@ -134,7 +134,8 @@ static int draw(char** a)
                 low[q] = 0;
                 if (!strcmp(low, tj_str(member(v, "sel"), ""))) sel = j;
             }
-        tagpu_wikitech_draw(&tr, &cam, sel, tj_is(member(v, "all"), TJ_TRUE), &art, stage, u, &o);
+        /* the stage as the game draws it: its ground, then the tree (techcheck.mjs draws WikiTech.ground first) */
+        tagpu_wikitech_stage(&tr, NULL, &cam, sel, tj_is(member(v, "all"), TJ_TRUE), &art, stage, u, &o);
         printf("{\"i\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,\"cam\":[%.17g,%.17g,%.17g],\"dropped\":%d,\"ops\":[",
                ci, x0, y0, w, h, cam.z, cam.x, cam.y, o.dropped);
         for (j = 0; j < o.n; j++) {
@@ -146,8 +147,8 @@ static int draw(char** a)
                 const char* s = o.text + r->off;
                 putchar('"');
                 for (; *s; s++) if (*s == '"' || *s == '\\') printf("\\%c", *s); else putchar(*s);
-                printf("\",%u]", r->rgb);
-            } else printf("null,0]");
+                printf("\",%u,%.9g]", r->rgb, p->shade);
+            } else printf("null,0,%.9g]", p->shade);
         }
         /* the hit test at each of the case's tree points: [unit, card, icon] in order indices, -1 none */
         printf("],\"hits\":[");

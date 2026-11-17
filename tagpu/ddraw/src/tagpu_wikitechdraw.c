@@ -23,16 +23,30 @@ typedef struct {
     double        ga;                   /* the canvas's globalAlpha                            */
 } TB;
 
-/* the tree's inks (techtree.js INK), as 0xRRGGBB written byte by byte, as the mockup's '#rrggbb' */
+/* the tree's inks (techtree.js INK, the prototype's), as 0xRRGGBB written byte by byte, as the
+   mockup's '#rrggbb' */
 #define RGB24(r, g, b) ((r) << 16 | (g) << 8 | (b))
-enum { I_BG    = RGB24(0x2a, 0x2c, 0x25), I_HEAD  = RGB24(0x33, 0x35, 0x2d), I_RIM  = RGB24(0x56, 0x59, 0x4c),
-       I_TEXT  = RGB24(0xe2, 0xe2, 0xda), I_MUTED = RGB24(0x9a, 0x9d, 0x8e), I_EDGE = RGB24(0x5b, 0x60, 0x50),
+enum { I_BG    = RGB24(0x22, 0x25, 0x1e), I_RIM   = RGB24(0x4a, 0x4d, 0x42), I_LINE = RGB24(0x00, 0x00, 0x00),
+       I_TEXT  = RGB24(0xd8, 0xd8, 0xc8), I_MUTED = RGB24(0x8f, 0x93, 0x84), I_EDGE = RGB24(0x4b, 0x50, 0x40),
        I_ALSO  = RGB24(0x6a, 0x70, 0x58), I_PATH  = RGB24(0x7f, 0xc4, 0xe8), I_KID  = RGB24(0x9f, 0xd6, 0x8a),
-       I_SEL   = RGB24(0xe8, 0xc6, 0x6a), I_UP    = RGB24(0xc9, 0x8a, 0xe0), I_PIC  = RGB24(0x00, 0x00, 0x00),
-       I_STAGE = RGB24(0x16, 0x18, 0x0f), I_SAY   = RGB24(0xb7, 0xb7, 0xae) };   /* the stage's fill and its message's
-                                                                                (wiki.js drawTech) */
+       I_SEL   = RGB24(0xe8, 0xc6, 0x6a), I_UP    = RGB24(0xd5, 0x8a, 0xe8), I_PIC  = RGB24(0x00, 0x00, 0x00),
+       I_STAGE = RGB24(0x15, 0x17, 0x13), I_DOT   = RGB24(0x2a, 0x2d, 0x25), I_SAY  = RGB24(0xb7, 0xb7, 0xae) };
+#define I_SHADOW_RGB 0x000000u    /* the card's shadow, techtree.js INK.shadow '#00000088'          */
+#define I_SHADOW_A   0x88u
+#define T_DIM        0.28         /* a card the selection does not light (techtree.js DIM)            */
 
 static uint32_t ink(TB* c, uint32_t rgb) { return rgb << 8 | (uint32_t)floor(c->ga * 255 + 0.5); }
+
+/* techtree.js mix: `rgb` seen through `a` over the stage, as one opaque colour */
+static uint32_t mix(uint32_t rgb, double a)
+{
+    uint32_t out = 0;
+    int sh;
+    if (a >= 1) return rgb;
+    for (sh = 16; sh >= 0; sh -= 8)
+        out |= (uint32_t)floor(((rgb >> sh) & 255) * a + ((I_STAGE >> sh) & 255) * (1 - a) + 0.5) << sh;
+    return out;
+}
 
 static HUDOP* top(TB* c, int kind, double x, double y, double w, double h)
 {
@@ -72,6 +86,48 @@ static void t_ring(TB* c, double x, double y, double w, double h, double lw, uin
         p->flags = HOPF_RING;
         p->size = (float)(lw / c->u);
         p->rgba = col;
+    }
+}
+
+/* a full arc filled: a disc, HOP_DOT with HOPF_RING as deep as its radius */
+static void t_disc(TB* c, double x, double y, double r, uint32_t col)
+{
+    HUDOP* p;
+    if ((p = top(c, HOP_DOT, x - r, y - r, 2 * r, 2 * r))) {
+        p->flags = HOPF_RING;
+        p->size = (float)(r / c->u);
+        p->rgba = col;
+    }
+}
+
+/* techtree.js rrect: a rounded rectangle of whole pixels, three rectangles and a disc at each corner */
+static void t_rrect(TB* c, double x, double y, double w, double h, double r, uint32_t col)
+{
+    if (w <= 0 || h <= 0) return;
+    if (r > floor(w / 2)) r = floor(w / 2);
+    if (r > floor(h / 2)) r = floor(h / 2);
+    if (r < 0) r = 0;
+    t_rect(c, x + r, y, w - 2 * r, h, col);
+    t_rect(c, x, y + r, r, h - 2 * r, col);
+    t_rect(c, x + w - r, y + r, r, h - 2 * r, col);
+    if (r > 0) {
+        t_disc(c, x + r, y + r, r, col);
+        t_disc(c, x + w - r, y + r, r, col);
+        t_disc(c, x + r, y + h - r, r, col);
+        t_disc(c, x + w - r, y + h - r, r, col);
+    }
+}
+
+/* techtree.js shadow: CSS's box-shadow 0 `dy` `blur` round the box, painted outside it (HOPF_DROP) */
+static void t_shadow(TB* c, double x, double y, double w, double h, double dy, double blur, double a)
+{
+    HUDOP* p;
+    if (w == 0 || h == 0) return;
+    if ((p = top(c, HOP_SOLID, x, y, w, h))) {
+        p->flags = HOPF_DROP;
+        p->size = (float)(dy / c->u);
+        p->shade = (float)(blur / c->u);
+        p->rgba = I_SHADOW_RGB << 8 | (uint32_t)floor(I_SHADOW_A / 255.0 * a * 255 + 0.5);
     }
 }
 
@@ -183,22 +239,21 @@ static void t_empty(WIKISTAGEOPS* o)
 
 static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art);
 
-void tagpu_wikitech_draw(const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art, HUDRECT stage,
-                         double u, WIKISTAGEOPS* o)
-{
-    TB c;
-    t_empty(o);
-    t_begin(&c, stage, u, o);
-    draw_tree(&c, T, cam, sel, all, art);
-}
-
 void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
                           HUDRECT stage, double u, WIKISTAGEOPS* o)
 {
     TB c;
     t_empty(o);
     t_begin(&c, stage, u, o);
+    /* techtree.js ground: the fill and a dot every WT_DOT units from the canvas's corner, one unit
+       square, whole pixels -- fixed to the canvas, not to the tree */
     t_rect(&c, 0, 0, c.W, c.H, ink(&c, I_STAGE));
+    {
+        const double pitch = WT_DOT * u, d = u >= 0.5 ? floor(u + 0.5) : 1;
+        double gx, gy;
+        for (gy = 0; floor(gy + 0.5) < c.H; gy += pitch)
+            for (gx = 0; floor(gx + 0.5) < c.W; gx += pitch) t_rect(&c, floor(gx + 0.5), floor(gy + 0.5), d, d, ink(&c, I_DOT));
+    }
     if (T) {
         draw_tree(&c, T, cam, sel, all, art);
         return;
@@ -215,7 +270,7 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
     TB c = *cp;
     const double z = cam->z;
     uint8_t *path = NULL, *kids = NULL, *pars = NULL;
-    int32_t (*ln)[3] = NULL;
+    int32_t (*ln)[4] = NULL;   /* parent, child, ink, dashed */
     uint8_t* rank = NULL;
     double* lw_of = NULL;
     int h = -1, nl = 0, i, k;
@@ -240,15 +295,18 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         for (q = 0; q < T->parents[sel].n; q++) pars[T->pool[T->parents[sel].at + q]] = 1;
     }
     /* THE EDGES first, under the cards: each card to its parent card, then (lit, or with `all`) every
-       other builder of a card's unit; drawn by rank, a stable order */
+       other builder of a card's unit, dashed; drawn by rank, a stable order. Each is techtree.js's
+       cubic from the parent's right edge to the child's left at the headers' middles, its handles at
+       the midpoint's x, in WT_SEG pieces; two cards level are joined by one line, undashed. */
     for (i = 0; i < T->nspine; i++) {
         const int kk = T->spine[i], spk = T->sp[kk];
         if (spk >= 0) {
             const int on = path[kk] && path[spk], kid = spk == h || (kk == h && pars[spk]);
             ln[nl][0] = spk; ln[nl][1] = kk;
             ln[nl][2] = on ? I_PATH : kid ? I_KID : I_EDGE;
-            lw_of[nl] = on ? 1.5 : 1;
-            rank[nl++] = (uint8_t)(on || kid ? 2 : h >= 0 ? 0 : 1);
+            ln[nl][3] = 0;
+            lw_of[nl] = on ? 1.5 : kid ? 1.25 : 1;
+            rank[nl++] = (uint8_t)(on || kid ? 2 : 1);
         }
         for (q = 0; q < T->parents[kk].n; q++) {
             const int p = T->pool[T->parents[kk].at + q];
@@ -258,7 +316,8 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
             if (!(kid || all)) continue;
             ln[nl][0] = p; ln[nl][1] = kk;
             ln[nl][2] = kid ? I_KID : I_ALSO;
-            lw_of[nl] = 1;
+            ln[nl][3] = !kid;
+            lw_of[nl] = kid ? 1.25 : 1;
             rank[nl++] = (uint8_t)(kid ? 2 : 0);
         }
     }
@@ -266,20 +325,44 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         for (i = 0; i < nl; i++) {
             const double* A = T->pos[T->card[ln[i][0]]];
             const double* Bp = T->pos[T->card[ln[i][1]]];
-            const double mx = (A[0] + A[2] + Bp[0]) / 2;
-            double lw, off, pt[8];
+            double lw, off, x1, y1, x2, y2, mx, dl, pt[2 * (WT_DASHES > WT_SEG ? WT_DASHES + 1 : WT_SEG + 1)];
+            int np = 1, j, n;
+            const int dashed = ln[i][3];
             if (rank[i] != k) continue;
-            c.ga = h >= 0 && !rank[i] ? 0.35 : 1;
             lw = floor(lw_of[i] * z + 0.5);
             if (lw < 1) lw = 1;
             off = fmod(lw, 2) ? 0.5 : 0;
-            pt[0] = TX(A[0] + A[2]);  pt[1] = TY(A[1] + WT_EDGE_Y) + off;
-            pt[2] = TX(mx) + off;     pt[3] = TY(A[1] + WT_EDGE_Y) + off;
-            pt[4] = TX(mx) + off;     pt[5] = TY(Bp[1] + WT_EDGE_Y) + off;
-            pt[6] = TX(Bp[0]);        pt[7] = TY(Bp[1] + WT_EDGE_Y) + off;
-            t_poly(&c, pt, 4, 0, lw, ink(&c, (uint32_t)ln[i][2]), HUGE_VAL, 0);
+            x1 = TX(A[0] + A[2]); y1 = TY(A[1] + WT_EDGE_Y) + off;
+            x2 = TX(Bp[0]);       y2 = TY(Bp[1] + WT_EDGE_Y) + off;
+            mx = (x1 + x2) / 2;
+            /* an edge wholly off the canvas is not drawn, as a card is not */
+            if ((x1 > x2 ? x1 : x2) < 0 || (x1 < x2 ? x1 : x2) > c.W || (y1 > y2 ? y1 : y2) < 0 || (y1 < y2 ? y1 : y2) > c.H)
+                continue;
+            /* a dashed edge's pieces: as many as dashes of 2 units fit along it, 8 to WT_DASHES (techtree.js
+               edge) */
+            dl = floor(2 * z + 0.5);
+            if (dl < 2) dl = 2;
+            n = WT_SEG;
+            if (dashed) {
+                double m = floor((fabs(x2 - x1) + fabs(y2 - y1)) / (2 * dl) + 0.5);
+                if (m < 4) m = 4;
+                if (m > WT_DASHES / 2) m = WT_DASHES / 2;
+                n = 2 * (int)m;
+            }
+            pt[0] = x1; pt[1] = y1;
+            if (y1 == y2 && !dashed) { pt[2] = x2; pt[3] = y2; np = 2; }
+            else
+                for (j = 1; j <= n; j++, np++) {
+                    const double t = (double)j / n, v = 1 - t, a0 = v * v * v, a1 = 3 * v * v * t, a2 = 3 * v * t * t, a3 = t * t * t;
+                    pt[2 * np] = a0 * x1 + (a1 + a2) * mx + a3 * x2;
+                    pt[2 * np + 1] = (a0 + a1) * y1 + (a2 + a3) * y2;
+                }
+            /* dashed by its own pieces, every other one, each a stroke of its own: at most
+               WT_DASHES / 2 lines at any zoom (techtree.js edge) */
+            if (dashed)
+                for (j = 0; j + 1 < np; j += 2) t_poly(&c, pt + 2 * j, 2, 0, lw, ink(&c, (uint32_t)ln[i][2]), HUGE_VAL, 0);
+            else t_poly(&c, pt, np, 0, lw, ink(&c, (uint32_t)ln[i][2]), HUGE_VAL, 0);
         }
-    c.ga = 1;
     /* THE CARDS */
     for (i = 0; i < T->nspine; i++) {
         const int kk = T->spine[i];
@@ -289,17 +372,30 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         const int lit = kk == h || path[kk] || kids[kk] || pars[kk];
         const WTLIST ic = T->icons[kk];
         const double cx = TX(x), cy = TY(y), cw = TX(x + w) - cx, ch = TY(y + hh) - cy;
-        double lw, tx, tw;
+        double lw, tx, tw, a, r;
         uint32_t rim;
         char s[600], t[600];
         if (TX(x + w) < 0 || TY(y + hh) < 0 || TX(x) > c.W || TY(y) > c.H) continue;
-        c.ga = h >= 0 && !lit ? 0.3 : 1;
-        t_rect(&c, cx, cy, cw, ch, ink(&c, I_BG));
-        t_rect(&c, cx, cy, cw, TY(y + WT_HEAD) - cy, ink(&c, I_HEAD));
-        rim = kk == h ? I_SEL : path[kk] ? I_PATH : kids[kk] || pars[kk] ? I_KID : I_RIM;
-        lw = floor((kk == h ? 1.5 : 0.75) * z + 0.5);
+        a = h >= 0 && !lit ? T_DIM : 1;
+        c.ga = 1;
+        /* THE CARD (techtree.js): its shadow, the selected card's halo, the rim, the fill inside it and
+           the line under the header -- rounded rectangles of whole pixels, mixed with the stage when
+           the card is dimmed, so it fades as one layer */
+        r = floor(WT_R * z + 0.5);
+        if (r < 1) r = 1;
+        lw = floor(0.5 * z + 0.5);
         if (lw < 1) lw = 1;
-        t_ring(&c, cx + lw / 2, cy + lw / 2, cw - lw, ch - lw, lw, ink(&c, rim));
+        t_shadow(&c, cx, cy, cw, ch, z, 3 * z, a);
+        if (kk == h) {
+            double hw = floor(z + 0.5);
+            if (hw < 1) hw = 1;
+            t_rrect(&c, cx - hw, cy - hw, cw + 2 * hw, ch + 2 * hw, r + hw, ink(&c, I_SEL));
+        }
+        rim = kk == h ? I_SEL : path[kk] ? I_PATH : kids[kk] || pars[kk] ? I_KID : I_RIM;
+        t_rrect(&c, cx, cy, cw, ch, r, ink(&c, mix(rim, a)));
+        t_rrect(&c, cx + lw, cy + lw, cw - 2 * lw, ch - 2 * lw, r - lw, ink(&c, mix(I_BG, a)));
+        t_rect(&c, cx + lw, TY(y + WT_HEAD), cw - 2 * lw, lw, ink(&c, mix(I_LINE, a)));
+        c.ga = a;
         /* the picture: its black square, the picture over it */
 #define PIC_AT(unit_idx, px_, py_, side_) do { \
             const double bx_ = TX(px_), by_ = TY(py_), bw_ = TX((px_) + (side_)) - bx_, bh_ = TY((py_) + (side_)) - by_; \
@@ -334,7 +430,7 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
             } \
         } while (0)
         if (un->title[0]) tagpu_wikitech_utf8(s, sizeof s, un->title, 1); else snprintf(s, sizeof s, "%s", un->name);
-        CLIP(s, tx, y + 10, tw, WT_ROLE_TITLE, 8, I_TEXT);
+        CLIP(s, tx, y + 10, tw, WT_ROLE_TITLE, 7, I_TEXT);
         tagpu_wikitech_utf8(s, sizeof s, un->desc, 0);
         CLIP(s, tx, y + 18, tw, WT_ROLE_BODY, 5.5, I_MUTED);
         if (T->upgrades[kk].n) snprintf(s, sizeof s, "%s \xC2\xB7 T%d \xC2\xB7 %u UP", T_KIND[T->kind[kk]], T->tier[kk], T->upgrades[kk].n);

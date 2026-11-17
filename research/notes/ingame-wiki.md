@@ -2336,9 +2336,28 @@ kind, each one line, clipped), the icons 13 units square, 8 a row, a 9-unit foot
 is exact before anything is drawn. A tidy tree: each childless card takes the next row, a parent is
 centred over its children but never above the cursor, and one cursor runs down the whole tree,
 every card starting at or below it and moving it past its own bottom plus `GAP` (6 units). That is
-the invariant: two cards of one column are at least `GAP` apart, whatever the fonts. The drawing
-is rectangles, polylines (an edge leaves a card's header at its right, turns at the gap's middle
-and enters the child's header), images and clipped one-line text: what a HUD op list carries.
+the invariant: two cards of one column are at least `GAP` apart, whatever the fonts.
+
+**The look** is the research tree's prototype's (the throwaway `tools/wiki/techtree-prototype/`,
+last at commit `3b92ed28`), its CSS pixels halved (its card 236 px to our 118 units): a card with
+2-unit rounded corners, a soft shadow (`0 1u 3u #0008`), a half-unit rim and a black line under the
+header, the selected card a one-unit halo outside its rim; an edge the cubic from the parent's
+right edge to the child's left at the headers' middles, its handles at the midpoint's x (an
+S-curve), an "also built by" edge dashed; the stage a dot grid every 16 window units, fixed to the
+canvas while the tree pans and zooms over it. It is drawn with what a HUD op list carries: a
+rounded rectangle is three rectangles and a disc at each corner (`HOP_DOT`), the shadow a
+`HOPF_DROP` box, a curve 24 straight pieces, a dashed edge every other one of its own pieces, as
+many as 2-unit dashes fit along it, 8 to 64 -- so a dashed edge is at most 32 lines at any zoom,
+where a dash pattern in pixels would be one line a dash; the cap leaves a long edge's dashes
+longer than the prototype's -- and an edge wholly off the canvas is not drawn. A dimmed card
+(opacity 0.28, the prototype's) is drawn in opaque colours mixed with the stage, so its
+overlapping shapes fade as one layer. `techcheck`'s budget case draws each tree whole at the
+game's stage size with every link: 10 547 ops at most (Escalation), of the stage's 16 384; every
+edge at its cap and every card drawn would be about 12 700 for Escalation, the six setups' largest
+tree. Ops past the list are dropped and counted, never written past it. The faces are the HUD's (the
+prototype's description and footer were the browser's system face), so those two lines read
+narrower than the prototype's.
+
 Every rectangle's corners are rounded to canvas pixels and a line one pixel wide sits on a pixel's
 centre, so rims stay one crisp line at any zoom; a picture is drawn nearest-neighbour at its own
 size or larger and filtered at high quality smaller; a text line under 6 canvas pixels is left out

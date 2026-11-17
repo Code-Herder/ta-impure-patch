@@ -37,6 +37,8 @@ const SRCS = ['src/tagpu_wikitech.c', 'src/tagpu_wikitechdraw.c', 'src/tagpu_wik
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c',
   'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 const TOL = 1 / 64;
+// the stage's op list, tagpu_wikistage.h WIKI_MAXOP, read from the header so the budget is the DLL's own
+const WIKI_MAXOP = +/#define WIKI_MAXOP\s+(\d+)/.exec(fs.readFileSync(path.join(DDRAW, 'src/tagpu_wikistage.h'), 'utf8'))[1];
 const ROLES = ['title', 'body', 'label'];
 
 class CannotRun extends Error {}
@@ -46,28 +48,50 @@ function run(cmd, args, opts = {}) {
   return r.stdout;
 }
 const colour = (s, ga) => {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
   if (!m) throw new Error(`a colour the check does not read: ${s}`);
   const h = m[1].length === 3 ? [...m[1]].map(d => d + d).join('') : m[1];
-  return ((parseInt(h, 16) << 8) | Math.round(ga * 255)) >>> 0;
+  const a = h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1;
+  return ((parseInt(h.slice(0, 6), 16) << 8) | Math.round(a * ga * 255)) >>> 0;
 };
 
 /* ---- the recording context: techtree.js's calls as shapes ---- */
 function recorder(em, asked, W, H) {
-  const out = [];
+  const out = [], saved = [];
   let path = [], dash = [];
   const g = {
     canvas: { width: W, height: H }, fillStyle: '#000000', strokeStyle: '#000000', lineWidth: 1, font: '', lineCap: 'butt',
     textBaseline: 'alphabetic', globalAlpha: 1, imageSmoothingEnabled: true, imageSmoothingQuality: 'low',
-    save() {}, restore() {},
+    shadowColor: '#00000000', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
+    save() { saved.push([g.globalAlpha, g.shadowColor, g.shadowBlur, g.shadowOffsetX, g.shadowOffsetY, g.fillStyle]); },
+    restore() { [g.globalAlpha, g.shadowColor, g.shadowBlur, g.shadowOffsetX, g.shadowOffsetY, g.fillStyle] = saved.pop(); },
+    // a disc: a full arc filled (HOP_DOT, as deep as its radius)
+    arc(x, y, r, a0, a1) {
+      if (a0 !== 0 || Math.abs(a1 - 2 * Math.PI) > 1e-12) throw new Error('an arc that is not a whole circle');
+      path.push({ disc: [x, y, r] });
+    },
+    fill() {
+      for (const p of path) {
+        if (!p.disc) throw new Error('a filled path that is not a disc');
+        const [x, y, r] = p.disc;
+        out.push({ k: 'dot', x: x - r, y: y - r, w: 2 * r, h: 2 * r, d: r, c: colour(g.fillStyle, g.globalAlpha) });
+      }
+    },
     setLineDash(d) { dash = d.length % 2 ? [...d, ...d] : [...d]; },
     beginPath() { path = []; },
     moveTo(x, y) { path.push([[x, y]]); },
-    lineTo(x, y) { if (!path.length) path.push([]); path.at(-1).push([x, y]); },
-    stroke() { for (const p of path) stroke(p, false); },
+    lineTo(x, y) { if (!path.length || path.at(-1).disc) path.push([]); path.at(-1).push([x, y]); },
+    stroke() { for (const p of path) if (!p.disc) stroke(p, false); },
     fillRect(x, y, w, h) {
       if (w < 0) { x += w; w = -w; }
       if (h < 0) { y += h; h = -h; }
+      // a shadow cast from a rectangle off the canvas (techtree.js `shadow`): the shadow alone, HOPF_DROP
+      if (colour(g.shadowColor, 1) & 255) {
+        if (x + w >= 0 || g.shadowOffsetX <= 0) throw new Error('a shadow cast from a rectangle on the canvas');
+        if (w && h) out.push({ k: 'drop', x: x + g.shadowOffsetX, y, w, h, dy: g.shadowOffsetY, blur: g.shadowBlur,
+          c: colour(g.shadowColor, g.globalAlpha) });
+        return;
+      }
       if (w && h) out.push({ k: 'rect', x, y, w, h, c: colour(g.fillStyle, g.globalAlpha) });
     },
     strokeRect(x, y, w, h) {
@@ -130,14 +154,17 @@ function recorder(em, asked, W, H) {
 }
 
 /* ---- the C ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { SOLID: 1, TEXT: 3, LINE: 5, PIC: 10 }, RING = 4, BASE = 16, INK = 64;
+const HOP = { SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, PIC: 10 }, RING = 4, DROP = 8, BASE = 16, INK = 64;
 function shapes(fr, u, roleOf) {
   const X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
-  for (const [kind, flags, part, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb] of fr.ops) {
+  for (const [kind, flags, part, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade] of fr.ops) {
     if (Math.abs(X(cx)) > TOL || Math.abs(Y(cy)) > TOL || Math.abs(cw * u - fr.w) > TOL || Math.abs(ch * u - fr.h) > TOL)
       out.push({ k: 'clip', clip: [X(cx), Y(cy), cw * u, ch * u] });
     else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
+    else if (kind === HOP.SOLID && flags === DROP)
+      out.push({ k: 'drop', x: X(x), y: Y(y), w: w * u, h: h * u, dy: size * u, blur: shade * u, c: rgba });
+    else if (kind === HOP.DOT && flags === RING) out.push({ k: 'dot', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
     else if (kind === HOP.TEXT && flags === (BASE | INK))
       out.push({ k: 'text', x: X(x), y: Y(y), size: size * u, role: roleOf[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });
@@ -173,6 +200,9 @@ function cases(tree) {
     const [rx, ry] = L.pos[root];
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: 'fit', sel: null, all: false, hits });
     out.push({ side, u: 1.5, stage: [40, 30, 800, 400], cam: 'fit', sel: root, all: true });
+    // THE BUDGET: the stage at its size in the game (1404 x 842 pixels at 1080p, the dot grid's most), the whole tree
+    // with every link -- the most ops a frame of the entry makes, which must fit WIKI_MAXOP (a drop is a DIFFER)
+    out.push({ side, u: 1.5, stage: [40, 30, 936, 561], cam: 'fit', sel: root, all: true, budget: true });
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: { z: 8, x: rx - 20, y: ry - 20 }, sel: up, all: false });
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: { z: 2, x: L.w / 3, y: L.h / 3 }, sel: icon, all: true });
   });
@@ -189,6 +219,7 @@ function draw(tree, c, fr, em, asked, pics) {
       if (Math.abs(f[k] - fr.cam[i]) > 1e-9 * Math.max(1, Math.abs(f[k]))) throw new Error(`the fitted camera's ${k}: ${f[k]} != C ${fr.cam[i]}`);
   }
   const r = recorder(em, asked, fr.w, fr.h);
+  WikiTech.ground(r.g, fr.w, fr.h, c.u);
   WikiTech.draw(r.g, M, L, { cam, s: c.u, sel: c.sel, all: c.all, pic: k => pics.get(k) || null, font: role => `400 1px role-${role}` });
   return r.out;
 }
@@ -247,7 +278,7 @@ try {
         strings.forEach((t, j) => em[r].set(t, v[j]));
       });
     }
-    let nops = 0, nd = 0, ntext = 0, npic = 0, nhit = 0;
+    let nops = 0, nd = 0, ntext = 0, npic = 0, nhit = 0, most = 0;
     cs.forEach((c, i) => {
       const fr = frames[i];
       if (fr.dropped) { code = 1; nd++; console.log(`DIFFER ${mod} case ${i}: the C side dropped ${fr.dropped} ops`); return; }
@@ -264,6 +295,7 @@ try {
       }
       const want = draw(tree, c, fr, em, null, pics), got = shapes(fr, c.u, roleOf);
       nops += got.length; ntext += got.filter(s => s.k === 'text').length; npic += got.filter(s => s.k === 'pic').length;
+      if (c.budget) most = Math.max(most, fr.ops.length);
       const n = Math.max(want.length, got.length);
       for (let j = 0; j < n; j++) {
         const f = differ(want[j], got[j]);
@@ -275,7 +307,7 @@ try {
       }
     });
     console.log(`techcheck: ${mod}: ${cs.length} cases over ${tree.sides.length} sides, ${nops} ops (${ntext} texts, ${npic} pictures), ${nhit} hits` +
-      (nd ? `, ${nd} DIFFER` : ', every op paired'));
+      `, the game's stage with every link ${most} ops of its ${WIKI_MAXOP}` + (nd ? `, ${nd} DIFFER` : ', every op paired'));
   }
   console.log(`techcheck: ${code ? 'DIFFER' : 'all equal'} -- ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
