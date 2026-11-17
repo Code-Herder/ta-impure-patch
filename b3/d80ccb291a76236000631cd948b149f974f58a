@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5-5 effort=high range=8dc21782..b3d80ccb reviewers=2 (correctness, thread sync) findings=7 acted=7 rejected=0 fixes=0b699279 date=2026-11-17
+- MEDIUM: a press on the panel's padding picked on the tree under it (tech_down now takes only the uncovered canvas; (tt5) clicks the padding)
+- LOW: WIKI_MAXHOT's argument did not count the panel's chips, and the panel was built before the window's controls: top layer built last, panel width capped at theatre.about_max 400, WIKI_MAXHOT 448; every unit's panel of six setups swept at five screens (93 hits, 397 ops at most)
+- LOW: js_fixed rounded the product, not the exact double (22 Escalation speeds): exact 128-bit compare, 202 526 values agree with node
+- LOW: a fitted zoom above 4:1 made the take refuse the tree: bounded finite and positive
+- LOW: a chip's pick kept a scroll past what was drawn: held to the drawn scroll
+- LOW: stale comments (About as the only top layer, the ellipsis) and notes (head 328, About-only cover, hit map size)
+Verified: wikilaycheck 46 cases + the 21:9 builder case agree; --check-only sweep 12 533 frames; wiki_regression techtree passed (incl. the padding click); mods (t3) every kind opened on all six setups; offline suite 17/17.
