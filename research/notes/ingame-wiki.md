@@ -2274,7 +2274,12 @@ shown stretched and soft; `res=` the screen's own shows what the game would draw
 
 **The panel.** The unit's picture, name, description and flags; its model in 3D (`unitview.js`):
 the pack's mesh posed by the unit's own COB script through the wiki's COB host (`serve.py`, the C
-the DLL's wiki runs), lit by face, turning until dragged; the actions its FBI allows, each the
+the DLL's wiki runs), lit by face, turning until dragged (a drag turns the Turn button off). It
+draws as the game's unit pass does: back faces culled (the engine paints only a face that runs
+clockwise on its screen; in the pack's model space that is a face wound counter-clockwise seen from
+outside, MEASURED 2026-11-16 in 262 of stock's 266 models), and a textured quad mapped per pixel
+through the inverse bilinear map of `tagpu_native.c` `taQuadST` from the pack's quad stream, not as
+two triangles; the actions its FBI allows, each the
 engine's own call -- Walk (`StartMoving`, `MoveRate1` / `StopMoving`), Aim (`AimPrimary` with a
 heading stepped every 45 ticks), Fire (`FirePrimary`, `Shot1`), Build (`StartBuilding` /
 `StopBuilding`), On / off (the state setter), Take off -- and Reset. An upgrade has no body of its
