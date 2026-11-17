@@ -12669,6 +12669,20 @@ static void check_mil_retreat_members(void)
           "every member arrived: FORM, and no RETREAT squad left");
 }
 
+/* check_mil_at_rally's world: mil_world, the anchor at cell (20, 20), the seat's start beside it at (328, 328) px
+   and the other at (6 416, 3 216), no structure known, so the estimate is the other start */
+static void rally_starts(void)
+{
+    mil_world();
+    s_st.ax = s_st.az = 20;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6416;
+    s_w.starts[1].z = 3216;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+}
+
 /* AT THE RALLY and THE RETREAT HOME (impai_mil.c): check_mil_stay_or_go's three tanks and a submarine they cannot
    hurt but outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at
    cell (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point
@@ -12680,8 +12694,13 @@ static void check_mil_retreat_members(void)
    member already where a retreat would take it -- no retreat, the squad back to FORM, the loss stamped for the
    lead, and no order at the submarine it lost to. (e) The same raid
    2 400 px out: one prediction, a retreat. (f) The member's index is the one it takes in the layer's RETREAT squad
-   it would join (below). (g) A sea ATTACK of three destroyers up the strait against six, the rally ashore with no
-   water within 1 024 px: no point is not home -- one prediction, lost, a retreat (below). */
+   it would join (below). (g) Three destroyers whose rally is ashore with no water within 1 024 px, each heading an
+   attack: a sea ATTACK up the strait against six loses, retreats, and each is moved to the water nearest the rally,
+   its HOME POINT, and is still on its way at the next decision; a FORM squad there with no contact is moved there
+   too; with the water past HOME_BLOCKS the lost ATTACK retreats and each is stopped once, but one walking off its
+   factory's yard (a lone Park); at its home point the lost ATTACK takes no retreat; and of five members in five
+   components the fifth, past HOME_SPIRALS, is given nothing (below). (h) A DEFEND that loses at home keeps its
+   task and travels home (below). */
 static void check_mil_at_rally(void)
 {
     static const char* const NAME[5] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally",
@@ -12744,26 +12763,133 @@ static void check_mil_at_rally(void)
     mil_print("a tank whose retreat joins the layer's", &o, from);
     CHECK(o.predictions == 1 && o.retreats == 1, "a tank home at its own index, not at the index it joins at: %u "
           "predictions, %u retreats", o.predictions, o.retreats);
-    /* (g) the rally about (675, 493) px, the strait from x 3 840 px: no block of the destroyers' component within
-       SUB_BLOCKS of it */
-    mil_world();
-    s_st.ax = s_st.az = 20;
-    s_w.starts[0].x = s_w.starts[0].z = 328;
-    s_w.starts[0].index = 0;
-    s_w.starts[1].x = 6416;
-    s_w.starts[1].z = 3216;
-    s_w.starts[1].index = 1;
-    s_w.nstarts = 2;
-    mil_water(W_STRAIT);
-    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 128, 120);
-    for (k = 0; k < 3; k++) member(1 + k, M_DEST, 250 + 2 * k, 100, 0);
-    for (k = 0; k < 6; k++) enemy(1300 + k, M_DEST, 250 + 2 * k, 108, IMPAI_LOS, 1);
-    from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea squad's decision runs");
-    mil_print("a sea ATTACK, the rally ashore", &o, from);
-    CHECK(o.predictions == 1 && o.retreats == 1 && squad_task_of(1) == IMPAI_SQ_RETREAT,
-          "a sea ATTACK whose rally has no water near: %u predictions, %u retreats, task %d", o.predictions,
-          o.retreats, squad_task_of(1));
+    /* (g) the rally about (675, 493) px, block (21, 15): no block of the destroyers' component within SUB_BLOCKS of
+       it. Each destroyer heads an attack, at the force it meets or, for a FORM squad, at the ground. In the ponds,
+       one destroyer in each of five one-block ponds 79 to 95 blocks from the rally: five components, one more than
+       HOME_SPIRALS. */
+    for (c = 0; c < 5; c++) {
+        static const char* const GN[5] = { "a lost sea ATTACK, the strait", "a sea FORM, the strait",
+                                           "a lost sea ATTACK, the water past HOME_BLOCKS",
+                                           "a lost sea ATTACK at its home point", "a sea FORM in five ponds" };
+        const int n = c == 4 ? 5 : 3, form = c == 1 || c == 4;
+        const int x0 = c == 2 ? 450 : c == 3 ? 241 : 250, z0 = c == 3 ? 30 : 100;
+        int moves = 0, stops = 0, near_home = 0, heads = 0, later = 0, ordered = 0;
+        rally_starts();
+        if (c == 2 || c == 4) {
+            s_w.nwater = 0;
+            s_w.sea = 50;
+            if (c == 2) water_add(&s_w, 440, 0, 471, 255, 40);
+            for (k = 0; c == 4 && k < 5; k++) water_add(&s_w, 200 + 8 * k, 40, 201 + 8 * k, 41, 40);
+            mil_sea_types();
+            fake_reach(&s_mreach, M_N);
+            s_mil_reach = &s_mreach;
+        } else
+            mil_water(W_STRAIT);
+        squad_task(0, form ? IMPAI_SQ_FORM : IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 128, 120);
+        for (k = 0; k < n; k++) member(1 + k, M_DEST, c == 4 ? 200 + 8 * k : x0 + 2 * k, c == 4 ? 40 : z0, 0);
+        if (!form)
+            for (k = 0; k < 6; k++) enemy(1300 + k, M_DEST, x0 + 2 * k, z0 + 8, IMPAI_LOS, 1);
+        for (k = 1; k <= n; k++) {
+            FUNIT* u = &s_w.unit[k];
+            memset(&u->list[0], 0, sizeof u->list[0]);
+            u->list[0].action = A_ATTACK;
+            u->list[0].target = (uint16_t)(form ? WQ_NONE : 1300);
+            u->list[0].pos[0] = (int32_t)((uint32_t)(x0 * 16 + 8) << 16);
+            u->list[0].pos[2] = (int32_t)((uint32_t)((z0 + 8) * 16 + 8) << 16);
+            u->n = 1;
+        }
+        if (c == 2) {           /* the third holds a factory's lone Park instead, walking off its yard */
+            s_w.unit[3].list[0].action = A_PARK;
+            s_w.unit[3].list[0].target = (uint16_t)WQ_NONE;
+        }
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea squad's decision runs: %s", GN[c]);
+        mil_print(GN[c], &o, from);
+        for (k = from; k < s_w.nlog; k++) {
+            const WQ_CMD* m = &s_w.log[k].c;
+            const int bx = m->pos[0] >> 21, bz = m->pos[2] >> 21;
+            if (m->unit < 1 || m->unit > n) continue;
+            ordered |= 1 << m->unit;
+            moves += m->action == A_MOVE;
+            stops += m->action == A_STOP;
+            near_home += m->action == A_MOVE && bx >= 120 && bx <= 135 && bz >= 11 && bz <= 19;
+        }
+        for (k = 1; k <= n; k++) heads += s_w.unit[k].n == 0 || s_w.unit[k].list[0].action != A_ATTACK;
+        printf("%s: moves=%d near the home point=%d stops=%d heads replaced=%d ordered=0x%x unreached=%u\n", GN[c],
+               moves, near_home, stops, heads, (unsigned)ordered, o.unreached);
+        if (c == 0)
+            CHECK(o.predictions == 1 && o.retreats == 1 && squad_task_of(1) == IMPAI_SQ_RETREAT && moves == 3 &&
+                      near_home == 3 && heads == 3,
+                  "%s: %u retreats, task %d, %d moves to the water nearest the rally, %d heads replaced", GN[c],
+                  o.retreats, squad_task_of(1), near_home, heads);
+        if (c == 1)
+            CHECK(!o.retreats && squad_task_of(1) == IMPAI_SQ_FORM && moves == 3 && near_home == 3 && heads == 3,
+                  "%s: task %d, %d moves to the water nearest the rally, %d heads replaced", GN[c], squad_task_of(1),
+                  near_home, heads);
+        if (c == 3)
+            CHECK(o.predictions == 1 && !o.retreats && squad_task_of(1) == IMPAI_SQ_FORM,
+                  "%s: home, no retreat: %u predictions, %u retreats, task %d", GN[c], o.predictions, o.retreats,
+                  squad_task_of(1));
+        if (c == 4)
+            CHECK(moves == 4 && !stops && ordered == 0x1E && o.unreached == 1 && s_w.unit[5].list[0].action == A_ATTACK,
+                  "%s: %d moves, %d stops, ordered 0x%x, %u unreached: the fifth component's search is past the cap, "
+                  "and a capacity stops nothing", GN[c], moves, stops, (unsigned)ordered, o.unreached);
+        if (c == 2) {
+            CHECK(o.predictions == 1 && o.retreats == 1 && !moves && stops == 2 && ordered == 0x6 &&
+                      s_w.unit[3].n == 1 && s_w.unit[3].list[0].action == A_PARK,
+                  "%s: %u retreats, %d moves, %d stops, ordered 0x%x, the Park kept", GN[c], o.retreats, moves, stops,
+                  (unsigned)ordered);
+            /* the engine leaves a stopped unit one Standby the next append drops (WQ_OF_DROP); the fake, none */
+            memset(&s_w.unit[2].list[0], 0, sizeof s_w.unit[2].list[0]);
+            s_w.unit[2].list[0].action = A_PATROL;
+            s_w.unit[2].list[0].target = (uint16_t)WQ_NONE;
+            s_w.unit[2].list[0].flags = WQ_OF_DROP;
+            s_w.unit[2].n = 1;
+        }
+        if (c != 0 && c != 2) continue;
+        from = s_w.nlog;
+        s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the next decision runs: %s", GN[c]);
+        for (k = from; k < s_w.nlog; k++) later += s_w.log[k].c.unit >= 1 && s_w.log[k].c.unit <= 3;
+        printf("%s, the next decision: %d orders to the destroyers, task %d\n", GN[c], later, squad_task_of(1));
+        if (c == 0)
+            CHECK(squad_task_of(1) == IMPAI_SQ_RETREAT, "%s: on its way to its home point, still RETREAT: task %d",
+                  GN[c], squad_task_of(1));
+        else
+            CHECK(!later, "%s: no unit standing, dropping its default order or parking is stopped: %d orders", GN[c],
+                  later);
+    }
+    /* (h) a held DEFEND: the rally 2 400 px out in this plan, about (2 496, 1 357) px, past THE ANCHOR BOX, three
+       tanks defending there against a tank 640 px from the anchor -- a base threat they can hurt, out of their
+       reach -- lose to eight tanks 128 px south, which threaten nothing. Every member stands home: no retreat, and
+       across two decisions the squad stays DEFEND, no defence begun again, every order it is given a move within
+       RALLY_PX of the rally, none at the threat. */
+    {
+        IMPAI_PLAN far = IMPAI_PLAN_ROW;
+        int round, off = 0;
+        far.rally_px = 2400;
+        rally_starts();
+        squad_task(0, IMPAI_SQ_DEFEND, TASIM_LAYER_LAND, 968 >> 5, 328 >> 5);
+        for (k = 0; k < 3; k++) member(1 + k, M_TANK, 156 + 2 * k, 84, 0);
+        enemy(1300, M_TANK, 60, 20, IMPAI_LOS, 1);
+        for (k = 0; k < 8; k++) enemy(1310 + k, M_TANK, 154 + 2 * k, 92, IMPAI_LOS, 1);
+        for (round = 0; round < 2; round++) {
+            from = s_w.nlog;
+            CHECK(mil_decide(&far, 1, &o) == 0, "the held defence's decision runs");
+            mil_print("a held DEFEND", &o, from);
+            for (k = from; k < s_w.nlog; k++) {
+                const WQ_CMD* m = &s_w.log[k].c;
+                const int64_t dx = (m->pos[0] >> 16) - 2496, dz = (m->pos[2] >> 16) - 1357;
+                if (m->unit >= 1 && m->unit <= 3 && (m->action != A_MOVE || dx * dx + dz * dz > 512 * 512)) off++;
+            }
+            printf("a held DEFEND, decision %d: task %d, predictions=%u retreats=%u defends=%u orders off home=%d\n",
+                   round, squad_task_of(1), o.predictions, o.retreats, o.defends, off);
+            CHECK(o.predictions == 1 && !o.retreats && !o.defends && squad_task_of(1) == IMPAI_SQ_DEFEND && !off,
+                  "a held DEFEND, decision %d: task %d, %u retreats, %u defences begun, %d orders off home", round,
+                  squad_task_of(1), o.retreats, o.defends, off);
+            s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+        }
+    }
 }
 
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by

@@ -312,11 +312,17 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    prediction. **The retreat home**: a squad of any task that loses its prediction while every member already
    stands within 512 px of the point a retreat would take it to, a point found (each member at the index it takes
    in the RETREAT squad it would join) takes no retreat and, that decision, not the contact; the lost prediction
-   still counts as the lead's evidence, a FORM squad forms its wave if it would win, and a RAID, an ATTACK and a
-   DEFEND go back to FORM where they stand. A member with no point -- no block of its class's component within
-   1 024 px of the rally, a ship with the rally ashore -- is not home: held as home, a lost sea ATTACK went on at
-   the force it lost to. Such a squad became RETREAT, was released to FORM in the same decision and was
-   predicted again at the next, for as long as a contact stood within its reach: on ProTA's Lava Mania
+   still counts as the lead's evidence, a FORM squad forms its wave if it would win, a RAID and an ATTACK go back
+   to FORM where they stand, and a DEFEND keeps its task and travels home that decision -- so a squad at home that
+   has lost does not walk on at its goal. A DEFEND keeps its task because the defence runs before the tasks and
+   makes a FORM squad with a threat in view DEFEND again: sent back to FORM, a held DEFEND went DEFEND, FORM and
+   DEFEND at every decision, a defence counted at each. A member of a class with no block of its component within
+   1 024 px of the rally -- a ship with the rally ashore -- is measured against its **home point** (*Keeping to
+   the layer*), so a lost sea ATTACK falls back to the water nearest home; a member with no point at all, none
+   within its home point's bound either, is not home: held as home, a lost sea ATTACK went on at the force it lost
+   to. **Why the retreat home**: without it a squad whose retreat would end where it stands became RETREAT, was
+   released to FORM in the same decision and was predicted again at the next, for as long as a contact stood within
+   its reach: on ProTA's Lava Mania
    (`bar-nota-lavamania-ca-2` at c1dc2e70), the rally 900 px short of the estimate, FORM squads were sent back 221
    times between GameTime 12 000 and 40 000, every one within 394 px of the rally, and raids 108 times, by contacts
    411 to 845 px off; no attack was given from 15 262 to 38 032 and the game reached the cap at 7 009 against
@@ -324,9 +330,10 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    344 within 512 px of the rally, and raids 229 times (MEASURED 2026-11-16, diagnostic builds logging each
    retreat). **Gap**: a squad so held may
    stand within reach of the contact it lost to -- artillery out-ranging the rally -- answered only by its units'
-   own fire, and is predicted again at each decision; a squad of members with no point becomes a RETREAT that
-   gives no move and is released where it stands at the next decision, so it stops without withdrawing, and as
-   FORM it is sent back every other decision while the contact stays in its reach. **Why the side**: 28 of the 35 retreats of
+   own fire, and is predicted again at each decision; a squad of members with no point becomes a RETREAT whose
+   members are stopped and released where they stand at the next decision, so it stops without withdrawing, and
+   as FORM it is sent back every other decision while the contact stays in its reach; a stopped unit's Standby, at
+   the roam move state, may take a target in its reach and chase it until a decision stops it again. **Why the side**: 28 of the 35 retreats of
    `bar-hota-pincushion-ca-2` at 1a9350ea had an ATTACK of the same layer within 1 024 px -- a squad of 41 worth
    9 755 fell back from the enemy's commander and towers beside two squads worth 9 133 that stayed --, and the
    game reached the cap at 414 units against 40 (MEASURED 2026-11-15, the recording's `s_mil`). **The home
@@ -395,7 +402,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    the enemy's base stood unswept (MEASURED 2026-11-15, the recording's `s_mil`). `stalled=` on the `mil` line
    counts the goals given up. **Gaps**: a squad whose nearest member edges 256 px nearer once a window keeps the goal
    another window; a goal chasing a target that moves more than 256 px a decision is measured afresh each time.
-   **A RETREAT releases each member as it arrives** at the rally point, within 512 px of the point travel gives it:
+   **A RETREAT releases each member as it arrives** home, within 512 px of the point travel gives it (about the
+   rally point, or its home point), or stopped where it stands with no point:
    the member joins its layer's FORM squad, which walks to the same point and fights what reaches it, and a RETREAT
    left with no member is freed; so no member home waits for another, and a squad that joins the retreat from
    farther out holds none of those already home. **Why**: the whole squad waited for its last member, and every
@@ -1081,7 +1089,15 @@ plant takes the slot.
 
 **Keeping to the layer.** Every military move goes through one function, which keeps the point when the member's
 class reaches it and otherwise moves it to the nearest block of the member's own component within 32 blocks (a
-bounded spiral, 32 a decision, cached by class, component and point), or gives no order (`unreached=`). A wave goes
+bounded spiral, 32 a decision, cached by class, component and point), or gives no order (`unreached=`). A FORM or
+RETREAT member with no such block for the rally point -- a ship whose rally is ashore -- goes to its **home point**,
+the block of its own component nearest the rally point within 192 blocks (6 144 px; a bounded spiral, 4 a decision,
+cached by class and component), spread as any travel; with none it is **stopped** (the engine's Stop leaves one
+Standby and the unit where it stands, [ui](../engine/ui.html), *STOP and ATTACK*), unless it holds no task -- no
+order, the default order the engine drops, or a factory's lone Park, which walks it off the yard --, so no member
+sent home keeps an attack at the force it lost to; a member the caches cannot answer for is given nothing that
+decision (`unreached=`), never stopped. The retreat home and the release measure a member against the same point.
+A wave goes
 only when at least half its squad's value reaches the target or a block of its own component within its range
 (`squad_reaches`), so no land wave crosses a strait and a sea wave shells a coast; a raid only to a target its first
 raider reaches; a scout only to starts it reaches, none when there is none; a member attacks a target only when it
@@ -1112,7 +1128,9 @@ seat whose military refuses every decision keeps one factory (the mil line's `re
 tidal generator on a dry anchor; before any structure is seen the estimate is the nearest start that can hold an
 enemy's base -- not the seat's own, not left empty, not an ally's where the level seated its starts -- so with
 random starts any start;
-a FORM squad with no block of its component within 32 blocks of its rally point stays where it is (`unreached=`); a
+a FORM or RETREAT member with no block of its component within 192 blocks of the rally point is stopped where it
+stands (`unreached=`), and at the roam move state its Standby may chase a target in its reach until the next
+decision stops it again; a
 naval judgement that comes late -- the estimate moving across water once structures are seen, as on Lake Shore --
 finds both `factory_max` slots land plants and gets no sea plant until a dry hunt, since none fits inside
 `factory_max` without taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for

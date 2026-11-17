@@ -1151,7 +1151,7 @@ static int way_off_crowded(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t h
     for (k = 0; k < d->nway_to; k++)
         if (d->way_to[k].slot != b->slot && touch(x, z, hb, d->way_to[k].x, d->way_to[k].z, d->way_to[k].h)) return 1;
     for (k = 0; k < d->nidle; k++)
-        if ((!still || !way_held(d, d->idle[k].slot)) && touch_ref(d, b, &d->idle[k], hb, x, z)) return 1;
+        if (touch_ref(d, b, &d->idle[k], hb, x, z) && (!still || !way_held(d, d->idle[k].slot))) return 1;
     if (still) return 0;
     for (k = 0; k < d->nhelpers; k++)
         if (touch_ref(d, b, &d->helpers[k], hb, x, z)) return 1;

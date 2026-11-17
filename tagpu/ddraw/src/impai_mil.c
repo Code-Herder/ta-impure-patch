@@ -38,6 +38,8 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
 #define STARTS       16
 #define SUB_BLOCKS   32         /* a move's point is moved at most this many 32-px blocks (1024 px)          */
 #define SUB_CACHE    32         /* the substitutes one decision computes                                     */
+#define HOME_BLOCKS  192        /* THE HOME POINT lies at most this many 32-px blocks from the rally (6 144 px)  */
+#define HOME_SPIRALS 4          /* the home points one decision searches for                                 */
 #define NEAR_KEYS    8          /* the (class, label) pairs one reach test of a squad computes               */
 #define RANGE_MAX    1024       /* a range read from the threat table is data: held to this for a reach test */
 typedef struct MUNIT {          /* an army unit of the census                                              */
@@ -82,6 +84,7 @@ typedef struct MSQ {            /* a squad's figures in this decision           
     uint16_t n;
     float    value;
     int      contact;           /* the contact it fights, -1 none                                           */
+    uint8_t  held;              /* 1 for a DEFEND THE RETREAT HOME held this decision: it travels home       */
 } MSQ;
 
 typedef struct ETYPE { uint16_t type, n; float value; } ETYPE;
@@ -149,6 +152,9 @@ typedef struct MDEC {
     int                 act_move;
     MSUB                sub_pt[SUB_CACHE];  /* the decision's substitute points (point_for)                 */
     int                 nsub_pt;
+    MSUB                home_pt[HOME_SPIRALS];  /* the decision's home points (home_point)                  */
+    int                 nhome_pt;
+    int                 act_park;           /* the world's action byte of a factory's Park, -1 none (halt)  */
     MSPARE              spare[DGUN_SPARE_MAX];  /* the D-gun's guard (spare_list)                          */
     int                 nspare;
     uint8_t             shoot[IMPAI_ENEMY_MAX]; /* the D-gun's candidates, by enemy index                  */
@@ -2103,6 +2109,59 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
     }
 }
 
+/* THE HOME POINT of army unit u, which point_for answered 0 for at the rally point -- no block of its class's
+   component within SUB_BLOCKS of it, as a ship whose rally is ashore: the block of that component nearest the rally
+   point, in ring order within HOME_BLOCKS rings (impai_reach_near), its centre into (*x, *z), 1; 0 when there is
+   none within them; -1, UNDECIDED, when the decision's HOME_SPIRALS searches are spent on other keys. point_for's
+   0 means the level has labels for u's class and u stands on a labelled block, so the key, (class, label), is
+   u's own; the rally point is the decision's one. Cached, found or not, so a squad costs one search a class. A
+   unit within HOME_BLOCKS of the rally has its own block within the rings, so it always has one. BOUND: at most
+   HOME_SPIRALS searches a decision, each at most (2 HOME_BLOCKS + 1)^2 = 148 225 label reads. */
+static int home_point(MDEC* d, const MUNIT* u, int32_t* x, int32_t* z)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const unsigned cls = d->in->ti[u->type].mclass;
+    const int label = impai_reach_at(r, cls, u->x >> 5, u->z >> 5);
+    MSUB* m;
+    int k, ox, oz;
+    for (k = 0; k < d->nhome_pt; k++)
+        if (d->home_pt[k].cls == cls && d->home_pt[k].label == label) break;
+    if (k == d->nhome_pt) {
+        if (d->nhome_pt >= HOME_SPIRALS) return -1;
+        m = &d->home_pt[d->nhome_pt++];
+        m->cls = (uint8_t)cls;
+        m->label = (uint16_t)label;
+        m->bx = (int16_t)(d->rx >> 5);
+        m->bz = (int16_t)(d->rz >> 5);
+        m->found = (uint8_t)impai_reach_near(r, cls, (uint16_t)label, m->bx, m->bz, HOME_BLOCKS, &ox, &oz);
+        m->sx = (int16_t)(m->found ? ox : 0);
+        m->sz = (int16_t)(m->found ? oz : 0);
+    }
+    m = &d->home_pt[k];
+    if (!m->found) return 0;
+    *x = m->sx * 32 + 16;
+    *z = m->sz * 32 + 16;
+    return 1;
+}
+
+/* THE POINT HOME of army unit u, the n-th member of a squad sent home: the point travel gives it about the rally
+   point and its substitute (travel_point, point_for); where there is neither, the point travel gives it about its
+   HOME POINT (home_point), which u reaches -- the home point holds u's own label, and travel_point keeps to points
+   u reaches. 1 with the point in (*px, *pz); 0 when u has no home point either: it is stopped where it stands
+   (travel_home); -1, UNDECIDED, a cache spent (point_for, home_point). FORM and RETREAT travel to it
+   (travel_home), and THE RETREAT HOME and THE RETREAT RELEASES ON ARRIVAL measure a member against it, so a squad
+   is home where it is sent. */
+static int point_home(MDEC* d, const MUNIT* u, int n, int32_t* px, int32_t* pz)
+{
+    int32_t hx, hz;
+    int p;
+    travel_point(d, u, n, d->rx, d->rz, px, pz);
+    if ((p = point_for(d, u->type, u->x, u->z, px, pz)) != 0) return p;
+    if ((p = home_point(d, u, &hx, &hz)) <= 0) return p;
+    travel_point(d, u, n, hx, hz, px, pz);
+    return 1;
+}
+
 /* THE ARRIVAL of squad s sent to (x, z). A member has arrived when it stands within `r` px of the point travel
    gives it -- its spread point, or the point or the substitute move_to gives it (point_for) -- or when travel
    gives it none, no substitute. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
@@ -2482,9 +2541,11 @@ static void figures(MDEC* d, int s)
 {
     MSQ* q = &d->sq[s];
     const int contact = q->contact;
+    const uint8_t held = q->held;
     int k;
     memset(q, 0, sizeof *q);
     q->contact = contact;
+    q->held = held;
     for (k = 0; k < d->narmy; k++) {
         const MUNIT* u = &d->army[k];
         if (u->sq != s) continue;
@@ -2805,23 +2866,21 @@ static int task_over(const MDEC* d, int s)
 static int member_home(MDEC* d, MUNIT* u, int n)
 {
     int32_t px, pz;
-    int p;
-    travel_point(d, u, n, d->rx, d->rz, &px, &pz);
-    p = point_for(d, u->type, u->x, u->z, &px, &pz);
+    const int p = point_home(d, u, n, &px, &pz);
     return p >= 0 && (!p || dist(u->x, u->z, px, pz) <= RALLY_PX);
 }
 
-/* THE RETREAT RELEASES ON ARRIVAL: each member of RETREAT squad s that has arrived -- within RALLY_PX of the point
-   travel gives it, or given none, as arrived judges a member; one point_for cannot answer for stays -- joins its
-   layer's FORM squad, and the squad holds the rest; a squad left with none is freed. INVARIANT: no member that has
-   arrived waits on another, so a squad that joins the layer's RETREAT from farther out (become, which restarts
-   its lifetime) holds none of the members already home. WHY: the whole squad waited for its last member, and
+/* THE RETREAT RELEASES ON ARRIVAL: each member of RETREAT squad s that has arrived -- within RALLY_PX of THE POINT
+   HOME (point_home), or with none, stopped where it stands (travel_home); one the caches cannot answer for stays --
+   joins its layer's FORM squad, and the squad holds the rest; a squad left with none is freed. INVARIANT: no member
+   that has arrived waits on another, so a squad that joins the layer's RETREAT from farther out (become, which
+   restarts its lifetime) holds none of the members already home. WHY: the whole squad waited for its last member, and
    every squad that fell back joined it and restarted its lifetime, so the retreat never ended while the waves kept
    falling back: 60 % of the army's value stood in RETREAT from GameTime 30 000 on bar-hota-pincushion-ca-2 at
    1a9350ea, 195 units of 414 at the cap, and 40-44 % in aa-2, ac-2 and cc-2 (MEASURED 2026-11-15, the
-   recordings' s_mil every 150 ticks from 20 000). A FORM squad walks to the same rally point and fights what
-   reaches it, which a member home has no reason not to. BOUND: the squad's members once a decision, point_for's
-   cost each. */
+   recordings' s_mil every 150 ticks from 20 000). A FORM squad walks to the same points and fights what reaches
+   it, which a member home has no reason not to. BOUND: the squad's members once a decision, point_home's cost
+   each. */
 static void release_arrived(MDEC* d, int s)
 {
     int k, n = 0, form = -1;
@@ -2859,44 +2918,47 @@ static int at_rally(const MDEC* d, int s, int c)
 }
 
 /* THE RETREAT HOME: a squad of any task that loses its prediction while every member already stands within RALLY_PX
-   of the point a retreat would take it to (member_at_rally: travel_point at the index the member takes in the
+   of the point a retreat would take it to (member_at_rally: THE POINT HOME, at the index the member takes in the
    RETREAT squad it would become or join -- become's merge keeps the army's order --, a point found) takes no
    retreat and, this decision, not the contact; the lost prediction is stamped all the same (lost, the lead's
    evidence). A FORM squad forms its wave if it would win (form_attack: its size, its goal, and the prediction
-   against every enemy mobile seen now that enters its stay-or-go and the defences at the goal); a RAID, an ATTACK
-   and a DEFEND go back to FORM where they stand (back_to_form), so a squad at home that has lost does not walk on
-   at its goal. INVARIANT: a squad that becomes a RETREAT holds a member the release does not hand back at once,
-   which walks, or one with no point (below); its members already home are handed back to FORM, where the next lost
-   prediction holds them here -- so no squad whose members have points is sent back, round after round, to where
-   it stands. NO POINT IS NOT HOME: a member with no point (point_for 0: no block of its class's component within
-   SUB_BLOCKS of the rally -- a ship, the rally ashore with no water within 1 024 px) is not home here, though the
-   release reads it as arrived (THE ARRIVAL); held as home, a lost sea ATTACK went on at the force it lost to.
-   WHY: such a squad became RETREAT, was
-   released to FORM in the same decision and was predicted again at the next, each round a prediction, a retreat
-   and a lost prediction, with no attack order and no wave formed while it stood where it was, for as long as a
-   contact stood within its reach -- range and REACH_PAD -- of there: on ProTA's Lava Mania
-   (bar-nota-lavamania-ca-2 at c1dc2e70) the rally stood at about (808, 2 150) px, 900 px short of the estimate,
+   against every enemy mobile seen now that enters its stay-or-go and the defences at the goal); a RAID and an
+   ATTACK go back to FORM where they stand (back_to_form); a DEFEND keeps its task and travels home this decision
+   (MSQ.held, travel_home) -- so a squad at home that has lost does not walk on at its goal. A DEFEND keeps its task
+   because the defence runs before the tasks and makes a FORM squad with a threat in view DEFEND again: sent back
+   to FORM, a held DEFEND went DEFEND, FORM and DEFEND at every decision, a defence counted at each. INVARIANT: a
+   squad that becomes a RETREAT holds a member the release does not hand back at once, which walks, or one with no
+   point (below); its members already home are handed back to FORM, where the next lost prediction holds them
+   here -- so no squad whose members have points is sent back, round after round, to where it stands. A member of
+   a class whose component has no block within SUB_BLOCKS of the rally -- a ship, the rally ashore with no water
+   within 1 024 px -- is measured against its HOME POINT, the block of its component nearest the rally, so a lost
+   sea ATTACK falls back to the water nearest home. NO POINT IS NOT HOME: a member with no point (point_home 0:
+   none within HOME_BLOCKS either) is not home here, though the release reads it as arrived; held as home, a lost
+   sea ATTACK went on at the force it lost to. WHY THE RETREAT HOME: without it a squad whose retreat would end where
+   it stands became RETREAT, was released to FORM in the same decision and was predicted again at the next, each
+   round a prediction, a retreat and a lost prediction, with no attack order and no wave formed while it stood
+   where it was, for as long as a contact stood within its reach -- range and REACH_PAD -- of there: on ProTA's Lava
+   Mania (bar-nota-lavamania-ca-2 at c1dc2e70) the rally stood at about (808, 2 150) px, 900 px short of the estimate,
    and from GameTime 12 000 to 40 000 FORM squads were sent back 221 times, every one within 394 px of the rally
    (median 113), and raids 108 times, 100 of them within 512 px, by contacts 411 to 845 px off; no attack was given
    from 15 262 to 38 032 and the game reached the cap at 7 009 against 50 567. On hota Red Triangle cc-1 at the
    same commit, the rally at about (4 190, 5 390) from GameTime 30 000 to 63 000, FORM squads were sent back 359
    times, 344 within 512 px of it, and raids 229 times, 147 within 512 px, by contacts a median 626 and 516 px
    off (MEASURED 2026-11-16, diagnostic builds logging each retreat, the rally from the recordings' anchor and
-   estimate). A squad
-   with a member still to walk home falls back as before, so a wave or a raid that meets a stronger force on its
-   way still does. RESIDUAL: a squad so held may stand within reach of the contact it lost to -- artillery
+   estimate). A squad with a member still to walk home falls back, so a wave or a raid that meets a stronger force
+   on its way still does. RESIDUAL: a squad so held may stand within reach of the contact it lost to -- artillery
    out-ranging the rally -- answered only by its units' own fire, and is predicted again at each decision, one of
-   the plan's predict_max. A squad of members with no point becomes a RETREAT that gives no move (move_to) and is
-   released where it stands at the next decision: it stops, it does not withdraw, and as FORM it is sent back
-   every other decision while the contact stays in its reach. BOUND: the squad's members, point_for's cost each,
-   once a lost prediction. */
-/* THE RETREAT HOME's test of army unit u, the n-th member: within RALLY_PX of the point travel gives it, a point
+   the plan's predict_max. A squad of members with no point becomes a RETREAT whose members are stopped (halt) and
+   released where they stand at the next decision: it stops, it does not withdraw, and as FORM it is sent back
+   every other decision while the contact stays in its reach; a stopped unit's Standby may take a target in its
+   reach and, at the roam move state, chase it (the reaction 0x43B1F0, engine/orders.md) until a decision stops it
+   again. BOUND: the squad's members, point_home's cost each, once a lost prediction. */
+/* THE RETREAT HOME's test of army unit u, the n-th member: within RALLY_PX of THE POINT HOME (point_home), a point
    found -- not member_home, which reads no point as arrived */
 static int member_at_rally(MDEC* d, MUNIT* u, int n)
 {
     int32_t px, pz;
-    travel_point(d, u, n, d->rx, d->rz, &px, &pz);
-    return point_for(d, u->type, u->x, u->z, &px, &pz) > 0 && dist(u->x, u->z, px, pz) <= RALLY_PX;
+    return point_home(d, u, n, &px, &pz) > 0 && dist(u->x, u->z, px, pz) <= RALLY_PX;
 }
 
 static int retreat_home(MDEC* d, int s)
@@ -3004,10 +3066,11 @@ static void tasks(MDEC* d)
                         d->out->retreats++;
                         continue;
                     }
-                    if (q->task != IMPAI_SQ_FORM) {
+                    if (q->task == IMPAI_SQ_ATTACK || q->task == IMPAI_SQ_RAID) {
                         back_to_form(d, s);
                         continue;
                     }
+                    d->sq[s].held = q->task == IMPAI_SQ_DEFEND;
                     best = -1;
                 }
             }
@@ -3452,8 +3515,9 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
 }
 
 /* A MOVE of army unit `slot`, of `type` at (ux, uz), to (x, z) or its substitute (point_for): EVERY MOVE ORDER OF
-   THE MILITARY GOES THROUGH IT, so no member is sent where its class cannot travel. With no substitute the move
-   is not given and is counted (IMPAI_MIL_OUT.unreached). As order: 1 given, 2 already at the head, 0 neither. */
+   THE MILITARY GOES THROUGH IT but a squad's way home, whose points THE POINT HOME substitutes the same way
+   (travel_home), so no member is sent where its class cannot travel. With no substitute the move is not given and
+   is counted (IMPAI_MIL_OUT.unreached). As order: 1 given, 2 already at the head, 0 neither. */
 static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz, int32_t x, int32_t z)
 {
     if (point_for(d, type, ux, uz, &x, &z) <= 0) {
@@ -3595,6 +3659,43 @@ static void travel(MDEC* d, int s, int32_t x, int32_t z)
     }
 }
 
+/* A STOP of army unit `slot`, standing at (x, z) px: the engine's Stop replaces its list and ends at once, leaving
+   one Standby and the unit where it stands (engine/ui.md, Stop's handler 0x401C20: MEASURED 2026-10-27, an ARMCK
+   held to 0.1 world units for 15 s). None for a unit that holds no task -- no order, a head the engine drops
+   (WQ_OF_DROP: the Standby a stop leaves) or a factory's lone Park, which walks it off the yard (impai_brain.c,
+   idle_head's rule) --, so a stopped unit costs no further root and a unit leaving its factory is not held on the
+   yard. As order. */
+static int halt(MDEC* d, uint16_t slot, int32_t x, int32_t z)
+{
+    WQ_ORDER o[2];
+    const int h = d->q->ops->head(d->q, slot, &o[0]);
+    if (h <= 0 || (o[0].flags & WQ_OF_DROP) ||
+        (d->act_park > 0 && o[0].action == d->act_park && d->q->ops->orders(d->q, slot, o, 2) == 1))
+        return 2;
+    return order(d, slot, WQ_CAN_STOP, (uint16_t)WQ_NONE, x, z);
+}
+
+/* A FORM or RETREAT squad's members home, and a squad THE RETREAT HOME held: each to THE POINT HOME (point_home),
+   about the rally point or its home point. INVARIANT: every member point_home answers for gets an order that
+   replaces its head, unless the head already says it -- a move to its point, or with no point a stop (halt) --, so
+   no member sent home keeps an attack it was given at the force it lost to. One the caches cannot answer for
+   (-1) gets none this decision and is counted (IMPAI_MIL_OUT.unreached), as one with no point is: a capacity never
+   stops a unit. */
+static void travel_home(MDEC* d, int s)
+{
+    int k, n = 0;
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
+        const MUNIT* u = &d->army[k];
+        int32_t px, pz;
+        int p;
+        if (u->sq != s) continue;
+        p = point_home(d, u, n++, &px, &pz);
+        if (p <= 0) d->out->unreached++;
+        if (p > 0) order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
+        else if (!p) halt(d, u->slot, u->x, u->z);
+    }
+}
+
 /* AN ATTACK THAT HAS ARRIVED WITH NOTHING TO ATTACK MOVES ON (orders): the point's sweep cell is stamped as its
    own members' (sweep_stamp), so the remembered commander and the sweep's cell there are spent, and the goal is
    chosen again (wave_goal); a goal the squad has not arrived at is taken, else -- no goal, or the same place, as a
@@ -3719,8 +3820,9 @@ static void orders(MDEC* d)
         if (d->acts < 1 + acts_kept(d, COM_ACTS_KEPT)) { stop = s; break; }
         /* A SQUAD NEVER STANDS WHILE IT HAS NOTHING TO FIGHT. INVARIANT: in each decision a squad with a task
            point either has a member attacking (fight's count: ordered now or already at its head) or its members
-           are sent on to its point as with no contact -- FORM and RETREAT to the rally point, DEFEND, ATTACK and
-           RAID to theirs -- and an ATTACK's goal was chosen before, and whatever, the contact test found (tasks).
+           are sent on to its point as with no contact -- FORM, RETREAT and a DEFEND THE RETREAT HOME held home
+           (travel_home), DEFEND, ATTACK and RAID to theirs -- and an ATTACK's goal was chosen before, and whatever,
+           the contact test found (tasks).
            So a contact holding nothing the squad can attack -- a submarine for a land squad, a target across
            water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
            back to FORM first (move_on), so it is never sent to where it stands. */
@@ -3733,7 +3835,7 @@ static void orders(MDEC* d)
                 if (at == 1) move_on(d, s);
                 else if (at == 0 && goal_stalled(d, s, 0)) give_up(d, s);
             }
-            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz);
+            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT || d->sq[s].held) travel_home(d, s);
             else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16);
         }
         if (d->roots > roots) d->acts--;
@@ -4268,8 +4370,9 @@ static void dgun(MDEC* d)
    row), the picture and the commander's memory read the seat's column alone, and the sweep the seat's own army.
    COST: units at most nslots, listed at most IMPAI_ARMY_MAX; enemies IMPAI_ENEMY_MAX; contacts IMPAI_CONTACTS;
    squads IMPAI_SQUADS; predictions predict_max (<= IMPAI_PREDICT_CAP); orders mil_roots; the maps
-   IMPAI_GRID_MAX^2 cells; substitute points SUB_CACHE spirals; each squad's reach test NEAR_KEYS spirals; the
-   hunt's goals, for at most IMPAI_ATTACKS_MAX ATTACK squads, a forming wave and the scout, IMPAI_SWEEP cells each.
+   IMPAI_GRID_MAX^2 cells; substitute points SUB_CACHE spirals, home points HOME_SPIRALS; each squad's reach test
+   NEAR_KEYS spirals; the hunt's goals, for at most IMPAI_ATTACKS_MAX ATTACK squads, a forming wave and the scout,
+   IMPAI_SWEEP cells each.
 
    THE TICK RULE (impai_mil_due) keeps this decision and the economy's on different ticks of the same seat. */
 int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
@@ -4292,6 +4395,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     d->plan = in->plan;
     d->now = (uint32_t)q->ops->gametime(q);
     d->acts = in->acts < 0 ? ACTS_NONE : in->acts;
+    d->act_park = q->ops->action(q, WQ_ACT_PARK);
     q->ops->map(q, &m);
     d->mw = m.w > 0 ? m.w * 16 : 1;
     d->mh = m.h > 0 ? m.h * 16 : 1;
