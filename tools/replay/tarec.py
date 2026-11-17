@@ -3322,12 +3322,33 @@ def occupancy(w, dw):
     own unit's bit 27 (0x47C7AF), so a holder keeps bit 26 after its loser has left, until its own
     clear (DISASSEMBLED; MEASURED in the r2 four-seat recording's primary stream, the recording
     machine's own world: unit 10 kept bit 26 from 1029, when 1503's replica left the shared cell,
-    to its own move at 1030), and the dump says nothing of the past contest a mark stands for."""
+    to its own move at 1030), and the dump says nothing of the past contest a mark stands for.
+
+    AN OPEN YARD gives nothing back: YARD_OPEN 0x47DAC0 re-claims for its structure alone
+    (0x47DAFD) and runs no clear, and the structure's re-claim lets go a cell its open yardmap
+    does not set only where the cell names the structure (0x47C8AE..0x47C8B7), so a layer-1 unit
+    that lost such a cell to the closed structure keeps bit 27 over an empty slot A until a
+    holder's clear or its own move (DISASSEMBLED, research/notes/engine/map.md *An open yard
+    gives nothing back*; MEASURED 2026-11-17, a slice-walkers recording of the live game: lab 1025
+    opened its yard at GameTime 3125 and four walkers on (160, 492..495) stood over empty cells
+    with bit 27 from then on). The lab's product can then be made on those cells: the placement
+    test refuses only a cell that names another unit (0x47DCFD..0x47DD0A), and the stamp contests
+    only a cell that already names one, so the new unit takes the empty cell unmarked and the
+    loser keeps its stale bit 27 under it (MEASURED in the same recording: unit 1054 made at 3126
+    on (160, 494..495), no mark; engine/map.md, *A lab can open its yard and make the nanoframe in
+    it in the same tick*). So inside the footprint of a live structure whose yard is open, a marked
+    layer-1 loser's slot A may be empty or name a unit holding the cell without the holder's mark.
+    Not checked: that the yardmap's open mask leaves that cell out, which the dump does not carry,
+    as above."""
     out = []
     cb = REC_CELL_BYTES
     yards = footprints(dw)
     rects = {slot: rect(u) for slot, u in dw.units.items()}
     state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
+    # the cells an open yard may have let go under its loser: inside a live structure whose yard
+    # is open, +0x10F bit 2 (AN OPEN YARD, above)
+    yard_let_go = set().union(*(rects[s] for s, u in dw.units.items()
+                                if structure(u) and u[U_YARD] & 4))
     for slot, u in sorted(dw.units.items()):
         if structure(u) or not stamped(u, w.gw, w.gh):
             continue
@@ -3344,9 +3365,11 @@ def occupancy(w, dw):
             if lost and want in dw.units and (cx, cz) in rects[want] and \
                     (layer(dw.units[want]) == layer(u) or
                      structure(dw.units[want]) and layer(u) == 1):
-                if not state[want] & U_HOLDER:
+                if not state[want] & U_HOLDER and (cx, cz) not in yard_let_go:
                     out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
                                f"names unit {want}, which holds it without the holder's mark")
+                continue
+            if lost and not want and layer(u) == 1 and (cx, cz) in yard_let_go:
                 continue
             out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint does not "
                        f"name it in slot {'AB'[layer(u) - 1]}, and no unit of its layer that "

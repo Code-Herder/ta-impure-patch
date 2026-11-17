@@ -1401,7 +1401,10 @@ the unit off the grid (`0x48682D`) before it clears the alive bit (`0x486DCE`).
 compare-dumps --seek` in a multiplayer segment check the slots, the yard bits and
 the marks instead of comparing them, by THE OCCUPANCY RULE (`tarec.occupancy`):
 the stamp's own checks layer by layer, a loser's cell naming the holder that took
-it, every named slot a live unit whose footprint holds the cell, and every set
+it -- or, inside the footprint of a structure whose yard is open, empty or naming
+a unit that took the freed cell unmarked, since an open yard gives nothing back
+(the engine map's *An open yard gives nothing back*) -- every named slot a live
+unit whose footprint holds the cell, and every set
 yard bit inside a live structure's footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`,
 `+0x110` bit 29); the dump's marks are then taken into the expected world. The
 owner approved the slot and yard-bit check on 2026-10-06 and its contest form, a

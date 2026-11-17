@@ -3913,6 +3913,38 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         self.assertEqual(len(tarec.occupancy(a, b)), 1)
 
+    def test_an_open_yard_leaves_its_loser_over_an_empty_cell(self):
+        # MEASURED 2026-11-17 (tarec.occupancy, AN OPEN YARD): the lab opened its yard and let go
+        # the cell its closed yard had taken from the walker, which keeps bit 27
+        lab = tarec.STRUCTURE | 1 << 26 | 1 << 27 | 1
+        units = {1: self.unit(1, 1, 2, 1, state=lab), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        units[1][tarec.U_YARD] = 4
+        a, b = self.worlds(units, {(1, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        # and the lab's product made on the freed cell takes it unmarked
+        units[3] = self.unit(2, 1)
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (3, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        units[1][tarec.U_YARD] = 0
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (3, 0)})
+        self.assertIn("without the holder's mark", tarec.occupancy(a, b)[0])
+
+    def test_an_empty_cell_under_a_loser_fails_where_no_yard_is_open(self):
+        lab = tarec.STRUCTURE | 1 << 26 | 1
+        for yard, walker in ((0, 1 << 27 | 1), (4, 1)):
+            units = {1: self.unit(1, 1, 2, 1, state=lab), 2: self.unit(2, 1, state=walker)}
+            units[1][tarec.U_YARD] = yard
+            a, b = self.worlds(units, {(1, 1): (1, 0)})
+            out = tarec.occupancy(a, b)
+            self.assertEqual(len(out), 1, (yard, out))
+            self.assertIn("does not name it in slot A", out[0])
+        # outside the open yard's footprint, and in slot B, the loser's cell must still be named
+        units = {1: self.unit(1, 1, state=lab), 2: self.unit(3, 1, state=1 << 27 | 1),
+                 3: self.unit(1, 1, state=1 << 27 | 2)}
+        units[1][tarec.U_YARD] = 4
+        a, b = self.worlds(units, {(1, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b)), 2, tarec.occupancy(a, b))
+
     def test_contest_a_structure_named_in_slot_b_fails(self):
         a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
         out = tarec.occupancy(a, b)
