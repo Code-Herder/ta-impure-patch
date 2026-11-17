@@ -72,6 +72,13 @@ lists what was ended (`ended` in `--json`) and warns when that was a TotalA.exe;
 still fails says its exit code and the prefix's processes on the same line. A Wine program you
 run in an instance's prefix ends at its next launch.
 
+**A private display must be started with `-noreset`.** Without it an X server regenerates each
+time its last client leaves and drops a client that connects meanwhile; when that client is the
+launch's Wine, the game has no display driver (`nodrv_CreateWindow ... no driver could be loaded`
+on Wine's stderr) and exits with **code 0** and *"exited during launch"*, its log ending at the
+`WIN32.dll loaded` line. Every harness's Xvfb passes it (`tareplay.start_xvfb` has the
+measurements); an Xvfb you start by hand needs it too.
+
 **TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
 from the template's `user.reg` (`gamespeed` 10). **Tick-based replay tests use internal 20 (2x) as standard;
 timing measurements use 10.** The replay harness also runs its lanes at one tick a frame once armed
@@ -167,9 +174,11 @@ tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480 (the shell 
 **Skirmish settings come from the registry, no clicking**: `--map "Two Continents"`,
 `--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`, controller
 0=off 1=human 2=AI, side 0=ARM 1=CORE, seats with the same allygroup 0..4 start allied and 5 is
-no group; an empty field leaves that key alone), `--los`, `--mapping`,
+no group, and the Start refuses when every enabled seat shares one group; an empty field leaves
+that key alone, a scenario's omitted `ally_group` writes 5), `--los`, `--mapping`,
 `--unit-limit` (20–1500). Metal and energy are the starting resources **and set storage** — the only way
-to set them. All sticky per instance. No `TotalA.exe` switch sets a game rule; raw switches go
+to set them. All sticky per instance. Not sticky: `--seatai 1,3` names the computer seats ImpAI
+plays for this launch (`impure.cfg`); every launch without it writes `none`. No `TotalA.exe` switch sets a game rule; raw switches go
 through `--arg=-t --arg=120`, and `-r`/`-d` are refused. **`Mapping` and `LineOfSight` are
 decided by the SKIRMISH gadgets** (the registry only saves the last choice), so `scenario load`
 sets them itself and starts every game **Mapped** (`--mapping 0` opts out) — a scenario places

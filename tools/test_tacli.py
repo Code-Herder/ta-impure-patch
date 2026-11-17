@@ -842,6 +842,17 @@ class ScenarioSetup(unittest.TestCase):
         # A scenario contains exactly what the file says, commanders included.
         self.assertTrue(compile_doc(scn())["setup"]["clear_existing"])
 
+    def test_commander_death_is_a_launch_key_and_never_reaches_the_wire(self):
+        self.assertIsNone(compile_doc(scn())["setup"]["commander_death"])
+        exp = compile_doc(scn(setup={"commander_death": True}))
+        self.assertIs(exp["setup"]["commander_death"], True)
+        self.assertFalse(compile_doc(scn(setup={"commander_death": False}))["setup"]
+                         ["commander_death"])
+        self.assertNotIn("commander", tacli._scn_wire(exp))
+        for bad in (1, "on", "yes"):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(setup={"commander_death": bad}))
+
     def test_duplicate_player_slots_are_fatal(self):
         with refuses(self):
             compile_doc(scn(setup={"players": [{"slot": 1}, {"slot": 1}]}))
@@ -1192,18 +1203,18 @@ class ScenarioWire(unittest.TestCase):
     def test_a_unit_line_carries_every_column_in_order(self):
         lines = self.wire(scn(units=[unit(id="hero", type="ARMCOM", facing=90,
                                           health=60, stance="hold")]))
-        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - - -", lines)
+        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - - - -", lines)
 
-    def test_a_cloaked_unit_says_1_in_the_last_column(self):
-        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - 1",
+    def test_a_cloaked_unit_carries_the_cloak_key(self):
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - - - cloak=1",
                       self.wire(scn(units=[unit(type="ARMSPY", cloaked=True)])))
 
     def test_cloaked_false_is_the_engines_default(self):
-        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - -",
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - - -",
                       self.wire(scn(units=[unit(type="ARMSPY", cloaked=False)])))
 
     def test_unset_fields_are_dashes_not_guesses(self):
-        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - -", self.wire(scn(units=[unit()])))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - - -", self.wire(scn(units=[unit()])))
 
     def test_the_header_carries_the_seed_and_the_counts(self):
         head = self.wire(scn(seed=7, units=[unit()]))[1]
@@ -1257,6 +1268,228 @@ class ScenarioWire(unittest.TestCase):
 
     def test_it_ends_with_a_marker_so_a_truncated_file_is_visible(self):
         self.assertEqual(self.wire(scn(units=[unit()]))[-1], "end")
+
+    def test_at_and_slot_follow_the_stock_column_only_when_the_expanded_unit_has_them(self):
+        # the packed calibration lane sets them on the expanded units; the schema has neither
+        exp = compile_doc(scn(units=[unit(), unit(), unit(), unit()]))
+        for u, keys in zip(exp["units"], ({}, {"at": 30}, {"slot": 0}, {"at": 0, "slot": 61})):
+            u.update(keys)
+        lines = [l for l in tacli._scn_wire(exp).splitlines() if l.startswith("unit ")]
+        self.assertEqual(lines, ["unit 0 ARMPW 1 900 1200 - - - - - - - -",
+                                 "unit 1 ARMPW 1 900 1200 - - - - - - - - at=30",
+                                 "unit 2 ARMPW 1 900 1200 - - - - - - - - slot=0",
+                                 "unit 3 ARMPW 1 900 1200 - - - - - - - - at=0 slot=61"])
+
+    def test_the_schema_takes_no_at_or_slot(self):
+        for bad in ({"at": 30}, {"slot": 2}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(**bad)]))
+
+
+class ScenarioWeaponKeys(unittest.TestCase):
+    """T2's keys: a unit's fire state and slot 0's stock, and the buildweapon order with its count;
+    each reaches its wire column or line, and a wrong value is refused."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def test_fire_and_stock_are_the_last_two_columns(self):
+        lines = self.wire(scn(units=[unit(fire="hold", stock=0), unit(fire="at_will", stock=200),
+                                     unit(fire="return")]))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - hold 0", lines)
+        self.assertIn("unit 1 ARMPW 1 900 1200 - - - - - - at_will 200", lines)
+        self.assertIn("unit 2 ARMPW 1 900 1200 - - - - - - return -", lines)
+
+    def test_a_group_hands_both_to_its_members(self):
+        lines = self.wire(scn(groups=[{"owner": 1, "at": [900, 1200],
+                                       "pattern": {"kind": "grid", "cols": 2, "spacing": 32},
+                                       "composition": [{"type": "ARMPW", "count": 2}],
+                                       "fire": "hold", "stock": 3}]))
+        self.assertEqual(sum(l.endswith(" hold 3") for l in lines if l.startswith("unit ")), 2)
+
+    def test_fire_and_stock_refuse_a_wrong_value(self):
+        for bad in ({"fire": "ceasefire"}, {"fire": 0}, {"stock": 201}, {"stock": -1},
+                    {"stock": "5"}, {"stock": True}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(**bad)]))
+
+    def test_buildweapon_takes_a_count_and_after(self):
+        lines = self.wire(scn(units=[unit(orders=[{"cmd": "buildweapon", "count": 2},
+                                                  {"cmd": "buildweapon", "count": 200,
+                                                   "after": 30}])]))
+        self.assertIn("order 0 buildweapon count 2", lines)
+        self.assertIn("order 0 buildweapon count 200 after=30", lines)
+
+    def test_buildweapon_refuses_a_target_or_a_bad_count(self):
+        for bad in ({"cmd": "buildweapon"}, {"cmd": "buildweapon", "count": 0},
+                    {"cmd": "buildweapon", "count": 201},
+                    {"cmd": "buildweapon", "count": 1, "to": [10, 10]},
+                    {"cmd": "move", "to": [10, 10], "count": 1}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(orders=[bad])]))
+
+    def test_the_order_verb_spells_the_count(self):
+        self.assertEqual(tacli._order_target("buildweapon", ["count", "5"], ""), "count 5")
+        for words in ([], ["count"], ["count", "0"], ["count", "201"], ["pos", "1", "2"]):
+            with self.subTest(words=words), refuses(self):
+                tacli._order_target("buildweapon", words, "")
+        with refuses(self):
+            tacli._order_target("move", ["count", "3"], "")
+
+
+class ScenarioQueue(unittest.TestCase):
+    """`queue`: TA's Shift, an order joining its unit's list. Accepted with its wire line; each
+    case Shift would cancel, or the applier could not order, is refused by name."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def doc(self, orders, **extra):
+        return scn(units=[unit(id="a", owner=0, orders=orders), unit(id="b", pos=[10, 10]),
+                          unit(id="c", pos=[20, 20])], **extra)
+
+    def refused(self, doc, why):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+            compile_doc(doc)
+        self.assertIn(why, err.getvalue())
+
+    def test_a_chain_writes_queue_last(self):
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b", "after": 5},
+                                    {"cmd": "attack", "target": "c", "after": 5, "queue": True}]))
+        self.assertIn("order 0 attack unit 1 after=5", lines)
+        self.assertIn("order 0 attack unit 2 after=5 queue", lines)
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b"},
+                                    {"cmd": "attack", "target": "c", "queue": True}]))
+        self.assertIn("order 0 attack unit 2 queue", lines)
+
+    def test_queue_false_is_the_plain_order(self):
+        exp = compile_doc(self.doc([{"cmd": "attack", "target": "b", "queue": False}]))
+        self.assertNotIn("queue", exp["units"][0]["orders"][0])
+        self.assertIn("order 0 attack unit 1", tacli._scn_wire(exp).splitlines())
+
+    def test_a_first_order_cannot_be_queued(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "queue": True}]),
+                     "the first order of a list has nothing to join")
+
+    def test_only_a_unit_target_can_be_queued(self):
+        head = {"cmd": "attack", "target": "b"}
+        for bad in ({"cmd": "attack", "to": [30, 30], "queue": True},
+                    {"cmd": "buildweapon", "count": 2, "queue": True},
+                    {"cmd": "stop", "queue": True}):
+            with self.subTest(bad=bad):
+                self.refused(self.doc([head, bad]), 'only an order on a unit "target" can be queued')
+        self.refused(self.doc([head, {"cmd": "reclaim", "target": "w", "queue": True}],
+                              features=[{"id": "w", "type": "TREE1", "pos": [40, 40]}]),
+                     "only an order on a unit can be queued")
+
+    def test_a_repeated_target_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": True},
+                               {"cmd": "attack", "target": "b", "queue": True}]),
+                     "'b' is already a target of this list")
+
+    def test_a_falling_after_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "after": 9},
+                               {"cmd": "attack", "target": "c", "after": 8, "queue": True}]),
+                     "after 8 is below the previous order's 9")
+
+    def test_queue_is_a_boolean(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": 1}]),
+                     "expected true or false")
+
+
+class ScenarioCalibrationKeys(unittest.TestCase):
+    """The keys the calibration runner resets a level with: clear_features, objective, a
+    seat's ai and storage, an order's after. Each is accepted with its exact wire line, and
+    a wrong value is refused."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def players(self, **kw):
+        p = {"slot": 1, "controller": "ai"}
+        p.update(kw)
+        return [{"slot": 0, "controller": "human"}, p]
+
+    def test_clear_features_writes_its_line_only_when_true(self):
+        self.assertIn("clearfeat 1", self.wire(scn(setup={"clear_features": True})))
+        self.assertFalse(any(l.startswith("clearfeat")
+                             for l in self.wire(scn(setup={"clear_features": False}))))
+
+    def test_objective_off_and_on(self):
+        self.assertIn("objective off", self.wire(scn(setup={"objective": "off"})))
+        self.assertIn("objective on", self.wire(scn(setup={"objective": "on"})))
+        self.assertFalse(any(l.startswith("objective") for l in self.wire(scn())))
+
+    def test_objective_refuses_another_word(self):
+        with refuses(self):
+            compile_doc(scn(setup={"objective": "armed"}))
+
+    def test_a_calib_block_compiles_and_never_reaches_the_wire(self):
+        lines = self.wire(scn(calib={"kind": ["winrate"], "metrics": ["winner"]}))
+        self.assertFalse(any("calib" in l for l in lines[1:]))
+        with refuses(self):
+            compile_doc(scn(calib=["winrate"]))
+
+    def test_ai_off_and_storage_on_the_player_line(self):
+        lines = self.wire(scn(setup={"players": self.players(
+            ai="off", storage={"metal": 1000000, "energy": 5000.5})}))
+        self.assertIn("player 1 ai=off mstore=1000000 estore=5000.5", lines)
+
+    def test_storage_rides_beside_the_level(self):
+        lines = self.wire(scn(setup={"players": self.players(
+            metal=500, storage={"metal": 5000, "energy": 5000})}))
+        self.assertIn("player 1 metal=500 energy=- mstore=5000 estore=5000", lines)
+
+    def test_storage_silences_the_launch_time_warning(self):
+        plain = compile_doc(scn(setup={"players": self.players(metal=500)}))
+        held = compile_doc(scn(setup={"players": self.players(
+            metal=500, storage={"metal": 5000, "energy": 5000})}))
+        self.assertTrue(any("launch-time" in w for w in plain["warnings"]))
+        self.assertFalse(any("launch-time" in w for w in held["warnings"]))
+
+    def test_ai_refuses_anything_but_off(self):
+        with refuses(self):
+            compile_doc(scn(setup={"players": self.players(ai="on")}))
+
+    def test_storage_wants_both_and_nothing_else(self):
+        for bad in ({"metal": 5}, {"metal": 5, "energy": 5, "fuel": 1},
+                    {"metal": -1, "energy": 5}, {"metal": "5", "energy": 5},
+                    {"metal": True, "energy": 5}, {"metal": float("inf"), "energy": 5}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(setup={"players": self.players(storage=bad)}))
+
+    def test_an_unknown_player_key_stays_fatal(self):
+        with refuses(self):
+            compile_doc(scn(setup={"players": self.players(aioff=True)}))
+
+    def test_after_rides_on_every_order_shape(self):
+        lines = self.wire(scn(
+            units=[unit(id="a", orders=[{"cmd": "move", "to": [2400, 1200], "after": 7},
+                                        {"cmd": "attack", "target": "b", "after": 1},
+                                        {"cmd": "reclaim", "target": "w", "after": 255},
+                                        {"cmd": "stop", "after": 3}]),
+                   unit(id="b", pos=[10, 10])],
+            features=[{"id": "w", "type": "TREE1", "pos": [20, 20]}]))
+        self.assertIn("order 0 move pos 2400 1200 after=7", lines)
+        self.assertIn("order 0 attack unit 1 after=1", lines)
+        self.assertIn("order 0 reclaim feat 0 after=255", lines)
+        self.assertIn("order 0 stop after=3", lines)
+
+    def test_after_zero_is_the_plain_order(self):
+        self.assertIn("order 0 move pos 2400 1200",
+                      self.wire(scn(units=[unit(orders=[{"cmd": "move", "to": [2400, 1200],
+                                                         "after": 0}])])))
+
+    def test_after_outside_a_byte_is_fatal(self):
+        for bad in (-1, 256, 1.5, "7"):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(orders=[{"cmd": "stop", "after": bad}])]))
+
+    def test_the_calibration_scenarios_compile(self):
+        for path in sorted((Path(__file__).resolve().parents[1] / "scenarios" / "calib")
+                           .glob("*.json")):
+            with self.subTest(path=path.name):
+                tacli._scn_wire(tacli._scn_compile(str(path)))
 
 
 class ScenarioResults(unittest.TestCase):
@@ -1363,6 +1596,25 @@ class LoadComposition(unittest.TestCase):
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
 
+    def test_an_impai_seat_is_a_computer_seat_to_the_engine(self):
+        # ImpAI is chosen by the store's seatai, never by the controller the registry holds
+        self.assertEqual(self.flags([{"slot": 2, "controller": "impai",
+                                      "side": "core"}]), ["2:2:1::::5"])
+
+    def test_an_omitted_ally_is_no_group_never_the_stores_last(self):
+        # the group an earlier scenario wrote would otherwise stay in the store, and seats that
+        # all inherit one group make the Start refuse (0x479760)
+        self.assertEqual(self.flags([{"slot": 0, "controller": "human"},
+                                     {"slot": 1, "controller": "ai", "ally_group": 2}]),
+                         ["0:1:::::5", "1:2:::::2"])
+
+    def test_the_difficulty_is_a_word_and_absent_leaves_the_screen_alone(self):
+        self.assertEqual(tacli._scn_setup({"setup": {"difficulty": "easy"}}, "t")["difficulty"],
+                         "easy")
+        self.assertIsNone(tacli._scn_setup({"setup": {}}, "t")["difficulty"])
+        with refuses(self):
+            tacli._scn_setup({"setup": {"difficulty": "brutal"}}, "t")
+
     def launch_values(self, players):
         class BeforeLaunch(Exception):
             pass
@@ -1453,6 +1705,41 @@ class PlayerSpecs(unittest.TestCase):
                 self.assertTrue(tacli.player_keys(flag))
 
 
+class StartRefusal(unittest.TestCase):
+    """The SKIRMISH Start's alliance test, decided from the settings block as 0x479760 decides it,
+    before the click, so a refused Start dies with its reason instead of at the live wait's bound."""
+
+    BLOCK = 0x0B8CBD10
+
+    def refusal(self, seats):
+        """`seats`: (controller, group) for each settings entry the screen counts."""
+        mem = {self.BLOCK + 0x18 * i: c for i, (c, _) in enumerate(seats)}
+        mem.update({self.BLOCK + 0x18 * i + 8: g for i, (_, g) in enumerate(seats)})
+
+        def peek(inst, specs, timeout):
+            vals = {tacli.SCN_SETTINGS_PEEK: self.BLOCK, tacli.SCN_SEATS_PEEK: len(seats)}
+            out = []
+            for spec in specs:
+                v = vals[spec] if spec in vals else mem[int(spec.split(":")[0], 16)]
+                out.append({"spec": spec, "value": f"{v} (0x{v:08X})"})
+            return out
+        with patch.object(tacli, "_peek", side_effect=peek):
+            return tacli._scn_start_refusal(Mock())
+
+    def test_two_seats_in_one_group_are_refused(self):
+        self.assertIn("alliance group 1", self.refusal([(1, 1), (2, 1), (0, 1), (0, 1)]))
+
+    def test_seats_of_two_groups_start(self):
+        self.assertIsNone(self.refusal([(1, 1), (2, 2), (0, 5), (0, 5)]))
+
+    def test_no_group_is_no_alliance(self):
+        self.assertIsNone(self.refusal([(1, 5), (2, 5), (0, 5), (0, 5)]))
+        self.assertIsNone(self.refusal([(1, 5), (2, 1), (0, 1), (0, 1)]))
+
+    def test_an_off_seat_neither_refuses_nor_lets_through(self):
+        self.assertIn("alliance group 2", self.refusal([(1, 2), (0, 1), (2, 2), (0, 3)]))
+
+
 class LoadedMap(unittest.TestCase):
     """TA falls back silently on a map it does not have, so `load` reads it back."""
 
@@ -1513,6 +1800,172 @@ class PeekValues(unittest.TestCase):
             inst = Mock(running=Mock(return_value=True), gamedir=Path("/nonexistent"))
             rows = tacli._peek(inst, ["0x1", "0x2"], 1)
         self.assertEqual([r["spec"] for r in rows], ["0x1", "0x2"])
+
+
+class LogReadersPoll(unittest.TestCase):
+    """talog's readers at a look every 20 ms: Cursor's one-open read returns what the listing's pass
+    returns, and Tail what a whole read returns, through growth, truncation and rotation."""
+
+    HEAD = b"log: run R%d part %d of tagpu.log, started now\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.g = Path(self.tmp.name)
+        (self.g / "log").mkdir()
+        self.cur = self.g / "log" / "tagpu.log"
+        self.cur.write_bytes(self.HEAD % (1, 1))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def append(self, data, path=None):
+        with open(path or self.cur, "ab") as f:
+            f.write(data)
+
+    def rotate(self, run=1, part=2):
+        self.cur.rename(self.g / "log" / "tagpu.1.log")
+        self.cur.write_bytes(self.HEAD % (run, part))
+
+    def same_as_the_listing(self, c):
+        """The one-open read, when it answers, is the listing's pass to the byte."""
+        quick = c._same_file()
+        if quick is not None:
+            self.assertEqual(quick, tacli.talog._stable(self.g, "tagpu", c._pass))
+        return quick
+
+    def test_the_cursor_reads_one_file_while_it_grows_and_the_listing_after_a_rotation(self):
+        c = tacli.talog.Cursor(self.g)
+        self.append(b"a\n")
+        self.assertIsNotNone(self.same_as_the_listing(c))
+        self.assertEqual(c.read(advance=True), b"a\n")
+        self.assertEqual(c.read(advance=True), b"")
+        self.append(b"b\n")
+        self.rotate()
+        self.append(b"c\n")
+        self.assertIsNone(self.same_as_the_listing(c))   # another key: the listing reads it
+        self.assertEqual(c.read(advance=True), b"b\n" + self.HEAD % (1, 2) + b"c\n")
+        self.append(b"d\n")
+        self.assertIsNotNone(self.same_as_the_listing(c))
+        self.assertEqual(c.read(advance=True), b"d\n")
+
+    def test_a_truncated_file_reads_as_the_listing_reads_it(self):
+        c = tacli.talog.Cursor(self.g)
+        self.append(b"a" * 100 + b"\n")
+        c.read(advance=True)
+        self.cur.write_bytes(self.HEAD % (1, 1) + b"x\n")
+        self.assertEqual(self.same_as_the_listing(c), ([b""], (c.key, c.off)))
+
+    def test_a_cursor_with_no_file_at_its_mark_takes_the_listing(self):
+        self.cur.unlink()
+        c = tacli.talog.Cursor(self.g)
+        self.assertIsNone(c._same_file())
+        self.cur.write_bytes(self.HEAD % (2, 1) + b"e\n")
+        self.assertEqual(c.read(advance=True), self.HEAD % (2, 1) + b"e\n")
+
+    def test_tail_is_the_whole_read_through_growth_truncation_and_rotation(self):
+        t = tacli.talog.Tail(self.cur)
+        self.assertEqual(t.read(), 0)
+        self.append(b"a\n")
+        at = t.read()
+        self.assertEqual((at, bytes(t.data[at:])), (len(self.HEAD % (1, 1)), b"a\n"))
+        for change in (lambda: self.cur.write_bytes(self.HEAD % (1, 1)),        # truncated
+                       lambda: self.rotate(),                                    # rotated, shorter
+                       lambda: (self.rotate(3, 1), self.append(b"z" * 500))):    # rotated, longer
+            change()
+            self.assertEqual(t.read(), 0)
+            self.assertEqual(bytes(t.data), self.cur.read_bytes())
+            self.append(b"more\n")
+            self.assertEqual(bytes(t.data[t.read():]), b"more\n")
+            self.assertEqual(bytes(t.data), self.cur.read_bytes())
+
+    def test_tail_of_a_missing_file_raises_as_a_whole_read_does_and_holds_nothing(self):
+        t = tacli.talog.Tail(self.cur)
+        t.read()
+        self.cur.unlink()
+        with self.assertRaises(OSError):
+            t.read()
+        self.assertEqual(bytes(t.data), b"")
+
+
+class AnswerWaitsNap(unittest.TestCase):
+    """tacli's waits for a game's answer look every ANSWER_NAP_S on a local instance: they see the
+    answer as soon as it is written, and the same answer as at their old nap."""
+
+    def test_a_local_look_is_the_fast_one_and_a_remote_one_keeps_its_nap(self):
+        with patch.object(tacli.time, "sleep") as sleep:
+            tacli._answer_nap(Mock(remote=None), 0.5)
+            tacli._answer_nap(Mock(remote=object()), 0.5)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [0.02, 0.5])
+
+    def wait(self, script, pattern):
+        """`tacli wait` on a real log while the game writes `script`, [(look, bytes)], each after
+        that many looks; (the matched line, the looks it took)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            cur = g / "log" / "tagpu.log"
+            cur.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\n")
+            inst = types.SimpleNamespace(name="r1", gamedir=g, remote=None, running=lambda: True)
+            looks, todo = [0], list(script)
+
+            def sleep(_):
+                looks[0] += 1
+                while todo and todo[0][0] <= looks[0]:
+                    with open(cur, "ab") as f:
+                        f.write(todo.pop(0)[1])
+
+            args = types.SimpleNamespace(name="r1", pattern=pattern, timeout=60, json=True)
+            with patch.object(tacli, "Instance", return_value=inst), \
+                    patch.object(tacli, "_answer_nap", lambda i, r: sleep(r)), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                tacli.cmd_wait(args)
+            return json.loads(out.getvalue())["matched"], looks[0]
+
+    def test_wait_takes_a_line_only_once_it_is_whole(self):
+        got, looks = self.wait([(3, b"replay: playing x at GameTime 3"), (6, b"00\n")],
+                               r"replay: playing .* GameTime \d+")
+        self.assertEqual((got, looks), ("replay: playing x at GameTime 300", 6))
+
+    def test_wait_on_a_crlf_log_returns_the_line_without_its_line_end(self):
+        """tagpu.log's lines end in CRLF (s_eol, tagpu_log.c): the match is the line's text, and a
+        pattern anchored with `$` matches it, as it did on a whole read's splitlines()."""
+        got, _ = self.wait([(2, b"replay: playing x at GameTime 3\r"), (4, b"\nnext\r\n")],
+                           r"GameTime \d+$")
+        self.assertEqual(got, "replay: playing x at GameTime 3")
+
+    def test_log_lines_hold_a_line_cut_between_its_cr_and_its_lf(self):
+        chunks = iter(["a\r\nb\r", "\nc", "\r\n"])
+        lines = tacli._LogLines(Mock(text=lambda advance: next(chunks)))
+        self.assertEqual([lines(), lines(), lines()], [["a"], ["b"], ["c"]])
+
+    def test_the_log_readers_carry_crlf_as_the_whole_reads_did(self):
+        """talog.Tail and Cursor return the file's bytes, CR and all, as the whole reads they
+        replaced did before decoding; tacompat's waits search them for text with no line end, or
+        anchor at `^`, which a CRLF line meets as an LF one does."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            cur = g / "log" / "tagpu.log"
+            cur.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\r\n")
+            c, t = tacli.talog.Cursor(g), tacli.talog.Tail(cur)
+            t.read()
+            with open(cur, "ab") as f:
+                f.write(b"scenario: applied=1\r\nunits: alive=7\r\n")
+            self.assertEqual(c.read(), b"scenario: applied=1\r\nunits: alive=7\r\n")
+            t.read()
+            self.assertEqual(bytes(t.data), cur.read_bytes())
+            self.assertEqual(re.search(rb"^units: alive=(\d+)", bytes(t.data), re.M)
+                             .group(1), b"7")
+
+    def test_peek_takes_an_answer_only_once_its_line_is_whole(self):
+        texts = iter(["peek: 0x1 @0x00000001 = 12",
+                      "peek: 0x1 @0x00000001 = 12345 (0x00003039)\n"])
+        with patch.object(tacli, "_log_cursor") as cur, patch.object(tacli, "put_trigger"), \
+                patch.object(tacli.time, "sleep"):
+            cur.return_value.text.side_effect = lambda: next(texts)
+            inst = Mock(running=Mock(return_value=True), gamedir=Path("/nonexistent"), remote=None)
+            rows = tacli._peek(inst, ["0x1"], 5)
+        self.assertEqual(rows[0]["value"], "12345 (0x00003039)")
 
 
 class LiveSignal(unittest.TestCase):
@@ -1758,6 +2211,133 @@ class SettingsStore(unittest.TestCase):
     def test_vsync_is_a_harness_key(self):
         # a --shipped launch hands it to the player with the rest of the placement
         self.assertIn("vsync", tacli.HARNESS_KEYS)
+
+    def test_seatai_is_written_whole_and_none_for_no_seat(self):
+        # a scenario launch writes it every time, so a stale line never seats ImpAI
+        self.assertIn("seatai", tacli.HARNESS_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            cfg.write_text("gamma=12\nseatai=3\n")
+            tacli.write_seatai(inst, [2, 1])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=1,2"])
+            tacli.write_seatai(inst, [])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+            tacli.write_seatai(inst, None)
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+
+    def test_every_harness_launch_writes_seatai(self):
+        # a launch that names no seat replaces a stale choice with none; one that names seats
+        # writes them
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nseatai=2\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=[2]))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("seatai=2", lines)
+            self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
+
+    def test_a_takeovers_seatai_reaches_its_launch(self):
+        # the takeover adds the seats its launch writes; a playing's launch writes none
+        class BeforeLaunch(Exception):
+            pass
+
+        head = {"mode": 2, "settings_map": "Show Down",
+                "players": [{"index": 0, "controller": 1, "side": 0, "logo": 0},
+                            {"index": 1, "controller": 2, "side": 1, "logo": 1}]}
+        class Unreadable(Exception):
+            pass
+
+        reader = types.SimpleNamespace(header_only=lambda path: head, Unreadable=Unreadable)
+        inst = Mock(remote=False)
+        inst.running.return_value = False
+        for argv, want in ((["replay", "takeover", "x", "r.imprec", "--at", "391", "--player", "0",
+                             "--seatai", "1"], [1]),
+                           (["replay", "takeover", "x", "r.imprec", "--at", "391", "--player", "0"],
+                            None),
+                           (["replay", "play", "x", "r.imprec"], None)):
+            with self.subTest(argv=argv):
+                args = tacli.build_parser().parse_args(argv)
+                with patch.object(tacli, "Instance", return_value=inst), \
+                     patch.object(tacli, "_tarec", return_value=reader), \
+                     patch.object(tacli, "_launch", side_effect=BeforeLaunch) as launch:
+                    with self.assertRaises(BeforeLaunch):
+                        args.func(args)
+                self.assertEqual(launch.call_args.args[0].seatai, want)
+
+    def test_a_running_playbacks_takeover_refuses_seatai(self):
+        # the store is read at attach, so a running playback could not take it
+        args = tacli.build_parser().parse_args(["replay", "takeover", "x", "--at", "391",
+                                                "--player", "0", "--seatai", "1"])
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            args.func(args)
+        self.assertIn("--seatai go with a recording", err.getvalue())
+
+    def test_a_launch_inside_a_run_lock_hold_runs_under_the_gpu_cap(self):
+        # the cap the run lock sized the GPU memory on, written inside a hold and gone outside one,
+        # so a launch by hand after a run is not capped; a --shipped launch hands it away
+        self.assertIn("gpumem", tacli.HARNESS_KEYS)
+        held = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00", "resources": [],
+                           "path": "/nowhere/tareplay.lock", "cap_mib": 536})
+        outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\ngpumem=64\n")
+            with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("gpumem=536", lines)          # the cap the hold was admitted under
+            self.assertEqual(sum(ln.startswith("gpumem=") for ln in lines), 1)
+            with patch.dict(os.environ, outside, clear=True):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertFalse(any(ln.startswith("gpumem=") for ln in lines))
+            self.assertIn("gamma=12", lines)
+
+    def test_a_shipped_launch_is_refused_inside_a_run_with_gpu_memory(self):
+        # its game would take a seat of the run and carry no cap; in a run without GPU memory it
+        # takes no seat, and the refusal comes before anything is made or written
+        held = {"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00", "resources": [],
+                "path": "/nowhere/tareplay.lock", "cap_mib": 536}
+        args = tacli.build_parser().parse_args(["launch", "nowhere-instance", "--shipped"])
+        with patch.dict(os.environ, {tacli.runlock.ENV: json.dumps(held)}), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            tacli._launch(args)
+        self.assertIn("--shipped inside a run with GPU memory", err.getvalue())
+        self.assertFalse(tacli.Instance("nowhere-instance", lenient=True).exists)
+        no_gpu = json.dumps(dict(held, gpu_mib=0, cap_mib=None))
+        with patch.dict(os.environ, {tacli.runlock.ENV: no_gpu}):
+            self.assertFalse(tacli.runlock.seated())
+
+    def test_every_harness_launch_writes_netai(self):
+        # the network game's AI is ota unless the launch asks for impai, so a stale impai line
+        # never plays a later launch's network seats; a --shipped launch hands it to the player
+        self.assertIn("netai", tacli.HARNESS_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nnetai=impai\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("netai=ota", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, netai="impai"))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("netai=impai", lines)
+            self.assertEqual(sum(ln.startswith("netai=") for ln in lines), 1)
+            with self.assertRaises(SystemExit):
+                tacli.write_netai(inst, "stock")
 
 
 # ----------------------------------------------------------- remote instances
@@ -3602,6 +4182,33 @@ class LocalRegistry(unittest.TestCase):
         self.assertIn("registry store created", out)
         self.assertEqual(self.store().get(taremote.STORE_TA, "Nickname")[2], b"LATER\0")
 
+    def test_a_game_launched_inside_a_gpu_run_is_started_through_runlocks_keeper(self):
+        # tacli starts its game through runlock.start_game, which inside a run with GPU memory puts it
+        # under a keeper holding a seat of the run (runlock.py, A SEAT IS LET GO AFTER ITS GAME:
+        # test_runlock.py's Keeper plays the keeper itself) and outside one starts it as it is. The
+        # seat is taken away here so that the stand-in game, not wine, is what starts.
+        self.assertEqual(self.main("create", "l1")[0], 0)
+        seen = []
+        real = tacli.runlock.start_game
+
+        def start(argv, what, **kw):
+            seen.append((list(argv[:2]), what, tacli.runlock.seated(), kw.get("start_new_session")))
+            with patch.object(tacli.runlock, "game_seat", lambda what: None):
+                return real(argv, what, **kw)
+        held = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s03", "resources": [],
+                           "path": str(Path(self.tmp.name) / "tareplay.lock"), "cap_mib": 920})
+        with patch.object(tacli.runlock, "start_game", start):
+            with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+                code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+            self.assertEqual(code, 0, err)
+            self.running = False                                # the game ended
+            outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+            with patch.dict(os.environ, outside, clear=True):
+                code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+            self.assertEqual(code, 0, err)
+        self.assertEqual(seen, [(["wine", "TotalA.exe"], "l1 (tacli launch)", True, True),
+                                (["wine", "TotalA.exe"], "l1 (tacli launch)", False, True)])
+
     def test_an_existing_store_is_the_instances_and_is_not_reseeded(self):
         self.assertEqual(self.main("create", "l1")[0], 0)
         self.assertEqual(self.main("registry", "l1", "Nickname=MINE")[0], 0)
@@ -4094,6 +4701,117 @@ class PrefixLeftovers(unittest.TestCase):
             self.addCleanup(p.kill)
             pids.append(p.pid)
         self.assertEqual(sorted(p["pid"] for p in tacli.prefix_processes(prefix)), sorted(pids))
+
+
+
+class DumpLines(unittest.TestCase):
+    """dump_written_rx and dump_refused_rx against the lines the recorder actually writes: every
+    tagpu_logf format of tagpu_recorder.c that names a dump, rendered with sample arguments. A
+    changed format fails here, not as a dump nobody saw in a game."""
+
+    SRC = Path(__file__).resolve().parents[1] / "tagpu" / "ddraw" / "src" / "tagpu_recorder.c"
+    CALL = re.compile(r'tagpu_logf\(((?:\s*"(?:[^"\\]|\\.)*")+)')
+    LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
+    CONV = re.compile(r"%(\.\*)?[-+ #0-9]*(?:l|ll|h)?([sdux])")
+
+    def formats(self):
+        text = self.SRC.read_text(encoding="latin-1")
+        out = []
+        for m in self.CALL.finditer(text):
+            fmt = "".join(self.LIT.findall(m.group(1)))
+            if re.match(r"recorder: (frame )?dump[ :]", fmt):
+                out.append(fmt)
+        return out
+
+    def render(self, fmt, name):
+        first = [True]
+
+        def arg(m):
+            if m.group(2) == "s" or m.group(1):
+                if first[0]:
+                    first[0] = False
+                    return name
+                return "replays\\dump-x.bin"
+            return "331"
+        return self.CONV.sub(arg, fmt.replace("%%", "%"))
+
+    def classify(self, fmt):
+        if " armed for GameTime " in fmt:
+            return "armed"
+        if "the dump leaves" in fmt:
+            return "note"
+        if "bytes of records" in fmt:
+            return "written"
+        return "refused"
+
+    def test_every_dump_format_is_classified_by_the_patterns(self):
+        fmts = self.formats()
+        kinds = {self.classify(f) for f in fmts}
+        self.assertEqual(kinds, {"armed", "note", "written", "refused"}, fmts)
+        written = re.compile(tacli.dump_written_rx("e0"))
+        refused = re.compile(tacli.dump_refused_rx("e0"))
+        for fmt in fmts:
+            line = self.render(fmt, "e0")
+            kind = self.classify(fmt)
+            self.assertEqual(bool(written.search(line)), kind == "written", line)
+            self.assertEqual(bool(refused.search(line)), kind == "refused", line)
+
+    def test_the_written_line_gives_its_gametime_and_path(self):
+        frame = ("recorder: frame dump calibfeat at GameTime 120 (iteration 121) -> "
+                 "replays\\dump-calibfeat.bin (8962308 bytes of records); 0 records with a body "
+                 "past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("calibfeat"), frame)
+        self.assertEqual((m["t"], m["iteration"], m["path"], m["bytes"]),
+                         ("120", "121", "replays\\dump-calibfeat.bin", "8962308"))
+        armed = ("recorder: dump w331 at GameTime 331 -> replays\\dump-w331.bin (100 bytes of "
+                 "records); 0 records with a body past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("w331"), armed)
+        self.assertEqual((m["t"], m["iteration"]), ("331", None))
+
+    def test_another_dumps_line_is_not_this_ones(self):
+        line = ("recorder: frame dump e01 at GameTime 5 (iteration 6) -> replays\\dump-e01.bin "
+                "(9 bytes of records); 0 records with a body past 0xFFFF bytes not written")
+        self.assertIsNone(re.search(tacli.dump_written_rx("e0"), line))
+
+
+class KnownGame(unittest.TestCase):
+    """Instance.pid: the game an Instance has found answers for itself while its pid keeps the
+    start time it had, so one Instance serves every call of a harness without a listing each;
+    a pid another process has taken since, or a zombie, is listed again."""
+
+    STAT = ("4242 (TotalA.exe) {state} 1 4242 4242 0 -1 4194560 100 0 0 0 5 6 0 0 20 0 9 0 "
+            "{start} 1000 200 18446744073709551615")
+
+    def test_the_stat_line_gives_a_live_totala_its_start(self):
+        self.assertEqual(tacli._totala_start(self.STAT.format(state="S", start=777)), 777)
+        self.assertIsNone(tacli._totala_start(self.STAT.format(state="Z", start=777)))
+        self.assertIsNone(tacli._totala_start(
+            self.STAT.format(state="S", start=777).replace("TotalA.exe", "wineserver")))
+        self.assertEqual(tacli._totala_start(self.STAT.format(state="R", start=5)), 5)
+
+    def test_a_pid_is_listed_again_only_when_its_process_changed(self):
+        listings, starts = [], {4242: 100}
+
+        def listing():
+            listings.append(1)
+            return {tacli.prefix_key(inst.prefix): 4242}
+
+        with tempfile.TemporaryDirectory() as d, patch.object(tacli, "INSTANCES", Path(d)), \
+                patch.object(tacli, "totala_by_prefix", listing), \
+                patch.object(tacli, "_proc_totala_start", lambda pid: starts.get(pid)):
+            inst = tacli.Instance("k1")
+            self.assertEqual([inst.pid(), inst.pid(), inst.pid()], [4242] * 3)
+            self.assertEqual(len(listings), 1, "the game found answers for itself")
+            starts[4242] = 900          # the game exited and another took its pid
+            self.assertEqual(inst.pid(), 4242)
+            self.assertEqual(len(listings), 2)
+            self.assertEqual(inst.pid(), 4242)
+            self.assertEqual(len(listings), 2)
+            del starts[4242]            # gone: listed again, and not running
+            listing_none = lambda: listings.append(1) or {}
+            with patch.object(tacli, "totala_by_prefix", listing_none):
+                self.assertFalse(inst.running())
+            self.assertEqual(len(listings), 3)
 
 
 if __name__ == "__main__":

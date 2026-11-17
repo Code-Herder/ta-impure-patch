@@ -81,7 +81,7 @@ int tagpu_wikiframe_indexed(const char* key, int* control_, int* index)
     size_t k;
     int i;
     if (colon && colon - key == 4 && !strncmp(key, "chip", 4)) {
-        /* a chip by its name, among sim.js's CHIPS */
+        /* a chip by its name (tagpu_wikidata_chip_name's) */
         for (i = 0; i < WIKI_NCHIP; i++)
             if (!strcmp(colon + 1, tagpu_wikidata_chip_name(i))) {
                 *control_ = WIKI_HUD_CHIP;

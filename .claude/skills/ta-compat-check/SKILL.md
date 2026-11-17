@@ -19,10 +19,20 @@ UNEXPECTED** (`CLAUDE.md` *Releases*). Run the Windows suite too when the owner 
 SSH session; say in the hand-over which platforms ran. A known gap does not block a release;
 an UNEXPECTED does, and so does a suite that could not run (exit 2).
 
+**ImpAI plays in the release run once it is the default AI (from b8 on):**
+
+```bash
+tools/compat/tacompat.py wine --dll <release ddraw.dll> --impai 300 --mp-impai
+```
+
+Every setup where Impure runs then plays an ImpAI stage and gives each peer of its network game an
+ImpAI seat. Each seat is held to the claim (by its last pulse it gave orders and completed a unit since its first, which counts the commander).
+300 s clears the claim's 130 s floor with margin and keeps the stage shorter than the bare 900.
+
 ## The loop
 
 ```bash
-make -C tagpu/ddraw -j$(nproc)                       # the DLL under test (the default --dll)
+tools/runlock.py make -- -C tagpu/ddraw              # the DLL under test (the default --dll)
 tools/compat/tacompat.py list                        # setups, fixtures, what is missing
 tools/compat/tacompat.py fetch                       # every fixture with a plain URL
 tools/compat/tacompat.py wine                        # every setup that fits the GPU at once, battles and network games
@@ -31,6 +41,10 @@ tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
 tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
 tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 6)
+tools/compat/tacompat.py wine --mp-impai              # each peer adds a computer seat its ImpAI plays
+tools/compat/tacompat.py wine --impai                 # also the ImpAI stage: 900 s of ImpAI against OTA AI
+tools/compat/tacompat.py wine --impai-survey          # where ImpAI is available: the stage loaded, nothing played
+tools/compat/tacompat.py wine --impai 120 --resume DIR   # go on with an interrupted run: only its unsettled setups
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py windows --smoke 30          # also play an isolated in-game smoke
@@ -103,12 +117,30 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   at "No sound driver is available for use.". No file of the setup is changed for it.
 - **The network stage** (Wine only, on by default, 30 s): every player's setup whose
   single-player run shows Impure running also plays a two-player game — a second instance of the
-  same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over
-  Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
+  same folder (`compat-<setup>-<tag>-j`), hosted and joined through the game's own battle room
+  over Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
   `compat-mp-join.json`. Queued beside the single-player runs, `--mp-jobs` (6) at once, each
-  on a DirectPlay port of its own from 47625 up (`tools/dpport.py`): the name server's port is
-  machine-wide, so one port per game is what keeps them apart. The report's column reads
-  `mp ok`, `mp FAILED`, `no mp` or `-` (not played).
+  on a DirectPlay port of its own leased from 61000 up (`tools/dpport.py`, above the kernel's
+  ephemeral range): the name server's port is machine-wide, so one port per game is what keeps
+  them apart, across runs as well. The report's column reads
+  `mp ok`, `mp FAILED`, `no mp` or `-` (not played). `--mp-impai` writes `netai=impai` on both
+  peers, adds one computer seat on each (named `ImpAI:` by the battle room's first step) and also
+  judges both peers' ImpAI seat lines, each naming the other's seat ImpAI's, and each peer's seat by
+  its last pulse: it gave orders and completed a unit since its first pulse (the game plays at least 130 s for it).
+- **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
+  each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
+  the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
+  lines, no `could not`, no refused turn, and by its last pulse it gave orders and completed a unit since its first;
+  at least 130 s for that pulse). The seats go under the registry root the game itself
+  reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
+  skirmish on another map, other seats or another Difficulty fails by name. The single-player
+  battle saves and checks its map the same way: a battle on another map fails by name. ImpAI unavailable fails unless the setup says
+  `"impai": "unavailable"`; content past its tables (`impai: fight none: … do not fit the tables`,
+  `impai: menus past their tables`) fails by its line whatever the setup says. `--impai-survey`
+  loads the same skirmish and reads the level init's lines with nothing played; `--impai-seat ota` runs the harness
+  on two stock seats. Column: `ai
+  ok`, `ai FAILED`, `ai n/a`, `-`. The note: [the suite](../../../research/notes/compat/suite.md),
+  *The ImpAI stage*.
 - **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:
   - **the game folder**: `tdrawlog.txt` at all (tdraw started), or `log\TA Demo Recorder Log
     -<date>.txt` at all — the recorder creates one only when it starts from inside a DirectPlay
@@ -128,10 +160,19 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
     UNEXPECTED, the same rule as *a run is only evidence if the watcher saw it*.
   - On Windows `win-watch.ps1` does the reading and judges nothing — it dumps the changed runs and
     the module table for the same decoder.
-- **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>/` (default cache
+- **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>[-<tag>]/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
-  `startup-failure.txt`, the Wine log and a picture of the first box.
+  `startup-failure.txt`, the Wine log and a picture of the first box. A Wine run reads each stage
+  the moment it ends (its runs-viewer step ends with it) and writes each setup's folder the moment
+  the setup's last stage ends, its result last as `verdict.json` (written aside and renamed over),
+  so a run cut short keeps every setup that finished; `run.json` holds what the run plays and the
+  DLL's hash. **`wine --resume DIR`** goes on with an interrupted run in that folder: a setup with
+  a `verdict.json` is read back, every other one — interrupted in any stage — is played whole.
+  Give it the same arguments: a resume with another DLL, or other play arguments (`--watch`,
+  `--battle`, `--mp`, `--mp-impai`, `--impai`, `--impai-survey`, `--impai-seat`, `--refuse`), is
+  refused. The managed rows are compared with their drop-in rows again at the report, so the two
+  may come from different sittings.
 
 ## Fixtures
 
@@ -249,7 +290,16 @@ Run the new setup before writing its `today` — write down what it did, not wha
 
 ## Traps
 
-- **Never run two `tacompat.py wine` at once**: the instance names are fixed (`compat-<setup>`).
+- **Two `tacompat.py wine` runs at once keep apart by construction**: each instance carries the
+  run's tag (`compat-<setup>-<tag>`, `<tag>` = `s<NN>`, the lowest run-lock slot the run holds)
+  and each network game a leased port, and the run lock admits them by their declared games
+  (`min(-j, setups) + 2 × min(--mp-jobs, network setups)`), cut to the games its share of the GPU
+  budget holds: a run plays no more games at once than its `games()` (`GameSlots`, and a seat per
+  game), each under the `compat` cap (`tools/runlock-suites.cfg`), so two runs together stay inside
+  the device's memory (`tools/runlock-vram.cfg`). A network game's two peers need their two seats
+  at once: a run granted fewer than two games plays no network game, and each reads `could not
+  run` by name instead of a joiner waiting forever for the host's seat. `tacompat.py clean` takes the whole run lock,
+  so it never removes a running run's instance.
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
   is safe; it tests nothing new until the next run.

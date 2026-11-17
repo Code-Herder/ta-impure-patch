@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The compat suite's two-player stage (tools/compat/tacompat.py, setup tazero-alpha5): the hosting peer's half, applied on that peer, where owner 0 is the local player. Thirty units meet the joining peer's (scenarios/compat-mp-join-tazero.json) in the middle of Two Continents, so both peers send each other creates, moves and hits within the stage's thirty seconds. TA Zero's own types (Marines), which replace every stock one; the setup names this file in its `scenarios`. The commanders stay (clear_existing false).",
+ "description": "The compat suite's two-player stage (tools/compat/tacompat.py, setup tazero-alpha5): the hosting peer's half, applied on that peer, where owner 0 is the local player. Thirty units meet the joining peer's (scenarios/compat-mp-join-tazero.json) on dry, level ground of Two Continents, at least WAVE_CLEAR (1500) world pixels from every start a record of the network game takes (tacompat.py, THE FIGHT STAYS OFF THE SEATS), so both peers send each other creates, moves and hits and no seat's commander is in the fight. TA Zero's own types (Marines), which replace every stock one; the setup names this file in its `scenarios`. The commanders stay (clear_existing false).",
  "seed": 20260927,
  "on_error": "abort",
  "setup": {
@@ -17,8 +17,8 @@
    "id": "host_wave",
    "owner": 0,
    "at": [
-    2800,
-    1200
+    6792,
+    6480
    ],
    "pattern": {
     "kind": "grid",
@@ -37,8 +37,8 @@
     {
      "cmd": "attack",
      "to": [
-      3200,
-      1200
+      7192,
+      6480
      ]
     }
    ]

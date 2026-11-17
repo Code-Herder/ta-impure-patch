@@ -63,6 +63,21 @@ starting a game ([tacli-design](../tacli-design.html), *A launch ends the prefix
 first*). MEASURED 2026-10-09: with another process holding the semaphore, `wine TotalA.exe`
 exits with code 255, the −1 above.
 
+### WinMain's exit with code 0 before a window — `0x49E977..0x49E98C`, `0x4B5BDA..0x4B5CA2` [DISASSEMBLED + MEASURED 2026-11-12]
+
+WinMain returns 0 at `0x49E980` when the graphics init `0x4B5980` (called at `0x49E977`) answers
+0. The init answers 0 from one place, `0x4B5C44..0x4B5CA2`, reached when `RegisterClassA`
+(`0x4B5BDA`, IAT `0x4FC338`) or `CreateWindowExA` (`0x4B5C0F`, IAT `0x4FC334`) fails, or when the
+DirectDraw setup `0x4B5510` (called at `0x4B5C3B`; its `DirectDrawCreate` thunk call at
+`0x4B55FB`) does: it frees through `0x4B4FF0`, shows `MessageBoxA` (`0x4B5C89`) with
+`"Error:  Environment Initialization Failed!\nCheck your DirectX setup"` (`0x509E68`), destroys
+the window (`0x4B5C93`) and returns 0. Before `0x4B5510`, a created window is shown and updated
+(`0x4B5C21`, `0x4B5C2B`). So a run whose DLL log has no `takeover:` line (the DLL logs it at
+DirectDrawCreate) failed at the class or the window. MEASURED under Wine: a launch whose X
+connection the server dropped printed `nodrv_CreateWindow ... no driver could be loaded`, its box
+could not open either, and the process exited with code 0 within a second
+([tacli-design](../tacli-design.html), *Exit code 0 is the display, not the semaphore*).
+
 ### The engine's mouse thread `0x4C2990`, and TotalA's other threads during play [DISASSEMBLED + MEASURED 2026-10-01]
 
 Found while the demo recorder's dumps were checked: 2 of 16 stock-fixture dumps summed bytes that
@@ -198,6 +213,13 @@ the scenario applier's stub runs on paused frames too, and applies there: MEASUR
 GameTime 1, which stayed 1. Its watchdog's message names the menus and the mission-end screen
 only.
 
+**What follows the draw call `0x4969CD`** [DISASSEMBLED 2026-11-13], which NO DRAW's skippable stub
+there rests on (`tagpu_nodraw.c`, THE SITES): the two arguments are `push ebx; push ebx` at
+`0x4969CB`, and after the call nothing reads EAX, ECX, EDX or a flag before writing it: `0x4969D2`
+reloads EAX (`mov eax,[0x511DE8]`), `0x4969DD` calls `0x4B6560`, an import thunk that reads no
+register, `0x4969E4` and `0x4969E7` write EDX and ECX, and the `sub` at `0x4969E9` sets the flags.
+So a stdcall function of two arguments that keeps EBX, ESI, EDI and EBP may stand in for the draw.
+
 **THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
 cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
 with an `after` (it hijacks the return to close its census), and `tagpu_detour_observe` refuses
@@ -288,8 +310,8 @@ disassembly confirms it:
 | `0x497F40` | the game-screen enter callback (the one `0x49821D` writes the viewport rect from, §vpwide). Its first test is bit 0 of `main+0x38D75` (`mov cl,[eax+0x38d75]; test cl,1` at `0x497F4B`/`0x497F54`): set → `0x498340`, the POLL path; clear → the first-entry path |
 | `0x4982C3`..`0x4982CA` | `push ebp; push ebp; push 0x497C70; call 0x4B6B20` — the thread is created here. `0x4B6B20(start, stack, arg)` is a three-argument wrapper (`ret 0xC`) over the CRT's `0x4E77D0`: a `0x74`-byte thread block, **`CreateThread`** (IAT `0x4FC1A8`) with flags `4` = suspended, then **`ResumeThread`** (IAT `0x4FC240`) — the `_beginthread` shape |
 | `0x49832A` | the game thread sets **bit 0** (`or ecx,1`) right after creating the thread, calls `0x45B640`, and falls into `0x498342`: **bit 1** tested (`shr dl,1; test dl,1`), clear → `je 0x4984DD`, the loading-screen path; set → the in-play handler is installed |
-| `0x497C70` | the thread's entry: an SEH frame (`push -1; push 0x4FDA48; push 0x4E6718`) around `call 0x497180(arg)` at `0x497CA1`. Stolen bytes `55 8B EC 6A FF` are position-independent, which is what lets an observer sit on it |
-| `0x497180` | the loader body: one function, `0x497180..0x497C6C`, one `ret`. First act `QueryPerformanceCounter` (IAT `0x4FC0BC`, it times itself); calls **`LoadGameData_Main 0x4917D0`** at `0x497581` — the routine the *per-map arrays* section left as "entry not traced": its one caller is this thread, and everything that section lists as allocated by the load (layers, projectiles, `LoadMap`, the unit array, the minimap) is allocated **on the loader thread** |
+| `0x497C70` | the thread's entry: an SEH frame (`push -1; push 0x4FDA48; push 0x4E6718`) around `call 0x497180(arg)` at `0x497CA1`. Stolen bytes `55 8B EC 6A FF` are position-independent, which is what lets an observer sit on it. Its address occurs once in the image, as the operand of the `push` at `0x4982C5` [byte search, 2026-11-13] |
+| `0x497180` | the loader body: one function, `0x497180..0x497C6C`, one `ret`. First act `QueryPerformanceCounter` (IAT `0x4FC0BC`, it times itself); calls **`LoadGameData_Main 0x4917D0`** at `0x497581` — the routine the *per-map arrays* section left as "entry not traced": its one caller is this thread, and everything that section lists as allocated by the load (layers, projectiles, `LoadMap`, the unit array, the minimap) is allocated **on the loader thread**. **Every game mode reaches `0x497581`** [DISASSEMBLED 2026-11-13]: the mode tests at `0x4971D8`, `0x4971DF` and `0x4971E6` branch to `0x49745C`, `0x4973C1` and `0x4974E3` or fall through to `0x4971EC`; those blocks meet at `0x4974E3` (`jmp` at `0x4973BC` and `0x497457`, `je` at `0x4972E2`, and `0x49745C..0x4974DE` falls into it), every branch between `0x4974E3` and `0x497581` lands inside that range or on `0x497581`, and no `ret` comes before it. `0x497180`'s only caller is `0x497CA1`, and neither it nor `0x4917D0` occurs in the image as a dword. That is the argument that the effect pools' level reset (`0x420620`, [weapons](weapons.md), *The level load empties the pools*) runs on every level load |
 | `0x4975C7` / `0x4975DE..0x4975F1` | the loader sets **bit 2** (`or edx,4`) and then waits for **bit 3** in a loop: `push 0x32; call SleepBatch100ms 0x4B6B50` per iteration *[name from `tools/ta_symbols.txt`]* |
 | `0x498539..0x498580` | the game thread's half of that handshake, inside `0x497F40`'s poll path: bit 2 set and `0x4568C0` non-zero → clear bit 2 (`and ecx,0xFFFB` at `0x49855D`), set bit 3 (`or edx,8` at `0x498576`), `call HAPINET_guaranteepackets 0x4C9790`. The in-game frame callback `0x496790` clears bit 2 the same way at `0x496868` (`0x496846..0x49686E`) |
 | `0x497C57..0x497C62` | the loader body's LAST act: **bit 1** set (`or ecx,2` at `0x497C5F`, the store at `0x497C62`), then `ret` at `0x497C6C` |
@@ -470,7 +492,9 @@ A failing `GetStatus` returns at once (`0x4CF5F8`).
   `honk`, or `sing` when (GameTime / 30) & 7 is nonzero, while `0x51E698` is set (`0x47FE25..0x47FE4D`;
   the `+Sing` command's handler `0x4172E0` toggles it, its record at `0x501E64`). UseWindowsSound
   plays it through `0x49F6C0` (`PlaySoundA`, IAT `0x4FC3D4`, `0x47FE75..0x47FE83`); otherwise
-  fxvol 0, Sound Mode 0 or NoDirectSound skips the play (`0x47FEA8..0x47FEC2`) and
+  fxvol 0, Sound Mode 0 or NoDirectSound skips the play (`0x47FEA8..0x47FEC2`: fxvol `main+0x37F0C`
+  at `0x47FEB0`, Sound Mode `main+0x37F19 & 7` at `0x47FEB9`, `0x51E690` at `0x47FEC2`, each a jump to
+  the write below) and
   `0x4D0640(file, −585, 0)` plays it (`0x47FED0`, `0x47FED6`), which is `0x4D02A0(file, 1, −585, 0)`:
   the file opened through the archive layer and played by name each time, **no point passed**.
   **Every one of those branches then writes the kind's next time**, GameTime + 30 × interval
@@ -515,7 +539,8 @@ select, ok and `0x48B090`'s):
   append with none. An order the DLL makes through `0x43ADC0` with stock's shift therefore sounds
   as stock's click does, with no sound call of its own (the formation move).
 - arrived, kind 6: Move_Ground (`0x4031D0`) says it in state 1 only on its goal event `0x20`
-  (`0x4031EB..0x403206`, result 5); without it (a give-up, `0x40`) the order ends silent with
+  (`0x4031EB..0x403206`: the events argument tested against `0x20` at `0x4031EB`, then
+  `0x47F780(unit, 6, 0)` at `0x4031FB`, result 5; DISASSEMBLED 2026-11-11); without it (a give-up, `0x40`) the order ends silent with
   result 9 (`0x403209`). State 0 says ok (`0x40322D`) and starts the move (`0x438930(order+0x22,
   order+0x36 + 4)`, `0x403232..0x40323F`), whose goal `0x44CF60` keeps the goal's footprint cell,
   `(P − (fx << 19) + 0x80000) >> 20` on the 16.16 position for each axis (`0x44CF7F..0x44CFA7`,
@@ -540,12 +565,14 @@ select, ok and `0x48B090`'s):
   `0x403B63`) is measured: `floor(|unit − site centre|)` (the 16.16 distance's high word,
   `0x403B6C..0x403BA9`) less `trunc(8 · hypot(unit fx, fz))` (`0x4FC910` = 8.0, `0x403BD6`) plus
   `trunc(−8 · hypot(site fx, fz))` (`0x4FC918` = −8.0, `0x403C1A`); past the builder's
-  BuildDistance (def `+0x212`, `0x403C32`) it notices "I can't reach the construction site"
+  BuildDistance (def `+0x212`, read at `0x403C32`; the signed compare `cmp ebx,edx` at `0x403C39`,
+  `jle 0x403C59`; DISASSEMBLED 2026-11-11) it notices "I can't reach the construction site"
   (`0x501580`, `0x403C45`) and ends the order; within it, the site test follows (`0x403C59`).
 - build, kind 9 "Starting construction" (`0x5012F8`): BuildingBuild `0x402937`, MobileBuild
   `0x403DA0`, `0x4140D4`.
 - unitcomplete, kind 8: BuildingBuild `0x402B10` (the table's "Nanolathe Complete"), MobileBuild
-  `0x403F39` and HelpBuild `0x40422F` ("Building complete", `0x501530`), `0x41430C`.
+  `0x403F39` and HelpBuild `0x40422F` ("Building complete", `0x501530`), `0x41430C`. HelpBuild then
+  returns 5, done (`0x40423C..0x404248`; DISASSEMBLED 2026-11-14), so a help ends with its frame.
 - working, kind 11: `0x404571`, ReclaimUnit `0x4048BE`, `0x404C6E`, `0x404FF1`, `0x414942`,
   `0x414D20`; none in BuildingBuild or MobileBuild.
 - repair, kind 10: `0x402491`, `0x4056FE`, `0x4057A1`, `0x415219`, `0x415298`.
@@ -764,6 +791,42 @@ pattern pushed at `0x42A8EC` and `0x42E350`, the name at `0x42A98B` and `0x42E39
 the compatibility fixtures' executables). The `language` value `0x51FB50` (above, the path
 builder) is set once by WinMain's init.
 
+**Where the loader pushes each name** [DISASSEMBLED 2026-11-17, each site `68 <VA>` read from
+`pristine/TotalA.exe.pristine`]. The wiki's install loader reads every one of these strings out of the
+running mod's image through the sites below and refuses an image whose site does not hold its push
+(`tools/wiki/tavfs.py`, `PROFILE_STRINGS`; `tools/tasim/tasim_load.c` follows the same reads). A path is
+built by `0x4290F0(buf, folder, name, ext)` unless the row says otherwise.
+
+| name | VA, text | pushed at | the read |
+|---|---|---|---|
+| the archive patterns | `0x5028CC` `rev%s.GP3`, `0x5028C4` `*.CCX`, `0x5028BC` `*.UFO`, `0x5028B4` `*.HPI` | `0x41D4EC`, `0x41D540`, `0x41D57A`, `0x41D5B4` | InitTAHPIAry `0x41D4C0`; the first formatted by `0x4E42B0` at `0x41D4F2` with `31` (`0x5028D8`, pushed at `0x41D4E0`) |
+| `units` | `0x503920` `units` | `0x42AA25`, `0x42AB68`, `0x42ABDC`, `0x42D6F1` | the pre-scan `0x42A8D0`'s listing path (built at `0x42AA2B`, listed by `0x4BCA30` at `0x42AA4F`), its per-file open (`0x42AB3E..0x42AB6E`), its `.OVR` open (`0x42ABE2`), and the level's re-read in `0x42D2E0` (`0x42D6E9..0x42D722`) |
+| `*` | `0x50372C` | `0x42AA1C`, `0x42DD03` | the unit listing above; the download listing (`0x42DCFE..0x42DD34`) |
+| `FBI` | `0x503928` | `0x42AA17`, `0x42AB3E`, `0x42D6CF` | the three unit sites above |
+| the weapons folder | `0x50392C` `Weapons` | `0x42A98B`, `0x42E39B` | each listed weapon file's open: the pre-scan's (`0x42A980..0x42A99B`) and the level's weapon load `0x42E310`'s (`0x42E391..0x42E3A1`) |
+| the weapon listing | `0x503934` `Weapons\*.tdf` | `0x42A8EC`, `0x42E350` | the pattern `0x4BCA30` lists in the same two |
+| `TDF` | `0x50341C` | `0x42A980`, `0x42E391`, `0x42D2F3`, `0x42D937`, `0x429EA3`, `0x42DCFE`, `0x42DDA3` | the two weapon opens, moveinfo, sidedata at the level's load and at the menu's, the download listing and its opens |
+| `gamedata` | `0x503360` | `0x42D301`, `0x42D945`, `0x429EB1` | moveinfo's folder and sidedata's |
+| `moveinfo` | `0x503F48` | `0x42D2F8` | the move classes, built at `0x42D307` (`0x42D2F3..0x42D307`) |
+| `sidedata` | `0x503410` | `0x42D93C`, `0x429EA8` | the sides, built at `0x42D94B` (`0x42D937..0x42D94B`) and at `0x429EB7` (`0x429EA3..0x429EB7`) |
+| `download` | `0x503730` | `0x42DD0E`, `0x42DDB0` | the listing's path (built at `0x42DD24`) and each listed file's open (`0x42DDA3..0x42DDB6`) |
+| `guis` | `0x502820` | `0x42D82A`, `0x41AD2C` | the page probe `0x42D824..0x42D83F` (built at `0x42D830`, sized by `0x4BBC40` at `0x42D83A`) and the page loader `0x41AD17..0x41AD5F` (built at `0x41AD4B`, sized at `0x41AD58`; a size of 0 falls through to the side's `%sDL` page, `0x502818` pushed at `0x41AD8E`) |
+| `GUI` | `0x502828` | `0x42D824`, `0x41AD17` | the same two |
+| `features`, `*.tdf` | `0x502C7C`, `0x502C88` | `0x422324`, `0x42231F` | `0x4BCB50(features, *.tdf, -1, 1)`, its arguments set at `0x422310..0x422335` and the call at `0x422339` (`0x422310..0x422331` in the loaders' comments) |
+| `scripts`, `COB` | `0x503740`, `0x503EC8` | `0x42D8DF`, `0x42D8D5` | a type's script from its UnitName (def `+0x20`, `lea` at `0x42D8D2`), built at `0x42D8E5` and loaded by `0x4B2450` at `0x42D8EF` |
+| `objects3d`, `3DO` | `0x5036E4`, `0x5036F0` | `0x42D753`, `0x42D74D` | a type's model, built at `0x42D759` and loaded by `0x4CB560` at `0x42D766` |
+| the Copyright reference, the year template | `0x5038CC`, `0x50390C` | `0x42AABF`, `0x42AAB7` | the pre-scan's `strstr` of the template in the reference; then `mov eax,[0x50390C]` at `0x42B102` and `mov esi,0x5038CC` at `0x42B107` for the compare ([keys](keys.html), the pre-scan) |
+| the Copyright default | `0x5037BC` | `0x42B0E6` | the default `0x4C48C0` copies at `0x42B0FD`, `0x80` bytes, for an FBI without `Copyright` (`0x5037B0`) |
+
+**The level's re-read of a type** (`0x42D6E9..0x42D722`): the path is built at `0x42D709` from the def's
+UnitName, sized by `0x4BBC40` at `0x42D713`, and only a size above 0 reaches the FBI reader `0x42BF40` at
+`0x42D722` (`je` past it at `0x42D71A`), so a type whose own file is empty or missing keeps what the pre-scan
+wrote [INFERRED from the skip]. Two
+types of one UnitName (Total Mayhem's `tronmakenuke.fbi` names `EMPMAKENUKE`) are both re-read from the one
+file of that name (MEASURED 2026-11-13, `tools/tasim/defcheck.py`). **One byte of a name**: the Total Mayhem
+list the profile's test models patches `0x503932` and `0x50393A` (file offsets `0x101F32`, `0x101F3A`), the
+last byte of `Weapons` in each of the two weapon strings, to `M` -- `WeaponM` in both.
+
 **Not established**: run-time patches of these strings by a DLL (TADR's, the loaders); whether a
 mod adds a file layer of its own. The loader reads what the engine mounted at the wiki's first
 open: an archive mounted later in the process (a RESTART's `0x41D4C0`) is not seen.
@@ -950,7 +1013,21 @@ a register once and call through it; the register is given with the load.
    both count as success) or `RegSetValueExA(type, data, *size)`, and closes all three. The
    callers pass the section `Total Annihilation` (`0x5032E8`), except the six values of each
    skirmish player, whose section is `Total Annihilation\Skirmish` (`0x503300`): six callers of
-   the dword read from `0x430C40` on and six of the dword write from `0x43161B` on. Its
+   the dword read from `0x430C40` on and six of the dword write from `0x43161B` on. The two
+   pushes that name the key are `68 D0 9E 50 00` at `0x4B68B1` (`Software`) and `68 B8 9E 50 00`
+   at `0x4B68E8` (the root), its rights chosen at `0x4B688E..0x4B68A5` and its three creates at
+   `0x4B68CB`, `0x4B68EE` and `0x4B690D`. **The root is a string, not the code**: every exe of the
+   compatibility setups carries the stock pushes, and each names its root in the string at
+   `0x509EB8` -- `Cavedog Entertainment` in retail, Total Mayhem's and ProTA's exes (md5-identical
+   to retail) and Twilight's, `TA Esc` in Escalation's, `TA Zero` in TA Zero's (read 2026-11-13 from
+   `pristine/TotalA.exe.pristine` and the seven fixture exes) -- while the Patch Loaders of Total
+   Mayhem and ProTA write `TotalM` and `ProTA` over it in their `DllMain` (MEASURED 2026-11-13: the
+   string read back in a running game, `tools/tasim/engrun.py` `engine_reads`, and the store's alias
+   line). Because a read creates every level, a root the registry refuses to create reads no setting
+   at all: the start-up's `gamespeed` falls back to 10 ([sim](sim.html), *The scheduler, the clock and the test pacing*) and the
+   skirmish's map and seats are the defaults. In a test launch Impure's store serves
+   `HKCU\Software\<the root at 0x509EB8>` as its own key ([settings](../modules/settings.html),
+   *TA's key wherever the exe names it*). Its
    wrappers:
 
    | wrapper | what | callers |
@@ -964,7 +1041,13 @@ a register once and call through it; the register is given with the load.
    **Escalation GOLD 10.2.0 variant [DISASSEMBLED 2026-09-28]:** the same accessor's
    `0x4B68B1` still pushes `Software` at `0x509ED0`, but `0x4B68E8` pushes `TA Esc` at
    `0x509EB8`. The skirmish caller `0x430C3B` still supplies `0x503300`, so the effective
-   key is `HKCU\Software\TA Esc\Total Annihilation\Skirmish`, independent of TADR.
+   key is `HKCU\Software\TA Esc\Total Annihilation\Skirmish`, independent of TADR. A mod chosen
+   by `mod=` reads under its own exe's root too: the mod loader lays the exe's image over the
+   process's (`tagpu_modload.c`, `put_image`), before the startup's registry load [INFERRED from the
+   measurement that follows]. MEASURED
+   2026-11-12 (`tacompat.py wine --impai-survey`): Escalation's `managed-escalation` row, whose
+   `TotalA.exe` on disk names `Cavedog Entertainment`, played the skirmish saved under
+   `Software\TA Esc` and saved its settings back there at the level load.
    `0x50DDF4` also contains the combined root string. The option accessor `0x49F5A0`
    formats the executable directory with `0x5098A0` at `0x49F5CE`; in this executable
    that format is `%s\taesc.ini`, not retail's `%s\totala.ini`. Its
@@ -1000,7 +1083,9 @@ a register once and call through it; the register is given with the load.
    and `0x4E132A` [screens not identified]; the logged runs never reached it.
 5. **A registry-key object, `0x4E2BE0(this, read, subkey, section)`**, `ret 0xC`. It opens
    (`RegOpenKeyA`, for reading) or creates (`RegCreateKeyA`, for writing)
-   `HKCU\Software\Cavedog Entertainment` (`0x50DDF4`), then `section` (the string at
+   `HKCU\Software\Cavedog Entertainment` (`0x50DDF4`, pushed at `0x4E2C0D` and `0x4E2C60`; Escalation's
+   exe holds `Software\TA Esc` there and TA Zero's `Software\TA Zero`, each its own `0x509EB8` root,
+   and Total Mayhem's loader writes its root at `0x50DDFD` [DISASSEMBLED 2026-11-13 in the loader]), then `section` (the string at
    `*0x529E80` when NULL), then `subkey`. Its four constructions name the engine library's own
    keys [INFERRED from the names]: `CavedogLibrary` (`0x50D74C`) with `PerformanceSettings`
    (`0x50DD84`) at `0x4E1B26` and with a computed subkey at `0x4E053A`, and `Cavedog library`

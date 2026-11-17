@@ -27,6 +27,9 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
+import talog  # the DLL's log, its refusals of the GPU memory cap (tools/talog.py)
+from stall import Stall  # the bound of a wait on a running level (tools/stall.py)
+
 TREE = Path(__file__).resolve().parents[1]
 TACLI = TREE / "tools/tacli"
 GAMETIME = "*0x511DE8+0x38a47"
@@ -34,6 +37,9 @@ PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips, and THE
 TRIGGER = "tagpu_replay.trigger"
 ACK_S = 60                       # a frame's answer: a trigger's line, the camera, a menu (tareplay)
 STALL_S = 120                    # a running level's GameTime standing still: a hung game (tareplay)
+# s between two looks at the log in a wait for a line. It decides how soon a wait sees its line, never
+# which: a wait returns the first line from its start that matches, and a faster look sees it sooner.
+LOOK_S = 0.02
 
 
 def tacli_api():
@@ -42,6 +48,41 @@ def tacli_api():
     api = module_from_spec(spec)
     spec.loader.exec_module(api)
     return api
+
+
+def hold_instance(what, instance, lanes=1, gpu=True, suite=None):
+    """The machine's run lock for a run that plays on `instance`, an instance its caller named
+    (tools/runlock.py): `lanes` and the instance's resource, so another run on it waits and runs on
+    other instances go beside it. The whole budget instead when the instance's prefix still shares
+    the template's registry hives: its wineserver rewrites them in place, under the copy every
+    other run's new private instance takes of them (tacli privatise_hives, THE GAP). The GPU memory
+    of a game a lane, under `suite`'s cap (runlock.hold), unless `gpu` is False, for a run whose
+    games render with GDI."""
+    sys.path.insert(0, str(TREE / "tools"))
+    import runlock
+    inst = tacli_api().Instance(instance)
+    meta = inst.meta_or_none() or {}
+    alone = meta.get("type") != "remote" and not meta.get("private_registry")
+    took = runlock.hold(TREE, what, None if alone else lanes, [runlock.instance_resource(instance)], gpu=gpu,
+                        suite=suite)
+    # from the hold on, no other run plays in this folder: what its log says is this run's games'
+    _CAPS[instance] = talog.CapWatch(inst.gamedir)
+    return took
+
+
+# THE CAP'S REFUSALS: every refusal of the GPU memory cap the games of a tool's instance log, from
+# its hold_instance on (talog.CapWatch), read at each Check's start and by cap_failure once the
+# tool has stopped the games it judges -- the lines after a case's last read included. A Check's
+# own reads fail the case at the line (Check.read).
+_CAPS = {}
+
+
+def cap_failure(instance) -> "str | None":
+    """The failure the refusals of the GPU memory cap name in `instance`'s games since the last
+    call, or since hold_instance (THE CAP'S REFUSALS), asked once the tool has stopped the games it
+    judges; None when there is none, or when the tool took no hold on the instance."""
+    caps = _CAPS.get(instance)
+    return caps.failure(instance) if caps is not None else None
 
 
 FIXTURE_UNITS = {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"}
@@ -65,15 +106,27 @@ class Check:
     def lockstep(self):
         """The trigger file and a log reader from now on; the world not yet held."""
         api = tacli_api()
-        instance = api.Instance(self.name)
-        self.gamedir = instance.gamedir
-        self.reader = api._LogLines(api._log_cursor(instance))
+        self.instance = api.Instance(self.name)
+        self.gamedir = self.instance.gamedir
+        if self.name in _CAPS:
+            _CAPS[self.name].sweep()    # a Check a game: the game before it read, as it rotates on
+        self.reader = api._LogLines(api._log_cursor(self.instance))
         self.log = []
         self.held = False
 
+    def read(self):
+        """The log's lines written since the last read, onto `log`. A refusal of the GPU memory cap
+        among them fails the case by name (talog.cap_failure): the cap the run lock sized the game
+        on is too small for it, and what the case reads next was played without that memory."""
+        got = [ln.rstrip() for ln in self.reader()]
+        self.log += got
+        refused = talog.cap_failure("\n".join(got))
+        assert not refused, refused
+        return got
+
     def _found(self, rx, start):
         """The first log line from index `start` on matching `rx`, None while there is none."""
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return next((ln for ln in self.log[start:] if re.search(rx, ln)), None)
 
     def _answer(self, rx, start, seconds=ACK_S):
@@ -81,14 +134,14 @@ class Check:
         end = time.monotonic() + seconds
         while (got := self._found(rx, start)) is None:
             assert time.monotonic() < end, f"no line matching {rx!r} in {seconds} s"
-            time.sleep(0.02)
+            time.sleep(LOOK_S)
         return got
 
     def _write(self, line):
         """One line of the replay trigger, written whole and renamed into place as tareplay writes
         it; the log index its answer is looked for from. Each caller awaits the answer before the
         next line, so no line replaces one the DLL has not read."""
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         tmp = self.gamedir / (TRIGGER + ".tmp")
         tmp.write_text(line + "\n")
         os.replace(tmp, self.gamedir / TRIGGER)
@@ -109,31 +162,22 @@ class Check:
     def _taken(self, T, start):
         """The pause at T taken. The level runs until then, as many ticks as the case advances, so
         the wait is bounded by its progress: it gives up only when GameTime stands still for
-        STALL_S, a hung game, and a loaded machine makes it longer, never different."""
+        STALL_S, a hung game, and a loaded machine makes it longer, never different. The log is
+        looked at every LOOK_S, and the line alone decides: GameTime, which only bounds the wait,
+        is read off the wait's path, from Stall.EVERY into it on (tools/stall.py)."""
         rx = rf"pause: (paused at GameTime {T}$|at {T} not taken.*)"
-        tick, since = None, time.monotonic()
+        bound = Stall(self.gamedir, STALL_S, lambda why: AssertionError(f"pause at {T}: {why}"),
+                      self._gone, time.sleep, LOOK_S)
         while (got := self._found(rx, start)) is None:
-            now = self._gametime()
-            if now is not None and now != tick:
-                tick, since = now, time.monotonic()
-            assert time.monotonic() - since < STALL_S, \
-                f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
-            time.sleep(0.05)
+            bound.check()
+            time.sleep(LOOK_S)
+        bound.retire()
         assert "paused at" in got, got
         self.held, self.tick = True, T
 
-    def _gametime(self):
-        """GameTime, a frame's answer bounded by ACK_S; None when the peek did not answer, which
-        _taken counts as standing still, so only its STALL_S decides."""
-        try:
-            r = subprocess.run([sys.executable, str(TACLI), "peek", self.name, GAMETIME, "--json",
-                                "--timeout", str(ACK_S)], capture_output=True, text=True,
-                               timeout=ACK_S + 30)
-        except subprocess.TimeoutExpired:
-            return None
-        if r.returncode:
-            return None
-        return int(json.loads(r.stdout)["peeks"][0]["value"].split()[0])
+    def _gone(self):
+        """The game's process has ended, so a GameTime read in flight is never answered."""
+        return not self.instance.running()
 
     def _still_held(self):
         """The hold's pause bit is still set: nothing let the world run under a case that holds it
@@ -980,7 +1024,9 @@ def main():
             failures.append(("", e))
             raised = False
         finally:
-            cleanup = [("release", check.release)]   # the world handed back held, as it came
+            # the world handed back held, as it came; then the log read to its end, for a refusal
+            # of the GPU memory cap after the case's last wait (Check.read)
+            cleanup = [("release", check.release), ("the log", check.read)]
             if a.case in ("locked", "inherit"):
                 cleanup.insert(0, ("menu.open=off", lambda: check.call("arm", "menu.open=off")))
             for what, step in cleanup:

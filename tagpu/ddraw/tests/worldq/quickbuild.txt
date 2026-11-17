@@ -1,0 +1,1030 @@
+map w=40 h=30 threshold=0 sea=0 lostype=0 ndefs=7 nslots=6 gametime=0
+explored  0 0000000011111111111111111111111111111111
+explored  1 0000000011111111111111111111111111111111
+explored  2 0000000011111111111111111111111111111111
+explored  3 0000000011111111111111111111111111111111
+explored  4 0000000011111111111111111111111111111111
+explored  5 0000000011111111111111111111111111111111
+explored  6 0000000011111111111111111111111111111111
+explored  7 0000000011111111111111111111111111111111
+explored  8 1111111111111111111111111111111111111111
+explored  9 1111111111111111111111111111111111111111
+explored 10 1111111111111111111111111111111111111111
+explored 11 1111111111111111111111111111111111111111
+explored 12 1111111111111111111111111111111111111111
+explored 13 1111111111111111111111111111111111111111
+explored 14 1111111111111111111111111111111111111111
+explored 15 1111111111111111111111111111111111111111
+explored 16 1111111111111111111111111111111111111111
+explored 17 1111111111111111111111111111111111111111
+explored 18 1111111111111111111111111111111111111111
+explored 19 1111111111111111111111111111111111111111
+explored 20 1111111111111111111111111111111111111111
+explored 21 1111111111111111111111111111111111111111
+explored 22 1111111111111111111111111111111111111111
+explored 23 1111111111111111111111111111111111111111
+explored 24 1111111111111111111111111111111111111111
+explored 25 1111111111111111111111111111111111111111
+explored 26 1111111111111111111111111111111111111111
+explored 27 1111111111111111111111111111111111111111
+explored 28 1111111111111111111111111111111111111111
+explored 29 1111111111111111111111111111111111111111
+metal 15,1 127
+metal 16,1 127
+metal 17,1 127
+metal 15,2 127
+metal 16,2 127
+metal 17,2 127
+metal 15,3 127
+metal 16,3 127
+metal 17,3 127
+metal 22,3 187
+metal 23,3 187
+metal 24,3 187
+metal 22,4 187
+metal 23,4 187
+metal 24,4 187
+metal 22,5 187
+metal 23,5 187
+metal 24,5 187
+metal 9,7 127
+metal 10,7 127
+metal 11,7 127
+metal 9,8 127
+metal 10,8 127
+metal 11,8 127
+metal 9,9 127
+metal 10,9 127
+metal 11,9 127
+metal 3,10 86
+metal 4,10 86
+metal 5,10 86
+metal 3,11 86
+metal 4,11 86
+metal 5,11 86
+metal 3,12 86
+metal 4,12 86
+metal 5,12 86
+metal 26,15 86
+metal 27,15 86
+metal 28,15 86
+metal 14,16 223
+metal 15,16 223
+metal 16,16 223
+metal 26,16 86
+metal 27,16 86
+metal 28,16 86
+metal 14,17 223
+metal 15,17 223
+metal 16,17 223
+metal 26,17 86
+metal 27,17 86
+metal 28,17 86
+metal 3,18 86
+metal 4,18 86
+metal 5,18 86
+metal 14,18 223
+metal 15,18 223
+metal 16,18 223
+metal 3,19 86
+metal 4,19 86
+metal 5,19 86
+metal 29,19 187
+metal 30,19 187
+metal 31,19 187
+metal 3,20 86
+metal 4,20 86
+metal 5,20 86
+metal 29,20 187
+metal 30,20 187
+metal 31,20 187
+metal 29,21 187
+metal 30,21 187
+metal 31,21 187
+def 1 ARMCK fx=2 fz=2 kind=0 flags=0x1b strength=0 workertime=80 reach=40 speed=52428 yard=2F2F2F2F options=3,5
+def 2 ARMACK fx=2 fz=2 kind=0 flags=0x1b strength=0 workertime=160 reach=60 speed=39321 yard=2F2F2F2F options=4
+def 3 ARMMEX fx=3 fz=3 kind=1 flags=0x0 strength=0.001 workertime=0 reach=0 speed=0 yard=2F2F2F2F2F2F2F2F2F options=
+coverage 3 13,0 2
+coverage 3 14,0 4
+coverage 3 15,0 6
+coverage 3 16,0 4
+coverage 3 17,0 2
+coverage 3 13,1 3
+coverage 3 14,1 6
+coverage 3 15,1 9
+coverage 3 16,1 6
+coverage 3 17,1 3
+coverage 3 20,1 1
+coverage 3 21,1 2
+coverage 3 22,1 3
+coverage 3 23,1 2
+coverage 3 24,1 1
+coverage 3 13,2 2
+coverage 3 14,2 4
+coverage 3 15,2 6
+coverage 3 16,2 4
+coverage 3 17,2 2
+coverage 3 20,2 2
+coverage 3 21,2 4
+coverage 3 22,2 6
+coverage 3 23,2 4
+coverage 3 24,2 2
+coverage 3 13,3 1
+coverage 3 14,3 2
+coverage 3 15,3 3
+coverage 3 16,3 2
+coverage 3 17,3 1
+coverage 3 20,3 3
+coverage 3 21,3 6
+coverage 3 22,3 9
+coverage 3 23,3 6
+coverage 3 24,3 3
+coverage 3 20,4 2
+coverage 3 21,4 4
+coverage 3 22,4 6
+coverage 3 23,4 4
+coverage 3 24,4 2
+coverage 3 7,5 1
+coverage 3 8,5 2
+coverage 3 9,5 3
+coverage 3 10,5 2
+coverage 3 11,5 1
+coverage 3 20,5 1
+coverage 3 21,5 2
+coverage 3 22,5 3
+coverage 3 23,5 2
+coverage 3 24,5 1
+coverage 3 7,6 2
+coverage 3 8,6 4
+coverage 3 9,6 6
+coverage 3 10,6 4
+coverage 3 11,6 2
+coverage 3 7,7 3
+coverage 3 8,7 6
+coverage 3 9,7 9
+coverage 3 10,7 6
+coverage 3 11,7 3
+coverage 3 1,8 1
+coverage 3 2,8 2
+coverage 3 3,8 3
+coverage 3 4,8 2
+coverage 3 5,8 1
+coverage 3 7,8 2
+coverage 3 8,8 4
+coverage 3 9,8 6
+coverage 3 10,8 4
+coverage 3 11,8 2
+coverage 3 1,9 2
+coverage 3 2,9 4
+coverage 3 3,9 6
+coverage 3 4,9 4
+coverage 3 5,9 2
+coverage 3 7,9 1
+coverage 3 8,9 2
+coverage 3 9,9 3
+coverage 3 10,9 2
+coverage 3 11,9 1
+coverage 3 1,10 3
+coverage 3 2,10 6
+coverage 3 3,10 9
+coverage 3 4,10 6
+coverage 3 5,10 3
+coverage 3 1,11 2
+coverage 3 2,11 4
+coverage 3 3,11 6
+coverage 3 4,11 4
+coverage 3 5,11 2
+coverage 3 1,12 1
+coverage 3 2,12 2
+coverage 3 3,12 3
+coverage 3 4,12 2
+coverage 3 5,12 1
+coverage 3 24,13 1
+coverage 3 25,13 2
+coverage 3 26,13 3
+coverage 3 27,13 2
+coverage 3 28,13 1
+coverage 3 12,14 1
+coverage 3 13,14 2
+coverage 3 14,14 3
+coverage 3 15,14 2
+coverage 3 16,14 1
+coverage 3 24,14 2
+coverage 3 25,14 4
+coverage 3 26,14 6
+coverage 3 27,14 4
+coverage 3 28,14 2
+coverage 3 12,15 2
+coverage 3 13,15 4
+coverage 3 14,15 6
+coverage 3 15,15 4
+coverage 3 16,15 2
+coverage 3 24,15 3
+coverage 3 25,15 6
+coverage 3 26,15 9
+coverage 3 27,15 6
+coverage 3 28,15 3
+coverage 3 1,16 1
+coverage 3 2,16 2
+coverage 3 3,16 3
+coverage 3 4,16 2
+coverage 3 5,16 1
+coverage 3 12,16 3
+coverage 3 13,16 6
+coverage 3 14,16 9
+coverage 3 15,16 6
+coverage 3 16,16 3
+coverage 3 24,16 2
+coverage 3 25,16 4
+coverage 3 26,16 6
+coverage 3 27,16 4
+coverage 3 28,16 2
+coverage 3 1,17 2
+coverage 3 2,17 4
+coverage 3 3,17 6
+coverage 3 4,17 4
+coverage 3 5,17 2
+coverage 3 12,17 2
+coverage 3 13,17 4
+coverage 3 14,17 6
+coverage 3 15,17 4
+coverage 3 16,17 2
+coverage 3 24,17 1
+coverage 3 25,17 2
+coverage 3 26,17 3
+coverage 3 27,17 3
+coverage 3 28,17 3
+coverage 3 29,17 3
+coverage 3 30,17 2
+coverage 3 31,17 1
+coverage 3 1,18 3
+coverage 3 2,18 6
+coverage 3 3,18 9
+coverage 3 4,18 6
+coverage 3 5,18 3
+coverage 3 12,18 1
+coverage 3 13,18 2
+coverage 3 14,18 3
+coverage 3 15,18 2
+coverage 3 16,18 1
+coverage 3 27,18 2
+coverage 3 28,18 4
+coverage 3 29,18 6
+coverage 3 30,18 4
+coverage 3 31,18 2
+coverage 3 1,19 2
+coverage 3 2,19 4
+coverage 3 3,19 6
+coverage 3 4,19 4
+coverage 3 5,19 2
+coverage 3 27,19 3
+coverage 3 28,19 6
+coverage 3 29,19 9
+coverage 3 30,19 6
+coverage 3 31,19 3
+coverage 3 1,20 1
+coverage 3 2,20 2
+coverage 3 3,20 3
+coverage 3 4,20 2
+coverage 3 5,20 1
+coverage 3 27,20 2
+coverage 3 28,20 4
+coverage 3 29,20 6
+coverage 3 30,20 4
+coverage 3 31,20 2
+coverage 3 27,21 1
+coverage 3 28,21 2
+coverage 3 29,21 3
+coverage 3 30,21 2
+coverage 3 31,21 1
+ARMMEX  0 0000000000000000000000000000000000000000
+ARMMEX  1 0000000111111111111111111111111111111000
+ARMMEX  2 0000000111111000000111111111111111111000
+ARMMEX  3 0000000111111000000111111111111111111000
+ARMMEX  4 0000000111111000000111111111111111111000
+ARMMEX  5 0000000111111000000111111111111111111000
+ARMMEX  6 0000000111111000000111111111111111111000
+ARMMEX  7 0111111111111000000111111111111111111000
+ARMMEX  8 0111111111111111111111111111111111111000
+ARMMEX  9 0111111111111111111111111111111111111000
+ARMMEX 10 0111111111111111111111111111111111111000
+ARMMEX 11 0111111111111111111111111111111111111000
+ARMMEX 12 0111111111111111111111111111111111111000
+ARMMEX 13 0111111111111111111111110000011111111000
+ARMMEX 14 0111111111111111111111110000011111111000
+ARMMEX 15 0111111111111111111111110000011111111000
+ARMMEX 16 0111111111111111111111110000011111111000
+ARMMEX 17 0111111111111111111111110000011111111000
+ARMMEX 18 0111111111111111111111111111111111111000
+ARMMEX 19 0111111111111111111111111111111111111000
+ARMMEX 20 0111111111111111111111111111111111111000
+ARMMEX 21 0111111111111111111111111111111111111000
+ARMMEX 22 0111111111111111111111111111111111111000
+ARMMEX 23 0111111111111111111111111111111111111000
+ARMMEX 24 0111111111111111111111111111111111111000
+ARMMEX 25 0111111111111111111111111111111111111000
+ARMMEX 26 0111111111111111111111111111111111111000
+ARMMEX 27 0000000000000000000000000000000000000000
+ARMMEX 28 0000000000000000000000000000000000000000
+ARMMEX 29 0000000000000000000000000000000000000000
+def 4 ARMMOHO fx=5 fz=5 kind=1 flags=0x0 strength=0.003 workertime=0 reach=0 speed=0 yard=2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F2F options=
+coverage 4 11,0 3
+coverage 4 12,0 6
+coverage 4 13,0 9
+coverage 4 14,0 9
+coverage 4 15,0 9
+coverage 4 16,0 6
+coverage 4 17,0 3
+coverage 4 18,0 2
+coverage 4 19,0 4
+coverage 4 20,0 6
+coverage 4 21,0 6
+coverage 4 22,0 6
+coverage 4 23,0 4
+coverage 4 24,0 2
+coverage 4 11,1 3
+coverage 4 12,1 6
+coverage 4 13,1 9
+coverage 4 14,1 9
+coverage 4 15,1 9
+coverage 4 16,1 6
+coverage 4 17,1 3
+coverage 4 18,1 3
+coverage 4 19,1 6
+coverage 4 20,1 9
+coverage 4 21,1 9
+coverage 4 22,1 9
+coverage 4 23,1 6
+coverage 4 24,1 3
+coverage 4 11,2 2
+coverage 4 12,2 4
+coverage 4 13,2 6
+coverage 4 14,2 6
+coverage 4 15,2 6
+coverage 4 16,2 4
+coverage 4 17,2 2
+coverage 4 18,2 3
+coverage 4 19,2 6
+coverage 4 20,2 9
+coverage 4 21,2 9
+coverage 4 22,2 9
+coverage 4 23,2 6
+coverage 4 24,2 3
+coverage 4 5,3 1
+coverage 4 6,3 2
+coverage 4 7,3 3
+coverage 4 8,3 3
+coverage 4 9,3 3
+coverage 4 10,3 2
+coverage 4 11,3 2
+coverage 4 12,3 2
+coverage 4 13,3 3
+coverage 4 14,3 3
+coverage 4 15,3 3
+coverage 4 16,3 2
+coverage 4 17,3 1
+coverage 4 18,3 3
+coverage 4 19,3 6
+coverage 4 20,3 9
+coverage 4 21,3 9
+coverage 4 22,3 9
+coverage 4 23,3 6
+coverage 4 24,3 3
+coverage 4 5,4 2
+coverage 4 6,4 4
+coverage 4 7,4 6
+coverage 4 8,4 6
+coverage 4 9,4 6
+coverage 4 10,4 4
+coverage 4 11,4 2
+coverage 4 18,4 2
+coverage 4 19,4 4
+coverage 4 20,4 6
+coverage 4 21,4 6
+coverage 4 22,4 6
+coverage 4 23,4 4
+coverage 4 24,4 2
+coverage 4 5,5 3
+coverage 4 6,5 6
+coverage 4 7,5 9
+coverage 4 8,5 9
+coverage 4 9,5 9
+coverage 4 10,5 6
+coverage 4 11,5 3
+coverage 4 18,5 1
+coverage 4 19,5 2
+coverage 4 20,5 3
+coverage 4 21,5 3
+coverage 4 22,5 3
+coverage 4 23,5 2
+coverage 4 24,5 1
+coverage 4 0,6 2
+coverage 4 1,6 3
+coverage 4 2,6 3
+coverage 4 3,6 3
+coverage 4 4,6 2
+coverage 4 5,6 4
+coverage 4 6,6 6
+coverage 4 7,6 9
+coverage 4 8,6 9
+coverage 4 9,6 9
+coverage 4 10,6 6
+coverage 4 11,6 3
+coverage 4 0,7 4
+coverage 4 1,7 6
+coverage 4 2,7 6
+coverage 4 3,7 6
+coverage 4 4,7 4
+coverage 4 5,7 5
+coverage 4 6,7 6
+coverage 4 7,7 9
+coverage 4 8,7 9
+coverage 4 9,7 9
+coverage 4 10,7 6
+coverage 4 11,7 3
+coverage 4 0,8 6
+coverage 4 1,8 9
+coverage 4 2,8 9
+coverage 4 3,8 9
+coverage 4 4,8 6
+coverage 4 5,8 5
+coverage 4 6,8 4
+coverage 4 7,8 6
+coverage 4 8,8 6
+coverage 4 9,8 6
+coverage 4 10,8 4
+coverage 4 11,8 2
+coverage 4 0,9 6
+coverage 4 1,9 9
+coverage 4 2,9 9
+coverage 4 3,9 9
+coverage 4 4,9 6
+coverage 4 5,9 4
+coverage 4 6,9 2
+coverage 4 7,9 3
+coverage 4 8,9 3
+coverage 4 9,9 3
+coverage 4 10,9 2
+coverage 4 11,9 1
+coverage 4 0,10 6
+coverage 4 1,10 9
+coverage 4 2,10 9
+coverage 4 3,10 9
+coverage 4 4,10 6
+coverage 4 5,10 3
+coverage 4 0,11 4
+coverage 4 1,11 6
+coverage 4 2,11 6
+coverage 4 3,11 6
+coverage 4 4,11 4
+coverage 4 5,11 2
+coverage 4 22,11 1
+coverage 4 23,11 2
+coverage 4 24,11 3
+coverage 4 25,11 3
+coverage 4 26,11 3
+coverage 4 27,11 2
+coverage 4 28,11 1
+coverage 4 0,12 2
+coverage 4 1,12 3
+coverage 4 2,12 3
+coverage 4 3,12 3
+coverage 4 4,12 2
+coverage 4 5,12 1
+coverage 4 10,12 1
+coverage 4 11,12 2
+coverage 4 12,12 3
+coverage 4 13,12 3
+coverage 4 14,12 3
+coverage 4 15,12 2
+coverage 4 16,12 1
+coverage 4 22,12 2
+coverage 4 23,12 4
+coverage 4 24,12 6
+coverage 4 25,12 6
+coverage 4 26,12 6
+coverage 4 27,12 4
+coverage 4 28,12 2
+coverage 4 10,13 2
+coverage 4 11,13 4
+coverage 4 12,13 6
+coverage 4 13,13 6
+coverage 4 14,13 6
+coverage 4 15,13 4
+coverage 4 16,13 2
+coverage 4 22,13 3
+coverage 4 23,13 6
+coverage 4 24,13 9
+coverage 4 25,13 9
+coverage 4 26,13 9
+coverage 4 27,13 6
+coverage 4 28,13 3
+coverage 4 0,14 2
+coverage 4 1,14 3
+coverage 4 2,14 3
+coverage 4 3,14 3
+coverage 4 4,14 2
+coverage 4 5,14 1
+coverage 4 10,14 3
+coverage 4 11,14 6
+coverage 4 12,14 9
+coverage 4 13,14 9
+coverage 4 14,14 9
+coverage 4 15,14 6
+coverage 4 16,14 3
+coverage 4 22,14 3
+coverage 4 23,14 6
+coverage 4 24,14 9
+coverage 4 25,14 9
+coverage 4 26,14 9
+coverage 4 27,14 6
+coverage 4 28,14 3
+coverage 4 0,15 4
+coverage 4 1,15 6
+coverage 4 2,15 6
+coverage 4 3,15 6
+coverage 4 4,15 4
+coverage 4 5,15 2
+coverage 4 10,15 3
+coverage 4 11,15 6
+coverage 4 12,15 9
+coverage 4 13,15 9
+coverage 4 14,15 9
+coverage 4 15,15 6
+coverage 4 16,15 3
+coverage 4 22,15 3
+coverage 4 23,15 6
+coverage 4 24,15 9
+coverage 4 25,15 10
+coverage 4 26,15 11
+coverage 4 27,15 9
+coverage 4 28,15 6
+coverage 4 29,15 3
+coverage 4 30,15 2
+coverage 4 31,15 1
+coverage 4 0,16 6
+coverage 4 1,16 9
+coverage 4 2,16 9
+coverage 4 3,16 9
+coverage 4 4,16 6
+coverage 4 5,16 3
+coverage 4 10,16 3
+coverage 4 11,16 6
+coverage 4 12,16 9
+coverage 4 13,16 9
+coverage 4 14,16 9
+coverage 4 15,16 6
+coverage 4 16,16 3
+coverage 4 22,16 2
+coverage 4 23,16 4
+coverage 4 24,16 6
+coverage 4 25,16 8
+coverage 4 26,16 10
+coverage 4 27,16 10
+coverage 4 28,16 8
+coverage 4 29,16 6
+coverage 4 30,16 4
+coverage 4 31,16 2
+coverage 4 0,17 6
+coverage 4 1,17 9
+coverage 4 2,17 9
+coverage 4 3,17 9
+coverage 4 4,17 6
+coverage 4 5,17 3
+coverage 4 10,17 2
+coverage 4 11,17 4
+coverage 4 12,17 6
+coverage 4 13,17 6
+coverage 4 14,17 6
+coverage 4 15,17 4
+coverage 4 16,17 2
+coverage 4 22,17 1
+coverage 4 23,17 2
+coverage 4 24,17 3
+coverage 4 25,17 6
+coverage 4 26,17 9
+coverage 4 27,17 11
+coverage 4 28,17 10
+coverage 4 29,17 9
+coverage 4 30,17 6
+coverage 4 31,17 3
+coverage 4 0,18 6
+coverage 4 1,18 9
+coverage 4 2,18 9
+coverage 4 3,18 9
+coverage 4 4,18 6
+coverage 4 5,18 3
+coverage 4 10,18 1
+coverage 4 11,18 2
+coverage 4 12,18 3
+coverage 4 13,18 3
+coverage 4 14,18 3
+coverage 4 15,18 2
+coverage 4 16,18 1
+coverage 4 25,18 3
+coverage 4 26,18 6
+coverage 4 27,18 9
+coverage 4 28,18 9
+coverage 4 29,18 9
+coverage 4 30,18 6
+coverage 4 31,18 3
+coverage 4 0,19 4
+coverage 4 1,19 6
+coverage 4 2,19 6
+coverage 4 3,19 6
+coverage 4 4,19 4
+coverage 4 5,19 2
+coverage 4 25,19 3
+coverage 4 26,19 6
+coverage 4 27,19 9
+coverage 4 28,19 9
+coverage 4 29,19 9
+coverage 4 30,19 6
+coverage 4 31,19 3
+coverage 4 0,20 2
+coverage 4 1,20 3
+coverage 4 2,20 3
+coverage 4 3,20 3
+coverage 4 4,20 2
+coverage 4 5,20 1
+coverage 4 25,20 2
+coverage 4 26,20 4
+coverage 4 27,20 6
+coverage 4 28,20 6
+coverage 4 29,20 6
+coverage 4 30,20 4
+coverage 4 31,20 2
+coverage 4 25,21 1
+coverage 4 26,21 2
+coverage 4 27,21 3
+coverage 4 28,21 3
+coverage 4 29,21 3
+coverage 4 30,21 2
+coverage 4 31,21 1
+ARMMOHO  0 0000000000000000000000000000000000000000
+ARMMOHO  1 0000001111100000000111111111111111100000
+ARMMOHO  2 0000001111100000000111111111111111100000
+ARMMOHO  3 0000001111100000000111111111111111100000
+ARMMOHO  4 0000001111100000000111111111111111100000
+ARMMOHO  5 0000001111100000000111111111111111100000
+ARMMOHO  6 0111111111100000000111111111111111100000
+ARMMOHO  7 0111111111100000000111111111111111100000
+ARMMOHO  8 0111111111111111111111111111111111100000
+ARMMOHO  9 0111111111111111111111111111111111100000
+ARMMOHO 10 0111111111111111111111111111111111100000
+ARMMOHO 11 0111111111111111111111000000011111100000
+ARMMOHO 12 0111111111111111111111000000011111100000
+ARMMOHO 13 0111111111111111111111000000011111100000
+ARMMOHO 14 0111111111111111111111000000011111100000
+ARMMOHO 15 0111111111111111111111000000011111100000
+ARMMOHO 16 0111111111111111111111000000011111100000
+ARMMOHO 17 0111111111111111111111000000011111100000
+ARMMOHO 18 0111111111111111111111111111111111100000
+ARMMOHO 19 0111111111111111111111111111111111100000
+ARMMOHO 20 0111111111111111111111111111111111100000
+ARMMOHO 21 0111111111111111111111111111111111100000
+ARMMOHO 22 0111111111111111111111111111111111100000
+ARMMOHO 23 0111111111111111111111111111111111100000
+ARMMOHO 24 0111111111111111111111111111111111100000
+ARMMOHO 25 0000000000000000000000000000000000000000
+ARMMOHO 26 0000000000000000000000000000000000000000
+ARMMOHO 27 0000000000000000000000000000000000000000
+ARMMOHO 28 0000000000000000000000000000000000000000
+ARMMOHO 29 0000000000000000000000000000000000000000
+def 5 ARMGEO fx=4 fz=4 kind=2 flags=0x0 strength=250 workertime=0 reach=0 speed=0 yard=8F8F8F8F8F8F8F8F8F8F8F8F8F8F8F8F options=
+coverage 5 12,0 3
+coverage 5 13,0 6
+coverage 5 14,0 9
+coverage 5 15,0 9
+coverage 5 16,0 6
+coverage 5 17,0 3
+coverage 5 19,0 1
+coverage 5 20,0 2
+coverage 5 21,0 3
+coverage 5 22,0 3
+coverage 5 23,0 2
+coverage 5 24,0 1
+coverage 5 12,1 3
+coverage 5 13,1 6
+coverage 5 14,1 9
+coverage 5 15,1 9
+coverage 5 16,1 6
+coverage 5 17,1 3
+coverage 5 19,1 2
+coverage 5 20,1 4
+coverage 5 21,1 6
+coverage 5 22,1 6
+coverage 5 23,1 4
+coverage 5 24,1 2
+coverage 5 12,2 2
+coverage 5 13,2 4
+coverage 5 14,2 6
+coverage 5 15,2 6
+coverage 5 16,2 4
+coverage 5 17,2 2
+coverage 5 19,2 3
+coverage 5 20,2 6
+coverage 5 21,2 9
+coverage 5 22,2 9
+coverage 5 23,2 6
+coverage 5 24,2 3
+coverage 5 12,3 1
+coverage 5 13,3 2
+coverage 5 14,3 3
+coverage 5 15,3 3
+coverage 5 16,3 2
+coverage 5 17,3 1
+coverage 5 19,3 3
+coverage 5 20,3 6
+coverage 5 21,3 9
+coverage 5 22,3 9
+coverage 5 23,3 6
+coverage 5 24,3 3
+coverage 5 6,4 1
+coverage 5 7,4 2
+coverage 5 8,4 3
+coverage 5 9,4 3
+coverage 5 10,4 2
+coverage 5 11,4 1
+coverage 5 19,4 2
+coverage 5 20,4 4
+coverage 5 21,4 6
+coverage 5 22,4 6
+coverage 5 23,4 4
+coverage 5 24,4 2
+coverage 5 6,5 2
+coverage 5 7,5 4
+coverage 5 8,5 6
+coverage 5 9,5 6
+coverage 5 10,5 4
+coverage 5 11,5 2
+coverage 5 19,5 1
+coverage 5 20,5 2
+coverage 5 21,5 3
+coverage 5 22,5 3
+coverage 5 23,5 2
+coverage 5 24,5 1
+coverage 5 6,6 3
+coverage 5 7,6 6
+coverage 5 8,6 9
+coverage 5 9,6 9
+coverage 5 10,6 6
+coverage 5 11,6 3
+coverage 5 0,7 1
+coverage 5 1,7 2
+coverage 5 2,7 3
+coverage 5 3,7 3
+coverage 5 4,7 2
+coverage 5 5,7 1
+coverage 5 6,7 3
+coverage 5 7,7 6
+coverage 5 8,7 9
+coverage 5 9,7 9
+coverage 5 10,7 6
+coverage 5 11,7 3
+coverage 5 0,8 2
+coverage 5 1,8 4
+coverage 5 2,8 6
+coverage 5 3,8 6
+coverage 5 4,8 4
+coverage 5 5,8 2
+coverage 5 6,8 2
+coverage 5 7,8 4
+coverage 5 8,8 6
+coverage 5 9,8 6
+coverage 5 10,8 4
+coverage 5 11,8 2
+coverage 5 0,9 3
+coverage 5 1,9 6
+coverage 5 2,9 9
+coverage 5 3,9 9
+coverage 5 4,9 6
+coverage 5 5,9 3
+coverage 5 6,9 1
+coverage 5 7,9 2
+coverage 5 8,9 3
+coverage 5 9,9 3
+coverage 5 10,9 2
+coverage 5 11,9 1
+coverage 5 0,10 3
+coverage 5 1,10 6
+coverage 5 2,10 9
+coverage 5 3,10 9
+coverage 5 4,10 6
+coverage 5 5,10 3
+coverage 5 0,11 2
+coverage 5 1,11 4
+coverage 5 2,11 6
+coverage 5 3,11 6
+coverage 5 4,11 4
+coverage 5 5,11 2
+coverage 5 0,12 1
+coverage 5 1,12 2
+coverage 5 2,12 3
+coverage 5 3,12 3
+coverage 5 4,12 2
+coverage 5 5,12 1
+coverage 5 23,12 1
+coverage 5 24,12 2
+coverage 5 25,12 3
+coverage 5 26,12 3
+coverage 5 27,12 2
+coverage 5 28,12 1
+coverage 5 11,13 1
+coverage 5 12,13 2
+coverage 5 13,13 3
+coverage 5 14,13 3
+coverage 5 15,13 2
+coverage 5 16,13 1
+coverage 5 23,13 2
+coverage 5 24,13 4
+coverage 5 25,13 6
+coverage 5 26,13 6
+coverage 5 27,13 4
+coverage 5 28,13 2
+coverage 5 11,14 2
+coverage 5 12,14 4
+coverage 5 13,14 6
+coverage 5 14,14 6
+coverage 5 15,14 4
+coverage 5 16,14 2
+coverage 5 23,14 3
+coverage 5 24,14 6
+coverage 5 25,14 9
+coverage 5 26,14 9
+coverage 5 27,14 6
+coverage 5 28,14 3
+coverage 5 0,15 1
+coverage 5 1,15 2
+coverage 5 2,15 3
+coverage 5 3,15 3
+coverage 5 4,15 2
+coverage 5 5,15 1
+coverage 5 11,15 3
+coverage 5 12,15 6
+coverage 5 13,15 9
+coverage 5 14,15 9
+coverage 5 15,15 6
+coverage 5 16,15 3
+coverage 5 23,15 3
+coverage 5 24,15 6
+coverage 5 25,15 9
+coverage 5 26,15 9
+coverage 5 27,15 6
+coverage 5 28,15 3
+coverage 5 0,16 2
+coverage 5 1,16 4
+coverage 5 2,16 6
+coverage 5 3,16 6
+coverage 5 4,16 4
+coverage 5 5,16 2
+coverage 5 11,16 3
+coverage 5 12,16 6
+coverage 5 13,16 9
+coverage 5 14,16 9
+coverage 5 15,16 6
+coverage 5 16,16 3
+coverage 5 23,16 2
+coverage 5 24,16 4
+coverage 5 25,16 6
+coverage 5 26,16 7
+coverage 5 27,16 6
+coverage 5 28,16 5
+coverage 5 29,16 3
+coverage 5 30,16 2
+coverage 5 31,16 1
+coverage 5 0,17 3
+coverage 5 1,17 6
+coverage 5 2,17 9
+coverage 5 3,17 9
+coverage 5 4,17 6
+coverage 5 5,17 3
+coverage 5 11,17 2
+coverage 5 12,17 4
+coverage 5 13,17 6
+coverage 5 14,17 6
+coverage 5 15,17 4
+coverage 5 16,17 2
+coverage 5 23,17 1
+coverage 5 24,17 2
+coverage 5 25,17 3
+coverage 5 26,17 5
+coverage 5 27,17 6
+coverage 5 28,17 7
+coverage 5 29,17 6
+coverage 5 30,17 4
+coverage 5 31,17 2
+coverage 5 0,18 3
+coverage 5 1,18 6
+coverage 5 2,18 9
+coverage 5 3,18 9
+coverage 5 4,18 6
+coverage 5 5,18 3
+coverage 5 11,18 1
+coverage 5 12,18 2
+coverage 5 13,18 3
+coverage 5 14,18 3
+coverage 5 15,18 2
+coverage 5 16,18 1
+coverage 5 26,18 3
+coverage 5 27,18 6
+coverage 5 28,18 9
+coverage 5 29,18 9
+coverage 5 30,18 6
+coverage 5 31,18 3
+coverage 5 0,19 2
+coverage 5 1,19 4
+coverage 5 2,19 6
+coverage 5 3,19 6
+coverage 5 4,19 4
+coverage 5 5,19 2
+coverage 5 26,19 3
+coverage 5 27,19 6
+coverage 5 28,19 9
+coverage 5 29,19 9
+coverage 5 30,19 6
+coverage 5 31,19 3
+coverage 5 0,20 1
+coverage 5 1,20 2
+coverage 5 2,20 3
+coverage 5 3,20 3
+coverage 5 4,20 2
+coverage 5 5,20 1
+coverage 5 26,20 2
+coverage 5 27,20 4
+coverage 5 28,20 6
+coverage 5 29,20 6
+coverage 5 30,20 4
+coverage 5 31,20 2
+coverage 5 26,21 1
+coverage 5 27,21 2
+coverage 5 28,21 3
+coverage 5 29,21 3
+coverage 5 30,21 2
+coverage 5 31,21 1
+ARMGEO  0 0000000000000000000000000000000000000000
+ARMGEO  1 0000000000000000000000000000000000000000
+ARMGEO  2 0000000000000000000000000000000000000000
+ARMGEO  3 0000000000000000000000000000000000000000
+ARMGEO  4 0000000000000000000000000000000000000000
+ARMGEO  5 0000000000000000000000000000000000000000
+ARMGEO  6 0000000000000000000000000111100000000000
+ARMGEO  7 0000000000000000000000000111100000000000
+ARMGEO  8 0000000000000000000000000111100000000000
+ARMGEO  9 0000000000000000000000000111100000000000
+ARMGEO 10 0000000000000000000000000000000000000000
+ARMGEO 11 0000000000000000000000000000000000000000
+ARMGEO 12 0000000000000000000000000000000000000000
+ARMGEO 13 0000000000000000000000000000000000000000
+ARMGEO 14 0000000000000000000000000000000000000000
+ARMGEO 15 0000000000000000000000000000000000000000
+ARMGEO 16 0000000000000000000000000000000000000000
+ARMGEO 17 0000000000000000000000000000000000000000
+ARMGEO 18 0000000000000000000000000000000000000000
+ARMGEO 19 0000000000000000000000000000000000000000
+ARMGEO 20 0000000000000000000000000000000000000000
+ARMGEO 21 0000000000000000000000000000000000000000
+ARMGEO 22 0000000000000000000000000000000000000000
+ARMGEO 23 0000000000000000000000000000000000000000
+ARMGEO 24 0000000000000000000000000000000000000000
+ARMGEO 25 0000000000000000000000000000000000000000
+ARMGEO 26 0000000000000000000000000000000000000000
+ARMGEO 27 0000000000000000000000000000000000000000
+ARMGEO 28 0000000000000000000000000000000000000000
+ARMGEO 29 0000000000000000000000000000000000000000
+def 6 ARMPW fx=2 fz=2 kind=0 flags=0x10 strength=0 workertime=0 reach=0 speed=117964 yard=2F2F2F2F options=
+feature 16,5 anchor=16,5 def=-1 fx=1 fz=1 flags=0x20 metal=0 energy=0
+feature 28,9 anchor=28,9 def=-1 fx=1 fz=1 flags=0x20 metal=0 energy=0
+seat units 1..5
+unit 1 type=6 index=1 owner=0 finished=1 pos=16777216,0,11534336 state=0x10000000
+  can 1: reclaim=-1 guard=-1
+  can 2: reclaim=-1 guard=4
+  can 3: reclaim=-1 guard=4
+  can 4: reclaim=-1 guard=4
+  can 5: reclaim=-1 guard=4
+unit 2 type=1 index=2 owner=0 finished=1 pos=19922944,0,11534336 state=0x10000010
+  can 1: reclaim=3 guard=4
+  can 2: reclaim=-1 guard=-1
+  can 3: reclaim=3 guard=4
+  can 4: reclaim=3 guard=4
+  can 5: reclaim=3 guard=4
+unit 3 type=2 index=3 owner=0 finished=1 pos=23068672,0,11534336 state=0x10000000
+  can 1: reclaim=3 guard=4
+  can 2: reclaim=3 guard=4
+  can 3: reclaim=-1 guard=-1
+  can 4: reclaim=3 guard=4
+  can 5: reclaim=3 guard=4
+unit 4 type=5 index=4 owner=0 finished=1 pos=17825792,0,6291456 state=0x10000000
+  can 1: reclaim=-1 guard=4
+  can 2: reclaim=-1 guard=4
+  can 3: reclaim=-1 guard=4
+  can 4: reclaim=-1 guard=-1
+  can 5: reclaim=-1 guard=4
+unit 5 type=3 index=5 owner=0 finished=1 pos=28835840,0,17301504 state=0x10000000
+  can 1: reclaim=-1 guard=4
+  can 2: reclaim=-1 guard=4
+  can 3: reclaim=-1 guard=4
+  can 4: reclaim=-1 guard=4
+  can 5: reclaim=-1 guard=-1
+actions 2 5 3 6 7 -1 -1
+economy -1

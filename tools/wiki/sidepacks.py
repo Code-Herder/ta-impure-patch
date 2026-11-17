@@ -9,8 +9,8 @@ For each mod it lays out the setup's game folder as tools/compat/tacompat.py's `
 install's files, then the setup's on top, a later name replacing an earlier one without case -- as symlinks in a
 temporary folder, and runs `gfx.py --side-only --stages` on it, which writes tools/wiki/mockup/gfx/side/<mod>/ and
 the mod's entry stage packs in its stage/ (gitignored: they are derived from the game's files). Then it loads each
-pack's layout into tools/wiki/mockup/sim.js's checkLayout under node, the bound the mockup applies before it uses
-one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
+pack's layout into the wiki's simulation host (serve.py's SimRelay: tagpu_wikidata_layout_json, the DLL's own
+loader), the bound the mockup applies before it uses one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
 what pins it.
 
 From the stock pack it also writes the fixture layouts' `sight` (art/wiki/side/fixture.json and fixture-tall.json),
@@ -35,11 +35,14 @@ REPO = HERE.parent.parent
 OUT = HERE / "mockup" / "gfx"
 ENTRIES = REPO / "art" / "wiki" / "entries"
 FIXTURES = [REPO / "art" / "wiki" / "side" / f for f in ("fixture.json", "fixture-tall.json")]
-SIM = HERE / "mockup" / "sim.js"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "tools" / "compat"))
 import tavfs  # noqa: E402
 import tacompat  # noqa: E402
+from tacompat import child, setup_tree  # noqa: E402  the setup's folder; cobcorpus.py and assetcheck.py reach them here
+from serve import SimRelay  # noqa: E402
+
+RELAY = SimRelay()                  # its host starts at the first request
 
 # wiki.js MODS -> tools/compat/setups.json
 SETUPS = {"stock": "retail", "mayhem": "mayhem-11.3.0", "prota": "prota-4.8", "twilight": "twilight-2.0b98",
@@ -71,58 +74,16 @@ RECORDS = {
 }
 
 
-def child(folder: Path, name: str):
-    """The entry of `folder` named `name` without case, or None."""
-    low = name.lower()
-    return next((c for c in folder.iterdir() if c.name.lower() == low), None)
-
-
-def mirror(src: Path, dst: Path):
-    """`src`'s tree under `dst`: real folders, every file a symlink to the original."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for e in src.iterdir():
-        if e.is_dir():
-            mirror(e, dst / e.name)
-        else:
-            (dst / e.name).symlink_to(e.resolve())
-
-
-def place(tree: Path, dest: str, src: Path):
-    """The setup's file at `dest` (a path in the game folder), each component matched without case as Windows does;
-    an existing file of that name is replaced."""
-    parts = [p for p in dest.replace("\\", "/").split("/") if p]
-    cur = tree
-    for part in parts[:-1]:
-        hit = child(cur, part)
-        if hit is None or not hit.is_dir():
-            hit = cur / part
-            hit.mkdir()
-        cur = hit
-    old = child(cur, parts[-1])
-    if old is not None:
-        if old.is_dir() and not old.is_symlink():
-            shutil.rmtree(old)
-        else:
-            old.unlink()
-    (cur / parts[-1]).symlink_to(src.resolve())
-
-
-def setup_tree(setup, retail: Path, tree: Path):
-    mirror(retail, tree)
-    for dest, src in tacompat.overlay(setup):
-        place(tree, dest, src)
-
-
 def check_layout(pack: Path):
-    """sim.js's checkLayout on the pack's layout under node: (ok, message)."""
-    node = shutil.which("node")
-    if node is None:
-        return False, "node is not installed: the layout was not checked"
-    js = ("const S = require(process.argv[1]); const p = JSON.parse(require('fs').readFileSync(process.argv[2]));"
-          "try { S.checkLayout(p.layout); console.log('checkLayout: ok'); }"
-          "catch (e) { console.log(e.message); process.exit(1); }")
-    r = subprocess.run([node, "-e", js, str(SIM), str(pack)], capture_output=True, text=True)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()
+    """The host's `layout` on the pack's layout, as the mockup's checkLayout reads it: (ok, message)."""
+    if shutil.which("node") is None:
+        return False, "node is not installed: the host was not built, the layout not checked"
+    layout = json.loads(pack.read_text())["layout"]
+    try:
+        got = json.loads(RELAY.answer(json.dumps({"op": "layout", "json": layout})))
+    except (OSError, subprocess.CalledProcessError) as e:
+        return False, f"the simulation host did not start: {e}"
+    return "error" not in got, got.get("error", "checkLayout: ok")
 
 
 # An entry unit's figure and the value an absent key stands for: what the bound entry takes from the casting. The

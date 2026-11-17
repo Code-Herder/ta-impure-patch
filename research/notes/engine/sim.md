@@ -19,8 +19,14 @@ the measured runs and what they mean for the design are in the
   `[main+0x29A0]+0x11C` (`0x47AF77`; a failure shows the string at `0x50842C`); refuses unless one
   of the first `main+0x38D81` settings entries is an AI (controller 2, `0x47AFB7`) and one a human
   (controller 1, `0x47AFD6`), and unless the count is within the map's player maximum `0x437300`
-  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls `0x479760` (`0x47B035`, string `0x5083C8` on a
-  nonzero answer) [role not traced]; recounts `+0x2A3C` as the AI plus human entries
+  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls the alliance test `0x479760` (`0x47B035`; on a nonzero answer `0x47B03E..0x47B04A` push the
+  string at `0x5083C8`, "All players may not be in the same allied group.", for the message the
+  branch shows, and nothing starts): over entries 0 to
+  `main+0x38D81` − 1 it takes the group `+8` of the first entry whose controller `+0` is nonzero
+  and whose group is not 5, answers 0 when there is none, and answers 1 only when every entry with
+  a nonzero controller has that group, an entry of controller 0 being passed over whatever its
+  group (`0x479760..0x4797D9`, DISASSEMBLED 2026-11-12) -- so 5 is no group, and two seats can
+  never be allies; recounts `+0x2A3C` as the AI plus human entries
   (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
   stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
   loader thread comes after it.
@@ -40,13 +46,16 @@ the measured runs and what they mean for the design are in the
   skirmish key `Player%dAllyGroup` (format at `0x5043C4`, pushed at `0x430D03`) into `+8`, and 5
   when the key is absent (`0x430D3C`); the seat fill's tests `0x47A863..0x47A872`, in its loop to
   `0x47A87E`, mark two seats allied (to `0x47A8CC`) when their groups are equal, the other seat's controller `+0` is not 0 and
-  the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11). The scenario format writes
+  the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11), which the Start's test
+  `0x479760` above passes over too. The scenario format writes
   it as `setup.players[].ally_group` ([scenario format](../scenario-format.md)). Groups 1, 2 and 1
   for seats 0, 1 and 2 gave the player records' alliance rows (PlayerInfo `+0x108`,
   [units](units.html)) `01 00 01`, `00 01 00` and `01 00 01`, and a later load with no groups each
   record's own byte only (MEASURED 2026-11-11, `scenarios/sensor-view.json` then
   `scenarios/sensor-preview.json` on one instance) — `+0xC` metal, `+0x10` energy,
-  `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
+  `+0x14` the colour (read by the fill and the seat setup below); how the screen's buttons cycle
+  them, and `+0x224` (the clicked seat) and `+0x228` (`SkirmishDifficulty`): [the GUI](ui.html),
+  *The SKIRMISH screen's handler*. Past them, the loader's type-2
   branch (`0x4973C1..0x497457`) copies `+0x108` into `ActiveCommanderDeath` `main+0x37EF6` and bit 0
   of `+0x10C`, `+0x110` and `+0x114` into bits 0, 1 and 2 of the LosType word `main+0x14281`, the
   bits the `Mapping`, `LOS` and `LOSType` console commands toggle; `+0x118` nonzero means fixed
@@ -55,8 +64,15 @@ the measured runs and what they mean for the design are in the
   the restart path `0x4997A0`, which tears the level down and re-reads the map first, and
   `0x49757C` in the loader's saved-game path) walks settings entries 0 to `main+0x38D81` − 1, the
   SKIRMISH screen's seat count: 4 by default (`0x4307EA`; also stored at `0x4307CF` and
-  `0x4307DD`, and raised by the saved-game path to the number of controller-1/2 entries,
-  `0x497542..0x497576`). **That count is why a skirmish seats four players.** Controller 1 copies the
+  `0x4307DD`, and raised by the saved-game path to one past the **highest** entry of 0..9 whose
+  controller is 1 or 2, `0x497542..0x497576`, which equals their number only when they are
+  contiguous; it only widens the range and reorders nothing). Before it, on that path,
+  `0x465FB0(save)` (`0x497527`, loader thread) writes for i = 0..9 the save's `Player%i` /
+  `Controller` (`0x5073C4`, `0x5073B8`) into settings entry i `+0` (`0x46600C`) and record i
+  `+0x73` (`0x466010`), or 0 into both (`0x466015..0x46601B`); its loop steps the record by `0x14B`
+  and stops at `0xCEE` (`cmp edi,0xCEE` at `0x46602D`), ten records (`0x466023..0x466037`). **So every caller seats settings entry i
+  into record i** (DISASSEMBLED, scout I13 of the ImpAI plan): what `impure.cfg`'s per-seat
+  `seatai` relies on. **That count is why a skirmish seats four players.** Controller 1 copies the
   entry's colour and side into PlayerInfo `+0x96`/`+0x95`, calls `0x464290(seat, 1)` and stores the
   seat in `main+0x2A43` and `main+0x2A42` (`0x47A798..0x47A7DE`); controller 2 does the same with
   type 2 and leaves those two bytes; anything else calls `0x464290(seat, 0)`. Then a human or AI
@@ -97,7 +113,7 @@ the measured runs and what they mean for the design are in the
   (`0x496F08..0x496F3C`), sets `+0x149` bit 0 (`0x496F5D`) and the base storage `+0xDC`/`+0xE0` to
   max(entry `+0x10`/`+0xC`, 200) (`0x496F64..0x496F97`), takes the map's start position through
   `0x437320(&pos, start)` (`0x496FA9`; a failure formats the string at `0x509534` and shows it
-  through `0x4B6290`, `0x497009..0x497021`), the side's commander type through `0x488B10`
+  through `0x4B6290`, `0x497009..0x497021`; *The start positions*, below), the side's commander type through `0x488B10`
   (`0x496FDC`), and creates it with `0x485F50(seat, type, pos, 1, 1, 0)` (`0x497002`); for the
   controlled player `main+0x2A42` it moves the camera onto it (`0x41C4C0`, `0x497038..0x497060`).
   A type-3 owner's create takes a proxy mover (`0x43DC00`, *Replay state design* above).
@@ -114,14 +130,32 @@ the measured runs and what they mean for the design are in the
   controlled player carries the watcher bit (`0x465154`, `0x465174` → `0x465864`). **Neither
   reads a record's type**, so a type-3 controlled player loses and wins like a local one (MEASURED,
   below). A firing test counts `main+0x39239` down over the passes and then sets the game-over bits
-  of `main+0x3923B` (*The Deathmatch respawn*, below).
+  of `main+0x3923B` (*The Deathmatch respawn*, below). **How long that takes** [DISASSEMBLED
+  2026-11-13]: the pass runs on the tick GameTime reaches the record's `+0xF0`, which then takes 30
+  more (`0x46507D..0x465092`); on a pass whose test answers 1 the countdown, −1 since the level's
+  entry, is set to 4 when below 0 (`ebp` = 4 from `0x464F99`; `0x46518B` for defeat, `0x46588D` for
+  victory), else decremented, and the pass that takes it below 0 sets stop bit 2 — `0x465833`
+  through `0x465643` in a skirmish (`ActiveCommanderDeath` ≠ 2, not a network game), `0x4658B4` with
+  the won bits after victory. So the stop comes on the sixth such pass, 150 ticks after the first,
+  and a level whose end test answers 1 from a held tick T on is stopped at T+151..T+180;
+  the in-play handler's teardown follows (`0x4995FC`) within the frame's batch, at most five ticks
+  (`0x4953F5`). `+IWin` sets the bit at once (`0x416A22`). MEASURED 2026-11-13, a landing gate's 79
+  replay L lanes, `replay-end.json` applied at T: the recorder ended at T+180 in 78, T+165 in one.
+  The replay harness bounds its end waits on this (`tareplay.py`, `LEVEL_END_TICKS`).
 - **Arming and disarming the objective.** The `.ota` reader `0x435DA0` destroys the old object
   (`0x48DFB0`, then the free `0x4B4F20`, `0x435DBC..0x435DCE`), allocates a new `0x8C`-byte one
   (`0x435DD6..0x435DDB`), arms it through `0x48DF90` (`0x435DE9`; `+0x88` = 1, `+0x40` = `+0x84` =
   0) and stores it at `main+0x391ED` (`0x435DFB`); `0x48DF90` has no other caller. `0x4904B0`
   (thiscall, `mov [ecx+0x88],0; ret`) disarms it; its callers are the `Kill` console command after
   it has killed every unit (`0x4164CD`, and `0x4164EF` on the command's other arm) and `0x488547`,
-  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives]. A
+  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives].
+  Impure's writers: the scenario applier's `objective: "off"` calls `0x4904B0` and `"on"` writes
+  `+0x88` = 1, the takeover's write, at its tick visit between two steps (`tagpu_scenario.c`).
+  **The objective's frees** [DISASSEMBLED 2026-11-11]: besides the `.ota` reader's, the gaming
+  state's destructor `0x434FF0` destroys it (`0x48DFB0` at `0x435008`), frees it (`0x4B4F20` at
+  `0x43500E`) and nulls `main+0x391ED` (`0x43501C`); it is called from the mode setter `0x434AB0`
+  (`0x434AD6`) and from `0x434B90` (`0x434BCF`), at a game-mode change on the game thread, never
+  inside a tick's visit. A
   skirmish reads the `.ota` in Start's branch (`0x47AF77`), before the seat fill, and its loader
   branch reads it no more; the network loader does (`0x4972D6`), as do the restart path (`0x499820`)
   and the saved-game loader (`0x4927A5`). **A disarm made in the seat fill therefore holds for the
@@ -138,6 +172,161 @@ the measured runs and what they mean for the design are in the
   no unit at all ran on (68 s measured) and took new units. With `ActiveCommanderDeath` set to 1, a
   type-3 commander's death cleared its `+0x149` bit 0 and killed nothing else: the kill-all is for a
   local owner only (*`Send_UnitDeath 0x4864B0`*, below, `0x48667E..0x4866B3`).
+
+### Difficulty and the AI handicap — `main+0x37EEE` [DISASSEMBLED 2026-11-11]
+
+The skirmish Difficulty is one global, `main+0x37EEE`: 0 Easy, 1 Medium, 2 Hard (the gadget and
+its other writers: [the GUI](ui.html), *The SKIRMISH screen's handler*). **It scales the resources of
+type-2 players at seventeen sites and nothing else in the simulation.** A sweep of `.text` finds 56
+instructions with the displacement `0x37EEE` (objdump's linear sweep; no `lea` or `add` form); the
+simulation's readers are the seventeen below and the AI profile command `plan`.
+
+**Every site has the same shape.** The record `rec` is tested active (`[rec]` ≠ 0) and of type 2
+(`byte [rec+0x73] == 2`) while it is live in a register; then `switch (main+0x37EEE)`: 0 → the value
+× 0.5, 1 → × 0.7, anything else unscaled. The value is multiplied by −0.5 or −0.7 and subtracted from
+the destination, which adds half or seven tenths of it. **Hard applies no scaling, at every site**:
+the switch is `sub eax,0` (or `sub eax,ebx` with `ebx` = 0) / `je` → × 0.5, `dec eax` / `jne` →
+unscaled. The constants are pairs of doubles, −0.7 then −0.5: `0x4FC480`, `0x4FC6D8`, `0x4FCC90`,
+`0x4FD040`, `0x4FD540`, `0x4FD700` (each read from the image). Every type test's bytes and branch
+below were checked against the image.
+
+| # | Function: what is scaled | Record tested | Type test (address: bytes) | Difficulty read | The type test's branch (unscaled) | Scaled continuation (S) |
+|---|---|---|---|---|---|---|
+| 1 | economy pass `0x401360`: a structure's negative EnergyUse (its production) → unit `+0xBC` | unit `+0xEC` in `eax` | `0x401435: 80 78 73 02 75 37` | `0x401441` | `0x401472` | `0x40143B` |
+| 2 | economy: an extractor's metal (unit `+0x58`) → unit `+0xD4` | same | `0x4014B2: 80 78 73 02 0F 85 83 00 00 00` | `0x4014C2` | `0x40153F` | `0x4014BC` |
+| 3 | economy: `makesmetal` (def `+0x22D`) → `+0xD4` | same | `0x4014F3: 80 78 73 02 75 46` | `0x4014FE` | `0x40153F` | `0x4014F9` |
+| 4 | economy: the wind `main+0x37EDE` × `windgenerator` (def `+0x1D2`) → `+0xBC` | same | `0x40157F: 80 78 73 02 75 26` | `0x401585` | `0x4015AB` | `0x401585` |
+| 5 | economy: the tide `main+0x14267` × `tidalgenerator` (def `+0x1D6`) → `+0xBC` | same | `0x4015F3: 80 78 73 02 0F 85 B8 00 00 00` | `0x4015FD` | `0x4016B5` | `0x4015FD` |
+| 6 | economy: a mobile unit's negative EnergyUse → `+0xBC` | same | `0x40167C: 80 78 73 02 75 33` | `0x401688` | `0x4016B5` | `0x401682` |
+| 7 | economy: `energymake` (def `+0x1C2`) → `+0xBC` | same | `0x4016F2: 80 78 73 02 75 33` | `0x4016FE` | `0x40172B` | `0x4016F8` |
+| 8 | economy: `metalmake` (def `+0x1CA`) → `+0xD4` | same | `0x401753: 80 78 73 02 75 36` | `0x40175E` | `0x40178F` | `0x401759` |
+| 9 | BuildingBuild `0x402640`, event 2: the refund of the target's def `+0x18A` × (1 − target `+0x104`) → the builder's `+0xD4` | builder `+0xEC`, `eax` | `0x40269F: 80 78 73 02 75 38` | `0x4026AB` | `0x4026DD` | `0x4026A5` |
+| 10 | the build step `0x41BA60` with a negative amount (unbuilding): the metal returned → the frame's `+0xD4` | frame `+0xEC`, `eax` | `0x41BBB1: 80 78 73 02 75 37` | `0x41BBBD` | `0x41BBEE` | `0x41BBB7` |
+| 11 | the reclaim payout `0x4237D0`: FeatureDef `+0xEC` energy → the reclaimer's `+0xBC` | reclaimer `+0xEC`, `eax` | `0x4238C4: 38 58 73 75 2E` (`cmp [eax+0x73],bl`, `bl` = 2) | `0x4238C9` | `0x4238F7` | `0x4238C9` |
+| 12 | the reclaim payout: FeatureDef `+0xF0` metal → `+0xD4` | same | `0x423918: 38 58 73 75 38` | `0x423923` | `0x423955` | `0x42391D` |
+| 13 | the energy transfer `0x464B30` → the recipient | `[obj+0x30]`, `ecx` | `0x464C06: 80 79 73 02 75 32` | `0x464C0C` | `0x464C3E` | `0x464C0C` |
+| 14 | the metal transfer `0x464C60` | same | `0x464D36: 80 79 73 02 75 34` | `0x464D3C` | `0x464D70` | `0x464D3C` |
+| 15 | the Deathmatch respawn `0x4653D9`: PlayerInfo `+0xA1` × 100 energy → the new commander's `+0xBC` | the new unit's `+0xEC`, `eax` | `0x465437: 80 78 73 02 75 38` | `0x465443` | `0x465475` | `0x46543D` |
+| 16 | the respawn: PlayerInfo `+0xA3` × 100 metal → `+0xD4` | same | `0x4654A3: 80 78 73 02 75 38` | `0x4654AF` | `0x4654E1` | `0x4654A9` |
+| 17 | unit death `0x486C9E..`, the kind nibble (argument `+0xA` & `0xF0`) `0x50` [INFERRED: a reclaimed unit]: (1 − victim `+0x104`) × the victim's def `+0x18A` → the killer's (`+0xF0`) `+0xD4` | killer `+0xEC`, `ecx` | `0x486CDA: 80 79 73 02 75 38` | `0x486CE6` | `0x486D18` | `0x486CE0` |
+
+Sites 2 and 3 share one switch (`0x401504..0x40153A`). **Where a row's arms meet** [DISASSEMBLED
+2026-11-17]: each scaled arm subtracts its product from the destination and jumps to the one store the
+unscaled `fadd` falls into -- row 8's arms `0x40176B..0x40178D` (the −0.7 and the −0.5 arm, each ending in
+`jmp 0x401795`) and its unscaled `fadd [esi+0xD4]` `0x40178F` meet at the store `0x401795`; row 9's value,
+(1.0 − the target's `+0x104`) × the target's def `+0x18A` (`0x402666..0x402678`, `_ftol` `0x4E43A0` at
+`0x40267E`), reaches the builder's (`esi`) `+0xD4` at `0x4026E3`; row 10's arms `0x41BBCA..0x41BBEC` load
+the frame's (`esi`) `+0xD4` at `0x41BBD0` and `0x41BBE2` and meet the unscaled arm at the store
+`fstp [esi+0xD4]` `0x41BBF4`. What each destination field means is the
+economy pass's ([network](network.html), the economy pass) and [memory](memory.html)'s (the kill
+credit); the rows name the stores, not their meanings. The scaled continuation S is the
+instruction after the type test, `VA + length`. Rows 13 and 14 are reached from any player's
+`+give` chat line (the console row `Give`, `0x501D68`, runs at mask 1, so without cheats:
+`0x416BD0` → `0x464C60(controlled, seat, amount, 1)` at `0x416C5D..0x416C8D`), the network's
+case `0x16`, the auto-share `0x457D30` and the SHARE dialog `0x4934B0`, never the loader thread;
+row 17 runs only from the step's reaper or the network's case `0x0C`; rows 9 to 12 and row 18 sit
+in order handlers, so they are reachable wherever an order node is destroyed, the loader thread's
+saved-game, placed-unit and players-phase paths included, all after `PLAYERS` `0x4919C8` (scout I1
+of the ImpAI plan, DISASSEMBLED, function-level reachability).
+
+**The on-hit commander purge, `0x406FC3`, a row 18 for the stock AI only.** The on-damage handler
+`0x406F80` (one caller, `0x489DA2` in the hit apply `0x489CE0`) tests the victim's def `+0x245` bit
+12 (`0x406FA8..0x406FB7`, `test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
+key) and an owner record (`[esi+0x96]`, `0x406FB9`) active (`0x406FBF..0x406FC1`) and of type 2 (`0x406FC3..0x406FC7`, the type test
+`0x406FC3: 80 78 73 02 75 2D`, unscaled branch `0x406FF6`, S `0x406FC9`); it then draws
+`0x4B6C30(300)` (`0x406FCE`), stores GameTime + 30 + the draw at the AI object's `+0x0D`
+(`0x406FD3..0x406FEE`), which only the builder planner's commander wait reads (`0x408186`), and
+calls `0x439EB0(unit, 0)` (`0x406FF1`), which removes every order of the unit's `+0x5C` list
+whose `+0x42` lacks flag `0x4` ([orders](orders.html)). It reads no Difficulty: a hit OTA AI commander
+drops its orders and pauses its planners 30 to 329 ticks, drawing the simulation RNG; a human's does
+not.
+
+**Impure's exemption for ImpAI** (`tagpu_impai.c`, [ImpAI in the engine](../modules/impai.html)).
+Each of fourteen type tests, rows 1 to 12, 17 and `0x406FC3`, becomes a 5-byte `jmp` to a stub of
+its own (the rest of the site NOPs). Rows 13 and 14 are not ImpAI's: the always-on fix `ai_untaxed`
+makes the `jne` inside each a `jmp` to the full credit (`0x464C0A`, `0x464D3A`;
+[engine patches](../modules/engine-patches.html)), so every give to an AI is credited in full, an
+ImpAI seat's included. Rows 15 and 16 stay stock: the respawn creates only the
+controlled player's commander (the owner byte `main+0x2A42`, pushed at `0x4653D2`), never an ImpAI
+seat's. The stub runs the site's own compare, copied from the site,
+and its `jne` to the unscaled branch; for a type-2 record it bounds the record to one of main's ten
+(offset below `0xCEE`, divisible by `0x14B`) and, when ImpAI's seat table marks it, jumps to the
+unscaled branch, else to S. It restores `EAX`, `ECX` and `EDX`, touches no x87 register and calls
+nothing. Zero to two values are live on the FPU stack at a site, none at row 18: the on-hit handler
+`0x406F80` loads no x87 value before `0x406FC3` (DISASSEMBLED). At every one of the 28 targets the flags are dead: the first instruction that touches them
+writes them or is a call (`0x401504: sub eax,ebx` behind the jumps at `0x4014C8`; `0x4016C5` passes
+`fcomp`/`fnstsw` before its `test ah,0x40`), and no direct branch of `.text` lands inside a site
+(DISASSEMBLED, the linear sweep, 49 473 direct branches). The stubs install at attach with the seam
+and the `AI` command's redirect, all or none ([the hook map](../modules/hook-map.html), *The AI
+seat*). An OTA AI seat keeps the stock handicap and the purge.
+
+**What the mods do to it**, MEASURED 2026-11-14 from the bar's recordings (`tools/impai/bar.py`, *The cheat
+flag* in [the bar](../impai/bar.html)): at GameTime 1, Difficulty Medium, an OTA AI seat's production `+0x9C`
+and `+0x90` was 0.7 of an ImpAI seat's with the same side's commander on the base game and on the compatibility
+setups `loader+tadr-ota`, `392+tadr-2026.8.6`, `twilight-2.0b98` and `tazero-alpha5`; 1.0 of it on `prota-4.8`
+and `mayhem-11.3.0`, whose setups therefore do not apply the Medium scale to a commander's production [how is
+not traced]; and 2.0 on `escalation` (4 metal and 100 energy against 2 and 50) [the mechanism not traced].
+
+**The other tests of the controller `+0x73` against 2** (the linear sweep, DISASSEMBLED; scout I4
+of the ImpAI plan): the AI tick `0x408C4C`; the activation `0x464332`; the battle-room row refresh
+`0x445A6F` (an active AI row's READY gadget cleared, `0x445A7A` [INFERRED]); the alliance set
+`0x452AB9`, where a local type-2 target reciprocates without being asked (`0x452ADB`), and its
+mirror `0x452A3A`; `0x457BAB`, which counts active type-2 records so that a peer can add an AI in the
+battle room only while it hosts none (`0x447D85`); the RIReport builder's `0x46C5CA` and `0x46C344`
+(no effect without `reporter.dll`); the unit-sync wait `0x46E052` (`bl` = 2, `0x46E029`) and
+`0x46E0F6` (`dl` = 2), which do not wait for a type-2 row's unit data; the profile reload
+`0x40A11C` and the profile load `0x46495B`, which gives only type-2 records the per-unit-type
+texts; the target query `0x40B7B0`, where a type-2 owner's units skip the `shootme` filter
+(`0x40B8DD..0x40B8F5`); the pump's system branch `0x453EDD`, which drops a system message to a
+type-2 row; the removal's local-AI path `0x4530B7`; the battle-room chat panel `0x449100`,
+`0x449770`; the pre-game `0x450575..0x4506F6`; and the AI debug dump's label `0x40C32A`. Not tests
+against 2, though listed so before: `0x450262` and `0x45328E` compare 3, `0x450508`, `0x450AD4`
+compare 4, and `0x457C9B` compares 3 (`0x457C80`, no caller). ImpAI's exemption touches none of
+them, so an ImpAI seat is a computer seat to each.
+
+**Difficulty-dependent, but not a handicap: the AI profile.** The profile command `plan`
+(`0x406C90`, registered with `weight` `0x406DB0` and `limit` `0x406E40` at `0x406F00..0x406F2E`)
+sets the gate `0x501774` when one of its arguments is `any` or names the current difficulty
+(`easy` 0, `medium` 1, `hard` 2: `0x406CE6..0x406D75`; `any` is compared at the first argument
+only, and a `plan` with no word closes the gate); `weight` and `limit` apply only while the gate is
+set (`0x406DB0`, `0x406E40`), `weight` to every seat with an AI object, humans included
+(`0x406E0A..0x406E27`), and `limit` only to type-2 records (`0x406EA8`). The profile load `0x4648E0`
+does not reset the gate before the file; the per-type texts `0x409F80`/`0x40A040` set it at their
+start (`0x406DA0`) and run after the file, and its initial value is 1, so lines before a file's
+first `plan` apply under whatever gate the previous parse left [INFERRED from the order]. **Every
+shipped profile the engine opens has three sections, `plan easy`, `plan medium`, `plan hard`**, with
+no `any` (MEASURED by reading the retail archives in memory through `tools/wiki/tavfs.py`, nothing
+extracted: the nine `ai\*.txt` of `rev31.gp3` and `krogoth.txt` of `ccdata.ccx`, about 810 `limit`
+and 90 `weight` lines a file; `krogoth.txt` alone has two `weight` lines before its first `plan`).
+**So the stock AI's build weights and limits differ with the Difficulty in every shipped profile**,
+on Hard too, where the handicap does not apply. The profile is parsed at the level load, so it uses
+the Difficulty in force then. `0x40C3DF` only prints `EASY`/`MEDIUM`/`HARD` into an AI debug dump. The other readers are
+the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game writers), `0x42FB47`
+(the registry load), the cycles' own reads (`0x41EE9A`, `0x47B93F`), and the labels `0x4368E3`,
+`0x45F53B`, `0x477431..0x47848E` and `0x47BC26..0x47BC88` — 38 reads and 18 writes in all.
+
+**Who writes it**: the SKIRMISH screen ([the GUI](ui.html)); the registry load (`0x42FB2E`,
+`0x42FB3C`); the post-game screen's own `Difficulty` cycle (`0x41EEBB..0x41EF1B`, which writes the
+settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`, a skirmish or a campaign only: a
+network game's restart sets nothing); the campaign screens (`0x477D26..0x477D62`); a saved game's
+load (its `Difficulty` key, `0x4926DF..0x492701`; a save is a campaign or a skirmish); and
+**`0x448A0B`, which stores 2 right after the settings save `0x430F00`** (called at `0x448A00`), at the end of the START
+action of the battle room's handler `0x447B10` ([network](network.html), *A computer seat in a
+network game*), which only the host can press. **So the host of a network game plays at Hard and
+every other peer at the value it already held** — its registry's (default Medium, `0x42F9C0`) or its
+last choice; each peer runs the handicap sites against its own value, which matters only on the
+peer that runs the seat. **The host's registry takes the 2 as well, at the level load**: the save at
+`0x448A00` precedes the store, but the game thread's load state `0x497F40` saves again at `0x497FF6`
+(unless `0x435100`, called with `ecx` = `*(main+0x391E9)`, returns 2, `0x497FE6..0x497FF4`) before the level starts. MEASURED
+2026-11-12, the reference setup, Wine (`tools/impai/netprobe.py difficulty`, two peers, one
+computer seat each): the host's store held `Difficulty` 1 before launch and 2 once both peers were
+in the level, where `main+0x37EEE` read 2 on the host and 0 on the joiner [the writer INFERRED: the
+load state's save is the one on that way, *REGISTRY_SaveSettings* in [the GUI](ui.html)]. So a
+network game's host starts its next skirmish at Hard unless the player changes it. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
+`0x4913F6` at start-up, `0x4273E8`, `0x47BB52`). The switch at `0x426A66`, `0x426A80`, `0x426A9B` is in
+`0x4269D0`, a key handler (0–9 warp to a campaign mission through `Warp.ini`, A/C the local side,
+E/M/H the Difficulty) that nothing calls and no pointer names [the purpose INFERRED from its strings]:
+dead code. No console command writes the Difficulty; it changes during play only through a restart.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 
@@ -166,6 +355,16 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   `0x513000`, argument 0) [names not read], so a skirmish skips those too. Once a call, loop or no loop: `0x428BD0`, `0x428BE0`, `0x428BF0` (`0x495674`..`0x49567E`,
   not read), the chat expiry `0x463EF0` (`0x495683`) and the temporary sight records' expiry
   `0x482130` (`0x495688`).
+- **After the players phase, within the iteration, nothing writes a unit's position, alive bit, owner,
+  type or `+0x10E` bit 2, a line-of-sight counter or the mapped grid** [DISASSEMBLED for the direct calls,
+  INFERRED for indirect calls]: a recursive closure over the direct calls of each callee from `0x495585`
+  to `0x495646` finds no such store (scout G4 of the ImpAI plan, DISASSEMBLED 2026-11-11); the indirect
+  calls are listed there and not followed, so a store reached only through one is not ruled out. The one listed-field write is
+  the dying bit 14: the feature tick's burn spread reaches the hit `0x489CE0` (`0x424463` → `0x4239C0` →
+  `0x423BE0` → `0x49A0C0` → `0x49A120` → `0x499CD0` → `0x489BB0`), which sets it at `0x489EE5`. The
+  counters change at the call's tail, `0x482130` after the last iteration. So the positions, owners, types
+  and cloak a turn of the players phase reads hold for the rest of the step, under the same proviso (ImpAI's turns,
+  [ImpAI in the engine](../modules/impai.html)).
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
   `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
@@ -239,7 +438,7 @@ ending the test:
 | `0x49B1AE` | an interceptor's quarry `proj+0x56` (victim 0) | a distance test against the weapon's `+0xD6` (`0x49B106..0x49B1A4`); the tests below run after it whatever it answered |
 | `0x49B218` | the cell's unit slot A, `[cell+0]` (`0x49B1C7..0x49B213`) | a unit of another owner than `proj+0x66` whose `+0x6E` plus its def's `+0x16E` is above the projectile's altitude `proj+8` |
 | `0x49B27A` | slot B, `[cell+2]` (`0x49B222..0x49B275`) | the same owner test, the altitude between `+0x6E` + def `+0x162` and `+0x6E` + def `+0x16E` |
-| `0x49B3D2` | the cell's feature, the ground or the water (victim 0, `0x49B28A..0x49B3CD`) | skipped for a weapon with `+0x111` bit 14 (`0x49B294`). The feature: the cell's `+8` index below the def count `main+0x14253` (`0xFFFE` resolved to its anchor through `+0xA`/`+0xB`, the other values from `0xFFFB` none), its def `[main+0x1426F] + idx·0x100`, hit when the def's height `+0xFA` plus the cell's height byte `+6` is above the projectile's altitude word `+0xA`, once a cell (`+0x5A`/`+0x5C` hold the last one). Else the ground: the cell's `+6` above the altitude bounces a weapon with bit 15 (`+0x20 = −(v >> 2)`) and hits otherwise; else the water: no bit 16, the altitude below the sea level `main+0x1427F` and `[[main+0x391E9]+0xD48]` zero |
+| `0x49B3D2` | the cell's feature, the ground or the water (victim 0, `0x49B28A..0x49B3CD`) | skipped for a weapon with `+0x111` bit 14 (`0x49B294`). The feature: the cell's `+8` index below the def count `main+0x14253` (`0xFFFE` resolved to its anchor through `+0xA`/`+0xB`, the other values from `0xFFFB` none, the void `0xFFFC` among them: `0x49B2BD..0x49B2E5`, the branch a word of `0xFFFF` takes), its def `[main+0x1426F] + idx·0x100`, hit when the def's height `+0xFA` plus the cell's height byte `+6` is above the projectile's altitude word `+0xA`, once a cell (`+0x5A`/`+0x5C` hold the last one). Else the ground: the cell's `+6` above the altitude bounces a weapon with bit 15 (`+0x20 = −(v >> 2)`) and hits otherwise; else the water: no bit 16, the altitude below the sea level `main+0x1427F` and `[[main+0x391E9]+0xD48]` zero |
 
 Slot A is the cell's `+0`, slot B its `+2`, each a unit index scaled by `0x118` into
 `main+0x14357`; the unit's def is its `+0x92`. Slot A hits anything below the unit's top, `+0x6E`
@@ -415,7 +614,7 @@ The positive list names these four bytes as the `leave` row `guitop` (the owner'
 **The keyboard ring [DISASSEMBLED + MEASURED 2026-10-05].** `0x4B6220` returns
 the graphics object through `0x51FBD0`, set by its initializer `0x4B5990`; the
 WinMain setup passes static object `0x51F320`. Its `+0xF2` is a ring capacity,
-at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries, `+0x16E`
+at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries (`0x51F416 + 4k`; MEASURED 2026-11-13: a typed chat line leaves its characters there, `0x51F426` `e` and `0x51F42A` space after `impai-handicap`'s, on the recording machine alone), `+0x16E`
 the enqueue index (`0x51F48E`) and `+0x172` the dequeue index (`0x51F492`).
 `0x4C1A40` clears both; `0x4C1AB0` removes one key, advances/wraps the dequeue
 index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless
@@ -517,14 +716,30 @@ scoreboard `0x51F2F4`, the music `0x51F2F8`, `0x51F300`, `0x51F304`, the mouse r
 `0x51F4C2`, the FPS counter `0x51F4FA..0x51F509`, `0x51FB94`, `0x51FBAC..0x51FBB7`, the timers
 `0x51FBE0..0x51FC87`, the Cavedog library's `0x5292E0` and `0x529548`, and `time()`'s cache
 `0x529F10`. Each is a `leave` row. Outside the images: the player records' clocks (already
-`replay-layout.tsv`'s timer rows) and the hover wave in the unit records.
+`replay-layout.tsv`'s timer rows) and, in stock, the hover wave in the unit records, which Impure
+puts on GameTime ([units](units.md), *The hover wave*).
 
 **The two random streams and where they are seeded.** The simulation RNG `0x51FC88` is seeded once
 a level by the loader `0x497180` from `QueryPerformanceCounter` (`0x49718C`, the two dwords summed,
-then `0x4B6CA0` at `0x49719D`); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
+then `0x4B6CA0` at `0x49719D`, which stores `(x ^ 0x66E29572) | 1` to `0x51FC88` at `0x4B6CAB` and returns at
+`0x4B6CB0`, `ret 4` [DISASSEMBLED 2026-11-17]); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
 `0x4971AE` (the loader thread's stream) and `0x49E8BB` (WinMain, the game thread's), both from
 `time(0)`, and keeps its state per thread at `+0x14` of the block `0x4EB0F0` returns, in neither
-image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **None of the simulation's
+image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **Under the harness's
+switch** -- the lever `tagpu_seeds.on`, which the automated harnesses alone write, honoured in a test
+launch (`tagpu_regstore_active`) -- Impure seeds all three from fixed values instead, through the
+engine's own seeders: the simulation RNG at `0x49719D` (the counter's two dwords summed at `0x49719A`), the
+loader thread's stream at `0x4971AE` (its argument popped at `0x4971B8`), and the game thread's
+re-seeded at the loader thread's start (`0x4982CA`; WinMain's `time()` call is `0x49E8B2`; srand's
+store `0x4E486C`), so every level a harness plays starts
+from the same states (`tagpu_patches.c`, *A harness's random streams*; the shatter's own stream,
+`s_shatterRng`, is put back at its start there too), and a clearing scenario apply
+seeds them again from the wire's seed (`tagpu_seed_run`, which puts the shatter's back at its start); a player's launch, `tacli launch
+--defaults` and the compatibility suite keep stock's. After the srand call the loader writes eax (`0x4971B3`) and ecx (`0x4971C1`) before
+reading them, and edx on each way of its mode dispatch (`0x4971F1`, `0x4973C6`, `0x497468`, the call
+at `0x4974FC`). A takeover or a seek writes the simulation RNG from the recording (`replay-globals.tsv`'s
+`rngseed`, a `write` row, put by the seek's R13 after its creates' draws) and restores neither CRT
+stream. **None of the simulation's
 consumers is recomputed on a puppet host**: the wind's draw `0x490C60` never runs with Impure
 (`fix_wind` replaces it, and the wind's state and fields are recorded); the meteor shower
 `0x437DE0` and the forced shower `0x438070` are gated on a puppet level and their state is recorded;
@@ -533,9 +748,13 @@ the objective's draw `0x490385` is never reached in this exe; the skirmish start
 the packet loss are network-only. Every site a puppet host does recompute is presentation (feature
 smoke, particles, lightning, replies, elimination texts, music), the viewer's camera shake
 `0x41C6F0`, or the front end. A new simulation use of `0x4E4870` would diverge silently: neither
-image holds its state. A live host's meteor shower is one already: its strike points share the
-game thread's stream with the draw path, so a takeover cannot reproduce them
+image holds its state. A live host's meteor shower is one already, in a player's game: its ten
+draws (`0x437E37`, `0x437E57`, `0x437E88`, `0x437EAA`, two a stone at `0x437F98`, `0x437FB5`; the
+forced shower's `0x4380AD`, `0x4380CE`, `0x438100`, `0x438124`) share the game thread's stream with
+the draw path, so where a shower falls follows the frames drawn, and a takeover cannot reproduce it
 ([*The scheduler, the clock and the test pacing*](#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
+Under the harness's switch the ten draw a stream of their own instead (`fix_meteor_stream`),
+recorded and seeded with the wind's.
 
 **Values in the records that look like addresses** (MEASURED on the first run's last live dumps of
 four fixtures; the DLL loaded at `0x76CF0000`, `SizeOfImage` `0x4949000`): 261 of 169,140 plain
@@ -635,7 +854,8 @@ of the 22 with an immediate only those five and SetState `0x490B30`'s case 5 (`0
 table `0x490C14`) store `0x497F40`, and SetState's eleven callers hand it 1, 2 or 7. The load state
 moves on only once the loader thread `0x497C90` has set its done bit, `main+0x38D75` bit 1
 (tested at `0x498342`, set at `0x497C62`, `0x497180`'s last store before it returns and the thread
-ends). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
+ends; cleared with the whole word at `0x498480` at the end of the same call, after the level's first
+in-game frame, [units](units.html) the load flags). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
 `0x467D70` (`0x498386` is the only jump in), before the frame function's first run at `0x49842F`
 and before the in-play state `0x499200` is installed at `0x498455` (SetState's case 6, never handed
 6).
@@ -654,6 +874,34 @@ skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause ke
 still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
 not run.
 
+
+### The start positions — `0x437300` and `0x437320` [DISASSEMBLED 2026-11-12]
+
+The game state `[main+0x391E9]` holds the map's specials as records of 12 bytes at `+0xDB4`, their count
+at `+0xDB8`, the allocation the `.ota` read makes of count × 12 bytes (`0x437043..0x437055`). A record:
+`+0` dword 1 for a start position, `+4` its 0-based index (`StartPos N` is N − 1), `+8` s16 X and `+0xA`
+s16 Z in world px. The schema read is the one whose start count equals the seats the skirmish enabled,
+else the one with most (scout N-b1); no retail skirmish map has fewer than six (N-b2), and index numbers
+may have gaps.
+
+- **`0x437300`**, thiscall on the game state, plain `ret`: the count of records whose `+0` is 1, walking
+  the array within `+0xDB8`. The SKIRMISH Start's player maximum (`0x47AFDE..0x47AFFA`).
+- **`0x437320(&pos, idx)`**, thiscall on the game state, `ret 8`: the first record with `+0` 1 and index
+  `idx` into `pos` as `{X << 16, 0, Z << 16}`, and 1; 0 for none. Called by the seat setup (`0x496FA9`)
+  and by ImpAI's `starts` op (`tagpu_worldq.c`, `wq_starts`), which asks indices 0 up, past gaps, until
+  it has as many as `0x437300` counted or has asked `WQ_STARTS_MAX` (64).
+
+The array is written by the `.ota` read before the level and lives for the level; nothing rewrites it in
+play but another `.ota` read.
+
+**Who starts at each** (DISASSEMBLED 2026-11-15, `0x4978DA..0x497972`): a new skirmish -- the game state's mode
+`[gs+0]` 2 (`0x435100` is `mov eax,[ecx]; ret`) and `main+0x38D6B` 0 (read at `0x4978FA`) -- with the settings' fixed starts
+`[main+0x29A0]+0x118` set walks the ten records at `main+0x1B63`, stride `0x14B`, and calls the seat setup
+`0x496EE0(r, r)` for each record r whose first dword is set, whose controller `+0x73` is 1, 2 or 3 and whose
+`+0x146` is not 10 (`cmp byte [rec+0x146],0xA` at `0x497958`): record r's commander starts at start r, and a start whose index is no such record's holds
+nobody. With `+0x118` clear the starts come from a list shuffled with `0x4E4870` (`0x497979..0x497ADC`). ImpAI's
+`starts` op answers each start's record under the first rule (`tagpu_worldq.c`, `start_seated`); the recorder
+keeps `+0x118` in its header and a replay writes it back (`tagpu_replay.c`, `replay_options`).
 ## The engine's rates — sim tick, render cadence, and what `gamespeed` multiplies
 
 [MEASURED 2026-09-09, this project — a live skirmish on Two Continents, one walking ARMCOM,
@@ -743,6 +991,7 @@ and the setter are in *The speeds* above, the step's iteration in
   (`0x4B6340..0x4B6361`); `+0xE8` reads 30, so it steps in whole thirtieths of a second. Its callers
   outside the scheduler include the main menu's idle timer `0x426BCA`, the GUI animation
   `0x478992..0x478BEB`, the player records' join and receive stamps and the hover wave `0x48A66A`
+  (which Impure re-points to GameTime)
   (*The unit and player records, byte by byte*).
 - **The scheduler `0x495230`** (called at `0x496928` in a skirmish, `0x4967F3` in a network game):
   elapsed = clock − the base `main+0x38A37`, kept at `+0x38A3F`; due = elapsed × the live speed
@@ -767,7 +1016,11 @@ and the setter are in *The speeds* above, the step's iteration in
   are the Options screen, the save `0x43136B`, the HUD `0x468C0B`, the setter `0x490E16`, the keys
   `0x496559` and the scheduler — no tick code (a displacement scan of `.text`). The registry's
   `gamespeed` (`0x504550`) is copied into the ceiling and the live speed **unclamped** at start-up
-  (`0x430509`, `0x43052B`).
+  (`0x430509`, `0x43052B`): the dword read `0x4B69D0` at `0x4304F6` goes through the settings accessor
+  ([process](process.html), *The six sites*), and when it fails `0x430518` stores `bx` instead, 10, set at
+  `0x4301AC`. So a ceiling of 10 where the key holds another speed says the game read no setting: the
+  calibration lanes check it at every launch (`tools/tasim/engrun.py`, `engine_reads`) as the evidence that
+  their settings key reached the game, since the speed itself reaches no tick.
 - **The batch is part of the result.** The step runs its iterations DeltaTime times and then its
   tail once a call — `0x428BD0`, `0x428BE0`, `0x428BF0` (each a bare `ret`), the chat expiry
   `0x463EF0`, the temporary sight records' expiry `0x482130` (`0x495674..0x495688`) — so a sight record outlives its deadline
@@ -777,7 +1030,9 @@ and the setter are in *The speeds* above, the step's iteration in
   in 1,328 unit fields; two pairs at a fixed batch (k = 2, then k = 1) differed only in the meteor
   shower's two points (next bullet); speed 20 against k = 2 differed in 1,272 and 1,383 unit fields.
 - **The meteor shower and the CRT `rand`.** The meteor tick `0x437DE0` draws the CRT's `rand`
-  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`;
+  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`
+  -- the first four at every shower it schedules, with the switch `0x51232C` on or off, the last
+  two per stone ([weapons.md](weapons.md), *The switch*);
   the forced shower `0x438070` (one caller, `0x41778A`) draws it too (`0x4380AD`, `0x4380CE`) and
   writes `0x512334` (`0x4380FB`). On
   the game thread the draw path draws from the same per-thread stream every frame (static call

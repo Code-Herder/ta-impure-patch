@@ -77,6 +77,8 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_puppet.h"
+#include "tagpu_impai.h"
+#include "tagpu_income.h"
 #include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
@@ -93,6 +95,11 @@
 #include "tagpu_gaf.h"
 #include "tagpu_packet.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_gui.h"
+#include "tagpu_packet_pub.h"
+#include "tagpu_skipstub.h"
+#include "tagpu_nodraw.h"
+#include "config.h"
 #include "tagpu_board.h"
 #include "tagpu_boardwire.h"
 #include "tagpu_recmp_players.h"
@@ -279,6 +286,9 @@ static int32_t        s_apre[0x10000];      /* ... with this altitude argument  
 static unsigned short s_coplaced[0x10000];  /* ... these slots, to clear at the step's end      */
 static void co_end(void);
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
+static unsigned   s_put_tick = ~0u; /* the GameTime this frame's visit put the recording at, ~0u
+                                       when it put none: cleared at each visit's start, so only the
+                                       draw after the put sees it (tagpu_replay_put_at)           */
 enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW, SK_SWITCH };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
 static struct {
@@ -417,6 +427,22 @@ static struct {
     unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
+/* ... and its `or units <s> <= <n>` clauses, armed and cleared with it; game thread */
+#define PAUSE_UNITS_MAX 4
+static struct { unsigned char seat; unsigned short n; } s_pause_units[PAUSE_UNITS_MAX];
+static unsigned s_pause_nunits;
+/* ... or its `or cells` clause, armed and cleared with it; game thread. A cell is one run of a
+   packed calibration batch: its two seats' ranges of block positions, each with its unit count n */
+#define PAUSE_CELLS_MAX 50          /* B / 30 at a unit limit of 1500: the packed lane's cells    */
+#define PAUSE_CELL_SPAN 30          /* positions a range, at most: a cell's capacity at 1500       */
+typedef struct {
+    unsigned start, end;            /* the cell's create and its last tick, GameTimes             */
+    unsigned char seat[2];
+    unsigned short lo[2], hi[2], n[2];
+    unsigned char decided;
+} PauseCell;
+static PauseCell s_pause_cells[PAUSE_CELLS_MAX];
+static unsigned s_pause_ncells;
 static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T or THE LAUNCH'S
                                        HOLD, not by the player: the hold keeper keeps it set     */
 /* THE LAUNCH'S HOLD: the state, from tagpu_hold.on read once at attach; then the game thread's
@@ -809,6 +835,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                            Refusal* r)
 {
     unsigned i;
+    /* the lists' hashes as the reader parsed them, v0.5.1's already read as this build's
+       (tagpu_recreader.c, list_id): any other hash is a list whose rows differ in what they record */
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         r->code = TAGPU_REPLAY_REFUSED_LAYOUT;
@@ -828,6 +856,14 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
     if (h->proj_cap != TAGPU_LIM_PROJ) {
         snprintf(why, cap, "it was recorded with a projectile pool of %u records, this build's "
                  "holds %u", h->proj_cap, (unsigned)TAGPU_LIM_PROJ);
+        return 0;
+    }
+    /* the cap decides which of the viewed seat's deaths leave their sight behind, so a playing
+       under another cap computes another world: the header carries the cap its game ran under
+       (RT_SIGHTCAP, written from the value the patch installed), and only an equal one plays */
+    if (h->sight_cap != tagpu_sightcap()) {
+        snprintf(why, cap, "it was recorded with a temporary sight records' cap of %u, this game "
+                 "runs %u (tagpu_sightcap.on)", h->sight_cap, tagpu_sightcap());
         return 0;
     }
     if (h->mode != MODE_SKIRMISH && h->mode != MODE_NETWORK) {
@@ -1158,7 +1194,8 @@ static int viewer_buffers(char* ta)
 
 /* THE VIEWER'S BUFFERS: the level init's call 0x4919C8, in LoadGameData_Main 0x4917D0 on the
    LOADER thread (0x497581), its only call site, retargeted here. The engine's own init first,
-   then, on a level the seating armed, record 10's buffers. Three invariants:
+   then ImpAI's seat table (tagpu_impai.h) and the income lever's rows (tagpu_income.h) on every
+   level, then, on a level the seating armed, record 10's buffers. Three invariants:
    - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
      state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
      end, after the loader has exited, and at every fill before a seating, so a seating that never
@@ -1178,6 +1215,8 @@ static void __cdecl tagpu_replay_level_players(void)
     char* ta;
     int ok;
     E_PlayersInit();
+    tagpu_impai_level_init();
+    tagpu_income_level_init();
     if (!tagpu_puppet_on() ||
         InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
     ta = ta_main();
@@ -5887,10 +5926,13 @@ static void wind_seed(const RecWorld* W)
 #define OFF_FOLLOW     0x142F7      /* the camera's followed projectile, or NULL: a pool record's
                                        position (+4) is all the camera reads (0x41CA3F..0x41CA49) */
 #define OFF_SIGHTRECS  0x1427B      /* the temporary sight records, SR_STRIDE bytes each          */
-#define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses a 21st (0x48292C)             */
+#define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses one past the cap in force
+                                       (0x48292C; tagpu_sightcap)                              */
 #define SR_STRIDE      0x24
 #define SR_EXPIRY      0x1C         /* the expiry removes it below this GameTime (0x482153..)     */
-#define SR_MAX         20
+#define SR_MAX         20           /* the seek's simulated cap (s_eye): the engine's stock one; a
+                                       death past it is counted (`capped`), and the engine's own
+                                       count is bounded by tagpu_sightcap, never by this      */
 #define DATA_BEGIN     0x00501000u  /* .data: the list's data rows are offsets from here          */
 #define LOS_REACT      0x7u         /* LosType bits 0-2: Mapping, true LOS, the ray fan           */
 #define LOS_MAPPING    0x1u
@@ -5908,7 +5950,7 @@ typedef void (__cdecl* PFN_SightExpire)(void);
 #define E_SightExpire ((PFN_SightExpire)0x00482130u)
 /* 0x482910(point, sight, height, duration): the temporary sight record's add, stdcall, `ret 0x10`
    (DISASSEMBLED 0x482910..0x482AAF). It refuses, touching nothing, when LosType bit 1 is clear
-   (0x482920) or the count is already SR_MAX (0x48292F); otherwise it makes the record for the
+   (0x482920) or the count is already the cap (0x48292F); otherwise it makes the record for the
    viewed record main+0x2A43 with its expiry GameTime + duration (0x4829C4), stamps it (0x4829F4,
    the ray fan; the circle after it) and counts it (0x482AA9). The destructor calls it for a
    viewed seat's live unit with the def's +0x202, +0x170 and 60 (0x48672C..0x486748). */
@@ -5967,8 +6009,10 @@ static void holds_put(char* ta, const RecWorld* W)
    being 1 or more wherever this runs: R0 (sk_bound) refuses a seek at GameTime 0. The records are the viewed
    player's death vision, made by the destructor under true LOS only; a record kept past a refill
    of the counters would later decrement counters the refill reset (an undercount, or 0 -> 255, a
-   cell seen for good), and the engine has no other way to drop one mid-level. The count is the
-   engine's, which its add keeps at SR_MAX or below; -1 when it is not, and nothing is touched. */
+   cell seen for good), and the engine has no other way to drop one mid-level. BOUNDED by the cap
+   in force, tagpu_sightcap: the level's block holds that many records and the add keeps the count
+   at or below it, so a count within it is dropped whole and every write is inside the block; -1
+   when the count is not within it, and nothing is touched. */
 static int sight_records_drop(char* ta)
 {
     int n;
@@ -5976,7 +6020,7 @@ static int sight_records_drop(char* ta)
     int i;
     memcpy(&n, ta + OFF_NSIGHTRECS, 4);
     memcpy(&recs, ta + OFF_SIGHTRECS, 4);
-    if (n < 0 || n > SR_MAX || (n && !recs)) return -1;
+    if (n < 0 || (unsigned)n > tagpu_sightcap() || (n && !recs)) return -1;
     for (i = 0; i < n; i++) memset(recs + (size_t)i * SR_STRIDE + SR_EXPIRY, 0, 4);
     if (n) E_SightExpire();
     return n;
@@ -6813,14 +6857,15 @@ static int sk_features_bound(const Lv* L, const RecWorld* W, char* why, unsigned
     return 1;
 }
 
-/* the engine's temporary sight records' count within what its add allows */
+/* the engine's temporary sight records' count within the cap in force (tagpu_sightcap): the
+   bound sight_records_drop takes */
 static int sight_records_bounded(const char* ta)
 {
     int n;
     const char* recs;
     memcpy(&n, ta + OFF_NSIGHTRECS, 4);
     memcpy(&recs, ta + OFF_SIGHTRECS, 4);
-    return n >= 0 && n <= SR_MAX && (!n || recs);
+    return n >= 0 && (unsigned)n <= tagpu_sightcap() && (!n || recs);
 }
 
 /* R0: every value of the world at T that the rebuild hands to the engine, bounded. */
@@ -8054,7 +8099,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
             return 0;
         }
         /* 0x40B320 indexes the ten-entry table with the record's +0x146, and index 10 would alias
-           the pathfinder's budget at 0x5119E8. R8's players_put then writes the image's byte over
+           the pathfinder's weights at 0x5119E8. R8's players_put then writes the image's byte over
            it (no row of replay-layout.tsv excludes it), and the teardown frees through
            0x5119C0[+0x146] (0x40B390, called at 0x464A4F). The level's slot setup 0x4854A0 copies
            it into each of the record's unit slots' +0xFF (0x485908..0x48590E), which the radar
@@ -8284,9 +8329,11 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
      where the forced 0x491D70(1) would pop that screen without clearing its bits and stall single
      player;
    - the objective armed, the exact inverse of E_Disarm (0x4904B0), which writes only +0x88. The
-     objective is made at the level's setup (0x435DA0) and only the next setup frees it, and the
-     end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D, 0x46586F), so
-     none sees the half-built world. */
+     objective is made at the level's setup (0x435DA0), and freed either by the next setup or by
+     the gaming state's destructor 0x434FF0, which frees and nulls main+0x391ED (0x43500E,
+     0x43501C) at a game-mode change (called at 0x434AD6 and 0x434BCF), neither inside this
+     visit; and the end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D,
+     0x46586F), so none sees the half-built world. */
 static void tk_live(char* ta, unsigned P)
 {
     LARGE_INTEGER a, b;
@@ -8340,8 +8387,10 @@ static const char* tk_run(char* ta)
 
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
-   false, the elimination's included; the step-down follows the seek's lines, which read the world
-   through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
+   false, the elimination's included; then ImpAI marks the fresh AI seats by the store
+   (tagpu_impai_takeover), after R13 has written the recording's ImpAI tables, which would otherwise
+   overwrite the marks, and before the arm, so the fork's first capture states them; the step-down
+   follows the seek's lines, which read the world through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
    and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
    tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
    rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
@@ -8369,6 +8418,7 @@ static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, un
              s_sk.killed, s_sk.made, s_sk.refused, built, s_tk.adopted, s_tk.resumed,
              s_tk.bounded, s_tk.orphans, seats);
     tagpu_puppet_end();
+    if (!s_rw.state) tagpu_impai_takeover();  /* a rewind's fork keeps the saved present's marks */
     counts_log("the takeover", T - 1);
     pend_clear();
     replay_close();
@@ -8564,8 +8614,20 @@ static int seek_run(char* ta)
     if (convert) rw_seats(ta);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
        comment): no temporary record outlives R5's refill, whose counters its later expiry would
-       otherwise decrement. R0 bounded the engine's count of them. */
-    s_sk.sdropped = (unsigned)sight_records_drop(ta);
+       otherwise decrement. The drop cannot refuse here: R0 found the count within the cap in
+       force (sight_records_bounded), and R3's kills add records only through the add 0x482910,
+       which refuses one past that cap (0x48292C..0x48292F), into the block LoadMap allocated for
+       the level, whose pointer R3 does not write. A refusal would mean engine memory broke that
+       rule; it is logged, never counted as records dropped. */
+    {
+        int dropped = sight_records_drop(ta);
+        if (dropped >= 0)
+            s_sk.sdropped = (unsigned)dropped;
+        else
+            tagpu_logf("replay: %s: seek to %u: R4 found %d temporary sight records, past the cap "
+                       "of %u: they outlive R5's refill", s_name, T,
+                       *(const int*)(ta + OFF_NSIGHTRECS), tagpu_sightcap());
+    }
     /* R5 */
     sk_sight_reset(ta, W);
     /* R6: the target's clock, before everything that stamps GameTime for it: the creates' mover
@@ -8719,8 +8781,8 @@ static int seek_run(char* ta)
                "T: %u water states, %u state bytes, %u sight stamps, %u refused; tables: %u "
                "written, %u skipped, %u values left as the host holds them, %u repaired; the "
                "projectile pool %s, %u records; the effects %s; temporary sight records: %u made "
-               "again, %u refused, %u deaths past the engine's %u (the records may differ from a "
-               "playing's)", s_name, T, s_sk.left, s_sk.moved,
+               "again, %u refused, %u deaths past the seek's cap of %u (the records may differ "
+               "from a playing's)", s_name, T, s_sk.left, s_sk.moved,
                s_sk.carried, s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed,
                s_sk.models, s_sk.sdropped, s_sk.water, s_sk.states, s_sk.stamps, s_sk.brefused,
                s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
@@ -9219,8 +9281,12 @@ static void rw_visit(void)
 }
 
 #define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
-#define TRIGGER_MS 100              /* the most often the trigger is looked for: the engine draws
-                                       330 to 4900 times a second (tagpu_packet_pub.c)          */
+#define TRIGGER_MS 10               /* the most often the trigger is looked for: the engine draws
+                                       330 to 4900 times a second (tagpu_packet_pub.c), and a look
+                                       that finds none is one GetFileAttributesA (trigger_read).
+                                       Every trigger a harness writes waits for the next look:
+                                       a calibration run writes about 6.5 ([INFERRED] from its
+                                       holds, tools/tasim/engrun.py)                            */
 
 /* The trigger: one line, the file deleted whatever it held.
    - `dump <name>`: a dump armed for the recorder's next capture point (tagpu_rec_dump_arm), on any
@@ -9277,16 +9343,19 @@ static void rw_visit(void)
      pacing again.
    - `pause at <T>`, T a decimal u32 past the level's GameTime: in a test launch's skirmish level
      outside rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a
-     time, a second replacing the first. `resume`: the pause bit cleared, as the Pause key clears
+     time, a second replacing the first; with up to four ` or units <s> <= <n>` clauses
+     (pause_words), or one ` or cells <cell>;...` clause (pause_cells_words), it may pause
+     earlier. `resume`: the pause bit cleared, as the Pause key clears
      it, when THE PAUSE AT T set it; refused with a line otherwise (pacing_refusal). */
-/* `p` is a decimal u32 and nothing after it: 1 with its value */
+#define U32_DIGITS 10               /* the digits a u32 word takes, at most */
+/* `p` is a decimal u32 of at most U32_DIGITS digits and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
     unsigned long long x = 0;
     unsigned k = 0;
     while (p[k] >= '0' && p[k] <= '9') {
         x = x * 10 + (unsigned)(p[k] - '0');
-        if (++k > 10 || x > 0xFFFFFFFFull) return 0;
+        if (++k > U32_DIGITS || x > 0xFFFFFFFFull) return 0;
     }
     if (!k || p[k]) return 0;
     *v = (unsigned)x;
@@ -9306,6 +9375,74 @@ static int u32_take(const char** p, unsigned* v)
     if (!u32_word(num, v)) return 0;
     *p += k;
     return 1;
+}
+
+/* `<T>` and 0..4 ` or units <s> <= <n>`, the whole of `p`, s below 10 and n at most 65535:
+   1 parsed, with the clauses in `seats`/`ns` and their count in *k */
+static int pause_words(const char* p, unsigned* T, unsigned char* seats, unsigned short* ns,
+                       unsigned* k)
+{
+    unsigned s, n;
+    *k = 0;
+    if (!u32_take(&p, T)) return 0;
+    while (*p) {
+        if (*k >= PAUSE_UNITS_MAX || strncmp(p, " or units ", 10)) return 0;
+        p += 10;
+        if (!u32_take(&p, &s) || s >= 10 || strncmp(p, " <= ", 4)) return 0;
+        p += 4;
+        if (!u32_take(&p, &n) || n > 65535) return 0;
+        seats[*k] = (unsigned char)s;
+        ns[*k] = (unsigned short)n;
+        (*k)++;
+    }
+    return 1;
+}
+
+/* `<s>:<lo>-<hi><=<n>` at *p, and *p moved past it: s below 10, lo <= hi < lo + PAUSE_CELL_SPAN,
+   hi and n at most 65535 */
+static int pause_range_take(const char** p, unsigned char* s, unsigned short* lo,
+                            unsigned short* hi, unsigned short* n)
+{
+    unsigned a, b, c, d;
+    if (!u32_take(p, &a) || a >= 10 || **p != ':') return 0;
+    (*p)++;
+    if (!u32_take(p, &b) || **p != '-') return 0;
+    (*p)++;
+    if (!u32_take(p, &c) || c > 65535 || c < b || c - b >= PAUSE_CELL_SPAN ||
+        strncmp(*p, "<=", 2)) return 0;
+    *p += 2;
+    if (!u32_take(p, &d) || d > 65535) return 0;
+    *s = (unsigned char)a;
+    *lo = (unsigned short)b;
+    *hi = (unsigned short)c;
+    *n = (unsigned short)d;
+    return 1;
+}
+
+/* `<T> or cells <cell>[;<cell>...]`, the whole of `p`, each cell
+   `<start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>` with start below end: 1 parsed, with the
+   cells in `cells` and their count, 1..PAUSE_CELLS_MAX, in *k */
+static int pause_cells_words(const char* p, unsigned* T, PauseCell* cells, unsigned* k)
+{
+    *k = 0;
+    if (!u32_take(&p, T) || strncmp(p, " or cells ", 10)) return 0;
+    p += 10;
+    for (;;) {
+        PauseCell* c;
+        int r;
+        if (*k >= PAUSE_CELLS_MAX) return 0;
+        c = &cells[(*k)++];
+        memset(c, 0, sizeof *c);
+        if (!u32_take(&p, &c->start) || *p++ != ',' || !u32_take(&p, &c->end) ||
+            c->end <= c->start || *p++ != ',')
+            return 0;
+        for (r = 0; r < 2; r++) {
+            if (r && *p++ != ',') return 0;
+            if (!pause_range_take(&p, &c->seat[r], &c->lo[r], &c->hi[r], &c->n[r])) return 0;
+        }
+        if (!*p) return 1;
+        if (*p++ != ';') return 0;
+    }
 }
 
 /* `<P> at <T>[ difficulty <D>]`, the whole of `p`: 1 parsed, D -1 when absent */
@@ -9329,7 +9466,8 @@ static void turbo_on(void);
 static void turbo_off(void);
 static void pace_level_end(void);
 static const char* pacing_refusal(const char* ta);
-static void pause_at_arm(unsigned T);
+static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
+                         unsigned k, const PauseCell* cells, unsigned ncells);
 static void pause_resume(void);
 static void pause_at_visit(void);
 static void hold_visit(void);
@@ -9386,10 +9524,19 @@ static int forks_trigger(const char* line)
     return 1;
 }
 
+/* The longest line the parsers take: `pause at <T> or cells ` and PAUSE_CELLS_MAX cells joined by
+   `;`, each `<start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>` -- ten numbers of at most
+   U32_DIGITS digits (u32_word) and eleven separator characters. A file that fills the buffer was
+   not read whole and is refused (trigger_read). */
+#define PAUSE_CELL_CHARS (10 * U32_DIGITS + 11)
+#define TRIGGER_LINE 8192
+_Static_assert(9 + U32_DIGITS + 10 + PAUSE_CELLS_MAX * (PAUSE_CELL_CHARS + 1) < TRIGGER_LINE,
+               "a full `or cells` line fits the trigger's");
+
 static void trigger_read(void)
 {
     static DWORD s_looked;
-    char line[384], name[40], dump[40];
+    char line[TRIGGER_LINE], name[40], dump[40];
     unsigned T, P;
     int D;
     DWORD now = GetTickCount();
@@ -9401,11 +9548,16 @@ static void trigger_read(void)
     if (GetFileAttributesA(TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
     f = fopen(TRIGGER, "rb");
     if (f) {
-        n = fread(line, 1, sizeof line - 1, f);
+        n = fread(line, 1, sizeof line, f);
         fclose(f);
     }
-    line[n] = 0;
     DeleteFileA(TRIGGER);
+    if (n == sizeof line) {
+        tagpu_logf("replay: trigger refused: longer than the %u bytes a trigger line may hold",
+                   (unsigned)(sizeof line - 1));
+        return;
+    }
+    line[n] = 0;
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
         line[--n] = 0;
     if (rw_trigger(line) || forks_trigger(line)) return;
@@ -9440,9 +9592,19 @@ static void trigger_read(void)
         turbo_off();
         return;
     }
-    if (!strncmp(line, "pause at ", 9) && u32_word(line + 9, &T)) {
-        pause_at_arm(T);
-        return;
+    if (!strncmp(line, "pause at ", 9)) {
+        unsigned char seats[PAUSE_UNITS_MAX];
+        unsigned short ns[PAUSE_UNITS_MAX];
+        PauseCell cells[PAUSE_CELLS_MAX];
+        unsigned k;
+        if (pause_words(line + 9, &T, seats, ns, &k)) {
+            pause_at_arm(T, seats, ns, k, NULL, 0);
+            return;
+        }
+        if (pause_cells_words(line + 9, &T, cells, &k)) {
+            pause_at_arm(T, NULL, NULL, 0, cells, k);
+            return;
+        }
     }
     if (!strcmp(line, "resume")) {
         pause_resume();
@@ -10032,6 +10194,7 @@ static void frame_visit(void)
         s_frame_tick = now;
         recorded_put(&L, W);
         contacts_put(&L, W);
+        s_put_tick = now;
         if (!s_rt.tsaved) {
             tagpu_simreg_transient_save();
             s_rt.tsaved = 1;
@@ -10045,11 +10208,16 @@ static void frame_visit(void)
 
 /* the frame visit, with the viewer's record's first fill before it and its viewed work and
    Follow's camera after it, whichever way the visit returns, and last the engine's cull when the
-   visit wrote anything it reads (THE DRAW'S UNIT LIST) */
+   visit wrote anything it reads (THE DRAW'S UNIT LIST); THE POSE CHECK first and NO DRAW's gate
+   last (tagpu_nodraw.h) */
 static void __cdecl tagpu_replay_frame(void)
 {
     char* ta = ta_main();
     const unsigned inputs = s_cull_inputs;
+    const unsigned g0 = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
+    const int quiet = !s_seek.pending && !s_sw.pending && !s_rw.state;   /* before the visit */
+    s_put_tick = ~0u;
+    if (ta) tagpu_nodraw_posecheck(ta, g0);
     if (ta) viewer_init(ta);
     frame_visit();
     hold_visit();
@@ -10059,6 +10227,7 @@ static void __cdecl tagpu_replay_frame(void)
         follow_visit(ta);
         if (s_cull_inputs != inputs) E_HotUnitsCull();
     }
+    tagpu_nodraw_gate(ta, g0, quiet);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -10987,6 +11156,8 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     return n;
 }
 
+int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
+
 /* The defs are the level's, which a load makes and only the teardown frees, and their count the
    engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
    max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
@@ -11620,6 +11791,11 @@ static unsigned guard_fnv(const Guard* g)
     return h;
 }
 
+int tagpu_replay_level_init_in(void)
+{
+    return s_sitesIn;
+}
+
 int tagpu_replay_watch_ready(char* why, unsigned cap)
 {
     unsigned i;
@@ -11878,6 +12054,18 @@ static unsigned char* before_call(unsigned engine, void (__cdecl* fn)(void))
     return s;
 }
 
+/* `fn` with every register and the flags kept, then `engine` or `alt` in its place as the byte at
+   `skip` says: entered by the site's call (inc/tagpu_skipstub.h) */
+static unsigned char* before_call_skippable(unsigned engine, void (__cdecl* fn)(void),
+                                            volatile unsigned char* skip, unsigned alt)
+{
+    unsigned char* s = tagpu_detour_stub();
+    if (!s) return NULL;
+    tagpu_skipstub_emit(s, (unsigned)(size_t)s, (unsigned)(size_t)fn,
+                        (unsigned)(size_t)skip, engine, alt);
+    return s;
+}
+
 /* DISASSEMBLED: 0x496920 tests main+0x38A51 bit 0 immediately before the branch
    around scheduler 0x495230 and step 0x495490 (0x496926 jumps to 0x496969, then 0x4969CD and
    0x4969D2: a paused frame still draws and reaches the frame visit). Both the rewind state and
@@ -11934,11 +12122,11 @@ static void rw_pause_init(void)
    the count test 0x496932 then skips the step, its tail included, so every batch is still k
    ticks and only when the batches run waits on the writer. A single batch that writes more than
    the rest of the ring still fills it, as it would at stock pacing.
-   What turbo does not make tick-exact is what stock pacing does not either: the readers of wall
-   time and the CRT rand draws of the frame -- the hover wave in the unit tick (0x48A66A), the
-   meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same stream, the
-   camera scroll by wall elapsed (0x41CEA2) -- each a function of the frames and the time between
-   two ticks (exe-reverse-engineering.md, the scheduler). */
+   What turbo does not make tick-exact is what stock pacing does not either: the CRT rand draws of
+   the frame -- the meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same
+   stream -- and the camera scroll by wall elapsed (0x41CEA2), each a function of the frames and the
+   time between two ticks (engine/sim.md, *The scheduler, the clock and the test pacing*). The hover
+   wave reads GameTime (tagpu_patches.c, fix_hover_clock). */
 static void turbo_due(char* ta)
 {
     DWORD now;
@@ -12020,7 +12208,8 @@ static void hold_bound(char* ta)
 
 /* The turbo first, then the bounds: a bound only lowers the count, so whatever the turbo set,
    an armed round trip still gets the frame after its T-1, a pause its frame after T and the
-   launch's hold its one tick. */
+   launch's hold its one tick. NO DRAW's mark last, on the count the step will run: the batch is
+   the turbo's when the turbo wrote it, as turbo_due does while it is live and no rewind runs. */
 static int __cdecl rt_pace_guard(void* entry_esp)
 {
     char* ta = ta_main();
@@ -12030,6 +12219,7 @@ static int __cdecl rt_pace_guard(void* entry_esp)
     rt_pace_bound(ta);
     pause_at_bound(ta);
     hold_bound(ta);
+    tagpu_nodraw_mark(ta, s_turbo.live && !s_rw.state);
     return 0;
 }
 
@@ -12038,12 +12228,26 @@ static int __cdecl rt_pace_guard(void* entry_esp)
    The bound above ends the batch at T; the frame visit after step T, on the same game thread,
    sets bit 0 of main+0x38A51, the bit the Pause key flips (0x4960AA..0x4960BC, DISASSEMBLED) and
    the frame callback tests at 0x496920 before the scheduler and the step. A GameTime a seek has
-   moved past is dropped with a line, never paused at. Nothing is paused without an armed T. */
-static void pause_at_arm(unsigned T)
+   moved past is dropped with a line, never paused at. Nothing is paused without an armed T.
+
+   `pause at <T> or units <s> <= <n> ...` also pauses at the first frame visit before T at which
+   one clause holds: seat s's live unit count, the u16 +0x144 of its record (incremented at
+   0x486187 and 0x486322, decremented in the destructor at 0x486DFC; DISASSEMBLED,
+   engine/units.md), is at most n. s is bounded below 10 at the parse, inside the ten records of
+   0x14B at main+0x1B63; the word is a value compared, never an index. With the turbo at k = 1 the
+   pause lands at the frame visit after the step in which the clause first held; a batch of more
+   steps ends where it ends, since no bound can end a batch on a condition. The clause is for
+   speed only: every measurement a test takes is read from the recording at its own tick.
+
+   `pause at <T> or cells <cell>;...` (pause_cells_words), the packed calibration lane's, instead
+   pauses at the first frame visit before T at which every cell is decided (pause_cells_visit). */
+static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
+                         unsigned k, const PauseCell* cells, unsigned ncells)
 {
     char* ta = ta_main();
     const char* why = pacing_refusal(ta);
-    unsigned now;
+    char clauses[PAUSE_UNITS_MAX * 32 + 1];
+    unsigned now, i, at = 0;
     if (why) {
         tagpu_logf("pause: at %u refused: %s", T, why);
         return;
@@ -12056,16 +12260,113 @@ static void pause_at_arm(unsigned T)
     if (s_pause_at)
         tagpu_logf("pause: at %u replaces the pause at %u", T, s_pause_at);
     s_pause_at = T;
-    tagpu_logf("pause: armed for GameTime %u", T);
+    s_pause_nunits = k;
+    s_pause_ncells = ncells;
+    clauses[0] = 0;
+    for (i = 0; i < k; i++) {
+        s_pause_units[i].seat = seats[i];
+        s_pause_units[i].n = ns[i];
+        at += (unsigned)snprintf(clauses + at, sizeof clauses - at, "%s units of seat %u <= %u",
+                                 i ? ", or" : " or", seats[i], ns[i]);
+    }
+    for (i = 0; i < ncells; i++) {
+        s_pause_cells[i] = cells[i];
+        s_pause_cells[i].decided = 0;
+    }
+    if (ncells)
+        snprintf(clauses, sizeof clauses, " or when its %u cells are decided", ncells);
+    tagpu_logf("pause: armed for GameTime %u%s", T, clauses);
+}
+
+/* The live units of seat s at positions lo..hi of its block: the unit array's slots from the
+   block's first (+0x67) on, each counted when its +0x110 has the alive bit. BOUNDED: the block's
+   first and last are DATA, used only when both are slots of the array (inside it, on its stride)
+   and the last below the slot count main+0x14351; hi is clamped to the block's last and to that
+   count, so a range reads at most PAUSE_CELL_SPAN records, every one of the array. -1 when the
+   block is not one, which decides nothing. */
+static int pause_range_live(char* ta, unsigned s, unsigned lo, unsigned hi)
+{
+    char* rec = player_rec(ta, s);
+    char* base = *(char**)(ta + OFF_BEGIN);
+    char* first = *(char**)(rec + PL_BLOCKFIRST);
+    char* last = *(char**)(rec + PL_BLOCKLAST);
+    unsigned nslots = *(const unsigned short*)(ta + OFF_NSLOTS);
+    size_t f, l, i;
+    int live = 0;
+    if (!base || first < base || last < first || (size_t)(first - base) % REC_UNIT_BYTES ||
+        (size_t)(last - base) % REC_UNIT_BYTES)
+        return -1;
+    f = (size_t)(first - base) / REC_UNIT_BYTES;
+    l = (size_t)(last - base) / REC_UNIT_BYTES;
+    if (l >= nslots) return -1;
+    if (f + hi < l) l = f + hi;
+    for (i = f + lo; i <= l; i++)
+        if (*(const uint32_t*)(base + i * REC_UNIT_BYTES + U_STATE) & U_ALIVE) live++;
+    return live;
+}
+
+/* THE `or cells` CLAUSE, at the frame visit where pause_at_visit runs: each undecided cell is
+   decided at its last tick (`limit`), or, after the tick of its create, when one of its two seats
+   has at most its n units alive in its range of positions (`units`); 1 when every cell is decided.
+   It is for SPEED ONLY: it ends a packed batch once nothing in it can still matter, and decides no
+   result. Each cell's end is read offline from the recording, and the packed lane's P5 check
+   fails the generation if this clause ever paused before that end. Its reads are bounded:
+   PAUSE_CELLS_MAX cells of two ranges of PAUSE_CELL_SPAN records each. */
+static int pause_cells_visit(char* ta, unsigned now)
+{
+    unsigned i, r, open = 0;
+    for (i = 0; i < s_pause_ncells; i++) {
+        PauseCell* c = &s_pause_cells[i];
+        const char* why = NULL;
+        if (c->decided) continue;
+        if (now >= c->end)
+            why = "limit";
+        else if (now > c->start)
+            for (r = 0; r < 2 && !why; r++) {
+                int live = pause_range_live(ta, c->seat[r], c->lo[r], c->hi[r]);
+                if (live >= 0 && live <= (int)c->n[r]) why = "units";
+            }
+        if (!why) {
+            open++;
+            continue;
+        }
+        c->decided = 1;
+        tagpu_logf("pause: cell %u decided at %u (%s)", i, now, why);
+    }
+    return !open;
 }
 
 static void pause_at_visit(void)
 {
     char* ta = ta_main();
-    unsigned now;
+    unsigned now, i;
     if (!s_pause_at || !ta) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
-    if (now < s_pause_at) return;
+    if (now < s_pause_at && s_pause_ncells) {
+        if (pause_cells_visit(ta, now)) {
+            *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+            s_pause_taken = 1;
+            tagpu_logf("pause: paused at GameTime %u (every cell decided)", now);
+            s_pause_at = 0;
+            s_pause_ncells = 0;
+        }
+        return;
+    }
+    if (now < s_pause_at) {
+        for (i = 0; i < s_pause_nunits; i++) {
+            unsigned s = s_pause_units[i].seat;
+            if (*(const unsigned short*)(player_rec(ta, s) + PL_LIVE) <= s_pause_units[i].n) {
+                *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+                s_pause_taken = 1;
+                tagpu_logf("pause: paused at GameTime %u (units of seat %u <= %u)", now, s,
+                           s_pause_units[i].n);
+                s_pause_at = 0;
+                s_pause_nunits = 0;
+                return;
+            }
+        }
+        return;
+    }
     if (now == s_pause_at) {
         *(unsigned short*)(ta + OFF_PAUSE) |= 1;
         s_pause_taken = 1;
@@ -12074,6 +12375,8 @@ static void pause_at_visit(void)
         tagpu_logf("pause: at %u not taken: the level is at GameTime %u", s_pause_at, now);
     }
     s_pause_at = 0;
+    s_pause_nunits = 0;
+    s_pause_ncells = 0;
 }
 
 /* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs.
@@ -12184,19 +12487,19 @@ static void pace_level_end(void)
                    s_turbo.ms ? (unsigned long)(s_turbo.ticks * 1000ull / s_turbo.ms) : 0ul,
                    s_turbo.lagged, s_turbo.held);
     memset(&s_turbo, 0, sizeof s_turbo);
+    tagpu_nodraw_level_end(g1);
     s_pause_at = 0;
+    s_pause_nunits = 0;
+    s_pause_ncells = 0;
     s_pause_taken = 0;
 }
 
-void tagpu_replay_pacing_init(void)
+/* the turbo's k from tagpu_turbo.on, or 0 with a line */
+static unsigned turbo_lever(void)
 {
     char b[16] = {0}, *end;
     unsigned long k;
-    if (tagpu_sim_lever("tagpu_hold.on")) {
-        if (tagpu_regstore_active()) s_lhold.state = LHOLD_ARMED;
-        else tagpu_logf("hold: tagpu_hold.on refused: not a test launch (tagpu_regstore.h)");
-    }
-    if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return;
+    if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return 0;
     k = strtoul(b, &end, 10);
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
     if (!*end && strspn(b, " \t\r\n") == strlen(b)) {
@@ -12209,7 +12512,18 @@ void tagpu_replay_pacing_init(void)
         tagpu_logf("turbo: tagpu_turbo.on refused: \"%s\" is not a k of 1 to 5, the "
                    "scheduler's own range (0x4953F5)", b);
     else
-        s_turbo_k = (unsigned)k;
+        return (unsigned)k;
+    return 0;
+}
+
+void tagpu_replay_pacing_init(void)
+{
+    if (tagpu_sim_lever("tagpu_hold.on")) {
+        if (tagpu_regstore_active()) s_lhold.state = LHOLD_ARMED;
+        else tagpu_logf("hold: tagpu_hold.on refused: not a test launch (tagpu_regstore.h)");
+    }
+    s_turbo_k = turbo_lever();
+    tagpu_nodraw_levers(s_turbo_k);
 }
 
 static void rt_pace_init(void)
@@ -12226,6 +12540,7 @@ static void rt_pace_init(void)
     tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
     if (s_turbo_k)
         tagpu_logf("turbo: k=%u %s", s_turbo_k, s_rt_pace_in ? "at 0x49692D" : "UNAVAILABLE");
+    tagpu_nodraw_guard(s_rt_pace_in);
     if (s_lhold.state == LHOLD_ARMED) {
         if (!s_rt_pace_in || !s_rw_pause_in) s_lhold.state = LHOLD_OFF;
         tagpu_logf("hold: the launch's hold %s", s_lhold.state ? "armed at 0x49692D and 0x496920"
@@ -12287,18 +12602,28 @@ static void mp_arena_init(void)
      falls through to 0x4969CD (DISASSEMBLED; tagpu_scenario.c rests on the same reading).
    The scenario applier's tick hook lands at the next instruction, 0x4969D2..0x4969D6: disjoint
    bytes. Installed on its own, before the play sites, since the trigger's `dump` serves live
-   recordings too. */
+   recordings too.
+   NO DRAW's stub is the same visit, then DrawGameScreen or, in its place, the undrawn frame
+   tagpu_nodraw_frame, as its flag says (tagpu_nodraw.c, THE SITES, for what the skip path rests on).
+   Only a launch whose lever passed and whose bytes match gets it (tagpu_nodraw_site_ok), so a
+   launch without the lever runs exactly the plain stub. ALL OR NOTHING: the frame stub goes in
+   first, and the composite's gate at 0x45AE73 only after it (tagpu_nodraw_site_in); until the gate
+   is in the flag is never set, so a stub with no gate behind it always jumps to DrawGameScreen,
+   and a frame stub that could not be written leaves no-draw nothing written at all. */
 static void frame_site_init(void)
 {
     enum { DRAW_SITE = 0x004969CDu, DRAW = 0x00468CF0u };
     unsigned char* stub;
-    int ok = 1;
+    int ok = 1, skippable;
     if (!call_is(DRAW_SITE, DRAW)) {
         tagpu_logf("replay: the frame visit at 0x4969CD holds other bytes: no trigger, so no dumps "
                    "and no seeks");
         return;
     }
-    stub = before_call(DRAW, tagpu_replay_frame);
+    skippable = tagpu_nodraw_site_ok();
+    stub = skippable ? before_call_skippable(DRAW, tagpu_replay_frame, tagpu_nodraw_skip(),
+                                             (unsigned)(size_t)tagpu_nodraw_frame)
+                     : before_call(DRAW, tagpu_replay_frame);
     if (stub) call_write(DRAW_SITE, stub, &ok);
     if (!stub || !ok) {
         tagpu_detour_stub_free(stub);
@@ -12306,7 +12631,8 @@ static void frame_site_init(void)
                    "trigger, so no dumps and no seeks");
         return;
     }
-    tagpu_logf("replay: the frame visit at 0x4969CD in");
+    tagpu_logf("replay: the frame visit at 0x4969CD in%s", skippable ? " (skippable)" : "");
+    tagpu_nodraw_site_in();
 }
 
 /* THE RESTART GATE. A level's RESTART runs the seat fill itself (0x4997A0: the teardown at

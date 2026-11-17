@@ -1,0 +1,6 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The no-draw shadow fixture's camera move 1 (tools/replay/fixtures.json, `nodraw-shadow`): the eye moved to player 0's base, still units, so the draw's unit rows and the units on and off screen change.",
+ "setup": {"clear_existing": false},
+ "camera": {"at": [4320, 1420]}
+}

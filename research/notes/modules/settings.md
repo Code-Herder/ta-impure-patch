@@ -56,6 +56,17 @@ control and a measurement has to arm exactly the passes it names, so `launch` an
 instance, `--no-defaults` back). Every arm-set recipe in the skill therefore still holds; under
 `--defaults` a pass is turned off with `tacli arm <i> <pass>.off`.
 
+**What the store says under `tagpu_defaults.off`.** Nothing, but for five keys it answers under
+every launch: `display`, `vsync` and `window`, which place the window; `gpumem`, the GPU memory cap
+tacli writes for a launch inside a run-lock hold and nothing else writes, written back only while
+it is set ([the Vulkan backend](vulkan-backend.html), *The GPU memory cap*); `seatai`, the computer
+seats ImpAI plays in a skirmish (`tagpu_settings_seatai`), and `netai`, the battle room's first
+computer step for the seats this peer adds in a network game (`tagpu_settings_netai`; both [ImpAI in the
+engine](impai.html)) — setup choices like the engine's own SKIRMISH registry keys. The DLL writes
+`seatai` only from the SKIRMISH seat button and never writes `netai`. Every tacli launch writes
+both — the seats a scenario names `impai` or `none`, and `ota` or `launch --netai impai` — so no
+launch inherits an earlier launch's choice.
+
 **Measured 2026-09-08** (Two Continents, 1024×768, `scenario load … one-unit --defaults`, no arm
 file in the gamedir): the `opt:` line listed all seventeen; `owndraw`, `fxown`, `featown`,
 `terrown`, `markown`, `gui`, `zoom`, `vpwide` and `weapons` each logged `ARMED` at attach, and
@@ -481,6 +492,34 @@ Zero, and TADR's `DllMain` ran on.
 **What the hooks do.** `HKCU\Software\Cavedog Entertainment` and every key below it are served
 from the store in memory; each change rewrites the file whole (a temporary file, flushed, moved
 over it with `MoveFileExW`). `HKCU` and `HKCU\Software` get store handles that hold no values.
+
+**TA's key wherever the exe names it.** `HKCU\Software\<R>` and every key below it are served from
+the same store, as `HKCU\Software\Cavedog Entertainment\…`, when R is the root the running exe's
+settings accessor names: the string at `0x509EB8`. The accessor `0x4B6880` opens every level of its
+key with `RegCreateKeyExA`, create even to read, so under a moved root -- Escalation's exe names
+`TA Esc`, TA Zero's `TA Zero`, the Patch Loaders of Total Mayhem and ProTA write `TotalM` and `ProTA`
+there in their `DllMain` -- the refused create left the game reading no setting at all
+([the registry](../engine/process.html), *The six sites*). R is read at every path the store
+composes, and taken only within a bound; past it no root is named and a moved root's create is
+refused as before:
+- the main module at `0x400000` with a PE header whose `e_lfanew` and section table lie within the
+  header page, and `SizeOfImage` at least `0x10A000`;
+- each range read -- 5 bytes at `0x4B68B1`, 5 at `0x4B68E8`, `0x18` at `0x509EB8` -- inside one
+  section's `[VirtualAddress, VirtualAddress + VirtualSize)` that has `IMAGE_SCN_MEM_READ`;
+- the accessor's two pushes the stock bytes, `68 D0 9E 50 00` at `0x4B68B1` (`Software`) and
+  `68 B8 9E 50 00` at `0x4B68E8` (the root), so the code reads its root from `0x509EB8` and nothing
+  else;
+- R copied a byte at a time into the store's buffer and checked there: a NUL within its `0x18`
+  bytes, not empty, no `\`. It is used as a name, never as an address.
+
+The first alias logs `registry: TA's key is HKCU\Software\<R> (named at 0x509EB8 by the accessor
+0x4B6880): served as the store's HKCU\Software\Cavedog Entertainment`. `RegEnumKeyA` on
+`HKCU\Software` still lists the real registry's keys, read-only, never the alias: the alias serves
+a path the game names and adds no key to a listing. Real mode installs no hook, so a player's launch
+is untouched. The second reader of the root, `0x4E2BE0`'s `RegCreateKeyA`/`RegOpenKeyA` of `0x50DDF4`
+(`Software\Cavedog Entertainment`), is served the same while its root is `0x509EB8`'s, as in every
+exe read (the seven fixture exes of the compatibility setups).
+
 Every other key is read-only: an open asking for any right beyond reading, a create and a value
 write are refused with `ERROR_ACCESS_DENIED`, and a read-only open, a query and a close go to
 the real registry. No hook calls a registry function that writes. A store handle is
@@ -494,8 +533,13 @@ the real registry. No hook calls a registry function that writes. A store handle
 (the game plays Smacker and loads no Video for Windows codec). `debug.c` and `utils.c` only read,
 and only in a `make DEBUG=1` build or under `age.dll`.
 
-**State and threads.** No engine memory is read or written, so `tagpu_regstore.c` is not on
-`thread-split.allow`. The store's keys and values sit under one critical section, which any
+**State and threads.** No engine memory is written. The one read is the alias's (above): the main
+image's header, the accessor's two pushes and the root string, on whichever thread makes the registry
+call, which is why `tagpu_regstore.c` is on `thread-split.allow` (class `publisher presentation`). The
+bytes lie inside the main image, mapped for the process's life; the code bytes are written by us only
+before the entry point (`tagpu_modload` `put_image`, under `mod=`) and are compared with the stock bytes
+at every read, and the string, which a Patch Loader writes in its `DllMain`, is copied and checked as
+data. The store's keys and values sit under one critical section, which any
 thread calling the registry may take. Under it run only this module, kernel32 file calls and
 `tagpu_log`, whose own lock is a leaf. Real registry calls run outside it. A change of value
 rewrites the file under that lock, on the calling thread: the game's saver writes about fifty

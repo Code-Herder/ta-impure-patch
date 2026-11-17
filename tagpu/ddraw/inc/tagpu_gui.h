@@ -17,9 +17,10 @@
    clients are the cursor and the minimap. Nothing of the engine's own frame
    is beneath it: `LAY_FS` declares no sampler for TA's surface.
 
-   THE HOOK ALSO HOSTS THE HARNESS. `tagpu_gui_hook.c`'s `before_flip` is the
-   only host of `tagpu_triggers_frame`, so every `tacli` verb in the fork is
-   dispatched from inside it. The golden source -- the engine's own composed
+   THE HOOK ALSO HOSTS THE HARNESS. `tagpu_gui_hook.c`'s `before_flip` hosts
+   `tagpu_triggers_frame`, so every `tacli` verb in the fork is dispatched from
+   inside it -- or, on an undrawn frame of a no-draw test, from the same
+   function's other caller, tagpu_gui_nodraw_frame. The golden source -- the engine's own composed
    frame, captured by `tagpu_surf_capture` on the game thread -- is not this
    module's and is drawn nowhere (tagpu_vk_surf.c).
 
@@ -47,6 +48,10 @@ void tagpu_gui_init(void);                          /* DllMain                */
 void tagpu_gui_flush(unsigned int frame_counter);   /* render thread: the heartbeat line */
 int  tagpu_gui_installed(void);
 unsigned tagpu_gui_flips(void);                     /* the publisher's flip count, game thread */
+/* GAME THREAD, a game frame that is not drawn (tagpu_nodraw.c, NO DRAW): the flip's game-frame
+   work such a frame still needs -- the profiles' match latch and the trigger family, under the
+   flip's own 16 ms gate (tagpu_gui_hook.c, triggers_tick). */
+void tagpu_gui_nodraw_frame(void);
 /* WINDOW PROCEDURE: a WM_MOUSEWHEEL the zoom did not take, lParam in the
    engine's space. It only queues the notch; the game thread scrolls the list
    under its point at the next GUI pump (tagpu_gui_hook.c, "the list wheel"). */

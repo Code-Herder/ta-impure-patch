@@ -113,6 +113,71 @@ is absent at launch (an archive installed only some of the time) is replaced in 
 the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
 load its `.ota` (`0x47BCD7`).
 
+### The SKIRMISH screen's handler `0x47AE60`: the seat button `Player<N>`, its cycle `0x4797E0` and the Difficulty gadget [DISASSEMBLED 2026-11-11]
+
+**The handler** `0x47AE60`, `stdcall(gui)`, `ret 4`, serves the screen loaded from `SKIRMISH.GUI`
+(`0x5084AC`, at `0x47BBC2`). It takes the actuated gadget's index `gui+0x60` (−1: nothing), copies
+that gadget's name (`0x49FED0`), stores **`atoi` of the name's last character** into the settings'
+`+0x224`, the clicked seat (`0x47AE80..0x47AEC0`), and strips that character. Whole names are tested
+through `0x49FD60(gui, name)`: `Start`, `PrevMenu`, `CommanderDeath`, `StartLocation`, `Mapping`,
+`LineOfSight`, `SelectMap`, `Difficulty`; the stripped names by an inline compare: `Player`, `Side`,
+`Allies`, `Color`, `Energy`, `Metal`. The Start branch and the seat fill it calls: [sim](sim.html),
+*Seating a level*.
+
+**The seat's controller button is the gadget `Player<N>`** (`0x47B133..0x47B191`): it plays the
+sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`), whose one caller is
+`0x47B178` (`E8 63 E6 FF FF`, after `push ebx`, the seat). The `Player` branch does not look at which mouse button was pressed.
+
+**The cycle `0x4797E0`** reads the seat's entry `+0x00` in the settings `[main+0x29A0]`
+(`0x47981D..0x47982D`) and writes the next value and the button's label:
+
+- 0, Open → **2**, label `Computer` (`0x5080DC`, `0x4798C2..0x4798C9`);
+- 1, Player → **0**, label `Open` (`0x5056F8`, `0x47989A..0x4798A1`);
+- 2, Computer → **1**, label `Player` (`0x504F6C`), when no seat among the first `main+0x38D81`
+  holds 1 (`0x479833..0x47985E`), else **0**, `Open`.
+
+So a seat cycles **Open → Computer → Player (when no seat is the player) → Open**. The label goes
+through the translator `0x4C5740` (`stdcall(text)`, `ret 4`) and **`0x4A0BF0(gui, "Player<N>", text,
+0)`** — four arguments, `ret 0x10`: the `push 0` before the translator's own `push` stays on the
+stack as the setter's fourth (`0x479855..0x479889`, `0x4798C2..0x4798E8`) — on `gui = main+0x519`,
+the name formatted from `Player%d` (`0x5080E8`) [DISASSEMBLED 2026-11-12]. An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
+`Color<N>` through `0x4A0570(gui, name, 0)`; otherwise they are enabled and a colour shared with
+another seat is changed (`0x4799F9..0x479ADB`). The screen's init `0x47A0E0` writes the same three
+labels from `+0x00` (`0x47A1DF..0x47A23F`), the Computer one by the call at **`0x47A1FC`** (`E8 EF 69
+02 00`, the branch `0x47A1DD..0x47A201` alone), each seat's name from its loop index `esi`.
+
+**Impure's change**: with ImpAI available, both calls are redirected (`tagpu_skirmish.c`) so a Computer
+seat takes two steps, `OTA AI` then `ImpAI`, the engine's value staying 2 and `impure.cfg`'s `seatai`
+bit saying which ([ImpAI in the engine](../modules/impai.html), *The seat choice*).
+
+**The other per-seat buttons** step the entry's other fields: `Side<N>` `+0x04` modulo the side
+count `main+0x37F39` (`0x47B1D3..0x47B1F6`); `Allies<N>` `+0x08` modulo 6 (`0x47B24E..0x47B271`;
+[sim](sim.html) shows equal groups start allied and group 5 allies nobody [INFERRED: 5 is "no
+alliance"]); `Metal<N>` `+0x0C` and `Energy<N>` `+0x10` in steps of 500 up to 10000
+(`0x47B510..0x47B5F4` for metal) [the lower bounds by mouse button, 500 and 200, not each traced].
+
+**The settings block's fields this screen owns** — `+0x00` the controller (0 Open, 1 Player, 2
+Computer), copied to the record's `+0x73` verbatim by the seat fill through `0x464290`, so the
+entry can hold no fourth value (3 is a replay puppet's type); `+0x224` the clicked seat; `+0x228`
+`SkirmishDifficulty`. **The registry** keeps `+0x00` as `Player%dController` (`0x5043F8`) in
+`Total Annihilation\Skirmish` (`0x503300`) for seats 0 to `main+0x38D81` − 1: loaded at
+`0x430C21..0x430C40` (`0x4B69D0`) and saved at `0x4315F1..0x43161B` (`0x4B6A50`).
+
+**The Difficulty gadget** is one global, not per seat. A click (`0x47B939..0x47B9C6`) steps
+`main+0x37EEE` 0 → 1 → 2 → 0 and writes the settings' `+0x228` with it; the sound is `SKirmish`
+(`0x502A6C`). The screen's init copies `+0x228` into `main+0x37EEE` (`0x47BBF7..0x47BC03`), then
+for the value v writes the gadget's byte `+0x137` = v and calls `0x4A1110(main+0x519, name, 1)` with
+0 `Easy` (`0x504EA8`), 1 `Medium` (`0x504EA0`), 2 `Hard` (`0x504E98`) (`0x47BC26..0x47BCAA`)
+[INFERRED: `+0x137` is the button's stage and the call shows its name]. What the value scales, and its other writers: [sim](sim.html),
+*Difficulty and the AI handicap*.
+
+**The CommanderDeath button** (`0x47B656..0x47B6D6`): a click plays `Skirmish` (`0x507CCC`), toggles
+the settings' dword `+0x108` (`xor [[main+0x29A0]+0x108], 1` at `0x47B690`) and relabels the button
+through `0x49FDF0`: "Game ends when commander is destroyed." (`0x5082A4`) when it is now non-zero,
+"Game continues after Commander is destroyed." (`0x508274`) when it is 0. The skirmish load copies
+the dword into ActiveCommanderDeath `main+0x37EF6` (`0x4973ED`, [sim](sim.html), *Seating a
+level*). DIS. `tacli scenario load` sets it from `setup.commander_death` and reads both back.
+
 ### The in-game wiki's engine questions: the four input channels, the network bit `main+0x2A44` and the pause [DISASSEMBLED 2026-10-25]
 
 The in-game wiki (`tagpu_wiki.c`, [the plan](../ingame-wiki-plan.html), landing 2) holds every input
@@ -225,12 +290,23 @@ the battle room's (`LOUNGE2.GUI`, handler `0x447B10`), not this dialog.
 `download\*.tdf` file: a dword entry count and five 0x25-byte entries (`u16` builder type, `u8`
 `MENU`, `u8` `BUTTON`, the buildee's name in 32 bytes, entry `k` at `+4 + k·0x25`). The block,
 `files · 0xBD` bytes from `0x4D83B0` at `0x42DD74`, is at `[main+0x391CB]`, the record count at
-`[main+0x391C7]`. The section loop `0x42DDD5..0x42DF0C` writes the count `k + 1` for section `k`
-(`0x42DE12`) and fills entry `k` with no cap, so a file of six or more entries writes past its
-record and the last file's past the block. The readers walk the records to `[main+0x391C7]` — the
+`[main+0x391C7]`. The section loop `0x42DDD5..0x42DF0C` takes section `k` by position,
+`0x4C3490(k)` after `0x4C3E10` resets the cursor: the file's `k`-th top-level section in file
+order, whatever its name. It writes the count `k + 1` (`0x42DE12`) and fills entry `k` with no
+cap, so a file of six or more entries writes past its record and the last file's past the block.
+The entry is filled only when the section's `UNITMENU` (`0x4C48C0` into 0x20 bytes) equals, by
+`_stricmp`, the name `+0x20` of a def, type 0 `None` included (`0x42DE3C..0x42DE7D`); the builder's
+type, `MENU`, `BUTTON` and `UNITNAME` (default `""`) are then written (`0x42DE89..0x42DF02`).
+Otherwise the entry keeps what the block held. `MENU` and `BUTTON` are `0x4C46C0` with default 0, stored as
+bytes. The files are those `0x4BCA30(<download>\*.TDF)` lists (`0x42DCFE..0x42DD34`), each opened as
+`0x4290F0(<download>, the listed name, TDF)` (`0x42DDA3..0x42DDB6`) and loaded by `0x4C2F60`. **The sections
+are taken by position, never by name**: TA Zero's files number theirs from `MenuEntry0`, and the offline
+loader's former probe from `MENUENTRY1` missed every file's first entry, which with the side rule below left
+108 of TA Zero's types at tech 0 where the engine has 1 or 2 (MEASURED 2026-11-13, `roles_check --setup
+tazero-alpha5`; `tools/tasim/tasim_load.c`, `each_download`, now reads them as this loop does). The readers walk the records to `[main+0x391C7]` — the
 build menu `0x41AE0F`, the downloadable check `0x42E04B`, the appender `0x42BE30` — except the page
 count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. The downloadable
-check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
+check, later in `0x42DCF0` (`0x42E031..0x42E0C1`, the record loop's back edge at `0x42E0BF`), compares each def's name with each record's first entry only and, when
 the def lacks the flag, sets `+0x241 |= 0x20` (the FBI's `downloadable`; the text it formats is
 "Hey!  Somebody forgot to set downloadable=1 for %s", `0x503944`), which the AI's pick skips
 (`0x40BBA0`, only when `0x435100` answers 1 for `[main+0x391E9]`, a mode whose meaning is not
@@ -245,7 +321,13 @@ the string `DOWNLOADMENU` at `0x503F7C`), and writes the record's count; stock's
 `0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record);
 `0x42DF35` hands the page count the record count; and `0x42E0B9` bounds the downloadable check by
 the file count `dl_alloc` noted (`cmp ebp,[s_dlFiles]`), so it reads the files' own records and flags
-a file's first unit only, as stock does, not the 6th, 11th, … of a long file.
+a file's first unit only, as stock does, not the 6th, 11th, … of a long file. So under the fix a type
+is flagged exactly when a download file's first section in file order names a def as `UNITMENU` and
+the type as `UNITNAME`; an unfilled first entry names `""` in the zeroed block. The offline loader
+models this rule (`tools/tasim/tasim_load.c`, `flag_downloadable`). MEASURED 2026-11-13 (`defcheck
+--setup`): the types flagged by the check alone, 34 on Escalation, 3 on Twilight and 116 on TA Zero,
+are exactly the rule's. Of Escalation's other 135 files, 90 open with `UNITMENU=BLANK`, which names
+no def, 42 name types whose FBI already sets the bit and 3 name no type.
 
 **MEASURED**, one download file of 12 entries for one builder: the previous build dies during the
 load in the C runtime's heap (`0x7BD35C8C`, an illegal read at `0xD9330004`, from `0x4E8952` under
@@ -395,8 +477,9 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 - **The page count.** The def load probes `<gui>\<NAME>0.GUI`, `1`, `2` … (`0x42D800..0x42D8CB`;
   the folder `0x502820` is pushed at `0x42D82A`) through the path builder `0x4290F0` and the open
   test `0x4BBC40`, which answers the file's size. `<NAME>0.GUI` answering sets `def+0x241` bit 31,
-  the orders page, and its absence clears it (`0x42D830..0x42D855`). `def+0x22E`, a byte, is then
-  (`0x42D85B..0x42D8CB`):
+  the orders page, and its absence clears it (`0x42D830..0x42D855`). The names are `%s0` (`0x503F18`) and
+  `%s%d` (`0x502B30`), and the probe has no bound of its own. `def+0x22E`, a byte, is then
+  (`0x42D85B..0x42D8CB`; the counted case stored at `0x42D8AD`):
     - when `<NAME>1.GUI` answers, the first index of 1, 2, … that does not;
     - else 1 when `<NAME>0.GUI` answers;
     - else 0.
@@ -415,6 +498,15 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`; the PlayerInfo pointer and
   its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
   GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
+- **The side records** the prefix comes from are the side loader `0x431A60`'s (called once, at
+  `0x491481`). It opens `<gamedata>\sidedata.TDF` (`0x431A73..0x431A87`) and loads it (`0x431A95`, the
+  result not tested; the def load opens the same file at `0x42D937..0x42D959` and exits the game through
+  `0x4B6290` when it does not load), finds `[SIDE0]`,
+  `[SIDE1]`, … by name (`0x4C3410`) until one is missing, stores their count at `main+0x37F39`
+  (`0x4324FB`), and reads each `nameprefix` into 4 bytes, so cut at 3 characters, copied into the record
+  only when the key is there (`0x431B26..0x431B66`, the test at `0x431B42`). The prefix is the seat's
+  side's, never a unit's: a type's own `side` key plays no part, so TA Zero's `NotForAI_Arm` builders,
+  which name no side record, read ARM's `DL` page in an ARM seat and CORE's in a CORE seat.
 - **GUI_Load's file is not the probe's.** GUI_Load builds its path as `strncpy(path, gi+0x9B6,
   0x100)` (gi = `main+0x519`, so the prefix is `main+0xECF`, `guis\` from `0x502820`, set at
   `0x4914CE`) followed by the name (`0x4AA989..0x4AA9DF`), then `0x4BAFF0(path, path, "GUI")`
@@ -883,6 +975,13 @@ the files:
 - `0x55554F` in `tagpu_wikistage.c` is the whitebox button colour `SIDE_BUTTON`.
 - `0x502823` and `0x505FEB` in `tools/wiki/sidepacks.py` are the single bytes Mayhem's loader
   patches inside `guis` and `unitpics`.
+- `0x401004` and `0x51FC8D` in `tools/replay/test_tareplay.py` are a test's edits to its own fixture
+  rows of the replay lists: the first into a layout column that must leave the lists' hash alone, the
+  second a globals row's address, which must move it.
+- `0x00512345` in the `peek:` lines of `tools/replay/test_tareplay.py`, `tools/test_stall.py` and
+  `tools/test_logwaits.py` is a placeholder address in a faked log.
+- `0x503921` in `tools/wiki/test_tavfs_profile.py` is a wrong immediate the test plants at `0x42AA26`,
+  inside the `units` push at `0x42AA25`, so the profile refuses the site.
 
 ### The wiki's per-mod tutorials: the controlled player's side, the Interface Type, a unit's display name, the G cells and the type-0 clicks [DISASSEMBLED + MEASURED 2026-10-28]
 
@@ -890,8 +989,8 @@ The in-game wiki plays its demos with the player's own side's units and in the p
 Interface Type ([the in-game wiki](../ingame-wiki.html), *The per-mod tutorials*). Two of the facts
 below are read live, by `tagpu_packet_pub.c` (`wiki_side`, `wiki_iface`) at every packet fill, on
 the game thread, in game. The rest are rules the wiki repeats from the mod's files on the asset
-loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its two simulations
-(`tagpu_wikisim.c`, `tools/wiki/mockup/sim.js`), which call none of these functions.
+loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its simulation
+(`tagpu_wikisim.c` over `tasim_*.c`), which calls none of these functions.
 Disassembled from `pristine/TotalA.exe.pristine` (`objdump -d -M intel`). The live rows were
 MEASURED 2026-10-28 under Wine through `tacli peek`, on scripted skirmishes under retail, TA Zero
 alpha 5, Total Mayhem 11.3.0 and Twilight 2.0b98 and on two Impure replays.
@@ -1002,8 +1101,7 @@ that is not G does not count.
 - **MEASURED offline** over the six compatibility setups' FBIs: every geothermal plant outside
   retail has G only inside its yard (4 × 4 with 4 G cells in Mayhem, ProTA, Twilight and
   Escalation; TA Zero 5 × 5 with 9), retail's all 16 cells.
-- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`sim.js` `siteOk`,
-  `tagpu_wikisim.c`), and the vent it anchors to is the one under a G cell, as Impure's
+- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`tasim_world.c` `tasim_site_ok`), and the vent it anchors to is the one under a G cell, as Impure's
   `geo_anchor` (`tagpu_resource.c`) reads it.
 
 **The type-0 clicks** (the table above, its type-0 column).
@@ -1052,7 +1150,7 @@ that is not G does not count.
   `main+0x2CDF` 0. A Ctrl + right press kept the selection, and `main+0x2CC7` held the mouse
   record's point (292, 644), but `main+0x2CDF` read 0 after the press, after the release with Ctrl
   held and after Ctrl's release, in two runs; why it was never seen at 1 is not established.
-- **The wiki's rows** (`sim.js` `leftClick`, `rightPress0`; `tagpu_wikisim.c` the same): a type-0
+- **The wiki's rows** (`tagpu_wikisim.c` `left_click`, `right_press0`): a type-0
   left click on the map with nothing armed is Quick Build's choice first, else over a unit of the
   player's the assist (an unfinished building, a builder selected) or a select, else a move of the
   selected mobile units, at the release; a right press deselects, and with Ctrl does nothing.
@@ -2092,7 +2190,7 @@ not establish the cause of its empty field.
 | `0x4A9FD0`, `0x4A9B90` | GUI pump peeks or pops one character according to GUI object `+0x18` (`0x4AA019..0x4AA039`), calls the key dispatcher, then takes the type-3 arm at `0x4AA2A6 → 0x4A7290`. Key dispatch uses GUI object `+0x20` as focus and GUIInfo `+0x64` to recognize an active edit; `0x4A9C80..0x4A9CA0` skips the shortcut branch for an active type-3 gadget. `0x4A9BF5` also calls the mapped SHIFT sampler `0x4C1B80(0xF9)`. `0x499890` also peeks for special in-game keys before the GUI pump. |
 | `0x49FC50(gi,index)` | `ret 8`. Ends a previous type-3 edit by setting `gi+0x64` to −1 without clearing its text, then sets GUIInfo `+0x64` to the new index, and, for type 3, sets caret `gi+0x74` to inline text length (`0x49FCC5..0x49FCD5`). GUI object `+0x20` and this edit index are distinct fields. |
 | `0x4A0BF0`, `0x4A09C0` | Named setter calls indexed setter at `0x4A0C58`. The type-3 arm copies a NUL-terminated string into gadget `+0xB6`, updates the caret if this gadget is edited, and sets `+0x138` only when the fourth argument is nonzero (`0x4A0A61..0x4A0AD4`). The field text is inline, not a pointer to `0x51E788`. |
-| `0x4A7290`, `0x4AB6C0`, `0x4AB720` | Textfield click sets focus and edit index, initializes the inline buffer/caret through `0x4AB6C0` (ret 20; preserves text within its character limit when flag is zero, otherwise clears it, and calls the painter), then resets the character ring (`0x4A7434..0x4A7439`, also the second mouse arm). An edited field runs `0x4AB720`; Return completes it and Esc clears it. The latter routine edits `+0xB6`, drains queued characters, and invokes the painter only after handling input. Printable range is `0x20..0x7F`; attrib bit 1 restricts it to alphanumeric, `_`, space or apostrophe (`0x4AB942..0x4AB972`). TALK's measured attrib 1 has that restriction clear. |
+| `0x4A7290`, `0x4AB6C0`, `0x4AB720` | Textfield click sets focus and edit index, initializes the inline buffer/caret through `0x4AB6C0` (ret 20; preserves text within its character limit when flag is zero, otherwise clears it, and calls the painter; it stores the text's length, the caret, at its GUI's `+0x74` — `0x4AB6E3`, or 0 at `0x4AB702` when it clears — and `0x4AB720`'s edits move it, `0x4AB7B0`, `0x4AB7B8`, `0x4AB7D9`, `0x4AB9CC`; for the desktop GUI `main+0x519` that is `main+0x58D`, MEASURED 2026-11-13 at 17 = `+give 2 100 metal`'s length after `impai-handicap`'s typed lines, on the recording machine alone), then resets the character ring (`0x4A7434..0x4A7439`, also the second mouse arm). An edited field runs `0x4AB720`; Return completes it and Esc clears it. The latter routine edits `+0xB6`, drains queued characters, and invokes the painter only after handling input. Printable range is `0x20..0x7F`; attrib bit 1 restricts it to alphanumeric, `_`, space or apostrophe (`0x4AB942..0x4AB972`). TALK's measured attrib 1 has that restriction clear. |
 | `0x4A4440`, `0x4A716A` | Button/shortcut handlers can consume characters through the same pop. They do not establish a textfield edit; focus, active edit index and accepted inline text remain the required observations. |
 
 `tagpu_shield.c` delivers `WM_TAGPU_CHAR` as `WM_CHAR` directly to the game;
@@ -2276,7 +2374,7 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 
 | site | gate | draws |
 |---|---|---|
-| `0x469F65` `DrawPopupF4Dialog 0x4948E0` | `0x435100([main+0x391E9]) == 2` [INFERRED: a mode query; 2 while the F4 popup is up] | the Kills/Losses box top-right of the viewport; the draw context is re-seeded from `main+0x37E27` after it (`0x4C6B10` at `0x469F95`) |
+| `0x469F65` `DrawPopupF4Dialog 0x4948E0` | `0x435100([main+0x391E9])`, GameingState's mode, is 3 (a network game, `0x469F3B`) or 2 (a skirmish, `0x469F51`; [sim](sim.html), the loader's new-skirmish test `0x4978DA`) | the Kills/Losses box top-right of the viewport; the draw context is re-seeded from `main+0x37E27` after it (`0x4C6B10` at `0x469F95`) |
 | `0x469F9F` `DrawPopupButtomDialog 0x4689C0` | called every frame; inside, throttled to one pass per 15 ms by **`GetTickCount`** (`0x4B6560` is `jmp [0x4FC0DC]`, the KERNEL32 import; next time in `0x51E544`), then **`0x4C1B80(0x20)`** — TA's key-id poll: id `0x20` → `GetAsyncKeyState(VK_SPACE)` (index table `0x4C1C6C`, jump table `0x4C1C48`, the case at `0x4C1C2D`; the same switch resolves the SHIFT hotkey `0xF9`) | **the same Kills/Losses box as F4, held while SPACE is down** — MEASURED: 21 382 non-key pixels in the viewport with F4, 21 382 with SPACE held over the commander, 0 with it released. "Buttom" in the corpus symbol is the space *button*, not the bottom of the screen |
 | `0x469FB8` `0x468380` | `[main+0x391C3] != 0` — the **`+bps`** cheat's flag (handler `0x419540`: `xor [main+0x391C3],1`) | `"Receive - %1.1f K/s"` / `"Send - %1.1f K/s"` (`0x5076A4`, `0x5076B8`), two `DrawTextCustomFont` lines at x `0x81`, y `[main+0x37E23] − 0x5F` and `+8` (the prologue). **Not `+netstats`**: its handler `0x417570` only zeroes the counters `0x511A60..0x511C64` |
 | `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |

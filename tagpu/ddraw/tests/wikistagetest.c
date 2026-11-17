@@ -10,7 +10,7 @@
     WIKI CONFIG SIDE TOP RIGHT CFG [COB]`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
    sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none) and with COB the units'
-   scripts that file names (tests/wikicobfile.h), as sim.js plays with serve.py's host -- the nano
+   scripts that file names (tests/wikicobfile.h), as the mockup plays them through its simulation host -- the nano
    spray is drawn only then -- and at tick 0, every 30th
    tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the rect
    X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
@@ -61,25 +61,6 @@
 #include "tagpu_wikistage.h"
 #include "tagpu_wikiframe.h"
 #include "wikicobfile.h"
-
-static char* slurp(const char* path, size_t* n)
-{
-    FILE* f = fopen(path, "rb");
-    char* p;
-    long len;
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len < 0 || !(p = (char*)malloc((size_t)len + 1)) || fread(p, 1, (size_t)len, f) != (size_t)len) {
-        fclose(f);
-        return NULL;
-    }
-    fclose(f);
-    p[len] = 0;
-    *n = (size_t)len;
-    return p;
-}
 
 typedef struct { stbtt_fontinfo f; unsigned char* ttf; float spacing; int upper; } FACE;   /* the face reads ttf */
 
@@ -279,7 +260,7 @@ static int players(const WIKIENTRY* e, const WIKIDEMO* d, WIKISIDE* sd, HUDRECT 
         tagpu_wikireplay_view(&rep, &rv);
         if ((rep.tick % 30 == 0 || rv.done) && rv.target < 0 && rep.game) {
             const WIKIVIEW* gv = tagpu_wikisim_view(rep.game);
-            const int g = rep.game->tick;
+            const int g = rep.game->sim.tick;
             double cx, cy, cw, ch;
             WIKISTAGEFRAME fr;
             WIKIFRAMEOV ov;
@@ -309,7 +290,8 @@ static int ops(char** a, const char* cob)
 {
     static WIKISTAGEVIEW v, vf;
     static WIKISTAGEOPS o;
-    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC, NULL, NULL };
+    static COBFILES files;
+    WIKISIMCTX ctx = { 0, NULL, 1, NULL, NULL, NULL };
     char err[256];
     size_t n;
     char* pak = slurp(a[0], &n);
@@ -322,7 +304,9 @@ static int ops(char** a, const char* cob)
     int16_t emblem[2], btn[5];
     int i, j, k;
     if (!pak) { fprintf(stderr, "wikistagetest: cannot read %s\n", a[0]); return 2; }
-    if (cob && !cob_load(cob)) return 2;
+    cob_init(&files);
+    ctx.cob = &files.cob;
+    if (cob && !cob_load(&files, cob)) return 2;
     if (!face(&f, a[1], a[2], a[3])) return 2;
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
         fprintf(stderr, "wikistagetest: %s\n", err);
@@ -362,33 +346,33 @@ static int ops(char** a, const char* cob)
                 return 2;
             }
             for (;;) {
-                if (s.tick % 30 == 0 || s.done) {
+                if (s.sim.tick % 30 == 0 || s.done) {
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, WIKISTAGE_LAYOUT_MOD);
-                    v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
-                    side_phase(&art, sd, s.tick);
+                    v.tick = s.sim.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
+                    side_phase(&art, sd, s.sim.tick);
                     art.emblem[0] = art.emblem[1] = -1;
-                    tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, NULL, &art, &o);
-                    frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
+                    tagpu_wikistage_build(&v, NULL, r, u, (s.sim.tick / 30) % 2 == 0, NULL, &art, &o);
+                    frame(&o, &v, e->id, e->demo[j].id, s.sim.tick, r, u);
                     if (e->frame == WIKI_FRAME_GAME) {
                         double cx, cy, cw, ch;
                         WIKISTAGEFRAME fr;
-                        const int kf = s.tick / 30, mode = e->live || e->takeover ? kf % 3 : WIKIFRAME_WATCH;
+                        const int kf = s.sim.tick / 30, mode = e->live || e->takeover ? kf % 3 : WIKIFRAME_WATCH;
                         const WIKIVIEW* g0 = tagpu_wikisim_view(&s);
                         const int ns = g0->game && g0->nseat > 0 ? g0->nseat : 1, human = e->takeover ? (kf / 3) % ns : 0;
                         WIKIFRAMEOV ov;
                         vf = v;
                         if (human) {
                             tagpu_wikistage_copy(&vf, tagpu_wikisim_view_as(&s, human), e, WIKISTAGE_LAYOUT_MOD);
-                            vf.tick = s.tick;
+                            vf.tick = s.sim.tick;
                         }
                         memset(&ov, 0, sizeof ov);
-                        ov.tick = s.tick;
+                        ov.tick = s.sim.tick;
                         ov.gv = human ? tagpu_wikisim_view_as(&s, human) : tagpu_wikisim_view(&s);
                         tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, mode, kf % 2 == 0, human, &ov);
                         tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
                         frame_of(kf, e->live || (e->takeover && mode != WIKIFRAME_WATCH), cw, ch, btn, &art, emblem, &vf, &fr);
                         tagpu_wikistage_build(&vf, NULL, r, u, 1, &fr, &art, &o);
-                        frame(&o, &vf, e->id, e->demo[j].id, s.tick, r, u);
+                        frame(&o, &vf, e->id, e->demo[j].id, s.sim.tick, r, u);
                     }
                 }
                 if (s.done) break;
@@ -401,7 +385,7 @@ static int ops(char** a, const char* cob)
     free(sd);
     free(pak);
     free(f.ttf);
-    cob_free();
+    cob_free(&files);
     return 0;
 }
 

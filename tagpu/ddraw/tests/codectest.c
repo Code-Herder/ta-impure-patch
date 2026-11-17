@@ -104,6 +104,8 @@
 #ifdef _WIN32
 #include "tagpu_recreader.h"
 #include "tagpu_log.h"
+#include "tagpu_replay_layout.h"
+#include "tagpu_replay_globals.h"
 #endif
 
 #define BLOCK_MAX (64u << 20)
@@ -3825,6 +3827,9 @@ static void rd_rec(RecBytes* b, unsigned kind, const void* body, unsigned len)
 
 static void rd_u32(RecBytes* b, unsigned kind, uint32_t v) { rd_rec(b, kind, &v, 4); }
 
+/* The RT_LAYOUT and RT_GLOBALS rd_segment's next headers carry; none while NULL */
+static const char* rd_lists[2];
+
 #define RD_GRID 4                                            /* a 4 x 4 grid: 8 bytes explored */
 #define RD_SLOT_IMAGE(k) (rd_image[(k) % 64])
 
@@ -3869,6 +3874,8 @@ static void rd_segment(RecBytes* f, RecStream* st, int writer, RecBytes* x, unsi
     rd_rec(&h, RT_FEATURES, feat, sizeof feat);
     v = 1;          rd_rec(&h, RT_PROJECTILES, &v, 4);
     if (id) rd_rec(&h, RT_TIMELINE, tl, sizeof tl);
+    if (rd_lists[0]) rd_rec(&h, RT_LAYOUT, rd_lists[0], (unsigned)strlen(rd_lists[0]));
+    if (rd_lists[1]) rd_rec(&h, RT_GLOBALS, rd_lists[1], (unsigned)strlen(rd_lists[1]));
     mem_block(f, RB_HEADER, RBF_STORED, t0, t0, (uint32_t)h.n, h.p, h.n);
     for (i = 0; i <= n; i++, t += 2) {
         r.n = 0;
@@ -4137,6 +4144,60 @@ static int outcomes_rechain(const RecCodecParams* p)
                                                               : -9;
     ok &= expect("rechain: fork 1's reader at 27, asked for fork 2, is not shared", k, 0);
     ok &= expect("  and still plays timeline 1", r && !k ? (int)recr_selected(r)->id : -1, 1);
+    recr_close(r);
+
+    DeleteFileA(path);
+    reccodec_stream_end(&st);
+    rb_free(&f);
+    rb_free(&x);
+    return ok;
+}
+
+/* The lists' hashes as the reader reads them (tagpu_recreader.c, list_id): a root recorded with
+   v0.5.1's whole-file hashes reads as this build's, so a fork recorded with this build's is one
+   shape with it; a fork whose positive list has another hash is refused by name. One of the
+   acceptance's sites, which each generator's ACCEPTANCE names (tools/replay-globals-gen.py). */
+static int outcomes_lists(const RecCodecParams* p)
+{
+    char dir[MAX_PATH], path[MAX_PATH], why[256], other[sizeof TAGPU_REPLAY_GLOBALS_SHA256];
+    RecBytes f, x;
+    RecStream st;
+    RecReader* r;
+    int ok = 1;
+    memset(&f, 0, sizeof f);
+    memset(&x, 0, sizeof x);
+    memcpy(other, TAGPU_REPLAY_GLOBALS_SHA256, sizeof other);
+    other[0] = other[0] == '1' ? '2' : '1';
+    if (!GetTempPathA(sizeof dir, dir)) return expect("lists: a temporary folder", 0, 1);
+    snprintf(path, sizeof path, "%scodectest-lists.imprec", dir);
+    if (!reccodec_stream_begin(&st, p)) return expect("lists: the codec's stream", 0, 1);
+    rb_put(&f, REC_MAGIC, 8);
+    rd_lists[0] = TAGPU_REPLAY_LAYOUT_LEGACY_SHA256;
+    rd_lists[1] = TAGPU_REPLAY_GLOBALS_LEGACY_SHA256;
+    rd_segment(&f, &st, 1, &x, 0, 0, 1, 21, 0);
+    st.chain = 0;
+    rd_lists[0] = TAGPU_REPLAY_LAYOUT_SHA256;
+    rd_lists[1] = TAGPU_REPLAY_GLOBALS_SHA256;
+    rd_segment(&f, &st, 1, &x, 1, 25, 25, 3, 40);
+    st.chain = 0;
+    rd_lists[1] = other;
+    rd_segment(&f, &st, 1, &x, 2, 31, 31, 3, 50);
+    rd_lists[0] = rd_lists[1] = NULL;
+    ok &= expect("lists: the file is written", rd_write(path, &f), 1);
+
+    r = recr_open(path, why, sizeof why);
+    ok &= expect("lists: v0.5.1's exclusion file reads as this build's",
+                 r && !strcmp(recr_header(r)->layout, TAGPU_REPLAY_LAYOUT_SHA256), 1);
+    ok &= expect("  and its positive list", r && !strcmp(recr_header(r)->globals,
+                                                          TAGPU_REPLAY_GLOBALS_SHA256), 1);
+    ok &= expect("  a fork recorded with this build's lists is one shape with it",
+                 r ? recr_timeline(r, 1, why, sizeof why) : -9, 1);
+    recr_close(r);
+
+    r = recr_open(path, why, sizeof why);
+    ok &= expect("lists: a fork with another positive list is refused",
+                 r ? recr_timeline(r, 2, why, sizeof why) : -9, 0);
+    ok &= expect("  by name", r && strstr(why, "positive list") != NULL, 1);
     recr_close(r);
 
     DeleteFileA(path);
@@ -6148,6 +6209,7 @@ static int cmd_outcomes(void)
 #ifdef _WIN32
     ok &= outcomes_reader(&p);
     ok &= outcomes_rechain(&p);
+    ok &= outcomes_lists(&p);
     ok &= outcomes_yard_rule();
 #endif
     ok &= outcomes_sprays();

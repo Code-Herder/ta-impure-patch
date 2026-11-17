@@ -38,6 +38,7 @@ import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.p
 import taremote  # noqa: E402  remote instances: PowerShell over SSH (tools/taremote.py)
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  an instance's game as a run, for the runs viewer (tools/tarun.py)
+import runlock  # noqa: E402  the machine's run lock: a game inside a hold runs under its GPU cap
 
 # --------------------------------------------------------------------------- paths
 
@@ -309,14 +310,21 @@ def proc_prefix(pid, environ: list):
     return None
 
 
-def _proc_is_totala(pid: int) -> bool:
-    """Whether `pid` is a TotalA.exe that has not ended. A leader that is a zombie is not an answer:
-    the process may live on in its other threads, and the listing can tell."""
+def _totala_start(stat: str) -> "int | None":
+    """The start time of the process a /proc/<pid>/stat line describes (field 22, clock ticks
+    since boot) while it is a TotalA.exe that has not ended, else None. A leader that is a zombie
+    is not an answer: the process may live on in its other threads, and the listing can tell."""
+    name, rest = stat[stat.find("(") + 1:stat.rfind(")")], stat[stat.rfind(")") + 2:].split()
+    if name != "TotalA.exe" or not rest or rest[0] == "Z" or len(rest) < 20:
+        return None
+    return int(rest[19])
+
+
+def _proc_totala_start(pid: int) -> "int | None":
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(errors="replace")
-    except OSError:
-        return False
-    return stat[stat.find("(") + 1:stat.rfind(")")] == "TotalA.exe" and stat[stat.rfind(")") + 2:][:1] != "Z"
+        return _totala_start(Path(f"/proc/{pid}/stat").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
 
 
 def totala_by_prefix() -> dict:
@@ -452,12 +460,20 @@ class Instance:
             return self.remote.pid()
         # THE GAME THIS OBJECT HAS ALREADY FOUND ANSWERS FOR ITSELF. The listing reads the process's
         # environment, which a live process can answer empty, and one such read here would report a
-        # running game as exited. Only a process that is gone, or a zombie, loses the pid.
-        known = getattr(self, "_known_pid", None)
-        if known and _proc_is_totala(known):
-            return known
-        self._known_pid = totala_by_prefix().get(prefix_key(self.prefix))
-        return self._known_pid
+        # running game as exited. Only a process that is gone, or a zombie, loses the pid. The game
+        # found is known by its pid AND its start time, verified at every answer: the kernel hands a
+        # pid out again only after its cyclic allocator has gone round the whole of pid_max, never
+        # within one clock tick, so a pid that kept its start time is the same process. That is
+        # what lets one Instance serve a harness's every call for as long as it likes (a game that
+        # exits and a later one that takes its pid are told apart), and skip the listing -- a
+        # pgrep and an environment scan -- at each.
+        known = getattr(self, "_known", None)
+        if known and _proc_totala_start(known[0]) == known[1]:
+            return known[0]
+        pid = totala_by_prefix().get(prefix_key(self.prefix))
+        start = _proc_totala_start(pid) if pid else None
+        self._known = (pid, start) if start is not None else None
+        return pid
 
     def running(self) -> bool:
         return self.pid() is not None
@@ -705,12 +721,15 @@ def write_title(inst: Instance, label: str) -> str:
 # What a launch writes into a gamedir that a player's install does not have.
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
-# The store keys an ordinary launch writes: the placement (write_placement) and
-# the size (ensure_store). A player's menu writes the same keys, so the store
+# The store keys an ordinary launch writes: the placement (write_placement),
+# the size (ensure_store), the seats ImpAI plays (write_seatai, `none` unless the launch
+# names seats), the battle room's first computer step for the seats it adds in a network
+# game (write_netai, `ota` unless the launch says `--netai impai`) and the GPU memory cap
+# (write_gpumem, inside a run-lock hold only). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "vsync", "resolution")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai", "netai", "gpumem")
 
 
 def _split_store(inst: Instance):
@@ -818,6 +837,64 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
             if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync", "maxfps")]
     keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}", f"vsync={vsync}"]
     path.write_text("\n".join(keep) + "\n")
+
+
+def seatai_type(text: str):
+    """`--seatai`'s value as write_seatai takes it: `none` -> [], else the seats 0-9 it names."""
+    t = text.strip().lower()
+    if t == "none":
+        return []
+    parts = [p.strip() for p in t.split(",")]
+    if not all(len(p) == 1 and p.isdigit() for p in parts) or len(set(parts)) != len(parts):
+        raise argparse.ArgumentTypeError(f"{text!r}: say none, or seats 0-9 comma-separated, each once")
+    return sorted(int(p) for p in parts)
+
+
+def write_seatai(inst: Instance, seats) -> None:
+    """The store's `seatai`: the computer seats ImpAI plays (tagpu_impai.c reads it at every
+    level init, under tagpu_defaults.off too), `none` for no seat (an empty list or None). Every
+    harness launch writes it, so no launch plays an earlier launch's seats."""
+    _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
+
+
+NETAI = ("ota", "impai")
+
+
+def write_netai(inst: Instance, choice) -> None:
+    """The store's `netai`: the first computer step of the AI rows this instance adds in a network
+    game's battle room, `impai` or `ota`, which names the row ImpAI: or AI: (tagpu_skirmish.c reads it
+    at attach, under tagpu_defaults.off too); `ota` for None. Every harness launch writes it, so no launch plays
+    an earlier launch's choice."""
+    if choice is not None and choice not in NETAI:
+        die(f"--netai {choice!r}: say {' or '.join(NETAI)}")
+    _store_set(inst, "netai", choice or "ota")
+
+
+def write_gpumem(inst: Instance) -> None:
+    """The store's `gpumem`, the GPU memory cap (MiB): for a launch inside a run-lock hold with GPU
+    memory, the cap that hold was admitted under, so the game runs under the cap its share of the
+    GPU budget was sized on; no line otherwise -- a launch by hand, in a run without GPU memory,
+    in a hold of runlock code that published no cap -- so that game is not capped
+    (runlock.write_gpumem, which every harness that starts a game itself calls too). The DLL reads
+    it under tagpu_defaults.off too and charges every device-local allocation against it
+    (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
+    runlock.write_gpumem(inst.gamedir)
+
+
+def write_harness_store(inst: Instance, meta, window, args) -> None:
+    """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
+    or missing (ensure_store), the placement, the seats ImpAI plays -- `none` unless this
+    launch names some (a scenario's `impai` seats) -- the network game's AI, `ota` unless this
+    launch says `--netai impai` -- and the GPU memory cap inside a run-lock hold (write_gpumem)."""
+    # The size goes into the store when it is asked for on THIS launch, or when
+    # the store has none yet; a recorded --res rewritten every launch would undo
+    # the player's pick (ensure_store).
+    ensure_store(inst, tuple(args.res) if args.res else None,
+                 default_res=tuple(meta["res"]))
+    write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
+    write_seatai(inst, getattr(args, "seatai", None))
+    write_netai(inst, getattr(args, "netai", None))
+    write_gpumem(inst)
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
@@ -1094,7 +1171,8 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # seat's controller is non-zero and the group is not 5 (0x47A863..0x47A872), so 5
 # is "no group" (DISASSEMBLED 2026-11-11). MEASURED 2026-11-11
 # (scenarios/sensor-view.json): groups 1, 2, 1 on seats 0..2 gave the player
-# records' +0x108 rows 01 00 01 / 00 01 00 / 01 00 01.
+# records' +0x108 rows 01 00 01 / 00 01 00 / 01 00 01. The SKIRMISH Start's alliance
+# test passes over 5 too (0x479760, SCN_NO_ALLY).
 PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy", "AllyGroup")
 PLAYER_SPEC = "N:controller[:side[:color[:metal[:energy[:allygroup]]]]]"
 
@@ -1888,11 +1966,18 @@ def _launch(args) -> dict:
                                 ("--vsync", getattr(args, "vsync", None)),
                                 ("--title", args.title), ("--sound/--no-sound", args.sound),
                                 ("--unit-limit", args.unit_limit), ("--shield/--no-shield", args.shield),
-                                ("--defaults/--no-defaults", getattr(args, "defaults", None)))
+                                ("--defaults/--no-defaults", getattr(args, "defaults", None)),
+                                ("--netai", getattr(args, "netai", None)),
+                                ("--seatai", getattr(args, "seatai", None)))
                  if v is not None]
         if clash:
             die(f"--shipped launches the gamedir as a player has it, so it writes nothing; "
                 f"{', '.join(clash)} would write something")
+        if runlock.seated():
+            # a game that takes a seat runs under its run's cap, and a player's store carries none
+            die("--shipped inside a run with GPU memory: the game would take a seat of the run and "
+                "run uncapped, holding memory the run's budget does not count; launch it outside "
+                "the run, or in one without GPU memory")
     if getattr(args, "window", None) is not None:
         store_window(args.window)
     inst = Instance(args.name)
@@ -2087,12 +2172,7 @@ def _launch(args) -> dict:
         terrown_note = _ensure_terrown_for_terr(inst)
         markown_note = _ensure_markown_for_mark(inst)
         defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-        # The size goes into the store when it is asked for on THIS launch, or when
-        # the store has none yet; a recorded --res rewritten every launch would undo
-        # the player's pick (ensure_store).
-        ensure_store(inst, tuple(args.res) if args.res else None,
-                     default_res=tuple(meta["res"]))
-        write_placement(inst, meta["tile"], win, vsync=meta.get("vsync", "on"))
+        write_harness_store(inst, meta, win, args)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -2123,9 +2203,12 @@ def _launch(args) -> dict:
     # shared registry.
     token = [taremote.TEST_TOKEN] if registry["serves"] else []
     old_log = _log_key(inst)
-    proc = subprocess.Popen(["wine", "TotalA.exe"] + token + argv, cwd=str(inst.gamedir),
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
+    # inside a run with GPU memory the game's keeper holds a seat of the run until every process of
+    # the game is reaped (runlock.py, THE GAME SEATS): a run puts no more games on the GPU than its
+    # GPU memory was taken for, whichever tool launches them
+    proc = runlock.start_game(["wine", "TotalA.exe"] + token + argv, f"{inst.name} (tacli launch)",
+                              cwd=str(inst.gamedir), env=env, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, start_new_session=True)
     deadline = time.time() + args.timeout
     pid = None
     while time.time() < deadline:
@@ -2400,7 +2483,7 @@ class _KeyBatchWait:
         return time.monotonic() - self.moved >= KEYS_STALL_S
 
     def nap(self):
-        time.sleep(0.25 if self.inst.remote else 0.02)
+        _answer_nap(self.inst, 0.25)
 
 
 def _send_key_batch(inst: Instance, batch: str) -> dict:
@@ -2558,7 +2641,7 @@ def _hud_dump(inst: Instance, timeout: float) -> dict:
                 return json.loads(ans.read_text())
             except ValueError:
                 pass
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     ask.unlink(missing_ok=True)
     die(f"no HUD answered in {timeout:g}s (a recording playing, or a live recorded skirmish, on "
         f"the Vulkan renderer?)")
@@ -2823,11 +2906,14 @@ def _peek(inst: Instance, specs, timeout: float):
     deadline = time.time() + timeout
     rows = []
     while time.time() < deadline and len(rows) < len(specs):
+        # complete lines only: a look that lands inside the sink's write of an answer line would
+        # otherwise read a cut value as the answer
         chunk = cursor.text()
+        chunk = chunk[:chunk.rfind("\n") + 1]
         if chunk:
             rows = _peek_rows(chunk, specs)
         if len(rows) < len(specs):
-            time.sleep(0.2)
+            _answer_nap(inst, 0.2)
     return rows
 
 
@@ -2837,9 +2923,10 @@ def _peek_rows(text, specs):
     evaluates a trigger's lines in order (tagpu_peek_frame). A peek the game had not answered
     when its caller gave up leaves its request behind, and its lines can land after the next
     peek's cursor: a line for a spec not asked for is never this peek's answer. A late line for a
-    spec this peek also asks for IS taken: the one peek the harness leaves unanswered is Stall's
-    GameTime read (tools/replay/tareplay.py), where a stale GameTime counts as one more interval
-    without progress and cannot decide a result."""
+    spec this peek also asks for IS taken, so a caller that goes on past an unanswered peek can
+    read that spec's stale value next: tacompat's Progress does, where a stale GameTime counts as
+    one more interval without progress and cannot decide a result. The stall bound's GameTime
+    reads (tools/stall.py) carry a nonce in their spec, so no peek takes their answers."""
     want = {}
     for s in specs:
         want[s] = want.get(s, 0) + 1
@@ -2898,7 +2985,7 @@ def cmd_weapons(args):
     since = result.stat().st_mtime if result.exists() else 0
     spec = "all" if not args.units else "\n".join(str(u) for u in args.units)
     put_trigger(inst.gamedir / "tagpu_weapons.trigger", spec + "\n")
-    if not _wait_file(result, args.timeout, since):
+    if not _wait_file(inst, result, args.timeout, since):
         die("no weapon dump appeared (needs a running game past its first frame)")
     data = json.loads(result.read_text())
     rows = []
@@ -2911,7 +2998,8 @@ def cmd_weapons(args):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
                         f"slot{s['i']:<2} st={s['state']} w={s['weapon'] or '-':<14} "
-                        f"tgt={s['target']:<5} spot={s['spot']} rl={s['reload']:<4} "
+                        f"tgt={s['target']:<5} spot={s['spot']} "
+                        f"rl={s['reload_left']}/{'-' if s['reload_time'] is None else s['reload_time']:<4} "
                         f"hd={s['heading']:<6} pt={s['pitch']:<6} stk={s['stock']} "
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
@@ -3045,12 +3133,12 @@ class CrashWatch:
             die(report)
 
 
-def _wait_file(path: Path, timeout: float, since: float):
+def _wait_file(inst: Instance, path: Path, timeout: float, since: float):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if path.exists() and path.stat().st_mtime > since:
             return True
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
     return False
 
 
@@ -3067,7 +3155,7 @@ def cmd_shot(args):
         if cands:
             newest = max(cands, key=lambda p: p.stat().st_mtime)
             break
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
     if not newest:
         die("no surface screenshot appeared (is the instance running?)")
     dest = Path(args.output).expanduser() if args.output else newest
@@ -3118,6 +3206,21 @@ def put_trigger(path, text: str):
 def _log_cursor(inst: Instance):
     """A place in the instance's log that survives rotation (talog.Cursor)."""
     return _RemoteCursor(inst) if inst.remote else talog.Cursor(inst.gamedir)
+
+
+# s between two looks of a wait for the game's answer: a log line or an answer file. The nap
+# decides how soon a wait sees the answer, never which: each look reads what the game wrote, and
+# a wait returns the first answer that matches, so a faster look sees the same answer sooner.
+# The game answers a trigger at a frame visit (the DLL reads its triggers at most every
+# TRIGGER_MS = 100 ms, tagpu_replay.c), so a long nap is time a held game and its harness both
+# stand still. A local look is one open of the current log file (talog.Cursor._same_file) or one
+# stat of the answer file. A remote instance's look is a sync over SSH, so it keeps the nap its
+# wait gives (`remote_s`). Bounds stay in seconds: each wait's deadline is wall time.
+ANSWER_NAP_S = 0.02
+
+
+def _answer_nap(inst: Instance, remote_s: float):
+    time.sleep(remote_s if inst.remote else ANSWER_NAP_S)
 
 
 def cmd_log(args):
@@ -3287,18 +3390,16 @@ def cmd_wait(args):
     """Block until a regex appears in log/tagpu.log (new lines only, across rotations)."""
     inst = Instance(args.name)
     rx = re.compile(args.pattern)
-    cursor = _log_cursor(inst)
+    lines = _LogLines(_log_cursor(inst))
     watch = CrashWatch(inst, f"/{args.pattern}/")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
-        chunk = cursor.text()
-        if chunk:
-            for line in chunk.splitlines():
-                if rx.search(line):
-                    out({"name": args.name, "matched": line}, args.json, human=line)
-                    return
+        for line in lines():
+            if rx.search(line):
+                out({"name": args.name, "matched": line}, args.json, human=line)
+                return
         watch.die_if_crashed()
-        time.sleep(0.5)
+        _answer_nap(inst, 0.5)
     die(f"timeout waiting for /{args.pattern}/")
 
 
@@ -3308,10 +3409,11 @@ def _stop(inst: Instance, hard: bool = False) -> dict:
     pid = inst.pid()
     if pid:
         run(["kill", str(pid)])
-        for _ in range(20):
-            if not inst.running():
-                break
-            time.sleep(0.5)
+        # a look is one read of /proc/<pid>/stat (Instance.pid), so the exit is seen as soon as
+        # it happens; the bound stays 10 s
+        deadline = time.monotonic() + 10
+        while inst.running() and time.monotonic() < deadline:
+            time.sleep(ANSWER_NAP_S)
     if hard or inst.running():
         run(["wineserver", "-k"], env=inst.env())
     return {"name": inst.name, "stopped": True, "was": pid}
@@ -3379,7 +3481,7 @@ def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False
                 last = snap.get("error", "unknown")
                 before = path.stat().st_mtime_ns
                 (inst.gamedir / "tagpu_ui.trigger").write_text("")
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     if soft:
         return None          # the caller is waiting for a UI to exist at all
     report = crash_report(inst, -1.0)
@@ -4282,7 +4384,7 @@ def _cat_ask(inst: Instance, kind: str, timeout: float = CAT_TIMEOUT) -> dict:
                 return json.loads(path.read_text())
             except json.JSONDecodeError:
                 pass                      # a rename we caught mid-flight; retry
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     die(f"no {kind} catalogue appeared in {timeout:g}s — "
         f"is the instance past its first frame?")
 
@@ -4489,12 +4591,19 @@ SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
 # `attack` at a coordinate is the idiom.
 SCN_ORDERS = {"stop": 10, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
               "defend": 7, "repair": 8, "patrol": 9, "teleport": 11, "reclaim": 12,
-              "capture": 13, "mobilebuild": 14}
+              "capture": 13, "mobilebuild": 14, "buildweapon": 256}
 SCN_ORDER_ALIASES = {"guard": "defend"}
 SCN_ORDERS_ALONE = {"stop"}                 # the only order that takes no target
+# `buildweapon` is no command of the mapper (tasim_wire.h, TASIM_CMD_BUILDWEAPON): the stockpile
+# build of slot 0's weapon, a `count` of missiles and no target, as the build menu's MAKENUKE /
+# MAKEANTI button queues it. The count's ceiling is the stock BuildWeapon stops at.
+SCN_ORDERS_COUNT = {"buildweapon"}
+SCN_STOCK_MAX = 200
 SCN_NO_ATTACK_MOVE = {"attack-move", "attackmove", "attack_move"}
 
 SCN_STANCES = ("hold", "manoeuvre", "roam")
+# the fire state, (UnitStateMask & 0x300000) >> 20: 0 hold fire, 1 return fire, 2 fire at will
+SCN_FIRES = ("hold", "return", "at_will")
 SCN_STANCE_ALIASES = {"maneuver": "manoeuvre", "manoeuver": "manoeuvre",
                       "maneouvre": "manoeuvre"}
 
@@ -4511,7 +4620,19 @@ SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
 SCN_LOS = {"permanent": 0, "true": 1, "circular": 2}
 
 SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
-SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
+# `impai` is a computer seat to the engine (controller 2) that ImpAI plays: the launch writes
+# the store's `seatai` (tagpu_impai.c reads it at the level init); `ai` is OTA AI, the stock AI.
+SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2, "impai": 2}
+# The SKIRMISH screen's Difficulty gadget stages, as main+0x37EEE holds them (engine/ui.md)
+SCN_DIFFICULTY = {"easy": 0, "medium": 1, "hard": 2}
+# A seat's AllyGroup when a scenario names none: no group. The SKIRMISH Start's test 0x479760 takes the
+# first enabled seat (controller nonzero) whose group is not 5 and refuses the Start when every enabled
+# seat has that group, so 5 belongs to no alliance (DISASSEMBLED 0x479760..0x4797D9). Written for every
+# seat a scenario lists, so a scenario never inherits the group an earlier one left in the store.
+SCN_NO_ALLY = 5
+# The StartLocation gadget's choice, as the loader reads it: the settings block's +0x118 nonzero is
+# fixed starts, seat i at StartPos(i+1) (0x49790E; engine/sim.md, Seating a level)
+SCN_STARTS = {"random": 0, "fixed": 1}
 
 SCN_PATTERNS = ("grid", "line", "random")
 SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
@@ -4688,7 +4809,7 @@ def _scn_orders(node, where, default=None):
     orders = []
     for i, o in enumerate(_scn_list(node, "orders", where)):
         w = f"{where}.orders[{i}]"
-        _scn_keys(o, w, required=("cmd",), optional=("to", "target"))
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after", "count", "queue"))
         raw = o["cmd"]
         cmd = raw.lower() if isinstance(raw, str) else raw
         if cmd in SCN_NO_ATTACK_MOVE:
@@ -4699,13 +4820,42 @@ def _scn_orders(node, where, default=None):
                        aliases=SCN_ORDER_ALIASES)
         to = _scn_point(o, "to", w)
         target = _scn_str(o, "target", w, raw=True)
-        if cmd in SCN_ORDERS_ALONE:
+        count = _scn_int(o, "count", w, 1, SCN_STOCK_MAX)
+        if cmd in SCN_ORDERS_COUNT:
+            if to or target or count is None:
+                die(f"{w}: {cmd!r} takes a \"count\" (1..{SCN_STOCK_MAX}) and no target")
+        elif count is not None:
+            die(f"{w}: only buildweapon takes a \"count\"")
+        elif cmd in SCN_ORDERS_ALONE:
             if to or target:
                 die(f"{w}: {cmd!r} takes no target")
         elif (to is None) == (target is None):
             die(f"{w}: {cmd!r} needs exactly one of \"to\" (a coordinate) "
                 f"or \"target\" (an entity handle)")
-        orders.append({"cmd": cmd, "to": to, "target": target})
+        # `after`: the ticks the applier waits before it issues the order, under a watch
+        # that cancels it if its unit (or a unit target) dies first (tagpu_scenario.c,
+        # delayed orders). 0 is the order at the apply.
+        after = _scn_int(o, "after", w, 0, 255, 0)
+        order = {"cmd": cmd, "to": to, "target": target, "after": after}
+        if count is not None:
+            order["count"] = count
+        # `queue`: TA's Shift, so the order joins the list instead of replacing it. Shift on an
+        # order matching one already listed cancels that one and adds nothing, so a queue never
+        # repeats a target (research/notes/scenario-format.md, *Queued orders*); the feature
+        # test waits for the handles, in _scn_validate.
+        if _scn_bool(o, "queue", w, False):
+            if not orders:
+                die(f"{w}.queue: the first order of a list has nothing to join")
+            if to is not None or count is not None or target is None:
+                die(f"{w}.queue: only an order on a unit \"target\" can be queued")
+            if any(p["target"] == target for p in orders):
+                die(f"{w}.queue: {target!r} is already a target of this list, and Shift would "
+                    f"cancel that order instead of adding this one")
+            if after < orders[-1]["after"]:
+                die(f"{w}.queue: after {after} is below the previous order's {orders[-1]['after']}, "
+                    f"whose plain issue would wipe this one")
+            order["queue"] = True
+        orders.append(order)
     return orders
 
 
@@ -4753,6 +4903,8 @@ def _scn_entity_body(node, where, default=None):
         "kills": _scn_int(node, "kills", where, 0, 65535, d.get("kills")),
         "stance": _scn_str(node, "stance", where, choices=SCN_STANCES,
                            aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
+        "fire": _scn_str(node, "fire", where, choices=SCN_FIRES, default=d.get("fire")),
+        "stock": _scn_int(node, "stock", where, 0, SCN_STOCK_MAX, d.get("stock")),
         "cloaked": _scn_bool(node, "cloaked", where, d.get("cloaked")),
         "orders": _scn_orders(node, where, d.get("orders")),
     }
@@ -4761,14 +4913,16 @@ def _scn_entity_body(node, where, default=None):
 def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
-             "los": None, "mapping": None,
+             "clear_features": False, "objective": None,
+             "los": None, "mapping": None, "difficulty": None, "starts": None, "commander_death": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
-                                 "switches", "players", "los", "mapping"))
+                                 "clear_features", "objective", "switches", "players",
+                                 "los", "mapping", "difficulty", "starts", "commander_death"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -4781,10 +4935,22 @@ def _scn_setup(doc, label):
     # then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+    # Every feature of the level burned through the engine's own BurnAll walker, indestructible
+    # ones and geothermal vents included, after the unit clear and before the creates.
+    setup["clear_features"] = _scn_bool(node, "clear_features", w, False)
+    # The level's end test: "off" disarms it (a level with no units runs on), "on" re-arms it.
+    setup["objective"] = _scn_str(node, "objective", w, choices=("off", "on"))
     # Both default to None = "leave the screen as it is"; `mapping` then falls
     # back to SCN_MAPPING_DEFAULT.
     setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
     setup["mapping"] = _scn_bool(node, "mapping", w)
+    # None leaves the screen's own Difficulty, the player's remembered SkirmishDifficulty
+    setup["difficulty"] = _scn_str(node, "difficulty", w, choices=SCN_DIFFICULTY)
+    # None leaves the screen's own StartLocation; "fixed" puts seat i at the map's StartPos(i+1)
+    setup["starts"] = _scn_str(node, "starts", w, choices=SCN_STARTS)
+    # SKIRMISH's commander toggle: true, a commander's death kills its side; false, the game goes
+    # on; None leaves the screen's own
+    setup["commander_death"] = _scn_bool(node, "commander_death", w)
 
     switches = node.get("switches")
     if switches is not None:
@@ -4799,9 +4965,8 @@ def _scn_setup(doc, label):
     for i, p in enumerate(_scn_list(node, "players", w)):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
-                  optional=("controller", "side", "color", "metal", "energy",
-                            "ally_group",
-                            "share_metal", "share_energy"))
+                  optional=("controller", "side", "color", "metal", "energy", "ai",
+                            "storage", "ally_group", "share_metal", "share_energy"))
         slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
@@ -4818,8 +4983,31 @@ def _scn_setup(doc, label):
             "ally_group": _scn_int(p, "ally_group", pw, 0, 4),
             "share_metal": _scn_int(p, "share_metal", pw, -1, 1000000),
             "share_energy": _scn_int(p, "share_energy", pw, -1, 1000000),
+            # "off": the console's AI toggle on an AI seat at the apply; the seat's units
+            # keep their orders and no planner runs
+            "ai": _scn_str(p, "ai", pw, choices=("off",)),
+            "storage": _scn_storage(p, pw),
         })
     return setup
+
+
+def _scn_storage(p, where):
+    """A seat's base storage, {"metal": M, "energy": E}: the seat setup's own writes, which
+    the economy pass adds to the storage it recomputes, so a level set beside it survives
+    the pass's clamp. Both or neither, non-negative numbers."""
+    v = p.get("storage")
+    if v is None:
+        return None
+    w = f"{where}.storage"
+    _scn_keys(v, w, required=("metal", "energy"))
+    out = {}
+    for k in ("metal", "energy"):
+        x = v[k]
+        if (isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                or x < 0 or x > 1e30):
+            die(f"{w}.{k}: expected a number of 0 or more, got {x!r}")
+        out[k] = x
+    return out
 
 
 def _scn_names(catalogue, key):
@@ -4891,7 +5079,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
 
     _scn_keys(doc, label, required=("format",),
               optional=("description", "seed", "on_error", "setup", "groups",
-                        "units", "features", "camera", "source"))
+                        "units", "features", "camera", "source", "calib"))
     if doc["format"] != SCN_FORMAT:
         die(f"{label}: format {doc['format']!r} is not {SCN_FORMAT!r}")
 
@@ -4905,6 +5093,11 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
             "groups": [], "units": [], "features": [], "camera": None,
             "warnings": warnings}
 
+    # The calibration runner's block (tools/tasim/calibref.py validates what it says); the
+    # wire never carries it.
+    if doc.get("calib") is not None and not isinstance(doc["calib"], dict):
+        die(f"{label}: calib: expected an object, got {_scn_kind(doc['calib'])}")
+
     # `on_error: "skip"` reaches layer 2 as "warn, do not refuse" — see _scn_type.
     lenient = warnings if norm["on_error"] == "skip" else None
 
@@ -4914,14 +5107,16 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
     # storage to hold it — say so once, where an author reads it, rather than
     # letting `apply` look like it worked.
     for p in norm["setup"]["players"]:
-        if (p["metal"] is not None or p["energy"] is not None) and not launching:
+        if ((p["metal"] is not None or p["energy"] is not None) and not launching
+                and p["storage"] is None):
             warnings.append(
                 f"setup.players slot {p['slot']}: metal/energy is a launch-time "
                 f"setting — `scenario load` writes Player{p['slot']}Metal/Energy and "
                 f"TA reads them as the starting level *and* the storage. `apply` "
                 f"cannot: in a running game the engine recomputes storage from the "
                 f"player's own units every tick and clamps the level to it, so the "
-                f"figure is gone within a second (the result reports what survived)")
+                f"figure is gone within a second (the result reports what survived); "
+                f"a \"storage\" beside it holds it")
 
     slots = {p["slot"] for p in norm["setup"]["players"]}
     # A slot with controller "off" gets no unit table from the engine, so the
@@ -4971,7 +5166,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: groups[{i}]"
         _scn_keys(g, w, required=("at", "composition", "pattern"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "cloaked", "orders"))
+                            "kills", "stance", "fire", "stock", "cloaked", "orders"))
         given = _scn_str(g, "id", w, raw=True)
         gid = claim(given or f"group{i}", "group", w, bool(given))
         composition = []
@@ -4995,7 +5190,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: units[{i}]"
         _scn_keys(u, w, required=("type", "pos"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "cloaked", "orders"))
+                            "kills", "stance", "fire", "stock", "cloaked", "orders"))
         given = _scn_str(u, "id", w, raw=True)
         norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
                               "type": _scn_type(u, w, unit_names, "unit", lenient),
@@ -5045,6 +5240,9 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
                     f"neighbours by handle, or give a coordinate with \"to\"")
             if t == holder["id"]:
                 die(f"{label}: {holder['id']}: order {o['cmd']!r} targets itself")
+            if o.get("queue") and handles[t] != "unit":
+                die(f"{label}: {holder['id']}: queued order {o['cmd']!r} targets the "
+                    f"{handles[t]} {t!r}; only an order on a unit can be queued")
     return norm
 
 
@@ -5100,7 +5298,8 @@ def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
             "height": body["height"], "facing": body["facing"],
             "health": body["health"], "nanoframe": body["nanoframe"],
             "kills": body["kills"],
-            "stance": body["stance"], "cloaked": body["cloaked"],
+            "stance": body["stance"], "fire": body["fire"], "stock": body["stock"],
+            "cloaked": body["cloaked"],
             "orders": body["orders"], "group": group}
 
 
@@ -5200,21 +5399,40 @@ def _scn_wire(exp) -> str:
     if setup["switches"]:
         lines.append("sw " + " ".join(f"{k}={int(bool(v))}"
                                       for k, v in sorted(setup["switches"].items())))
+    if setup.get("clear_features"):
+        lines.append("clearfeat 1")
+    if setup.get("objective"):
+        lines.append(f"objective {setup['objective']}")
     for p in setup["players"]:
+        keys = []
         if p["metal"] is not None or p["energy"] is not None:
-            lines.append(f"player {p['slot']} metal={_f(p['metal'])} "
-                         f"energy={_f(p['energy'])}")
-        if p["share_metal"] is not None or p["share_energy"] is not None:
-            lines.append(f"player {p['slot']} share_metal={_f(p['share_metal'])} "
-                         f"share_energy={_f(p['share_energy'])}")
+            keys += [f"metal={_f(p['metal'])}", f"energy={_f(p['energy'])}"]
+        if p.get("share_metal") is not None or p.get("share_energy") is not None:
+            keys += [f"share_metal={_f(p.get('share_metal'))}",
+                     f"share_energy={_f(p.get('share_energy'))}"]
+        if p.get("ai") == "off":
+            keys.append("ai=off")
+        if p.get("storage") is not None:
+            keys += [f"mstore={p['storage']['metal']!r}",
+                     f"estore={p['storage']['energy']!r}"]
+        if keys:
+            lines.append(f"player {p['slot']} " + " ".join(keys))
 
+    # The header stays byte-identical to the one before `at`/`slot`: a wire without them is the
+    # same bytes, so no calibration reference keyed by its wire's hash goes stale.
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
-                 "<stance> <nano%> <kills> <cloaked>")
+                 "<stance> <nano%> <kills> <fire> <stock>")
     for i, u in enumerate(exp["units"]):
+        # `at` and `slot` (optional trailing keys) are the packed calibration lane's (tools/tasim),
+        # which sets them on the expanded units; the JSON scenario schema has neither. `cloak=1` is
+        # `cloaked`, a key rather than a column so that a wire without it keeps its bytes
+        keys = (f" at={u['at']}" if u.get("at") is not None else "") + \
+               (f" slot={u['slot']}" if u.get("slot") is not None else "") + \
+               (" cloak=1" if u.get("cloaked") else "")
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
                      f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
                      f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])} "
-                     f"{'1' if u['cloaked'] else '-'}")
+                     f"{_f(u.get('fire'))} {_f(u.get('stock'))}{keys}")
     for i, f in enumerate(exp["features"]):
         lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
                      f"{_f(f['height'])} {_f(f['facing'])}")
@@ -5225,14 +5443,18 @@ def _scn_wire(exp) -> str:
     fords = {f["id"]: i for i, f in enumerate(exp["features"])}
     for i, u in enumerate(exp["units"]):
         for o in u["orders"]:
-            if o["to"]:
-                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}")
+            after = f" after={o['after']}" if o.get("after") else ""
+            after += " queue" if o.get("queue") else ""
+            if o.get("count"):
+                lines.append(f"order {i} {o['cmd']} count {o['count']}{after}")
+            elif o["to"]:
+                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}{after}")
             elif o["target"] in ords:
-                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}{after}")
             elif o["target"] in fords:
-                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}{after}")
             else:
-                lines.append(f"order {i} {o['cmd']}")
+                lines.append(f"order {i} {o['cmd']}{after}")
     cam = exp["camera"]
     if cam:
         pin = int(bool(cam["pin"]))
@@ -5383,7 +5605,7 @@ def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
             except json.JSONDecodeError:
                 pass                      # a rename we caught mid-flight; retry
         watch.die_if_crashed()
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     die(f"no result appeared in {timeout:g}s — is the game past its loading screen? "
         f"(tacli log {inst.name} -g scenario)")
 
@@ -5466,11 +5688,10 @@ def _scn_apply_lines(res: dict, exp: dict):
 # Interface Type, and a target that is off-screen or under fog is the same as
 # one in the middle of the view.
 #
-# It is NOT a validator. `ScriptAction_Type2Index` returning NULL is documented
-# (scenario-format.md) to mean "this unit cannot take that order", and the fork
-# reports it — but measured 2026-09-07 it refused nothing: capture, mobilebuild,
-# unload, blast, repair and load were all accepted on a commander with a bare
-# position, and did nothing. An order that makes no sense is issued, not caught.
+# It is only as much of a validator as the engine's mapper: `ScriptAction_Type2Index`
+# says "this unit cannot take that order" by writing action 0 into its result
+# (scenario-format.md), and the fork reports that as a failed order. What the
+# mapper accepts and the unit then cannot act on is issued, not caught.
 # There is no ownership check either: the applier hands the engine whatever unit
 # the caller named, which is how a scenario orders units it spawned for another
 # player.
@@ -5520,7 +5741,17 @@ def _order_cmd(raw: str) -> str:
 
 
 def _order_target(cmd: str, words, expect_target: str) -> str:
-    """`pos <x> <y>` in WORLD units, `unit <engine_index>`, or nothing."""
+    """`pos <x> <y>` in WORLD units, `unit <engine_index>`, `count <n>` for buildweapon, or
+    nothing."""
+    if cmd in SCN_ORDERS_COUNT:
+        if len(words) != 2 or words[0] != "count" or not _is_int(words[1]) or \
+                not 1 <= int(words[1]) <= SCN_STOCK_MAX:
+            die(f"{cmd!r} wants `count <n>`, n 1..{SCN_STOCK_MAX}, and no target")
+        if expect_target:
+            die(f"{cmd!r} takes no target, so --expect-target guards nothing")
+        return f"count {int(words[1])}"
+    if words and words[0] == "count":
+        die("only buildweapon takes a count")
     if cmd in SCN_ORDERS_ALONE:
         if words:
             die(f"{cmd!r} takes no target")
@@ -5643,7 +5874,6 @@ SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")
 # it does not have, so the registry says what was asked for and only the engine
 # says what happened.
 SCN_GAMEINGSTATE = "*0x511DE8+0x391E9:4"
-SCN_NO_ALLY_GROUP = 5           # the engine's "no group" (PLAYER_KEYS)
 SCN_TNTFILE = 0x204
 
 
@@ -5659,7 +5889,7 @@ def _scn_player_flags(setup) -> list:
     """
     flags = []
     for p in setup["players"]:
-        group = SCN_NO_ALLY_GROUP if p["ally_group"] is None else p["ally_group"]
+        group = SCN_NO_ALLY if p["ally_group"] is None else p["ally_group"]
         fields = [SCN_CONTROLLERS[p["controller"]],
                   "" if p["side"] is None else SCN_SIDES[p["side"]],
                   p["color"], p["metal"], p["energy"], group]
@@ -5690,6 +5920,136 @@ def _scn_set_toggle(inst: Instance, gadget: str, want: int, names, label: str) -
     return f"{label} {names[was]} -> {names[g.get('stage')]}"
 
 
+# main+0x37EEE, the Difficulty the SKIRMISH gadget writes (engine/sim.md, Difficulty and the AI
+# handicap): a dword, 0 Easy, 1 Medium, 2 Hard
+SCN_DIFFICULTY_PEEK = "*0x511DE8+0x37EEE:4"
+SCN_DIFFICULTY_NAMES = ("easy", "medium", "hard")
+
+
+def _scn_set_difficulty(inst: Instance, want: int) -> str:
+    """The SKIRMISH Difficulty gadget to `want`, then the engine's own value read back: the click
+    handler (0x47B939..0x47B9C6) steps main+0x37EEE 0 -> 1 -> 2 -> 0, and the gadget's stage is
+    only the label's [INFERRED, engine/ui.md], so a gadget that does not behave as a stage of that
+    value dies here rather than in a game played at the wrong Difficulty."""
+    said = _scn_set_toggle(inst, "Difficulty", want, SCN_DIFFICULTY_NAMES, "difficulty")
+    rows = _peek(inst, [SCN_DIFFICULTY_PEEK], 10.0)
+    got = _peek_uint(rows[0] if rows else None)
+    if got != want:
+        die(f"difficulty: the gadget reads {SCN_DIFFICULTY_NAMES[want]} but main+0x37EEE holds "
+            f"{got} -- the SKIRMISH screen's Difficulty gadget did not set the engine's value")
+    return said
+
+
+# The settings block's pointer, main+0x29A0; its +0x118 is the start choice the loader reads at 0x49790E
+SCN_SETTINGS_PEEK = "*0x511DE8+0x29A0:4"
+
+
+def _scn_set_starts(inst: Instance, fixed: bool) -> str:
+    """The SKIRMISH StartLocation gadget to the stage at which the settings block's +0x118 is
+    nonzero (fixed) or zero (random), read back after each stage: the label of each stage is the
+    gadget's, the value the loader acts on is the engine's, so the stage is found by the value and a
+    gadget that sets neither dies here rather than in a game played from the wrong starts."""
+    snap, g = _ui_resolve(inst, "StartLocation", SCN_MENU_TIMEOUT, wait=True)
+    stages = g.get("stages") or 0
+    if stages < 2:
+        die(f"starts: StartLocation is not a toggle (stages={stages})")
+    for stage in [g.get("stage")] + [k for k in range(stages) if k != g.get("stage")]:
+        if stage != g.get("stage"):
+            g = _ui_set_stage(inst, snap, g, stage)
+            snap = _ui_snapshot(inst, timeout=2.0, soft=True) or snap
+        rows = _peek(inst, [SCN_SETTINGS_PEEK], 10.0)
+        block = _peek_uint(rows[0] if rows else None)
+        if not block:
+            die("starts: the settings block's pointer main+0x29A0 could not be read")
+        rows = _peek(inst, [f"0x{block + 0x118:X}:4"], 10.0)
+        got = _peek_uint(rows[0] if rows else None)
+        if got is None:
+            die(f"starts: the settings block's +0x118 (0x{block + 0x118:X}) could not be read")
+        if bool(got) == fixed:
+            return f"starts {'fixed' if fixed else 'random'} (StartLocation stage {stage})"
+    die(f"starts: no stage of StartLocation's {stages} makes the settings block's +0x118 "
+        f"{'nonzero' if fixed else 'zero'}")
+
+
+# The Start's own refusal the settings block decides, read before the click (0x47AED2..0x47B0BC;
+# engine/sim.md, Seating a level): the seat count main+0x38D81, and each entry's controller +0 and
+# alliance group +8, entries 0x18 bytes apart.
+SCN_SEATS_PEEK = "*0x511DE8+0x38D81:4"
+SCN_SETTING_STRIDE = 0x18
+SCN_SETTINGS_MAX = 10
+
+
+def _scn_start_refusal(inst: Instance):
+    """The SKIRMISH Start's alliance refusal, decided as 0x479760 decides it from the settings the
+    Start is about to read, or None. A refused Start leaves the shell on SKIRMISH with the engine's
+    message (0x47B035..0x47B04A, the string at 0x5083C8) and no game, which the live wait would only
+    report when its bound ran out; read here, nothing changes the block between the read and the
+    click but the click."""
+    rows = _peek(inst, [SCN_SETTINGS_PEEK, SCN_SEATS_PEEK], 10.0)
+    block = _peek_uint(rows[0] if rows else None)
+    seats = _peek_uint(rows[1] if len(rows) > 1 else None)
+    if not block or seats is None:
+        die("start: the settings block main+0x29A0 or its seat count main+0x38D81 could not be read")
+    seats = min(seats, SCN_SETTINGS_MAX)
+    specs = []
+    for i in range(seats):
+        at = block + i * SCN_SETTING_STRIDE
+        specs += [f"0x{at:X}:4", f"0x{at + 8:X}:4"]
+    rows = _peek(inst, specs, 10.0) if specs else []
+    vals = [_peek_uint(r) for r in rows]
+    if len(vals) < len(specs) or None in vals:
+        die("start: the skirmish settings' entries could not be read")
+    enabled = [(i, vals[2 * i + 1]) for i in range(seats) if vals[2 * i]]
+    first = next((g for _, g in enabled if g != SCN_NO_ALLY), None)
+    if first is not None and all(g == first for _, g in enabled):
+        return (f"every enabled seat ({', '.join(str(i) for i, _ in enabled)}) is in alliance group "
+                f"{first}: the Start refuses it with \"All players may not be in the same allied "
+                f"group.\" (0x479760); give one seat another group, or none (omit its ally_group)")
+    return None
+
+
+# The SKIRMISH screen's CommanderDeath button: its click toggles the settings dword +0x108
+# (`xor [settings+0x108], 1` at 0x47B690, the settings block at [main+0x29A0]) and relabels the
+# button "Game ends when commander is destroyed." (1) or "Game continues after Commander is
+# destroyed." (0); the skirmish load copies the dword into ActiveCommanderDeath main+0x37EF6
+# (0x4973ED), which Send_UnitDeath reads before a commander's kill-all (0x486688) [DISASSEMBLED,
+# engine/ui.md and engine/sim.md]. Set there, it is the level constant the recording leaves out
+# (replay-globals.tsv's commanderdeath row), as in a game a player starts.
+SCN_SETTINGS_CMDRDEATH = 0x108
+SCN_CMDRDEATH_PEEK = "*0x511DE8+0x37EF6:4"
+SCN_CMDRDEATH_NAMES = ("game continues", "game ends")
+
+
+def _scn_cmdrdeath_setting(inst: Instance):
+    """The SKIRMISH settings' +0x108, or None when it cannot be read."""
+    rows = _peek(inst, [SCN_SETTINGS_PEEK], 10.0)
+    base = _peek_uint(rows[0] if rows else None)
+    if not base:
+        return None
+    rows = _peek(inst, [f"0x{base + SCN_SETTINGS_CMDRDEATH:X}:4"], 10.0)
+    return _peek_uint(rows[0] if rows else None)
+
+
+def _scn_set_commander_death(inst: Instance, want: int) -> str:
+    """The SKIRMISH CommanderDeath button clicked when the setting is not `want`, then the setting
+    read back until the click's handler has run, or die naming what it holds."""
+    was = _scn_cmdrdeath_setting(inst)
+    if was not in (0, 1):
+        die(f"commander death: the SKIRMISH settings' +0x108 reads {was!r}, not 0 or 1")
+    if was == want:
+        return f"commander death is {SCN_CMDRDEATH_NAMES[want]}"
+    snap, g = _ui_resolve(inst, "CommanderDeath", SCN_MENU_TIMEOUT, wait=True)
+    _ui_click_gadget(inst, g, snap)
+    deadline = time.monotonic() + SCN_MENU_TIMEOUT
+    got = _scn_cmdrdeath_setting(inst)
+    while got != want and time.monotonic() < deadline:
+        time.sleep(0.2)
+        got = _scn_cmdrdeath_setting(inst)
+    if got != want:
+        die(f"commander death: clicked CommanderDeath, and the setting reads {got!r}, not {want}")
+    return f"commander death {SCN_CMDRDEATH_NAMES[was]} -> {SCN_CMDRDEATH_NAMES[got]}"
+
+
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
     """Wait for the fork to answer a gadget walk at all.
 
@@ -5713,22 +6073,20 @@ def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
 
 def _scn_wait_live(inst: Instance, timeout: float) -> int:
     """Wait for a world: the overlay's own count of living units goes non-zero."""
-    cursor = _log_cursor(inst)
+    lines = _LogLines(_log_cursor(inst))
     deadline = time.time() + timeout
     while True:
         if not inst.running():
             die(f"{inst.name} exited while its map was loading "
                 f"(tacli log {inst.name} -n 40)")
-        chunk = cursor.text()
-        if chunk:
-            for line in chunk.splitlines():
-                m = SCN_LIVE_RX.search(line)
-                if m:
-                    return int(m.group(1))
+        for line in lines():
+            m = SCN_LIVE_RX.search(line)
+            if m:
+                return int(m.group(1))
         if time.time() >= deadline:
             die(f"no game after {timeout:g}s — the shell never reached a live map "
                 f"(tacli ui {inst.name} snapshot)")
-        time.sleep(0.5)
+        _answer_nap(inst, 0.5)
 
 
 def _scn_loaded_map(inst: Instance, timeout: float = 10.0):
@@ -5790,8 +6148,12 @@ def cmd_scenario_load(args):
     los = args.los
     if los is None and setup["los"] is not None:
         los = SCN_LOS[setup["los"]]
+    cmdrdeath = args.commander_death
+    if cmdrdeath is None and setup["commander_death"] is not None:
+        cmdrdeath = int(setup["commander_death"])
     # Explicit players override the saved seat count as well as their controllers.
     seats = max((p["slot"] + 1 for p in setup["players"]), default=0)
+    impai = [p["slot"] for p in setup["players"] if p["controller"] == "impai"]
     launched = (_remote_launch if inst.remote else _launch)(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         vsync=args.vsync,
@@ -5800,11 +6162,13 @@ def cmd_scenario_load(args):
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=los, mapping=mapping, arg=[],
-        timeout=args.launch_timeout, no_restore_pointer=False))
+        timeout=args.launch_timeout, no_restore_pointer=False, seatai=impai))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
             f"(tacli stop {args.name} --hard)")
     lres = launched.get("res")
+    steps.append("ImpAI plays seat" + ("s " if len(impai) > 1 else " ")
+                 + ",".join(map(str, impai)) if impai else "no seat plays ImpAI")
     steps.append("launched" + (f" {lres[0]}x{lres[1]}" if lres else "")
                  + (" on the remote machine" if launched.get("remote") else "")
                  + (f", map {wanted_map!r}" if wanted_map else "")
@@ -5824,6 +6188,10 @@ def cmd_scenario_load(args):
     for i, selector in enumerate(SCN_MENU_PATH):
         last = i == len(SCN_MENU_PATH) - 1
         before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
+        if last:
+            refused = _scn_start_refusal(inst)
+            if refused:
+                die(f"start: {refused}")
         # `Start` tears the shell down to load the map, so there is no gadget
         # tree left to settle against: the live wait below is that click's
         # confirmation instead.
@@ -5840,9 +6208,23 @@ def cmd_scenario_load(args):
             if los is not None:
                 steps.append(_scn_set_toggle(inst, "LineOfSight", los,
                                              SCN_LOS_NAMES, "line of sight"))
+            if setup["difficulty"] is not None:
+                steps.append(_scn_set_difficulty(inst, SCN_DIFFICULTY[setup["difficulty"]]))
+            if setup["starts"] is not None:
+                steps.append(_scn_set_starts(inst, setup["starts"] == "fixed"))
+            if cmdrdeath is not None:
+                steps.append(_scn_set_commander_death(inst, cmdrdeath))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
+
+    # what the level runs with, read whether or not the file asked
+    rows = _peek(inst, [SCN_CMDRDEATH_PEEK], 10.0)
+    level_cmdrdeath = _peek_uint(rows[0] if rows else None)
+    if cmdrdeath is not None and level_cmdrdeath != cmdrdeath:
+        die(f"commander death: the level's ActiveCommanderDeath (main+0x37EF6) is "
+            f"{level_cmdrdeath!r}, not {cmdrdeath}")
+    steps.append(f"ActiveCommanderDeath {level_cmdrdeath}")
 
     loaded = _scn_loaded_map(inst)
     if wanted_map and loaded and not _scn_map_matches(loaded, wanted_map):
@@ -5858,6 +6240,7 @@ def cmd_scenario_load(args):
     res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
     res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
                      "res": launched["res"], "unit_limit": limit,
+                     "commander_death": level_cmdrdeath,
                      "players": _scn_player_flags(setup),
                      "alive_before_apply": alive, "window": launched["window"],
                      "pid": launched["pid"]}
@@ -5899,8 +6282,10 @@ def _replay_held_launch(inst: Instance) -> bool:
 
 
 class _LogLines:
-    """The complete lines a log cursor has passed, oldest first: a line the sink has not finished
-    writing waits for the next call."""
+    """The complete lines a log cursor has passed, oldest first, without their line ends: a line
+    the sink has not finished writing waits for the next call. The sink ends tagpu.log's lines with
+    CRLF (s_eol, tagpu_log.c), so each line loses the `\\r` before its `\\n` too, as splitlines()
+    on a whole read did: a line a caller prints or matches with `$` is the text the game wrote."""
 
     def __init__(self, cursor):
         self.cursor, self.part = cursor, ""
@@ -5908,7 +6293,7 @@ class _LogLines:
     def __call__(self):
         lines = (self.part + self.cursor.text(advance=True)).split("\n")
         self.part = lines.pop()
-        return lines
+        return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
 
 
 def _tarec(blocks=False):
@@ -5983,7 +6368,11 @@ def _replay_start(args, verb, tail=""):
         skirmish_players=count, display=args.display, slot=None, sound=None, intro=False,
         shield=None, dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=None, mapping=None, arg=[],
-        timeout=args.launch_timeout, no_restore_pointer=False))
+        timeout=args.launch_timeout, no_restore_pointer=False,
+        # the store's `seatai` (write_harness_store): a playing marks no seat (its level init on a
+        # puppet clears the table and the recording writes it), and a takeover adds these to the
+        # seats ImpAI played in the recording (tagpu_impai.c, tagpu_impai_takeover)
+        seatai=getattr(args, "seatai", None)))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
             f"(tacli stop {args.name} --hard)")
@@ -6031,7 +6420,7 @@ def _replay_start(args, verb, tail=""):
                 if time.time() >= deadline:
                     die(f"no `replay: playing` in {args.load_timeout:g}s "
                         f"(tacli log {args.name} -g replay)")
-                time.sleep(0.5)
+                _answer_nap(inst, 0.5)
     finally:
         # a request the Start never read would make the next skirmish a replay
         request.unlink(missing_ok=True)
@@ -6080,22 +6469,44 @@ def _replay_playing(inst: Instance):
     return None, "no level of this run has played a recording"
 
 
+def dump_written_rx(name: str) -> str:
+    """The recorder's line for dump `name` written (tagpu_recorder.c, dump_write). A dump taken
+    now -- `dump <name> now`, a rewind's -- says `frame dump <name> at GameTime <frame> (iteration
+    <tick>)`; one armed for a GameTime says `dump <name> at GameTime <tick>`. Both go on `-> <path>
+    (<n> bytes of records)`. Groups: `t` the GameTime, `iteration` (a frame dump's), `path`,
+    `bytes`. The one pattern every caller waits on (tareplay, the calibration runner);
+    tools/test_tacli.py renders the recorder's own format strings against it."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump {n} at GameTime (?P<t>-?\d+)"
+            rf"(?: \(iteration (?P<iteration>-?\d+)\))? -> (?P<path>.*?) "
+            rf"\((?P<bytes>\d+) bytes of records\)")
+
+
+def dump_refused_rx(name: str) -> str:
+    """The recorder's line for dump `name` that will not be written: refused, not taken, out of
+    memory, unwritable, or a name it does not take. A line that says what a dump leaves out
+    (`dump <name>: the level has no ...: the dump leaves it out`) is neither this nor written."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump(?: {n}(?: refused: | at GameTime -?\d+ refused: "
+            rf"| for GameTime -?\d+ not taken: |: no memory |: cannot write )"
+            rf"|: a name of |: the name ).*")
+
+
 def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
     """Waits for the seek's arrival or refusal and, with a dump, for the dump's line; returns
     what they say. The arrival comes at the frame visit that runs the seek, paused or not; the
     dump comes at the capture point of T, which a paused playback reaches at its first step after
     the pause. On a `held` launch (THE LAUNCH'S HOLD) it returns at the arrival: the dump is armed
     for T and taken once the caller resumes the level (`dump_pending`)."""
-    n, d = re.escape(name), re.escape(dump or "")
+    n = re.escape(name)
     arrive_rx = re.compile(rf"replay: {n}: at GameTime {T}, sought from GameTime (\d+) in (\d+) ms "
                            rf"\(read (\d+), rebuild (\d+)\); units (\d+) killed, (\d+) made, "
                            rf"(\d+) refused")
     wrote_rx = re.compile(rf"replay: {n}: the seek to {T} wrote: .*")
     refuse_rx = re.compile(rf"replay: (?:{n}: )?seek to {T} refused: (.*)"
                            rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
-    dump_rx = re.compile(rf"recorder: dump {d} at GameTime (-?\d+) -> (.*) \(\d+ bytes of records\)")
-    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write "
-                             rf"| at GameTime \d+ refused: | for GameTime \d+ not taken: ).*")
+    dump_rx = re.compile(dump_written_rx(dump or ""))
+    dump_bad_rx = re.compile(dump_refused_rx(dump or ""))
     res = {"arrived": False}
     deadline = time.time() + timeout
     pending = first
@@ -6120,7 +6531,7 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
                 continue
             m = dump_rx.search(line)
             if m:
-                res["dump_at"], res["dump"] = int(m.group(1)), m.group(2)
+                res["dump_at"], res["dump"] = int(m["t"]), m["path"]
                 continue
             m = dump_bad_rx.search(line)
             if m:
@@ -6140,7 +6551,7 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
                        f"the dump {dump} (a paused playback takes it at its first step)")
             res["timeout"] = f"no {missing} in {timeout:g}s"
             return res
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
         pending = lines()
 
 
@@ -6261,7 +6672,7 @@ def _replay_takeover_wait(inst, name, lines, first, timeout, held=False):
                        "the recorder's start of the new timeline")
             res["timeout"] = f"no {missing} in {timeout:g}s"
             return res
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
         pending = lines()
 
 
@@ -6314,7 +6725,7 @@ def cmd_replay_forks(args):
                 if not res["done"]:
                     sys.exit(1)
                 return
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"forks {args.action}: no result in {args.timeout:g} s")
 
 
@@ -6356,7 +6767,7 @@ def cmd_rewind(args):
                 "now": "(?:closed, nothing moved|returned to now)", "fork": "forked at GameTime",
                 "close": "(?:closed, nothing moved|returned to now)"}[args.action]
     done_rx = re.compile(r"rewind: " + expected)
-    dump_rx = re.compile(rf"recorder: frame dump {re.escape(args.dump or '')} at GameTime (\d+)")
+    dump_rx = re.compile(dump_written_rx(args.dump or ""))
     result = {"name": args.name, "action": args.action, "done": False}
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
@@ -6370,14 +6781,14 @@ def cmd_rewind(args):
             match = dump_rx.search(line)
             if match:
                 result.update(dump=str(inst.gamedir / "replays" / f"dump-{args.dump}.bin"),
-                              dump_at=int(match[1]))
+                              dump_at=int(match["t"]))
         if result["done"] and (not args.dump or "dump" in result):
             out(result, args.json, human=result["detail"] +
                 (f"; dump at GameTime {result['dump_at']}: {result['dump']}" if args.dump else ""))
             return
         if not inst.running():
             die(f"{args.name} exited during rewind {args.action}")
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"rewind {args.action}: no complete result in {args.timeout:g} s")
 
 
@@ -6417,9 +6828,9 @@ def cmd_replay_takeover(args):
             sys.exit(1)
     else:
         if any((args.res, args.vsync, args.display, args.defaults is not None, args.keep_dll,
-                args.restart, args.timeline)):
-            print("tacli: replay takeover: the launch options and --timeline go with a "
-                  "recording; without one the takeover is of the running playback",
+                args.restart, args.timeline, args.seatai is not None)):
+            print("tacli: replay takeover: the launch options, --timeline and --seatai go with "
+                  "a recording; without one the takeover is of the running playback",
                   file=sys.stderr)
             sys.exit(2)
         inst = Instance(args.name)
@@ -6455,14 +6866,14 @@ def cmd_replay_takeover(args):
                     if "refused" in m[1]:
                         sys.exit(1)
                     return
-            time.sleep(0.1)
+            _answer_nap(inst, 0.1)
         die("fork prediction: no result")
     if args.dump:
         # armed on the playing before the takeover: the recorder keeps an armed dump across the
         # takeover's seek, which sets GameTime to T - 1, and takes it at the fork's capture point
         # of G (tagpu_recorder.c, tagpu_rec_dump_arm)
         armed_rx = re.compile(rf"recorder: dump {re.escape(args.dump)} armed for GameTime "
-                              rf"{args.dump_at}|recorder: dump {re.escape(args.dump)}.* refused.*")
+                              rf"{args.dump_at}|" + dump_refused_rx(args.dump))
         trigger(f"dump {args.dump} at {args.dump_at}")
         deadline, got_line, pending, read = time.time() + 30, None, rest, []
         while got_line is None and time.time() < deadline:
@@ -6472,10 +6883,10 @@ def cmd_replay_takeover(args):
                     got_line = m.group(0)
             read += pending
             pending = lines()
-            time.sleep(0.1)
+            _answer_nap(inst, 0.1)
         # what the takeover's wait reads next: every line after the verdict, the hold's among them
         rest = read + pending
-        if got_line is None or "refused" in got_line:
+        if got_line is None or " armed for GameTime " not in got_line:
             res.update(taken=False, dump_refused=got_line or "no answer in 30 s")
             out(res, args.json, human=f"{name}: on {args.name}, not taken over: dump "
                                       f"{args.dump}: {res['dump_refused']}")
@@ -6539,7 +6950,7 @@ def _replay_ask(args, line, rx, refused=None):
                 return name, got[r.start():].strip(), None
         if not inst.running():
             die(f"{args.name} exited (tacli log {args.name} -n 40)")
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"{args.name}: no answer to `{line}` in {args.timeout:g}s (tacli log {args.name} -g replay)")
 
 
@@ -6702,7 +7113,7 @@ def cmd_switches(args):
                 break
             except json.JSONDecodeError:
                 pass
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     if res is None:
         die(f"no answer in {args.timeout:g}s — is the game past its first frame?")
     res["name"] = args.name
@@ -6783,7 +7194,7 @@ def cmd_ab(args):
                         f"the {args.pass_} pass armed and drawing? (tacli log {args.name} "
                         f"-g 'vk: census'); below 15 fps, raise --settle")
                 watch.die_if_crashed()
-                time.sleep(0.5)
+                _answer_nap(inst, 0.5)
     finally:
         lever.unlink(missing_ok=True)
         meta = inst.meta()
@@ -7022,6 +7433,8 @@ def _remote_launch(args) -> dict:
     # it lacks is the DLL's default, on
     if getattr(args, "vsync", None) is not None:
         _store_set(inst, "vsync", args.vsync)
+    write_seatai(inst, getattr(args, "seatai", None))
+    write_netai(inst, getattr(args, "netai", None))
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)
@@ -7345,6 +7758,10 @@ def build_parser():
                         "are the skirmish starting resources, and set storage too. "
                         "Seats with the same allygroup 0..4 start allied; 5 is no "
                         "group.")
+    l.add_argument("--seatai", type=seatai_type, default=None, metavar="SEATS",
+                   help="the computer seats ImpAI plays, written into impure.cfg's `seatai` "
+                        "for this launch: `none`, or seats 0-9 comma-separated (1,3). Every "
+                        "launch writes the key, `none` without this flag")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int,
                    help="SkirmishMapping (TA's saved value; the SKIRMISH screen's "
@@ -7383,6 +7800,10 @@ def build_parser():
                         "run: borderless fullscreen on the primary monitor -- the "
                         "owner's screen on the live display). Refused with arm files "
                         "present or with a flag that writes something. Not sticky")
+    l.add_argument("--netai", choices=NETAI, default=None,
+                   help="the first computer step of the AI rows this instance adds in a network "
+                        "game's battle room, impai or ota; a click on the row steps to the other "
+                        "(impure.cfg `netai`; every launch writes it, ota when not given)")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",
@@ -7416,10 +7837,11 @@ def build_parser():
     add_common(od)
     od.add_argument("name")
     od.add_argument("cmd", help="move attack defend|guard repair patrol reclaim "
-                               "capture load unload blast stop mobilebuild teleport")
+                               "capture load unload blast stop mobilebuild teleport "
+                               "buildweapon")
     od.add_argument("target", nargs="*", metavar="TARGET",
                     help="pos <x> <y> (world units) | unit <engine_index> | "
-                         "nothing, for stop")
+                         "count <n>, for buildweapon | nothing, for stop")
     od.add_argument("--sel", action="store_true",
                     help="order every unit the player currently has selected")
     od.add_argument("--unit", type=int, metavar="IDX",
@@ -7671,6 +8093,11 @@ def build_parser():
                      help="SKIRMISH's Line of Sight toggle: 0 = Permanent (no grey "
                           "fog over ground already seen), 1 = True, 2 = Circular. "
                           "Left as the screen has it when not given")
+    scd.add_argument("--commander-death", dest="commander_death", type=int, choices=(0, 1),
+                     default=None,
+                     help="override setup.commander_death: SKIRMISH's commander toggle, 1 = "
+                          "a commander's death kills its side, 0 = the game goes on. Left "
+                          "as the screen has it when neither gives it")
     scd.add_argument("--defaults", dest="defaults", action="store_true", default=None,
                      help="the shipped configuration: every play pass on with no arm file "
                           "(the DLL's play defaults, tagpu_opt.c), a .off file turning one "
@@ -7796,6 +8223,11 @@ def build_parser():
                           "takeover so that it cannot be late: replays/dump-NAME.bin")
     rpt.add_argument("--dump-at", type=gametime_type, default=None, metavar="G",
                      help="the GameTime of --dump, after T")
+    rpt.add_argument("--seatai", type=seatai_type, default=None, metavar="SEATS",
+                     help="with a recording: the computer seats ImpAI plays after the takeover "
+                          "besides those it played in the recording, written into impure.cfg's "
+                          "`seatai`: `none`, or seats 0-9 comma-separated (1,3); a seat it adds "
+                          "starts fresh. `none` without this flag")
     rpt.add_argument("--timeout", type=float, default=REPLAY_TAKEOVER_TIMEOUT,
                      help=f"seconds to wait for the takeover's line and the recorder's start, "
                           f"or on a held launch the hold's line (default "

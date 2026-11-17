@@ -10,6 +10,9 @@ mod or patch install puts next to it (fixtures.json), and the ddraw.dll under te
     tacompat.py list                                   # setups, fixtures, what is missing
     tacompat.py wine    [--dll PATH] [SETUP ...]       # every setup at once, on Wine
     tacompat.py wine    --battle 0 --mp 0              # start-up only: no skirmish, no network game
+    tacompat.py wine    --impai [SECONDS] [--mp-impai] # also the ImpAI stage, and ImpAI seats in the network game
+    tacompat.py wine    --impai-survey                 # where ImpAI is available: the stage loaded, nothing played
+    tacompat.py wine    --resume DIR [ARGS]            # go on with an interrupted run: its unsettled setups only
     tacompat.py windows [--dll PATH] [SETUP ...]       # one at a time, on a Windows desktop
     tacompat.py clean                                  # remove the Wine instances
     tacompat.py selftest                               # check the hook decode, no game needed
@@ -22,7 +25,9 @@ run and read what each party logs. On Wine, a setup that reaches the main menu t
 starts a skirmish and fights 200 against 200, because two patchers that both start can
 still collide where the limits are used: `battle-crash` is a crash after the menu. Where
 Impure runs, a second instance of the same folder then joins it in a two-player network game
-over Windows' DirectPlay, several at once, each on a DirectPlay port of its own. Every run, and
+over Windows' DirectPlay, several at once, each on a DirectPlay port of its own (with --mp-impai,
+each peer adds a computer seat its ImpAI plays). With --impai, a third copy of the folder plays the
+ImpAI stage: a skirmish of ImpAI against OTA AI at Hard, judged by ImpAI's own lines. Every run, and
 every peer, is read for TADR's code having run two ways: from the game folder (tadr_evidence)
 and from the running process (exe_hooks) -- the exe's own code against TotalA.exe on disk, which
 is the only thing that shows a recorder started off the exe's entry point.
@@ -38,6 +43,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import math
 import http.server
 import ntpath
 import os
@@ -62,7 +68,9 @@ sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
-import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
+import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+import talog  # noqa: E402  a log file read as it grows (tools/talog.py)
+sys.path.insert(0, str(TREE / "tools" / "wiki"))   # tavfs: a setup's files as the engine mounts them
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -159,12 +167,17 @@ MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
 # The battle and the two halves place stock unit types. A mod that replaces the factions (TA
 # Zero has no ARMPW) names its own in the setup's `scenarios`, the same three roles.
 DEFAULT_SCENARIOS = {"battle": "200v200", "host": MP_SCENARIOS[0], "join": MP_SCENARIOS[1]}
+# THE FIGHT STAYS OFF THE SEATS: no unit a network game's halves place can stand within WAVE_CLEAR world pixels
+# of a start one of its records takes -- StartPos1..MP_RECORDS of the map's schema for that many seats (fixed
+# starts put record i at StartPos(i + 1): two humans and, with --mp-impai, two computer seats). Every seat is
+# its own team, so a wave beside a computer seat's commander is an enemy inside its safe distance (ImpAI's is
+# 600), and the seat's only builder flees: the claim would measure the scenario, not the seat. Checked before
+# each network game against the setup's own map (wave_misses), and offline against the installed one.
+WAVE_CLEAR = 1500
+MP_RECORDS = 4
 # Each side's in-game panel is <side>MAIN.GUI, and a mod may add sides: TA Zero's third is GOK.
 # MAINMENU starts with MAIN, so the front end never matches.
 IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
-# DirectPlay's name server binds its port for the whole machine, so every network game of a
-# run gets a port of its own from these, patched into both peers' prefixes (tools/dpport.py).
-MP_PORT_BASE = dpport.STOCK + 1
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 # NO OUTCOME IS DECIDED BY THE WALL CLOCK: a loaded machine runs every game slower, never
@@ -180,6 +193,11 @@ STALL_S = 120
 ACK_S = 60
 POLL_S = 300
 HANG_S = 1800
+# s between two looks of a wait at what the game wrote: a log line or an answer file. It decides
+# how soon a wait sees the answer, never which -- each look reads the bytes the game wrote, and a
+# faster look reads the same bytes sooner -- and a log is read through talog.Tail, which reads only
+# what was appended, so a look costs no more for a long log.
+LOOK_S = 0.02
 
 
 def die(msg, code=2):
@@ -412,6 +430,51 @@ def overlay(setup) -> list:
     return list(out.values())
 
 
+def child(folder: Path, name: str):
+    """The entry of `folder` named `name` without case, or None."""
+    low = name.lower()
+    return next((c for c in folder.iterdir() if c.name.lower() == low), None)
+
+
+def mirror(src: Path, dst: Path):
+    """`src`'s tree under `dst`: real folders, every file a symlink to the original."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for e in src.iterdir():
+        if e.is_dir():
+            mirror(e, dst / e.name)
+        else:
+            (dst / e.name).symlink_to(e.resolve())
+
+
+def place(tree: Path, dest: str, src: Path):
+    """The setup's file at `dest` (a path in the game folder), each component matched without case as Windows does;
+    an existing file of that name is replaced."""
+    parts = [p for p in dest.replace("\\", "/").split("/") if p]
+    cur = tree
+    for part in parts[:-1]:
+        hit = child(cur, part)
+        if hit is None or not hit.is_dir():
+            hit = cur / part
+            hit.mkdir()
+        cur = hit
+    old = child(cur, parts[-1])
+    if old is not None:
+        if old.is_dir() and not old.is_symlink():
+            shutil.rmtree(old)
+        else:
+            old.unlink()
+    (cur / parts[-1]).symlink_to(src.resolve())
+
+
+def setup_tree(setup, retail: Path, tree: Path):
+    """The setup's game folder as `overlay` gives it, without an instance: the retail install's files mirrored under
+    `tree`, then the setup's on top, a later name replacing an earlier one without case. Every file is a symlink, so
+    the tree reads as the folder and writes nothing through to either source as long as nothing writes into it."""
+    mirror(retail, tree)
+    for dest, src in overlay(setup):
+        place(tree, dest, src)
+
+
 def pick_setups(names) -> list:
     if not names:
         return [s for s in SETUPS if not s.get("matrix")]
@@ -423,8 +486,9 @@ def pick_setups(names) -> list:
     if missing:
         die(f"no setup {', '.join(missing)} (tacompat.py list)")
     # a managed row is judged against its drop-in row, so one is no result without the other
-    partners = [by[by[n]["equals"]] for n in names if by[n].get("equals") and by[n]["equals"] not in names]
-    return [by[n] for n in names] + partners
+    partners = [by[n]["equals"] for n in names if by[n].get("equals") and by[n]["equals"] not in names]
+    # each once: two managed rows of one mod share a partner, and a setup named twice would be prepared twice
+    return [by[n] for n in dict.fromkeys(names + partners)]
 
 
 def expectation(setup, platform, which) -> "dict | None":
@@ -440,6 +504,9 @@ def expectation(setup, platform, which) -> "dict | None":
 def verdict(o, setup, platform):
     """Meets the goal; or matches today's accepted behaviour (a known gap); or neither."""
     goal = expectation(setup, platform, "goal")
+    # judged again after each stage, in whichever order the stages end: nothing an earlier judging set outlives it
+    o.pop("today", None)
+    o.pop("differs_today", None)
     o["goal"], o["differs"] = goal, judge(o, goal)
     if not o["differs"]:
         o["verdict"] = "meets goal"
@@ -481,9 +548,18 @@ def lever_file(lever) -> tuple:
 # seam): the picture comes back through the lane's retry or a pass stays off until a new swapchain,
 # and either way a player would have seen it. No pixel check sees most of them -- a dead HUD leaves
 # the side panel right -- so they are judged by name. A suite that fits the device never meets one
-# (GameSlots), so one here is the renderer's footprint growing or something else on the GPU.
+# (GameSlots, the run lock's GPU tokens), so one here is something else on the GPU, or a game whose
+# own allocations reached the GPU memory cap its token was sized on (tools/runlock-vram.cfg), which
+# the DLL names as such (`vk: gpumem: the cap refuses`): the cap is then too small for that game.
+#
+# CAP REFUSED. That last kind fails a game whatever its setup expects and whatever lever refuses
+# the device on purpose (`refuse_lever`, `stage_refused`): a lever's refusals are the DLL's own
+# doing, the cap's mean the suite's figure is too small (tools/runlock-suites.cfg). Every game
+# this tool starts is read for them across its launches and rotations once it has stopped
+# (talog.CapWatch): the run, each peer of the network game, the ImpAI stage and a mod's install.
 DEVICE_REFUSED = re.compile(
-    r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
+    r"^(?:vk: gpumem: the cap refuses .*"
+    r"|vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
     r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
     r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*"
     # the one line every refusal of a pass the picture needs passes through, logged or not, and the end of the road
@@ -548,9 +624,11 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     miss = []
     if g["gave_up"]:
         miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
-    if g.get("refused") and not (exp.get("refuse_lever") or exp.get("stage_refused")):
-        miss.append(f"the device refused the renderer's memory ({len(g['refused'])}x), "
-                    f"first: {g['refused'][0][:120]}")
+    # the cap's own refusals are judged by `judge` on the run's whole log, lever or not (CAP REFUSED)
+    refused = [r for r in g.get("refused", []) if not talog.CAP_REFUSED_RX.match(r)]
+    if refused and not (exp.get("refuse_lever") or exp.get("stage_refused")):
+        miss.append(f"the device refused the renderer's memory ({len(refused)}x), "
+                    f"first: {refused[0][:120]}")
     # The lever's refusal has to have happened, and the lane has to have come back from it: the
     # side-panel step and the frames that follow then judge the picture it came back with.
     if exp.get("refuse_lever") and not g.get("lane_back"):
@@ -671,10 +749,23 @@ def judge(o: dict, exp: dict) -> list:
                     f"{', '.join(c['missing'])} missing from the engine's {c.get('types', 0)} unit types"))
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
+    miss += battle_seat_misses(o, exp)
     if o.get("smoke") is not None and not o["smoke"].get("ok", False):
         miss.append(f"the Windows in-game smoke failed: {o['smoke'].get('why', '?')}")
     if o.get("mp") is not None and not o["mp"].get("ok", False):
         miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
+    st = o.get("impai")
+    if st is not None:
+        # An ImpAI the setup cannot have is a gap only where its expectation says so (`"impai":
+        # "unavailable"`, the owner's call); everything else the stage finds fails it.
+        if st.get("available") is False and exp.get("impai") != "unavailable":
+            miss.append("ImpAI is unavailable: " + ("; ".join(st.get("unavailable_why") or [])
+                                                    or "the level init marked no seat"))
+        if not st.get("ok"):
+            miss.append(f"the ImpAI stage failed: {st.get('why') or '?'}")
+    # CAP REFUSED: whatever the setup expects, and whatever lever refuses the device on purpose
+    if o.get("cap"):
+        miss.append(o["cap"])
     miss += gui_misses(o.get("gui"), exp)
     miss += hud_misses((o.get("battle") or {}).get("hud"), exp)
     miss += dialog_misses((o.get("battle") or {}).get("dialog"))
@@ -719,8 +810,15 @@ def snapshot_dll(dll: Path) -> Path:
     return snap
 
 
-def report(results, platform, dll, started, strict=False, source=None) -> int:
-    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}"
+def results_dir(platform, started) -> Path:
+    """The run's results folder: its start and platform, and the run's tag inside a run, since two
+    runs can start in one second (tools/runlock.py, TAGS)."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
+    return RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}{run}"
+
+
+def report(results, platform, dll, started, strict=False, source=None, out=None) -> int:
+    out = out or results_dir(platform, started)
     out.mkdir(parents=True, exist_ok=True)
     for r in results:
         d = out / r["setup"]
@@ -744,7 +842,10 @@ def report(results, platform, dll, started, strict=False, source=None) -> int:
         mp = r.get("mp")
         net = ("no mp" if r.get("mp_skip") else "-") if mp is None else \
               ("mp ok" if mp["ok"] else "mp FAILED")
-        lines.append(f"  {mark[r['verdict']]} {r['setup']:22} {r['outcome']:18} {net:9}{box}")
+        st = r.get("impai")
+        ai = "-" if st is None else "ai n/a" if st.get("available") is False else \
+             ("ai ok" if st["ok"] else "ai FAILED")
+        lines.append(f"  {mark[r['verdict']]} {r['setup']:22} {r['outcome']:18} {net:9} {ai:9}{box}")
         if r["verdict"] == "UNEXPECTED":
             for m in r.get("differs_today") or r.get("differs", []):
                 lines.append(f"      {m}")
@@ -757,6 +858,88 @@ def report(results, platform, dll, started, strict=False, source=None) -> int:
     if n["UNEXPECTED"] or (strict and n["known gap"]):
         return 1
     return 0
+
+
+# ----------------------------------------------------------------- resuming a run
+#
+# A Wine run writes each setup's result into its results folder the moment the setup settles: its
+# evidence files first, then `<setup>/verdict.json`, written to a temporary name, flushed and renamed
+# over. A setup the run did not finish -- interrupted in any stage -- therefore has no verdict file,
+# and `wine --resume DIR` plays it whole, beside every setup DIR has none for, and reads the rest back.
+# The cross-row comparisons (compare_managed) are made again from the results at the report, so a
+# managed row and its drop-in row may come from the two sittings. `run.json` holds what the run plays
+# and the DLL's hash; a resume that differs in either is refused, because its report would be one
+# run of two builds or two suites.
+
+VERDICT = "verdict.json"
+RUN_FILE = "run.json"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def wine_plays(args) -> dict:
+    """The arguments that decide what a Wine run plays and how it is judged: two sittings of one run
+    must agree on every one. The pool sizes, the DLL's path, the setup names, --screens (pictures
+    only) and --strict (the exit code only) are not among them."""
+    return {k: getattr(args, k) for k in ("watch", "battle", "mp", "mp_impai", "impai", "impai_survey",
+                                          "impai_seat", "refuse")}
+
+
+def run_stamp(out: Path, plays: dict, dll_md5: str):
+    """The run's `run.json`: what it plays and the DLL's hash, which a resume must match."""
+    write_atomic(out / RUN_FILE, json.dumps({"platform": "wine", "plays": plays, "dll_md5": dll_md5},
+                                            indent=2) + "\n")
+
+
+def resume_refusal(out: Path, plays: dict, dll_md5: str) -> "str | None":
+    """Why the run in `out` cannot be resumed with these arguments and this DLL, None when it can."""
+    try:
+        was = json.loads((out / RUN_FILE).read_text())
+    except (OSError, ValueError) as e:
+        return f"{out} holds no run to resume ({RUN_FILE}: {e})"
+    if was.get("platform") != "wine":
+        return f"{out} is a {was.get('platform')} run"
+    if was.get("dll_md5") != dll_md5:
+        return (f"{out} was played with the DLL {str(was.get('dll_md5'))[:12]}, this one is {dll_md5[:12]}: "
+                f"a resumed run is one build")
+    then = was.get("plays") or {}
+    differ = [f"{k} {then.get(k)!r} there, {v!r} here" for k, v in plays.items() if then.get(k) != v]
+    return f"{out} played other arguments: {'; '.join(differ)}" if differ else None
+
+
+def settled_results(out: Path, names) -> dict:
+    """{setup: its result} for each of `names` whose verdict file `out` holds."""
+    got = {}
+    for name in names:
+        f = out / name / VERDICT
+        if f.is_file():
+            got[name] = json.loads(f.read_text())
+    return got
+
+
+def persist(out: Path, o: dict):
+    """A settled setup's evidence and then its verdict file (VERDICT, above). The result in memory is
+    replaced by its JSON round trip, so a row played now and a row read back compare alike."""
+    d = out / o["setup"]
+    d.mkdir(parents=True, exist_ok=True)
+    o["log_facts"] = log_facts((o.get("_files") or {}).get("tagpu.log", ""))
+    for name, text in o.pop("_files", {}).items():
+        (d / name).write_text(text, errors="replace")
+    for name, src in o.pop("_temps", {}).items():
+        if Path(src).exists():
+            shutil.move(src, d / name)
+    text = json.dumps(o, indent=2) + "\n"
+    write_atomic(d / VERDICT, text)
+    o.clear()
+    o.update(json.loads(text))
 
 
 # ------------------------------------------------------------------------- Wine
@@ -794,7 +977,7 @@ def xvfb_reply(fd):
     return answer
 
 
-def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
+def start_xvfb(n: 'int | None' = None, screen: str = '1280x1024x24') -> subprocess.Popen:
     """Own a server only after its readiness pipe confirms the display it bound.
 
     With no number, Xvfb reserves one atomically. An existing socket is not an
@@ -805,8 +988,11 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
     p = None
     try:
         argv = ['Xvfb'] + ([f':{n}'] if n is not None else [])
+        # -noreset: a server that regenerates when its last client leaves drops the clients
+        # connecting meanwhile, and a game whose Wine loses its display ends before a window
+        # (tareplay.py's start_xvfb says how, with the measurements)
         p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
-                                    '1280x1024x24', '-nolisten', 'tcp'],
+                                    screen, '-nolisten', 'tcp', '-noreset'],
                              pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
                              stderr=errors, start_new_session=True)
         os.close(write_fd)
@@ -847,18 +1033,25 @@ def stop_xvfb(p: subprocess.Popen):
         p.wait()
 
 
+SUFFIX_ROOM = 3                 # the longest suffix an instance of a setup takes (inst_name)
+
+
 def inst_name(setup_name: str, suffix="") -> str:
-    """The tacli instance name for a setup. tacli takes 32 characters, and both instances of a
-    setup have to fit inside them -- the single-player one and the joiner's `-j` -- so the room is
-    always measured as though the suffix were there and a long name is cut to its head plus three
-    hex digits of its hash, which keeps two long names of one family apart. `retail+tadr-recorder-
-    ota` is the first that does not fit."""
+    """The tacli instance name for a setup, carrying the run's tag (tools/runlock.py, TAGS) when
+    this process is inside a run: two runs at once never make or remove each other's instances,
+    and a run's names are the ones the last run on the same tag left, which prepare_wine replaces.
+    A probe started by hand outside any run gets the name with no tag. tacli takes 32 characters,
+    and every instance of a setup has to fit inside them -- the single-player one, the joiner's
+    `-j` and the wiki gate's `-wh`, `-wj` and `-wk` -- so the room is always measured as though
+    the longest suffix were there and a long name is cut to its head plus three hex digits of its
+    hash, which keeps two long names of one family apart."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
     base = re.sub(r"[^a-z0-9]+", "-", setup_name.lower()).strip("-")
-    room = 32 - len(PREFIX) - 2
+    room = 32 - len(PREFIX) - len(run) - SUFFIX_ROOM
     if len(base) > room:
         base = (base[:room - 4].rstrip("-") + "-" +
                 hashlib.md5(base.encode()).hexdigest()[:3])
-    return PREFIX + base + suffix
+    return PREFIX + base + run + suffix
 
 
 UNIT_FOLDERS = ("units", "unitsE", "ZUnits")
@@ -889,8 +1082,8 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
     xv = start_xvfb()
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{xv.tacompat_display}", WINEDEBUG=WINEDEBUG,
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", ALSA_CONFIG_PATH=str(ASOUND_NULL))
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            stdin=subprocess.DEVNULL, start_new_session=True)
+    caps = talog.CapWatch(gamedir)      # CAP REFUSED
+    proc = start_game(gamedir, env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     said = ""
     try:
         # The installer ends in a log line on its own, its network calls being bounded, so the game's end and the suite's
@@ -910,6 +1103,9 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
         xv.terminate()
         server.shutdown()
         lever.unlink()
+    refused = caps.failure()
+    if refused:
+        die(f"the start that installs {mod}: {refused}")
     if "installed" not in said or not (gamedir / "mods" / f"{mod}.new" / "installed.txt").is_file():
         die(f"the DLL did not install {mod}: {said or 'its log says nothing of it'}")
 
@@ -933,18 +1129,9 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     gamedir, prefix = Path(meta["gamedir"]), Path(meta["prefix"])
     if not meta.get("private_registry"):
         die(f"{name}: tacli made the prefix without registry hives of its own")
-    env = dict(os.environ, WINEPREFIX=str(prefix))
     if DPLAY_SRC.is_dir():
         subprocess.run(["bash", str(DPINSTALL), str(prefix), str(DPLAY_SRC)],
                        capture_output=True, check=True)
-    # The skirmish map the battle is built for (`battle_map`). The SKIRMISH screen loads the
-    # saved map's preview the moment it opens, so a map the setup lacks is a box before any
-    # gadget can pick another. A mod whose loader moves the registry (Mayhem: Software\TotalM)
-    # names its root in the setup.
-    for root in ["Software\\Cavedog Entertainment"] + setup.get("registry_roots", []):
-        subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
-                        "/t", "REG_SZ", "/d", battle_map(setup), "/f"], env=env, capture_output=True, timeout=120)
-    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
     for dest, src in overlay(setup):
         target = gamedir / dest
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1015,7 +1202,46 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())
-    return {"name": name, "gamedir": gamedir, "prefix": prefix}
+    # The skirmish map the battle is built for (`battle_map`), saved under every root the
+    # game may read (known_roots), now that the folder holds its exe. The SKIRMISH screen loads the
+    # saved map's preview the moment it opens, so a map the setup lacks is a box before any gadget
+    # can pick another; the battle reads the root in the game's memory before it walks in.
+    roots = known_roots(setup, gamedir)
+    seed_battle_map(prefix, roots, battle_map(setup))
+    return {"name": name, "gamedir": gamedir, "prefix": prefix, "roots": roots}
+
+
+def as_test_instance(inst: dict) -> "dpport.Lease":
+    """The instance prepare_wine made, readied for tacli's own launches (a TEST launch: the token and the store,
+    tagpu_regstore.h) instead of a player's, and the DirectPlay port leased for it, which the caller holds while the
+    instance lives and closes when it removes it (a lease goes with its process if that ends first):
+      - the store prepare_wine parks is put back, so the DLL serves the registry from it;
+      - the instance is marked to run native DirectPlay (tacli's sticky `dplay`, DPLAY_OVERRIDES), as the player's
+        launch here always does (start_game's environment). Without it Wine's builtin dplayx.dll stands in for the
+        folder's own: the Patch Loader of Total Mayhem and ProTA, which the exe imports as DPLAYX.dll, never runs
+        and its renames with it, and the builtin's registry imports, which the store does not answer, end the test
+        launch at attach (MEASURED 2026-11-13, mayhem-11.3.0: "5 of DPLAYX.dll's 8 registry imports are not
+        answered by the store"; with the mark the same folder reached its level and the loader's root
+        HKCU\\Software\\TotalM was asked for);
+      - that native DirectPlay is moved to a port of its own, leased (tools/dpport.py, A PORT A GAME, LEASED) and
+        saved as the instance's `dplay_port`, which tacli patches into the prefix at every launch: so every game
+        launched with native DirectPlay holds its own port whatever the game does, a skirmish that hosts no
+        session included, and no two live instances share one."""
+    gamedir = Path(inst["gamedir"])
+    parked = gamedir / (taremote.STATE_DIR + ".off")
+    if parked.is_dir():
+        parked.rename(gamedir / taremote.STATE_DIR)
+    lease = dpport.lease()
+    try:
+        meta_path = INSTANCES / inst["name"] / "instance.json"
+        meta = json.loads(meta_path.read_text())
+        meta["dplay"] = True
+        meta["dplay_port"] = lease.port
+        write_atomic(meta_path, json.dumps(meta, indent=2))
+    except BaseException:
+        lease.close()
+        raise
+    return lease
 
 
 def x_windows(display: int) -> list:
@@ -1168,19 +1394,48 @@ def differs_from_dropin(s, o, d) -> list:
         wrong = [t for t in set(host) | set(join) if host.get(t) != join.get(t)]
         if wrong:
             out.append(f"CRC_all differs from a drop-in peer in the same game on {sorted(wrong)[:6]}")
-    log = (o.get("_files") or {}).get("tagpu.log", "")
-    if not re.search(r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS), log, re.I):
+    fa, fb = o.get("log_facts") or {}, d.get("log_facts") or {}
+    if not fa.get("loose_refused"):
         out.append("the log names no loose unit file as refused: the decoy never reached the closed step")
-    name = re.compile(r"its archives name (\S+?),")
-    ma, mb = name.search(log), name.search((d.get("_files") or {}).get("tagpu.log", ""))
-    if not ma or not mb or ma.group(1) != mb.group(1):
-        out.append(f"the replays name this game {ma and ma.group(1)}, its drop-in folder {mb and mb.group(1)}")
+    ga, gb = fa.get("archives_name"), fb.get("archives_name")
+    if not ga or not gb or ga != gb:
+        out.append(f"the replays name this game {ga}, its drop-in folder {gb}")
     return out
+
+
+def log_facts(text: str) -> dict:
+    """What the managed comparison reads of a run's tagpu.log: whether a loose unit file was refused (the decoy reached
+    the closed step) and the name the replays give the game from its archives. Read when the result is persisted, the
+    last moment its files are in memory, and kept in it, so a row read back is compared like one played now."""
+    loose = r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS)
+    name = re.search(r"its archives name (\S+?),", text)
+    return {"loose_refused": bool(re.search(loose, text, re.I)), "archives_name": name and name.group(1)}
+
+
+def folder_wrong(s) -> list:
+    """What a managed row's own game folder shows wrong once its run is over: a refusal's box and its impure.cfg, a
+    fetched package's swap. Read when the setup settles, while its instance is the one this run played, and kept in
+    its result (`folder_wrong`), so a run resumed from the results folder judges it without the folder."""
+    wrong = []
+    if s.get("refusal"):
+        gamedir = s["_inst"]["gamedir"]
+        said = gamedir / "log" / "startup-failure.txt"
+        if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
+            wrong.append(f"the box does not say that {s['refusal']}")
+        cfg = gamedir / "impure.cfg"
+        if cfg.is_file() and re.search(rb"(?m)^mod=", cfg.read_bytes()):
+            wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
+    elif s.get("equals") and s.get("fetched"):
+        mods = s["_inst"]["gamedir"] / "mods"
+        if (mods / f"{s['managed']}.new").exists() or not (mods / s["managed"] / "installed.txt").is_file():
+            wrong.append("the start did not swap the downloaded package in")
+    return wrong
 
 
 def compare_managed(results):
     """Each managed row against its drop-in row of the same run, and each refusal against what it must say. A mod's files
-    coming from a package is otherwise invisible to every other check."""
+    coming from a package is otherwise invisible to every other check. Reads only the results: what a row's own
+    folder showed is its `folder_wrong`."""
     by = {r["setup"]: r for r in results}
     for s in SETUPS:
         o = by.get(s["name"])
@@ -1188,20 +1443,12 @@ def compare_managed(results):
             continue
         wrong = []
         if s.get("refusal"):
-            gamedir = s["_inst"]["gamedir"]
-            said = gamedir / "log" / "startup-failure.txt"
-            if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
-                wrong.append(f"the box does not say that {s['refusal']}")
-            if re.search(rb"(?m)^mod=", (gamedir / "impure.cfg").read_bytes()):
-                wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
+            wrong = list(o.get("folder_wrong") or [])
             print(f"  {s['name']}: " + (f"WRONG: {wrong}" if wrong else "the box said why, and mod= is gone"))
         elif s.get("equals"):
             d = by.get(s["equals"])
             wrong = differs_from_dropin(s, o, d) if d else [f"{s['equals']} did not run, so nothing was compared"]
-            if s.get("fetched"):
-                mods = s["_inst"]["gamedir"] / "mods"
-                if (mods / f"{s['managed']}.new").exists() or not (mods / s["managed"] / "installed.txt").is_file():
-                    wrong.append("the start did not swap the downloaded package in")
+            wrong += o.get("folder_wrong") or []
             content = o.get("content") or {}
             join = ((o.get("mp") or {}).get("crcs") or {}).get("join") or {}
             print(f"  {s['name']}: against {s['equals']}: {len(content.get('names') or [])} types by key and by ID, "
@@ -1287,9 +1534,13 @@ def beats(gamedir: Path, since=0) -> "tuple[int, int] | None":
         data = (gamedir / "log" / "tagpu.log").read_bytes()
     except OSError:
         return None
-    if len(data) < since:
-        since = 0
-    return len(re.findall(rb"^GUI flips=", data[since:], re.M)), len(data)
+    return beats_in(data, since), len(data)
+
+
+def beats_in(data, since: int) -> int:
+    """The heartbeats in a log's bytes from byte `since` on; a log shorter than `since` was
+    rotated, and is counted whole."""
+    return len(re.findall(rb"^GUI flips=", data[since:] if len(data) >= since else data, re.M))
 
 
 def presents(gamedir: Path) -> "int | None":
@@ -1302,19 +1553,25 @@ def presents(gamedir: Path) -> "int | None":
 def presents_after(gamedir: Path, n=2) -> bool:
     """Until `n` heartbeats are logged after now, so at least (n - 1) x PRESENTS_PER_BEAT frames
     were presented after it; False when the heartbeats stood still for STALL_S."""
-    got = beats(gamedir)
-    if got is None:
+    log = talog.Tail(gamedir / "log" / "tagpu.log")
+    try:
+        log.read()
+    except OSError:
         return False
-    since, seen, at = got[1], 0, time.monotonic()
+    since, seen, at = len(log.data), 0, time.monotonic()
     while True:
-        got = beats(gamedir, since)
-        if got and got[0] >= n:
+        try:
+            log.read()
+            got = beats_in(log.data, since)
+        except OSError:
+            got = None
+        if got and got >= n:
             return True
-        if got and got[0] != seen:
-            seen, at = got[0], time.monotonic()
+        if got and got != seen:
+            seen, at = got, time.monotonic()
         elif time.monotonic() - at > STALL_S:
             return False
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
 
 
 def alive_after_apply(gamedir: Path) -> "int | None":
@@ -1323,23 +1580,80 @@ def alive_after_apply(gamedir: Path) -> "int | None":
     from a later flip's trigger family, and the header is written from a frame's packet, so a
     header after that line is of a frame that holds the units. None when there is none."""
     end = time.monotonic() + ACK_S
+    log, applied, at = talog.Tail(gamedir / "log" / "tagpu.log"), b"scenario: applied=", -1
     while True:
         try:
-            text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+            new = log.read()
         except OSError:
-            text = ""
-        at = text.rfind("scenario: applied=")
-        m = re.search(r"^units: alive=(\d+)", text[at:], re.M) if at >= 0 else None
+            new = 0
+        # the newest applier line: the one found before, unless the bytes since hold a later one
+        if not new:
+            at = -1
+        at = max(at, log.data.rfind(applied, max(0, new - len(applied) + 1)))
+        # complete lines only: a look inside the sink's write of a header would read a cut count
+        whole = log.data.rfind(b"\n") + 1
+        m = re.search(rb"^units: alive=(\d+)", log.data[at:whole], re.M) if at >= 0 else None
         if m:
             return int(m.group(1))
         if time.monotonic() >= end:
             return None
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
 
 
 def scenarios(setup) -> dict:
     """The scenarios a setup's battle and network game apply, by role."""
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
+
+
+def group_reach(group: dict) -> float:
+    """How far from its `at` any unit of a scenario group can stand: the formation's half extent (tacli's
+    _scn_points, `at` the formation's centre) plus its jitter in both axes -- a bound, not the placement."""
+    p, n = group["pattern"], sum(c.get("count", 1) for c in group["composition"])
+    spacing, jitter = p.get("spacing", 0), p.get("jitter", 0)
+    if p["kind"] == "grid":
+        cols = min(p["cols"], n) or 1
+        rows = -(-n // cols)
+        half = math.hypot((cols - 1) / 2 * spacing, (rows - 1) / 2 * spacing)
+    elif p["kind"] == "line":
+        half = (n - 1) / 2 * spacing
+    else:
+        half = math.hypot(p["size"][0] / 2, p["size"][1] / 2)
+    return half + jitter * math.sqrt(2)
+
+
+def wave_misses(scen: dict, starts: dict, records: int = MP_RECORDS, clear: float = WAVE_CLEAR) -> list:
+    """THE FIGHT STAYS OFF THE SEATS: each group and unit of `scen` that can stand within `clear` of
+    StartPos1..`records` ({N: (x, z)}, bar.start_positions), named; a start the map lacks is named too."""
+    miss = [f"the map has no StartPos{k}" for k in range(1, records + 1) if k not in starts]
+    where = [(g["id"], g["at"], group_reach(g)) for g in scen.get("groups", [])]
+    where += [(u.get("id", u["type"]), u["pos"], 0.0) for u in scen.get("units", [])]
+    for name, at, reach in where:
+        for k in range(1, records + 1):
+            if k in starts:
+                d = math.dist(at, starts[k]) - reach
+                if d < clear:
+                    miss.append(f"{name} at {at} can stand {max(d, 0):.0f} from StartPos{k} {starts[k]}, "
+                                f"inside {clear}")
+    return miss
+
+
+def mp_wave_misses(scens: dict, gamedirs: list) -> list:
+    """wave_misses of both halves of a network game, against the starts of their map as each peer's own files
+    hold it (tavfs.Vfs over the game folder, the engine's mount order); `could not` lines when a map is not
+    there to read."""
+    import tavfs
+    sys.path.insert(0, str(TREE / "tools" / "impai"))
+    import bar
+    miss = []
+    for role, gamedir in zip(("host", "join"), gamedirs):
+        scen = json.loads((TREE / "scenarios" / f"{scens[role]}.json").read_text())
+        try:
+            starts = bar.start_positions(scen["setup"]["map"], MP_RECORDS, tavfs.Vfs(Path(gamedir)))
+        except (bar.BarError, tavfs.VfsError, OSError) as e:
+            miss.append(f"{role}: could not read {scen['setup']['map']}'s starts: {e}")
+            continue
+        miss += [f"{role}: {scens[role]}: {m}" for m in wave_misses(scen, starts)]
+    return miss
 
 
 def battle_map(setup) -> str:
@@ -1520,7 +1834,7 @@ def wiki_stage_refused(name, gamedir: Path) -> "str | None":
                 d = json.loads(out.read_text())
         except ValueError:
             pass
-        time.sleep(0.2)
+        time.sleep(LOOK_S)
     rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == "wiki"), None)
     if not rect:
         return f"the last frame has no wiki button: {[h['key'] for h in d.get('hits', [])][:8]}"
@@ -1608,50 +1922,27 @@ def hud_misses(hud: "dict | None", exp: dict) -> list:
     return []
 
 
-# A GAME'S DEVICE MEMORY, MEASURED 2026-11-06 on an RTX 4070 alone (917-921 MiB) and at its worst
-# with others on the GPU (935), a 200v200 skirmish on the default settings. 1000 leaves it room.
-GAME_DEVICE_MIB = 1000
-
-
-def device_free_mib() -> "int | None":
-    """What the largest GPU has free now, or None where nothing here can say: `nvidia-smi`, or the
-    amdgpu driver's counters. Intel's shared memory and Windows have no such limit to plan for."""
-    try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.total,memory.used",
-                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=30)
-        rows = [[int(v) for v in l.split(",")] for l in r.stdout.splitlines() if l.strip()]
-        if r.returncode == 0 and rows:
-            return max(a - b for a, b in rows)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pass
-    free = []
-    for total in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
-        try:
-            used = total.with_name("mem_info_vram_used")
-            free.append((int(total.read_text()) - int(used.read_text())) >> 20)
-        except (OSError, ValueError):
-            pass
-    return max(free, default=None)
-
-
 class GameSlots:
-    """How many games may hold device memory at once, so a suite cannot refuse itself its memory.
+    """How many games may hold device memory at once: the run lock's games(), the GPU tokens this
+    run holds (tools/runlock.py, THE VRAM TOKENS), so no run, this one or another, is refused its
+    memory.
 
     A BOUND, NOT A TIMING: the pools are sized for the CPU, and a battle plus a two-player game
     per pool is 18 games at about 900 MiB each, which is what filled a 12 GB card (MEASURED
     2026-11-06: 11 824 of 12 282 MiB, and four setups lost their UI). A run takes its slots before
-    its game starts and gives them back after its game has ended. `capacity` None is no bound."""
+    its game starts and gives them back after its game has ended."""
 
-    def __init__(self, capacity: "int | None"):
+    def __init__(self, capacity: int):
         self.capacity, self.free = capacity, capacity
         self.cv = threading.Condition()
 
     def hold(self, n: int, fn, *args, **kw):
         """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
-        and two of them can never each hold half of what they need."""
-        if self.capacity is None:
-            return fn(*args, **kw)
-        n = min(n, self.capacity)
+        and two of them can never each hold half of what they need. More than the run has would
+        wait forever, and is refused: a run that may play fewer games at once than a network game
+        has peers plays none (runlock.together, cmd_wine)."""
+        if n > self.capacity:
+            raise ValueError(f"{n} game slots asked of a run of {self.capacity}")
         with self.cv:
             self.cv.wait_for(lambda: self.free >= n)
             self.free -= n
@@ -1661,20 +1952,6 @@ class GameSlots:
             with self.cv:
                 self.free += n
                 self.cv.notify_all()
-
-
-def game_slots(jobs: int, mp_jobs: int) -> GameSlots:
-    """The bound for this run: what the device has free now, at GAME_DEVICE_MIB a game. Never
-    below two, because a network game is two games and a smaller GPU still has to run them."""
-    free = device_free_mib()
-    wanted = jobs + 2 * mp_jobs
-    if free is None:
-        print(f"device memory: unknown here, {wanted} games at once at most")
-        return GameSlots(None)
-    can = max(2, free // GAME_DEVICE_MIB)
-    print(f"device memory: {free} MiB free, {min(can, wanted)} games at once at most"
-          + (f" (the pools alone would run {wanted})" if can < wanted else ""))
-    return GameSlots(can if can < wanted else None)
 
 
 def wine_skirmish(name, proc) -> "str | None":
@@ -1720,14 +1997,16 @@ def wine_skirmish(name, proc) -> "str | None":
 def log_says(gamedir: Path, text: str, seconds: float) -> bool:
     """Whether tagpu.log comes to hold `text` within `seconds`. A bound on the wait for a line the
     render thread writes within a second of the lever; the run fails by name when it never does."""
+    log, want = talog.Tail(gamedir / "log" / "tagpu.log"), text.encode()
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         try:
-            if text in (gamedir / "log" / "tagpu.log").read_text(errors="replace"):
+            new = log.read()
+            if log.data.find(want, max(0, new - len(want) + 1)) >= 0:
                 return True
         except OSError:
             pass
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
     return False
 
 
@@ -1753,13 +2032,17 @@ def refuse_once(gamedir: Path, device_full: "str | None" = None) -> "str | None"
     # The heartbeats count the overlay's frames, which run with the lane down too, so the lane's
     # own line after the retry's is what says it is up, and only then do they say it presented.
     end = time.monotonic() + 90
+    log, back, at = talog.Tail(gamedir / "log" / "tagpu.log"), GUI_LANE_BACK.encode(), -1
     while True:
-        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
-        if "vk: up in " in text[text.rfind(GUI_LANE_BACK):]:
+        new = log.read()
+        if not new:
+            at = -1
+        at = max(at, log.data.rfind(back, max(0, new - len(back) + 1)))
+        if b"vk: up in " in log.data[at:]:
             break
         if time.monotonic() > end:
             return "the lane was retried and the log never said it came up"
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
     if not presents_after(gamedir):
         return f"no frame presented for {STALL_S} s after the lane came back"
     return None
@@ -1797,6 +2080,23 @@ def refuse_to_gdi(name, display, gamedir: Path, device_full: "str | None" = None
     return {"opened": 1.0, "stale": stale, "where": str(where)}, None
 
 
+def wine_menu(name, proc, display, seen, boxes, t0) -> bool:
+    """Whether a started game reached its main menu within POLL_S, before any box and while alive."""
+    end = time.time() + POLL_S
+    while time.time() < end and not boxes and proc.poll() is None:
+        time.sleep(2)
+        new_boxes(display, seen, boxes, t0)
+        if "MAINMENU" in (tacli("ui", name, timeout=15).stdout.splitlines() or [""])[0]:
+            return True
+    return False
+
+
+def scenario_map(scenario: str) -> str:
+    """The map a scenario of `scenarios/` names (`setup.map`), BATTLE_MAP when it names none."""
+    f = TREE / "scenarios" / f"{scenario}.json"
+    return (json.loads(f.read_text()).get("setup") or {}).get("map") or BATTLE_MAP if f.is_file() else BATTLE_MAP
+
+
 def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None,
                 device_full=None, wiki_refused=False, menu_reset=False) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
@@ -1807,6 +2107,12 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
     why = wine_skirmish(name, proc)
     if why:
         return {"ok": False, "why": why}
+    want = scenario_map(scenario)
+    got = loaded_map(name)
+    if got is None or got.lower() != want.lower():
+        return {"ok": False, "hud": None,
+                "why": f"the skirmish loaded {got or 'no map the game names'}, not the battle's {want} (the saved map "
+                       f"under {', '.join(inst['roots'])})"}
     # Before the scenario: it clears the map (clear_existing), commanders and all. The commander
     # check comes first, since the side-panel step below selects the commander.
     cmd = commanders(name)
@@ -1857,11 +2163,13 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
             if soak.done():
                 break
         except Stalled as e:
-            return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})"}
+            return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})",
+                    "impai_seat": battle_impai_misses(battle_log(gamedir), battle_ai_records(scenario))}
     why = terrain_drew(gamedir)
     if why:
         return {"ok": False, "hud": hud, "why": f"{why} ({applied})"}
-    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog}
+    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog,
+            "impai_seat": battle_impai_misses(battle_log(gamedir), battle_ai_records(scenario))}
 
 
 # ------------------------------------------------------- the running game's own code
@@ -2080,7 +2388,8 @@ def folder_files(gamedir: Path) -> dict:
 
 def game_pid(root: int, exe_real: str) -> "int | None":
     """The pid whose memory holds the game. `wine TotalA.exe` maps the PE in the process
-    Popen started or in a child of it, so the launcher's pid is not always the game's. Only
+    started or in a child of it, and inside a run with GPU memory start_game's `pid` is the game's
+    keeper, its parent, so the launcher's pid is not always the game's. Only
     descendants of `root` are looked at: a ptrace_scope of 1 lets a process read its own
     descendants and nothing else, and another session's game must never be read."""
     for pid in descendants(root):
@@ -2272,9 +2581,12 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
-                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
+
+    def launch():
+        return start_game(gamedir, env, stdout=log, stderr=subprocess.STDOUT)
+    caps = talog.CapWatch(gamedir)      # both launches, every rotation (CAP REFUSED)
+    proc = launch()
+    first_log = None                    # the start-up's tagpu.log when the battle needed a second launch
     boxes, seen, menu, shots = [], set(), None, {}
     impure_log = gamedir / "log" / "tagpu.log"
     # THE START-UP WATCH ends on a fact: the process gone, the first box, or the menu watched for
@@ -2347,12 +2659,36 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         # network game (mp_eligible): gui-stress's fresh start every 120 presents, run on
         # through a battle, spends the layer's 32 repaints of a palette generation by design.
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
-            fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
-                                scenarios(setup)["battle"],
-                                refuse=setup.get("refuse_in_battle"),
-                                device_full=setup.get("device_full"),
-                                wiki_refused=setup.get("wiki_refused", False),
-                                menu_reset=setup.get("menu_reset", False))
+            # THE BATTLE IS PLAYED ON ITS OWN MAP OR NOT AT ALL: the saved map is read under the
+            # registry root in the game's memory (REG_ROOT_VA), so a root prepare_wine had not
+            # seated is seated now and the game started again, and the walk's map is read back.
+            try:
+                root = game_registry_root(inst["name"])
+                if root.lower() not in {r.lower() for r in inst["roots"]}:
+                    first_log = impure_log.read_text(errors="replace") if impure_log.exists() else ""
+                    subprocess.run(["wineserver", "-k"], env=env, capture_output=True, timeout=30)
+                    try:
+                        proc.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    seed_battle_map(prefix, [root], battle_map(setup))
+                    inst["roots"] = inst["roots"] + [root]
+                    proc = launch()
+                    if not wine_menu(inst["name"], proc, display, seen, boxes, t0):
+                        raise Lobby(f"started again to seat HKCU\\{root}, the main menu never came up")
+                    again = game_registry_root(inst["name"])
+                    if again.lower() != root.lower():
+                        raise Lobby(f"the game read its settings under HKCU\\{root}, then under HKCU\\{again}")
+                fight = {"registry_root": root, "restarted": first_log is not None}
+            except Lobby as e:
+                fight = {"ok": False, "hud": None, "why": str(e)}
+            if "why" not in fight:
+                fight.update(wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
+                                         scenarios(setup)["battle"],
+                                         refuse=setup.get("refuse_in_battle"),
+                                         device_full=setup.get("device_full"),
+                                         wiki_refused=setup.get("wiki_refused", False),
+                                         menu_reset=setup.get("menu_reset", False)))
             level = level_tables(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
@@ -2371,6 +2707,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
             proc.kill()
         stop_xvfb(xv)
         log.close()
+    cap = caps.failure()
     wlog = Path(log.name).read_text(errors="replace")
     # +loaddll names a module as L"Z:\\home\\...\\gamedir\\x.dll" (backslashes doubled):
     # the game folder's own modules are the ones under this instance's gamedir.
@@ -2383,6 +2720,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         return p.read_text(errors="replace") if p.exists() else None
 
     tagpu = read(impure_log) if impure_log.exists() and impure_log.stat().st_mtime >= t0 else None
+    if first_log is not None and tagpu is not None:     # both launches, in their order
+        tagpu = first_log + "\n# tacompat: the game started again for the battle's registry root\n" + tagpu
     o = {
         "setup": setup["name"], "platform": "wine",
         "boxes": boxes, "alive_at_end": alive,
@@ -2395,7 +2734,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
         "battle": fight, "hooks": hooks, "content": content, "level": level,
-        "seconds": round(time.time() - t0, 1), "watch_end": watch_end,
+        "seconds": round(time.time() - t0, 1), "watch_end": watch_end, "cap": cap,
     }
     logs = other_logs(gamedir / "log", t0)
     o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs) + hook_evidence(hooks)
@@ -2494,6 +2833,19 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
         time.sleep(2 if ours else 5)
 
 
+def start_game(gamedir, env, **out):
+    """`wine TotalA.exe` in `gamedir`, as tacli launches it for the run lock: the store carries the
+    run's GPU memory cap (runlock.write_gpumem) and, inside a run with GPU memory, the game's keeper
+    holds a seat of the run until every process of the game is reaped (runlock.start_game), so a
+    game started here stays inside the GPU memory its run took (tools/runlock.py, THE GPU MEMORY,
+    THE GAME SEATS, A SEAT IS LET GO AFTER ITS GAME). The handle answers for the game as a Popen
+    does; its `pid` is the root of the game's processes (game_pid looks below it)."""
+    runlock.write_gpumem(gamedir)
+    return runlock.start_game(["wine", "TotalA.exe"], f"{Path(gamedir).parent.name} (tacompat)",
+                              cwd=str(gamedir), env=env, stdin=subprocess.DEVNULL,
+                              start_new_session=True, **out)
+
+
 def start_wine(inst, display, *, display_server=None):
     """TotalA.exe in the instance's game folder on its own virtual display."""
     if display_server is None:
@@ -2507,9 +2859,7 @@ def start_wine(inst, display, *, display_server=None):
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
-                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
+    proc = start_game(inst["gamedir"], env, stdout=log, stderr=subprocess.STDOUT)
     return {"inst": inst, "display": display, "env": env, "xv": xv, "log": log, "proc": proc}
 
 
@@ -2577,8 +2927,10 @@ def lobby_to_selgame(inst, nick):
     lobby_field(inst, "NICKNAME", nick)
 
 
-def lobby_to_ready(host, join, port):
-    """tools/mp_lobby.sh's walk, host then joiner, as far as both being ready in one battle room on the battle's map."""
+def lobby_to_ready(host, join, port, ai=False):
+    """tools/mp_lobby.sh's walk, host then joiner, as far as both being ready in one battle room on the battle's map.
+    With `ai`, each peer adds one computer seat before it is ready, as recmp_create_begin_test.py's game does: the
+    host's row 2 (Unused, Blocked, AI: two clicks) and the joiner's row 3 (one)."""
     lobby_to_selgame(host, "HOST")
     lobby_ui(host, "click", "STARTNEW", timeout=30)
     lobby_field(host, "GAMENAME", "COMPAT")
@@ -2613,13 +2965,17 @@ def lobby_to_ready(host, join, port):
         time.sleep(5)
     lobby_ui(join, "click", "JOINGAME", timeout=30)
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
+    if ai:
+        for _ in range(2):
+            lobby_ui(host, "click", "PLAYER2", timeout=20)
+        lobby_ui(join, "click", "PLAYER3", timeout=20)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
     lobby_ui(host, "click", "READY0", timeout=20)
 
 
-def wine_lobby(host, join, port):
-    """The battle room's walk, then Start, into one live game."""
-    lobby_to_ready(host, join, port)
+def wine_lobby(host, join, port, ai=False):
+    """The battle room's walk, then Start, into one live game; with `ai`, a computer seat added on each peer."""
+    lobby_to_ready(host, join, port, ai)
     # THE ORACLE FOR START IS THE GAME COMING ALIVE, NOT THE CLICK'S ANSWER. The click that
     # starts the game takes away the gadget layer it was read from, so a click that worked can
     # still answer "no active gui" -- or, one patient retry later, name the in-game panel
@@ -2643,7 +2999,7 @@ def wine_lobby(host, join, port):
     return seen
 
 
-def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
+def run_wine_mp(setup, dll, seconds, taken, mine, ports, impai=False) -> dict:
     """Two players, the setup's folder on each, hosted and joined through the game's own
     battle room over Windows' DirectPlay, a small fight between them, then watched. Every
     peer's folder is read for TADR's evidence, and every peer's process for its code.
@@ -2654,6 +3010,10 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     the game is over. The host peer's single-player run has ended by now (this is queued from
     its result), and prepare_wine has just installed the joiner's stock DirectPlay, so the
     patch lands on files no process of the game has open yet.
+
+    With `impai` (--mp-impai) both peers' stores say `netai=impai` and each adds a computer
+    seat in the battle room, so each peer's ImpAI plays the seat it added; without it both
+    say `netai=ota`, whatever an earlier run left.
 
     Xvfb reserves each display atomically when its server starts. An earlier
     filesystem vacancy check cannot reserve it against another test driver."""
@@ -2671,12 +3031,18 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     try:
         for inst in (setup["_inst"], join):
             dpport.set_port(inst["prefix"], port)
+            store_set(inst["gamedir"], "netai", "impai" if impai else "ota")
         held = free_dplay_port(port, mine)
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, None, None, port,
-                      scenarios(setup))
+        near = mp_wave_misses(scenarios(setup), [setup["_inst"]["gamedir"], join["gamedir"]])
+        if near:
+            return {"ok": False, "why": "the network game's waves are not clear of the seats: " + "; ".join(near),
+                    "evidence": [], "port": port}
+        # THE CLAIM needs a pulse of each ImpAI seat's: its game is played past IMPAI_CLAIM_TICKS
+        out = play_mp(setup["_inst"], join, max(seconds, -(-IMPAI_CLAIM_TICKS // TICKS_PER_S)) if impai else seconds,
+                      None, None, port, scenarios(setup), impai)
         out["port"] = port
         return out
     except SystemExit as e:                     # dpport refused the files: say so, as a result
@@ -2685,14 +3051,16 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         ports.put(port)
 
 
-def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dict:
-    """The game itself: both peers started, walked into one game, fought, watched, read."""
+def play_mp(host, join, seconds, host_display, join_display, port, scens, impai=False) -> dict:
+    """The game itself: both peers started, walked into one game, fought, watched, read. With
+    `impai`, each peer adds a computer seat its ImpAI plays (impai_mp_misses)."""
     peers = {"host": host, "join": join}
     t0 = time.time()
     games = {}
     boxes, seen, why = [], set(), None
     shots, hooks, cmd_seen, sockets = {}, {}, {}, None
     crcs = {}
+    caps = {role: talog.CapWatch(inst["gamedir"]) for role, inst in peers.items()}    # CAP REFUSED
     try:
         try:
             games["host"] = start_wine(peers["host"], host_display)
@@ -2712,7 +3080,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
                 raise Lobby(f"a box before the menu: {boxes[0]['title']}")
             if len(menus) < 2:
                 raise Lobby(f"the main menu never came up on {', '.join(sorted(set(games) - menus))}")
-            cmd_seen = wine_lobby(peers["host"]["name"], peers["join"]["name"], port)
+            cmd_seen = wine_lobby(peers["host"]["name"], peers["join"]["name"], port, impai)
             for role, scen in ((r, scens[r]) for r in ("host", "join")):
                 r = tacli("scenario", "apply", peers[role]["name"], scen, timeout=180)
                 if r.returncode != 0:
@@ -2774,14 +3142,578 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
             out["_files"][f"mp-{role}-ErrorLog.txt"] = err.read_text(errors="replace")
         if not why and not out[role]["packet_pub"]:
             why = f"Impure drew nothing on the {role}'s game"
+    if impai and not why:
+        miss = impai_mp_misses({r: out["_files"][f"mp-{r}-tagpu.log"] for r in peers})
+        why = "; ".join(miss) or None
+    capped = [c for c in (caps[r].failure(f"the {r}") for r in peers if r in games) if c]
+    if capped:
+        why = "; ".join(capped + ([why] if why else []))
     out["ok"] = why is None
     if out["ok"] and not TRACE:
         for role in games:
             Path(shots.pop(f"mp-{role}-wine.log")).unlink(missing_ok=True)
-    out["why"] = why or (f"two players, {scens['host']} and {scens['join']} applied, {seconds} s; "
+    out["why"] = why or (f"two players{', an ImpAI seat each' if impai else ''}, {scens['host']} and "
+                         f"{scens['join']} applied, {seconds} s; "
                          + "; ".join(f"{k}: {v}" for k, v in cmd_seen.items()))
     out["seconds"] = round(time.time() - t0, 1)
     return out
+
+
+# ------------------------------------------------------------------------- Wine, the ImpAI stage
+
+# THE IMPAI STAGE (research/notes/compat/suite.md, The ImpAI stage): where the setup's single-player
+# run shows Impure running, one more skirmish on a fresh copy of the setup's folder, the bar's seating
+# (research/notes/impai/bar.md): record 0 the human with no unit, record 1 a CORE computer seat played
+# by the AI under test, record 2 an ARM computer seat OTA AI plays, Difficulty Hard. `--impai-seat ota`
+# plays record 1 with OTA AI too, which runs the whole harness on two stock seats. The seats are written
+# where the SKIRMISH screen reads them -- the registry's Player<N>Controller and Player<N>Side under
+# `Total Annihilation\Skirmish`, NumSkirmishPlayers and SkirmishDifficulty under `Total Annihilation`,
+# at every root the setup names (engine/ui.md, the SKIRMISH screen) -- and impure.cfg's `seatai`; the
+# engine's Difficulty main+0x37EEE is then read back in the game, so a screen that kept another value
+# fails the stage by name instead of playing at it. The scenario (scenarios/compat/impai-stage.json, or
+# the setup's `scenarios.impai`) clears the start and places the two commanders apart on dry ground with
+# the end test off, so the human with no unit cannot end the level. After SECONDS of game time the end
+# scenario, derived from it, keeps one unit of record 1 and arms the end test again: the human seat is
+# defeated, the level ends, and its teardown writes ImpAI's level-end lines.
+IMPAI_SCENARIO = TREE / "scenarios" / "compat" / "impai-stage.json"
+IMPAI_HUMAN, IMPAI_SEAT, IMPAI_OTA = 0, 1, 2      # the stage's records
+IMPAI_SIDES = {IMPAI_HUMAN: 0, IMPAI_SEAT: 1, IMPAI_OTA: 0}   # ARM 0, CORE 1, as the commanders placed
+IMPAI_RESOURCES = 1000                            # each seat's starting metal and energy (the bar's)
+IMPAI_HARD = 2                                    # main+0x37EEE: 0 Easy, 1 Medium, 2 Hard
+DIFFICULTY = "*0x511DE8+0x37EEE:4"
+# WHERE THE GAME KEEPS ITS SKIRMISH SETTINGS is decided by its own memory, not by the setup's name
+# [DISASSEMBLED, engine/process.md, the registry accessor]: 0x4B6880 opens HKCU\Software (0x509ED0,
+# pushed at 0x4B68B1), then the root at 0x509EB8 (pushed at 0x4B68E8), then the section. Retail's
+# root is "Cavedog Entertainment"; Escalation's exe names "TA Esc" there, a mod's loader can rewrite
+# it, and a mod chosen by mod= lays its exe's image over the process's (tagpu_modload.c, put_image),
+# so the file on disk does not show it. The startup's registry load 0x42F9A0 (called at 0x4913F6)
+# reads the seats, so they are written before the launch: under every root the setup or its exe
+# names, and once the game is up the root in its memory is read and, when it is another, the
+# seats are written there too and the game started again.
+REG_ROOT_VA = 0x509EB8
+REG_ROOT_ROOM = 0x18                    # bytes to the next string, "Software" at 0x509ED0
+REG_PUSHES = {0x4B68B1: "68 D0 9E 50 00", 0x4B68E8: "68 B8 9E 50 00"}   # push 0x509ED0; push 0x509EB8
+STOCK_ROOT = "Software\\Cavedog Entertainment"
+# The loaded level's map: GameingState *(main+0x391E9), +0x204 the TNT path (the recorder's map_stem,
+# tagpu_recorder.c, names recordings by it).
+GAME_STATE = "*0x511DE8+0x391E9:4"
+GS_TNT = 0x204
+IMPAI_LEVEL_END = "impai: handicap rows"          # every level end of an installed ImpAI writes it
+IMPAI_INSTALLED = re.compile(r"^impai: seam 0x465031", re.M)
+IMPAI_SEATS_LINE = re.compile(r"^impai: seats (\S+) \(impure\.cfg\) of (\d+) records", re.M)
+# what keeps a seat from ImpAI, each the line that says so (tagpu_impai.c)
+IMPAI_WHY = re.compile(r"^impai: (unavailable: .*|menus past their tables .*|menus none: .*|threat none: .*|"
+                       r"tinfo none: .*|fight none: .*|seats none: record \d+ is remote.*)$", re.M)
+# ImpAI's content is all or none (tagpu_impai.c, impai_content_build): a mod whose [DAMAGE] rows, weapons or
+# types do not fit the fight tables (IMPAI_FDMG_POOL rows), or whose menus do not fit theirs, has no ImpAI
+# seat. Each line says so, and fails the stage by name whatever the setup accepts.
+IMPAI_NOFIT = re.compile(r"^impai: (fight none: .*do not fit the tables.*|menus past their tables .*)$", re.M)
+IMPAI_CONTENT = re.compile(r"^impai: (threat types=.*|tinfo mex=.*|menus side=.*|reach classes=.*)$", re.M)
+IMPAI_WORK = re.compile(r"^impai: work seat=(\d+) ticks=(\d+) refused=(\d+)", re.M)
+IMPAI_COULD_NOT = re.compile(r"^impai: .*could not.*$", re.M)
+# research/notes/impai/player.md: one line a game minute an ImpAI seat, its counts since the level began: the
+# units it completed, the military's and the economy's orders (tagpu_impai.c, impai_pulse)
+IMPAI_PULSE = re.compile(r"^impai: pulse seat=(\d+) t=(\d+) built=(\d+) mroots=(\d+) eroots=(\d+) .*$", re.M)
+# THE CLAIM an ImpAI seat is held to wherever one plays (the stage, the network game): by its last pulse it had
+# given orders and completed a unit since its first -- the seat played, which a turn taken alone does not show.
+# The first pulse is in the level's first 15 ticks and already counts the commander as completed (built=1,
+# MEASURED 2026-11-16, every seat of the suite's first ImpAI run), so the claim compares against it, never
+# against zero. The next pulses follow a game minute apart, so a game of ImpAI's is played past
+# IMPAI_CLAIM_TICKS (two game minutes and a margin; the stage's and the network game's length are raised to it).
+IMPAI_CLAIM_TICKS = 2 * 1800 + 300
+# a network game's seat line (tagpu_impai.c, the level init)
+IMPAI_NET_LINE = re.compile(r"^impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) "
+                            r"records; other peers' AI seats (\S+), ImpAI's (\S+)", re.M)
+IMPAI_NET_LEVEL = 2                     # impai_seats_level: Hard in every network game
+
+
+def seat_list(text: str) -> list:
+    """The level init's spelling of a set of records: "none" or "1,3"."""
+    return [] if text == "none" else [int(x) for x in text.split(",")]
+
+
+def impai_stage_eligible(setup) -> bool:
+    """A player's setup whose goal is Impure running: a harness setup (one with a lever) checks a
+    mechanism, not a game. Single player, so a setup that plays no network game still plays it."""
+    return setup["goal"]["outcome"] == "impure-active" and not setup.get("levers")
+
+
+def impai_scenario(setup) -> Path:
+    """The stage's scenario: the setup's `scenarios.impai` (a mod whose sides are not ARM and CORE names
+    its own, as for the battle), else IMPAI_SCENARIO."""
+    name = setup.get("scenarios", {}).get("impai")
+    return (TREE / "scenarios" / f"{name}.json") if name else IMPAI_SCENARIO
+
+
+def seat_commanders(scen: dict, live: list) -> dict:
+    """The stage's scenario with each unit's type the commander the engine gave its owner at the start (`commanders`,
+    from tacli units: its side's own), so a mod whose sides name other commanders -- TA Zero has no CORCOM -- plays
+    the same stage. Lobby when the game gave an owner the scenario places none."""
+    by = {}
+    for c in live:
+        by.setdefault(c["owner"], c["type"])
+    missing = sorted({u["owner"] for u in scen.get("units", [])} - set(by))
+    if missing:
+        raise Lobby(f"the game gave records {missing} no commander for the stage to place")
+    return dict(scen, units=[dict(u, type=by[u["owner"]]) for u in scen.get("units", [])])
+
+
+def impai_end_scenario(scen: dict) -> dict:
+    """The stage's end: every unit cleared but the first record-1 unit the stage placed, kept where it was
+    placed, and the end test armed again, so the human seat's defeat ends the level."""
+    keep = next((u for u in scen.get("units", []) if u.get("owner") == IMPAI_SEAT), None)
+    if keep is None:
+        raise Lobby(f"the stage's scenario places no unit for record {IMPAI_SEAT}")
+    return {"format": scen["format"], "description": "the ImpAI stage's end (tacompat.py)",
+            "on_error": "abort", "setup": {"clear_existing": True, "objective": "on"},
+            "units": [{"id": "keep", "type": keep["type"], "owner": IMPAI_SEAT, "pos": keep["pos"]}]}
+
+
+def store_set(gamedir: Path, key: str, value: str):
+    """One line of the game folder's impure.cfg set to key=value, every other line kept."""
+    cfg = gamedir / "impure.cfg"
+    lines = cfg.read_text(errors="replace").splitlines() if cfg.exists() else []
+    lines = [ln for ln in lines if ln.partition("=")[0].strip().lower() != key] + [f"{key}={value}"]
+    cfg.write_text("\r\n".join(lines) + "\r\n")
+
+
+def exe_registry_root(exe: Path) -> "str | None":
+    """The registry root an exe's file names (REG_ROOT_VA), None when its accessor's code is not stock
+    there -- then where it reads is not known from the file."""
+    import tavfs
+    try:
+        blob = exe.read_bytes()
+        if any(tavfs.exe_bytes(blob, va, 5) != bytes.fromhex(want) for va, want in REG_PUSHES.items()):
+            return None
+        return "Software\\" + tavfs.exe_cstr(blob, REG_ROOT_VA, REG_ROOT_ROOM)
+    except (OSError, tavfs.VfsError):
+        return None
+
+
+def managed_dropin(setup) -> "dict | None":
+    """The drop-in setup of the mod a row chooses by mod= (its `managed-<id>` row's `equals`), None for
+    any other row."""
+    by = {x["name"]: x for x in SETUPS}
+    row = by.get(f"managed-{setup['managed']}") if setup.get("managed") else None
+    return by.get(row.get("equals")) if row else None
+
+
+def known_roots(setup, gamedir: Path) -> list:
+    """The registry roots a game is seated under before its launch, each once: retail's, the setup's
+    `registry_roots` (where a loader moves the registry at run time), the one the folder's exe names,
+    and for a mod chosen by mod= the one its drop-in exe names, since the mod loader lays that exe's
+    image over the process. The game's memory has the last word (game_registry_root)."""
+    dropin = managed_dropin(setup)
+    exes = [gamedir / "TotalA.exe"] + [src for dest, src in (overlay(dropin) if dropin else [])
+                                       if dest.lower() == "totala.exe"]
+    roots = [STOCK_ROOT] + setup.get("registry_roots", []) + [exe_registry_root(e) for e in exes]
+    return [r for i, r in enumerate(roots) if r and r.lower() not in {x.lower() for x in roots[:i] if x}]
+
+
+def seed_battle_map(prefix: Path, roots, map_name: str):
+    """The battle's map, `map_name` (`battle_map`), as the saved skirmish map under each of `roots`."""
+    env = dict(os.environ, WINEPREFIX=str(prefix))
+    for root in roots:
+        subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
+                        "/t", "REG_SZ", "/d", map_name, "/f"], env=env, capture_output=True, timeout=120)
+    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
+
+
+def impai_seating(inst, roots, scen_map: str, seat_ai: str):
+    """The stage's seats where the startup's registry load reads them, under each of `roots`, and the
+    store's `seatai`: record 1 when ImpAI plays it, none for `--impai-seat ota`."""
+    env = dict(os.environ, WINEPREFIX=str(inst["prefix"]))
+    for root in roots:
+        key = f"HKCU\\{root}\\Total Annihilation"
+        values = [(key, "SkirmishMap", "REG_SZ", scen_map),
+                  (key, "NumSkirmishPlayers", "REG_DWORD", "3"),
+                  (key, "SkirmishDifficulty", "REG_DWORD", str(IMPAI_HARD))]
+        for rec, side in IMPAI_SIDES.items():
+            values += [(key + "\\Skirmish", f"Player{rec}Controller", "REG_DWORD", "1" if rec == IMPAI_HUMAN else "2"),
+                       (key + "\\Skirmish", f"Player{rec}Side", "REG_DWORD", str(side)),
+                       (key + "\\Skirmish", f"Player{rec}Metal", "REG_DWORD", str(IMPAI_RESOURCES)),
+                       (key + "\\Skirmish", f"Player{rec}Energy", "REG_DWORD", str(IMPAI_RESOURCES))]
+        for k, name, kind, data in values:
+            subprocess.run(["wine", "reg", "add", k, "/v", name, "/t", kind, "/d", data, "/f"], env=env,
+                           capture_output=True, check=True, timeout=120)
+    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
+    store_set(inst["gamedir"], "seatai", str(IMPAI_SEAT) if seat_ai == "impai" else "none")
+
+
+# THE BATTLE'S COMPUTER SEAT IS IMPAI'S wherever the DLL carries ImpAI: the battle's skirmish runs from the player's own
+# store, which names no `seatai`, so the default every player gets applies (every computer seat ImpAI's) and the gate
+# tests what players run. The seat has no builder (the battle scenario clears the start) and the fight ends before the
+# seat's second pulse, so the claim of the stage and the network game does not fit it; what the battle asks is that
+# ImpAI marked exactly the scenario's computer records and that its military began a task for each in the fight.
+IMPAI_MIL_TASK = re.compile(r"^impai: mil seat=(\d+) t=(\d+) ", re.M)
+
+
+def battle_ai_records(scenario: str) -> list:
+    """The records a battle scenario seats as computer players (its setup.players, controller `ai`)."""
+    sc = json.loads((TREE / "scenarios" / f"{scenario}.json").read_text())
+    return sorted(pl["slot"] for pl in sc["setup"].get("players", []) if pl.get("controller") == "ai")
+
+
+def battle_impai_misses(text: str, records: list) -> list:
+    """THE BATTLE'S COMPUTER SEAT IS IMPAI'S, from the battle game's tagpu.log: nothing asked of a DLL with no ImpAI (no
+    seam line); else the level init marked exactly `records`, no `could not` and no content past its tables, and once the
+    applier was armed ImpAI's military began a task (`impai: mil seat= t=`) for every one of them."""
+    if not IMPAI_INSTALLED.search(text):
+        return []
+    st = impai_stage_read(text)
+    miss = [f"ImpAI could not: {line}" for line in st["could_not"]]
+    miss += [f"ImpAI's content did not fit its tables: impai: {line}" for line in st["nofit"]]
+    # the skirmish is the player's saved one, so the level may seat more computer records than the scenario fills
+    # (MEASURED 2026-11-16, retail: `impai: seats 1,3 ... of 4 records`, record 3 left with no unit): each of the
+    # scenario's must be ImpAI's, and a marked record the scenario gives no unit has nothing to be asked
+    unmarked = [r for r in records if r not in (st["marks"] or [])]
+    if unmarked:
+        why = "; ".join(st["why"]) or "no reason line"
+        miss.append(f"ImpAI marked {st['marks'] if st['marks'] is not None else 'no seat line'}: the battle's "
+                    f"computer seat(s) {unmarked} not ImpAI's ({why})")
+        return miss
+    # The fight starts at the applier's arming, not at its `applied=` line: that line is written on a later render
+    # frame, after the game-thread tick has placed the units, so ImpAI's first task (game thread) can precede it.
+    # `applier armed` is written before the state turns ST_ARMED (tagpu_scenario.c, an interlocked exchange), which
+    # is what lets the tick place anything, so every task on the scenario's units follows it in the log. It is
+    # written once a process (install_tick_hook), so a log with a second apply has no anchor for that one.
+    applies = text.count("scenario: applied=")
+    if applies > 1:
+        return miss + [f"the battle's log holds {applies} scenario applies; the fight's start is known only for one"]
+    at = text.rfind("scenario: applier armed")
+    began = {int(seat) for seat, _ in IMPAI_MIL_TASK.findall(text[at:] if at >= 0 else text)}
+    miss += [f"ImpAI's military began no task for seat {r} in the fight" for r in records if r not in began]
+    return miss
+
+
+def battle_seat_misses(o: dict, exp: dict) -> list:
+    """The judge's part of THE BATTLE'S COMPUTER SEAT IS IMPAI'S: a setup whose expectation says ImpAI is unavailable has
+    no such seat to ask about."""
+    if o.get("battle") is None or exp.get("impai") == "unavailable":
+        return []
+    return [f"the battle's computer seat: {m}" for m in o["battle"].get("impai_seat") or []]
+
+
+def battle_log(gamedir: Path) -> str:
+    try:
+        return (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def impai_pulses(text: str) -> dict:
+    """{seat: [(t, built, orders), ...]} of a log's pulse lines, orders the military's and the economy's."""
+    out = {}
+    for s, t, built, mroots, eroots in IMPAI_PULSE.findall(text):
+        out.setdefault(int(s), []).append((int(t), int(built), int(mroots) + int(eroots)))
+    return out
+
+
+def impai_claim_misses(pulses: dict, seat: int, who: str) -> list:
+    """THE CLAIM of one ImpAI seat from its pulses (impai_pulses): a pulse after its first, and by its last it had
+    given orders and completed a unit since its first (IMPAI_CLAIM_TICKS)."""
+    got = pulses.get(seat) or []
+    if len(got) < 2:
+        return [f"{who}: ImpAI's seat {seat} wrote {len(got)} pulse(s), not one after the level's first"]
+    (t0, built0, _), (t, built, orders) = got[0], got[-1]
+    miss = []
+    if not orders:
+        miss.append(f"{who}: ImpAI's seat {seat} gave no order by GameTime {t}")
+    if built <= built0:
+        miss.append(f"{who}: ImpAI's seat {seat} completed no unit from GameTime {t0} to {t} "
+                    f"(built={built} at both)")
+    return miss
+
+
+def impai_stage_read(text: str) -> dict:
+    """What a stage game's tagpu.log says of ImpAI: the level init's seat line, why a seat was not
+    ImpAI's, the content lines, each seat's work line, any `could not` line, the pulse lines and whether
+    the level end was written."""
+    seats = IMPAI_SEATS_LINE.findall(text)
+    work = {int(s): (int(t), int(r)) for s, t, r in IMPAI_WORK.findall(text)}
+    pulses = impai_pulses(text)
+    return {"installed": bool(IMPAI_INSTALLED.search(text)),
+            "marks": seat_list(seats[-1][0]) if seats else None, "live": int(seats[-1][1]) if seats else None,
+            "why": IMPAI_WHY.findall(text), "content": IMPAI_CONTENT.findall(text), "work": work,
+            "could_not": IMPAI_COULD_NOT.findall(text), "nofit": IMPAI_NOFIT.findall(text), "pulses": pulses,
+            "level_end": IMPAI_LEVEL_END in text}
+
+
+def impai_stage_misses(st: dict, seat_ai: str, survey: bool = False) -> tuple:
+    """(available, misses) of one stage game's ImpAI lines (impai_stage_read). `available`: the level init
+    marked record 1 for `--impai-seat impai` (False with no seat line: ImpAI unavailable, `why` says
+    why); for `ota` it is None, nothing being asked of ImpAI. A miss is a failure of the stage whatever
+    the setup accepts; an unavailable ImpAI is judged against the setup's expectation (judge). The
+    survey plays no game, so it asks for no level end and no turn."""
+    miss = []
+    if st["live"] is not None and st["live"] != 3:
+        miss.append(f"the level seated {st['live']} records, not the stage's three")
+    if st["installed"] and not st["level_end"] and not survey:
+        miss.append("the level end wrote no ImpAI lines")
+    for line in st["could_not"]:
+        miss.append(f"ImpAI could not: {line}")
+    for line in st.get("nofit", []):
+        miss.append(f"ImpAI's content did not fit its tables: impai: {line}")
+    for seat, (_, refused) in sorted(st["work"].items()):
+        if refused:
+            miss.append(f"ImpAI's seat {seat} refused {refused} turn(s)")
+    if seat_ai == "ota":
+        if st["marks"]:
+            miss.append(f"ImpAI marked {st['marks']} with seatai=none")
+        return None, miss
+    if st["marks"] is None:
+        return False, miss
+    available = st["marks"] == [IMPAI_SEAT]
+    if not available and st["marks"]:
+        miss.append(f"ImpAI marked {st['marks']}, not the stage's record {IMPAI_SEAT}")
+    if available and not survey and not st["work"].get(IMPAI_SEAT, (0, 0))[0]:
+        miss.append(f"ImpAI's seat {IMPAI_SEAT} took no turn")
+    if available and not survey:
+        miss += impai_claim_misses(st["pulses"], IMPAI_SEAT, "the stage")
+    return available, miss
+
+
+def stage_map_missing(size, mapname: str) -> "str | None":
+    """Why the stage cannot be played on `mapname`, None when it can: both of the map's files, the
+    `.ota` the SKIRMISH screen lists and the `.tnt` it loads, are present to the engine -- `size(path)`
+    is the engine's open test, a size above 0 (tools/wiki/tavfs.py, *A file exists*)."""
+    gone = [f"maps\\{mapname}{ext}" for ext in (".ota", ".tnt") if not size(f"maps\\{mapname}{ext}")]
+    return f"could not run: no {mapname} ({', '.join(gone)} not in the setup's files)" if gone else None
+
+
+def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
+    """The ImpAI stage on a fresh copy of the setup's folder (`-a`), its registry hives its own; with
+    `seconds` 0 the survey: the skirmish loaded and its level init's lines read, no game played. The
+    scenario's map is looked up first through the setup's own file layer, the engine's mount order
+    over the copy (tavfs.Vfs): a setup that lacks it names its own scenario (`scenarios.impai`) or the
+    stage does not run, by name."""
+    xv = start_xvfb()
+    try:
+        inst = prepare_wine(setup, dll, xv.tacompat_display, suffix="-a")
+    finally:
+        stop_xvfb(xv)
+    path = impai_scenario(setup)
+    scen = json.loads(path.read_text())
+    import tavfs
+    why = stage_map_missing(tavfs.Vfs(Path(inst["gamedir"])).size, scen["setup"]["map"])
+    if why:
+        return {"ok": False, "available": None, "why": why}
+    roots = inst["roots"]
+    impai_seating(inst, roots, scen["setup"]["map"], seat_ai)
+    # THE CLAIM needs a pulse of ImpAI's seat: a game is played past IMPAI_CLAIM_TICKS (the survey plays none)
+    return play_impai(inst, max(seconds, -(-IMPAI_CLAIM_TICKS // TICKS_PER_S)) if seconds else 0, path, scen,
+                      seat_ai, roots)
+
+
+def peek_values(name, *specs) -> "list | None":
+    """The game's answers to tacli peek `specs`, as its text, None when it does not answer."""
+    r = tacli("peek", name, *specs, "--json", timeout=ACK_S + 30)
+    try:
+        return [str(p["value"]) for p in json.loads(r.stdout)["peeks"]] if r.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def peek_text(value: str) -> "str | None":
+    """A peek's `s` answer without its quotes, None for anything else (<unreadable>)."""
+    m = re.fullmatch(r'"(.*)"', value or "")
+    return m.group(1) if m else None
+
+
+def game_registry_root(name) -> str:
+    """The registry root the running game reads (REG_ROOT_VA); Lobby when its accessor is not stock, since
+    where it reads its skirmish settings is then not known."""
+    got = peek_values(name, f"0x{REG_ROOT_VA:X}:s{REG_ROOT_ROOM:X}", *(f"0x{va:X}:x5" for va in REG_PUSHES))
+    if not got:
+        raise Lobby("tacli peek did not answer for the game's registry root")
+    code = [f"0x{va:X} holds {have}" for (va, want), have in zip(REG_PUSHES.items(), got[1:])
+            if have.upper() != want]
+    root = peek_text(got[0])
+    if code or not root:
+        raise Lobby("could not run: the game's registry accessor 0x4B6880 is not stock ("
+                    + ("; ".join(code) or f"0x{REG_ROOT_VA:X} reads {got[0]}")
+                    + "), so where it reads the stage's seats is not known")
+    return "Software\\" + root
+
+
+def loaded_map(name) -> "str | None":
+    """The loaded level's map name (GS_TNT, the path's stem), None when the game does not say."""
+    got = peek_values(name, GAME_STATE)
+    gs = int(got[0].split()[0]) if got and got[0][:1].isdigit() else 0
+    got = peek_values(name, f"0x{gs + GS_TNT:X}:s80") if gs else None
+    path = peek_text(got[0]) if got else None
+    return ntpath.splitext(ntpath.basename(path))[0] if path else None
+
+
+def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list) -> dict:
+    """The stage's game: started; the registry root the game reads checked against `roots`, the ones its
+    seats were written under (REG_ROOT_VA) -- another one is seated as well and the game started again;
+    walked into the skirmish; the map, the seats and the Difficulty checked; the scenario applied, SECONDS
+    of game time watched, the level ended, the log read. With `seconds` 0, the survey: the log read once
+    the skirmish is in play, nothing applied or played."""
+    name, gamedir = inst["name"], inst["gamedir"]
+    t0 = time.time()
+    boxes, seen, why, shots, done = [], set(), None, {}, {}
+    g = None
+    caps = talog.CapWatch(gamedir)      # every launch of the stage (CAP REFUSED)
+
+    def to_menu():
+        nonlocal g
+        g = start_wine(inst, None)
+        deadline = time.time() + POLL_S
+        while time.time() < deadline and not boxes:
+            time.sleep(2)
+            new_boxes(g["display"], seen, boxes, t0)
+            if "MAINMENU" in (tacli("ui", name, timeout=15).stdout.splitlines() or [""])[0]:
+                return
+        raise Lobby(f"a box before the menu: {boxes[0]['title']}" if boxes else "the main menu never came up")
+    try:
+        try:
+            to_menu()
+            root = game_registry_root(name)
+            if root.lower() not in {r.lower() for r in roots}:
+                # the game read its settings at its start, under a root the stage had not seated
+                stop_wine(g)
+                g = None
+                roots = roots + [root]
+                impai_seating(inst, [root], scen["setup"]["map"], seat_ai)
+                to_menu()
+                again = game_registry_root(name)
+                if again.lower() != root.lower():
+                    raise Lobby(f"the game read its settings under HKCU\\{root}, then under HKCU\\{again}")
+            done["registry_root"] = root
+            step = wine_skirmish(name, g["proc"])
+            if step:
+                raise Lobby(step)
+            want = scen["setup"]["map"]
+            got_map = loaded_map(name)
+            if got_map is None or got_map.lower() != want.lower():
+                written = ", ".join("HKCU\\" + r for r in roots)
+                raise Lobby(f"the skirmish loaded {got_map or 'no map the game names'}, not the stage's {want}: "
+                            f"the game did not take the stage's seats (written under {written}; it reads "
+                            f"HKCU\\{root})")
+            cmd = commanders(name, players=3)
+            if not cmd["ok"]:
+                raise Lobby("the skirmish did not seat three players with a commander each: " + cmd["why"])
+            r = tacli("peek", name, DIFFICULTY, "--json", timeout=ACK_S + 30)
+            got = int(str(json.loads(r.stdout)["peeks"][0]["value"]).split()[0]) if r.returncode == 0 else None
+            if got != IMPAI_HARD:
+                raise Lobby(f"the skirmish's Difficulty main+0x37EEE is {got}, not Hard ({IMPAI_HARD})")
+            # the survey (`seconds` 0) has read what it came for: the level init's lines
+            if seconds:
+                scen = seat_commanders(scen, cmd["commanders"])
+                staged = Path(g["log"].name).with_suffix(".impai-stage.json")
+                staged.write_text(json.dumps(scen))
+                shots["impai-stage.json"] = str(staged)
+                r = tacli("scenario", "apply", name, str(staged), timeout=180)
+                if r.returncode != 0:
+                    raise Lobby(f"scenario apply {path.name}: {(r.stderr or r.stdout).strip()[:200]}")
+                applied = (r.stdout.splitlines() or [""])[0]
+                made = re.search(r"\((\d+) units?\b", applied)
+                alive = alive_after_apply(gamedir)
+                if not made or alive is None or alive < max(1, int(made.group(1)) * 9 // 10):
+                    raise Lobby(f"Impure sees {alive if alive is not None else 'no'} unit(s) after {applied!r}")
+                done["applied"], done["alive"] = applied, alive
+                soak = Progress(lambda: gametime(name), seconds * TICKS_PER_S)
+                while not why:
+                    time.sleep(2)
+                    new_boxes(g["display"], seen, boxes, t0)
+                    if g["proc"].poll() is not None:
+                        why = "the game exited during the stage"
+                    elif (gamedir / "ErrorLog.txt").exists():
+                        why = "the game wrote a crash report"
+                    elif boxes:
+                        why = f"a box during the stage: {boxes[0]['title']}"
+                    else:
+                        try:
+                            if soak.done():
+                                break
+                        except Stalled as e:
+                            why = f"the game stood at GameTime {e}"
+                if not why:
+                    done["gametime"] = gametime(name)
+                    end = Path(g["log"].name).with_suffix(".impai-end.json")
+                    end.write_text(json.dumps(impai_end_scenario(scen)))
+                    shots["impai-end.json"] = str(end)
+                    at = len((gamedir / "log" / "tagpu.log").read_bytes())
+                    r = tacli("scenario", "apply", name, str(end), timeout=180)
+                    if r.returncode != 0:
+                        raise Lobby(f"the end scenario: {(r.stderr or r.stdout).strip()[:200]}")
+                    text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+                    if IMPAI_INSTALLED.search(text) and not log_says_after(gamedir, IMPAI_LEVEL_END, at, STALL_S):
+                        why = f"the level did not end within {STALL_S} s of the end scenario"
+        except (Lobby, subprocess.SubprocessError, OSError, ValueError, SystemExit) as e:
+            why = str(e) if isinstance(e, Lobby) else f"{type(e).__name__}: {e}"
+        if why and g:
+            shot = Path(g["log"].name).with_suffix(".impai.png")
+            subprocess.run(["import", "-display", f":{g['display']}", "-window", "root", str(shot)],
+                           capture_output=True, timeout=20)
+            shots["impai.png"] = str(shot)
+    finally:
+        if g:
+            shots["impai-wine.log"] = stop_wine(g, keep=True)
+    tlog = gamedir / "log" / "tagpu.log"
+    text = tlog.read_text(errors="replace") if tlog.exists() and tlog.stat().st_mtime >= t0 else ""
+    st = impai_stage_read(text)
+    available, misses = impai_stage_misses(st, seat_ai, survey=not seconds)
+    refused = caps.failure()
+    if refused:
+        misses = [refused] + misses
+    out = {"ok": why is None and not misses, "seat_ai": seat_ai, "available": available,
+           "why": why or "; ".join(misses) or None, "seconds": round(time.time() - t0, 1), **done,
+           "unavailable_why": st["why"], "content": st["content"], "work": st["work"],
+           "pulses": {s: len(t) for s, t in st["pulses"].items()},
+           "_files": {"impai-tagpu.log": text}, "_temps": shots}
+    err = gamedir / "ErrorLog.txt"
+    if err.exists() and err.stat().st_mtime >= t0:
+        out["_files"]["impai-ErrorLog.txt"] = err.read_text(errors="replace")
+    if out["ok"] and not TRACE:
+        Path(shots.pop("impai-wine.log")).unlink(missing_ok=True)
+    return out
+
+
+def log_says_after(gamedir: Path, text: str, at: int, seconds: float) -> bool:
+    """Whether tagpu.log comes to hold `text` past byte `at` within `seconds`: the bound on a wait
+    for a line the game writes in a few frames, which fails by name when it never does."""
+    log, want = talog.Tail(gamedir / "log" / "tagpu.log"), text.encode()
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            new = log.read()
+            if log.data.find(want, max(at, new - len(want) + 1)) >= 0:
+                return True
+        except OSError:
+            pass
+        time.sleep(LOOK_S)
+    return False
+
+
+def impai_mp_misses(texts: dict) -> list:
+    """The network stage with an ImpAI seat on each peer (`--mp-impai`), from each peer's tagpu.log: each
+    peer's level init read `netai=impai`, marked exactly one record -- the computer seat it added, named
+    ImpAI: by the battle room's first step -- at Hard whatever the peer's Difficulty, and counted exactly one
+    AI seat another peer runs, the other's, ImpAI's by its name; and THE CLAIM of the seat each peer's ImpAI
+    played (impai_claim_misses), read on that peer, where ImpAI runs it."""
+    miss = []
+    for role, text in texts.items():
+        got = IMPAI_NET_LINE.findall(text)
+        if len(got) != 1:
+            miss.append(f"{role}: {len(got)} network seat lines, not one")
+            continue
+        marks, netai, level, _, remote, rimpai = got[0]
+        if netai != "impai":
+            miss.append(f"{role}: its level init read netai={netai}")
+        if int(level) != IMPAI_NET_LEVEL:
+            miss.append(f"{role}: ImpAI's level {level} in a network game, not Hard")
+        if len(seat_list(marks)) != 1:
+            miss.append(f"{role}: ImpAI marked {marks}, not its one computer seat")
+        if len(seat_list(remote)) != 1:
+            miss.append(f"{role}: other peers' AI seats {remote}, not the other peer's one")
+        elif rimpai != remote:
+            miss.append(f"{role}: other peers' ImpAI seats {rimpai}, not the other peer's ImpAI seat {remote}")
+        if len(seat_list(marks)) == 1:
+            miss += impai_claim_misses(impai_pulses(text), seat_list(marks)[0], role)
+    return miss
 
 
 def threw(setup, platform, fut) -> dict:
@@ -2818,6 +3750,24 @@ def judged(setup, o):
         J.checks(setup["name"], 1)
 
 
+def as_each_ends(first: dict, handle):
+    """Each future of `first` ({future: what}) handed to handle(future, what) the moment it ends, in the order they
+    end, and each future `handle` returns ({future: what}) watched the same way, until none is left.
+
+    A STAGE ENDS WHEN IT ENDS. A Wine run's network game and ImpAI stage are queued from its single-player run's result
+    and end long before the run's last single-player run does (a network game's play_mp takes 78 to 128 s, an ImpAI
+    stage 145 to 162 s, MEASURED 2026-11-13 in two full runs' verdict files). Read as each ends, a stage's journal step
+    ends with it, so the runs journal and its estimates time the stage itself, and its setup's verdict file is written
+    when the setup's last stage ends, so a run cut short keeps every setup that finished (--resume). Read in the order
+    they were queued, after every single-player run, each would wait for the slowest of those runs and for every stage
+    queued before it."""
+    pending = dict(first)
+    while pending:
+        done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+        for f in done:
+            pending.update(handle(f, pending.pop(f)))
+
+
 def journaled(setup, step, fn, *a):
     """fn(*a) as the setup's step: started when a worker takes it; an exception ends it unrun,
     anything else is ended by the caller, which knows the verdict."""
@@ -2832,7 +3782,7 @@ def journaled(setup, step, fn, *a):
 def cmd_wine(args):
     source = Path(args.dll).resolve()
     if not source.is_file():
-        die(f"no DLL at {source} (build it: make -C tagpu/ddraw -j$(nproc))")
+        die(f"no DLL at {source} (build it: tools/runlock.py make -- -C tagpu/ddraw)")
     dll = snapshot_dll(source)
     setups = pick_setups(args.setups)
     if args.refuse:
@@ -2846,17 +3796,77 @@ def cmd_wine(args):
         print(f"skipped, fixtures not fetched: {', '.join(skipped)} (tacompat.py list)")
     if not ready:
         die("nothing to run")
+    plays, dll_md5 = wine_plays(args), md5_file(dll)
+    resume = Path(args.resume).expanduser().resolve() if args.resume else None
+    if resume:
+        why = resume_refusal(resume, plays, dll_md5)
+        if why:
+            die(f"cannot resume: {why}")
+    settled = settled_results(resume, [s["name"] for s in ready]) if resume else {}
+    todo = [s for s in ready if s["name"] not in settled]
+    if resume:
+        print(f"resuming {resume}: {len(settled)} setups settled there, {len(todo)} to play")
+
+    def finish(results, started, out):
+        results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
+        compare_managed(results)
+        rc = report(results, "wine", dll, started, args.strict, source, out=out)
+        J.note(summary=str(out / "summary.txt"))
+        shutil.rmtree(dll.parent, ignore_errors=True)
+        return rc
+    if not todo:
+        return finish([settled[s["name"]] for s in ready], time.time(), resume)
+    mp_jobs = max(1, args.mp_jobs)
+    impai_jobs = max(1, args.impai_jobs)
+    eligible = sum(mp_eligible(s) for s in todo) if args.mp else 0
+    stage = bool(args.impai or args.impai_survey)
+    impai_eligible = sum(impai_stage_eligible(s) for s in todo) if stage else 0
+    # the games at once: the single-player runs, two a network game and one an ImpAI stage beside
+    # them; the instances prepared below carry the run's tag (inst_name)
+    runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
+                 min(args.jobs, len(todo)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible),
+                 suite="compat")
+    # the instances are prepared before any game starts, on the run's own slots: no more at once
+    # than it holds (tools/runlock.py, OFFLINE WORK)
+    args.prep_jobs = max(1, min(args.prep_jobs, runlock.workers()))
+    leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
+    out = resume or results_dir("wine", started)
+    out.mkdir(parents=True, exist_ok=True)
+    if not resume:
+        run_stamp(out, plays, dll_md5)
+    for s in todo:                  # an unsettled setup's evidence is from a sitting that did not finish
+        shutil.rmtree(out / s["name"], ignore_errors=True)
     taken = set()
+
+    def steps(s, k):
+        return [
+            {"id": "prepare", "pool": "prep", "order": k},
+            {"id": "run", "pool": "game", "after": ["prepare"], "order": k},
+        ] + ([{"id": "mp", "pool": "mp", "after": ["run"], "order": k}] if args.mp and mp_eligible(s)
+             else []) \
+          + ([{"id": "impai", "pool": "impai", "after": ["run"], "order": k}] if stage and impai_stage_eligible(s)
+             else [])
     global J
-    J = tarun.begin("tacompat", [(s["name"], [
-        {"id": "prepare", "pool": "prep", "order": k},
-        {"id": "run", "pool": "game", "after": ["prepare"], "order": k},
-    ] + ([{"id": "mp", "pool": "mp", "after": ["run"], "order": k}] if args.mp and mp_eligible(s)
-         else [])) for k, s in enumerate(ready)],
+    J = tarun.begin("tacompat", [(s["name"], steps(s, k)) for k, s in enumerate(ready)],
         kind="wine", title=f"tacompat wine ({len(ready)} setups) -j {args.jobs}", gate=True,
-        pools={"prep": max(1, args.prep_jobs), "game": args.jobs, "mp": max(1, args.mp_jobs)},
-        variant=f"watch{args.watch}-battle{args.battle}-mp{args.mp}")
+        pools={"prep": max(1, args.prep_jobs), "game": args.jobs, "mp": max(1, args.mp_jobs),
+               "impai": impai_jobs},
+        variant=f"watch{args.watch}-battle{args.battle}-mp{args.mp}"
+                + (f"-impai{'survey' if args.impai_survey else args.impai}"
+                   f"{'' if args.impai_seat == 'impai' else '-ota'}" if stage else "")
+                + ("-mpimpai" if args.mp_impai else ""))
+    for k, s in enumerate(ready):
+        if s["name"] in settled:
+            for step in steps(s, k):
+                J.finish(s["name"], step["id"], "skipped", f"settled in {out}")
+            judged(s, settled[s["name"]])
+
+    def settle(s, o):
+        """The setup's final verdict: journaled, and written to the results folder (VERDICT)."""
+        o["folder_wrong"] = folder_wrong(s)
+        judged(s, o)
+        persist(out, o)
 
     def prepared(s):
         inst = journaled(s, "prepare", prepare_wine, s, dll, create_display)
@@ -2865,48 +3875,74 @@ def cmd_wine(args):
     xv = start_xvfb()
     create_display = xv.tacompat_display
     try:
-        print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
+        print(f"preparing {len(todo)} setups, {args.prep_jobs} at a time")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
-            for s, inst in zip(ready, prep.map(prepared, ready)):
+            for s, inst in zip(todo, prep.map(prepared, todo)):
                 s["_inst"] = inst
     finally:
         stop_xvfb(xv)
     # Every prefix this run made, for free_dplay_port: the only ones it may end.
-    mine = {str(s["_inst"]["prefix"]) for s in ready}
-    print(f"running {len(ready)} setups, {args.jobs} at a time, each menu watched {args.watch} s "
+    mine = {str(s["_inst"]["prefix"]) for s in todo}
+    print(f"running {len(todo)} setups, {args.jobs} at a time, each menu watched {args.watch} s "
           f"of frames" + (f", a {args.battle} s battle" if args.battle else "")
           + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else "")
+          + (" with an ImpAI seat on each peer" if args.mp and args.mp_impai else "")
+          + (f"; an ImpAI stage of {args.impai} s ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai
+             else f"; the ImpAI survey ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai_survey else "")
           + " (game time: x30 ticks or frames)")
-    results, mp_futs = [], {}
+    results = list(settled.values())
     # Each network game is queued the moment its setup's single-player run shows Impure
-    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each.
-    mp_jobs = max(1, args.mp_jobs)
+    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each,
+    # leased for the run (tools/dpport.py, A PORT A GAME, LEASED).
     ports = queue.Queue()
-    for k in range(mp_jobs):
-        ports.put(MP_PORT_BASE + k)
-    slots = game_slots(args.jobs, mp_jobs if args.mp else 0)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
-        futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
-                            args.screens, args.battle): s
-                for s in ready}
-        for f in concurrent.futures.as_completed(futs):
-            s = futs[f]
+    for _ in range(mp_jobs):
+        lease = dpport.lease()
+        leases.append(lease)
+        ports.put(lease.port)
+    slots = GameSlots(runlock.games())
+    print(f"games at once: {slots.capacity}, the run lock's GPU tokens for this run")
+    # the two peers of a network game wait for each other in the battle room, so they need their two
+    # seats together: in a run of one game at once every network game is refused by name, unplayed
+    mp_refused = runlock.together(2, "a network game") if args.mp else None
+    if mp_refused:
+        print(f"every network game: could not run: {mp_refused}")
+    # each setup's stages still running: it is settled, its verdict file written, when the last one ends
+    left = {}
+    runs = {}
+
+    def ended(f, what):
+        """A stage of a setup that has just ended: its result read, its journal step ended, the setup settled when
+        it was the setup's last stage; the stages a run queues returned, for as_each_ends to watch."""
+        step, s = what
+        name = s["name"]
+        more = {}
+        if step == "run":
             o = threw(s, "wine", f)         # a run that threw is its own result, and reported
             verdict(o, s, "wine")
             ran(s, "run", o)
-            print(f"  {s['name']}: {o['outcome']} ({o['verdict']})")
+            print(f"  {name}: {o['outcome']} ({o['verdict']})")
             results.append(o)
+            runs[name] = o
             if s.get("no_network_game"):
                 o["mp_skip"] = s["no_network_game"]
-            if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
-                mp_futs[s["name"]] = (s, o, mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s,
-                                                           dll, args.mp, taken, mine, ports))
-            else:
-                if args.mp and mp_eligible(s):
-                    J.finish(s["name"], "mp", "skipped", "Impure did not reach the menu")
-                judged(s, o)
-        for name, (s, o, f) in mp_futs.items():
+            live = o["outcome"] == "impure-active" and o.get("menu")
+            if stage and impai_stage_eligible(s) and live:
+                more[impai_pool.submit(slots.hold, 1, journaled, s, "impai", run_wine_impai, s, dll,
+                                       0 if args.impai_survey else args.impai, args.impai_seat)] = ("impai", s)
+            elif stage and impai_stage_eligible(s):
+                J.finish(name, "impai", "skipped", "Impure did not reach the menu")
+            if args.mp and mp_eligible(s) and live and mp_refused:
+                refused = concurrent.futures.Future()
+                refused.set_result({"ok": False, "why": f"could not run: {mp_refused}", "evidence": []})
+                more[refused] = ("mp", s)
+            elif args.mp and mp_eligible(s) and live:
+                more[mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s, dll, args.mp, taken, mine,
+                                    ports, args.mp_impai)] = ("mp", s)
+            elif args.mp and mp_eligible(s):
+                J.finish(name, "mp", "skipped", "Impure did not reach the menu")
+            left[name] = {st for st, _ in more.values()}
+        elif step == "mp":
+            o = runs[name]
             try:
                 m = f.result()
             except BaseException as e:
@@ -2923,18 +3959,36 @@ def cmd_wine(args):
             o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
             o["mp"] = m
             verdict(o, s, "wine")
-            judged(s, o)
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
-    results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
-    compare_managed(results)
-    rc = report(results, "wine", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-wine"
-                       / "summary.txt"))
-    shutil.rmtree(dll.parent, ignore_errors=True)
-    return rc
+        else:
+            o = runs[name]
+            try:
+                a = f.result()
+            except BaseException as e:
+                a = {"ok": False, "available": None, "why": f"{type(e).__name__}: {e}"}
+            J.finish(name, "impai", "done" if a["ok"] else "fail", a.get("why"))
+            o["_files"].update(a.pop("_files", {}))
+            o["_temps"].update(a.pop("_temps", {}))
+            o["impai"] = a
+            verdict(o, s, "wine")
+            said = "unavailable" if a.get("available") is False else "ok" if a["ok"] else "FAILED: " + str(a["why"])
+            print(f"  {name}: ImpAI stage {said} ({o['verdict']})")
+        left[name].discard(step)
+        if not left[name]:
+            settle(s, o)
+        return more
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=impai_jobs) as impai_pool:
+        as_each_ends({pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
+                                  args.screens, args.battle): ("run", s) for s in todo}, ended)
+    return finish(results, started, out)
 
 
 def cmd_clean(args):
+    """Every instance of every tag: under the whole run lock, so no run's instance goes while it
+    plays."""
+    runlock.hold(TREE, "tacompat clean")
     for d in sorted(INSTANCES.glob(PREFIX + "*")):
         if (d / "instance.json").exists():
             tacli("rm", d.name, "--force")
@@ -3587,8 +4641,7 @@ def cmd_windows(args):
                 pass
         w.s.close()
     rc = report(results, "windows", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}"
-                                 f"-windows" / "summary.txt"))
+    J.note(summary=str(results_dir("windows", started) / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
@@ -3680,7 +4733,165 @@ def cmd_selftest(args):
         rbad += got != want
     total = len(MATCH_CASES) + len(COMMANDER_CASES)
     print(f"patterns and commanders: {total - rbad} of {total} as intended")
-    return 1 if bad or gbad or hbad or rbad else 0
+    ibad = 0
+    for name, text, seat_ai, want_available, want_misses, *survey in IMPAI_CASES:
+        available, misses = impai_stage_misses(impai_stage_read(text), seat_ai, *survey)
+        ok = available == want_available and len(misses) == want_misses
+        print(f"  {'ok ' if ok else 'BAD'} {name:26} available={available} {len(misses)} miss(es)"
+              + (f": {misses}" if misses and not ok else ""))
+        ibad += not ok
+    for name, texts, want in IMPAI_MP_CASES:
+        got = len(impai_mp_misses(texts))
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
+        ibad += got != want
+    for name, setup_exp, stage, want in IMPAI_JUDGE_CASES:
+        o = {"outcome": "impure-active", "impai": stage}
+        got = len([m for m in judge(o, {"outcome": "impure-active", **setup_exp}) if "ImpAI" in m])
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
+        ibad += got != want
+    for name, files, want in IMPAI_MAP_CASES:
+        got = stage_map_missing(lambda path: files.get(path.lower(), 0), "Town & Country")
+        ok = (got is None) == want
+        print(f"  {'ok ' if ok else 'BAD'} {name:26} {got or 'present'}")
+        ibad += not ok
+    for name, answers, want in IMPAI_ROOT_CASES:
+        got = stage_reads(answers)
+        ok = got == want if not want.startswith("Lobby") else got.startswith("Lobby") and want[6:] in got
+        print(f"  {'ok ' if ok else 'BAD'} {name:26} {got}")
+        ibad += not ok
+    scen = {"units": [{"id": "a", "type": "CORCOM", "owner": 1, "pos": [1, 2]}, {"id": "b", "type": "ARMCOM", "owner": 2}]}
+    live = [{"type": "ARMCOM", "owner": 0}, {"type": "CORECOMMANDER", "owner": 1}, {"type": "GOKCOMMANDER", "owner": 2}]
+    got = [u["type"] for u in seat_commanders(scen, live)["units"]]
+    ok = got == ["CORECOMMANDER", "GOKCOMMANDER"]
+    try:
+        seat_commanders(scen, live[:2])
+        ok = False
+    except Lobby:
+        pass
+    print(f"  {'ok ' if ok else 'BAD'} {'commanders: from the game':26} {got}")
+    ibad += not ok
+    roots = known_roots({"registry_roots": ["Software\\TotalM", "software\\cavedog entertainment"]}, Path("/nonexistent"))
+    ok = roots == [STOCK_ROOT, "Software\\TotalM"]
+    print(f"  {'ok ' if ok else 'BAD'} {'roots: each once':26} {roots}")
+    ibad += not ok
+    total = (len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
+             + len(IMPAI_ROOT_CASES) + 2)
+    print(f"impai stage: {total - ibad} of {total} as intended")
+    sbad = resume_selftest()
+    ebad = stages_selftest()
+    return 1 if bad or gbad or hbad or rbad or ibad or sbad or ebad else 0
+
+
+def stage_reads(answers: dict) -> str:
+    """What game_registry_root and loaded_map make of the peek answers `answers` ({spec: value}; a spec
+    with no answer is unreadable), as text: the root and the map, or the Lobby's message."""
+    global peek_values
+    real = peek_values
+    peek_values = lambda name, *specs: [answers.get(sp, "<unreadable>") for sp in specs]
+    try:
+        try:
+            return f"{game_registry_root('selftest')} {loaded_map('selftest')}"
+        except Lobby as e:
+            return f"Lobby {e}"
+    finally:
+        peek_values = real
+
+
+def stages_selftest() -> int:
+    """as_each_ends on stand-in stages: a run's two queued stages handed over in the order they end, not the order they
+    were queued, a slow single-player run delaying neither, and the setup settled once, after its last stage. Returns
+    the cases not as intended."""
+    gate = {k: threading.Event() for k in ("slow run", "mp", "impai")}
+    seen = []
+
+    def stage(name):
+        if not gate[name].wait(20):
+            raise TimeoutError(name)
+        return name
+
+    def handle(f, what):
+        seen.append(f.result())
+        more = {}
+        if what == "fast run":
+            more = {pool.submit(stage, "mp"): "mp", pool.submit(stage, "impai"): "impai"}
+            gate["impai"].set()             # the stage queued last ends first
+        elif what == "impai":
+            gate["mp"].set()
+        elif what == "mp":
+            seen.append("settled")          # its setup's last stage
+            gate["slow run"].set()          # the other setup's run ends only now
+        return more
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        as_each_ends({pool.submit(lambda: "fast run"): "fast run", pool.submit(stage, "slow run"): "slow run"},
+                     handle)
+    want = ["fast run", "impai", "mp", "settled", "slow run"]
+    ok = seen == want
+    print(f"  {'ok ' if ok else 'BAD'} {'stages: as each ends':26} {seen}")
+    try:
+        GameSlots(1).hold(2, lambda: None)
+        refused = False
+    except ValueError:
+        refused = True
+    print(f"  {'ok ' if refused else 'BAD'} {'stages: 2 slots of 1 refused':26} {refused}")
+    print(f"stages: {ok + refused} of 2 as intended")
+    return 2 - ok - refused
+
+
+def resume_selftest() -> int:
+    """The resume's files in a scratch folder: a settled setup is read back as it was judged, an
+    interrupted one -- evidence and no verdict, or a verdict never renamed into place -- is not, and a
+    resume with another DLL, other arguments or no run is refused. Returns the cases not as intended."""
+    refusing = next(x for x in SETUPS if x.get("refusal"))
+    plays = {"watch": 45, "battle": 60, "mp": 30, "mp_impai": False, "impai": 0, "impai_survey": False,
+             "impai_seat": "impai", "refuse": None}
+    cases = []
+    with tempfile.TemporaryDirectory(prefix="tacompat-resume-") as tmp:
+        out = Path(tmp)
+        run_stamp(out, plays, "a" * 32)
+        o = {"setup": "settled", "verdict": "meets goal", "level": {"features": [("tree", 1)]},
+             "impai": {"work": {1: (5, 0)}}, "_files": {"tagpu.log": "log"}, "_temps": {}}
+        persist(out, o)
+        back = settled_results(out, ["settled", "evidence-only", "not-renamed", "never-ran"])
+        cases.append(("settled: read back as judged", back.get("settled") == o and o["level"]["features"] == [["tree", 1]]
+                      and (out / "settled" / "tagpu.log").read_text() == "log"))
+        cases.append(("settled: no file left half-written", not list(out.rglob("*.tmp"))))
+        (out / "evidence-only").mkdir()
+        (out / "evidence-only" / "tagpu.log").write_text("log")
+        (out / "not-renamed").mkdir()
+        (out / "not-renamed" / (VERDICT + ".tmp")).write_text("{}")
+        cases.append(("interrupted: played again", sorted(back) == ["settled"]))
+        cases.append(("resume: the same run", resume_refusal(out, plays, "a" * 32) is None))
+        why = resume_refusal(out, plays, "b" * 32)
+        cases.append(("resume: another DLL refused", bool(why) and "one build" in why))
+        why = resume_refusal(out, dict(plays, impai=120), "a" * 32)
+        cases.append(("resume: other arguments refused", bool(why) and "impai 0 there, 120 here" in why))
+        cases.append(("resume: no run refused", bool(resume_refusal(out / "settled", plays, "a" * 32))))
+        game = out / "game"
+        (game / "log").mkdir(parents=True)
+        (game / "log" / "startup-failure.txt").write_text(f"... {refusing['refusal']} ...")
+        inst = dict(refusing, _inst={"gamedir": game})
+        cases.append(("folder: no impure.cfg, nothing wrong", folder_wrong(inst) == []))
+        (game / "impure.cfg").write_bytes(b"mod=x\r\n")
+        cases.append(("folder: mod= kept, wrong", len(folder_wrong(inst)) == 1))
+        rows = [{"setup": refusing["name"], "verdict": "meets goal", "folder_wrong": folder_wrong(inst)}]
+        compare_managed(rows)
+        cases.append(("compare: a read-back folder finding", rows[0]["verdict"] == "UNEXPECTED"))
+        logs = {"managed": f"modload: the loose file {UNIT_FOLDERS[0]}\\ARMAARP.FBI is not read under a mod\n"
+                           "recmp: its archives name ttm-1,\n", "dropin": "recmp: its archives name ttm-1,\n"}
+        for key, text in logs.items():
+            persist(out, {"setup": key, "verdict": "meets goal", "_files": {"tagpu.log": text}, "_temps": {}})
+        back = settled_results(out, list(logs))
+        said = differs_from_dropin({"equals": "dropin"}, back["managed"], back["dropin"])
+        cases.append(("compare: the log read back", not [m for m in said if "loose unit" in m or "replays name" in m]))
+        persist(out, {"setup": "managed", "verdict": "meets goal", "_files": {"tagpu.log": ""}, "_temps": {}})
+        said = differs_from_dropin({"equals": "dropin"}, settled_results(out, ["managed"])["managed"], back["dropin"])
+        cases.append(("compare: a log with neither", len([m for m in said if "loose unit" in m or "replays name" in m]) == 2))
+    sbad = 0
+    for name, ok in cases:
+        print(f"  {'ok ' if ok else 'BAD'} {name}")
+        sbad += not ok
+    print(f"resume: {len(cases) - sbad} of {len(cases)} as intended")
+    return sbad
 
 
 # (name, pattern, text, whether it must match)
@@ -3702,6 +4913,83 @@ COMMANDER_CASES = [
     ("a seat given nothing", _CMD([0, 1], [0, 1, 3]), False),
     ("one seat", _CMD([0], [0]), False),
     ("before play", _CMD([], [], in_play=False), False),
+]
+
+
+_IMPAI_IN = "impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE, 16 handicap sites and ... in\n"
+_IMPAI_CONTENT = ("impai: reach classes=15 blocks=64x64 components=9 cells=1 blocks_written=1 us=1\n"
+                  "impai: tinfo mex=4 energy=6 maker=2 factory=10 cons=12\nimpai: threat types=480\n"
+                  "impai: menus side=1 builders=40 types=600 ms=1.0\n")
+_IMPAI_END = "impai: handicap rows scaled/exempt gametime=27031: 1=0/0\n"
+_IMPAI_WORK = "impai: work seat=1 ticks={t} refused={r} slots_max=1/2 visits_max=1/2 cells_max=1/2 flood_max=1/2 scans=1 clusters=1 gametime=27031\n"
+_IMPAI_OK = (_IMPAI_IN + _IMPAI_CONTENT + "impai: seats 1 (impure.cfg) of 3 records\n" + _IMPAI_WORK.format(t=27000, r=0)
+             + _IMPAI_END)
+# (name, the stage game's log, the seat under test, available, how many misses)
+IMPAI_CASES = [
+    ("ImpAI plays record 1", _IMPAI_OK, "impai", True, 0),
+    ("not installed", "impai: unavailable: 0x465031 not stock (E9 00 00 00 00)\n", "impai", False, 0),
+    ("menus past their tables", _IMPAI_IN + "impai: menus past their tables (side 1, builder 9: 2048 menus, 9 "
+     "types)\nimpai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "impai", False, 1),
+    ("[DAMAGE] rows past the pool", _IMPAI_IN + "impai: fight none: the engine's types, weapons or [DAMAGE] rows do "
+     "not fit the tables (480 types, 4096 weapon slots, 65536 rows)\nimpai: seats none (impure.cfg) of 3 records\n"
+     + _IMPAI_END, "impai", False, 1),
+    ("no classification, not a fit", _IMPAI_IN + "impai: fight none: no classification\n"
+     "impai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "impai", False, 0),
+    ("a refused turn", _IMPAI_OK.replace("refused=0", "refused=3"), "impai", True, 1),
+    ("could not", _IMPAI_OK + "impai: tinfo none: the content view could not be opened\n", "impai", True, 1),
+    ("no level end", _IMPAI_OK.replace(_IMPAI_END, ""), "impai", True, 1),
+    ("no turn", _IMPAI_OK.replace("ticks=27000", "ticks=0"), "impai", True, 1),
+    ("four records", _IMPAI_OK.replace("of 3 records", "of 4 records"), "impai", True, 1),
+    ("another record marked", _IMPAI_OK.replace("seats 1 (", "seats 2 ("), "impai", False, 1),
+    ("OTA AI on both seats", _IMPAI_IN + "impai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "ota", None, 0),
+    ("OTA AI, ImpAI marked", _IMPAI_OK, "ota", None, 1),
+    ("OTA AI, not installed", "impai: unavailable: 0x465031 not stock (E9 00 00 00 00)\n", "ota", None, 0),
+    ("survey, ImpAI available", _IMPAI_IN + _IMPAI_CONTENT + "impai: seats 1 (impure.cfg) of 3 records\n", "impai",
+     True, 0, True),
+    ("survey, a could-not line", _IMPAI_IN + "impai: tinfo none: the content view could not be opened\n"
+     "impai: seats 1 (impure.cfg) of 3 records\n", "impai", True, 1, True),
+]
+_NET = ("impai: seats {m} (netai={n}, a network game, level {lv}) of 4 records; other peers' AI seats {r}, "
+        "ImpAI's {i}\n")
+# (name, each peer's log, how many misses)
+IMPAI_MP_CASES = [
+    ("each peer its own seat", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"),
+                                "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 0),
+    ("a peer read ota", {"host": _NET.format(lv=2, m="none", n="ota", r="3", i="3"),
+                         "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 2),
+    ("no network line", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"), "join": ""}, 1),
+    ("the other's AI not ImpAI's", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="none"),
+                                    "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 1),
+    ("a peer's level not Hard", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"),
+                                 "join": _NET.format(lv=0, m="3", n="impai", r="4", i="4")}, 1),
+]
+# (name, the expectation's ImpAI key, the stage's result, how many ImpAI misses judge finds)
+# the stage's map through the setup's files: (name, {path: size}, playable)
+IMPAI_MAP_CASES = [
+    ("map present", {"maps\\town & country.ota": 812, "maps\\town & country.tnt": 400000}, True),
+    ("no .tnt", {"maps\\town & country.ota": 812}, False),
+    ("a 0-byte .ota", {"maps\\town & country.ota": 0, "maps\\town & country.tnt": 400000}, False),
+    ("neither", {}, False),
+]
+# (name, the peek answers, what stage_reads makes of them) -- the root's answer as tagpu_peek.c writes an `s`
+# read, the code's as an `x` read; "Lobby <text>" wants a refusal whose message holds <text>
+_STOCK_CODE = {"0x4B68B1:x5": "68 D0 9E 50 00", "0x4B68E8:x5": "68 B8 9E 50 00",
+               GAME_STATE: "4096 (0x00001000)", "0x1204:s80": '"maps\\Town & Country.tnt"'}
+IMPAI_ROOT_CASES = [
+    ("root: retail", {**_STOCK_CODE, "0x509EB8:s18": '"Cavedog Entertainment"'},
+     "Software\\Cavedog Entertainment Town & Country"),
+    ("root: Escalation's", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"'}, "Software\\TA Esc Town & Country"),
+    ("root: accessor moved", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"', "0x4B68E8:x5": "68 00 10 60 00"},
+     "Lobby 0x4B68E8 holds 68 00 10 60 00"),
+    ("root: unreadable", {k: v for k, v in _STOCK_CODE.items()}, "Lobby is not stock"),
+    ("map: no game state", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"', GAME_STATE: "0 (0x00000000)"},
+     "Software\\TA Esc None"),
+]
+IMPAI_JUDGE_CASES = [
+    ("available, ok", {}, {"ok": True, "available": True}, 0),
+    ("unavailable, goal", {}, {"ok": True, "available": False, "unavailable_why": ["unavailable: x"]}, 1),
+    ("unavailable, accepted", {"impai": "unavailable"}, {"ok": True, "available": False}, 0),
+    ("failed", {"impai": "unavailable"}, {"ok": False, "available": True, "why": "ImpAI's seat 1 refused"}, 1),
 ]
 
 
@@ -3769,7 +5057,8 @@ def main():
     wi.add_argument("--dll", default=str(default_dll), help="the ddraw.dll under test (this tree's build)")
     wi.add_argument("--jobs", "-j", type=int, default=6)
     wi.add_argument("--prep-jobs", type=int, default=8, metavar="N",
-                    help="instances prepared at once (each has registry hives of its own)")
+                    help="instances prepared at once (each has registry hives of its own), no "
+                         "more than the run holds slots")
     wi.add_argument("--watch", type=int, default=45, metavar="SECONDS",
                     help="the start-up watch: the menu watched for SECONDS x 30 engine frames once "
                          "it is up (a game Impure is not in: SECONDS of its main thread's CPU time)")
@@ -3789,6 +5078,24 @@ def main():
     # half of what is free (ta-vulkan-compute-restorer, D10).
     wi.add_argument("--mp-jobs", type=int, default=6, metavar="N",
                     help="network games at once, each on a DirectPlay port of its own")
+    wi.add_argument("--mp-impai", action="store_true",
+                    help="the network game adds a computer seat on each peer, played by that peer's ImpAI "
+                         "(netai=impai)")
+    wi.add_argument("--impai", type=int, nargs="?", const=900, default=0, metavar="SECONDS",
+                    help="where Impure runs, also play the ImpAI stage: a skirmish of the AI under test "
+                         "against OTA AI at Hard for SECONDS x 30 ticks of game time (900 when the flag is "
+                         "given alone; 0: none)")
+    wi.add_argument("--impai-survey", action="store_true",
+                    help="the ImpAI stage's skirmish loaded and read, no game played: where ImpAI is "
+                         "available, and its content lines, setup by setup")
+    wi.add_argument("--impai-seat", choices=("impai", "ota"), default="impai",
+                    help="what plays the stage's seat under test: ImpAI, or OTA AI to run the harness on "
+                         "two stock seats")
+    wi.add_argument("--impai-jobs", type=int, default=6, metavar="N", help="ImpAI stages at once")
+    wi.add_argument("--resume", metavar="DIR",
+                    help="go on with the run whose results folder is DIR: every setup with a verdict there is "
+                         "read back, every other one played whole; refused when DIR's run played other "
+                         "arguments or another DLL")
     wi.set_defaults(fn=cmd_wine)
     wn = sub.add_parser("windows", help="run the setups on a Windows desktop, one at a time")
     wn.add_argument("setups", nargs="*")
@@ -3804,10 +5111,8 @@ def main():
     sub.add_parser("selftest", help="check the hook decode against every shape it claims"
                    ).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
-    # the Wine suite plays its games here and waits for the machine's run lock; the Windows suite
-    # plays them on the remote desktop
-    if args.fn is cmd_wine:
-        runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]))
+    # the Wine suite takes the machine's run lock in cmd_wine, once it knows its games; the
+    # Windows suite plays them on the remote desktop
     rc = 2                              # die() and anything unforeseen: it could not run
     try:
         rc = args.fn(args)

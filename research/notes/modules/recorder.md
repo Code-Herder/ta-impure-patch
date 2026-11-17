@@ -208,6 +208,12 @@ base and `SizeOfImage` (`RT_DLL`) and each recorded table's layout (`RT_FIELDS`)
 does, and arms the dump (§2.6f). The writer thread reads no engine memory, and since
 `tagpu_recwriter.c` is not on `thread-split.allow` the build refuses an engine address in it.
 
+The header names the exclusion file and the positive list by a hash of what the readers read, as
+the generators derive it from the rows (`RT_LAYOUT`, `RT_GLOBALS`), not of the whole file, so a
+renamed field or corrected evidence leaves recordings playable; v0.5.1's whole-file hashes read as
+this build's, which each generator proves at build time against v0.5.1's frozen file and tables
+([what the hashes cover](../tadr-port/demo-recorder-completeness.md#engine-records-recorded-whole-by-default)).
+
 **Three simulation tables moved to the heap for it**, so their pages are write-watched: the build
 ghost's memo `s_ghost` (`tagpu_datakeys.c`) and the transported explosions' marks `s_txMark` and
 `s_txKillMark` (`tagpu_patches.c`). Each is allocated when its module installs and never freed.
@@ -563,7 +569,11 @@ full, an armed `pause at <T>` bounds it to end at T, and a test launch's hold
 (`tagpu_hold.on`) bounds the level's first batch to one tick; the frame visit
 then sets the pause bit (*The scheduler, the clock and the test pacing* in the
 engine map), which the pause guard at `0x496920` keeps set until `resume`. An
-unavailable guard refuses the turbo and the pause too, and leaves the hold off.
+unavailable guard refuses the turbo and the pause too, and leaves the hold off. With
+`tagpu_nodraw.on` it marks, last, a frame whose batch was the turbo's (no rewind,
+the lag scale clear, no puppet): NO DRAW's gate at the end of the frame visit skips
+only a marked frame's draw (`tagpu_nodraw.c`, [render](../engine/render.html),
+*What DrawGameScreen writes*); an unavailable guard leaves no-draw off.
 
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
@@ -768,8 +778,8 @@ and on the loader thread at the allocator ownership boundary and the level init'
   (`+0x82` then NULL) and the move `0x47CB60`, and a carried unit's `+0x82`; every cell of the
   feature grid and every wreck record whole, the three heads and the cursor, the host's 3DO model
   instances freed through `0x45AAA0` and made through `0x45A8D0` into `+0x04`; the particles
-  destroyed through their own `[vt+0](../1)` and removed from the ten layers, the explosion count
-  zeroed, the debris records re-initialised and the flying-piece slots zeroed
+  destroyed through their own `[vt+0](../1)` and removed from the ten layers, the explosion pool,
+  the debris records and the flying-piece slots emptied as every level load empties them
   (`tagpu_effects_clear`, both builds); the declared tables and the sim files' restores; the
   globals, the pool and the explored map as above; the viewed record's temporary sight records made
   again through the engine's add `0x482910`, one for each recorded death of a live viewed-seat unit

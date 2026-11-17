@@ -82,7 +82,11 @@ wrappers and what the build check cannot prove:
   its feature's `SIM_PRIVATE` struct. Memory, TLS, page changes and levers come through the
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
-  named outside the wrappers — and names each; its header lists what it cannot see.
+  named outside the wrappers — and names each; its header lists what it cannot see. A file the
+  simulation runs that names no engine memory (ImpAI's `impai_*.c`, and `tasim_snap.c` and
+  `tagpu_placegeo.c`, which it calls) is listed `engine-free sim`: the class grants no engine
+  read, which `thread-split-check.sh` holds it to, and the scope gives it the state rule,
+  `SIM_FEATURE` regions and the coverage build.
 - **A feature's landing on main runs the replay test groups for everything the feature changed**
   (`main...HEAD`); its local landings do not run them. A **test group** is one
   scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
@@ -298,8 +302,11 @@ generated `inc/spirv/*.spv.h`. Our own lines inside a vendored file follow the r
 
 ## Build the gate in parallel
 
-`make -C tagpu/ddraw -j$(nproc)` — **43.6 s serial, 4.8 s parallel** on the reference setup
-(measured 2026-09-17). Use it; the serial form is a habit, not a requirement.
+`tools/runlock.py make -- -C tagpu/ddraw` — make at `-j` the slots of the machine's run lock it
+is granted: at most 8 by default (`-j N` asks for more), fewer when fewer are free, and inside a
+run the run's own. **43.6 s serial, 4.8 s at `-j 32`** on the reference setup (measured
+2026-09-17). A bare `make -j$(nproc)` is load the lock cannot see, and every run beside it slows
+(next section).
 
 It is parallel-safe by construction rather than by luck: `inc/git.h` is written at **parse**
 time by `$(shell …)` and not by a recipe, `thread-split-check.sh` and `spirv-check.sh` are
@@ -311,17 +318,62 @@ targets share an intermediate. CI has been building this way since the workflow 
 same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
 about `-j`. The assurances are the two above.
 
-## Game regressions run one at a time
+## Game regressions share a 28-slot budget
 
 A landing gate alone already peaks at a load of about 24 on the reference setup's 32 threads, so
 two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
-**Every tool that plays games for a regression holds the machine's run lock** (`tools/runlock.py`:
-`tareplay.py`'s game commands, `tacompat.py wine`, `recmp_play_test.py`), so a second run waits
-for the first. A chain of games scripted by hand queues the same way through `flock(1)` on the
-lock file, `$(git rev-parse --git-common-dir)/tareplay.lock`. Never work around it: while a run
-waits, do the offline work (builds, codectest, unit tests, docs). Builds and offline checks take
-no lock.
+**Every tool that plays games for a regression holds slots of the machine's run lock**
+(`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes, for each game lane it plays at once, as it declares
+them, **its renderer's measured weight**, the whole lane's cost rounded up — **two slots a GDI lane,
+two a Vulkan lane** (`tools/runlock-lanes.cfg`, each figure's measurement beside it;
+`runlock.lane_slots`) — and
+runs are admitted **in arrival order**: the
+slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. The
+GPU's memory is budgeted the same way, **in MiB**: in the same admission a run takes, for each
+game it plays on the GPU at once, that game's **cap** plus the driver's allowance and a margin
+(`tools/runlock-vram.cfg`), all of it or none, and plays no more games at once than that memory
+holds. Each suite names its cap — its measured peak plus a stated margin
+(`tools/runlock-suites.cfg`: replay, compat, wiki); a run that names none runs under the play
+defaults' cap — so runs of different caps share one budget and never sum past it. Every game
+launched inside a run carries the run's cap (`gpumem=`, written by `runlock.write_gpumem`
+whatever starts the game) and holds one of the run's **seats** while it lives, and a refusal of
+the cap the renderer does not plan for fails that game by name in every suite. AI test games take
+no GPU memory: they run on GDI, and `--gpu` opts in to debug. What else two runs could meet on is kept
+apart by construction: what a run makes for itself (instance names, results folders) carries its
+**tag**, the lowest slot it holds, so no two live runs share one; each network game **leases its
+DirectPlay port** (`tools/dpport.py`); and what a run is given — the instance its caller names, a
+fixed output folder — is a named **resource** the admission takes beside the slots, so a second
+run on the same instance waits and a run on another goes beside it. Only two runs take all 28:
+`tacompat.py clean`, which removes every run's instances, and a run on a caller's instance whose
+prefix still shares the template's registry hives (made without `--private-registry`), whose
+wineserver rewrites them under every other run's copy. A chain of games scripted by hand goes
+through the wrapper, `tools/runlock.py run --lanes N [--vram G] [--suite S] --what TEXT
+[--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU, whose lanes are
+GDI's; `--slots W` in place of `--lanes N` for W slots outright);
+`tools/runlock.py status` says who holds what, GPU memory and game seats included. A bare `flock(1)`
+on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every run, but it waits
+outside the queue and can wait for as long as runs keep overlapping, so use the wrapper.
+
+**Offline work and builds hold slots too**, one a worker, in the same queue: the wiki gate's
+offline checks, tareplay's tarec pool, `calib.py check` and `refs build` take as many as are free
+up to what they ask and run no more workers than they were granted, and a build goes through
+`tools/runlock.py make` (above). The games alone are not the load: at 81 on 32 threads every run
+ran at about 40 % speed (measured 2026-11-13). Admission also leaves room for the load the lock
+cannot see: a run waits while its slots on top of the 1-minute load, each slot another run holds
+counted once, would pass the machine's threads (`tools/runlock-load.cfg`), unless no other run
+holds a slot, so it only ever delays. Never work around it: while a run waits, do the work that
+takes no slots (unit tests, codectest, docs).
+
+**Host memory rides on the slots.** Each slot carries the machine's memory less a reserve left for the
+owner's own programs (`tools/runlock-mem.cfg`, seeded into the lock like the GPU figures), a twenty-eighth
+each -- 1534 MiB on the reference setup -- so the slots held never carry more than the machine less the
+reserve. An offline job that needs more than one slot runs through `runlock.forked`: it takes the slots
+that carry the memory it declares, and its process is held to them by RLIMIT_DATA, so it fails its
+allocation (and is run again on twice the slots) instead of taking the desktop's memory. Every process
+the lock admits is the kernel's first OOM victim (`oom_score_adj` 1000); that is the second line, not the
+bound. A tool whose worker grows past a slot declares its memory; `tools/runlock.py status` shows the
+figure.
 
 ## Python tooling: install what you need, into the shared venv
 

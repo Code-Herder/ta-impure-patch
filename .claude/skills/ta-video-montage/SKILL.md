@@ -1283,7 +1283,6 @@ Open, and none of it blocking:
   it is the easing at the 7.47 keyframe, not anything at 9 s.
 * `air-war` leaves the outer thirds of its frame fairly empty, with the bases only
   600 units apart in a 1920-unit frame.
-* `scenarios/ball10.json` asked for 625 units per player against the engine's hard
-  cap of 500 and never created what it declared; since 2026-09-11 it asks for 500,
-  the most the engine seats (the landing review found the old file refused by
-  `validate` outright, which is not a fixture).
+* `scenarios/ball10.json` asks for 500 units per player on a unit limit of 501: the
+  apply's clear holds each player's start-commander slot from the creates in its tick,
+  so 500 a player needs one slot more (`scenario-format.md`).

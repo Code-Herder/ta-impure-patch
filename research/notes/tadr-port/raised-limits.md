@@ -480,5 +480,6 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   had measured it; its 2× paragraph still said nanoframes).
 - **TADR's 128 sounds is past the engine's table** (landing 4).
 - The engine map said the effect arrays are simulation state that the draw passes only read, and
-  did not record that the explosion cap and the debris records' fullness gate synced random-number
-  draws. It does now (landing 1).
+  did not record that the explosion cap gates synced random-number draws. It does now (landing 1).
+  The debris records' fullness gates none while they number the explosion cap (the engine map's
+  weapons page, *The shatter and the effect pools' bounds*).

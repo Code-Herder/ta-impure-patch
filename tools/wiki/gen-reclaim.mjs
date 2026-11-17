@@ -3,18 +3,18 @@
    usage: node tools/wiki/gen-reclaim.mjs        then node tools/wiki/simcheck.mjs and tools/wiki/stagemap.py build
 
    The demos are the reclaim sweep of tagpu/ddraw/src/tagpu_sweep.c (research/notes/gpu-status.md section 2.110;
-   research/notes/ingame-wiki-reclaim-plan.md) played through sim.js. The unit figures are the stock game's, read once
+   research/notes/ingame-wiki-reclaim-plan.md) played through the simulation host. The unit figures are the stock game's, read once
    from the retail unit files, and the features' from greenworld's feature files (each row's `from`); stagemap.py check
    holds every feature row to its section on the local install. Nothing of the game is copied.
 
-   A demo arms reclaim with a `reclaim` input, which sim.js plays as the cursor's trip to RECLAIM (through ORDERS when
+   A demo arms reclaim with a `reclaim` input, which the simulation plays as the cursor's trip to RECLAIM (through ORDERS when
    the page shown has none), and picks a kind off the popup with a `pick`, the trip to that row: both find their button
    on the running mod's own layout, so the same demo plays in every setup. E is pressed as a key once reclaim is armed,
    where RECLAIM is on the screen it was armed from in every setup. The ring's press is the left button at both
    Interface Types, as any armed order's is; its cancel is the `cancel` action. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-const { TRIP, PICK } = createRequire(import.meta.url)('./mockup/sim.js');
+const { TRIP, PICK } = createRequire(import.meta.url)('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 // the world point of cell (cx, cz)'s centre
 const C = (cx, cz) => [cx * 16 + 8, cz * 16 + 8];
@@ -114,9 +114,9 @@ function TL(start) {
     down(k) { inputs.push({ at: t, down: k }); return T; },
     up(k) { inputs.push({ at: t, up: k }); return T; },
     click(k) { T.down(k); t += 3; return T.up(k); },
-    // the trip to RECLAIM (sim.js planReclaim): nothing but a caption stands in its TRIP ticks, and it ends where it began
+    // the trip to RECLAIM (tagpu_wikisim.c plan_reclaim): nothing but a caption stands in its TRIP ticks, and it ends where it began
     reclaim() { inputs.push({ at: t, reclaim: true }); t += TRIP; return T; },
-    // the trip to the popup's row of a kind (sim.js pickTrip), PICK ticks, ending where it began
+    // the trip to the popup's row of a kind (THE PICK TRIP, tagpu_wikisim.h), PICK ticks, ending where it began
     pick(k) { inputs.push({ at: t, pick: k }); t += PICK; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
     // the demo's clock stops until no unit of the player's holds a build or a reclaim order, at most `max` ticks

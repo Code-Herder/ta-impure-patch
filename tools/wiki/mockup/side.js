@@ -8,7 +8,7 @@
    stage*, "How it is drawn"). Every frame rect is checked against the sheet when the pack loads (read), so compose never
    reads outside the sheet, and every write is clipped to the column.
 
-   Runs in a page (the global WikiSide) and under node (module.exports), as sim.js does. */
+   Runs in a page (the global WikiSide) and under node (module.exports). */
 const WikiSide = (() => {
   const COL = 128;                 // the engine's panel width, whatever the HUD scale
   const MINIMAP = 126;             // 0x466780: the minimap picture's long side

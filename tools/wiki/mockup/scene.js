@@ -1,4 +1,4 @@
-/* scene.js -- the in-game wiki's 3D stage: one view of sim.js turned into what the world passes draw. Pure: a view, the
+/* scene.js -- the in-game wiki's 3D stage: one view of the simulation turned into what the world passes draw. Pure: a view, the
    stage's pack (the scene.json tools/wiki/gfx.py writes) and the simulation's tick in, records out; no GL, no DOM. It
    runs in the page, where gfx.js draws its records with tools/tascene-render.js, and under node.
    tagpu/ddraw/src/tagpu_wikiscene.c is its port (research/notes/ingame-wiki-3d-stage-plan.md, landings 6g and 6h),
@@ -136,7 +136,7 @@ const WikiScene = (() => {
     /* THE GHOST STAGE, in ghost_record's order (tagpu_native.c): the placement ghost, each gesture site's (whatever
        its colour), then each queued build not yet started; a started one is the nanoframe itself. The engine knows
        which from the order node's own target (`started`); the view carries no such link, so a queued site with a unit
-       of its type standing on its exact point is the started one -- exact, because sim.js places a new unit on its
+       of its type standing on its exact point is the started one -- exact, because the simulation places a new unit on its
        site's point. Untinted, as the game draws them. */
     const ghost = (g, owner) => record(pack, g, owner, { alpha: GHOST_ALPHA, ghost: true, shadow: false });
     const push = r => { if (r) out.ghosts.push(r); };

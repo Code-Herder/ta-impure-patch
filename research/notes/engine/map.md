@@ -49,10 +49,10 @@ functions and their behaviour on a full pool.
 | Offset | What |
 |---|---|
 | `+0x00`, `+0x02` | slot A and slot B, unit indices: the stamp `0x47CC30` files a unit by `+0x110 & 3`, 1 in A and 2 (airborne) in B, and a building's yard cells in A |
-| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal |
+| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal. The extremes are `0x483210(xz, wh)`'s (`0x483210..0x483368`; LoadMap calls it over the whole map at `0x483CE7`), over the cell and its right, lower and lower-right neighbours, which clamps the rectangle's far ends to W − 1 and H − 1 and loops below them (`0x483263..0x483277`), so **no call ever writes the last column's or the last row's extremes**; LoadMap's init does not either, and its grid is CRT malloc, so they hold what the allocator left [DISASSEMBLED]. The last row's reach a class map: the class rule `0x47DE60` reads a cell's extremes once its feature and unit rules pass it. So can the last column's, though the border mask's pass 1 (`0x4833B0`) marks that column: the mask leaves a feature's anchor where it is, and a non-blocking feature (FeatureDef `+0xFE` bit 6 clear) anchored on the last column passes the feature rule [DISASSEMBLED]. `tools/tasim/classcheck.py` reports the engine's values in both. The 2×2 maximum `+0x05` is what the site test `0x47D2E0` compares a building's depth against (read at `0x47D50D` for a land yard cell, `0x47D521` for a water one; [orders](orders.html), its row), and ImpAI reads it at the level init as each 32-px block's top, the most over the block's four cells, 255 on the last column and row (`tagpu_impai.c`, `cell_top`), for its sea plant's depth filter |
 | `+0x08` | the feature def: `0xFFFF` none, `0xFFFE` a footprint cell, `0xFFFD` the border, `0xFFFC` void. Every feature function treats a def from `0xFFFB` up as no feature (`0x4240ED`, `0x4244D3`, `0x4246EC`) |
 | `+0x0A`, `+0x0B` | a footprint cell's rows and columns back to its anchor: the anchor is the cell less `(rows × W + columns)` cells (the destroy, `0x4246C6..0x4246E6`). An anchor whose flags have bit 0 set: its record's index. A GAF anchor without one: the damage it has taken, a `u16` (the damage, `0x42463F..0x424666`) |
-| `+0x0C` | flags: bit 0 the anchor holds a record; bit 1 the yard mark, set by the stamp (`0x47CE32`) and cleared by the clear (`0x47D17C`); bit 2 the draw's, cleared and set again on every cell it draws, every frame (`0x4698A4..0x4698B0`, `0x469936`); bits 3–6 the feature's owner, 10 for none (the spawn, `0x423EF1..0x423F07`) |
+| `+0x0C` | flags: bit 0 the anchor holds a record; bit 1 the yard mark, set by the stamp (`0x47CE32`) and cleared by the clear (`0x47D17C`); bit 2 the draw's, cleared and set again on every cell it draws, every frame (`0x4698A4..0x4698B0`, `0x469936`); bits 3–6 the feature's owner, 10 for none (the spawn, `0x423EF1..0x423F07`). LoadMap's init loop clears bits 0–1 (`and 0xFC`) and its height loops write `(flags & 0xD7) | 0x50` (owner 10, bit 5 clear; v1 `0x483A24`, v2 `0x483ABE`), so bits 2 and 7 keep the allocator's bytes until the draw writes bit 2 |
 
 **The pool's start.** The level load `0x421F20` allocates the pool (`0x18000` bytes in stock,
 `0x421F29`), zeroes it, links every record to its neighbours, next `i + 1` and prev `i − 1`, with
@@ -222,7 +222,12 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
 - **The two lookups bound themselves.** The cell lookup `0x481550(x, z)`, `ret 8`, returns NULL
   unless `0 ≤ x < W` and `0 ≤ z < H`, signed (`0x481551..0x481593`). The height `0x485070(pos)`,
   `ret 4`, takes the cell of the position's integer halves `>> 4` and returns −1 (`0x485136`)
-  unless that cell and its +1 neighbours lie on the grid (`0x48508F..0x4850C4`).
+  unless that cell and its +1 neighbours lie on the grid (`0x48508F..0x4850C4`). It reads the
+  high words of the position's `+0x00` and `+0x08` (`movsx`), and interpolates the four heights
+  with each division by 16 truncating toward zero, the `cdq; and edx,0xF; add; sar 4` idiom
+  (`0x4850F8..0x48512A`; the body `0x485070..0x48513D`): `top = h00 + (h10 − h00)·fx/16`, `bot = h01 + (h11 − h01)·fx/16`, the
+  answer `top + (bot − top)·fz/16`, `fx`/`fz` the integer halves' low four bits [DISASSEMBLED;
+  `tasim_map.c` `ts_map_ground`, whose test holds it to hand-computed cases].
 - **The destructor's arguments.** It passes `level` as the death record's `+0xA` low nibble, so
   1..15, and `smoke` as 1 unless the high nibble is 7 (`0x486D55..0x486D6E`: `test al,0xF` at
   `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four
@@ -668,11 +673,11 @@ record exactly once.
 |---|---|---|
 | `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to a stub that reloads `x`/`y` from the arguments and jumps to `0x4236EF` |
 | `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` with force 0 and `0x423C50` for the successor. Force 0 refuses an indestructible def (FeatureDef `+0xFF` bit 1, `0x42471E`), and `0x423C50`'s own clear then refuses too (`0x423D71`), so **an indestructible feature is left as it was**. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
-| `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | **Its refusals, in order** [DISASSEMBLED 2026-10-31]: def `0xFFFF` spawns nothing (`0x423C5A..0x423C73`); the footprint past the map's far edge -- column + FeatureDef `+0x94` above the width in cells `main+0x14233` (`0x423CEC..0x423CF8`), row + `+0x96` above the height `main+0x14237` (`0x423D20..0x423D24`), equal accepted -- returns 0 before anything is cleared. Then it clears the footprint row by row (`0x423D3E..0x423D94`): every cell whose feature word `+8` is not `0xFFFF` goes to `0x4246B0(cell, 0)` (`0x423D6A`), and a refusal there (an indestructible feature, FeatureDef `+0xFF` bit 1) abandons the spawn (`0x423D71` → `0x423DE7`) with the cells before it already cleared; units under it are not read. Then a 3DO def takes a record. **Its place and turn** [DISASSEMBLED 2026-10-29]: `pos` given (`0x423E26`, `je` on null), the record's `+0x08/+0x0C/+0x10` are a copy of it; null, as every map load passes it (`0x483A7E`, `0x483ADE`, `0x483B38`), `+0x08` and `+0x10` are the footprint's centre in 16.16, `(2·col + fx) << 19` and `(2·row + fz) << 19` from the def's `+0x94/+0x96` (`0x423E3D..0x423E68`), and `+0x0C` the ground's height there, `0x485070(pos) << 16` (`0x423E70..0x423E85`). `turn` given (`0x423E95`), `+0x20..+0x25` are a copy; null, they are zero (`0x423EAC..0x423EB7`). Then the Object3do from the def's template `+0x98` (`0x423EBB..0x423ECB`). The in-game wiki's stage places a wreck by this rule ([the reclaim entry](../ingame-wiki-reclaim-plan.html)) | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
+| `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | The body is `0x423C50..0x424041`. **Its refusals, in order** [DISASSEMBLED 2026-10-31]: def `0xFFFF` spawns nothing (`0x423C5A..0x423C73`); def `0xFFFC` writes the word alone and returns 0 (`0x423C76..0x423C81`); any other def indexes the FeatureDef table with no compare against the def count (`0x423CCF..0x423CD6`); the footprint past the map's far edge -- column + FeatureDef `+0x94` above the width in cells `main+0x14233` (`0x423CEC..0x423CF8`), row + `+0x96` above the height `main+0x14237` (`0x423D20..0x423D24`), equal accepted -- returns 0 before anything is cleared. Then it clears the footprint row by row (`0x423D3E..0x423D94`): every cell whose feature word `+8` is not `0xFFFF` goes to `0x4246B0(cell, 0)` (`0x423D6A`), and a refusal there (an indestructible feature, FeatureDef `+0xFF` bit 1) abandons the spawn (`0x423D71` → `0x423DE7`) with the cells before it already cleared; units under it are not read. Then a 3DO def takes a record, the free list's head (`0x423DA8..0x423DC5`, through `0x4232F0`), and none left abandons the spawn (`0x423DB4..0x423DE5`). **Its place and turn** [DISASSEMBLED 2026-10-29]: `pos` given (`0x423E26`, `je` on null), the record's `+0x08/+0x0C/+0x10` are a copy of it; null, as every map load passes it (`0x483A7E`, `0x483ADE`, `0x483B38`), `+0x08` and `+0x10` are the footprint's centre in 16.16, `(2·col + fx) << 19` and `(2·row + fz) << 19` from the def's `+0x94/+0x96` (`0x423E3D..0x423E68`), and `+0x0C` the ground's height there, `0x485070(pos) << 16` (`0x423E70..0x423E85`). `turn` given (`0x423E95`), `+0x20..+0x25` are a copy; null, they are zero (`0x423EAC..0x423EB7`). Then the Object3do from the def's template `+0x98` (`0x423EBB..0x423ECB`). The in-game wiki's stage places a wreck by this rule ([the reclaim entry](../ingame-wiki-reclaim-plan.html)) | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
 | `0x4233A0` `(x, y, flag)`, the burn: starts the feature's burn sequence, FeatureDef `+0xB4`, and draws its spread countdown `+0x2E` (`0x4234C2`; [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)) | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
 | `0x4232A0` | a bare allocator: returns the free head, or the count for "none" | no `E8` caller |
 | `0x424050` | the feature tick, one caller `0x495585` in the game tick; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`); the whole of it: [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30) | — |
-| `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), both into the produced floats `+0xBC`/`+0xD4` of the unit in `esi` [INFERRED: the reclaimer, the first argument], so its owner's next economy pass credits them ([weapons.md](weapons.md), *The ledger*), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
+| `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. The cell under `pos` (`0x481550`, twice) holds a def index below `0xFFFB` (`0x42381E..0x423823`), `0xFFFE` for a footprint cell, resolved to its anchor (`0x42383A..0x42383F`, `0x423845..0x423862`) whose word is tested again (`0x423868`), or nothing, which returns 0 (`0x423841`, `0x423886`). A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), both into the produced floats `+0xBC`/`+0xD4` of the unit in `esi` [INFERRED: the reclaimer, the first argument], so its owner's next economy pass credits them ([weapons.md](weapons.md), *The ledger*), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`). MEASURED 2026-11-13 in ImpAI's recordings (the bar's nine games, 18 payouts): a rock's reclaim paid its whole metal at once -- a 1 005-metal rock's reclaimer showed `+0xE4` 1 006 after the next pass, its own MetalMake of 1 beside it -- and its anchor's flags went from `0x50` to `0x51` with the def unchanged for 21 ticks while its reclaim sequence played, then back to `0x50` under its successor's def (26 → 327, 12 → 251); a 5 000-metal payout into a store of 644 of 1 300 filled the store and the rest was lost to the pass's cap (*weapons.md*, *The settle*). ImpAI counts its own payouts from `+0xD4` (*modules/impai.md*) | — |
 | `0x4244B0(cell, x, y, weapon)`, a feature taking damage; callers `0x49A626` (the area damage) and the network handler | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD`; [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30) | — |
 | `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`, which the border fix wraps: "A saved game's features on the map's border") | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | on a full pool an `Animating` record's GAF spawn still succeeds and takes no record, leaving `+0x0A` at 0 (`0x423EE9`); `FeatureDie` finds none (`0x42361B` → `0x42364C` → `0x423651`), and in stock the write lands on record 0, which on a full pool is live. A `3D` record refused on a full pool (`0x423DDF`/`0x423DE7`) writes through a word no spawn wrote — record 0 on the zeroed grid a load gets. Both patched ("A saved feature's state and the wreck record its cell names"). A save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
@@ -765,15 +770,37 @@ as one of the values at `0xFFFB` and up, which means one of three things:
 So the mask closes the border to building, to movement and to feature spawns, and to nothing else.
 
 **The pathing maps** [DISASSEMBLED]. 32 movement classes at `0x512358`, `0x20` bytes each:
-`+0x00` present, `+0x04`/`+0x06` the class's footprint (`s16`, [INFERRED] from its use as the
-refresh's margin), `+0x10`/`+0x14` the map's W and H,
-`+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick.
+`+0x00` the name, non-NULL for a present class, `+0x04`/`+0x06` the class's footprint (`s16`,
+`FootPrintX`/`FootPrintZ`), `+0x08`/`+0x0A` `maxwaterdepth`/`minwaterdepth` (`s16`), `+0x0C`..`+0x0F`
+`maxslope`, `badslope`, `maxwaterslope`, `badwaterslope` (bytes) — the parser `0x440340`'s, in
+[the key inventory](keys.md) — `+0x10`/`+0x14` the map's W and H,
+`+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick, the
+search's watermark.
 `0x440940` builds them: for each present class it frees the old map, allocates the new one and
 fills it (`0x440500`), and it runs once a load, at `0x4918E3` in `LoadGameData_Main`, after LoadMap
-(`0x4918C0`): after the mask and before any saved feature is back. After that `0x440830` recomputes
+(`0x4918C0`): after the mask and before any saved feature is back. It gives every present class
+W = `main+0x14233` and H = `main+0x14237`, the PLOT grid's (`0x44098D`, `0x440990`; the body `0x440940..0x4409FC`), and allocates `((H + 15) >> 4) · W`
+dwords (`0x44097E..0x4409B8`); `0x440470` is the same sizing for one class from two arguments. The
+reader `0x40D7B0` takes cell `(x, z)` as dword `(z >> 4) · W + x`, bits `2 · (z & 15)`
+(`0x40D83E..0x40D85E`): code 0 blocked, 1 passable but bad, 3 good, with the class's footprint
+already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). Before the map
+it answers 0 off the class's W × H (unsigned) and 0 when the 32-px block at the footprint's centre,
+`((x >> 1) + (fx >> 2), (z >> 1) + (fz >> 2))`, is outside half the PLOT grid's W and H; then **2**
+when that block's explored bit of the player the pathfinder is serving, `1 << [pf+0x78]`, is clear
+(`0x40D80E..0x40D83B`), so a cell of an unexplored block is passable to the search whatever its
+code, at no pen; the function ends at `0x40D870` (`ret 8`). The search that reads it:
+[units, the pathfinder](units.md#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12). ImpAI's reach
+labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
+(`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
+the PLOT grid's. In play no seat's rule reads them, since slot A puts every player's units in them:
+the WORLDQ's `passable` op recomputes the fill over a window from the content alone
+(`tagpu_worldq.c`, THE CONTENT MAP: the class record's `+0x04`..`+0x0F`, each cell's feature word
+`+0x08` and back-reference `+0x0A`/`+0x0B`, its extremes `+0x05`/`+0x06`, the sea level and
+FeatureDef `+0xFE` bit 6, through the core's ports with the unit rule left out), and under ImpAI's
+check lever the level init compares that with these maps entry for entry while no unit stands. After that `0x440830` recomputes
 them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of caller:
 
-- **grid changes**, through `0x440A40(xy, wh)` (stdcall, `ret 8`, `xy = x | y << 16`,
+- **grid changes**, through `0x440A40(xy, wh)` (stdcall, `ret 8`, `0x440A40..0x440A6C`, `xy = x | y << 16`,
   `wh = w | h << 16`), which runs `0x440830` for each present class over
   `[x − fw, x + w] × [y − fh, y + h]` clamped to the map: `SpawnFeatureOnMap` (`0x424031`, with the
   anchor and FeatureDef `+0x94`), `FEATURES_Destroy` (`0x424822`), and the placement code at
@@ -783,6 +810,60 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
   unit on the cell (`0x47E10C`) and compares its stamp, `[[unit]+0x26]`, with the class tick `+0x1C`
   (`0x47E121..0x47E13F`). `0x440940` rewrites `+0x10`, `+0x14` and `+0x18` but never `+0x1C`, which
   only `0x440B18` writes, so the class tick carries over from one load to the next in a process.
+
+**The rules** [DISASSEMBLED; `tasim_class.c` ports each, `tests/tasim_class_test.py` holds them]:
+
+- **The per-cell rule `0x47DE60(class, cell)`** (`ret 8`, `0x47DE60..0x47DFB3`): the feature word
+  first (the five readers' rule above, a def at or past the count blocking at `0x47DE8D`; a `0xFFFE`
+  cell hops to its anchor and reads the def there with no compare
+  against the def count; a word of `0xFFFB`..`0xFFFD`, the TNT's void `0xFFFC` among them, sets 1 at
+  `0x47DE9E`, and a 1 returns 0 at `0x47DEEB..0x47DEF5` before any class field, unit or height is
+  read, so **a void cell is 0 for every movement class** -- the walls of the packed calibration lane's
+  generated maps, `tools/tasim/synthmap.py`), then the unit in slot A (`0x47DEF8..0x47DF32`) — one with no mover (a
+  structure) is an obstacle (0), a mover only when its stamp is below the watermark — then the depths against the sea level byte
+  `main+0x1427F`, signed: the 2×2 minimum below `sea − maxwaterdepth` or the maximum above
+  `sea − minwaterdepth` is 0; then the slope, `max − min` as a byte, against the water pair when the
+  minimum is below the sea and the land pair otherwise: up to bad 3, up to max 1, past it 0.
+- **The rectangle `0x47DFC0(class, x, z, w, h)`** (`ret 0x14`, `0x47DFC0..0x47E1EC`): 0 when `x` or `z` is negative or
+  `x + w ≥ W` or `z + h ≥ H` (signed) — **it refuses any rectangle that reaches the last column or
+  row** — else the worst of the rule over its cells, a 0 answering at once; an empty rectangle
+  answers 3.
+- **The refresh `0x47E1F0(class, x, z)`** (`ret 0xC`, `0x47E1F0..0x47E2CD`): five calls of `0x47DFC0`
+  (`0x47E214..0x47E2B5`), the footprint `(x, z, fx, fz)` first, its 0 or 1 the answer; then the
+  ring in pinwheel order, each corner once — the top row `x − 1..x + fx − 1`, the right column
+  `z − 1..z + fz − 1`, the bottom row `x..x + fx`, the left column `z..z + fz` — any part not 3
+  answering 1. A ring part off the grid or on the
+  last column or row answers 0 there and so 1 here, never 0.
+- **The fill `0x440500`** (thiscall on the class, `0x440500..0x44082F`): a row pass and a column
+  pass, each a sliding minimum over a line of `max(W + fx, H + fz) + 3` bytes (sized at
+  `0x440509..0x440531`, so a negative footprint would index before it) whose two cells before and
+  `span + 1` after are 0, so a cell past the map counts 0. The running minimum starts at 0, is kept
+  while the cell entering the window is above it and the one leaving was above it, and is rescanned
+  over the window when the one leaving held it (`0x4405C8..0x440606`; the column pass
+  `0x44072D..0x440770`, the same code): the row pass stores the window minimum of the rule
+  over `[x, x + fx)`, the column pass of those over `[z, z + fz)`, and a 3 drops to 1 when the cell
+  before or after the window is below 3. So entry `(x, z)` is 0 when a footprint cell is 0, 3 when
+  the footprint and its ring are all 3, else 1. **The fill and the refresh disagree at the far
+  edges**: the fill counts only the cells past the map as off it, the refresh refuses the last
+  column and row, so an entry whose footprint ends on the last column or row (`x + fx = W`) is 1
+  (or 0) after the fill and 0 after any refresh, and one whose ring reaches it (`x + fx = W − 1`)
+  can be 3 after the fill and is 1 after any refresh. The engine's own maps keep the fill's values
+  there until a re-mark reaches them.
+- **The re-mark `0x440830(class, xz, wh)`** (`0x440830..0x44091F`): `x`, `z`, `w`, `h` are the
+  `int16` halves; the near ends `x − fx` and `z − fz` clamp at 0, the far ends `x + w + 1` and
+  `z + h + 1` clamp to W and H through an **unsigned** compare (`0x440884` `jbe`, `0x440891`), so a far end below 0 recomputes the whole width or height; each
+  entry through `0x47E1F0`. W and H are the class record's `+0x10` and `+0x14` (`0x440881`, `0x44088E`), so an
+  absent class's re-mark writes nothing: the static constructor `0x440230` and the teardown `0x440A00` zero
+  them, `0x440940` sets them only for a class with a name (`0x440974`), and with both 0 the far ends clamp to 0
+  and it leaves at `0x44089D` [DISASSEMBLED 2026-11-12]. The claim `0x440A70`'s mover branch, which walks the
+  32 records with no present test, relies on it.
+- **The claim `0x440A70(unit)`** (`0x440A70..0x440AE0`, [its entry](units.md)), **the watermark `0x440AF0(class, unit)`**
+  and **the cleanup `0x440BE0(class, unit)`**: the watermark becomes
+  `max(GameTime, 30) − 30` (unsigned), the searcher's stamp is GameTime for the walk (re-marking its
+  rectangle when its old stamp was below the old watermark), and when the watermark moved every
+  slot from 1 to the last whose unit is alive (`+0x110` bit 28) with a mover and a stamp in
+  `[old, new)` is re-marked; then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
+  cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`).
 
 **The restore.** `0x424C00(tdf)` (stdcall, `ret 4`) has one caller, `0x43265A`, in the game-load
 routine `0x432610`, which has one caller, `0x497B29` in the loader body (the condition is in
@@ -1019,7 +1100,9 @@ draws three values:
 
 `simrand` is the sim RNG `0x4B6C30(n)`, which answers 0 for `n < 2` (`0x4B6C35`). The
 updater then derives the components `+0x37ECC` and `+0x37ED4` from the speed and the heading
-(`0x490CE8..0x490D35`), and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
+(`0x490CE8..0x490D35`): `−2 · 0x4B70EF(heading, speed)` and `−2 · 0x4B7123(heading, speed)` (`neg`, `shl 1`
+at `0x490D05..0x490D07` and `0x490D31..0x490D33`), so the wind is a vector of length `2 · speed` in
+16.16, 0.15 wu a tick at a speed of 5000 [DISASSEMBLED 2026-11-13]; and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
 (`0x490D3B..0x490D7B`). `+0x37EC8` is 5000, written only by the load (`0x4918ED`). It sets the changed flag to 1 (`0x490D7B`) and pops `esi` (`0x490D85`).
 
 **The writers and readers.** The only writers of `+0x37EC4`, `+0x37EDA` and `+0x37ED8` are
@@ -1108,7 +1191,20 @@ game start makes at `0x4971C7`.
   engine's copy `main+0x479` in its place when that is not null, counted (`network levels seeded
   from the engine's session copy`), and otherwise the map's hash alone, counted (`network levels
   seeded from the map alone`); both are logged with the refused answer's `HRESULT` and `dwSize`.
-- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
+- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG; under
+  the harness's switch `tagpu_seeds.on` (a test launch only) it is `TEST_SEED_WIND` with the map's
+  hash, so every level a harness plays on one map draws one wind schedule, a function of GameTime.
+- **A harness's clearing scenario apply** seeds the wind again, from the wire's seed alone, after the
+  clear and before the creates, and draws it at once (`tagpu_seed_run`, with the simulation RNG, the
+  game thread's CRT stream and the meteors): it sets `next` to the apply's GameTime − 1, calls the updater
+  `0x490C40` on the game thread (no argument, `esi` pushed at `0x490C59` and popped at `0x490D85`, the
+  x87 stack balanced, `ret`), which draws through `wind_draw` and derives the components, the ratio and
+  the changed flag, and then raises `next` by one, the schedule a draw in the next step would have
+  made. The wind is then in force from the next step's projectile tick `0x495513`, which runs before
+  that step's updater `0x49558F`. An apply at GameTime 0 cannot draw (`next` cannot be below 0) and
+  leaves `next` at 0, so the updater draws in step 1, as after a level load. Either way a
+  calibration run's wind, or a packed batch's, is then its seed's wherever its lane-launch places it
+  ([tasim-calibration](../modules/tasim-calibration.html), *The packed lane*, *The streams*).
 
 #### The engine's DirectPlay object — `main+0x14` [DISASSEMBLED 2026-09-25]
 
@@ -1486,14 +1582,21 @@ the unit tick `0x48AD30` runs `DoScriptsNow(1)` `0x4B0D60` at `0x48ADEB`, and on
 owner of type 1 or 2, the order run `0x43B7C0` (`0x48AF98`). There the build handler BuildingBuild
 `0x402640` waits for INBUILDSTANCE (`0x438700` at `0x4027CA`) -- which a lab's script sets in the
 slice that opens the yard [INFERRED: the stock labs' order of the two] -- then asks
-`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` (on failure it sleeps
-15 ticks) and creates through `0x485F50` at `0x4028EA`. Nothing in the turn
+`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` with the unit to ignore
+pushed as 0 (`push 0` at `0x402896`), so every unit on the footprint counts, and creates through
+`0x485F50` at `0x4028EA`. On a refusal it pushes 15 and sleeps (`0x439E80`, `0x4028A2..0x4028A6`),
+sets bit 1 of the node's `+0x06` and returns 2 (`0x4028AB..0x4028BF`), and the next run asks again:
+a unit standing on the yard holds the lab's next product for as long as it stands [DISASSEMBLED
+2026-11-14]. MEASURED 2026-11-14 in the closing run's Trout Farm games: a constructor guarding the
+seat's one factory stood on its yard from GameTime 11 888 and the product was created at 39 339, five
+ticks after the constructor drifted off it; ImpAI's yard rule answers it ([the brain](../impai/brain.html),
+*The yard stays clear*). Nothing in the turn
 stands between the slice's yard and the handler's create, so both can fall in one tick, the yard
 first; slice-walkers measured them one tick apart (lab 502 opened at GameTime 2962, nanoframe 527
 was made at 2963 on the yard's four free cells). The placement test does not see the yard: for a
 mobile def (`+0x22F` ≠ 0, the path at `0x47DBF4`) it refuses only a footprint cell whose slot A
-names another unit (`0x47DCFD..0x47DD0A`), so the order the cells were freed in decides the
-create.
+names another unit than the ignored one (`0x47DCFD..0x47DD0A`, the jump to the refusal `0x47DD99`),
+so the order the cells were freed in decides the create.
 
 **So the recording carries the yard at its place, and a playing applies it there.** The recorder
 observes YARD_OPEN's write `mov [esi+0x10F],bl` at `0x47DAF1` (6 bytes, `88 9E 0F 01 00 00`;
@@ -1760,8 +1863,14 @@ the shear is the same in every mode:
 - **Without it** (Permanent 12, Circular 8, whose LOS grids are all lit): the first three points go to
   `PositionInPlayerMapped 0x408090(player, point)` (`0x465BBB`, `0x465C53`, `0x465CF7`), which places
   the point at `0x408095..0x4080C0` — not visible at `0x4080C1` — and reads the shared mapped grid
-  `main+0x14273`, a `u16` a cell and a bit a player; the fourth goes to an inline copy of it,
-  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses.
+  `main+0x14273`, a `u16` a cell and a bit a player. **The bit it tests is the viewed player's**,
+  `1 << main+0x2A43` (the byte read at `0x4080E0`, the test `0x4080EA..0x4080F4`), whatever `player` is: the argument supplies only the
+  grid's size, `+0x80` and `+0x84`, so `0x408090` answers for the viewed player alone
+  [DISASSEMBLED 2026-11-11]. `tagpu_worldq.c`'s mapped test calls it only for the viewed seat and
+  the controlled one (`main+0x2A42`), whose reclaim the resolver's mode 12 judges by the same bit
+  (*orders.md*, *The order resolver's reclaim case*), and answers unmapped for any other; the fourth
+  goes to an inline copy of it,
+  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses. ImpAI's line-of-sight rule (`tagpu_worldq.c`, `unit_los`) is this function for any seat: the same four points with the live shear fix's row (the first point's True read `0x465B6A..0x465B93`), the seat's own mapped bit in the modes without True line of sight where the engine tests the viewed player's (`0x4080E0`, and `0x465E00` in the inline fourth read) — the stamp writes every record's own bit, `1 << rec+0x146` (`0x481940..0x481951`) — and no submerged unit at all, the sea test `0x465B41..0x465B4E` being decided for the engine by bit 9, the viewed player's sonar; under `tagpu_impai_check.on` every ImpAI turn compares it with `0x465AC0` ([ImpAI in the engine](../modules/impai.html), *What a seat knows*).
 
 The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
 (`0x465D46`, `0x465DA9`); the fourth takes its column in `ecx` from `0x465D3B`, in both modes.
@@ -1898,7 +2007,14 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 Readers of `main+0x14273` that no `+0x84` compare bounds — `0x40D817`, `0x466D01` and `0x47E37B`,
 which halve a coordinate to scale it; `0x4816CC`, `0x481A48`, `0x481B58`, `0x481CAA`, `0x483E69`,
 `0x484F8B`, `0x484FEE` and `0x485460` — index it by a cell or a scaled minimap coordinate, not by a
-world point's row. `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+world point's row. **Its writers in play only set bits**: `0x481A53..0x481A67` and `0x481B61..0x481B75`
+XOR a player's bit into a word only when that bit is clear, and `0x485466..0x48547A` ORs; the refill
+`0x4816A0`, with a nonzero argument, writes `0xFFFF` to every word while `main+0x14281` bit 0 is clear
+and 0 while it is set (`0x4816BB..0x4816FB`) [DISASSEMBLED 2026-11-13]. So once the level starts
+Mapped, every bit stays set, and the pathfinder's map reader `0x40D7B0` never takes its "unexplored is
+passable" answer (`0x40D817..0x40D83B`: the word's bit numbered by the byte `+0x78` of the pathfinder object,
+`this` (`ecx`, kept at `[esp+0x10]` from `0x40D7BC`) [INFERRED: the searching player], is tested at `0x40D82D`, and with it clear the reader returns
+2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
 accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
 the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
 (`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they
@@ -1970,7 +2086,21 @@ its corner, `(z >> 5) − (y >> 6)` less the circle's offset (`0x4826B7`), and t
 row (`0x4824F8..0x482547`), so every row of the circle inside the grid is stamped.
 
 **The temporary sight records** `main+0x1427B`, `main+0x14277` of them, at most 20 (`0x48292C`), 36
-bytes each: `0x482910(point, sight, height, duration)` (`__stdcall`, `ret 0x10` at `0x482AAF`;
+bytes each. **The block is allocated at two sites**, each `push 0x2D0` (20 × 36) to the allocator
+`0x4D83B0` with the count zeroed beside it: LoadMap's at `0x483D88` (count `0x483D92`, the allocator
+called at `0x483D98`, pointer `0x483DA6`), the one a level runs, and `0x481500`'s at `0x481505` (count `0x48150F`, pointer
+`0x481527`), a function nothing calls, as nothing calls the free `0x481530` (DIS 2026-11-13: no `E8`/`E9`
+to either and no stored pointer to them in the image). Their frees are `0x481535` and `0x483DD7`
+(`0x483DD0`, called at `0x491BB3`). Every access to the count and the block in `.text` is at one of
+these, the expiry `0x482130` or the add `0x482910`; `0x2D0` occurs only at the two allocations and the
+cap 20 only at `0x48292C` (a `.text`-wide search of the immediates and of every base register
+derived from `main`, DIS 2026-11-13). The expiry walks and compacts `count` records and the add fills
+record `count`, so the cap and the block's size are the only two places the 20 lives. **Impure's test
+lever `tagpu_sightcap.on`** (N, 21..127, test launches only) rewrites the three: both pushes to
+N × 36 and the compare's imm8 (`0x48292E`) to N, which a signed imm8 bounds at 127
+(`tagpu_patches.c`, `fix_sight_cap`; the packed calibration lane's,
+[tasim-calibration](../modules/tasim-calibration.html), *The packed lane*).
+The add is `0x482910(point, sight, height, duration)` (`__stdcall`, `ret 0x10` at `0x482AAF`;
 DISASSEMBLED `0x482910..0x482AAF`). It **refuses before writing anything** — no push, no store, the
 count unchanged — when LosType bit 1 is clear (`and al,2` at `0x48291C`, `jne` at `0x482920`) or the
 count is already 20 (`cmp eax,0x14` at `0x48292C`, `jge` at `0x48292F`); both jump to the `ret`.
@@ -2010,7 +2140,7 @@ moved together. "Past its time" is `+0x1C` below GameTime, unsigned (`0x482153..
 keeps it): a record made at GameTime d is removed by the first expiry with GameTime ≥ d + 61, so the
 last GameTime drawn with it is the last step end at or below d + 60 -- d + 60 itself when a step is
 one tick, up to one step earlier otherwise. The in-game wiki's death vision copies the cap, the list's
-owner rule and this boundary (`tagpu_wikisim.c` `kill` and `tagpu_wikisim_sight_lit`; its players
+owner rule and this boundary (`tasim_world.c` `tasim_kill` and `tasim_sight.c` `tagpu_wikisim_sight_lit`; its players
 entry's data rule keeps a script under the cap: at most 20 kills of one seat within any 62 ticks).
 
 - **The stamp and its removal read the stored words**: `0x482270` at `0x4822CD`/`0x4822D0`,
@@ -2093,6 +2223,43 @@ did not move: stored at column 24, row 0, stock's row), and no cell at 200 or mo
 fixture: 179 sites installed, all 44 patched sites read back as intended — the emitter's two
 branches landing after the count — the point `0x4825D4..0x482614` and `0x48261F..0x48266A` read
 back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells of rows 0–9.
+
+### What the feature draw shows a player — `0x4698A4..0x469936`, `0x469A46..0x469ABB`, `0x4658E0` [DISASSEMBLED 2026-11-15]
+
+`DrawGameScreen 0x468CF0` reads the one shared feature grid every frame, for the viewed player
+`main[0x2A43]` (stored at `[esp+0x70]`, `0x46967D..0x469689`) and its record, `main + 0x1B63 +
+viewer × 0x14B` (`0x46968D..0x4696AB`). The flat pre-pass `0x4698A4..0x469936` takes each anchor
+(a def word below `0xFFFB`, `0x4698AA`) whose def's `+0xFA` is below 10 (`0x4698CF`); a taller one
+is marked (cell `+0x0C` bit 2, `0x469936`) and drawn by the row sweep `0x469A46..0x469ABB`, which
+applies the same gate:
+
+- **A def without `+0xFF` bit 3** (`nodrawundergray`, `0x4698D8`, `0x469A64`) is drawn by `0x46A610`
+  with **no sight test**.
+- **A def with it** is drawn when the anchor's owner nibble, cell `+0x0C` bits 3–6, equals the
+  viewer's index (`0x4698E1..0x4698F0`, `0x469A6D..0x469A79`), or when **`0x4658E0`** passes.
+
+`0x4658E0(record, x, z, fx, fz, height)` (stdcall, `ret 0x18`; the caller pushes the anchor's cell,
+the def's footprint `+0x94`/`+0x96` and the cell's height byte `+0x04`, `0x4698F2..0x46990F`) tests
+two corners, `(x, z)` and `(x + fx, z + fz)`, each in px at 16 a cell as 16-bit words, its row
+sheared by half the height: column `x·16 >> 5`, row `(z·16 − height/2) >> 5`. Under `LosType & 2`
+(`main+0x14281`, `0x4658FE..0x465914`) it reads the record's sight counters (`+0x7C`, `+0x80` ×
+`+0x84` blocks; `0x46592E..0x465958`, `0x465A07..0x465A2D`); otherwise the mapped grid
+`main+0x14273` at the viewer's bit `1 << main[0x2A43]` (`0x4659A7..0x4659CE`, `0x465A8B..0x465AAD`).
+Either corner passing draws the feature. The corners are under the shear fix (table above:
+`0x465942`, `0x46598A`, `0x465A17`, `0x465A63`), so a sheared row above the grid is read at the
+corner's own row.
+
+The screen fog grid's builder `0x4843C0` reads the viewed player (`0x4843CD`) and writes its grey
+mask only under `LosType & 2` (`0x4844E7`; *The screen fog grid*, below), and the overlay `0x4848E0`
+draws it over everything. So on explored ground **every feature but a gated one is drawn live**,
+greyed outside sight under true line of sight, and a wreck spawned out of sight is drawn at once.
+The bar's games play LosType 6, the map explored. A gated def is rare: of the 1 644 feature
+sections of the installed content six set it, the wall defs DragonsTeeth(_Core),
+Fortification(_Core) and floatingteeth(_core) (MEASURED 2026-11-15, the wreck-sight sweep).
+ImpAI takes this rule as what its seat may know of the features
+(`tasim_sweep.c`, `tasim_feature_drawn`; [the brain](../impai/brain.html), *Task allocation*).
+**Not established**: a reclaim in fog removing the drawn feature at once [INFERRED from the grid
+being the draw's only source].
 
 ### The sight table and the stamp — `los.tdf`'s loader `0x433130`, the stamp `0x482270`, the sight grid `0x482C20` [DISASSEMBLED + MEASURED 2026-11-01]
 
@@ -2383,7 +2550,10 @@ The map edge's mirror draws the map as its TNT lays it out ([GPU status](../gpu-
 and **no moment of a saved game's load has that in the feature grid**. So the list is built from
 the TNT itself, by LoadMap's own placement rules, at the one point every path reaches.
 
-**LoadMap `0x483610`** runs on the loader thread; its one caller is `0x4918C0`. After
+**LoadMap `0x483610`** runs on the loader thread; its one caller is `0x4918C0`. A TNT version
+other than `0x1020` and `0x2000` stops it with an error (`0x483652..0x48366A`); W and H are the
+header's `+4` and `+8` (`0x48387D..0x483892`), the sea level `main+0x1427F` the low byte of its
+`+0x24` (`0x483873`), and the new game's grid is written at `0x4839A8..0x483D7D`. After
 `0x421F20` has loaded the map's FeatureDefs (called at `0x4839F4`; `main+0x14253` is their count,
 and `0x4224B0` only ever appends a def, so an index never changes meaning), it takes one of two
 paths by the TNT's version, `[esp+0x18]` (`0x1020` or `0x2000`):
@@ -2400,6 +2570,24 @@ slots above are LoadMap's at that address. `main+0x38D6B` is the saved game bein
 `0x492655`, cleared at `0x4915F4`. `0x423160` walks the schema's list at `[main+0x391E9]+0xDBC`,
 count `+0xDC0`, `0x88`-byte records — features the `.ota` places, which are not the TNT's.
 
+**The FeatureDefs' order** [DISASSEMBLED]. `0x421F20` calls `LoadFeature 0x4224B0` for each name of
+the TNT's table in turn (`0x42201E..0x422037`: the name at `+4` of each `0x84`-byte record, the
+count at `+0x1C` of the TNT object), ignoring its result. LoadFeature searches the list of
+feature TDFs at `[0x511FB4]+4..+8` in order and takes the first file whose section lookup
+`0x4C3410` finds the name (`0x4224C9..0x4224F3`); with none it formats a message and calls
+`0x4B6290` (`0x4224FD..0x422522`) [INFERRED: the engine's fatal error]. It never looks for the name
+among the defs already loaded: it grows the table to `(count + 1)·0x100` bytes (`0x422527..0x422558`)
+and fills the new last def, so a name the TNT lists twice is two defs. `0x423160` matches each
+schema feature's name without case against the defs (`0x4231A3..0x4231CF`, `0x4F8A70`) and calls
+LoadFeature for one not there; it places a GAF def's anchor at the record's cell and centres a 3DO
+def there, `footx / 2` and `footz / 2` truncated (`cdq; sub; sar 1`). The schema's records are the
+OTA reader `0x436C30`'s (`0x437204..0x43725E`): `Featurename`, `XPos` and `ZPos` of each
+subsection of the schema's `[features]`, the positions in 16-px cells, default −1, and a record with
+either negative has its name emptied (`0x43725E`). The same reader stores the schema's
+`SurfaceMetal` at `+0xD30` (`0x4366B3..0x4366DB`, default 0); which schema a game reads is
+`0x436860`'s choice, not mapped here. `tasim_map.c` loads in this order, and
+`tools/tasim/classcheck.py` holds its grid and class maps to a running game's.
+
 **`SpawnFeatureOnMap 0x423C50`**: a footprint (`FeatureDef+0x94` × `+0x96`, 16-px cells, from the
 anchor right and down) that runs past the map is refused. Then, footprint cell by footprint cell,
 anything not empty (`0xFFFF`) goes to `FEATURES_Destroy 0x4246B0(cell, 0)`, and a refusal
@@ -2413,8 +2601,8 @@ footprint cell `0xFFFE` with its offset back to the anchor in `+0x0A` (dz) and `
 the game-load routine `0x432610`, calls `LoadFeature 0x4224B0` (`0x424DE1`)
 and places each record with `GetGridPosPLOT 0x481550` and `SpawnFeatureOnMap` (`0x424FBF`,
 `0x425050`), then restores its sequence (the calls at `0x42507E`, `0x42509D`, `0x4250BB`, below).
-**Between the two, `0x4833B0` masks the border** (called at `0x483CF1`, after the join)
-[DISASSEMBLED 2026-09-24]. It writes the scroll extent first (`main+0x1422B`/`+0x1422F`, the map's
+**Between the two, `0x4833B0` masks the border** (called at `0x483CF1`, after the join;
+`0x4833B0..0x483604`) [DISASSEMBLED 2026-09-24]. It writes the scroll extent first (`main+0x1422B`/`+0x1422F`, the map's
 pixel size less `0x20` and `0x80`), then makes four passes over the grid. Every store is guarded by
 the same pair, `cmp dx,0xffff; je` then `cmp dx,0xfffe; jne`, so it turns an EMPTY cell and a
 footprint cell (`0xFFFE`) alike into `0xFFFD` and leaves an anchor alone: five stores, each after
@@ -2424,8 +2612,8 @@ its `0xFFFE` compare (`0x483439`, `0x483455`, `0x4834CC`, `0x483572`, `0x4835E8`
 | --- | --- | --- |
 | 1 | columns W−2 and W−1 of every row (`+0x08` and `+0x15` of the cell at W−2), unconditionally | `0x483440`, `0x48345C` |
 | 2 | down each column from the top, while the projected y, row·16 − height/2, is negative | `0x4834D3` |
-| 3 | up each column from the bottom, while row·16 − height/2 is past the extent's height `main+0x1422F` — the cell ONE ROW ABOVE the one tested (`sub eax, W·13`) | `0x483579` |
-| 4 | only when `[main+0x391E9]+0xD44` is set (a lava world [INFERRED]): every cell whose 2×2 minimum height `+0x06` is at or below the sea level `main+0x1427F` | `0x4835EF` |
+| 3 | up each column from the bottom, while row·16 − height/2 is past the extent's height `main+0x1422F` — the cell ONE ROW ABOVE the one tested (`sub eax, W·13`, `0x483559..0x483565`), so the last row is never masked by it. Passes 2 and 3 test no row bound: pass 2 stops by row 8 at the latest (`8·16 − 255/2 > 0`) and pass 3 above row 1 on the same arithmetic, so a map of fewer than 9 rows would run them off the grid (`0x4833F8..0x483589`) | `0x483579` |
+| 4 | only when `[main+0x391E9]+0xD44` is set — the OTA's GlobalHeader `lavaworld`, read by `0x4C46C0` at `0x43657B` (the string `0x504BE4`) and stored at `0x43658B` — every cell whose 2×2 minimum height `+0x06` is at or below the sea level `main+0x1427F` | `0x4835EF` |
 
 **The extent written here is where our edge passes end the map.** Pass 1 masks exactly the 32 px
 the extent's width leaves off (`edi = [main+0x14233] − 2`, `0x4833EC..0x4833F8`, then the cell

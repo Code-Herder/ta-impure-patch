@@ -38,11 +38,18 @@ page's controls and the demos playing on the stage.
                                                       the 3D stage and the sidebar under each
                                                       setup of the compatibility suite, one game
                                                       a setup
-    wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
-    wiki_regression.py - gate --shots DIR [-j N]      all of it at once under one hold of the run lock:
-                                                      the offline checks, each single-player mode on
-                                                      its own instance and X server, and each setup
-                                                      of mods, every lane a process (gate)
+    wiki_regression.py - offline [--offline-jobs N]   the offline checks, no game: OFFLINE_CHECKS,
+                                                      on the slots of the run lock they are granted
+    wiki_regression.py - gate --shots DIR [-j N] [--resume]
+                                                      all of it at once, every lane a process: the
+                                                      offline checks on slots of the run lock of
+                                                      their own, from the moment they are granted,
+                                                      and under one hold of the run lock, taken when
+                                                      it is free, each single-player mode on its own
+                                                      instance and X server and each setup of mods,
+                                                      the longest first (gate); --resume goes on
+                                                      with the gate an earlier sitting left in DIR,
+                                                      its kept lanes read back (RESUMING A GATE)
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -132,13 +139,14 @@ try, on the same launch as sp:
        round to the building's page, then its button, each a press and a release inside. Paused,
        the dump's log of what the game gave its simulation holds the demo's presses and releases
        and the sidebar's in order, every move within a pixel of the point it was given at, and its
-       state hash equals sim.js fed the same logged inputs at the same ticks (`simparity.mjs
-       --try`); sim.js's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
+       state hash equals the host fed the same logged inputs at the same ticks (`simparity.mjs
+       --try`); the host's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
        reached and the building each button armed. With --shot, the presented frame is grabbed
        before `snap`'s click and before `line`'s first release, the line's sites on the stage;
-  (t2c) on the sidebar, read back the same way: NEXT and PREV page the ARMCK, the ORDERS tab shows
-       the side's GEN and the BUILD tab its page again, and STOP disarms the building armed and
-       empties the orders;
+  (t2c) on the sidebar, with Try it paused, read back the same way: NEXT and PREV page the ARMCK, the
+       ORDERS tab shows the side's GEN and the BUILD tab its page again, a click on the map places the
+       building the demo left armed (one order, the building put away), the sidebar arms it again,
+       and STOP disarms it and empties the orders -- no tick runs between the placement and STOP;
   (t2b) exactly one cursor: the pointer over the sidebar's BUILD tab and over the stage's centre,
        one, on the stage; over the play control, off the stage, the player's alone (needs
        tools/wiki/gfx.py's pack, as cursor does);
@@ -233,7 +241,7 @@ from simparity's records of it, none written here:
        (.data/wiki-replay/m0p-shots, for the eye: different screens, so not measured);
   (p4) on Watching's Try it the Players set and Take over inert: each control drawn held (the press machine's
        press_held) and let go, the record unchanged and no players block; then Try it on demo jump's data through device
-       clicks, a row hovered by `dmove:` first: Jump on Bram's row and Ada's (the eye at sim.js seatCam's), Follow on
+       clicks, a row hovered by `dmove:` first: Jump on Bram's row and Ada's (the eye at the host's seatcam), Follow on
        Bram's with the replay playing (the eye on his camera) and again (Free cam: the eye stays), paused Sight on
        Bram, Ada and Bram again (the bar's rates each viewed seat's at once, OQ-D A; his side's top bar; the fog and
        the minimap pass) and again (the full map, the rates 0), each switch off and on, stats, a chip, the team split,
@@ -351,7 +359,7 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        is the chain stage == composer(pack, the wiki's state) and composer(pack, the engine's
        state) == the engine: one pack, one composer, the states apart only where the wiki sets
        them (decision 7 greys every order but STOP);
-  (b4) Build Lines demo 1 played in the player's context: where sim.js, replaying the dump's ctx,
+  (b4) Build Lines demo 1 played in the player's context: where the host, replaying the dump's ctx,
        locks it (a role with no unit, or a build the sidebar cannot reach) it holds at that tick with
        the "Turned off in this mod" badge above the stage; elsewhere it plays past it, no badge;
   (w6) Watching's first demo held at tick 150 (tagpu_wiki.shot): the game frame's two bars, each client pixel against
@@ -388,8 +396,10 @@ import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
-from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, tacli_api
+from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, cap_failure, hold_instance, tacli_api
+import dllkey
 import runlock
+import talog
 
 SCENARIO = TREE / "scenarios/place-basic.json"
 END_SCENARIO = TREE / "scenarios/replay-end.json"
@@ -400,6 +410,9 @@ EYE = (f"{MAIN}+0x1431f", f"{MAIN}+0x14323")
 KEY_RING = ("0x51F48E", "0x51F492")      # the key ring's enqueue and dequeue indices
 HELD_AT = 120                            # the plan's GameTime for the single-player case
 DUMP_S = 30
+# s between two looks for an answer file the game writes. It decides how soon a wait sees the file,
+# never what it reads: a look reads the file the game wrote, and a faster look reads it sooner.
+LOOK_S = 0.02
 GAP = 3                                  # client pixels kept clear of a margin's edges
 
 
@@ -435,7 +448,7 @@ class Wiki(Check):
                 except ValueError:
                     pass
             assert time.monotonic() < end, f"no tagpu_wiki.json in {DUMP_S} s: the wiki filled no record"
-            time.sleep(0.1)
+            time.sleep(LOOK_S)
 
     @staticmethod
     def hit(d, key):
@@ -496,7 +509,7 @@ class Wiki(Check):
         return self._found(rx, start)
 
     def mark(self):
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return len(self.log)
 
     def settle_eye(self, x, z):
@@ -982,12 +995,12 @@ def simparity_hash(args):
 
 
 def simparity_hashes(layout, pack=None, scripts=False):
-    """sim.js's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
+    """The host's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
     sidebar layout file `layout` (tagpu_wiki.layout.json, the one the check played on and wrote: the running mod's,
     the fixture, or null and one side) at Interface Type 0 and 1, with that side's casting from the side pack `pack`
     when the layout is the mod's -- the check gives a casting on the mod's layout only -- and with `scripts` the
     units' scripts, from the packs gfx.py built from the same install, as the check runs them when its log says so.
-    Keyed as check_hashes keys the game's lines; REFUSED where sim.js refuses the demo."""
+    Keyed as check_hashes keys the game's lines; REFUSED where the host refuses the demo."""
     lay = json.loads(Path(layout).read_text())
     want = {}
     for k in range(len(lay["sides"]) if lay else 1):
@@ -1001,13 +1014,13 @@ def simparity_hashes(layout, pack=None, scripts=False):
 
 
 def check_against(got, want, what):
-    """The game's check equal to sim.js's, key for key: the same contexts played, each hash equal, and a demo
+    """The game's check equal to the host's, key for key: the same contexts played, each hash equal, and a demo
     refused on one side exactly when it is on the other. A difference fails naming its keys."""
     missing, extra = sorted(set(want) - set(got)), sorted(set(got) - set(want))
     differ = sorted(k for k in set(want) & set(got) if got[k] != want[k])
     assert not (missing or extra or differ), \
         f"{what} the game's check and simparity --hash differ: " + "; ".join(
-            f"{name} {', '.join(f'{k} (game {got.get(k)}, sim.js {want.get(k)})' for k in keys[:12])}"
+            f"{name} {', '.join(f'{k} (game {got.get(k)}, host {want.get(k)})' for k in keys[:12])}"
             f"{f' and {len(keys) - 12} more' if len(keys) > 12 else ''}"
             for name, keys in (("not played in the game:", missing), ("played only in the game:", extra),
                                ("differ:", differ)) if keys)
@@ -1080,21 +1093,26 @@ def mockup_shot(state, path, out=None):
         m.url, m.tick = None, None
         run("resize", str(gw + 34), str(gh + 900))
         run("goto", f"http://127.0.0.1:{m.httpd.server_address[1]}{url}")
-        # THE PAGE SETTLED: the fonts, the window, the mod's sidebar pack, and with the game look the demo's stage --
-        # WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each 'pending' only while a load it waits on is
-        # in flight, and every such load resolves or fails (WikiGfx.settled), so the wait has no deadline and its
-        # verdict no timing: a picture of a page still loading is never taken, and a load that failed is named. A page
-        # that never settles is a hang, which the gate's lane bound (GATE_LANE_S) ends. Each eval waits a slice inside
-        # the page (a playwright-cli call is a process, a second each) and says where it stands; the slice decides
-        # nothing
-        status = ("() => !(window.WikiPage && (WikiPage.sim() || WikiPage.replay())) || document.fonts.status !== 'loaded'"
-                  " || !document.querySelector('#win canvas.skin')"
-                  " || document.querySelector('#sidebar-note').textContent.startsWith('loading') ? 'pending' : "
-                  + ("WikiGfx.settled(WikiPage.stageId())" if game else "'ready'"))
+        # THE PAGE SETTLED (wiki.js settled): the content, the skin's kit, the mod's sidebar pack, the fonts, and with
+        # the game look the demo's stage -- WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each
+        # 'pending: <what>' only while a load it waits on is in flight. Every such load resolves or fails, and every
+        # state that cannot change by itself (a failed sim, a missing demo, a kit that did not load, a frame that
+        # threw) answers its reason instead, so the wait's verdict has no timing: a picture of a page still loading
+        # is never taken, and a failure is named. Each eval waits a slice inside the page (a playwright-cli call is a
+        # process, a second each) and says where it stands; the slice decides nothing. SETTLE_S only bounds a page
+        # that breaks that rule, failing with what it was still waiting for; it never passes a picture
+        status = ("() => window.WikiPageFailed ? `the page did not start: ${WikiPageFailed}`"
+                  " : !window.WikiPage ? 'pending: the page scripts and layout.json'"
+                  + (" : !window.WikiGfx ? 'gfx.js is not loaded'" if game else "")
+                  + " : WikiPage.settled()")
+        end = time.monotonic() + SETTLE_S
         while (ready := wl.result(run("eval", f"async () => {{ const s = {status}, t0 = performance.now();"
-                                              " while (s() === 'pending' && performance.now() - t0 < 10000)"
-                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) == "pending":
-            pass
+                                              " while (s().startsWith('pending') && performance.now() - t0 < 10000)"
+                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) \
+                and ready.startswith("pending"):
+            assert time.monotonic() < end, \
+                f"the mockup page was still {ready} after {SETTLE_S} s ({state['entry']}, demo {state['demo_n'] + 1}" \
+                f"{', game look' if game else ''}): a load that never resolved, which wiki.js settled() rules out"
         assert ready == "ready", f"the mockup page did not settle ({state['entry']}, " \
                                  f"demo {state['demo_n'] + 1}{', game look' if game else ''}): {ready}"
         m.url = url
@@ -1131,6 +1149,11 @@ def mockup_shot(state, path, out=None):
     return cursor_at
 
 
+SETTLE_S = 1200                          # mockup_shot: the page settles in 34..128 s alone (MEASURED 2026-11-11, the
+                                         # takeover lane's first picture); a page past this broke settled()'s rule
+PW_CALL_S = 600                          # MockupPage.run: a call's own wait in the page is at most a 10 s slice
+
+
 class MockupPage:
     """mockup_shot's page, one a process: its server, its playwright-cli browser and the page it has open, kept from
     one picture to the next so that a picture of the same demo needs no load, and one at a later tick no replay from
@@ -1160,17 +1183,28 @@ class MockupPage:
             launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
         cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
                                                "launchOptions": launch}}))
-        pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
-        self.run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=self.tmp)
+        self.pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
         self.run("open", "about:blank")
         self.closed = False
         atexit.register(self.close)
+
+    def run(self, *a):
+        """One playwright-cli call. PW_CALL_S only bounds a call that never returns -- a browser or a page whose main
+        thread is stuck -- and fails naming it; an answer of any kind is the caller's to judge."""
+        try:
+            return subprocess.run(self.pw + list(a), capture_output=True, text=True, cwd=self.tmp, timeout=PW_CALL_S)
+        except subprocess.TimeoutExpired:
+            raise AssertionError(f"playwright-cli {a[0]} did not return in {PW_CALL_S} s: the mockup's browser or its "
+                                 f"page is stuck") from None
 
     def close(self):
         if self.closed:
             return
         self.closed = True
-        self.run("close")
+        try:
+            self.run("close")
+        except AssertionError as e:
+            print(f"wiki: {e}")
         self.httpd.shutdown()
         shutil.rmtree(self.tmp, ignore_errors=True)
         if MockupPage.open_ is self:
@@ -1205,7 +1239,7 @@ def demos(c, shots, res):
     print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1]}")
     layf = c.gamedir / "tagpu_wiki.layout.json"
     pack = pack_for_layout(layf) if "the mod's" in lay else None
-    # the check names both of its sources; simparity --hash --scripts gives sim.js both or neither, as the game's one 3D
+    # the check names both of its sources; simparity --hash --scripts gives the host both or neither, as the game's one 3D
     # load does, so a line that says otherwise, or does not say, is a failure rather than a guess
     src = re.search(r"the units' scripts are (on|off), their sounds (on|off)", lay)
     assert src, f"(d1) the check's line does not say whether the units' scripts and sounds are on: {lay}"
@@ -1324,8 +1358,8 @@ def stage_fit(d):
 
 
 def try_view(c, d, what):
-    """Try it yourself as the game played it, read back through sim.js: the dump's state hash must
-    equal simparity.mjs --try's -- sim.js fed the inputs the dump logged at the ticks it logged them
+    """Try it yourself as the game played it, read back through the host: the dump's state hash must
+    equal simparity.mjs --try's -- the host fed the inputs the dump logged at the ticks it logged them
     -- and then tools/wiki/sideview.mjs --dump's view describes the game's simulation: the routed
     screen, its page and gadget states, the armed mode, the selection's orders."""
     assert not d["try_cut"], f"{what}: the dump's log of Try it was cut ({d['try_cut']} inputs)"
@@ -1339,7 +1373,7 @@ def try_view(c, d, what):
             # kept for an offline replay: simparity.mjs --try <it>
             kept = c.gamedir / "tagpu_wiki.try.differ.json"
             kept.write_text(dumpf.read_text())
-            raise AssertionError(f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs "
+            raise AssertionError(f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, the host fed its inputs "
                                  f"{r.stdout.strip()}; the dump kept in {kept}")
         r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), "--dump", str(dumpf)], capture_output=True,
                            text=True, timeout=300)
@@ -1359,7 +1393,7 @@ def view_side(d, sv, what):
     assert isinstance(k, int) and 0 <= k < len(lay["sides"]), f"{what}: the dump's ctx names no side of the layout: {ctx}"
     if d["layout_src"] == "mod":
         assert k == d["engine_side"], f"{what}: the wiki plays side {k} on the mod's layout, the engine's is {d['engine_side']}"
-    assert sv and sv.get("index") == k, f"{what}: sim.js's replay shows side {sv and sv.get('index')}, the game side {k}: {sv}"
+    assert sv and sv.get("index") == k, f"{what}: the host's replay shows side {sv and sv.get('index')}, the game side {k}: {sv}"
     return lay["sides"][k]
 
 
@@ -1373,7 +1407,7 @@ def side_by_prefix(lay, prefix, what):
 
 def side_centre(lay, screen, i):
     """Gadget i of a layout screen: its centre in the stage's world units, where the build trip
-    presses it (sim.js centreOf)."""
+    presses it (tagpu_wikisim.c centre_of)."""
     s = lay["screens"][screen]
     gx, gy, gw, gh = s["gadgets"][i]["rect"]
     return -SIDE_W + gx + gw / 2, s["y"] + gy + gh / 2
@@ -1399,13 +1433,16 @@ class Stage:
     def client(self, x, z):
         return round(self.ox + x * self.s), round(self.oz + z * self.s)
 
-    def press(self, lay, screen, i):
-        x, z = side_centre(lay, screen, i)
+    def click(self, x, z):
+        """a left click at world point (x, z): a move there, the button down and up there"""
         at = self.client(x, z)
         self.c.keys("dmove:%d,%d" % at, "ddown:%d,%d" % at, "dup:%d,%d" % at)
         self.points.append((x, z))
         self.want += [["down", "lmb"], ["up", "lmb"]]
         return at
+
+    def press(self, lay, screen, i):
+        return self.click(*side_centre(lay, screen, i))
 
     def view(self, what):
         return try_view(self.c, self.c.dump(), what)
@@ -1487,11 +1524,25 @@ def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
     return st, arms
 
 
+T2C_SITE = (80, 288)                     # (t2c) the world point its placement clicks: where buildshapes/line starts the
+                                         # line it lets go of (Shift up before the button), so no build order of that
+                                         # Try it ever covers it, and mobile units never block a site (tasim_site_ok)
+
+
 def side_controls(c, d):
-    """(t2c) the sidebar's other controls, on the ARMCK the last demo left armed and ordered: NEXT
-    and PREV page it, ORDERS shows the side's GEN and BUILD its page again (tabs act on the press),
-    and STOP disarms and empties the orders; each read back from the simulation, whose hash equals
-    the game's at every read."""
+    """(t2c) the sidebar's other controls, on the ARMCK the last demo left selected and armed (its last inputs let go
+    of a line and keep the building armed): NEXT and PREV page it, ORDERS shows the side's GEN and BUILD its page
+    again (tabs act on the press); a click on the map places the armed building -- the ARMCK's one order, the
+    building put away -- and the sidebar arms it again; and STOP disarms and empties the orders. Each is read back
+    from the simulation, whose hash equals the game's at every read.
+
+    TRY IT IS PAUSED THROUGHOUT, through the page's play control, and its input stands between two ticks
+    (tagpu_wikisim_input), so no tick runs between the placement and STOP: the order STOP has to clear is the one the
+    click gave, there by construction, never one of the demo's that the ARMCK may or may not have worked off by the
+    tick wall time let Try it reach. The tick standing from the pause to STOP is checked."""
+    press(c, d, "play")
+    d = wait_dump(c, lambda d: not d["playing"], "(t2c) play did not pause Try it")
+    paused_at = d["tick"]
     st = Stage(c, d)
     lay = d["layout"]
     v = st.view("(t2c)")
@@ -1513,19 +1564,34 @@ def side_controls(c, d):
         v = st.view(f"(t2c) {role}")
         assert v["side"]["screen"] == want, f"(t2c) the {role} tab did not show {want}: {v['side']}"
         steps.append(f"{role} -> {want}")
+    assert v["mode"].startswith("build:") and v["selected"], \
+        f"(t2c) the demo left no building armed on a selection: mode {v['mode']}, selected {v['selected']}"
+    T = v["mode"].split(":", 1)[1]
+    st.click(*T2C_SITE)
+    v = st.view("(t2c) the placement")
+    placed = {u: [o["k"] for o in os] for u, os in v["orders"].items()}
+    assert v["mode"] == "contextual" and placed and all(k == ["build"] for k in placed.values()), \
+        f"(t2c) a click at {T2C_SITE} with {T} armed did not place it alone: mode {v['mode']}, orders {placed}"
+    steps.append(f"{T} placed at {T2C_SITE}: {placed}")
+    k, role, p = st.arm(T, "(t2c)")
+    steps.append(f"{T} armed again on page {p} after {k} x {role.upper()}")
+    v = st.view("(t2c) armed")
     before = {u: len(o) for u, o in v["orders"].items()}
-    assert v["mode"] != "contextual" and any(before.values()), \
-        f"(t2c) STOP needs a building armed and an order to clear: mode {v['mode']}, orders {before}"
-    st.press(lay, screen, side_gadget(lay, screen, lambda g: g["role"] == "stop", "(t2c)"))
+    assert v["mode"] == f"build:{T}" and before == {u: 1 for u in placed}, \
+        f"(t2c) STOP needs {T} armed and the placement's order: mode {v['mode']}, orders {before}"
+    st.press(lay, v["side"]["screen"], side_gadget(lay, v["side"]["screen"], lambda g: g["role"] == "stop", "(t2c)"))
     v = st.view("(t2c) STOP")
     assert v["mode"] == "contextual" and not any(v["orders"].values()), \
         f"(t2c) STOP left mode {v['mode']} and orders {v['orders']}"
     steps.append(f"STOP: {before} orders and the armed building -> none")
     d = c.dump()
+    assert d["tick"] == paused_at, f"(t2c) Try it ran from tick {paused_at} to {d['tick']} while paused"
     got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
     assert got[-len(st.want):] == st.want, f"(t2c) the game gave its simulation {got[-len(st.want):]}, the presses {st.want}"
-    print(f"wiki try: (t2c) on the sidebar: {'; '.join(steps)}; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
-    return d
+    print(f"wiki try: (t2c) on the sidebar, Try it paused at tick {d['tick']}: {'; '.join(steps)}; "
+          f"hash {d['hash']} equal to the host's")
+    press(c, d, "play")
+    return wait_dump(c, lambda d: d["playing"], "(t2c) play did not start Try it again")
 
 
 def one_cursor(c, d):
@@ -1561,7 +1627,7 @@ def one_cursor(c, d):
 
 def try_it(c, shot=None):
     """(t1)..(t5): Try it yourself driven by device input on the stage and its sidebar, its
-    simulation against sim.js fed what the game logged."""
+    simulation against the host fed what the game logged."""
     held_at(c, HELD_AT)
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"], "(t1) the page was not drawn")
@@ -1604,7 +1670,7 @@ def try_it(c, shot=None):
         print(f"wiki try: (t2) {entry}/{demo} replayed through the stage: {len(d['try_log'])} inputs "
               f"({len(moves)} moves, every one within a pixel of its point), "
               + ", ".join(f"{T} armed on page {p} after {k} x {role.upper()}" for T, k, role, p in arms)
-              + f"; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
+              + f"; tick {d['tick']}, hash {d['hash']} equal to the host's")
         press(c, d, "play")
         d = wait_dump(c, lambda d: d["playing"], "(t2) play did not start Try it again")
 
@@ -1652,7 +1718,7 @@ def try_it(c, shot=None):
 
 STAGE3D_SHOTS = (("quickbuild", 1), ("quickbuild", 11), ("buildshapes", 1))
 STAGE3D_TICKS = (30, 180, 330)
-# (entry, demo, ticks): the mockup's sim (tools/wiki/mockup/sim.js) puts a nanoframe in Quick Build 3 at
+# (entry, demo, ticks): the wiki's simulation puts a nanoframe in Quick Build 3 at
 # 267..287, the reclaim in Quick Build 8 at 171..180 and the upgrade's nanoframe after it, the gesture's
 # ghosts in Build Lines 2 and 4 from tick 0, Quick Build 9's ARMCK walking toward +x at 164..233, and Reclaim 3's
 # field of wrecks (3D features through the unit pass) all nine standing at 300 and two of them reclaimed by 500
@@ -1670,14 +1736,19 @@ COUNTED = (r"wiki3d: count (\d+): (\d+) of (\d+) frame\(s\) drew the image, fram
 
 
 def wait_line(c, start, rx, what, seconds=30):
-    end = time.monotonic() + seconds
+    """The first log line from index `start` on that matches `rx`, `start` being a mark (c.mark()) taken before the
+    action whose answer the line is. The first, not the newest: which lines follow a mark is the game's to say, so
+    the answer cannot depend on when a look lands, and the look's interval decides only how soon it is seen. Each
+    line is searched once."""
+    rx, end, k = re.compile(rx), time.monotonic() + seconds, start
     while True:
         c.mark()
-        hit = [ln for ln in c.log[start:] if re.search(rx, ln)]
-        if hit:
-            return hit[-1]
-        assert time.monotonic() < end, f"{what}: no line matching `{rx}` in {seconds} s"
-        time.sleep(0.3)
+        for ln in c.log[k:]:
+            if rx.search(ln):
+                return ln
+        k = max(k, len(c.log))
+        assert time.monotonic() < end, f"{what}: no line matching `{rx.pattern}` in {seconds} s"
+        time.sleep(LOOK_S)
 
 
 def drawn_window(c, what, want_all):
@@ -1938,7 +2009,7 @@ def sim_facing(entry, demo, tick, kind):
           "const v = sim.view(); const out = v.units.filter(u => u.type === process.argv[5]).map(u => {"
           " const p = prev && prev.units.find(q => q.id === u.id); return { hx: u.hx, hz: u.hz, dx: p ? u.x - p.x : 0, dz: p ? u.z - p.z : 0 }; });"
           "console.log(JSON.stringify(out));")
-    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / f"art/wiki/entries/{entry}.json"),
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/simhost.js"), str(TREE / f"art/wiki/entries/{entry}.json"),
                         str(demo), str(tick), kind], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     got = [u for u in json.loads(r.stdout) if u["dx"] or u["dz"]]
@@ -3231,7 +3302,7 @@ def takeover_t4(c):
     if math.hypot(goal[0] - c1["x"], goal[1] - c1["z"]) < 96:
         goal = (min(max(c1["x"] - 160, 48), mw - 48), min(max(c1["z"] - 96, 48), mh - 48))
     far = math.hypot(goal[0] - c1["x"], goal[1] - c1["z"])
-    # the move: a right press at Interface Type 1, a left click at type 0 (sim.js rightClick, leftClick)
+    # the move: a right press at Interface Type 1, a left click at type 0 (tagpu_wikisim.c right_click, left_click)
     c.keys(("drclick:%d,%d" if d["ctx"]["iface"] else "dclick:%d,%d") % frame_client(d, *goal))
     turbo(c, 8)
     try:
@@ -3340,17 +3411,17 @@ def pl_entry():
 
 
 def pl_twin(expr):
-    """`expr` evaluated by node with sim.js as S, replay.js as R and the players entry as E: the mockup's own answer"""
+    """`expr` evaluated by node with simhost.js as S, replay.js as R and the players entry as E: the mockup's own answer"""
     js = ("const S = require(process.argv[1]), R = require(process.argv[2]), E = require(process.argv[3]);"
           f" console.log(JSON.stringify({expr}));")
-    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / "tools/wiki/mockup/replay.js"),
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/simhost.js"), str(TREE / "tools/wiki/mockup/replay.js"),
                         str(TREE / f"art/wiki/entries/{PLAYERS}.json")], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, f"node: {r.stderr.strip()[-400:]}"
     return json.loads(r.stdout)
 
 
 def pl_eye(d, demo, seat, g):
-    """The eye seat `seat`'s recorded camera at game tick g gives the drawn frame (frame.js eye): sim.js seatCam, less
+    """The eye seat `seat`'s recorded camera at game tick g gives the drawn frame (frame.js eye): the host's seatcam, less
     half the viewport, held to the map less the viewport, the viewport and the map the dump's"""
     cam = pl_twin(f"S.seatCam(E, E.demos.find(d => d.id === {json.dumps(demo)}), {seat}, {g})")
     assert cam, f"seat {seat} of {demo} has no recorded camera"
@@ -3963,7 +4034,7 @@ def asset(c):
 def launched(instance, mode, res):
     """The instance on the scenario with the launch's hold, under the run lock; the callable that
     stops it and puts its levers back."""
-    runlock.hold(TREE, f"wiki_regression {mode} on {instance}")
+    hold_instance(f"wiki_regression {mode} on {instance}", instance, suite="wiki")
     gamedir = tacli_api().Instance(instance).gamedir
     levers = {"tagpu_hold.on": True, "tagpu_recorder.off": mode != "recorded"}
     had = {n: (gamedir / n).exists() for n in levers}
@@ -4305,7 +4376,10 @@ def mp(name):
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     import dpport
-    runlock.hold(TREE, f"wiki_regression mp ({name})")
+    runlock.hold(TREE, f"wiki_regression mp ({name})", 2, suite="wiki")      # the host and the joiner
+    # they meet in one lobby, so they need their two seats together (runlock.together)
+    why = runlock.together(2, "wiki_regression mp")
+    assert not why, f"(m) could not run: {why}"
     setup = next(s for s in tacompat.load_json("setups.json")["setups"] if s["name"] == "retail")
     dll = tacompat.snapshot_dll(TREE / "tagpu/ddraw/ddraw.dll")
     xv = tacompat.start_xvfb()
@@ -4314,8 +4388,11 @@ def mp(name):
         join = tacompat.prepare_wine(setup, dll, xv.tacompat_display, suffix="-wj")
     finally:
         tacompat.stop_xvfb(xv)
-    port = tacompat.MP_PORT_BASE
+    lease = dpport.lease()          # held to the end of this process: the game's port
+    port = lease.port
     games = {}
+    # each peer's refusals of the GPU memory cap, read once both have stopped (talog.CapWatch)
+    caps = {r: talog.CapWatch(inst["gamedir"]) for r, inst in (("host", host), ("join", join))}
     try:
         for inst in (host, join):
             dpport.set_port(inst["prefix"], port)
@@ -4377,11 +4454,13 @@ def mp(name):
             assert not bad, f"(m) the {r}'s log has a desync line: {bad[:2]}"
         for r, g in games.items():
             assert g["proc"].poll() is None, f"(m) the {r}'s game exited"
-        print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
-              "both run on after the close, no desync line")
     finally:
         for g in games.values():
             tacompat.stop_wine(g)
+    refused = [c for c in (caps[r].failure(f"the {r}") for r in games) if c]
+    assert not refused, f"(m) {'; '.join(refused)}"
+    print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
+          "both run on after the close, no desync line, no refusal of the GPU memory cap")
 
 
 MODS_SCREEN = "2560x1440"                     # the private display, and so the game's screen (private_xvfb)
@@ -4426,7 +4505,9 @@ def private_xvfb(size):
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     r, w = os.pipe()
-    p = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", f"{size}x24", "-nolisten", "tcp"],
+    # -noreset: a display that regenerates when its last client leaves drops the clients connecting meanwhile
+    # (tools/replay/tareplay.py, start_xvfb)
+    p = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", f"{size}x24", "-nolisten", "tcp", "-noreset"],
                          pass_fds=(w,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     os.close(w)
     try:
@@ -4613,7 +4694,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     import numpy as np
     from PIL import Image
     # (b2) the layout every demo starts on is the mod's, and the game plays every demo on it to
-    # the hash sim.js gives on the same file
+    # the hash the host gives on the same file
     start = c.mark()
     (gamedir / "tagpu_wiki.check").write_text("")
     line = wait_line(c, start, r"wiki check: \d+ demos played", "(b2) the check", 120)
@@ -4650,7 +4731,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     shot = out / f"stage-{entry}-d{demo}-t{tick}.window.png"
     window_grab(display, d, shot)
     comp = out / f"stage-{entry}-d{demo}-t{tick}.composed.png"
-    # the context the game's demo plays in, side, interface type and casting, for sim.js's play of it
+    # the context the game's demo plays in, side, interface type and casting, for the host's play of it
     ctxf = out / "stage-ctx.json"
     ctxf.write_text(json.dumps(d["ctx"]))
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
@@ -4688,7 +4769,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
           f"texels sampled; the minimap {'composed' if v['composed']['minimap'] else 'left to the whitebox'}")
     assert bad == 0, f"(b3) {bad} pixels of the stage's column differ from the composer (out: {out / 'sidebar.png'})"
 
-    # (b4) the demo played in the player's context: held at sim.js's lock with the badge where sim.js
+    # (b4) the demo played in the player's context: held at the host's lock with the badge where the host
     # locks it, playing on past its first build elsewhere
     entry, k, at = SIDE_LOCK
     node = tree_node(entry)
@@ -4717,11 +4798,11 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     red = int(np.all(np.abs(above - LOCK_RGB) <= 8, axis=2).sum())
     if v["locked"]:
         assert d["done"] and d2["done"] and d["tick"] == d2["tick"] == v["tick"] == at, \
-            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, done {d['done']}, not held at {at} (sim.js: {v})"
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, done {d['done']}, not held at {at} (host: {v})"
         assert red > 0, f"(b4) {entry} demo {k + 1} held at its lock, but no badge above the stage ({shot})"
     else:
         assert d2["tick"] > d["tick"] > at and not red, \
-            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, {red} badge pixels (sim.js: not locked)"
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, {red} badge pixels (host: not locked)"
     row["lock"] = {"locked": v["locked"], "ticks": [d["tick"], d2["tick"]], "badge_px": red}
     print(f"wiki mods: {row['setup']}: (b4) {entry} demo {k + 1} played: "
           + (f"held at its lock, tick {d['tick']} -> {d2['tick']} over 1.5 s, {v['locked']} out of reach, the badge "
@@ -4821,6 +4902,7 @@ def mods_setup(tacompat, setup, dll, out):
     except BaseException:
         tacompat.stop_xvfb(xv)
         raise
+    caps = talog.CapWatch(inst["gamedir"])      # read once the game has stopped
     g = tacompat.start_wine(inst, xv.tacompat_display, display_server=xv)
     display, gamedir, t0, seen = g["display"], inst["gamedir"], time.time(), set()
 
@@ -4831,6 +4913,8 @@ def mods_setup(tacompat, setup, dll, out):
         assert not row["boxes"], f"({step}) a box on the display: {row['boxes']}"
         assert not (gamedir / "ErrorLog.txt").exists(), f"({step}) ErrorLog.txt was written"
         assert g["proc"].poll() is None, f"({step}) the game exited"
+        refused = caps.sweep()
+        assert not refused, f"({step}) {talog.CAP_FAILED} an allocation: {refused[0]}"
 
     def screen_grab(name):
         """The whole private display, so a box beside the game would be in the picture too."""
@@ -4867,7 +4951,7 @@ def mods_setup(tacompat, setup, dll, out):
                 break
             except (OSError, ValueError):
                 assert time.monotonic() < end, "(w2) no whole tagpu_wiki3d.json within 60 s"
-                time.sleep(0.5)
+                time.sleep(LOOK_S)
         (out / "tagpu_wiki3d.json").write_text(json.dumps(report, indent=1))
         row["report"] = report
         poll("w2")
@@ -4948,11 +5032,16 @@ def mods_setup(tacompat, setup, dll, out):
         except Exception:
             pass
     finally:
+        tacompat.stop_wine(g)
         logs = sorted((gamedir / "log").glob("tagpu*.log"), key=lambda f: f.stat().st_mtime) \
             if (gamedir / "log").is_dir() else []
         if logs:
             shutil.copyfile(logs[-1], out / "tagpu.log")
-        tacompat.stop_wine(g)
+    # the game has stopped: a refusal of the GPU memory cap anywhere in it fails the setup
+    refused = caps.failure(setup["name"])
+    if refused and talog.CAP_FAILED not in row.get("why", ""):
+        row["pass"], row["why"] = False, "; ".join(filter(None, (refused, row.get("why"))))
+        print(f"wiki mods: {setup['name']}: FAILED: {refused}", file=sys.stderr)
     return row
 
 
@@ -4990,7 +5079,7 @@ def mods(names, shots):
     assert shots, "mods needs --shots DIR"
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
-    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})")
+    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})", 1, suite="wiki")     # one setup at a time
     byname = {s["name"]: s for s in tacompat.load_json("setups.json")["setups"]}
     unknown = [n for n in names if n not in byname]
     assert not unknown, f"no such setup in tools/compat/setups.json: {unknown}"
@@ -5004,25 +5093,41 @@ def mods(names, shots):
     assert not bad, f"failed on {bad}"
 
 
-# the gate's shards of each simparity run (simparity.mjs --shard): its 48 contexts of demo plays, two to a process --
-# context k and k + 24, one played without the units' scripts (~87 s alone, ~20 s on the unbound casting) and one
-# with them (~190 s), so the shards cost alike (MEASURED 2026-11-03, native, an idle reference setup)
-SIMPARITY_SHARDS = 24
+# the gate's shards of the simparity run (simparity.mjs --shard): its work items, dealt longest first by the costs of
+# its last full run (build/simparity-costs.json), each shard keeping its three builds' hosts busy (simparity.mjs's
+# header, THE COST)
+SIMPARITY_SHARDS = 10
 # and of each simcheck run (simcheck.mjs --shard): the fixture's 16 contexts, 8 without the scripts then 8 with them,
 # four to a process, two of each kind
 SIMCHECK_SHARDS = 4
 # and of stagecheck (stagecheck.mjs --shard): its 16 passes, four to a process; alone it spends ~104 s playing and
 # measuring, then 27 to 91 s a pass (MEASURED 2026-11-03, 1115 s in all), so a shard takes some 190 to 300 s
 STAGECHECK_SHARDS = 4
+# THE OFFLINE CHECKS' WEIGHT, the slots of the run lock each holds while it runs (tools/runlock.py, OFFLINE WORK): the
+# processes it keeps busy at once. A simparity check sends each request to its three builds' hosts and then reads
+# their answers (hostchan.cjs tee), so the three compute at once while node waits; every other check is node and at
+# most one child it waits for, a host behind the synchronous channel (hostchan.cjs) or a spawnSync, so one at a time.
+# [Read from the sources, not measured.]
+SIMPARITY_HOSTS = 3
+
+
+def offline_weight(cmd):
+    """The slots the offline check `cmd` holds while it runs: SIMPARITY_HOSTS for simparity's parity run, else 1."""
+    return SIMPARITY_HOSTS if any(str(c).endswith("simparity.mjs") for c in cmd) else 1
 
 
 def offline_runs(shards=1, check_shards=1):
     """OFFLINE_CHECKS: every check of the wiki that plays no game, as (name, argv) -- the mockup's demos on the
     fixture, without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then
-    the DLL's code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and
-    under Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
-    (scenecheck), the tech tree's drawing and hit test on each pack's tree (techcheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
-    them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits each
+    the DLL's code against the mockup's and against itself: the simulation in its three builds, native, sanitized and
+    under Wine as the DLL is built (simparity), the text's fill natively and under Wine (textparity), the sidebar's
+    column (sidecheck), the stage's ops (stagecheck), the 3D scene
+    (scenecheck), the tech tree's drawing and hit test on each pack's tree (techcheck) and the window's load-time
+    check over every pack's castings (wikilaycheck --check-only). None of
+    them plays a game, and none writes what another reads: they run in any order, at once. None reads what a game
+    lane writes either -- they read the tree, art/, the packs and build/simparity-costs.json, and build their programs
+    in temporary folders or under names of their own in tagpu/ddraw/tests/, where a game lane writes its shots, its
+    instance, scratch files named by its pid and assetcheck's program -- so the gate starts them before its game lanes. `shards` splits the
     simparity run, `check_shards` each simcheck run and stagecheck into that many processes, which together check what
     one does. The longest come first, as a pool starts the checks in this order."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
@@ -5034,10 +5139,8 @@ def offline_runs(shards=1, check_shards=1):
          for k in range(1, STAGECHECK_SHARDS + 1)]
     runs += checks if check_shards == 1 else [(f"{name} --shard {k}/{check_shards}", [*cmd, "--shard", f"{k}/{check_shards}"])
                                              for name, cmd in checks for k in range(1, check_shards + 1)]
-    for wine in ([], ["--wine"]):
-        runs += [(" ".join(["simparity", *wine]), [wiki / "simparity.mjs", *wine])] if shards == 1 else \
-            [(" ".join(["simparity", *wine, f"--shard {k}/{shards}"]), [wiki / "simparity.mjs", *wine, "--shard", f"{k}/{shards}"])
-             for k in range(1, shards + 1)]
+    runs += [("simparity", [wiki / "simparity.mjs"])] if shards == 1 else \
+        [(f"simparity --shard {k}/{shards}", [wiki / "simparity.mjs", "--shard", f"{k}/{shards}"]) for k in range(1, shards + 1)]
     runs += [("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
              ("sidecheck", [wiki / "sidecheck.mjs"]), ("scenecheck", [wiki / "scenecheck.mjs"]),
              ("techcheck", [wiki / "techcheck.mjs"])]
@@ -5048,12 +5151,36 @@ def offline_runs(shards=1, check_shards=1):
     return runs
 
 
-def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
+def under_wine(cmd):
+    """Whether an offline check runs a build under Wine: one given --wine, and simparity, whose three builds include
+    the Wine one"""
+    return "--wine" in map(str, cmd) or any(str(c).endswith("simparity.mjs") for c in cmd)
+
+
+def git_dir():
+    """This worktree's own git directory (the main checkout's `.git`, a linked worktree's `.git/worktrees/<name>`),
+    which no other worktree reaches."""
+    return Path(subprocess.run(["git", "-C", str(TREE), "rev-parse", "--absolute-git-dir"], capture_output=True,
+                               text=True, check=True).stdout.strip())
+
+
+def wine_prefix():
+    """The prefix the offline checks' Wine builds run in (textparity --wine, simparity's `wine` build): the
+    repository's one `wikigate-wine`, which shares no file with any other prefix, made the first time
+    (tools/wiki/wineprefix.py, THE INVARIANT)."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import wineprefix
+    return wineprefix.ensure(TREE)
+
+
+def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None, keep=()):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
     which fails like one that differs. `popen` starts it and `done` lets it go: the gate's own (Lanes), which end
-    it with the gate; past `bound` seconds it is hung, ended and fails."""
+    it with the gate; past `bound` seconds it is hung, ended and fails. `keep` are descriptors it inherits: its
+    offline phase's slots (runlock.Workers.fds), which it then holds until it exits."""
     t0 = time.monotonic()
-    p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env)
+    p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env,
+              pass_fds=keep)
     try:
         stdout, stderr = p.communicate(timeout=bound)
     except subprocess.TimeoutExpired:
@@ -5072,9 +5199,23 @@ def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None
     return p.returncode, last[:300]
 
 
-def offline_checks():
-    """offline_runs one after another, each to its end whatever the one before said. Takes no lock."""
-    failed = [name for name, cmd in offline_runs() if offline_one(name, cmd)[0]]
+def offline_checks(jobs):
+    """offline_runs as the gate shards them, each to its end whatever another said, the Wine ones in wine_prefix(), on
+    at most `jobs` slots of the run lock and at least the heaviest check's (tools/runlock.py, OFFLINE WORK): each
+    check holds its offline_weight of them while it runs."""
+    import concurrent.futures
+    runs = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS)
+    wenv = {**os.environ, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in runs) else os.environ
+    with runlock.offline(TREE, "wiki_regression offline", jobs, max(offline_weight(c) for _, c in runs)) as phase:
+        print(f"wiki offline: {len(runs)} checks on {phase.n} slots of the run lock", flush=True)
+
+        def one(name, cmd):
+            with phase.share(offline_weight(cmd)):
+                return offline_one(name, cmd, env=phase.environ(wenv if under_wine(cmd) else os.environ),
+                                   keep=phase.fds())[0]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=phase.n) as pool:
+            codes = list(pool.map(lambda nc: one(*nc), runs))
+    failed = [name for (name, _), code in zip(runs, codes) if code]
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
@@ -5091,10 +5232,10 @@ GATE_VERDICT = re.compile(r"wiki regression (\w+: passed|FAILED)|wiki mods: \S+:
 
 
 class Lanes:
-    """Every process the gate starts, each in a session of its own, so the gate can end each with all it started.
-    THE LOCK'S LIFETIME: the lanes run under the gate's hold of the run lock (RUNLOCK_HELD, inherited), which the
-    kernel drops when the gate exits -- so the gate never exits while a lane runs: on any way out, a signal
-    included, it stops starting lanes and ends every live one before it returns."""
+    """Every process the gate starts, each in a session of its own, so the gate can end each with all it started: on
+    any way out, a signal included, it stops starting lanes and ends every live one before it returns. The run lock
+    does not rest on that: each game lane's process holds it itself (gate_lane), so it cannot go while one plays,
+    however the gate leaves."""
 
     def __init__(self):
         import threading
@@ -5152,11 +5293,13 @@ class Lanes:
                 p.wait()
 
 
-def gate_lane(lanes, cmd, log, env):
+def gate_lane(lanes, cmd, log, env, keep=()):
     """One lane's process to its end, everything it says into `log`: its exit code and its verdict line, the last
-    line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails."""
+    line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails.
+    `keep` are descriptors the process inherits: a game lane's are the run lock's (runlock.fds), by which it holds
+    the lock until it exits, whatever the gate does meanwhile (runlock, A HOLD THAT ENDS BEFORE THE PROCESS)."""
     with open(log, "w") as f:
-        p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env)
+        p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env, pass_fds=keep)
         try:
             code = p.wait(timeout=GATE_LANE_S)
         except subprocess.TimeoutExpired:
@@ -5169,33 +5312,283 @@ def gate_lane(lanes, cmd, log, env):
     return code, (said or lines or [""])[-1][:300]
 
 
+def gate_instance_name(mode):
+    """The game lane `mode`'s instance, carrying the run's tag (tools/runlock.py, TAGS): two gates at
+    once never share one, and gate_instance's removal reaches only a dead run's instance of the same
+    name."""
+    return f"wikigate-{runlock.tag()}-{mode}"
+
+
 def gate_instance(name, *create):
     """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
-    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Made before any lane starts, so no
-    wineserver of the gate is writing the template's hives while they are copied."""
+    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every instance of the gate is made
+    private before Wine first runs in it, and the offline checks' prefix shares no file with the template
+    (wine_prefix), so no wineserver of the gate ever writes the template's hives and the gate's own lanes never tear
+    a copy it makes. No locked run plays a non-private instance beside it either: a run on one takes the whole budget
+    (resource_regression.hold_instance). tacli's THE GAP, a copy read while a wineserver of another, non-private
+    instance rewrites the template's, stays open to a game started outside every lock."""
     if tacli_api().Instance(name).exists:
         tacli("rm", name, "--force", timeout=120)
     tacli("create", name, "--private-registry", *create, timeout=300)
     return tacli_api().Instance(name)
 
 
-def gate(shots, jobs, offline_jobs, modes, setups):
-    """Every part of the wiki's gate at once under one hold of the run lock: the offline checks on `offline_jobs`
-    workers, the Wine ones in a prefix of their own, and on `jobs` workers each game lane -- a mode on its own
-    instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
+def gate_tree_hold():
+    """One gate a worktree: an exclusive flock(2) on `wikigate.lock` in this worktree's own git directory, waited for
+    while another gate of this worktree runs and held by this process until it exits (the returned file). The run
+    lock does not order two gates' offline lanes, and those of one worktree build into the same files
+    (tagpu/ddraw/tests/*.exe, build/simparity-costs.json)."""
+    import fcntl
+    path = git_dir() / "wikigate.lock"
+    f = open(path, "a+")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        t0 = time.monotonic()
+        print(f"wiki gate: another gate is running in this worktree ({path}); waiting for its end", flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+        print(f"wiki gate: the other gate ended after {time.monotonic() - t0:.0f} s", flush=True)
+    return f
+
+
+# RESUMING A GATE. Each lane's result is written the moment the lane ends, into `<shots>/verdicts/<kind>-<lane>.json`,
+# written beside and renamed over (tacompat.py's pattern), so a lane the gate did not finish has none. `gate --resume`
+# plays in the --shots folder an earlier sitting left: a lane whose pass or fail is kept there under this sitting's key
+# is read back, every other lane is played whole, its log and shots folder emptied first. A fail is kept as a fail: a
+# resume never plays a failed lane again. A gate without --resume starts with no verdict file.
+#
+# THE KEY is what a lane's result depends on besides its own command, which the tree holds: the tree (HEAD, with a
+# worktree git sees no change in; a sitting on a dirty tree is never resumed), the DLL the game lanes install
+# (tagpu/ddraw/ddraw.dll, hashed less the time it was linked, which `make` changes at every run: tools/dllkey.py,
+# whose other bytes are the same for the same tree, so a rebuild between sittings keeps the key), the inputs outside the tree that the lanes read by offline_runs' own account -- the mockup's
+# graphics and side packs (tools/wiki/mockup/gfx/, every file's hash) and simparity's dealt costs
+# (build/simparity-costs.json, which decide what each simparity shard checks) -- and the game lanes' screen. A kept
+# result whose key differs is refused, naming each field that differs, and its lane played again. What neither the tree
+# nor those files hold -- the retail install, Wine and the offline checks' prefix -- is the reference setup's, the same
+# for both sittings.
+#
+# WHAT A STOP LEAVES. A lane's verdict is written only when it ends as a pass or a fail (a check that could not run, exit
+# 2, is played again) with the gate not stopping. Every lane is a process in a session of its own (Lanes), so a Ctrl-C
+# or SIGTERM reaches the gate alone; the gate ends its lanes only through Lanes.end_all, which marks the gate stopping
+# before it signals any of them. A lane the stop ended therefore finds the mark set when its process has exited, and
+# keeps nothing: by construction no kept result is one a stop touched.
+
+GATE_VERDICTS = "verdicts"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def file_md5(path) -> "str | None":
+    """The file's MD5, None when there is no such file."""
+    import hashlib
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except FileNotFoundError:
+        return None
+    return h.hexdigest()
+
+
+def folder_digest(d: Path) -> "str | None":
+    """One digest of every file under `d`, by its path and its MD5; None when there is no such folder."""
+    import hashlib
+    if not d.is_dir():
+        return None
+    h = hashlib.sha256()
+    for f in sorted(p for p in d.rglob("*") if p.is_file()):
+        h.update(f"{f.relative_to(d)}\0{file_md5(f)}\n".encode())
+    return h.hexdigest()
+
+
+def gate_key(tree=TREE) -> dict:
+    """The fields of every lane's key but its name (RESUMING A GATE); `tree` None when git sees a change in the
+    worktree, tracked or untracked."""
+    st = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True)
+    head = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True, text=True)
+    clean = st.returncode == 0 and not st.stdout.strip() and head.returncode == 0
+    return {"tree": head.stdout.strip() if clean else None,
+            "dll": dllkey.digest(tree / "tagpu/ddraw/ddraw.dll"),
+            "gfx": folder_digest(tree / "tools/wiki/mockup/gfx"),
+            "costs": file_md5(tree / "build/simparity-costs.json"),
+            "res": GATE_RES}
+
+
+def verdict_path(shots: Path, kind: str, name: str) -> Path:
+    """A lane's verdict file: its kind and its name, every character but a letter, a digit, '.' and '-' a '_'."""
+    return shots / GATE_VERDICTS / (kind + "-" + re.sub(r"[^A-Za-z0-9.-]", "_", name) + ".json")
+
+
+def key_differs(then: dict, now: dict) -> list:
+    """The fields of two keys that differ, by name."""
+    return [k for k in sorted(set(then) | set(now)) if then.get(k) != now.get(k)]
+
+
+def kept_lanes(shots: Path, lanes, key: dict, say=print) -> dict:
+    """{(kind, name): (kind, name, code, line)} of each lane of `lanes` ((kind, name) pairs) whose pass or fail `shots`
+    keeps under `key` with its name; each refused one said, by the fields that differ."""
+    got = {}
+    for kind, name in lanes:
+        f = verdict_path(shots, kind, name)
+        if not f.is_file():
+            continue
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            say(f"wiki gate: {kind} {name}: the kept result is refused, {f.name} unreadable: {e}; played again")
+            continue
+        differ = key_differs(doc.get("key") or {}, {**key, "lane": f"{kind} {name}"})
+        if differ or doc.get("code") in (None, 2):
+            why = f"its key differs: {', '.join(differ)}" if differ else f"its exit code is {doc.get('code')}"
+            say(f"wiki gate: {kind} {name}: the kept result is refused, {why}; played again")
+            continue
+        got[(kind, name)] = (kind, name, doc["code"], doc["line"])
+    return got
+
+
+def keep_lane(shots: Path, key: dict, kind: str, name: str, code: int, line: str):
+    """A lane's verdict file (RESUMING A GATE): its exit code and its verdict line under its key."""
+    f = verdict_path(shots, kind, name)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(f, json.dumps({"key": {**key, "lane": f"{kind} {name}"}, "code": code, "line": line}, indent=1) + "\n")
+
+
+# THE GAME LANES START LONGEST FIRST, by the median of each lane's last finished times in the runs journal (tarun's
+# history.jsonl, the figures the runs viewer estimates from), a lane with none first, since it may be the longest: the
+# longest lane, `players` (median 23 min), was queued twelfth of eighteen behind -j 6 and started 46 minutes into a
+# 64-minute gate (MEASURED 2026-11-13 in the journal, 28 runs). The order changes when a lane starts, never what it
+# finds: each lane is a process of this script with its own command line, on an instance of its own carrying the
+# run's tag (gate_instance_name: wikigate-<tag>-<mode>; a mods setup's prepare_wine instance, tacompat.inst_name(setup,
+# "-wk")), on an X server of its own (private_xvfb, reserved by -displayfd), writing only its own log
+# (<shots>/<mode>.log, <shots>/mods-<setup>.log), its own shots folder (<shots>/<mode>, <shots>/mods/<setup>) and its
+# own verdict file; the offline lanes read nothing a game lane writes (offline_runs). What they share is the machine,
+# which -j and the run lock's games() bound whatever the order.
+
+def game_lane_order(lanes, history) -> list:
+    """`lanes`, (kind, name) game lanes, longest first by `history` (tarun.load_history's {(kind, name, variant):
+    [seconds]}); those with no history first, in the order given."""
+    import statistics
+    import tarun
+
+    def expect(lane):
+        past = history.get((*lane, ""))
+        return statistics.median(past[-tarun.KEEP_HISTORY:]) if past else None
+    return sorted(lanes, key=lambda lane: (expect(lane) is not None, -(expect(lane) or 0)))
+
+
+def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=None, offline_slots=None):
+    """The gate's lanes in the order they need: first the offline lanes, `offline`'s (weight, fn) each, on slots of
+    the run lock of their own (runlock.offline, OFFLINE WORK): at most `offline_slots` (None: their weights' sum) and
+    at least the heaviest lane's weight, waited for in the queue; each fn is called with that hold, on the `checks`
+    pool, once it holds its weight of the grant (Workers.share), and the hold is let go when the last offline lane
+    ends, whatever the game lanes wait for meanwhile. Then, when `games` is given, the run lock taken for `lanes`
+    game lanes at once (None, its whole budget) -- waited for while other runs hold what it needs, the log saying
+    so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part of holds the lock
+    already) for the game lanes' processes to inherit, returning the game lanes as callables, submitted to `pool`. The
+    game lanes' hold lasts from the first game lane's start to the last one's end and is released then; the offline
+    lanes still running are waited for after it. Returns every lane's result, the offline lanes' first, each in the
+    order given.
+    On any way out by an exception `cleanup` runs first -- it ends every lane -- and both holds are released after it.
+    The game lanes hold the lock themselves (gate_lane), and an offline lane's process its phase's slots
+    (offline_one's `keep`), so a clean-up cut short cannot let another run in beside one still running. The gate's
+    process holds the run lock by no other call, so a release is always these holds'.
+    No more game lanes play at once than the run lock's games(), its GPU tokens: each waits its turn on a semaphore of
+    that size, whatever `pool` holds."""
+    import concurrent.futures
+    import threading
+    t0 = time.monotonic()
+    off, played, phase = [], [], None
+    try:
+        if offline:
+            weights = [w for w, _ in offline]
+            print(f"wiki gate: {len(offline)} offline lanes wait for {max(weights)} to "
+                  f"{offline_slots or sum(weights)} slots of the run lock ({runlock.lock_path(tree)})", flush=True)
+            phase = runlock.offline(tree, f"{what}: offline lanes", offline_slots or sum(weights), max(weights))
+            print(f"wiki gate: the offline lanes start on {phase.n} slots after {time.monotonic() - t0:.0f} s", flush=True)
+
+            def lane(weight, fn):
+                with phase.share(weight):
+                    return fn(phase)
+            off = [checks.submit(lane, w, fn) for w, fn in offline]
+            # its tasks are leaves that wait on no run, so its slots go when they end, never held for the game lanes
+            threading.Thread(target=lambda: (concurrent.futures.wait(off), phase.release()), daemon=True).start()
+        if games:
+            print(f"wiki gate: {len(off)} offline lanes started; the game lanes wait for the run lock "
+                  f"({runlock.lock_path(tree)})", flush=True)
+            took = runlock.hold(tree, what, lanes, suite="wiki")
+            t1 = time.monotonic()
+            at_once = threading.BoundedSemaphore(runlock.games())
+
+            def bounded(g):
+                # no more game lanes at once than the run lock's games(), its GPU tokens
+                with at_once:
+                    return g()
+            print(f"wiki gate: the run lock {'taken' if took else 'already held by the run this gate is part of'} "
+                  f"after {t1 - t0:.0f} s; the game lanes start, {runlock.games()} at once", flush=True)
+            played = [f.result() for f in [pool.submit(bounded, g) for g in games(runlock.fds())]]
+            runlock.release()
+            left = sum(not f.done() for f in off)
+            print(f"wiki gate: the game lanes ended after {time.monotonic() - t1:.0f} s; the run lock released"
+                  + (f", {left} offline lanes still running" if left else ""), flush=True)
+        return [f.result() for f in off] + played
+    except BaseException:
+        cleanup()
+        runlock.release()
+        if phase is not None:
+            phase.release()
+        raise
+
+
+def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
+    """Every part of the wiki's gate at once: the offline checks on at most `offline_jobs` slots of the run lock, the
+    Wine ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
+    own instance `wikigate-<tag>-<mode>` with its own registry and its own private X server, and a setup of the mods run
     (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
-    would give and says the same verdict. The runs viewer shows one step a lane."""
+    would give and says the same verdict. The runs viewer shows one step a lane.
+    THE RUN LOCK covers the game lanes and the offline lanes in two holds (gate_schedule). The offline checks play no
+    game and read nothing a game lane writes (offline_runs), so none waits for one: they take slots of their own,
+    each its offline_weight, as soon as the queue grants them, and run beside other runs' games as they run beside
+    this gate's own; their hold is let go when the last of them ends. The game lanes' instances and X servers are made
+    under the lock, named with its tag: tacli's instances are one set for every worktree, and another gate's game
+    lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has.
+    The game lanes start longest first (game_lane_order). With `resume` the gate goes on with the one an earlier sitting
+    left in `shots`: each lane kept there under this sitting's key is read back, not played (RESUMING A GATE)."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
+    import functools
     import signal
     import tacompat
     import tarun
-    runlock.hold(TREE, f"wiki_regression gate (-j {jobs})")
+    tree_lock = gate_tree_hold()        # noqa: F841 -- held while this process lives
     shots.mkdir(parents=True, exist_ok=True)
     offline = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS) if offline_jobs else []
+    key = gate_key()
+    if resume and key["tree"] is None:
+        print("wiki gate: cannot resume: the worktree has uncommitted or untracked changes, and a kept lane is keyed "
+              "by HEAD; commit first", file=sys.stderr)
+        raise SystemExit(2)
+    every = [("offline", n) for n, _ in offline] + [("game", m) for m in modes] + [("mods", n) for n in setups]
+    kept = kept_lanes(shots, every, key) if resume else {}
+    if not resume:
+        shutil.rmtree(shots / GATE_VERDICTS, ignore_errors=True)
+    for kind, name in every if resume else ():
+        if kind != "offline" and (kind, name) not in kept:      # played again from no log and no shots
+            (shots / f"{name if kind == 'game' else 'mods-' + name}.log").unlink(missing_ok=True)
+            shutil.rmtree(shots / name if kind == "game" else shots / "mods" / name, ignore_errors=True)
+    order = game_lane_order([lane for lane in every if lane[0] != "offline"], tarun.load_history("wiki_regression"))
+    rank = {lane: k for k, lane in enumerate(order)}
     items = [("offline", [{"id": n, "pool": "offline", "order": k} for k, (n, _) in enumerate(offline)]),
-             ("game", [{"id": m, "pool": "game", "order": k} for k, m in enumerate(modes)]),
-             ("mods", [{"id": n, "pool": "game", "order": len(modes) + k} for k, n in enumerate(setups)])]
+             ("game", [{"id": m, "pool": "game", "order": rank[("game", m)]} for m in modes]),
+             ("mods", [{"id": n, "pool": "game", "order": rank[("mods", n)]} for n in setups])]
     items = [it for it in items if it[1]]
     J = tarun.begin("wiki_regression", items, kind="gate", title=f"wiki gate ({len(modes)} modes, {len(setups)} "
                     f"setups, {len(offline)} offline checks) -j {jobs}", pools={"game": jobs, "offline": max(1, offline_jobs)},
@@ -5212,20 +5605,28 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     def verdict(code):
         return "pass" if code == 0 else "unrun" if code == 2 else "fail"
 
-    def lane_offline(name, cmd, wenv):
+    def settled(kind, name, code, line):
+        """The lane's verdict file, when it ended as a pass or a fail with the gate not stopping (RESUMING A GATE)."""
+        with lanes.lock:
+            stopping = lanes.stopping
+        if code != 2 and not stopping:
+            keep_lane(shots, key, kind, name, code, line)
+        return (kind, name, code, line)
+
+    def lane_offline(name, cmd, wenv, phase):
         J.start("offline", name)
         try:
-            code, line = offline_one(name, cmd, lanes.popen, wenv, lanes.done, GATE_LANE_S)
+            code, line = offline_one(name, cmd, lanes.popen, phase.environ(wenv), lanes.done, GATE_LANE_S, phase.fds())
         except (Exception, SystemExit) as e:        # noqa: BLE001 -- the lane's verdict, never the gate's crash
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("offline", name, verdict(code), line)
-        return ("offline", name, code, line)
+        return settled("offline", name, code, line)
 
-    def lane_mode(mode, inst, xv):
+    def lane_mode(mode, inst, xv, genv, keep):
         J.start("game", mode)
         try:
             cmd = me + [inst.name, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
-            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", env)
+            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         finally:
@@ -5233,29 +5634,26 @@ def gate(shots, jobs, offline_jobs, modes, setups):
             tacompat.stop_xvfb(xv)
         J.finish("game", mode, verdict(code), line)
         print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
-        return ("game", mode, code, line)
+        return settled("game", mode, code, line)
 
-    def lane_setup(name):
+    def lane_setup(name, genv, keep):
         J.start("mods", name)
         try:
-            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log", env)
+            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log",
+                                   genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("mods", name, verdict(code), line)
         print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
-        return ("mods", name, code, line)
+        return settled("mods", name, code, line)
 
-    t0 = time.monotonic()
-    old_term = signal.signal(signal.SIGTERM, on_term)
-    games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
-    checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
-    try:
-        # every instance made before the first lane starts (gate_instance), each game lane's on its own X server,
-        # which an instance's display is pinned to when it is made
-        wine = gate_instance("wikigate-wine") if any("--wine" in map(str, c) for _, c in offline) else None
-        wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
-        made = []
-        for m in modes:
+    def game_lanes(keep):
+        """The game lanes, made once the run lock is held: each mode's X server and instance, the instance's display
+        pinned to its server when it is made. Their environment is taken now, RUNLOCK_HELD in it, so a lane's own
+        runlock.hold sees the lock its process holds through `keep`, the lock's descriptors."""
+        genv = dict(os.environ)
+        made = {}
+        for m in [name for kind, name in play if kind == "game"]:
             # held until the server is in `servers`, where the clean-up finds it: a signal between the two would
             # leave it running in a session of its own
             signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
@@ -5264,23 +5662,45 @@ def gate(shots, jobs, offline_jobs, modes, setups):
                 servers.add(xv)
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
-            made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
-        futs = [checks.submit(lane_offline, n, c, wenv if "--wine" in map(str, c) else env) for n, c in offline]
-        futs += [games.submit(lane_mode, m, inst, xv) for m, inst, xv in made]
-        futs += [games.submit(lane_setup, n) for n in setups]
-        done = [f.result() for f in futs]
+            made[m] = (gate_instance(gate_instance_name(m), "--display", f":{xv.tacompat_display}"), xv)
+        return [functools.partial(lane_mode, name, *made[name], genv, keep) if kind == "game" else
+                functools.partial(lane_setup, name, genv, keep) for kind, name in play]
+
+    def ignore_signals():
+        # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes running past the gate,
+        # so both are ignored until it is done
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    def end_lanes():
+        ignore_signals()
+        lanes.end_all()
+
+    for kind, name, code, line in kept.values():
+        J.finish(kind, name, verdict(code), f"kept: {line}")
+        print(f"wiki gate: {kind} {name}: {'passed' if code == 0 else 'FAILED'}, kept from the earlier sitting - {line}",
+              flush=True)
+    play = [lane for lane in order if lane not in kept]
+    offline_play = [(n, c) for n, c in offline if ("offline", n) not in kept]
+    t0 = time.monotonic()
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.signal(signal.SIGTERM, on_term)
+    games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
+    checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
+    try:
+        wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline_play) else env
+        done = list(kept.values()) + gate_schedule(
+            [(offline_weight(c), functools.partial(lane_offline, n, c, wenv if under_wine(c) else env))
+             for n, c in offline_play],
+            game_lanes if play else None, checks, games, f"wiki_regression gate (-j {jobs})", end_lanes,
+            lanes=min(jobs, len(play)), offline_slots=offline_jobs)
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
     except BaseException as e:
         state = "stopped" if isinstance(e, KeyboardInterrupt) else "unrun"
         raise
     finally:
-        # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes playing under a
-        # released lock, so both are ignored until it is done
-        old_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        if state in ("stopped", "unrun"):
-            lanes.end_all()
+        ignore_signals()
         games.shutdown(wait=True, cancel_futures=True)
         checks.shutdown(wait=True, cancel_futures=True)
         for xv in list(servers):
@@ -5311,21 +5731,28 @@ def main():
                                               "takeover: three Take over frames beside the mockup's; "
                                               "players: the Players demos' states beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
-    p.add_argument("--offline-jobs", type=int, help="gate: the offline checks run at once, 0 for none; by default the "
-                                                    "threads the game lanes leave (two to a lane), at one and a half to "
-                                                    "a check (node, the scripts' host, the C side), and at least 4")
+    p.add_argument("--offline-jobs", type=int, help="gate, offline: the most slots of the run lock the offline checks "
+                                                    "hold, each check its weight (offline_weight), 0 for none in the "
+                                                    "gate; by default the slots the game lanes leave of the budget "
+                                                    "(a Vulkan lane's weight each, tools/runlock-lanes.cfg), and at "
+                                                    "least 4; fewer when fewer are free")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
+    p.add_argument("--resume", action="store_true", help="gate: go on with the gate an earlier sitting left in --shots "
+                                                         "DIR: each lane whose pass or fail it kept under this sitting's "
+                                                         "key is read back, every other one played (RESUMING A GATE)")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
     try:
+        offline_jobs = a.offline_jobs if a.offline_jobs is not None else \
+            max(4, runlock.BUDGET - runlock.lane_slots("vulkan") * (a.jobs if a.mode == "gate" else 0))
         if a.mode == "offline":
-            offline_checks()
+            offline_checks(offline_jobs)
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
-            offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, ((os.cpu_count() or 8) - 2 * a.jobs) * 2 // 3)
-            gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
+            gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n],
+                 a.resume)
         elif a.mode == "mp":
             mp(a.instance)
         elif a.mode == "mods":
@@ -5371,6 +5798,12 @@ def main():
     finally:
         if stop:
             stop()
+    # a game this run launched has stopped: a refusal of the GPU memory cap anywhere in it fails
+    # the mode, whatever its checks saw (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance) if stop else None
+    if refused:
+        print(f"wiki regression FAILED: {refused}", file=sys.stderr)
+        return 1
     print(f"wiki regression {a.mode}: passed in {time.monotonic() - t0:.0f} s")
     return 0
 

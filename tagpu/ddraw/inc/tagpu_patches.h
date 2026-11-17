@@ -86,4 +86,25 @@ void tagpu_slice_give(char* cob, unsigned where);
    then the recording's (tagpu_patches.c, *The playback's seed*). */
 const char* tagpu_wind_state_name(void);
 void tagpu_wind_state_set(unsigned long long state);
+
+/* A harness's run seeds (tagpu_patches.c, A RUN'S SEEDS): with the lever tagpu_seeds.on in force,
+   every random stream a level starts with is seeded from `seed` alone and the wind's and the
+   meteors' schedules restart from the current GameTime; without it, nothing. The game thread,
+   between two steps, on a level that is not a puppet. */
+void tagpu_seed_run(unsigned int seed);
+
+/* The temporary sight records' cap in force (tagpu_patches.c, fix_sight_cap): the engine's 20, or
+   the N of a test launch's tagpu_sightcap.on. Whenever it returns N, the add 0x482910 refuses a
+   record past N (`cmp eax,N; jge` at 0x48292C) and every level's block 0x483D88 holds N records
+   of 36 bytes, the three sites being rows of the fail-closed table, which ends the process at the
+   report rather than play with other bytes. Set once at install; read anywhere after. */
+#define TAGPU_SIGHTCAP_STOCK 20u
+unsigned int tagpu_sightcap(void);
+
+/* The validated program of unit def `def`'s script: the blob at def +0x18E that the COB load bound to the def's
+   model (cob_bind_loaded_model), found in the validated files the read hook keeps; NULL for none -- a scriptless
+   type, or a build whose read hook is not installed. It lives as long as the blob: the level, freed only by the
+   teardown on the game thread (cob_free_blob). */
+struct TagpuCobProgram;
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def);
 #endif

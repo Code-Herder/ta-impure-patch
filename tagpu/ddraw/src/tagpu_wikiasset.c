@@ -3823,7 +3823,7 @@ static int title_points(const SUNIT* u, unsigned* cp)
 
 /* ---- THE CASTS' WRECKS, gfx.py `corpse_record`: the section the FBI's `corpse` names, found as
    the 3D loader finds a feature (the first features\**\*.tdf holding it, feat_each), read into
-   sim.js checkFeature's record. footprintx/z are taken as 16 bits and height as 8 (FeatureDef
+   the loader's feature record (tagpu_wikidata.c). footprintx/z are taken as 16 bits and height as 8 (FeatureDef
    +0x94/+0x96 and +0xFA, as feature_resolve reads them), metal and energy by fbi_strtod (+0xF0,
    +0xEC) [INFERRED: LoadFeature 0x4224B0's reader of those two keys is not mapped], blocking and
    reclaimable as != 0 (+0xFE bits 6 and 7). The name and the object are lower-cased and must be

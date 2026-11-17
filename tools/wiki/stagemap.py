@@ -28,10 +28,10 @@ Every scene of every entry has a description, and `build` derives it from the sc
   recipe names that map, and a section tile it lacks fails the build. Only the author's install needs worlds.hpi:
   the description names the map. A crop is the ground's size of a map's tiles from a cell of it, which must be flat
   ground no feature of the map reaches into, so no picture of the map's own expects a feature or a slope the stage
-  does not have. Broad metal ground (a rect that touches both opposite map edges on an axis, which sim.js
+  does not have. Broad metal ground (a rect that touches both opposite map edges on an axis, which the simulation
   `distinct` never takes for a deposit) has no ground of its own: a scene with one fails the build, and a metal map
   is a scene of its own whose SurfaceMetal is its ground.
-- **The ground is GROUND_ROWS deep**, whatever the scene's rows: with the sidebar on, sim.js grows a stage's map down
+- **The ground is GROUND_ROWS deep**, whatever the scene's rows: with the sidebar on, the simulation grows a stage's map down
   to the column's height, and a stage draws its description's top rows. The scene's own rows are decorated first and
   alone, so a stage that does not grow looks as the scene alone would.
 - **Each deposit is one metal patch of the ground's world**: the feature of the recipe's patch file (the world's
@@ -79,7 +79,7 @@ SCT_VERSION = 2    # every section of the retail worlds.hpi
 DECOR_BLOCK = 8    # cells: greenflat01's 4 x 4-tile repeat, a recipe's `block` unless it says otherwise
 DECOR_CLEAR = 2    # cells kept clear round a deposit or a vent
 DECOR_TRIES = 32
-GROUND_ROWS = 48   # cells: every description's ground is this deep, the tallest map a stage grows to (sim.js SIDE_MAX_H / CELL)
+GROUND_ROWS = 48   # cells: every description's ground is this deep, the tallest map a stage grows to (WIKI_SIDE_ROWS / 16)
 
 # Per scene name: the world whose deposits, vents and decoration it takes, and its ground -- a `section` and the
 # shipped map whose tiles it is drawn with, or a `crop` of a map from a cell. Evad River Confluence (totala2.hpi, the
@@ -235,7 +235,7 @@ def body_vent(body):
 
 
 def scene_figures(body):
-    """A scene feature's figures as the entry states them (sim.js checkFeature): its footprint, metal (+0xF0) and
+    """A scene feature's figures as the entry states them (tagpu_wikidata.c): its footprint, metal (+0xF0) and
     energy (+0xEC), height (+0xFA), blocking and reclaimable (+0xFE bit 7), and a 3D feature's model (`object=`, which
     clears +0xFE bit 0). Height, blocking and reclaimable must be stated by the section: the engine's defaults for a
     missing key are not established here, so a section that leaves one out is refused rather than guessed at."""
@@ -252,7 +252,7 @@ def scene_figures(body):
 
 
 def entry_figures(d):
-    """The entry's figures for a feature, with sim.js's defaults for the keys it may leave out."""
+    """The entry's figures for a feature, with the loader's defaults for the keys it may leave out."""
     return {"footprint": list(d["footprint"]), "metal": float(d.get("metal", 0)), "energy": float(d.get("energy", 0)),
             "height": d.get("height", 0), "blocking": bool(d.get("blocking", False)),
             "reclaimable": bool(d.get("reclaimable", False)), **({"object": d["object"]} if "object" in d else {})}
@@ -323,7 +323,7 @@ def decorate(vfs, seed, recipe, w, z0, z1, keep_clear, placed):
 # --------------------------------------------------------------------------- the scene
 
 def broad(rect, w, h):
-    """A rect that touches both opposite map edges on an axis: sim.js `distinct` never takes it for a deposit."""
+    """A rect that touches both opposite map edges on an axis: the simulation never takes it for a deposit."""
     x, z, rw, rh = rect
     return (x <= 0 and x + rw >= w) or (z <= 0 and z + rh >= h)
 

@@ -1,0 +1,17 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The income lever (tagpu/ddraw/src/tagpu_income.c; research/notes/modules/income-lever.md): Town & Country at Hard, so the Difficulty scales no seat, seat 0 an idle human (ARM) and seats 1 and 2 OTA AI on CORE with the same commander and the same starting stores. The `income-mult` test group's content writes tagpu_impai_income.on with `1=2.5` before each launch (tools/impai/level_lever.py --income), so seat 1's production is 2.5 times seat 2's. At GameTime 35 the idle human gives each computer seat 100 energy and 100 metal, which the next economy pass, 61's, counts in its rates and the lever leaves unmultiplied; at GameTime 75 nothing has finished, each seat's production is its commander's, and tools/impai/income_check.py asserts on the held level that seat 1's rates less the give are 2.5 times seat 2's. Both computer seats start with 20 metal and 10 000 energy, so seat 1's energy bonus meets a full store and the clamp. The test group then applies the handicap check's economy structures (impai-handicap-economy.json: a solar collector, a wind generator, a metal extractor, a metal maker and a tidal generator for each computer seat) and its two A.K.s a computer seat (impai-handicap-army.json) at GameTime 300, so every kind of production the pass sums runs under the multiplier, each stock AI orders and moves something in the takeover's window, and both build on with their incomes for the rest of the game.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": false,
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0, "metal": 1000, "energy": 1000},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "metal": 20, "energy": 10000},
+   {"slot": 2, "controller": "ai", "side": "core", "color": 2, "metal": 20, "energy": 10000}
+  ]
+ }
+}

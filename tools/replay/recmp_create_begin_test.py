@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Record native constructor ordering with two humans and two hosted AIs.
 
-Owns two fresh Wine instances, a private display and the chosen DirectPlay port.
+Owns two fresh Wine instances, named with the run's tag (tools/runlock.py, TAGS) and --label, a
+private display and a DirectPlay port leased for the game (tools/dpport.py): --port asks for one
+port, refused while another run leases it, and with none the first free one is taken. Two games of
+one run at once each take a --label of their own (tareplay.py's landing gives each its build's
+letter, MP_LABELS), so they never make or remove each other's instances. tools/mp_lobby.sh types
+each instance's name as its player's nickname, so every name fits the nickname (instance_names).
 Only the host saves; both endpoints must contribute each constructor boundary.
 This verifies capture and persisted causality, not multiplayer engine playback.
 
@@ -21,12 +26,18 @@ communication audience a two-human game has.
 --select has each human select all their units and click once, so the recording carries a
 selection and a click from each.
 
+--impai makes both hosted AIs ImpAI's: both peers launch with `netai=impai`, so the battle room's
+first step of an AI row it adds is ImpAI (tagpu_skirmish.c, THE BATTLE ROOM) and the host's PLAYER2
+and the joiner's PLAYER3 come up ImpAI's at the clicks that add them. Before the start each peer's
+room must show both AI rows named `ImpAI:` (IMPAI_NAME; a name reaches the other peer through
+DirectPlay, so the read waits up to LABEL_S for it); once the level is up, each peer's level init
+must mark its own AI record and name the other's among the other peers' ImpAI seats (IMPAI_SEATS:
+the host 2, the joiner 3). Every other check is the same game's.
 --marks has each human hold the drawing board's key and draw a line and a pin (MARKS, below), and
 waits until each peer has applied the other's (`recmp: remote marks`), so the recording carries
 the recording machine's own marks and the ones it received.
 """
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -37,7 +48,6 @@ import struct
 import subprocess
 import sys
 import time
-import uuid
 import zlib
 
 import devpy
@@ -47,6 +57,7 @@ from recmp_file import History, RECMP_ROOT_CREATE_BEGIN
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / "tools"))
+import dpport
 import talog
 
 
@@ -143,6 +154,57 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
+# SELGAME's NICKNAME field takes ten characters (MEASURED 2026-11-13: tacli's `ui fill` reads the
+# field's maxchars as 10 and refused 'MB-S00-RAISED-H'), and tools/mp_lobby.sh types the
+# instance's name, upper-cased, into it.
+NICKNAME_CHARS = 10
+
+# --impai: each peer's AI row by its instance's suffix, the name the battle room gives an ImpAI row
+# (0x451310's format, ImpAI:%s), the bound on a name reaching the other peer, and the level init's
+# network seat line (tagpu_impai.c): its first list is this peer's own ImpAI records, its last the
+# other peers' AI seats named ImpAI:
+AI_ROWS = {"H": 2, "J": 3}
+IMPAI_NAME = "ImpAI:"
+LABEL_S = 60
+IMPAI_SEATS = re.compile(r"impai: seats (\S+) \(netai=impai, a network game, level \d+\) of \d+ records; "
+                         r"other peers' AI seats (\S+), ImpAI's (\S+)")
+
+
+def room_rows(snapshot):
+    """{row: text} of the battle room's PLAYER<n> buttons, from a `tacli ui --json` snapshot."""
+    out = {}
+    for gadget in snapshot.get("gadgets") or []:
+        m = re.fullmatch(r"PLAYER(\d)", gadget.get("name") or "")
+        if m:
+            out[int(m.group(1))] = gadget.get("text") or ""
+    return out
+
+
+def impai_seat_problems(texts):
+    """--impai's level check on {suffix: the peer's log}: [] when each peer marked exactly its own AI
+    row and named the other peer's among the other peers' ImpAI seats, else each miss by name."""
+    bad = []
+    for suffix, text in sorted(texts.items()):
+        got = IMPAI_SEATS.findall(text)
+        if len(got) != 1:
+            bad.append(f"{suffix}: {len(got)} network ImpAI seat lines, not one")
+            continue
+        marks, _, remote_impai = got[0]
+        own, other = AI_ROWS[suffix], AI_ROWS["J" if suffix == "H" else "H"]
+        if marks != str(own):
+            bad.append(f"{suffix}: ImpAI seats {marks}, not its own AI row {own}")
+        if remote_impai != str(other):
+            bad.append(f"{suffix}: the other peers' ImpAI seats {remote_impai}, not the other peer's AI row {other}")
+    return bad
+
+
+def instance_names(tag, label=""):
+    """(host, joiner): the game's two instances, `mb-<tag>-<label>-H` and `-J`. The longest tag is
+    three characters (tools/runlock.py, TAGS: `s<NN>`) and a label one (label_arg), so the longest
+    name is NICKNAME_CHARS, and the tag and label keep every run's and every game's names apart."""
+    token = f"mb-{tag}-" + (f"{label}-" if label else "")
+    return token + "H", token + "J"
+
 
 def dump_stacks(instances, owned, output):
     """Every thread's stack of each peer's Wine processes, before a failed game is stopped: a
@@ -170,8 +232,11 @@ MARKS = ("down:backslash", "mouse:400,300", "down:lbutton", "mouse:450,320", "mo
          "up:lbutton", "mouse:600,400", "down:mbutton", "up:mbutton", "up:backslash")
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, allies=False,
-        marks=False):
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None,
+        impai=False, allies=False, marks=False):
+    """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
+    memory cap refused it an allocation (talog.cap_failure), read from its whole log once the game
+    has ended, whether the game passed or not."""
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -193,8 +258,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
                 raise RuntimeError(description)
             time.sleep(0.1)
 
-    with Path(f"/tmp/tacli-dplay-{port}.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with dpport.lease(port) as lease:
+        port = lease.port
+        print(f"DirectPlay port {port}", flush=True)
         try:
             display = tareplay.start_xvfb()
             digest = hashlib.sha256(dll.read_bytes()).hexdigest()
@@ -204,11 +270,11 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
             (output / "build-sha.txt").write_text(digest+"\n")
             if reproduce:
                 command(sys.executable, TREE / "tools/reproduce_fixture.py", output / "zzrepro.ufo")
-            token = "mb"+uuid.uuid4().hex[:6]
-            for suffix in ("H", "J"):
-                name = token+suffix
-                if (instances / name).exists():
-                    raise RuntimeError("fixture instance already exists")
+            # an instance of the run's tag and this label is a dead run's: no live run shares the
+            # tag, and no game of this run at once shares the label
+            for suffix, name in zip(("H", "J"), instance_names(tareplay.runlock.tag(), label)):
+                subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
+                               stderr=subprocess.STDOUT, check=False, timeout=120)
                 owned.append(name)
                 command(sys.executable, cli, "create", name, "--private-registry",
                         "--display", display.display, "--res", "1024x768")
@@ -222,7 +288,7 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
                     raise RuntimeError("saving must be off on the contributing peer")
                 command(sys.executable, cli, "registry", name, "MultiCommanderDeath=0", "gamespeed=20")
                 command(sys.executable, cli, "launch", name, "--keep-dll", "--dplay",
-                        "--dplay-port", port)
+                        "--dplay-port", port, *(("--netai", "impai") if impai else ()))
                 command(sys.executable, cli, "ui", name, "wait", "--gui", "MAINMENU", "--timeout", "45")
                 if hashlib.sha256((game / "ddraw.dll").read_bytes()).hexdigest() != digest:
                     raise RuntimeError("fixture DLL changed")
@@ -232,11 +298,31 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
             for _ in range(2):
                 command(sys.executable, cli, "ui", host, "click", "PLAYER2")
             command(sys.executable, cli, "ui", join, "click", "PLAYER3")
+            if impai:
+                rows = {}
+
+                def named():
+                    for name in owned:
+                        rows[name] = room_rows(json.loads(command(sys.executable, cli, "ui", name, "--json")))
+                    return all(rows[n].get(r, "").startswith(IMPAI_NAME) for n in owned for r in AI_ROWS.values())
+
+                try:
+                    wait_for(named, "", LABEL_S)
+                except RuntimeError:
+                    raise RuntimeError(f"the AI rows {sorted(AI_ROWS.values())} are not both {IMPAI_NAME} on "
+                                       f"both peers: {rows}")
+                print(f"both AI rows {IMPAI_NAME} on both peers: {rows[host]}", flush=True)
             for name in owned:
                 command(sys.executable, cli, "ui", name, "click", "READY0")
             command(sys.executable, cli, "ui", host, "click", "START", "--timeout", "30")
             for name in owned:
                 command(sys.executable, cli, "wait", name, "alive=[1-9]", "--timeout", "120")
+            if impai:
+                bad = impai_seat_problems({s: talog.run_text(instances / n / "gamedir")
+                                           for s, n in zip(AI_ROWS, owned)})
+                if bad:
+                    raise RuntimeError("ImpAI's network seats: " + "; ".join(bad))
+                print("PASS: each peer's level marks its own AI row ImpAI's and names the other's", flush=True)
             for name, unit_type, x, ai in ((host, "ARMFLASH", 2300, 2), (join, "CORAK", 2460, 3)):
                 roster = json.loads(command(sys.executable, cli, "roster", name, "--json"))
                 bases = {u["owner"]: u["world"] for u in roster["units"] if u["type"].upper() == "ARMCOM"}
@@ -350,11 +436,17 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
         finally:
             for name in owned:
                 game = instances / name / "gamedir"
-                if (game / "log/tagpu.log").exists():
-                    (output / (name+".log")).write_text(talog.run_text(game))
                 if (instances / name / "instance.json").exists():
                     subprocess.run([sys.executable, str(cli), "stop", name], stdout=log,
                                    stderr=subprocess.STDOUT, check=False, timeout=30)
+                # read once the peer has stopped, so its last lines are in it
+                if (game / "log/tagpu.log").exists():
+                    text = talog.run_text(game)
+                    (output / (name+".log")).write_text(text)
+                    why = talog.cap_failure(text, name)
+                    if why and refused is not None:
+                        refused[name] = why
+                if (instances / name / "instance.json").exists():
                     subprocess.run([sys.executable, str(cli), "rm", name], stdout=log,
                                    stderr=subprocess.STDOUT, check=False, timeout=30)
             if display:
@@ -362,33 +454,55 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
             log.close()
 
 
+def label_arg(value):
+    """--label: one lower-case letter or digit, which keeps an instance's name inside the nickname
+    (instance_names)."""
+    if not re.fullmatch(r"[a-z0-9]", value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not one lower-case letter or digit")
+    return value
+
+
 def main():
     devpy.ensure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw-cover.dll")
-    parser.add_argument("--port", type=int, default=47818)
+    parser.add_argument("--port", type=int, default=None,
+                        help="this DirectPlay port (default: the first free lease, tools/dpport.py)")
     parser.add_argument("--reproduce", action="store_true",
                         help="install the reproducing trees and shrubs on both peers")
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     parser.add_argument("--select", action="store_true", help="the humans select and click")
+    parser.add_argument("--label", default="", type=label_arg,
+                        help="the instances' names carry it: one each game a run plays at once")
+    parser.add_argument("--impai", action="store_true",
+                        help="both hosted AIs ImpAI's, by the battle room's first step (netai=impai)")
     parser.add_argument("--marks", action="store_true", help="the humans draw on the board (MARKS)")
     parser.add_argument("--allies", action="store_true",
                         help="the two humans allied both ways (each still fights its own AI): the "
                              "allies' ribbon reads each other's economy from the channel")
     args = parser.parse_args()
-    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]))
+    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
+                          suite="replay")  # host, joiner
+    why = tareplay.runlock.together(2, "recmp_create_begin_test")      # they meet in one lobby
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
+    refused, failed = {}, False
     try:
         run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
-            args.allies, args.marks)
+            args.label, refused, args.impai, args.allies, args.marks)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
-        print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
-        return 1
-    return 0
+        print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
+        failed = True
+    # each peer's refusals last: the line a caller reads as the game's failure names them
+    for why in refused.values():
+        print(f"FAIL: {why}; inspect {output}", file=sys.stderr, flush=True)
+    return 1 if failed or refused else 0
 
 
 if __name__ == "__main__":

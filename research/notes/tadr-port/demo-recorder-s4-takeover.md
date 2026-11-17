@@ -196,6 +196,11 @@ parent's chain at the fork point less this list, and nothing else:
   controller the two headers give differently;
 - (d) the contact bits by the puppet view's rule: bit 12 always, and bits 8 to 10 too unless the two
   worlds view the same player.
+- (e) at the fork's first capture only, ImpAI's rows of each seat the takeover newly gave ImpAI -- the
+  seats the fork's header marks ImpAI's (`RT_PLAYER` byte 15) and the parent segment's header does not:
+  its rows of `s_seat`, `s_brain` and `s_mil` and the `s_job` rows of its unit block, which `seat_fresh`
+  starts as a level start does (decided by the owner 2026-11-13, [ImpAI's decisions](../impai/decisions.html)).
+  Every later capture is compared in full.
 
 ## The file: segments
 
@@ -261,6 +266,13 @@ segment with no complete iteration with its header, and never a complete iterati
 ## Residuals
 
 - **COB state** (O4, every seek's class), including the adopted builders' pose.
+- **A seat whose AI was switched off becomes a computer seat again.** TK1 types every seat but P 2, so a seat
+  the console's AI toggle (`0x463C60(rec, 1)`, the scenario's `ai: "off"`) left type 1 plays on as an AI in the
+  fork. MEASURED 2026-11-16 with two such seats in the `income-mult` test group: `tarec compare-fork` found
+  their player images differing from the recording at `+0x1E0`, 01 recorded and 02 in the fork, and the
+  takeover's AI check, which counts every seat the recording's header names a computer, found no orders
+  from them in the fork's window [391, 2191). The fix is to keep a recorded type-1 seat at 1; until then no test group with an `ai: "off"` seat
+  asks for a takeover (`income-stall` asks for none).
 - **VTOL_MobileBuild's orphaned frame**, above.
 - **A seat's control-group order inside its vectors** is the rebuild's, not the recording's.
 - **The contact bits as another player.** When P is not the recording's viewed record the recorded

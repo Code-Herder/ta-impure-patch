@@ -436,6 +436,44 @@ typedef struct TAGPU_PK_FORMDOT {
 
 #define TAGPU_PK_MAX_FORM   1500u
 
+/* ---- IMPAI'S DEBUG OVERLAY (tagpu_impai.c, THE OVERLAY; game thread, BY VALUE) ----
+   What one ImpAI seat knows, drawn by the marker pass while the test lever tagpu_impaiov.on names the
+   seat: one header, and the items -- the chosen map layer's nonzero cells, then the seat's rows in slot
+   order (its own units, its contacts, its ghosts), then its metal patches. Built on the game thread from
+   ImpAI's declared state and content alone, with the ground's height at each item, so a puppet shows
+   what the live game showed. The acquire bounds the header's seat below 10 and its layer to its enum,
+   every item's kind to its enum, its seat below 10, its point within +-TAGPU_PK_PLACE_COORD, a CELL's
+   shade to 1..15 and its side to 1..TAGPU_PK_IMPAI_SIDE; items only beside a header. */
+typedef struct TAGPU_PK_IMPAIHDR {
+    uint8_t  seat;            /* the seat shown                                 */
+    uint8_t  layer;           /* TAGPU_PK_IL_*: what the cells are              */
+    uint16_t pad;
+    uint32_t radar_age;       /* GameTime less the seat's last published radar
+                                 pass; 0xFFFFFFFF before its first              */
+    uint32_t known_gen;       /* the seat's knowledge generation               */
+} TAGPU_PK_IMPAIHDR;
+
+/* 16 B, at most TAGPU_PK_MAX_IMPAI */
+typedef struct TAGPU_PK_IMPAI {
+    uint8_t  kind;            /* TAGPU_PK_IM_*                                  */
+    uint8_t  seat;
+    uint8_t  level;           /* a CELL's shade 1..15, | TAGPU_PK_IM_NEG for a
+                                 value below 0; a CONTACT's classes (impai.h's
+                                 IMPAI_* bits)                                  */
+    uint8_t  size;            /* a CELL's side in 32-px blocks; a CLUSTER's
+                                 radius in 16-px map cells                      */
+    int32_t  x, h, z;         /* world px: a CELL's corner, a point's centre;
+                                 h the ground's height there                    */
+} TAGPU_PK_IMPAI;
+
+enum { TAGPU_PK_IM_CELL, TAGPU_PK_IM_CONTACT, TAGPU_PK_IM_GHOST, TAGPU_PK_IM_CLUSTER, TAGPU_PK_IM_OWN,
+       TAGPU_PK_IM_LAST = TAGPU_PK_IM_OWN };
+enum { TAGPU_PK_IL_GROUND, TAGPU_PK_IL_AIR, TAGPU_PK_IL_WATER, TAGPU_PK_IL_INFLUENCE, TAGPU_PK_IL_PRESENCE,
+       TAGPU_PK_IL_REACH, TAGPU_PK_IL_LAST = TAGPU_PK_IL_REACH };
+#define TAGPU_PK_IM_NEG      0x80u
+#define TAGPU_PK_IMPAI_SIDE  64u      /* a CELL's side bound, 32-px blocks      */
+#define TAGPU_PK_MAX_IMPAI   16384u
+
 /* ---- THE WEAPON RANGE RINGS (tagpu_rangeown.c, game thread, BY VALUE) ----
    What tagpu_range.c draws (tagpu_range.h): one header and one record per
    ring. The game thread decides WHICH rings show and of what class -- the
@@ -905,7 +943,10 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_RING    0x10000000u /* the range rings did not fit this
                                               packet, or were more than its
                                               cap                            */
-#define TAGPU_PK_TRUNC_BOARD   0x20000000u /* the drawing board's tables did not
+#define TAGPU_PK_TRUNC_IMPAI   0x20000000u /* ImpAI's overlay items did not
+                                              fit this packet, or were more
+                                              than its cap                   */
+#define TAGPU_PK_TRUNC_BOARD   0x40000000u /* the drawing board's tables did not
                                               fit this packet                */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
@@ -1297,6 +1338,11 @@ typedef struct TAGPU_PACKET {
     uint32_t n_ring, off_ring;        /* PK_RING, at most TAGPU_PK_MAX_RING;
                                          none without the header               */
 
+    /* ---- ImpAI's debug overlay (tagpu_impai.c) ---- */
+    uint32_t n_impaihdr, off_impaihdr; /* PK_IMPAIHDR: 1 while the overlay
+                                         shows, else 0                          */
+    uint32_t n_impai, off_impai;      /* PK_IMPAI, at most TAGPU_PK_MAX_IMPAI;
+                                         none without the header               */
     /* ---- the drawing board (tagpu_board.c) ---- */
     uint32_t n_board, off_board;      /* PK_BOARD: 1 in a level in play, else 0 */
     uint32_t n_bdseg, off_bdseg;      /* PK_BDSEG, at most TAGPU_PK_MAX_BDSEG    */
@@ -1596,6 +1642,11 @@ static __inline const TAGPU_PK_RANGE* tagpu_pk_range(const TAGPU_PACKET* p)
 { return p->n_range ? (const TAGPU_PK_RANGE*)(const void*)((const unsigned char*)p + p->off_range) : (const TAGPU_PK_RANGE*)0; }
 static __inline const TAGPU_PK_RING* tagpu_pk_rings(const TAGPU_PACKET* p)
 { return p->n_ring ? (const TAGPU_PK_RING*)(const void*)((const unsigned char*)p + p->off_ring) : (const TAGPU_PK_RING*)0; }
+/* ImpAI's overlay header and items, or NULL */
+static __inline const TAGPU_PK_IMPAIHDR* tagpu_pk_impaihdr(const TAGPU_PACKET* p)
+{ return p->n_impaihdr ? (const TAGPU_PK_IMPAIHDR*)(const void*)((const unsigned char*)p + p->off_impaihdr) : (const TAGPU_PK_IMPAIHDR*)0; }
+static __inline const TAGPU_PK_IMPAI* tagpu_pk_impai(const TAGPU_PACKET* p)
+{ return p->n_impai ? (const TAGPU_PK_IMPAI*)(const void*)((const unsigned char*)p + p->off_impai) : (const TAGPU_PK_IMPAI*)0; }
 /* the drawing board's header, segments and markers, or NULL */
 static __inline const TAGPU_PK_BOARD* tagpu_pk_board(const TAGPU_PACKET* p)
 { return p->n_board ? (const TAGPU_PK_BOARD*)(const void*)((const unsigned char*)p + p->off_board) : (const TAGPU_PK_BOARD*)0; }

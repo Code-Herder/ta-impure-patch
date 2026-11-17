@@ -37,7 +37,7 @@ static void game_free(WIKISIM* s)
 /* the game stopped: a lock, a pass that starved, a kill that found no unit */
 static int stopped(const WIKISIM* s)
 {
-    return s && (s->locked != -1 || s->starved || s->bad_kill);
+    return s && (s->locked != -1 || s->sim.starved || s->sim.bad_kill);
 }
 
 static int is_done(const WIKIREPLAY* r)
@@ -64,15 +64,15 @@ static void publish(WIKIREPLAY* r)
 {
     const WIKISIM* w = r->walker;
     int k;
-    for (k = 0; k < w->nseat && k < WIKI_SEATS; k++) {
-        const WIKIECON* z = &w->econ[k];
+    for (k = 0; k < w->sim.nseat && k < WIKI_SEATS; k++) {
+        const WIKIECON* z = &w->sim.econ[k];
         if (z->lost > r->prev_lost[k] && r->nmark < WIKI_REPLAY_MARKS) {
-            r->mark[r->nmark][0] = w->tick;
+            r->mark[r->nmark][0] = w->sim.tick;
             r->mark[r->nmark][1] = HUD_MK_DEATH;
             r->mark[r->nmark++][2] = k;
         }
         if (z->out && !r->prev_out[k] && r->nmark < WIKI_REPLAY_MARKS) {
-            r->mark[r->nmark][0] = w->tick;
+            r->mark[r->nmark][0] = w->sim.tick;
             r->mark[r->nmark][1] = HUD_MK_DEFEAT;
             r->mark[r->nmark++][2] = k;
         }
@@ -83,7 +83,7 @@ static void publish(WIKIREPLAY* r)
 
 static void end_walk(WIKIREPLAY* r)
 {
-    r->walked = r->walker->tick;
+    r->walked = r->walker->sim.tick;
     game_free(r->walker);
     r->walker = NULL;
     r->bg = 0;
@@ -96,7 +96,7 @@ static void seek(WIKIREPLAY* r, int t)
     char err[256];
     if (t < 0) t = 0;
     if (t > chain_last(r)) t = chain_last(r);
-    if (t < r->game->tick) {
+    if (t < r->game->sim.tick) {
         /* THE LIFETIME: the old game is freed before the new one is made and r->game is cleared with
            it, so no code can reach the freed simulation; nothing else holds it -- a view taken from it
            is valid only until this step or press returns (tagpu_wikireplay_game). */
@@ -110,11 +110,11 @@ static void seek(WIKIREPLAY* r, int t)
         r->quiet = 0;
         r->target = t == 0 ? -1 : t;
         r->pend = 1;
-    } else if (t > r->game->tick) {
+    } else if (t > r->game->sim.tick) {
         r->target = t;
         r->pend = 1;
     } else {
-        if (r->target >= 0) r->quiet = r->game->snd_total;
+        if (r->target >= 0) r->quiet = r->game->sim.snd_total;
         r->target = -1;
     }
     r->acc = 0;
@@ -147,7 +147,7 @@ static void act(WIKIREPLAY* r, int c, int value)
         r->left = 1;
         return;
     }
-    playhead = r->target >= 0 ? r->target : r->game->tick;
+    playhead = r->target >= 0 ? r->target : r->game->sim.tick;
     if (r->tk && (pick_act(r, c, value) || lane_act(r, c, value))) return;
     if (r->players && pl_act(r, c, value)) return;
     switch (c) {
@@ -285,23 +285,23 @@ static int play(WIKIREPLAY* r)
     WIKISIM* g = r->game;
     int ran = 0, n;
     if (r->target >= 0) {
-        n = r->target - g->tick < WIKI_REPLAY_SEEK ? r->target - g->tick : WIKI_REPLAY_SEEK;
+        n = r->target - g->sim.tick < WIKI_REPLAY_SEEK ? r->target - g->sim.tick : WIKI_REPLAY_SEEK;
         for (; ran < n && !g->done && chain_step(r, g); ran++) {}
-        if (!r->failed && g->tick == r->target) {
+        if (!r->failed && g->sim.tick == r->target) {
             r->target = -1;
-            r->quiet = g->snd_total;
+            r->quiet = g->sim.snd_total;
         }
     } else if (!r->paused) {
         r->acc += r->speed;
-        while (r->acc >= 10 && g->tick < chain_last(r) && !g->done && chain_step(r, g)) {
+        while (r->acc >= 10 && g->sim.tick < chain_last(r) && !g->done && chain_step(r, g)) {
             r->acc -= 10;
             ran++;
-            if (r->players && g->tick >= pass_due(r)) {
-                make_pass(r, g->tick);
+            if (r->players && g->sim.tick >= pass_due(r)) {
+                make_pass(r, g->sim.tick);
                 if (r->failed) break;
             }
         }
-        if (g->tick == chain_last(r)) {
+        if (g->sim.tick == chain_last(r)) {
             r->paused = 1;
             r->acc = 0;
         }
@@ -330,8 +330,8 @@ static int in_hand(const WIKIREPLAY* r, int c)
 static int now_tick(const WIKIREPLAY* r)
 {
     if (r->rw == WIKI_RW_OPEN) return r->G;
-    if (r->rw == WIKI_RW_PAST) return r->target >= 0 ? r->target - 1 : r->past ? r->past->tick : r->G;
-    return r->game->tick;
+    if (r->rw == WIKI_RW_PAST) return r->target >= 0 ? r->target - 1 : r->past ? r->past->sim.tick : r->G;
+    return r->game->sim.tick;
 }
 
 /* a timeline's chain into `c`: the row indices from the original down to it; its length. THE
@@ -392,7 +392,7 @@ static int log_apply(WIKIREPLAY* r, int kind, int key, double x, double z, int s
     WIKIREPLAYLOG* e;
     if (!log_room(t, 1 + spare)) return 0;
     e = &t->log[t->nlog++];
-    e->tau = r->game->tick + 1;
+    e->tau = r->game->sim.tick + 1;
     e->kind = (int8_t)kind;
     e->key = (int8_t)key;
     e->seat = (int8_t)r->human;
@@ -456,7 +456,7 @@ static void live_open(WIKIREPLAY* r)
 {
     WIKISIM* L = r->game;
     int held[WIKI_NKEYS], k;
-    if (L->tick - 1 <= WIKI_REPLAY_FIRST || r->nlogged > WIKI_REPLAY_LOG - WIKI_REPLAY_LOG_KEEP
+    if (L->sim.tick - 1 <= WIKI_REPLAY_FIRST || r->nlogged > WIKI_REPLAY_LOG - WIKI_REPLAY_LOG_KEEP
         || !log_room(&r->tl[r->selected], WIKI_REPLAY_LOG_KEEP)) {
         toast_of(r, WIKI_TOAST_REFUSED, 0, -1, -1);
         return;
@@ -465,7 +465,7 @@ static void live_open(WIKIREPLAY* r)
     if (!r->scripted && r->selected != 0)
         for (k = 0; k < WIKI_NKEYS; k++)
             if (held[k]) log_apply(r, WIKI_LOG_UP, k, 0, 0, 0);
-    r->G = L->tick;
+    r->G = L->sim.tick;
     r->last = r->G - 1;
     r->rw = WIKI_RW_OPEN;
 }
@@ -488,7 +488,7 @@ static void to_now(WIKIREPLAY* r)
     r->target = -1;
     log_apply(r, WIKI_LOG_RELEASE, -1, 0, 0, 0);
     r->dt = r->G;
-    r->quiet = r->game->snd_total;
+    r->quiet = r->game->sim.snd_total;
     r->rw = WIKI_RW_IDLE;
     r->back = r->clock;
 }
@@ -499,7 +499,7 @@ static void to_now(WIKIREPLAY* r)
 static void live_seek(WIKIREPLAY* r, int T)
 {
     char err[256];
-    if (!r->past || T - 1 < r->past->tick) {
+    if (!r->past || T - 1 < r->past->sim.tick) {
         game_free(r->past);
         r->past = NULL;
         if (!(r->past = game_new(r, 0, err, sizeof err))) {
@@ -522,7 +522,7 @@ static void live_seek(WIKIREPLAY* r, int T)
 static int fork_member(WIKIREPLAY* r, WIKISIM* s, const WIKITIMELINE* m)
 {
     char err[256];
-    if (m->seat < 0 || m->seat >= s->nseat || m->seat >= WIKI_SEATS || s->econ[m->seat].units == 0
+    if (m->seat < 0 || m->seat >= s->sim.nseat || m->seat >= WIKI_SEATS || s->sim.econ[m->seat].units == 0
         || !tagpu_wikisim_fork(s, m->R, m->seat, m->part, m->npart, m->mode, err, sizeof err)) {
         r->failed = 1;
         return 0;
@@ -536,7 +536,7 @@ static int fork_member(WIKIREPLAY* r, WIKISIM* s, const WIKITIMELINE* m)
 static void past_tick(WIKIREPLAY* r)
 {
     WIKISIM* P = r->past;
-    const int t = P->tick;
+    const int t = P->sim.tick;
     const WIKITIMELINE* m;
     if (r->pm + 1 < r->npchain && t + 1 == r->tl[r->pchain[r->pm + 1]].R) {
         r->pl = 0;
@@ -619,7 +619,7 @@ static void fork_at(WIKIREPLAY* r, const PLAN* p)
     r->game = P;
     r->past = NULL;
     r->gen = r->pgen;
-    r->quiet = r->game->snd_total;
+    r->quiet = r->game->sim.snd_total;
     r->target = -1;
     r->rw = WIKI_RW_IDLE;
     r->arm = WIKI_ARM_NONE;
@@ -712,18 +712,18 @@ static void live_play(WIKIREPLAY* r)
     WIKISIM* L = r->game;
     int i, n, fed;
     if (r->rw == WIKI_RW_IDLE) {
-        if (L->tick >= r->end || L->done) return;
+        if (L->sim.tick >= r->end || L->done) return;
         fed = L->in[r->human].fed;
         tagpu_wikisim_step(L);
         if (r->scripted && in_hand(r, r->clock) && L->in[r->human].fed != fed) r->clash = 1;
     } else if (r->rw == WIKI_RW_PAST && r->target >= 0 && r->past) {
-        n = r->target - 1 - r->past->tick < WIKI_REPLAY_SEEK ? r->target - 1 - r->past->tick : WIKI_REPLAY_SEEK;
+        n = r->target - 1 - r->past->sim.tick < WIKI_REPLAY_SEEK ? r->target - 1 - r->past->sim.tick : WIKI_REPLAY_SEEK;
         for (i = 0; i < n && !r->past->done && !r->failed; i++) past_tick(r);
-        if (!r->failed && r->past->tick == r->target - 1) {
+        if (!r->failed && r->past->sim.tick == r->target - 1) {
             r->target = -1;
-            r->quiet = r->past->snd_total;
-            r->dt = r->past->tick;
-            r->click_from = r->past->tick;
+            r->quiet = r->past->sim.snd_total;
+            r->dt = r->past->sim.tick;
+            r->click_from = r->past->sim.tick;
         }
     }
 }
@@ -733,10 +733,10 @@ static void live_play(WIKIREPLAY* r)
 static void arm_fill(WIKIREPLAY* r)
 {
     if (r->rw != WIKI_RW_PAST) r->arm = WIKI_ARM_NONE;
-    else if (r->arm == WIKI_ARM_SEEKING && r->target < 0 && r->past->tick + 1 == r->arm_R) {
+    else if (r->arm == WIKI_ARM_SEEKING && r->target < 0 && r->past->sim.tick + 1 == r->arm_R) {
         r->arm = WIKI_ARM_ARMED;
         toast_of(r, WIKI_TOAST_ARMED, r->arm_R, r->arm_evict, -1);
-    } else if (r->arm == WIKI_ARM_ARMED && r->past->tick + 1 != r->arm_R) r->arm = WIKI_ARM_NONE;
+    } else if (r->arm == WIKI_ARM_ARMED && r->past->sim.tick + 1 != r->arm_R) r->arm = WIKI_ARM_NONE;
 }
 
 /* the shown world's figures the top bar eases toward: its tick and the human seat's stored values,
@@ -744,8 +744,8 @@ static void arm_fill(WIKIREPLAY* r)
    takeover's row named, bounded by the picker) */
 static void shown_from(WIKIREPLAY* r, const WIKISIM* s)
 {
-    const WIKIECON* z = &s->econ[r->human];
-    r->s_tick = s->tick;
+    const WIKIECON* z = &s->sim.econ[r->human];
+    r->s_tick = s->sim.tick;
     r->s_e = z->e;
     r->s_m = z->m;
     r->s_emax = z->emax;
@@ -803,7 +803,7 @@ static int chain_step(WIKIREPLAY* r, WIKISIM* s)
     if (r->tk) {
         n = chain_of(r, r->selected, chain);
         for (k = 1; k < n; k++)
-            if (r->tl[chain[k]].R == s->tick + 1) {
+            if (r->tl[chain[k]].R == s->sim.tick + 1) {
                 if (!fork_member(r, s, &r->tl[chain[k]])) return 0;
                 break;
             }
@@ -861,11 +861,11 @@ static void bg_walk(WIKIREPLAY* r, int ran)
 {
     int i, n;
     if (!r->bg || !r->walker) return;
-    n = WIKI_REPLAY_WALK - ran < chain_last(r) - r->walker->tick ? WIKI_REPLAY_WALK - ran : chain_last(r) - r->walker->tick;
+    n = WIKI_REPLAY_WALK - ran < chain_last(r) - r->walker->sim.tick ? WIKI_REPLAY_WALK - ran : chain_last(r) - r->walker->sim.tick;
     for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) publish(r);
     if (r->failed) return;
-    if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
-    else r->walked = r->walker->tick;
+    if (r->walker->done || r->walker->sim.tick >= chain_last(r)) end_walk(r);
+    else r->walked = r->walker->sim.tick;
 }
 
 /* THE SWITCH to timeline `id`, a live one (tagpu_replay.c, the switch): the timeline left stamped
@@ -879,7 +879,7 @@ static void switch_to(WIKIREPLAY* r, int id)
 {
     char err[256];
     int a[RECR_TIMELINES], b[RECR_TIMELINES], na, nb, ka = 0, kb = 0, same, T;
-    const int t = r->game->tick;
+    const int t = r->game->sim.tick;
     r->tl[r->selected].used = r->tick;
     r->pick = WIKI_PICKER_CLOSED;
     na = chain_of(r, r->selected, a);
@@ -963,7 +963,7 @@ static void take_over(WIKIREPLAY* r, int h)
     r->G = 0;
     r->back = r->clock;
     r->tk_full = before >= REC_FORK_LIMIT;
-    r->quiet = r->game->snd_total;
+    r->quiet = r->game->sim.snd_total;
     r->dt = r->pick_R - 1;
     toast_of(r, WIKI_TOAST_TAKING_OVER, r->pick_R - 1, -1, h);
 }
@@ -987,7 +987,7 @@ static int pick_act(WIKIREPLAY* r, int c, int value)
         return 1;
     }
     if (c != WIKI_HUD_TAKEAS) return 0;
-    if (r->pick != WIKI_PICKER_OPEN || value < 0 || value >= r->game->nseat || value >= WIKI_SEATS || r->game->econ[value].units == 0)
+    if (r->pick != WIKI_PICKER_OPEN || value < 0 || value >= r->game->sim.nseat || value >= WIKI_SEATS || r->game->sim.econ[value].units == 0)
         r->ignored++;
     else {
         r->pick = WIKI_PICKER_CLOSED;
@@ -1052,7 +1052,7 @@ static int lane_act(WIKIREPLAY* r, int c, int value)
    with the new eviction or closes it. */
 static void pick_fill(WIKIREPLAY* r)
 {
-    const int p = r->target >= 0 ? r->target : r->game->tick;
+    const int p = r->target >= 0 ? r->target : r->game->sim.tick;
     PLAN q;
     int ok;
     if (r->pick == WIKI_PICKER_ASKED) {
@@ -1068,13 +1068,13 @@ static void pick_fill(WIKIREPLAY* r)
         r->pick_parent = q.parent;
         r->pick_tl = r->selected;
         r->pick_serial = r->serial;
-        if (!(r->target < 0 && r->game->tick + 1 == r->pick_R)) seek(r, r->pick_R - 1);
+        if (!(r->target < 0 && r->game->sim.tick + 1 == r->pick_R)) seek(r, r->pick_R - 1);
         if (r->failed) return;
         r->pick = WIKI_PICKER_SEEKING;
     }
     if (r->pick == WIKI_PICKER_SEEKING) {
-        if (r->target < 0 && r->game->tick + 1 == r->pick_R) r->pick = WIKI_PICKER_OPEN;
-    } else if (r->pick == WIKI_PICKER_OPEN && (!r->paused || r->target >= 0 || r->game->tick + 1 != r->pick_R))
+        if (r->target < 0 && r->game->sim.tick + 1 == r->pick_R) r->pick = WIKI_PICKER_OPEN;
+    } else if (r->pick == WIKI_PICKER_OPEN && (!r->paused || r->target >= 0 || r->game->sim.tick + 1 != r->pick_R))
         r->pick = WIKI_PICKER_CLOSED;
     if (r->pick != WIKI_PICKER_CLOSED && r->selected != r->pick_tl) r->pick = WIKI_PICKER_CLOSED;
     if ((r->pick == WIKI_PICKER_SEEKING || r->pick == WIKI_PICKER_OPEN) && r->serial != r->pick_serial) {
@@ -1132,7 +1132,7 @@ static int teams_headed(const WIKIREPLAY* r)
 {
     const WIKISCENE* sc = scene_of(r);
     int n[WIKI_SEATS] = { 0 }, k, t, nteam = 0, big = 0;
-    for (k = 0; k < r->game->nseat && k < WIKI_SEATS; k++) {
+    for (k = 0; k < r->game->sim.nseat && k < WIKI_SEATS; k++) {
         t = k < sc->nseat ? sc->seat[k].team : k;
         if (t < 0 || t >= WIKI_SEATS) t = k;
         nteam += n[t]++ == 0;
@@ -1251,7 +1251,7 @@ static void make_pass(WIKIREPLAY* r, int g)
 static void pl_tail(WIKIREPLAY* r)
 {
     int g, x, z, v, due = 0;
-    if (r->target < 0) r->shown = r->game->tick;
+    if (r->target < 0) r->shown = r->game->sim.tick;
     g = r->shown;
     if (r->jump_req >= 0) {
         if (cam_of(r, r->jump_req, g, &x, &z)) {
@@ -1280,8 +1280,8 @@ static void pl_tail(WIKIREPLAY* r)
         }
         if (due) make_pass(r, g);
         if (r->failed) return;
-        if (r->sight >= 0 && r->sight < r->game->nseat) {
-            const WIKIECON* e = &r->game->econ[r->sight];
+        if (r->sight >= 0 && r->sight < r->game->sim.nseat) {
+            const WIKIECON* e = &r->game->sim.econ[r->sight];
             r->p_e = e->e;
             r->p_m = e->m;
             r->p_emax = e->emax;
@@ -1309,7 +1309,7 @@ static void pl_tail(WIKIREPLAY* r)
 static void seek_end(WIKIREPLAY* r)
 {
     if (r->target < 0 && r->pend) {
-        r->click_from = r->game->tick;
+        r->click_from = r->game->sim.tick;
         r->pend = 0;
     }
 }
@@ -1322,9 +1322,9 @@ static void stat_walk(WIKIREPLAY* r)
     const WIKISIM* w = r->walker;
     int k;
     if (!r->players) return;
-    while (r->npt < WIKI_STAT_PTS && w->tick >= r->pbase + r->npt * r->period) {
-        for (k = 0; k < r->stat_nseat && k < w->nseat; k++) {
-            const WIKIECON* z = &w->econ[k];
+    while (r->npt < WIKI_STAT_PTS && w->sim.tick >= r->pbase + r->npt * r->period) {
+        for (k = 0; k < r->stat_nseat && k < w->sim.nseat; k++) {
+            const WIKIECON* z = &w->sim.econ[k];
             float* o = r->sv[r->npt][k];
             o[0] = (float)z->mi;
             o[1] = (float)z->ei;
@@ -1439,7 +1439,7 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     if (!r->live) {
         publish(r);
         stat_walk(r);
-        if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
+        if (r->walker->done || r->walker->sim.tick >= chain_last(r)) end_walk(r);
     } else {
         /* the original timeline; the memo before the level's first frame: seat 0's stored values
            (its settings), no rate read, the DisplayTimer 0 as in a record no frame has drawn
@@ -1475,14 +1475,14 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
     if (r->done) return;
     r->tick++;
     if (r->walker && !r->bg) {
-        n = chain_last(r) - r->walker->tick < WIKI_REPLAY_WALK ? chain_last(r) - r->walker->tick : WIKI_REPLAY_WALK;
+        n = chain_last(r) - r->walker->sim.tick < WIKI_REPLAY_WALK ? chain_last(r) - r->walker->sim.tick : WIKI_REPLAY_WALK;
         for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) {
             publish(r);
             stat_walk(r);
         }
         if (!r->failed) {
-            if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
-            else r->walked = r->walker->tick;
+            if (r->walker->done || r->walker->sim.tick >= chain_last(r)) end_walk(r);
+            else r->walked = r->walker->sim.tick;
         }
         r->done = is_done(r);
         return;
@@ -1539,23 +1539,23 @@ int tagpu_wikireplay_cost(const WIKIREPLAY* r)
     int n, w;
     const int last = chain_last(r);
     if (r->done) return 0;
-    if (r->walker && !r->bg) return last - r->walker->tick < WIKI_REPLAY_WALK ? last - r->walker->tick : WIKI_REPLAY_WALK;
+    if (r->walker && !r->bg) return last - r->walker->sim.tick < WIKI_REPLAY_WALK ? last - r->walker->sim.tick : WIKI_REPLAY_WALK;
     if ((!r->waiting || r->target < 0) && trip_acts(r, r->clock + 1)) return step_max();
     if (r->live) {
-        if (r->rw == WIKI_RW_IDLE) return r->game->tick < r->end && !r->game->done;
+        if (r->rw == WIKI_RW_IDLE) return r->game->sim.tick < r->end && !r->game->done;
         if (r->rw != WIKI_RW_PAST || r->target < 0 || !r->past) return 0;
-        n = r->target - 1 - r->past->tick;
+        n = r->target - 1 - r->past->sim.tick;
         return n < WIKI_REPLAY_SEEK ? n : WIKI_REPLAY_SEEK;
     }
-    if (r->target >= 0) n = r->target - r->game->tick < WIKI_REPLAY_SEEK ? r->target - r->game->tick : WIKI_REPLAY_SEEK;
+    if (r->target >= 0) n = r->target - r->game->sim.tick < WIKI_REPLAY_SEEK ? r->target - r->game->sim.tick : WIKI_REPLAY_SEEK;
     else if (r->paused) n = 0;
     else {
         n = (r->acc + r->speed) / 10;
-        if (n > last - r->game->tick) n = last - r->game->tick;
+        if (n > last - r->game->sim.tick) n = last - r->game->sim.tick;
     }
     if (!r->walker) return n;
     /* the background walk's share: what is left of WIKI_REPLAY_WALK, to the chain's last */
-    w = WIKI_REPLAY_WALK - n < last - r->walker->tick ? WIKI_REPLAY_WALK - n : last - r->walker->tick;
+    w = WIKI_REPLAY_WALK - n < last - r->walker->sim.tick ? WIKI_REPLAY_WALK - n : last - r->walker->sim.tick;
     return n + (w > 0 ? w : 0);
 }
 
@@ -1620,13 +1620,13 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->caption = r->caption;
     v->failed = r->failed;
     v->ignored = r->ignored;
-    v->game_tick = r->game ? r->game->tick : 0;
+    v->game_tick = r->game ? r->game->sim.tick : 0;
     v->end = r->end;
     v->playhead = r->target >= 0 ? r->target : v->game_tick;
     v->paused = r->paused;
     if (r->live) {
         v->playhead = now_tick(r);
-        v->paused = r->rw != WIKI_RW_IDLE || r->game->tick >= r->end || r->game->done;
+        v->paused = r->rw != WIKI_RW_IDLE || r->game->sim.tick >= r->end || r->game->done;
     }
     v->speed = r->speed;
     v->acc = r->acc;
@@ -1690,7 +1690,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
         v->nsaved = r->nsaved;
         memcpy(v->saved, r->saved, sizeof v->saved);
         v->bg = r->bg;
-        v->walker_tick = r->walker ? r->walker->tick : -1;
+        v->walker_tick = r->walker ? r->walker->sim.tick : -1;
         v->tk_full = r->tk_full;
     }
     if ((v->players = r->players)) {
@@ -1736,7 +1736,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->selected = r->selected;
     v->human = r->human;
     v->has_past = r->past != NULL;
-    v->past_tick = r->past ? r->past->tick : 0;
+    v->past_tick = r->past ? r->past->sim.tick : 0;
     v->past_target = r->past ? r->target : -1;
     v->past_gen = r->past ? r->pgen : 0;
     v->be = r->be;

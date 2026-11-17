@@ -165,10 +165,15 @@ TADR re-creates the stock initialiser in C: 8 vertices, 6 faces, `+0x1C = 0x502C
 companions at `0x502BF8+8k`. The stock loop still initialises the dead inline array, which is
 harmless. **Missed sites: none** (all `+0x1AB9F` references are those four).
 
-**SIM-RNG-coupled (DIS).** In `0x421700`, when the aux scan fails, `0x421802…0x421808` skips the
-six sim-RNG draws. So aux fullness decides the draw count too. **TADR's own comment ("this pool is
-visual-only, so allocation order cannot affect simulation determinism") is half right.** Order
-does not matter; success does.
+**Not SIM-RNG-coupled while the caps are equal (DIS).** In `0x421700`, a failed aux scan would
+leave at `0x421802…0x421808` and skip the sim-RNG draws, but the scan cannot fail while the aux
+records number the explosion cap: the taken aux records are never more than the explosion records
+with a body, and the scan runs only below the explosion cap (`0x42176F`), so one record is always
+free (the invariant and every place that keeps it: the engine map's weapons page, *The shatter and
+the effect pools' bounds*). TADR raises both to 3000, as we do, and `tagpu_patches.c` pins the two
+equal with a `_Static_assert`. **TADR's own comment ("this pool is visual-only, so allocation order
+cannot affect simulation determinism") holds** while the caps are equal: neither the order nor the
+fullness reaches the draws.
 
 **Our code:** nothing reads `+0x1AB9F` directly. The debris gather follows `sys+0x2C`
 (`tagpu_packet_pub.c:1158ff`), so a relocated record is reached by pointer. With TADR's scheme it is
@@ -809,7 +814,7 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | projectiles 300→3000 | **SIM** (damage-bearing object refused at cap) | yes (`0x499A30` from load) | alloc + clear, 10 caps, compaction frame (probe + 3 displacements) | none (61 refs, all `0x12C`, all frames) | `PROJ_COUNT`, `TAGPU_PK_MAX_PROJ`, packet validator, gather clamp | we silently draw 300; MP effect of refused remote projectiles unknown |
 | explosions 300→3000 | cap gates **sim-RNG draws** in `0x421700` | reset per level; relocated to a static | 7 base refs + table reload + 2 caps | none | `OFF_NEXPL`/`OFF_EXPL`/`EXPL_COUNT`, `MAX_EXPL`, validator | **we draw no explosions** after relocation; RNG divergence |
 | flying pieces 100→1000 | visual (no RNG on the slot path) | per level | 7 base + 6 end + backing + reset | none (the five `this` loads correctly kept) | `VA_PSYS_*`, `MAX_DEBRIS`, validator | **we draw no debris** after relocation |
-| aux records 300→3000 | fullness gates **sim-RNG draws** | per level, relocated to a static | 2 allocators replaced, C re-init | none | none (pointer-followed) | TADR's "visual-only" comment is wrong on count |
+| aux records 300→3000 | visual while the aux records number the explosion cap: a record is always free below it (§4) | per level, relocated to a static | 2 allocators replaced, C re-init | none | none (pointer-followed) | none while the caps are equal; a `_Static_assert` pins them |
 | units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
@@ -820,8 +825,8 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | wreck records 2048→8192 (**not TADR's**) | **SIM**: corpses, and features dying or reclaimed | per level (`0x421F20`) | none — TADR leaves it | — | `WR_COUNT` ×2, `TAGPU_PK_MAX_WRECKS`, `PK_RESERVE`, `TAGPU_PD_MAXHAND` | a full pool refuses corpses; stock's paid-for feature left standing is fixed at `0x423651` (§12) |
 
 **Notes this pass corrected**, both in landing 1: `tagpu_packet_pub.c` said "twelve more" `0x190`
-sites where there are twenty, and the engine map now records that the explosion cap and the debris
-records' fullness gate sim-RNG draws.
+sites where there are twenty, and the engine map now records that the explosion cap gates sim-RNG
+draws (the debris records' fullness cannot, while they number the cap: §4).
 
 **Settled since, by landing 1** [MEASURED 2026-09-23]: both callers of `0x49AE20` are game-thread,
 and the stack probe was taken anyway. Two peers on the same build agree past every effect cap: paused,

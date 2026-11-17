@@ -202,6 +202,10 @@ def main():
     out = args.out.resolve()
     if any(out == root or root in out.parents for root in (compat.TREE, compat.main_checkout())):
         parser.error('output must be outside the repository')
+    # its host and joiner meet in one lobby: inside a run (runlock.py run) they need two seats at once
+    why = compat.runlock.together(2, 'cob_peer_probe') if compat.runlock.holding() else None
+    if why:
+        parser.error(f'could not run: {why}')
     out.mkdir(parents=True, exist_ok=False)
     report = run(out, args.setup, args.dll.resolve(), args.port, args.quarantine)
     print(json.dumps({k: v for k, v in report.items() if k != 'peers'}, indent=2))

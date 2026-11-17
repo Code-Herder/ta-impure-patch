@@ -33,6 +33,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
+#include "tagpu_worldq.h"
 #include "tagpu_route.h"
 #include "tagpu_sweep.h"
 #include "tagpu_board.h"
@@ -46,6 +47,9 @@
 #include "tagpu_allysight.h"
 #include "tagpu_allypanel.h"
 #include "tagpu_seatcontact.h"
+#include "tagpu_impai.h"
+#include "tagpu_income.h"
+#include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -233,8 +237,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: the flip observer AND the UI renderer's leaves (Phase E,
            tagpu_gui.h). TWO INSTALLS: the observer of the flip 0x4C63A0 goes
            in whenever the engine's bytes match there, with NO trigger, because
-           it is the only host of the on-demand trigger family and therefore of
-           every `tacli` verb and of the key/click injection. "tagpu_gui.on"
+           it hosts the on-demand trigger family and therefore every `tacli`
+           verb and the key/click injection (a no-draw test's undrawn frames
+           reach the family through tagpu_gui_nodraw_frame instead). "tagpu_gui.on"
            gates the 17 LEAVES, the arena and the census, and those are still
            byte-matched all-or-nothing. Every detour calls the original, so the
            engine draws exactly as before — we only watch. The leaves it
@@ -334,6 +339,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            before the registry closes its lever list for the same reason. */
         tagpu_rec_lever_init();
 
+        /* tagpu: ImpAI's test levers (tagpu_impai.h), read before the registry closes its lever list
+           for the same reason; the install below acts on them. */
+        tagpu_impai_levers();
+
+        /* tagpu: the handicap ladder's income lever (tagpu_income.h): reads tagpu_impai_income.on before the
+           registry closes its lever list, and redirects the economy pass's call 0x46555A, byte-matched,
+           disjoint from every site above; with no lever every seat's pass runs as stock. */
+        tagpu_income_init();
+
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
            read, and closes the list: a lever or TLS index taken later is logged by name. */
@@ -371,6 +385,17 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            tagpu_replay.play asked for the level; the replay's step rides B2's stub. */
         tagpu_replay_init();
 
+        /* tagpu: ImpAI's seam (tagpu_impai.h), only once replay's sites went in, the level
+           init's PLAYERS call among them, which runs ImpAI's level init, and the teardown wrap
+           (tagpu_reclaim_init above), which runs its level end: the players phase's call of the
+           stock AI tick, 0x465031, is byte-matched and redirected to a wrapper that always calls
+           the stock tick, so the recorder's observer on that tick's entry 0x408C40 still runs. */
+        tagpu_impai_init();
+
+        /* tagpu: the SKIRMISH seat button's ImpAI step (tagpu_skirmish.h), after the seam, whose
+           availability it reads: two call-site redirects in the screen's handler and init. */
+        tagpu_skirmish_init();
+
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport
            shrunk by exactly as much. One observer on the background loader
@@ -395,6 +420,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_resource_init();
         /* the in-play handler's shared hooks, before every one of their clients (tagpu_route.h) */
         tagpu_route_init();
+        /* the build cursor's site-test call decoded, once the patches have written it (tagpu_worldq.h) */
+        tagpu_worldq_init();
         /* after the resource module: its observer on 0x4197D0 must come first (tagpu_place.h) */
         tagpu_place_init();
         tagpu_sweep_init();

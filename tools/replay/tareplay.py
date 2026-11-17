@@ -3,20 +3,36 @@
 puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
 
     tools/replay/tareplay.py run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
-                                            [--cover] [--out DIR]
+                                            [--cover] [--out DIR | --resume DIR] [--gdi]
     tools/replay/tareplay.py list
-    tools/replay/tareplay.py landing [--base main] [--check] [-j N]   the landing tier
-    tools/replay/tareplay.py broad [--release DLL] [-j N]             the broad tier
+    tools/replay/tareplay.py landing [--base main] [--check] [-j N] [--resume DIR]
+                                                                      the landing tier
+    tools/replay/tareplay.py broad [--release DLL] [-j N] [--resume DIR]
+                                                                      the broad tier
     tools/replay/tareplay.py features [--check DIR]                   the SIM_FEATURE regions
     tools/replay/tareplay.py measure SCENARIO... [--end T] [-j N]     what each one reaches
     tools/replay/tareplay.py takeover FIXTURE [--player P] [--at T]   L, K and F alone
 
 `landing` runs the fixtures the changed SIM_FEATURE regions name (every fixture when the
 recorder's own files change) on the coverage build, plays the two-player game on both coverage
-builds when the recorder or its multiplayer half changed, checks that they reached every changed
+builds when the recorder, its multiplayer half or ImpAI's network play changed (the last in its
+ImpAI form, multiplayer_group), checks that they reached every changed
 function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
 such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
 what the tier never exercised.
+
+`--resume DIR` goes on with a run of `run`, `landing` or `broad` an earlier sitting left in DIR,
+stopped or cut short: each test group (and each two-player group) whose PASS or FAIL DIR holds
+under this sitting's key is read back, a FAIL as a FAIL, and every other one is played whole
+(*resuming a run*, above the Run class). The summary, the coverage check and the note read the
+union; the note names the groups kept. A DIR that does not exist yet is made, and the first
+sitting in it plays every group; a DIR that cannot be a folder, and a worktree with changes, are
+refused before anything is selected.
+
+`run --gdi` plays every lane with GDI (GDI_LEVER) and takes no GPU token, so the AI's fixtures
+can be played while the GPU is reserved: the record, the puppets, the round trips and the seeks
+of one run share the renderer, so no comparison it makes crosses two. The summary's first line
+names the renderer. `landing` and `broad` play the players' renderer.
 
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
@@ -27,7 +43,12 @@ recording and agrees at every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
-construction events inside the live/puppet comparison on every commit's random seed.
+construction events inside the live/puppet comparison on every commit's random seed. Its `first`
+and `last_max` keep every point clear of its human's interface work -- a chat line typed, a
+console command -- which writes the recording machine's interface state (the chat line's length,
+the key ring) and nothing a puppet writes, so the images gate fails it inside [T1, Tlast]
+whatever the seed: `first` puts every point after the work, `last_max` every point at or before
+a GameTime ahead of the next.
 Four processes, each a game of its own:
 
     L  live      the fixture recorded, dumps l<T1> and l<Tlast>
@@ -40,8 +61,9 @@ Four processes, each a game of its own:
 and a fifth where fixtures.json gives the fixture `"watch": true`:
 
     W  watch     the playing a player starts and drives (watch_lane): from the main menu's
-                 REPLAYS, Watch refuses two edited copies of the recording (another layout
-                 hash; a map no archive has, which the Start refuses), then plays it; the replay
+                 REPLAYS, Watch refuses three edited copies of the recording (another layout
+                 hash; another globals hash; a map no archive has, which the Start refuses), then
+                 plays it; the replay
                  HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
                  play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
                  Sight and Sight again, twice, with clock and camera unchanged and the resource
@@ -76,12 +98,21 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
 and the entry's `checks`, each failing by name: judge, line, orders, ai, fork and victory
 (TAKEOVER_CHECKS states each one's claim).
 
+A fixture fixtures.json gives `"nodraw": true` plays every lane on GDI, and L under THE SHADOW
+(SHADOW_LEVER; tagpu_nodraw.c), NO DRAW and the pose check: on every drawn in-play frame the
+repose's selection an undrawn frame would make is compared with the units the draw itself passes
+to DrawUnit, and beside no-draw every other frame L would skip draws. No-draw never runs on a
+puppet, so the puppets play the recording without either. One check, failing by name: the shadow
+in, frames compared with units drawn in them, none differing, and frames not drawn
+(shadow_verdict).
+
 Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves by -displayfd,
 for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
 another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
 by name or pattern, only by tacli on an instance this run holds, or by the PID it started.
-SIGTERM or Ctrl-C stops the run: no new game starts, each game in progress is stopped at its next
-wait, and every worker stops its instance and its Xvfb. The workers play the games, -j of them at
+SIGTERM or SIGINT stops the run (THE STOP): no new game starts, every worker's game and Xvfb are
+stopped at once, and each worker stops them again once its own last call has returned, so the run
+ends within the bounds of the calls in flight. The workers play the games, -j of them at
 most; the checks run beside them on an offline pool, a fixture's as soon as its last lane ends
 and the forks and rewind lanes' while those lanes play on (*the offline work*), and the summary
 lists every check in the order it was asked for. Exit 0: every check passed; 1: a named
@@ -123,6 +154,9 @@ No check is decided by the wall clock. A wait on a fact is bounded by ACK_S for 
 and, while the level runs, by STALL_S of GameTime standing still (Stall): each catches a hung or
 dead game, never an outcome. A peek the running game has not answered is no progress, not a
 failure: a seek's rebuild, a fork crossing's among them, holds the game thread for one frame. A
+wait for the level's end, given on a held tick T, is bounded at GameTime T + LEVEL_END_TICKS, where
+the engine's end test has ended it (Log.wait_end); a fixture whose scenarios leave that test
+disarmed is refused before a game (objective_left_off). A
 seek's cost is checked on its work, never its time: the iterations it read, the units it made and
 the blocks it decoded, each against the file (W1 to W3, work_verdict).
 
@@ -133,6 +167,7 @@ stay as a player has them.
 import argparse
 import atexit
 import fcntl
+import functools
 import datetime
 import hashlib
 import itertools
@@ -150,7 +185,7 @@ import sys
 import threading
 import time
 import zlib
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -164,8 +199,10 @@ END_SCENARIO = SCENARIOS / "replay-end.json"
 STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limits build
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
+import stall  # noqa: E402  the bound of a wait on a running level (tools/stall.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
-import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
+import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+import dllkey  # noqa: E402  a built DLL's hash less its link time (tools/dllkey.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -199,6 +236,45 @@ DECLINE_LEVER = "tagpu_rec.decline"
 # draws is 1 (mod 30), so on that grid the takeover, the forks and the rewind's fork start where
 # they ask
 EXACT_LEVER = "tagpu_rec.exact"
+# A Worker with `gdi` set launches with this lever in its game folder: the GDI backend, the engine's
+# own stock draw path, and no Vulkan device (tagpu_cfg.c, dd.c). The AI tools' games render so by
+# default, take no GPU tokens and are compared only with other GDI games: the Vulkan lane makes the
+# game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
+# write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
+GDI_LEVER = "tagpu_gdi.on"
+# A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_nodraw.c), a test's GDI pacing,
+# accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the turbo's and
+# whose scoreboard could not write its rank skips DrawGameScreen and runs DrawUnit's repose of the units the
+# draw would reach and what a test reads: the render-options tick, the trigger family, ImpAI's digests, the
+# map's features, the publish and the roster. Screenshots and `tacli ui` then see the last drawn frame, so of
+# tareplay's own lanes only a `nodraw` fixture's L sets it (THE SHADOW).
+NODRAW_LEVER = "tagpu_nodraw.on"
+# the launch's answer to it (tagpu_nodraw.c, tagpu_nodraw_levers and tagpu_nodraw_guard), from line 0
+NODRAW_ACK = r"nodraw: (on at 0x4969CD.*|UNAVAILABLE.*|tagpu_nodraw\.on refused.*)"
+# its account at each level's end (tagpu_nodraw.c, tagpu_nodraw_level_end)
+NODRAW_ACCOUNT = re.compile(r"nodraw: from GameTime (\d+) to (\d+), (\d+) running frames not drawn, "
+                            r"(\d+) drawn for the scoreboard, (\d+) drawn otherwise")
+# THE SHADOW (tagpu_nodraw.c), on L of a fixture with `nodraw`, whose lanes all play on GDI: on every drawn
+# in-play frame the repose's selection is compared with the units the draw itself passes to DrawUnit, and
+# beside NO DRAW every other frame it would skip draws, so L runs undrawn frames and checks drawn ones. Its
+# answer, its differences by name, its progress every 600 frames compared and its account at each level's
+# end. L launches with POSE_LEVER too, the pose check's period: its lines are read by nodraweq.py, logged here
+# so the group reaches the check's code.
+SHADOW_LEVER = "tagpu_ndshadow.on"
+POSE_LEVER = "tagpu_posecheck.on"
+# The temporary sight records' cap, a test lever (tagpu_patches.c, fix_sight_cap): a simulation lever the
+# recording's header names, which only the packed calibration lane sets, after `place` (tools/tasim/engrun.py,
+# THE PACKED LANE). Every placement and close removes it, so no fixture's game runs under a cap it did not ask for.
+SIGHTCAP_LEVER = "tagpu_sightcap.on"
+# The harness's fixed seeds (tagpu_patches.c, A HARNESS'S RANDOM STREAMS): every Worker launch writes it, so every
+# level a harness plays starts from fixed random states and a clearing apply seeds them from its wire's seed; the
+# DLL honours it in a test launch only. A player's launch, `tacli launch --defaults` and the compatibility
+# suite never write it and keep stock's seeds. close() removes it, so a launch by hand between runs plays as usual.
+SEEDS_LEVER = "tagpu_seeds.on"
+SHADOW_ACK = r"nodraw: (shadow on at 0x469A00.*|shadow UNAVAILABLE.*|tagpu_ndshadow\.on refused.*)"
+SHADOW_COUNT = re.compile(r"nodraw: shadow (?:at|from) GameTime \d+(?: to \d+)?, (\d+) frames compared, "
+                          r"(\d+) differed, (\d+) not checked, (\d+) units drawn in them")
+SHADOW_DIFFERS = "nodraw: shadow DIFFERS"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
 GAMETIME = "*0x511DE8+0x38A47:4"
@@ -225,8 +301,31 @@ TAKEOVER_CHECKS = {
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
 TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after Tlast
 ACK_S = 60                      # a one-frame answer: an arm, a dump's line, a peek, a screen
-PEEK_UNANSWERED = "no peek lines"   # tacli peek's words when the game did not answer in its wait
 STALL_S = 120                   # GameTime standing still this long while the level runs: a hung game
+# THE LEVEL'S END. A level whose end was given while it was held at GameTime T -- the end scenario
+# clearing every unit, a takeover's `+iwin` -- is torn down by GameTime T + LEVEL_END_TICKS, so a
+# wait for its end is bounded there in game ticks (Log.wait_end), however slow the machine.
+# DISASSEMBLED 2026-11-13 from pristine/TotalA.exe.pristine:
+# - the end tests run on the controlled player's pass of the players phase 0x464F80, the tick
+#   GameTime reaches its record's +0xF0, which then takes 30 more (0x46507D..0x465092): the first
+#   pass after T falls at T+1..T+30;
+# - a test that answers 1 (defeat 0x490360 at 0x46516D, victory 0x490230 at 0x46586F) steps the
+#   countdown main+0x39239, -1 from the level's entry (0x498199): below 0 it is set to 4 (ebp,
+#   0x464F99) and the pass ends (0x46518B, 0x46588D); else it is decremented, and the pass that
+#   takes it below 0 sets the stop bit 2 of main+0x3923B (0x465833 by way of 0x465643 in a
+#   skirmish, 0x4658B4) -- the sixth pass, 150 ticks after the first, so T+151..T+180. +IWin sets
+#   the bit at once (0x416A22);
+# - the in-play handler tears the level down on that bit (0x4995FC) and a frame runs at most 5
+#   ticks (the scheduler's clamp 0x4953F5; the turbo's k is 1 to 5), so the level ends at most 4
+#   ticks past the pass that set it.
+# MEASURED 2026-11-13, a landing gate's 79 L lanes, the end scenario at T: the recorder ended at
+# T+180 in 78 and T+165 in one. The margin is one more pass: it holds the frame's ticks past the
+# setting pass, and a countdown misread by one pass would move the end by exactly one pass.
+LEVEL_END_TICKS = 180 + 30
+# A level's teardown 0x491B60, logged at its entry on the game thread (tagpu_reclaim.c,
+# reclaim_teardown_pre, and the recorder's end inside it) before the shell's clock 0x44A696 can
+# move GameTime again (engine/network.md, GameTime's five writers)
+LEVEL_ENDED = re.compile(r"reclaim: level teardown|recorder: ended after")
 SEEK_LEAD = 123                 # the reader's lead before a seek's target (tagpu_replay.c, EYE_LEAD)
 JUDGE_TICKS = 240               # the takeover judge's sample, this many ticks after T: its old 4 s
                                 # at speed 20
@@ -253,8 +352,33 @@ def main_checkout() -> Path:
 
 INSTANCES = main_checkout() / "tagpu" / "instances"
 PRINT = threading.Lock()
-STOP = threading.Event()        # set by SIGTERM / Ctrl-C: every wait gives up, no job starts
+STOP = threading.Event()        # set by THE STOP: every wait gives up, no job starts
 J = tarun.NULL                  # the run's journal once its games start (run_threads)
+
+# THE STOP. SIGINT and SIGTERM end a run of games, in this order: STOP is set, so every wait gives up
+# and no job starts; every live worker's game is stopped through its instance and its Xvfb by the
+# Popen that started it (Worker.halt); and each worker thread, once its own call in flight has
+# returned, stops them again (Worker.close). That last stop is what holds the claim: a worker's
+# calls run one after another, so the game a launch in flight starts exists before its worker's
+# close looks for it. The halt only makes the stop prompt. A game's keeper ends with its game
+# (runlock.py, THE KEEPER), so neither stop names a keeper.
+#
+# The signal handler does nothing (SignalStop). Python runs a handler on the main thread between two
+# bytecodes, wherever that thread is, and a signal that comes during a handler runs a second one
+# inside it: a handler that takes a lock the main thread may hold -- PRINT inside say(), STOP's own
+# condition -- can wait for itself forever, and one that writes can fail on a closed pipe. Either
+# leaves STOP unset when the handler sets it after its line, and every worker plays on: a landing
+# gate under `timeout -s INT` logged its `stopping:` line and then nothing for 6.5 min, nine games
+# still running and two lanes still dumping (MEASURED 2026-11-14, the gate's console and dump times)
+# [INFERRED: which of the two held the handler up]. So the C side's wakeup byte wakes a thread of
+# its own, which sets STOP before anything else and runs the rest with ordinary locks.
+#
+# tacli runs in a session of its own (tacli()): a signal sent to the run's process group -- Ctrl-C at
+# the terminal, `timeout` -- reaches this process alone, never a launch midway, whose keeper would
+# then start a game nobody waits for. Once STOP is set, a new tacli call starts only to stop a game.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+LIVE = {}                       # {id: worker} whose games THE STOP halts, under LIVE_LOCK
+LIVE_LOCK = threading.Lock()
 
 
 def say(*a):
@@ -281,6 +405,86 @@ def nap(s):
         raise CouldNotRun("the run was stopped")
 
 
+def _noted(signum, frame):
+    """THE STOP's handler: nothing. The signal's wakeup byte is the whole message (SignalStop)."""
+
+
+class SignalStop:
+    """SIGINT and SIGTERM turned into a call of `on_signal(signal)` on a thread of its own (THE STOP).
+    The C handler writes each signal's number to a pipe (signal.set_wakeup_fd) and the Python handler
+    does nothing, so nothing runs on the interrupted main thread. The wakeup descriptor is set before
+    the handlers, so no signal finds the handler without the byte. Made on the main thread, as both
+    calls must be; close() puts back what it found."""
+
+    def __init__(self, on_signal):
+        self.r, self.w = os.pipe()
+        os.set_blocking(self.w, False)      # the C handler must never block on a full pipe
+        self.fd_before = signal.set_wakeup_fd(self.w, warn_on_full_buffer=False)
+        self.before = {s: signal.signal(s, _noted) for s in STOP_SIGNALS}
+        self.thread = threading.Thread(target=self._watch, args=(on_signal,), name="tareplay-stop",
+                                       daemon=True)
+        self.thread.start()
+
+    def _watch(self, on_signal):
+        while True:
+            try:
+                got = os.read(self.r, 64)
+            except OSError:
+                return
+            if not got:
+                return                      # close(): the write end is gone
+            for b in got:
+                if b in STOP_SIGNALS:
+                    on_signal(signal.Signals(b))
+
+    def close(self):
+        for s, h in self.before.items():
+            signal.signal(s, h)
+        signal.set_wakeup_fd(self.fd_before)
+        os.close(self.w)
+        self.thread.join()
+        os.close(self.r)
+
+
+_SIGNALS = None                         # the process's SignalStop, from its first run_threads on
+
+
+def watch_signals():
+    """THE STOP armed for the rest of the process, once: a run's report after its games still stops
+    by STOP rather than by an exception on the main thread."""
+    global _SIGNALS
+    if _SIGNALS is None:
+        _SIGNALS = SignalStop(stop_run)
+
+
+def unwatch_signals():
+    """The handlers and the wakeup descriptor put back (for a test)."""
+    global _SIGNALS
+    if _SIGNALS is not None:
+        _SIGNALS.close()
+        _SIGNALS = None
+
+
+def stop_run(signum):
+    """THE STOP, on the signal's own thread: STOP first, so no failure of what follows can leave a
+    worker playing on, then the line, then every live worker's game and Xvfb, all at once."""
+    if STOP.is_set():
+        return
+    STOP.set()
+    try:
+        say(f"stopping on {signal.Signals(signum).name}: no new game starts; every worker's game "
+            f"and Xvfb are stopped now")
+    except OSError:
+        pass                            # a closed output costs the line, never the stop
+    with LIVE_LOCK:
+        live = list(LIVE.values())
+    halts = [threading.Thread(target=w.halt, name=f"halt-{w.name}", daemon=True) for w in live]
+    for t in halts:
+        t.start()
+    for t in halts:
+        t.join()
+
+
 # ---- Xvfb and the instance ------------------------------------------------------------------
 
 def xvfb_reply(fd):
@@ -304,14 +508,28 @@ TAKEN = threading.Lock()
 def start_xvfb():
     """A server owned only once its -displayfd pipe confirms the number it bound, in :300..:399,
     skipping any number with a socket or a lock: a socket alone is not an acknowledgement, and a
-    lost race leaves the number to its winner."""
+    lost race leaves the number to its winner.
+
+    -noreset: THE DISPLAY NEVER REGENERATES, so it accepts every client that connects. A default
+    X server resets when its last client leaves, and a client that connects during the reset is
+    dropped -- and a worker's display is left with no client between every two games, when the
+    harness's lone xdpyinfo/xdotool calls come and go just as the launch's Wine processes
+    connect. Wine then has no display driver: the game's CreateWindowExA fails ("no driver could
+    be loaded"), and it ends with code 0 before a window (TA's "Environment Initialization
+    Failed" path, 0x4B5C44). MEASURED 2026-11-12 (.data/impai/runs/launch): raw clients
+    connecting while others leave, 302 of 1200 dropped by a default server, 0 of 1200 with
+    -noreset; 12 instances launched 30 times each beside three such clients a display, 17 of 360
+    launches ended that way on default servers (every server alive, Wine's "no driver" each
+    time), 0 of 360 with -noreset. A reset also leaks one render-node descriptor in the server
+    (401 after 400 lone clients)."""
     with TAKEN:
         for n in DISPLAYS:
             if Path(f"/tmp/.X11-unix/X{n}").exists() or Path(f"/tmp/.X{n}-lock").exists():
                 continue
             rfd, wfd = os.pipe()
             p = subprocess.Popen(["Xvfb", f":{n}", "-displayfd", str(wfd), "-screen", "0",
-                                  "1280x1024x24", "-nolisten", "tcp"], pass_fds=(wfd,),
+                                  "1280x1024x24", "-nolisten", "tcp", "-noreset"],
+                                 pass_fds=(wfd,),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
             os.close(wfd)
@@ -342,8 +560,12 @@ INPUT_TIMEOUT = 150
 
 
 def tacli(*args, timeout=180):
+    """(exit code, output) of one tacli command, run in a session of its own and refused once the
+    run is stopped unless it stops a game (THE STOP)."""
+    if STOP.is_set() and args[0] != "stop":
+        raise CouldNotRun("the run was stopped")
     r = subprocess.run([sys.executable, str(TACLI), *map(str, args)], capture_output=True,
-                       text=True, timeout=timeout)
+                       text=True, timeout=timeout, start_new_session=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -373,7 +595,19 @@ def turbo_lane(fix, proc, k):
 
 
 class Worker:
-    """One tacli instance on one Xvfb, for the whole run."""
+    """One tacli instance on one Xvfb, for the whole run.
+
+    THE CAP'S REFUSALS. `caps` reads every line the games in the instance's folder log, from
+    watch_caps() on, for refusals of the GPU memory cap (talog.CapWatch): it is read at each
+    launch (place), each collection and each stop, so a game's lines after its last wait are read
+    once the game has ended, whichever lane launched it and however often. Run.job watches each
+    lane and fails it by name (cap_failure); every other tool that plays on a Worker asks
+    cap_failure once its games have ended. A Log's waits fail a game at the line itself."""
+
+    caps = None
+    nodraw = False                      # the next launch skips its undrawn frames' draw (NODRAW_LEVER)
+    shadow = False                      # ... checks its drawn frames' repose selection (SHADOW_LEVER)
+    posecheck = False                   # ... logs its pose checks (POSE_LEVER)
 
     def __init__(self, out, game_speed=TEST_GAME_SPEED):
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
@@ -382,6 +616,7 @@ class Worker:
         self.turbo = 0
         self.held = False               # the next launch holds its level (THE LAUNCH'S HOLD)
         self.exact = False              # the next launch records the exact stream (EXACT_LEVER)
+        self.gdi = False                # the next launch renders with GDI (GDI_LEVER)
         self.lane = None                # (fixture, lane) while a job plays, for the journal
         self.lock = None
         self.last_collection = None
@@ -398,6 +633,7 @@ class Worker:
         if not self.lock:
             raise CouldNotRun("every tareplay-<k> instance is held by another run")
         self.out = out
+        self.display_lock = threading.Lock()    # the Xvfb's one stop (stop_display)
         try:
             self.xvfb = start_xvfb()
         except BaseException:
@@ -421,13 +657,50 @@ class Worker:
             self.lock.close()
             raise
         say(f"{self.name} on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
+        self.watch_caps()
+
+    def watch_caps(self):
+        """The cap's refusals read from now on (THE CAP'S REFUSALS), none read before."""
+        self.caps = talog.CapWatch(self.gamedir)
+
+    def sweep_caps(self):
+        if self.caps is not None:
+            self.caps.sweep()
+
+    def cap_failure(self) -> "str | None":
+        """The failure the cap's refusals since watch_caps() name, the games' last lines read; None
+        when there is none."""
+        return self.caps.failure() if self.caps is not None else None
 
     def close(self):
-        """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
+        """The instance stopped and left unheld, and no test lever left in its folder: a launch by hand between
+        runs plays as usual, whatever the run's games armed (ImpAI's levels and the income lever among them)."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
-        stop_xvfb(self.xvfb)
+        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER, SEEDS_LEVER):
+            (self.gamedir / lever).unlink(missing_ok=True)
+        clear_impai_levers(self.gamedir)
+        self.stop_display()
         self.lock.close()
+
+    def halt(self):
+        """THE STOP's halt, from the signal's thread while this worker's own thread may sit in a call:
+        the game stopped through the instance this run holds, then the Xvfb by the Popen that started
+        it. The worker's thread stops both again in close() once its call has returned."""
+        try:
+            rc, detail = tacli("stop", self.name, "--hard", timeout=120)
+            if rc:
+                say(f"{self.name}: the stop: {last(detail)}")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            say(f"{self.name}: the stop: {e}")
+        finally:
+            self.stop_display()
+
+    def stop_display(self):
+        """The Xvfb stopped and reaped once, whichever of halt() and close() comes first: the lock
+        makes the second find it reaped, so it never signals a pid the first has let go."""
+        with self.display_lock:
+            stop_xvfb(self.xvfb)
 
     def stop(self, hard=False):
         if hard:
@@ -435,6 +708,7 @@ class Worker:
             if rc or self.running():
                 raise CouldNotRun(f"failed game cleanup: {last(detail)}; instance still held")
             self.last_collection = None
+            self.sweep_caps()
             return
         if self.last_collection:
             self.quit()
@@ -447,9 +721,17 @@ class Worker:
             for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
                 shutil.copy2(f, self.last_collection / f.name)
             (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
+
+    @functools.cached_property
+    def instance(self):
+        """tacli's Instance of this worker's instance, one for the run: it knows the game it has
+        found by pid and start time and verifies both at every answer (tacli Instance.pid), so a
+        relaunched game is found again and each call in between costs no process listing."""
+        return _CLI_API.Instance(self.name)
 
     def running(self):
-        return _CLI_API.Instance(self.name).running()
+        return self.instance.running()
 
     def quit(self):
         """The game's exit hook joins its file workers; SIGTERM bypasses it."""
@@ -492,7 +774,10 @@ class Worker:
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
+        self.sweep_caps()               # the game before this launch, read before it rotates on
         self.last_collection = None
+        if self.nodraw and not (self.gdi and self.turbo):
+            raise CouldNotRun("no-draw needs GDI and a turbo k (the DLL refuses tagpu_nodraw.on without them)")
         speed = fixture_speed(fix, self.game_speed)
         rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
         if rc:
@@ -501,7 +786,8 @@ class Worker:
         if len(rows) != 1 or rows[0]["value"] != speed or rows[0]["type"] != 4:
             raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
         say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)"
-            + (f", turbo k={self.turbo}" if self.turbo else "") + (", held" if self.held else ""))
+            + (f", turbo k={self.turbo}" if self.turbo else "") + (", held" if self.held else "")
+            + (", GDI" if self.gdi else "") + (", no draw" if self.nodraw else ""))
         turbo = self.gamedir / "tagpu_turbo.on"
         if self.turbo:
             turbo.write_text(f"{self.turbo}\n")
@@ -518,6 +804,18 @@ class Worker:
             exact.write_text("")
         else:
             exact.unlink(missing_ok=True)
+        gdi = self.gamedir / GDI_LEVER
+        gdi.unlink(missing_ok=True)     # unlinked first: a link the instance holds is never written through
+        if self.gdi:
+            gdi.write_text("")
+        seeds = self.gamedir / SEEDS_LEVER
+        seeds.unlink(missing_ok=True)   # as the GDI lever's
+        seeds.write_text("")
+        for lever, on, text in ((NODRAW_LEVER, self.nodraw, ""), (SHADOW_LEVER, self.shadow, ""),
+                                (POSE_LEVER, self.posecheck, "300")):
+            (self.gamedir / lever).unlink(missing_ok=True)  # as the GDI lever's
+            if on:
+                (self.gamedir / lever).write_text(text)
         refresh = self.gamedir / REFRESH_LEVER
         if fix.get("takeover"):
             refresh.write_text(f"{TAKEOVER_REFRESH}\n")
@@ -531,6 +829,8 @@ class Worker:
         for other in fixtures().values():
             for name in (other.get("content") or {}).get("files", []):
                 (self.gamedir / name).unlink(missing_ok=True)
+        clear_impai_levers(self.gamedir)
+        (self.gamedir / SIGHTCAP_LEVER).unlink(missing_ok=True)
         # A cached catalogue belongs to the previous fixture's installed
         # content. The next launch must resolve its units against its own game.
         _CLI_API._cat_path(_CLI_API.Instance(self.name)).unlink(missing_ok=True)
@@ -562,17 +862,10 @@ class Worker:
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
-    def gametime(self, wait=ACK_S, busy=False):
-        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most. With
-        `busy`, None when the game is running and has not answered: a seek's or a fork crossing's
-        rebuild runs inside one frame (MEASURED 2026-10-12, battle's X lane at a load average of
-        63-87: two fork crossings' seeks of 6.5 s wall each, back to back, and a peek unanswered
-        through tacli's 10 s), so a running game that has not answered yet is a fact for the
-        caller's own bound (Stall), never an outcome."""
+    def gametime(self, wait=ACK_S):
+        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most."""
         rc, o = tacli("peek", self.name, GAMETIME, "--json", "--timeout", wait,
                       timeout=wait + ACK_S)
-        if rc and busy and PEEK_UNANSWERED in o and self.running():
-            return None
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
         g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
@@ -597,6 +890,7 @@ class Worker:
                       (list(rd.glob("*.imprec")) if recordings else [])):
                 shutil.copy2(f, into / f.name)
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
 
 
 def crash_report(path: Path) -> str:
@@ -615,6 +909,16 @@ class Log:
     crash ends every wait at once (`alive`)."""
 
     ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
+    # s between two reads of the log in a wait. It decides how soon a wait sees its line, never
+    # which line: a wait reads the lines the game wrote, in order, from its start, and returns the
+    # first that matches (wait, wait_running), so a faster read sees the same line sooner. A held
+    # game answers each trigger at its next frame visit (the DLL reads the trigger at most every
+    # TRIGGER_MS = 10 ms, tagpu_replay.c), and a hold is five such waits, so at 0.4 s a hold cost
+    # about 2 s of a bar game's wall time (MEASURED 2026-11-13, the bar's dry run: 204 holds of
+    # about 2.06 s). A read costs one open of the current file (talog.Cursor._same_file), so 50
+    # a second across every lane of a run stays negligible. Bounds stay in seconds: a wait's
+    # timeout and Stall's STALL_S are wall time, whatever the nap.
+    NAP_S = 0.02
 
     def __init__(self, w: Worker):
         self.w = w
@@ -626,6 +930,10 @@ class Log:
         self.seen_running = False
         self.checked = 0.0
         self.turbo = False      # `turbo on` holds on this level (turbo_engage)
+        self.nodraw_on = False  # the launch acknowledged NODRAW_LEVER (nodraw_ack)
+        # NO DRAW's account, summed over the launch's levels (NODRAW_ACCOUNT): {from, to, skipped, board,
+        # drawn}, or None while no level has ended with one
+        self.nodraw = None
         self.held = False       # a pause of hold_at's holds the level now
         self.pending = None     # the GameTime hold_at armed and the level has not reached yet
         self.hold_from = 0      # where in `lines` to look for its pause
@@ -636,27 +944,48 @@ class Log:
         (its exception handler, which can leave the process up behind a box), or the process
         that was running is gone. A wait would otherwise sit out its whole timeout -- up to
         half an hour -- on a game that cannot answer."""
-        if self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was:
+        if self.crashed():
             self.read()
             raise Failed(f"the game crashed: {crash_report(self.errorlog)}")
-        now = time.time()
-        if now - self.checked < self.ALIVE_EVERY:
-            return
-        self.checked = now
-        if self.w.running():
-            self.seen_running = True
-        elif self.seen_running:
+        if self.exited():
             self.read()
             raise Failed("the game's process exited during a wait"
                          + (f": {self.lines[-1].strip()}" if self.lines else ""))
+
+    def gone(self):
+        """Whether the game can answer nothing more, as alive() would fail it, without raising:
+        the end of a Stall's retire."""
+        return self.crashed() or self.exited()
+
+    def crashed(self):
+        return self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was
+
+    def exited(self):
+        """The process that was running is gone; asked of tacli at most every ALIVE_EVERY."""
+        now = time.time()
+        if now - self.checked < self.ALIVE_EVERY:
+            return False
+        self.checked = now
+        if self.w.running():
+            self.seen_running = True
+            return False
+        return self.seen_running
 
     def read(self):
         got = (self.part + self.cursor.text(advance=True)).split("\n")
         self.part = got.pop()
         self.lines += got
         for ln in got:
+            m = NODRAW_ACCOUNT.search(ln)
+            if m:
+                self.nodraw = nodraw_add(self.nodraw, m)
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
+            # a refusal of the GPU memory cap fails the game: the cap is too small for it. The
+            # lines after a game's last wait are read by its worker's watch (Worker.caps)
+            refused = talog.cap_failure(ln)
+            if refused:
+                raise Failed(refused)
         return got
 
     def wait(self, rx, timeout, start=0):
@@ -670,58 +999,67 @@ class Log:
             start = len(self.lines)
             if time.time() >= end:
                 return None
-            nap(0.4)
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
 
-    def wait_running(self, rx, start=0, poll=None):
+    def wait_running(self, rx, start=0, poll=None, end_by=None):
         """The first line from index `start` on that matches, on a level that runs toward it: no
         deadline but a stall (Stall), so a loaded machine only makes it later. `poll` is called
-        at every look, for a lane that watches the window meanwhile."""
+        at every look, for a lane that watches the window meanwhile. `end_by`, (G, what): the
+        level must end by GameTime G (wait_end), and fails by name when a peek reads a later one
+        and the log, read after the peek's answer, shows no teardown. The peek's read, the shell
+        clock that moves GameTime after a teardown and the teardown's line are all the game
+        thread's, so a teardown before the read is logged before its answer: a GameTime past G
+        with no teardown in the log is a level still running there. The line alone decides what
+        the wait returns: the stall's reads are asked only once the wait has gone Stall.EVERY
+        without it, never block a look, and one still in flight at the line is retired before the
+        wait returns (tools/stall.py)."""
         rx = re.compile(rx)
-        stall = Stall(self.w)
+        bound = Stall(self)
         while True:
             for ln in self.lines[start:]:
                 if rx.search(ln):
+                    bound.retire()
                     return ln
+                if end_by and LEVEL_ENDED.search(ln):
+                    end_by = None
             start = len(self.lines)
             if poll:
                 poll()
-            stall.check()
-            nap(0.4)
+            g = bound.check()
+            if end_by and g is not None and g > end_by[0]:
+                self.read()
+                if not any(rx.search(ln) or LEVEL_ENDED.search(ln) for ln in self.lines[start:]):
+                    raise Failed(f"the level did not end by GameTime {end_by[0]} after {end_by[1]}:"
+                                 f" a peek read GameTime {g}")
+                continue
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
 
+    def wait_end(self, rx, start=0, poll=None, after="the end scenario"):
+        """`rx` from index `start` on, on a level whose end -- `after` -- was given while it was
+        held at `self.at`: it must end by GameTime self.at + LEVEL_END_TICKS."""
+        return self.wait_running(rx, start, poll, (self.at + LEVEL_END_TICKS, after))
 
-class Stall:
-    """The bound of a wait on a running level: STALL_S of GameTime standing still. A loaded machine
-    runs the level slower, never not at all, so this catches a hung or dead game and decides no
-    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip. A
-    peek the running game has not answered within EVERY is no progress and nothing more: the game
-    thread is inside one long frame, a seek's rebuild, and STALL_S alone decides when that is a
-    hung game. No second, shorter bound stands in for it."""
 
-    EVERY = 5.0
+class Stall(stall.Stall):
+    """The bound of a wait on a running level (tools/stall.py) on a Log's game: STALL_S of
+    GameTime standing still could not run, and the log's own test of a game that can answer
+    nothing more ends a retire. Each GameTime it reads is the lane's progress in the journal."""
 
-    def __init__(self, w):
-        self.w = w
-        self.g = None
-        self.since = self.next = time.monotonic()
+    def __init__(self, log):
+        super().__init__(log.w.gamedir, STALL_S, CouldNotRun, log.gone, nap, Log.NAP_S)
+        self.lane = log.w.lane
 
     def check(self):
-        now = time.monotonic()
-        if now < self.next:
-            return
-        g = self.w.gametime(self.EVERY, busy=True)
-        now = time.monotonic()
-        self.next = now + self.EVERY
-        if g is not None and g != self.g:
-            self.g, self.since = g, now
-        elif now - self.since > STALL_S:
-            raise CouldNotRun(f"the level stood at GameTime {self.g} for {STALL_S} s while it ran"
-                              + ("" if g is not None else ", its last peek unanswered"))
+        g = super().check()
+        if g is not None and self.lane:
+            J.progress(*self.lane, g)
+        return g
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -738,6 +1076,66 @@ def sources_mtime():
 
 def fixtures():
     return json.loads((HERE / "fixtures.json").read_text())["fixtures"]
+
+
+def clear_impai_levers(gamedir):
+    """Every ImpAI test lever in a game folder removed, whoever wrote it: the DLL reads them at attach
+    (tagpu/ddraw/src/tagpu_impai.c, THE LEVERS), so one left behind -- by a tool that plays on a worker
+    and is no fixture, tools/impai/l1_run.py -- would run its checks or its budgets in the next game, and
+    a fixture's own content (check_lever.py) writes them again after this. A link is removed as a link,
+    never written through."""
+    for lever in Path(gamedir).glob("tagpu_impai*.on"):
+        lever.unlink(missing_ok=True)
+
+
+REARM_SCENARIO = "replay-objective-on.json"
+
+
+def scenario_objective(name):
+    """The `objective` a scenario under scenarios/ sets: "on", "off" or None."""
+    try:
+        doc = json.loads((SCENARIOS / name).read_text())
+    except (OSError, ValueError) as e:
+        raise CouldNotRun(f"scenario {name}: {e}")
+    return (doc.get("setup") or {}).get("objective")
+
+
+def objective_left_off(name, fix):
+    """Why the fixture's level would never end, or None. A lane's level ends by the engine's end
+    test, which the end scenario's clear fires (LEVEL_END_TICKS); a scenario that sets `objective`
+    off disarms it (tagpu_scenario.c, apply_objective), and a level with the test disarmed runs on
+    with no unit at all. So the last scenario a lane applies that names the objective must arm it.
+    In the order they apply: the load; the `apply` steps at or before `end`, by GameTime (`steps`,
+    and U's `rewind_steps`); U's `rewind_paused`, whose GameTime the lane chooses, so it is taken
+    as last when it disarms and never as the one that arms; then the end scenario. A `type` or
+    `run` step that disarms it -- the console's Kill does (0x4164EF) -- is not read here; the end's
+    bound in game ticks (Log.wait_end) names that one when it runs."""
+    steps = [(T, a) for T, kind, a in fix.get("steps", []) + fix.get("rewind_steps", [])
+             if kind == "apply" and T <= fix["end"]]
+    order = [fix["load"]] + [a for _, a in sorted(steps, key=lambda st: st[0])]
+    if fix.get("rewind_paused") and scenario_objective(fix["rewind_paused"]) == "off":
+        order.append(fix["rewind_paused"])
+    order.append(END_SCENARIO.name)
+    off = None
+    for sc in order:
+        state = scenario_objective(sc)
+        if state == "off":
+            off = sc
+        elif state == "on":
+            off = None
+    if off:
+        return (f"{name}: {off} sets `objective` off and no step at or before its end "
+                f"({fix['end']}) nor {END_SCENARIO.name} sets it on again, so its level would "
+                f"never end: apply {REARM_SCENARIO} as a step at its end")
+    return None
+
+
+def refuse_unended(fixes):
+    """Before a game: CouldNotRun naming every fixture of `fixes`, {name: fixture}, whose level
+    would never end (objective_left_off)."""
+    unended = [why for why in (objective_left_off(n, f) for n, f in fixes.items()) if why]
+    if unended:
+        raise CouldNotRun("; ".join(unended))
 
 
 def broad_fixtures():
@@ -760,16 +1158,19 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3, first=301, last_min=None):
+def gametimes(name, end, h, trips=3, first=301, last_min=None, last_max=None):
     """T1 and `trips` round trips: T = 1 (mod 30) between `first` and 0.8 x end, with room for
     the dump after a round trip, sorted, from a generator seeded by the fixture and HEAD. A
-    fixture's `first` puts every point after its human's interface work (the images gate reads
-    the recording machine's interface state as unlisted state, the null twin classifying only
-    what a viewer does without changing the game); it moves where the checks run, not what they
-    check. Its `last_min` makes the last point reach a named completion checkpoint."""
+    fixture's `first` puts every point after its human's interface work and its `last_max` every
+    point at or before a GameTime ahead of later work (the images gate reads the recording
+    machine's interface state as unlisted state, the null twin classifying only what a viewer
+    does without changing the game); they move where the checks run, not what they check. Its
+    `last_min` makes the last point reach a named completion checkpoint."""
     if first % 30 != 1:
         raise CouldNotRun(f"{name}: first {first} is not 1 (mod 30)")
     hi = min(int(0.8 * end), end - CONTINUE - 30)
+    if last_max is not None:
+        hi = min(hi, last_max)
     pool = list(range(first, hi + 1, 30))
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
@@ -798,7 +1199,9 @@ def arm(w, log, line, ok_rx, bad_rx, what):
 
 def turbo_engage(w, log):
     """With a turbo lane's k, `turbo on` -- after the launch acknowledged that k (tagpu_replay.c,
-    THE TURBO), on the held level, after the lane's own arms: its ticks start with the `resume`."""
+    THE TURBO), on the held level, after the lane's own arms: its ticks start with the `resume`.
+    A no-draw lane's acknowledgement is required with it (nodraw_ack), so every path that engages
+    the turbo has it."""
     if not w.turbo or log.turbo:
         return
     got = log.wait(r"turbo: (k=\d+ (at 0x49692D|UNAVAILABLE)|tagpu_turbo\.on refused.*)", ACK_S, 0)
@@ -808,6 +1211,38 @@ def turbo_engage(w, log):
     arm(w, log, "turbo on", rf"turbo: on at GameTime \d+ \(k={w.turbo}\)", r"turbo: on refused",
         "turbo on")
     log.turbo = True
+    nodraw_ack(w, log)
+
+
+def nodraw_ack(w, log):
+    """A no-draw lane's launch acknowledged NODRAW_LEVER: CouldNotRun unless its answer is `nodraw: on
+    at 0x4969CD`, since a lane that draws every frame runs, only slower, and would say nothing."""
+    if not w.nodraw or log.nodraw_on:
+        return
+    got = log.wait(NODRAW_ACK, ACK_S, 0)
+    if not got or "nodraw: on at 0x4969CD" not in got:
+        raise CouldNotRun("no-draw: " + (got.strip() if got else
+                                         "the launch did not acknowledge tagpu_nodraw.on"))
+    log.nodraw_on = True
+
+
+def nodraw_add(acc, m):
+    """NO DRAW's account `acc` (Log.nodraw, or None) with one more level's line, `m` a NODRAW_ACCOUNT
+    match: the counts summed, `from` the first level's, `to` the last's."""
+    g0, g1, skipped, board, drawn = (int(x) for x in m.groups())
+    if acc is None:
+        return {"from": g0, "to": g1, "skipped": skipped, "board": board, "drawn": drawn}
+    return {"from": acc["from"], "to": g1, "skipped": acc["skipped"] + skipped,
+            "board": acc["board"] + board, "drawn": acc["drawn"] + drawn}
+
+
+def nodraw_share(acc) -> "float | None":
+    """The undrawn share of a NO DRAW account: frames not drawn over every frame the mark armed (paused,
+    held and in-game-screen frames are not armed, and draw by design); None for no account or none armed."""
+    if not acc:
+        return None
+    n = acc["skipped"] + acc["board"] + acc["drawn"]
+    return acc["skipped"] / n if n else None
 
 
 HOLD_RX = r"pause: paused at GameTime (\d+) \(the launch's hold\)"
@@ -889,7 +1324,7 @@ def run_to(w, log, G, steps, poll=None):
                 step(w, kind, arg)
                 adopt_held(w, log, f"the script {' '.join(arg)}")
             else:
-                step(w, kind, arg)
+                step(w, kind, arg, log)
         if log.at >= G:
             return log.at
         T = min(steps[0][0], G) if steps else G
@@ -901,7 +1336,7 @@ def run_to(w, log, G, steps, poll=None):
 
 def arm_dump(w, log, name, T):
     arm(w, log, f"dump {name} at {T}", rf"recorder: dump {name} armed for GameTime {T}",
-        rf"recorder: dump(:| {name}) .*(refused|please|not letters)", f"dump {name} at {T}")
+        _CLI_API.dump_refused_rx(name), f"dump {name} at {T}")
 
 
 def cover_ask(w, log, name):
@@ -1001,13 +1436,13 @@ def wait_dumps(log, names, running=False, playing=None):
     (`running`), bounded by a stall alone, and on a playing begun at the log's line `playing` by
     its end as well (wait_playing); else already taken, each line a frame's answer."""
     for name in names:
-        rx = (rf"recorder: dump {name} (at GameTime|for GameTime \d+ not taken|refused)"
-              rf"|recorder: dump {name}: ")
+        written = _CLI_API.dump_written_rx(name)
+        rx = f"{written}|{_CLI_API.dump_refused_rx(name)}"
         if running and playing is not None:
             got = wait_playing(log, rx, f"dump {name}", playing)
         else:
             got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
-        if not got or "at GameTime" not in got or "not taken" in got:
+        if not got or not re.search(written, got):
             raise CouldNotRun(f"dump {name}: {got.strip() if got else f'not taken in {ACK_S} s'}")
 
 
@@ -1021,7 +1456,9 @@ def resolve(arg, roster):
     return str(arg)
 
 
-def step(w, kind, arg):
+def step(w, kind, arg, log=None):
+    """One fixture step on the held level. Each returns once the game has acknowledged it: an
+    apply or an order by the applier's line, keys by the engine's consumption of the events."""
     if kind == "apply":
         rc, o = tacli("scenario", "apply", w.name, SCENARIOS / arg, timeout=300)
         if rc:
@@ -1044,10 +1481,15 @@ def step(w, kind, arg):
             if rc:
                 raise CouldNotRun(f"type {arg!r}: tacli keys {' '.join(tokens)}: {last(o)}")
     elif kind == "order":
-        # `tacli order` returns once the applier says the order was issued, on the held level
-        rc, o = tacli("roster", w.name, "--json", timeout=ACK_S)
-        roster = json.loads(o)["units"] if not rc else []
+        # the units by rank in a roster logged after every step before this one was acknowledged
+        # (roster_after), never the newest dump, which a fast level can have logged before the
+        # scenario's units existed; `tacli order` returns once the applier says the order was
+        # issued, on the held level
+        if log is None:
+            raise CouldNotRun("order: a step that names units needs the lane's log")
+        log.read()
         kind_, rank = arg["unit"]
+        roster = roster_after(log, len(log.lines), f"order {kind_} {rank}")
         unit = resolve([kind_, rank], roster)
         argv = [resolve(a, roster) for a in arg["args"]]
         rc, o = tacli("order", w.name, argv[0], *argv[1:], "--unit", unit, "--expect", kind_,
@@ -1090,7 +1532,7 @@ def twin(w, log, fix):
     g1 = w.gametime()
     n = len(log.lines)
     w.trigger("dump ln1 now")
-    if not log.wait(r"recorder: frame dump ln1 at GameTime", ACK_S, n):
+    if not log.wait(_CLI_API.dump_written_rx("ln1"), ACK_S, n):
         raise CouldNotRun(f"the twin: frame dump ln1 not taken in {ACK_S} s")
     # Sample clicks, cursor positions and camera positions while the world is
     # paused: returning to the same eye or coordinate would hide these viewer
@@ -1144,7 +1586,7 @@ def twin(w, log, fix):
                   i * map_height // (len(NULL_VIEWS) - 2))
             n = len(log.lines)
             w.trigger(f"dump {name} now")
-            if not log.wait(rf"recorder: frame dump {name} at GameTime", ACK_S, n):
+            if not log.wait(_CLI_API.dump_written_rx(name), ACK_S, n):
                 raise CouldNotRun(f"the twin: frame dump {name} not taken")
             if w.gametime() != g1:
                 raise CouldNotRun("the twin: GameTime moved during the viewer samples")
@@ -1159,7 +1601,7 @@ def twin(w, log, fix):
             step(w, "run", command)
         n = len(log.lines)
         w.trigger(f"dump {name} now")
-        if not log.wait(rf"recorder: frame dump {name} at GameTime", ACK_S, n):
+        if not log.wait(_CLI_API.dump_written_rx(name), ACK_S, n):
             raise CouldNotRun("the twin: selection frame dump not taken")
         if w.gametime() != g1:
             raise CouldNotRun("the twin: GameTime moved during the selection view")
@@ -1191,7 +1633,7 @@ def twin(w, log, fix):
         raise CouldNotRun(f"the twin: the in-game menu did not open: {last(o)}")
     n = len(log.lines)
     w.trigger("dump ln2 now")
-    if not log.wait(r"recorder: frame dump ln2 at GameTime", ACK_S, n):
+    if not log.wait(_CLI_API.dump_written_rx("ln2"), ACK_S, n):
         raise CouldNotRun(f"the twin: frame dump ln2 not taken in {ACK_S} s")
     if w.gametime() != g1:
         raise CouldNotRun("the twin: GameTime moved between its dumps")
@@ -1254,7 +1696,7 @@ def live(w, fx, Ts, out):
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
     resume(w, log)
     for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
-        log.wait_running(rx, n)
+        log.wait_end(rx, n)
     wait_dumps(log, names)
     w.collect(out, recordings=True)
     w.stop()
@@ -1362,8 +1804,11 @@ def takeover_k(w, fx, out):
     # the dump is armed on the playing before the takeover, so an entry whose level ends soon
     # after T (`dump`) takes it before the end
     dump = f"k{T + span}"
+    # the seats `seatai` adds to those ImpAI played in the recording, which start fresh
+    # (tagpu_impai.c, seat_fresh); none unless the entry names some
+    seatai = ("--seatai", ",".join(map(str, tk["seatai"]))) if tk.get("seatai") else ()
     rc, o = tacli("replay", "takeover", w.name, fx["rec"], "--at", T, "--player", P,
-                  "--dump", dump, "--dump-at", T + span,
+                  "--dump", dump, "--dump-at", T + span, *seatai,
                   "--defaults", "--restart", "--keep-dll", "--timeout", ACK_S, "--json",
                   timeout=LAUNCH_TIMEOUT + ACK_S)
     try:
@@ -1429,20 +1874,22 @@ def takeover_k(w, fx, out):
             # 2026-10-08: `+iwin` did), so the resume is asked for and not waited on, and taken
             # back if no level was left to read it
             n = 0
+            ender = f"its chat line {tk['type']!r}"
             log.read()
             if not any(re.search(r"recorder: ended after", ln) for ln in log.lines):
                 w.trigger("resume")
             log.held = False
-            log.wait_running(r"recorder: writer: .* closed", 0, watch)
+            log.wait_end(r"recorder: writer: .* closed", 0, watch, ender)
             (w.gamedir / TRIGGER).unlink(missing_ok=True)
         else:
             run_to(w, log, max(T + span, res.get("ai_window", [0, 0])[1], held), [], watch)
             n = len(log.lines)
+            ender = "the end scenario"
             rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
             if rc:
                 raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
             resume(w, log)
-        log.wait_running(r"recorder: writer: .* closed", n, watch)
+        log.wait_end(r"recorder: writer: .* closed", n, watch, ender)
     except Failed:
         if not res["gone"]:
             raise
@@ -1455,30 +1902,48 @@ def takeover_k(w, fx, out):
     return res
 
 
+ROSTER_ROW = re.compile(r"^\s+u\d+\s+")
+ROSTER_UNIT = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
+                         r"world=\((-?\d+),(-?\d+),-?\d+\)")
+
+
+def roster_after(log, start, what):
+    """The units of the first whole roster dump that begins at line `start` of the log or later.
+    roster_log (tagpu_packet_pub.c) writes a dump as one block on the game thread, right after the
+    fill it lists, then the `units:` header; the dumps come every 5 s of wall time, held or not. A
+    block that begins at `start` or later was written after every line before `start`, so its fill
+    came after every game-thread line there: on a held level it lists the units as the steps those
+    lines acknowledged left them. A block that began before `start` is skipped whole."""
+    end = time.monotonic() + ACK_S
+    i = start
+    while True:
+        row = log.wait(ROSTER_ROW.pattern, max(0.0, end - time.monotonic()), i)
+        if not row:
+            raise CouldNotRun(f"{what}: no roster dump began in {ACK_S} s")
+        r = log.lines.index(row, i)
+        header = log.wait(r"^units: alive=", max(0.0, end - time.monotonic()), r + 1)
+        if not header:
+            raise CouldNotRun(f"{what}: the roster dump begun at line {r} has no header")
+        h = log.lines.index(header, r + 1)
+        if r > 0 and ROSTER_ROW.match(log.lines[r - 1]):
+            i = h + 1
+            continue
+        roster = []
+        for line in log.lines[r:h]:
+            m = ROSTER_UNIT.match(line)
+            if m:
+                roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
+                               "world": [int(m[4]), int(m[5])]})
+        return roster
+
+
 def takeover_roster(log, G, P):
-    """The first complete roster the level publishes once it is held at G, after the takeover,
-    never the loader's nor one from before the hold."""
+    """The first whole roster the level logs once it is held at G, after the takeover, never the
+    loader's nor one from before the hold."""
     mark = log.wait(rf"pause: paused at GameTime {G}\s*$", ACK_S)
     if not mark:
         raise CouldNotRun(f"order: the level was not held at GameTime {G}")
-    start = log.lines.index(mark) + 1
-    row = log.wait(r"^\s+u\d+\s+", ACK_S, start)
-    if not row:
-        raise CouldNotRun("order: no roster after takeover")
-    start = log.lines.index(row, start)
-    # roster_log writes the dump as one block before its following units header.
-    end = log.wait(r"^units: alive=", ACK_S, start + 1)
-    if not end:
-        raise CouldNotRun("order: the post-takeover roster is incomplete")
-    rx = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
-                    r"world=\((-?\d+),(-?\d+),-?\d+\)")
-    roster = []
-    for line in log.lines[start:log.lines.index(end, start + 1)]:
-        m = rx.match(line)
-        if m:
-            roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
-                           "world": [int(m[4]), int(m[5])]})
-    return roster
+    return roster_after(log, log.lines.index(mark) + 1, "order after the takeover")
 
 
 def tk_order(w, P, order, roster):
@@ -1600,8 +2065,8 @@ def started_at(seconds):
     return edit
 
 
-def other_layout(b):
-    """replay-layout.tsv's SHA-256 in hex, one digit changed: another exclusion file's."""
+def other_hash(b):
+    """A list's SHA-256 in hex (RT_LAYOUT, RT_GLOBALS), one digit changed: another list's."""
     s = bytearray(b)
     s[0] = ord("1") if s[0] != ord("1") else ord("2")
     return bytes(s)
@@ -1990,7 +2455,7 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     if rc:
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
     resume(w, log)
-    log.wait_running(r"recorder: writer: .* closed", n)
+    log.wait_end(r"recorder: writer: .* closed", n)
     if not log.wait(rf"replay: forks .*\b{re.escape(stem)}\.imprec: (done|refused):", 120, n):
         raise CouldNotRun("the fork's level did not complete its file maintenance")
     # the skirmish ends on its results screen; its MainMenu builds the main menu, over which the
@@ -2110,8 +2575,8 @@ def forks_picker(w, log, T5, P):
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
     driven through the replay HUD: a version-1 index converted at the browser's open, its line's
-    favourite and bookmark kept with the file's root key, two copies of the recording refused, the
-    data refusal's marked and the missing map's not, then the recording watched, its speed changed
+    favourite and bookmark kept with the file's root key, three copies of the recording refused, the
+    data refusals marked and the missing map's not, then the recording watched, its speed changed
     on the HUD, the in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
     resume, Leave with the marks still on the line, and a second Watch from the browser it
     returns to.
@@ -2121,8 +2586,10 @@ def watch_lane(w, fx, rec, out, T):
     w.place(fix, fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
-    copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
+    copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_hash,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
+              (f"{stem}-globals", tarec.RT_GLOBALS, other_hash,
+               "it was recorded with another positive list (replay-globals.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
     # the browser lists newest first by the recorded start, as the prune orders (tagpu_replays.c,
     # THE ORDER): the copies first, in this order, the recording itself last
@@ -2167,18 +2634,20 @@ def watch_lane(w, fx, rec, out, T):
         ui_on(w, "REPLAYS.GUI", ACK_S)
         res.append((f"W: Watch refuses {name}", PASS, got))
 
-    # the marks the refusals left (tagpu_replays.c, THE LOCK): the other exclusion file is a data
-    # refusal, marked in the index and Watch grey on its row; a missing map never marks
+    # the marks the refusals left (tagpu_replays.c, THE LOCK): the other exclusion file and the
+    # other positive list are data refusals, marked in the index with their codes
+    # (TAGPU_REPLAY_REFUSED_LAYOUT 4, _GLOBALS 5) and Watch grey on their rows; a missing map
+    # never marks
     idx = index_lines(rd)
     for row, (name, tag, _, _) in enumerate(copies):
         line = idx.get(f"{name}.imprec", "")
         mark = re.search(r"\tL\t(\d+)\t", line)
         ui(w, "select", "RECS", f"#{row}")
         state = watch_button(w)
-        want = tag == tarec.RT_LAYOUT
-        if want and (not mark or mark.group(1) != "4" or state != "grayed"):
+        want = {tarec.RT_LAYOUT: "4", tarec.RT_GLOBALS: "5"}.get(tag)
+        if want and (not mark or mark.group(1) != want or state != "grayed"):
             raise Failed(f"{name}: the refusal left mark {mark.group(1) if mark else 'none'} "
-                         f"and Watch {state}; expected mark 4 and Watch grayed")
+                         f"and Watch {state}; expected mark {want} and Watch grayed")
         if not want and (mark or state != "ok"):
             raise Failed(f"{name}: a missing map left mark {mark.group(1) if mark else 'none'} "
                          f"and Watch {state}; expected none and Watch ok")
@@ -2534,9 +3003,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         return [m["t"] for m in d["state"]["markers"] if m["kind"] == "bookmark"]
 
     def dump_now(dname):
-        arm(w, log, f"dump {dname} now", rf"recorder: frame dump {dname} at GameTime",
-            rf"recorder: (frame )?dump(:| {dname}) .*(refused|please|not letters|cannot)",
-            f"dump {dname} now")
+        arm(w, log, f"dump {dname} now", _CLI_API.dump_written_rx(dname),
+            _CLI_API.dump_refused_rx(dname), f"dump {dname} now")
         return copies(f"X2 {dname}", w.gamedir / "replays" / f"dump-{dname}.bin")[0]
 
     # 2. the seek path, 5 -> 2: GameTime T5 + 1 is in 5's own segment, which 2's chain lacks
@@ -2825,7 +3293,7 @@ def forks_steps(w, fx, out, results):
         rc, text = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
         if not rc:
             resume(w, log)
-        if rc or not log.wait_running(r"recorder: writer: .* closed", n):
+        if rc or not log.wait_end(r"recorder: writer: .* closed", n):
             raise CouldNotRun(f"forks: K{tid} did not end: {last(text)}")
         if not log.wait(r"replay: forks .*: (done|refused):", 120, n):
             raise CouldNotRun(f"forks: K{tid} did not complete maintenance")
@@ -3119,10 +3587,10 @@ def forks_steps(w, fx, out, results):
     held_start(w, log)
     abandoned = log.at
     resume(w, log)
-    stall = Stall(w)
-    while w.gametime() <= abandoned:
+    bound = Stall(log)
+    while (g := w.gametime()) <= abandoned:
         try:
-            stall.check()
+            bound.saw(g)
         except CouldNotRun as e:
             raise Failed(f"writer-refused: the game did not continue: {e}")
         nap(0.5)
@@ -3136,7 +3604,20 @@ def forks_steps(w, fx, out, results):
 #
 # A check reads files the games wrote and plays no game, so it runs on the offline pool and never
 # in a worker's slot: a lane hands its checks over and goes on to its next game, and a fixture's
-# report starts as soon as its last lane ends, while other fixtures' games still run.
+# report starts as soon as its last lane ends, while other fixtures' games still run. The pool's
+# tasks run on slots of the run lock: the run's hold asks for offline_workers beside its game
+# lanes, in the same admission, and the pool runs no more at once than it was granted
+# (runlock.workers; tools/runlock.py, OFFLINE WORK).
+#
+# THE GAME SLOTS GO TO THE CHECKS ONCE NO GAME WILL TAKE THEM. Every group's last lane comes at the
+# run's tail (LANE_ORDER puts every Q after every P), so most of the checks are asked for as the
+# games end, when the hold's game_slots() a game slot would otherwise sit idle. MEASURED 2026-11-13:
+# a landing gate of 74 groups wrote its verdicts one about every 7 s for 10.5 min after its last
+# game, on the 4 workers its hold granted beside 12 game lanes; one group's 28 tarec calls take
+# 22 s one after another (stock-impai-fight, 0.4 to 2.4 s a call). A game slot that no lane
+# and no two-player group will take again (GameSlots, THE LENDING) is handed to the pool for good,
+# game_slots() workers a slot (OfflinePool.widen), so the pool never runs on more slots than the run
+# holds and a game never waits for a check.
 #
 # NO DEADLOCK, by what runs where: a task on the pool is a leaf -- a tarec process, or a function
 # that reads files -- and never waits for other pool work. Only the workers and the report
@@ -3154,13 +3635,56 @@ _POOL = None
 _POOL_LOCK = threading.Lock()
 
 
+class OfflinePool:
+    """The offline pool: each task submitted runs on a thread once it holds one worker of `gate`,
+    a runlock.Workers over the slots the run holds for offline work, whose grant widen() raises as
+    game slots come free for good (THE GAME SLOTS GO TO THE CHECKS). The gate lets tasks in in the
+    order they ask; the threads past its grant wait on it, idle. The slots are the run's own,
+    taken by its hold(workers=), so the gate holds no file of the lock, and no widening takes the
+    grant past `most`, the slots the run holds."""
+
+    def __init__(self, threads, granted, most=None):
+        self.threads, self.most = threads, granted if most is None else most
+        self.gate = runlock.Workers(granted)
+        self.ex = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="offline",
+                                     initializer=yield_to_games)
+
+    def submit(self, fn, *args):
+        return self.ex.submit(self._gated, fn, args)
+
+    def _gated(self, fn, args):
+        with self.gate.share():
+            return fn(*args)
+
+    def widen(self, workers):
+        """`workers` more tasks at once, on slots the run holds and no game will use again; never
+        past `most`."""
+        k = min(workers, self.most - self.gate.n)
+        if k > 0:
+            self.gate.widen(k)
+
+    def shutdown(self, wait=True):
+        self.ex.shutdown(wait=wait)
+
+
 def offline(games=1):
-    """The offline pool, sized by its first caller for `games` games at once (run_threads)."""
+    """The offline pool, sized by its first caller for `games` games at once (run_threads): it
+    runs offline_workers(games) at once, cut inside a run to the workers the run lock granted it,
+    and may be widened to the slots the run holds -- its workers and game_slots() for each of its
+    games(), never past runlock.slots(): in a run that declared no workers, workers() is its
+    games' slots, and nothing is left to widen into. It has a thread for each, cut to the memory
+    there is for them (offline_memory)."""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
-            _POOL = ThreadPoolExecutor(max_workers=offline_workers(games),
-                                       thread_name_prefix="offline", initializer=yield_to_games)
+            n = offline_workers(games)
+            if runlock.holding():
+                granted = min(n, runlock.workers())
+                most = max(granted, min(granted + runlock.game_slots() * runlock.games(),
+                                        runlock.slots()))
+                _POOL = OfflinePool(max(granted, min(most, offline_memory(most))), granted, most)
+            else:
+                _POOL = OfflinePool(n, n)
         return _POOL
 
 
@@ -3175,16 +3699,22 @@ def yield_to_games():
         pass
 
 
-def offline_workers(games):
-    """Checks at once: the cores less two for each game, and no more than the GiB available -- a
-    tarec process holds 0.3 to 0.7 GB (`check` and `compare-fork` on a battle, MEASURED
-    2026-10-08)."""
+def offline_memory(default):
+    """The tarec processes the memory available holds, one a GiB: a tarec process holds 0.3 to
+    0.7 GB (`check` and `compare-fork` on a battle, MEASURED 2026-10-08); `default` when
+    /proc/meminfo cannot be read."""
     try:
         with open("/proc/meminfo") as f:
-            gib = next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+            return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
     except (OSError, StopIteration, ValueError):
-        gib = os.cpu_count()
-    return max(2, min(os.cpu_count() - 2 * games, gib))
+        return default
+
+
+def offline_workers(games):
+    """The checks a run of `games` game lanes asks to run at once, each a slot of the run lock:
+    one a game lane, since a lane hands its checks over as it ends [INFERRED from the queue's
+    shape, not measured], and no more than offline_memory, and at least two."""
+    return max(2, min(games, offline_memory(games)))
 
 
 class Ordered:
@@ -3387,6 +3917,9 @@ def checks(fx):
     for proc, how in ran.items():
         if how == "ran":
             res.later(unordered_check, proc, out / proc / "tagpu.log")
+            res.later(predictor_check, proc, out / proc / "tagpu.log", proc == "L" and bool(fx.get("predicts")))
+    if fx.get("naval") and ran.get("L") == "ran":
+        res.later(naval_check, "L", out / "L" / "tagpu.log")
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -3407,12 +3940,60 @@ def checks(fx):
             a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
             compare(f"round trip {T}: A against B", "compare-dumps", "--seek", rec, a, b,
                     files=[a, b])
+    if fx["fix"].get("nodraw") and ran.get("L") == "ran":
+        res.later(shadow_check, "L", out / "L" / "tagpu.log", True)
     if ran.get("W") == "ran":
         res.add(*fx["wres"])
         d = out / "W" / f"dump-w{Ts[0]}.bin"
         compare(f"W w{Ts[0]} (the HUD's seek, in a playing Watch started)", "compare",
                 "--puppet", "--seek", rec, d, files=[d])
     return res
+
+
+def shadow_verdict(label, text, undrawn):
+    """[(label, verdict, detail)] of THE SHADOW over one lane's log `text`: PASS when the launch put the
+    shadow in, it compared frames with units in them and none differed; FAIL on a difference, each
+    named, or, on the lane that runs NO DRAW beside it (`undrawn`), when no frame went undrawn; could
+    not run when it was not in or compared no unit. Each level counts as its account line, or as its
+    last progress line when the log ends before the account."""
+    ack = re.search(SHADOW_ACK, text)
+    if not ack or "shadow on at" not in ack.group(0):
+        return [(label, UNRUN, ack.group(0).strip() if ack else "the launch did not answer tagpu_ndshadow.on")]
+    differs = [ln.strip() for ln in text.splitlines() if SHADOW_DIFFERS in ln]
+    total = [0, 0, 0, 0]
+    level = [0, 0, 0, 0]
+    for ln in text.splitlines():
+        m = SHADOW_COUNT.search(ln)
+        if not m:
+            continue
+        got = [int(x) for x in m.groups()]
+        if "shadow from GameTime" in ln:
+            total = [t + g for t, g in zip(total, got)]
+            level = [0, 0, 0, 0]
+        else:
+            level = got
+    compared, differed, unchecked, units = (t + g for t, g in zip(total, level))
+    detail = f"{compared} frames compared, {differed} differed, {unchecked} not checked, {units} units drawn in them"
+    if undrawn:
+        accounts = [NODRAW_ACCOUNT.search(ln) for ln in text.splitlines()]
+        skipped = sum(int(m.group(3)) for m in accounts if m)
+        detail += f"; {skipped} frames not drawn"
+    if differed or differs:
+        return [(label, FAIL, detail + "\n" + "\n".join(differs[:8]))]
+    if undrawn and not skipped:
+        return [(label, FAIL, detail + ": no frame went undrawn beside the shadow")]
+    if not units:
+        return [(label, UNRUN, detail)]
+    return [(label, PASS, detail)]
+
+
+def shadow_check(proc, log_path, undrawn):
+    label = f"{proc}: the shadow, the repose's selection against the draw's"
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, f"no log: {e}")]
+    return shadow_verdict(label, text, undrawn)
 
 
 def tarec_verdict(label, *args):
@@ -3535,6 +4116,67 @@ def yard_dropped_verdict(label, text):
 
 
 UNORDERED = re.compile(r"recorder: (\d+) footprint calls a playing cannot put in their order")
+
+MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ .*?\bpredictions=(\d+) refused_predictions=(\d+)")
+
+
+def predictor_verdict(label, text, need):
+    """[(label, verdict, detail)]: the fight predictor's answers in a lane's log, from each ImpAI
+    seat's level-end military line (tagpu_impai.c, `impai: mil seat=<i> level=`). The fight content
+    is built from the engine's own types at every level init (tagpu_impai.c, impai_fight_build), so
+    a prediction refused there is a defect -- content that failed to build, or a side the content
+    cannot hold -- and any fails. `need`, the fixture's `predicts`: at least one prediction made, so
+    a test group meant to play the predictor cannot pass on its refusal path or without a fight.
+    No line: could not run when `need`, else nothing to judge (the lane played no ImpAI seat)."""
+    seats = [(int(a), int(b), int(c)) for a, b, c in MIL_END.findall(text)]
+    if not seats:
+        return [(label, UNRUN, "no ImpAI military's level-end line")] if need else []
+    made = sum(n for _, n, _ in seats)
+    refused = sum(r for _, _, r in seats)
+    detail = ", ".join(f"seat {i}: {n} predictions, {r} refused" for i, n, r in seats)
+    if refused:
+        return [(label, FAIL, detail)]
+    if need and not made:
+        return [(label, FAIL, f"{detail}: the test group made no prediction")]
+    return [(label, PASS, detail)]
+
+
+def predictor_check(proc, log_path, need):
+    """Any lane that played an ImpAI seat live: L, and a takeover's."""
+    label = f"{proc}: the fight predictor's answers"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))] if need else []
+    return predictor_verdict(label, text, need)
+
+
+NAVAL_MIL = re.compile(r"impai: mil seat=(\d+) level=\S+ .*?\bnaval=(-?\d+)\b")
+NAVAL_ECO = re.compile(r"impai: eco seat=(\d+) .*?\bsea_plants=(\d+)\b")
+
+
+def naval_verdict(label, text):
+    """[(label, verdict, detail)]: whether the live lane played ImpAI's naval rule, from each seat's
+    level-end lines (tagpu_impai.c): PASS when some seat judged the map naval (`impai: mil ... naval=1`)
+    and ordered a sea plant (`impai: eco ... sea_plants>=1`), FAIL otherwise, UNRUN with no military
+    line. A test group meant to play the rule must not pass on a game where the rule never fired."""
+    naval = {int(s): int(n) for s, n in NAVAL_MIL.findall(text)}
+    if not naval:
+        return [(label, UNRUN, "no ImpAI military's level-end line")]
+    plants = {int(s): int(n) for s, n in NAVAL_ECO.findall(text)}
+    detail = ", ".join(f"seat {s}: naval={n} sea_plants={plants.get(s, 0)}" for s, n in sorted(naval.items()))
+    ok = any(n == 1 and plants.get(s, 0) >= 1 for s, n in naval.items())
+    return [(label, PASS if ok else FAIL, detail)]
+
+
+def naval_check(proc, log_path):
+    """The live lane of a test group whose fixture says `naval`."""
+    label = f"{proc}: the naval rule played"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))]
+    return naval_verdict(label, text)
 
 
 def unordered_verdict(label, text):
@@ -3909,6 +4551,179 @@ def first_lanes(fxs):
     return sorted(fxs, key=lambda n: (not set("XUK") & set(fxs[n]["want"]), -fxs[n]["fix"]["end"]))
 
 
+# ---- resuming a run -------------------------------------------------------------------------
+#
+# A run writes each test group's result into the group's folder the moment its report settles:
+# `<group>/verdict.json`, written to a temporary name, flushed and renamed over (tacompat.py's
+# pattern), so a group the run did not finish has none. `run`, `landing` and `broad` given
+# `--resume DIR` play in DIR again: a group whose verdict file holds a PASS or a FAIL under the
+# key this sitting computes is read back -- its summary lines, its checks' verdicts, its recording
+# and its coverage files -- and every other group's folder is emptied and the group played whole.
+# A FAIL is kept as a FAIL: a resume never plays a failed group again. The landing's two-player
+# groups are kept the same way (Run.kept_multiplayer). The verdict file is written after the
+# result is stored in this sitting (keep_verdict): a file that cannot be written is said by name,
+# the sitting's summary still holds the result, and only a resume loses it, by playing the group
+# again.
+#
+# THE KEY is everything a group's result depends on that its folder does not hold: the tree (HEAD,
+# with a worktree git sees no change in; a sitting on a dirty tree is never resumed), the hashes of
+# the DLL files the run can load (the default build, the coverage build, the stock-limits coverage
+# build, and any the command or a group names) less the time each was linked, which `make` changes
+# at every run (tools/dllkey.py: every other byte is the same for the same tree, so a rebuild
+# between sittings keeps the key), the fixture's entry and its scenario files'
+# hashes, the renderer, the game speed and the turbo, the lanes it plays, whether its dumps are
+# kept (broad reads them) and the GameTimes seeded from HEAD (gametimes). A kept result whose key
+# differs is refused, naming each field that differs, and its group played again; so is one whose
+# coverage files are not the ones it recorded. Every result the summary, the note and the
+# coverage check read therefore holds under this sitting's key.
+#
+# WHAT A STOP LEAVES. A verdict is written only when its report settles with STOP clear. A lane a
+# stop cuts short ends could not run -- a game the stop ended under it included (Run.job) -- so its
+# group's report settles after STOP is set and writes nothing; and a stop moves a result only
+# towards could-not-run or FAIL, never to a PASS. A SIGTERM reaches this process alone, so by
+# construction no result a stop touched is kept. A signal to the run's process group (a Ctrl-C at
+# the terminal, `timeout`) also reaches its tarec checks, though never its tacli calls, which run in
+# sessions of their own (THE STOP): a report that settles between a check's end and this process's
+# stop thread setting STOP keeps the FAIL the signal made. The summary names that FAIL, and a run
+# without --resume clears it.
+
+VERDICT = "verdict.json"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def keep_verdict(name, path: Path, doc):
+    """The verdict file of group `name`, `doc()` written whole at `path` (write_atomic). A file that
+    cannot be written, or a result that cannot be put in one, is said by name and kept nowhere: the
+    result itself is already stored, and a resumed run plays the group again."""
+    try:
+        write_atomic(path, json.dumps(doc(), indent=1) + "\n")
+    except (OSError, TypeError, ValueError) as e:
+        say(f"{name}: its verdict file {path} was not written ({type(e).__name__}: {e}); the "
+            f"result stands, and a resumed run plays the group again")
+
+
+def file_md5(path) -> "str | None":
+    """The file's MD5, None when there is no such file."""
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except FileNotFoundError:
+        return None
+    return h.hexdigest()
+
+
+def tree_name(path) -> str:
+    """`path` relative to the tree when it is inside it, else absolute: what a key names a file by."""
+    p = Path(path).resolve()
+    try:
+        return str(p.relative_to(TREE))
+    except ValueError:
+        return str(p)
+
+
+def tree_key() -> "str | None":
+    """HEAD when git sees no change in the worktree, tracked or untracked; None otherwise, since a
+    result graded on uncommitted work names no tree another sitting could match."""
+    r = subprocess.run(["git", "-C", str(TREE), "status", "--porcelain"], capture_output=True,
+                       text=True)
+    if r.returncode or r.stdout.strip():
+        return None
+    return head()
+
+
+def resume_refusal(resume: str) -> "str | None":
+    """Why `--resume DIR` cannot go on, or None, with DIR made when it does not exist yet: a first
+    sitting with --resume starts fresh in it. main() asks before a command selects anything, so a
+    refusal costs no selection (a landing's plan takes minutes)."""
+    if tree_key() is None:
+        return (f"--resume {resume}: the worktree has uncommitted or untracked changes: a resumed "
+                f"run keeps results keyed by HEAD, so commit first")
+    try:
+        Path(resume).expanduser().resolve().mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"--resume {resume}: not a folder this run can play in ({e.strerror})"
+    return None
+
+
+def run_dlls(args, played=()) -> dict:
+    """{name: hash} of the DLL files a run can load: the default build, its coverage build, the
+    stock-limits coverage build, the ones the command gave, and `played`, those its groups play.
+    Each is hashed less its link time (dllkey.digest), so a `make` between sittings of an
+    unchanged tree keeps the key."""
+    paths = [build_dll(False, False)[0], build_dll(False, True)[0], build_dll(True, True)[0]]
+    paths += [Path(p) for p in (getattr(args, "dll", None), getattr(args, "stock_dll", None)) if p]
+    return {tree_name(p): dllkey.digest(p) for p in [*paths, *played]}
+
+
+def scenario_files(fix) -> dict:
+    """{name: MD5} of every scenario file a fixture's lanes apply: each string of its entry that
+    names a file under scenarios/, the end scenario and the objective's re-arm."""
+    names = {END_SCENARIO.name, REARM_SCENARIO}
+
+    def walk(v):
+        if isinstance(v, str):
+            if v.endswith(".json") and (SCENARIOS / v).is_file():
+                names.add(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(fix)
+    return {n: file_md5(SCENARIOS / n) for n in sorted(names)}
+
+
+def cover_files(d: Path) -> dict:
+    """{path under `d`: MD5} of every coverage file in a group's folder."""
+    return {str(f.relative_to(d)): file_md5(f) for f in sorted(d.rglob("cover-*.bin"))}
+
+
+def key_differs(then: dict, now: dict) -> list:
+    """The fields of two keys that differ, by name; a field that is a table names its entries."""
+    out = []
+    for k in sorted(set(then) | set(now)):
+        a, b = then.get(k), now.get(k)
+        if a == b:
+            continue
+        if isinstance(a, dict) and isinstance(b, dict):
+            out += [f"{k} {s}" for s in sorted(set(a) | set(b)) if a.get(s) != b.get(s)]
+        else:
+            out.append(k)
+    return out
+
+
+def read_kept(d: Path, key: dict) -> "tuple[dict | None, str | None]":
+    """(the verdict file in `d`, None) when it is kept under `key`; (None, why) when it is refused;
+    (None, None) when there is none."""
+    f = d / VERDICT
+    if not f.is_file():
+        return None, None
+    try:
+        doc = json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        return None, f"{VERDICT} unreadable: {e}"
+    if doc.get("result") not in ("pass", "fail"):
+        return None, f"its result is {doc.get('result')!r}"
+    differ = key_differs(doc.get("key") or {}, key)
+    if differ:
+        return None, f"its key differs: {', '.join(differ)}"
+    if cover_files(d) != doc.get("covers"):
+        return None, "its coverage files are not the ones it recorded"
+    return doc, None
+
+
 class Run:
     """`fixes` the fixtures by name (fixtures.json's, or measure's scenarios); `measure` runs L
     and P only, with no dump and no check, for the coverage files.
@@ -3916,15 +4731,29 @@ class Run:
     A fixture's report (fixture_report: its checks, then its lines of the summary) starts on the
     report threads when its last lane ends -- `left` counts the lanes queued or running, and a
     lane queues the lanes that follow it before it ends -- so the checks of one fixture overlap
-    the games of the others."""
+    the games of the others.
+
+    With `args.resume` the run plays in a folder an earlier sitting left: a group with a kept
+    result there (read_kept, *resuming a run*) is not queued, and its report is the kept one."""
+
+    gdi = False
 
     def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
+        fixes = fixes or fixtures()
+        refuse_unended({n: fixes[n] for n in names})
         self.q = queue.PriorityQueue()
         self.seq = itertools.count()
         self.lock = threading.Lock()
         self.pending = 0
         self.left = {}
         self.reports = {}
+        self.keys = {}
+        self.kept = []
+        self.resuming = bool(getattr(args, "resume", None))
+        self.tree = tree_key()
+        if self.resuming and self.tree is None:
+            raise CouldNotRun("the worktree has uncommitted or untracked changes: a resumed run "
+                              "keeps results keyed by HEAD, so commit first")
         self.report_pool = ThreadPoolExecutor(max_workers=max(1, len(names)),
                                               thread_name_prefix="report")
         self.fx = {}
@@ -3934,11 +4763,17 @@ class Run:
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         self.turbo = getattr(args, "turbo", 0)
         self.kind = getattr(args, "cmd", "run")
-        # what the estimate keys a lane's past times by: the pacing and the build's kind
+        self.what = getattr(args, "what", "tareplay")
+        # `run --gdi`: every lane of the run renders with GDI (GDI_LEVER) and the run takes no GPU
+        # token. Its record, puppets, round trips and seeks then share one renderer, so each
+        # comparison the run makes stays within it; `landing` and `broad` have no such option and
+        # play the players' renderer
+        self.gdi = bool(getattr(args, "gdi", False))
+        # what the estimate keys a lane's past times by: the pacing, the build's kind, the renderer
         self.variant = (f"gs{self.game_speed}-turbo{self.turbo}"
-                        f"{'-cover' if getattr(args, 'cover', False) else ''}")
+                        f"{'-cover' if getattr(args, 'cover', False) else ''}"
+                        f"{'-gdi' if self.gdi else ''}")
         h = head()
-        fixes = fixes or fixtures()
         for name in names:
             fix = fixes[name]
             counts_options(fix)
@@ -3947,7 +4782,7 @@ class Run:
             cover = bool(getattr(args, "cover", False)) and not fix.get("cost")
             dll = chosen_dll(name, args, stock, cover)
             Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301),
-                           fix.get("last_min"))
+                           fix.get("last_min"), fix.get("last_max"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))
@@ -3966,8 +4801,102 @@ class Run:
             else:
                 say(f"{name}: T1 {Ts[0]}, round trips {' '.join(map(str, Ts[1:]))}, "
                     f"Tlast {Ts[-1]}")
+        self.dlls = run_dlls(args, [fx["dll"] for fx in self.fx.values()])
+        # measure's groups have no report, so they have no key and nothing of theirs is kept
+        for name, fx in self.fx.items() if not measure else ():
+            self.keys[name] = self.group_key(fx)
+            if not self.resuming:
+                (fx["out"] / VERDICT).unlink(missing_ok=True)
+                continue
+            doc, why = read_kept(fx["out"], self.keys[name])
+            if why:
+                say(f"{name}: the kept result is refused, {why}; played again")
+            if doc:
+                self.adopt(name, doc)
+            else:
+                shutil.rmtree(fx["out"], ignore_errors=True)
         for name in first_lanes(self.fx):
-            self.put(name, "L")
+            if name not in self.kept:
+                self.put(name, "L")
+
+    def group_key(self, fx):
+        """The key a group's result is kept under (*resuming a run*)."""
+        return {"tree": self.tree, "dlls": self.dlls, "dll": tree_name(fx["dll"]),
+                "fixture": fx["fix"], "scenarios": scenario_files(fx["fix"]),
+                "renderer": "gdi" if self.gdi else "players", "game_speed": self.game_speed,
+                "fixture_speed": fx["game_speed"], "turbo": self.turbo,
+                "lanes": "".join(fx["want"]), "keep": self.keep, "gametimes": fx["Ts"]}
+
+    def adopt(self, name, doc):
+        """A group's kept result as its report: its summary lines, and the fields the commands
+        read after the report (its verdicts, its lanes, its recording)."""
+        fx = self.fx[name]
+        fx["verdicts"] = [tuple(v) for v in doc["verdicts"]]
+        fx["procs"], fx["problems"] = doc["procs"], [tuple(p) for p in doc["problems"]]
+        if doc.get("rec"):
+            fx["rec"] = fx["out"] / doc["rec"]
+        lines = [ln.replace(doc["out"], str(fx["out"])) for ln in doc["lines"]]
+        got = Future()
+        got.set_result((lines, doc["failed"], doc["unrun"]))
+        self.reports[name] = got
+        self.kept.append(name)
+        say(f"{name}: kept from the earlier sitting: {doc['result']}")
+
+    def settle(self, name):
+        """The group's report, and its verdict file when it settles as a PASS or a FAIL with the
+        run not stopping (*resuming a run*, WHAT A STOP LEAVES). The report is the result: a
+        verdict file that cannot be written is said by name and costs only the resume, which then
+        plays the group again."""
+        fx = self.fx[name]
+        got = journaled_report(fx, self.keep)
+        lines, failed, unrun = got
+        key = self.keys.get(name)
+        if key is not None and not STOP.is_set() and (failed or not unrun):
+            rec = fx.get("rec")
+            keep_verdict(name, fx["out"] / VERDICT, lambda: {
+                "key": key, "result": "fail" if failed else "pass", "out": str(fx["out"]),
+                "lines": lines, "failed": failed, "unrun": unrun,
+                "verdicts": fx.get("verdicts", []), "procs": fx["procs"],
+                "problems": fx["problems"],
+                "rec": str(Path(rec).relative_to(fx["out"])) if rec else None,
+                "covers": cover_files(fx["out"])})
+        return got
+
+    def multiplayer_key(self, build, dll):
+        """The key a two-player group's result is kept under: its tools' own settings are the
+        tree's, and its form (`mp_impai`) the landing's."""
+        return {"tree": self.tree, "dlls": self.dlls, "dll": tree_name(dll),
+                "group": mp_item(build), "impai": getattr(self, "mp_impai", False)}
+
+    def kept_multiplayer(self, dlls):
+        """{build: (reach, problems)} of the two-player groups of {build: DLL} a resumed run keeps;
+        every other group's folder emptied, to be played whole."""
+        kept = {}
+        for build, dll in dlls.items():
+            d = self.out / mp_item(build)
+            doc, why = None, None
+            if self.resuming:
+                doc, why = read_kept(d, self.multiplayer_key(build, dll))
+            if why:
+                say(f"{mp_item(build)}: the kept result is refused, {why}; played again")
+            if doc:
+                kept[build] = ({tuple(k) for k in doc["reach"]}, doc["problems"])
+                self.kept.append(mp_item(build))
+                say(f"{mp_item(build)}: kept from the earlier sitting: {doc['result']}")
+            else:
+                shutil.rmtree(d, ignore_errors=True)
+        return kept
+
+    def settle_multiplayer(self, build, dll, reach, problems):
+        """A two-player group's verdict file, written as Run.settle writes a test group's, once
+        its result is in `mp_results`."""
+        if STOP.is_set():
+            return
+        d = self.out / mp_item(build)
+        keep_verdict(mp_item(build), d / VERDICT, lambda: {
+            "key": self.multiplayer_key(build, dll), "result": "fail" if problems else "pass",
+            "reach": sorted(map(list, reach)), "problems": problems,
+            "covers": cover_files(d)})
 
     def put(self, name, proc):
         with self.lock:
@@ -3976,20 +4905,25 @@ class Run:
         self.q.put((LANE_ORDER.index(proc), next(self.seq), name, proc))
 
     def done(self, name):
+        """A lane has ended and given its slot back. `pending` reaching 0 is for good: a lane
+        queues the lanes that follow it (put) before its own done, and nothing else queues one
+        after the run starts, so the run's game slots then go to the checks (GameSlots.lanes_end)."""
         with self.lock:
             self.pending -= 1
             self.left[name] -= 1
             last = self.left[name] == 0
+            over = self.pending == 0
         if last and not self.measure:
             self.report_of(name)
+        if over:
+            self.slots.lanes_end()
 
     def report_of(self, name):
         """The future of the fixture's report, started once: when its last lane ends, or by
         report() for a fixture a stopped run left with lanes never run."""
         with self.lock:
             if name not in self.reports:
-                self.reports[name] = self.report_pool.submit(journaled_report, self.fx[name],
-                                                             self.keep)
+                self.reports[name] = self.report_pool.submit(self.settle, name)
             return self.reports[name]
 
     def job(self, w, name, proc):
@@ -4002,12 +4936,18 @@ class Run:
         w.lane = (name, proc)
         J.start(name, proc, instance=w.name, display=str(w.xvfb.display),
                 gt_target=lane_target(fx, proc))
+        w.watch_caps()
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
             w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             w.held = held_lane(fx["fix"], proc)
             w.exact = proc in ("L", "K")
+            # a `nodraw` fixture plays every lane on GDI, the renderer no-draw runs on, and L,
+            # the owner's game, under the shadow, no-draw and the pose check (THE SHADOW)
+            nd = bool(fx["fix"].get("nodraw"))
+            w.gdi = self.gdi or nd
+            w.nodraw = w.posecheck = w.shadow = nd and proc == "L"
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -4050,11 +4990,19 @@ class Run:
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
+            # every game of the lane has ended (each lane stops its last): a refusal of the GPU
+            # memory cap anywhere in them fails the lane by name, and its checks still run
+            refused = w.cap_failure()
+            if refused:
+                fx["problems"].append((proc, "FAILED", refused))
+                say(f"{name} {proc}: FAILED: {refused}")
             fx["procs"][proc] = "ran"
             w.lane = None
-            J.finish(name, proc, "done")
+            J.finish(name, proc, "fail" if refused else "done", refused)
         except Exception as e:
-            kind = "FAILED" if isinstance(e, Failed) else "could not run"
+            # THE STOP ends the games under the lanes, which then read as games that exited: a
+            # stopped run's lane could not run, never a failure of the change (WHAT A STOP LEAVES)
+            kind = "FAILED" if isinstance(e, Failed) and not STOP.is_set() else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
             fx["procs"][proc] = kind
             fx["problems"].append((proc, kind, why))
@@ -4074,11 +5022,26 @@ class Run:
             try:
                 w.stop(hard=True)
             except Exception as cleanup:
+                self.cap_problem(w, fx, name, proc, why)
                 why = f"failed game cleanup: {cleanup}"
                 fx["problems"].append((proc, "could not run", why))
                 say(f"{name} {proc}: {why}; retiring {w.name}")
                 return False
+            self.cap_problem(w, fx, name, proc, why)
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
+
+    def cap_problem(self, w, fx, name, proc, why):
+        """A failed lane's refusals of the GPU memory cap, a problem of their own unless its
+        failure already is one: a pass that lost its memory is often why the lane failed."""
+        try:
+            refused = w.cap_failure()
+        except OSError as e:
+            fx["problems"].append((proc, "could not run", f"the log could not be read for the GPU "
+                                                           f"memory cap's refusals: {e}"))
+            return
+        if refused and not why.startswith(talog.CAP_FAILED):
+            fx["problems"].append((proc, "FAILED", refused))
+            say(f"{name} {proc}: FAILED: {refused}")
 
     def worker(self):
         try:
@@ -4086,6 +5049,8 @@ class Run:
         except Exception as e:
             say(f"a worker did not start: {e}")
             return
+        with LIVE_LOCK:
+            LIVE[id(w)] = w
         try:
             while not STOP.is_set():
                 try:
@@ -4095,13 +5060,160 @@ class Run:
                         if self.pending == 0:
                             return
                     continue
+                # a stopped run's take returns no slot, and the job then ends could not run at
+                # its first stopping() without starting a game
+                held = self.slots.take(1, lane=True)
+                retired = False
                 try:
-                    if self.job(w, name, proc) is False:
+                    retired = self.job(w, name, proc) is False
+                    if retired:
                         return
                 finally:
+                    # a worker retires when its cleanup could not end its game, which may still
+                    # be on the GPU: its slot stays taken for the rest of the run (GameSlots.retire)
+                    if retired:
+                        self.slots.retire(held)
+                    else:
+                        self.slots.give(held)
                     self.done(name)
         finally:
-            w.close()
+            try:
+                w.close()
+            finally:
+                with LIVE_LOCK:
+                    LIVE.pop(id(w), None)
+
+    def multiplayer_lane(self, build):
+        """The landing's two-player group of `build` beside the test groups' lanes: two of the
+        run's game slots (GameSlots) for the host and the joiner, one of them given back when the
+        game ends and the other kept for its playing. Its result goes to `mp_results`, and its
+        verdict file is written (settle_multiplayer); a stopped run plays nothing more."""
+        dll = self.multiplayer[build]
+        try:
+            held = self.slots.take(2, lane=False)
+        except ValueError as e:
+            self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: {e}"])
+            return
+
+        def game_over():
+            nonlocal held
+            if held == 2:
+                self.slots.give(1)
+                held = 1
+        try:
+            if STOP.is_set():
+                return
+            try:
+                reach, trouble = multiplayer_group(build, dll, self.out, self.keep, game_over,
+                                                   getattr(self, "mp_impai", False))
+            except Exception as e:
+                self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
+                                                  f"{type(e).__name__}: {e}"])
+                return
+            self.mp_results[build] = (reach, trouble)
+            self.settle_multiplayer(build, dll, reach, trouble)
+        finally:
+            self.slots.give(held)
+
+
+class GameSlots:
+    """The games a run plays at once, shared by its workers' lanes and the landing's two-player
+    groups: never more than runlock.games(), the grant the run lock gave.
+
+    A lane waiting for a slot goes before a two-player group, which takes its two only when two
+    are free and no lane waits. So the groups play on the slots the lanes leave idle -- the run's
+    tail, where its last long lanes play on alone -- and hold a waiting lane back no longer than
+    their own games; and neither starves: a group's two come free once the queue is empty.
+
+    The slots and the run lock's game seats agree: both number games(), and every game a slot
+    holder launches takes one seat (runlock.py, THE GAME SEATS), so the holders of all the slots
+    hold no more seats than there are. A group's peers wait for each other in the battle room, so
+    it needs both its seats at once: it takes its two slots together, and a run granted fewer than
+    two games plays no group at all (run_threads refuses them by name before a game starts), since
+    the joiner's launch would wait for the seat the host holds while the host waits for the joiner.
+
+    A slot whose game may still be running is never given back (`retire`): a worker whose cleanup
+    could not end its game leaves that game holding GPU memory and a seat, so the run plays one
+    game fewer at once from then on, and a taker that asks more than is left is refused rather
+    than waiting for slots that will never come free.
+
+    A taker never waits past a stop: `take` then returns 0 slots.
+
+    THE LENDING. Once the lanes are over (lanes_end: no lane is queued or running, and none will
+    be) a free slot that no two-player group still has to take is handed to the offline pool for
+    good: `spare(k)` is called with the k slots, which leave `total` and `free` and count in
+    `lent`. The `groups` that have not yet asked keep two free slots each, so a group finds its
+    two as it would have; a retired slot is never lent, since its game may still run. So no slot
+    is both a game's and the pool's, and no game waits for a check."""
+
+    def __init__(self, total, groups=0, spare=lambda k: None):
+        self.total, self.free, self.lanes_waiting = total, total, 0
+        self.groups, self.spare, self.lent, self.lanes_over = groups, spare, 0, False
+        self.cv = threading.Condition()
+
+    def take(self, n, lane):
+        """`n` slots once they are free (a lane's before a group's), how many were taken. More
+        than the run has, or has left once slots are retired, would wait forever, and is refused
+        (ValueError)."""
+        lend = 0
+        try:
+            with self.cv:
+                self.lanes_waiting += lane
+                try:
+                    while not (self.free >= n and (lane or not self.lanes_waiting)):
+                        if n > self.total:
+                            raise ValueError(f"{n} game slots asked of a run of {self.total}")
+                        if STOP.is_set():
+                            return 0
+                        self.cv.wait(1)
+                    self.free -= n
+                    return n
+                finally:
+                    self.lanes_waiting -= lane
+                    if not lane:
+                        # a group asks once: taken, refused or stopped, it reserves nothing more
+                        self.groups -= 1
+                    self.cv.notify_all()
+                    lend = self._lendable()
+        finally:
+            if lend:
+                self.spare(lend)
+
+    def give(self, n):
+        with self.cv:
+            self.free += n
+            self.cv.notify_all()
+            lend = self._lendable()
+        if lend:
+            self.spare(lend)
+
+    def retire(self, n):
+        """`n` taken slots kept for the rest of the run: their games may still be running."""
+        with self.cv:
+            self.total -= n
+            self.cv.notify_all()
+
+    def lanes_end(self):
+        """No lane will take a slot again (Run.done): the free slots past the groups' go to the
+        pool, and every slot given back from now on."""
+        with self.cv:
+            self.lanes_over = True
+            lend = self._lendable()
+        if lend:
+            self.spare(lend)
+
+    def _lendable(self):
+        """The slots lent now (THE LENDING), taken out of `total` and `free`; the caller holds cv
+        and calls spare() with them once it has let go of it."""
+        if not self.lanes_over:
+            return 0
+        k = self.free - 2 * max(0, self.groups)
+        if k <= 0:
+            return 0
+        self.free -= k
+        self.total -= k
+        self.lent += k
+        return k
 
 
 def cost_line(fx):
@@ -4209,10 +5321,20 @@ def lane_target(fx, proc):
     return {"P": Ts[-1], "R": Ts[-1] + CONTINUE, "Q": Ts[0]}.get(proc)
 
 
+def renderer_line(run) -> str:
+    """The summary's first line: the renderer every lane of the run played on."""
+    if run.gdi:
+        return "renderer: GDI (--gdi), every lane; no comparison here crosses renderers"
+    return "renderer: the players' (the default)"
+
+
 def report(run):
-    """The summary, fixture by fixture in the run's order, each from its report (Run.report_of)."""
+    """The summary, fixture by fixture in the run's order, each from its report (Run.report_of);
+    a resumed run names the groups it kept after the renderer."""
     failed = unrun = False
-    lines = []
+    lines = [renderer_line(run)]
+    if run.kept:
+        lines.append(f"resumed: kept from the earlier sitting: {' '.join(run.kept)}")
     for name in run.fx:
         got, f, u = run.report_of(name).result()
         lines += got
@@ -4245,20 +5367,47 @@ def cmd_run(args):
     return status
 
 
+def queued_lanes(run):
+    """The lanes `run` plays: every lane of each group it does not keep from an earlier sitting."""
+    return sum(len(fx["want"]) for name, fx in run.fx.items() if name not in run.kept)
+
+
+def game_lanes(run):
+    """The games `run` plays at once, the lanes it declares to the run lock: its workers, and no
+    more than the lanes it queues; and when it plays two-player groups, at least the host and the
+    joiner of each, which play at once on the slots the lanes leave (GameSlots)."""
+    return max(min(run.j, queued_lanes(run)), 2 * len(getattr(run, "multiplayer", ())))
+
+
 def run_threads(run):
-    """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game.
-    The workers are the only threads that play games, one each: never more than -j at once."""
+    """The run's workers and its two-player groups (`run.multiplayer`, {build: DLL}) to their end,
+    under the machine's run lock (tools/runlock.py), which is taken first and held until the
+    process ends; SIGINT or SIGTERM stops every worker's game at once (THE STOP). The workers play a
+    game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
+    nor more games at once than the run lock's games(), its GPU tokens. The hold asks beside the
+    lanes for the offline pool's workers, and the pool runs no more than it was granted, and
+    game_slots() more for each game slot no game will take again (GameSlots, THE LENDING)."""
     global J
-    offline(run.j)
+    lanes = game_lanes(run)
+    runlock.hold(TREE, run.what, lanes, gpu=not run.gdi, suite="replay", workers=offline_workers(lanes))
+    run.j = min(run.j, runlock.games(), queued_lanes(run))
+    run.mp_results = {}
+    why = runlock.together(2, "the two-player game") if getattr(run, "multiplayer", None) else None
+    if why:
+        say(f"multiplayer: could not run: {why}")
+        run.mp_results = {b: (set(), [f"MULTIPLAYER {b}: could not run: {why}"])
+                          for b in run.multiplayer}
+        run.multiplayer = {}
+    pool = offline(run.j)
+    run.slots = GameSlots(runlock.games(), groups=len(getattr(run, "multiplayer", ())),
+                          spare=lambda k: pool.widen(runlock.game_slots() * k))
+    if not run.pending:
+        run.slots.lanes_end()           # every group kept: no lane will ever take a slot
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
-
-    def interrupted(signum, frame):
-        if not STOP.is_set():
-            say("stopping: no new game starts; each worker stops its game and its Xvfb")
-        STOP.set()
-    signal.signal(signal.SIGTERM, interrupted)
-    signal.signal(signal.SIGINT, interrupted)
+    threads += [threading.Thread(target=run.multiplayer_lane, args=(b,))
+                for b in getattr(run, "multiplayer", ())]
+    watch_signals()
     for t in threads:
         t.start()
     while any(t.is_alive() for t in threads):
@@ -4272,6 +5421,8 @@ def journal(run):
     rank = {n: k for k, n in enumerate(first_lanes(run.fx))}
     items = []
     for name, fx in run.fx.items():
+        if name in run.kept:
+            continue
         steps = [{"id": p, "pool": "game", "order": LANE_ORDER.index(p) * 1000 + rank[name],
                   "after": [] if p == "L" else ["K"] if p == "F" else ["L"]}
                  for p in fx["want"]]
@@ -4296,7 +5447,11 @@ def journal(run):
 def out_dir(args):
     base = Path(os.environ.get("TAREPLAY_OUT") or
                 Path.home() / ".local" / "share" / "ta-replay" / "runs")
-    out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    resume = getattr(args, "resume", None)
+    if resume:
+        out = Path(resume).expanduser()
+    else:
+        out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     # every tarec this run starts, in this process or a child, shares one decode cache, which no
@@ -4394,6 +5549,7 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c", DD + "src/tagpu_recfile.c",
                 DD + "inc/tagpu_recfile.h",
                 DD + "inc/tagpu_recorder.h", DD + "inc/tagpu_recfmt.h", DD + "inc/tagpu_recreader.h",
+                DD + "inc/tagpu_recdiff.h",
                 DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
                 DD + "replay-layout.tsv", DD + "replay-absent.tsv",
@@ -4411,6 +5567,10 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
 # runs them in the DLL; a coverage build does not instrument them (the Makefile's COVERED), so the
 # game answers for them, and reach is not asked of their functions
 RECMP_PATH = re.compile(re.escape(DD) + r"(src|inc)/tagpu_recmp\w*\.[ch]")
+# ImpAI's own files and the battle room's ImpAI step: no test group plays ImpAI in a network game, so a
+# change to them plays the two-player game with both hosted AIs ImpAI's and takes its recording over
+# with every AI seat ImpAI's (multiplayer_group's ImpAI form)
+IMPAI_MP_PATH = re.compile(re.escape(DD) + r"src/(impai_\w+|tagpu_impai|tagpu_skirmish)\.[ch]")
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
 
@@ -4468,10 +5628,16 @@ def recorder_wide(path):
         path == "scenarios/replay-end.json"
 
 
+def wants_impai_multiplayer(paths):
+    """Whether the landing's two-player game is the ImpAI form (multiplayer_group, `impai`): a change to
+    ImpAI's files or the battle room's ImpAI step (IMPAI_MP_PATH)."""
+    return any(IMPAI_MP_PATH.fullmatch(p) for p in paths)
+
+
 def wants_multiplayer(paths):
-    """Whether the landing plays the two-player game (multiplayer_group): a change to the recorder
-    or to its multiplayer half, which no test group runs."""
-    return any(recorder_wide(p) or RECMP_PATH.fullmatch(p) for p in paths)
+    """Whether the landing plays the two-player game (multiplayer_group): a change to the recorder,
+    to its multiplayer half or to ImpAI's network play, which no test group runs."""
+    return any(recorder_wide(p) or RECMP_PATH.fullmatch(p) for p in paths) or wants_impai_multiplayer(paths)
 
 
 def gated(paths, base):
@@ -4555,17 +5721,44 @@ def skip_include(line, new_file):
 
 def landing_plan(base):
     """What the landing must reach: (fixtures, functions {(src, fn): (feature, builds)}, regions
-    {feature: ([(src, fn)...], builds)} for file-scope lines, problems, why, gated) -- `builds`
-    the builds that compile the changed lines (tafeat.builds), each of which must reach them;
-    `gated` whether any changed path is gated at all."""
+    {key: ([(src, fn)...], builds, what)}, problems, why, gated) -- `builds` the builds that compile
+    the changed lines (tafeat.builds), each of which must reach the function or one of the region's
+    functions; `gated` whether any changed path is gated at all.
+
+    A region is a feature's changed file-scope lines, keyed by the feature's name, or a whole sim
+    file, keyed `<file>:prelude` when a line above its first SIM_FEATURE changed and
+    `<file>:headers` when a header it includes did. A whole file selects every feature of it and
+    asks for one of its functions on each build that has one. A feature or a whole file that holds
+    no function, a table alone, selects its fixtures and is no region: nothing of it can be
+    reached. No key holds a space: the note's `features=` is read by splitting on spaces."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
-    funcs, regions = {}, {}
-    for path in sorted(whole):              # a header it includes changed: every feature of it
+    funcs, regions, data_only = {}, {}, set()
+
+    def whole_file(rel, text, key, bs, what):
+        """Every feature of `rel`, and a function of it reached on each build of `bs` that
+        compiles one (a test program's functions are in no build)."""
         for f in feats:
-            if f["file"] == path[len(DD):]:
-                fx |= set(f["fixtures"])
+            if f["file"] == rel:
+                fx.update(f["fixtures"])
+        fns = tafeat.functions(text)
+        bl = tafeat.builds(text)
+        if fns:
+            bs = bs & frozenset().union(*(bl[f[1]] for f in fns))
+        if not bs:
+            return
+        if "stock" in bs:
+            fx.add(STOCK_FIXTURE)
+        if not fns:                     # a table alone: its features' test groups are what it asks
+            if key not in data_only:
+                data_only.add(key)
+                why.append(f"{DD}{key}: the file holds no function, so its test groups run and "
+                           f"no function is asked to be reached")
+            return
+        old = regions.get(key, ([(rel, f[0]) for f in fns], frozenset(), what))
+        regions[key] = (old[0], old[1] | bs, what)
+
     for path in sorted(by_region | by_function):
         if not (TREE / path).exists():
             continue
@@ -4573,6 +5766,8 @@ def landing_plan(base):
         text = (TREE / path).read_text()
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
+        quiet = tafeat.comment_or_directive_lines(text)
+        prelude = frozenset()
         src = text.split("\n")
         new_file = subprocess.run(["git", "-C", str(TREE), "cat-file", "-e",
                                    f"{merge_base(base)}:{path}"],
@@ -4589,25 +5784,87 @@ def landing_plan(base):
             if path in by_region:
                 feat = tafeat.feature_at(feats, rel, ln)
                 if not feat:
-                    problems.append(f"UNFEATURED {path}:{ln}")
+                    if ln in quiet:
+                        prelude |= b
+                    else:
+                        problems.append(f"UNFEATURED {path}:{ln}: above the file's first "
+                                        f"SIM_FEATURE, where only a comment, a preprocessor line "
+                                        f"or a blank may stand")
                     continue
                 fx |= set(feat["fixtures"])
                 if fn:
                     old = funcs.get((rel, fn[0]), (feat["name"], frozenset()))
                     funcs[(rel, fn[0])] = (feat["name"], old[1] | b)
                 else:
-                    old = regions.get(feat["name"], ([(rel, f[0]) for f in fns
-                                                      if feat["line"] <= f[1] <= feat["end"]],
-                                                     frozenset()))
-                    regions[feat["name"]] = (old[0], old[1] | b)
+                    held = [(rel, f[0]) for f in fns if feat["line"] <= f[1] <= feat["end"]]
+                    if not held:
+                        # a feature of data alone, impai_fitparams.c's coefficients: no function of
+                        # it can run, so its test groups are what it asks; the code that reads the
+                        # data is another feature's, asked to be reached when that code changes
+                        if feat["name"] not in data_only:
+                            data_only.add(feat["name"])
+                            why.append(f"{path}: feature {feat['name']} holds no function, so its "
+                                       f"test groups run and no function is asked to be reached")
+                        continue
+                    old = regions.get(feat["name"], (held, frozenset(), "a changed file-scope "
+                                                     "line, and no function of its region"))
+                    regions[feat["name"]] = (old[0], old[1] | b, old[2])
             elif fn:
                 old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))
                 funcs[(rel, fn[0])] = (old[0], old[1] | b)
+        if prelude:
+            whole_file(rel, text, f"{rel}:prelude", prelude,
+                       "a changed line above its first SIM_FEATURE, and no function of the file")
+    for path in sorted(whole):
+        if (TREE / path).exists():
+            whole_file(path[len(DD):], (TREE / path).read_text(), f"{path[len(DD):]}:headers",
+                       tafeat.BOTH, "a changed header it includes, and no function of the file")
     return fx, funcs, regions, problems, why, bool(fx or by_region or by_function or whole)
 
 
-# One DirectPlay port per game; the games run one after the other inside the gate's run lock.
-MP_GAMES = {"raised": 47818, "stock": 47819}
+def reached_by_build(per, fixes):
+    """{build: {(source, function)}} from {test group: what it reached}: each group's reach counts
+    on the build its entry names -- `"dll": "stock"` the stock-limits build, else the default --
+    since a line only the stock-limits build compiles is reached only by a group that ran it, and
+    a line only the default build compiles only by one that did not."""
+    return {b: set().union(*(v for n, v in per.items()
+                             if (fixes[n].get("dll") == "stock") == (b == "stock")))
+            for b in ("raised", "stock")}
+
+
+def uncovered(funcs, regions, got, fx, multiplayer):
+    """(problems, reached, total): each changed function and each region of landing_plan not
+    reached on every build it names, by name, against `got` (reached_by_build)."""
+    def reached(keys, bs):
+        return all(any(k in got[b] for k in keys) for b in bs)
+    problems = []
+    for (src, fn), (feat, bs) in sorted(funcs.items()):
+        if not reached([(src, fn)], bs):
+            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
+                            f"fixtures {' '.join(sorted(fx)) or 'none'}"
+                            f"{'; and the two-player game' if multiplayer else ''})")
+    for key, (fns, bs, what) in sorted(regions.items()):
+        if not reached(fns, bs):
+            problems.append(f"UNCOVERED {key}: {what} ran in the build{'s' if len(bs) > 1 else ''} "
+                            f"{'+'.join(sorted(bs))}")
+    k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
+        1 for fns, bs, _ in regions.values() if reached(fns, bs))
+    return problems, k, len(funcs) + len(regions)
+
+
+# The builds the two-player game plays on, both at once and beside the test groups' lanes, inside
+# the gate's run lock (Run.multiplayer_lane, GameSlots). They share nothing they write: each game
+# leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py), its host and joiner
+# are instances named with the run's tag and the build's letter (--label, MP_LABELS), each on an X
+# server it reserves by -displayfd, its playing takes a tareplay-<k> instance by its exclusive lock
+# (Worker), and each group writes only its own folder, multiplayer-<build>.
+MP_BUILDS = ("raised", "stock")
+# one letter a build, each its own: the instance's name is its player's nickname, which holds ten
+# characters (recmp_create_begin_test.instance_names)
+MP_LABELS = {"raised": "r", "stock": "s"}
+# the ImpAI form's takeover: the host's human, record 0, takes the recording over, and the joiner's human
+# and both hosted AIs, the records 1 to 3 recmp_create_begin_test.py seats, become ImpAI's
+MP_SEATAI = "1,2,3"
 
 
 def mp_item(build):
@@ -4629,15 +5886,29 @@ def mp_step(argv, log_path):
     return p.returncode
 
 
-def multiplayer_group(build, dll, out, keep):
+def mp_takeover_at(rec):
+    """The GameTime the ImpAI form takes the two-player recording over at: the middle of its first
+    timeline, a multiplayer segment, where a takeover starts at T itself (tarec.takeover_at)."""
+    seg = tarec.chain(tarec.segments(tarec.blocks(rec)[0]), 0)
+    return (seg[0]["first"] + seg[-1]["last"]) // 2
+
+
+def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False):
     """The two-player game on one coverage build: recorded by two humans, allied both ways, and two
     AIs, each human's opponent, with chat, a selection and a click, and a drawing-board line and pin
     from each human, so the allies' ribbon reads each human's economy from the contribution channel
     and each peer applies the other's marks (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end with one seek back,
     600 to 200, so a multiplayer seek composes again (recmp_play_test.py).
-    ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
-    is never read as "not reached"."""
+    Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
+    memory cap, which it names on its last line, the line a failed step reports.
+    The ImpAI form (`impai`) plays both hosted AIs as ImpAI's (`--impai`) and then takes the recording
+    over as the host's human at mp_takeover_at with every computer seat ImpAI's (MP_SEATAI): the
+    takeover's AI check and its ImpAI seat check (recmp_play_test.py --takeover --seatai), a fourth
+    process whose coverage counts too.
+    ({(source, function)} the processes ran, problems). A failed step ends the group, named: it
+    is never read as "not reached". `game_over` is called once the game's two peers have ended and
+    the playing, one game, has not started."""
     item = mp_item(build)
     d = out / item
     d.mkdir(parents=True)
@@ -4651,15 +5922,17 @@ def multiplayer_group(build, dll, out, keep):
         lines = [ln for ln in log.read_text(errors="replace").splitlines() if ln.strip()]
         return lines[-1] if lines else "no output"
 
-    say(f"{item}: the game, on port {MP_GAMES[build]}")
+    say(f"{item}: the game")
     J.start(item, "game")
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--port", MP_GAMES[build], "--chat", "--select", "--marks", "--allies"], log)
+                  "--chat", "--select", "--marks", "--allies", "--label", MP_LABELS[build],
+                  *(("--impai",) if impai else ())], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
+    game_over()
     rec = game / "native.imprec"
     say(f"{item}: the playing")
     J.start(item, "play")
@@ -4669,13 +5942,29 @@ def multiplayer_group(build, dll, out, keep):
     if rc:
         return failed("play", f"the playing failed: {tail(log)}", log)
     J.finish(item, "play", "pass")
+    if impai:
+        try:
+            T = mp_takeover_at(rec)
+        except (OSError, ValueError, tarec.Unreadable) as e:
+            return failed("takeover", f"the takeover's GameTime: {e}")
+        say(f"{item}: the takeover at {T}")
+        J.start(item, "takeover")
+        log = d / "takeover.log"
+        rc = mp_step([HERE / "recmp_play_test.py", rec, "--out", d / "takeover", "--dll", dll,
+                      "--takeover", f"{T}:0", "--seatai", MP_SEATAI, "--cover", "takeover"], log)
+        if rc:
+            return failed("takeover", f"the takeover failed: {tail(log)}", log)
+        J.finish(item, "takeover", "pass")
     J.start(item, "checks")
     rc, text = tarec_run("check", rec)
     if rc:
         return failed("checks", f"tarec check: {last(text)}")
     covers = sorted(game.glob("cover-*.bin")) + sorted((d / "play").glob("cover-*.bin"))
-    if len(covers) != 3:
-        return failed("checks", f"{len(covers)} coverage files of the host, joiner and playing")
+    if impai:
+        covers += sorted((d / "takeover").glob("cover-*.bin"))
+    if len(covers) != (4 if impai else 3):
+        return failed("checks", f"{len(covers)} coverage files of the host, joiner, playing"
+                      f"{' and takeover' if impai else ''}")
     try:
         reach = {k for k in tafeat.reached(tafeat.read_map(dll.with_suffix(".map")), covers)
                  if k[0] in srcs}
@@ -4684,9 +5973,28 @@ def multiplayer_group(build, dll, out, keep):
     J.finish(item, "checks", "pass")
     if not keep:
         for f in (game / "tested-ddraw.dll", game / "tested-ddraw.map", rec,
-                  d / "play" / rec.name):
+                  d / "play" / rec.name, d / "takeover" / rec.name, d / "takeover" / f"fork-{rec.name}"):
             f.unlink(missing_ok=True)
     return reach, []
+
+
+def calibration_stale(base):
+    """The calibration references this landing made stale (tools/tasim/calib.py stale): counted
+    and reported, never re-measured here -- a re-measure is hours, `calib.py engine --stale`, on
+    the owner's schedule. None when the count could not be taken, which is said."""
+    r = subprocess.run([sys.executable, str(TREE / "tools" / "tasim" / "calib.py"), "stale",
+                        "--since", base, "--json"], capture_output=True, text=True, timeout=300)
+    try:
+        got = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        got = {"error": last(r.stdout + r.stderr) or f"exit {r.returncode}"}
+    if r.returncode or "error" in got:
+        say(f"calibration: the stale count could not be taken: {got.get('error')}")
+        return None
+    n = len(got["stale"])
+    say(f"calibration: {n} reference{'s' if n != 1 else ''} made stale by this landing"
+        + "".join(f"\n  {sid}: {'; '.join(why)}" for sid, why in sorted(got["stale"].items())))
+    return n
 
 
 def cmd_landing(args):
@@ -4706,12 +6014,14 @@ def cmd_landing(args):
     fx, funcs, regions, problems, why, gated_any = landing_plan(base)
     for w_ in why:
         say(w_)
-    multiplayer = wants_multiplayer(git("diff", "--name-only", f"{base}...HEAD").split())
+    changed = git("diff", "--name-only", f"{base}...HEAD").split()
+    multiplayer, mp_impai = wants_multiplayer(changed), wants_impai_multiplayer(changed)
     if not (gated_any or multiplayer):
         print("tareplay landing: nothing gated changed")
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
-        f"functions; {len(regions)} file-scope regions")
+        f"functions; {len(regions)} regions")
+    stale = calibration_stale(base) if gated_any else 0
     status = 0
     run = None
     if fx or multiplayer:
@@ -4719,60 +6029,43 @@ def cmd_landing(args):
         out = out_dir(args)
         try:
             mp_dlls = {b: chosen_dll(mp_item(b), args, b == "stock", True)
-                       for b in MP_GAMES} if multiplayer else {}
+                       for b in MP_BUILDS} if multiplayer else {}
             run = Run(sorted(fx), args, out)
         except CouldNotRun as e:
             print(f"tareplay: {e}", file=sys.stderr)
             return 2
         run.j = args.j
-        run.multiplayer = list(mp_dlls)
+        run.mp_impai = mp_impai
+        mp_kept = run.kept_multiplayer(mp_dlls)
+        run.multiplayer = {b: d for b, d in mp_dlls.items() if b not in mp_kept}
         run_threads(run)
         status = report(run)
         if STOP.is_set():
             return status or 2
-    # reach per build: a line only the stock-limits build compiles is reached only by a fixture
-    # that ran that build, and a line only the default build compiles only by one that did not
     per, unread = reached_of(run) if run else ({}, [])
     problems += unread
-    got = {b: set().union(set(), *(v for n, v in per.items()
-                                   if (run.fx[n]["fix"].get("dll") == "stock") == (b == "stock")))
-           for b in ("raised", "stock")}
-    # after the test groups, alone on the machine under the gate's run lock
-    for b, d in (mp_dlls.items() if run else ()):
-        if STOP.is_set():
-            return status or 2
-        reach, trouble = multiplayer_group(b, d, run.out, args.keep)
+    got = reached_by_build(per, {n: run.fx[n]["fix"] for n in per})
+    # the two-player groups played beside the test groups (Run.multiplayer_lane), or kept
+    for b in (mp_dlls if run else ()):
+        reach, trouble = mp_kept.get(b) or run.mp_results[b]
         got[b] |= reach
         problems += trouble
-    if STOP.is_set():
-        return status or 2
 
-    def reached(keys, bs):
-        return all(any(k in got[b] for k in keys) for b in bs)
-    for (src, fn), (feat, bs) in sorted(funcs.items()):
-        if not reached([(src, fn)], bs):
-            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
-                            f"fixtures {' '.join(sorted(fx)) or 'none'}"
-                            f"{'; and the two-player game' if multiplayer else ''})")
-    for feat, (fns, bs) in sorted(regions.items()):
-        if not reached(fns, bs):
-            problems.append(f"UNCOVERED {feat}: a changed file-scope line, and no function of its "
-                            f"region ran in the build{'s' if len(bs) > 1 else ''} "
-                            f"{'+'.join(sorted(bs))}")
+    missed, k, total = uncovered(funcs, regions, got, fx, multiplayer)
+    problems += missed
     for p in problems:
         print(f"tareplay landing: {p}")
     J.note(problems=problems)
-    k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
-        1 for fns, bs in regions.values() if reached(fns, bs))
-    total = len(funcs) + len(regions)
     if status == 0 and not problems:
         sha = graded[:8]
         seeds = " ".join(f"{n}:{run.fx[n]['Ts'][0]}" for n in sorted(fx)) if run else ""
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"multiplayer={','.join(MP_GAMES) if multiplayer else '-'} "
+                f"multiplayer={','.join(MP_BUILDS) if multiplayer else '-'}{'+impai' if mp_impai else ''} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
+                f"calibration_stale={'-' if stale is None else stale} "
+                f"kept={','.join(run.kept) if run and run.kept else '-'} "
                 f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
@@ -4936,15 +6229,19 @@ def cmd_forks(args):
     fix = fixtures().get(args.fixture)
     if not fix or not fix.get("takeover"):
         raise CouldNotRun("forks needs a takeover fixture")
+    refuse_unended({args.fixture: fix})
     out = out_dir(args)
+    # one Worker, one game at a time, and the checks it hands over
+    runlock.hold(TREE, args.what, 1, suite="replay", workers=offline_workers(1))
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
+    status, why = 2, ""
     try:
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
         fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
               "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("first", 301),
-                            fix.get("last_min"))}
+                            fix.get("last_min"), fix.get("last_max"))}
         if args.x2_only:
             w.turbo, w.held = turbo_lane(fix, "X", args.turbo), held_lane(fix, "X")
             res = x2_alone(w, fx, out / "X", Path(args.x2_only))
@@ -4953,14 +6250,26 @@ def cmd_forks(args):
             fx["rec"] = live(w, fx, None, out / "L")
             w.turbo, w.held = turbo_lane(fix, "X", args.turbo), held_lane(fix, "X")
             res = forks_lane(w, fx, out / "X")
-        for name, status, detail in res:
-            say(name, status, detail)
-        return 0
+        for name, verdict, detail in res:
+            say(name, verdict, detail)
+        status = 0
     except (CouldNotRun, Failed) as e:
         say("forks:", str(e))
-        return 1 if isinstance(e, Failed) else 2
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
     finally:
         w.close()
+    return ended_by_cap(w, "forks", status, why)
+
+
+def ended_by_cap(w, what, status, why=""):
+    """The exit status of command `what`, which played on worker `w`, once its games have ended:
+    1, said by name, when the GPU memory cap refused any of them an allocation (Worker, THE CAP'S
+    REFUSALS) and `why`, the command's own failure, does not already say so; else `status`."""
+    refused = w.cap_failure()
+    if refused and not why.startswith(talog.CAP_FAILED):
+        say(f"{what}: FAILED: {refused}")
+        return 1
+    return status
 
 
 def rewind_lane(w, fx, out):
@@ -4976,33 +6285,40 @@ def rewind_lane(w, fx, out):
 def cmd_rewind(args):
     if args.fixture != "battle":
         raise CouldNotRun("rewind's L/P/Q fixture is battle")
+    refuse_unended({"battle": fixtures()["battle"]})
     out = out_dir(args)
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
+    # one Worker, one game at a time, and the checks it hands over
+    runlock.hold(TREE, args.what, 1, suite="replay", workers=offline_workers(1))
     w = Worker(out, args.game_speed)
+    status, why = 2, ""
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
               "cover": args.cover}
         w.turbo, w.held = turbo_lane(fx["fix"], "U", args.turbo), held_lane(fx["fix"], "U")
         res = rewind_lane(w, fx, out)
-        text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
+        text = "\n".join(f"{verdict} {name}: {detail}" for name, verdict, detail in res)
         (out / "summary.txt").write_text(text + "\n")
-        return 1 if any(s == FAIL for _, s, _ in res) else 2 if any(s == UNRUN for _, s, _ in res) else 0
+        status = (1 if any(v == FAIL for _, v, _ in res) else
+                  2 if any(v == UNRUN for _, v, _ in res) else 0)
     except (CouldNotRun, Failed) as e:
         say("rewind:", str(e))
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
         w.collect(out / "failure", recordings=True)
         w.stop()
-        return 1 if isinstance(e, Failed) else 2
     finally:
         w.close()
+    return ended_by_cap(w, "rewind", status, why)
 
 
 def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
               + (", the stock-limits build" if fix.get("dll") == "stock" else "")
-              + (", a takeover" if fix.get("takeover") else ""))
+              + (", a takeover" if fix.get("takeover") else "")
+              + (", L under the shadow and no-draw" if fix.get("nodraw") else ""))
     return 0
 
 
@@ -5021,6 +6337,10 @@ def main(argv=None):
                    help="the coverage builds; each process writes its cover-<proc>.bin")
     r.add_argument("--keep", action="store_true", help="keep the passing dumps")
     r.add_argument("--out", help="the run's folder")
+    r.add_argument("--gdi", action="store_true",
+                   help="every lane renders with GDI and the run takes no GPU token: the AI's test "
+                        "groups played while the GPU is reserved; the landing gate plays the "
+                        "players' renderer")
     r.set_defaults(func=cmd_run)
     ls = sub.add_parser("list", help="the fixtures")
     ls.set_defaults(func=cmd_list)
@@ -5074,6 +6394,12 @@ def main(argv=None):
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")
     fe.set_defaults(func=cmd_features)
+    for parser in (r, la, br):
+        parser.add_argument("--resume", metavar="DIR",
+                            help="go on with the run an earlier sitting left in DIR: each test "
+                                 "group whose PASS or FAIL it kept under this sitting's key is "
+                                 "read back, every other one played (*resuming a run*); a "
+                                 "DIR that does not exist yet is made and the run starts fresh")
     for parser in (r, m, la, br, tk, fk, rw):
         parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
                             help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
@@ -5085,15 +6411,21 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
         ap.error("-j is 1..16")
+    if getattr(a, "resume", None):
+        if a.out:
+            ap.error("--resume DIR plays in DIR: no --out with it")
+        why = resume_refusal(a.resume)
+        if why:
+            ap.error(why)
     # the subcommands that read recordings need numpy, numba and zstandard (tarec.py through
     # reccodec.py); `features` and `list` run under the build's bare python3, and so does
     # `landing --check`, which reads git notes only
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
-    # every command that plays games waits for the machine's run lock (tools/runlock.py)
-    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
-        runlock.hold(TREE, "tareplay " + " ".join(sys.argv[1:] if argv is None else argv))
+    # every command that plays games takes the machine's run lock where its games start
+    # (run_threads, cmd_forks, cmd_rewind), once it knows how many it plays at once
+    a.what = "tareplay " + " ".join(sys.argv[1:] if argv is None else argv)
     rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
     try:
         rc = a.func(a)

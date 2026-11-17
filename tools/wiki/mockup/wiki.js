@@ -1,6 +1,6 @@
 /* wiki.js -- the in-game wiki's mockup: the game frame and Impure's top bar, the wiki window with its tree, demo list and
-   entry, and the stage, where stage.js draws what sim.js's view() says. The content is art/wiki/ (tree.json,
-   entries/<id>.json) and the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
+   entry, and the stage, where stage.js draws what the simulation's view() says. The content is art/wiki/ (tree.json,
+   entries/<id>.json) and the behaviour is the simulation host's (simhost.js); this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
    specification the game copies. An entry with "frame": "game" plays its demos through replay.js on the whole game
    frame (frame.js), with the replay HUD (tools/hudart/mockup/hud.js) on it. */
 (async () => {
@@ -150,7 +150,8 @@ async function loadFixtures() {
 /* a mod's pack, once: a sim started before it arrived restarts on it, and the page's text and side list follow it.
    The layout and the casting are one source: a casting list that is not index-aligned with the layout's
    sides, or one side's casting the sim's bounds refuse, refuses the pack whole, as a refused layout does. The mod's
-   stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack */
+   stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack. Whatever
+   fails on the way, the load or the checks after it, leaves the pack an error, never 'loading' (settled) */
 function loadPack(mod) {
   if (PACKS[mod] || mod === 'unknown') return;
   PACKS[mod] = 'loading';
@@ -165,7 +166,7 @@ function loadPack(mod) {
     p.stages = await fetch(`gfx/side/${mod}/stage/index.json`).then(r => r.ok ? r.json() : null, () => null)
       .then(j => j && j.entries ? j.entries : {}, () => ({}));
     PACKS[mod] = p;
-  }, x => { PACKS[mod] = { error: x.message }; }).then(() => {
+  }).catch(x => { PACKS[mod] = { error: x && x.message || String(x) }; }).then(() => {
     sideNote();
     if (mod !== S.mod) return;
     sideControl(); renderTree(); renderEntry();
@@ -282,7 +283,7 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
    row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every node back in the
    normal page's order. ---- */
 function theatre() { const e = entry(); return !!e && (e.frame === 'game' || e.frame === 'techtree' || S.theatre); }
-/* a text entry (sim.js checkText): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
+/* a text entry (tagpu_wikidata_entry): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
 const isText = e => !!e && !e.frame && !(Array.isArray(e.demos) && e.demos.length);
 function arrange() {
   const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
@@ -345,56 +346,57 @@ $('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) {
 let sim = null, simErr = null, acc = 0, simLayout = null, simCtx = null;
 let rep = null, repTry = false;
 const frameEntry = () => { const e = entry(); return !!e && e.frame === 'game'; };
-/* THE SOUND (sound.js): the sim's events played after each frame's steps, `heard` of them so far; the root of the stage
-   pack's folder holds the sounds.json the sim takes its source from, as the game's sim takes it from the 3D load that
-   gives the scripts */
+/* THE SOUND (sound.js): the sim's events played after each frame's steps, `heard` of them so far; the sim takes its
+   units' sound categories from the stage pack it takes their scripts from (the host's `packs`), as the game's sim takes
+   them from the 3D load that gives the scripts, and the root of the stage pack's folder holds the sounds.json that
+   names each category's WAVs */
 let heard = 0;
 // the sounds of the pack the stage draws from; with no stage (no entry, or a text entry) the gfx root, which holds none
 const soundRoot = () => { const d = stageDir() || ''; return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
 // a press on one of the page's controls: the engine's in-game menu controls say `Options` (tagpu_wiki.c button_sound)
 const buttonSound = () => { if (typeof WikiSound !== 'undefined') WikiSound.named(soundRoot(), 'Options'); };
-/* THE REPLAY'S LIFETIME (replay.js): it owns its simulations and their COB worlds, so it is freed whenever it is
-   dropped -- a new start, a failure -- and nothing keeps it after */
+/* THE SIMULATIONS' LIFETIME: the demo's sim and the replay (replay.js, which owns its simulations) are freed in the
+   host whenever they are dropped -- a new start, a failure -- and nothing keeps them after; a sim the page never
+   freed would hold a slot of the host's table until the table evicted it */
 function dropReplay() { if (rep) rep.free(); rep = null; }
-function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; dropReplay(); }
+function dropSim() { if (sim) sim.free(); sim = null; }
+function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); dropSim(); dropReplay(); }
 function start() {
-  sim = null; simErr = null; acc = 0; heard = 0; releaseAll(); dropReplay(); frameReset();
+  dropSim(); simErr = null; acc = 0; heard = 0; releaseAll(); dropReplay(); frameReset();
   const e = entry(), d = demo();
   if (!d) return;
-  if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
+  if (typeof WikiSim === 'undefined' || typeof WikiReplay === 'undefined') {
+    simErr = 'no simulation: the wiki plays through tools/wiki/serve.py';
+    return;
+  }
   // a demo the layout refuses (an input inside a build's trip, say) shows why on the stage, as a broken entry does
   simLayout = sideLayout(); simCtx = context();
   const replay = frameEntry();
   repTry = replay && S.try;
   const make = ctx => replay ? (S.try ? WikiReplay.create : WikiReplay.play)(e, d, simLayout, ctx)
     : S.try ? WikiSim.create(e, d, simLayout, ctx) : WikiSim.play(e, d, simLayout, ctx);
-  /* THE UNITS' SCRIPTS run on tools/wiki/serve.py's host, from the gfx pack the stage draws (cob.js). Served any other
-     way, or with no pack built, the page plays without them and says why in the console. */
-  const cob = typeof WikiCob !== 'undefined' ? WikiCob.cobPage(`tools/wiki/mockup/gfx/${stageDir()}`) : null;
-  const snd = cob && typeof WikiSound !== 'undefined' ? WikiSound.source(soundRoot()) : null;
-  const made = r => { if (replay) rep = r; else sim = r; };
-  try { made(make(cob ? { ...simCtx, cob, snd } : simCtx)); }
-  catch (x) {
-    if (!cob || !/COB host/.test(x && x.message)) fail(x);
-    else {
-      console.warn('wiki sim: playing without the units\' scripts:', x.message);
-      try { made(make(simCtx)); } catch (y) { fail(y); }
-    }
-  }
+  /* THE UNITS' SCRIPTS AND SOUNDS are the gfx pack's the stage draws, read by tools/wiki/serve.py's host; with no pack
+     built the units play at rest and silent, as a type the pack does not name does */
+  try {
+    const r = make({ ...simCtx, packs: [`tools/wiki/mockup/gfx/${stageDir()}`] });
+    if (replay) rep = r; else sim = r;
+  } catch (x) { fail(x); }
   // a type whose script the host refused plays at rest, its gates open (tagpu_wikicob.h)
   const shown = sim || (rep && rep.game);
   for (const n of shown ? shown.cobNotes() : []) if (n) console.warn('wiki sim: a script is quarantined:', n);
   controls(); syncURL();
 }
 /* a demo holds its last frame once done. A Try-it sim is never done but by a lock -- its scene holds a unit whose cast
-   the side leaves unbound (sim.js, decision 12) -- and then holds the same way: the frame under the entry's badge, no
+   the side leaves unbound (decision 12) -- and then holds the same way: the frame under the entry's badge, no
    tick and no input, as a demo stopped at a build the mod cannot reach does */
 const held = () => rep ? rep.view().done : !!sim && sim.done;
 function advance(dt) {
   if (!S.open || !(sim || rep) || !S.playing || held()) { acc = 0; return; }
   acc = Math.min(acc + dt * TICK * S.speed, 8);       // a stalled tab catches up a few ticks, not seconds of them
   if (rep) return advanceReplay();
-  while (acc >= 1 && sim && !held()) { try { sim.step(); } catch (x) { fail(x); } acc--; }
+  // the frame's whole ticks in one request (the host's `steps`), which stops at the demo's end as the held test would
+  const n = Math.floor(acc);
+  if (n >= 1) { try { sim.steps(n); } catch (x) { fail(x); } acc -= n; }
 }
 /* THE REPLAY'S PACING, the DLL's rule: a frame runs whole steps while their summed cost() -- never fewer than the game
    ticks each runs -- stays within WikiReplay.FILL, always at least one, and the demo ticks left over are owed to the
@@ -447,7 +449,7 @@ function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
-// the units' poses for the 3D stage (sim.js `poses`): one request to the COB host after each tick
+// the units' poses for the 3D stage (the drop-in's `poses`), kept beside the view the host answered
 function poses() {
   if (!sim) return null;
   try { return sim.poses(); } catch (x) { fail(x); return null; }
@@ -708,7 +710,8 @@ const hudSnap = v => Math.floor(v + 0.5 + 1 / 64);   // hud.js snapPx: a box's e
 let FR = null, PRESS = null, PTR = null, liveMove = null;
 function frameReset() {
   FR = { gv: null, lside: null, poses: null, tick: 0, gen: -1, quiet: -1, rec: null, hud: null, boxes: [] };
-  PRESS = WikiFrame.Press(); liveMove = null;
+  // frame.js reads the host's constants as it loads, so without serve.py there is no WikiFrame, and no replay to press
+  PRESS = typeof WikiFrame !== 'undefined' ? WikiFrame.Press() : null; liveMove = null;
 }
 frameReset();
 function frameClear() {
@@ -1051,19 +1054,23 @@ fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => {
   const b = $('#unit .scr'); if (b) chipCut(b);
 }).catch(x => console.error('wiki styles:', x));
 
-/* ---- the frame loop ---- */
-let last = 0;
+/* ---- the frame loop: the next frame asked for first, so a frame that throws does not end the loop -- the stage's
+   pack is asked for by a drawn frame, and a loop that ended would leave it unasked for good. The first error a frame
+   threw is kept for settled(), which names it ---- */
+let last = 0, frameErr = null;
 function loop(t) {
-  const dt = last ? Math.min(.25, (t - last) / 1000) : 0; last = t;
-  gameTick(dt);
-  if (S.open) {
-    frameDrag();
-    advance(dt);
-    const v = draw(); strip(v);
-    if (held() !== loop.held) { loop.held = held(); controls(); }
-  }
-  paintParts();                       // last, so a keycap or button made this frame shows its part in it
   requestAnimationFrame(loop);
+  try {
+    const dt = last ? Math.min(.25, (t - last) / 1000) : 0; last = t;
+    gameTick(dt);
+    if (S.open) {
+      frameDrag();
+      advance(dt);
+      const v = draw(); strip(v);
+      if (held() !== loop.held) { loop.held = held(); controls(); }
+    }
+    paintParts();                     // last, so a keycap or button made this frame shows its part in it
+  } catch (x) { if (!frameErr) frameErr = x && x.message || String(x); console.error('wiki frame:', x); }
 }
 
 /* ---- the controls strip ---- */
@@ -1081,18 +1088,59 @@ $('#iface').value = S.iface; $('#iface').onchange = e => { S.iface = +e.target.v
 window.addEventListener('resize', layout);
 
 applySkin(); layout(); renderTree(); renderEntry(); controls(); loadPack(S.mod); sideNote(); sideControl();
+// the content's arrival and the demo's start on it, which settled() waits for: done once, or failed with why
+let contentLoaded = false, startErr = null;
 Promise.all([load(), loadFixtures()]).then(() => {
   sideControl();
   if (S.entry && !(S.entry in ENT)) S.entry = null;
   if (S.open && !S.entry && TREE) S.entry = leaves(TREE.tree)[0] || null;
   const d = entry() && entry().demos; if (d && S.demo >= d.length) S.demo = 0;
   setOpen(S.open); start(); render();
-});
+}).catch(x => { startErr = x && x.message || String(x); console.error('wiki:', x); }).finally(() => { contentLoaded = true; });
 requestAnimationFrame(loop);
+
+/* THE PAGE SETTLED, what a scripted picture of it waits for (tools/wiki_regression.py mockup_shot): 'pending: <what>'
+   only while a load the page waits on is in flight -- the content, the skin's kit and its first paint, the mod's
+   sidebar pack, the fonts, and in the game look the stage's pack (gfx.js settled) -- each of which resolves or fails;
+   'ready' once the demo's simulation or replay runs on what arrived; otherwise why it never will. Every state that
+   cannot change by itself -- a demo whose sim failed (fail() leaves no sim and no replay), an entry or a demo that is
+   not there, a kit that did not load, a frame that threw -- answers its reason and never 'pending', so a waiter ends
+   on it. The stage's pack is asked for by the first frame drawn with a view (gfx.js frame), which every animation
+   frame draws while the sim or the replay runs. */
+function settled() {
+  if (!contentLoaded) return 'pending: the tree, its entries and the sidebar fixtures';
+  if (startErr) return `the page did not start the demo: ${startErr}`;
+  if (frameErr) return `a frame threw: ${frameErr}`;
+  if (treeErr) return `the tree did not load: ${treeErr}`;
+  if (S.entry && ENT[S.entry] && ENT[S.entry].error) return ENT[S.entry].error;
+  if (!demo()) return `no demo ${S.demo + 1} in entry ${S.entry}`;
+  // first, as the pack's arrival starts the demo again on its layout (loadPack)
+  if (S.sidebar === 'mod' && PACKS[S.mod] === 'loading') return `pending: the ${S.mod} sidebar pack`;
+  if (simErr) return `the demo failed: ${simErr}`;
+  if (!(sim || rep)) return 'the demo has no simulation and no replay';
+  if (S.skin !== 'whitebox') {
+    const K = KITS[S.skin];
+    if (K && K.error) return `the ${S.skin} kit did not load: ${K.error}`;
+    if (!K || K.loading) return `pending: the ${S.skin} kit`;
+    if (!$('#win canvas.skin')) return `pending: the ${S.skin} kit's first paint`;
+  }
+  if (document.fonts.status !== 'loaded') return 'pending: the fonts';
+  if (gameLook()) {
+    if (!window.WikiGfx) return 'gfx.js is not loaded';
+    const g = WikiGfx.settled(stageId());
+    return g === 'pending' ? `pending: the stage ${stageId()} in the game's graphics (${WikiGfx.state()})` : g;
+  }
+  return 'ready';
+}
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
 // and a frame:game entry's replay, its frame record, and the frame as drawn: its corner and the stage HUD's unit in canvas
 // pixels, its size in game pixels, Leave's question's rects, the viewer's cursor and the emblems' boxes, in canvas pixels
 window.WikiPage = { state: S, sim: () => sim, replay: () => rep, frame: () => FR && FR.rec, frameDrawn: () => FR && FR.hud,
-  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx, tech: () => TT.M,
+  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx, settled, tech: () => TT.M,
   techSide: () => { const d = techData(); return d && d.sides ? techSide(d) : 0; } };
-})();
+})().catch(x => {
+  // the page's own start failed (layout.json, say): settled() will never be there to ask, so the failure is kept for a
+  // scripted check to read instead of waiting on it
+  window.WikiPageFailed = x && x.message || String(x);
+  console.error('wiki:', x);
+});

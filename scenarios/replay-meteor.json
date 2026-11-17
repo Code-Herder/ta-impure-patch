@@ -1,0 +1,36 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `meteor` test group: a hail shower over the whole level. Flooded Glaciers' OTA rains `hailstorm` (MeteorRadius 2800, MeteorDensity 400, MeteorDuration 35, MeteorInterval 52), so the meteor tick 0x437DE0 draws a shower's points and every stone's offset from the meteors' own stream (the harness's switch tagpu_seeds.on, which every test group's game runs with) from the level's start and every 87 s after. Each seat holds eight hovercraft at its own start, moving within it, so stones fall among units that move (the hover wave) and units that stand (the moved-at stamp). The two starts are the OTA's special0 and special1, out of each other's weapons' range.",
+ "setup": {
+  "map": "Flooded Glaciers",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "a1", "type": "ARMSH", "owner": 0, "pos": [4880, 2000], "orders": [{"cmd": "move", "to": [4400, 2000]}]},
+  {"id": "a2", "type": "ARMSH", "owner": 0, "pos": [4960, 2000], "orders": [{"cmd": "move", "to": [4480, 2300]}]},
+  {"id": "a3", "type": "ARMSH", "owner": 0, "pos": [5040, 2000]},
+  {"id": "a4", "type": "ARMSH", "owner": 0, "pos": [5120, 2000]},
+  {"id": "a5", "type": "ARMSH", "owner": 0, "pos": [4880, 2300], "orders": [{"cmd": "move", "to": [5200, 1700]}]},
+  {"id": "a6", "type": "ARMSH", "owner": 0, "pos": [4960, 2300]},
+  {"id": "a7", "type": "ARMSH", "owner": 0, "pos": [5040, 2300], "orders": [{"cmd": "move", "to": [4700, 1700]}]},
+  {"id": "a8", "type": "ARMSH", "owner": 0, "pos": [5120, 2300]},
+  {"id": "c1", "type": "CORSH", "owner": 1, "pos": [800, 640], "orders": [{"cmd": "move", "to": [1300, 640]}]},
+  {"id": "c2", "type": "CORSH", "owner": 1, "pos": [880, 640]},
+  {"id": "c3", "type": "CORSH", "owner": 1, "pos": [960, 640], "orders": [{"cmd": "move", "to": [1400, 1000]}]},
+  {"id": "c4", "type": "CORSH", "owner": 1, "pos": [1040, 640]},
+  {"id": "c5", "type": "CORSH", "owner": 1, "pos": [800, 900]},
+  {"id": "c6", "type": "CORSH", "owner": 1, "pos": [880, 900], "orders": [{"cmd": "move", "to": [600, 1300]}]},
+  {"id": "c7", "type": "CORSH", "owner": 1, "pos": [960, 900]},
+  {"id": "c8", "type": "CORSH", "owner": 1, "pos": [1040, 900]}
+ ],
+ "camera": {"at": [5000, 2150]}
+}

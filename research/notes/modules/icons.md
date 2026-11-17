@@ -416,7 +416,7 @@ is `taIconShape`. Its five uniforms `uIconFill`, `uIconSel`, `uIconWhite`, `uIco
 `tagpu_vk_mark.c` writes `uGrid` into line draws' blocks alone and an icon draw's block holds
 `uIconInk` and `uIconSelCol` in its first two words. The atlas is the image `IMG_ICON`, in a fourth descriptor set per slot, uploaded
 once per slot (it never changes after its publication); an icon draw without it draws nothing and
-is logged once. `TAGPU_MK_MAXDRAW` is 24: a full frame records 16 draws, and a draw past the cap
+is logged once. `TAGPU_MK_MAXDRAW` is 24: a full frame records at most 22 draws ([markers](markers.html)), and a draw past the cap
 drops the whole marker layer for the frame.
 
 ## The pick

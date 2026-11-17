@@ -111,6 +111,17 @@ It images only what may have changed, and puts only the changes into the ring:
   when a table's count takes rows in; a row of zeros is passed over without imaging, its image
   being zeros, like the shadow it is compared with.
 
+Each of these comparisons — a unit's record and mover against their copy, a static table against
+its copy, a row against zeros — asks one function, `rec_diff_from` (`inc/tagpu_recdiff.h`), for the
+first byte at or after a start where two buffers differ. It compares 64 bytes a step on SSE2 and
+names the differing byte exactly, so what is imaged, and so the stream, is what a byte-by-byte
+comparison gives. `tagpu/ddraw/tests/recdifftest.c` holds it to the byte loop on every length,
+start and alignment class and on random buffers (`tests/recdifftest.py` on the host under the
+sanitizers, `make recdifftest` for Windows), and `recdifftest.exe bench` times the two on buffers
+shaped as one capture's: under Wine on the reference setup (2026-11-13), 6 MB of static tables with
+200 changed rows in 98 µs against 766 µs for the 16-bytes-a-step comparison it replaced, 1,500
+live units in 15 µs against 49, 16,384 zero rows of 140 bytes in 85 µs against 292.
+
 The largest declared tables are heap tables for this reason: the build ghost's memo `s_ghost`
 (16,384 rows of 52 bytes) and the transported explosions' marks `s_txMark` and `s_txKillMark`
 (65,536 entries each). As static arrays their 1.3 MB was compared every iteration. Each is allocated
@@ -1305,11 +1316,13 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   takeover), or `react` (LosType bits 0–2, written with the engine's own reaction). The rows: the
   wind `main+0x37EC4..+0x37EE5`, LosType, the game end's countdown `main+0x39239` and flags
   `+0x3923B` (bits 2 and 4 `hold`, the rest `write`), the simulation RNG `0x51FC88`, the meteors,
-  the pathfinder's budget table `0x5119E8..0x511A3B`, the 32 movement classes' watermarks
+  the pathfinder's weights and counters `0x5119E8..0x511A3B`, the 32 movement classes' watermarks
   `0x512374 + 0x20k`, `0x51E53C`, `0x51E684`, `0x51E688` and `0x51E6C4`: a 77-dword image, recorded
   whole at the first iteration (`RK_GLOBALS`) and then as the dwords that changed
   (`RK_GLOBALS_DELTA`), and re-read whole into the rotating check every 30 iterations. The header
-  carries the file's SHA-256 (`RT_GLOBALS`), and a recording made with another list does not play.
+  carries the list's hash over what the readers read (`RT_GLOBALS`; v0.5.1's
+  recordings carry that release's whole-file hash, read as this one's), and a recording made with
+  a list that records other bytes does not play.
   **A field the simulation's steps write goes on the list** unless it is the viewer's own or a cache
   of the draw; the TSV's header names what it leaves out and why. Adding a row is ordinary work;
   removing one, or making one `hold`, is a loosening and the owner's.
@@ -1344,7 +1357,7 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   buffer that the file and its CRC both read, because the engine's mouse thread writes a few `.data`
   bytes while a dump runs (its tagged lock and the cursor's positions; none recorded), and a body
   past `0xFFFF` bytes is refused and counted rather than truncated. The trigger
-  `tagpu_replay.trigger` is now read by the replay's frame visit (below) at most every 100 ms, on
+  `tagpu_replay.trigger` is now read by the replay's frame visit (below) at most every 10 ms, on
   any level in play: `dump <name>` arms a dump the recorder takes at its next capture point —
   while paused, at the first tick after the pause — and **`dump <name> at <T>`** one taken at the
   capture point of GameTime T exactly, whatever the speed or pauses (up to 8 armed at once; one for
@@ -1938,8 +1951,12 @@ made, and a missing or unreadable dump is could not run, never a failure. Each w
 tacli instance, `tareplay-<k>`, on its own Xvfb in `:300..:399`, a number taken only once the
 server's `-displayfd` pipe confirms it and skipping any with a socket or a lock, and holds an
 exclusive lock on `tagpu/instances/tareplay-<k>.lock` for the run, so two runs take different k and
-never touch each other's games; nothing is stopped by name or pattern. SIGTERM or Ctrl-C stops the
-run: no new game starts, each wait gives up, and every worker stops its game and its Xvfb. Passing dumps are deleted unless `--keep`; the run's folder is outside
+never touch each other's games; nothing is stopped by name or pattern. SIGINT or SIGTERM stops the
+run (`tareplay.py`, THE STOP): a thread of its own, woken by the signal's wakeup byte while the
+handler itself does nothing, sets STOP, so no new game starts and each wait gives up; it stops every
+worker's game through its instance and its Xvfb by its Popen at once, and each worker stops them
+again once its own call in flight has returned, so the run ends within that call's bound. tacli runs
+in a session of its own, so a signal to the run's process group never ends a launch midway. Passing dumps are deleted unless `--keep`; the run's folder is outside
 the repository (`--out`, `$TAREPLAY_OUT`), since its logs carry absolute paths.
 
 **The fixtures**, `tools/replay/fixtures.json`, keyed by GameTime: `load`, a scenario under
@@ -2361,7 +2378,7 @@ each time (OQ7); there is no standing list.
 
 | Command | What it does |
 |---|---|
-| `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a changed `#define`, string or character literal is a changed line; a line no feature covers is `UNFEATURED`), a changed header a `sim` file includes every feature of that file whether or not the file changed too, the recorder's own files, `tools/replay/` and `scenarios/replay-end.json` every fixture, a changed fixture entry, a scenario a fixture loads or the tool its content runs that fixture; the old side is the merge-base, as `git diff`'s is. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region), in every build that compiles the changed line: a line under `#ifdef TAGPU_LIMITS_STOCK` adds `stock-limits` and must be reached by a fixture of the stock-limits build, a line under `#ifndef` by one of the default build (`tafeat.builds`). After the fixtures, a change to the recorder's own files, `tools/replay/`, `scenarios/replay-end.json` or a `tagpu_recmp*` file plays the two-player game on each coverage build ([the completeness note](demo-recorder-completeness.md)): what it ran counts as reach on its build, and a failed step fails as `MULTIPLAYER <build>: …`. A gated change that selects nothing to run (comments only) passes with a note of `fixtures=-`. On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… multiplayer=<builds or -> reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
+| `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a changed `#define`, string or character literal is a changed line; a changed line above the file's first `SIM_FEATURE`, its prelude, is `UNFEATURED` unless it is a comment, a preprocessor line or a blank, and then selects every feature of the file), a changed header a `sim` file includes every feature of that file whether or not the file changed too, the recorder's own files, `tools/replay/` and `scenarios/replay-end.json` every fixture, a changed fixture entry, a scenario a fixture loads or the tool its content runs that fixture; the old side is the merge-base, as `git diff`'s is. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region, a changed prelude line or header one function of the file, `UNCOVERED <file>:prelude` or `<file>:headers`), in every build that compiles the changed line: a line under `#ifdef TAGPU_LIMITS_STOCK` adds `stock-limits` and must be reached by a fixture of the stock-limits build, a line under `#ifndef` by one of the default build (`tafeat.builds`). After the fixtures, a change to the recorder's own files, `tools/replay/`, `scenarios/replay-end.json` or a `tagpu_recmp*` file plays the two-player game on each coverage build ([the completeness note](demo-recorder-completeness.md)): what it ran counts as reach on its build, and a failed step fails as `MULTIPLAYER <build>: …`. A gated change that selects nothing to run (comments only) passes with a note of `fixtures=-`. On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… multiplayer=<builds or -> reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
 | `landing --check` | exit 0 when nothing gated changed, or when a passing note sits on a commit R of `main..HEAD` and `R..HEAD` changes nothing gated; 1 otherwise, saying why |
 | `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, and `fixtures.json`'s `broad` entries, which no landing runs — `limits-tier1` (4 × 1,499 units, `unit_limit` 1500: each cleared commander holds the 1,500th place) with 20 round trips, and `cost-four-ai`, a ten-minute four-AI game recorded live and reported, never failed (OQ5), for the capture's cost an iteration and the file's size per hour of game time — then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
 | `measure SCENARIO… [--end T]` | L and P of each scenario on the coverage builds, to GameTime T (default 1800; a fixture to its own end), and the functions each reached (`reached.json`) |
@@ -2464,9 +2481,12 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   on both builds. The three entries were chosen for what they reach without the steps.
 - **`limits-tier1` and `cost-four-ai` have not run in the broad tier yet**; the broad tier's first
   run is their measurement.
-- **The debris pools' class is open**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE` and
-  are not carried; the debris they hold writes nothing the simulation reads, and their class is the
-  owner's decision.
+- **The debris pools are not carried**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE`,
+  and so are stock's own pools in the main block, but no record kind carries them and a seek drops
+  what they hold. They are not display state alone: the explosion cap (`0x42176F`) decides how
+  many sim-RNG draws a shatter makes ([the engine map](../engine/weapons.html)); the debris pool's
+  no-free exit (`0x421802`) is unreachable while its records number that cap. Carrying them is a recorder project of its own
+  ([completeness](demo-recorder-completeness.html), *A seek drops the effects in flight*).
 - **Only the `sim` files and the recorder's own are instrumented**; a change elsewhere runs no
   fixture unless it touches a gated file.
 - **O15** still reaches naval fixtures' round-trip processes on some runs, and the forest fixtures'
@@ -2619,7 +2639,8 @@ invariants, the file's segments, the fork's handle and the residuals are in
   Paralyze and BuildWeapon resume (OQ-A). VTOL_MobileBuild's orphaned frame and the adopted builders'
   COB pose are accepted residuals.
 - **D2**: `tarec compare-fork` excludes the node state D1 restarts, the records outside the fork's
-  seats, the roles that changed and the contact bits by the puppet view's rule, and nothing else.
+  seats, the roles that changed, the contact bits by the puppet view's rule and, at the fork's first
+  capture, ImpAI's rows of a seat the takeover newly gave ImpAI, and nothing else.
 - **D3**: a fork is always recorded; a takeover whose file cannot be appended is refused before the
   rebuild.
 - **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is

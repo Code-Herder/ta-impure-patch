@@ -1,0 +1,19 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The constructor of the `impai-persona` test group (impai-persona.json), applied at GameTime 331 with nothing cleared: one CORE construction K-bot (CORCK) of seat 1 at (5000, 760), between its commander and its army, idle. Seat 1's economy decides at 7 (mod 60) under Easy's persona, so its first decision after the apply is at 367, and an idle constructor beside the commander's frame always takes an order there -- a ladder job, else the assist of the commander's build (impai_econ.c, assign) --, which Easy's react of 45 holds pending until 412: the group's takeover at 391, held at 390, finds that batch pending. Nothing else of seat 1's is idle then -- in the group's recording at 6b6e332d the lab builds from 53 and the commander from 113, and seat 1 orders nothing from 136 to 712 -- so without this unit its 367 decision orders nothing and the takeover finds no entry.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "core_ck",
+   "type": "CORCK",
+   "owner": 1,
+   "pos": [
+    5000,
+    760
+   ],
+   "facing": 180
+  }
+ ]
+}

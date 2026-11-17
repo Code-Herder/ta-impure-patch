@@ -2080,6 +2080,11 @@ static int __cdecl before_update(void* entry_esp)
     return 0;                           /* never hijack the return */
 }
 
+void tagpu_menu_nodraw_frame(void)
+{
+    if (s_installed) menu_tick();
+}
+
 /* ---- init ---------------------------------------------------------------- */
 static void read_tokens(void)
 {

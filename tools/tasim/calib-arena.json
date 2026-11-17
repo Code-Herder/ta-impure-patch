@@ -1,0 +1,35 @@
+{
+ "about": "The calibration arena (tools/tasim/calibref.py, arena()). map, flat, axis, a, b and courses are written by tools/tasim/arenascan.py pick from the install and re-derived by its check before every `calib engine`: a two-seat map whose .ota leaves the meteor shower switched off in every schema by the engine's own rule, and the longest dry rectangle of one height at least 1600 world units across ([x, y, width, height] in world units, height and sea level the TNT's). A duel puts side A at a and side B along the axis toward b at its distance; courses holds a movement course per land move class, [from, to]. scenario: the launch and first empty point, its map the same. los, mapping and commander_death: the default of every calibration scenario, the skirmish's True line of sight, Mapped, and a commander's death ending nothing (ActiveCommanderDeath 0, which the launch sets through the SKIRMISH screen's CommanderDeath button), which a reference is keyed by.",
+ "map": "cavedog links cc",
+ "scenario": "scenarios/calib/arena.json",
+ "los": 1,
+ "mapping": 1,
+ "commander_death": 0,
+ "unit_limit": 1500,
+ "flat": {
+  "rect": [4544, 384, 5584, 1600],
+  "height": 85,
+  "sealevel": 75
+ },
+ "axis": "x",
+ "a": [4800, 1184],
+ "b": [9872, 1184],
+ "courses": {
+  "kbot": [
+   [4800, 704],
+   [9872, 704]
+  ],
+  "tank": [
+   [4800, 1024],
+   [9872, 1024]
+  ],
+  "hover": [
+   [4800, 1344],
+   [9872, 1344]
+  ],
+  "amphibious": [
+   [4800, 1664],
+   [9872, 1664]
+  ]
+ }
+}

@@ -19,18 +19,16 @@ import sys
 from pathlib import Path
 
 GUARD = "TAGPU_DEVPY_REEXEC"
+VENV_HINT = "<main checkout>/.venv-undither/bin/python"
 REPO = Path(__file__).resolve().parents[2]
 
 
 def _have():
-    try:
-        import numpy  # noqa: F401
-        import zstandard  # noqa: F401
-    except ImportError:
-        return False
     # looked up, not imported: importing numba costs a tenth of a second, which reccodec.py pays
-    # only when it decodes a sectioned block
-    return importlib.util.find_spec("numba") is not None
+    # only when it decodes a sectioned block; and loading numpy reserves OpenBLAS's buffers, one a
+    # thread of the machine (1 GiB on the reference setup), which every worker the tool then forks
+    # inherits and its memory bound counts (runlock.bind_worker)
+    return all(importlib.util.find_spec(m) is not None for m in ("numpy", "zstandard", "numba"))
 
 
 def venv_python():
@@ -50,7 +48,8 @@ def ensure():
         return
     py = None if os.environ.get(GUARD) else venv_python()
     if py is None:
-        print("needs numpy, numba and zstandard: the shared venv (CLAUDE.md, Python tooling)",
+        print(f"could not run: needs numpy, numba and zstandard, which the shared venv has: "
+              f"run it with {venv_python() or VENV_HINT} (CLAUDE.md, Python tooling)",
               file=sys.stderr)
         sys.exit(2)
     os.environ[GUARD] = "1"

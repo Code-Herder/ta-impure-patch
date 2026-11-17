@@ -609,7 +609,9 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the instance")
     a = ap.parse_args()
     TMP.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["make", "-C", str(DDRAW), f"-j{os.cpu_count()}", "tests/modinsttest.exe", "ddraw.dll"], check=True, capture_output=True)
+    # under the run lock, at -j the slots it grants (tools/runlock.py, BUILDS)
+    subprocess.run([sys.executable, str(ROOT / "tools/runlock.py"), "make", "--what", "installtest build", "--",
+                    "-C", str(DDRAW), "tests/modinsttest.exe", "ddraw.dll"], check=True, capture_output=True, cwd=ROOT)
     if not a.only or a.only == "tar":
         part_tar()
     if a.only != "tar":

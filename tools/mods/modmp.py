@@ -23,10 +23,12 @@ import dpport  # noqa: E402
 import modpack as mp  # noqa: E402
 import runlock  # noqa: E402
 import tacompat as t  # noqa: E402
+import talog  # noqa: E402
 
 OUT = ROOT / "tmp" / "modmp"
 DLL = ROOT / "tagpu/ddraw/ddraw.dll"
-PORT = dpport.STOCK + 40
+PORT = None                     # the cases' DirectPlay port, leased in main (tools/dpport.py)
+LEASE = None                    # that lease, held to the end of the process
 FILM = None
 fails = 0
 
@@ -100,6 +102,8 @@ class Pair:
         for inst in (self.host, self.join):
             dpport.set_port(inst["prefix"], PORT)
         t.free_dplay_port(PORT, {str(self.host["prefix"]), str(self.join["prefix"])})
+        # each peer's refusals of the GPU memory cap, read once it has stopped (talog.CapWatch)
+        self.caps = {r: talog.CapWatch(inst["gamedir"]) for r, inst in (("host", self.host), ("join", self.join))}
         self.games["host"] = t.start_wine(self.host, None)
         self.film = None
         if FILM and self.label == "gameplay":
@@ -122,6 +126,10 @@ class Pair:
         for role, g in self.games.items():
             self.shot(role, "end")
             t.stop_wine(g)
+        for role in self.games:
+            refused = self.caps[role].failure(f"the {role}")
+            if refused:
+                report(False, f"{self.label}: {refused}")
         OUT.mkdir(parents=True, exist_ok=True)
         for role, inst in (("host", self.host), ("join", self.join)):
             (OUT / f"{self.label}-{role}.log").write_text(log_of(inst))
@@ -246,9 +254,17 @@ def main():
     a.add_argument("--old-dll", help="an Impure build from before the fingerprint, v0.5's ddraw.dll or older; `older` and `olderhost` need it")
     a.add_argument("--film", type=Path)
     args = a.parse_args()
-    global FILM
+    global FILM, PORT, LEASE
     FILM = args.film
-    runlock.hold(ROOT, "modmp")
+    # each case a host and a joiner at once; their instances carry the run's tag (tacompat.inst_name),
+    # and OUT is one folder for every run
+    runlock.hold(ROOT, "modmp", 2, [f"shots:{OUT}"], suite="compat")
+    why = runlock.together(2, "modmp")          # the host and the joiner meet in one lobby
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
+    LEASE = dpport.lease()
+    PORT = LEASE.port
     OUT.mkdir(parents=True, exist_ok=True)
     old = OUT / "older-ddraw.dll"
     if args.only in (None, "older", "olderhost"):

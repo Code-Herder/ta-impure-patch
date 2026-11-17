@@ -20,12 +20,13 @@
 
    By default the C side is built natively with gcc, AddressSanitizer and UndefinedBehaviorSanitizer. --wine builds it
    with the DLL's own compiler (i686-w64-mingw32-gcc, tagpu_wikidata.c on SSE2 as the Makefile compiles it) and runs it
-   under Wine (WINEPREFIX: the main checkout's wineprefix/). */
+   under Wine, in the prefix tools/wiki/wineprefix.py gives (wikibuild.mjs wineEnv), never the template's. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { wineEnv } from './wikibuild.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiText = require('./mockup/text.js');
@@ -62,10 +63,8 @@ function build(tmp) {
     const obj = path.join(tmp, 'tagpu_wikidata.o');
     run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', obj, sse], { cwd: DDRAW });
     run(cc, [...flags, '-static', '-o', exe, 'tests/wikitexttest.c', obj, ...SRCS.filter(src => src !== sse)], { cwd: DDRAW });
-    const common = run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim();
-    const env = { ...process.env };
-    env.WINEPREFIX ??= path.join(path.resolve(ROOT, common), '..', 'wineprefix');
-    env.WINEDEBUG ??= '-all';
+    let env;
+    try { env = wineEnv(); } catch (e) { throw new CannotRun(e.message); }
     return (args) => run('wine', [exe, ...args], { cwd: tmp, env });
   }
   const exe = path.join(DDRAW, 'tests/wikitexttest-native.exe');   // `.exe` so the tree's *.exe ignore covers it

@@ -552,7 +552,8 @@ def main():
                              "tagpu_wikilay.c", "tagpu_uikit.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
                              "tagpu_pak.c", "lodepng.c", "tagpu_wikiframe.c", "tagpu_wikistage.c", "tagpu_wikisim.c", "tagpu_placegeo.c",
                              "tagpu_sweepgeo.c", "tagpu_wikicob.c", "tagpu_cobvm.c", "tagpu_cob_safe.c", "tagpu_wikireplay.c", "tagpu_wikitech.c")),
-                         "-lm", "-o", str(exe)],
+                         # the shared simulation core, every tasim_*.c (tools/wiki/tasimsrcs.mjs takes the same files)
+                         *(str(f) for f in sorted(SRC.glob("tasim_*.c"))), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:
         sys.exit("wikilaycheck: the native build failed\n" + cc.stderr)

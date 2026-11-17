@@ -661,6 +661,9 @@ surface. [BINARY-VERIFIED, strings]
 **In game:** `%sMAIN2.GUI` (`0x509570`, used at `0x497BA4`) · `%sGEN.GUI` (`0x50282C`) ·
 `BUILDER.GUI` (`0x502844`) · `TABMENU` · `UNITINFOx`
 
+SKIRMISH's handler, its seat button `Player<N>` and its Difficulty gadget are mapped in
+[the GUI](engine/ui.html), *The SKIRMISH screen's handler `0x47AE60`*.
+
 **Build pages are `<UNITNAME><page>.GUI`** — `sprintf` at `0x41B286` with the format
 `%s%d.GUI` (`0x502838`), the `%s` being a unit-name buffer built immediately above. So a
 builder's menu is per-unit and paged, and page *n+1*'s gadgets live in a **file that is

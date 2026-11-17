@@ -46,7 +46,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Mechanism | **Runtime spawn from inside the fork**, calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`. Not a `.sav` writer, not a generated `.ota` mission. |
 | Menus | **No menu navigation by the agent**: `scenario load` drives `ui click SINGLE → Skirmish → Start` internally, each step auto-waiting and reporting the screen it landed on. Not an engine bypass — the Start button *is* map load, player setup and start positions, so it gets pressed rather than reimplemented. |
 | File ownership | **Self-contained.** `setup` carries map, players, resolution, unit limit, switches; the entity list carries the situation. `load` = launch + apply (always a clean start); `apply` = mutate a live game, ignoring `setup`. Two verbs, two unambiguous meanings. |
-| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, cloaked), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
+| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, fire state, stock, cloaked), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
 | Coordinates | **World units, one space**, exactly what `roster` / `eye` / `click` already speak: `pos: [x, y]` on the eye plane, optional `height` (default: engine snaps to terrain). No normalized space, no tile space. Out-of-map is a validation error. |
 | Facing | **Degrees, `0` = TA's own default build facing** (heading word `0x8000`, *not* `0x0000`). Omitted = engine default. |
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
@@ -54,7 +54,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Identity | **Author-chosen string handles** → ordinals at compile time → `UnitStruct*` in a spawn table at apply time. Engine indices are never the public identity (`UnitInGameIndex` is recycled on death). |
 | Validation | **Three layers**: strict schema (unknown keys are errors), catalogue check against the live unit/feature/map lists, and an in-process **resolve-before-create** pass that creates nothing if anything fails. `on_error: "skip"` opts into best-effort, and it acts in **layer 3**: layer 2 downgrades to a warning and passes the name through, because only the fork can drop entities one at a time. Layer 1 stays absolute — *not a name* is not *not in this game*. |
 | Timing | **Detect** the trigger in the present path (existing idiom); **apply** from a detour at **`0x4969D2`** — five position-independent bytes inside the block `0x4969CB` (TADR's `GameTickHook` address) enters — never mid-render, where the sort-grid walk lives. All entities in **one visit**, so the situation is reproducible. |
-| Existing units | `setup.clear_existing` defaults **true**, removing the skirmish's starting commanders silently via `UNITS_KillUnit(u, 0)` — a scenario contains exactly what the file says. It runs over a **snapshot** taken first, and **before** the create pass, for reasons phase C measured (below). |
+| Existing units | `setup.clear_existing` defaults **true**, removing the skirmish's starting commanders silently via `UNITS_KillUnit(u, 0)` — a scenario contains exactly what the file says. It runs over a **snapshot** taken first, and **before** the create pass, for reasons phase C measured (below). An apply that clears also restarts every seat's weapon scan (the AI object's cursor `+0x39` set to 0, as on a level's first step: [tasim calibration](modules/tasim-calibration.md), *What a reload does not reset*); one that adds to a running game (`clear_existing: false`, `tacli order`, a camera-only wire) leaves the scans where the game has them. Both are withheld in a network game and on a puppet. |
 | Camera | `at` and `center_on` both mean **the centre of the window**, never the eye origin. Group targets compile to a coordinate; entity handles resolve to the unit's *actual* post-snap position. `pin` defaults false. |
 | Orders | The engine's own order **names**, compiled to TA's order constants and resolved per unit through **`ScriptAction_Type2Index`** (TADR's own path). TA has **no attack-move**; the idiom for a meeting engagement is `attack` a ground position. |
 | Switches | `setup.switches` name-keyed to the `SoftwareDebugMode` bits. **`shootall` defaults on** (the universal player convention); always echoed in the result. |
@@ -122,14 +122,29 @@ unit names by scanning the live definition table. This design follows its recipe
   half-built look, and is the percentage **built** — `40` is a 40%-complete scaffold.
   The engine's own field is the fraction *remaining*, so the applier inverts it.
 - `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask. It is the MOVEMENT
-  stance: a unit on `hold` still fires at what comes in range, so a target that must not shoot
-  back has to be unarmed.
+  stance: a unit on `hold` still fires at what comes in range; what keeps a unit from firing is
+  `fire`.
 - `kills` (0..65 535) sets the unit's kill count, which veterancy reads. It is written on the peer
   that applies the scenario only: the engine's create message carries no kills, so another peer's
   copy of the unit starts at 0.
+- **The weapon keys**, each refused in a network game and on a puppet, as the calibration keys
+  below are:
+  - `fire` is the FIRE state, a token: `hold` (hold fire), `return` (return fire), `at_will` (fire
+    at will), `+0x110` bits 20–21 = 0, 1, 2; absent, the unit keeps its def's `standingfireorder`.
+    The applier writes it as Standing_FireOrder `0x403100` does: the two bits, then for `hold` and
+    `return` the clear of each slot whose `+0x1B` has bit 4 (`0x48A0F0`), which at a create finds
+    no target, the create having just set each slot's to none (`0x485C50`). A unit on `hold`
+    neither acquires nor retaliates; on `return` it retaliates but runs no scan; on `at_will` the
+    scan and Standby's search run ([units](engine/units.md), the `+0x110` row). The result's
+    `units[i].fire` reads it back (0, 1, 2).
+  - `stock` (0..200) is slot 0's stockpile count, the byte BuildWeapon adds to (`unit+0x1E`); 200 is
+    where BuildWeapon stops. Only for a type whose slot 0 weapon is a stockpile weapon (weapon
+    `+0x111` bit 28): any other is an error naming the unit. The write is followed by the stock's
+    build-menu relabel `0x41C150`, as each engine writer's is. The result's `units[i].stock` reads
+    it back.
 - `cloaked` (`true`) gives the unit the order the stock CLOAK button gives: the applier looks up
   `CLOAK_ON` by name (`0x438760`, the string at `0x502774` the button pushes at `0x41A77E`) and
-  issues it through `0x43AFC0` without Shift, right after the create. Its handler sets `+0x110`
+  issues it through `0x43AFC0` without Shift, after the scenario's orders. Its handler sets `+0x110`
   bit 11 only for a type that can cloak (def `+0x245` bit 13); the owner's economy pass then sets
   `+0x10E` bit 2 when it can take the type's whole `CloakCost` (def `+0x1DA`; `CloakCostMoving`,
   `+0x1DE`, for a moving unit) out of the player's current energy at once, and clears it when it
@@ -142,19 +157,40 @@ unit names by scanning the live definition table. This design follows its recipe
   and the order reaches no peer. `false` or absent leaves the engine's default (`init_cloaked`).
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
-  wreck gets reclaimed), never a group.
-- **Only the LAST order of a list takes effect today.** The applier issues each with
-  `shift = 0`, and `ORDERS_NewMainOrder2Unit`'s allocator walks the unit's order list and
-  destroys every entry lacking flag bit `0x4` before linking the new one, when the new order's
-  own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at
-  `0x43AE0E..0x43AE12`; a move order's evidently do) — so a list is a replacement, not a queue.
-  [BINARY-VERIFIED 2026-09-04, found by the landing review; no shipped fixture uses more than
-  one order per entity, so nothing depends on it yet.] Making the array a real queue means
-  passing `shift = 1` for the second and later orders, and that path is the one whose
-  duplicate scan *cancels* a matching order rather than adding one — it needs a live test
-  before it is used.
+  wreck gets reclaimed), never a group. An order whose handle names a unit that was not created
+  or a feature that was not placed fails by name (`its target unit N was never created`, `its
+  target feature N was never placed`) and is not issued, under `on_error: skip` too. The spawn
+  `0x423C50` refuses a feature whose footprint covers an indestructible feature of the map, such
+  as a metal rock ([map](engine/map.md), the `0x423C50` row): a scenario places its wrecks clear of
+  them.
+- **A list replaces, unless its later orders carry `queue`.** The applier issues an order
+  without Shift (`shift = 0`), and `ORDERS_NewMainOrder2Unit`'s allocator then walks the unit's
+  order list and destroys every entry lacking flag bit `0x4` before linking the new one, when the
+  new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at
+  `0x43AE0E..0x43AE12`; a move order's evidently do) — so of plain orders only the last takes
+  effect. [BINARY-VERIFIED 2026-09-04.]
+- **Queued orders: `"queue": true`** is TA's Shift. The applier issues the order with Shift, and
+  `0x43ADC0` then skips the wipe and links it after the unit's last commanded node (the one marked
+  `+0x42` bit `0x1000`, which it takes the mark from), or at the tail (`0x43AE5B..0x43AFB1`), so a
+  plain order followed by queued ones is one queue in file order: when the head ends, the
+  engine's controller starts the next. With Shift, `0x43AFC0` first walks the list for a node of
+  the same action, of the same target when the order has one, and within 16 world units on x and
+  z of a position the order has, and **removes that node and adds nothing** — the toggle a
+  Shift-click on a waypoint makes (`0x43AFE0..0x43B087`, [orders](engine/orders.md), *The order
+  module*). So `queue` is refused, by name, by `tacli` and again by the DLL's parser, unless:
+  - it is not the first order of its list (it has an order to join);
+  - its target is a unit handle (`"target"` naming a unit), with no `to` and no `count` — never a
+    feature, a position or `buildweapon`, whose root `0x43B0B0` takes no Shift;
+  - no earlier order of its list names the same target (`tacli` checks the whole list; the parser,
+    which sees the wire, checks the chain back to its head without `queue`);
+  - its `after` is not below the previous order's: an order issued before its predecessor would be
+    wiped by the predecessor's plain issue.
+  On the wire the order line ends ` queue`, after any ` after=<n>`; the parser takes it only for an
+  ordinal subject and a `unit <ordinal>` target. A delayed chain reaches `0x43AFC0` in file order
+  (*The delayed orders*, `tagpu_scenario.c`); an entry the watch cancels leaves the chain's later
+  entries to join whatever list the unit holds.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
-  `cloaked`, `orders`) may sit on a group, where it applies to every member.
+  `fire`, `stock`, `cloaked`, `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
   the camera, so there is one rule for the word.
 - Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded. A `line`'s optional
@@ -181,11 +217,15 @@ unit names by scanning the live definition table. This design follows its recipe
   seats ten players on Core Prime Industrial Area, a ten-player map, each with its commander
   ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
   refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
-  instance's registry store.
-- **A player's keys** are `slot` (required), `controller` (`human`, `ai`, `off`; `ai` when
-  absent), `side` (`arm`, `core`), `color` (0..9), `metal` and `energy` (the starting resources, a
-  launch-time setting: see below) and `ally_group` (0..4). They compile to `--player`'s six fields
-  in that order, `N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`.
+  instance's registry store. A record that is active but was not seated at the level start
+  (`+0x73` 0, so no control-group table `+0x78`) is refused as `player slot N has no seat in this
+  game`: the create files every unit into its owner's groups and would fault at `0x4802DD`
+  ([units](engine/units.md), the `+0x78` row).
+- **A player's keys** are `slot` (required), `controller` (`human`, `ai`, `impai`, `off`; `ai`
+  when absent), `side` (`arm`, `core`), `color` (0..9), `metal` and `energy` (the starting
+  resources, a launch-time setting: see below) and `ally_group` (0..4), which compile to
+  `--player`'s six fields in that order, `N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`;
+  and the apply's `share_metal`/`share_energy` (above), `ai` (`off`) and `storage` (below).
 - **`ally_group`: seats with the same group start allied.** It is the skirmish key
   `Player<N>AllyGroup`, which the settings load reads into the settings entry's `+8`, 5 when the key
   is absent, and the seat fill allies two seats whose groups are equal when the other seat's
@@ -211,6 +251,49 @@ unit names by scanning the live definition table. This design follows its recipe
 - Per-player unit counts are checked after expansion: over `setup.unit_limit` is an
   **error**, over the default cap of 1500 with no limit set is a **warning** (the engine
   would silently drop the rest).
+- **The calibration keys** reset a level between runs of the calibration runner
+  ([the calibration runner](modules/tasim-calibration.html)). Each writes engine state no other
+  machine sees, so the applier refuses each in a network game and on a puppet, as an error
+  naming the key that `on_error` then handles:
+  - `setup.clear_features` (default `false`): every feature of the level burned through the
+    engine's own BurnAll walker `0x424840`, after the unit clear and before the creates. It
+    takes indestructible features and geothermal vents too, so a scenario that needs a vent
+    cannot use it. The result says `"features_cleared": true`.
+  - `setup.objective`: `"off"` disarms the level's end test (`0x4904B0`), so a level with no
+    units runs on; `"on"` arms it again (`+0x88 = 1`, the takeover's write). A level with no
+    objective is an error. The result says `"objective"`.
+  - `setup.players[].ai: "off"`: the console's AI toggle on an AI seat (`0x463C60(rec, 1)`): the
+    seat becomes type 1, its units keep their orders and no planner runs. Refused for a seat that
+    is not an active AI seat or is the controlled one. The result's `players[s].ai` says `"off"`.
+  - `setup.players[].storage: {"metal", "energy"}`: the seat's base storage, the seat setup's
+    own writes (`+0x149` bit 0, `+0xE0` metal, `+0xDC` energy, the maxima raised to at least
+    them). The economy pass adds it to the storage it recomputes, so a level set beside it
+    survives the pass's clamp. Both numbers, 0 or more; the result's `players[s].storage` reads
+    them back as `[metal, energy]`, or `null` when the apply wrote none. The engine ends a seat's
+    base storage when a unit of its side's commander type dies (`0x486518`), so the applier
+    writes it after the apply's own clear; a later apply whose clear kills a commander states the
+    storage again.
+  - **Every apply resets each listed active seat's economy-pass results** after its creates, asked by
+    no key: income and expense to 0, and the storage maxima to what the next economy pass would
+    compute from the seat's alive, finished units and its base storage (raised to a level the
+    wire sets). The pass skips a seat with no live unit that has had one (`0x465525..0x465537`),
+    so without the reset a seat emptied by a clear would carry the previous level's values into
+    the next. Withheld in a network game and on a puppet, without an error (the calibration
+    note, [tasim calibration](modules/tasim-calibration.md), *The seat's rates*).
+  - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
+    apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
+    as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
+    target's cell changes first (a unit whose death is pending, `+0x110` bit 14, counts as dead), if
+    a later apply's clear kills it, if the level changes or becomes a puppet (whose state only
+    the recorder writes), or, fail-closed, if GameTime
+    advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
+    frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
+    log says `scenario: delayed orders: issued N of M, refused R, cancelled K (deaths D, cleared
+    C, skipped S)`, R the due orders the unit could not take. The result's `delayed` is the number pending after the apply, and `cleared_slots` lists
+    the slots the apply's clear emptied.
+- **The top-level `calib` object** is the calibration runner's: the scenario's kinds, metrics,
+  runs, tick limit, end clauses and scoreboard area (`tools/tasim/calibref.py` validates it).
+  The compiler accepts it as an object and never writes it to the wire.
 
 ## Order vocabulary
 
@@ -220,7 +303,23 @@ fork's. Every number is TADR's button/order table's [`TA_MemoryStructures.pas:6-
 `stop`'s: TADR numbers it 1, and type 1 in the mapper is not Stop (below).
 
 `stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
-`patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+`patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14) `buildweapon`(256)
+
+`buildweapon` is no command of the mapper, whose types are 1–14; its 256 is the fork's own. It is
+the stockpile build of slot 0's weapon, `{"cmd": "buildweapon", "count": n}` with n 1–200 and no
+target, and the applier issues it as the build menu's MAKENUKE / MAKEANTI button does:
+`0x43B0B0(BUILDWEAPON, unit, 0, n)` (`0x419B97..0x419BA8`), the action looked up by name through
+`0x438760`, which adds n to the tail node of the unit's second list `+0x60` or appends one. The
+node is BuildWeapon `0x402B70`'s, which builds into slot 0's stock up to 200, charging the unit's
+ledger in steps of 5 ticks ([orders](engine/orders.md), *Which root for which order*). Only a unit
+whose slot 0 weapon is a stockpile weapon takes it (BuildWeapon reads that weapon with no test);
+another is `this unit cannot take that order`. Refused in a network game and on a puppet. The
+result's `units[i].buildweapon` reads back what slot 0's BuildWeapon nodes still have to build
+after the order, for an ordinal subject ordered at the apply. `tacli order <inst> buildweapon
+count <n> --unit <idx>` gives it to a live unit.
+
+Any order may carry `"after": n` (0–255): it is issued n ticks after the apply by the same path,
+or cancelled when its unit or target goes first ([the file](#the-file), the calibration keys).
 
 `stop` is the sidebar STOP button's own order: type 10 sends the mapper to `0x43F82C`, which looks
 up the script action `"STOP"` with no test of the unit [DISASSEMBLED], the action the button
@@ -319,15 +418,35 @@ consequences, both caught in review:
   map cell — `issue_orders` passes a position and a null target pointer for `feat` already —
   so a live feature is named by `pos <x> <y>` and reaches the identical engine path.
 
-**`ScriptAction_Type2Index` is not a validator, measured.** *The engine recipe* below records
-[CORPUS] that a `NULL` return means "this unit cannot take that order", and the applier does
-report it. It refused nothing we could construct: `capture`, `mobilebuild`, `unload`, `blast`,
-`repair` and `load` were all **accepted** on a commander with a bare position (2026-09-07) and
-did nothing observable. So `issued` counts orders handed to the engine, not orders that mean
-anything — the roster is the oracle. **There is no ownership check either**, by construction:
+**`ScriptAction_Type2Index` refuses by writing action 0.** It returns its first argument's
+buffer on every path and says "this unit cannot take that order" by storing 0 there
+(`0x4401DC..0x4401E7`); action 0 is `Ready`, the descriptor with the empty name, which no command
+maps to, and the engine's reaction attack tests the byte the same way (`0x43B24D`) [DISASSEMBLED].
+The applier reports such an order as failed and issues nothing, an undelayed one in the result's
+errors and a delayed one in the report line's `refused`. The mode-3 tests (`attack`) are in
+[orders](engine/orders.md); a 2026-09-07 trial that found `capture`, `mobilebuild`, `unload`,
+`blast`, `repair` and `load` all accepted on a commander with a bare position tested the
+returned pointer, never the byte, so it says nothing about which of them the mapper refuses.
+What the mapper accepts can still mean nothing to the unit: `issued` counts orders handed to the
+engine, and the roster is the oracle. **There is no ownership check either**, by construction:
 `issue_orders` passes whatever unit the subject resolved to, which is what lets a scenario
 order units it spawned for another player. An order aimed at an enemy unit is accepted; whether
 its AI immediately overrides it was not measured.
+
+**Every scenario's orders against the mapper: `tools/tasim/applysweep.py`.** `plan` lists the levels it would play and what it would not; `run --dll PATH --j N` applies every `ta-scenario/1` file under `scenarios/` that carries an order once, on the level it is written for, set up as whatever plays it sets it up:
+
+- a fixture's mid-level applies on the fixture's load at their GameTimes, with its content, LOS and unit limit as tareplay launches it;
+- a calibration scenario on the arena;
+- any other on its own map with its own setup's unit limit (1500 when it names none, always passed: an instance keeps the last limit any launch wrote), and with a fixture's content when its map or its types need one;
+- a type the core's definitions of the stock install (`tasim_run defs`) lack needs a mod: the scenario takes the content of the first fixture whose content command installs every such type, read from the definitions of a scratch folder the command ran in. With none it is not played but named COULD NOT RUN, with the compatibility suite's setup when that plays it.
+
+Scenarios with the same launch share a level, each applied two ticks after the one before, unless one of three things holds; then the scenario loads a level of its own:
+
+- it turns a seat's AI off;
+- it keeps what it finds (`clear_existing: false`);
+- its creates would not fit. The stale-hits hold (`hit_take`, below) keeps the slots its clear frees from them, so an owner's units must fit in the limit less what the previous apply left. A scenario that does not fit even on a fresh load of its own launch (a 500-unit army on a limit of 500) is DOES NOT FIT, a failure.
+
+The sweep follows each scenario past its last delayed order and names every refused order with its unit, command and target. An apply passes only when its result does: `ok` 1, no error, no create refused and something created. Any other is named as failed, so an `on_error: abort` that created nothing is never counted as played. It holds the run lock for the lanes it plays and runs `--j` tareplay Workers in parallel, no more than the lock's games. Its levels render with GDI and take no GPU token; `--gpu` renders them on the default renderer and takes a token a lane, and `applysweep.json` names the renderer. A scenario it flags is fixed in the scenario; a missing mod is a missing setup (exit 2).
 
 ## Engine switches
 
@@ -397,8 +516,8 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | feature name → id | `FeatureName2ID(name)` | `0x422DD0` | Only a feature the level loaded: a name it did not load is an error ("no feature named … in this game"). TADR's `TAMap.PlaceFeatureOnMap` falls back to `LoadFeature 0x4224B0`, which is not safe in a live game: it searches the TDF index `[0x511FB4]`, which the level load frees and zeroes (`0x4223E0` at `0x4918DE`, the store at `0x422452`), so it reads through NULL at `0x4224BB` (DISASSEMBLED). |
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] It returns the feature object for a 3-D def only: a 2-D (GAF) def such as a tree, `+0xFE` bit 0 set, gets no object and returns NULL on success, so the applier takes the anchor cell's `+8` word holding the def as the placement fact (`0x423C60` zeroes the return, `0x423EE5` writes the word) [DISASSEMBLED 2026-10-26] |
-| order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
-| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last order per entity survives. [BINARY-VERIFIED] |
+| order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and that byte at 0 means this unit cannot take that order (`0x4401DC..0x4401E7`; the pointer itself is never `NULL`, DISASSEMBLED). Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
+| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last plain order per entity survives; a `queue` order passes `shift = 1` and joins the list (*Queued orders*). [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
@@ -550,7 +669,10 @@ per-instance. Two established idioms, both followed:
 - **In**: `tagpu_scenario.trigger` — a private, versioned, line-oriented text file the CLI
   writes and the DLL scans with a small fixed-vocabulary parser, then deletes
   (`tagpu_peek` idiom). No user hand-writes it; **no compatibility promise** — it changes
-  freely whenever the DLL does.
+  freely whenever the DLL does. The parser is the shared core's `tasim_wire.c`, one copy for
+  the applier (`tagpu_scenario.c`) and tasim ([layers and modules](impai/shared-core.html));
+  `tagpu/ddraw/tests/tasim_wire_test.py` holds its native, sanitized and i686 builds to one
+  dump of every scenario's wire and names each malformed case's error.
 - **Out**: `tagpu_scenario.json` — written **tmp + rename** so a reader never sees a
   half-built file, polled by the CLI in an auto-wait loop (`tagpu_ui` idiom,
   `inc/tagpu_ui.h`).
@@ -564,18 +686,53 @@ v1 seed=20260901 clear=1 onerror=abort units=401 feats=1
 map Two Continents
 limit 500
 sw noshake=1 shootall=1
-player 1 metal=5000 energy=5000
-# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <cloaked>
-unit 0 ARMPW 1 775 1098 - 90 - - - - -
+clearfeat 1
+objective off
+player 1 metal=5000 energy=5000 ai=off mstore=5000 estore=5000
+# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>
+unit 0 ARMPW 1 775 1098 - 90 - - - - hold -
 feat 0 ARMCOM_DEAD 1700 1200 - 45
-order 0 attack pos 2400 1200
+order 0 attack pos 2400 1200 after=7
+order 0 buildweapon count 2
 cam feat 0 pin=0
 end
 ```
 
+The calibration keys ride on their own lines and columns: `clearfeat 1` and `objective off|on`
+when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
+both or neither), beside `metal=`/`energy=` and the share levels `share_metal=`/`share_energy=`
+(`-` unchanged, below 0 sharing off); and ` after=<n>` (1–255) last on an `order` line, or
+before a closing ` queue` (*Queued orders*). The
+weapon keys are the unit line's last two columns, `<fire>` a token (`hold` / `return` / `at_will`)
+and `<stock>` 0–200, each `-` when unset, and `buildweapon`'s amount is its target, `count <n>`
+(1–200), which no other order takes. The parser refuses an unknown `player` key and any column
+past an order's or a unit's end.
+
+Three optional keys may follow `<stock>` on a unit line, in this order: ` at=<n>` (0–65535), the
+ticks after the apply at which the unit is created, ` slot=<p>` (0–65535), the position in its
+owner's unit block it is created in, and ` cloak=1`, a unit's `cloaked`, refused with an `at` other
+than 0 since the cloak is issued at the apply. `cloak` is a key and not a column so that a wire
+without it keeps its bytes, which the calibration's references are keyed by. `at` and `slot` are
+the packed calibration lane's
+([tasim-calibration](modules/tasim-calibration.html), *The packed lane*): `tacli` writes them only
+when an expanded unit carries them, the JSON schema has neither, and the `tasim_run` interface
+refuses a wire that uses them (*The tasim_run interface* there: tasim takes it on in T1, and its
+stand-in `fake_tasim.py` refuses so until then). The parser refuses a value out of range, a key repeated or out of order, two units
+of one owner asking for one slot, and an order whose subject and ordinal unit target have
+different `at` (a live or selected subject counting as `at=0`).
+
+The numbers are read as the DLL's C runtime reads them, in every build. An integer column is a
+32-bit `strtol`: a value out of range saturates, so a `v1 seed=` above 2147483647 — which `tacli`
+writes for some scenarios (33 of the 201 in `scenarios/`, counted 2026-11-12) — comes back in the
+result as 2147483647, and a column saturated at the low end is −2147483648, the value `-`
+stands for: the engine's default where `-` is allowed, refused where a number is required. A
+storage is a `strtod` double from 0 up to, and not including, the double nearest 3e38, rounded
+once to the float the seat stores.
+
 Three details the sketch above did not have. The map gets **its own line** — the rest of
 the line is the name — so a map with spaces needs no escaping. An order names its target
-in a fixed vocabulary (`pos <x> <y>` / `unit <ord>` / `feat <ord>` / nothing, for `stop`),
+in a fixed vocabulary (`pos <x> <y>` / `unit <ord>` / `feat <ord>` / `count <n>`, for
+`buildweapon` / nothing, for `stop`),
 which is cheaper to parse than guessing from the argument count. And **every entity line
 precedes every order line**, because the fork creates the whole situation before issuing
 anything — so an order can name a unit spawned later in the same tick. `end` closes the
@@ -597,11 +754,12 @@ handles back before an agent sees it:
  "requested": {"units": 401, "features": 1, "orders": 400},
  "applied": 402, "failed": 0, "cleared": 2,
  "orders": {"issued": 400, "failed": 0},
+ "delayed": 0, "features_cleared": false, "cleared_slots": [1, 2],
  "map": {"name": "Two Continents", "world": [10752, 12800], "tiles": [672, 800]},
  "limit": {"total": 0, "per_player": 250, "array_slots": 2500},
  "switches": {"before": 12, "after": 1052, "bits": {"shootall": true, "noshake": true}},
  "units": {"0": {"engine_index": 3, "owner": 0, "type": "ARMPW",
-                 "requested": [1823, 1026], "actual": [1823, 1026, 85]}},
+                 "requested": [1823, 1026], "actual": [1823, 1026, 85], "fire": 0}},
  "features": {"0": {"def": 87, "type": "armlab_dead",
                     "requested": [3000, 1200], "actual": [3000, 1200, 85]}},
  "order_probe": {"passed": [3800, 1200, 84], "stored": [3800, 1200, 84]},
@@ -609,7 +767,9 @@ handles back before an agent sees it:
 ```
 
 `actual` carries three components — the two the file asked for plus the terrain snap the
-engine chose. `order_probe` is the applier reading `UnitOrders->Pos` straight back after the
+engine chose. A unit's `fire`, `stock` and `buildweapon` appear only when the file asked for
+them, each read back on the game thread right after the write or the order; `null` for a fire or
+stock the applier did not write. `order_probe` is the applier reading `UnitOrders->Pos` straight back after the
 first order, **reported in whole world units**. It does NOT check the coordinate convention and
 never could: the order constructor copies the caller's three dwords verbatim, so `passed ==
 stored` is a tautology — which is exactly how the wrong convention survived a month of
@@ -683,6 +843,53 @@ before launch. The schema bounds slots to 0..9; an omitted roster leaves the
 saved seat preset alone. Controller keys alone are insufficient: playback writes
 its recorded seat extent, which can be smaller than the next scenario's roster.
 With ten slots declared it seats ten (the seating rule under the schema's notes).
+
+**A player's `controller`** is `human`, `ai` (OTA AI, the stock AI), `impai` or `off`. `impai`
+is a computer seat to the engine, written to the registry as `ai` is (controller 2); what makes
+ImpAI play it is the store: `load` writes `seatai=<the impai slots>` into the instance's
+`impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat; every
+other tacli launch writes `seatai=none`, so a line an earlier launch left never seats ImpAI. The
+DLL reads the key at each level's init under every launch, `--defaults` included ([ImpAI in the
+engine](modules/impai.html)). A network game's computer seats are ImpAI's by their names, which the
+battle room's button sets; the store's `netai` is the button's first step, which every tacli launch
+writes too: `ota`, or `impai` with `tacli launch --netai impai`.
+
+**`setup.difficulty`**, `easy`, `medium` or `hard`, sets the SKIRMISH screen's `Difficulty`
+gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine's own value
+`main+0x37EEE` back; a value other than the one asked for stops the load. Omitted, the screen
+keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
+resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
+
+**`setup.starts`**, `fixed` or `random`, sets the SKIRMISH screen's `StartLocation` gadget before
+Start. The stage is found by the engine's own value, not the gadget's label: after each stage the
+load reads the settings block's `+0x118` (`[main+0x29A0]+0x118`, the choice the loader reads at
+`0x49790E`), nonzero for fixed, and stops when no stage gives the value asked for. With fixed
+starts seat i takes the map's `StartPos(i+1)` ([sim](engine/sim.html), *Seating a level*).
+Omitted, the screen keeps its own choice.
+
+**One `ally_group` for every seat is refused.** The SKIRMISH Start refuses a game
+whose enabled seats all share one group other than 5 ("All players may not be in the same allied
+group.", `0x479760`; [sim](engine/sim.html), *Seating a level*): two seats cannot be allies. `load`
+reads the settings block just before it clicks Start and dies naming that refusal rather than
+waiting out its live-map bound.
+
+**`setup.commander_death`**, `true` or `false`, sets the SKIRMISH screen's commander toggle before
+Start: `true` is "Game ends when commander is destroyed." and `false` "Game continues after
+Commander is destroyed.". The `CommanderDeath` button flips the settings' `+0x108` and the skirmish
+load copies it into ActiveCommanderDeath `main+0x37EF6` (`0x4973ED`), so `load` reads the setting,
+clicks only when it differs, reads it again, and after the level is live reads `main+0x37EF6`
+back; a value other than the one asked for stops the load. The load's steps and
+`loaded.commander_death` report the level's value whether or not the file asked. With 1, a
+commander's death kills every other unit of its side that is alive and not already dying, when
+the side's record is active and of type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
+own clear sets it to 0 for its kills, so clearing a skirmish's commanders takes nothing with them.
+It is a launch key, set where a player sets it, so the level holds it from its first step: the
+demo recording leaves it out as a level constant (`replay-globals.tsv`), and an apply never
+writes it. `--commander-death 0|1` overrides the file. `scenarios/commander-death.json` shows it,
+and `tools/replay/killall_check.py` reads the level's recording to check it tick-exactly: the
+commander's death (`tarec.py deaths`) in the step from GameTime T, each other unit of its side in
+the step from T when its slot is later than the commander's and from T + 1 when it is earlier,
+as the unit tick's walk in slot order and its reaper give.
 
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
@@ -817,6 +1024,15 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   is *outside* the sim loop, so the simulation never observes the empty world. The
   snapshot stays: it means the sweep kills exactly what was there and can never reach a
   unit the same visit created.
+- **The slots the clear frees are not the creates' to take.** The stale-hits fix holds a unit
+  slot in the tick it is freed: a create never takes it then, and in the next tick takes it only
+  when its block has no slot free for longer (`tagpu_patches.c`, `hit_take` at first-free's test
+  `0x486036`, `hit_held`). So the creates of an apply that clears fit in the free slots its owner's
+  block had BEFORE the clear, less any freed earlier in the same tick. The applier counts them
+  before it creates anything and refuses an owner that does not fit, naming its block, the
+  occupied slots, the slots held by the clear and those freed earlier in the tick. A full block
+  cleared and refilled in one apply therefore does not fit: a 500-unit army on a 500 limit loses
+  the start commander's slot to the hold.
 - **A scenario that leaves a player with no units ends the game**, and then
   `Game_MainLoopTick` stops and the applier is never called again. That is the engine
   being right, not a bug — but the first version reported it as a silent 30-second CLI
@@ -855,9 +1071,8 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   in Python instead would mean renumbering ordinals and orphaning any order or camera that
   named it; the fork already re-checks every name, so per-entity best effort belongs
   exactly where it can be per-entity.
-- **`setup.players[].metal/energy` cannot be set from the apply point** — but they *can*
-  be set at launch, which phase D then found. The offsets are
-  right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
+- **`setup.players[].metal/energy` hold at the apply point only beside a `storage`.** The offsets
+  are right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
   `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, storage at `+0xA4`/`+0xA8`) and the write
   lands — the result's `players.wrote` shows the figure back. But TA's economy pass
   `0x401360`, which runs once every 30 ticks for each local player (`0x46507D..0x465092`,
@@ -872,11 +1087,12 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   the bit but the saved-game loader (`0x466200`, which restores it) makes that storage at least
   200: the skirmish seat setup (`0x496F5D`), the network setup (`0x4977D8`), `0x496E90`
   (`0x496EA1`), whose callers are `0x465F42` and the Deathmatch respawn (`0x46540F`), and
-  `0x497080` (`0x497114`), which nothing calls. The applier still writes, and reports
-  `requested` / `wrote` / `now`; the compiler warns whenever a file asks, so `validate` says
-  it before anything runs; and the shipped example dropped the two keys rather than advertise
-  a knob the engine overrules. Setting resources for real is a launch-time problem — and
-  phase D solved it; see below.
+  `0x497080` (`0x497114`), which nothing calls. **The `storage` key is that base storage**: the
+  applier makes the seat setup's own writes (`0x496EE0`: the bit at `0x496F5D`, the floats at
+  `0x496F64..0x496F97`) before the level writes, so the pass adds it to the storage it
+  recomputes and a level at or below it survives the clamp. The compiler's warning fires only
+  for a level with no `storage` beside it. Launch-time resources still come from `scenario
+  load` (phase D, below).
 
 **D — `scenario load` end to end. BUILT 2026-09-01.** `cmd_scenario_load` composes the
 verbs that already worked: launch carrying `setup`'s launch half, the shell path by gadget

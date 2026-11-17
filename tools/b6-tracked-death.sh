@@ -1,9 +1,13 @@
 #!/bin/bash
 # The tracked unit dies with a build order armed — one scripted run, no hand driving.
 #
-#   tools/b6-tracked-death.sh [out-dir]     (instance $B6_INSTANCE, default b6td, on the
-#                                            private Xvfb $B6_DISPLAY, default :142;
+#   tools/b6-tracked-death.sh [out-dir]     (instance b6td, made afresh, on the private Xvfb
+#                                            $B6_DISPLAY, default :142;
 #                                            B6_DLL=stocklimits runs ddraw-stocklimits.dll)
+#
+# One game under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
+# instance's resource, so a second run of this probe waits for the first. The probe runs itself
+# again as the lock's command, which holds them until it exits.
 #
 # Launch scenarios/b6-tracked-death.json with the play defaults (the build ghost is one) ->
 # select the CORCK -> press CORSOLAR (main+0x2CC3 = 0x0E) -> order it into the ARM LLT's range
@@ -18,9 +22,14 @@
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
-I=${B6_INSTANCE:-b6td}
+I=b6td
 D=${B6_DISPLAY:-:142}
-OUT=${1:-${TMPDIR:-/tmp}/b6-tracked-death}
+OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b6-tracked-death}")
+case "${RUNLOCK_HELD:-}" in
+  *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
+  *) cd "$REPO" && exec python3 tools/runlock.py run --lanes 1 --what "b6-tracked-death" \
+       --resource "instance-$I" -- "$REPO/tools/b6-tracked-death.sh" "$OUT" ;;
+esac
 mkdir -p "$OUT"
 start=$(date +%s)
 echo "b6 start $(date -d @"$start" +%T)"
@@ -33,7 +42,9 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+# a registry of its own: an instance sharing the template's hives would take the whole budget
+"$T" rm "$I" --force > /dev/null 2>&1
+"$T" create "$I" --private-registry --display "$D" > "$OUT/create.txt" 2>&1 \
   || fail "create: $(tail -1 "$OUT/create.txt")"
 info() {        # retried: `tacli ls` fails while another session's instance is half made
   local v

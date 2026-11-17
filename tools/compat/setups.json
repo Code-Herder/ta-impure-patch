@@ -458,6 +458,9 @@
           "ARMAABOAT",
           "ALL_L2"
         ]
+      },
+      "calib": {
+        "unit_limit": 1000
       }
     },
     {
@@ -537,6 +540,9 @@
         "battle": "compat-battle-tazero",
         "host": "compat-mp-host-tazero",
         "join": "compat-mp-join-tazero"
+      },
+      "calib": {
+        "end_type": "ARMT1SOLAR"
       }
     },
     {

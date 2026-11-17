@@ -59,6 +59,12 @@ int tagpu_rec_dump_now(const char* name);
 int tagpu_rec_ai_arm(const char* name, unsigned from, unsigned until);
 /* Acquisition runs for human seats too; end planner attribution before it. */
 void tagpu_rec_ai_planning_end(void);
+/* ImpAI's turn as the stock tick's: orders constructed between the two are attributed to `seat`,
+   as ai_enter attributes those inside 0x408C40, which an ImpAI seat never calls. Game thread only;
+   enter pushes only inside an armed window, below the stack's depth, for a seat below REC_PLAYERS,
+   and returns whether it pushed, which leave takes. */
+int  tagpu_rec_ai_turn_enter(unsigned seat);
+void tagpu_rec_ai_turn_leave(int pushed);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has

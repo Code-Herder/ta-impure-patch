@@ -1166,7 +1166,7 @@ static int feat_eq(const WIKIFEATDEF* a, const WIKIFEATDEF* b)
 }
 
 /* THE CASTING'S BOUNDS: each casting of the report, read by tagpu_wikidata_casting -- the pack's
-   reader, which holds sim.js's checkCasting -- must be accepted and equal the block's, field for
+   reader, which holds a casting's bounds -- must be accepted and equal the block's, field for
    field. 1 when every side's is. */
 static int casting_agrees(const WIKISIDE* side, const char* rep, char* why, size_t nwhy)
 {

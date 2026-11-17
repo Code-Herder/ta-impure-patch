@@ -142,6 +142,16 @@ extern const SimField tagpu_sim_owned[];
 
 #define SIM__IS_ARRAY(v) (!__builtin_types_compatible_p(__typeof__(v), __typeof__(&(v)[0])))
 
+/* THE WIDEST ROW A RECORDING CARRIES: the demo recorder images a row whole into one span (tagpu_recorder.c,
+   SPAN_MAX is this), and refuses to record any game while a recorded declaration's row is wider. So each
+   declaration below whose class is SIM_STATE and whose row width is known when it compiles is held to it
+   here: a table too wide fails the build, not the first game. A table with every seat's value of a slot
+   is keyed by slot, its seats in the row (impai.h, IMPAI_HITROW), never by seat with every slot in it. */
+#define SIM_ROW_MAX 0x7000u
+#define SIM__ROW_FITS(var, cls_, stride_)                                                       \
+    _Static_assert((cls_) != SIM_STATE || (stride_) <= SIM_ROW_MAX,                              \
+                   #var "'s rows are wider than a recording carries (SIM_ROW_MAX)")
+
 #define SIM__ENTRY(var, ...)                                                                   \
     static const SimDesc simdir_##var = { .name = __FILE__ ":" #var, .line = __LINE__,         \
                                           .addr = (void*)&(var), __VA_ARGS__ };                \
@@ -150,15 +160,18 @@ extern const SimField tagpu_sim_owned[];
 
 /* A scalar, a struct or a buffer: one row. */
 #define SIM_VAR(var, cls_) \
+    SIM__ROW_FITS(var, cls_, sizeof(var));                                                     \
     SIM__ENTRY(var, .stride = sizeof(var), .nrows = 1, .cls = (cls_))
 
 /* A scalar or struct whose layout names fields that are not plain values. */
 #define SIM_VAR_L(var, cls_, layout_) \
+    SIM__ROW_FITS(var, cls_, sizeof(var));                                                     \
     SIM__ENTRY(var, .stride = sizeof(var), .nrows = 1, .cls = (cls_), .layout = (layout_))
 
 /* A static array of rows; `key_` is what a row index means. */
 #define SIM_ROWS(var, cls_, key_, layout_)                                                     \
     _Static_assert(SIM__IS_ARRAY(var), #var " is not an array");                               \
+    SIM__ROW_FITS(var, cls_, sizeof((var)[0]));                                                \
     SIM__ENTRY(var, .stride = sizeof((var)[0]), .nrows = sizeof(var) / sizeof((var)[0]),        \
                .cls = (cls_), .key = (key_), .layout = (layout_))
 
@@ -167,6 +180,7 @@ extern const SimField tagpu_sim_owned[];
     _Static_assert(SIM__IS_ARRAY(var), #var " is not an array");                               \
     _Static_assert(__builtin_types_compatible_p(__typeof__(count), unsigned),                  \
                    #count " is not unsigned");                                                 \
+    SIM__ROW_FITS(var, cls_, sizeof((var)[0]));                                                \
     SIM__ENTRY(var, .stride = sizeof((var)[0]), .nrows = sizeof(var) / sizeof((var)[0]),        \
                .rows = &(count), .cls = (cls_), .key = (key_), .layout = (layout_))
 
@@ -177,12 +191,14 @@ extern const SimField tagpu_sim_owned[];
     _Static_assert(!SIM__IS_ARRAY(var), #var " is not a pointer");                             \
     _Static_assert(__builtin_types_compatible_p(__typeof__(count), unsigned),                  \
                    #count " is not unsigned");                                                 \
+    SIM__ROW_FITS(var, cls_, stride_);                                                         \
     SIM__ENTRY(var, .stride = (stride_), .rows = &(count), .cls = (cls_), .key = (key_),        \
                .flags = SIMD_HEAP, .layout = (layout_))
 
 /* A pointer to `n_` rows of `*var` that SIM_ALLOC made. */
 #define SIM_BLOCK(var, cls_, key_, n_, layout_)                                                \
     _Static_assert(!SIM__IS_ARRAY(var), #var " is not a pointer");                             \
+    SIM__ROW_FITS(var, cls_, sizeof(*(var)));                                                  \
     SIM__ENTRY(var, .stride = sizeof(*(var)), .nrows = (n_), .cls = (cls_), .key = (key_),      \
                .flags = SIMD_HEAP, .layout = (layout_))
 

@@ -8,6 +8,7 @@
 #include "tagpu_log.h"
 
 #include "tagpu_settings.h"
+#include "tagpu_vkcap.h"         /* tagpu_vkcap_mib_ok: the caps gpumem= may name */
 
 #define STORE      "impure.cfg"
 #define STORE_TMP  "impure.cfg.tmp"
@@ -22,7 +23,7 @@
 
 static void slog(const char* fmt, ...)
 {
-    char b[700];
+    char b[1024];
     va_list ap;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b, fmt, ap);
@@ -110,6 +111,8 @@ static const Opt O_RADARDOTS[] = { {"always", 1}, {"zoomed", 0}, {"1", 1}, {"0",
    thread, so no value needs a restart. */
 static const Opt O_ONOFF[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
 static const char* const RC_NAME[5] = { "ground", "air", "nuke", "cannon", "lrpc" };
+/* What plays a computer seat this peer adds in a network game's battle room (tagpu_impai.c). */
+static const Opt O_NETAI[] = { {"ota", 0}, {"impai", 1} };
 /* The drawing board's marks: faded after 60 s of game time, or kept until erased (the owner's
    choice of 2026-11-15; drawing-board-plan.md). Read every frame, so no value needs a restart. */
 static const Opt O_MARKLIFE[] = { {"60", 60}, {"erased", 0} };
@@ -156,6 +159,11 @@ static const Key s_key[TS_NKEYS] = {
     { "sensorview",  O_ONOFF, N(O_ONOFF), 1 },
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
+    /* every seat ImpAI's: a skirmish's computer seats play ImpAI, OTA AI one click on (the seat
+       button, tagpu_skirmish.c); a campaign mission's stay OTA AI (tagpu_impai.c, THE SEAT CHOICE) */
+    { "seatai",      NULL,    0,          0x3FF },
+    /* ImpAI first in the battle room, as `seatai`'s default is */
+    { "netai",       O_NETAI, N(O_NETAI), 1 },
     { "marklife",    O_MARKLIFE, N(O_MARKLIFE), 60 },
     { "drawkey",     NULL,       0,             0xDC },
 };
@@ -199,6 +207,9 @@ static int s_rkind = 2, s_rkindSet;
 /* The range rings' per-type choice, `rangetoggle=`: under s_io like the spacing. */
 static TsRangeToggle s_rtoggle[TS_RTOGGLE_SAVED];
 static int s_nrtoggle;
+/* `gpumem=`, MiB, 0 for none (tagpu_settings_gpumem). Set at attach, before any other thread
+   exists, and never again. */
+static int s_gpumem;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -227,6 +238,7 @@ static int valid(TagpuSetting k, int v)
     if (k == TS_MONITOR) return v == -1 || (v >= 0 && v < s_monCount);
     if (k == TS_RESOLUTION) return res_ok(v);
     if (k == TS_RANGEALLY || k == TS_RANGEENEMY) return v >= 0 && v <= TS_RC_ALL;
+    if (k == TS_SEATAI) return v >= 0 && v < 1024;
     if (k == TS_DRAWKEY) return tagpu_settings_drawkey_ok(v);
     for (i = 0; i < s_key[k].nopts; i++)
         if (s_key[k].opts[i].value == v) return 1;
@@ -285,6 +297,24 @@ int tagpu_settings_placement(TagpuSetting key, int* out)
     return 1;
 }
 
+int tagpu_settings_seatai(void)
+{
+    return s_attached ? read_val(TS_SEATAI) : 0;
+}
+
+int tagpu_settings_netai(void)
+{
+    return s_attached ? read_val(TS_NETAI) : 0;
+}
+
+void tagpu_settings_set_seatai(int mask)
+{
+    if (!s_attached || mask < 0 || mask >= 1024 || (int)s_val[TS_SEATAI] == mask) return;
+    InterlockedExchange(&s_val[TS_SEATAI], mask);
+    InterlockedIncrement(&s_gen);
+    InterlockedIncrement(&s_dirty);
+}
+
 long tagpu_settings_gen(void) { return (long)s_gen; }
 
 void tagpu_settings_set(TagpuSetting key, int value)
@@ -338,6 +368,18 @@ static int serialise(char* b, int cap)
                 at += k;
             }
             k = _snprintf(b + at, cap - at, "%s\r\n", n ? "" : "none");
+        } else if (i == TS_SEATAI) {
+            int v = read_val(TS_SEATAI), c, n = 0;
+            k = _snprintf(b + at, cap - at, "seatai=");
+            if (k < 0 || k >= cap - at) return -1;
+            at += k;
+            for (c = 0; c < 10; c++) {
+                if (!(v & (1 << c))) continue;
+                k = _snprintf(b + at, cap - at, "%s%d", n++ ? "," : "", c);
+                if (k < 0 || k >= cap - at) return -1;
+                at += k;
+            }
+            k = _snprintf(b + at, cap - at, "%s\r\n", n ? "" : "none");
         } else {
             /* the value IN FORCE: under Classic or Classic++ a render key is the
                preset's, whatever a custom session left in the slot */
@@ -371,6 +413,12 @@ static int serialise(char* b, int cap)
             at += k;
         }
         k = _snprintf(b + at, cap - at, "\r\n");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
+    /* only while a harness launch set it: a player's store never carries the key */
+    if (s_gpumem) {
+        k = _snprintf(b + at, cap - at, "gpumem=%d\r\n", s_gpumem);
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
@@ -613,6 +661,25 @@ static int parse_rclass(const char* v)
     return m;
 }
 
+/* `none`, or seats 0-9 separated by commas (`1,3`), into a bit per seat; -1 for anything else */
+static int parse_seats(const char* v)
+{
+    char b[64];
+    char* w;
+    char* e;
+    int m = 0;
+    lstrcpynA(b, v, sizeof b);
+    if (!lstrcmpiA(trim(b), "none")) return 0;
+    for (w = b; w; w = e) {
+        e = strchr(w, ',');
+        if (e) *e++ = 0;
+        w = trim(w);
+        if (w[0] < '0' || w[0] > '9' || w[1]) return -1;
+        m |= 1 << (w[0] - '0');
+    }
+    return m;
+}
+
 /* `NAME:n:ally:enemy,...`, skipped entry by entry as the spacing's are */
 static void parse_rtoggle(char* v)
 {
@@ -702,6 +769,26 @@ static void parse_line(char* line)
         if (m >= 0) s_val[t] = m;
         else slog("%s=%s is not a list of ground, air, nuke, cannon, lrpc or none - "
                   "the default stands", s_key[t].name, v);
+        return;
+    }
+    if (!lstrcmpiA(k, "seatai")) {
+        int m = parse_seats(v);
+        if (m >= 0) s_val[TS_SEATAI] = m;
+        else {
+            s_val[TS_SEATAI] = 0;
+            slog("seatai: %s not understood - no seat plays ImpAI", v);
+        }
+        return;
+    }
+    if (!lstrcmpiA(k, "gpumem")) {
+        char* end;
+        long mib = strtol(v, &end, 10);
+        if (end != v && !*end && tagpu_vkcap_mib_ok(mib)) s_gpumem = (int)mib;
+        else {
+            s_gpumem = 0;
+            slog("gpumem=%s is not a cap of %d..%ld MiB - the GPU memory is not capped", v,
+                 TAGPU_VKCAP_MIN_MIB, TAGPU_VKCAP_MAX_MIB);
+        }
         return;
     }
     if (!lstrcmpiA(k, "drawkey")) {
@@ -950,7 +1037,9 @@ static void migrate(void)
 void tagpu_settings_attach(void)
 {
     int i, first;
-    char b[512];
+    /* the attach line names every key: about 410 characters at the defaults, and 160 more for the
+       tagpu_defaults.off preamble */
+    char b[768];
     int at;
 
     if (s_attached) return;
@@ -971,7 +1060,7 @@ void tagpu_settings_attach(void)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED but for display, vsync and window (" MASTER_OFF
+                   s_ignored ? " IGNORED but for display, vsync, window, seatai, netai and gpumem (" MASTER_OFF
                                " present: every other setting is the lever's or the compiled "
                                "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {
@@ -982,7 +1071,7 @@ void tagpu_settings_attach(void)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, sizeof b - at, " resolution=%dx%d", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, sizeof b - at, " resolution=native");
-        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY || i == TS_DRAWKEY)
+        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY || i == TS_SEATAI || i == TS_DRAWKEY)
             k = _snprintf(b + at, sizeof b - at, " %s=0x%x", s_key[i].name,
                           (unsigned)read_val((TagpuSetting)i));
         else
@@ -992,7 +1081,8 @@ void tagpu_settings_attach(void)
         at += k;
     }
     b[sizeof b - 1] = 0;
-    slog("%s gpu=%s window=%s", b, s_gpu[0] ? s_gpu : "auto", s_winSet ? "set" : "-");
+    slog("%s gpu=%s window=%s gpumem=%d", b, s_gpu[0] ? s_gpu : "auto", s_winSet ? "set" : "-",
+         s_gpumem);
 }
 
 /* ---- the monitors, the GPU and the window -------------------------------- */
@@ -1254,4 +1344,9 @@ int tagpu_settings_vsync(void)
 {
     int v;
     return tagpu_settings_placement(TS_VSYNC, &v) ? v : s_key[TS_VSYNC].def;
+}
+
+int tagpu_settings_gpumem(void)
+{
+    return s_attached ? s_gpumem : 0;
 }

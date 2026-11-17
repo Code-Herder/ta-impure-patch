@@ -1,5 +1,5 @@
 /* unitview.js -- the tech tree entry's unit, in 3D: the unit's model posed by its own COB script through the wiki's COB
-   host (tools/wiki/serve.py POST /cob, the C the DLL's wiki runs; cob.js), drawn with a free orbit camera in the unit
+   host (tools/wiki/serve.py POST /cob, the C the DLL's wiki runs: tagpu_wikicob.c; cobOpen below), drawn with a free orbit camera in the unit
    panel (research/notes/ingame-wiki.md, *The tech tree entry*). The pack is gfx.py `tech_pack`'s: 7 floats a vertex,
    x y z u v fc ck -- u < 0 a flat palette colour fc, else the palette-indexed atlas at (u, v) with colour key ck.
    Each vertex also carries the pack's quad stream, 8 floats: its point in its quad's frame (2), the quad's fourth corner
@@ -16,6 +16,41 @@
    Returns {dispose}. Runs in a page (the global WikiUnitView). */
 const WikiUnitView = (() => {
 const PACKS = {};
+  /* THE COB HOST'S WORLD OF ONE UNIT TYPE, through serve.py's POST /cob (its header states the ops): the calls this view
+     makes, each a synchronous request, so a call answers before it returns as the DLL's do. model(unit) is the unit's
+     posed model as tagpu_wikicob_model leaves it (pose.js `parse`), null for a unit that runs no script; one `models`
+     request answers until the next call. `pack` is the gfx pack folder from the repository root the scripts come from. */
+  const HOW = { now: 0, later: 1, args: 2 };   // WIKICOB_NOW, WIKICOB_LATER, WIKICOB_ARGS
+  function cobRequest(req) {
+    const x = new XMLHttpRequest();
+    x.open('POST', '/cob', false);
+    x.setRequestHeader('Content-Type', 'application/json');
+    try { x.send(JSON.stringify(req)); } catch (e) { throw new Error(`the COB host is not reachable at /cob: ${e.message}`); }
+    if (x.status !== 200) throw new Error(`the COB host answered ${x.status}`);
+    const got = JSON.parse(x.responseText);
+    if (got.error) throw new Error(`the COB host: ${got.error}`);
+    return got;
+  }
+  function cobOpen(pack, name) {
+    const id = cobRequest({ op: 'new', types: [{ name, pack }], seed: 1 }).world;
+    let models = null, parsed = {};
+    const changed = got => { models = null; parsed = {}; return got; };
+    return {
+      spawn: (type, facts) => changed(cobRequest({ op: 'spawn', world: id, type, facts })).unit,
+      call: (unit, script, how, args, facts) =>
+        changed(cobRequest({ op: 'call', world: id, unit, script, how: HOW[how], args: args || [], facts })).r,
+      slice: facts => { changed(cobRequest({ op: 'slice', world: id, facts })); },
+      model(unit) {
+        if (!models) models = cobRequest({ op: 'models', world: id }).models;
+        if (!(unit in parsed)) {
+          const b64 = models[unit];
+          parsed[unit] = b64 ? WikiPose.parse(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0))) : null;
+        }
+        return parsed[unit];
+      },
+      free: () => cobRequest({ op: 'free', world: id }),
+    };
+  }
   const HINT = 'drag to orbit · wheel to zoom · its own COB script poses it';
   const bin = u => fetch(u).then(r => { if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.arrayBuffer(); }).then(b => new Uint8Array(b));
   const f32 = b => new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
@@ -160,7 +195,7 @@ const PACKS = {};
       // the COB host: a world of one type, one finished unit at the origin
       if (full && m.script) {
         try {
-          world = WikiCob.cobPage(world_path()).open([u.name]);
+          world = cobOpen(world_path(), u.name);
           unit = world.spawn(0, facts);
         } catch (e) { world = null; say(`no COB host (serve with tools/wiki/serve.py): ${e.message || e}`); }
       }
@@ -232,7 +267,7 @@ const PACKS = {};
       }]);
       if (u.structure && !u.weapons.length) list.push(['On / off', b => { const on = !b.classList.contains('on'); world?.activate(unit, on); b.classList.toggle('on', on); }]);
       list.push(['Turn', b => { cam.spin = !cam.spin; b.classList.toggle('on', cam.spin); }]);
-      list.push(['Reset', () => { if (!world) return; try { world.free?.(); } catch {} world = WikiCob.cobPage(world_path()).open([u.name]); unit = world.spawn(0, facts); acts.querySelectorAll('.on').forEach(x => { if (x !== turnBtn) x.classList.remove('on'); }); onTick = null; }]);
+      list.push(['Reset', () => { if (!world) return; try { world.free?.(); } catch {} world = cobOpen(world_path(), u.name); unit = world.spawn(0, facts); acts.querySelectorAll('.on').forEach(x => { if (x !== turnBtn) x.classList.remove('on'); }); onTick = null; }]);
       acts.innerHTML = '';
       for (const [t, f] of list) { const b = document.createElement('button'); b.dataset.part = 'button'; b.textContent = t;
         if (t === 'Turn') { turnBtn = b; b.classList.toggle('on', cam.spin); } b.onclick = () => f(b); acts.append(b); }

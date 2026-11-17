@@ -34,11 +34,15 @@ why TADR's post-create fix was not ported, are in
   resurrect type among its 1–14 (jump table `0x4401EC`); its reclaim case `0x43F4F7` needs the
   unit's def `+0x245` bit `0x400` (`0x43F4FD`), finds the feature under the position (`0x4815A0`
   and the `0xFFFE` hop, `0x43F50B..0x43F58A`), and when the def also has `+0x245` bit `0x800`
-  (`0x43F5A5`) [INFERRED: `canresurrect`; CORNECRO is the one retail unit with that tag], the
+  (`0x43F5A5`) — `canresurrect`, which the FBI loader reads into that bit (key `0x503A64`,
+  `0x42CA15..0x42CA35`; CORNECRO is the one retail unit with that tag) — the
   cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
   `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C` (`0x43F612`), which
   resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
-  `reclaim` of a wreck by a Necro is a resurrect order.
+  `reclaim` of a wreck by a Necro is a resurrect order — and so is its reclaim of any reclaimable
+  feature, since the case tests the bit and the feature's `+0xFE`, not that the feature is a wreck:
+  MEASURED 2026-11-13, a Necro ordered to reclaim a Dragon's Teeth never reached the payout
+  `0x4237D0` (whose only callers are `0x404D66` and `0x414A4A`) in 900 ticks.
 
 **MEASURED 2026-09-26: the failure exit never fired.** Scratch counters (a build never committed)
 on `0x405155` and `0x405164` logged the order's position, the cell and its record index at each
@@ -103,9 +107,11 @@ With `shift` 0 the `je` at `0x43AFDA` goes straight to `0x43B08A`, which re-push
 arguments unchanged — action, shift, unit, target, pos, p1, p2 (`0x43B08A..0x43B09C`) — and calls
 the allocator **`0x43ADC0`** (`0x43B09D`), which takes `0x56`
 bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and constructs the order in place with
-**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0`, so
-**that is the whole of its path** and everything below about the scan is context, not
-description of what we do.
+**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0` for
+every order but a `queue` one, which it issues with Shift; the parser refuses a queued order that
+the scan below could match (`tasim_wire.c` `queue_joins_chain`: an ordinal's attack chain on unit
+targets, no target named twice, `after` never falling), so the scan always falls through to
+`0x43ADC0` for it.
 
 **What the `shift != 0` scan does when it matches is CANCEL, not merge**
 [BINARY-VERIFIED `0x43B034..0x43B087`]: `0x43B03D` picks `unit+0x60` over `+0x5C` as the list
@@ -128,9 +134,12 @@ queueing, and with `shift ≠ 0` the wipe is skipped. The link [DISASSEMBLED 202
 carry `0x4000`; it gets `0x1`, and `0x2000` when `shift = 0`; an order with `0x20` or `0x40000` goes
 to the head of its list (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`;
 any other goes right after the `+0x5C` order carrying `0x1000`, taking that mark from it, or to the
-tail when none carries it. The applier's `orders`
-array therefore only ever takes effect in its last element; recorded in
-[scenario format](../scenario-format.html).
+tail when none carries it (`0x43AF4F..0x43AFB1`: the new node takes `0x1000` at `0x43AF59..0x43AF60`, the
+walk is `0x43AF69..0x43AF76`, the old mark is cleared at `0x43AF84..0x43AF8A`, the tail link is
+`0x43AF78..0x43AF7B` and an empty list's `0x43AFA4..0x43AFAB`). So Shift orders issued in sequence after a plain one form one queue in
+issue order, and a plain order replaces the list. The applier's `orders` array is a replacement
+unless its later orders carry `queue`; recorded in [scenario format](../scenario-format.html),
+*Queued orders*.
 
 **The position is copied verbatim, which is why a read-back probe cannot check it**
 [BINARY-VERIFIED `0x43A164..0x43A177`]:
@@ -329,6 +338,13 @@ with the mapped bit (`0x43F623..0x43F67B`) and a feature whose def has `+0xFE` b
 target unit, `VTOL_RECLAIMUNIT` (`0x501B48`, `0x43F6B2..0x43F6C6`) or `RECLAIMUNIT` (`0x501B5C`,
 `0x43FA33`); with none, the answer byte is 0 (`0x43F6AA..0x43F6AC` → `0x4401DC`, the store at
 `0x4401E3`). **So with no target unit mode 12 answers a reclaim-family order or nothing.**
+**The mapped test is the viewed player's, not the issuing unit's owner's**: the grid's dimensions
+come from the unit's owner record (`[unit+0x96]`, `0x43F5AF`), but the explored word is
+`main+0x14273` and its bit index the byte `main+0x2A43` (`0x43F5E2`, `0x43F5F0`) [DISASSEMBLED
+2026-11-11]. For a unit of an AI seat, a feature's reclaim therefore resolves only where the
+*watching human's* map is explored; a caller that needs the unit's own owner resolves
+`RECLAIM`/`VTOL_RECLAIM` by name through `0x438760` and applies its own checks (`+0x245` bit
+`0x400`, FeatureDef `+0xFE` bit 7, the feature in its owner's sight).
 
 The block `0x43FF38..0x4401D9` is **not** mode 12's: it is reached only from the contextual case
 (table entry 0, `0x43F9E9`, its Interface Type 0 arm at `0x43FE35`; a scan of every branch into
@@ -361,10 +377,15 @@ and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 wi
 (`0x404C8B`). The controller takes 1 as "next state" (the jump table `0x43BAA4`, entry 1 →
 `0x43B897`, `inc byte [order+5]`) and loops, and the order's timer bit set by `0x439E80(2)`
 (`order+6 |= 1`, `order+0xA = now + 2`) skips it there (`0x43B817..0x43B81D`) until the two ticks
-are up; state 5 then pays out (`0x4237D0` at `0x404D66`, result 5) -- after the entry's lookup,
+are up; state 5 then pays out (the table's entry 5, `0x404D60`: the reclaim completion `0x4237D0(unit, ebp)`, *map.md*, at `0x404D66`, then `mov eax,5`, result 5; DISASSEMBLED 2026-11-11) -- after the entry's lookup,
 so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
 takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
-[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **The countdown
+lives on the node**, so an order that replaces the reclaim (`0x43ADC0` with no Shift) starts it
+over, and the node's destructor starts StopBuilding (`0x43A251`), whose fold of the arms the next
+StartBuilding waits behind in a stock script's RequestState: MEASURED 2026-11-13, a CORCK beside a
+Dragon's Teeth, its reclaim re-issued every 45 ticks, never paid in 3600 ticks (CORCK's `close()` and
+`open()` sleep 83 and 68 ticks). MEASURED 2026-11-13 in ImpAI's recordings: a 1 005-metal rock's node read `+0x36` 517 once set, two less every two ticks down to −3, then the node was gone and the reclaimer paid, about 550 ticks after the countdown was set. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
 emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
@@ -373,8 +394,8 @@ the far corner that plus the def's `+0x94` and `+0x96` `<< 20` [INFERRED: Footpr
 FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answers
 (`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
 both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
-corner). The wiki's stage, whose ground is 0, sprays from the same box (`tagpu_wikisim.c`
-`spray_feature`, sim.js `sprayFeature`).
+corner). The wiki's stage, whose ground is 0, sprays from the same box (`tasim_fx.c`
+`spray_feature`).
 
 **The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of
 the rect at `this+0x08..+0x14` -- `x` equal to `+0x08` or `+0x0C` with `z` in `[+0x10, +0x14]`,
@@ -396,7 +417,8 @@ ordered or removed anything; `0x408090`, `0x485070` and `0x438760` (the three fa
 
 **Gaps.** The contextual block's `0x4401AA` test (the unit's first dword) is not identified. The
 hovered-unit path of `0x43E490` case 12 from `0x43E770` was not traced. The radius feature scan
-`0x47EA40` (callers `0x405B93`, `0x41564F`) is not used and its arguments are not mapped.
+`0x47EA40` (callers `0x405B93`, `0x41564F`) is not used by the reclaim sweep; its arguments and its
+unwritten altitude are in *What an order's position is made from*.
 
 ## Direct AI order activity observer
 
@@ -407,26 +429,66 @@ tests the object's owner record for active and controller 2 at
 and dispatches due planner objects from ten slots at AI+0x11 through their
 vtable at `0x408C8E`. Group assignment classifies live units and calls
 `0x480250` at `0x4088FA`; it does not directly construct orders in the
-disassembled body. **The groups it assigns** [DISASSEMBLED 2026-11-01,
-`0x408830..0x408914`, called at `0x408C68`]: for each selectable unit
-(`+0x110` bit 5) of its record's block, after setting the move and fire
-states, a unit still in group 0 (`+0xAC`) goes to group 1 when it has no mover
-(`+0x110` bit 29) -- 5 instead with `+0x110` bit 31 -- else 4 for a def with
-`+0x241` bit 6 [INFERRED: a builder, the MOBILEBUILD bit], else 8 with bit 11
-[INFERRED: an aircraft], else 7 when def `+0x1C0` is above 0, else 3 with
-`+0x110` bit 31, else none (`0x408894..0x4088FA`). **Under Sight on an AI seat
-these show**: the group digit `0x469CD1..0x469CF9` draws `'0' + +0xAC` under
-each unit of the viewed player whose group is not 0 ([render.md](render.md),
-*the group digit*), so M0-P's shots (2026-11-01, a replay with Sight on AI
-seats 1 and 2) show a white 4 under that seat's commander, and the human's
-commander none. `0x408BF0` contains a similar assignment/planner loop
-without the controller gate; the activity observer does not use it.
+disassembled body. **The group assignment `0x408830`** [DISASSEMBLED
+2026-11-01 and 2026-11-11, `0x408830..0x408914`, called at `0x408C68`]: for
+each unit with `+0x110` bit 5 of its record's block `[+0x67, +0x6B]` it first
+writes the standing states **directly into `+0x110`**: the move state, bits
+18–19, = 1 for a def with `+0x245` bit 12 (CanCapture) and 2 otherwise
+(`0x408854..0x40887E`), and the fire state, bits 20–21, = 2, fire at will
+(`0x408884..0x40888E`). Then a unit still in group 0 (`+0xAC`) goes to group 1
+when it is a structure (`+0x110` bit 29) -- 5 instead with `+0x110` bit 31 --
+else 4 for a def with `+0x241` bit 6 (`builder`), else 8 with bit 11
+(`canfly`), else 7 when def `+0x1C0` is above 0 (a signed word, `jle`
+at `0x4088E9`: `minwaterdepth`, so a ship), else 3 with `+0x110` bit 31, else
+none (`0x408894..0x4088FA`, each through `0x480250(unit, group)`). The def
+bits' keys are the FBI loader's ([data keys](keys.html)). Groups 2, 6 and 9
+are filled only by the planners' rebalancing (`0x407560` → `0x480250`, below).
+**`+0xAC` is also the player's numbered group** (Ctrl+digit): the selection by
+group reads it (`0x48D975..0x48DD85`), so an AI seat's group numbers and a
+human's Ctrl groups are the same field [the selection code read only for that
+field]. **Under Sight on an AI seat these show**: the group digit
+`0x469CD1..0x469CF9` draws `'0' + +0xAC` under each unit of the viewed player
+whose group is not 0 ([render.md](render.md), *the group digit*), so M0-P's
+shots (2026-11-01, a replay with Sight on AI seats 1 and 2) show a white 4
+under that seat's commander, and the human's commander none. `0x408BF0`
+contains a similar assignment/planner loop without the controller gate;
+nothing calls it (no `call`, no stored pointer to it).
 
 `0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`
-with argument 1 for AI, and at `0x408CA7` with 0 otherwise. These are its only
-direct callers. It scans weapon targets and invokes target setters/resetters
+with argument 1 for AI (`push 1` at `0x408C96`, the AI object in ECX at `0x408C98`), and at `0x408CA7`
+with 0 otherwise; it is `thiscall` and pops its one argument (`ret 4` at `0x408BDF`; DISASSEMBLED
+2026-11-12). These are its only
+direct callers in the image; Impure's ImpAI wrapper calls it by address, with 1, for a seat ImpAI
+plays, in place of `0x408C40` ([ImpAI in the engine](../modules/impai.html), *The seam and the
+wrapper*). It scans weapon targets and invokes target setters/resetters
 `0x48A0A0`, `0x48A060`, `0x48A0F0`, with queries `0x49D120`, `0x48A190` and
-`0x40B7B0`. Because human seats also run it, activity attribution ends on
+`0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
+`0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit, the word `main+0x37EE6`, divided by 30
+through the magic multiplier `0x88888889`, loaded at `0x4089C0` and `imul`'d at `0x4089C5`),
+from the cursor `obj+0x39`, which steps through the record's block and wraps
+from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`); a cursor of 0, the
+constructor's (`0x408CDA`), starts at `+0x67`. The cursor is never reset in
+a level, so where it stands follows the steps since the player init: at a
+1500-unit limit, 51 slots a step, the first slot of a block comes round about
+every 29.4 steps. **An idle weapon takes its target when the cursor reaches
+its unit.** MEASURED 2026-11-12 on the calibration duel `duel-armpw-corak`
+(each unit in its block's first slot, attacking the other): 48 of 50 fresh
+launches, each applied at GameTime 91, set both weapon targets (unit `+0x04`)
+86 steps after the apply, where 51 × GameTime mod 1500 = 27; in one level
+running 50 runs 330 steps apart the ARMPW took its target on a step with
+51 × GameTime mod 1500 at most 51 in 34 runs, and on other steps in the rest
+[INFERRED: from another target source, such as the attack order]. The
+calibration applier resets the cursor at every apply
+([tasim calibration](../modules/tasim-calibration.html), *What a reload does
+not reset*). A unit is scanned when
+`+0xA6` ≠ 0, it is complete (`+0x104` = 0.0), `+0x110` bit 31 is set and its
+fire state (bits 20–21) is 2 (`0x408A01..0x408A41`); each of its three weapon
+slots when the slot byte `+0x1F` has bits 1 and 4 and the weapon's `+0x111`
+bit 8 (`dropped`) is clear, and **with argument 0 also bit 26 (`commandfire`)
+clear** (`0x408A88..0x408A96`). So the AI's argument 1 lets the scan target
+CommandFire weapons on its own, and a human seat's 0 leaves them to orders. The
+scan reads `obj+0`, `obj+0x39`, the record's block and the acquisition record
+(`0x40B7B0`); it reads no planner slot and no group. Because human seats also run it, activity attribution ends on
 entry to this phase, through the existing `tagpu_weapons.c:my_Acquire` wrapper.
 A weapon reaction alone cannot prove planner liveness. Acquisition already owns
 a guarded detour; adding an observer over that detour makes the limits integrity
@@ -438,6 +500,63 @@ event fields, stamps GameTime at node+0x46 (`0x43A12E`), and leaves the
 owner+0x0E NULL (`0x43A193`). It runs no order handler. The high-level helper
 `0x43ADC0` calls it at `0x43ADEF`; callers can insert the result inline,
 so observing only list-insertion functions misses new AI orders.
+
+#### What an order's position is made from: the callers of the two order makers [DISASSEMBLED 2026-11-13..14]
+
+`0x43A0C0` takes the position as its third argument (`[esp+0x28]` after its prologue), copies 12 bytes from
+it verbatim into `+0x22`, `+0x26`, `+0x2A` (`0x43A164..0x43A175`), or zeroes the three when it is NULL
+(`0x43A13A..0x43A160`); `0x43ADC0` passes its fifth argument through to it (`0x43ADDD`, `0x43ADE6`). The
+other fields the constructor writes from constants, its other arguments, GameTime and the action table
+(`0x43A0C0..0x43A1A4`), so the position is the one field a caller can fill from memory nobody wrote. Every
+one of the 48 calls of `0x43A0C0` and 27 of `0x43ADC0` was read for where its position comes from. Many
+callers reserve the action byte on the stack and fill it through `0x438760(name)` between the pushes
+(`push ecx; push ecx; mov ecx,esp; push name; call 0x438760`): count the arguments past that pair. No
+caller copies an order node with `rep movs`; the engine makes every node through these two.
+
+- **NULL, the three zeroed by the constructor (41):** `0x43ADC0` at `0x4029A5`, `0x402EFA` (ebx tested 0
+  at `0x402EE2`), `0x403DC5`, `0x4140F3`, `0x43B120`, `0x487E3F`, `0x487E8A`, `0x487FF6`, `0x4880D2`,
+  `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`, `0x48821E` (ebx 0 through the parser `0x487BF0`, from
+  `0x487C0B`); `0x43A0C0` at `0x401F52`, `0x4032F0`, `0x405293`, `0x406101`, `0x40652B`, `0x40FEBC`,
+  `0x4105C5`, `0x410A1F`, `0x410B02`, `0x41100F`, `0x411EDA`, `0x412687`, `0x412C09`, `0x41335E`,
+  `0x413B4F`, `0x415448`, `0x4155DF`, `0x43852A`, `0x43B327`, `0x43B399`, `0x43B4F1`, `0x43B625`,
+  `0x43B69A`, `0x43B751`, `0x43B9FC`, `0x489E90`, `0x48A03D`.
+- **An engine object's position (19), written by the engine before any order reads it:** a unit's
+  `+0x6A` (`0x401C92`, `0x412037`, `0x4127DB`, `0x412E21`, `0x41354A`, `0x43A074`, `0x43B2A8`, `0x43B474`,
+  `0x43B5A6`); an existing node's `+0x22`, itself made by these two (`0x402E5E`, `0x406673`, `0x40F924`,
+  `0x410102`, `0x410375`, `0x411FB7`, `0x41277F`, `0x412DA7`, `0x4134D2`); the AI object's point `+0x14`
+  (`0x408064`, the threat test `0x49AA80` reads the same point at `0x40802A`).
+- **Passed through from their own caller (3):** `0x43ADEF` (`0x43ADC0`'s fifth argument), `0x43B09D` (the
+  GUI issue `0x43AFC0`'s fifth, the clicked point), `0x4804BB` (the group order `0x480460`'s).
+- **A stack point the caller fills (12):**
+  - the builder planner `0x408100`: `0x4082B0`, the site `0x40BFE0` leaves y unwritten in — **a
+    defect, written by Impure** (`fix_planner_site`, below); `0x408421` and `0x4085A1`, a point the
+    planner writes whole from its base and a jitter (`0x4083F7..0x4083FF`); `0x408453`, the base
+    itself. The base is the 12 bytes `0x40BA80` copies at the planner's entry (`0x408127`,
+    `0x40BA92..0x40BA9F`), its y then the site's (`0x408250`) or the commander's `+0x6E` (`0x40834F`);
+  - the order parser `0x487BF0` (a saved or scripted order): `0x487D70`, `0x487DE8`, `0x487F25`,
+    `0x487FA5`, `0x4880AB`, each x and z from the line's numbers and y from ebx, 0 (`0x487D40`,
+    `0x487EE2`). An order line with fewer numbers than its format leaves sscanf's missing outputs
+    as they were, on the stack [INFERRED from the format strings; no shipped file was found to
+    carry one];
+  - the patrols' reclaim: `0x405BFB`, `0x405D11` (RepairPatrol `0x405980`) and `0x415784`
+    (VTOL_RepairPatrol `0x4152F0`), the point the feature search `0x47EA40` recorded — **a defect,
+    written by Impure** (`fix_reclaim_site`, the next paragraph).
+
+**The patrols' reclaim search `0x47EA40`** (stdcall, six arguments: pos, radius, then two pairs of an
+out-point and an out-value; `ret 0x18`; callers `0x405B93`, `0x41564F`) walks the feature grid around
+pos and keeps two lists of 16-byte records `{x, y, z, value}` (`0x47EB3B..0x47EB64`,
+`0x47EB86..0x47EBB3`), one per kind of feature, then copies a record of each into the two out-points
+(`0x47EC3F..0x47EC56`, `0x47ECCB..0x47ECE2`). Each record's point is a frame local: x at `[esp+0x1C]`
+and z at `[esp+0x24]` are the loop's counters (`0x47EAAE`, `0x47EA9A`, `0x47EBCC`, `0x47EBEE`), and y at
+`[esp+0x20]` is written nowhere in the function, so every RECLAIM and VTOL_RECLAIM order a patrol made
+from one carried the stack's leftover in `+0x26`. **Impure writes it** (`tagpu_patches.c`,
+`fix_reclaim_site`): a `jmp` over `mov esi,[esp+0x30]; mov [esp+0x18],eax` at `0x47EA79` (where esp is
+the frame less one pushed argument, so the y local is `[esp+0x24]`) to a stub that writes 0 to it, runs
+the two, and rejoins at `0x47EA81`, compared. 0 is the y the order parser gives a feature reclaim; what a
+reclaim reads of its node's y was not traced [INFERRED: x and z alone].
+
+**Not read field by field:** the saved-game loader `0x43A420`, which builds its nodes from the save's
+records; its fallback is the section above (*The saved-game loader's order fallback*).
 
 The four examined insertions are `0x43AC60` (insert before the supplied node,
 ret12), `0x43ACB0` (head, ret8), `0x43AD10` (tail, ret8), and `0x43AD50`
@@ -455,7 +574,11 @@ At the existing normal dispatcher observation sites `0x43B878` and
 `0x43BB1D`, ESI names the live order node; both read node+0x0E and call
 its handler. Destruction has a separate site, `0x43A216`, which is excluded
 from execution evidence. The destructor `0x43A1F0` receives the node in ECX
-and reaches any event-2 handler only after `0x43A1F5`. Forgetting a sample
+and reaches any event-2 handler only after `0x43A1F5`. That call indexes the order-descriptor array by the
+node's action byte with no bound: `0x43A202..0x43A21A` load `*0x512344`, take `+4` (the action) times 25 and
+call through `[array + 25 action + 4]`, when `+6` has bit `0x02` (`0x43A1FE`) [DISASSEMBLED]. So a node whose
+action is past the array's count calls through memory past it; the WORLDQ refuses a command with such an action
+before `0x43ADC0` makes the node (`tagpu_worldq.c`, ORDERS OUT; `worldq.h`, `wq_cmd_formed`). Forgetting a sample
 at entry establishes its lifetime before an allocation can reuse its address.
 The observer dereferences only the current dispatcher node, never a saved
 sample pointer, and bounds its owner against the level's unit allocation.
@@ -486,6 +609,353 @@ already registered Impure stub; its first-install path does not match the
 engine's bytes. A mismatch therefore leaves all three new observers uninstalled,
 and the harness refuses AI activity observation.
 
+#### The AI object, its lifecycle and its ten planners [DISASSEMBLED 2026-11-11]
+
+**The object** at record `+0x74`, `0x3D` bytes, constructed by `0x408CB0` (`thiscall(obj, rec)`,
+`ret 4`): `+0` the record, `+4` the record's `+0x146` byte, `+5` the group assignment's countdown
+(30), `+9` and `+0xD` zeroed (`+0xD` is a GameTime the builder planner's commander waits for,
+`0x40817D..0x40818B`; its one writer is the on-damage handler `0x406F80`, below), `+0x11..+0x38` ten planner slots, `+0x39` the weapon scan's cursor
+(`0x408CBB..0x408CDD`). Each planner is a small object: `+0` its vtable {tick, destructor}, `+4`
+the AI object, `+8` its group, `[rec+0x78] + 0x20·g` (the group table `0x480190` allocates, ten
+`0x20`-byte groups), `+0xC` the GameTime it is next due, `+0x10` the record's `+0x146` byte.
+`0x408C40` calls a slot's tick when `[slot+0xC]` ≤ GameTime `main+0x38A47`
+(`0x408C75..0x408C94`); the AI object's destructor `0x408F10` calls each slot's destructor.
+
+**Lifecycle.** The player init `0x464700` makes the object for every record but an active type 3
+— **human seats get one too**, for the weapon scan — and the teardown `0x464A00` frees it (both:
+[memory](memory.html), [recorder](recorder.html) *The takeover*). In between it is never freed: the
+seat activation `0x464290` zeroes `+0x74` without a free, and the `AI` chat command `0x416280`
+flips `+0x73` between 1 and 2 without touching it. `0x4648E0` gives each active type-2 record its
+profile: it loads `ai\<aiprofile>.txt`, the map's OTA key `aiprofile` (`0x504B18`, read at
+`0x4366D5..0x436729` into the map struct's `+0x804`, default `default`), falling back to
+`ai\default.txt` (`0x507308`, `0x46490C..0x464916`), then applies `0x409F80(i)` and `0x40A040(i)`
+(`0x46494E..0x464982`). The tick `0x408C40` is reached from one instruction only, `0x465031`
+(`call`, `E8 0A 3C FA FF`): no other call, no stored pointer to it, and no branch into the rel32
+bytes `0x465032..0x465035`. The gate before it (`0x464FCE..0x46502F`): the record is seated
+(`[rec]` ≠ 0), its `+0x73` is 1, 2 or 3, its `+0x146` is not 10, and `+0x74` is set; the
+controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` is the AI object
+(`0x46502A`), `EDI` the record and `ESI` the record's index, the loop counter `BL` zero-extended
+(`0x464FAB..0x464FB5`); after it the phase reads `ESI` (`0x465036` `push esi`), `EDI`
+(`0x46503C`) and `BL` (`0x46506A`), and nothing reads `EAX`, `ECX` or `EDX` before writing it:
+`0x40B2C0` loads `EAX` from its stack argument first (`0x40B2C0`) and `EDX`, `ECX` next
+(`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
+stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
+type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
+redirects this call to a wrapper that calls the tick for every seat ImpAI does not play and, for
+an ImpAI seat, the weapon scan `0x4089A0(obj, 0)` after ImpAI's turn instead -- a human seat's argument,
+so its CommandFire weapons fire only by order
+([the hook map](../modules/hook-map.html), *The AI seat*).
+
+**The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
+
+| Slot | Group | Object, vtable | Tick, period | What the tick does |
+|---|---|---|---|---|
+| `+0x11` | 0 | none (NULL) | — | — |
+| `+0x15` | 1, structures | `0x14` B, `0x4FC9B0` | `0x4086D0`, every 30 | each complete structure (`+0x110` bits 29 and 28, not 14): a metal maker (`+0x22D`) is switched **off** through `0x48B090(unit, 1, 0)` when twice the stored metal `rec+0x98` is at least the stored energy `rec+0x8C`, left alone when the net energy `0x464AD0(rec)` is not above 0, and otherwise switched **on** when `0x4B6C30(5)` is not 0 (`0x40871E..0x40877F`); a factory (a build list, `+0x152`) with no order queues one unit of the type `0x40BDB0(seat, unit)` picks, through `0x419B00(name, unit, 1)` (`0x408781..0x4087C4`). `0x408620` and `0x408670` are uncalled copies of these two |
+| `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; with none it does nothing (`0x407828`); at three units or fewer, or four or five while not attacking, it moves (mode 2) to the centroid of group 5, 1 or 4, the base (`0x407869..0x4078C8`; none of them holding a unit, nothing); at six or more, or more than three while attacking (`+0x24`), it attacks (mode 3) the unit the target picker names (`0x407846..0x407867`, `0x4078D2`), all through the group order `0x480460`. Its next due time is GameTime + 300, written before anything else (`0x4077F7..0x4077FE`), so a seat with an armed mobile unit and any structure orders a move every 300 ticks whatever its economy [DISASSEMBLED 2026-11-12] |
+| `+0x1D` | 3, armed mobile | `0x18` B, `0x4FC990`; `+0x14` 2 | `0x4079F0`, every 150 | moves group 3 (mode 2) to group 2's centroid |
+| `+0x21` | 4, builders | `0x14` B, `0x4FC9A8` | `0x408100`, every 90 | the builder planner, below |
+| `+0x25` | 5, armed structures | `0x14` B, `0x4FC980` | `0x407380` = `ret` | nothing; its `+0xC` stays 0, so it is due every tick |
+| `+0x29` | 6, second force | `0x28` B, `0x4FC988`; `+0x1C` 50000 | `0x4077E0`, every 300 | as group 2, pulling from group 7 |
+| `+0x2D` | 7, naval | `0x18` B, `0x4FC990`; `+0x14` 6 | `0x4079F0`, every 150 | follows group 6 |
+| `+0x31` | 8, aircraft | `0x14` B, `0x4FC998` (constructor `0x407350`) | `0x407AE0`, every 30 + rand(900) | below five units, patrols (mode 9) over the target picker's unit, else random points appended with Shift; otherwise moves and patrols to random map edges |
+| `+0x35` | 9, roamers | `0x3C` B, `0x4FC9A0` (constructor `0x407D40`) | `0x407E90`, every 30 + rand(150) | wanders to a point drawn from the sim RNG; whether the point is seen is the record's own sight counters `+0x7C` when `main+0x14281` bit 1 is set, else `0x408090`, the **viewed** player's explored bit (`0x407F5C..0x407FC2`); each CanAttack unit gets mode 3 at the point, issued only when the resolver answered (`0x40804C..0x408064`) |
+
+Each tick first stores GameTime plus its period into its `+0xC` (`0x4086E2`, `0x4077F7`,
+`0x407A07`, `0x40811B`; the aircraft and roamer periods draw `0x4B6C30(900)` and `0x4B6C30(150)`
+at `0x407AF2` and `0x407E9C`). The work of the ticks other than the builder's is as read from
+their bodies, not each branch traced. **The builder planner `0x408100`** takes the base point
+from `0x40BA80(seat, &base)`; for each group-4 unit whose def's build-list count `+0x152` is not
+0 (`0x408143..0x408151`, the count and not the pointer `+0x156`: [units](units.html), *A builder's
+build list*, so a builder with no `[CANBUILD]` and no download entry, a Fark or a Necro, is passed over
+here; the second loop below orders it only when idle), a CanCapture
+unit (the stock commander) waits while `0x40C230(seat)` ≥ 5 or GameTime is below the AI object's
+`+0xD`; a unit whose head order has `+0x42` bit `0x8` is skipped; `0x40BDB0(seat, unit)` picks the
+type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit refuses beyond
+(W+H)/3; then `0x43F0E0(&a, 14, unit, 0, &site)` and `0x43ADC0(a, 0, unit, 0, &site, type, 1)`
+(`0x408292..0x4082B0`) — **without testing the resolver's byte**, and with the second argument 0, no
+Shift, so it replaces whatever the builder was doing, a scripted reclaim included, every 90 ticks.
+An idle unit (no head order, or
+a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base, in a second loop over group 4 that has no build-list test (`0x4082CC..0x408421`: each unit loaded at `0x4082E1`, the head test at `0x4082E3..0x4082F0`; MEASURED 2026-11-13, a Necro whose order had ended held action 34 within 900 ticks, RepairPatrol by the descriptors' name order
+[INFERRED: 41 Standby, 32 Reclaim and 33 ReclaimUnit fix that order]); the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
+point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
+and `0x40C230`, read only at their call sites.]
+
+**The target picker `0x4071F0`** (`thiscall` on the AI object, the point by value, `ret 0xC`)
+returns the unit nearest the point over every record that is active, of type 1–3, `+0x146` ≠ 10
+and not allied (the `+0x108` row): alive (`+0x110` bit 28), `+0x110 & 3` ≠ 2, not bit 15, not
+`+0x10E` bit 2 (`0x407207..0x407330`). **It tests no sight, radar or explored map** — its body reads
+neither `main+0x14273` nor a record's `+0x7C` and calls only arithmetic — so the stock AI's attack
+targets come from every enemy unit on the map. Its callers are the force planner (`0x407901`) and
+the aircraft planner (`0x407B74`).
+
+**The stock planners draw the simulation RNG** `0x4B6C30` (`0x407AF2`, `0x407E9C`, `0x4083A9`,
+`0x4086A5` among others), so a seat whose planners do not run draws a different stream from one
+whose do.
+
+#### The stock AI's helpers: the base, the build choice, the build site and the scan [DISASSEMBLED 2026-11-11]
+
+The planners' `seat` is the AI object's `+4`, the record's `+0x146`; the helpers use it both as the
+index of the acquisition record `acq` = `0x5119C0[seat]` and as the record's index
+(`main+0x1B63 + seat·0x14B`). Float constants were read from `.rdata`.
+
+**The acquisition record** (`0x10D` bytes, constructor `0x409160`; made by `0x40B320`, freed by
+`0x40B390`, [recorder](recorder.html) *The takeover*) is the stock AI's world model:
+
+| Offset | What | Written by | Read by |
+|---|---|---|---|
+| `+0` / `+4` | the record / the seat | the constructor | |
+| `+0x05` vector | **enemy units the seat sees** | the scan `0x40AA40` | `0x40AD80`, the roamer's threat sum `0x40B1C0(seat, point, r)`, which sums `+0x91[type]` over the units within r; its one caller, `0x407FD0` in the roamer `0x407E90`, pushes r = `0xA0`, 160 world units (`0x407FC9`; DIS 2026-11-13, the only `E8`/`E9` to it in `.text`) |
+| `+0x15` vector | enemy units with unit `+0x110` bit 8 — the **viewed** player's radar contact, not this seat's | the scan | `0x40AD80` |
+| `+0x25` vector | own complete air pads (`builder` and `isairbase`, activated) | the scan | `0x40B530` |
+| `+0x35..+0x3D` | **the base point**, 16.16 | the scan (`0x40AD02..0x40AD0B`) | `0x40BA80`, `0x40BFE0` |
+| `+0x4D` vector | **the metal spots**, `{u16 x, u16 z, f32 metal}` | `0x40A7B0` | the spot search `0x40A260` |
+| `+0x69 + 3·type` | three signed bytes per type: t0 general, t1 metal, t2 energy | the rating `0x409730` | the score `0x40BB00` |
+| `+0x75` | **own complete units with a build list** (`+0x156` ≠ 0) | the scan | `0x40C230` |
+| `+0x79` | 1 = owns an activated `istargetingupgrade` unit | the scan | `0x40AD80` |
+| `+0x81` | per type: own complete count | the scan | the rating, the score |
+| `+0x91` | per type: the value score v | the rating | the rating, `0x40B1C0` |
+| `+0xA1` | per type: base weight, 40 for `bmcode` 0 plus 20 for a build list | `0x409470` | the scan |
+| `+0xB1` | per type: the profile's weight percent, default 100 | `0x409470`, `weight` `0x409DC0` | the score |
+| `+0xC1` / `+0xE1` | per type: weight / limit locked by a `weight` / `limit` naming the exact unit | `0x409DC0` / `0x409E90` | |
+| `+0xD1` | per type: the build limit, −1 for none | `0x409470`, `limit` `0x409E90` | `0x409F20` |
+| `+0xED` | GameTime of the last scan | the tick | the tick `0x40B2C0` |
+| `+0xF1..+0x105` | the build lattice: eight draws of the simulation RNG at creation (`0x40A150`) | | the general search `0x40A5D0` |
+| `+0x109` | the site-search radius | `0x40BFE0` | `0x40BFE0` |
+
+**The tick `0x40B2C0(i)`** (one caller, `0x465037` in the players phase, for every record that has
+an acquisition record, humans included) runs the scan once 30 ticks have passed, then draws
+`0x4B6C30(30)` (`0x40B301`) and on 0 re-runs the rating `0x409730`, about every 900 ticks. **The
+scan `0x40AA40`** walks every live, not dying unit slot: a **non-allied** unit goes into `+0x05`
+when `UnitInPlayerLOS 0x465AC0(rec, unit)` passes and it is not `+0x110` bit 15, and into `+0x15`
+when it has `+0x110` bit 8; an **own** complete unit counts into `+0x81`, `+0x75`, `+0x25`, `+0x79`
+and the base. Allies' units are ignored. **The base point** is the centroid of the own complete
+units weighted by `+0xA1`, so of structures and builders only; with none it is (0, 0, 0), the map's
+corner. `0x40BA80(seat, out)` copies it (callers: the builder and aircraft planners).
+
+**The build choice `0x40BDB0(seat, builder)`** (stdcall, `ret 8`, a type or 0) walks the builder's
+build list; for each type with a score w = `0x40BB00(seat, type)` above 0 it adds w to a running
+total and takes the type when `0x4B6C30(total)` < w (`0x40BDE7..0x40BE06`): **a weighted random
+pick, each type in proportion to its score**, one draw of the simulation RNG per scored entry. A
+pick of another side than the builder's returns 0 (`0x40BE5A..0x40BE8B`). Callers: the builder
+planner (`0x4081A7`), the structure planner (`0x408797`) and the uncalled `0x408620`.
+
+**The score `0x40BB00(seat, type)`** (stdcall, `ret 8`) is 0 while the stored energy `rec+0x8C` is
+below 50 or the stored metal `rec+0x98` below 25 (`0x40BB2A`, `0x40BB51`), for a `downloadable` type
+in a campaign, or past the type's limit (`0x409F20`: the type below `UNITINFOCount`, and the own
+count below `+0xD1` unless that is −1). Otherwise an energy need E = (min(energy storage, 1000) −
+stored) × 0.125, plus 20 when the net energy is below 1, plus 100 when the income is below 50 or 10
+below 200; a metal need M = (min(metal storage, 500) − stored) × 0.25, plus 20 when the net metal is
+below 1, plus 100 when the income is below 3 or 20 below 5. Metal is served first: Mw = clamp(M, 0,
+100), Ew = clamp(E − Mw, 0, 100), Ow = max(0, 100 − Mw − Ew), and the score is (Ow·t0 + Mw·t1 +
+Ew·t2) × `+0xB1` ÷ 10000 (`0x40BBB6..0x40BDA5`).
+
+**The rating `0x409730`** (no RNG) sets per type: v (1, or 11 for an extractor, +10 for a metal
+maker, +10 for an energy producer, plus cost terms; plus 1, or 11 for `canattack`, and per weapon
+with an ID range ÷ 100 + damage ÷ 40 + 5; clamped to ±100); t0 (1, or 21 for `canattack`; +30 for a
+builder while fewer than 3 are owned, +50 an energy producer, +50 an extractor, +25 a metal maker,
++40 `canfly`, +15 sonar, +5 radar, plus `energymake` up to 30; × 4 when none is owned, × 2 when one;
+× 3 when def `+0x1C0` ≥ 0; + v/2 when the record's live count is above half the per-player limit; 0
+for a transport, a feature, or a wind generator on a map whose maximum wind is below half the
+nominal; at most 100); t2 = clamp(−0.0025 × energy cost − 5 × `0x488F30(def)`, 0, 100); t1 =
+clamp(100 for an extractor + 25 for a metal maker − 0.02 × metal cost, 0, 100). [The signs of v's
+cost terms rest on objdump's `fsubp` operand order.] The profile (`ai\*.txt` and the FBI's
+`ai_weight`) only scales `+0xB1` and sets `+0xD1`; `weight` applies to every seat with an AI object,
+`limit` to type-2 seats only.
+
+**The build site `0x40BFE0(seat, pos, def, site)`** (stdcall, `ret 0x10`, 1 on success): the radius
+`+0x109` grows by 160 a call, up to the map's larger dimension, while searches fail, and is reset to
+0 on success (`0x40BFF8..0x40C01E`, `0x40C1E3`). The centre is the base point, or the point that far
+from the builder towards the base. An extractor (def `+0x1CE`, extractsmetal, unequal to the 0.0 at `0x4FC9B8`: `0x40C13D..0x40C14E`) draws `0x4B6C30(255)`, 0..254 (`push 0xFF` at `0x40C150`, the call `0x40C155`), and, when the
+map's `SurfaceMetal` is below the draw (`cmp [state+0xD30],eax; jge` at `0x40C166..0x40C16C`), takes the **spot search** `0x40A260` (the metal spots within
+4·r cells, nearest first, the richest accepted one; no RNG); otherwise the **general search**
+`0x40A5D0`: up to 30 tries (`0x40A77A`), each a random distance and angle (`0x40A673`, `0x40A682`)
+snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four draws a try,
+accepted by the site test and refused when the site's metal is above twice the background
+(the limit 2 × SurfaceMetal × footprintx × footprintz at `0x40A5EC..0x40A602`, held to the site test's accumulator `0x51E688` through the getter `0x47C770` at `0x40A76A..0x40A773`: the compare `cmp eax,[esp+0x24]` at `0x40A76F`, its `jle` accepting) [INFERRED intent: spots are kept for extractors]. So on a map with SurfaceMetal 254 or more every extractor takes the general search, and on Core Prime Industrial Area (255, every cell 255) none of its sites is refused for metal [DISASSEMBLED 2026-11-12]. The site is the footprint centre `(2·cell + foot)
+<< 19`; its y is not written, so the builder planner `0x408100`'s MobileBuild order (`0x4082B0`) carried the
+stack's leftover in its position `+0x26` -- the order's constructor copies the position verbatim
+(`0x43A16F`), and the drawn build-site rectangle reads it (`0x438C59`). For a structure MobileBuild's
+acceptance replaces it with the ground altitude (`0x47DDC0` at `0x403D2F`, its store at `0x47DE52`); for a
+mobile type `0x47DDC0` returns at once (def `+0x22F` set, `0x47DDC8..0x47DDD0`) and MobileBuild hands the
+leftover to the create as the unit's first altitude (`0x403D34..0x403D51`, the call at `0x403D5B` →
+`0x485F50` → `0x485A40`). The commander branch copies it into its base y
+(`0x408225`, `0x408250`), which the second loop copies into its own sites (`0x40831C..0x408330`): MEASURED
+2026-11-13 a unit-array address, the factory pointer `0x40BDB0` saved at the same stack slot in the
+same tick (`0x40BDB9`). **Impure writes it** (`tagpu_patches.c`, `fix_planner_site`, at the call
+`0x4081E2`): 0 before the search and, on a found site, the y a player's click order there would
+carry. For a structure that is the altitude `0x47DDC0` writes, on a copy of the site so x and z stay
+the search's; for a mobile type it is the cursor's rule, the larger of the terrain height `0x485070`
+(stdcall, the high halves of x and z; -1 off the map) and the sea level `main+0x1427F`, shifted to
+16.16 (`0x484B50`'s `0x484BB2..0x484BDE`). The search writes x at `0x40C1D3` and z at `0x40C1E0`; after the call the
+planner writes ecx (`0x4081E7`) and edx (`0x4081EF`) before reading them. **The site tests pass player 0, so they read no sight and no explored
+map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
+level from `0x4649ED`) is every metal feature cell on the map.
+
+**The builder count `0x40C230(seat)`** returns `+0x75`, the seat's complete units with a build list
+— commander, constructors and factories alike. The commander (the CanCapture unit) builds while it
+is below 5 and roams once it reaches 5 (`0x408169`, `0x40830E`). **A hit commander stops
+building**: the on-damage handler `0x406F80` (caller `0x489DA2`) sets the AI object's `+0xD` to
+GameTime + 30 + `0x4B6C30(300)` and purges the commander's orders through `0x439EB0(unit, 0)`
+(`0x406FC9..0x406FEE`), only for a victim whose def has `cancapture` (`+0x245` bit 12) and whose
+owner is an active type-2 record (the type test `0x406FC3`; [sim](sim.html), *Difficulty and the
+AI handicap*, which Impure exempts ImpAI's seats from). **`0x439EB0(unit, all)`** (`ret 8`; three
+callers: `0x406FF1` with 0, the controller `0x43BA97` with 1 for a handler result above 9, the unit
+destructor `0x4867A1` with 1): with 0 it walks `+0x5C` and removes every node whose `+0x42` lacks
+flag `0x4` (`test byte [esi+0x42],4` at `0x439ED2`), each unlinked, marked `0x10000` unless it was the head
+(`0x439EE0..0x439EE6`), destructed by `0x43A1F0` (`0x439EF3`) and freed (`0x439EF9`), the rule of
+`0x43ADC0`'s non-Shift wipe; `+0x60` is untouched (`0x439F0B..0x439F0D`); with 1 every node of
+both lists goes (`0x439F0F..0x439F71`). It creates nothing: an emptied commander gets its
+`Standby` default back from the controller's next run (DISASSEMBLED, scout I12 of the ImpAI
+plan).
+
+**The force planners' rebalance `0x407560(src, cap)`** (thiscall, `ret 8`; one caller `0x407804`)
+takes the first unit of group `src` into an empty group, sends a unit back to `src` while it is
+farther than √(cap·n) from the group's centroid, then takes in every `src` unit within that
+distance (`0x407560..0x4077CF`): √(20000·n) for group 2, √(50000·n) for group 6. No RNG, no sight.
+The attack rule (three units or fewer: regroup at the base; six or more, or more than three while
+already attacking: attack the target picker's unit) runs every 300 ticks. **The base it regroups at
+is not the builder planner's base point**: it is **`0x407410(&out)`** (thiscall on a planner slot,
+`ret 4`) of the armed-structure slot `+0x25`, else the structure slot `+0x15`, else the builder
+slot `+0x21` (`0x407869..0x4078A3`), the first that holds a unit. `0x407410` averages its group's
+units' integer x, y and z words `+0x6C`, `+0x70`, `+0x74`, each sum divided by the count, and
+writes them as 16.16 values into `out` (`0x40743D..0x407493`); an empty group returns 0 and writes
+nothing (`0x40742B..0x40743A`). So a seat with no armed structure regroups at the plain mean of the
+positions of its group-1 structures [DISASSEMBLED 2026-11-12].
+
+**RNG and sight, in one place.** The helpers that draw the simulation RNG: the build choice (one
+per scored entry), the build site (one for an extractor, four a try), the acquisition record (eight
+at creation, one every 30 ticks for every seat that has one, humans included), the metal maker, the
+builder's idle roam (`0x4083A9`, `0x4084CA`), the hit commander (`0x406FCE`) and `0x40B7B0`'s weapon
+re-find (`0x40B8A2`, `0x40B9D8`). The base point, the score, the rating, the builder count, the
+rebalance, the scan and the spot search draw none. Only the scan reads other players' units through
+sight (`0x465AC0`), plus the viewed player's radar bit; the target picker reads every enemy with no
+test, and the site tests no sight at all.
+
+#### The group order `0x480460`, and the standing states
+
+**`0x480460(rec, group, mode, shift, target, pos*, p1, p2)`**, stdcall, `ret 0x20`: walks the
+record's block `[+0x67, +0x6B]` and, for each unit with `+0xA6` ≠ 0 and `+0xAC` = `group` (no alive
+test), calls `0x43F0E0(&p2_slot, mode, unit, target, pos)` and then `0x43ADC0` with the byte it
+wrote (`0x48047E..0x4804BB`). **It never tests the resolver's answer**: a refused unit gets action
+0, `Ready` ([render](render.html), *`0x512344`*), and with `shift` 0 that order wipes its queue
+first. Its callers are the stock planners only: `0x4078C8`, `0x40791F`, `0x407A83`, `0x407C50`,
+`0x407D2C`.
+
+**The standing states are orders too.** `Standing_MoveOrder` and `Standing_FireOrder` (records
+`0x4FC526` and `0x4FC53F`, status `Acknowledged`, flags `0x10060`: bit `0x40` exempts them from
+`0x43ADC0`'s wipe, bit `0x20` links them at the head) have the handlers `0x4030D0`, which writes the
+node's `+0x36 & 3` into unit `+0x110` bits 18–19, and `0x403100`, which writes it into bits 20–21
+and, for states 0 and 1, calls ClearTarget `0x48A0F0(unit, slot)` for each of slots 0..2 whose state byte
+`+0x1B` has bit 4 (`0x403129..0x403150`: the test `0x40313F`, the call `0x403146`; slots 3..9 are not
+visited, and the slot init sets bit 4 on every slot); both return 5. **The fire-order button** reads bits
+12–14 of the word `main+0x37EBE` (`0x41A5F5..0x41A605`, the jump table `0x41A910`) and gives
+`STANDING_FIREORDER` (`0x5027A4`, resolved through `0x438760`) through `0x48CF30` with the new state as its
+`p1`: from 0 the state 1 (`push 1` at `0x41A614`, bit 12 set), from 1 the state 2 (`push 2` at `0x41A64D`,
+bit 13 set) and from 2 or 3 the state 0 (`push 0` at `0x41A686`, bits 12–14 cleared at `0x41A6A4`), so it
+cycles hold fire → return fire → fire at will [DISASSEMBLED 2026-11-17; INFERRED: the word's bits are the
+button's shown state].
+The player's buttons issue them through `0x48CF30`, which requires def `+0x245` bit 0
+(`mobilestandorders`) for the move order and bit 1 (`firestandorders`) for the fire order
+(`0x48D0B7..0x48D10B`). The stock AI does not issue them; its group assignment writes the bits
+directly (above). **A new unit's states come from its def**: the spawn initialiser `0x485A40`
+writes bits 18–19 from def `+0x241` bits 0–1 (`standingmoveorder`, `0x485C8A..0x485C9D`) and bits
+20–21 from bits 2–3 (`standingfireorder`, `0x485CA3..0x485CB6`), both 2 by default; its three
+callers (the create `0x485F50`, `CreateFromNetwork 0x4861D0` and `0x485E90`) write neither
+before. A unit being built then takes its builder's states (BuildingBuild `0x40294D..0x40298C`,
+GetBuilt `0x402E82..0x402EC2`) [which unit is the builder in each, from [units](units.html)].
+
+#### Calling the order roots from the AI's tick [DISASSEMBLED 2026-11-11]
+
+What makes an order-root call from inside `0x408C40` (or a replacement reached from `0x465031`)
+correct by construction, and which roots fit an AI:
+
+- **Ordering.** `0x408C40` runs in the players phase `0x464F80` (step call `0x49555F`), which each
+  step reaches only after the unit tick `0x48AD30` (`0x4954ED`) has returned ([sim](sim.html), *Each
+  iteration, in order*). The order controllers `0x43B7C0` and `0x43BAD0` run inside the unit tick,
+  so no order list is being walked while a root links or wipes nodes. The stock planners call
+  `0x43F0E0`, `0x43ADC0` and `0x43B0B0` (through `0x419B00`) from this same frame.
+- **Lifetime.** `0x43ADC0` without Shift destroys nodes through `0x43A1F0`, which can run handlers
+  (*Contextual cancellation*, below): no order-node pointer survives a root call, and a unit
+  pointer is re-derived from its ID after each call.
+- **Bound.** No root validates its unit: the resolver dereferences `unit+0x92` and `+0x96` untested
+  (`0x43F112`, `0x43F131`) and `0x43ADC0` validates nothing. The unit must be
+  `array + ID·0x118` with the ID below `u16 main+0x14351`, inside `[main+0x14357, main+0x1435B]`
+  (*Input bounds and layout*, below), and live (`+0x110` bit 28). A target, once linked, is held
+  by the engine's own reference chain (`0x4895C0` at `0x43A0E3`; the death walk `0x489740` tells
+  its holders, [units](units.html)).
+- **Thread.** The players phase runs on the game thread every step and **once on the loader
+  thread** at the end of a level load (`0x497C10`), before the loader's done bit
+  `main+0x38D75` bit 1 is set (`0x497C62`), which the game thread waits for before its first tick
+  ([sim](sim.html)): single-writer by that ordering. The bit is a one-frame flag: the in-play entry clears the whole word at `0x498480` after the level's first in-game frame ([units](units.html), the load flags), so it marks the order of that first frame and cannot gate "loaded" during play.
+
+**Which root for which order:**
+
+| Order | Root | Note |
+|---|---|---|
+| any action by name | `0x438760` | the table never changes in a process, so once is enough |
+| move, attack a unit or the ground, guard, repair or assist, patrol, stop, build at a site | `0x43F0E0` with mode 2, 3 (target NULL for the ground), 7, 8, 9, 10, 14, then `0x43ADC0` | test the resolver's byte and issue nothing on 0. Mode 8 has no alliance test (*What each resolver mode answers*); a build's `pos` is the footprint centre `(2·origin + size) << 19`, as the manual build `0x4196D8..0x419714`, with `p1` the type and `p2` 1, as the builder planner |
+| reclaim a feature | `0x438760("RECLAIM" / "VTOL_RECLAIM")` and `0x43ADC0` | not mode 12, whose map test is the viewed player's (*The order resolver's reclaim case*); a unit target's reclaim is mode 2 against an enemy |
+| a weapon's stockpile build | `0x43B0B0(BUILDWEAPON, unit, 0, count)`, the action by name (`0x438760("BUILDWEAPON")`, the string `0x502678`) | the build menu's MAKENUKE / MAKEANTI call (`0x419B97..0x419BA8`, the name pushed at `0x419B9E`); p1 0 is slot 0, as in every stock creator. The node goes on `+0x60` (BuildWeapon's descriptor carries `0x40000`) and only the secondary controller `0x43BAD0` runs it, for a type-1/2 owner. BuildWeapon `0x402B70` reads slot p1's weapon `[unit + p1·0x1C + 0x10]` (`0x402B89`) and its reload `+0xE4` (`0x402BDE..0x402BE0`) with no test, so the caller bounds the slot to a stockpile weapon (`+0x111` bit 28) and the count to ≥ 1; it sends nothing to the network (it calls only `0x4E43A0`, `0x4011C0`, `0x439E80`, `0x41C150`). DIS. Impure's scenario `buildweapon` order (`tagpu_scenario.c` `issue_buildweapon`) |
+| a factory's queue | `0x43B0B0(BUILDINGBUILD, unit, type, count)` | the type bounded below the def count; not `0x419B00`, which plays the build sound for the viewed player and finds the type by a linear scan (`0x488B10`). **The build button's count** [DISASSEMBLED 2026-11-14]: `0x41ABFA..0x41AC3C` passes `0x419B00` a count of 5 while Shift is down (`0x4C1B80(0xF9)`, `0x41AC13`) and 1 without (`0x41AC2B`), the negative for the other button (`0x41AC17`, `0x41AC34`) [INFERRED: `0x4AB6B0` the click's button, 1 the left] -- one shift-click queues five; the stock AI's factory orders queue 1 (`0x408648`, `0x4087A6`). ImpAI's army order in a surplus queues the five for a seat with an action budget (`impai_econ.c`, THE GOVERNOR, A SURPLUS), WORLDQ's `WQ_QUEUE_MAX` |
+| the standing states | `0x43ADC0` with `Standing_MoveOrder` / `Standing_FireOrder`, or the stock group assignment | fire state 2 is what the weapon scan needs |
+| not for an AI | `0x480460`, `0x43AFC0`, `0x48CF30` | issues `Ready` on a refusal; toggles a queued node with Shift; walks the selection of `main+0x2A42` |
+
+`0x43AFC0` and `0x48CF30` are the player's roots: `0x43AFC0`'s two callers are `0x4197A9` and
+`0x48D1F4`, and no AI code calls either. The LOS fix (`tagpu_patches.c`) patches tests inside
+`0x43F0E0`; a call by address goes through it.
+
+#### What each resolver mode answers [DISASSEMBLED 2026-11-11]
+
+`0x43F0E0`'s mode is `(byte)mode − 1` into the jump table `0x4401EC` (`0x43F12D..0x43F14D`);
+anything outside 1–14 is refused. A refusal stores action 0 into the caller's byte and returns the
+buffer like every other exit (`0x4401DC..0x4401E7`), so the return is never NULL and the byte is
+the answer: the reaction attack `0x43B1F0` tests it and returns 0 on 0 (`0x43B247..0x43B24D`),
+and the scenario applier does the same. Before it, a non-NULL target must be alive (`+0x110` bit 28,
+`0x43F0F4`, else refused), and the alliance byte of the unit's record for the target's owner
+(`[unit+0x96] + 0x108 + [target+0x96]+0x146`) sets `eax` = 1 (enemy) when it is 0 and `ebx` = 1
+(ally) otherwise (`0x43F104..0x43F128`). "VTOL" answers are chosen by def `+0x241` bit 11; "no
+mover" is a unit whose first dword is 0.
+
+| Mode | Case | Needs (def `+0x245` bit) | Answers |
+|---|---|---|---|
+| 1 | `0x43F9E9` | — | the contextual order (the Interface Type arms, *The order resolver's reclaim case*) |
+| 2 move | `0x43F845` | 7 `canmove` | no mover → `QMOVE`; no target → `VTOL_MOVE`/`MOVE_GROUND`; with a target, by its kind: `CAPTURE`, `VTOL_RECLAIMUNIT`/`RECLAIMUNIT` (an enemy), `HELPBUILD`/`REPAIRUNIT` (an ally `0x4899B0` accepts), the pickups (`0x489A90`), `VTOL_FOLLOW`/`FOLLOW_GROUND` (an ally), else the move (`0x43F893..0x43F9E4`) [the order of these tests as read, not each branch traced] |
+| 3 attack | `0x43F154` | 4 `canattack` | an enemy target: by both units' air and water state `AIRSTRIKE`, `AIRTOAIR`, `AIRTOGROUND`, `AIRTOGROUNDHOVER`; a mover (def `+0x22F` 1) → `ATTACK_CHASE` (`0x43F348`, the name `0x5053CC` pushed at `0x43F352`); a structure (`+0x110` bit 29, def `+0x22F` 0) → `ATTACK_NOMOVE` (`0x43F367..0x43F375`, the name `0x5053BC` pushed at `0x43F375`); any other `+0x22F` neither, falling to the kamikaze test (`0x43F38A`); `ATTACK_KAMIKAZE` for `+0x241` bit 28. **No target, or an allied one: the ground attack**, refused when weapon 1's `+0x111` bit 17 (`toairweapon`) is set (`0x43F17E..0x43F189`), else `SUPPRESS` for a non-flyer and `AIRSTRIKE`/`AIRTOGROUND` for a flyer. **An enemy target is refused** (`0`) for: no `canattack` (`test byte [def+0x245],0x10` at `0x43F154`, its `je` to the refusal at `0x43F15B`); no weapon (`+0x110` bit 31, read at `0x43F161`, its `je` at `0x43F171` to the kamikaze test) and no `kamikaze`, the last test `0x43F38E..0x43F39A`; weapon 1 `toairweapon` against a target not airborne (airborne being the target's `+0x110 & 3` = 2, `0x43F1D4..0x43F1DF`; the refusal `0x43F1E1..0x43F1EB`); a submerged target -- the high words of its altitude (`+0x70`, of the 16.16 `+0x6E`) and of its def's `+0x16E` (`+0x170`), each `movsx`, summed and found below the sea byte `main+0x1427F` (`0x43F1F1..0x43F219`) -- with neither weapon 1 nor a present weapon 2 a `waterweapon` (`0x43F21B..0x43F236`; weapon 2's presence `+0x3B` bit 1 and its `+0x111` bit 16 at `0x43F223..0x43F230`); a `canhover` unit (def `+0x241` bit 12, `0x43F244`) with a waterweapon in slot 1 or 2 (slot 2's at `0x43F25B..0x43F264`) against a target not submerged (`0x43F240..0x43F277`); a `canfly` unit (bit 11, `0x43F27E`) whose weapon 1 is `dropped` (`+0x111` bit 8) against a target whose def has `canfly` (`0x43F29D..0x43F31D`: the dropped arm answers a non-flying target, `0x43F2AA..0x43F2C8`, and refuses at `0x43F31B..0x43F31D`, `jne 0x4401DC`, when the target's `+0x241 & 0x800` is set) [the sites re-read DISASSEMBLED 2026-11-17]; a type without `canfly` and without `kamikaze` whose unit has no mover (its first dword 0, `0x43F348`) and no `+0x110` bit 29 (`0x43F367`), the kamikaze test `0x43F38E..0x43F39A` refusing it. The calibration's fight generators issue an attack only where these tests answer (`tools/tasim/duelgen.py`, `takes_attack`), and so does ImpAI's military (`impai_mil.c`, `can_attack`, on the type facts `impai_tinfo_attack` reads from the role input, whose `+0x245` mask both role fillers copy holds bit 4) [DISASSEMBLED 2026-11-12, the naval scout's table; MEASURED 2026-11-13: every order the applier refused in A2a's first sweep -- spies and jammers, flak, ships on submarines -- is one of them] |
+| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL`: the def's (`unit+0x92`) `+0x245` bit 14 (`mov ecx,[esi+0x245]; shr ecx,0xE; test cl,1`), else the refusal `0x4401DC` (the `je` at `0x43F7F4`); nothing of the target is tested beyond the entry's `+0x110` bit 28 (`0x43F0F4..0x43F0FE`, `0x43F7E8..0x43F80A`, DISASSEMBLED 2026-11-12). The order that fires a CommandFire weapon, which the weapon scan leaves alone at argument 0; ImpAI's military gives it for the commander's D-gun (`WQ_CAN_DGUN`) |
+| 5 unload | `0x43F735` | 8 `canload` | `VTOL_UNLOAD`/`GROUND_UNLOAD` |
+| 6 load | `0x43F701` | a target `0x489A90` accepts | `VTOL_PICKUP`/`GROUND_PICKUP` |
+| 7 guard | `0x43F4C7` | 5 `canguard`, **and an allied target** (`ebx`, `0x43F4D4`) | `VTOL_FOLLOW`/`FOLLOW_GROUND` |
+| 8 repair | `0x43F46C` | `0x4899B0(target)` (thiscall, `ecx` the builder): a target (`0x4899B7`), the builder's def `+0x245` bit 9 (`0x4899CC`), the target's health `+0x108` not equal to its def's `+0x1FA` (`0x4899E8`, an equality test), the target's `+0x110 & 3` not 2, airborne (`0x4899F3`), then water-depth tests against the sea level `main+0x1427F` (`0x489A04..0x489A53`), DISASSEMBLED 2026-11-14 | target `+0x104` ≠ 0.0 (unfinished) → `VTOL_HELPBUILD`/`HELPBUILD`, else `VTOL_REPAIRUNIT`/`REPAIRUNIT`. **No alliance test**: an enemy target is accepted. ImpAI's repair asks it for a finished army unit standing at its haven (`impai_build.c`, THE REPAIR); its assist asks it for the seat's unfinished buildings, and for its commander, which never guards, for the seat's unfinished mobile units too -- a factory's frame on its yard (`impai_build.c`, THE ASSIST, THE COMMANDER HELPS AT HOME); whether HELPBUILD on a factory's frame adds the commander's build power is not yet measured |
+| 9 patrol | `0x43F3B9` | 6 `canpatrol` | no mover → `QPATROL`; bit 9 → `VTOL_REPAIRPATROL`/`REPAIRPATROL`; else `VTOL_PATROL`/`PATROL` |
+| 10 stop | `0x43F82C` | **none** (bit 3, `canstop`, is not tested) | `STOP` (`0x502714`) |
+| 11 | `0x43F813` | none | `TELEPORT` |
+| 12 reclaim | `0x43F4F7` | 10 `canreclamate` | *The order resolver's reclaim case*, above |
+| 13 capture | `0x43F6D1` | 12 `cancapture`, a target of another record | `CAPTURE` |
+| 14 build | `0x43F7A0` | def `+0x156` (a CANBUILD list) and a mover | `VTOL_MOBILEBUILD`/`MOBILEBUILD` |
+
+**What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
+**enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
+for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target
+(`0x43F17E..0x43F1B4`: weapon 1's `toairweapon` is its only test). Its handler, **Suppress `0x4038A0`**
+[DISASSEMBLED 2026-11-13], refuses a VTOL in state 0 (def `+0x241` bit 11, `0x4039D9..0x4039F0`), and
+in state 1 writes the point into weapon slots 0 and 1, or 2 when its `+0x36` is 2, through `0x48A0A0`
+(`0x40396B..0x4039CE`); it reads neither the fire state nor any owner at the point. State 0 sets no
+wait mask and returns 1 (`0x403A13`), and state 1 sets the mask `0x1C00` only as it returns 1
+(`0x40398A`, `0x4039C7`), so the controller runs both in the unit's first tick with the node at its
+head (*The controller*, below), and AutoAim, which runs earlier in the unit tick, reads the point the
+tick after. Neither
+mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
+its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
+that itself before it asks; ImpAI's military orders only at units its seat sees now, re-observed in the same turn (`impai_mil.c`, `target_now`), since its knowledge rows can be up to 8 ticks old, and attacks only where the tests above answer (`can_attack`, the target's state read from the observation's `aim`: `+0x110 & 3`, and the altitude and the def's top each rounded to a word as `0x43F1F7..0x43F208` adds them, which can call a unit under the sea a pixel before the line-of-sight test `0x465AC0` does). An
+attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
+order behind.
+
+Bit 9 is **not a key**: the FBI loader writes it as a copy of bit 10, `canreclamate`
+(`0x42CA3B..0x42CA4F`), so every reclaimer can repair and nothing else can. The rows other than
+2, 7, 8, 10 and 12 are as read from each case's first tests; their tails were not each traced.
+
 ### Resource placement and contextual order contracts [DISASSEMBLED + MEASURED 2026-10-04]
 
 `tagpu_resource.c` implements manual mex/geo snapping and contextual resource building. All
@@ -495,20 +965,20 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 
 | Entry | Contract and callers |
 |---|---|
-| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation |
+| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation. The footprint's first cell is `(centre − (f << 19) + 0x80000) >> 20` with an arithmetic `sar` (`0x419817..0x41983D`); the site's altitude is `0x47C780`'s for an accepted site and `0x47D820`'s for a refused one, stored at `0x419909` (`0x4198EC..0x419909`) [DISASSEMBLED 2026-11-11] |
 | `0x498DA0` | Mouse-to-world update, called only at `0x499221`. The existing viewport wrapper repairs its result before resource input captures the raw point. In `0x499200`, cursor update `0x499241`, hovered unit query `0x499278` and context resolution `0x499297` precede button dispatch |
 | `0x498F70` | Left button handler, `ret 4`, prologue `51 A1 E8 1D 51 00`, one caller `0x4995B3`. The resource gate's saved entry stack holds the six-dword message pointer at `[esp+4]` |
 | `0x499100` | Right button handler, `ret 4`, prologue `51 8B 0D E8 1D 51 00`, one caller `0x4993AC`. Contextual orders use right when Interface Type `main+0x37EFA` is nonzero; zero uses left. Explicit commands retain native button/cancel behavior |
-| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H. Its return's bit 0 reports acceptance |
+| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H (`0x47D302..0x47D352`: the cell word's x and z as signed 16-bit values, `x + fx` against `main+0x14233`, `z + fz` against `+0x14237`). Its return's bit 0 reports acceptance. Given a player (`0x47D366`), it refuses a footprint centre whose sheared cell is unmapped, and **the mapped bit it tests is the viewed player's**, `1 << main+0x2A43` (`0x47D3D1..0x47D3FA`), not the argument's; the argument supplies the grid's size (`+0x80`, `+0x84`) and, under `LosType` bit 1, its own LOS grid `+0x7C` (`0x47D40C..0x47D42C`), whose answer is the flag `[esp+0x10]` that a unit or a yard occupant on the footprint refuses on (`0x47D53B`, `0x47D55B`) [DISASSEMBLED 2026-11-11]. So a site test given another seat's record answers with the viewed player's map (`tagpu_worldq.c`, *THE PLAYER*). **The frame at `0x47D3D1`** (`8A 8B 43 2A 00 00`, resuming at `0x47D3D7`): `sub esp,0x2C` and four pushes put the return address at `[esp+0x3C]`; EDI holds the passed record (`0x47D358`); the `add` at `0x47D3EE` rewrites the flags before the `je` at `0x47D3FA`; no direct jump lands in `0x47D3D2..0x47D3D6` [DISASSEMBLED 2026-11-12]. Before it: `sub esp,0x2C` and four pushes (`0x47D2E0..0x47D306`); the one call before the site, `0x485010` at `0x47D385` (the cell's height byte), pops its own argument (`ret 4`, `0x48505F`); the block is the centre `(2·cx + fx) << 19` sheared by half the altitude, its row bounded against the record's grid `+0x80`/`+0x84` (`0x47D36C..0x47D3FA`, the row at `0x47D3B0`, `0x47D3B8`); the shear fix's patch `0x47D3B8..0x47D3C3` ends before `0x47D3C4` and leaves EDI alone; the LOS read under `LosType` bit 1 is `0x47D40C..0x47D43A`. **The height tail** [DISASSEMBLED 2026-11-13]: the footprint walk keeps three byte extremes over the yard cells, starting at `0xFF`, 0 and 0 (`0x47D492..0x47D4AD`): a cell whose yard byte has bit `0x08` gives its `+0x06` (the 2×2 minimum) to the land minimum `[esp+0x14]` and its `+0x05` (the 2×2 maximum) to the land maximum `[esp+0x18]` (`0x47D4F9..0x47D518`); a cell with bit `0x10` gives its `+0x05` to the water maximum `[esp+0x4C]` (`0x47D51C..0x47D52C`). A yard cell with bit `0x80` (`G`) sets the flag `[esp+0x28]` (`0x47D684..0x47D68F`), and when that cell's feature -- its word `+0x08`, a def below `main+0x14253`'s count or a `0xFFFE` resolved to its anchor (`0x47D69D..0x47D6F3`) -- has FeatureDef (`main+0x1426F`, `0x100` bytes each) `+0xFE` bit `0x20`, the flag `[esp+0x2C]` (`0x47D704..0x47D711`). After the walk a footprint holding a `G` cell and no such feature refuses (`0x47D75B..0x47D769`) [DISASSEMBLED 2026-11-13]: a geothermal plant stands only on a vent [INFERRED: bit `0x20` is the FeatureDef's geothermal flag]. After the walk a land maximum below the land minimum -- no `0x08` cell -- takes the water path, the altitude `sea (main+0x1427F) - def+0x22C` (waterline) (`0x47D773..0x47D787`); otherwise `max - min` above `def+0x228` (maxslope) refuses (`0x47D789..0x47D7AA`) and the altitude is the land minimum. Then the water maximum above the altitude refuses (`0x47D7AE..0x47D7B8`), the land minimum below `sea - def+0x1BE` (maxwaterdepth) refuses (`0x47D7BA..0x47D7D5`), and `max(land maximum, water maximum)` above `sea - def+0x1C0` (minwaterdepth) refuses (`0x47D7D7..0x47D7F0`); accepted, `0x51E684` takes the altitude and it returns 1 (`0x47D7F2..0x47D80C`). A shipyard's yard is `C` and `w` (CORSY, ARMSY: `wCCCCCCw` and `C` rows, MEASURED from the FBIs), both bit `0x10` and not `0x08` (the decoder, [units](units.html) *A yardmap parsed past its string*), so it takes the water path: no slope test, a maxwaterdepth compare against the untouched `0xFF`, and the minwaterdepth compare over its cells' `+0x05` is the one that binds. ImpAI's sea plant prefilters its candidates on those `+0x05` bytes, a block's most (`tagpu_impai.c`, `cell_top`; `impai_build.c`, *THE SEA PLANT*), and leaves every decision to this test. Impure patches it (`tagpu_impai.c`, *THE SEAT'S OWN SITE TEST*): a call through ImpAI's thunk reads the passed record's own bit `+0x146`; every other caller reads `main+0x2A43` as stock ([ImpAI in the engine](../modules/impai.html), *The seat's own site test*) |
 | `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
-| `0x47D820` | Blocked-site altitude [DISASSEMBLED 2026-10-09], `stdcall(def, x \| z<<16)`, `ret 8`; callers `0x4198FE` (the build cursor, on a refused site) and `0x47DE4A`. Answers 0 for an origin below 1 or a footprint end at or past W/H (`0x47D834..0x47D888`); otherwise walks the yardmap `def+0x14E` over the footprint `def+0x14A`/`+0x14C` (grid `main+0x14287`, 13-byte cells, width `+0x14233`) and, over the cells whose yard byte has `0x08`, takes the lowest cell byte `+6` and the highest `+5`: it returns the lowest `+6` as a byte, or sea level `main+0x1427F` less `def+0x22C` when that highest `+5` is below it, which includes a footprint with no such cell (`0x47D92A..0x47D94A`). It writes nothing outside its own frame. Quick Build gives it to the ghost of a queued plan whose ground the site test refuses |
+| `0x47D820` | Blocked-site altitude [DISASSEMBLED 2026-10-09], `stdcall(def, x \| z<<16)`, `ret 8`; callers `0x4198FE` (the build cursor, on a refused site) and `0x47DE4A`. Answers 0 for an origin below 1 or a footprint end at or past W/H (`0x47D834..0x47D888`, the width compare at `0x47D86F`, its branch `0x47D871`); otherwise walks the yardmap `def+0x14E` over the footprint `def+0x14A`/`+0x14C` (grid `main+0x14287`, 13-byte cells, width `+0x14233`) and, over the cells whose yard byte has `0x08`, takes the lowest cell byte `+6` and the highest `+5`: it returns the lowest `+6` as a byte, or sea level `main+0x1427F` less `def+0x22C` when that highest `+5` is below it, which includes a footprint with no such cell (`0x47D92A..0x47D94A`). It writes nothing outside its own frame. Quick Build gives it to the ghost of a queued plan whose ground the site test refuses |
 | `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
-| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
-| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard. **The move answers** [DISASSEMBLED 2026-11-09], the mode `(byte)mode − 1` into the table `0x4401EC`: mode 2, Move (entry 1, `0x43F845`), needs def `+0x245` bit `0x80` (else refused, `0x43F84E`); a unit whose first dword is 0 [INFERRED: it has no mover object] gets `QMOVE` (`0x50531C`, `0x43F854..0x43F870`) whatever the target and `pos`; else with no target `VTOL_MOVE` (`0x5016CC`) when def `+0x241` bit 11 is set, otherwise `MOVE_GROUND` (`0x5052E4`, through `0x4401C2`). Mode 1 at Interface Type 1 (entry 0, `0x43F9E9`; its Type 0 arm is `0x43FE35`) with no target and no reclaimable feature at `pos` ends in the move fallback `0x43FDFF..0x43FE30`: def `+0x245` bit `0x80` and a non-zero first dword (the unit, `edi` from `0x43FCD1`), then `VTOL_MOVE` / `MOVE_GROUND` by the same bit 11 — **the same answer as mode 2 for a mover**, and 0 for a unit without one (`0x43FE13` → `0x4401DC`), which `0x48CF30` then skips. The formation move asks it once per selected unit at a press, with the press's point, and starts a gesture only on these answers |
-| `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read |
+| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. It writes the name's action byte (`0x43880F`), or 0 for a name the descriptor array lacks (`0x438819`), and returns the output pointer [DISASSEMBLED 2026-11-11]. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12; in mode 12 with no target the answer is `RESURRECT` for a def with `+0x245` bit `0x800` (the test at `0x43F5A2`), else `VTOL_RECLAIM` for one with `+0x241` bit 11 (read at `0x43F68E`, the name `0x501B68` loaded at `0x43F694`) or `RECLAIM` [DISASSEMBLED 2026-11-11]; every mode's answer is *What each resolver mode answers*, above. It refuses a dead target (`+0x110` bit 28, `0x43F0F4`) but never tests its unit, whose `+0x92` and `+0x96` it dereferences (`0x43F112`, `0x43F131`). There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard. **The move answers** [DISASSEMBLED 2026-11-09], the mode `(byte)mode − 1` into the table `0x4401EC`: mode 2, Move (entry 1, `0x43F845`), needs def `+0x245` bit `0x80` (else refused, `0x43F84E`); a unit whose first dword is 0 [INFERRED: it has no mover object] gets `QMOVE` (`0x50531C`, `0x43F854..0x43F870`) whatever the target and `pos`; else with no target `VTOL_MOVE` (`0x5016CC`) when def `+0x241` bit 11 is set, otherwise `MOVE_GROUND` (`0x5052E4`, through `0x4401C2`). Mode 1 at Interface Type 1 (entry 0, `0x43F9E9`; its Type 0 arm is `0x43FE35`) with no target and no reclaimable feature at `pos` ends in the move fallback `0x43FDFF..0x43FE30`: def `+0x245` bit `0x80` and a non-zero first dword (the unit, `edi` from `0x43FCD1`), then `VTOL_MOVE` / `MOVE_GROUND` by the same bit 11 — **the same answer as mode 2 for a mover**, and 0 for a unit without one (`0x43FE13` → `0x4401DC`), which `0x48CF30` then skips. The formation move asks it once per selected unit at a press, with the press's point, and starts a gesture only on these answers |
+| `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read. **ImpAI reads the same menus** through `tagpu_buildmenu_types` on the LOADER thread inside PLAYERS `0x4919C8`, after the def load `0x42D2E0` (`0x4918CA`) and the download records `0x42DCF0` (`0x4918CF`), for every builder type (def `+0x241` bit 6) below the def count and every side below min(`main+0x37F39`, 5), each press counted whether it arms a structure (`0x41AB7F`) or queues a unit (`0x41AC3C`); its level init merges each builder's sides into the role classifier's build options, whose tech walk they are ([ImpAI](../modules/impai.html), *The build menus*) |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
-| `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
+| `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7` (`0x422040..0x422169`), anchor by anchor in cell order, the low byte of `_ftol(metal)`, so a later anchor overwrites an earlier one where footprints meet; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
 
 The full resolver caller list is `0x401F2F`, `0x402E3D`, `0x4031A7`, `0x405265`, `0x405ABC`,
 `0x4064F5`, `0x40804C`, `0x408299`, `0x408403`, `0x408435`, `0x408589`, `0x40FE86`,
@@ -524,7 +994,7 @@ DISASSEMBLED: manual dispatch `0x419670` (sole direct caller `0x498F98`) reads t
 `main+0x2CC4`, point `+0x2CAA` and definition footprint
 `+0x14A/+0x14C`. Its `0x4196D8..0x419714` conversion reconstructs each order coordinate
 as `(2 * footprint_origin + footprint_size) << 19`, passed through `0x43AFC0` at `0x4197A9`.
-`tagpu_resource.c:position` uses that same center: even footprint axes place at `cx * 16`
+`tasim_snap.c`'s `tasim_snap_position` uses that same center: even footprint axes place at `cx * 16`
 world units, odd axes at `(cx + 0.5) * 16`. Thus an even axis's actual center differs by
 eight world units from the candidate-cell center used for the tie. No metric change is implied.
 
@@ -550,12 +1020,77 @@ command. Acceptance calls `0x47DDC0` at `0x403D2F`, creates a nanoframe through
 which is distinct from placement refusal. These contracts are disassembly, not proof
 that a particular reported upgrade failed for constructor overlap.
 
+#### MobileBuild's reach abandon [DISASSEMBLED + MEASURED 2026-11-13]
+
+State 1 (`0x403B45`) tests the handler's event byte for `0x40`, the move's end, at `0x403B63`; without it
+the placement test above runs (`0x403C59`). With it, the handler measures how far the builder stopped from
+the site: the integer part of the 16.16 distance from the unit (`+0x6A`, `+0x72`) to the node's position
+(`+0x22`, `+0x2A`) (the CRT two-double call `0x4FB440` at `0x403B98`, truncated by `0x4E43A0`, its high word
+at `0x403BEB`), less `(int)(8.0 · hypot(+0x7E, +0x80))`, the builder's footprint (`0x4FC910` holds 8.0;
+`0x403BA5..0x403BDF`), plus `(int)(-8.0 · hypot)` of the site type's footprint `def+0x14A`, `+0x14C`
+(`0x4FC918` holds -8.0; `0x403BE4..0x403C30`), compared signed with the builder def's builddistance, the word
+`+0x212` (`0x403C28..0x403C3B`). Past it the handler shows "I can't reach the construction site" (`0x501580`,
+through `0x47F780` at `0x403C45`) and returns 8 at `0x403C4A`: the order is abandoned
+(`0x403C3D..0x403C56`). A MobileBuild given the event bit `0x08` ends the same way at once ("Construction
+terminated", `0x5015A4`, `0x403A27..0x403A53`) and one given `0x02` returns 5 (`0x403A56..0x403A71`).
+
+**What follows, MEASURED** (an instrumented build, 2026-11-13, a CORCV of an ImpAI seat on Trout Farm walled
+in beside its CORVP, every decision's list read for GameTime 5 000..14 000): after each abandon the unit's one
+node was **Standby**, action 41, flags `0x24000`, its `+6` word `0x00010001` -- the controller's default order
+(`0x405FE0` in the table below), carrying the `0x4000` the stock idle test reads as idle -- and the unit never left a 16 x 48 px patch on and
+beside the plant's yard, whichever site it was sent to. ImpAI reads such a builder's job by the
+same compare (`impai_brain.c`, THE REACH ABANDON) and holds the site back for that builder alone.
+
 Installed stock definitions read for the Comet Catcher stress test: `ARMMEX`/`CORMEX`
 have 3x3 footprints, `ARMMOHO`/`CORMOHO` 5x5, and `ARMACK`/`CORACK` 2x2 with
 build distance 60. `tools/resource_upgrade_stress.py` measures actual mouse dispatch,
 reclamation, frame creation and completion; its native-order snapshots require the
 pause bit at `main+0x38A51`, so the unit tick and its order destructors cannot run
 between the game-thread peeks.
+
+#### HelpBuild's walk and its abandon [DISASSEMBLED + MEASURED 2026-11-14]
+
+HelpBuild `0x403F70` (`ret 0xC`) answers its third argument's event bit `0x02` with `0x41C110` and 5
+(`0x403F77..0x403F96`) and a node with no target (`+0x16` 0) with "Construction terminated" (`0x5015A4`, through
+`0x47F780` at `0x403FB0`) and 8 (`0x403F9D..0x403FC1`); otherwise it jumps on the node's state byte `+0x05`
+through the table at `0x40425C` (states 0-4: `0x403FD9`, `0x404069`, `0x4040EE`, `0x404105`, `0x404223`; above 4,
+7 at `0x40424B`). **State 0** returns 7 unless the builder def's `+0x241` bit `0x40` is set (`0x403FE6..0x403FF3`),
+then walks: `0x438A00` at `0x40404E` with the node, the target's position `+0x6A`, the distance `builddistance`
+(`+0x212`) `+ (int)(16.0 · sqrt(fx·fx + fz + fz)) / 2` and that half on its own, fx and fz the target def's
+`+0x14A`, `+0x14C` (`0x403FF9..0x404045`; `0x4FC928` holds the double 16.0; the cast `0x4E43A0`, the halving
+`cdq; sub; sar 1`, so toward zero). The sum squares fx alone (`fld st(1); fmul st,st(2); fadd st,st(1); fadd
+st,st(1)`), so it is the footprint's diagonal only when fz is 2; for a 6 x 6 target it is 16 · √48, not √72. It
+then sets `node+0x06` to `0xE8` and returns 1. **State 1** answers the event bit `0x40`, the walk's end short of
+that distance, with "I can't get there" (`0x5015BC`, `0x404072..0x40407A`) and 8, abandoned
+(`0x404069..0x40408B`); a target already finished returns 5 (`0x40408E..0x4040AD`;
+[cob](cob.html), *The scripts a unit's work starts*). State 4 is the completion, "Building complete" and 5 (`0x404223..0x404248`).
+
+**What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
+30 000-40 000): an ARMLAB made all 15 of its products at one 16.16 point, its cell (168, 414); three ARMCVs north
+and west of the plant, given the help on each product, held **Standby** (41) at their head two ticks after every
+help, while one south of it, by the plant's exit, held the help. ImpAI records the frame's cell for the refused
+builder (`impai_brain.c`, THE HELP REFUSED).
+
+#### The on and off [DISASSEMBLED 2026-11-14]
+
+The order descriptors are 25-byte records -- a description, the handler, 13 bytes, the name -- so the record of
+BuildingBuild, its description "Nanolathing" at `0x4FC558` and its handler at `0x4FC55C`, has its name at
+`0x4FC56D`; the record's place is not the action byte, which `0x438760` resolves by name at run time. **Activate**
+`0x403010` (its 25-byte record at `0x4FC4C2`: the description pointer `0x501280`, the handler at `0x4FC4C6`) and
+**Deactivate** `0x403040` (its record at `0x4FC4DB`: the description pointer `0x501274`, the handler at `0x4FC4DF`;
+both read from `.rdata` with `objdump -s`) read the unit's def dword `+0x245`, `shr 2`, `test 1` (`0x40301A..0x403023`, `0x40304A..0x403053`) and only
+when it is set -- FBI `onoffable` -- call the state setter `0x48B090(1, 1)` or `(1, 0)` (`0x40302C`, `0x40305C`);
+either returns 5, the node done (`0x403031`, `0x403061`). **The button** resolves `ACTIVATE` (`0x502768`) or
+`DEACTIVATE` (`0x50275C`), the two names pushed at `0x41A804` and `0x41A83D`, through `0x438760` (`0x41A809`, `0x41A842`, `0x41A86D`) and gives the order with
+`0x48CF30` (`0x41A811`, `0x41A84A`, `0x41A875`), stepping a word at `main+0x37EC0`, its bits 5 and 6
+(`0x41A7DB..0x41A85B`) [INFERRED: the button's state; `0x48CF30` the order to the selection]. ImpAI names the
+same two strings for its own orders (`tagpu_worldq.c`, `ACT_NAME`) and gives them through the order root
+`0x43ADC0` like any other (`impai_econ.c`, THE MAKERS). The economy pass charges a structure's EnergyUse and pays its
+MakesMetal only while `+0x10E` bit 0 is set (`0x4013C5` → `0x4016C5`; [weapons](weapons.html), *The settle*). **The
+stock AI switches its makers directly**: `0x408670(unit)` calls `0x48B090(1, 0)` when twice the owner's stored metal
+(`+0x98`) is at least its stored energy (`+0x8C`), and otherwise `0x48B090(1, 1)` when the energy's net rate
+(`0x464AD0`) is above 0.0 (`0x4FC968`) and `0x4B6C30(5)` draws nonzero (`0x408670..0x4086C9`; the same test
+inline at `0x40872E..0x40877F`) -- no onoffable test and no band.
 
 #### CORE reclaim-to-Moho handoff [DISASSEMBLED + MEASURED 2026-10-05]
 
@@ -642,7 +1177,8 @@ above), not from CANBUILD `+0x152`/`+0x156`, so the resource hooks do not depend
 whole-build-list patch. The menu reads the page count byte `+0x22E`, the orders-page bit
 `+0x241` bit 31, the type word `+0x21E` and the name `+0x20`. Building movement code is byte `+0x22F == 0`, builder
 bit `+0x241 & 0x40`, fly bit `+0x241 & 0x800`; worker time is u16 `+0x1FE`, repair capability
-`+0x245 & 0x200`. Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
+`+0x245 & 0x200` (no key of its own: the FBI loader copies `canreclamate`, bit `0x400`, into it,
+`0x42CA3B..0x42CA4F`). Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
 positive. Geo recognition scans the complete bounded yard for byte `0x8F`, at most 64×64 cells.
 
 The feature grid `main+0x14287` has dimensions `+0x14233/+0x14237`, stride 13. Dimension products
@@ -718,13 +1254,18 @@ removal root. This is the only order pointer retained across a root; it has an e
 proof. After reclaim removal no node pointer is used. Helpers' Guards remain intact.
 
 **New orders `0x43ADC0(action,shift,unit,target,pos,p1,p2)`** use the same seven-argument
-stdcall layout and `ret 28` as `0x43AFC0`. It constructs a `0x56`-byte node through
+stdcall layout and `ret 28` as `0x43AFC0`. **It validates nothing** [DISASSEMBLED 2026-11-11]: not
+the unit, not the target, and the action only as a byte (the constructor reads it with
+`mov al` at `0x43A0C3` and masks it `0xFF` before indexing `0x512344`, `0x43A17C..0x43A182`), so
+junk above the low byte is harmless and an action byte of 0 issues `Ready`. When the allocation
+fails it stores NULL and, without Shift, reads the NULL node's `+0x42` at `0x43AE0E` (the engine's
+own crash). It constructs a `0x56`-byte node through
 `0x4B4F10`/`0x43A0C0` at `0x43ADC4`..`0x43ADF4`, preserves existing non-temporary work with
 Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
 head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). In
 detail [DISASSEMBLED 2026-10-25]: without Shift, and when the new node lacks `+0x42` bit `0x40`,
-every main-chain node lacking bit 4 is destroyed; then, on every call unless the new node has
-`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`). The new
+every main-chain node lacking flag `0x4` (`bl` = 4 at `0x43AE25`, tested at `0x43AE27`) is destroyed; then, on every call unless the new node has
+`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`, the flag word read at `0x43AE7C`). The new
 node gets `+0x42 |= 1`, and `|= 0x2000` without Shift (`0x43AEE7`). A node with `0x40020` is linked
 at the head of its chain (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`.
 Any other node gets `0x1000` and is linked **after the node carrying `0x1000`**, whose bit is
@@ -786,12 +1327,53 @@ What that rests on:
 - **The dispatch `0x43B87C`** maps a handler's result through the jump table `0x43BAA4`
   (10 entries; above 9 → `0x43BA90`): 0 → state 0 (`0x43B89F`); 1 → state + 1 (`0x43B897`);
   2 and 4 → nothing (`0x43B99F`); 3 → a random wait (`0x43B890` → `0x43B951`); 5 and 8 → unlink and
-  free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`, which also returns a node with
-  no successor (`+0x4A` null, `0x43B8F8` → `0x43B94B`) to state 0. Follow_Ground returns only 1, 2,
+  free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`, which first sets the node's
+  `+0x42` bit `0x800000` (`0x43B8E5..0x43B8EE`), then unlinks and frees a node with a successor and returns
+  one with none (`+0x4A` null, `0x43B8F8` → `0x43B94B`) to state 0, its byte 6 bit 0 set, after a wait of
+  30 + `0x4B6C30(30)` ticks (`0x43B94B..0x43B95C`; DISASSEMBLED 2026-11-14). So a lone node that returns 9
+  is never ended by the engine: it starts over every 30 to 59 ticks, and `0x800000` marks that it has. Follow_Ground returns only 1, 2,
   3, 5, 7 and 8, never 0 or 9, so once its first step has run, nothing returns its node to state 0.
+- **The controller `0x43B7C0(unit)` runs a node until it waits** [DISASSEMBLED 2026-11-13]. Its one
+  caller is the unit tick (`0x48AF98`), after AutoAim (`0x48ADDA`) and before the movement pass
+  (`0x48AFAA`). For the head node `[unit+0x5C]` it ORs the node's `+0x4E` with the unit's event word
+  `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
+  and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
+  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`). Results 1, 2 and 4 go
+  through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
+  whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
+  `0x439E80` sets, never the tick.
 
 A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
 whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.
+
+#### What an idle unit does, and what ends an attack order [DISASSEMBLED 2026-11-13]
+
+Read for the calibration's re-targeting protocol, which gives each unit with a mover one Shift queue
+of attack orders (`tools/tasim/duelgen.py` `queue_orders`; [calibration](../modules/tasim-calibration.md),
+*The predictor's fights*). The structure half is the ta-scout's batch R1 of 2026-11-13.
+
+| address | what | facts |
+|---|---|---|
+| `0x405FE0` | **Standby** (action 41), the default order of the fight pool's mobile types (def `+0x230`, which the controller inserts when the main list empties, flagged `+0x42 |= 0x4000`, `0x43B9AD..0x43BA3A`) | state 0 stops the unit (`0x489800(unit, 3)`, `0x40605C`) and wakes next tick; state 1 calls the search `0x43B700` (`0x406002`): a target → `0x43B1F0(unit, target, 0)` and result 5, the node freed and the reaction run (`0x40600B..0x40601F`); none → sleep 30 + `0x4B6C30(30)` ticks, drawing the simulation RNG (`0x406022..0x40603A`) |
+| `0x43B700` | **the idle search**, stdcall(unit) `ret 4` | `0x40B7B0(unit, 0, 0)` only at fire state 2, fire at will (`+0x110 & 0x300000 == 0x200000`, `0x43B704..0x43B71D`), else 0: under return fire or hold fire an idle unit never searches. Callers: Standby (`0x406002`, `0x4060B6`), Patrol (`0x4033DE`), and `0x40F98D`, `0x4105FB`, `0x41106D` [not read] |
+| `0x40B7B0` | **the target finder** `(unit, slot, mode)`, stdcall `ret 0xC` | **three callers**: the weapon scan `0x408B76` and `0x408974` (in `0x408920`, no direct caller found), both mode 1; the idle search `0x43B71D`, **mode 0**. Mode 0's radius is the def's raw signed `SightDistance` `+0x202` (`0x40B83A..0x40B85F`), not the LOS table's 256 cap; mode 1's is the slot's range `0x49ADF0` (`0x40B80C..0x40B82F`). Candidates come from `0x40AD80`: the seat's visible-enemy list (acquisition record `+0x05`, rebuilt every 30 ticks by `0x40AA40`) within the radius, alive and not dying (`0x40AD9C..0x40AE46`); the radar list `+0x15` only when the seat owns a targeting facility (`+0x79`) and the visible list gave none (`0x40AE7A..0x40AEA1`). Up to 50 picks without replacement, each drawing the simulation RNG (`0x40B8A1`, `0x40BA3A`), each filtered by alive and not dying, the shootme gate (def `+0x241` bit 15, a type-2 owner, or shootall, `0x40B8D1..0x40B8F5`), can-engage `0x49ABB0(unit, target, slot)` unless kamikaze (`0x40B8FB..0x40B91B`), and in mode 0 the def's `+0x23D` category (`0x40B921..0x40B952`). Each is scored `rand(dist²)`, the lowest wins, one outside the slot's `+0x231` category preferred (`0x40B9D8..0x40BA2D`): the finder keeps the best outside the category (`[esp+0x24]`) and the best inside it (`[esp+0x28]`), returns the outside one when there is one (`0x40BA4D..0x40BA67`) and **else the inside one** (`0x40BA6A..0x40BA7D`) [DISASSEMBLED 2026-11-14] -- the category is a preference, never a refusal, so a NOTAIR slot fires on ground units when no aircraft is a candidate (MEASURED 2026-11-13, Comet Catcher: a human's line of ARMSAM, a NOTAIR missile, killed 26 of ImpAI's 27 constructors). A toairweapon (weapon flag bit 17) is refused a target whose `+0x110 & 3` is not 2 earlier, in can-engage (`0x49AD07..0x49AD1C`). ImpAI's ground reach is this rule ([ImpAI in the engine](../modules/impai.html), *The threat table*). Can-engage holds the range test `dx² + dz² ≤ (+0xDC)²` in both its water (`0x49AC47..0x49ACA2`) and other branch (`0x49AD7E..0x49ADDB`), so **an idle unit's search reaches min(SightDistance, slot 0's range)**: in 23 of the calibration's 37 fight types sight is the shorter (ARMSUB 112 against 400, CORMSHIP 245 against 1300; def `+0x202` and weapon `+0xDC` from `tasim_run defs`, 2026-11-12) |
+| `0x43B1F0` | **the reaction** `(unit, target, flag)` | refuses at move state 0, hold position (`0x43B211..0x43B221`), and fire state 0, hold fire (`0x43B224..0x43B234`); asks the resolver for mode 3 (`0x43B242`); at move state 1, manoeuvre, pushes a leashed attack and a move back, the leash origin the unit's position (`0x43B330..0x43B33C`) and its length def `+0x214` (640 for 34 of the 37 fight types, 1280 for CORPT [INFERRED: `maneuverleashlength`]) (`0x43B257..0x43B379`); at move state 2, roam, a plain attack at the head (`0x43B37B..0x43B3EC`). Both states default to 2 from the def at spawn (`0x485C8A..0x485CB6`) |
+| `0x4033A0` | **Patrol** | runs the idle search at each wake, every 30 to 59 ticks (`0x4033D9..0x403406`). Move_Ground `0x4031D0` runs no search |
+| `0x4031D0` | **Move_Ground** (action 26), a mover's move | state 0 (`0x403212`): 7 when the unit's `+0x86` is set, else the ok sound (`0x438880`), the move started at the node's point (`0x438930(node+0x22, node+0x36 + 4)`, `0x403232..0x40323F`), `node+6 = 0xE0`, result 1. State 1 (`0x4031EB`): result 5, done, only when the events carry `0x20`, the goal reached (the arrived sound `0x47F780(unit, 6, 0)` first, `0x4031F2..0x403206`); any other wake returns 9 (`0x403209`), which on a lone node starts the move over (the dispatch, below) (DISASSEMBLED 2026-11-14). **A move to a point inside a structure's footprint never ends**: MEASURED in the bar's cmdr run (65 games, the ImpAI commander's head every 300 ticks), its flights to an own structure's centre held the head with the flag `0x800000` set in 5 090 samples, the commander unmoved since the last sample in 5 063 and 39 / 43 / 51 px (p10 / p50 / p90) from the point, for up to 67 200 ticks [INFERRED: the mover stops at the footprint and never posts `0x20`]. Readers: ImpAI's hand-back (`impai_brain.c`, THE COMMANDER'S HAND-BACK) lists such a commander idle once the military's window lapses |
+| `0x402DA0` | **GetBuilt**'s end (action 19), a factory's unit finishing | at build fraction 0 (`0x402DAB..0x402DBC`) it copies the builder's QMove and QPatrol nodes (the names `0x5010A4`, `0x50109C` through `0x438760`, the builder `node+0x16`'s list `+0x5C` walked at `0x402E01..0x402E6D`, each re-asked of the resolver and appended with Shift by `0x43ADC0`); **with none copied it appends a `PARK`** (the name `0x501358` pushed at `0x402EF0`, `0x402EE2..0x402EFA`, Shift 1) and answers 5, so the unit's list is the Park alone. Its descriptor is the `.rdata` record `0x4FC7B0` (status "Parking", the handler at `+4`, the name "Park" at `+0x15`). The node carries no `0x4000`: MEASURED 2026-11-13, a CORCV out of a CORVP with no rally held flags `0x1001` |
+| `0x4061A0` | **Park** (action 28 in the retail vector) | state 0 (`0x4061FE`): a VTOL moves to its own point (`0x438760("VTOL_MOVE")`, `0x406240`); any other unit gets a move goal off the yard sized by its footprint (`+0x7E`, `0x406263..0x4062E1`, `0x438AD0`), `node+6 = 0xE0`, result 1. State 1 (`0x4061C3`): result 5, done, on the event bit `0x20` (`0x4061C3`) or when a node follows (`+0x4A` nonzero, `0x4061D7..0x4061DC`); otherwise it sleeps 30 ticks (`0x439E80(0x1E)`, `0x4061EB`) and answers 0, **so a Park that is the unit's only node never ends**. MEASURED 2026-11-13 (an instrumented build, games to GameTime 10 000): CORCVs out of their CORVP held it from the exit to the end on Lava Mania, Pincushion and Trout Farm. ImpAI's idle test counts a lone Park as idle (`impai_brain.c`, `idle_head`) |
+| `0x4034A0` | **Attack_Chase**, a mover's attack (action 6) | result 5 (`0x403853`) when the target `+0x16` is 0 (`0x4034BB..0x4034C0`), the events carry `0x800` or `0x10008` (`0x4034AF`, `0x4034C6`), or the unit is past its leash `+0x3E` (`0x4034D2..0x40351E`). The death walk `0x489740` posts 8 to every node targeting the dead unit and zeroes its `+0x16` (`0x489760..0x48978E`), so a dead target ends the order at the controller's next run and the next queued node starts. Each node starts at state 0 and takes the first armed slot `0x4897E0` (`0x403595..0x4035A1`); within `0x4034A0..0x403862` only `+0x110` bit 31 is read (`0x403557`), no move state. A unit without a mover gets result 7 (`0x403539..0x40353C`), which empties the main list (`0x43BA3D`) |
+| `0x402160` | **Attack_NoMove**, a structure's attack (action 8; the resolver gives it for `+0x110` bit 29, `0x43F367`) | result 5 when the target is 0 or the events carry `0x10808` (`0x402166..0x402175`); state 1 takes slot 0 from the weapon scan (`0x4898B0(unit, 0)`, slot byte `+0x1F` bit 4 cleared at `0x4898F4`), sets its target (`0x48A060`, `0x4021B3..0x4021BA`) and waits on `0x11808`; **a target out of reach ends it**: AutoAim raises `+0xBA |= 0x1000` at reload 0 when can-aim `0x49AA80` fails (`0x49E53A`), state 2 (`0x402191..0x4021A3`) hands slots 0..2 back to the scan and returns 9, and result 9 (`0x43B8E5`) frees a node that has a successor (`0x43B8F8`, `0x43B928..0x43B949`) or puts the last one back to state 0 behind 30 + `0x4B6C30(30)` ticks (`0x43B94B..0x43B973`). So a structure's nearest-first queue drains one out-of-reach head a tick at reload 0 to its farthest target, retries that one every 30 to 59 ticks, and never reaches its standing Guard_NoMove; the calibration gives structures no orders |
+| `0x4021F0` | **Guard_NoMove** (action 22), a tower's standing order | read in outline only: state 1 (`0x402256`) adopts slot 0's unit target (`0x48A190`, `0x489690`) or re-checks every 30 ticks; state 2 (`0x4022DF`) keeps it while `0x49ABB0` engages, waiting on `0x7008`; state 3 (`0x402347`) picks a random candidate from `0x40AD80(owner, node+0x22, 0x280, …)` [INFERRED: within 640 of its post]; it draws the RNG (`0x402327`, `0x4023B2`). What `0x40AD80` returns for it, and so whether sight limits a tower, is not established |
+
+**Other idle paths.** The weapon scan `0x4089A0` gives an idle weapon a target its seat sees within
+that weapon's own range, at fire state 2 only (`0x408B5E..0x408B87`), and never moves the unit; it
+never touches a slot whose byte `+0x1F` lacks bit 4 (`0x408A67..0x408A6A`), which is how an order
+holds slot 0. The hit reaction `0x406F80` fires only when the victim's head is empty or Standby
+(`0x407069..0x40707B`) and needs can-engage on slot 0, range included (`0x4070C8..0x4070D7`), before
+`0x43B1F0`: a unit hit from beyond its slot 0's reach only turns its weapons. So **an attack order's
+dead target is not replaced**: the order ends, the unit falls back to Standby, and nothing searches
+past its first slot's reach.
 
 #### An upgrade preview without grid mutation
 
@@ -849,7 +1431,7 @@ wParam, timestamp, message and double-click flag. Thus `main+0x559` is y, `main+
 its timestamp, `main+0x565` its message and `main+0x569` its double-click flag, and `main+0x56D`
 is `GUI+0x54`, the wParam of the last event the pump popped, while `main+0x533` is inside
 its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
-and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
+and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. `main+0x58D` is `GUI+0x74`, a text field's caret, the length `0x4AB6C0` stores ([ui](ui.html), the textfield row). The existing event-ring and GUI pump sections establish those owners. A two-image null
 twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
 changed ring/eye bit. A native injected click returns the pointer to screen centre, so the
 harness follows each sampled click with a separate move and requires the GUI x/y/message echo

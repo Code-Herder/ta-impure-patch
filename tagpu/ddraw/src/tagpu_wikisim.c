@@ -1,9 +1,15 @@
-/* tagpu_wikisim.c -- the in-game wiki's simplified simulation. Contract: tagpu_wikisim.h.
+/* tagpu_wikisim.c -- the in-game wiki's simulation, its front end: tagpu_wikisim.h's entry points
+   over the shared simulation core (tasim.h, the tasim_*.c files), and what only the wiki has -- the
+   UI the inputs go through (the cursor, the sidebar's gadgets and page router, what a press lands
+   on, the click window), the scripted input (the build and pick trips, the glide, the demo's clock
+   and waits), the selection, the input of the placement gesture, the reclaim sweep, Quick Build
+   and the snap to the game's own rules (tasim_place.c, tasim_sweep.c, tasim_snap.c), the scene
+   and the casting's binding, the view, the state hash
+   and the fork. Contract: tagpu_wikisim.h.
 
-   The sections and the functions follow tools/wiki/mockup/sim.js in its order and under its names
-   in C's spelling (siteOk is site_ok), so that a change to one is found in the other. Where a JS
-   value can be undefined, a C value that every comparison treats alike stands in for it: NaN for
-   a metal value read off the map, -1 for no vent and for no building armed. */
+   A function the core shares across its files carries its prefix (tasim_site_ok). Where a value
+   can be absent, a value that every comparison treats alike stands in for it: NaN for a metal
+   value read off the map, -1 for no vent and for no building armed. */
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -11,9 +17,13 @@
 #include <string.h>
 #include "tagpu_sweepgeo.h"
 #include "tagpu_wikisim.h"
+#include "tasim.h"
+#include "tasim_hash.h"
+#include "tasim_place.h"
+#include "tasim_snap.h"
+#include "tasim_sweep.h"
+#include "tasim_worldq.h"
 
-#define CELL    WIKI_CELL
-#define TPS     WIKI_TPS
 #define RADIUS  3
 #define ARENA   64
 #define DRAG    4
@@ -28,27 +38,17 @@
    wobble that comes back is a click. DRAG only decides when the view draws the box. */
 #define CLICK_TIME 25
 #define CLICK_BOX  32
-#define FOLLOW  48
 #define SPACING 24
-/* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
-   tagpu_placegeo.h's */
-#define PLACE_ORDER_BUDGET 4096
-/* a cell far enough off any map for every test to refuse it, and small enough that no cell
-   arithmetic below can overflow: a wild cursor answers as off the map */
-#define CELL_BOUND (1 << 20)
+/* the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
+   nin wherever it is set (seat_in bounds it), so the index is in range. */
+#define ST(s) ((s)->in[(s)->act])
 
-/* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
+/* The context a sim created with none plays in: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
    neither scripts nor sound. */
 static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL, NULL };
-enum { KIND_NONE, KIND_MEX, KIND_GEO };
-enum { HOW_BUILD, HOW_RECLAIM, HOW_FEATURE };
-/* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
+/* where the cursor is; NONE: a mouse button that has not gone down */
 enum { OVER_NONE, OVER_SIDE, OVER_MAP };
-
-/* sim.js's st: the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
-   nin wherever it is set (seat_in bounds it), so the index is in range. */
-#define ST(s) ((s)->in[(s)->act])
 
 static const WIKITRIPROW TRIP_ROWS[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
 /* Every row ends on the button's down, or it would arm at another tick in another mod; and the
@@ -66,105 +66,44 @@ typedef char trip_row3_fits[TRIP_FITS(3, WIKI_TRIP_ROW3) ? 1 : -1];
 typedef char trip_rows_four[WIKI_TRIP_NROWS == 4 ? 1 : -1];
 /* the pick trip's inputs -- its glide, the row's down and up and the glide back -- fit trip_in too */
 typedef char pick_fits[WIKI_PICK_DOWN + 2 + (WIKI_PICK - WIKI_PICK_UP) <= WIKI_TRIP_EVENTS ? 1 : -1];
-/* every push_order a sweep's split makes fits the list: its room is SWEEP_LIST_CAP less the list */
-#define SWEEP_LIST_CAP PLACE_LIST_CAP
-
-/* quickChoice's and site's answer, a candidate building: sim.js's `c` */
-typedef struct {
-    int    type, kind, ox, oz;
-    char   target[WIKI_ID_MAX];     /* an upgrade: the building it replaces; "" otherwise */
-    int    anchored, has_anchor, ax, az;    /* distinct's answer, once asked */
-    double strength;
-    int    queued;
-} CHOICE;
+_Static_assert(SWEEP_LIST_CAP == PLACE_LIST_CAP, "a sweep's room is the core's list bound");
+_Static_assert(WIKI_KIND_METAL == (int)SWEEP_KIND_METAL && WIKI_KIND_ENERGY == (int)SWEEP_KIND_ENERGY &&
+               WIKI_KIND_ALL == (int)SWEEP_KIND_ALL, "the wiki's kinds are the sweep rule's");
+_Static_assert(WIKI_FEATS_MAX <= SWEEP_MAX_TARGETS, "a ring holds every feature of a scene");
 
 static double sq(double v) { return v * v; }
 
-/* Math.round: half rounds up. x - floor(x) is exact wherever it can fall on either side of 0.5,
-   so this agrees with it for every double. */
-static double js_round(double x)
-{
-    double r = floor(x);
-    return x - r >= 0.5 ? r + 1 : r;
-}
-
-static int bound_cell(double c)
-{
-    return c < -CELL_BOUND ? -CELL_BOUND : c > CELL_BOUND ? CELL_BOUND : (int)c;
-}
-
-/* ---- tagpu_placegeo.c's shapes and take-off rule, called directly; sim.js ports each one ---- */
+/* ---- tagpu_placegeo.c's shapes, called directly, and its take-off rule through tasim_place.c ---- */
 
 /* the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up */
-static int origin(double v, int f) { return bound_cell(floor((v - 8 * f + 8) / CELL)); }
-
-typedef struct { double x, z; } XZ;
+static int origin(double v, int f) { return tasim_bound_cell(floor((v - 8 * f + 8) / CELL)); }
 
 /* 0x43AFC0's predicate: within 16 world units of the node on both axes, inclusive */
 static int within(XZ p, XZ q) { return fabs(p.x - q.x) <= 16 && fabs(p.z - q.z) <= 16; }
 
 /* ---- definitions ---- */
 
-static const WIKIDEF* def(const WIKISIM* s, int t) { return &s->entry->def[t]; }
-static int fpx(const WIKISIM* s, int t) { return def(s, t)->fx; }
-static int fpz(const WIKISIM* s, int t) { return def(s, t)->fz; }
-static int mobile(const WIKISIM* s, int t) { return def(s, t)->max_velocity > 0; }
-/* a resource building: a mex extracts metal, a geothermal plant needs a vent under a G cell of its yard */
-static int kind(const WIKISIM* s, int t) { return def(s, t)->extracts > 0 ? KIND_MEX : def(s, t)->vent ? KIND_GEO : KIND_NONE; }
-/* footprint cell (dx, dz) of type t is a G cell, sim.js's gCell: WIKIDEF.g holds the `g` a type
-   lists, or every cell of a `vent` type with none. THE BOUND: the rows are WIKI_FP_MAX cells a
-   side, and a type with G cells is held within them (the loader and the casting's reader refuse
-   one past it), so a cell outside them is no G cell. */
-static int g_cell(const WIKISIM* s, int t, int dx, int dz)
-{
-    return dx >= 0 && dz >= 0 && dx < WIKI_FP_MAX && dz < WIKI_FP_MAX && ((def(s, t)->g[dz] >> dx) & 1);
-}
-/* mirrors tagpu_resource.c strength: ExtractsMetal for a mex, EnergyMake otherwise */
-static double strength(const WIKISIM* s, int t) { return kind(s, t) == KIND_MEX ? def(s, t)->extracts : def(s, t)->energy_make; }
-static int can_build(const WIKISIM* s, const WIKIUNIT* u, int t) { return (int)((def(s, u->type)->builds >> t) & 1); }
 /* FBI canreclamate, def+0x245 bit 0x400 (the FBI reader 0x42BF40 at 0x42C9EF..0x42CA1A): the
    resolver's first test for a reclaim (0x43F4FD) and what makes RECLAIM live (0x41B509..0x41B512) */
 static int is_reclaimer(const WIKISIM* s, const WIKIUNIT* u)
 {
-    return u->sel && u->owner == s->act && def(s, u->type)->canreclamate;
+    return u->sel && u->owner == s->act && tasim_def(&s->defs, u->type)->canreclamate;
 }
-/* the layout's pages of a type, NULL for none or with the sidebar off */
-static const WIKIPAGES* type_pages(const WIKISIM* s, int t)
-{
-    return s->lay && s->ltype[t] >= 0 ? &s->lay->type[s->ltype[t]] : NULL;
-}
-static int npages(const WIKISIM* s, int t) { const WIKIPAGES* p = type_pages(s, t); return p ? p->npage : 0; }
 
 /* ---- the grid ---- */
-
-static int cell_of(double v) { return bound_cell(floor(v / CELL)); }
 
 /* A cell's flat index as the JS arrays take it, -1 where the array has no element: JS reads
    undefined there, and an index aliasing into the next row reads that row, as it does here. */
 static int flat(const WIKISIM* s, int cx, int cz)
 {
-    long k = (long)cz * s->W + cx;
-    return k >= 0 && k < (long)s->W * s->H ? (int)k : -1;
+    long k = (long)cz * s->sim.W + cx;
+    return k >= 0 && k < (long)s->sim.W * s->sim.H ? (int)k : -1;
 }
 
 static int seen(const WIKISIM* s, int cx, int cz)
 {
     int k = flat(s, cx, cz);
-    return k < 0 || s->fog[k] != 2;
-}
-
-typedef struct { int ox, oz, fx, fz; } BOX;
-
-static int overlap(BOX a, BOX b) { return a.ox < b.ox + b.fx && b.ox < a.ox + a.fx && a.oz < b.oz + b.fz && b.oz < a.oz + a.fz; }
-
-static BOX box(const WIKISIM* s, int t, int ox, int oz)
-{
-    BOX b;
-    b.ox = ox;
-    b.oz = oz;
-    b.fx = fpx(s, t);
-    b.fz = fpz(s, t);
-    return b;
+    return k < 0 || s->sim.fog[k] != 2;
 }
 
 /* Where the cursor is: the column left of x = 0, else the map, which is as tall as the column.
@@ -176,7 +115,7 @@ static int over(const WIKISIM* s)
     return s->lay && ST(s).cursor_x < 0 ? OVER_SIDE : OVER_MAP;
 }
 
-/* sim.js's Math.min(Math.max(v, 0), m): a v at or below 0, -0 included, gives +0 */
+/* v held to 0..m: a v at or below 0, -0 included, gives +0 */
 static double clamp_map(double v, double m) { return v > 0 ? (v < m ? v : m) : 0.0; }
 
 /* the cursor the map rules read: with the sidebar, clamped onto the map, so a drag released over
@@ -184,693 +123,117 @@ static double clamp_map(double v, double m) { return v > 0 ? (v < m ? v : m) : 0
 static XZ map_cursor(const WIKISIM* s)
 {
     XZ c;
-    c.x = s->lay ? clamp_map(ST(s).cursor_x, s->W * CELL) : ST(s).cursor_x;
-    c.z = s->lay ? clamp_map(ST(s).cursor_z, s->H * CELL) : ST(s).cursor_z;
+    c.x = s->lay ? clamp_map(ST(s).cursor_x, s->sim.W * CELL) : ST(s).cursor_x;
+    c.z = s->lay ? clamp_map(ST(s).cursor_z, s->sim.H * CELL) : ST(s).cursor_z;
     return c;
 }
 
-/* ---- units: each one on the heap, so a pointer to it holds while the list grows ---- */
-
-/* the sound's two entries (THE SOUND, below the spray), which the rules call where the engine's do */
-static void notice(WIKISIM* s, const WIKIUNIT* u, int kind);
-static void notice_active(WIKISIM* s, WIKIUNIT* u);
-static void sound_named(WIKISIM* s, int name);
-
-/* ---- the units' scripts: the in-game wiki's COB host (tagpu_wikicob.h), sim.js's COB, facts,
-   stance, cobCall, extractorSpeed and spawn ---- */
-
-/* a world position in 16.16, truncated toward zero and held to the int32 range, as sim.js's fix16 */
-static int32_t fix16(double v)
-{
-    const double t = trunc(v * 65536.0);
-    return t < -2147483648.0 ? INT32_MIN : t > 2147483647.0 ? INT32_MAX : (int32_t)t;
-}
-
-/* GET's facts: every unit with a script handle, in creation order -- its handle, owner, centre,
-   the build fraction still to go as the float unit+0x104 holds, and HEALTH in percent, 100 since
-   the wiki has no damage. The count, 0 when the scratch could not grow (oom set). */
-static int facts(WIKISIM* s)
-{
-    int i, n = 0;
-    if (s->nunit > s->cfact) {
-        WIKICOBFACT* p = (WIKICOBFACT*)realloc(s->fact, (size_t)s->nunit * sizeof *p);
-        if (!p) { s->oom = 1; return 0; }
-        s->fact = p;
-        s->cfact = s->nunit;
-    }
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        WIKICOBFACT* f = &s->fact[n];
-        if (!u->cob) continue;
-        f->unit = u->cob;
-        f->owner = u->owner;
-        f->x = fix16(u->x);
-        f->z = fix16(u->z);
-        f->left = (float)(1.0 - u->built);
-        f->health = 100;
-        n++;
-    }
-    return n;
-}
-
-/* INBUILDSTANCE, the gate a builder's work waits on (0x438700); open for a unit that runs no script */
-static int stance(const WIKISIM* s, const WIKIUNIT* u)
-{
-    return !s->cob || !u->cob || tagpu_wikicob_value(s->cob, u->cob, WIKICOB_INBUILDSTANCE) != 0;
-}
-
-static void cob_call(WIKISIM* s, const WIKIUNIT* u, const char* script, int how, int argc, const int32_t* args)
-{
-    int n;
-    if (!s->cob || !u->cob) return;
-    n = facts(s);
-    tagpu_wikicob_call(s->cob, u->cob, script, how, argc, args, s->fact, n);
-}
-
-/* JS's ToInt32 of a finite double's integer part, its low byte: a cell's metal as the engine's byte */
-static int metal_byte(double m)
-{
-    double t = fmod(trunc(m), 4294967296.0);
-    if (t < 0) t += 4294967296.0;
-    return (int)((uint32_t)t & 0xFFu);
-}
-
-/* the extractor's SetSpeed (0x437840, from every create): the sum over its footprint cells on the
-   map of the cell's metal + 1, kept in a 16-bit word and sign-extended (0x437866..0x437902).
-   ExtractsMetal does not enter it. */
-static int32_t extractor_speed(const WIKISIM* s, const WIKIUNIT* u)
-{
-    int x, z, sum = 0;
-    for (z = u->oz; z < u->oz + fpz(s, u->type); z++)
-        for (x = u->ox; x < u->ox + fpx(s, u->type); x++)
-            if (x >= 0 && x < s->W && z >= 0 && z < s->H) sum += metal_byte(s->metal[z * s->W + x]) + 1;
-    sum &= 0xFFFF;
-    return sum >= 0x8000 ? sum - 0x10000 : sum;
-}
-
-/* A UNIT APPEARS (a scene's spawn, a nanoframe placed): the create's script starts in the engine's
-   order, Create run-now (0x485DE6), an extractor's SetSpeed run-later (0x437902), and for a unit
-   made whole whose FBI says ActivateWhenBuilt the state setter's Activate (0x48612F). Its handle
-   is the next in spawn order, the host's own numbering, so the facts carry its row while Create
-   runs. */
-static void spawn(WIKISIM* s, WIKIUNIT* u)
-{
-    int n;
-    if (!s->cob || s->ncob >= WIKICOB_UNITS) return;
-    u->cob = ++s->ncob;
-    n = facts(s);
-    if (tagpu_wikicob_spawn(s->cob, u->type, s->fact, n) != u->cob) {
-        u->cob = 0;
-        s->ncob--;
-        s->oom = 1;
-        return;
-    }
-    if (def(s, u->type)->extracts > 0) {
-        const int32_t a = extractor_speed(s, u);
-        cob_call(s, u, "SetSpeed", WIKICOB_ARGS, 1, &a);
-    }
-    if (u->built >= 1 && def(s, u->type)->activate_when_built) tagpu_wikicob_activate(s->cob, u->cob, 1);
-    notice_active(s, u);
-}
-
-/* a unit joins the world, appended in the room new_unit made for it. With the sidebar it carries
-   its page state: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set and page
-   1; any other unit has neither. */
-static WIKIUNIT* enter(WIKISIM* s, WIKIUNIT* u)
-{
-    if (s->lay) {
-        const int n = npages(s, u->type);
-        u->bp = n >= 1;
-        u->page = n >= 1 ? 1 : 0;
-    }
-    s->unit[s->nunit++] = u;
-    spawn(s, u);
-    return u;
-}
-
-/* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
-   past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
-   through here, so they cannot grow a list until realloc fails, and take_offs' scratch
-   (WIKISIM's q and by) holds any list. 1 when the order went in; 0 when the list was full or
-   memory ran out, which sets `oom`. */
-static int push_order(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
-{
-    if (u->norder >= PLACE_LIST_CAP) return 0;
-    if (u->norder == u->corder) {
-        int c = u->corder ? u->corder * 2 : 8;
-        WIKIORDER* p = (WIKIORDER*)realloc(u->order, (size_t)c * sizeof *p);
-        if (!p) { s->oom = 1; return 0; }
-        u->order = p;
-        u->corder = c;
-    }
-    u->order[u->norder] = *o;
-    u->order[u->norder++].serial = ++s->next_serial;
-    return 1;
-}
-
-static void splice_orders(WIKIUNIT* u, int i, int n)
-{
-    memmove(u->order + i, u->order + i + n, (size_t)(u->norder - i - n) * sizeof *u->order);
-    u->norder -= n;
-}
-
-static WIKIUNIT* new_unit(WIKISIM* s, int type, int owner, double built, const char* id, const char* label)
-{
-    WIKIUNIT* u;
-    if (s->nunit == s->cunit) {
-        int c = s->cunit ? s->cunit * 2 : 32;
-        WIKIUNIT** p = (WIKIUNIT**)realloc(s->unit, (size_t)c * sizeof *p);
-        if (!p) { s->oom = 1; return NULL; }
-        s->unit = p;
-        s->cunit = c;
-    }
-    if (!(u = (WIKIUNIT*)calloc(1, sizeof *u))) { s->oom = 1; return NULL; }
-    if (id && *id) snprintf(u->id, sizeof u->id, "%s", id);
-    else snprintf(u->id, sizeof u->id, "u%d", s->next_id++);
-    u->type = type;
-    u->owner = owner;
-    u->built = built;
-    u->label = label ? label : def(s, type)->name;
-    return u;
-}
-
-/* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's
-   default heading 0x8000 is the centre of the spawn's 0x8000 - BuildAngle/2 + rand(BuildAngle)
-   (0x485A40, tagpu_native.c ghost_one), and the simulation has no randomness. */
-static WIKIUNIT* place(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
-{
-    u->ox = ox;
-    u->oz = oz;
-    u->x = (ox + fpx(s, u->type) / 2.0) * CELL;
-    u->z = (oz + fpz(s, u->type) / 2.0) * CELL;
-    u->hx = 0;
-    u->hz = 1;
-    return enter(s, u);
-}
-
-/* (hx, hz): the scene's facing, already a unit vector (tagpu_wikidata.c) */
-static WIKIUNIT* add(WIKISIM* s, int type, int owner, double x, double z, double built, const char* id, const char* label,
-                     double hx, double hz)
-{
-    WIKIUNIT* u = new_unit(s, type, owner, built, id, label);
-    if (!u) return NULL;
-    if (mobile(s, type)) {
-        u->x = x;
-        u->z = z;
-        u->hx = hx;
-        u->hz = hz;
-        return enter(s, u);
-    }
-    return place(s, u, bound_cell(js_round(x / CELL - fpx(s, type) / 2.0)), bound_cell(js_round(z / CELL - fpz(s, type) / 2.0)));
-}
-
-static WIKIUNIT* by_id(const WIKISIM* s, const char* id)
-{
-    int i;
-    for (i = 0; i < s->nunit; i++)
-        if (!strcmp(s->unit[i]->id, id)) return s->unit[i];
-    return NULL;
-}
-
-/* the first structure of that type on that site; a mobile unit has no site (sim.js: its ox is undefined) */
-static WIKIUNIT* structure_at(const WIKISIM* s, int t, int ox, int oz)
-{
-    int i;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        if (u->type == t && !mobile(s, u->type) && u->ox == ox && u->oz == oz) return u;
-    }
-    return NULL;
-}
+/* ---- the acting seat's selection ---- */
 
 static int is_builder(const WIKISIM* s, const WIKIUNIT* u)
 {
-    return u->sel && u->owner == s->act && mobile(s, u->type) && def(s, u->type)->worker_time > 0;
+    return u->sel && u->owner == s->act && tasim_mobile(&s->defs, u->type) && tasim_def(&s->defs, u->type)->worker_time > 0;
 }
 
 static int nbuilders(const WIKISIM* s)
 {
     int i, n = 0;
-    for (i = 0; i < s->nunit; i++) n += is_builder(s, s->unit[i]);
+    for (i = 0; i < s->sim.nunit; i++) n += is_builder(s, s->sim.unit[i]);
     return n;
 }
 
-/* the types the selected builders' build lists offer, as a mask; read in definition order */
-static uint64_t available(const WIKISIM* s)
-{
-    uint64_t ts = 0;
-    int i;
-    for (i = 0; i < s->nunit; i++)
-        if (is_builder(s, s->unit[i])) ts |= def(s, s->unit[i]->type)->builds;
-    return ts;
-}
-
-/* the selected units of the player's that can reclaim, sim.js's reclaimers().length */
+/* the selected units of the player's that can reclaim */
 static int nreclaimers(const WIKISIM* s)
 {
     int i, n = 0;
-    for (i = 0; i < s->nunit; i++) n += is_reclaimer(s, s->unit[i]);
+    for (i = 0; i < s->sim.nunit; i++) n += is_reclaimer(s, s->sim.unit[i]);
     return n;
 }
 
-/* ---- THE FEATURES (research/notes/ingame-wiki-reclaim-plan.md), sim.js's: the entry's `features`
-   table names each by its TDF section, and a scene places one at its anchor cell, the footprint's
-   top-left, as the TNT and LoadFeature 0x4224B0 place a map's. A blocking one stands in the way as
-   a structure does; a reclaimable one is a reclaim's target, and goes when its reclaim pays out
-   (FeatureDie at 0x423965). ---- */
+/* ---- Quick Build and the build cursor's snap: the game's rules (tasim_snap.c) over the core's WORLDQ,
+   given the input tagpu_resource.c gives them ---- */
 
-static BOX feat_box(const WIKIFEAT* f)
-{
-    BOX b;
-    b.ox = f->ox;
-    b.oz = f->oz;
-    b.fx = f->fx;
-    b.fz = f->fz;
-    return b;
-}
-
-static WIKIFEAT* feat_by_id(const WIKISIM* s, const char* id)
-{
-    int i;
-    for (i = 0; i < s->nfeat; i++)
-        if (!strcmp(s->feat[i].id, id)) return &s->feat[i];
-    return NULL;
-}
-
-/* the feature whose footprint holds the cell under (x, z), as 0x4815A0 finds one at a position
-   through its anchor */
-static WIKIFEAT* feat_at(const WIKISIM* s, double x, double z)
-{
-    const int cx = cell_of(x), cz = cell_of(z);
-    int i;
-    for (i = 0; i < s->nfeat; i++) {
-        WIKIFEAT* f = &s->feat[i];
-        if (cx >= f->ox && cx < f->ox + f->fx && cz >= f->oz && cz < f->oz + f->fz) return f;
-    }
-    return NULL;
-}
-
-/* the feature leaves the list and its anchor cell is gone, which the game look's image no longer
-   draws. THE BOUND: gone holds WIKI_FEATS_MAX cells and each feature leaves once. */
-static void feat_remove(WIKISIM* s, WIKIFEAT* f)
-{
-    const int k = (int)(f - s->feat);
-    if (s->ngone < WIKI_FEATS_MAX) {
-        s->gone[2 * s->ngone] = f->ox;
-        s->gone[2 * s->ngone + 1] = f->oz;
-        s->ngone++;
-    }
-    memmove(&s->feat[k], &s->feat[k + 1], (size_t)(s->nfeat - k - 1) * sizeof *s->feat);
-    s->nfeat--;
-}
-
-/* ---- plans: the player's build orders; one is started once its building stands at its site ---- */
-
-static int started(const WIKISIM* s, const WIKIORDER* o) { return structure_at(s, o->type, o->ox, o->oz) != NULL; }
-
-/* THE ENGINE'S SITE TEST (0x47D2E0), simplified as sim.js simplifies it: the footprint inside the
-   map's placeable interior, cells 1 to w - 2 (tagpu_resource.c site_known's bound), clear of every
-   structure but `ignore` (an upgrade's old building), and for a geothermal plant a vent under one
-   of its G cells: 0x47D2E0 refuses a yard holding G (0x47D80F) unless some G cell stands on a
-   feature whose FeatureDef +0xFE has bit 0x20 (0x47D684..0x47D711, 0x47D75B..0x47D769),
-   DISASSEMBLED; a vent under any other cell of the yard counts for nothing. Mobile units never
-   block. */
-static int interior(const WIKISIM* s, int t, int ox, int oz)
-{
-    return ox >= 1 && oz >= 1 && ox + fpx(s, t) < s->W && oz + fpz(s, t) < s->H;
-}
-
-/* vent v lies under a G cell of type t's footprint at (ox, oz), sim.js's ventsUnderG */
-static int vent_under_g(const WIKISIM* s, const PlaceCell* v, int t, int ox, int oz)
-{
-    return v->cx >= ox && v->cx < ox + fpx(s, t) && v->cz >= oz && v->cz < oz + fpz(s, t) && g_cell(s, t, v->cx - ox, v->cz - oz);
-}
-
-static int site_ok(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* ignore)
-{
-    BOX b = box(s, t, ox, oz);
-    int i;
-    if (!interior(s, t, ox, oz)) return 0;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (!mobile(s, u->type) && u != ignore && overlap(b, box(s, u->type, u->ox, u->oz))) return 0;
-    }
-    /* a blocking feature in the yard refuses it [INFERRED: the site test 0x47D2E0's feature cells;
-       no entry builds over one] */
-    for (i = 0; i < s->nfeat; i++)
-        if (s->feat[i].blocking && overlap(b, feat_box(&s->feat[i]))) return 0;
-    if (kind(s, t) == KIND_GEO) {
-        for (i = 0; i < s->nvent && !vent_under_g(s, &s->vent[i], t, ox, oz); i++) {}
-        if (i == s->nvent) return 0;
-    }
-    return 1;
-}
-
-/* mirrors tagpu_resource.c site_known: the interior, every footprint cell explored */
-static int known(const WIKISIM* s, int t, int ox, int oz)
-{
-    int i, j;
-    if (!interior(s, t, ox, oz)) return 0;
-    for (j = oz; j < oz + fpz(s, t); j++)
-        for (i = ox; i < ox + fpx(s, t); i++)
-            if (!seen(s, i, j)) return 0;
-    return 1;
-}
-
-/* mirrors tagpu_resource.c fits: site_known, then the site test */
-static int fits(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* ignore)
-{
-    return known(s, t, ox, oz) && site_ok(s, t, ox, oz, ignore);
-}
-
-/* mirrors tagpu_resource.c plans_block: a plan's footprint over the site. Without Shift a click
-   replaces the queues of the selected builders it orders, so their plans do not block it. */
-static int plans_block(const WIKISIM* s, const CHOICE* c, int shift)
-{
-    BOX b = box(s, c->type, c->ox, c->oz);
-    int i, j, replaced = 0;
-    for (i = 0; !shift && i < s->nunit; i++)
-        if (is_builder(s, s->unit[i]) && can_build(s, s->unit[i], c->type)) replaced = 1;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (u->owner != s->act || (replaced && is_builder(s, u))) continue;
-        for (j = 0; j < u->norder; j++) {
-            const WIKIORDER* o = &u->order[j];
-            if (o->k == WIKI_ORDER_BUILD && overlap(b, box(s, o->type, o->ox, o->oz))) return 1;
-        }
-    }
-    return 0;
-}
-
-/* ---- the rules of tagpu_resource.c, as sim.js mirrors them. The metal a rule reads is -1 on
-   unexplored ground. ---- */
-
-static double metal_at(const WIKISIM* s, int i, int j)
-{
-    int k = flat(s, i, j);
-    if (!seen(s, i, j)) return -1;
-    return k < 0 ? NAN : s->metal[k];
-}
-
-/* the cells of a footprint metal_at finds above SurfaceMetal. Inside the map it is four reads of
-   the sums init builds (WIKISIM.rich): Quick Build's hover asks it for every candidate of site()'s
-   search round every seat's cursor, on every tick a selected builder offers an extractor. Read
-   cell by cell it was 55 % of a players replay's time (MEASURED 2026-11-02, gprof over the five
-   players demos, native -O2). A footprint past an edge reads cell by cell, where flat() aliases
-   into the next row as JS indexes; site() never asks one. */
-static int coverage(const WIKISIM* s, int ox, int oz, int fx, int fz)
-{
-    int i, j, n = 0;
-    if (ox >= 0 && oz >= 0 && fx >= 0 && fz >= 0 && ox + fx <= s->W && oz + fz <= s->H) {
-        const int* R = s->rich;
-        const int w = s->W + 1;
-        return R[(oz + fz) * w + ox + fx] - R[oz * w + ox + fx] - R[(oz + fz) * w + ox] + R[oz * w + ox];
-    }
-    for (j = oz; j < oz + fz; j++)
-        for (i = ox; i < ox + fx; i++)
-            if (metal_at(s, i, j) > s->SM) n++;
-    return n;
-}
-
-/* WIKISIM.rich, once metal and fog are filled: rich[(j + 1)(W + 1) + i + 1] counts the cells of
-   columns 0..i and rows 0..j above SurfaceMetal as metal_at reads them */
+/* TASIM.rich, once metal and fog are filled: rich[(j + 1)(W + 1) + i + 1] counts the cells of
+   columns 0..i and rows 0..j above SurfaceMetal, an unexplored cell's metal read as -1, as the core's
+   metal op reads it (tasim_worldq.c coverage) */
 static void rich_sums(WIKISIM* s)
 {
-    const int w = s->W + 1;
+    const int w = s->sim.W + 1;
     int i, j;
-    memset(s->rich, 0, (size_t)w * sizeof *s->rich);
-    for (j = 0; j < s->H; j++) {
+    memset(s->sim.rich, 0, (size_t)w * sizeof *s->sim.rich);
+    for (j = 0; j < s->sim.H; j++) {
         int row = 0;
-        s->rich[(j + 1) * w] = 0;
-        for (i = 0; i < s->W; i++) {
-            row += metal_at(s, i, j) > s->SM;
-            s->rich[(j + 1) * w + i + 1] = s->rich[j * w + i + 1] + row;
+        s->sim.rich[(j + 1) * w] = 0;
+        for (i = 0; i < s->sim.W; i++) {
+            row += (seen(s, i, j) ? s->sim.metal[j * s->sim.W + i] : -1) > s->sim.SM;
+            s->sim.rich[(j + 1) * w + i + 1] = s->sim.rich[j * w + i + 1] + row;
         }
     }
-}
-
-static int distinct(WIKISIM* s, CHOICE* c);
-static int queued(WIKISIM* s, CHOICE* c);
-
-static void choice(CHOICE* c, int t, int k, int ox, int oz)
-{
-    memset(c, 0, sizeof *c);
-    c->type = t;
-    c->kind = k;
-    c->ox = ox;
-    c->oz = oz;
-}
-
-/* mirrors tagpu_resource.c site: candidates are centre cells within radius r of the seed's cell; a
-   footprint's origin is its centre minus half the footprint, rounded down. A mex scores its
-   coverage, a geothermal plant 1. The highest score wins and a tie goes to the centre nearest the
-   raw cursor by the (candidate + 0.5) metric, the first in scan order on an exact tie. `legal`
-   (Quick Build) skips a candidate the site test or a plan refuses unless it is the site of a
-   queued plan; without it a mex ignores occupancy and a geothermal plant takes the nearest site
-   that fits. */
-static int site(WIKISIM* s, int t, double sx, double sz, double rx, double rz, int r, int legal, int shift, CHOICE* out)
-{
-    const int fx = fpx(s, t), fz = fpz(s, t), k = kind(s, t), bx = cell_of(sx), bz = cell_of(sz);
-    double dist = INFINITY;
-    int dx, dz, best = 0, found = 0;
-    if (!k) return 0;
-    for (dz = -r; dz <= r; dz++)
-        for (dx = -r; dx <= r; dx++) {
-            const int cx = bx + dx, cz = bz + dz, ox = cx - (fx >> 1), oz = cz - (fz >> 1);
-            const double tx = cx - rx / CELL + 0.5, tz = cz - rz / CELL + 0.5, d = tx * tx + tz * tz;
-            int n;
-            if (ox < 0 || oz < 0 || ox + fx > s->W || oz + fz > s->H) continue;
-            n = k == KIND_MEX ? coverage(s, ox, oz, fx, fz) : 1;
-            if (!n || n < best || (n == best && d >= dist)) continue;
-            if (legal) {
-                const int taken = !fits(s, t, ox, oz, NULL);
-                CHOICE c;
-                choice(&c, t, k, ox, oz);
-                if (taken && !known(s, t, ox, oz)) continue;
-                if (taken || plans_block(s, &c, shift)) {
-                    if (k == KIND_MEX && !distinct(s, &c)) continue;
-                    if (!queued(s, &c)) continue;
-                }
-            } else if (k == KIND_GEO && !fits(s, t, ox, oz, NULL)) continue;
-            best = n;
-            dist = d;
-            found = 1;
-            choice(out, t, k, ox, oz);
-        }
-    return found;
-}
-
-/* mirrors tagpu_resource.c snapped_site: a mex winner away from the raw cell must win again in a
-   search of radius max(footprint) around itself without legality, the raw cursor still breaking
-   ties, or there is no snap */
-static int snapped_site(WIKISIM* s, int t, double rx, double rz, int legal, int shift, CHOICE* c)
-{
-    const int fx = fpx(s, t), fz = fpz(s, t);
-    CHOICE v;
-    if (!site(s, t, rx, rz, rx, rz, RADIUS, legal, shift, c)) return 0;
-    if (c->kind != KIND_MEX) return 1;
-    if (c->ox + (fx >> 1) != cell_of(rx) || c->oz + (fz >> 1) != cell_of(rz)) {
-        if (!site(s, t, (c->ox + fx / 2.0) * CELL, (c->oz + fz / 2.0) * CELL, rx, rz, fx > fz ? fx : fz, 0, shift, &v)
-            || v.ox != c->ox || v.oz != c->oz)
-            return 0;
-    }
-    return 1;
-}
-
-/* mirrors tagpu_resource.c distinct: from the first footprint cell above SurfaceMetal in scan
-   order, the eight-connected component of cells above it is a deposit when it is closed: it never
-   reaches the edge of the 129-cell arena around that cell, meets no unexplored neighbour, has an
-   explored background neighbour, and does not touch both opposite map edges on either axis. Its
-   anchor (the topmost, then leftmost, cell) identifies the deposit for same_plan. Asked once per
-   CHOICE: nothing it reads changes while one lives. */
-static int distinct(WIKISIM* s, CHOICE* c)
-{
-    const int fx = fpx(s, c->type), fz = fpz(s, c->type), W = s->W, H = s->H;
-    int i, j, sx = -1, sz = -1, head = 0, tail = 0, boundary = 0, edges = 0, ax, az;
-    if (c->anchored) return c->has_anchor;
-    c->anchored = 1;
-    for (j = c->oz; j < c->oz + fz && sx < 0; j++)
-        for (i = c->ox; i < c->ox + fx; i++)
-            if (metal_at(s, i, j) > s->SM) { sx = i; sz = j; break; }
-    if (sx < 0) return 0;
-    if (++s->gen == 0) {    /* the stamps wrapped: none may look current */
-        memset(s->mark, 0, (size_t)W * H * sizeof *s->mark);
-        s->gen = 1;
-    }
-    /* metal_at answered a number, so the start's flat index is in the array */
-    s->mark[flat(s, sx, sz)] = s->gen;
-    s->todo[tail++] = sx;
-    s->todo[tail++] = sz;
-    ax = sx;
-    az = sz;
-    while (head < tail) {
-        const int ci = s->todo[head], cj = s->todo[head + 1];
-        int dx, dz;
-        head += 2;
-        if (abs(ci - sx) == ARENA || abs(cj - sz) == ARENA) return 0;
-        if (ci == 0) edges |= 1;
-        if (ci == W - 1) edges |= 2;
-        if (cj == 0) edges |= 4;
-        if (cj == H - 1) edges |= 8;
-        for (dz = -1; dz <= 1; dz++)
-            for (dx = -1; dx <= 1; dx++) {
-                const int ni = ci + dx, nj = cj + dz;
-                int k;
-                if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
-                k = nj * W + ni;
-                if (s->mark[k] == s->gen) continue;
-                s->mark[k] = s->gen;
-                if (!seen(s, ni, nj)) return 0;
-                if (s->metal[k] <= s->SM) { boundary = 1; continue; }
-                /* every map cell enters once, after the start: the queue holds W * H + 1 cells */
-                s->todo[tail++] = ni;
-                s->todo[tail++] = nj;
-                if (nj < az || (nj == az && ni < ax)) { ax = ni; az = nj; }
-            }
-    }
-    if (!(boundary && (edges & 3) != 3 && (edges & 12) != 12)) return 0;
-    c->has_anchor = 1;
-    c->ax = ax;
-    c->az = az;
-    return 1;
-}
-
-/* mirrors tagpu_resource.c geo_anchor: the one explored vent under a G cell of the footprint, by
-   index (tagpu_resource.c tests yard & 0x80 alone); -1 when no G cell holds one or they hold
-   several cells of them */
-static int vent_anchor(const WIKISIM* s, int t, int ox, int oz)
-{
-    int i, first = -1;
-    for (i = 0; i < s->nvent; i++) {
-        const PlaceCell* v = &s->vent[i];
-        if (!vent_under_g(s, v, t, ox, oz) || !seen(s, v->cx, v->cz)) continue;
-        if (first < 0) first = i;
-        else if (v->cx != s->vent[first].cx || v->cz != s->vent[first].cz) return -1;
-    }
-    return first;
-}
-
-static XZ centre(const WIKISIM* s, int t, int ox, int oz)
-{
-    XZ p;
-    p.x = (ox + fpx(s, t) / 2.0) * CELL;
-    p.z = (oz + fpz(s, t) / 2.0) * CELL;
-    return p;
-}
-
-/* mirrors tagpu_resource.c same_plan: a build order is this choice's plan when it is of the same
-   kind and on the same vent, the same deposit (the same anchor), or for an upgrade within 16
-   world units of the same place on both axes. Its building type need not be the one offered now. */
-static int same_plan(WIKISIM* s, CHOICE* c, const WIKIORDER* o)
-{
-    CHOICE b;
-    if (kind(s, o->type) != c->kind) return 0;
-    if (c->kind == KIND_GEO) {
-        const int a = vent_anchor(s, c->type, c->ox, c->oz);
-        return a >= 0 && a == vent_anchor(s, o->type, o->ox, o->oz);
-    }
-    if (c->target[0]) {
-        const XZ p = centre(s, c->type, c->ox, c->oz), q = centre(s, o->type, o->ox, o->oz);
-        return fabs(p.x - q.x) <= 16 && fabs(p.z - q.z) <= 16;
-    }
-    choice(&b, o->type, kind(s, o->type), o->ox, o->oz);
-    return distinct(s, c) && distinct(s, &b) && c->ax == b.ax && c->az == b.az;
-}
-
-/* mirrors tagpu_resource.c find_cancel: a builder's first unstarted matching plan; for an upgrade
-   only a build that is not the head and follows the unstarted reclaim of the same building, which
-   goes with it. Answers the first order to remove and the count in `*n`, or -1. */
-static int find_cancel(WIKISIM* s, const WIKIUNIT* u, CHOICE* c, int* n)
-{
-    int i;
-    for (i = 0; i < u->norder; i++) {
-        const WIKIORDER* o = &u->order[i];
-        const WIKIORDER* p = i > 0 ? &u->order[i - 1] : NULL;
-        const WIKIUNIT* g;
-        if (o->k != WIKI_ORDER_BUILD || started(s, o) || !same_plan(s, c, o)) continue;
-        if (!c->target[0]) { *n = 1; return i; }
-        if (p && p->k == WIKI_ORDER_RECLAIM && !strcmp(p->target, c->target) && (g = by_id(s, p->target))
-            && !(g->reclaimed > 0)) {
-            *n = 2;
-            return i - 1;
-        }
-    }
-    return -1;
-}
-
-/* mirrors tagpu_resource.c queued: 0 no plan of the player's here, 1 a plan, 2 a plan a selected
-   builder can cancel. Each unit's first matching order decides for that unit. */
-static int queued(WIKISIM* s, CHOICE* c)
-{
-    int i, j, n, q = 0;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (u->owner != s->act) continue;
-        for (j = 0; j < u->norder; j++) {
-            if (u->order[j].k != WIKI_ORDER_BUILD || !same_plan(s, c, &u->order[j])) continue;
-            q = 1;
-            if (u->sel && def(s, u->type)->worker_time > 0 && find_cancel(s, u, c, &n) >= 0) return 2;
-            break;
-        }
-    }
-    return q;
 }
 
 static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z);
 
-/* mirrors tagpu_resource.c quick_choice, the one answer the ghost, the cursor and a right-click all
-   use. Off in the build-menu mode and while Alt is held. Over a unit, it offers only an upgrade:
-   the unit must be a finished resource building the player owns, and the replacement, centred on
-   it, must have a strictly higher ExtractsMetal (or EnergyMake), fit once the old one is gone or
-   be queued there already. Over ground, each offered type gets snapped_site's legal search and a
-   mex a distinct deposit. Per kind the highest ExtractsMetal or EnergyMake that fits wins, the
-   first in definition order on a tie; between a mex and a geothermal plant, the one whose centre
-   is nearer the cursor. */
-static int quick_choice(WIKISIM* s, int shift, CHOICE* out)
+/* a unit's slot in the core's WORLDQ: its place in the list plus 1 (tasim_worldq.h) */
+static int slot_of(const WIKISIM* s, const WIKIUNIT* u)
+{
+    int i;
+    for (i = 0; i < s->sim.nunit; i++)
+        if (s->sim.unit[i] == u) return i + 1;
+    return -1;
+}
+
+/* QUICK BUILD'S INPUT, as tagpu_resource.c reads the game's: the cursor's point in 16.16, the profile's
+   radius (RADIUS, retail's), the unit under the cursor of any owner and with none whether the feature there
+   is reclaimable, the acting seat's selected units in slot order -- the first SNAP_UNITS_MAX, a seat's most
+   in the game -- and Shift */
+static void quick_in(WIKISIM* s, int shift, SNAP_QUICK_IN* in)
 {
     const XZ m = map_cursor(s);
-    const double x = m.x, z = m.z;
-    const WIKIUNIT* target;
-    const uint64_t offered = available(s);
-    CHOICE best[3];
-    int t, desired = KIND_NONE, have[3] = { 0, 0, 0 };
-    double old = 0;
-    /* Quick Build offers in the contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate):
-       not with reclaim armed */
-    if (ST(s).mode >= 0 || ST(s).rmode || ST(s).held[WIKI_KEY_ALT]) return 0;
-    target = unit_at(s, x, z);
-    if (target) {
-        if (target->owner != s->act || mobile(s, target->type) || target->built < 1 || !(desired = kind(s, target->type)))
-            return 0;
-        old = strength(s, target->type);
+    const WIKIUNIT* u = unit_at(s, m.x, m.z);
+    int i;
+    memset(in, 0, sizeof *in);
+    in->raw[0] = tasim_fix16(m.x);
+    in->raw[2] = tasim_fix16(m.z);
+    in->radius = RADIUS;
+    in->target = u ? slot_of(s, u) : -1;
+    if (!u) {
+        const WIKIFEAT* f = tasim_feat_at(&s->sim, m.x, m.z);
+        in->feature_reclaimable = f && f->reclaimable;
     }
-    for (t = 0; t < s->entry->ndef; t++) {
-        const int k = kind(s, t), fx = fpx(s, t), fz = fpz(s, t);
-        const double value = strength(s, t);
-        CHOICE c;
-        if (!((offered >> t) & 1)) continue;
-        if (!k || (desired && k != desired) || value <= old || (have[k] && value <= best[k].strength)) continue;
-        if (target) {
-            choice(&c, t, k, bound_cell(trunc((floor(target->x) - fx * 8 + 8) / CELL)),
-                   bound_cell(trunc((floor(target->z) - fz * 8 + 8) / CELL)));
-            snprintf(c.target, sizeof c.target, "%s", target->id);
-            if (!fits(s, t, c.ox, c.oz, target) && (!known(s, t, c.ox, c.oz) || !queued(s, &c))) continue;
-        } else if (!snapped_site(s, t, x, z, 1, shift, &c) || (k == KIND_MEX && !distinct(s, &c))) continue;
-        c.strength = value;
-        c.queued = queued(s, &c);
-        if (!c.queued && plans_block(s, &c, shift)) continue;
-        best[k] = c;
-        have[k] = 1;
-    }
-    if (have[KIND_MEX]) *out = best[KIND_MEX];
-    else if (have[KIND_GEO]) *out = best[KIND_GEO];
-    else return 0;
-    if (have[KIND_MEX] && have[KIND_GEO]) {
-        const XZ g = centre(s, best[KIND_GEO].type, best[KIND_GEO].ox, best[KIND_GEO].oz);
-        const XZ m = centre(s, best[KIND_MEX].type, best[KIND_MEX].ox, best[KIND_MEX].oz);
-        if (sq(floor(g.x - x)) + sq(floor(g.z - z)) < sq(floor(m.x - x)) + sq(floor(m.z - z))) *out = best[KIND_GEO];
-    }
-    out->queued = queued(s, out);
+    for (i = 0; i < s->sim.nunit && i < 0xFFFE && in->nbuilders < SNAP_UNITS_MAX; i++)
+        if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == s->act) s->snap_builders[in->nbuilders++] = (uint16_t)(i + 1);
+    in->builders = s->snap_builders;
+    in->shift = shift;
+}
+
+/* Quick Build's one answer, the ghost's, the cursor's and a click's (tasim_snap_quick). It offers in the
+   contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate): not in the build-menu mode, not with
+   reclaim armed, and not while Alt is held. */
+static int quick_choice(WIKISIM* s, int shift, SNAP_QUICK_IN* in, SNAP_CHOICE* out)
+{
+    WQ_CORE ctx;
+    WORLDQ q;
+    if (ST(s).mode >= 0 || ST(s).rmode || ST(s).held[WIKI_KEY_ALT] || !tasim_worldq_open(&ctx, &q, &s->sim, &s->defs, s->act))
+        return 0;
+    quick_in(s, shift, in);
+    return tasim_snap_quick(&q, in, out, s->snap);
+}
+
+/* the build cursor's snap of entry type `t` at the cursor (tasim_snap_snapped, no legality): 1 with the
+   footprint's first cell */
+static int snapped_at(WIKISIM* s, int t, XZ m, int* cx, int* cz)
+{
+    WQ_CORE ctx;
+    WORLDQ q;
+    SNAP_CHOICE c;
+    int32_t raw[3];
+    raw[0] = tasim_fix16(m.x);
+    raw[1] = 0;
+    raw[2] = tasim_fix16(m.z);
+    if (!tasim_worldq_open(&ctx, &q, &s->sim, &s->defs, s->act) || !tasim_snap_snapped(&q, NULL, t + 1, raw, RADIUS, 0, &c, s->snap))
+        return 0;
+    *cx = c.x;
+    *cz = c.z;
     return 1;
 }
 
@@ -880,10 +243,10 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z)
 {
     WIKIUNIT* hit = NULL;
     int i;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        if (fabs(x - u->x) <= fpx(s, u->type) * CELL / 2.0 && fabs(z - u->z) <= fpz(s, u->type) * CELL / 2.0
-            && (!hit || mobile(s, u->type) || !mobile(s, hit->type)))
+    for (i = 0; i < s->sim.nunit; i++) {
+        WIKIUNIT* u = s->sim.unit[i];
+        if (fabs(x - u->x) <= tasim_fpx(&s->defs, u->type) * CELL / 2.0 && fabs(z - u->z) <= tasim_fpz(&s->defs, u->type) * CELL / 2.0
+            && (!hit || tasim_mobile(&s->defs, u->type) || !tasim_mobile(&s->defs, hit->type)))
             hit = u;
     }
     return hit;
@@ -891,14 +254,39 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z)
 
 /* ---- the sidebar's rules; none of them runs with the sidebar off (`lay` NULL) ---- */
 
-static void disarm(WIKISIM* s);
-static void arm(WIKISIM* s, int t);
 static void toggle_reclaim(WIKISIM* s);
 
 /* RECLAIM: an order button whose name holds RECLAIM, the orders handler's strstr (0x419F56) */
 static int is_reclaim(const WIKIGADGET* g) { return g->role == WIKI_ROLE_ORDER && strstr(g->name, "RECLAIM") != NULL; }
 
 static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
+
+/* the layout's pages of a type, NULL for none or with the sidebar off */
+static const WIKIPAGES* type_pages(const WIKISIM* s, int t)
+{
+    return s->lay && s->ltype[t] >= 0 ? &s->lay->type[s->ltype[t]] : NULL;
+}
+static int npages(const WIKISIM* s, int t) { const WIKIPAGES* p = type_pages(s, t); return p ? p->npage : 0; }
+
+/* THE UNIT HOOK (tasim_state.h), what the wiki keeps of the core's units; `ctx` is the WIKISIM, which init
+   points it at. ENTER: with the sidebar a unit carries its page state, which is the engine's unit record's
+   (WIKIUNIT.bp) and so set as it is made: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set
+   and page 1, any other unit with neither. LEAVE: the sidebar's shown unit goes with its unit, which route()
+   would make so on this tick's end anyway. BUILT: a building of the player's finished counts for the demo's
+   BUILT waits. It writes the WIKISIM's own fields and the unit's bp and page alone, as the hook's contract
+   wants. */
+static void unit_hook(void* ctx, WIKIUNIT* u, int ev)
+{
+    WIKISIM* s = (WIKISIM*)ctx;
+    if (ev == TASIM_UNIT_ENTER && s->lay) {
+        const int n = npages(s, u->type);
+        u->bp = n >= 1;
+        u->page = n >= 1 ? 1 : 0;
+    } else if (ev == TASIM_UNIT_LEAVE && s->shown == u)
+        s->shown = NULL;
+    else if (ev == TASIM_UNIT_BUILT && u->owner == 0)
+        s->nbuilt++;
+}
 
 /* the column's row of world z (s->dz, the header's DZ) */
 static double row_of(const WIKISIM* s, double z) { return z - s->dz; }
@@ -927,7 +315,7 @@ static int inside(const WIKISIM* s, const WIKISCREEN* sc, const WIKIGADGET* g, d
 /* a build button's unit as a type of the entry, -1 when it names none the entry defines */
 static int unit_def(const WIKISIM* s, const WIKIGADGET* g)
 {
-    return g->unit[0] ? tagpu_wikidata_def(s->entry, g->unit) : -1;
+    return g->unit[0] ? tagpu_wikidata_def(s->defs.entry, g->unit) : -1;
 }
 
 /* OWNER QUESTION Q-O1, the recommended answer: a build button is live only when the entry defines
@@ -936,7 +324,7 @@ static int unit_def(const WIKISIM* s, const WIKIGADGET* g)
 static int build_live(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* shown)
 {
     const int t = unit_def(s, g);
-    return !g->grey && t >= 0 && shown && can_build(s, shown, t);
+    return !g->grey && t >= 0 && shown && tasim_can_build(&s->defs, shown, t);
 }
 
 /* A gadget's state as the stage draws it: -1 not drawn, 0 normal, 1 pressed or the current tab, 2
@@ -961,8 +349,8 @@ static int gadget_state(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* s
     case WIKI_ROLE_BUILDTAB: return n >= 1 ? (shown->bp ? 1 : 0) : 2;
     case WIKI_ROLE_BUILD:    return build_live(s, g, shown) ? pressed : 2;
     case WIKI_ROLE_STOP:
-        for (i = 0; i < s->nunit; i++)
-            if (s->unit[i]->sel && s->unit[i]->owner == 0 && def(s, s->unit[i]->type)->canstop) return pressed;
+        for (i = 0; i < s->sim.nunit; i++)
+            if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == 0 && tasim_def(&s->defs, s->sim.unit[i]->type)->canstop) return pressed;
         return 2;
     case WIKI_ROLE_ORDER:    return is_reclaim(g) && nreclaimers(s) ? (pressed || ST(s).rmode) : 2;
     default:                 return pressed;
@@ -1011,19 +399,45 @@ static void route(WIKISIM* s)
     const WIKIPAGES* T;
     WIKIUNIT* u = NULL;
     int i, nsel = 0, screen;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i]->sel && s->unit[i]->owner == 0 && nsel++ == 0) u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++)
+        if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == 0 && nsel++ == 0) u = s->sim.unit[i];
     if (nsel != 1) u = NULL;
     T = u ? type_pages(s, u->type) : NULL;
     /* THE BOUND on the screen shown: every index taken here is one tagpu_wikilayout_check held
        below lay->nscreen (a side's main2 and gen, a type's pages and orders), and u->page is 1..n:
-       enter() starts it at 1 and act() is its only other writer, wrapping within 1..n */
+       tasim_world.c's enter starts it at 1 and act() is its only other writer, wrapping within 1..n */
     screen = !nsel ? side->main2
            : T && u->bp && u->page >= 1 && u->page <= T->npage ? T->page[u->page - 1]
            : T && T->orders >= 0 ? T->orders : side->gen;
     if (screen != s->screen) s->cap = -1;
     s->screen = screen;
     s->shown = u;
+}
+
+/* leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it */
+static void disarm(WIKISIM* s)
+{
+    ST(s).mode = -1;
+    ST(s).has_gesture = 0;
+    ST(s).shift_placed = 0;
+    ST(s).rmode = 0;
+    ST(s).has_rg = 0;
+}
+
+/* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E
+   (0x41AB89) and the type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a
+   Shift-placement made earlier in this Shift hold keeps bit 5 (shift_placed), and releasing
+   Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
+   tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
+   armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
+   of its own type only. With the sidebar off as well as on. */
+static void arm(WIKISIM* s, int t)
+{
+    if (ST(s).mode != t) ST(s).has_gesture = 0;
+    ST(s).mode = t;
+    ST(s).has_drag = 0;
+    ST(s).rmode = 0;
+    ST(s).has_rg = 0;
 }
 
 /* A BUTTON ACTS ON THE RELEASE INSIDE IT, as the engine's: 0x4A6AE0 returns 1 for a release inside
@@ -1035,7 +449,9 @@ static void route(WIKISIM* s)
 
    STOP is 0x419BE0's STOP branch (0x419CB6..0x419CF2, called from 0x41AA00 at 0x41ABCC),
    DISASSEMBLED: main+0x2CC3 = 1 (0x419CC2) replaces an armed build's mode 0x0E, so it disarms; it
-   clears main+0x2CC6 bit 3 and leaves bit 5, the Shift-placement bit (shift_placed); the order
+   clears main+0x2CC6 bit 3 (0x419CCE..0x419CD8) and leaves bit 5, the Shift-placement bit
+   (shift_placed), so a placement made earlier in this Shift hold still disarms when Shift is
+   released (0x4992D8); the order
    issuer 0x48CF30 then gives every selected unit of the controlled player the STOP order through
    0x43AFC0 (0x48D1F4), which replaces its orders, with no canstop test. Its effect with Shift held
    is not established; the orders are emptied either way [INFERRED]. The placement gesture ends
@@ -1051,11 +467,11 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
        calls NEXT 0x41BDE0 or PREV 0x41BF10, which play `nextbuildmenu` (0x41BF01, 0x41C04C) on
        every press: their exits for no unit shown or a unit with no pages (0x41BDF2, 0x41BE1F,
        0x41BF21) jump to the play */
-    if (g->role == WIKI_ROLE_ORDERS) sound_named(s, WIKI_SNDNAME_ORDERSBUTTON);
-    else if (g->role == WIKI_ROLE_BUILDTAB) sound_named(s, WIKI_SNDNAME_BUILDBUTTON);
-    else if (g->role == WIKI_ROLE_STOP) sound_named(s, WIKI_SNDNAME_IMMEDIATE);
-    else if (g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) sound_named(s, WIKI_SNDNAME_NEXTBUILDMENU);
-    else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) sound_named(s, WIKI_SNDNAME_ADDBUILD);
+    if (g->role == WIKI_ROLE_ORDERS) tasim_sound_named(&s->sim, WIKI_SNDNAME_ORDERSBUTTON);
+    else if (g->role == WIKI_ROLE_BUILDTAB) tasim_sound_named(&s->sim, WIKI_SNDNAME_BUILDBUTTON);
+    else if (g->role == WIKI_ROLE_STOP) tasim_sound_named(&s->sim, WIKI_SNDNAME_IMMEDIATE);
+    else if (g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) tasim_sound_named(&s->sim, WIKI_SNDNAME_NEXTBUILDMENU);
+    else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !tasim_mobile(&s->defs, t)) tasim_sound_named(&s->sim, WIKI_SNDNAME_ADDBUILD);
     if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) {
         u->page = g->role == WIKI_ROLE_NEXT ? (u->page == n ? 1 : u->page + 1) : (u->page < 2 ? n : u->page - 1);
         u->bp = 1;
@@ -1066,9 +482,9 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
         ST(s).has_gesture = 0;
         ST(s).rmode = 0;
         ST(s).has_rg = 0;
-        for (i = 0; i < s->nunit; i++)
-            if (s->unit[i]->sel && s->unit[i]->owner == s->act) s->unit[i]->norder = 0;
-    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) arm(s, t);
+        for (i = 0; i < s->sim.nunit; i++)
+            if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == s->act) s->sim.unit[i]->norder = 0;
+    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !tasim_mobile(&s->defs, t)) arm(s, t);
     else if (is_reclaim(g)) toggle_reclaim(s);
     route(s);
 }
@@ -1122,7 +538,7 @@ static void release_side(WIKISIM* s)
         act(s, &sc->gadget[i]);
 }
 
-/* the sidebar as the view shows it; `under` reads the cursor unclamped, as sim.js's view does */
+/* the sidebar as the view shows it; `under` reads the cursor unclamped */
 static void side_view(const WIKISIM* s, WIKIVSIDE* v)
 {
     const WIKISCREEN* sc = screen_of(s, s->screen);
@@ -1143,14 +559,12 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
     if (under) snprintf(v->under, sizeof v->under, "%s", under->id);
 }
 
-/* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), sim.js's,
-   rule for rule over the sim's features. With reclaim armed a press on the map that travels
+/* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), the game's
+   rule (tasim_sweep.c) over the sim's features. With reclaim armed a press on the map that travels
    RECL_DRAG or more is a ring round the press point; its release orders the selected reclaimers
    to take the features of the chosen kind it holds, split nearest-first between them
    (tagpu_sweepgeo.c, which the game's sweep calls too). A shorter press is stock's click. A popup
    off RECLAIM's row picks the kind, and RECLAIM's own key cycles it. ---- */
-
-static void assign(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* os, int n, int shift);
 
 /* the press travel past which a press is a ring (tagpu_sweep.c DRAG_PX, screen pixels, the
    stage's world units at zoom 1) and the ring's bound (RING_MAX_WU); the popup, in the engine's
@@ -1173,16 +587,27 @@ static int reclaim_index(const WIKISIM* s)
     return -1;
 }
 
-/* tagpu_sweep.c kind_ok: the kind's amount is above 0, ALL takes any */
-static int kind_ok(const WIKISIM* s, const WIKIFEAT* f)
+/* the acting seat's selected units, slots ascending, into s->snap_builders: their count */
+static int selected_slots(WIKISIM* s)
 {
-    return ST(s).kind == WIKI_KIND_METAL ? f->metal > 0 : ST(s).kind == WIKI_KIND_ENERGY ? f->energy > 0 : 1;
+    int i, n = 0;
+    for (i = 0; i < s->sim.nunit && i < 0xFFFE && n < SNAP_UNITS_MAX; i++)
+        if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == s->act) s->snap_builders[n++] = (uint16_t)(i + 1);
+    return n;
 }
 
-/* a target of the kind by the click's own rules: reclaimable and mapped at its centre (0x408090) */
-static int takes(const WIKISIM* s, const WIKIFEAT* f)
+/* the feature under the map cursor when the sweep's rule takes it for the kind
+   (tasim_sweep_feature_takes, over the core's view of the acting seat); NULL otherwise */
+static const WIKIFEAT* takes_at_cursor(WIKISIM* s)
 {
-    return f->reclaimable && kind_ok(s, f) && seen(s, cell_of(f->x), cell_of(f->z));
+    const XZ c = map_cursor(s);
+    const WIKIFEAT* f = tasim_feat_at(&s->sim, c.x, c.z);
+    WQ_CORE ctx;
+    WORLDQ q;
+    SWEEP_TARGET t;
+    if (!f || !tasim_worldq_open(&ctx, &q, &s->sim, &s->defs, s->act) ||
+        !tasim_sweep_feature_takes(&q, tasim_cell_of(c.x), tasim_cell_of(c.z), (unsigned)ST(s).kind, &t)) return NULL;
+    return f;
 }
 
 /* ARMING AND DISARMING, the orders handler's RECLAIM branch (0x419F3D..0x419FAF): the toggle on
@@ -1200,7 +625,7 @@ static void toggle_reclaim(WIKISIM* s)
         ST(s).has_drag = 0;
         ST(s).rmode = 1;
     }
-    sound_named(s, WIKI_SNDNAME_SPECIAL);
+    tasim_sound_named(&s->sim, WIKI_SNDNAME_SPECIAL);
 }
 
 typedef struct { int rect[4], rows[WIKI_NKINDS][4], tongue[4]; } POPUP;
@@ -1224,7 +649,7 @@ static int popup(const WIKISIM* s, POPUP* P)
     g = &sc->gadget[i];
     if (g->hidden || !live(gadget_state(s, g, s->shown, 0))) return 0;
     by = sc->y + g->y + s->dz;
-    hi = (s->H * CELL < s->lay->height + s->dz ? s->H * CELL : s->lay->height + s->dz) - POP_H;
+    hi = (s->sim.H * CELL < s->lay->height + s->dz ? s->sim.H * CELL : s->lay->height + s->dz) - POP_H;
     if (hi < 0) return 0;
     y0 = clampi(by + g->h / 2 - POP_H / 2, 0, hi);
     x0 = POP_X - WIKI_SIDE_W;
@@ -1336,10 +761,10 @@ static int order_point(const WIKISIM* s, const WIKIORDER* o, XZ* p)
         return 1;
     }
     if (o->k == WIKI_ORDER_BUILD) {
-        *p = centre(s, o->type, o->ox, o->oz);
+        *p = tasim_centre(&s->defs, o->type, o->ox, o->oz);
         return 1;
     }
-    if (o->k != WIKI_ORDER_RECLAIM || !(u = by_id(s, o->target))) return 0;
+    if (o->k != WIKI_ORDER_RECLAIM || !(u = tasim_by_id(&s->sim, o->target))) return 0;
     p->x = u->x;
     p->z = u->z;
     return 1;
@@ -1362,30 +787,39 @@ static RING ring_in(const WIKISEATIN* q)
 /* the acting seat's */
 static RING ring_of(const WIKISIM* s) { return ring_in(&ST(s)); }
 
-/* the ring's order: nearest the centre first, then by z, then x, then the anchor cell */
-static int ring_before(const WIKISIM* s, const RING* R, const WIKIFEAT* a, const WIKIFEAT* b)
+/* the sweep rule's input for ring R: its centre and radius, the kind, the acting seat's selection and
+   Shift (tasim_sweep.h), and the core's view of the acting seat */
+static int sweep_in(WIKISIM* s, const RING* R, int shift, SWEEP_IN* in, WQ_CORE* ctx, WORLDQ* q)
 {
-    const double da = sq(a->x - R->x) + sq(a->z - R->z), db = sq(b->x - R->x) + sq(b->z - R->z);
-    if (da != db) return da < db;
-    if (a->z != b->z) return a->z < b->z;
-    if (a->x != b->x) return a->x < b->x;
-    return a->oz * s->W + a->ox < b->oz * s->W + b->ox;
+    memset(in, 0, sizeof *in);
+    in->c[0] = R->x;
+    in->c[2] = R->z;
+    in->r = R->r;
+    in->kind = (unsigned)ST(s).kind;
+    in->nselected = selected_slots(s);
+    in->selected = s->snap_builders;
+    in->shift = shift;
+    return tasim_worldq_open(ctx, q, &s->sim, &s->defs, s->act);
 }
 
-/* WHICH FEATURES A RING HOLDS (enumerate): every feature whose centre is inside it that `takes`
-   holds, in the ring's order, into idx[] as indices into s->feat; their count. A feature's centre
-   is a whole number of world units: (ox + fx / 2) x 16. */
-static int ring_targets(const WIKISIM* s, const RING* R, int* idx)
+/* WHICH FEATURES A RING HOLDS, by the game's rule (tasim_sweep_targets), nearest first, into idx[] as
+   indices into s->feat: their count. Each target is found again by its anchor cell. */
+static int ring_targets(WIKISIM* s, const RING* R, int* idx)
 {
-    int i, j, n = 0;
-    for (i = 0; i < s->nfeat; i++) {
-        const WIKIFEAT* f = &s->feat[i];
-        if (!sweep_inside(R->x, R->z, R->r, (int32_t)f->x, (int32_t)f->z) || !takes(s, f)) continue;
-        for (j = n; j > 0 && ring_before(s, R, f, &s->feat[idx[j - 1]]); j--) idx[j] = idx[j - 1];
-        idx[j] = i;
-        n++;
-    }
-    return n;
+    SWEEP_IN in;
+    WQ_CORE ctx;
+    WORLDQ q;
+    unsigned more, n, k;
+    int i, m = 0;
+    if (!sweep_in(s, R, 0, &in, &ctx, &q)) return 0;
+    n = tasim_sweep_targets(&q, &in, s->sweep->t, WIKI_FEATS_MAX, &more);
+    for (k = 0; k < n; k++)
+        for (i = 0; i < s->sim.nfeat; i++)
+            if (s->sim.feat[i].ox == s->sweep->t[k].ax && s->sim.feat[i].oz == s->sweep->t[k].az) {
+                idx[m++] = i;
+                break;
+            }
+    return m;
 }
 
 /* a reclaim of feature f */
@@ -1421,17 +855,16 @@ static void click_tail(WIKISIM* s, int shift)
    mode [INFERRED for empty ground]. A unit under the pointer is not modelled. */
 static void reclaim_click(WIKISIM* s, int shift)
 {
-    const XZ c = map_cursor(s);
-    const WIKIFEAT* f = feat_at(s, c.x, c.z);
+    const WIKIFEAT* f = takes_at_cursor(s);
     WIKIORDER o;
     XZ at;
     int i, j;
-    if (!f || !takes(s, f)) return;
+    if (!f) return;
     o = order_feat(f);
     at.x = f->x;
     at.z = f->z;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++) {
+        WIKIUNIT* u = s->sim.unit[i];
         int k = -1;
         if (!is_reclaimer(s, u)) continue;
         for (j = 0; shift && j < u->norder && k < 0; j++) {
@@ -1440,109 +873,23 @@ static void reclaim_click(WIKISIM* s, int shift)
             q.z = u->order[j].z;
             if (u->order[j].k == WIKI_ORDER_RECLAIM && u->order[j].feat && within(at, q)) k = j;
         }
-        if (k >= 0) splice_orders(u, k, 1);
-        else assign(s, u, &o, 1, shift);
+        if (k >= 0) tasim_splice_orders(u, k, 1);
+        else tasim_assign(&s->sim, u, &o, 1, shift);
     }
     click_tail(s, shift);
 }
 
-/* a reclaim of one of the ring's targets, idx[0..n) into s->feat */
-static int on_ring(const WIKISIM* s, const WIKIORDER* o, const int* idx, int n)
-{
-    int k;
-    if (o->k != WIKI_ORDER_RECLAIM || !o->feat) return 0;
-    for (k = 0; k < n; k++)
-        if (!strcmp(s->feat[idx[k]].id, o->target)) return 1;
-    return 0;
-}
-
-/* THE COMMIT, tagpu_sweep.c commit: the ring's targets; without Shift every order of every
-   reclaimer but the reclaims on those targets goes (cancel_others); targets a reclaimer already has
-   queued are dropped (drop_queued); each reclaimer's split inputs from its list (builder_inputs: it
-   starts at its last positioned order, its load the queued feature reclaims' travel and ticks from
-   where it stands, every position in whole world units, a 16.16 word >> 16); the split; every
-   assignment appended. Its tail runs only when it ordered or took something off, so an empty ring
-   keeps reclaim armed. THE BOUND: a scene has at most WIKI_FEATS_MAX features, so idx[] and the
-   split's tables hold every target; a builder's room is SWEEP_LIST_CAP less its list, so every
-   assignment fits it. */
+/* THE COMMIT, tagpu_sweep.c's: tasim_sweep_commit over the core's view -- the ring's targets split
+   across the selected reclaimers, without Shift their other orders taken off -- then the click's tail,
+   only when it ordered or took something off, so an empty ring keeps reclaim armed. */
 static void sweep_commit(WIKISIM* s, const RING* R, int shift)
 {
-    int idx[WIKI_FEATS_MAX];
-    SweepTarget T[WIKI_FEATS_MAX];
-    uint16_t who[WIKI_FEATS_MAX], seq[WIKI_FEATS_MAX];
-    SweepBuilder* B;
-    WIKIUNIT** bs;
-    int nt = ring_targets(s, R, idx), nb = 0, cancelled = 0, issued = 0, i, j, k;
-    unsigned m;
-    if (!(bs = (WIKIUNIT**)malloc(((size_t)s->nunit + 1) * sizeof *bs))) { s->oom = 1; return; }
-    for (i = 0; i < s->nunit; i++)
-        if (is_reclaimer(s, s->unit[i])) bs[nb++] = s->unit[i];
-    if (!nb) { free(bs); return; }
-    if (nt) {
-        if (!shift)
-            for (i = 0; i < nb; i++) {
-                WIKIUNIT* u = bs[i];
-                for (j = k = 0; j < u->norder; j++)
-                    if (on_ring(s, &u->order[j], idx, nt)) u->order[k++] = u->order[j];
-                cancelled += u->norder - k;
-                u->norder = k;
-            }
-        for (i = k = 0; i < nt; i++) {
-            int queued = 0;
-            for (j = 0; j < nb && !queued; j++) {
-                int q;
-                for (q = 0; q < bs[j]->norder && !queued; q++)
-                    queued = bs[j]->order[q].k == WIKI_ORDER_RECLAIM && bs[j]->order[q].feat
-                          && !strcmp(bs[j]->order[q].target, s->feat[idx[i]].id);
-            }
-            if (!queued) idx[k++] = idx[i];
-        }
-        nt = k;
-    }
-    if (nt) {
-        if (!(B = (SweepBuilder*)calloc((size_t)nb, sizeof *B))) { s->oom = 1; free(bs); return; }
-        for (i = 0; i < nb; i++) {
-            const WIKIUNIT* u = bs[i];
-            double px, pz;
-            B[i].x = (int32_t)floor(u->x);
-            B[i].z = (int32_t)floor(u->z);
-            B[i].speed = def(s, u->type)->max_velocity;
-            B[i].reach = def(s, u->type)->build_distance;
-            px = B[i].x;
-            pz = B[i].z;
-            for (j = 0; j < u->norder; j++) {
-                const WIKIORDER* o = &u->order[j];
-                const WIKIFEAT* f = o->k == WIKI_ORDER_RECLAIM && o->feat ? feat_by_id(s, o->target) : NULL;
-                XZ p;
-                if (order_point(s, o, &p)) {
-                    B[i].x = (int32_t)floor(p.x);
-                    B[i].z = (int32_t)floor(p.z);
-                }
-                if (f) {
-                    const double dd = sqrt(sq(f->x - px) + sq(f->z - pz));
-                    B[i].load += (B[i].speed > 0 && dd > B[i].reach ? (dd - B[i].reach) / B[i].speed : 0)
-                               + sweep_reclaim_ticks((float)f->energy, (float)f->metal);
-                    px = f->x;
-                    pz = f->z;
-                }
-            }
-            B[i].room = u->norder >= SWEEP_LIST_CAP ? 0u : (uint32_t)(SWEEP_LIST_CAP - u->norder);
-        }
-        for (i = 0; i < nt; i++) {
-            T[i].x = (int32_t)s->feat[idx[i]].x;
-            T[i].z = (int32_t)s->feat[idx[i]].z;
-            T[i].ticks = sweep_reclaim_ticks((float)s->feat[idx[i]].energy, (float)s->feat[idx[i]].metal);
-        }
-        m = sweep_split(B, (unsigned)nb, T, (unsigned)nt, who, seq);
-        for (i = 0; i < (int)m; i++) {
-            const WIKIORDER o = order_feat(&s->feat[idx[seq[i]]]);
-            push_order(s, bs[who[i]], &o);
-            issued++;
-        }
-        free(B);
-    }
-    free(bs);
-    if (issued || cancelled) click_tail(s, shift);
+    SWEEP_IN in;
+    SWEEP_RES res;
+    WQ_CORE ctx;
+    WORLDQ q;
+    if (!sweep_in(s, R, shift, &in, &ctx, &q) || !tasim_sweep_commit(&q, &in, &res, s->sweep)) return;
+    if (res.issued || res.cancelled) click_tail(s, shift);
 }
 
 /* THE RELEASE of a press that went down on the map with reclaim armed: past the threshold it
@@ -1611,7 +958,7 @@ static int plan_trip(const WIKISIM* s, int T, TRIPPLAN* plan)
     const WIKIUNIT* u = s->shown;
     const WIKIPAGES* TP = u ? type_pages(s, u->type) : NULL;
     const int n = TP ? TP->npage : 0;
-    const char* name = def(s, T)->name;
+    const char* name = tasim_def(&s->defs, T)->name;
     int p = 0, gi = -1, k, i, j, c, page, knext, kprev, dir;
     const WIKISCREEN* sc;
     /* no data input presses a tab, so bp is set in a scripted demo; a build met on the orders page
@@ -1781,24 +1128,26 @@ static WIKIHOVER map_hover(WIKISIM* s)
     const double x = m.x, z = m.z;
     const int shift = ST(s).held[WIKI_KEY_SHIFT];
     WIKIHOVER h;
-    CHOICE c;
+    SNAP_QUICK_IN in;
+    SNAP_CHOICE c;
     memset(&h, 0, sizeof h);
     evaluate(s, &ST(s).place);
     if (ST(s).mode >= 0) {
         const int t = ST(s).mode;
-        const int snapped = !ST(s).held[WIKI_KEY_ALT] && snapped_site(s, t, x, z, 0, shift, &c);
         h.kind = WIKI_HOVER_PLACE;
         h.type = t;
-        h.ox = snapped ? c.ox : origin(x, fpx(s, t));
-        h.oz = snapped ? c.oz : origin(z, fpz(s, t));
-        h.ok = site_ok(s, t, h.ox, h.oz, NULL);
+        if (ST(s).held[WIKI_KEY_ALT] || !snapped_at(s, t, m, &h.ox, &h.oz)) {
+            h.ox = origin(x, tasim_fpx(&s->defs, t));
+            h.oz = origin(z, tasim_fpz(&s->defs, t));
+        }
+        h.ok = tasim_site_ok(&s->sim, &s->defs, t, h.ox, h.oz, NULL);
         return h;
     }
-    if (quick_choice(s, shift, &c)) {
+    if (quick_choice(s, shift, &in, &c)) {
         h.kind = WIKI_HOVER_QUICK;
-        h.type = c.type;
-        h.ox = c.ox;
-        h.oz = c.oz;
+        h.type = c.type - 1;
+        h.ox = c.x;
+        h.oz = c.z;
         h.ok = 1;
         return h;
     }
@@ -1820,7 +1169,7 @@ static WIKIHOVER hover(WIKISIM* s)
 
 /* the evaluation the stage shows, as tagpu_place.c's current() lets the packet have it: only while
    the building it was made for is still the one armed; NULL for none. With the sidebar off as
-   well as on, as sim.js's `placed`. */
+   well as on. */
 static const WIKIPLACE* placed_in(const WIKISEATIN* q)
 {
     return q->place.kind != PLACE_NONE && q->mode == q->place.type ? &q->place : NULL;
@@ -1829,7 +1178,7 @@ static const WIKIPLACE* placed_in(const WIKISEATIN* q)
 /* the acting seat's */
 static const WIKIPLACE* placed(const WIKISIM* s) { return placed_in(&ST(s)); }
 
-/* ---- the placement gesture, tagpu_place.c as sim.js mirrors it ---- */
+/* ---- the placement gesture: tagpu_place.c's input mirrored, its rule tasim_place.c's ---- */
 
 /* mirrors tagpu_place.c's cursor site: the build cursor's rectangle, snapped as the ghost is.
    PlaceCell holds int16, so the cell is held to its range. */
@@ -1838,149 +1187,58 @@ static PlaceCell cursor_site(WIKISIM* s)
     const int t = ST(s).mode;
     const XZ m = map_cursor(s);
     PlaceCell p;
-    CHOICE c;
     int cx, cz;
-    if (!ST(s).held[WIKI_KEY_ALT] && snapped_site(s, t, m.x, m.z, 0, ST(s).held[WIKI_KEY_SHIFT], &c)) {
-        cx = c.ox;
-        cz = c.oz;
-    } else {
-        cx = origin(m.x, fpx(s, t));
-        cz = origin(m.z, fpz(s, t));
+    if (ST(s).held[WIKI_KEY_ALT] || !snapped_at(s, t, m, &cx, &cz)) {
+        cx = origin(m.x, tasim_fpx(&s->defs, t));
+        cz = origin(m.z, tasim_fpz(&s->defs, t));
     }
     p.cx = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
     p.cz = (int16_t)(cz < -32768 ? -32768 : cz > 32767 ? 32767 : cz);
     return p;
 }
 
-static XZ site_centre(const WIKISIM* s, int t, const WIKISITE* w) { return centre(s, t, w->cx, w->cz); }
-static XZ order_at(const WIKISIM* s, const WIKIORDER* o) { return centre(s, o->type, o->ox, o->oz); }
+static XZ site_centre(const WIKISIM* s, int t, const WIKISITE* w) { return tasim_centre(&s->defs, t, w->cx, w->cz); }
+static XZ order_at(const WIKISIM* s, const WIKIORDER* o) { return tasim_centre(&s->defs, o->type, o->ox, o->oz); }
 
-/* mirrors tagpu_place.c toggles: some selected builder has a build order within 16 world units of
-   the site; it compares no building type */
-static int toggles(const WIKISIM* s, int t, const WIKISITE* w)
+/* the gesture's rule input: the armed type, the shape's ring flag and the acting seat's selected
+   units in slot order (tasim_place.h), and the core's view of the acting seat */
+static int place_in(WIKISIM* s, int t, int ring, PLACE_IN* in, WQ_CORE* ctx, WORLDQ* q)
 {
-    const XZ at = site_centre(s, t, w);
-    int i, j;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (!is_builder(s, u)) continue;
-        for (j = 0; j < u->norder; j++)
-            if (u->order[j].k == WIKI_ORDER_BUILD && within(at, order_at(s, &u->order[j]))) return 1;
-    }
-    return 0;
+    memset(in, 0, sizeof *in);
+    in->type = t + 1;
+    in->ring = ring;
+    in->nselected = selected_slots(s);
+    in->selected = s->snap_builders;
+    return tasim_worldq_open(ctx, q, &s->sim, &s->defs, s->act);
 }
 
-/* A world position as tagpu_place.c's order positions hold it, 16.16 fixed point, for the shared
-   take-off rule. Exact for every position that rule compares, so it answers as sim.js's doubles
-   do: a footprint's centre is (cx + f/2) * 16, a multiple of 8, exact in 16.16 within the
-   clamp. The clamp changes no answer: the rule only ever compares a site that is not refused --
-   inside the map, so its centre lies within 0..WIKI_MAP_MAX * 16 = 2048 (the loader refuses a
-   larger map) -- with an order, and an order clamped to +-8192 is still further than 16 from
-   every such site, as it was before the clamp. Within the clamp no difference reaches 2^31, so
-   place_within's wrapped compare never wraps. */
-_Static_assert(WIKI_MAP_MAX * WIKI_CELL + 16 < 8192
-               && (8192LL + WIKI_MAP_MAX * WIKI_CELL) * 65536 < 0x80000000LL,
-               "a clamped order lies beyond the reach of every site on the map, and no difference wraps");
-static int32_t fixed16(double v)
-{
-    return (int32_t)((v < -8192 ? -8192 : v > 8192 ? 8192 : v) * 65536);
-}
-
-/* mirrors tagpu_place.c take_offs for one builder: place_take_offs_one (tagpu_placegeo.h), the
-   game's own function, over the builder's queue as it stands -- its build orders are the ones
-   the rule reads -- and the sites, whose positions and refused flags `pos` holds. A site that
-   takes one becomes WIKI_SITE_REMOVE. Leaves in s->by the site that takes each order off
-   (PLACE_NO_SITE for none) and in `took` whether each site took one. */
-static void take_offs_one(WIKISIM* s, const PlaceSitePos* pos, WIKISITE* sites, int n, const WIKIUNIT* u, uint8_t* took)
-{
-    int i, j;
-    for (j = 0; j < u->norder; j++) {
-        const XZ q = order_at(s, &u->order[j]);
-        s->q[j].x = fixed16(q.x);
-        s->q[j].z = fixed16(q.z);
-        s->q[j].match = u->order[j].k == WIKI_ORDER_BUILD;
-    }
-    place_take_offs_one(s->q, (unsigned)u->norder, pos, (unsigned)n, s->by, took);
-    for (i = 0; i < n; i++)
-        if (took[i]) sites[i].state = WIKI_SITE_REMOVE;
-}
-
-/* the sites as the take-off rule reads them. A site turns only from WIKI_SITE_PLACE to
-   WIKI_SITE_REMOVE after this, never to or from refused, so `pos` holds for every builder. */
-static void site_positions(const WIKISIM* s, int t, const WIKISITE* sites, int n, PlaceSitePos* pos)
+/* the sites as the game's rule judges them (tasim_place_classify), in the wiki's states */
+static void wiki_sites(const PLACE_SITE* in, int n, WIKISITE* out)
 {
     int i;
     for (i = 0; i < n; i++) {
-        const XZ at = site_centre(s, t, &sites[i]);
-        pos[i].x = fixed16(at.x);
-        pos[i].z = fixed16(at.z);
-        pos[i].refused = sites[i].state == WIKI_SITE_REFUSED;
+        out[i].cx = in[i].cx;
+        out[i].cz = in[i].cz;
+        out[i].state = in[i].state == PLACE_SITE_FREE ? WIKI_SITE_PLACE
+                     : in[i].state == PLACE_SITE_TAKE ? WIKI_SITE_REMOVE : WIKI_SITE_REFUSED;
     }
-}
-
-/* mirrors tagpu_place.c take_offs over every selected builder, for the sites' states. A ring takes
-   nothing off: a site a Shift-click would toggle is WIKI_SITE_REMOVE, and left out. */
-static void take_offs(WIKISIM* s, int t, WIKISITE* sites, int n, int ring)
-{
-    PlaceSitePos pos[PLACE_MAX_SITES];
-    uint8_t took[PLACE_MAX_SITES];
-    int i;
-    if (ring) {
-        for (i = 0; i < n; i++)
-            if (sites[i].state != WIKI_SITE_REFUSED && toggles(s, t, &sites[i])) sites[i].state = WIKI_SITE_REMOVE;
-        return;
-    }
-    site_positions(s, t, sites, n, pos);
-    for (i = 0; i < s->nunit; i++)
-        if (is_builder(s, s->unit[i])) take_offs_one(s, pos, sites, n, s->unit[i], took);
-}
-
-/* mirrors tagpu_place.c classify: refused where the site test refuses, else WIKI_SITE_PLACE, and
-   then the take-off rule's WIKI_SITE_REMOVE */
-static void classify(WIKISIM* s, int t, const PlaceCell* cells, int n, int ring, WIKISITE* sites)
-{
-    int i;
-    for (i = 0; i < n; i++) {
-        sites[i].cx = cells[i].cx;
-        sites[i].cz = cells[i].cz;
-        sites[i].state = site_ok(s, t, cells[i].cx, cells[i].cz, NULL) ? WIKI_SITE_PLACE : WIKI_SITE_REFUSED;
-    }
-    take_offs(s, t, sites, n, ring);
 }
 
 /* mirrors tagpu_place.c ring_target: the unit under the cursor, any unit (0x48CD80), else a selected
-   builder's queued build whose footprint holds the cursor's cell, first in selection order then
-   queue order. As cells. */
-static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
+   builder's queued build whose footprint holds the cursor's cell (tasim_place_queued_at). As
+   cells. */
+static int ring_target(WIKISIM* s, const WORLDQ* q, int* tx, int* tz, int* tw, int* th)
 {
     const XZ m = map_cursor(s);
     const WIKIUNIT* u = unit_at(s, m.x, m.z);
-    int i, j, px, pz;
     if (u) {
-        *tw = fpx(s, u->type);
-        *th = fpz(s, u->type);
+        *tw = tasim_fpx(&s->defs, u->type);
+        *th = tasim_fpz(&s->defs, u->type);
         *tx = origin(u->x, *tw);
         *tz = origin(u->z, *th);
         return 1;
     }
-    px = cell_of(m.x);
-    pz = cell_of(m.z);
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* b = s->unit[i];
-        if (!is_builder(s, b)) continue;
-        for (j = 0; j < b->norder; j++) {
-            const WIKIORDER* o = &b->order[j];
-            if (o->k != WIKI_ORDER_BUILD) continue;
-            if (px >= o->ox && px < o->ox + fpx(s, o->type) && pz >= o->oz && pz < o->oz + fpz(s, o->type)) {
-                *tx = o->ox;
-                *tz = o->oz;
-                *tw = fpx(s, o->type);
-                *th = fpz(s, o->type);
-                return 1;
-            }
-        }
-    }
-    return 0;
+    return tasim_place_queued_at(q, tasim_cell_of(m.x), tasim_cell_of(m.z), tx, tz, tw, th, s->place);
 }
 
 /* mirrors tagpu_place.c evaluate: the shape the cursor shows, with the modifiers read live. Nothing
@@ -1991,26 +1249,37 @@ static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
 static void evaluate(WIKISIM* s, WIKIPLACE* p)
 {
     PlaceCell cells[PLACE_MAX_SITES];
+    PLACE_SITE sites[PLACE_MAX_SITES];
+    PLACE_IN in;
+    WQ_CORE ctx;
+    WORLDQ q;
     const int shift = ST(s).held[WIKI_KEY_SHIFT], ctrl = ST(s).held[WIKI_KEY_CTRL], alt = ST(s).held[WIKI_KEY_ALT];
-    int t, fx, fz, tx, tz, tw, th, n, budget, builders, i, k;
+    int t, fx, fz, tx, tz, tw, th, n, i, k;
     p->kind = PLACE_NONE;
     p->n = 0;
     if (ST(s).mode < 0 || !shift || (!ctrl && !ST(s).has_gesture)) return;
     t = ST(s).mode;
-    fx = fpx(s, t);
-    fz = fpz(s, t);
-    if (ctrl && ring_target(s, &tx, &tz, &tw, &th)) {
+    fx = tasim_fpx(&s->defs, t);
+    fz = tasim_fpz(&s->defs, t);
+    if (!place_in(s, t, 0, &in, &ctx, &q)) return;
+    tasim_place_builders(&q, &in, s->place);
+    tasim_place_snapshot(&q, s->place);
+    if (ctrl && ring_target(s, &q, &tx, &tz, &tw, &th)) {
         p->kind = PLACE_RING;
         n = (int)place_ring(fx, fz, tx, tz, tw, th, cells, PLACE_MAX_SITES);
     } else if (ST(s).has_gesture) {
         p->kind = alt ? (ctrl ? PLACE_HOLLOW : PLACE_RECT) : (ctrl ? PLACE_AXIS : PLACE_LINE);
         n = (int)place_shape(p->kind, fx, fz, ST(s).spacing[t], ST(s).gesture, cursor_site(s), cells, PLACE_MAX_SITES);
     } else return;
-    builders = nbuilders(s);
-    budget = PLACE_ORDER_BUDGET / (builders ? builders : 1);
-    if (n > budget) n = budget;
+    n = (int)tasim_place_budget((unsigned)n, s->place->nb);
     p->type = t;
-    classify(s, t, cells, n, p->kind == PLACE_RING, p->site);
+    for (i = 0; i < n; i++) {
+        sites[i].cx = cells[i].cx;
+        sites[i].cz = cells[i].cz;
+    }
+    in.ring = p->kind == PLACE_RING;
+    tasim_place_classify(&q, &in, sites, (unsigned)n, s->place);
+    wiki_sites(sites, n, p->site);
     p->n = n;
     if (p->kind == PLACE_RING) {
         for (i = k = 0; i < n; i++)
@@ -2021,54 +1290,30 @@ static void evaluate(WIKISIM* s, WIKIPLACE* p)
 
 static void place_click(WIKISIM* s, int shift);
 
-/* mirrors tagpu_place.c commit (remove_taken and append_sites): the stock Shift-clicks of the sites,
-   judged against each builder's queue as it stood before the gesture, the sites classified afresh
-   by the same take-off rule the preview's colours come from. Per builder: the orders the rule gave
-   a site are taken off, and each of those sites adds nothing for that builder (a ring takes
-   nothing off, its removing sites skipped); the rest are appended in the shape's order while the
-   queue is shorter than PLACE_LIST_CAP. Every selected builder gets them, its build list not
-   consulted, as 0x419670 orders. A changed queue sets the Shift-placement bit, so releasing Shift
-   disarms. */
+/* tagpu_place.c's commit: tasim_place_commit over the evaluation's sites, judged afresh, and a
+   changed queue sets the Shift-placement bit, so releasing Shift disarms, and plays stock's
+   `oktobuild` once a gesture */
 static void commit(WIKISIM* s, const WIKIPLACE* p)
 {
-    PlaceCell cells[PLACE_MAX_SITES];
-    WIKISITE sites[PLACE_MAX_SITES];
-    PlaceSitePos pos[PLACE_MAX_SITES];
-    uint8_t took[PLACE_MAX_SITES];
-    const int t = p->type, ring = p->kind == PLACE_RING;
-    int i, j, b, changed = 0;
-    for (i = 0; i < p->n; i++) {
-        cells[i].cx = (int16_t)p->site[i].cx;
-        cells[i].cz = (int16_t)p->site[i].cz;
+    PLACE_SITE sites[PLACE_MAX_SITES];
+    uint16_t order[PLACE_MAX_SITES];
+    PLACE_IN in;
+    PLACE_COMMIT_RES r;
+    WQ_CORE ctx;
+    WORLDQ q;
+    unsigned n;
+    int i;
+    if (!place_in(s, p->type, p->kind == PLACE_RING, &in, &ctx, &q)) return;
+    n = tasim_place_budget((unsigned)p->n, tasim_place_builders(&q, &in, s->place));
+    for (i = 0; i < (int)n; i++) {
+        sites[i].cx = p->site[i].cx;
+        sites[i].cz = p->site[i].cz;
+        order[i] = (uint16_t)i;
     }
-    classify(s, t, cells, p->n, ring, sites);
-    site_positions(s, t, sites, p->n, pos);
-    for (b = 0; b < s->nunit; b++) {
-        WIKIUNIT* u = s->unit[b];
-        if (!is_builder(s, u)) continue;
-        if (!ring) take_offs_one(s, pos, sites, p->n, u, took);
-        for (i = 0; i < p->n; i++)
-            if (ring) took[i] = sites[i].state == WIKI_SITE_REMOVE;
-        for (j = ring ? 0 : u->norder; j-- > 0;)
-            if (s->by[j] != PLACE_NO_SITE) {
-                splice_orders(u, j, 1);
-                changed++;
-            }
-        for (i = 0; i < p->n; i++) {
-            WIKIORDER o;
-            if (sites[i].state == WIKI_SITE_REFUSED || took[i]) continue;
-            memset(&o, 0, sizeof o);
-            o.k = WIKI_ORDER_BUILD;
-            o.type = t;
-            o.ox = sites[i].cx;
-            o.oz = sites[i].cz;
-            if (push_order(s, u, &o)) changed++;
-        }
-    }
-    /* stock's `oktobuild`, once a gesture, as tagpu_place.c's commit plays it */
-    if (changed) {
+    tasim_place_commit(&q, &in, sites, n, order, &r, s->place);
+    if (r.issued || r.removed) {
         ST(s).shift_placed = 1;
-        sound_named(s, WIKI_SNDNAME_OKTOBUILD);
+        tasim_sound_named(&s->sim, WIKI_SNDNAME_OKTOBUILD);
     }
 }
 
@@ -2097,154 +1342,52 @@ static void release(WIKISIM* s)
 
 /* ---- orders ---- */
 
-/* leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it */
-static void disarm(WIKISIM* s)
-{
-    ST(s).mode = -1;
-    ST(s).has_gesture = 0;
-    ST(s).shift_placed = 0;
-    ST(s).rmode = 0;
-    ST(s).has_rg = 0;
-}
-
-/* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E
-   (0x41AB89) and the type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a
-   Shift-placement made earlier in this Shift hold keeps bit 5 (shift_placed), and releasing
-   Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
-   tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
-   armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
-   of its own type only. With the sidebar off as well as on, as sim.js's `arm`. */
-static void arm(WIKISIM* s, int t)
-{
-    if (ST(s).mode != t) ST(s).has_gesture = 0;
-    ST(s).mode = t;
-    ST(s).has_drag = 0;
-    ST(s).rmode = 0;
-    ST(s).has_rg = 0;
-}
-
-/* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all
-   of them or, when they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim
-   never goes in without its build */
-static void assign(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* os, int n, int shift)
-{
-    int i;
-    if (!shift) u->norder = 0;
-    else if (u->norder + n > PLACE_LIST_CAP) return;
-    for (i = 0; i < n; i++) push_order(s, u, &os[i]);
-}
-
-static WIKIORDER order_build(int t, int ox, int oz)
-{
-    WIKIORDER o;
-    memset(&o, 0, sizeof o);
-    o.k = WIKI_ORDER_BUILD;
-    o.type = t;
-    o.ox = ox;
-    o.oz = oz;
-    return o;
-}
-
-static WIKIORDER order_target(int k, const char* id)
-{
-    WIKIORDER o;
-    memset(&o, 0, sizeof o);
-    o.k = k;
-    snprintf(o.target, sizeof o.target, "%s", id);
-    return o;
-}
-
-/* mirrors tagpu_resource.c click, a Quick Build click: the builders that can build it get the order (an upgrade's reclaim first),
-   the other selected builders guard them, shared out in turn, and units that cannot build keep
-   their orders. Shift appends, and never adds a Guard to a helper already guarding one of them. */
-static void quick_order(WIKISIM* s, const CHOICE* c, int shift)
-{
-    int i, j, k, ncap = 0, help = 0;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIORDER os[2];
-        if (!is_builder(s, u) || !can_build(s, u, c->type)) continue;
-        ncap++;
-        os[0] = order_target(WIKI_ORDER_RECLAIM, c->target);
-        os[1] = order_build(c->type, c->ox, c->oz);
-        if (c->target[0]) assign(s, u, os, 2, shift);
-        else assign(s, u, os + 1, 1, shift);
-    }
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIORDER g;
-        int guarding = 0, nth;
-        if (!is_builder(s, u) || can_build(s, u, c->type)) continue;
-        nth = help++;
-        for (j = 0; shift && j < u->norder && !guarding; j++)
-            for (k = 0; u->order[j].k == WIKI_ORDER_GUARD && k < s->nunit && !guarding; k++)
-                guarding = is_builder(s, s->unit[k]) && can_build(s, s->unit[k], c->type) && !strcmp(s->unit[k]->id, u->order[j].target);
-        if (guarding) continue;
-        /* the (nth % ncap)-th capable builder; quick_choice offers only what some builder can build */
-        for (j = 0, k = ncap ? nth % ncap : 0; j < s->nunit; j++)
-            if (is_builder(s, s->unit[j]) && can_build(s, s->unit[j], c->type) && k-- == 0) break;
-        if (j == s->nunit) continue;
-        g = order_target(WIKI_ORDER_GUARD, s->unit[j]->id);
-        assign(s, u, &g, 1, shift);
-    }
-}
-
-/* mirrors tagpu_resource.c unqueue: each selected builder loses the plan find_cancel names, and an upgrade's reclaim with it */
-static void unqueue(WIKISIM* s, CHOICE* c)
-{
-    int i, f, n;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        if (is_builder(s, u) && (f = find_cancel(s, u, c, &n)) >= 0) splice_orders(u, f, n);
-    }
-}
-
 /* a move: the selected mobile units to points SPACING apart across the cursor, in selection order */
 static void move_order(WIKISIM* s, int shift)
 {
     const XZ c = map_cursor(s);
     int i, n = 0, m = 0;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i]->sel && s->unit[i]->owner == s->act && mobile(s, s->unit[i]->type)) n++;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++)
+        if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == s->act && tasim_mobile(&s->defs, s->sim.unit[i]->type)) n++;
+    for (i = 0; i < s->sim.nunit; i++) {
+        WIKIUNIT* u = s->sim.unit[i];
         WIKIORDER o;
-        if (!(u->sel && u->owner == s->act && mobile(s, u->type))) continue;
+        if (!(u->sel && u->owner == s->act && tasim_mobile(&s->defs, u->type))) continue;
         memset(&o, 0, sizeof o);
         o.k = WIKI_ORDER_MOVE;
         o.x = c.x + (m++ - (n - 1) / 2.0) * SPACING;
         o.z = c.z;
-        assign(s, u, &o, 1, shift);
+        tasim_assign(&s->sim, u, &o, 1, shift);
     }
 }
 
 /* Quick Build's click, the same at both Interface Types: tagpu_resource.c gates the button that
    orders, the right press at type 1 (0x499100) and the left click at type 0 (0x498F70,
-   `(iface != 0) != right` in its gate). With a choice, a queued site is cancelled by Shift and a
-   plain click is consumed unchanged; otherwise the choice is ordered. 0: no choice, the click is
-   the game's own. */
+   `(iface != 0) != right` in its gate), and tasim_snap_commit decides it. 0: nothing ordered, the
+   click is the game's own. */
 static int quick_click(WIKISIM* s, int shift)
 {
-    CHOICE c;
-    if (!quick_choice(s, shift, &c)) return 0;
-    if (c.queued) {
-        if (shift && c.queued == 2) unqueue(s, &c);
-    } else quick_order(s, &c, shift);
-    return 1;
+    WQ_CORE ctx;
+    WORLDQ q;
+    SNAP_QUICK_IN in;
+    SNAP_CHOICE c;
+    SNAP_COMMIT_RES res;
+    if (!quick_choice(s, shift, &in, &c) || !tasim_worldq_open(&ctx, &q, &s->sim, &s->defs, s->act)) return 0;
+    return tasim_snap_commit(&q, &in, &c, &res, s->snap) != SNAP_NONE;
 }
 
 static int unfinished_own(const WIKISIM* s, const WIKIUNIT* u)
 {
-    return u->owner == s->act && !mobile(s, u->type) && u->built < 1;
+    return u->owner == s->act && !tasim_mobile(&s->defs, u->type) && u->built < 1;
 }
 
 /* the assist: every selected builder is ordered to build the unfinished building where it stands */
 static void assist(WIKISIM* s, const WIKIUNIT* u, int shift)
 {
-    const WIKIORDER o = order_build(u->type, u->ox, u->oz);
+    const WIKIORDER o = tasim_order_build(u->type, u->ox, u->oz);
     int i;
-    for (i = 0; i < s->nunit; i++)
-        if (is_builder(s, s->unit[i])) assign(s, s->unit[i], &o, 1, shift);
+    for (i = 0; i < s->sim.nunit; i++)
+        if (is_builder(s, s->sim.unit[i])) tasim_assign(&s->sim, s->sim.unit[i], &o, 1, shift);
 }
 
 /* TYPE 1, a right press on the map with nothing armed (tagpu_resource.c right_click): Quick
@@ -2263,15 +1406,15 @@ static void right_click(WIKISIM* s, int shift)
 
 static void select_units(WIKISIM* s, int shift, int box);
 
-/* SELECTION (sim.js's): one flag per unit, the hash's item 3; the acting seat's selection is the
+/* SELECTION: one flag per unit, the hash's item 3; the acting seat's selection is the
    flagged units it owns, and every select and deselect of its input touches its own units alone,
    so an input of one seat never changes another's selection. That leaves a selected unit of a
    seat with no input state selected for good, which is why init refuses a scene that selects one. */
 static void deselect(WIKISIM* s)
 {
     int i;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i]->owner == s->act) s->unit[i]->sel = 0;
+    for (i = 0; i < s->sim.nunit; i++)
+        if (s->sim.unit[i]->owner == s->act) s->sim.unit[i]->sel = 0;
 }
 
 /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the
@@ -2324,23 +1467,23 @@ static void place_click(WIKISIM* s, int shift)
     /* stock's click 0x498F70: a site the build cursor found refused says `notoktobuild` and keeps the
        building armed (0x49901D); a placed one says `oktobuild` (0x498FA4) */
     if (h.kind != WIKI_HOVER_PLACE || !h.ok) {
-        sound_named(s, WIKI_SNDNAME_NOTOKTOBUILD);
+        tasim_sound_named(&s->sim, WIKI_SNDNAME_NOTOKTOBUILD);
         return;
     }
-    at = centre(s, h.type, h.ox, h.oz);
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
+    at = tasim_centre(&s->defs, h.type, h.ox, h.oz);
+    for (i = 0; i < s->sim.nunit; i++) {
+        WIKIUNIT* u = s->sim.unit[i];
         int k = -1;
-        if (!is_builder(s, u) || !can_build(s, u, h.type)) continue;
+        if (!is_builder(s, u) || !tasim_can_build(&s->defs, u, h.type)) continue;
         for (j = 0; shift && j < u->norder; j++)
             if (u->order[j].k == WIKI_ORDER_BUILD && within(at, order_at(s, &u->order[j]))) { k = j; break; }
-        if (k >= 0) splice_orders(u, k, 1);
+        if (k >= 0) tasim_splice_orders(u, k, 1);
         else {
-            const WIKIORDER o = order_build(h.type, h.ox, h.oz);
-            assign(s, u, &o, 1, shift);
+            const WIKIORDER o = tasim_order_build(h.type, h.ox, h.oz);
+            tasim_assign(&s->sim, u, &o, 1, shift);
         }
     }
-    sound_named(s, WIKI_SNDNAME_OKTOBUILD);
+    tasim_sound_named(&s->sim, WIKI_SNDNAME_OKTOBUILD);
     if (!shift) disarm(s);
     else ST(s).shift_placed = 1;
 }
@@ -2358,14 +1501,14 @@ static void select_units(WIKISIM* s, int shift, int box)
         const double z0 = ST(s).drag_z0 < z ? ST(s).drag_z0 : z, z1 = ST(s).drag_z0 > z ? ST(s).drag_z0 : z;
         const WIKIUNIT* last = NULL;
         int any_mobile = 0, picked = 0;
-        for (i = 0; i < s->nunit; i++) {
-            u = s->unit[i];
-            if (u->owner == s->act && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && mobile(s, u->type)) any_mobile = 1;
+        for (i = 0; i < s->sim.nunit; i++) {
+            u = s->sim.unit[i];
+            if (u->owner == s->act && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && tasim_mobile(&s->defs, u->type)) any_mobile = 1;
         }
         if (!shift) deselect(s);
-        for (i = 0; i < s->nunit; i++) {
-            u = s->unit[i];
-            if (u->owner == s->act && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && (!any_mobile || mobile(s, u->type))) {
+        for (i = 0; i < s->sim.nunit; i++) {
+            u = s->sim.unit[i];
+            if (u->owner == s->act && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && (!any_mobile || tasim_mobile(&s->defs, u->type))) {
                 u->sel = 1;
                 last = u;
                 picked++;
@@ -2373,8 +1516,8 @@ static void select_units(WIKISIM* s, int shift, int box)
         }
         /* the box's sound (0x48C65A..0x48C681): one unit selected says its select, more the allsound
            SelectMultipleUnits, none nothing */
-        if (picked == 1) notice(s, last, WIKI_SND_SELECT);
-        else if (picked > 1) sound_named(s, WIKI_SNDNAME_MULTI);
+        if (picked == 1) tasim_notice(&s->sim, last, WIKI_SND_SELECT);
+        else if (picked > 1) tasim_sound_named(&s->sim, WIKI_SNDNAME_MULTI);
         return;
     }
     u = unit_at(s, x, z);
@@ -2385,7 +1528,7 @@ static void select_units(WIKISIM* s, int shift, int box)
             u->sel = 1;
         }
         /* the click's select says it when its unit is left selected (0x48C8B9, 0x48C997) */
-        if (u->sel) notice(s, u, WIKI_SND_SELECT);
+        if (u->sel) tasim_notice(&s->sim, u, WIKI_SND_SELECT);
     } else if (!shift) deselect(s);
 }
 
@@ -2405,8 +1548,7 @@ static void step_spacing(WIKISIM* s, int key)
 /* A scripted demo with the sidebar on plays a `build` out as its trip; Try it, and a demo without
    the sidebar, arm at once (the wiki never sends `build`, and the rule cases use it as their
    shortcut). */
-/* A CLICK ACTION of the acting seat, recorded before the action runs (WIKICLICK, sim.js's
-   clickAction): the left click's -- 0x4993C5..0x4993D0 and 0x499435..0x499441, here a placement at
+/* A CLICK ACTION of the acting seat, recorded before the action runs (WIKICLICK): the left click's -- 0x4993C5..0x4993D0 and 0x499435..0x499441, here a placement at
    a press, the sweep's press, the click branch of a release (select at type 1, left_click at type
    0) and a placement off the map (perspective-streams E6) -- and the right press's, 0x499100,
    every right press on the map: right_click, right_press0 and the cancel of an armed building or
@@ -2416,7 +1558,7 @@ static void click_action(WIKISIM* s)
 {
     WIKICLICK* c;
     XZ m;
-    if (!s->game) return;
+    if (!s->sim.game) return;
     m = map_cursor(s);
     c = &s->clicks[s->nclicks++ % WIKI_CLICKS];
     c->tick = s->feeding;
@@ -2430,10 +1572,10 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
     if (ev->has & WIKI_IN_CAPTION) s->caption = ev->caption;
     if (ev->has & WIKI_IN_BUILD) {
         /* tagpu_wikidata_trips refused a trip's build naming no type before the sim started */
-        if (ev->build >= 0 && ev->build < s->entry->ndef && s->unbound[ev->build]) lock(s, ev->build);
+        if (ev->build >= 0 && ev->build < s->defs.entry->ndef && s->unbound[ev->build]) lock(s, ev->build);
         else if (s->trips) {
-            if (ev->build >= 0 && ev->build < s->entry->ndef) trip(s, ev->build);
-        } else if (ev->build >= 0 && ev->build < s->entry->ndef) arm(s, ev->build);
+            if (ev->build >= 0 && ev->build < s->defs.entry->ndef) trip(s, ev->build);
+        } else if (ev->build >= 0 && ev->build < s->defs.entry->ndef) arm(s, ev->build);
         else {
             disarm(s);
             ST(s).has_drag = 0;
@@ -2562,1269 +1704,6 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
     ST(s).hover = hover(s);
 }
 
-/* ---- one tick. Units walk at MaxVelocity (world units a tick) as MOVEMENT below says, and stop
-   once within BuildDistance of the footprint; a building fills at its builders' summed WorkerTime
-   over its BuildTime (worker time a second), times the entry's pace, with no cost; a reclaim takes
-   as long as building it would. Guards work on whatever their guarded unit works on this tick, so
-   they are resolved after everyone else. ---- */
-
-/* ---- MOVEMENT, sim.js's (research/notes/ingame-wiki.md, *How units move*), which says why each
-   rule is so. A mobile unit's body is its footprint's box about its centre, a structure's its
-   footprint, and a builder within build distance of a site it has not started holds the site as a
-   claim. Bodies overlap only with area in common. THE STEP RULE: a step may not make its unit
-   overlap a body it does not overlap already, nor take its body off the map. A unit walks straight
-   at its target while the line is clear of every still body (a structure, a claim, a unit that
-   did not step on the last tick), else one leg at a time along the planner's path round every
-   body; a refused step turns 45 and then 90 degrees either way. ---- */
-
-static int grow(WIKISIM* s, void** p, int* cap, int need, size_t size);
-
-enum { GO_ARRIVED = 1, GO_STEPPED, GO_WAITING, GO_STUCK };
-enum { REFUSED_NONE = -1, REFUSED_EDGE = -2 };
-enum { TARGET_POINT, TARGET_SITE, TARGET_UNIT };
-#define C45  0.70710678118654752440     /* Math.SQRT1_2, the double both round it to */
-#define DIAG (CELL * 1.41421356237309504880)   /* CELL * Math.SQRT2 */
-/* a step's tries, (cos, sin) of its turn: straight on, 45 degrees either way, then 90 */
-static const double TURNS[5][2] = { { 1, 0 }, { C45, C45 }, { C45, -C45 }, { 0, 1 }, { 0, -1 } };
-/* the planner's neighbours: the four sides, then the four corners */
-static const int DIRS[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
-
-static int hits(WIKIRECT a, WIKIRECT b) { return a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1; }
-static int meets(WIKIRECT a, WIKIRECT b) { return a.x0 <= b.x1 && b.x0 <= a.x1 && a.z0 <= b.z1 && b.z0 <= a.z1; }
-static int same_rect(WIKIRECT a, WIKIRECT b) { return a.x0 == b.x0 && a.z0 == b.z0 && a.x1 == b.x1 && a.z1 == b.z1; }
-static int on_map(const WIKISIM* s, WIKIRECT r) { return r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->W * CELL && r.z1 <= s->H * CELL; }
-
-static WIKIRECT rect(double x0, double z0, double x1, double z1)
-{
-    WIKIRECT r;
-    r.x0 = x0;
-    r.z0 = z0;
-    r.x1 = x1;
-    r.z1 = z1;
-    return r;
-}
-
-static WIKIRECT rect_of(const WIKISIM* s, int t, int ox, int oz)
-{
-    return rect(ox * CELL, oz * CELL, (ox + fpx(s, t)) * CELL, (oz + fpz(s, t)) * CELL);
-}
-
-static WIKIRECT body_at_type(const WIKISIM* s, int t, double x, double z)
-{
-    const double ax = fpx(s, t) * CELL / 2.0, az = fpz(s, t) * CELL / 2.0;
-    return rect(x - ax, z - az, x + ax, z + az);
-}
-
-static WIKIRECT body_at(const WIKISIM* s, const WIKIUNIT* u, double x, double z) { return body_at_type(s, u->type, x, z); }
-
-static WIKIRECT body(const WIKISIM* s, const WIKIUNIT* v)
-{
-    return mobile(s, v->type) ? body_at(s, v, v->x, v->z) : rect_of(s, v->type, v->ox, v->oz);
-}
-
-/* the distance from (x, z) to r, 0 inside it */
-static double rect_dist(double x, double z, WIKIRECT r)
-{
-    double dx = r.x0 - x, dz = r.z0 - z;
-    const double ex = x - r.x1, ez = z - r.z1;
-    if (dx < 0) dx = 0;
-    if (ex > dx) dx = ex;
-    if (dz < 0) dz = 0;
-    if (ez > dz) dz = ez;
-    return sqrt(dx * dx + dz * dz);
-}
-
-/* the gap between rects a and b, 0 when they touch or overlap */
-static double rect_gap(WIKIRECT a, WIKIRECT b)
-{
-    double dx = b.x0 - a.x1, dz = b.z0 - a.z1;
-    const double ex = a.x0 - b.x1, ez = a.z0 - b.z1;
-    if (dx < 0) dx = 0;
-    if (ex > dx) dx = ex;
-    if (dz < 0) dz = 0;
-    if (ez > dz) dz = ez;
-    return sqrt(dx * dx + dz * dz);
-}
-
-/* the site u's first order claims, sim.js's claim: a build not started yet that u has reached --
-   its centre within build distance of the site, or its body within a step of it, which is how a
-   builder whose BuildDistance is under its half width arrives (touching the site, or stopped short
-   by the site refusing its step); unclaimed there, what stands on the site would never leave it.
-   0 when none */
-static int claim(const WIKISIM* s, const WIKIUNIT* u, WIKIRECT* out)
-{
-    const WIKIORDER* o = u->norder ? &u->order[0] : NULL;
-    if (!o || o->k != WIKI_ORDER_BUILD || started(s, o)) return 0;
-    *out = rect_of(s, o->type, o->ox, o->oz);
-    return rect_dist(u->x, u->z, *out) <= def(s, u->type)->build_distance
-        || rect_gap(body(s, u), *out) <= def(s, u->type)->max_velocity;
-}
-
-/* a feature's footprint in world units */
-static WIKIRECT feat_rect(const WIKIFEAT* f)
-{
-    return rect(f->ox * CELL, f->oz * CELL, (f->ox + f->fx) * CELL, (f->oz + f->fz) * CELL);
-}
-
-/* every body but u's into s->obs: the units' in creation order, then the blocking features', then
-   the claims in their claimants' order; their count, or -1 when the scratch cannot grow. It holds
-   one more, the site go() adds. */
-static int bodies(WIKISIM* s, const WIKIUNIT* u)
-{
-    int i, n = 0;
-    WIKIRECT r;
-    if (!grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit + s->nfeat + 1, sizeof *s->obs)) return -1;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i] != u) {
-            s->obs[n].r = body(s, s->unit[i]);
-            s->obs[n++].u = s->unit[i];
-        }
-    for (i = 0; i < s->nfeat; i++)
-        if (s->feat[i].blocking) {
-            s->obs[n].r = feat_rect(&s->feat[i]);
-            s->obs[n++].u = NULL;
-        }
-    for (i = 0; i < s->nunit; i++)
-        if (mobile(s, s->unit[i]->type) && claim(s, s->unit[i], &r)) {
-            s->obs[n].r = r;
-            s->obs[n++].u = NULL;
-        }
-    return n;
-}
-
-static int still(const WIKISIM* s, const WIKIBODY* b) { return !b->u || !mobile(s, b->u->type) || !b->u->went; }
-
-/* A TARGET, sim.js's toPoint, toSite and toUnit: the point aimed at; in range within `stop` of r,
-   or touching `body`, the target's own body; a straight walk ends `clip` short of the point; the
-   planner's goal is within `plan` of r, or touching `body`; `serial` and `kind` name it for the
-   leg */
-typedef struct {
-    double   x, z, stop, clip, plan;
-    WIKIRECT r, body;
-    int      has_body, serial, kind;
-} TARGET;
-
-static TARGET to_point(const WIKIORDER* o, double x, double z)
-{
-    TARGET t;
-    memset(&t, 0, sizeof t);
-    t.x = x;
-    t.z = z;
-    t.r = rect(x, z, x, z);
-    t.plan = CELL;
-    t.serial = o->serial;
-    t.kind = TARGET_POINT;
-    return t;
-}
-
-static TARGET to_site(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* u, WIKIRECT r)
-{
-    TARGET t;
-    memset(&t, 0, sizeof t);
-    t.x = (r.x0 + r.x1) / 2;
-    t.z = (r.z0 + r.z1) / 2;
-    t.r = r;
-    t.stop = t.plan = def(s, u->type)->build_distance;
-    t.body = r;
-    t.has_body = 1;
-    t.serial = o->serial;
-    t.kind = TARGET_SITE;
-    return t;
-}
-
-static TARGET to_unit(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* g)
-{
-    TARGET t;
-    memset(&t, 0, sizeof t);
-    t.x = g->x;
-    t.z = g->z;
-    t.r = rect(g->x, g->z, g->x, g->z);
-    t.stop = t.clip = t.plan = FOLLOW;
-    t.body = body(s, g);
-    t.has_body = 1;
-    t.serial = o->serial;
-    t.kind = TARGET_UNIT;
-    return t;
-}
-
-/* a feature's Reclaim walks until the footprints touch: its goal 0x44D8A0 is the ring of cells round
-   the feature's footprint widened by the unit's, which 0x44DCB0 passes when the unit's cell lies on
-   it; BuildDistance is not read */
-static TARGET to_feat(const WIKIORDER* o, const WIKIFEAT* f)
-{
-    TARGET t;
-    memset(&t, 0, sizeof t);
-    t.x = f->x;
-    t.z = f->z;
-    t.r = t.body = feat_rect(f);
-    t.has_body = 1;
-    t.plan = CELL;
-    t.serial = o->serial;
-    t.kind = TARGET_SITE;
-    return t;
-}
-
-static int is_target(const WIKIBODY* b, const TARGET* t) { return t->has_body && same_rect(b->r, t->body); }
-
-static int in_range(double x, double z, WIKIRECT b, const TARGET* t, double within)
-{
-    return rect_dist(x, z, t->r) <= within || (t->has_body && meets(b, t->body));
-}
-
-/* THE STEP RULE: the body u's step to (x, z) would newly overlap, its index in s->obs, the first,
-   or REFUSED_EDGE; REFUSED_NONE when none */
-static int refuses(const WIKISIM* s, const WIKIUNIT* u, double x, double z, int nobs)
-{
-    const WIKIRECT a = body_at(s, u, x, z), now = body(s, u);
-    int k;
-    if (!on_map(s, a) && on_map(s, now)) return REFUSED_EDGE;
-    for (k = 0; k < nobs; k++)
-        if (hits(a, s->obs[k].r) && !hits(now, s->obs[k].r)) return k;
-    return REFUSED_NONE;
-}
-
-/* u steps `len` along the unit vector (hx, hz) -- to (ex, ez) exactly when `exact`, the end of a
-   path's leg -- or along the first turn of it the step rule lets go. GO_ARRIVED, with no step,
-   when what refuses the straight step is the target itself; GO_WAITING when every try is refused.
-   u->turned says whether a turn went. */
-static int step(const WIKISIM* s, WIKIUNIT* u, double hx, double hz, double len, int nobs, const TARGET* t,
-                int exact, double ex, double ez)
-{
-    int k;
-    for (k = 0; k < 5; k++) {
-        const double c = TURNS[k][0], sn = TURNS[k][1];
-        const double dx = k ? hx * c - hz * sn : hx, dz = k ? hx * sn + hz * c : hz;
-        const double x = !k && exact ? ex : u->x + dx * len, z = !k && exact ? ez : u->z + dz * len;
-        const int r = refuses(s, u, x, z, nobs);
-        if (r == REFUSED_NONE) {
-            u->x = x;
-            u->z = z;
-            u->hx = dx;
-            u->hz = dz;
-            u->stepped = 1;
-            u->turned = k > 0;
-            return GO_STEPPED;
-        }
-        if (!k && t && r >= 0 && is_target(&s->obs[r], t)) return GO_ARRIVED;
-    }
-    return GO_WAITING;
-}
-
-/* the segment from (x, z) to (tx, tz) passes through the inside of r */
-static int crosses(double x, double z, double tx, double tz, WIKIRECT r)
-{
-    const double p[2] = { x, z }, d[2] = { tx - x, tz - z }, lo[2] = { r.x0, r.z0 }, hi[2] = { r.x1, r.z1 };
-    double t0 = 0, t1 = 1;
-    int k;
-    for (k = 0; k < 2; k++) {
-        double a, b;
-        if (d[k] == 0) {
-            if (!(lo[k] < p[k] && p[k] < hi[k])) return 0;
-            continue;
-        }
-        a = (lo[k] - p[k]) / d[k];
-        b = (hi[k] - p[k]) / d[k];
-        if (a > b) {
-            const double c = a;
-            a = b;
-            b = c;
-        }
-        if (a > t0) t0 = a;
-        if (b < t1) t1 = b;
-    }
-    return t0 < t1;
-}
-
-/* u's body can slide straight to the target's point past every still body but the target's own
-   and those it overlaps already, and ends on the map */
-static int clear(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
-{
-    const WIKIRECT now = body(s, u);
-    const double ax = fpx(s, u->type) * CELL / 2.0, az = fpz(s, u->type) * CELL / 2.0;
-    int k;
-    if (on_map(s, now) && !on_map(s, body_at(s, u, t->x, t->z))) return 0;
-    for (k = 0; k < nobs; k++) {
-        const WIKIBODY* b = &s->obs[k];
-        if (!still(s, b) || is_target(b, t) || hits(now, b->r)) continue;
-        if (crosses(u->x, u->z, t->x, t->z, rect(b->r.x0 - ax, b->r.z0 - az, b->r.x1 + ax, b->r.z1 + az))) return 0;
-    }
-    return 1;
-}
-
-/* the planner's heap: by f, then by push, a total order, so it pops what sim.js's pops */
-static int heap_less(const WIKIHEAPNODE* a, const WIKIHEAPNODE* b) { return a->f < b->f || (a->f == b->f && a->seq < b->seq); }
-
-static void heap_push(WIKISIM* s, double f, int n)
-{
-    WIKIHEAPNODE* h = s->heap;
-    int k = s->nheap++;
-    h[k].f = f;
-    h[k].seq = s->heap_seq++;
-    h[k].n = n;
-    while (k > 0) {
-        const int p = (k - 1) >> 1;
-        WIKIHEAPNODE x;
-        if (!heap_less(&h[k], &h[p])) break;
-        x = h[k];
-        h[k] = h[p];
-        h[p] = x;
-        k = p;
-    }
-}
-
-static int heap_pop(WIKISIM* s)
-{
-    WIKIHEAPNODE* h = s->heap;
-    const int top = h[0].n;
-    int k = 0;
-    h[0] = h[--s->nheap];
-    for (;;) {
-        const int l = 2 * k + 1, r = l + 1;
-        int m = k;
-        WIKIHEAPNODE x;
-        if (l < s->nheap && heap_less(&h[l], &h[m])) m = l;
-        if (r < s->nheap && heap_less(&h[r], &h[m])) m = r;
-        if (m == k) break;
-        x = h[k];
-        h[k] = h[m];
-        h[m] = x;
-        k = m;
-    }
-    return top;
-}
-
-/* a planner node is free: no cell of it held and no mover's body over it (sim.js plan's free) */
-static int node_free(WIKISIM* s, int n, int NW, int fx, int fz, int nmover)
-{
-    if (!s->known[n]) {
-        const int i = n % NW, j = n / NW;
-        const WIKIRECT a = rect(i * CELL, j * CELL, (i + fx) * CELL, (j + fz) * CELL);
-        int ok = 1, di, dj, k;
-        for (dj = 0; dj < fz && ok; dj++)
-            for (di = 0; di < fx && ok; di++)
-                if (s->occ[(j + dj) * s->W + i + di]) ok = 0;
-        for (k = 0; k < nmover && ok; k++)
-            if (hits(a, s->mover[k])) ok = 0;
-        s->known[n] = ok ? 1 : 2;
-    }
-    return s->known[n] == 1;
-}
-
-static double plan_h(double x, double z, const TARGET* t)
-{
-    const double h = rect_dist(x, z, t->r) - t->plan;
-    return h > 0 ? h : 0;
-}
-
-/* THE PLANNER, sim.js's plan: A* over the map's cells, node (i, j) standing u's body on cells
-   i..i+fx-1, j..j+fz-1. The node to head for into (*wx, *wz), 1; or 0: no nearer place, or no
-   scratch. Its bounds: W x H nodes, each pushed once from a seed and at most once from each of its
-   eight neighbours, so the heap holds at most 8 x W x H + 4 (tagpu_wikisim_init sizes it). */
-static int plan(WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs, double* wx, double* wz)
-{
-    const int fx = fpx(s, u->type), fz = fpz(s, u->type), NW = s->W - fx + 1, NH = s->H - fz + 1;
-    const WIKIRECT now = body(s, u);
-    int k, i, j, n, nmover = 0, end = -1, best = -1, next = -1, i0, j0, i1, j1;
-    double bestd = 0, a, b;
-    if (NW < 1 || NH < 1 || !s->heap || !grow(s, (void**)&s->mover, &s->cmover, nobs, sizeof *s->mover)) return 0;
-    memset(s->occ, 0, (size_t)s->W * s->H);
-    for (k = 0; k < nobs; k++) {
-        const WIKIBODY* o = &s->obs[k];
-        int x0, z0, x1, z1;
-        if (hits(now, o->r)) continue;
-        if (o->u && mobile(s, o->u->type)) {
-            s->mover[nmover++] = o->r;
-            continue;
-        }
-        /* a structure's or a claim's rect is whole cells */
-        x0 = (int)(o->r.x0 / CELL);
-        z0 = (int)(o->r.z0 / CELL);
-        x1 = (int)(o->r.x1 / CELL);
-        z1 = (int)(o->r.z1 / CELL);
-        for (j = z0 > 0 ? z0 : 0; j < (z1 < s->H ? z1 : s->H); j++)
-            for (i = x0 > 0 ? x0 : 0; i < (x1 < s->W ? x1 : s->W); i++) s->occ[j * s->W + i] = 1;
-    }
-    for (n = 0; n < NW * NH; n++) {
-        s->pg[n] = INFINITY;
-        s->par[n] = -1;
-        s->shut[n] = 0;
-        s->known[n] = 0;
-    }
-    s->nheap = 0;
-    s->heap_seq = 0;
-    a = u->x / CELL - fx / 2.0;
-    b = u->z / CELL - fz / 2.0;
-    i0 = (int)floor(a);
-    j0 = (int)floor(b);
-    i1 = (int)ceil(a);
-    j1 = (int)ceil(b);
-    for (j = j0; j <= j1; j++)
-        for (i = i0; i <= i1; i++) {
-            double dx, dz, d;
-            if (i < 0 || j < 0 || i >= NW || j >= NH || !node_free(s, j * NW + i, NW, fx, fz, nmover)) continue;
-            dx = (i + fx / 2.0) * CELL - u->x;
-            dz = (j + fz / 2.0) * CELL - u->z;
-            d = sqrt(dx * dx + dz * dz);
-            s->pg[j * NW + i] = d;
-            heap_push(s, d + plan_h((i + fx / 2.0) * CELL, (j + fz / 2.0) * CELL, t), j * NW + i);
-        }
-    while (s->nheap) {
-        double cx, cz, e;
-        n = heap_pop(s);
-        if (s->shut[n]) continue;
-        s->shut[n] = 1;
-        i = n % NW;
-        j = n / NW;
-        cx = (i + fx / 2.0) * CELL;
-        cz = (j + fz / 2.0) * CELL;
-        if (in_range(cx, cz, rect(i * CELL, j * CELL, (i + fx) * CELL, (j + fz) * CELL), t, t->plan)) {
-            end = n;
-            break;
-        }
-        e = rect_dist(cx, cz, t->r);
-        if (best < 0 || e < bestd) {
-            best = n;
-            bestd = e;
-        }
-        for (k = 0; k < 8; k++) {
-            const int di = DIRS[k][0], dj = DIRS[k][1], ni = i + di, nj = j + dj, m = nj * NW + ni;
-            double c;
-            if (ni < 0 || nj < 0 || ni >= NW || nj >= NH || s->shut[m] || !node_free(s, m, NW, fx, fz, nmover)) continue;
-            if (di && dj && (!node_free(s, j * NW + ni, NW, fx, fz, nmover) || !node_free(s, nj * NW + i, NW, fx, fz, nmover)))
-                continue;
-            c = s->pg[n] + (di && dj ? DIAG : CELL);
-            if (c < s->pg[m]) {
-                s->pg[m] = c;
-                s->par[m] = n;
-                heap_push(s, c + plan_h((ni + fx / 2.0) * CELL, (nj + fz / 2.0) * CELL, t), m);
-            }
-        }
-    }
-    if (end < 0) {
-        if (best < 0 || !(bestd < rect_dist(u->x, u->z, t->r))) return 0;
-        end = best;
-    }
-    /* back to the seed; past it when u stands on it */
-    for (n = end; s->par[n] >= 0; n = s->par[n]) next = n;
-    if (s->pg[n] == 0) n = next;
-    if (n < 0) return 0;
-    *wx = (n % NW + fx / 2.0) * CELL;
-    *wz = (n / NW + fz / 2.0) * CELL;
-    return 1;
-}
-
-/* u's leg is still its to walk: the same order and target, its node covered by no body u is not
-   on already */
-static int leg_holds(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
-{
-    const WIKIRECT now = body(s, u), a = body_at(s, u, u->leg_x, u->leg_z);
-    int k;
-    if (!u->leg || u->leg_serial != t->serial || u->leg_kind != t->kind) return 0;
-    for (k = 0; k < nobs; k++)
-        if (hits(a, s->obs[k].r) && !hits(now, s->obs[k].r)) return 0;
-    return 1;
-}
-
-/* u's turn toward t: GO_ARRIVED in range, else GO_STEPPED, GO_WAITING (its tries refused) or
-   GO_STUCK (no nearer place) */
-static int go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
-{
-    const double v = def(s, u->type)->max_velocity;
-    double dx, dz, d;
-    int nobs, r;
-    if (in_range(u->x, u->z, body(s, u), t, t->stop)) {
-        u->leg = 0;
-        return GO_ARRIVED;
-    }
-    if ((nobs = bodies(s, u)) < 0) return GO_WAITING;
-    /* the site is a body to the unit heading for it, started, claimed or not: its straight step
-       stops at the site's edge and is GO_ARRIVED, so a builder whose BuildDistance is shorter
-       than its half width does not walk onto it (claim says how it then claims the site) */
-    if (t->kind == TARGET_SITE) {
-        s->obs[nobs].r = t->body;
-        s->obs[nobs++].u = NULL;
-    }
-    if (clear(s, u, t, nobs)) {
-        u->leg = 0;
-        dx = t->x - u->x;
-        dz = t->z - u->z;
-        d = sqrt(dx * dx + dz * dz);
-        return step(s, u, dx / d, dz / d, v < d - t->clip ? v : d - t->clip, nobs, t, 0, 0, 0);
-    }
-    if (!leg_holds(s, u, t, nobs)) {
-        double wx, wz;
-        if (!plan(s, u, t, nobs, &wx, &wz)) {
-            u->leg = 0;
-            return GO_STUCK;
-        }
-        u->leg = 1;
-        u->leg_x = wx;
-        u->leg_z = wz;
-        u->leg_serial = t->serial;
-        u->leg_kind = t->kind;
-    }
-    dx = u->leg_x - u->x;
-    dz = u->leg_z - u->z;
-    d = sqrt(dx * dx + dz * dz);
-    r = d <= v ? step(s, u, dx / d, dz / d, d, nobs, t, 1, u->leg_x, u->leg_z)
-               : step(s, u, dx / d, dz / d, v, nobs, t, 0, 0, 0);
-    if (r != GO_STEPPED || u->turned || (u->x == u->leg_x && u->z == u->leg_z)) u->leg = 0;
-    return r;
-}
-
-/* A unit on a structure or a claim steps straight away from its centre (the first such in
-   bodies' order), along (0, 1) from the centre itself, and does nothing else on its turn; 1 when
-   it was on one */
-static int evacuate(WIKISIM* s, WIKIUNIT* u)
-{
-    const WIKIRECT now = body(s, u);
-    const int nobs = bodies(s, u);
-    int k;
-    for (k = 0; k < nobs; k++) {
-        const WIKIBODY* b = &s->obs[k];
-        double dx, dz, d;
-        if ((b->u && mobile(s, b->u->type)) || !hits(now, b->r)) continue;
-        dx = u->x - (b->r.x0 + b->r.x1) / 2;
-        dz = u->z - (b->r.z0 + b->r.z1) / 2;
-        d = sqrt(dx * dx + dz * dz);
-        u->leg = 0;
-        if (d > 0) step(s, u, dx / d, dz / d, def(s, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
-        else step(s, u, 0, 1, def(s, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
-        return 1;
-    }
-    return 0;
-}
-
-/* toward a footprint until within build distance of it; 1 once in range */
-static int reach(WIKISIM* s, const WIKIORDER* o, WIKIUNIT* u, int t, int ox, int oz)
-{
-    const TARGET g = to_site(s, o, u, rect_of(s, t, ox, oz));
-    return go(s, u, &g) == GO_ARRIVED;
-}
-
-/* THE BUILD'S REQUEST, 0x4011C0 on the BUILDER's ledger (0x41BA60 charges it at 0x41BC5A,
-   `lea ecx,[ebp+0xbc]`, ebp the builder): the request is always added (0x4011D1..0x4011E3) and
-   granted unless either debt is above 0 (0x4011C0..0x4011F6, 0x4011F8..0x401212); the step applies
-   its progress only on a grant (0x41BC65..0x41BC67) */
-static int econ_request(WIKIUNIT* u, double e, double m)
-{
-    WIKILEDGER* L = &u->led;
-    L->eR += e;
-    L->mR += m;
-    if (L->eD > 0 || L->mD > 0) return 0;
-    L->eG += e;
-    L->mG += m;
-    return 1;
-}
-
-/* a builder in range works on st, and turns at once to face its centre (unchanged when it stands
-   on the centre); its work waits on its stance (0x438700), at the work's start only (MobileBuild's
-   work state 0x403E0C and the step 0x41BA60 never read +0x10F): no progress on a work until its
-   script has set INBUILDSTANCE once, though the job is its own from now, which its StartBuilding
-   goes for */
-static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
-{
-    const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
-    const double w = def(s, u->type)->worker_time / def(s, st->type)->build_time / TPS * s->PACE;
-    if (d > 0) {
-        u->hx = dx / d;
-        u->hz = dz / d;
-    }
-    u->job = st;
-    u->job_how = how;
-    snprintf(u->job_id, sizeof u->job_id, "%s", st->id);
-    if (!(u->stanced && !u->work_feat && !strcmp(u->work, st->id))) {
-        if (!stance(s, u)) return;
-        u->stanced = 1;
-    }
-    /* a reclaim says working once an order, when its work first goes on (ReclaimUnit's state after
-       the stance wait, 0x4048BE); credit runs only for a unit with a first order */
-    if (how == HOW_RECLAIM && u->norder && u->order[0].serial != u->said) {
-        u->said = u->order[0].serial;
-        notice(s, u, WIKI_SND_WORKING);
-    }
-    /* in a game, the build's request (econ_request): its increment's part of the structure still
-       unbuilt after this tick's builders before it, as the engine's step updates +0x104 call by
-       call, times the built type's build costs (0x41BB36..0x41BB5C); refused, no progress and no
-       spray. The increment is worker_time / 30 / build_time where the engine's step takes
-       floor(WorkerTime / 30), but the increments of a building sum to 1 in both, so a building
-       costs its build costs */
-    if (s->game && how == HOW_BUILD) {
-        const double left = 1 - st->built - st->work_build;
-        if (left > 0) {
-            const double dd = w < left ? w : left;
-            const WIKIDEF* b = def(s, st->type);
-            if (!econ_request(u, dd * b->build_cost_energy, dd * b->build_cost_metal)) return;
-        }
-    }
-    if (how == HOW_BUILD) st->work_build += w;
-    else st->work_reclaim += w;
-    st->worked = 1;
-    /* the step made progress: the unit's turn sprays at the structure as it stands now */
-    u->spray = how + 1;
-    snprintf(u->spray_id, sizeof u->spray_id, "%s", st->id);
-    u->spray_type = st->type;
-    u->spray_x = st->x;
-    u->spray_z = st->z;
-}
-
-static void shift_order(WIKIUNIT* u) { splice_orders(u, 0, 1); }
-
-/* the unit leaves the list and its memory goes; the sidebar's shown unit goes with it, which
-   route() would make so on this tick's end anyway */
-static void remove_unit(WIKISIM* s, WIKIUNIT* u)
-{
-    int i, k = 0;
-    if (s->shown == u) s->shown = NULL;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i] != u) s->unit[k++] = s->unit[i];
-    s->nunit = k;
-    free(u->order);
-    free(u);
-}
-
-/* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY), sim.js's spray functions ---- */
-
-static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
-static int32_t sub32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (uint32_t)b); }
-
-/* a double truncated toward zero and held to the int32 range, as _ftol leaves an in-range value */
-static int32_t trunc32(double v)
-{
-    const double t = trunc(v);
-    return t < -2147483648.0 ? INT32_MIN : t > 2147483647.0 ? INT32_MAX : (int32_t)t;
-}
-
-/* lowbias32, a 32-bit finaliser: each output bit depends on every input bit */
-static uint32_t mix32(uint32_t x)
-{
-    x ^= x >> 16;
-    x *= 0x7FEB352Du;
-    x ^= x >> 15;
-    x *= 0x846CA68Bu;
-    x ^= x >> 16;
-    return x;
-}
-
-/* the emission's key: the builder's id (FNV-1a 32 over its bytes) and its place among the tick's
-   emissions */
-static uint32_t spray_key(const char* id, int nemit)
-{
-    uint32_t h = 0x811C9DC5u;
-    for (; *id; id++) h = (h ^ (unsigned char)*id) * 0x01000193u;
-    return mix32(h + (uint32_t)nemit * 0x9E3779B9u);
-}
-
-/* THE WIKI'S GENERATOR, in place of the CRT rand 0x4E4870 the spawn draws from: draw k (0..5) of
-   particle i of the burst made on `tick`, 0..0x7FFF as rand's */
-static int32_t spray_draw(uint32_t key, int tick, int i, int k)
-{
-    return (int32_t)(mix32(mix32(key ^ (uint32_t)tick) ^ (uint32_t)(i * 8 + k)) & 0x7FFFu);
-}
-
-/* 0x473B50's box (0x473B80..0x473D34): on each axis from lo to hi, the base at lo + 4/11 of the
-   span and the extent to 7/11 of it, each 4 * span and 7 * span an int32 divided by 11 toward
-   zero; {base x, y, z, extent x, y, z} */
-static void spray_box(const int32_t lo[3], const int32_t hi[3], int32_t out[6])
-{
-    int k;
-    for (k = 0; k < 3; k++) {
-        const uint32_t d = (uint32_t)sub32(hi[k], lo[k]);
-        const int32_t q4 = (int32_t)(4u * d) / 11, q7 = (int32_t)(7u * d) / 11;
-        out[k] = add32(lo[k], q4);
-        out[3 + k] = sub32(add32(lo[k], q7), out[k]);
-    }
-}
-
-/* ONE BURST of 0x473D50 on `tick`: five particles, each drawn as the spawn draws them -- start x,
-   y, z in the first box, then target x, y, z in the second, each base + trunc(draw * extent /
-   0x8000) -- running the distance's integer length >> 18 steps (about 4 world units a tick), each
-   step the distance over the steps toward zero, its end `tick` + steps; one of 0 steps is not
-   made, its draws spent (0x473EDE). Its colour is 0xA1 + its place in the burst (0x473F13..
-   0x473F41). Returns the particles the burst made, those past the pool's bound included. */
-static int spray_burst(WIKISIM* s, const WIKISPRAY* e, int tick)
-{
-    int i, k, made = 0;
-    for (i = 0; i < 5; i++) {
-        int32_t at[2][3], d[3], len, steps;
-        WIKIVPART* p;
-        for (k = 0; k < 6; k++) {
-            const int32_t* b = e->box[k / 3];
-            at[k / 3][k % 3] = add32(b[k % 3], (int32_t)((int64_t)spray_draw(e->key, tick, i, k) * b[3 + k % 3] / 0x8000));
-        }
-        for (k = 0; k < 3; k++) d[k] = sub32(at[1][k], at[0][k]);
-        len = trunc32(sqrt((double)d[0] * d[0] + (double)d[1] * d[1] + (double)d[2] * d[2]));
-        steps = (int16_t)(uint16_t)((uint32_t)len >> 18);
-        if (!steps) continue;
-        made++;
-        if (s->npart >= WIKI_SPRAY_PARTS) { s->part_cut = 1; continue; }
-        p = &s->part[s->npart++];
-        p->x = at[0][0];
-        p->y = at[0][1];
-        p->z = at[0][2];
-        p->sx = d[0] / steps;
-        p->sy = d[1] / steps;
-        p->sz = d[2] / steps;
-        p->end = tick + steps;
-        p->col = 0xA1 + i % 7;
-    }
-    return made;
-}
-
-/* THE UNIT'S SPRAY on tick `t`, in its turn after its build calls: QueryNanoPiece run-now names the
-   piece (0 when the script has none, as 0x43E400 presets it), the host gives that piece's origin,
-   and the unit's facing turns it as the stage turns the unit's model (tagpu_wikiscene.c `model`:
-   (cs, sn) = (-hz, hx) about the up axis, the model's z out of the world's; a type that does not
-   move at the heading (0, 1) whatever its facing says), so the spray starts at the piece the
-   stage draws. The target is the structure's box (0x403E5B..0x403EC8): its centre
-   +- FootprintX and FootprintZ x 8 world units (the def loader's 0x42D079..0x42D0C5) and from the
-   ground to its model's height (0x42D7BF). A build sprays from the piece into the box
-   (0x4720D0), a reclaim from the box into the piece (0x472200) and only every second tick from
-   its first on that structure: a new order's first step sprays at once (its counter reset at
-   0x404845), and no two ticks running ever spray the same reclaim (0x404A4E re-arms the order at
-   2 ticks, 0x439E80). */
-/* the nano piece's point: QueryNanoPiece names the piece and the host gives its origin, turned by
-   the unit's facing */
-static void nano_point(WIKISIM* s, const WIKIUNIT* u, int32_t pt[3])
-{
-    int32_t io[4] = { 0, 0, 0, 0 }, turned[3], base[3];
-    const int fixed = !mobile(s, u->type);
-    const double cs = fixed ? -1.0 : -u->hz, sn = fixed ? 0.0 : u->hx;
-    int piece = 0;
-    const int n = facts(s);
-    if (tagpu_wikicob_query(s->cob, u->cob, "QueryNanoPiece", io, s->fact, n) > 0) piece = io[0];
-    tagpu_wikicob_origin(s->cob, u->cob, piece, turned, base);
-    pt[0] = add32(add32(fix16(u->x), trunc32(cs * turned[0] + sn * turned[2])), base[0]);
-    pt[1] = add32(turned[1], base[1]);
-    pt[2] = sub32(sub32(fix16(u->z), trunc32(-sn * turned[0] + cs * turned[2])), base[2]);
-}
-
-/* one reverse emission from box `target` to point `pt` (0x472200), its second burst due on the
-   next tick */
-static void emit_reverse(WIKISIM* s, const WIKIUNIT* u, const int32_t target[6], const int32_t pt[3], int t)
-{
-    WIKISPRAY e;
-    memcpy(e.box[0], target, sizeof e.box[0]);
-    spray_box(pt, pt, e.box[1]);
-    e.key = spray_key(u->id, s->nemit++);
-    e.due = t + 1;
-    if (!spray_burst(s, &e, t)) return;
-    if (s->nburst < WIKI_SPRAY_BURSTS) s->burst[s->nburst++] = e;
-    else s->part_cut = 1;
-}
-
-/* A FEATURE'S RECLAIM SPRAYS from the feature's box to the nano piece, twice a call with the same
-   arguments (0x404D3B, 0x404D4C): the box from the anchor cell's corner, FootprintX x FootprintZ
-   cells wide and the feature's height (+0xFA) tall over the ground (0x404CC9..0x404D37), the
-   stage's ground being 0 */
-static void spray_feature(WIKISIM* s, WIKIUNIT* u, int t)
-{
-    const int* f = u->spray_box;
-    int32_t pt[3], lo[3], hi[3], target[6];
-    nano_point(s, u, pt);
-    lo[0] = fix16(f[0] * CELL);
-    lo[1] = 0;
-    lo[2] = fix16(f[1] * CELL);
-    hi[0] = fix16((f[0] + f[2]) * CELL);
-    hi[1] = fix16(f[4]);
-    hi[2] = fix16((f[1] + f[3]) * CELL);
-    spray_box(lo, hi, target);
-    emit_reverse(s, u, target, pt, t);
-    emit_reverse(s, u, target, pt, t);
-}
-
-static void spray(WIKISIM* s, WIKIUNIT* u, int t)
-{
-    const WIKIDEF* d;
-    int32_t pt[3], lo[3], hi[3];
-    WIKISPRAY e;
-    int k;
-    if (!s->part) return;
-    if (u->spray - 1 == HOW_FEATURE) {
-        spray_feature(s, u, t);
-        return;
-    }
-    d = def(s, u->spray_type);
-    if (u->spray - 1 == HOW_RECLAIM) {
-        if (u->spray_at && !strcmp(u->spray_on, u->spray_id) && t - u->spray_at < 2) return;
-        u->spray_at = t;
-        snprintf(u->spray_on, sizeof u->spray_on, "%s", u->spray_id);
-    }
-    nano_point(s, u, pt);
-    lo[0] = sub32(fix16(u->spray_x), d->fx * 0x80000);
-    hi[0] = add32(fix16(u->spray_x), d->fx * 0x80000);
-    lo[1] = 0;
-    hi[1] = tagpu_wikicob_top(s->cob, u->spray_type);
-    lo[2] = sub32(fix16(u->spray_z), d->fz * 0x80000);
-    hi[2] = add32(fix16(u->spray_z), d->fz * 0x80000);
-    k = u->spray - 1 == HOW_RECLAIM;
-    spray_box(pt, pt, e.box[k]);
-    spray_box(lo, hi, e.box[!k]);
-    e.key = spray_key(u->id, s->nemit++);
-    e.due = t + 1;
-    if (!spray_burst(s, &e, t)) return;
-    if (s->nburst < WIKI_SPRAY_BURSTS) s->burst[s->nburst++] = e;
-    else s->part_cut = 1;
-}
-
-/* THE WALKER on tick `t` (0x471EB0, after the units' turns): every particle moves a step, its
-   colour's low nibble on from 1 to 7 and round (0x4739B0), and dies once `t` is past its end
-   (0x473B30); then each burst due now is made (0x472F60's second spawn) */
-static void spray_tick(WIKISIM* s, int t)
-{
-    int i, k = 0;
-    for (i = 0; i < s->npart; i++) {
-        WIKIVPART* p = &s->part[i];
-        const int low = (p->col & 0xF) + 1;
-        p->x = add32(p->x, p->sx);
-        p->y = add32(p->y, p->sy);
-        p->z = add32(p->z, p->sz);
-        p->col = (p->col & 0xFFF0) + (low > 7 ? 1 : low);
-        if (t <= p->end) s->part[k++] = *p;
-    }
-    s->npart = k;
-    for (i = 0, k = 0; i < s->nburst; i++) {
-        if (s->burst[i].due == t) spray_burst(s, &s->burst[i], t);
-        else s->burst[k++] = s->burst[i];
-    }
-    s->nburst = k;
-}
-
-/* ---- THE SOUND (tagpu_wikisim.h), sim.js's sound functions ---- */
-
-static const unsigned char SND_PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
-static const unsigned char SND_INTERVAL[WIKI_SND_KINDS] = WIKI_SND_INTERVALS;
-/* THE WIKI'S GENERATOR for a reply's variant, in place of the CRT rand 0x47FD70 draws from: the
-   unit's id (FNV-1a 32 over its bytes), the kind and the tick, 0..0x7FFF as rand's */
-static int32_t snd_draw(const char* id, int kind, int tick)
-{
-    uint32_t h = 0x811C9DC5u;
-    for (; *id; id++) h = (h ^ (unsigned char)*id) * 0x01000193u;
-    return (int32_t)(mix32(mix32(h + (uint32_t)kind * 0x9E3779B9u) ^ (uint32_t)tick) & 0x7FFFu);
-}
-
-/* an event into the ring; the count stops at INT_MAX, the ring's place wraps by itself */
-static void sound_event(WIKISIM* s, int kind, int name, int cat, int variant)
-{
-    WIKISNDEV* v = &s->snd[s->snd_total % WIKI_SND_LOG];
-    v->tick = s->now;
-    v->kind = kind;
-    v->name = name;
-    v->cat = cat;
-    v->variant = variant;
-    if (s->snd_total < INT_MAX - WIKI_SND_LOG) s->snd_total++;
-}
-
-/* 0x47F1A0's play by name: at once, no queue, no cooldown */
-static void sound_named(WIKISIM* s, int name)
-{
-    if (s->snd_on && name >= 0 && name < WIKI_NSNDNAME) sound_event(s, 0, name, -1, 0);
-}
-
-/* 0x47F780 then 0x47FAD0: the viewed player's unit (s->viewed's), then the kind's cooldown, a notice
-   of its kind already queued, a full queue's last entry dropped, and the notice in before the first
-   entry of a lower priority */
-static void notice(WIKISIM* s, const WIKIUNIT* u, int kind)
-{
-    WIKISNDQ* e;
-    int i, k;
-    if (!s->snd_on || s->snd_quiet || u->owner != s->viewed || kind <= 0 || kind >= WIKI_SND_KINDS) return;
-    if (s->now < s->snd_next[kind]) return;
-    for (i = 0; i < s->nsndq; i++)
-        if (s->sndq[i].kind == kind) return;
-    if (s->nsndq == WIKI_SND_QUEUE) s->nsndq--;
-    for (k = 0; k < s->nsndq && SND_PRIORITY[s->sndq[k].kind] >= SND_PRIORITY[kind]; k++) {}
-    memmove(&s->sndq[k + 1], &s->sndq[k], (size_t)(s->nsndq - k) * sizeof *s->sndq);
-    e = &s->sndq[k];
-    memset(e, 0, sizeof *e);
-    e->kind = kind;
-    e->tick = s->now;
-    e->type = u->type;
-    e->priority = SND_PRIORITY[kind];
-    snprintf(e->unit, sizeof e->unit, "%s", u->id);
-    s->nsndq++;
-}
-
-/* ACTIVATION as the state setter 0x48B090 notices it, for a unit whose script runs: a change since
-   the last look says activate or deactivate */
-static void notice_active(WIKISIM* s, WIKIUNIT* u)
-{
-    int on;
-    if (!s->cob || !u->cob || tagpu_wikicob_resting(s->cob, u->cob)) return;
-    on = tagpu_wikicob_value(s->cob, u->cob, WIKICOB_ACTIVATION) != 0;
-    if (on == u->active) return;
-    u->active = on;
-    notice(s, u, on ? WIKI_SND_ACTIVATE : WIKI_SND_DEACTIVATE);
-}
-
-/* THE CONSUMER 0x47F680, once a tick after its work: entry 0 leaves the queue, with sound only a
-   gap after the last reply, which it then is; with sound and a variant to pick (0x47FD70's count
-   gate), the reply is made and the kind's next time written. BOUND: the queue's type is a def index
-   notice() took from a unit, below WIKI_MAX_DEFS, and its kind is below WIKI_SND_KINDS. */
-static void sound_tick(WIKISIM* s)
-{
-    WIKISNDQ e;
-    int32_t count;
-    int play;
-    if (!s->snd_on || !s->nsndq) return;
-    e = s->sndq[0];
-    memmove(&s->sndq[0], &s->sndq[1], (size_t)(s->nsndq - 1) * sizeof *s->sndq);
-    s->nsndq--;
-    play = s->now >= s->snd_last + WIKI_SND_GAP;
-    if (play) s->snd_last = s->now;
-    count = e.type >= 0 && e.type < WIKI_MAX_DEFS ? s->snd_count[e.type][e.kind] : 0;
-    if (!play || count <= 0) return;
-    sound_event(s, e.kind, -1, s->snd_cat[e.type], (int)((int64_t)snd_draw(e.unit, e.kind, s->now) * count / 0x8000));
-    s->snd_next[e.kind] = s->now + 30 * SND_INTERVAL[e.kind];
-}
-
-/* an order's first run says ok (0x438880 at its handler's start, the one kind-5 push, 0x438899),
-   unless the scene gave it; a build order's never does: MobileBuild, 0x403A20..0x403F6F, does not
-   call 0x438880 */
-static void begin(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
-{
-    if (o->serial == u->begun) return;
-    u->begun = o->serial;
-    /* a feature's Reclaim never says ok: 0x404AD0 calls no 0x438880, where ReclaimUnit does
-       (0x4047C1) */
-    if (o->serial > s->scene_serial && o->k != WIKI_ORDER_BUILD && !(o->k == WIKI_ORDER_RECLAIM && o->feat))
-        notice(s, u, WIKI_SND_OK);
-}
-
-/* u's first order has said cant for its taken site */
-static int cant_said(const WIKIUNIT* u)
-{
-    return u->norder && u->cant == u->order[0].serial;
-}
-
-/* the cell a footprint `f` cells wide stands on at world coordinate `p`, rounded as the engine
-   rounds both the unit's (+0x76/+0x78, 0x48AA00..0x48AA32) and a move's goal (0x44CF60):
-   (P - (f << 19) + 0x80000) >> 20 on 16.16 fixed point */
-static int foot_cell(double p, int f)
-{
-    return (int)floor((p - f * (CELL / 2) + CELL / 2) / CELL);
-}
-
-/* the engine's arrival for a move: its goal test 0x44D310 passes when the unit's footprint cell is
-   within ((order+0x36 + 4) >> 4) cells of the goal's (0x44CF60's radius, from Move_Ground
-   0x403232..0x40323F); a click's move carries +0x36 = 0 (0x4991E2 pushes type 0 through 0x48CF30
-   and 0x43AFC0, which 0x43A116 stores there), so the radius is 0: the goal's own cell */
-static int in_goal_cell(const WIKISIM* s, const WIKIUNIT* u, double x, double z)
-{
-    return foot_cell(u->x, fpx(s, u->type)) == foot_cell(x, fpx(s, u->type)) &&
-           foot_cell(u->z, fpz(s, u->type)) == foot_cell(z, fpz(s, u->type));
-}
-
-/* MobileBuild's reach when the builder's move gave up (event 0x40, 0x403B63..0x403C39): the
-   whole world units between it and the site's centre, less trunc(8 x its footprint's diagonal)
-   and trunc(8 x the site's), beyond its BuildDistance (def+0x212) */
-static int out_of_reach(const WIKISIM* s, const WIKIUNIT* u, int t, int ox, int oz)
-{
-    const XZ c = centre(s, t, ox, oz);
-    const double dx = u->x - c.x, dz = u->z - c.z;
-    const double uf = sqrt((double)fpx(s, u->type) * fpx(s, u->type) + (double)fpz(s, u->type) * fpz(s, u->type));
-    const double sf = sqrt((double)fpx(s, t) * fpx(s, t) + (double)fpz(s, t) * fpz(s, t));
-    const double d = floor(sqrt(dx * dx + dz * dz)) - trunc(8.0 * uf) + trunc(-8.0 * sf);
-    return d > def(s, u->type)->build_distance;
-}
-
-/* the countdown a Reclaim order sets on a feature (0x404BBA..0x404BDC): trunc(15 + (energy + metal)
-   / 2) of the FeatureDef's floats (+0xEC, +0xF0), as tagpu_sweepgeo.c's sweep_reclaim_ticks reads
-   them; the loader holds both below WIKI_FEAT_AMOUNT, so it fits an int */
-static int reclaim_countdown(double energy, double metal)
-{
-    const double e = (float)energy, m = (float)metal;
-    return (int)floor(15 + ((e > 0 ? e : 0) + (m > 0 ? m : 0)) / 2);
-}
-
-/* THE RECLAIM HANDLER ON A FEATURE, 0x404AD0, DISASSEMBLED (research/notes/exe-reverse-engineering.md,
-   *The reclaim sweep's engine side*): every call looks the feature up at the order's point, and
-   with none says "Reclamation failed" (kind 7, 0x404AF8) and ends. The walk until the footprints
-   touch; a walk that gives up ends the order silent (result 8). Arrived, the countdown and
-   StartBuilding; the stance wait (0x404C5A); the working reply once (0x404C6E); then a working
-   call every 2 ticks (0x439E80(2) at 0x404C77) takes 2 off it, and above 15 sprays (0x404CB5).
-   At 0 or below that call ends its state (result 1, 0x404C8B) with the next call armed 2 ticks
-   on, and that call pays out and the feature goes (state 5, 0x404D60: 0x4237D0, FeatureDie) --
-   after the entry's lookup, so a feature gone in between fails as above. The countdown, the next
-   call's tick, the payout due and whether it paid are the unit's (rc_*). `o` is u's first order. */
-static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
-{
-    WIKIFEAT* f = feat_by_id(s, o->target);
-    const int t = s->tick + 1;
-    double dx, dz, d;
-    if (!f) {
-        shift_order(u);
-        u->rc_serial = 0;
-        notice(s, u, WIKI_SND_CANT);
-        return;
-    }
-    if (u->rc_serial != o->serial) {
-        const TARGET g = to_feat(o, f);
-        const int r = go(s, u, &g);
-        if (r == GO_STUCK) {
-            shift_order(u);
-            return;
-        }
-        if (r != GO_ARRIVED) return;
-        u->rc_serial = o->serial;
-        u->rc_c = reclaim_countdown(f->energy, f->metal);
-        u->rc_next = t;
-        u->rc_due = 0;
-        u->rc_paid = 0;
-    }
-    dx = f->x - u->x;
-    dz = f->z - u->z;
-    d = sqrt(dx * dx + dz * dz);
-    if (d > 0) {
-        u->hx = dx / d;
-        u->hz = dz / d;
-    }
-    u->job = NULL;
-    u->job_how = HOW_FEATURE;
-    snprintf(u->job_id, sizeof u->job_id, "%s", f->id);
-    if (!(u->stanced && u->work_feat && !strcmp(u->work, f->id))) {
-        if (!stance(s, u)) return;
-        u->stanced = 1;
-    }
-    if (o->serial != u->said) {
-        u->said = o->serial;
-        notice(s, u, WIKI_SND_WORKING);
-    }
-    if (t < u->rc_next) return;
-    u->rc_next = t + 2;
-    if (u->rc_due) {
-        u->rc_paid = 1;
-        feat_remove(s, f);
-        return;
-    }
-    u->rc_c -= 2;
-    if (u->rc_c <= 0)
-        u->rc_due = 1;
-    else if (u->rc_c > 15) {
-        u->spray = HOW_FEATURE + 1;
-        u->spray_box[0] = f->ox;
-        u->spray_box[1] = f->oz;
-        u->spray_box[2] = f->fx;
-        u->spray_box[3] = f->fz;
-        u->spray_box[4] = f->height;
-    }
-}
-
-static void advance(WIKISIM* s)
-{
-    int i;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        u->job = NULL;
-        u->job_id[0] = 0;
-        u->worked = 0;
-        /* went: it stepped on the last tick, so this tick's straight walks pass it as walking */
-        u->went = u->stepped;
-        u->stepped = 0;
-        u->evacuated = 0;
-        u->spray = 0;
-        u->completed = 0;
-        u->work_build = u->work_reclaim = 0;
-    }
-    s->nemit = 0;
-    /* a structure placed here joins the list and is visited too, with no orders */
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIUNIT* st;
-        WIKIORDER* o;
-        int r;
-        if (!mobile(s, u->type)) continue;
-        o = u->norder ? &u->order[0] : NULL;
-        /* the order's handler runs wherever the unit stands, so its ok comes before any step off
-           a claim */
-        if (o) begin(s, u, o);
-        if (evacuate(s, u)) {
-            u->evacuated = 1;
-            continue;
-        }
-        if (!o || o->k == WIKI_ORDER_GUARD) continue;
-        if (o->k == WIKI_ORDER_MOVE) {
-            const TARGET t = to_point(o, o->x, o->z);
-            int arrived;
-            r = go(s, u, &t);
-            if (r != GO_ARRIVED && r != GO_STUCK) continue;
-            /* Move_Ground says arrived on its goal test's event 0x20 alone (0x4031EB..0x4031FB); a
-               give-up (0x40) ends the order silent. A stuck move ends where the engine's mover
-               would give up, unless it already stands in the goal's cell */
-            arrived = r == GO_ARRIVED || in_goal_cell(s, u, o->x, o->z);
-            shift_order(u);
-            if (arrived) notice(s, u, WIKI_SND_ARRIVED);
-            continue;
-        }
-        if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
-            feat_work(s, u, o);
-            continue;
-        }
-        if (o->k == WIKI_ORDER_RECLAIM) {
-            if (!(st = by_id(s, o->target))) { shift_order(u); continue; }
-            if (reach(s, o, u, st->type, st->ox, st->oz)) credit(s, u, st, HOW_RECLAIM);
-            continue;
-        }
-        st = structure_at(s, o->type, o->ox, o->oz);
-        if (st && st->built >= 1) { shift_order(u); continue; }
-        {
-            const TARGET g = to_site(s, o, u, rect_of(s, o->type, o->ox, o->oz));
-            r = go(s, u, &g);
-        }
-        if (r == GO_STUCK && out_of_reach(s, u, o->type, o->ox, o->oz)) {
-            /* "I can't reach the construction site" (0x403C45) ends the order; a give-up within
-               reach goes on to the site as an arrival does (0x403C59) */
-            shift_order(u);
-            notice(s, u, WIKI_SND_CANT);
-            continue;
-        }
-        if (r != GO_ARRIVED && r != GO_STUCK) continue;
-        if (!st) {
-            const WIKIRECT rect = rect_of(s, o->type, o->ox, o->oz);
-            int k, taken = 0;
-            if (!site_ok(s, o->type, o->ox, o->oz, NULL)) {
-                shift_order(u);
-                notice(s, u, WIKI_SND_CANT);
-                continue;
-            }
-            /* the site waits until no unit stands on it; those that do step off it, its claim
-               (evacuate). MobileBuild's site test (0x47DB70 at 0x403CC7) fails on an occupied
-               cell, and its first failure an order says cant ("Waiting for target area to
-               clear", 0x403CDF) */
-            for (k = 0; k < s->nunit && !taken; k++)
-                taken = mobile(s, s->unit[k]->type) && hits(body(s, s->unit[k]), rect);
-            if (taken) {
-                if (u->cant != o->serial) {
-                    u->cant = o->serial;
-                    notice(s, u, WIKI_SND_CANT);
-                }
-                continue;
-            }
-            if (!(st = new_unit(s, o->type, u->owner, 0, NULL, NULL))) continue;
-            place(s, st, o->ox, o->oz);
-            notice(s, u, WIKI_SND_BUILD);
-        }
-        credit(s, u, st, HOW_BUILD);
-    }
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIUNIT* g;
-        WIKIORDER* o = u->norder ? &u->order[0] : NULL;
-        if (!o || o->k != WIKI_ORDER_GUARD || u->evacuated) continue;
-        if (!(g = by_id(s, o->target))) { shift_order(u); continue; }
-        /* a guarded unit reclaiming a feature is followed: the wiki's guard helps only a
-           structure's work (its job is NULL then) */
-        if (g->job) {
-            WIKIUNIT* j = g->job;
-            if (reach(s, o, u, j->type, j->ox, j->oz)) credit(s, u, j, g->job_how);
-        } else {
-            const TARGET t = to_unit(s, o, g);
-            go(s, u, &t);
-        }
-    }
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* st = s->unit[i];
-        if (!st->worked) continue;
-        if (st->work_build && st->built < 1) {
-            st->built += st->work_build;
-            if (st->built > 1) st->built = 1;
-            st->completed = st->built >= 1;
-            if (st->built >= 1 && st->owner == 0) s->nbuilt++;
-            /* 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6) */
-            if (st->built >= 1 && s->cob && st->cob && def(s, st->type)->activate_when_built)
-                tagpu_wikicob_activate(s->cob, st->cob, 1);
-        }
-        if (st->work_reclaim) {
-            st->reclaimed += st->work_reclaim;
-            if (st->reclaimed > 1) st->reclaimed = 1;
-            if (st->reclaimed >= 1) {
-                if (s->cob && st->cob) tagpu_wikicob_remove(s->cob, st->cob);
-                remove_unit(s, st);
-                i--;
-            }
-        }
-    }
-    /* THE NOTICES OF THE WORK, in creation order whatever order the work was credited in: a change
-       of ACTIVATION the completion made, then each builder whose build finished this tick, as each
-       builder's handler finds the build complete (0x403F39, 0x40422F) */
-    for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
-    for (i = 0; s->snd_on && i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        const WIKIUNIT* t = u->job_id[0] && u->job_how == HOW_BUILD ? by_id(s, u->job_id) : NULL;
-        if (t && t->completed) notice(s, u, WIKI_SND_COMPLETE);
-    }
-    /* orders whose work is over end now, so the next one starts on the next tick */
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        const WIKIORDER* o = u->norder ? &u->order[0] : NULL;
-        WIKIUNIT* st;
-        if (!o) continue;
-        if (o->k == WIKI_ORDER_BUILD) {
-            if ((st = structure_at(s, o->type, o->ox, o->oz)) && st->built >= 1) shift_order(u);
-        } else if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
-            /* a feature's reclaim ends with its payout (result 5); another reclaimer of it finds
-               it gone on its next call */
-            if (u->rc_serial == o->serial && u->rc_paid) {
-                shift_order(u);
-                u->rc_serial = 0;
-            }
-        } else if ((o->k == WIKI_ORDER_RECLAIM || o->k == WIKI_ORDER_GUARD) && !by_id(s, o->target))
-            shift_order(u);
-    }
-    /* THE ENGINE'S CALLS OF THE UNIT'S TURN, sim.js's, unit by unit in creation order: its build
-       calls, then its walk class. A builder's work is the structure it worked on this tick,
-       waiting on its stance or not; when that changes StopBuilding goes for the old one (0x43A251,
-       run-later, no argument: the order's destructor, in the same call as the build it finished)
-       and StartBuilding for the new one (0x4385C7, run-later, one word: the target's angle from the
-       builder's facing, 0 here since the builder faces it at once). A structure finished or
-       reclaimed this tick is no one's work any more. Then the walk class (0x43DA70): a mobile unit
-       that stepped this tick and stood the last starts StartMoving and MoveRate1 (no FBI the wiki
-       reads sets moverate1, whose default 2 x MaxVelocity keeps its class 1), one that stood this
-       tick and stepped the last StopMoving, both run-now. Jobs are found by id: a reclaim freed
-       its target above. */
-    for (i = 0; s->cob && i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        /* a feature's work holds while the feature stands */
-        const int feat = u->job_id[0] && u->job_how == HOW_FEATURE;
-        const WIKIUNIT* t = u->job_id[0] && !feat ? by_id(s, u->job_id) : NULL;
-        const WIKIFEAT* tf = feat ? feat_by_id(s, u->job_id) : NULL;
-        const char* tid;
-        char ended[WIKI_ID_MAX] = "";
-        if (t && u->job_how == HOW_BUILD && t->built >= 1) t = NULL;
-        tid = t ? t->id : tf ? tf->id : NULL;
-        if (u->work[0] && (!tid || u->work_feat != (tf != NULL) || strcmp(u->work, tid))) {
-            cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
-            snprintf(ended, sizeof ended, "%s", u->work);
-            u->work[0] = 0;
-            u->work_serial = 0;
-            u->work_feat = 0;
-            u->stanced = 0;
-        }
-        if (tid && !u->work[0]) {
-            const int32_t heading = 0;
-            cob_call(s, u, "StartBuilding", WIKICOB_ARGS, 1, &heading);
-            snprintf(u->work, sizeof u->work, "%s", tid);
-            u->work_feat = tf != NULL;
-            u->work_serial = u->norder ? u->order[0].serial : 0;
-        }
-        /* a work that ended this tick sprays its last step by its own cadence, which is forgotten
-           only then -- unless this tick's spray was a new work's */
-        if (u->spray) spray(s, u, s->tick + 1);
-        if (ended[0] && !strcmp(u->spray_on, ended)) u->spray_at = 0;
-        if (!mobile(s, u->type)) continue;
-        if (u->stepped && !u->moving) {
-            cob_call(s, u, "StartMoving", WIKICOB_NOW, 0, NULL);
-            cob_call(s, u, "MoveRate1", WIKICOB_NOW, 0, NULL);
-        } else if (!u->stepped && u->moving)
-            cob_call(s, u, "StopMoving", WIKICOB_NOW, 0, NULL);
-        u->moving = u->stepped;
-    }
-    /* a run-now start or a query in the turns can set ACTIVATION too */
-    for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
-    /* no pointer to a reclaimed unit outlives the tick */
-    for (i = 0; i < s->nunit; i++) s->unit[i]->job = NULL;
-}
-
 /* ---- the sim ---- */
 
 /* THE CURSOR'S SHAPE (WIKI_CURSOR_*, the game's cursor for each): the build-menu mode, else a
@@ -3837,10 +1716,11 @@ static void advance(WIKISIM* s)
 static int reclaim_cursor(const WIKISIM* s)
 {
     const XZ c = map_cursor(s);
-    const WIKIFEAT* f = feat_at(s, c.x, c.z);
+    const WIKIFEAT* f = tasim_feat_at(&s->sim, c.x, c.z);
     POPUP P;
     if (popup(s, &P) && on_popup(s, &P)) return WIKI_CURSOR_ARROW;
-    return ST(s).kind != WIKI_KIND_ALL && f && f->reclaimable && seen(s, cell_of(f->x), cell_of(f->z)) && !kind_ok(s, f)
+    return ST(s).kind != WIKI_KIND_ALL && f && f->reclaimable && seen(s, tasim_cell_of(f->x), tasim_cell_of(f->z)) &&
+           !tasim_sweep_kind_ok((float)f->metal, (float)f->energy, (unsigned)ST(s).kind)
          ? WIKI_CURSOR_ARROW : WIKI_CURSOR_RECLAIM;
 }
 
@@ -3850,246 +1730,13 @@ static int cursor_shape(const WIKISIM* s)
     if (over(s) != OVER_MAP) return WIKI_CURSOR_ARROW;
     if (ST(s).rmode) return reclaim_cursor(s);
     if (ST(s).mode >= 0) return WIKI_CURSOR_BUILD;
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i]->sel && s->unit[i]->owner == s->act && mobile(s, s->unit[i]->type)) return WIKI_CURSOR_MOVE;
+    for (i = 0; i < s->sim.nunit; i++)
+        if (s->sim.unit[i]->sel && s->sim.unit[i]->owner == s->act && tasim_mobile(&s->defs, s->sim.unit[i]->type)) return WIKI_CURSOR_MOVE;
     return WIKI_CURSOR_ARROW;
 }
 
 /* the sequence a shape shows: the build cursor is the arrow's cursornormal (tagpu_wikisim.h) */
 static int cursor_seq(int shape) { return shape == WIKI_CURSOR_BUILD ? WIKI_CURSOR_ARROW : shape; }
-
-/* ---- THE GAME (WIKI_PLAY_GAME and _STALL only; research/notes/ingame-wiki-replay-plan.md, decisions
-   2, 3, 7 and 18), sim.js's game functions: the seats' counts and economy, the kills and the
-   wrecks. A demo and Try it run none of it, so no state or hash of theirs can change by it. ---- */
-
-/* the seats' unit counts at the end of a step, after the work; `out` once a count goes from above
-   0 to 0. A nanoframe counts: +0x144 is incremented at every create, finished or not (0x486187,
-   0x486322). */
-static void econ_counts(WIKISIM* s)
-{
-    int k, i;
-    for (k = 0; k < s->nseat; k++) {
-        WIKIECON* z = &s->econ[k];
-        int n = 0;
-        for (i = 0; i < s->nunit; i++) n += s->unit[i]->owner == k;
-        if (z->units > 0 && n == 0) z->out = 1;
-        z->units = n;
-    }
-}
-
-/* one resource's settle, 0x401A4D..0x401AB1 then 0x401AB3..0x401B27: the debt paid first, then the
-   grants, from what is stored plus produced; what passes the storage is wasted. The fractions of
-   the debt and of the grants paid out. */
-static void econ_settle(double* cur, double* waste, double P, double D, double G, double max, double* fD, double* fG)
-{
-    const double A = *cur + P;
-    const double rest = A - (D <= A ? D : A);
-    double c, w = 0;
-    *fD = D <= A ? 1 : A / D;
-    *fG = G <= rest ? 1 : rest / G;
-    c = rest - (G <= rest ? G : rest);
-    if (c > max) {
-        w = c - max;
-        c = max;
-    }
-    *cur = c;
-    *waste += w;
-}
-
-/* THE PASS, 0x401360, on ticks 1, 30, 60, ...: sim.js's `pass`, which says it all with the
-   addresses; the arithmetic is sim.js's operation for operation, so the two agree to the bit */
-static void econ_pass(WIKISIM* s)
-{
-    int k, i;
-    for (k = 0; k < s->nseat; k++) {
-        WIKIECON* z = &s->econ[k];
-        double sm = 0, se = 0, EP = 0, ER = 0, EG = 0, ED = 0, MP = 0, MR = 0, MG = 0, MD = 0;
-        double fDe, fGe, fDm, fGm;
-        for (i = 0; i < s->nunit; i++) {
-            WIKIUNIT* u = s->unit[i];
-            const WIKIDEF* d = def(s, u->type);
-            WIKILEDGER* L = &u->led;
-            const double eu = d->energy_use;
-            const int active = u->built >= 1 && d->activate_when_built;
-            if (u->owner != k) continue;
-            if (!mobile(s, u->type)) {
-                if (active) {
-                    int granted = 0;
-                    if (eu >= 0) {
-                        L->eR += eu;
-                        if (!(L->eD > 0)) {
-                            L->eG += eu;
-                            granted = 1;
-                        }
-                    } else
-                        L->eP += -eu;
-                    if (d->extracts > 0 && granted) L->mP += d->extracts * extractor_speed(s, u);
-                }
-            } else if (active || u->stepped) {
-                if (eu >= 0) {
-                    L->eR += eu;
-                    if (!(L->eD > 0)) L->eG += eu;
-                } else
-                    L->eP += -eu;
-            }
-            if (u->built >= 1) {
-                L->eP += d->energy_make;
-                L->mP += d->metal_make;
-                se += d->energy_storage;
-                sm += d->metal_storage;
-            }
-        }
-        for (i = 0; i < s->nunit; i++) {
-            const WIKILEDGER* L = &s->unit[i]->led;
-            if (s->unit[i]->owner != k) continue;
-            EP += L->eP; ER += L->eR; EG += L->eG; ED += L->eD;
-            MP += L->mP; MR += L->mR; MG += L->mG; MD += L->mD;
-        }
-        z->emax = se + (z->cmd_lost ? 0 : z->be);
-        z->mmax = sm + (z->cmd_lost ? 0 : z->bm);
-        z->ei = EP;
-        z->eo = ER;
-        z->mi = MP;
-        z->mo = MR;
-        econ_settle(&z->e, &z->we, EP, ED, EG, z->emax, &fDe, &fGe);
-        econ_settle(&z->m, &z->wm, MP, MD, MG, z->mmax, &fDm, &fGm);
-        for (i = 0; i < s->nunit; i++) {
-            WIKILEDGER* L = &s->unit[i]->led;
-            if (s->unit[i]->owner != k) continue;
-            L->eD = (L->eG - fGe * L->eG) + (L->eD - fDe * L->eD);
-            L->eP = L->eR = L->eG = 0;
-            L->mD = (L->mG - fGm * L->mG) + (L->mD - fDm * L->mD);
-            L->mP = L->mR = L->mG = 0;
-        }
-        if (s->econ_mode == WIKI_ECON_REFUSE && (fDe < 1 || fGe < 1 || fDm < 1 || fGm < 1)) s->starved = 1;
-    }
-}
-
-/* THE WRECK of a finished unit killed, sim.js's `corpse`, which gives the engine's placement rules
-   (0x486360, 0x423C50) with their addresses. BOUND: a game's features array holds WIKI_FEATS_MAX
-   (scene_feats), and the features standing plus those gone are the scene's plus one per wreck made,
-   at most one a kill: the loader holds the scene's features and the game script's kills to
-   WIKI_FEATS_MAX, and a fork refuses a part whose kills would pass it (tagpu_wikisim_fork). So
-   s->nfeat never passes the capacity, and `gone` (WIKI_FEATS_MAX cells) takes each feature at most
-   once. The row is the type's corpse, an index of the bound features table the binder or the
-   loader checked. */
-static void corpse(WIKISIM* s, const WIKIUNIT* u)
-{
-    const WIKIDEF* d = def(s, u->type);
-    const WIKIFEATDEF* fd;
-    WIKIFEAT* f;
-    int ox, oz, x, z, j;
-    if (d->corpse < 0 || d->corpse >= s->entry->nfeat) return;
-    fd = &s->entry->feat[d->corpse];
-    ox = mobile(s, u->type) ? foot_cell(u->x, d->fx) : u->ox;
-    oz = mobile(s, u->type) ? foot_cell(u->z, d->fz) : u->oz;
-    if (ox < 0 || oz < 0 || ox >= s->W || oz >= s->H || ox + fd->fx > s->W || oz + fd->fz > s->H) return;
-    for (z = oz; z < oz + fd->fz; z++)
-        for (x = ox; x < ox + fd->fx; x++)
-            for (j = 0; j < s->nfeat; j++) {
-                const WIKIFEAT* g = &s->feat[j];
-                if (x >= g->ox && x < g->ox + g->fx && z >= g->oz && z < g->oz + g->fz) {
-                    feat_remove(s, &s->feat[j]);
-                    break;
-                }
-            }
-    f = &s->feat[s->nfeat++];
-    memset(f, 0, sizeof *f);
-    snprintf(f->id, sizeof f->id, "%s", u->id);
-    f->def = d->corpse;
-    f->ox = ox;
-    f->oz = oz;
-    f->fx = fd->fx;
-    f->fz = fd->fz;
-    f->x = (ox + fd->fx / 2.0) * CELL;
-    f->z = (oz + fd->fz / 2.0) * CELL;
-    f->metal = fd->metal;
-    f->energy = fd->energy;
-    f->height = fd->height;
-    f->blocking = fd->blocking;
-    f->reclaimable = fd->reclaimable;
-}
-
-/* THE DEATH SOUND of a finished unit killed, sim.js's `deathSound` (tagpu_wikisim.h,
-   WIKI_SND_DEATH): one event at once, for a unit of any seat, the cell under its centre held to
-   the map */
-static void death_sound(WIKISIM* s, const WIKIUNIT* u)
-{
-    int cx = (int)floor(u->x / CELL), cz = (int)floor(u->z / CELL);
-    if (!s->snd_on) return;
-    cx = cx < 0 ? 0 : cx > s->W - 1 ? s->W - 1 : cx;
-    cz = cz < 0 ? 0 : cz > s->H - 1 ? s->H - 1 : cz;
-    sound_event(s, WIKI_SND_DEATH, u->type, -1, cz * s->W + cx);
-}
-
-/* A KILL, the game script's {at, kill}, fed before its tick's drop_work, COB slice and advance:
-   sim.js's `kill`, which gives the engine's facts with their addresses. Its script goes first,
-   through the host's own removal; a finished unit leaves its wreck and makes its death sound; a
-   commander counts as its seat's loss; a builder whose running build is the unfinished structure
-   killed loses that order and says cant. THE KILLS AND THE LOSSES (PD6): the victim's seat loses it
-   whatever killed it (+0xFE, ungated at 0x4868C1); `by`, a seat of the game other than the
-   victim's, counts a kill when the victim was finished (+0xFC, behind a killer, +0x104 == 0 and
-   another player; engine/memory.md); a `by` that is no seat counts nothing. The death is recorded
-   for the replay's death vision at the unit's place (WIKIDEATH) when the engine's temporary sight
-   record add would keep it.
-   THE DEATH VISION'S BOUND (DISASSEMBLED 2026-11-02, 0x482910..0x482935, 0x482130..0x482260,
-   0x4866E0..0x486748): the records are one list for the whole game, main+0x1427B, 36 bytes each,
-   its count main+0x14277. The add 0x482910 refuses the new record, touching nothing, when the count
-   is already 20 (`cmp eax,0x14; jge` at 0x48292C): the records live stay and the newest death
-   lights nothing. Its one caller, the destructor at 0x486748, adds only for a unit whose owner's
-   +0x146 is the viewed byte main+0x2A43 (0x486716..0x48672A), and a replay's Sight change drops
-   every record and makes the new seat's again (tagpu_replay.c sight_change), so the list holds the
-   viewed seat's deaths alone: the bound is the seat's. The expiry 0x482130, after each step's tick
-   loop, removes a record whose tick + 60 is below GameTime, so at an add on tick t a death of tick
-   d is live while d + WIKI_SIGHT_SPAN >= t - 1, a step being one tick. So a kill of a seat that
-   already has WIKI_PLAYERS_DEATHS deaths live is not recorded, whatever the script or a fork part
-   kills; a players entry's data rule keeps its own script inside that bound (tagpu_wikidata.h).
-   THE INVARIANT, an ordering: between two ticks the only references to a WIKIUNIT are s->unit[] and
-   s->shown -- advance clears every job pointer by the tick's end, and orders, the spray and the
-   sounds name units by id -- and a kill runs in feed, between advances, so remove_unit clearing
-   both leaves nothing that can read the freed unit. The COB handle goes before the unit, and the
-   host never gives a handle twice. */
-static void kill(WIKISIM* s, const char* id, int by)
-{
-    WIKIUNIT* u = id ? by_id(s, id) : NULL;
-    int i, live;
-    if (!u) {
-        s->bad_kill = 1;
-        return;
-    }
-    s->nkill++;
-    if (u->owner >= 0 && u->owner < s->nseat) s->econ[u->owner].losses++;
-    if (by >= 0 && by < s->nseat && by != u->owner && u->built >= 1) s->econ[by].kills++;
-    for (i = live = 0; i < s->ndeath; i++)
-        live += s->death[i].owner == u->owner && s->death[i].tick + WIKI_SIGHT_SPAN + 1 >= s->feeding;
-    if (s->ndeath < WIKI_FEATS_MAX && live < WIKI_PLAYERS_DEATHS) {
-        WIKIDEATH* d = &s->death[s->ndeath++];
-        d->tick = s->feeding;
-        d->owner = u->owner;
-        d->type = u->type;
-        d->x = u->x;
-        d->z = u->z;
-    }
-    if (s->cob && u->cob) tagpu_wikicob_remove(s->cob, u->cob);
-    if (u->built >= 1) {
-        corpse(s, u);
-        death_sound(s, u);
-    }
-    if (u->owner >= 0 && u->owner < s->nseat && def(s, u->type)->cast == WIKI_CAST_COMMANDER) {
-        s->econ[u->owner].lost++;
-        s->econ[u->owner].cmd_lost = 1;
-    }
-    if (!mobile(s, u->type) && u->built < 1)
-        for (i = 0; i < s->nunit; i++) {
-            WIKIUNIT* v = s->unit[i];
-            const WIKIORDER* o = v->norder ? &v->order[0] : NULL;
-            if (v != u && o && o->k == WIKI_ORDER_BUILD && o->type == u->type && o->ox == u->ox && o->oz == u->oz) {
-                shift_order(v);
-                notice(s, v, WIKI_SND_CANT);
-            }
-        }
-    remove_unit(s, u);
-}
 
 /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation
    began when it shows another sequence. The engine installs a cursor only when its index differs
@@ -4121,9 +1768,9 @@ static void feed(WIKISIM* s, int t)
         if (e->has & WIKI_IN_UNTIL) {
             s->waiting = e->until;
             s->wait_max = e->until_max;
-            s->wait_from = s->tick;
+            s->wait_from = s->sim.tick;
             if (e->until == WIKI_UNTIL_BUILT) s->wait_built = ++s->built_waits;
-        } else if (s->game && (e->has & WIKI_IN_KILL)) kill(s, e->kill, e->by);
+        } else if (s->sim.game && (e->has & WIKI_IN_KILL)) tasim_kill(&s->sim, &s->defs, e->kill, e->by, s->feeding);
         /* a seat's camera is recorded data the replay layer reads (tagpu_wikidata_seat_cam); the
            simulation never sees it */
         else if (e->has & WIKI_IN_CAMERA) {}
@@ -4143,8 +1790,8 @@ static int holds(const WIKISIM* s, int until)
 {
     int i, j;
     if (until == WIKI_UNTIL_BUILT) return s->nbuilt >= s->wait_built;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++) {
+        const WIKIUNIT* u = s->sim.unit[i];
         if (u->owner != 0) continue;
         for (j = 0; j < u->norder; j++) {
             const int k = u->order[j].k;
@@ -4155,62 +1802,45 @@ static int holds(const WIKISIM* s, int until)
     return 1;
 }
 
-/* AN ORDER THE PLAYER TAKES AWAY ends its work at once: the order's destructor starts StopBuilding
-   when the input is handled (0x43A251), before the next tick's slice */
-static void drop_work(WIKISIM* s)
-{
-    int i;
-    for (i = 0; s->cob && i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        if (!u->work[0] || (u->norder ? u->order[0].serial : 0) == u->work_serial) continue;
-        cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
-        u->work[0] = 0;
-        u->work_serial = 0;
-        u->work_feat = 0;
-        u->stanced = 0;
-        u->spray_at = 0;
-    }
-}
-
 /* the player's input stands between two ticks: the view of the tick the sim stands at shows it */
 void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
 {
     if (!seat_in(s, ev->seat)) return;
-    s->now = s->tick;
+    s->sim.now = s->sim.tick;
     s->act = ev->seat;
     input(s, ev);
-    drop_work(s);
-    cursor_tick(s, s->tick);
+    tasim_drop_work(&s->sim);
+    cursor_tick(s, s->sim.tick);
     s->act = 0;
 }
 
 void tagpu_wikisim_step(WIKISIM* s)
 {
-    const int t = s->tick + 1;
+    const int t = s->sim.tick + 1;
     int i;
-    s->now = t;
+    s->sim.now = t;
     if (s->waiting && holds(s, s->waiting)) s->waiting = 0;
     else if (s->waiting && t - s->wait_from > s->wait_max) s->stalled = 1;
     if (!s->waiting) feed(s, ++s->clock);
-    drop_work(s);
+    tasim_drop_work(&s->sim);
     /* the slice: every unit's DoScriptsNow(1), before its orders and its movement (0x48ADEB) */
-    if (s->cob) {
-        const int n = facts(s);
-        tagpu_wikicob_slice(s->cob, s->fact, n);
-        for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
+    if (s->sim.cob) {
+        const int n = tasim_facts(&s->sim);
+        tagpu_wikicob_slice(s->sim.cob, s->sim.fact, n);
+        for (i = 0; i < s->sim.nunit; i++) tasim_notice_active(&s->sim, s->sim.unit[i]);
     }
-    advance(s);
-    spray_tick(s, t);
-    sound_tick(s);
+    tasim_advance(&s->sim, &s->defs);
+    tasim_spray_tick(&s->sim, t);
+    tasim_sound_tick(&s->sim);
     /* a game's counts after the work, then on ticks 1, 30, 60, ... its economy's pass */
-    if (s->game) {
-        econ_counts(s);
-        if (t == 1 || t % TPS == 0) econ_pass(s);
+    if (s->sim.game) {
+        tasim_econ_counts(&s->sim);
+        if (t == 1 || t % TPS == 0) tasim_econ_pass(&s->sim, &s->defs);
     }
-    s->tick = t;
+    s->sim.tick = t;
     /* a lock ends the demo on its own tick, which then holds under the entry's badge; a game ends as
        well on a pass that starved and at a kill that found no unit */
-    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->starved || s->bad_kill;
+    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->sim.starved || s->sim.bad_kill;
     if (s->lay) route(s);
     /* the step's per-seat tail: each seat's hover and cursor shape over the world the tick left */
     for (s->act = 0; s->act < s->nin; s->act++) {
@@ -4222,32 +1852,20 @@ void tagpu_wikisim_step(WIKISIM* s)
 
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o)
 {
-    const WIKIUNIT* u = by_id(s, id);
+    const WIKIUNIT* u = tasim_by_id(&s->sim, id);
     if (!u) return -1;
     *o = u->order;
     return u->norder;
 }
 
-static int grow(WIKISIM* s, void** p, int* cap, int need, size_t size)
-{
-    void* q;
-    int c;
-    if (need <= *cap) return 1;
-    for (c = *cap ? *cap : 16; c < need; c *= 2) {}
-    if (!(q = realloc(*p, (size_t)c * size))) { s->oom = 1; return 0; }
-    *p = q;
-    *cap = c;
-    return 1;
-}
-
 static WIKIVSITE vsite(const WIKISIM* s, int t, int ox, int oz)
 {
     WIKIVSITE v;
-    const XZ p = centre(s, t, ox, oz);
+    const XZ p = tasim_centre(&s->defs, t, ox, oz);
     memset(&v, 0, sizeof v);
     v.type = t;
-    v.fx = fpx(s, t);
-    v.fz = fpz(s, t);
+    v.fx = tasim_fpx(&s->defs, t);
+    v.fz = tasim_fpz(&s->defs, t);
     v.x = p.x;
     v.z = p.z;
     return v;
@@ -4256,11 +1874,11 @@ static WIKIVSITE vsite(const WIKISIM* s, int t, int ox, int oz)
 const unsigned char* tagpu_wikisim_model(const WIKISIM* s, int i, int* nprim)
 {
     *nprim = 0;
-    if (!s->cob || i < 0 || i >= s->nunit || !s->unit[i]->cob) return NULL;
-    return tagpu_wikicob_model(s->cob, s->unit[i]->cob, nprim);
+    if (!s->sim.cob || i < 0 || i >= s->sim.nunit || !s->sim.unit[i]->cob) return NULL;
+    return tagpu_wikicob_model(s->sim.cob, s->sim.unit[i]->cob, nprim);
 }
 
-/* what the acting seat's input shows (sim.js's seatView): the ghost, the gesture's sites (into
+/* what the acting seat's input shows: the ghost, the gesture's sites (into
    `site`, PLACE_MAX_SITES of room) and shape, the spacing, the cursor, the keys held, the drag, the
    armed mode, and the sweep's armed, kind and ring */
 static void seat_block(WIKISIM* s, WIKIVSEAT* b, WIKIVSITE* site)
@@ -4320,18 +1938,18 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     s->act = seat_in(s, seat) ? seat : 0;
     seat_block(s, &m, s->vsite);
 
-    v->w = s->W;
-    v->h = s->H;
-    v->surface_metal = s->SM;
-    v->metal = s->metal;
-    v->fog = s->fog;
-    v->nvent = s->nvent;
-    v->vent = s->vent_centre;
+    v->w = s->sim.W;
+    v->h = s->sim.H;
+    v->surface_metal = s->sim.SM;
+    v->metal = s->sim.metal;
+    v->fog = s->sim.fog;
+    v->nvent = s->sim.nvent;
+    v->vent = s->sim.vent_centre;
 
     v->nunit = 0;
-    if (grow(s, (void**)&s->vunit, &s->cvunit, s->nunit, sizeof *s->vunit))
-        for (i = 0; i < s->nunit; i++) {
-            const WIKIUNIT* u = s->unit[i];
+    if (tasim_grow(&s->sim, (void**)&s->vunit, &s->cvunit, s->sim.nunit, sizeof *s->vunit))
+        for (i = 0; i < s->sim.nunit; i++) {
+            const WIKIUNIT* u = s->sim.unit[i];
             WIKIVUNIT* w = &s->vunit[v->nunit++];
             w->id = u->id;
             w->type = u->type;
@@ -4340,13 +1958,13 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
             w->z = u->z;
             w->hx = u->hx;
             w->hz = u->hz;
-            w->fx = fpx(s, u->type);
-            w->fz = fpz(s, u->type);
+            w->fx = tasim_fpx(&s->defs, u->type);
+            w->fz = tasim_fpz(&s->defs, u->type);
             w->selected = u->sel;
             w->built = u->built;
             w->reclaimed = u->reclaimed;
             w->label = u->label;
-            w->cant = cant_said(u);
+            w->cant = tasim_cant_said(u);
         }
     v->unit = s->vunit;
 
@@ -4360,25 +1978,25 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     /* plans(): the viewed seat's unstarted build orders, one per site; each owned by the last unit,
        of any owner, that holds an order for it */
     v->nqueued = 0;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++) {
+        const WIKIUNIT* u = s->sim.unit[i];
         if (u->owner != s->act) continue;
         for (j = 0; j < u->norder; j++) {
             const WIKIORDER* o = &u->order[j];
-            const XZ c = centre(s, o->type, o->ox, o->oz);
+            const XZ c = tasim_centre(&s->defs, o->type, o->ox, o->oz);
             int q;
-            if (o->k != WIKI_ORDER_BUILD || started(s, o)) continue;
+            if (o->k != WIKI_ORDER_BUILD || tasim_started(&s->sim, &s->defs, o)) continue;
             /* one type at one centre is one site */
             for (q = 0; q < v->nqueued; q++)
                 if (s->vqueued[q].type == o->type && s->vqueued[q].x == c.x && s->vqueued[q].z == c.z) break;
-            if (q < v->nqueued || !grow(s, (void**)&s->vqueued, &s->cvqueued, v->nqueued + 1, sizeof *s->vqueued)) continue;
+            if (q < v->nqueued || !tasim_grow(&s->sim, (void**)&s->vqueued, &s->cvqueued, v->nqueued + 1, sizeof *s->vqueued)) continue;
             s->vqueued[v->nqueued] = vsite(s, o->type, o->ox, o->oz);
-            for (k = 0; k < s->nunit; k++) {
+            for (k = 0; k < s->sim.nunit; k++) {
                 int m;
-                for (m = 0; m < s->unit[k]->norder; m++) {
-                    const WIKIORDER* r = &s->unit[k]->order[m];
+                for (m = 0; m < s->sim.unit[k]->norder; m++) {
+                    const WIKIORDER* r = &s->sim.unit[k]->order[m];
                     if (r->k == WIKI_ORDER_BUILD && r->type == o->type && r->ox == o->ox && r->oz == o->oz)
-                        s->vqueued[v->nqueued].owner = s->unit[k]->owner;
+                        s->vqueued[v->nqueued].owner = s->sim.unit[k]->owner;
                 }
             }
             v->nqueued++;
@@ -4387,8 +2005,8 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     v->queued = s->vqueued;
 
     v->nline = 0;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++) {
+        const WIKIUNIT* u = s->sim.unit[i];
         double fx = u->x, fz = u->z;
         if (!u->sel || u->owner != s->act) continue;
         for (j = 0; j < u->norder; j++) {
@@ -4400,11 +2018,11 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
             if (order_point(s, o, &p)) {
                 tx = p.x;
                 tz = p.z;
-            } else if ((g = by_id(s, o->target))) {
+            } else if ((g = tasim_by_id(&s->sim, o->target))) {
                 tx = g->x;
                 tz = g->z;
             } else continue;
-            if (!grow(s, (void**)&s->vline, &s->cvline, v->nline + 1, sizeof *s->vline)) break;
+            if (!tasim_grow(&s->sim, (void**)&s->vline, &s->cvline, v->nline + 1, sizeof *s->vline)) break;
             s->vline[v->nline].from_x = fx;
             s->vline[v->nline].from_z = fz;
             s->vline[v->nline].to_x = tx;
@@ -4429,30 +2047,30 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
         v->drag_z1 = m.drag_z1;
     }
     v->caption = s->caption;
-    v->pace = s->PACE;
+    v->pace = s->sim.PACE;
     v->clock = s->clock;
     v->waiting = s->waiting;
     v->stalled = s->stalled;
-    v->has_cob = s->cob != NULL;
-    v->cob_hash = s->cob ? tagpu_wikicob_hash(s->cob, 0xCBF29CE484222325ull) : 0;
-    v->npart = s->npart;
-    v->part = s->part;
-    v->part_cut = s->part_cut;
-    v->nburst = s->nburst;
-    v->burst = s->burst;
-    v->has_sound = s->snd_on;
-    memcpy(v->snd_next, s->snd_next, sizeof v->snd_next);
-    v->snd_last = s->snd_last;
-    v->nsndq = s->nsndq;
-    v->sndq = s->sndq;
-    v->snd_total = s->snd_total;
-    v->nsnd = s->snd_total < WIKI_SND_LOG ? s->snd_total : WIKI_SND_LOG;
-    for (i = 0; i < v->nsnd; i++) s->vsnd[i] = s->snd[(s->snd_total - v->nsnd + i) % WIKI_SND_LOG];
+    v->has_cob = s->sim.cob != NULL;
+    v->cob_hash = s->sim.cob ? tagpu_wikicob_hash(s->sim.cob, 0xCBF29CE484222325ull) : 0;
+    v->npart = s->sim.npart;
+    v->part = s->sim.part;
+    v->part_cut = s->sim.part_cut;
+    v->nburst = s->sim.nburst;
+    v->burst = s->sim.burst;
+    v->has_sound = s->sim.snd_on;
+    memcpy(v->snd_next, s->sim.snd_next, sizeof v->snd_next);
+    v->snd_last = s->sim.snd_last;
+    v->nsndq = s->sim.nsndq;
+    v->sndq = s->sim.sndq;
+    v->snd_total = s->sim.snd_total;
+    v->nsnd = s->sim.snd_total < WIKI_SND_LOG ? s->sim.snd_total : WIKI_SND_LOG;
+    for (i = 0; i < v->nsnd; i++) s->vsnd[i] = s->sim.snd[(s->sim.snd_total - v->nsnd + i) % WIKI_SND_LOG];
     v->snd = s->vsnd;
     v->mode = m.mode;
-    v->nfeat = s->nfeat;
-    for (i = 0; i < s->nfeat; i++) {
-        const WIKIFEAT* f = &s->feat[i];
+    v->nfeat = s->sim.nfeat;
+    for (i = 0; i < s->sim.nfeat; i++) {
+        const WIKIFEAT* f = &s->sim.feat[i];
         WIKIVFEAT* w = &s->vfeat[i];
         w->id = f->id;
         w->def = f->def;
@@ -4462,11 +2080,11 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
         w->fz = f->fz;
         w->metal = f->metal;
         w->energy = f->energy;
-        w->wreck = s->entry->feat[f->def].object[0] != 0;
+        w->wreck = s->defs.entry->feat[f->def].object[0] != 0;
     }
     v->feat = s->vfeat;
-    v->ngone = s->ngone;
-    v->gone = s->gone;
+    v->ngone = s->sim.ngone;
+    v->gone = s->sim.gone;
     /* THE SWEEP as tagpu_sweep_fill publishes it (WIKIVSWEEP) */
     if ((v->rmode = ST(s).rmode)) {
         WIKIVSWEEP* w = &v->sweep;
@@ -4483,7 +2101,7 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
             w->ring_r = R.r;
             w->ntarget = ring_targets(s, &R, w->target);
             for (i = 0; i < w->ntarget; i++) {
-                const WIKIFEAT* f = &s->feat[w->target[i]];
+                const WIKIFEAT* f = &s->sim.feat[w->target[i]];
                 if (f->metal > 0) w->wrecks++;
                 else if (f->energy > 0) w->trees++;
                 w->metal += f->metal;
@@ -4491,9 +2109,8 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
             }
         }
         if (!ST(s).has_rg && over(s) == OVER_MAP && !(pop && on_popup(s, &P))) {
-            const XZ c = map_cursor(s);
-            const WIKIFEAT* f = feat_at(s, c.x, c.z);
-            if (f && takes(s, f)) w->hover = (int)(f - s->feat);
+            const WIKIFEAT* f = takes_at_cursor(s);
+            if (f) w->hover = (int)(f - s->sim.feat);
         }
         if ((w->has_popup = pop)) {
             memcpy(w->rect, P.rect, sizeof w->rect);
@@ -4506,18 +2123,18 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
     v->locked = s->locked;
     /* a game's own part; with no room for the ledgers the part says none (ledger NULL) */
-    v->game = s->game;
-    if (s->game) {
-        v->nseat = s->nseat;
+    v->game = s->sim.game;
+    if (s->sim.game) {
+        v->nseat = s->sim.nseat;
         v->seat = s->seat;
-        v->econ = s->econ;
-        v->econ_mode = s->econ_mode;
-        v->starved = s->starved;
-        v->bad_kill = s->bad_kill;
-        v->nkill = s->nkill;
+        v->econ = s->sim.econ;
+        v->econ_mode = s->sim.econ_mode;
+        v->starved = s->sim.starved;
+        v->bad_kill = s->sim.bad_kill;
+        v->nkill = s->sim.nkill;
         v->ledger = NULL;
-        if (grow(s, (void**)&s->vledger, &s->cvledger, s->nunit, sizeof *s->vledger)) {
-            for (i = 0; i < s->nunit; i++) s->vledger[i] = s->unit[i]->led;
+        if (tasim_grow(&s->sim, (void**)&s->vledger, &s->cvledger, s->sim.nunit, sizeof *s->vledger)) {
+            for (i = 0; i < s->sim.nunit; i++) s->vledger[i] = s->sim.unit[i]->led;
             v->ledger = s->vledger;
         }
         /* the overlays' and sight's part: each input seat's cursor, the clicks kept oldest first,
@@ -4536,11 +2153,11 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
         v->nclick = s->nclicks < WIKI_CLICKS ? s->nclicks : WIKI_CLICKS;
         for (i = 0; i < v->nclick; i++) s->vclick[i] = s->clicks[(s->nclicks - v->nclick + i) % WIKI_CLICKS];
         v->click = s->vclick;
-        v->ndeath = s->ndeath;
-        v->death = s->death;
-        v->ntype = s->entry->ndef;
-        for (i = 0; i < s->entry->ndef && i < WIKI_MAX_DEFS; i++) {
-            const WIKIDEF* d = &s->entry->def[i];
+        v->ndeath = s->sim.ndeath;
+        v->death = s->sim.death;
+        v->ntype = s->defs.entry->ndef;
+        for (i = 0; i < s->defs.entry->ndef && i < WIKI_MAX_DEFS; i++) {
+            const WIKIDEF* d = &s->defs.entry->def[i];
             s->vtype[i].sight_distance = d->sight_distance;
             s->vtype[i].radar_distance = d->radar_distance;
             s->vtype[i].sonar_distance = d->sonar_distance;
@@ -4552,9 +2169,9 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     /* the input seats beyond seat 0, only in a game with more than one (the hash's item 13); init
        gave vinsite PLACE_MAX_SITES sites a seat for them */
     v->nin = s->nin;
-    v->viewed = s->viewed;
+    v->viewed = s->sim.viewed;
     v->input = s->vinput;
-    for (k = 1; s->game && k < s->nin; k++) {
+    for (k = 1; s->sim.game && k < s->nin; k++) {
         s->act = k;
         seat_block(s, &s->vinput[k - 1], &s->vinsite[(size_t)(k - 1) * PLACE_MAX_SITES]);
     }
@@ -4562,42 +2179,7 @@ const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat)
     return v;
 }
 
-/* ---- the state hash, in tagpu_wikisim.h's order ---- */
-
-static void fnv_bytes(uint64_t* h, const void* p, size_t n)
-{
-    const unsigned char* b = (const unsigned char*)p;
-    while (n--) {
-        *h ^= *b++;
-        *h *= 0x100000001B3ull;
-    }
-}
-
-static void fnv_int(uint64_t* h, int v)
-{
-    const uint32_t u = (uint32_t)v;
-    unsigned char b[4];
-    int i;
-    for (i = 0; i < 4; i++) b[i] = (unsigned char)(u >> (8 * i));
-    fnv_bytes(h, b, 4);
-}
-
-static void fnv_double(uint64_t* h, double v)
-{
-    uint64_t u;
-    unsigned char b[8];
-    int i;
-    memcpy(&u, &v, sizeof u);
-    for (i = 0; i < 8; i++) b[i] = (unsigned char)(u >> (8 * i));
-    fnv_bytes(h, b, 8);
-}
-
-static void fnv_str(uint64_t* h, const char* str)
-{
-    const size_t n = str ? strlen(str) : 0;
-    fnv_int(h, (int)n);
-    fnv_bytes(h, str, n);
-}
+/* ---- the state hash, in tagpu_wikisim.h's order: the core's items through tasim_hash.h's feeders ---- */
 
 /* one seat's input as items 4, 5 and 6 feed it (item 6 without the caption) */
 static void fnv_input(uint64_t* h, const WIKISIM* s, const WIKISEATIN* q)
@@ -4609,8 +2191,8 @@ static void fnv_input(uint64_t* h, const WIKISIM* s, const WIKISEATIN* q)
     int i;
     fnv_int(h, ghost);
     if (ghost) {
-        const XZ c = centre(s, g->type, g->ox, g->oz);
-        fnv_str(h, def(s, g->type)->name);
+        const XZ c = tasim_centre(&s->defs, g->type, g->ox, g->oz);
+        fnv_str(h, tasim_def(&s->defs, g->type)->name);
         fnv_double(h, c.x);
         fnv_double(h, c.z);
         fnv_int(h, g->ok ? 1 : 0);
@@ -4628,7 +2210,7 @@ static void fnv_input(uint64_t* h, const WIKISIM* s, const WIKISEATIN* q)
     fnv_double(h, q->cursor_x);
     fnv_double(h, q->cursor_z);
     for (i = 0; i < WIKI_NKEYS; i++) fnv_int(h, q->held[i] ? 1 : 0);
-    fnv_str(h, q->mode >= 0 ? def(s, q->mode)->name : "");
+    fnv_str(h, q->mode >= 0 ? tasim_def(&s->defs, q->mode)->name : "");
     fnv_int(h, q->mode >= 0 ? q->spacing[q->mode] : -1);
     fnv_int(h, q->has_drag && q->drag_active);
     if (q->has_drag && q->drag_active) {
@@ -4654,63 +2236,15 @@ static void fnv_sweep(uint64_t* h, const WIKISEATIN* q)
 
 uint64_t tagpu_wikisim_hash(const WIKISIM* s)
 {
-    const int cells = s->W * s->H;
-    uint64_t h = 0xCBF29CE484222325ull;
-    int i, j;
+    uint64_t h = TASIM_FNV_BASIS;
+    int i;
 
-    fnv_int(&h, s->tick);
+    fnv_int(&h, s->sim.tick);
     fnv_int(&h, s->done ? 1 : 0);
     fnv_int(&h, s->side);
     fnv_int(&h, s->iface);
-
-    fnv_int(&h, s->W);
-    fnv_int(&h, s->H);
-    fnv_double(&h, s->SM);
-    for (i = 0; i < cells; i++) fnv_double(&h, s->metal[i]);
-    for (i = 0; i < cells; i++) fnv_int(&h, s->fog[i]);
-    fnv_int(&h, s->nvent);
-    for (i = 0; i < s->nvent; i++) {
-        fnv_double(&h, s->vent_centre[i].x);
-        fnv_double(&h, s->vent_centre[i].z);
-    }
-
-    fnv_int(&h, s->nunit);
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        /* sim.js's orders(id) answers the first unit of that id, so this does too */
-        const WIKIUNIT* by = by_id(s, u->id);
-        fnv_str(&h, u->id);
-        fnv_str(&h, def(s, u->type)->name);
-        fnv_int(&h, u->owner);
-        fnv_double(&h, u->x);
-        fnv_double(&h, u->z);
-        fnv_double(&h, u->hx);
-        fnv_double(&h, u->hz);
-        fnv_int(&h, u->sel ? 1 : 0);
-        fnv_double(&h, u->built);
-        fnv_double(&h, u->reclaimed);
-        fnv_str(&h, u->label);
-        fnv_int(&h, by->norder);
-        for (j = 0; j < by->norder; j++) {
-            const WIKIORDER* o = &by->order[j];
-            fnv_int(&h, o->k);
-            if (o->k == WIKI_ORDER_MOVE) {
-                fnv_double(&h, o->x);
-                fnv_double(&h, o->z);
-            } else if (o->k == WIKI_ORDER_BUILD) {
-                fnv_str(&h, def(s, o->type)->name);
-                fnv_int(&h, o->ox);
-                fnv_int(&h, o->oz);
-            } else if (o->k == WIKI_ORDER_RECLAIM) {
-                fnv_str(&h, o->target);
-                fnv_int(&h, o->feat ? 1 : 0);
-                if (o->feat) {
-                    fnv_double(&h, o->x);
-                    fnv_double(&h, o->z);
-                }
-            } else fnv_str(&h, o->target);
-        }
-    }
+    tasim_hash_map(&h, &s->sim);
+    tasim_hash_units(&h, &s->sim, &s->defs);
 
     /* items 4 to 6, seat 0's input; item 7's column is seat 0's too, and act is 0 between calls */
     fnv_input(&h, s, &s->in[0]);
@@ -4728,319 +2262,89 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         for (i = 0; i < v.nstate; i++) fnv_int(&h, v.state[i]);
         fnv_str(&h, v.under);
     }
-    fnv_str(&h, s->locked >= 0 ? def(s, s->locked)->name : s->locked == WIKI_LOCK_RECLAIM ? "RECLAIM" : "");
+    fnv_str(&h, s->locked >= 0 ? tasim_def(&s->defs, s->locked)->name : s->locked == WIKI_LOCK_RECLAIM ? "RECLAIM" : "");
 
     fnv_int(&h, s->clock);
     fnv_int(&h, s->waiting);
     fnv_int(&h, s->stalled);
-    fnv_int(&h, s->cob != NULL);
-    if (s->cob) {
-        const uint64_t c = tagpu_wikicob_hash(s->cob, 0xCBF29CE484222325ull);
-        unsigned char b[8];
-        for (i = 0; i < 8; i++) b[i] = (unsigned char)(c >> (8 * i));
-        fnv_bytes(&h, b, 8);
-    }
-    fnv_int(&h, s->npart);
-    for (i = 0; i < s->npart; i++) {
-        const WIKIVPART* q = &s->part[i];
-        fnv_int(&h, q->x);
-        fnv_int(&h, q->y);
-        fnv_int(&h, q->z);
-        fnv_int(&h, q->sx);
-        fnv_int(&h, q->sy);
-        fnv_int(&h, q->sz);
-        fnv_int(&h, q->end);
-        fnv_int(&h, q->col);
-    }
-    fnv_int(&h, s->part_cut);
-    fnv_int(&h, s->nburst);
-    for (i = 0; i < s->nburst; i++) {
-        const WIKISPRAY* e = &s->burst[i];
-        int k;
-        for (k = 0; k < 12; k++) fnv_int(&h, e->box[k / 6][k % 6]);
-        fnv_int(&h, e->due);
-        fnv_int(&h, (int)e->key);
-    }
-    fnv_int(&h, s->snd_on);
-    if (s->snd_on) {
-        const int n = s->snd_total < WIKI_SND_LOG ? s->snd_total : WIKI_SND_LOG;
-        for (i = 0; i < WIKI_SND_KINDS; i++) fnv_int(&h, s->snd_next[i]);
-        fnv_int(&h, s->snd_last);
-        fnv_int(&h, s->nsndq);
-        for (i = 0; i < s->nsndq; i++) {
-            const WIKISNDQ* e = &s->sndq[i];
-            fnv_int(&h, e->kind);
-            fnv_int(&h, e->tick);
-            fnv_str(&h, e->unit);
-            fnv_str(&h, def(s, e->type)->name);
-            fnv_int(&h, e->priority);
-        }
-        fnv_int(&h, s->snd_total);
-        for (i = 0; i < n; i++) {
-            const WIKISNDEV* e = &s->snd[(s->snd_total - n + i) % WIKI_SND_LOG];
-            fnv_int(&h, e->tick);
-            fnv_int(&h, e->kind);
-            fnv_int(&h, e->name);
-            fnv_int(&h, e->cat);
-            fnv_int(&h, e->variant);
-        }
-        for (i = 0; i < s->nunit; i++) fnv_int(&h, cant_said(s->unit[i]));
-    }
-
-    fnv_int(&h, s->nfeat);
-    for (i = 0; i < s->nfeat; i++) {
-        fnv_str(&h, s->feat[i].id);
-        fnv_str(&h, s->entry->feat[s->feat[i].def].name);
-        fnv_int(&h, s->feat[i].ox);
-        fnv_int(&h, s->feat[i].oz);
-    }
-    fnv_int(&h, s->ngone);
-    for (i = 0; i < 2 * s->ngone; i++) fnv_int(&h, s->gone[i]);
+    tasim_hash_cob(&h, &s->sim);
+    tasim_hash_fx(&h, &s->sim, &s->defs);
+    tasim_hash_feats(&h, &s->sim, &s->defs);
     fnv_sweep(&h, &s->in[0]);
-    if (s->game) {
-        fnv_int(&h, s->nseat);
-        for (i = 0; i < s->nseat; i++) {
-            const WIKIECON* z = &s->econ[i];
-            fnv_int(&h, z->units);
-            fnv_int(&h, z->lost);
-            fnv_int(&h, z->out);
-            fnv_int(&h, z->cmd_lost);
-            fnv_double(&h, z->m);
-            fnv_double(&h, z->mmax);
-            fnv_double(&h, z->mi);
-            fnv_double(&h, z->mo);
-            fnv_double(&h, z->wm);
-            fnv_double(&h, z->e);
-            fnv_double(&h, z->emax);
-            fnv_double(&h, z->ei);
-            fnv_double(&h, z->eo);
-            fnv_double(&h, z->we);
-            fnv_int(&h, z->kills);
-            fnv_int(&h, z->losses);
-        }
-        fnv_int(&h, s->econ_mode);
-        fnv_int(&h, s->starved);
-        fnv_int(&h, s->bad_kill);
-        fnv_int(&h, s->nkill);
-        for (i = 0; i < s->nunit; i++) {
-            const WIKILEDGER* L = &s->unit[i]->led;
-            fnv_double(&h, L->eP);
-            fnv_double(&h, L->eR);
-            fnv_double(&h, L->eG);
-            fnv_double(&h, L->eD);
-            fnv_double(&h, L->mP);
-            fnv_double(&h, L->mR);
-            fnv_double(&h, L->mG);
-            fnv_double(&h, L->mD);
-        }
-    }
+    tasim_hash_econ(&h, &s->sim);
     /* 13. the input seats beyond seat 0, only in a game with more than one */
-    if (s->game && s->nin > 1) {
+    if (s->sim.game && s->nin > 1) {
         fnv_int(&h, s->nin);
-        fnv_int(&h, s->viewed);
+        fnv_int(&h, s->sim.viewed);
         for (i = 1; i < s->nin; i++) {
             fnv_input(&h, s, &s->in[i]);
             fnv_sweep(&h, &s->in[i]);
         }
     }
-    /* 14. the deaths, only in a game */
-    if (s->game) {
-        fnv_int(&h, s->ndeath);
-        for (i = 0; i < s->ndeath; i++) {
-            const WIKIDEATH* d = &s->death[i];
-            fnv_int(&h, d->tick);
-            fnv_int(&h, d->owner);
-            fnv_double(&h, d->x);
-            fnv_double(&h, d->z);
-            fnv_str(&h, def(s, d->type)->name);
-        }
-    }
+    tasim_hash_deaths(&h, &s->sim, &s->defs);
     return h;
 }
 
-/* ---- sight: what a seat sees in a game's view, for the replay's Sight (tagpu_wikireplay.c) ----
-
-   THE LIT GRID, the engine's line of sight reduced to the stage (research/notes/line-of-sight.md;
-   DISASSEMBLED, the scout's P1): every live unit -- a nanoframe from its create (0x482AC0 at
-   0x486178) -- stamps its own owner's grid alone (PD7: an ally shares no sight), one byte a 32-unit
-   block on the (w >> 1) x (h >> 1) grid (0x482F1B..0x482F45 halves the map's cells truncating).
-   The emit 0x4827B0 raises the unit's altitude to at least the sea level + 1 (0x48280B..0x48281B);
-   the stage is a world whose ground and sea level are both 0 (PD16: every stage unit stands at
-   altitude 0, and the sea byte main+0x1427F cannot be below the ground), so the altitude is 1 and
-   the emitter 0x4825B0 takes the height h = min(255, modelHeight + 1), the column floor(x) >> 5
-   and the row (floor(z) - (h >> 1)) >> 5, arithmetic shifts (0x4825D4..0x48261C). A column or row
-   off the grid -- the unsigned bound 0x48265B..0x482669 -- stamps nothing at all (0x4826A9..
-   0x4826AC), so a unit within h / 2 of the north edge lights nothing, as in the game. Else the
-   stamp 0x482270 adds one to the unit's own block (0x48239E) and one to the block under each point
-   of each ray of TABLE(idx) (0x48247F) whose height test passes; on flat ground every point passes
-   (MEASURED M0-P1, no block of the set unlit), so the table's count grid -- the loader's four images
-   (x, -y), (y, x), (-x, y), (-y, -x) of each line, no point merged (tagpu_wikidata.h WIKISIGHT) --
-   loses nothing: each offset on the grid adds its count. The counters are bytes and wrap at 256
-   as the engine's inc does; only lit or unlit is read, and a block wraps to 0 only under 256
-   stamps, far past the players fixture's game (15 at most). MEASURED M0-P1 (a
-   139-high flat plate, True LOS): ARMCOM at idx 8 lights exactly its table's 212 offsets and its
-   own block, 213, centred on row (z - h/2) >> 5 with h = def+0x170 + altitude (178 -> row 183 for
-   z 5975). THE DEATH VISION: the destructor makes a temporary sight record (0x482910 at 0x486748)
-   for each unit of the viewed player killed, at its place with its sight and height, stamped
-   through the same emitter; the expiry 0x482130 removes it once its tick + 60 is below GameTime
-   (0x482153..0x48215E), so the last tick drawn with it is tick + WIKI_SIGHT_SPAN, a step being one
-   tick. A death of `seat` with g <= tick + WIKI_SIGHT_SPAN stamps as its unit did; the list holds
-   only the deaths the engine's add keeps, at most WIKI_PLAYERS_DEATHS live (kill states the
-   rule). BOUND: every index is checked against the grid,
-   the view's type count and the table's cells before it is read. */
-static int sight_asr5(int v) { return v >= 0 ? v / 32 : -((-v + 31) / 32); }
-
-static void sight_stamp(const WIKISIGHT* t, const WIKIVTYPE* k, double x, double z, int gw, int gh, uint8_t* out)
+/* the sight rules over a view's records (tasim_sight.c) */
+static TASIM_SIGHTIN sight_in(const WIKIVIEW* v)
 {
-    const int h = k->model_height + 1 < 255 ? k->model_height + 1 : 255;
-    const int c = sight_asr5((int)floor(x)), r = sight_asr5((int)floor(z) - (h >> 1));
-    const int q = tagpu_wikidata_sight_table(t, k->sight_distance);
-    int i;
-    if (c < 0 || c >= gw || r < 0 || r >= gh) return;
-    out[r * gw + c] = (uint8_t)(out[r * gw + c] + 1);
-    if (q < 0) return;
-    for (i = t->first[q]; i < t->first[q + 1] && i < WIKI_SIGHT_CELLS; i++) {
-        const int cc = c + t->cell[i].dc, rr = r + t->cell[i].dr;
-        if (cc >= 0 && cc < gw && rr >= 0 && rr < gh) out[rr * gw + cc] = (uint8_t)(out[rr * gw + cc] + t->cell[i].n);
-    }
+    TASIM_SIGHTIN in;
+    in.w = v->w;
+    in.h = v->h;
+    in.game = v->game;
+    in.nunit = v->nunit;
+    in.unit = v->unit;
+    in.ntype = v->ntype;
+    in.type = v->type;
+    in.ndeath = v->ndeath;
+    in.death = v->death;
+    return in;
 }
 
 int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out)
 {
-    const int gw = v->w >> 1, gh = v->h >> 1;
-    int i;
-    if (gw <= 0 || gh <= 0 || gw * gh > WIKI_SIGHT_GRID) return 0;
-    if (!t || !t->numtables) {
-        memset(out, 1, (size_t)gw * gh);
-        return gw * gh;
-    }
-    memset(out, 0, (size_t)gw * gh);
-    if (!v->game) return gw * gh;
-    for (i = 0; i < v->nunit; i++)
-        if (v->unit[i].owner == seat && v->unit[i].type >= 0 && v->unit[i].type < v->ntype)
-            sight_stamp(t, &v->type[v->unit[i].type], v->unit[i].x, v->unit[i].z, gw, gh, out);
-    for (i = 0; i < v->ndeath; i++) {
-        const WIKIDEATH* d = &v->death[i];
-        if (d->owner == seat && g <= d->tick + WIKI_SIGHT_SPAN && d->type >= 0 && d->type < v->ntype)
-            sight_stamp(t, &v->type[d->type], d->x, d->z, gw, gh, out);
-    }
-    return gw * gh;
+    const TASIM_SIGHTIN in = sight_in(v);
+    return tasim_sight_lit(&in, t, seat, g, out);
 }
-
-/* THE ARMY VALUE (tagpu_replay_army_values, tagpu_hudmarks.c sample): the game values a type whose
-   BMcode +0x22F is 1 and that is not a commander (+0x245 bit 0x40000) at its metal cost +0x18A,
-   every other at 0, and sums the floats of its live, finished units in slot order; the wiki's
-   mobile type is one with a max velocity, its commander the cast. The sum stays in f32 (SSE2,
-   the Makefile's THE WIKI'S SIMULATION), each add rounded as Math.fround rounds sim.js's. */
-float tagpu_wikisim_army(const WIKISIM* s, int seat)
-{
-    float a = 0;
-    int i;
-    for (i = 0; s->game && i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (u->owner == seat && u->built >= 1 && mobile(s, u->type) && def(s, u->type)->cast != WIKI_CAST_COMMANDER)
-            a += (float)def(s, u->type)->build_cost_metal;
-    }
-    return a;
-}
-
-/* THE CONTACTS (OQ-C A; DISASSEMBLED, the scout's P2.2 and P3): the radar pass 0x467440 runs for
-   the viewed record alone. Its loop 2 walks each of the viewer's live, not dying, activated
-   (+0x10E bit 0) units with a radar +0x204 or sonar +0x206: a target of another owner at a
-   horizontal centre distance d gets bit 8 when its y + def+0x16E >= sea << 16 and d^2 < (radar +
-   2 y_r)^2, y_r the radar unit's altitude, and bit 9 when its y <= sea << 16 and d^2 < sonar^2
-   (0x467840..0x46793D), d^2 = (dx dx >> 32) + (dz dz >> 32) on the 16.16 differences, 64-bit
-   (0x47E995..0x47E9EF). On the stage every unit stands at altitude 0 = the sea level (PD16), so
-   both tests hold at once and y_r is 0: a unit is a contact when d^2 < max(radar, sonar)^2 of a
-   live, finished, `activates` unit of the seat with either above 0 (a finished ActivateWhenBuilt
-   unit is activated, 0x486135..0x486148, and the wiki has no on/off). Loop 5 sets bit 8 on any unit
-   over a lit block of the viewer's counters, the block of (x >> 5, (z - y/2) >> 5), unsheared at
-   altitude 0 (0x46770D..0x467814). The seat's own units are dotted by ownership, not by a bit
-   (0x466E64..0x466E7D), so they are 0 here. Jamming (loop 3, bit 10) and stealth (def+0x241 bit 8)
-   are left out: no wiki cast has either. */
-static int64_t sight_fix(double x) { return (int64_t)floor(x * 65536.0); }
 
 void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uint8_t* out)
 {
-    const int gw = v->w >> 1, gh = v->h >> 1;
-    int i, j;
-    for (i = 0; i < v->nunit; i++) {
-        const WIKIVUNIT* u = &v->unit[i];
-        const int c = sight_asr5((int)floor(u->x)), r = sight_asr5((int)floor(u->z));
-        int64_t ux, uz;
-        out[i] = 0;
-        if (u->owner == seat || !v->game) continue;
-        if (lit && c >= 0 && c < gw && r >= 0 && r < gh && gw * gh <= WIKI_SIGHT_GRID && lit[r * gw + c]) {
-            out[i] = 1;
-            continue;
-        }
-        ux = sight_fix(u->x);
-        uz = sight_fix(u->z);
-        for (j = 0; j < v->nunit && !out[i]; j++) {
-            const WIKIVUNIT* q = &v->unit[j];
-            const WIKIVTYPE* k = q->type >= 0 && q->type < v->ntype ? &v->type[q->type] : NULL;
-            const int64_t R = k ? (k->radar_distance > k->sonar_distance ? k->radar_distance : k->sonar_distance) : 0;
-            int64_t dx, dz;
-            if (q->owner != seat || !(q->built >= 1) || !k || !k->activates || R <= 0) continue;
-            dx = ux - sight_fix(q->x);
-            dz = uz - sight_fix(q->z);
-            if (((dx * dx) >> 32) + ((dz * dz) >> 32) < R * R) out[i] = 1;
-        }
-    }
+    const TASIM_SIGHTIN in = sight_in(v);
+    tasim_contacts(&in, lit, seat, out);
 }
+
+float tagpu_wikisim_army(const WIKISIM* s, int seat) { return tasim_army(&s->sim, &s->defs, seat); }
 
 void tagpu_wikisim_free(WIKISIM* s)
 {
-    int i;
-    for (i = 0; s->unit && i < s->nunit; i++) {
-        free(s->unit[i]->order);
-        free(s->unit[i]);
-    }
-    free(s->unit);
-    tagpu_wikicob_free(s->cob);
-    free(s->fact);
-    free(s->part);
-    free(s->burst);
-    free(s->metal);
-    free(s->fog);
-    free(s->rich);
-    free(s->vent);
-    free(s->vent_centre);
+    tasim_free(&s->sim);
     free((void*)s->script);
     free(s->resolved);
     free(s->bound);
-    free(s->mark);
-    free(s->todo);
-    free(s->obs);
-    free(s->mover);
-    free(s->occ);
-    free(s->known);
-    free(s->shut);
-    free(s->pg);
-    free(s->par);
-    free(s->heap);
+    free(s->snap);
+    free(s->place);
+    free(s->sweep);
+    free(s->snap_builders);
     free(s->vunit);
     free(s->vledger);
     free(s->vqueued);
     free(s->vline);
     free(s->vinsite);
-    free(s->feat);
-    free(s->gone);
     memset(s, 0, sizeof *s);
 }
 
 static void fill_metal(WIKISIM* s, const WIKIMETAL* m)
 {
     int i, j;
-    for (j = m->z > 0 ? m->z : 0; j < (s->H < m->z + m->h ? s->H : m->z + m->h); j++)
-        for (i = m->x > 0 ? m->x : 0; i < (s->W < m->x + m->w ? s->W : m->x + m->w); i++) s->metal[j * s->W + i] = m->v;
+    for (j = m->z > 0 ? m->z : 0; j < (s->sim.H < m->z + m->h ? s->sim.H : m->z + m->h); j++)
+        for (i = m->x > 0 ? m->x : 0; i < (s->sim.W < m->x + m->w ? s->sim.W : m->x + m->w); i++) s->sim.metal[j * s->sim.W + i] = m->v;
 }
 
 static void fill_fog(WIKISIM* s, const WIKIFOG* f)
 {
     int i, j;
-    for (j = f->z > 0 ? f->z : 0; j < (s->H < f->z + f->h ? s->H : f->z + f->h); j++)
-        for (i = f->x > 0 ? f->x : 0; i < (s->W < f->x + f->w ? s->W : f->x + f->w); i++) s->fog[j * s->W + i] = f->black ? 2 : 1;
+    for (j = f->z > 0 ? f->z : 0; j < (s->sim.H < f->z + f->h ? s->sim.H : f->z + f->h); j++)
+        for (i = f->x > 0 ? f->x : 0; i < (s->sim.W < f->x + f->w ? s->sim.W : f->x + f->w); i++) s->sim.fog[j * s->sim.W + i] = f->black ? 2 : 1;
 }
 
 /* the script's order: by tick, then file order */
@@ -5053,11 +2357,11 @@ static int by_tick(const void* a, const void* b)
 
 static WIKIRECT scene_rect(const WIKISIM* s, int t, double x, double z)
 {
-    if (mobile(s, t)) return body_at_type(s, t, x, z);
-    return rect_of(s, t, bound_cell(js_round(x / CELL - fpx(s, t) / 2.0)), bound_cell(js_round(z / CELL - fpz(s, t) / 2.0)));
+    if (tasim_mobile(&s->defs, t)) return tasim_body_at_type(&s->defs, t, x, z);
+    return tasim_rect_of(&s->defs, t, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(&s->defs, t) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(&s->defs, t) / 2.0)));
 }
 
-/* the scene's units as sim.js's merge() lists them: the entry's, then the demo's (b, or NULL) */
+/* the scene's units, merged: the entry's, then the demo's (b, or NULL) */
 static int scene_n(const WIKISCENE* a, const WIKISCENE* b) { return a->nunit + (b ? b->nunit : 0); }
 static const WIKISCENEUNIT* scene_unit(const WIKISCENE* a, const WIKISCENE* b, int k)
 {
@@ -5071,18 +2375,18 @@ static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, 
 {
     const WIKIRECT r = scene_rect(s, scene_unit(a, b, k)->def, x, z);
     int m;
-    if (!(r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->W * CELL && r.z1 <= s->SH * CELL)) return 0;
+    if (!(r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->sim.W * CELL && r.z1 <= s->SH * CELL)) return 0;
     for (m = 0; m < scene_n(a, b); m++) {
         const int t = scene_unit(a, b, m)->def;
-        if (mobile(s, t) && m >= k) continue;
-        if (hits(r, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
+        if (tasim_mobile(&s->defs, t) && m >= k) continue;
+        if (tasim_hits(r, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
     }
-    for (m = 0; m < s->nfeat; m++)
-        if (s->feat[m].blocking && hits(r, feat_rect(&s->feat[m]))) return 0;
+    for (m = 0; m < s->sim.nfeat; m++)
+        if (s->sim.feat[m].blocking && tasim_hits(r, tasim_feat_rect(&s->sim.feat[m]))) return 0;
     return 1;
 }
 
-/* A SCENE'S MOBILE UNIT STARTS CLEAR, sim.js's: at its authored centre, or the nearest centre a
+/* A SCENE'S MOBILE UNIT STARTS CLEAR: at its authored centre, or the nearest centre a
    whole number of cells away, at most SCENE_SPREAD either way, by distance, then z, then x, whose
    body is on the map and clear of the scene's structures and of the mobile units before it, the
    entry's and the demo's together; with none, where authored. Into spot[2k], spot[2k + 1],
@@ -5099,7 +2403,7 @@ static void scene_spots(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b
     for (k = 0; k < n; k++) {
         const double x = scene_unit(a, b, k)->x, z = scene_unit(a, b, k)->z;
         int found = 0;
-        if (!mobile(s, scene_unit(a, b, k)->def)) continue;
+        if (!tasim_mobile(&s->defs, scene_unit(a, b, k)->def)) continue;
         for (d2 = 0; d2 <= 2 * SCENE_SPREAD * SCENE_SPREAD && !found; d2++)
             for (j = -SCENE_SPREAD; j <= SCENE_SPREAD && !found; j++)
                 for (i = -SCENE_SPREAD; i <= SCENE_SPREAD && !found; i++)
@@ -5113,8 +2417,8 @@ static void scene_spots(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b
 
 /* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound
    footprint other than the authored one can overlap a structure placed before it or leave the
-   placeable interior (cells 1 to w - 2, site_ok's bound); the demo is refused for that casting
-   rather than played broken, as sim.js refuses it. Mobile units never block. The entry's units,
+   placeable interior (cells 1 to w - 2, tasim_site_ok's bound); the demo is refused for that casting
+   rather than played broken. Mobile units never block. The entry's units,
    then the demo's (b, or NULL). 1, or 0 with the refusal in `err`, or -1 when memory ran out. */
 static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
 {
@@ -5125,7 +2429,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
     scene_spots(s, a, b, spot);
     for (i = 0; i < n; i++) {
         const WIKISCENEUNIT* d = scene_unit(a, b, i);
-        WIKIUNIT* u = add(s, d->def, d->owner, spot[2 * i], spot[2 * i + 1], d->built, d->id, d->label, d->hx, d->hz);
+        WIKIUNIT* u = tasim_add(&s->sim, &s->defs, d->def, d->owner, spot[2 * i], spot[2 * i + 1], d->built, d->id, d->label, d->hx, d->hz);
         BOX fb;
         if (!u) {
             free(spot);
@@ -5137,21 +2441,21 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
             o.k = WIKI_ORDER_MOVE;
             o.x = d->move[j].x;
             o.z = d->move[j].z;
-            push_order(s, u, &o);
-            if (s->oom) {
+            tasim_push_order(&s->sim, u, &o);
+            if (s->sim.oom) {
                 free(spot);
                 return -1;
             }
         }
-        if (mobile(s, u->type)) continue;
-        fb = box(s, u->type, u->ox, u->oz);
-        for (j = 0; j < s->nunit; j++) {
-            const WIKIUNIT* v = s->unit[j];
-            if (v != u && !mobile(s, v->type) && overlap(fb, box(s, v->type, v->ox, v->oz))) break;
+        if (tasim_mobile(&s->defs, u->type)) continue;
+        fb = tasim_box(&s->defs, u->type, u->ox, u->oz);
+        for (j = 0; j < s->sim.nunit; j++) {
+            const WIKIUNIT* v = s->sim.unit[j];
+            if (v != u && !tasim_mobile(&s->defs, v->type) && tasim_overlap(fb, tasim_box(&s->defs, v->type, v->ox, v->oz))) break;
         }
-        for (k = 0; j == s->nunit && k < s->nfeat && !overlap(fb, feat_box(&s->feat[k])); k++) {}
-        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->SH) || j < s->nunit || k < s->nfeat) {
-            snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
+        for (k = 0; j == s->sim.nunit && k < s->sim.nfeat && !tasim_overlap(fb, tasim_feat_box(&s->sim.feat[k])); k++) {}
+        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->sim.W && fb.oz + fb.fz < s->SH) || j < s->sim.nunit || k < s->sim.nfeat) {
+            snprintf(err, errn, "%s's %s does not fit the scene", u->id, tasim_def(&s->defs, u->type)->name);
             free(spot);
             return 0;
         }
@@ -5160,7 +2464,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
     return 1;
 }
 
-/* THE SCENE'S FEATURES, sim.js's: the entry's scene's, then the demo's, each its table row at its
+/* THE SCENE'S FEATURES: the entry's scene's, then the demo's, each its table row at its
    anchor cell, named by its id or f<k + 1>; refused when it leaves the scene's map, overlaps a
    feature before it, or takes an id given before it. 1, or 0 with the refusal in `err`, or -1 when
    memory ran out. THE BOUND: at most WIKI_FEATS_MAX, the view's and the sweep's tables; each row
@@ -5175,20 +2479,20 @@ static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int k
     }
     /* room for a wreck per kill (corpse); a game's for WIKI_FEATS_MAX, which a fork's kills are held
        to as well */
-    if (!(s->feat = (WIKIFEAT*)calloc((size_t)(game ? WIKI_FEATS_MAX : n + kills) + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
+    if (!(s->sim.feat = (WIKIFEAT*)calloc((size_t)(game ? WIKI_FEATS_MAX : n + kills) + 1, sizeof *s->sim.feat)) || !(s->sim.gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->sim.gone)))
         return -1;
     for (k = 0; k < n; k++) {
         const WIKISCENEFEAT* sf = k < a->nfeat ? &a->feat[k] : &b->feat[k - a->nfeat];
         const WIKIFEATDEF* d;
-        WIKIFEAT* f = &s->feat[k];
-        if (sf->def < 0 || sf->def >= s->entry->nfeat) {
+        WIKIFEAT* f = &s->sim.feat[k];
+        if (sf->def < 0 || sf->def >= s->defs.entry->nfeat) {
             snprintf(err, errn, "feature %d of the scene names no feature of the entry", k);
             return 0;
         }
-        d = &s->entry->feat[sf->def];
+        d = &s->defs.entry->feat[sf->def];
         if (sf->id[0]) snprintf(f->id, sizeof f->id, "%s", sf->id);
         else snprintf(f->id, sizeof f->id, "f%d", k + 1);
-        for (j = 0; j < k && strcmp(s->feat[j].id, f->id); j++) {}
+        for (j = 0; j < k && strcmp(s->sim.feat[j].id, f->id); j++) {}
         if (j < k) {
             snprintf(err, errn, "feature %d of the scene: the id is not a new name", k);
             return 0;
@@ -5198,7 +2502,7 @@ static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int k
         f->oz = sf->oz;
         f->fx = d->fx;
         f->fz = d->fz;
-        if (f->ox < 0 || f->oz < 0 || f->ox + f->fx > s->W || f->oz + f->fz > s->SH) {
+        if (f->ox < 0 || f->oz < 0 || f->ox + f->fx > s->sim.W || f->oz + f->fz > s->SH) {
             snprintf(err, errn, "feature %d of the scene is not on the map", k);
             return 0;
         }
@@ -5209,17 +2513,17 @@ static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int k
         f->height = d->height;
         f->blocking = d->blocking;
         f->reclaimable = d->reclaimable;
-        for (j = 0; j < k && !overlap(feat_box(&s->feat[j]), feat_box(f)); j++) {}
+        for (j = 0; j < k && !tasim_overlap(tasim_feat_box(&s->sim.feat[j]), tasim_feat_box(f)); j++) {}
         if (j < k) {
             snprintf(err, errn, "feature %d of the scene overlaps another feature", k);
             return 0;
         }
     }
-    s->nfeat = n;
+    s->sim.nfeat = n;
     return 1;
 }
 
-/* the scene gives the player a mobile builder: sim.js builders() without the selection test, over
+/* the scene gives the player a mobile builder: a builder, without the selection test, over
    the types the sim plays */
 static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
 {
@@ -5238,7 +2542,7 @@ struct WIKISIMBOUND {
     WIKIFEATDEF feat[WIKI_FEAT_DEFS];
 };
 
-/* THE BOUND ENTRY, sim.js's binder, into s->bound and s->unbound (tagpu_wikisim.h says what it
+/* THE BOUND ENTRY, into s->bound and s->unbound (tagpu_wikisim.h says what it
    is). A game entry's rival type binds to `rk`, the rival casting, as the player's to `k`, and keeps
    its own definition, not unbound, when `rk` is NULL; in a game (`game`) each bound type takes its
    cast's wreck, put over the features table's row of its name or appended to it. THE BOUND on every
@@ -5342,7 +2646,7 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKI
                 snprintf(err, errn, "the casting binds two units to one type");
                 return 0;
             }
-    s->entry = &B->e;
+    s->defs.entry = &B->e;
     return 1;
 }
 
@@ -5358,7 +2662,7 @@ static int unbound_in_scene(const WIKISIM* s, const WIKISCENE* a, const WIKISCEN
     return -1;
 }
 
-/* THE RESOLVED SCRIPT, sim.js's resolve: the demo's inputs copied into the sim's own array with
+/* THE RESOLVED SCRIPT: the demo's inputs copied into the sim's own array with
    each action turned into its button at s->iface, then ordered by tick, file order breaking ties.
    tagpu_wikidata_buttons has held the copy to its data rule; s->script points into it. 0 when
    memory ran out. */
@@ -5379,7 +2683,7 @@ static int resolve(WIKISIM* s, const WIKIDEMO* d)
     return 1;
 }
 
-/* THE INPUT SEATS (sim.js's inputSeats) of the inputs `in`: 1 + the highest seat they name (a kill
+/* THE INPUT SEATS of the inputs `in`: 1 + the highest seat they name (a kill
    names none, and a camera input acts on no input state), at least `seats`; -1 when an input names
    a seat outside 0..WIKI_SEATS - 1, which the loader refuses (THE BOUND every index into WIKISIM.in
    rests on) */
@@ -5406,6 +2710,9 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     size_t cells;
     int i, k, r, kills = 0;
     memset(s, 0, sizeof *s);
+    /* the core tells the wiki of its units' lives from the first unit on (unit_hook) */
+    s->sim.hook = unit_hook;
+    s->sim.hook_ctx = s;
     /* a game entry plays only as a game and a game only from a game entry's demo, so no page demo
        reaches a branch of the game's */
     if (game != (e->frame == WIKI_FRAME_GAME)) {
@@ -5436,7 +2743,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
             return 0;
         }
     }
-    /* A GAME plays the demo's game script as sim.js's gameDemo makes it: its inputs, each with its
+    /* A GAME plays the demo's game script: its inputs, each with its
        seat, its end and its sidebar. `gd` lives only through init: resolve copies the inputs, and
        nothing below keeps `d`. */
     if (game) {
@@ -5450,10 +2757,10 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         d = &gd;
         for (i = 0; i < d->ninput; i++) kills += (d->input[i].has & WIKI_IN_KILL) != 0;
     }
-    /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
+    /* a layout is checked whole before any sim reads it; every index
        read out of it below is then in range */
     if (lay && !tagpu_wikilayout_check(lay, err, errn)) return 0;
-    /* THE CONTEXT, refused as sim.js's context() refuses it: an Interface Type other than 0 or 1
+    /* THE CONTEXT, refused: an Interface Type other than 0 or 1
        (the DLL maps the engine's int to these two before it starts a demo), and with a layout a
        side that is not one of its sides, which every read of lay->side[s->side] rests on */
     if (!ctx) ctx = &CTX_NONE;
@@ -5466,7 +2773,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         return 0;
     }
     s->iface = ctx->iface;
-    s->entry = e;
+    s->defs.entry = e;
     if (ctx->cast && (r = bind(s, e, ctx->cast, ctx->rival, game, lay ? &lay->sight : NULL, err, errn)) <= 0) {
         if (r < 0) goto oom;
         tagpu_wikisim_free(s);
@@ -5474,10 +2781,10 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     /* THE SIGHT TABLE a players game stamps with: a type of the bound entry whose radius index the
        layout's table does not store refuses the game -- an entry's own type, since bind left a
-       cast of one unbound -- as sim.js's make does */
+       cast of one unbound */
     if (game && e->players && lay)
-        for (i = 0; i < s->entry->ndef; i++) {
-            const WIKIDEF* t = &s->entry->def[i];
+        for (i = 0; i < s->defs.entry->ndef; i++) {
+            const WIKIDEF* t = &s->defs.entry->def[i];
             if (tagpu_wikidata_sight_ok(&lay->sight, t->sight_distance)) continue;
             snprintf(err, errn, "unit %s: a players entry's type of sightDistance %d reaches sight table %d, which the layout "
                      "does not store", t->name, t->sight_distance, tagpu_wikidata_sight_index(&lay->sight, t->sight_distance));
@@ -5486,7 +2793,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     /* THE SIDEBAR, on or off for the sim's whole life: a demo shows it when its `sidebar` says so,
        by default when the scene gives the player a mobile builder; Try it shows it whenever the
        scene does, whatever the demo said */
-    s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(s->entry, a) || scene_builder(s->entry, b))
+    s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(s->defs.entry, a) || scene_builder(s->defs.entry, b))
            ? lay : NULL;
     /* THE COLUMN IS SEAT 0'S (WIKISIM.act): a game with the sidebar on gives no other seat an input */
     if (s->lay && s->nin > 1) {
@@ -5501,7 +2808,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     for (i = 0; i < e->ndef; i++) {
         s->ltype[i] = -1;
         for (k = 0; s->lay && k < s->lay->ntype; k++)
-            if (s->lay->type[k].side == s->side && !strcmp(s->lay->type[k].name, s->entry->def[i].name)) s->ltype[i] = k;
+            if (s->lay->type[k].side == s->side && !strcmp(s->lay->type[k].name, s->defs.entry->def[i].name)) s->ltype[i] = k;
     }
     s->cap = -1;
     s->locked = -1;
@@ -5510,52 +2817,49 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
        (tools/wiki/stagemap.py GROUND_ROWS) and within WIKI_MAP_MAX. The scene's content is checked
        against the scene's own rows (SH), so it is the same scene in every context; the rules of play
        read H. */
-    s->W = a->w;
+    s->sim.W = a->w;
     s->SH = a->h;
-    s->H = tagpu_wiki_map_rows(a->h, s->lay ? s->lay->height : 0);
-    cells = (size_t)s->W * s->H;
-    s->SM = a->surface_metal;
-    s->PACE = e->pace;
+    s->sim.H = tagpu_wiki_map_rows(a->h, s->lay ? s->lay->height : 0);
+    cells = (size_t)s->sim.W * s->sim.H;
+    s->sim.SM = a->surface_metal;
+    s->sim.PACE = e->pace;
     for (k = 0; k < WIKI_SEATS; k++) s->in[k].mode = -1;
     s->end = scripted && d && d->has_end ? d->end : INFINITY;
     s->demo_id = d ? d->id : NULL;
-    s->next_id = 1;
-    if (!(s->metal = (double*)malloc(cells * sizeof *s->metal)) || !(s->fog = (unsigned char*)calloc(cells, 1))
-        || !(s->mark = (uint32_t*)calloc(cells, sizeof *s->mark)) || !(s->todo = (int*)malloc((cells + 1) * 2 * sizeof *s->todo))
-        || !(s->occ = (unsigned char*)malloc(cells)) || !(s->known = (unsigned char*)malloc(cells))
-        || !(s->shut = (unsigned char*)malloc(cells)) || !(s->pg = (double*)malloc(cells * sizeof *s->pg))
-        || !(s->par = (int*)malloc(cells * sizeof *s->par))
-        || !(s->rich = (int*)malloc((size_t)(s->W + 1) * (s->H + 1) * sizeof *s->rich))
-        || !(s->heap = (WIKIHEAPNODE*)malloc((cells * 8 + 4) * sizeof *s->heap)))
+    s->sim.next_id = 1;
+    if (!tasim_map_alloc(&s->sim)
+        || !(s->snap = (SNAP_SCRATCH*)malloc(sizeof *s->snap)) || !(s->place = (PLACE_SCRATCH*)malloc(sizeof *s->place))
+        || !(s->sweep = (SWEEP_SCRATCH*)malloc(sizeof *s->sweep))
+        || !(s->snap_builders = (uint16_t*)malloc(SNAP_UNITS_MAX * sizeof *s->snap_builders)))
         goto oom;
-    for (i = 0; i < (int)cells; i++) s->metal[i] = s->SM;
+    for (i = 0; i < (int)cells; i++) s->sim.metal[i] = s->sim.SM;
     for (i = 0; i < a->nmetal; i++) fill_metal(s, &a->metal[i]);
     for (i = 0; b && i < b->nmetal; i++) fill_metal(s, &b->metal[i]);
     for (i = 0; i < a->nfog; i++) fill_fog(s, &a->fog[i]);
     for (i = 0; b && i < b->nfog; i++) fill_fog(s, &b->fog[i]);
     rich_sums(s);
-    s->nvent = a->nvent + (b ? b->nvent : 0);
-    if (!(s->vent = (PlaceCell*)calloc((size_t)s->nvent + 1, sizeof *s->vent))
-        || !(s->vent_centre = (WIKIPOINT*)calloc((size_t)s->nvent + 1, sizeof *s->vent_centre)))
+    s->sim.nvent = a->nvent + (b ? b->nvent : 0);
+    if (!(s->sim.vent = (PlaceCell*)calloc((size_t)s->sim.nvent + 1, sizeof *s->sim.vent))
+        || !(s->sim.vent_centre = (WIKIPOINT*)calloc((size_t)s->sim.nvent + 1, sizeof *s->sim.vent_centre)))
         goto oom;
-    for (i = 0; i < s->nvent; i++) {
+    for (i = 0; i < s->sim.nvent; i++) {
         const WIKIPOINT* p = i < a->nvent ? &a->vent[i] : &b->vent[i - a->nvent];
-        const int cx = cell_of(p->x), cz = cell_of(p->z);
-        s->vent[i].cx = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
-        s->vent[i].cz = (int16_t)(cz < -32768 ? -32768 : cz > 32767 ? 32767 : cz);
-        s->vent_centre[i].x = (cx + 0.5) * CELL;
-        s->vent_centre[i].z = (cz + 0.5) * CELL;
+        const int cx = tasim_cell_of(p->x), cz = tasim_cell_of(p->z);
+        s->sim.vent[i].cx = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
+        s->sim.vent[i].cz = (int16_t)(cz < -32768 ? -32768 : cz > 32767 ? 32767 : cz);
+        s->sim.vent_centre[i].x = (cx + 0.5) * CELL;
+        s->sim.vent_centre[i].z = (cz + 0.5) * CELL;
     }
     /* THE UNITS' SCRIPTS, the host made before any unit so each scene unit's spawn reaches it: each
        of the sim's types (the bound ones, with a casting) asked of the context's source by name */
     if (ctx->cob) {
         WIKICOBTYPE types[WIKI_MAX_DEFS];
         memset(types, 0, sizeof types);
-        for (i = 0; i < s->entry->ndef && i < WIKI_MAX_DEFS; i++)
-            if (!ctx->cob->type(ctx->cob->ctx, s->entry->def[i].name, &types[i])) memset(&types[i], 0, sizeof types[i]);
-        if (!(s->cob = tagpu_wikicob_new(s->entry->ndef, types, 1, err, errn))) goto refused;
-        if (!(s->part = (WIKIVPART*)calloc(WIKI_SPRAY_PARTS, sizeof *s->part)) ||
-            !(s->burst = (WIKISPRAY*)calloc(WIKI_SPRAY_BURSTS, sizeof *s->burst)))
+        for (i = 0; i < s->defs.entry->ndef && i < WIKI_MAX_DEFS; i++)
+            if (!ctx->cob->type(ctx->cob->ctx, s->defs.entry->def[i].name, &types[i])) memset(&types[i], 0, sizeof types[i]);
+        if (!(s->sim.cob = tagpu_wikicob_new(s->defs.entry->ndef, types, 1, err, errn))) goto refused;
+        if (!(s->sim.part = (WIKIVPART*)calloc(WIKI_SPRAY_PARTS, sizeof *s->sim.part)) ||
+            !(s->sim.burst = (WIKISPRAY*)calloc(WIKI_SPRAY_BURSTS, sizeof *s->sim.burst)))
             goto oom;
     }
     /* THE UNITS' SOUNDS, before any unit so a scene unit's spawn can say its activation: each type's
@@ -5564,17 +2868,17 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         /* a demo is a scene of a game under way: its last reply is a gap past, so the first one has
            sound (the engine's level start zeroes it, 0x47EE30, which would silence every demo's
            first second) */
-        s->snd_on = 1;
-        s->snd_last = -WIKI_SND_GAP;
-        for (i = 0; i < s->entry->ndef && i < WIKI_MAX_DEFS; i++) {
+        s->sim.snd_on = 1;
+        s->sim.snd_last = -WIKI_SND_GAP;
+        for (i = 0; i < s->defs.entry->ndef && i < WIKI_MAX_DEFS; i++) {
             WIKISNDTYPE t;
             memset(&t, 0, sizeof t);
-            if (!ctx->snd->type(ctx->snd->ctx, s->entry->def[i].name, &t)) {
+            if (!ctx->snd->type(ctx->snd->ctx, s->defs.entry->def[i].name, &t)) {
                 memset(&t, 0, sizeof t);
                 t.cat = -1;
             }
-            s->snd_cat[i] = t.cat;
-            for (k = 0; k < WIKI_SND_KINDS; k++) s->snd_count[i][k] = t.count[k] > 0 ? t.count[k] : 0;
+            s->sim.snd_cat[i] = t.cat;
+            for (k = 0; k < WIKI_SND_KINDS; k++) s->sim.snd_count[i][k] = t.count[k] > 0 ? t.count[k] : 0;
         }
     }
     /* the scene's units say nothing as it is laid out: an engine level's units are there before
@@ -5583,18 +2887,18 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     for (k = 0; k < WIKI_SEATS; k++) s->in[k].kind = b && b->has_kind ? b->kind : a->has_kind ? a->kind : WIKI_KIND_ALL;
     if ((r = scene_feats(s, a, b, kills, game, err, errn)) < 0) goto oom;
     if (!r) goto refused;
-    s->snd_quiet = 1;
+    s->sim.snd_quiet = 1;
     r = scene_units(s, a, b, err, errn);
-    s->snd_quiet = 0;
+    s->sim.snd_quiet = 0;
     if (r < 0) goto oom;
     if (!r) goto refused;
     /* the orders the scene gave its units, every serial up to here, say no ok */
-    s->scene_serial = s->next_serial;
-    /* THE SCENE'S SELECTION is of the input seats' units alone (sim.js's): a deselect and a release
+    s->sim.scene_serial = s->sim.next_serial;
+    /* THE SCENE'S SELECTION is of the input seats' units alone: a deselect and a release
        clear only the acting seat's units (deselect, tagpu_wikisim_release), so a selected unit of a
        seat with no input state would stay selected for the whole simulation */
     for (i = 0; sel && i < sel->nselected; i++) {
-        WIKIUNIT* u = by_id(s, sel->selected[i]);
+        WIKIUNIT* u = tasim_by_id(&s->sim, sel->selected[i]);
         if (!u) {
             snprintf(err, errn, "wiki sim: the scene selects %s, which it does not have", sel->selected[i]);
             goto refused;
@@ -5615,7 +2919,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         if (b && b->has_cursor) { s->in[k].cursor_x = b->cursor.x; s->in[k].cursor_z = b->cursor.z; }
         else if (a->has_cursor) { s->in[k].cursor_x = a->cursor.x; s->in[k].cursor_z = a->cursor.z; }
     if (scripted && d) {
-        /* the wait's data rule beyond the loader's (sim.js make): no other input shares its tick */
+        /* the wait's data rule beyond the loader's: no other input shares its tick */
         for (i = 0; i < d->ninput; i++) {
             if (!(d->input[i].has & WIKI_IN_UNTIL)) continue;
             for (k = 0; k < d->ninput; k++)
@@ -5633,22 +2937,22 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
        settings (0x465EF5..0x465F1A), the base storage the same (0x496F64..0x496F97 floor it at 200,
        which the loader holds every setting to), the storage and the rates 0 until the first pass
        (0x46478F, 0x464795) */
-    if ((s->game = game)) {
-        s->econ_mode = scripted == WIKI_PLAY_GAME_STALL ? WIKI_ECON_STALL : WIKI_ECON_REFUSE;
-        s->nseat = a->nseat < 0 ? 0 : a->nseat > WIKI_SEATS ? WIKI_SEATS : a->nseat;
-        for (i = 0; i < s->nseat; i++) {
+    if ((s->sim.game = game)) {
+        s->sim.econ_mode = scripted == WIKI_PLAY_GAME_STALL ? WIKI_ECON_STALL : WIKI_ECON_REFUSE;
+        s->sim.nseat = a->nseat < 0 ? 0 : a->nseat > WIKI_SEATS ? WIKI_SEATS : a->nseat;
+        for (i = 0; i < s->sim.nseat; i++) {
             s->seat[i] = a->seat[i];
-            s->econ[i].m = s->econ[i].bm = a->seat[i].metal;
-            s->econ[i].e = s->econ[i].be = a->seat[i].energy;
+            s->sim.econ[i].m = s->sim.econ[i].bm = a->seat[i].metal;
+            s->sim.econ[i].e = s->sim.econ[i].be = a->seat[i].energy;
         }
     }
     if (s->lay) route(s);
     if ((k = unbound_in_scene(s, a, b)) >= 0) lock(s, k);
     /* a game's seats counted as the scene stands, then again after the script's tick 0, which may kill */
-    if (s->game) econ_counts(s);
+    if (s->sim.game) tasim_econ_counts(&s->sim);
     feed(s, 0);
-    if (s->game) econ_counts(s);
-    s->done = s->locked != -1 || s->bad_kill;
+    if (s->sim.game) tasim_econ_counts(&s->sim);
+    s->done = s->locked != -1 || s->sim.bad_kill;
     for (s->act = 0; s->act < s->nin; s->act++) {
         ST(s).hover = hover(s);
         ST(s).cursor_shape = cursor_shape(s);
@@ -5657,7 +2961,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->act = 0;
     /* the view's room for seats 1..nin - 1's gesture sites */
     if (s->nin > 1 && !(s->vinsite = (WIKIVSITE*)calloc((size_t)(s->nin - 1) * PLACE_MAX_SITES, sizeof *s->vinsite))) goto oom;
-    if (s->oom) goto oom;
+    if (s->sim.oom) goto oom;
     return 1;
 oom:
     snprintf(err, errn, "wiki sim: out of memory");
@@ -5666,7 +2970,7 @@ refused:
     return 0;
 }
 
-/* THE RELEASE, sim.js's sim.release: what the game's rebuild leaves of a seat's input after Back to
+/* THE RELEASE: what the game's rebuild leaves of a seat's input after Back to
    now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a
    return to now, each from the commander selected and a building armed, came up with no unit
    selected, main+0x2CC3 back to 1 and the side's MAIN2 shown). The seat's held keys and buttons, a
@@ -5710,11 +3014,11 @@ void tagpu_wikisim_release(WIKISIM* s, int seat)
     ST(s).rmode = 0;
     if (s->lay && seat == 0) route(s);
     ST(s).hover = hover(s);
-    cursor_tick(s, s->tick);
+    cursor_tick(s, s->sim.tick);
     s->act = 0;
 }
 
-/* THE FORK, sim.js's sim.fork; the contract and THE ORDERING are tagpu_wikisim.h's. Every refusal
+/* THE FORK; the contract and THE ORDERING are tagpu_wikisim.h's. Every refusal
    comes before the first write, so a refused fork leaves the sim as it was. The script's inputs
    not yet fed are split: the other seats' carried, the taken seat's and every kill dropped. The
    release (above) lets go of the taken seat alone, and with seat 0 drops the trips' recorded
@@ -5730,11 +3034,11 @@ int tagpu_wikisim_fork(WIKISIM* s, int R, int seat, const WIKIINPUT* in, int n, 
     WIKIDEMO d;
     int held[2 * WIKI_SEATS];
     int k, c, kills = 0, carried = 0;
-    if (!s->game || s->tick != R - 1) {
-        snprintf(err, errn, "demo %s: the fork at tick %d: the game stands at tick %d", id, R, s->tick);
+    if (!s->sim.game || s->sim.tick != R - 1) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the game stands at tick %d", id, R, s->sim.tick);
         return 0;
     }
-    if (s->locked != -1 || s->starved || s->bad_kill) {
+    if (s->locked != -1 || s->sim.starved || s->sim.bad_kill) {
         snprintf(err, errn, "demo %s: the fork at tick %d: the game has stopped", id, R);
         return 0;
     }
@@ -5768,7 +3072,7 @@ int tagpu_wikisim_fork(WIKISIM* s, int R, int seat, const WIKIINPUT* in, int n, 
     }
     /* THE BOUND the wrecks' table rests on (corpse): every wreck the part can make still fits; a
        carried input carries no kill */
-    if (s->nfeat + s->ngone + kills > WIKI_FEATS_MAX) {
+    if (s->sim.nfeat + s->sim.ngone + kills > WIKI_FEATS_MAX) {
         snprintf(err, errn, "demo %s: the fork at tick %d: the features and the kills pass %d", id, R, WIKI_FEATS_MAX);
         return 0;
     }
@@ -5819,9 +3123,9 @@ int tagpu_wikisim_fork(WIKISIM* s, int R, int seat, const WIKIINPUT* in, int n, 
     s->script = script;
     s->nscript = carried + n;
     s->next = 0;
-    s->econ_mode = econ_mode;
-    s->viewed = seat;
-    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->starved || s->bad_kill;
+    s->sim.econ_mode = econ_mode;
+    tasim_set_viewed(&s->sim, seat);
+    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->sim.starved || s->sim.bad_kill;
     return 1;
 oom:
     snprintf(err, errn, "wiki sim: out of memory");

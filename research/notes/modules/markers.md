@@ -207,7 +207,7 @@ blended, unfogged, untested quad an icon, constant screen size and snapped like 
 second — after the selection rects, under the orders, the bars, the digits and every UI layer —
 with its own texture kind (`TAGPU_MK_TEX_ICON`), its own atlas and the FS branch `uText == 2`. The
 health-bar loop and the group digits skip a unit whose model an icon hides, and the draw list's
-cap `TAGPU_MK_MAXDRAW` is 24, room above the 16 draws a full frame records (a draw past it drops the
+cap `TAGPU_MK_MAXDRAW` is 24, room above the 22 draws a full frame can record (23 draw sites; the placement and the sweep never draw on one frame) (a draw past it drops the
 whole marker layer for the frame).
 
 **Window A is retired, and the identity blend LUT with it.** `0x439740` is the only

@@ -201,7 +201,7 @@ site's action, and both the colours and the commit read its result, so for the s
 preview shows what the release does. That function, `place_take_offs_one` in `tagpu_placegeo.c`,
 reads only its arguments (one builder's orders and the sites, each with its order position), and
 the in-game wiki's simulation calls the same one, so the wiki in the DLL plays the game's own
-rule; the browser mockup's `sim.js` ports it, and `tools/wiki/simparity.mjs` holds the port to it. With Shift released mid-drag
+rule, and so does the browser mockup, which runs the same C through its simulation host. With Shift released mid-drag
 nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
 call the build cursor judges its site with, so a gesture's site is refused exactly when a single
 click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a

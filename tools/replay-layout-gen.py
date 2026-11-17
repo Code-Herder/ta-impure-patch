@@ -45,6 +45,28 @@ the field inside its record, the mask inside the field, a pointer row four bytes
 mask, no bit in two rows, rows in record and offset order, names unique within a record, and
 every writer an address inside the executable's .text. The header carries the SHA-256 of the
 file and of this script, so a stale header says which of the two moved.
+
+THE FILE'S HASH, which the recorder writes into a recording's header (RT_LAYOUT) and the reader
+compares with this build's (tagpu_recreader.c, list_id; tagpu_replay.c, validate_header), covers
+what the recorder and the replay read, as this generator derives it from the rows, and nothing else
+(`semantic`): each row of the generated table, in file order, as the header holds it: record,
+class, ID table, offset, size and the emitted mask (0 for every byte of the field, which this
+generator decides). Out of it: name (the harness's failure lines), writers and evidence, comments,
+blank lines, the case of a hex digit and the spelling of a full mask. So renaming a field or
+correcting its evidence leaves every recording playable, and a change to what is excluded, or to
+how this generator renders it, refuses the recordings made before it.
+
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file. Two frozen files stand for what
+v0.5.1 published: tagpu/ddraw/replay-layout.v0.5.1.tsv, its file, and
+tagpu/ddraw/replay-layout.v0.5.1.tables, its header's table as `semantic` renders it (no names).
+The check confirms that the file's SHA-256 is the one v0.5.1's header carries (PUBLISHED_SHA256),
+and fails the build unless `semantic` renders that file and this one alike and equal to the frozen
+table: so neither a row nor a change here may move a byte v0.5.1's readers read. The header then
+carries that hash, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256, which the reader takes for this build's. A
+change to what is recorded therefore fails here until the acceptance is dropped, which leaves
+v0.5.1's recordings unplayable: the owner's decision. The acceptance is at each of ACCEPTANCE's
+sites. The build reads no history: tools/replay/test_tareplay.py (ListHashes) checks that the
+frozen file is byte for byte the tag's and the frozen table the tag's header's.
 """
 import argparse
 import hashlib
@@ -56,6 +78,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-layout.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_layout.h")
+# The release whose recordings name the whole file's hash, its file frozen, and the SHA-256 its
+# header carries (v0.5.1's inc/tagpu_replay_layout.h, TAGPU_REPLAY_LAYOUT_SHA256).
+PUBLISHED = "v0.5.1"
+PUBLISHED_TSV = os.path.join(DDRAW, "replay-layout.v0.5.1.tsv")
+PUBLISHED_TABLES = os.path.join(DDRAW, "replay-layout.v0.5.1.tables")
+PUBLISHED_SHA256 = "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
+# Every site that accepts PUBLISHED's hash; dropping the acceptance edits each.
+ACCEPTANCE = ("PUBLISHED_* in tools/replay-layout-gen.py, list_id in "
+              "tagpu/ddraw/src/tagpu_recreader.c and in tools/replay/tarec.py, outcomes_lists in "
+              "tagpu/ddraw/tests/codectest.c, ListHashes in tools/replay/test_tareplay.py")
 
 # The records the retail executable fixes, and their strides.
 RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9,
@@ -154,8 +186,68 @@ def parse(text):
     return rows
 
 
-def render(tsv_bytes, gen_bytes, rows):
-    digest = hashlib.sha256(tsv_bytes).hexdigest()
+def table(rows):
+    """The generated table's rows as the recorder and the replay read them: (record, class, ID
+    table or "", offset, size, mask), the mask 0 for every byte of the field."""
+    return [(r["record"], r["kind"], r["target"], r["offset"], r["size"],
+             0 if r["mask"] is None or r["mask"] == (1 << (8 * r["size"])) - 1 else r["mask"])
+            for r in rows]
+
+
+def tables(entries):
+    """`semantic`'s text from a table's rows, one line each, so that v0.5.1's header renders
+    through it as this generator's table does."""
+    return "".join(f"{rec}\t{cls}\t{target or '-'}\t{off:#x}\t{size}\t{mask:#x}\n"
+                   for rec, cls, target, off, size, mask in entries)
+
+
+def semantic(rows):
+    """The text the file's hash covers: the generated table as its readers read it (the module's
+    THE FILE'S HASH says why these)."""
+    return tables(table(rows))
+
+
+def semantic_digest(rows):
+    return hashlib.sha256(semantic(rows).encode("ascii")).hexdigest()
+
+
+def first_difference(was, now):
+    """The first line on which two renderings differ: (its number, now's line, was's line)."""
+    a, b = was.splitlines(), now.splitlines()
+    i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+    return i + 1, b[i] if i < len(b) else "no line", a[i] if i < len(a) else "no line"
+
+
+def published(rows):
+    """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
+    published, and `semantic` renders it and `rows` alike and equal to its frozen table: Invalid
+    when any of that fails."""
+    with open(PUBLISHED_TSV, "rb") as f:
+        tsv = f.read()
+    with open(PUBLISHED_TABLES, encoding="ascii") as f:
+        frozen = f.read()
+    if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
+                      f"(SHA-256 {PUBLISHED_SHA256})")
+    try:
+        was = semantic(parse(tsv.decode("utf-8")))
+    except (Invalid, UnicodeDecodeError) as e:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer renders ({e})")
+    now = semantic(rows)
+    for what, ref in ((f"its rows read other bytes than {PUBLISHED}'s file", was),
+                      (f"this generator reads other bytes than {PUBLISHED}'s "
+                       f"({os.path.basename(PUBLISHED_TABLES)})", frozen)):
+        if ref != now:
+            n, a, b = first_difference(ref, now)
+            raise Invalid(f"{what}: line {n} is {a!r}, {PUBLISHED}'s {b!r}. The header cannot "
+                          f"accept {PUBLISHED}'s hash; dropping that acceptance ({ACCEPTANCE}) is "
+                          f"the owner's decision")
+    return PUBLISHED_SHA256
+
+
+def render(tsv_bytes, gen_bytes, rows, legacy):
+    digest = semantic_digest(rows)
+    file_digest = hashlib.sha256(tsv_bytes).hexdigest()
     gen_digest = hashlib.sha256(gen_bytes).hexdigest()
     out = [
         "/* tagpu_replay_layout.h -- GENERATED from tagpu/ddraw/replay-layout.tsv by",
@@ -164,7 +256,13 @@ def render(tsv_bytes, gen_bytes, rows):
         "#ifndef TAGPU_REPLAY_LAYOUT_H",
         "#define TAGPU_REPLAY_LAYOUT_H",
         "",
+        "/* The file's hash, over the table as its readers read it, and the one v0.5.1's recordings",
+        "   carry, which the generator proves reads the same bytes (tools/replay-layout-gen.py,",
+        "   THE FILE'S HASH); then the whole file's and the generator's, which say which side a stale",
+        "   header missed. */",
         f'#define TAGPU_REPLAY_LAYOUT_SHA256 "{digest}"',
+        f'#define TAGPU_REPLAY_LAYOUT_LEGACY_SHA256 "{legacy}"',
+        f'#define TAGPU_REPLAY_LAYOUT_FILE_SHA256 "{file_digest}"',
         f'#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "{gen_digest}"',
         "",
         "enum { " + ", ".join(f"RL_{r.upper()}" for r in RECORDS) + " };",
@@ -186,11 +284,9 @@ def render(tsv_bytes, gen_bytes, rows):
         "",
         "static const ReplayLayoutRow tagpu_replay_layout[] = {",
     ]
-    for r in rows:
-        target = f"RL_T_{r['target'].upper()}" if r["target"] else "RL_T_NONE"
-        mask = 0 if r["mask"] is None or r["mask"] == (1 << (8 * r["size"])) - 1 else r["mask"]
-        out.append(f"    {{ RL_{r['record'].upper()}, RL_{r['kind'].upper()}, {target}, "
-                   f"{r['offset']:#05x}, {r['size']}, {mask_c(mask)}, \"{r['name']}\" }},")
+    for r, (rec, cls, target, off, size, mask) in zip(rows, table(rows)):
+        out.append(f"    {{ RL_{rec.upper()}, RL_{cls.upper()}, RL_T_{(target or 'none').upper()}, "
+                   f"{off:#05x}, {size}, {mask_c(mask)}, \"{r['name']}\" }},")
     out += ["};", "", "#endif", ""]
     return "\n".join(out)
 
@@ -227,11 +323,14 @@ def main():
         return 2
     try:
         rows = parse(tsv.decode("utf-8"))
+        gen = open(os.path.abspath(__file__), "rb").read()
+        text = render(tsv, gen, rows, published(rows))
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-layout: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
-    gen = open(os.path.abspath(__file__), "rb").read()
-    text = render(tsv, gen, rows)
+    except OSError as e:
+        print(f"replay-layout: cannot read {e.filename}: {e.strerror}", file=sys.stderr)
+        return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
             f.write(text)
@@ -248,7 +347,7 @@ def main():
     def stamp(name, header):
         m = re.search(name + r' "([0-9a-f]+)"', header)
         return m.group(1) if m else None
-    if stamp("LAYOUT_SHA256", have) != stamp("LAYOUT_SHA256", text):
+    if stamp("LAYOUT_FILE_SHA256", have) != stamp("LAYOUT_FILE_SHA256", text):
         why = "replay-layout.tsv changed since the header was generated"
     elif stamp("GEN_SHA256", have) != stamp("GEN_SHA256", text):
         why = "tools/replay-layout-gen.py changed since the header was generated"

@@ -13,10 +13,10 @@
      there -- each corner, the depth key, the mode and the anchor, within 1/64 of a unit -- in their order, both
      buckets. The gathers run as gfx.js runs them, through a recording stand-in for the WebGL context, so the code
      paired is the mockup's own and not a copy of it;
-   - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of sim.js's view against
+   - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of the host's view against
      tagpu_wikiscene_fog's source of tagpu_wikisim.c's view as the record carries it (tagpu_wikistage_copy),
      expanded by tagpu_fog_entry as the stage's passes expand it -- the grid's size, its origin and every byte;
-   - every demo's MODEL RECORDS at the same ticks: scene.js build of sim.js's view against tagpu_wikiscene_models of
+   - every demo's MODEL RECORDS at the same ticks: scene.js build of the host's view against tagpu_wikiscene_models of
      the record's view, the types the pack resolved handed to both -- each record's type, owner, ghost bit, shadow
      kind, slot, anchor, yaw, depth key and alpha within 1/64, and its nanoframe staging (on or off, the threshold,
      the three colours and the wire's) exactly, units then ghosts in order.
@@ -27,9 +27,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiScene = require('./mockup/scene.js');
 require('../tascene-render.js');
 const TR = globalThis.TasceneRender;
@@ -37,7 +38,7 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const PACK = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const TOL = 1 / 64;
-const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
+const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 

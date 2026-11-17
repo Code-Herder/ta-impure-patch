@@ -13,6 +13,9 @@
 # tools/sim-state-check.sh reads) and its argument; it only shrinks, one line per
 # converted file, so a conversion's diff shows what left the render thread. Adding a
 # line is the owner's decision, made in a review, never a session's fix for a red build.
+# A line of class `engine-free` grants nothing: its file is scanned as an unlisted one is,
+# and one hit fails the build. It is listed for its `sim` scope alone, the only scope the
+# class may have, so it is no loosening.
 #
 # PATTERNS (perl, case-insensitive, after `/* */` and `//` comments and "string literals"
 # are removed — a log line that names an address dereferences nothing):
@@ -80,13 +83,16 @@ if [ -f "$ALLOW" ]; then
         read -r path class scope extra <<< "$line"
         [ -z "${path:-}" ] && continue
         case "${class:-}" in
-            publisher|session-reader|fenced|tooling|pure-engine-code|engine-map|to-convert:*) ;;
+            publisher|session-reader|fenced|tooling|pure-engine-code|engine-map|to-convert:*|engine-free) ;;
             *) echo "thread-split: $ALLOW: unknown class '${class:-}' for $path" >&2; exit 2 ;;
         esac
         case "${scope:-}" in
             sim|presentation) ;;
             *) echo "thread-split: $ALLOW: $path needs a scope after its class, sim or presentation (not '${scope:-}')" >&2; exit 2 ;;
         esac
+        if [ "$class" = engine-free ] && [ "$scope" != sim ]; then
+            echo "thread-split: $ALLOW: $path is engine-free, which is listed only to be sim (not '$scope')" >&2; exit 2
+        fi
         [ -z "${extra:-}" ] || { echo "thread-split: $ALLOW: $path has a word past its scope: '$extra'" >&2; exit 2; }
         [ -e "$path" ] || { echo "thread-split: $ALLOW names a file that does not exist: $path" >&2; exit 2; }
         ALLOWED["$path"]="$class"
@@ -105,11 +111,15 @@ for f in src/*.c src/*.h src/*/*.c src/*/*.h inc/*.h; do
         [ -n "$hits" ] && { echo "== $f ${ALLOWED[$f]:+[${ALLOWED[$f]}]}"; echo "$hits" | head -6 | sed 's/^/   /'; }
         continue
     fi
-    if [ -n "${ALLOWED[$f]:-}" ]; then
+    if [ -n "${ALLOWED[$f]:-}" ] && [ "${ALLOWED[$f]}" != engine-free ]; then
         [ -z "$hits" ] && listed_clean+=("$f")
         continue
     fi
-    if [ -n "$hits" ]; then
+    if [ -n "$hits" ] && [ -n "${ALLOWED[$f]:-}" ]; then
+        echo "thread-split: $f is engine-free on $ALLOW and names engine memory:" >&2
+        echo "$hits" | head -8 | sed 's/^/    /' >&2
+        status=1
+    elif [ -n "$hits" ]; then
         echo "thread-split: $f is NOT on $ALLOW and names engine memory:" >&2
         echo "$hits" | head -8 | sed 's/^/    /' >&2
         status=1
@@ -120,8 +130,9 @@ if [ "$MODE" = check ]; then
         echo "thread-split: FAILED — a render-thread file may not read engine memory (frame-packet-exchange §10)." >&2
         echo "thread-split: a game-thread publisher belongs on the list WITH its argument; that is a review decision." >&2
     else
-        n=${#ALLOWED[@]}
-        echo "thread-split: clean — ${n} listed file(s), every other source names no engine memory"
+        n=0
+        for f in "${!ALLOWED[@]}"; do [ "${ALLOWED[$f]}" = engine-free ] || n=$((n + 1)); done
+        echo "thread-split: clean — ${n} listed file(s), every other source names no engine memory ($(( ${#ALLOWED[@]} - n )) of them listed engine-free)"
         for f in "${listed_clean[@]}"; do echo "thread-split: note: $f is listed but names nothing any more — its line can go"; done
     fi
 fi

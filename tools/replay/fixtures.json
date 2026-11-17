@@ -1,5 +1,5 @@
 {
- "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game, which starts held at GameTime 1 with its scenario applied (tareplay.py, THE LAUNCH'S HOLD), each given while the game is held at its GameTime: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `last_min` requires the final comparison checkpoint to reach that GameTime; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, or at `at` when given (tenseat's: 901, the tick after its typed LOS command, where a takeover's contact bits must come from the recording), as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check. `run` steps execute an assertion command ({instance} and {gamedir} substitutions), handed the game held at their GameTime and handing it back held where they advanced it, and fail the live lane on a nonzero exit; a later step's GameTime must lie past where its script leaves the game. `sources` binds input/presentation code to replay fixtures in addition to the SIM_FEATURE gates. `preflight` runs a native assertion before the live recording starts. `viewer` and `viewer_more` run native input assertions in separate paused selection views, each checked against the same frozen simulation. `cob`: \"exact\" compares L's counts against P's with `tarec compare-counts --cob-exact`, every COB child the VM's START or CALL makes, by script name, exactly, and no other comparison (tareplay.py, counts_options). `forest-reproduce` and `stock-forest-reproduce` install tools/reproduce_fixture.py's archive (the stock twin on feat-forest.json's quiet forest: a seek in the stock-limits build does not put back the burning trees' explosions in stock's pool, which s3a-forest-fire.json's fire keeps in flight), so the trees and shrubs the feature cursor passes reproduce: Two Continents has trees at rest in its last rows, which the cursor, one cell a tick from the map's last, reaches from about GameTime 360, and each one's spawn makes reproduction's source test (tagpu_recorder.c, feat_source) in both builds. `decline`: every launch has tagpu_rec.decline in its game folder, so the writer's stream codec declines blocks 2, 7, 12, ... through its own fallback, and the recording must count declined blocks (tareplay.py, codec_check); every other check reads across them.",
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game, which starts held at GameTime 1 with its scenario applied (tareplay.py, THE LAUNCH'S HOLD), each given while the game is held at its GameTime: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `last_min` requires the final comparison checkpoint to reach that GameTime; `first` and `last_max` keep every checkpoint after and at or before those GameTimes, clear of the human's typed and console work, which the images gate would read as interface state the recording machine alone wrote; `end` is the GameTime scenarios/replay-end.json ends the level at, whose clear the engine's end test ends within tareplay.py's LEVEL_END_TICKS; a fixture whose scenarios turn that test off (`objective`: \"off\") applies replay-objective-on.json as a step at its `end`, or the harness refuses it before a game (objective_left_off). `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, or at `at` when given (tenseat's: 901, the tick after its typed LOS command, where a takeover's contact bits must come from the recording), as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `seatai` the computer seats ImpAI plays after it besides those it played in the recording (`tacli replay takeover --seatai`; a seat it adds starts fresh, tagpu_impai.c's seat_fresh), `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `nodraw`: true plays every lane on GDI, and L under the shadow, no-draw and the pose check (tareplay.py, THE SHADOW; tagpu_nodraw.c): every drawn frame's repose selection is compared with the units the draw passes to DrawUnit, and L passes on none differing. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check. `run` steps execute an assertion command ({instance} and {gamedir} substitutions), handed the game held at their GameTime and handing it back held where they advanced it, and fail the live lane on a nonzero exit; a later step's GameTime must lie past where its script leaves the game. `sources` binds input/presentation code to replay fixtures in addition to the SIM_FEATURE gates. `preflight` runs a native assertion before the live recording starts. `viewer` and `viewer_more` run native input assertions in separate paused selection views, each checked against the same frozen simulation. `predicts`: L's ImpAI military must make at least one fight prediction; on every lane that played an ImpAI seat live, a refused prediction fails (tareplay.py, predictor_verdict). `cob`: \"exact\" compares L's counts against P's with `tarec compare-counts --cob-exact`, every COB child the VM's START or CALL makes, by script name, exactly, and no other comparison (tareplay.py, counts_options). `forest-reproduce` and `stock-forest-reproduce` install tools/reproduce_fixture.py's archive (the stock twin on feat-forest.json's quiet forest: a seek in either build drops the explosions in flight, which s3a-forest-fire.json's fire keeps in the pool, and only the stock build's images gate can see it), so the trees and shrubs the feature cursor passes reproduce: Two Continents has trees at rest in its last rows, which the cursor, one cell a tick from the map's last, reaches from about GameTime 360, and each one's spawn makes reproduction's source test (tagpu_recorder.c, feat_source) in both builds. `decline`: every launch has tagpu_rec.decline in its game folder, so the writer's stream codec declines blocks 2, 7, 12, ... through its own fallback, and the recording must count declined blocks (tareplay.py, codec_check); every other check reads across them.",
  "fixtures": {
   "forest-fire": {
    "load": "s3a-forest-fire.json",
@@ -54,6 +54,15 @@
    "takeover": {"player": "controlled", "order": ["ARMCK", 0],
                 "checks": ["judge", "line", "orders", "ai", "fork"]}
   },
+  "nodraw-shadow": {
+   "load": "replay-battle-load.json",
+   "steps": [[1, "apply", "replay-battle-units.json"],
+             [600, "apply", "replay-nodraw-camera-1.json"],
+             [1200, "apply", "replay-nodraw-camera-2.json"],
+             [1800, "apply", "replay-nodraw-camera-3.json"]],
+   "end": 2400,
+   "nodraw": true
+  },
   "battle-los": {
    "load": "replay-battle-truelos.json",
    "los": "file",
@@ -92,6 +101,7 @@
    "forks": true,
    "load": "replay-four-ai.json",
    "dll": "stock",
+   "steps": [[300, "run", ["tools/tacli", "weapons", "{instance}", "--timeout", "60"]]],
    "end": 1800,
    "watch": true,
    "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
@@ -133,6 +143,10 @@
              [900, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "2400", "1950", "--unit", "3", "--expect", "ARMATLAS"]]],
    "end": 1800
   },
+  "meteor": {
+   "load": "replay-meteor.json",
+   "end": 2400
+  },
   "waterline": {
    "load": "replay-waterline.json",
    "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
@@ -173,6 +187,7 @@
   "wpn-badtgt": {
    "load": "wpn-badtgt.json",
    "content": {"run": ["tools/extra_weapons_fixture.py", "{gamedir}"], "files": ["wpn-test.ufo", "wpn-badtgt.ufo"]},
+   "steps": [[300, "run", ["tools/tacli", "weapons", "{instance}", "--timeout", "60"]]],
    "end": 1800,
    "watch": true
   },
@@ -368,6 +383,15 @@
    "end": 1500,
    "content": {"run": ["tools/cob_ext_fixture.py", "{gamedir}"], "files": ["cobext.ufo"]}
   },
+  "calib-applier": {
+   "load": "calib/applier-check.json",
+   "sources": ["tagpu/ddraw/src/tagpu_scenario.c", "tagpu/ddraw/src/tagpu_cat.c",
+               "tools/tasim/applier_check.py"],
+   "steps": [[60, "apply", "calib/applier-check-2.json"],
+             [120, "run", ["tools/tasim/applier_check.py", "check", "{instance}"]],
+             [899, "apply", "calib/applier-check-end.json"]],
+   "end": 900
+  },
   "stock-teleport": {
    "load": "replay-teleport.json",
    "dll": "stock",
@@ -435,6 +459,158 @@
    "sources": ["tools/randprobe_fixture.py"],
    "end": 1500
   },
+  "impai-observe": {
+   "load": "impai-observe.json", "los": "file",
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
+   "steps": [[300, "apply", "impai-observe-radar.json"],
+             [4200, "run", ["tools/tacli", "switches", "{instance}", "cheats=on"]],
+             [4200, "type", "+ai 2"], [4230, "type", "+ai 2"]],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
+   "end": 5400
+  },
+  "impai-observe-perm": {
+   "load": "impai-observe-perm.json", "los": "file",
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
+   "end": 5400
+  },
+  "impai-handicap": {
+   "load": "impai-handicap.json", "los": "file",
+   "steps": [[300, "apply", "impai-handicap-economy.json"],
+             [300, "apply", "impai-handicap-army.json"],
+             [360, "type", "+give 1 100 energy"], [360, "type", "+give 1 100 metal"],
+             [360, "type", "+give 2 100 energy"], [360, "type", "+give 2 100 metal"],
+             [4200, "run", ["tools/tacli", "switches", "{instance}", "cheats=on"]],
+             [4200, "type", "+ai 2"], [4230, "type", "+ai 2"]],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
+   "first": 391, "last_max": 4171,
+   "end": 5400,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
+  "income-mult": {
+   "load": "income-mult.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "--income", "1=2.5"],
+               "files": ["tagpu_impai_income.on"]},
+   "steps": [[35, "type", "+give 1 100 energy"], [35, "type", "+give 1 100 metal"],
+             [35, "type", "+give 2 100 energy"], [35, "type", "+give 2 100 metal"],
+             [75, "run", ["tools/impai/income_check.py", "check", "{instance}"]],
+             [300, "apply", "impai-handicap-economy.json"],
+             [300, "apply", "impai-handicap-army.json"]],
+   "sources": ["tagpu/ddraw/src/tagpu_income.c", "tools/impai/income_check.py"],
+   "first": 91,
+   "end": 5400,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
+  "income-stall": {
+   "load": "income-stall.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "--income", "1=5"],
+               "files": ["tagpu_impai_income.on"]},
+   "steps": [[330, "run", ["tools/impai/income_check.py", "stall", "{instance}"]]],
+   "sources": ["tagpu/ddraw/src/tagpu_income.c", "tools/impai/income_check.py"],
+   "end": 2400
+  },
+  "impai-eco": {
+   "load": "impai-eco.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=hard"], "files": ["tagpu_impai_level.on"]},
+   "steps": [[4700, "order", {"unit": ["ARMFLEA", 0], "args": ["attack", "unit", ["CORCOM", 0]]}],
+             [4700, "order", {"unit": ["ARMFLEA", 1], "args": ["attack", "unit", ["CORCOM", 0]]}]],
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_tinfo.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tasim_snap.c", "tagpu/ddraw/src/tagpu_placegeo.c",
+               "tagpu/ddraw/src/impai_mil.c", "tools/impai/level_lever.py"],
+   "end": 5400,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
+  "impai-fight": {
+   "load": "impai/impai-fight.json", "los": "file", "predicts": true,
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",
+               "tagpu/ddraw/src/impai_fight.h", "tagpu/ddraw/src/impai_fight.c", "tagpu/ddraw/src/impai_fitparams.c",
+               "tagpu/ddraw/src/impai_table.c", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/tagpu_impai.c",
+               "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
+  "impai-persona": {
+   "load": "impai/impai-persona.json", "los": "file", "predicts": true,
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=easy", "--persona", "1=60,90,45,10,3,15,3,4,2"],
+               "files": ["tagpu_impai_level.on", "tagpu_impai_persona.on"]},
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_react.h", "tagpu/ddraw/src/impai_react.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_brain.h",
+               "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h",
+               "tools/impai/level_lever.py"],
+   "steps": [[331, "apply", "impai/impai-persona-cons.json"], [5400, "apply", "replay-objective-on.json"]],
+   "end": 5400,
+   "rewind": true,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
+  "stock-impai-fight": {
+   "load": "impai/impai-fight.json", "los": "file", "predicts": true, "dll": "stock",
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",
+               "tagpu/ddraw/src/impai_fight.h", "tagpu/ddraw/src/impai_fight.c", "tagpu/ddraw/src/impai_fitparams.c",
+               "tagpu/ddraw/src/impai_table.c", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/tagpu_impai.c",
+               "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
+  "impai-naval": {
+   "load": "impai/impai-naval.json", "los": "file", "predicts": true, "naval": true,
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_fight.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
+  "impai-raid": {
+   "load": "impai/impai-raid.json", "los": "file",
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/tagpu_impai.c",
+               "tagpu/ddraw/src/worldq.h"],
+   "steps": [[901, "apply", "impai/impai-raid-wave.json"],
+             [931, "order", {"unit": ["ARMFLASH", 0], "args": ["attack", "unit", ["CORCV", 0]]}],
+             [931, "order", {"unit": ["ARMFLASH", 1], "args": ["attack", "unit", ["CORCV", 0]]}],
+             [931, "order", {"unit": ["ARMFLASH", 2], "args": ["attack", "unit", ["CORCV", 1]]}],
+             [931, "order", {"unit": ["ARMFLASH", 3], "args": ["attack", "unit", ["CORCV", 1]]}],
+             [3600, "apply", "replay-objective-on.json"]],
+   "end": 3600
+  },
+  "stock-impai-naval": {
+   "load": "impai/impai-naval.json", "los": "file", "predicts": true, "naval": true, "dll": "stock",
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_fight.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
+  "stock-impai-observe": {
+   "load": "impai-observe.json", "los": "file", "dll": "stock",
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
+   "steps": [[300, "apply", "impai-observe-radar.json"],
+             [4200, "run", ["tools/tacli", "switches", "{instance}", "cheats=on"]],
+             [4200, "type", "+ai 2"], [4230, "type", "+ai 2"]],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
+   "end": 5400
+  },
+  "impai-takeover-fresh": {
+   "load": "replay-takeover-end.json",
+   "end": 900,
+   "takeover": {"player": 0, "seatai": [1], "dump": 600, "checks": ["judge", "line", "fork"]}
+  },
+  "stock-impai-takeover-fresh": {
+   "load": "replay-takeover-end.json", "dll": "stock",
+   "end": 900,
+   "takeover": {"player": 0, "seatai": [1], "dump": 600, "checks": ["judge", "line", "fork"]}
+  },
   "resource-mex": {
    "load": "resource-snapping.json",
    "sources": [
@@ -461,7 +637,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -513,7 +694,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -567,6 +753,11 @@
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
     "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h",
     "tagpu/ddraw/src/tagpu_cob_safe.c",
     "tagpu/ddraw/inc/tagpu_cob_safe.h",
     "tagpu/ddraw/src/tagpu_patches.c",
@@ -643,6 +834,11 @@
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
     "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h",
     "tools/cob_legacy_save_probe.py"
    ],
    "steps": [
@@ -697,7 +893,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -749,7 +950,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -801,7 +1007,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -853,7 +1064,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -905,7 +1121,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -961,7 +1182,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1017,7 +1243,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1070,7 +1301,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -1124,7 +1360,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -1178,7 +1419,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1230,7 +1476,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1288,7 +1539,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1345,7 +1601,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1386,6 +1647,42 @@
     "tagpu/ddraw/src/tagpu_place.h",
     "tagpu/ddraw/src/tagpu_placegeo.c",
     "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_place.c",
+    "tagpu/ddraw/src/tasim_place.h",
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tools/place_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/place_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "stock-place-basic": {
+   "load": "place-basic.json",
+   "dll": "stock",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_place.c",
+    "tagpu/ddraw/src/tagpu_place.h",
+    "tagpu/ddraw/src/tagpu_placegeo.c",
+    "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_place.c",
+    "tagpu/ddraw/src/tasim_place.h",
     "tagpu/ddraw/src/tagpu_route.c",
     "tagpu/ddraw/src/tagpu_route.h",
     "tools/place_regression.py",
@@ -1413,6 +1710,42 @@
     "tagpu/ddraw/src/tagpu_sweep.h",
     "tagpu/ddraw/src/tagpu_sweepgeo.c",
     "tagpu/ddraw/src/tagpu_sweepgeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_sweep.c",
+    "tagpu/ddraw/src/tasim_sweep.h",
+    "tools/sweep_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/sweep_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "stock-sweep-basic": {
+   "load": "sweep-basic.json",
+   "dll": "stock",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tagpu/ddraw/src/tagpu_sweep.c",
+    "tagpu/ddraw/src/tagpu_sweep.h",
+    "tagpu/ddraw/src/tagpu_sweepgeo.c",
+    "tagpu/ddraw/src/tagpu_sweepgeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_sweep.c",
+    "tagpu/ddraw/src/tasim_sweep.h",
     "tools/sweep_regression.py",
     "tools/resource_regression.py"
    ],

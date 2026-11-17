@@ -1,0 +1,21 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A calibration lane's end: every unit cleared, one unit kept for seat 1 and the objective armed again, so seat 0 has none and the level ends at the next players phase and the recording closes complete.",
+ "setup": {
+  "clear_existing": true,
+  "objective": "on"
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORFUS",
+   "owner": 1,
+   "pos": [6020, 1184]
+  }
+ ],
+ "calib": {
+  "place": {
+   "keep_ai": [1220, 0, null]
+  }
+ }
+}

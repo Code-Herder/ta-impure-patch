@@ -134,9 +134,127 @@ static int rs_class(const char* p)
     return RS_REAL;
 }
 
-/* The full path of `sub` under `base` in `out`, with empty components dropped: 1; 0 when
-   `base` is a handle this module does not know (neither a predefined key nor a store
-   handle); -1 when the path does not fit. */
+/* TA'S KEY WHEREVER THE RUNNING EXE NAMES IT. The engine's settings accessor 0x4B6880 opens every
+   level of its key with RegCreateKeyExA (IAT 0x4FC014): HKCU, then `Software` (0x509ED0, pushed at
+   0x4B68B1), then the root (0x509EB8, pushed at 0x4B68E8), then the subkey -- create, even to read
+   (rights 0x20019 to read, 0x20006 to write; 0x4B689F..0x4B690D, DISASSEMBLED). A store answers a
+   create only under RS_ROOT, so an exe or a loader that moves the root -- Escalation's exe names
+   `TA Esc`, TA Zero's `TA Zero`, and the Patch Loaders of Total Mayhem and ProTA write `TotalM` and
+   `ProTA` over 0x509EB8 in their DllMain -- had its create refused and read no setting at all: not the
+   map, not the seats, not gamespeed (MEASURED 2026-11-13, mayhem-11.3.0 in a test launch: `create
+   HKCU\Software\TotalM: REFUSED (create, rights 0x20019)` and a map tacli did not name).
+
+   So in test mode a path HKCU\Software\<R>[\...] is served as RS_ROOT[\...], R being the root the
+   running exe's accessor names, read at every compose:
+   - BOUND. The main module must sit at 0x400000 with a PE header, its e_lfanew and its whole section
+     table within the header page, and SizeOfImage at least RS_EXE_IMAGE_MIN. Each range read -- the 5
+     bytes at each of the accessor's pushes and the root's RS_EXE_ROOT_ROOM bytes -- must lie inside one
+     section's [VirtualAddress, VirtualAddress + VirtualSize) that has IMAGE_SCN_MEM_READ, which the
+     loader maps readable for the image's life (rs_exe_readable). Both pushes must be the stock bytes, so
+     the code reads its root from 0x509EB8 and nothing else. R is copied out of those bytes: a NUL within
+     them, R not empty, no `\`. Anything else names no root, and a moved root stays refused as before.
+   - LIFETIME. The main image is mapped for the life of the process; nothing is cached.
+   - ORDERING. A loader that writes 0x509EB8 in its DllMain is seen by every compose after its write. A
+     compose that races the write copies a mixture, which is data: a name that is not the exe's root is
+     refused as before, or served as the store's -- an address is never taken from it.
+   Real mode installs no hook, so this is never reached there. RS_ROOT itself needs no alias. The second
+   reader of the root, 0x4E2BE0's RegCreateKeyA/RegOpenKeyA of 0x50DDF4 (`Software\Cavedog
+   Entertainment`, where Escalation and TA Zero carry their root too and Mayhem's loader pokes 0x50DDFD,
+   DISASSEMBLED), is served the same while its root is 0x509EB8's. */
+#define RS_EXE_BASE       0x400000u
+#define RS_EXE_ROOT_VA    0x509EB8u
+#define RS_EXE_ROOT_ROOM  0x18u           /* up to `Software` at 0x509ED0 */
+#define RS_EXE_IMAGE_MIN  0x10A000u       /* RS_EXE_ROOT_VA + RS_EXE_ROOT_ROOM - RS_EXE_BASE, page-rounded */
+#define RS_SOFTWARE       "HKCU\\Software\\"
+#define RS_SOFTWARE_LEN   (sizeof(RS_SOFTWARE) - 1)
+
+static const struct { DWORD va; BYTE code[5]; } s_rootPushes[2] = {
+    { 0x4B68B1u, { 0x68, 0xD0, 0x9E, 0x50, 0x00 } },     /* push 0x509ED0, `Software` */
+    { 0x4B68E8u, { 0x68, 0xB8, 0x9E, 0x50, 0x00 } },     /* push 0x509EB8, the root   */
+};
+static int s_aliasLogged;
+
+/* 1 when the `n` bytes at `va` lie inside one section of the main image that is mapped readable: the
+   section's [VirtualAddress, VirtualAddress + VirtualSize) with IMAGE_SCN_MEM_READ. `nt` is the header
+   rs_exe_root checked, and the section table must end within the header page with it. MEASURED
+   2026-11-13 on pristine/TotalA.exe.pristine and the seven fixture exes of the compatibility setups:
+   the pushes lie in .text (0x1000 + 0xFA92A, 0x60000020) and the root in .data (0x101000 + 0x2A65C,
+   0xC0000040), and every table ends at 0x270. */
+static int rs_exe_readable(const BYTE* base, const IMAGE_NT_HEADERS32* nt, DWORD va, DWORD n)
+{
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    const DWORD rva = va - RS_EXE_BASE;
+    const size_t end = (size_t)((const BYTE*)(sec + nt->FileHeader.NumberOfSections) - base);
+    WORD k;
+
+    if (end > 0x1000u) return 0;
+    for (k = 0; k < nt->FileHeader.NumberOfSections; k++)
+        if ((sec[k].Characteristics & IMAGE_SCN_MEM_READ) && rva >= sec[k].VirtualAddress &&
+            rva - sec[k].VirtualAddress <= sec[k].Misc.VirtualSize &&
+            n <= sec[k].Misc.VirtualSize - (rva - sec[k].VirtualAddress))
+            return 1;
+    return 0;
+}
+
+/* 1 and R in `out` when the running exe is the engine at 0x400000 whose accessor names its root at
+   0x509EB8 (the bound above), else 0. */
+static int rs_exe_root(char* out, size_t cap)
+{
+    const BYTE* base = (const BYTE*)GetModuleHandleW(NULL);
+    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
+    const IMAGE_NT_HEADERS32* nt;
+    const volatile char* root;
+    size_t n;
+    int i;
+
+    if ((ULONG_PTR)base != RS_EXE_BASE || dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    if (dos->e_lfanew < (LONG)sizeof *dos || (DWORD)dos->e_lfanew > 0x1000u - sizeof *nt) return 0;
+    nt = (const IMAGE_NT_HEADERS32*)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage < RS_EXE_IMAGE_MIN) return 0;
+    if (!rs_exe_readable(base, nt, RS_EXE_ROOT_VA, RS_EXE_ROOT_ROOM)) return 0;
+    for (i = 0; i < 2; i++)
+        if (!rs_exe_readable(base, nt, s_rootPushes[i].va, 5) ||
+            memcmp(base + (s_rootPushes[i].va - RS_EXE_BASE), s_rootPushes[i].code, 5)) return 0;
+    /* each byte read once, into `out`, and the copy is what is checked: a loader's write racing this
+       read cannot put a byte into the copy that the checks did not see */
+    root = (const volatile char*)(base + (RS_EXE_ROOT_VA - RS_EXE_BASE));
+    for (n = 0; n < RS_EXE_ROOT_ROOM && n < cap; n++) {
+        out[n] = root[n];
+        if (!out[n]) break;
+        if (out[n] == '\\') return 0;
+    }
+    if (!n || n == RS_EXE_ROOT_ROOM || n == cap) return 0;
+    return 1;
+}
+
+/* `path` with HKCU\Software\<the exe's root> served as RS_ROOT (TA'S KEY WHEREVER THE RUNNING EXE NAMES
+   IT): 1, or -1 when the served path does not fit `cap`. */
+static int rs_alias(char* path, size_t cap)
+{
+    char root[RS_EXE_ROOT_ROOM];
+    size_t rn, tail;
+
+    if (_strnicmp(path, RS_SOFTWARE, RS_SOFTWARE_LEN) || !rs_exe_root(root, sizeof root)) return 1;
+    rn = strlen(root);
+    if (!_stricmp(root, RS_ROOT + RS_SOFTWARE_LEN)) return 1;
+    if (_strnicmp(path + RS_SOFTWARE_LEN, root, rn) ||
+        (path[RS_SOFTWARE_LEN + rn] && path[RS_SOFTWARE_LEN + rn] != '\\'))
+        return 1;
+    tail = strlen(path + RS_SOFTWARE_LEN + rn);
+    if (RS_ROOT_LEN + tail >= cap) return -1;
+    memmove(path + RS_ROOT_LEN, path + RS_SOFTWARE_LEN + rn, tail + 1);
+    memcpy(path, RS_ROOT, RS_ROOT_LEN);
+    if (!s_aliasLogged) {
+        s_aliasLogged = 1;
+        tagpu_logf("registry: TA's key is HKCU\\Software\\%s (named at 0x509EB8 by the accessor 0x4B6880): "
+                   "served as the store's " RS_ROOT, root);
+    }
+    return 1;
+}
+
+/* The full path of `sub` under `base` in `out`, with empty components dropped, and TA's key
+   served wherever the exe names it (rs_alias): 1; 0 when `base` is a handle this module does not
+   know (neither a predefined key nor a store handle); -1 when the path does not fit. */
 static int rs_compose(HKEY base, const char* sub, char* out, size_t cap)
 {
     const char* b;
@@ -160,7 +278,7 @@ static int rs_compose(HKEY base, const char* sub, char* out, size_t cap)
         out[n] = 0;
         sub = e;
     }
-    return 1;
+    return rs_alias(out, cap);
 }
 
 static int rs_find(const char* path)

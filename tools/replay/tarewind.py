@@ -292,7 +292,7 @@ def run(t, w, fx, out):
         n = len(log.lines)
         t.step(w, "apply", "replay-end.json")
         t.resume(w, log)
-        log.wait_running(r"recorder: writer: .* closed", n)
+        log.wait_end(r"recorder: writer: .* closed", n)
         w.collect(ue, recordings=True)
         w.stop()
         records = sorted(ue.glob("*.imprec"))
@@ -444,7 +444,7 @@ def run(t, w, fx, out):
             start = len(log.lines)
             t.step(w, "apply", "replay-end.json")
             t.resume(w, log)
-            log.wait_running(r"recorder: writer: .* closed", start)
+            log.wait_end(r"recorder: writer: .* closed", start)
             w.collect(live, recordings=True)
             w.stop()
             records = sorted(live.glob("*.imprec"))
@@ -480,7 +480,7 @@ def run(t, w, fx, out):
             log.read()
             start = len(log.lines)
             w.trigger(f"seek-frame {T1} dump q")
-            if not log.wait(r"recorder: frame dump q at GameTime", t.ACK_S, start):
+            if not log.wait(t._CLI_API.dump_written_rx("q"), t.ACK_S, start):
                 raise t.Failed("fresh seek: no atomic frame dump")
             if fx["cover"]:
                 t.cover_ask(w, log, "rewind-Q")

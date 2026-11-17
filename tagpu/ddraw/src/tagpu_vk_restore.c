@@ -1651,31 +1651,44 @@ int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, i
     return tagpu_rcore_job_add(&s_sched, j->core, frames, count);
 }
 
+/* D10's rule: an atlas fits in half of what is free -- what the driver says (VK_EXT_memory_budget),
+   or a quarter of the largest device-local heap where it cannot say. Under the GPU memory cap
+   (`gpumem=`) free is at most the cap's headroom, so the atlas yields here -- the terrain restores
+   per tile -- rather than at the allocation door, where a refused image would take its pass down. */
 int tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char* why, int whyLen)
 {
     VkPhysicalDeviceMemoryProperties mp;
-    unsigned long long heap = 0, freeB;
+    unsigned long long heap = 0, freeB, room, cap;
     uint32_t i;
+    int asked;
     if (why && whyLen > 0) why[0] = 0;
     if (!d || !d->pd) return 0;
-    if (tagpu_vk_mem_free(&freeB, &heap)) {
+    asked = tagpu_vk_mem_free(&freeB, &heap);
+    if (!asked) {
+        vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
+        for (i = 0; i < mp.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++)
+            if ((mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+                mp.memoryHeaps[i].size > heap)
+                heap = mp.memoryHeaps[i].size;
+        freeB = heap / 4;
+    }
+    if (tagpu_vk_mem_cap(&room, &cap) && room < freeB) {
         if (why) {
-            _snprintf(why, whyLen, "%llu MB against half of the %llu MB the driver says is free (of %llu MB)",
-                      bytes >> 20, freeB >> 20, heap >> 20);
+            _snprintf(why, whyLen, "%llu MB against half of the %llu MB left under the %llu MB cap "
+                                   "(impure.cfg gpumem=)",
+                      bytes >> 20, room >> 20, cap >> 20);
             why[whyLen - 1] = 0;
         }
-        return bytes <= freeB / 2;
+        return bytes <= room / 2;
     }
-    vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
-    for (i = 0; i < mp.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++)
-        if ((mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
-            mp.memoryHeaps[i].size > heap)
-            heap = mp.memoryHeaps[i].size;
-    freeB = heap / 4;
     if (why) {
-        _snprintf(why, whyLen, "%llu MB against half of %llu MB free (a quarter of the %llu MB heap: "
-                               "no memory-budget query here)",
-                  bytes >> 20, freeB >> 20, heap >> 20);
+        if (asked)
+            _snprintf(why, whyLen, "%llu MB against half of the %llu MB the driver says is free (of %llu MB)",
+                      bytes >> 20, freeB >> 20, heap >> 20);
+        else
+            _snprintf(why, whyLen, "%llu MB against half of %llu MB free (a quarter of the %llu MB heap: "
+                                   "no memory-budget query here)",
+                      bytes >> 20, freeB >> 20, heap >> 20);
         why[whyLen - 1] = 0;
     }
     return bytes <= freeB / 2;

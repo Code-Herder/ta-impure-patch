@@ -709,6 +709,32 @@ static const char* frame_valid(const void* rec)
             }
         }
     }
+    /* ImpAI's overlay: the marker pass walks the count, picks a colour by the kind, the layer and the
+       shade from fixed tables, and projects every point with arithmetic the coordinate bound keeps from
+       overflowing */
+    if (!table_ok(p, p->off_impaihdr, p->n_impaihdr, sizeof(TAGPU_PK_IMPAIHDR))) return "impai header";
+    if (p->n_impaihdr > 1u) return "more than one impai header";
+    if (!table_ok(p, p->off_impai, p->n_impai, sizeof(TAGPU_PK_IMPAI))) return "impai table";
+    if (p->n_impai > TAGPU_PK_MAX_IMPAI) return "more impai items than the table holds";
+    if (p->n_impai && !p->n_impaihdr) return "impai items without their header";
+    if (p->n_impaihdr) {
+        const TAGPU_PK_IMPAIHDR* h = tagpu_pk_impaihdr(p);
+        const TAGPU_PK_IMPAI* it = tagpu_pk_impai(p);
+        unsigned k;
+        if (h->seat >= 10u || h->layer > TAGPU_PK_IL_LAST) return "impai header seat or layer";
+        for (k = 0; k < p->n_impai; k++) {
+            const TAGPU_PK_IMPAI* e = &it[k];
+            if (e->kind > TAGPU_PK_IM_LAST || e->seat >= 10u) return "impai item kind or seat";
+            if (e->x < -TAGPU_PK_PLACE_COORD || e->x > TAGPU_PK_PLACE_COORD ||
+                e->h < -TAGPU_PK_PLACE_COORD || e->h > TAGPU_PK_PLACE_COORD ||
+                e->z < -TAGPU_PK_PLACE_COORD || e->z > TAGPU_PK_PLACE_COORD)
+                return "impai item coordinate";
+            if (e->kind == TAGPU_PK_IM_CELL &&
+                ((e->level & 0x7Fu) < 1u || (e->level & 0x7Fu) > 15u || e->size < 1u ||
+                 e->size > TAGPU_PK_IMPAI_SIDE))
+                return "impai cell shade or side";
+        }
+    }
     /* the drawing board: the marker pass walks both counts, projects every point with arithmetic
        the coordinate bound keeps from overflowing, and draws each text glyph by glyph up to its
        length */

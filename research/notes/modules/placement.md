@@ -6,14 +6,18 @@ Shift-drag lines, rectangles and rings of buildings, and their spacing.
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`.
 
-### 2.109 Several buildings in one gesture (`tagpu_place.c`, `tagpu_placegeo.c`) — 2026-10-25
+### 2.109 Several buildings in one gesture (`tagpu_place.c`, `tasim_place.c`, `tagpu_placegeo.c`) — 2026-10-25
 
 With a building armed, Shift + left-drag lays a line of it (Ctrl: held to the dominant axis),
 Shift + Alt a filled rectangle in serpentine order (Ctrl: hollow), and Shift + Ctrl over a unit, or
 over a queued build of a selected builder, a ring round it; the release with Shift held orders it.
 The shapes are BAR's (Recoil's `GetBuildPositions`) in TA build cells, ported to exact integers
-(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). The take-off rule is there
-too, as `place_take_offs_one`, which the in-game wiki's simulation (`tagpu_wikisim.c`) also calls. Behaviour, semantics and
+(`tagpu_placegeo.c`, engine-free and integers only, self-tested by `tests/placetest.py`), with the
+take-off rule's arithmetic, `place_take_offs_one`. The rules -- the builder set, the plan snapshot,
+each site judged, the take-offs and the commit -- are `tasim_place.c`'s, over `WORLDQ` (`worldq.h`):
+the game reads and orders through the engine's view (`tagpu_worldq.c`), opened with the build
+cursor's own site test, and the in-game wiki's simulation (`tagpu_wikisim.c`) calls the same
+functions over the core's view (`tasim_worldq.c`), so its demos play the game's rule. Behaviour, semantics and
 gaps: [quality-of-life](../tadr-port/quality-of-life.html), *What Impure does*. The engine side: the
 engine map's *The placement's mouse path, and several buildings in one gesture*.
 
@@ -26,7 +30,7 @@ engine map's *The placement's mouse path, and several buildings in one gesture*.
 | `0x4993BF` | **12-byte route stub** (`E9 rel32` + seven `90`), the router's (`tagpu_route.c`, shared with the reclaim sweep, §2.110, and the [formation move](formation.html)), written through `tagpu_detour_write` after all 22 bytes `0x4993BF..0x4993D4` match. `pushad`, `route_button(record copy, message)`, `popad`; in mode 14 `route_button` asks `tagpu_place_button`, and its answer is the way taken: 1 → the frame `0x4995B8` (a Shift press starts a gesture instead of placing; a release commits it), 2 → `0x4993CB`, stock's click on this record (a one-site gesture at the release cursor is stock's own Shift-click: its toggle, sound, recorded click and bit 5), 0 → the two original instructions |
 | `0x48CD80` | Called by the evaluation, with Shift and Ctrl held, for the ring's unit: the engine's hover query, which the handler skips in build placement; its answer is bounded as a unit slot |
 | `0x438760` | The two build actions `MOBILEBUILD` / `VTOL_MOBILEBUILD` by the engine's own name strings (`0x502654`, `0x502640`), as `0x419670` asks |
-| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root), from the same take-off rule the preview's colours come from (`take_offs`, which calls `place_take_offs_one` once per builder over its run of the snapshot): per builder, each queued node of the builder's build action is taken by one non-red site at most — first every site takes the node at its own position, then each site without one the first within 16 units that no site took. The taken nodes are removed through `0x439F80` in descending place in the chain, the head last, each re-found by its place and removed only if it still carries the snapshot's action, position and flag (else counted `stale=` and left queued); then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
+| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root), from the same take-off rule the preview's colours come from (`take_offs`, which calls `place_take_offs_one` once per builder over its run of the snapshot): per builder, each queued node of the builder's build action is taken by one non-red site at most — first every site takes the node at its own position, then each site without one the first within 16 units that no site took. The taken nodes are removed through `0x439F80` in descending place in the chain, the head last, each re-found by its place and removed only if it still carries the snapshot's action, position and flags (else counted `stale=` and left queued); then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
 | `0x47F1A0` | `oktobuild` (`0x509660`) once a committed gesture that added or removed an order, as `0x498FA4` plays it per click |
 | `tagpu_packet_pub.c` → `PK_PLACE` | The sites copied by value (≤ 256 × 28 bytes: the build rectangle in `0x4197D0`'s layout, the type, the GUI colour index `0x0A` placed / `0x04` refused / `0x0E` toggles a queued build off). The acquire bounds the count, each colour, each coordinate (±`0x100000`) and each type (`< udef_count`). An overflow sets `TAGPU_PK_TRUNC_PLACE` (`0x4000`) and the square stays replaced |
 | `tagpu_mark.c`, `tagpu_native.c` (Vulkan) | The marker pass draws each site as the build square (its gate, projection, ±`0x100000` drop, normalise-then-inset; `square_gate`/`square_emit`, shared with the cursor's square) from a bucket of its own, and skips the one square; the ghost pass draws one build ghost per site instead of the cursor's. Counters: `mark: … place=N placered=R placetake=T` (sites drawn, of them red and yellow) under `tagpu_mark.on=log`, `ghost: … sites=N` |
@@ -34,20 +38,27 @@ engine map's *The placement's mouse path, and several buildings in one gesture*.
 
 **Threads and lifetimes.** All of the module's state is game-thread state, written and read inside
 the in-play handler and DrawGameScreen; the render thread sees only the packet's values. The unit
-array, the player's block, slots and def indices are bounded against their engine counts; every
-order-chain walk is bounded (16384) and stops at a node another unit owns; builders are held as
-slot indices and re-derived before every root call, and no node pointer survives `0x439F80`. The
+array, the player's block, slots and def indices are bounded against their engine counts; the
+rules see the lists only as values the engine's view copies, its walk bounded (16384) and stopped
+at a node another unit owns; builders are held as slot indices and the view re-derives each before
+every root call, and no node pointer survives `0x439F80`. The
 builder set is `0x419670`'s (selected, builder def) narrowed to alive, not excluded and owned; like
 `0x419670` it does not consult CANBUILD. A commit is capped at 4096 orders (sites × builders); the
 preview shows the cut shape. A puppet seat refuses every hook. `thread-split.allow` lists the file
 `publisher presentation` (the owner's decision).
 
 **Replay.** The module is presentation: it declares no simulation state, and a commit's effects are
-ordinary order nodes the recorder keeps. A one-site gesture goes through `0x4995B3` and records its
-click as stock's; a multi-site gesture records none. Its sound has the owner-approved
+ordinary order nodes the recorder keeps. `tagpu_placegeo.c`, whose `place_ring` ImpAI's base ring
+calls as well, is `engine-free sim` in `thread-split.allow`: one feature, `place_shapes`, names
+`place-basic`, `stock-place-basic` and ImpAI's test groups, the coverage build instruments it, and a
+landing that changes a function of it asks those groups to reach that function on each build. A one-site
+gesture goes through `0x4995B3` and records its click as stock's; a multi-site gesture records none. Its sound has the owner-approved
 `replay-absent.tsv` row `0x47F1A0 dll * absent` ([recorder
 completeness](../tadr-port/demo-recorder-completeness.html)). Test group `place-basic`
-(`scenarios/place-basic.json`, `tools/place_regression.py replay`).
+(`scenarios/place-basic.json`, `tools/place_regression.py replay`), and on the stock-limits build its twin
+`stock-place-basic`, the same entry but its `dll`: nothing in it is past a stock limit (three placed units
+of retail types and the two players' commanders on Comet Catcher, the default unit limit, a few dozen build
+orders). `tagpu_worldq.c`'s `worldq` names both.
 
 **A zoomed Shift-click.** Between the press and its release IdleTick hands the handler the move
 made before the press (the ring is empty), and the gesture ends on a move without the button that is
@@ -63,7 +74,7 @@ display at zoom 0.35 and 0.6 (16 presses, none lost), so no regression case cove
 no facing. The take-off rule (yellow) is the module's reading of `0x43AFC0`, not the engine's
 call, and is checked only by the regression (cases (h) and (n)) and by `placetest.py`'s table
 cases of `place_take_offs_one`. The preview and the commit
-apply the one rule (`take_offs`) and agree for the same queues; the release judges again against
+apply the one rule (`tasim_place_classify`) and agree for the same queues; the release judges again against
 the queues as they stand at the release, so a change since the last drawn frame — a tick
 finishing or starting a queued build, a builder dying or the selection changing (the order
 budget), a nanoframe turning a site red — changes its result, and a release over the side panel

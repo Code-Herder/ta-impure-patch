@@ -115,6 +115,7 @@ What we have mapped of the engine lives in one page per subsystem; this page kee
 - [The simulation step and its clock](engine/sim.md) — The sim tick, its rate, the step's phases and counts, and how a level starts and ends.
 - [Units: records, creation, death and transport](engine/units.md) — The unit and player records, creation, the unit cap, build lists, death, transport and attachment.
 - [Weapons, damage and effects](engine/weapons.md) — Weapon decisions and IDs, damage, veterancy, area damage, projectiles, the effect pools and the nano spray.
+- [Data keys the engine reads](engine/keys.md) — The TDF getters, the parsers that call them, and every key each parser reads: the unit FBI, the move classes, weapons, features, the map's OTA and the sidedata.
 - [The map: terrain, features, footprints, fog and sight](engine/map.md) — The terrain pass, features and wrecks, the wind, the grid stamp and footprint contest, the fog grids and line of sight.
 - [Orders and the AI](engine/orders.md) — The order module, order fallbacks, resurrect, the AI's order activity and resource placement.
 - [Drawing the frame: blits, rasterisers, shadows and markers](engine/render.md) — The offscreen and flip, `DrawGameScreen`'s sweep, the unit blit and its shadows, the rasterisers, the order markers.
@@ -264,6 +265,13 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   target differs with the DLL's load address). They are the mod's bytes and stay — Impure's
   reference-image check names them in the log and refuses only what leads into TADR
   ([the takeover](compat/takeover.md) part 4). Not sites of Impure's table.
+- **`0x410000`, `0x4FF618`** — the Patch Loader's `DllMain` gate (`vendor/Total-Annihilation-Patch-Loader/
+  dllmain.c`): it exits the game unless the ten bytes at RVA `0x10000` read `14 68 78 1B 50 00 8D 4C 24 1B`
+  (retail's: the tail of `jne 0x410015` at `0x40FFFF`, then `push 0x501B78` at `0x410001` and
+  `lea ecx,[esp+0x1B]` at `0x410006`), and unless `0x4FF618` reads `DDRAW.dll` -- the name of the import descriptor whose
+  thunks start at `0x4FC02C` -- or the version bytes `0x49E9C0`/`0x49E9C9` are 3 and 1. Read from the
+  pristine image 2026-11-17; the wiki's install loader repeats the gate (`tools/wiki/tavfs.py`,
+  `LOADER_GATE`).
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

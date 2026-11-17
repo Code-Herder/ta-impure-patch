@@ -40,6 +40,7 @@ static void cob_required(unsigned type);
 static void cob_level_reset(void);
 static void cob_level_enter(void);
 #endif
+static int fix_effect_pools(void);
 
 /* Write `val` at absolute `addr` iff it currently holds `expect`. Returns 1 on patch,
    0 if the byte didn't match (wrong build) or protection change failed. */
@@ -4952,8 +4953,12 @@ SIM_FEATURE(shatter_rng, SIM_PUPPET_RUNS, "battle");
    state is no address, and the scan for addresses must not read it as one. THE ORDERING: COB runs
    on the game thread in the step, except a Create's first slice, which the create runs at once
    (0x485DE6) and which the loader's start-unit calls (0x497963, 0x497ACD) make on the LOADER thread;
-   those finish before the load-done gate lets the game thread step, so the two never draw at once. */
-static unsigned int s_shatterRng = 0x2545F491u;
+   those finish before the load-done gate lets the game thread step, so the two never draw at once.
+   UNDER THE HARNESS'S SWITCH (A HARNESS'S RANDOM STREAMS) the stream is put back at its start at
+   every level load (test_rng_seed) and at a run's clearing apply (tagpu_seed_run), as the other
+   streams are re-seeded there, so a harness's level and a calibration run start it alike. */
+#define SHATTER_RNG_START 0x2545F491u
+static unsigned int s_shatterRng = SHATTER_RNG_START;
 static const SimField shatter_rng_layout[] = { SIM_FIELD_AT(0, 4, SIMF_OPAQUE, SIM_ID_NONE),
                                                SIM_FIELD_END };
 SIM_VAR_L(s_shatterRng, SIM_STATE, shatter_rng_layout);
@@ -5159,7 +5164,8 @@ SIM_FEATURE(los_shear, SIM_PUPPET_RUNS, "battle");
        nothing. The stored
        words are otherwise written only by the create (0 at 0x485C0A), a saved game's restore
        (0x48724D, with the height byte at 0x4872BF, as saved), and the temporary records'
-       compaction (main+0x1427B, at most 20 of 36 bytes, each holding its own words and byte),
+       compaction (main+0x1427B, at most the cap's records of 36 bytes -- 20, or a test launch's
+       tagpu_sightcap.on N -- each holding its own words and byte),
        which moves the words (0x482220) and the byte (0x48222D) together -- the table;
      - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
        player decides the order it resolves -- the table;
@@ -6909,6 +6915,43 @@ static void __cdecl hit_reset(unsigned int* regs)
     s_hitRows = n;
     s_hitDelayHead = s_hitDelayCount = 0;
     tx_reset();
+}
+
+/* tagpu_limits.h, tagpu_unit_birth. The stamp column is the level's: hit_reset publishes it during the level
+   load, and the level's first creates (0x496EE0, 0x4977BB) take and stamp on the loader thread too (THREADS,
+   above). The loader's last store, bit 1 of main+0x38D75 at 0x497C62, comes after them, and the game thread
+   reads that bit at 0x498342 before the level's first step, so every loader write is ordered before every
+   call, which runs in play on the game thread. In play hit_take and the copies' stamps write it, and on a
+   puppet the seek and the frame visit put the recorded column (tagpu_replay.c, tables_put), all on the game
+   thread between steps. A slot is an index of the unit array, as hit_slot_index makes one, bounded by the
+   column's rows. Without the fail-closed table
+   no stamp is written, so there is no answer; nor for a stamp with HIT_LB, unknown or a copy's lower bound,
+   which two units of one slot can share. Exact births of one slot rise strictly (hit_next_birth). */
+int tagpu_unit_birth(unsigned int slot, unsigned int* out)
+{
+    unsigned int stamp;
+    if (s_limState <= 0 || !s_hitStamp || slot >= s_hitRows) return 0;
+    stamp = s_hitStamp[slot];
+    if (stamp & HIT_LB) return 0;
+    *out = stamp;
+    return 1;
+}
+
+/* tagpu_limits.h, THE HOLD. The freed column is the level's, as the stamp column is (above); `slot` is
+   bounded by its rows. */
+int tagpu_unit_hold_on(void)
+{
+    return s_limState > 0 && s_hitFreed != NULL;
+}
+
+int tagpu_unit_slot_takeable(unsigned int slot)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int f, now;
+    if (!tagpu_unit_hold_on() || slot >= s_hitRows || !ta) return 1;
+    f = s_hitFreed[slot];
+    now = HIT_GAMETIME(ta);
+    return !hit_held(f, now) || hit_reusable(f, now);
 }
 
 /* At 0x486036, the first free slot of the player's block that first-free meets (esi; the stub
@@ -9569,6 +9612,227 @@ static int fix_load_unpaused(void)
     return fix_write(site, 1);
 }
 
+SIM_FEATURE(hover_clock, SIM_PUPPET_RUNS, "waterline transport-turn");
+
+/* THE HOVER WAVE ON THE WALL CLOCK [DISASSEMBLED]. 0x48A490(unit) fits a unit to the heights at
+   its footprint's four corners and writes its altitude +0x70 (0x48A797) and its tilts +0x68
+   (0x48A7B7) and +0x64 (0x48A7DB). For a def with +0x241 bit 12 (canhover), alive (+0x110 bit 28)
+   and not dying (bit 14) (0x48A60C..0x48A630), each corner's height gets a wave
+   sin(phase) * amplitude (0x4B7123, the 512-entry table 0x509F00) whose phase is
+   ((0x4B6340() & 0x1F) + 8 * corner) << 11 plus the unit's +0xAA (0x48A66A..0x48A684).
+   0x4B6340 is GetTickCount (IAT 0x4FC0DC) * [[0x51FBD0]+0xE8] / 1000 (0x4B6340..0x4B6361), and
+   +0xE8 is 30: its one writer 0x4B62D0 (0x4B62DA) has one caller, WinMain, which pushes 0x1E
+   (0x49E98F..0x49E991). So the phase steps once every thirtieth of a second of wall time, and the
+   tilts feed the simulation: the piece positions add +0x64/+0x66/+0x68 before rotating
+   (0x43DF86..0x43DF8E), so a hovercraft's shots leave from a point the wall clock chose, and the
+   water state 0x43DB50 and the weapons' water path 0x49AC3B read the altitude. Two processes,
+   two peers or a recording and its replay, compute different hover poses from the same game.
+   THE FIX. The 5-byte `call 0x4B6340` at 0x48A66A calls a stub that returns GameTime
+   (main+0x38A47) instead. At speed 10, normal speed, the scheduler 0x495230 runs one tick per
+   step of that same clock (due = elapsed clock steps * speed * 0.1, engine/sim.md *The scheduler,
+   the clock and the test pacing*), so the wave keeps its amplitude, its 32-step period and its
+   speed at normal speed; at another speed it runs with the game, as the rest of the unit does.
+   The stub writes eax alone, which is what the call returns; ecx and edx, which the stock call
+   clobbers, are written before they are read again (0x48A66F, 0x48A676), and 0x48A643 has just
+   read the main pointer the stub reads, inside the same call. 0x48A66F's `mov ecx,[esp+0x10];
+   and eax,0x1F` is compared, the low five bits of eax being what the phase takes.
+   THE INVARIANT: the wave is a function of GameTime and the unit's record, so every process that
+   runs a tick computes the same hover pose for the same unit.
+   CLASS: simulation, fail closed. A peer without it fits its hovercraft by its own clock. */
+static int fix_hover_clock(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xD1, 0xBC, 0x02, 0x00 };   /* call 0x4B6340 */
+    static const unsigned char after[7] = { 0x8B, 0x4C, 0x24, 0x10, 0x83, 0xE0, 0x1F };
+    unsigned char *c, *p;
+    if (!(c = fix_code(12))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xA1; *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;    /* mov eax,[0x511DE8]   */
+    *p++ = 0x8B; *p++ = 0x80; *p++ = 0x47; *p++ = 0x8A; *p++ = 0x03; *p++ = 0x00;
+                                                                        /* mov eax,[eax+0x38A47] */
+    *p++ = 0xC3;                                                        /* ret                  */
+    lim_branch(0x0048A66A, sizeof call, call, 0xE8, (unsigned int)(size_t)c,
+               "hover wave: GameTime for the wall clock");
+    lim_same(0x0048A66F, sizeof after, after, "hover wave: the phase's low five bits");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(mover_stamp, SIM_PUPPET_RUNS, "transport-pad waterline");
+
+/* THE MOVER'S UNWRITTEN STAMP [DISASSEMBLED]. A unit whose def has +0x22F = 1 gets a 0x2F-byte
+   mover from MEM_Alloc 0x4B4F10, which does not zero, and the mover's constructor 0x43DC00 (a
+   thiscall, ecx the block). The constructor has four callers, each right after its own
+   `push 0x2F; call 0x4B4F10` (0x485E66, 0x485F29, the create 0x485F50's 0x4860D5,
+   CreateFromNetwork 0x4861D0's 0x4862E9), and no jump lands inside its first six bytes. It
+   writes +0x00..+0x29 and the byte +0x2E (0x43DC04..0x43DD03) and never +0x2A..+0x2D, the dword
+   "moved at" stamp. The stamp's one writer is the placement 0x43D6D0 (`mov [ebp+0x2A],GameTime`
+   at 0x43D865), which runs only for an uncarried unit (+0x86 = 0, 0x43D6DD..0x43D6E5) whose
+   position or layer just changed (0x43D827..0x43D854). Its one reader is the hover wave
+   (0x48A6DE): m = min(GameTime - stamp, 60), unsigned (0x48A6E8..0x48A6FA), and the wave's
+   amplitude is c - c*m/60 (0x48A6FF..0x48A714), full on the tick a hovercraft moves and gone 60
+   ticks after it stops. A hovercraft that has not moved since its create (a factory's unit still
+   on its pad, a unit standing where it was made) reads whatever the block's last tenant left,
+   and the creates' own fit (0x486109, 0x486306) reads it before any placement.
+   THE FIX. A jmp over the constructor's first six bytes (`push esi; mov esi,ecx; push edi;
+   xor eax,eax`) goes to a stub that writes MOVER_UNMOVED to [ecx+0x2A], runs the six bytes and
+   rejoins at 0x43DC06, compared.
+   WHY 0x80000000. Stock's never-moved hovercraft has no wave: the leftovers MEASURED in its
+   movers (0x5EE80002, 0x736E0003 at GameTime 12001, and the like) all lie above GameTime, so
+   GameTime - stamp wraps past 60 and the amplitude is 0. A leftover inside the 60 ticks below
+   GameTime, which gives a fading wave, needs the block's last tenant to have been a mover stamped
+   in the last 60 ticks [INFERRED: no case measured]. 0x80000000 is above every GameTime the engine
+   reaches (2^31 ticks at 30 a second is over two years), so a mover reads "no wave" from its
+   constructor to its first move at every GameTime, the first 60 ticks of a level included, as
+   the typical stock one does; 0 would give a never-moved hovercraft a fading wave there. The
+   first move stamps GameTime, as in stock, and from there the two agree. A hovercraft still on a
+   factory pad (carried: the placement never stamps it) has no wave, as stock's typically has.
+   THE INVARIANT: every mover's +0x2A is MOVER_UNMOVED from its constructor until a placement
+   stamps it, so the hover wave never reads memory the engine did not write.
+   CLASS: simulation, fail closed. A peer without it fits a resting hovercraft by its heap. */
+#define MOVER_UNMOVED 0x80000000u
+
+static int fix_mover_stamp(void)
+{
+    static const unsigned char entry[6] = { 0x56, 0x8B, 0xF1, 0x57, 0x33, 0xC0 };
+    static const unsigned char join[3]  = { 0x8D, 0x7E, 0x08 };             /* lea edi,[esi+8] */
+    static const unsigned int unmoved = MOVER_UNMOVED;
+    unsigned char *c, *p;
+    if (!(c = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xC7; *p++ = 0x41; *p++ = 0x2A;                    /* mov dword [ecx+0x2A],imm32 */
+    memcpy(p, &unmoved, 4); p += 4;
+    memcpy(p, entry, sizeof entry); p += sizeof entry;                  /* the six stolen bytes   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0043DC06);
+    lim_branch(0x0043DC00, sizeof entry, entry, 0xE9, (unsigned int)(size_t)c,
+               "mover: the moved-at stamp written in the constructor");
+    lim_same(0x0043DC06, sizeof join, join, "mover: the constructor, where the stub rejoins");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(planner_site, SIM_PUPPET_RUNS, "battle tenseat");
+
+/* THE AI BUILDER PLANNER'S UNWRITTEN SITE ALTITUDE [DISASSEMBLED]. The stock AI's builder planner
+   0x408100 (the AI tick 0x408C40's slot +0x21, every 90 ticks) keeps a site {x, y, z} on its stack
+   at [esp+0x30..0x38]. For each idle builder it asks 0x40BDB0 for a type and 0x40BFE0(seat,
+   &unit->pos, def, site) for a place (the call at 0x4081E2; stdcall, `ret 0x10`, eax not 0 when
+   it found one). 0x40BFE0 writes x (0x40C1D3) and z (0x40C1E0) and never y, and nothing else in
+   0x408100's first loop stores [esp+0x34]. The order 0x43ADC0 (0x4082B0) then copies the site
+   into the node's position +0x22/+0x26/+0x2A verbatim (the constructor 0x43A0C0, 0x43A16F), and
+   the commander branch copies site.y into its base's y (0x408225, 0x408250), which the second
+   loop copies into its own sites (0x40831C..0x408330). So a MobileBuild node carries whatever
+   the stack held: MEASURED 2026-11-13, the factory pointer 0x40BDB0 saved there during the same
+   tick's factory planner 0x4086D0 (0x40BDB9), a unit-array address, which differs whenever the
+   heap's layout does. MobileBuild 0x403A20 hands the node's position to CreateUnit 0x485F50 by
+   value (0x403D34..0x403D51, the call at 0x403D5B), after 0x47DDC0(def, &pos) at 0x403D2F, which
+   writes a structure's ground altitude into y (its store at 0x47DE52) and returns at once for any
+   other type (def +0x22F not 0, 0x47DDC8..0x47DDD0). So a structure's stale y reached the
+   recording, every comparison of two games and the drawn build-site rectangle (0x438C59); a
+   mobile type's reached the create itself (0x485A40), as the unit's first altitude.
+   WHAT A PLAYER'S ORDER CARRIES. A click issues its order at the cursor's world point main+0x2CAA
+   (0x48CF30 from 0x49906D and 0x4991D9; engine/input.md), whose y the unprojection 0x484B50 sets
+   to the larger of the terrain height 0x485070(pos) and the sea level, the byte main+0x1427F,
+   shifted to 16.16 (0x484BB2..0x484BDE).
+   THE FIX. The call at 0x4081E2 goes to planner_site: it writes site.y = 0, makes the stock call
+   with the stock arguments, and when that found a place, writes the y a player's order there
+   would carry: for a structure what MobileBuild will write, 0x47DDC0(def, copy) on a copy of the
+   site, so the site's x and z, which 0x47DDC0 also snaps, stay 0x40BFE0's; for any other type
+   the cursor's rule, max(0x485070(site), sea level) << 16. Both are bounded by the engine itself:
+   0x47D820 refuses a cell below 1 or whose footprint reaches the map's last row or column
+   (0x47D834..0x47D888), and 0x485070 answers -1 for a cell off the map (0x485098..0x4850C4,
+   0x485139), which the max turns into the sea level. Every register the planner reads after
+   0x4081E2 is written first (eax is the result; ecx at 0x4081E7, edx at 0x4081EF), and the call
+   keeps the stdcall frame.
+   THE INVARIANT: every site the planner hands an order, and every base y it copies from one, is
+   written by the engine's own arithmetic, so no node carries a stack leftover.
+   CLASS: simulation, fail closed. A player without it records heap addresses in its AI's orders. */
+typedef int (__stdcall* PFN_PlanSite)(int seat, const int* from, const char* def, int* site);
+#define E_PlanSite ((PFN_PlanSite)0x0040BFE0u)
+typedef void (__stdcall* PFN_SiteAlt)(const char* def, int* pos);
+#define E_SiteAlt  ((PFN_SiteAlt)0x0047DDC0u)
+typedef int (__stdcall* PFN_GroundHeight)(const int* pos);
+#define E_GroundHeight ((PFN_GroundHeight)0x00485070u)
+#define DEF_MOBILE  0x22F                   /* byte: 0 for a type MobileBuild places on cells */
+#define MAIN_SEALEVEL 0x1427F               /* byte: the level's sea level */
+
+static int __stdcall planner_site(int seat, const int* from, const char* def, int* site)
+{
+    int found, copy[3];
+    site[1] = 0;
+    found = E_PlanSite(seat, from, def, site);
+    if (!found) return found;
+    if (!def[DEF_MOBILE]) {
+        copy[0] = site[0];
+        copy[1] = 0;
+        copy[2] = site[2];
+        E_SiteAlt(def, copy);
+        site[1] = copy[1];
+    } else {
+        const char* ta = *(const char* const*)0x00511DE8;
+        int ground = E_GroundHeight(site);
+        int sea = (unsigned char)ta[MAIN_SEALEVEL];
+        site[1] = (ground > sea ? ground : sea) << 16;
+    }
+    return found;
+}
+
+static int fix_planner_site(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xF9, 0x3D, 0x00, 0x00 };   /* call 0x40BFE0 */
+    static const unsigned char after[6] = { 0x8B, 0x8D, 0x92, 0x00, 0x00, 0x00 };
+    lim_branch(0x004081E2, sizeof call, call, 0xE8, (unsigned int)(size_t)planner_site,
+               "AI planner: the build site's altitude written");
+    lim_same(0x004081E7, sizeof after, after, "AI planner: ecx written after the site's call");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(reclaim_site, SIM_PUPPET_RUNS, "battle");
+
+/* THE PATROL'S RECLAIM SEARCH'S UNWRITTEN ALTITUDE [DISASSEMBLED]. 0x47EA40(pos, radius, &out1,
+   &value1, &out2, &value2) (stdcall, `ret 0x18`; its callers RepairPatrol 0x405980 at 0x405B93 and
+   VTOL_RepairPatrol 0x4152F0 at 0x41564F) walks the feature grid around pos and keeps two lists of
+   16-byte records {x, y, z, value} (0x47EB3B..0x47EB64, 0x47EB86..0x47EBB3), one per kind of
+   feature, then copies a record of each into *out1 and *out2 (0x47EC3F..0x47EC56,
+   0x47ECCB..0x47ECE2). The point it records is a frame local: x at [esp+0x1C] and z at [esp+0x24]
+   are the loop's counters (0x47EAAE, 0x47EA9A, 0x47EBCC, 0x47EBEE), and y at [esp+0x20] is never
+   written in the function, so every record, and every RECLAIM or VTOL_RECLAIM order the patrols
+   make from one (0x43A0C0 at 0x405BFB, 0x405D11 and 0x415784, its position copied verbatim at
+   0x43A16F), carries what the stack held there into the node's +0x26.
+   THE FIX. A jmp over `mov esi,[esp+0x30]; mov [esp+0x18],eax` at 0x47EA79, where esp is the
+   frame's base less the second allocation's pushed argument, to a stub that writes 0 to the y
+   local ([esp+0x24] there), runs the two instructions and rejoins at 0x47EA81, compared. Zero is
+   the y the engine's own order parser gives a feature reclaim (0x487BF0's orders are x, 0, z:
+   0x487D40, 0x487EE2) [INFERRED: what a reclaim reads of y was not traced].
+   THE INVARIANT: every point the search records is written whole before it is copied.
+   CLASS: simulation, fail closed. A player without it records stack leftovers in its patrols'
+   reclaim orders. */
+static int fix_reclaim_site(void)
+{
+    static const unsigned char body[8] = {
+        0x8B, 0x74, 0x24, 0x30,                         /* mov esi,[esp+0x30]  */
+        0x89, 0x44, 0x24, 0x18,                         /* mov [esp+0x18],eax  */
+    };
+    static const unsigned char join[4] = { 0x8B, 0x44, 0x24, 0x34 };   /* mov eax,[esp+0x34] */
+    unsigned char *c, *p;
+    if (!(c = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;               /* mov dword [esp+0x24],0 */
+    *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    memcpy(p, body, sizeof body); p += sizeof body;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0047EA81);
+    lim_branch(0x0047EA79, sizeof body, body, 0xE9, (unsigned int)(size_t)c,
+               "patrol reclaim: the searched point's altitude written");
+    lim_same(0x0047EA81, sizeof join, join, "patrol reclaim: where the stub rejoins");
+    return FIX_TABLE;
+}
+
 /* AN AI ALLY IS AN ALLY LIKE A HUMAN ONE, in a skirmish and in a network game: the owner's rule
    (research/notes/shared-resources-ai-plan.md). Three fixes, each through the engine's own code:
    a hosted AI's 0x28, the transfers without their tax on an AI, and the auto-share for AI allies,
@@ -9778,6 +10042,11 @@ static void patch_engine_defects(void)
     int maps = fix_map_terrain();
     int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
+    int pools = fix_effect_pools();
+    int hover = fix_hover_clock();
+    int stamp = fix_mover_stamp();
+    int site = fix_planner_site();
+    int rsite = fix_reclaim_site();
     int aisend = fix_ai_economy_send();
     int aitax  = fix_ai_untaxed();
     int aishr  = fix_ai_autoshare();
@@ -9906,6 +10175,22 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
+              "enginefix: the effect pools start every level empty -- the explosions' records, "
+              "the debris records with their blocks and the flying-piece slots (0x42090A) %s",
+              fix_state(pools));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: the hover wave on GameTime, not the wall clock (0x48A66A) %s; a mover's "
+              "moved-at stamp written in its constructor (0x43DC00) %s; the AI builder planner's "
+              "site altitude written (0x4081E2) %s; the patrols' reclaim search's altitude "
+              "written (0x47EA79) %s",
+              fix_state(hover), fix_state(stamp), fix_state(site), fix_state(rsite));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
               "enginefix: AI allies as human ones -- a hosted AI's 0x28 beside the viewed record's "
               "(0x4655A1) %s; a give to an AI in full (0x464D3A 0x464C0A) %s; the auto-share for AI "
               "allies, in a skirmish too, for every record a peer controls (0x457DD8 0x457DE4 "
@@ -9975,6 +10260,114 @@ static void patch_engine_defects(void)
     plog(b);
 }
 
+SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
+
+/* A HARNESS'S RANDOM STREAMS [DISASSEMBLED]. Stock starts every level from three random states,
+   each seeded from a clock:
+     - the simulation RNG 0x51FC88 (Park-Miller, drawn through 0x4B6C30): the loader 0x497180
+       sums QueryPerformanceCounter's two dwords (0x49718C..0x49719A) and seeds it through
+       0x4B6CA0 (stdcall, `ret 4`: state = seed ^ 0x66E29572 | 1) at 0x49719D. It reaches the
+       burst spray, the accuracy spread, the self-destruct's last countdown step, a structure's
+       heading and a unit's hover phase at its create, COB RAND and the AI;
+     - the loader thread's CRT stream: `srand(time(0))` at 0x4971A5..0x4971AE. The loader draws
+       the skirmish start positions from it (0x4979E7, 0x497A32);
+     - the game thread's CRT stream, seeded once by WinMain (`srand(time(0))`, 0x49E8B2..
+       0x49E8BB), which the draw path draws every drawn frame, and so, in a player's game, does
+       the meteor shower.
+   rand 0x4E4870 keeps its state per thread at +0x14 of 0x4EB0F0's block, which srand 0x4E4860
+   writes (0x4E4860..0x4E486C). Of rand's 61 call sites the rest are presentation, the front end
+   or network-only code (engine/sim.md, *The two random streams*), the wind's 0x490C60, which
+   fix_wind replaces, the meteor tick's, which fix_meteor_stream replaces under the switch, and
+   the objective's
+   0x490385, which nothing reaches.
+   THE SWITCH. The game folder's `tagpu_seeds.on`, a lever (tagpu_simreg.h) the automated
+   harnesses alone write -- every tareplay Worker, so the replay test groups, the calibration's
+   lanes, bar.py, eco_bench and the ImpAI tools that play through one -- and honoured only in a
+   test launch (tagpu_regstore_active), read once at install and listed in a recording's header.
+   A player's launch, `tacli launch --defaults` and the compatibility suite's games never write it
+   and keep stock's seeds: every skirmish there starts from its own random state (owner's
+   decision, 2026-11-14).
+   UNDER THE SWITCH every level starts from the same states: the loader's two seeds are
+   TEST_SEED_RNG for the counter and TEST_SEED_CRT for the time, and the game thread's stream is
+   re-seeded with TEST_SEED_CRT on the game thread just before the loader thread starts (fix_wind's
+   stub at 0x4982CA, test_seed_game_thread). The wind's and the meteors' seeds are wind_seed's,
+   TEST_SEED_WIND outside a network game, and the meteors draw their own stream
+   (fix_meteor_stream). The shatter's stream (fix_shatter_rng) is put back at its start with the
+   simulation RNG's seed, 0x49719D running on the loader thread before the start units' creates
+   (0x497963, 0x497ACD), the only draws a level makes before the load-done gate. And a scenario
+   apply that clears the level re-seeds all of them from the wire's seed (tagpu_seed_run), the
+   shatter's stream put back at its start, so a calibration run is a function of its
+   scenario and its index rather than of the runs its lane played before it. The values are
+   arbitrary: a test that wants another game changes its scenario's seed.
+   0x49719D and 0x4971AE call test_rng_seed and test_crt_seed directly, with stock's arguments
+   and conventions: 0x4B6CA0 is stdcall with one argument, srand is cdecl and its caller pops
+   (0x4971B8). After the first, time() at 0x4971A5 clobbers eax, ecx and edx before any is read;
+   after the second the loader writes eax (0x4971B3) and ecx (0x4971C1) before reading them, and
+   edx on each of the mode dispatch's four ways before it reads it (0x4971F1, 0x4973C6, 0x497468,
+   the call at 0x4974FC). Both are rows of the fail-closed table, so a harness's launch runs the
+   bytes a player's runs.
+   WHAT STAYS PER PROCESS: the heap's layout, `main`'s pad (0x41D924).
+   CLASS: simulation, fail closed. */
+#define TEST_SEED_RNG  0x5EED0001u
+#define TEST_SEED_CRT  0x5EED0002u
+#define TEST_SEED_WIND 0x5EED00035EED0003ull
+
+static int s_testSeeds;                 /* tagpu_seeds.on in force: set once at install */
+SIM_VAR(s_testSeeds, SIM_INSTALL);
+
+typedef void (__stdcall* PFN_RngSeed)(unsigned int seed);
+#define E_RngSeed ((PFN_RngSeed)0x004B6CA0u)
+typedef void (__cdecl* PFN_Srand)(unsigned int seed);
+#define E_Srand   ((PFN_Srand)0x004E4860u)
+/* the wind updater, no argument, plain `ret` (A RUN'S SEEDS, THE WIND AT THE APPLY) */
+typedef void (__cdecl* PFN_WindTick)(void);
+#define E_WindTick ((PFN_WindTick)0x00490C40u)
+
+/* 0x49719D, the LOADER thread */
+static void __stdcall test_rng_seed(unsigned int counter)
+{
+    if (!s_testSeeds) {
+        E_RngSeed(counter);
+        return;
+    }
+    E_RngSeed(TEST_SEED_RNG);
+    s_shatterRng = SHATTER_RNG_START;
+    tagpu_logf("enginefix: test seeds: the level's simulation RNG seeded with 0x%08X, not the "
+               "performance counter; the loader's and the game thread's CRT streams with 0x%08X, "
+               "not time(0); the shatter's stream at its start", TEST_SEED_RNG, TEST_SEED_CRT);
+}
+
+/* 0x4971AE, the LOADER thread: its own stream */
+static void __cdecl test_crt_seed(unsigned int now)
+{
+    E_Srand(s_testSeeds ? TEST_SEED_CRT : now);
+}
+
+/* the GAME thread, at the loader thread's start (fix_wind's stub at 0x4982CA): its own stream */
+static void __cdecl test_seed_game_thread(void)
+{
+    if (s_testSeeds) E_Srand(TEST_SEED_CRT);
+}
+
+static int fix_test_seeds(void)
+{
+    static const unsigned char rng[5]  = { 0xE8, 0xFE, 0xFA, 0x01, 0x00 };   /* call 0x4B6CA0 */
+    static const unsigned char crt[5]  = { 0xE8, 0xAD, 0xD6, 0x04, 0x00 };   /* call 0x4E4860 */
+    static const unsigned char pops[3] = { 0x83, 0xC4, 0x04 };               /* add esp,4     */
+    if (tagpu_sim_lever("tagpu_seeds.on")) {
+        if (tagpu_regstore_active())
+            s_testSeeds = 1;
+        else
+            plog("enginefix: tagpu_seeds.on refused: not a test launch (tagpu_regstore.h)");
+    }
+    lim_branch(0x0049719D, sizeof rng, rng, 0xE8, (unsigned int)(size_t)test_rng_seed,
+               "test seeds: the simulation RNG's seed");
+    lim_branch(0x004971AE, sizeof crt, crt, 0xE8, (unsigned int)(size_t)test_crt_seed,
+               "test seeds: the loader thread's CRT seed");
+    lim_same(0x004971B8, sizeof pops, pops, "test seeds: the loader pops srand's argument");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
 
 /* ===== THE LOADERS AND TWO HUD DIVIDES =====================================================
@@ -10019,8 +10412,9 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    at `next`, is read after 0x490CE8 only by its pop at 0x490D85. The load's call at 0x491903
    goes through a stub that seeds the generator first: in a network game from DirectPlay's
    session instance GUID and a hash of the map's name, or from the map's hash alone when
-   DirectPlay names no session; otherwise from QueryPerformanceCounter, the counter stock seeds
-   its own RNG with.
+   DirectPlay names no session; otherwise, under the harness's switch, from TEST_SEED_WIND and
+   the map's hash (*A harness's random streams*), and without it from QueryPerformanceCounter,
+   the counter stock seeds its own RNG with.
    THE SESSION, NOT THE HOST [DISASSEMBLED]. The engine's DirectPlay object (its trace strings
    "HAPINET_*" at 0x50B0AC..0x50B4A0) lives in main at +0x14. main+0x4D9 is the interface every
    call goes through: an IDirectPlay3A from QueryInterface (IID 0x4FCD78, at 0x4CA684), or, when
@@ -10066,7 +10460,9 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    loader thread does not exist yet; stock lets it call DirectPlay concurrently with the game
    thread once it runs (its wait pumps the network at 0x49727D while the game thread pumps at
    0x49852E, and it makes the SetSessionDesc above), so a call on the game thread before it
-   starts adds no concurrency that stock does not already have.
+   starts adds no concurrency that stock does not already have. The same stub then calls
+   test_seed_game_thread, which re-seeds the game thread's CRT stream under the harness's
+   switch.
    A successful answer is used only when its dwSize is sizeof(DPSESSIONDESC2) and its
    guidInstance is not null (Wine can answer DP_OK with a zeroed descriptor). Otherwise the seed
    takes the engine's copy main+0x479 when it is not null: it held DirectPlay's answer on every
@@ -10094,6 +10490,9 @@ static unsigned long long s_windState;          /* loader thread writes, then GA
 static const SimField wind_state_layout[] = { SIM_FIELD_AT(0, 8, SIMF_OPAQUE, SIM_ID_NONE),
                                               SIM_FIELD_END };
 SIM_VAR_L(s_windState, SIM_STATE, wind_state_layout);
+/* the meteor shower's own stream (fix_meteor_stream), seeded with the wind's at the level load */
+static unsigned long long s_meteorState;        /* loader thread writes, then GAME THREAD   */
+SIM_VAR_L(s_meteorState, SIM_STATE, wind_state_layout);
 /* the wind's diagnostics, peekable */
 static struct {
     volatile LONG levels;                       /* level loads seeded                        */
@@ -10130,12 +10529,11 @@ const char* tagpu_wind_state_name(void) { return simdir_s_windState.name; }
 
 void tagpu_wind_state_set(unsigned long long state) { s_windState = state; }
 
+static unsigned long long seed_mix(unsigned long long* state);
+
 static unsigned int wind_next(void)
 {
-    unsigned long long z = (s_windState += 0x9E3779B97F4A7C15ull);
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return (unsigned int)((z ^ (z >> 31)) >> 32);
+    return (unsigned int)(seed_mix(&s_windState) >> 32);
 }
 
 static int wind_guid_null(const GUID* g)
@@ -10252,6 +10650,25 @@ static unsigned int wind_map_hash(const char* gs, char* stem, unsigned int room)
     return h;
 }
 
+/* splitmix64's step and finaliser: the wind's generator, the meteors' and the run seeds' mixer */
+static unsigned long long seed_mix(unsigned long long* state)
+{
+    unsigned long long z = (*state += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+#define METEOR_SALT 0x6D6574656F72730Bull       /* the meteors' stream apart from the wind's */
+
+/* THE METEORS' SEED, from the wind's (wind_seed), one seed apart by METEOR_SALT. The stream is
+   drawn only under the harness's switch (fix_meteor_stream). */
+static void meteor_seed(unsigned long long wind)
+{
+    s_meteorState = wind ^ METEOR_SALT;
+    seed_mix(&s_meteorState);
+}
+
 static void __cdecl wind_seed(void)
 {
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
@@ -10298,6 +10715,10 @@ static void __cdecl wind_seed(void)
                        (long)level, (unsigned long)s_windSessionHr,
                        (unsigned long)s_windDiag.descSize, stem, map, (long)n);
         }
+    } else if (s_testSeeds) {
+        s_windState = TEST_SEED_WIND ^ ((unsigned long long)map << 32);
+        tagpu_logf("enginefix: wind: level %ld seeded from the harness's fixed seed (game mode "
+                   "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     } else {
         LARGE_INTEGER c;
         QueryPerformanceCounter(&c);
@@ -10305,6 +10726,7 @@ static void __cdecl wind_seed(void)
         tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (game mode "
                    "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     }
+    meteor_seed(s_windState);
     wind_next();                                /* one step, so a seed of 0 is no special case */
 }
 
@@ -10354,7 +10776,7 @@ static int fix_wind(void)
     };
     static const unsigned char after[4] = { 0x85, 0xC0, 0x75, 0x0A };   /* test eax,eax; jne */
     unsigned char *a, *b, *c, *d, *p;
-    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(16)) ||
+    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(24)) ||
         !(d = fix_code(16))) {
         lim_no_stub();
         return FIX_TABLE;
@@ -10374,6 +10796,7 @@ static int fix_wind(void)
     p = c;
     *p++ = 0x60;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_session_capture); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)test_seed_game_thread); p += 4;
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x004B6B20);
     p = d;
@@ -10395,6 +10818,124 @@ static int fix_wind(void)
     lim_branch(0x00491903, sizeof load, load, 0xE8, (unsigned int)(size_t)b,
                "wind: the level load's call, seeding first");
     return FIX_TABLE;
+}
+
+SIM_FEATURE(meteor_stream, SIM_PUPPET_OWNER, "meteor");
+
+/* THE METEOR SHOWER ON THE DRAWN FRAMES' STREAM, A HARNESS'S FIX [DISASSEMBLED]. The shower tick
+   0x437DE0 (the sim step's call at 0x495594, every tick, on every peer, no host test) draws CRT
+   rand 0x4E4870 on the game thread: four draws at every shower it schedules, switch on or off --
+   the shower's two points (0x437E37, 0x437E57, 0x437E88, 0x437EAA) -- and two at every stone
+   (0x437F98, 0x437FB5); the forced shower 0x438070 (the `+meteor` handler 0x417760's call at
+   0x41778A) draws the points' four (0x4380AD, 0x4380CE, 0x438100, 0x438124). The game thread's CRT
+   stream is also the draw path's, drawn every drawn frame (engine/sim.md, *The two random
+   streams*), so where a shower falls follows how many frames the process has drawn: a drawn and an
+   undrawn twin of one game parted at meteorp1/meteorp2 (MEASURED 2026-11-13, nodraweq on
+   nodraw-shadow).
+   THE FIX, under the harness's switch alone (A HARNESS'S RANDOM STREAMS; owner's decision,
+   2026-11-14: a player's game keeps stock's shower, these bytes untouched). Each of the ten calls
+   goes to meteor_rand, a cdecl function returning 15 bits, rand's range 0..0x7FFF, from the
+   meteors' own splitmix64 stream s_meteorState, which only these calls draw. Every caller writes
+   ecx and edx before reading them after the call (0x437E3C, 0x437E5C, the cdq at 0x437E8D,
+   0x437EAF and 0x437FBA, the imul at 0x437F9D; 0x4380B2, 0x4380D3 and the cdq at 0x438105 and
+   0x438129), as after the CRT's. The stream is seeded at the level load with the wind
+   (meteor_seed) and at a run's clearing apply (tagpu_seed_run), restored with every declared table
+   by a seek and a takeover, and on a puppet nothing draws it: the tick is refused there
+   (tagpu_puppet.c, gate_meteor) and the stones come from the recording. Inside a network game every
+   peer seeds it alike and rains its own shower, so a harness's two-peer game stacks the peers'
+   showers on the same points, where stock's peers rain apart.
+   CLASS: simulation, a harness's: the ten sites join the fail-closed table only under the switch. */
+static int __cdecl meteor_rand(void)
+{
+    return (int)(seed_mix(&s_meteorState) >> 49);
+}
+
+/* -1 when the switch is off: nothing written */
+static int fix_meteor_stream(void)
+{
+    static const unsigned int sites[10] = {
+        0x00437E37, 0x00437E57, 0x00437E88, 0x00437EAA, 0x00437F98, 0x00437FB5,
+        0x004380AD, 0x004380CE, 0x00438100, 0x00438124,
+    };
+    int i;
+    if (!s_testSeeds) return -1;
+    for (i = 0; i < 10; i++) {
+        unsigned char call[5];
+        unsigned int rel = 0x004E4870u - (sites[i] + 5u);    /* call 0x4E4870, the CRT's rand */
+        call[0] = 0xE8;
+        memcpy(call + 1, &rel, 4);
+        lim_branch(sites[i], sizeof call, call, 0xE8, (unsigned int)(size_t)meteor_rand,
+                   "meteors: a draw from their own stream");
+    }
+    return FIX_TABLE;
+}
+
+/* A RUN'S SEEDS, under the harness's switch (A HARNESS'S RANDOM STREAMS): the scenario applier
+   calls it on the game thread, between two steps, for an apply that clears the level, after the
+   clear and before the creates (tagpu_scenario.c, apply_now: the invariant and what rests on it),
+   with the wire's seed. It seeds every stream a level starts with
+   from that seed alone: the simulation RNG through 0x4B6CA0, the game thread's CRT stream
+   through srand, the wind's and the meteors' streams; it puts the shatter's stream back at its
+   start, a constant, so calibration check R6 finds it at run 0's value at every run's empty point
+   (tools/tasim/engtrace.py) and the seed's states stream_states mirrors keep their steps; and it restarts the two schedules that run
+   on GameTime from the apply's: the shower's (0x5122E8 the next shower, 0x512318 active), as the
+   level's init 0x437CD0 starts the shower, and the wind's, by drawing the seed's wind at once.
+   The loader thread's stream is gone with the loader.
+   THE WIND AT THE APPLY. A wind left to be drawn on the next step would not be in force for that
+   step: the step's projectile tick (0x495513) runs before its wind updater (0x49558F), so a shot
+   made in step T + 1 would fly one tick in the wind the level had before the apply -- the previous
+   batch's in a packed lane, the clear's alone -- and a cell could differ between packings. So the
+   updater 0x490C40 runs here, synchronously: it takes no argument, keeps esi (push 0x490C59, pop
+   0x490D85) and the x87 stack balanced (fild/fidiv/fstp, fld/fcomp), and returns with `ret`
+   (DISASSEMBLED), so a cdecl call of no argument is its contract. It draws only when next <
+   GameTime (`cmp ecx,edx; jae` at 0x490C51), so next is set to T - 1 first; the draw (fix_wind's
+   wind_draw, from s_windState) adds 30 * (5 + r % 10) to it, the updater derives the components
+   +0x37ECC/+0x37ED4, the ratio +0x37EDE and the changed flag +0x37EE2 from that draw alone, and
+   next is then raised by 1, so the schedule after it is the one a draw at step T + 1 from next = T
+   would make. From the apply on, every step sees the seed's wind. Without fix_wind's jump the
+   updater draws stock's way, from the simulation RNG and the CRT just seeded: still the seed's
+   alone, and R6 (tools/tasim/engtrace.py) names the wind's state. An apply at GameTime 0 cannot
+   draw (no next is below 0) and leaves the draw to step 1, as the level load does: a level at
+   GameTime 0 has drawn no wind yet, so none from an earlier run can be in force.
+   ITS LOG LINE names the call's place, "before the creates", and the calibration lane requires
+   those words (tools/tasim/engrun.py, seed_report): a DLL that seeds after the creates logs
+   otherwise and cannot play a lane whose references claim their applies' streams. The line's
+   words and that place change together. tools/tasim/engtrace.py (stream_states) mirrors the
+   seed_mix steps below and both constants, and holds every apply's recorded states to them. */
+void tagpu_seed_run(unsigned int seed)
+{
+    char* ta = *(char* const*)(size_t)B6_MAIN;
+    unsigned long long st = ((unsigned long long)seed << 32) | seed;
+    unsigned int now, period, next, wind, off = 0;
+    if (!s_testSeeds || !ta) return;
+    E_RngSeed((unsigned int)seed_mix(&st));
+    E_Srand((unsigned int)seed_mix(&st));
+    s_windState = seed_mix(&st) ^ TEST_SEED_WIND;
+    wind_next();
+    s_meteorState = seed_mix(&st) ^ METEOR_SALT;
+    seed_mix(&s_meteorState);
+    s_shatterRng = SHATTER_RNG_START;
+    memcpy(&now, ta + 0x38A47, 4);
+    if (now) {
+        unsigned int before = now - 1;
+        memcpy(ta + 0x37EC4, &before, 4);
+        E_WindTick();
+        memcpy(&wind, ta + 0x37EC4, 4);
+        wind += 1;
+        memcpy(ta + 0x37EC4, &wind, 4);
+    } else {
+        memcpy(ta + 0x37EC4, &now, 4);
+        wind = now;
+    }
+    memcpy(&period, (const void*)0x00512314u, 4);
+    next = now + period;
+    memcpy((void*)0x005122E8u, &next, 4);
+    memcpy((void*)0x00512318u, &off, 4);
+    tagpu_logf("enginefix: run seeds before the creates: the wire's seed %u at GameTime %u seeds "
+               "the simulation RNG, the game thread's CRT stream, the wind and the meteors, the shatter's "
+               "stream at its start; the wind "
+               "is drawn %s, its next change at %u, and the next shower is at %u", seed, now,
+               now ? "now" : "on the next step", wind, next);
 }
 
 SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");
@@ -10921,6 +11462,15 @@ static void patch_loader_defects(void)
     int ring = fix_range_circle();
     int plc  = fix_order_anyone();
     int qsit = fix_queued_site();
+    int seed = fix_test_seeds();
+    int mstr = fix_meteor_stream();
+    tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
+               "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
+               s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
+    if (mstr >= 0)
+        tagpu_logf("enginefix: under tagpu_seeds.on the meteor shower draws its own stream, not the "
+                   "CRT's the drawn frames draw (0x437E37 0x437E57 0x437E88 0x437EAA 0x437F98 "
+                   "0x437FB5 0x4380AD 0x4380CE 0x438100 0x438124) %s", fix_state(mstr));
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
@@ -10934,6 +11484,82 @@ static void patch_loader_defects(void)
                (unsigned int)(size_t)&s_windDiag.fromCopy, (unsigned int)(size_t)&s_windDiag.setCalls,
                (unsigned int)(size_t)&s_windDiag.setDiffered, (unsigned int)(size_t)&s_windDiag.setWithheld,
                (unsigned int)(size_t)&s_windDiag.mapOnly, (unsigned int)(size_t)&s_yardDiag.filled);
+}
+
+SIM_FEATURE(sight_cap, SIM_PUPPET_RUNS, "battle");
+
+/* THE TEMPORARY SIGHT RECORDS' CAP, A TEST LEVER: `tagpu_sightcap.on` holding N, 21..127, raises it
+   from 20 to N, in a test launch only (tagpu_regstore_active, the turbo's gate); anywhere else, or
+   with another text, the lever is refused with a line and nothing changes. The players' game never
+   runs it. It is the packed calibration lane's (research/notes/modules/tasim-calibration.md, *The
+   packed lane*): the records are one list for the whole game (engine/map.md, *The temporary sight
+   records*), so a level holding many fights at once shares one cap that a fight alone never
+   reaches, and a death the cap refuses lights nothing for 61 ticks. Raised past every batch's
+   viewed-seat units, no add is refused, as in an unpacked run.
+   THE SITES (DISASSEMBLED; a .text-wide search finds no other 0x2D0 and no other compare with 20
+   on the count main+0x14277 or the block main+0x1427B, through any base):
+     0x481505  68 D0 02 00 00   push 0x2D0, the block of 20 x 36 bytes in 0x481500, which nothing
+                                calls -> push N x 36
+     0x483D88  68 D0 02 00 00   push 0x2D0, LoadMap's block, the one a level allocates
+                                (0x483D98 calls the allocator 0x4D83B0) -> push N x 36
+     0x48292C  83 F8 14         cmp eax,0x14, the add 0x482910's cap -> cmp eax,N
+   N is at most 127 because the compare's imm8 is sign-extended. Every other reader of the count
+   and the block works from the count alone: the expiry 0x482130 walks count records and compacts
+   them, and the add fills record `count`. The three go into the fail-closed table, so a lever on an
+   exe whose bytes differ there ends the process at the report rather than playing at 20.
+   Impure's readers of the list take the cap in force from tagpu_sightcap: a seek's and a sight
+   change's drop (tagpu_replay.c, sight_records_bounded and sight_records_drop) bound the count by
+   it, so every record the engine can hold is dropped and the reads stay inside the block. A
+   recording made under the lever carries its N (RT_SIGHTCAP), and a playing refuses a recording
+   whose cap is not its own (tagpu_replay.c, validate_header). */
+static unsigned int s_sightCap;          /* N, or 0 when the lever is not in force */
+SIM_VAR(s_sightCap, SIM_INSTALL);
+
+unsigned int tagpu_sightcap(void)
+{
+    return s_sightCap ? s_sightCap : TAGPU_SIGHTCAP_STOCK;
+}
+
+static int fix_sight_cap(void)
+{
+    char b[16], *end;
+    unsigned long n;
+    unsigned int bytes;
+    size_t len;
+    FIXSITE site[3] = {
+        { 0x00481505, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
+        { 0x00483D88, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
+        { 0x0048292C, 3, { 0x83, 0xF8, 0x14 },             { 0x83, 0xF8 } },
+    };
+
+    if (tagpu_sim_lever_read("tagpu_sightcap.on", b, sizeof b) < 0) return -1;
+    /* the file's own line end goes, so the refusal below quotes the text on one log line */
+    len = strlen(b);
+    while (len && (b[len - 1] == ' ' || b[len - 1] == '\t' || b[len - 1] == '\r' || b[len - 1] == '\n'))
+        b[--len] = '\0';
+    n = strtoul(b, &end, 10);
+    if (!tagpu_regstore_active()) {
+        plog("sightcap: tagpu_sightcap.on refused: not a test launch (tagpu_regstore.h)");
+        return -1;
+    }
+    if (end == b || *end || n < 21 || n > 127) {
+        tagpu_logf("sightcap: tagpu_sightcap.on refused: \"%s\" is not a cap of 21 to 127", b);
+        return -1;
+    }
+    s_sightCap = (unsigned int)n;
+    bytes = s_sightCap * 36u;
+    memcpy(site[0].now + 1, &bytes, 4);
+    memcpy(site[1].now + 1, &bytes, 4);
+    site[2].now[2] = (unsigned char)s_sightCap;
+    return fix_table(site, 3, "temporary sight record cap, test lever");
+}
+
+static void patch_sight_cap(void)
+{
+    int r = fix_sight_cap();
+    if (r >= 0)
+        tagpu_logf("sightcap: TEST LEVER tagpu_sightcap.on -- the temporary sight records' cap %u "
+                   "(0x481505 0x483D88 0x48292C) %s", s_sightCap, fix_state(r));
 }
 
 SIM_FEATURE(apply_patches, SIM_PUPPET_RUNS, "battle");
@@ -11078,6 +11704,7 @@ void tagpu_apply_patches(void)
 
     patch_engine_defects();
     patch_loader_defects();
+    patch_sight_cap();
 }
 
 SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");
@@ -11093,8 +11720,8 @@ SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");
    load's loop 0x4207FB..0x4208F9 initialises each of the engine's 300 (DISASSEMBLED: +0 = 0xFF,
    +4 = 8, +8 = 6, +0xC = -1, +0x1C = 0x502C28, +0x20 = 0, +0x24 the record's 0x60-byte vertex
    block, +0x28 its 0xC0-byte face block; each of its 6 faces of 0x20 gets +0x1C bit 0, +0 = 0xC8,
-   +4 = 4, +0xC = 0x502BF8 + 8 * the face). Both builds: the raised one over its own records
-   (lim_level_reset), the stock one over the engine's at a seek (tagpu_effects_clear). */
+   +4 = 4, +0xC = 0x502BF8 + 8 * the face). Both builds, over the records the build uses, at every
+   level load and every seek (fx_pools_empty). */
 static void debris_init(unsigned char* r, unsigned char* vertices, unsigned char* faces)
 {
     unsigned int v, k;
@@ -11156,19 +11783,6 @@ static unsigned char* __cdecl lim_aux_alloc(void)
     for (i = 0; i < TAGPU_LIM_AUX; i++)
         if (s_aux[i][0] == 0xFF) { s_aux[i][0] = 0; return s_aux[i]; }
     return NULL;
-}
-
-/* In place of the level load's `mov ecx,0x64 / xor eax,eax / mov edi,0x511DF0 / rep stosd`
-   at 0x42090A, which clears the flying-piece slots: clear ours, and initialise the debris
-   records exactly as the loop at 0x4207FB..0x4208F9 initialises stock's (that loop still
-   runs, over the engine's own array, which nothing uses any more). Returns 0 because stock
-   leaves eax = 0 on the way out of the function. */
-static int __cdecl lim_level_reset(void)
-{
-    int i;
-    memset(s_psys, 0, sizeof s_psys);
-    for (i = 0; i < TAGPU_LIM_AUX; i++) debris_init(s_aux[i], s_auxVert[i], s_auxFace[i]);
-    return 0;
 }
 
 /* THE PROJECTILE COMPACTION FRAME. 0x49AE20 keeps two i16 index arrays on its stack, one
@@ -11563,6 +12177,23 @@ static void __cdecl cob_free_blob(void* blob)
     SIM_FREE_OWNED(s_cobFiles, f);
     LeaveCriticalSection(&s_cobLock);
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
+}
+
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def)
+{
+    const void* blob;
+    const TagpuCobProgram* program = NULL;
+    CobFile* f;
+    /* the read hook and its lock exist only once lim_sites installed them, which a limits state above 0 proves:
+       an early return there sets it to -1 */
+    if (!def || !tagpu_limits_in()) return NULL;
+    blob = *(void* const*)(def + 0x18E);
+    if (!blob) return NULL;
+    EnterCriticalSection(&s_cobLock);
+    f = cob_find(blob);
+    if (f) program = f->program;
+    LeaveCriticalSection(&s_cobLock);
+    return program;
 }
 
 static void* cob_bind_loaded_model(char* def, void* blob)
@@ -12209,18 +12840,14 @@ static void lim_sites(void)
 
     /* ---- flying pieces: the slots move from 0x511DF0..0x511F80 to s_psys. The five
        `mov ecx,0x511F80` are the backing allocator's `this` (it lives right after the
-       slots), not the slots' end, and stay as they are. */
+       slots), not the slots' end, and stay as they are. The level load's clear of the slots
+       at 0x42090A is the effect pools' fix in both builds (fix_effect_pools), which clears
+       s_psys here. */
     {
         static const unsigned char push[5] = { 0x68, 0xA0, 0x86, 0x01, 0x00 };
         static const unsigned char op = 0x68;
         lim_op(0x004208FB, 5, push, &op, 1, 100000u * TAGPU_LIM_PSYS / 100u,
                "flying-piece backing bytes");
-    }
-    {
-        static const unsigned char clr[14] = { 0xB9, 0x64, 0x00, 0x00, 0x00, 0x33, 0xC0,
-                                               0xBF, 0xF0, 0x1D, 0x51, 0x00, 0xF3, 0xAB };
-        lim_branch(0x0042090A, 14, clr, 0xE8, (unsigned int)(size_t)&lim_level_reset,
-                   "effect pools level reset");
     }
     {
         static const unsigned int base[7] = { 0x00420B08, 0x00420F38, 0x00421153, 0x00421172,
@@ -12523,58 +13150,14 @@ char* tagpu_limits_weapon0(void)
 
 static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
 
-#endif /* TAGPU_LIMITS_STOCK */
-
-/* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
-   steps, after the rebuild's kills and creates: what was in flight before the seek and what the
-   creates' Create scripts made both go, and nothing that names a unit outlives the kills.
-   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
-     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
-     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
-     is kept (its second loop, which frees it, is not run).
-   - The explosions, then the debris records and the flying-piece slots, in that order: debris
-     re-initialised while live explosions still name a record at +0 would leave those explosions
-     drawing a free record. The raised build's are its own pools (lim_level_reset); the stock
-     build's are the engine's: the explosion count main+0x1491B, the 300 debris records at
-     main+0x1AB9F with their blocks at main+0x1E88F and main+0x2590F (the strides the load's loop
-     uses), and the 100 slots 0x511DF0..0x511F80, zeroed as the load's `rep stosd` at 0x42090A
-     does.
-   Not the rest of the load 0x420620: it allocates the explosions' sequence tables and the
-   pieces' ring, which mid-level would leak. The ring that owns the pieces' blocks (0x511F80)
-   stays consistent: an eviction nulls an owner slot only while it still points at that block
-   (0x437A96..0x437A9D, 0x437AC8..0x437ACF), so a block orphaned here is reclaimed later without
-   touching a reused slot. 1 cleared, 0 when there is no main block or the raise is not in. */
-int tagpu_effects_clear(void)
+/* the stock build installs no read hook, so it holds no validated program */
+const struct TagpuCobProgram* tagpu_cob_def_program(const char* def)
 {
-    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
-    char* ta = *(char* const*)0x00511DE8;
-    unsigned char* layers;
-    int i;
-    if (!ta) return 0;
-    layers = *(unsigned char* const*)(ta + 0x38D77);
-    for (i = 0; layers && i < 10; i++) {
-        char** first = (char**)(layers + i * 16 + 4);      /* the layer's vector */
-        char** last = (char**)(layers + i * 16 + 8);
-        while (*last != *first) {
-            void* object = *(void**)*first;
-            if (object) ((PFN_FxDestroy)**(void***)object)(object, 1);
-            memmove(*first, *first + 4, (size_t)(*last - (*first + 4)));
-            *last -= 4;
-        }
-    }
-#ifndef TAGPU_LIMITS_STOCK
-    if (s_limState <= 0) return 0;
-    s_expl.count = 0;
-    lim_level_reset();
-#else
-    *(int*)(ta + 0x1491B) = 0;
-    for (i = 0; i < 300; i++)
-        debris_init((unsigned char*)ta + 0x1AB9F + i * 0x34, (unsigned char*)ta + 0x1E88F + i * 0x60,
-                    (unsigned char*)ta + 0x2590F + i * 0xC0);
-    memset((void*)(size_t)0x00511DF0u, 0, 100 * 4);
-#endif
-    return 1;
+    (void)def;
+    return NULL;
 }
+
+#endif /* TAGPU_LIMITS_STOCK */
 
 /* Two sites of the table that cover one byte: two fixes, or a fix and a raised limit, would
    each have been checked against stock bytes the other rewrites. Our bug, found before
@@ -12590,6 +13173,11 @@ static int lim_overlap(void)
                 return 1;
             }
     return 0;
+}
+
+int tagpu_limits_in(void)
+{
+    return s_limState > 0;
 }
 
 int tagpu_limits_install(void)
@@ -12954,6 +13542,169 @@ void tagpu_limits_report(void)
         }
     }
     tagpu_refuse(text);
+}
+
+SIM_FEATURE(effect_pools, SIM_PUPPET_RUNS, "battle stock-impai-fight");
+
+/* THE EFFECT POOLS START EVERY LEVEL EMPTY.
+
+   WHAT STOCK LEAVES [DISASSEMBLED]. The explosion pool, the debris records and the flying-piece
+   slots live for the process: stock's in the main block, which is allocated once (0x41D924..0x41D9D5),
+   and in .data; the raised build's in the statics of the limits block. The level load's effects
+   reset 0x420620 zeroes the explosion count alone (0x420630), writes some fields of each debris
+   record and of its six faces (0x4207FB..0x4208F9) and zeroes the flying-piece slots (0x42090A). So
+   the explosion records past the count and the debris records' unwritten bytes keep an earlier
+   level's values -- a record's state B sequence (+0x18) naming the table B the teardown frees
+   (0x420960, at 0x4209DF), a debris face's texture pointer into a model template the teardown frees
+   (0x42DB90) -- and nothing reads them while the explosion cap equals the debris records' count:
+   - THE ENGINE'S INVARIANT: the taken debris records (+0 != 0xFF) are at most the explosion records
+     below the count whose body (+0) is not NULL. Every place that changes either side keeps it: the
+     load zeroes the count (0x420630) and frees every debris record (0x420804); the add starts a
+     record with no body (0x420A30, its +0 at 0x420AE6); the shatter counts its record (0x4217B0)
+     and takes a debris record (0x421D82) for its body (0x421806); the tick frees a body and nulls
+     +0 together (0x4210A3, 0x4210A6); the compaction drops only a record whose body, +0xC and +0x18
+     are all NULL (0x4210E6..0x42113E).
+   - SO A SHATTER ALWAYS FINDS A FREE DEBRIS RECORD. It scans for one only after its cap test
+     `count < 300` (0x42176F), when at most 299 bodies, and so at most 299 taken records, are live
+     among 300 (the scan's bound, `cmp eax,0x12C` at 0x4217FB). Its no-free exit (0x421802, the
+     NULL body at 0x421806, the leave at 0x421808) is unreachable while the two caps are equal,
+     which the _Static_assert below pins: 300 and 300 in stock, TAGPU_LIM_EXPL and TAGPU_LIM_AUX
+     (3000 each) raised.
+   - SO NO STALE BYTE IS READ. A record past the count comes below it only through the add, which
+     writes its +0xC and +0x18 (0x420A85..0x420AB7), or the shatter, which clears them (0x4218F1,
+     0x4218F4); the tick and the draw read records below the count alone. A taken debris record is
+     rewritten before any draw: its vertices (0x421915..0x42199B, 0x421BB8..0x421C76) and its faces
+     (0x421C95..0x421D2F).
+   The explosion cap at 0x42176F still decides how many sim-RNG draws a shatter makes when the
+   explosion pool is full, from the records this level wrote.
+
+   THE FIX replaces the slots' clear at 0x42090A (`mov ecx,0x64 / xor eax,eax / mov edi,0x511DF0 /
+   rep stosd`, 14 bytes), the last thing 0x420620 does before its epilogue, with a call of
+   fx_pools_empty and nine NOPs, in both builds. It zeroes the explosion pool whole, count and
+   records, and the debris records with their vertex and face blocks, initialises each debris record
+   as the engine's loop does (debris_init), and zeroes the flying-piece slots, in the pools the build
+   uses. A fresh process holds exactly these bytes there: its main block is zeroed whole by
+   `rep stosd` / `rep stosb` (0x41D94C..0x41D95E) before 0x41D9D5 publishes it, and the statics
+   start zeroed [DISASSEMBLED; MEASURED 2026-11-13, a fresh process's dump holds 300 zero explosion
+   records]. What it buys:
+   - every level's pools hold a fresh process's bytes, whatever the process played before;
+   - an in-place seek (tagpu_effects_clear) leaves the same pool bytes as a fresh-process seek;
+   - the tail past the count is zero rather than holding freed pointers, should the caps ever
+     differ.
+   A first level is unchanged.
+
+   EVERY LEVEL LOAD REACHES IT. 0x420620's only caller is 0x4919D2 in LoadGameData_Main 0x4917D0;
+   that function's only caller is 0x497581 in the loader body 0x497180; its only caller is 0x497CA1
+   in the loader thread's procedure 0x497C70, whose address is pushed only at 0x4982C5, in the load
+   state's first call of every level (engine/units.md). The game modes branch at 0x4971D8..0x4971E6
+   and meet again at 0x4974E3, before 0x497581; a saved game's restore comes after it (0x497B29).
+   Neither 0x4917D0 before 0x4919D2 nor 0x420620 before 0x42090A has a return or a branch past it.
+   None of the four addresses occurs in the image as a dword, so no indirect call reaches them
+   [DISASSEMBLED 2026-11-13, objdump and a byte search of the pristine exe].
+
+   REGISTERS. The epilogue after the site (0x420918: pop edi, esi, ebp, ebx, ecx; ret) restores edi
+   and ecx, the two registers the stock clear leaves changed besides eax, and edx is a scratch
+   register of the engine's own code. Stock leaves eax = 0 at the return, so the reset returns 0.
+
+   THREADS (an ordering). At a level load the reset runs on the loader thread, inside 0x420620,
+   before the loader's last store, bit 1 of main+0x38D75 (0x497C62). Every engine reader and writer
+   of the pools runs only in play, on the game thread, after the load state has seen that bit
+   (0x498342..0x49834D): the sim step's shatter and explosion tick, run by the in-play entry that
+   follows that test (its catch-up ticks, then the in-play handler 0x499200 it installs at
+   0x498455), and the receivers of 0x0A..0x10, whose mask 4 the dispatcher admits in net state 6
+   alone (0x454762..0x45477D), which the in-play entry sets at 0x498445. At a seek the reset runs on
+   the game thread (tagpu_effects_clear), between two sim steps. The frame packet reads the pools on
+   the game thread, in the in-play draw alone.
+
+   CLASS: in the fail-closed table. Its absence would change no shared state of a live game in the
+   stock build: nothing reads the bytes it clears (WHAT STOCK LEAVES). It is in the table for two
+   reasons. In the raised build this call is what initialises the static debris records and clears
+   the static flying-piece slots, a raised limit like the rest of the table: without it no static
+   debris record reads free (+0 = 0xFF), lim_aux_alloc hands out none, and every shatter takes the
+   no-free exit and draws nothing where stock draws. And in both builds every level then starts
+   with the pool bytes a fresh process starts with, which the replay's byte comparisons of a later
+   level against a fresh process's playing of it assume. */
+#define FXP_EXPL      0x1491Bu   /* main+: the explosion count, its 300 records of 0x54 after it  */
+#define FXP_DEBRIS    0x1AB9Fu   /* main+: the 300 debris records of 0x34                          */
+#define FXP_VERTS     0x1E88Fu   /* main+: their vertex blocks of 0x60, straight after them        */
+#define FXP_FACES     0x2590Fu   /* main+: their face blocks of 0xC0, straight after those         */
+#define FXP_STOCK     300        /* explosion and debris records                                   */
+#define FXP_PIECES    100        /* flying-piece slots at 0x511DF0                                 */
+
+/* The shatter's no-free exit (0x421802..0x421808) is unreachable, and the pools' stale bytes
+   unread, only while the explosion cap equals the debris records' count (WHAT STOCK LEAVES). */
+_Static_assert(TAGPU_LIM_EXPL == TAGPU_LIM_AUX, "the explosion cap equals the debris records' count");
+
+/* Both are emptied together, so no record names a freed body. */
+static int __cdecl fx_pools_empty(void)
+{
+    int i;
+#ifndef TAGPU_LIMITS_STOCK
+    memset(&s_expl, 0, sizeof s_expl);
+    memset(s_aux, 0, sizeof s_aux);
+    memset(s_auxVert, 0, sizeof s_auxVert);
+    memset(s_auxFace, 0, sizeof s_auxFace);
+    for (i = 0; i < TAGPU_LIM_AUX; i++) debris_init(s_aux[i], s_auxVert[i], s_auxFace[i]);
+    memset(s_psys, 0, sizeof s_psys);
+#else
+    unsigned char* ta = *(unsigned char* const*)0x00511DE8;
+    if (!ta) return 0;
+    memset(ta + FXP_EXPL, 0, 4 + FXP_STOCK * 0x54);
+    memset(ta + FXP_DEBRIS, 0, FXP_STOCK * (0x34 + 0x60 + 0xC0));
+    for (i = 0; i < FXP_STOCK; i++)
+        debris_init(ta + FXP_DEBRIS + i * 0x34, ta + FXP_VERTS + i * 0x60, ta + FXP_FACES + i * 0xC0);
+    memset((void*)(size_t)0x00511DF0u, 0, FXP_PIECES * 4);
+#endif
+    return 0;
+}
+
+static int fix_effect_pools(void)
+{
+    static const unsigned char clr[14] = { 0xB9, 0x64, 0x00, 0x00, 0x00, 0x33, 0xC0,
+                                           0xBF, 0xF0, 0x1D, 0x51, 0x00, 0xF3, 0xAB };
+    lim_branch(0x0042090A, (int)sizeof clr, clr, 0xE8, (unsigned int)(size_t)&fx_pools_empty,
+               "the effect pools emptied at every level load");
+    return FIX_TABLE;
+}
+
+/* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
+   steps, after the rebuild's kills and creates: what was in flight before the seek and what the
+   creates' Create scripts made both go, and nothing that names a unit outlives the kills.
+   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
+     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
+     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
+     is kept (its second loop, which frees it, is not run).
+   - The explosions, the debris records and the flying-piece slots, emptied as a level load empties
+     them (fx_pools_empty), after the particles: the pools then hold what a fresh process playing
+     the same level would hold at its start, whatever this process played before the seek.
+   Not the rest of the load 0x420620: it allocates the explosions' sequence tables and the
+   pieces' ring, which mid-level would leak. The ring that owns the pieces' blocks (0x511F80)
+   stays consistent: an eviction nulls an owner slot only while it still points at that block
+   (0x437A96..0x437A9D, 0x437AC8..0x437ACF), so a block orphaned here is reclaimed later without
+   touching a reused slot. 1 cleared, 0 when there is no main block or the raise is not in. */
+int tagpu_effects_clear(void)
+{
+    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* layers;
+    int i;
+    if (!ta) return 0;
+    layers = *(unsigned char* const*)(ta + 0x38D77);
+    for (i = 0; layers && i < 10; i++) {
+        char** first = (char**)(layers + i * 16 + 4);      /* the layer's vector */
+        char** last = (char**)(layers + i * 16 + 8);
+        while (*last != *first) {
+            void* object = *(void**)*first;
+            if (object) ((PFN_FxDestroy)**(void***)object)(object, 1);
+            memmove(*first, *first + 4, (size_t)(*last - (*first + 4)));
+            *last -= 4;
+        }
+    }
+#ifndef TAGPU_LIMITS_STOCK
+    if (s_limState <= 0) return 0;
+#endif
+    fx_pools_empty();
+    return 1;
 }
 
 SIM_FEATURE(restore_invariants, SIM_PUPPET_RUNS, "battle");

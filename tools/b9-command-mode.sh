@@ -1,10 +1,14 @@
 #!/bin/bash
 # A command mode whose unit dies — one scripted run, no hand driving.
 #
-#   tools/b9-command-mode.sh [out-dir]  (instance $B9_INSTANCE, default b9cm, on the private
-#                                        Xvfb $B9_DISPLAY, default :146; B9_MODE=attack or move,
+#   tools/b9-command-mode.sh [out-dir]  (instance b9cm, made afresh, on the private Xvfb
+#                                        $B9_DISPLAY, default :146; B9_MODE=attack or move,
 #                                        default attack; B9_DLL=stocklimits runs
 #                                        ddraw-stocklimits.dll)
+#
+# One game under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
+# instance's resource, so a second run of this probe waits for the first. The probe runs itself
+# again as the lock's command, which holds them until it exits.
 #
 # scenarios/b9-group.json with the play defaults. Select the CORAK alone, press CORATTACK or
 # CORMOVE (the order byte main+0x2CC3 takes the mode, 3 or 2), walk the CORAK into the LLT's
@@ -15,7 +19,7 @@
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
-I=${B9_INSTANCE:-b9cm}
+I=b9cm
 D=${B9_DISPLAY:-:146}
 MODE=${B9_MODE:-attack}
 case "$MODE" in
@@ -23,7 +27,12 @@ case "$MODE" in
   move)   GADGET=CORMOVE;   WANT=2 ;;
   *) echo "B9_MODE is attack or move"; exit 2 ;;
 esac
-OUT=${1:-${TMPDIR:-/tmp}/b9-command-mode-$MODE}
+OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b9-command-mode-$MODE}")
+case "${RUNLOCK_HELD:-}" in
+  *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
+  *) cd "$REPO" && exec python3 tools/runlock.py run --lanes 1 --what "b9-command-mode $MODE" \
+       --resource "instance-$I" -- "$REPO/tools/b9-command-mode.sh" "$OUT" ;;
+esac
 mkdir -p "$OUT"
 start=$(date +%s)
 echo "b9 $MODE start $(date -d @"$start" +%T)"
@@ -36,7 +45,9 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+# a registry of its own: an instance sharing the template's hives would take the whole budget
+"$T" rm "$I" --force > /dev/null 2>&1
+"$T" create "$I" --private-registry --display "$D" > "$OUT/create.txt" 2>&1 \
   || fail "create: $(tail -1 "$OUT/create.txt")"
 info() {        # retried: `tacli ls` fails while another session's instance is half made
   local v

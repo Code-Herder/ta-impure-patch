@@ -1,0 +1,184 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI's naval rule (tagpu/ddraw/src/impai_mil.c, the naval judgement and keeping to the layer; impai_build.c, the sea plant): Gods of War, an island map 78.5 % under its sea, with fixed starts, true line of sight, unmapped, at Hard, the level's end test off. Unmapped so the sea plant's search passes over the water seat 1 has not seen, as its own site test refuses it: the two CORPT (SightDistance 280, MEASURED from the FBI) explore deep water about 750 px from the anchor, within its 1024, so the naval check passing proves the search found explored water. Every unit of the level is cleared. Seat 1 is ImpAI (CORE, StartPos2, so the launch writes `seatai=1`) on start 2's island, the south-west corner: its commander at the start, (336, 3696), and a K-bot lab on the flat dry site at (336, 3568), so its first factory stands and the next one is the one the rule decides; four AK on dry ground at (400..592, 3904), a land FORM squad; two CORPT at (1088, 3600) and (1152, 3600), water 55 deep, a sea FORM squad. Seat 2 is OTA AI (ARM): its commander and lab on start 4's island at (2784, 3792) and (2784, 3664), the start seat 1's estimate takes (start 4 is 2450 px from seat 1's, start 3 2547), so the estimate lies across the water; four ARMPT at (1024..1216, 3360..3392), 240 px from the CORPT, so a sea-against-sea prediction, a contact the land squad cannot close on and a defence across the shore come in the first minutes. Seat 0 is an idle human with no unit; with the end test off the level runs on. Each computer seat's base storage is 1000 metal and 1000 energy, the applier's write after its clear. The dry and deep points were MEASURED from the map's heights; features were not: the apply's result names any create the engine refused. Expected in the live lane: `impai: reach summary ... mostly_water=1`; seat 1 judges naval from its first military decision and orders a CORSY from its commander, its level-end lines carrying `naval=1` and `sea_plants=1`; predictions made.",
+ "setup": {
+  "map": "Gods of War",
+  "res": "1024x768",
+  "clear_existing": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": false,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "core_com",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    336,
+    3696
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_lab",
+   "type": "CORLAB",
+   "owner": 1,
+   "pos": [
+    336,
+    3568
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_ak0",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    400,
+    3904
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_ak1",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    464,
+    3904
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_ak2",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    528,
+    3904
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_ak3",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    592,
+    3904
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_pt0",
+   "type": "CORPT",
+   "owner": 1,
+   "pos": [
+    1088,
+    3600
+   ],
+   "facing": 90
+  },
+  {
+   "id": "core_pt1",
+   "type": "CORPT",
+   "owner": 1,
+   "pos": [
+    1152,
+    3600
+   ],
+   "facing": 90
+  },
+  {
+   "id": "arm_com",
+   "type": "ARMCOM",
+   "owner": 2,
+   "pos": [
+    2784,
+    3792
+   ],
+   "facing": 270
+  },
+  {
+   "id": "arm_lab",
+   "type": "ARMLAB",
+   "owner": 2,
+   "pos": [
+    2784,
+    3664
+   ],
+   "facing": 270
+  },
+  {
+   "id": "arm_pt0",
+   "type": "ARMPT",
+   "owner": 2,
+   "pos": [
+    1024,
+    3392
+   ],
+   "facing": 270
+  },
+  {
+   "id": "arm_pt1",
+   "type": "ARMPT",
+   "owner": 2,
+   "pos": [
+    1088,
+    3360
+   ],
+   "facing": 270
+  },
+  {
+   "id": "arm_pt2",
+   "type": "ARMPT",
+   "owner": 2,
+   "pos": [
+    1152,
+    3360
+   ],
+   "facing": 270
+  },
+  {
+   "id": "arm_pt3",
+   "type": "ARMPT",
+   "owner": 2,
+   "pos": [
+    1216,
+    3392
+   ],
+   "facing": 270
+  }
+ ]
+}

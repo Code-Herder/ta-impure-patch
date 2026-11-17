@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "Promo fixture: 200 aircraft over two flak-defended bases 600 units apart, both inside the pinned frame. The first cut sent the two air forces at each OTHER across an empty view and it played out in seconds: by 30 s after the load the frame held a landscape, a few turrets and some wrecks, and the capture measured 90 % duplicate frames. Aircraft are fast, the camera is pinned, and a crossing is over in one pass -- so give them something in frame to keep attacking. Bases sit at x 2700 and x 3300 either side of the camera, the squadrons enter from x 1750 and x 4250, and the flak keeps firing while they circle.",
+  "description": "Promo fixture: 200 aircraft over two flak-defended bases 600 units apart, both inside the pinned frame. The first cut sent the two air forces at each OTHER across an empty view and it played out in seconds: by 30 s after the load the frame held a landscape, a few turrets and some wrecks, and the capture measured 90 % duplicate frames. Aircraft are fast, the camera is pinned, and a crossing is over in one pass -- so give them something in frame to keep attacking. Bases sit at x 2700 and x 3300 either side of the camera, the squadrons enter from x 1750 and x 4250, and the flak keeps firing while they circle. The two air forces mirror each other, every aircraft armed: 56 fighters, 24 gunships (ARMBRAWL, CORAPE) and 20 bombers a side, each ordered to attack the other base.",
   "seed": 20260911,
   "on_error": "abort",
 
@@ -41,7 +41,7 @@
 
     { "id": "core_air", "owner": 1, "at": [4250, 1500],
       "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
-      "composition": [{"type": "CORVAMP", "count": 56}, {"type": "CORFINK", "count": 24},
+      "composition": [{"type": "CORVAMP", "count": 56}, {"type": "CORAPE", "count": 24},
                       {"type": "CORSHAD", "count": 20}],
       "facing": 270,
       "orders": [{"cmd": "attack", "to": [2700, 1500]}] }

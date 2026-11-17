@@ -46,6 +46,14 @@ done
 HOST="$1"; shift
 JOINS=("$@")
 TACLI="$(cd "$(dirname "$0")" && pwd)/tacli"
+
+# Each player's nickname is its instance's name, upper-cased, and SELGAME's NICKNAME field holds ten
+# characters (tacli reads its maxchars as 10): a longer name is refused here, before any menu is
+# walked, rather than on SELGAME minutes later.
+for INST in "$HOST" "${JOINS[@]}"; do
+    [ "${#INST}" -le 10 ] || {
+        echo "mp_lobby: '$INST' is ${#INST} characters and its nickname holds 10" >&2; exit 2; }
+done
 PROVIDER='Internet TCP/IP Connection For DirectPlay'
 
 ui() { "$TACLI" ui "$@"; }

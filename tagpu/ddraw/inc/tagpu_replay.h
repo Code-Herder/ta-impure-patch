@@ -19,6 +19,10 @@
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* 1 once tagpu_replay_init put every one of its play sites in, the level init's PLAYERS call
+   0x4919C8 among them: from then on every level's load calls tagpu_replay_level_players, which
+   runs ImpAI's level init (tagpu_impai.h). DllMain's attach writes it; read after. */
+int tagpu_replay_level_init_in(void);
 /* The test pacing's levers (tagpu_replay.c), each honoured only in a test launch
    (tagpu_regstore_active) -- configurations no player runs -- and refused with a line otherwise.
    DllMain's attach, before tagpu_simreg_attach closes the lever list, so every recording's header
@@ -26,7 +30,10 @@ void tagpu_replay_init(void);
    - THE TURBO's k: tagpu_turbo.on, its text a k of 1 to 5 (empty is 1). Nothing changes until the
      trigger's `turbo on`.
    - THE LAUNCH'S HOLD: tagpu_hold.on present. The level's first batch is one tick and the level
-     is held after it, until the trigger's `resume`. */
+     is held after it, until the trigger's `resume`.
+   - NO DRAW, THE SHADOW and THE POSE CHECK: tagpu_nodraw.on, tagpu_ndshadow.on and
+     tagpu_posecheck.on, read here for tagpu_nodraw.c (inc/tagpu_nodraw.h), which rides on the frame
+     visit and the pacing guard tagpu_replay_init installs. */
 void tagpu_replay_pacing_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);
@@ -246,6 +253,11 @@ unsigned tagpu_replay_logo_colour(unsigned logo);
    commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.
    With `out` NULL, the level's count of types. Game thread only. */
 unsigned tagpu_replay_army_values(float* out, unsigned cap);
+/* 1 when this frame's visit put the recording's world at GameTime `now` (THE FRAME VISIT, before the in-play
+   draw call 0x4969CD), so the declared state the draw after it reads is the recording's at `now`; 0 on a
+   frame whose visit put nothing -- the level's last step, a seek, a hold, a rewind -- or on a live level.
+   For ImpAI's knowledge digests (tagpu_impai_frame). Game thread, in the draw after the visit. */
+int tagpu_replay_put_at(unsigned now);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
 /* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD

@@ -11,10 +11,14 @@
     tools/exemap-check.py              changes since main  (the landing gate)
     tools/exemap-check.py --base REF   changes since REF
 
+Not read: tagpu/ddraw/*.v<N>*.tsv, the frozen copies of a shipped release's replay lists, whose
+addresses the live lists (replay-globals.tsv, replay-layout.tsv) carry.
+
 Exit 1 if an address is MISSING. EXTEND does not fail the run: two entries are sometimes right
 (a function seen from two subsystems), and the landing says why when it keeps both.
 """
 import argparse
+import fnmatch
 import re
 import subprocess
 import sys
@@ -25,6 +29,7 @@ NOTES = REPO / "research/notes"
 MAP = ["research/notes/exe-reverse-engineering.md"] + sorted(
     p.relative_to(REPO).as_posix() for p in (NOTES / "engine").glob("*.md"))
 ADDR = re.compile(r"\b0x0*([45][0-9A-Fa-f]{5})\b")
+FROZEN = "*.v[0-9]*.tsv"
 
 
 def norm(hexdigits: str) -> str:
@@ -86,6 +91,8 @@ def main():
     code = added(a.base, ["tagpu", "tools"])
     missing = {}
     for path, lines in code.items():
+        if Path(path).parent.as_posix() == "tagpu/ddraw" and fnmatch.fnmatch(Path(path).name, FROZEN):
+            continue
         for n, text in lines.items():
             for x in ADDR.findall(text):
                 if norm(x) not in mapped:

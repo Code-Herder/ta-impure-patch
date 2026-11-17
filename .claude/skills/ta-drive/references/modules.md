@@ -37,7 +37,9 @@ tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each lo
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
-  reload, heading, pitch, stock, aim result and COB thread, plus the C-path hit counters,
+  reload (`rl=<left>/<time>`: the slot's countdown `+0x14`, 0 on a weapon that has not fired, and
+  the weapon's `reloadtime` in ticks, its record's `+0xE4`), heading, pitch, stock, aim result
+  and COB thread, plus the C-path hit counters,
   projectile launches per slot, and each extended type's cached `AimFromWeaponN,QueryWeaponN`
   pieces from slot 3 on (`-1` = not asked yet). With stock content every counter but
   `loader`/`stock_splice` must read 0 and `mismatch`/`violation` must be 0; that is the
@@ -142,7 +144,8 @@ tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
 Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
-uppercased instance name for TA's ten-character nickname field.
+uppercased instance name for TA's ten-character nickname field, and refuses a longer
+name before it walks any menu.
 
 **Allies in a network game** come from the battle room, not from a scenario: `ally_group` and
 `--player`'s sixth field write the skirmish key only. `--allies` presses `ALLY1..ALLYn-1` on every
@@ -267,7 +270,8 @@ indices; four-byte returns retain the saved exact incarnation. These brackets
 run with recording off and return follows no freed engine object. The file fixture checks ordered
 applied mixed batches through synthetic seek and proof
 isolation. Native constructor ordering uses the coverage DLL:
-`python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+`python3 tools/replay/recmp_create_begin_test.py --out /tmp/recmp-birth-run` (it leases its DirectPlay
+port, `tools/dpport.py`; `--port N` asks for one).
 It queues on the run lock, and its `cover-<instance>.bin` files, written at each game's exit, are
 what `tafeat.reached` reads. The landing tier plays it with `--chat --select --marks`, the humans talking,
 selecting and clicking and drawing a line and a pin on the drawing board (each peer must apply the
@@ -409,9 +413,10 @@ producer. Main/mode/span/log boundaries are controlled; this does not prove a
 native loading receipt, its display or persisted application clocks. Its own
 prefix/display are removed.
 
-`python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
+`python3 tools/replay/recmp_primary_test.py [--port PORT] --out /tmp/recmp-primary-run`
 checks native live movement through the installed primary wrapper in two owned
-human instances, with saving off and a 20-unit limit. Both commanders must move
+human instances, with saving off and a 20-unit limit, under two lanes of the run
+lock, on a leased DirectPlay port (the first free one without `--port`). Both commanders must move
 on both observers; native movement counts must be positive and stale refusals
 zero. Add `--raw` for the unqueued primary transport. The fixture retains the
 tested DLL/map/hash, native ticks, rosters and logs, then removes its own
@@ -430,8 +435,10 @@ loading chat, bandwidth or continued migration.
   `--dplay-port N` patches N into the prefix's copies of both files (`tools/dpport.py`: seven
   immediates, refused on any build it does not know) after every `--dplay` reinstall. Give all
   peers of one game the same N and every game a different one; the joiner's address stays
-  `127.0.0.1`. `tacompat.py` takes 47625 upward for its own games, so pick from 47700 up by hand,
-  and check `ss -tulnp 'sport = :N'` is empty first. Default and `--dplay-port 47624`: stock.
+  `127.0.0.1`. The tools lease their games' ports from 61000 up (`dpport.lease`, one flock a
+  port), so pick below that by hand, outside `net.ipv4.ip_local_port_range` (by default
+  32768-60999, ports the kernel hands out as source ports), and check `ss -tulnp 'sport = :N'`
+  is empty first. Default and `--dplay-port 47624`: stock.
 - `--free-dplay-port` kills a stale `dplaysvr.exe` holding the instance's own port. The server
   outlives the game that started it, so a leftover one makes the next host on that port fail
   `Open(DPOPEN_CREATE) = DPERR_GENERIC`, which looks exactly like a broken prefix. Put it on the
@@ -876,7 +883,7 @@ from inside its start-up. **`tacli launch` cannot start them**: it adds `-xtacli
 exe, is not loaded at attach. Drive them the way the compat suite does:
 
 1. Build the instance from the suite's folder: `tacli create <n> --private-registry --display <d>`,
-   then `rsync -a` the suite's `compat-<setup>/gamedir/` over it, leaving out `tacli-state`, `log`
+   then `rsync -a` the suite's `compat-<setup>-<tag>/gamedir/` over it, leaving out `tacli-state`, `log`
    and `tagpu_*`.
 2. Move the `gamedir/tacli-state` folder aside (the suite gives it an `.off` suffix; a launch
    recreates it, so do it after the last `tacli launch`), and copy the tree's `ddraw.dll` over the gamedir's.
@@ -1003,10 +1010,36 @@ block that reads to its last complete block.
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
-- **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
-  `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
-  holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
-  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
+- **Game regressions share a 28-slot budget.** Every tool that plays games for a regression takes
+  slots of the machine's run lock (`tools/runlock.py`) for the games it plays at once, each its
+  renderer's weight (`tools/runlock-lanes.cfg`: two a GDI game, two a Vulkan one), and waits in
+  arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
+  the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
+  the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
+  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one, and the GPU memory
+  of each game on the GPU, at its suite's cap (`tools/runlock-suites.cfg`; the play defaults'
+  `cap_mib` of `tools/runlock-vram.cfg` for a run that names none): a run plays no more games at once
+  than that memory holds, and each game launched takes a seat of its run, so `-j 12` plays 9 at a
+  time there at the 920 MiB cap. The instances a run
+  makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
+  games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
+  `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
+  games goes through `tools/runlock.py run --lanes N [--vram G] [--suite S] --what TEXT [--resource
+  NAME] -- <command>` (N the games at once, their renderer's weight each -- GDI with `--vram 0`,
+  Vulkan otherwise -- or `--slots W` for W slots outright; G the games on the GPU, S the suite whose
+  cap they run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
+  resources, the free slots and what the load guard says. The offline work takes slots too, one a
+  worker, as many as are free up to what it asks: the wiki gate's offline checks (a `simparity`
+  shard three), tareplay's tarec pool and `calib.py check`. A slot also carries host memory, the
+  machine's less the reserve of `tools/runlock-mem.cfg`, a twenty-eighth each (1534 MiB on the
+  reference setup): `refs build` reads each lane in a process of its own on the slots that carry
+  that lane's memory, held to them (`runlock.forked`), and every process the lock admits is the
+  kernel's first choice when memory runs out. A build goes through
+  `tools/runlock.py make [-j N] -- <make args>` (8 slots by default; make runs at `-j` the slots
+  granted). An admission also waits while its slots on top of the 1-minute load -- each slot
+  another run holds counted once, whether its load shows yet or not -- would pass the machine's
+  threads (`tools/runlock-load.cfg`), unless no other run holds a slot. A bare
+  `flock(1)` on `tareplay.lock` still excludes every run but waits outside the queue.
 - **The replay gate of a feature's landing on main** is `tools/replay/tareplay.py landing`
   (`--base main`, `-j N`); its local landings skip it:
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
@@ -1015,7 +1048,16 @@ block that reads to its last complete block.
   stock-limits build's lines need `stock-limits`), and on a pass writes a `replay-roundtrip:` git
   note on the commit it graded. Commit first: it refuses uncommitted changes under
   `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
-  covers HEAD.
+  covers HEAD. Its two-player games, one a coverage build, play at once beside the test groups'
+  lanes, on two of the run's game slots each; a run granted fewer than two games fails them as
+  `MULTIPLAYER <build>: could not run`.
+  `run`, `landing` and `broad` take `--resume DIR`: a run cut short goes on in its own folder,
+  each test group (and two-player group) whose PASS or FAIL it kept read back -- a FAIL stays a
+  FAIL -- and every other one played. A group is kept only under the same key: HEAD on a clean
+  worktree, the DLLs' hashes, the test group's entry and scenarios, renderer, speed, turbo, lanes
+  and GameTimes; one that differs is refused by the field that differs, and played again. A DIR
+  that does not exist yet is made, so a first sitting can already name it; a DIR that cannot be a
+  folder, or a worktree with changes, is refused before the groups are selected.
   Changes to `tools/tacli` select every test group, as changes to the replay harness do.
   `tareplay.py broad` runs every test group and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
@@ -1143,9 +1185,12 @@ block that reads to its last complete block.
   valued`). A defeat marker is a seat whose live units reach 0. A paused replay shows no
   `PAUSED` icon under the HUD; GDI shows it.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
-  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish as player P,
-  every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
-  no AI). It starts at R, where the stream's world is the recorder's exact copy: R = T in a
+  [--difficulty D] [--dump NAME --dump-at G] [--seatai SEATS]` makes the playback a live skirmish
+  as player P, every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2
+  when it had no AI). ImpAI plays the seats it played in the recording, from their recorded
+  state, and, with FILE, the computer seats `--seatai` adds (the launch's `seatai`, `none` without
+  it), which start fresh; without FILE the flag is refused, since the store is read at attach.
+  It starts at R, where the stream's world is the recorder's exact copy: R = T in a
   segment that holds nothing (a multiplayer recording's own segment), else the refresh at or
   before T -- each segment's first two iterations, then every GameTime 1 modulo the interval
   (300 ticks, or the recording's `tagpu_rec.refresh`) -- which a skirmish segment, a multiplayer

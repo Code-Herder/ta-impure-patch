@@ -16,6 +16,10 @@
                                              last value or the exact one, the two equal at every
                                              refresh, and the refreshes on their grid
                                              (cmd_lossy_check); to GameTime T when given
+  tools/replay/tarec.py deaths FILE [--json] every unit death of timeline 0, in the order the
+                                             engine made them: the GameTime of the step it is in,
+                                             the slot, its type and owner, and its killer
+                                             (cmd_deaths)
   tools/replay/tarec.py segments FILE        each timeline's segment of the file and its bytes,
                                              then the SHA-256 of the original's
   tools/replay/tarec.py compare-fork FILE N  timeline N's first iteration against its parent's
@@ -143,6 +147,7 @@ reads the stored header with the standard library alone.
 TAREC_CACHE=DIR keeps each recording's decoded blocks in DIR, keyed by the file's bytes and the
 decoder's sources, so a second command on the same file does not decode it again (reccache.py).
 """
+import json
 import os
 import re
 import struct
@@ -280,6 +285,7 @@ RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks wri
 RT_HOLD = 46                # what a skirmish stream holds between refreshes, and how often
 RT_TYPES = 47               # the unit frame's per-type constants
 RT_MUTATORS = 48            # the mutators this game ran, name and version, in the mount's order
+RT_SIGHTCAP = 49            # the temporary sight records' cap the game ran under, when not the engine's 20
 REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
 REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
 RECL_CELLS, RECL_SPRAYS = 1, 2
@@ -389,6 +395,34 @@ def entries(payload):
 
 # ---- the header and the end ------------------------------------------------------------------
 
+_LIST_HASHES = {}
+
+
+def list_id(name, digest):
+    """A header's RT_LAYOUT (`name` "layout") or RT_GLOBALS ("globals") as the DLL's reader reads it
+    (tagpu_recreader.c, list_id): v0.5.1's whole-file hash, which the list's generator proves reads
+    the bytes this checkout's tables read, as this checkout's hash; any other as it is. One of the
+    acceptance's sites, which each generator's ACCEPTANCE names. header() keeps the hash as
+    recorded beside it (`layout_raw`, `globals_raw`), which list_shown prints."""
+    if name not in _LIST_HASHES:
+        with open(_generator(f"replay-{name}-gen").HEADER, encoding="utf-8") as f:
+            text = f.read()
+        found = [re.search(rf'#define TAGPU_REPLAY_{name.upper()}_{which}SHA256 "([0-9a-f]{{64}})"',
+                           text) for which in ("LEGACY_", "")]
+        if not all(found):
+            raise Unreadable(f"inc/tagpu_replay_{name}.h names no hash: regenerate it")
+        _LIST_HASHES[name] = tuple(m.group(1) for m in found)
+    legacy, current = _LIST_HASHES[name]
+    return current if legacy and digest == legacy else digest
+
+
+def list_shown(digest, raw):
+    """A list's hash as read (list_id) for a line, and as recorded when the two differ."""
+    if not digest:
+        return ""
+    return digest[:12] + (f" (recorded as {raw[:12]})" if raw and raw != digest else "")
+
+
 def header(payload):
     h = {"players": [], "levers": [], "tables": {}}
     for tag, b in entries(payload):
@@ -404,16 +438,22 @@ def header(payload):
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
         elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
-            if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
+            if (len(b) < 16+0xB9 or b[0] >= 10 or b[15] > 1
+                    or any(p["index"] == b[0] for p in h["players"])):
                 raise Unreadable("malformed or duplicate seat in the header")
+            # byte 15: 1 when ImpAI played the seat, 0 for OTA AI, a human, or a recording made
+            # before the seat choice (tagpu_recfmt.h, RT_PLAYER)
             h["players"].append({"index": b[0], "controller": b[1], "side": b[2], "logo": b[3],
-                                 "alliances": bytes(b[4:15]), "info": bytes(b[16:16 + 0xB9]),
+                                 "alliances": bytes(b[4:15]), "ai": b[15],
+                                 "info": bytes(b[16:16 + 0xB9]),
                                  "name": b[16 + 0xB9:].decode("latin-1")})
         elif tag == RT_LEVER:
             nf = struct.unpack_from("<H", b, 2)[0]
             h["levers"].append({"set": b[0], "read": b[1], "file": b[4:4 + nf].decode("latin-1"),
                                 "text": b[4 + nf:].decode("latin-1")})
-        elif tag == RT_LAYOUT: h["layout"] = b.decode("latin-1")
+        elif tag == RT_LAYOUT:
+            h["layout_raw"] = b.decode("latin-1")
+            h["layout"] = list_id("layout", h["layout_raw"])
         elif tag == RT_TABLE:
             ix, cls, key, stride, flags, _, lhash = struct.unpack_from("<HBBIHHI", b)
             h["tables"][ix] = {"class": cls, "key": key, "stride": stride, "flags": flags,
@@ -426,7 +466,9 @@ def header(payload):
         elif tag == RT_SETTINGS_MAP: h["settings_map"] = b.decode("latin-1")
         elif tag == RT_WEAPONS: h["weapons"] = struct.unpack_from("<II", b)
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
-        elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
+        elif tag == RT_GLOBALS:
+            h["globals_raw"] = b.decode("latin-1")
+            h["globals"] = list_id("globals", h["globals_raw"])
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
         elif tag == RT_FRAME: h["frame"] = u32
         elif tag == RT_DLL: h["dll"] = struct.unpack_from("<II", b)
@@ -435,6 +477,7 @@ def header(payload):
             size, mtime = struct.unpack_from("<IQ", b)
             h.setdefault("archives", []).append((b[12:].decode("latin-1"), size, mtime))
         elif tag == RT_MUTATORS: h["mutators"] = b.decode("latin-1")
+        elif tag == RT_SIGHTCAP: h["sight_cap"] = u32
         elif tag == RT_MODPRINT:
             h["modprint"] = u32
             if len(b) >= 8:
@@ -1974,7 +2017,8 @@ def cmd_info(path):
     print(f"  map {h.get('map')!r}, mode {h.get('mode')}, build {h.get('build')}, "
           f"from GameTime {h.get('start')}, started {started(h)}")
     print(f"  {h.get('slots')} unit slots, {h.get('units_each')} units each, "
-          f"unit defs {h.get('unitdefs')}, layout {h.get('layout', '')[:12]}")
+          f"unit defs {h.get('unitdefs')}, "
+          f"layout {list_shown(h.get('layout'), h.get('layout_raw'))}")
     o = h.get("options", {})
     print(f"  options: LosType {o.get('lostype')}, commander death {o.get('cmdrdeath')}, "
           f"difficulty {o.get('difficulty')}, fixed starts {o.get('fixed_starts')}, "
@@ -1995,8 +2039,10 @@ def cmd_info(path):
               f"(names 0x{f[4]:08x})")
     print(f"  globals list {h.get('globals', '')[:12]}, a projectile pool of "
           f"{h.get('projectiles')} records")
+    if "sight_cap" in h:
+        print(f"  temporary sight records' cap {h['sight_cap']} (the test lever tagpu_sightcap.on)")
     for p in h["players"]:
-        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, "
+        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, ai={p['ai']}, "
               f"side {p['side']}, logo {p['logo']}, alliances {p['alliances'].hex()}")
     for lv in h["levers"]:
         print(f"  lever {lv['file']}: {'set' if lv['set'] else 'absent'}"
@@ -2279,6 +2325,55 @@ def seek_blocks(path, timeline, T, lead, base):
             start = ch[i + 1]["fork_at"]
     return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read),
             int(bool(base) and snap is not None))
+
+
+# an RK_EV_DEATH's body (tagpu_recfmt.h): u32 unit ID, u32 killer's ID, u8 killer's player (10:
+# none), i8 severity, u8 the record's +0xA, u8 carried, then the unit's image, whose first 0x118
+# bytes are the unit record: its type word +0xA6 and its owner +0xFF (engine/units.md)
+DEATH_HEAD = struct.Struct("<IIBbBB")
+DEATH_TYPE, DEATH_OWNER = DEATH_HEAD.size + 0xA6, DEATH_HEAD.size + 0xFF
+NO_PLAYER = 10
+
+
+def deaths(path):
+    """Every RK_EV_DEATH of timeline 0, in stream order: {"gametime", "slot", "type", "owner",
+    "killer", "killer_player", "nested"}. `gametime` is the RK_TICK the event follows: the death is
+    in the step from that GameTime to the next, and two deaths with the same one are in the same
+    step. A unit ID is its slot + 1, and 0 names no unit. `nested` is how many death brackets
+    (RK_EV_DEATH .. RK_EV_DEATH_END) the death is inside: a death another one's destructor made."""
+    _h, bl, _stop = load(path)
+    out, tick, depth = [], None, 0
+    for kind, _first, _last, payload in bl[1:]:
+        if kind != RB_STREAM:
+            continue
+        for rk, b in records(payload):
+            if rk == RK_TICK:
+                tick = struct.unpack_from("<I", b)[0]
+            elif rk == RK_EV_DEATH:
+                uid, kid, kplayer, _sev, _rec, _carried = DEATH_HEAD.unpack_from(b)
+                out.append({"gametime": tick, "slot": uid - 1,
+                            "type": struct.unpack_from("<H", b, DEATH_TYPE)[0],
+                            "owner": b[DEATH_OWNER], "killer": kid - 1 if kid else None,
+                            "killer_player": None if kplayer == NO_PLAYER else kplayer,
+                            "nested": depth})
+                depth += 1
+            elif rk == RK_EV_DEATH_END:
+                depth -= 1
+    return out
+
+
+def cmd_deaths(path, as_json=False):
+    rows = deaths(path)
+    if as_json:
+        print(json.dumps({"file": str(path), "deaths": rows}))
+        return 0
+    for r in rows:
+        print(f"GameTime {r['gametime']}: slot {r['slot']} (type {r['type']}, player {r['owner']})"
+              + (f", killed by slot {r['killer']}" if r["killer"] is not None else "")
+              + (f" of player {r['killer_player']}" if r["killer_player"] is not None else "")
+              + (f", inside {r['nested']} death(s)" if r["nested"] else ""))
+    print(f"{path}: {len(rows)} deaths")
+    return 0
 
 
 def cmd_segments(path):
@@ -2870,6 +2965,56 @@ def puppet_view(w, radar=False):
 FORK_NODE = ((0x05, 1), (0x06, 4), (0x0A, 4), (0x4E, 4), (0x52, 4), (0x32, 4))
 FORK_NODE_FLAGS = 0x600000          # +0x42 bits 21 (seen) and 22 (stopbuilding)
 
+# The rows tagpu_impai.c's seat_fresh writes for a seat a takeover newly gives ImpAI: its mark,
+# brain and military, keyed by player, and the jobs of its unit block, keyed by unit slot. Its
+# knowledge tables (s_known, s_seatst, s_radar_bits, s_radar_hit, s_cluster) are not here: no
+# turn writes them for a seat ImpAI does not play and the level init clears them to zero, which is
+# what seat_fresh writes, so they compare equal.
+IMPAI_FRESH_PLAYER_ROWS = ("src/tagpu_impai.c:s_seat", "src/tagpu_impai.c:s_brain",
+                           "src/tagpu_impai.c:s_mil")
+IMPAI_FRESH_SLOT_ROWS = "src/tagpu_impai.c:s_job"
+
+
+def fork_fresh_seats(ha, hb, b):
+    """The seats the fork's takeover newly gave ImpAI, when `b` is the fork's first capture, the
+    iteration at its header's fork_at; the empty set at any other capture, and for a header that
+    names no fork. Taken from the two headers' RT_PLAYER byte 15 (ImpAI plays the seat): the seats
+    the fork's header marks and the parent segment's header does not. Never wider than the
+    takeover's own fresh set (tagpu_impai_takeover: its marks less those R13 restored): a parent's
+    marks are set only at its level init or its takeover, both before its header's capture, and
+    after that only cleared (the console's AI), so a seat its header does not mark was not marked
+    at fork_at. A seat cleared and named again by `seatai` is fresh to the takeover and not to this
+    rule, so it is compared in full and fails by name."""
+    tl = hb.get("timeline")
+    if not tl or b.tick != tl[2]:
+        return set()
+    parent = {p["index"] for p in ha["players"] if p.get("ai")}
+    return {p["index"] for p in hb["players"] if p.get("ai") and p["index"] not in parent}
+
+
+def mask_fresh_seats(w, h, seats, blocks):
+    """World w's rows of IMPAI_FRESH_PLAYER_ROWS for each seat of `seats`, and its rows of
+    IMPAI_FRESH_SLOT_ROWS in the seat's unit block (`blocks`: seat -> inclusive slots, absent when
+    the fork's player image gives none), zeroed; `h` names w's tables. A row past a table's bytes
+    is left alone, so a table that holds fewer rows is named by its size, as differences names it."""
+    if not seats:
+        return
+    by_name = {t["name"]: (ix, t["stride"]) for ix, t in h["tables"].items()}
+
+    def zero(name, first, last):
+        ix, stride = by_name.get(name, (None, 0))
+        t = w.tables.get(ix)
+        if t is None or not stride:
+            return
+        at, end = first * stride, min((last + 1) * stride, len(t))
+        if at < end:
+            t[at:end] = bytes(end - at)
+    for seat in seats:
+        for name in IMPAI_FRESH_PLAYER_ROWS:
+            zero(name, seat, seat)
+        if seat in blocks:
+            zero(IMPAI_FRESH_SLOT_ROWS, *blocks[seat])
+
 
 def fork_view(a, b, ha, hb):
     """A parent's world at fork_at and its fork's first iteration less what the takeover's rebuild
@@ -2879,10 +3024,24 @@ def fork_view(a, b, ha, hb):
     viewer's and the deactivated records alike; (c) the controllers and the controlled and viewed
     players, and PlayerInfo +0x94 of each seat whose controller the two headers give differently;
     (d) the contact bits by puppet_view's rule, bit 12 always and bits 8-10 too unless the two
-    worlds view the same player."""
+    worlds view the same player; (e) at the fork's first capture only, ImpAI's mark, brain,
+    military and unit-block jobs of each seat the takeover newly gave ImpAI (fork_fresh_seats),
+    which seat_fresh starts as a level start does, so they differ from the parent's by design.
+    (e) extends (c), the same seats' change of controller, and is a loosening the owner decided
+    (research/notes/impai/decisions.md, *A takeover's fresh ImpAI seat in compare-fork*): every
+    later capture of the fork is compared in full, and every other seat's ImpAI rows at the first."""
     seats = {p["index"] for p in hb["players"]}
     ctl_a = {p["index"]: p["controller"] for p in ha["players"]}
     ctl_b = {p["index"]: p["controller"] for p in hb["players"]}
+    fresh = fork_fresh_seats(ha, hb, b)
+    blocks = {}
+    for seat in fresh:
+        try:
+            blocks[seat] = sel_block(b.players[seat], b.slots)
+        except Unreadable:
+            pass
+    for w, h in ((a, ha), (b, hb)):
+        mask_fresh_seats(w, h, fresh, blocks)
     mask = 0x1000 if a.view[1] == b.view[1] else 0x1700
     for w in (a, b):
         for img in w.lists.values():
@@ -2944,19 +3103,20 @@ def _generator(name):
     return gen
 
 
-def globals_list(want=None):
+def globals_list(want=None, raw=None):
     """replay-globals.tsv through its own parser (tools/replay-globals-gen.py): (the generator, its
-    rows, the image's slots, the file's SHA-256). With `want`, a recording's or a dump's RT_GLOBALS,
-    the file must be the one it was made with: the classes and the coverage are this checkout's."""
-    import hashlib
+    rows, the image's slots, the list's hash over what its readers read). With `want`, a
+    recording's or a dump's RT_GLOBALS as header() reads it, and `raw` as it was recorded
+    (`globals_raw`), the list must be the one it was made with: the classes and the coverage are
+    this checkout's."""
     gen = _generator("replay-globals-gen")
-    with open(gen.TSV, "rb") as f:
-        raw = f.read()
-    digest = hashlib.sha256(raw).hexdigest()
+    with open(gen.TSV, encoding="utf-8") as f:
+        rows = gen.parse(f.read())
+    digest = gen.semantic_digest(rows)
     if want is not None and want != digest:
-        raise Unreadable(f"made with another replay-globals.tsv ({want[:12]}) than this checkout's "
-                         f"({digest[:12]}): its classes and coverage would be the wrong ones")
-    rows = gen.parse(raw.decode("utf-8"))
+        raise Unreadable(f"made with another replay-globals.tsv ({list_shown(want, raw)}) than "
+                         f"this checkout's ({digest[:12]}): its classes and coverage would be the "
+                         f"wrong ones")
     return gen, rows, gen.slots(rows)[0], digest
 
 
@@ -3013,7 +3173,7 @@ def globals_opaque(h):
     if not h.get("globals"):
         return set()
     try:
-        slots = globals_list(h["globals"])[2]
+        slots = globals_list(h["globals"], h.get("globals_raw"))[2]
     except Unreadable:
         return set()
     return {sl["dword"] + k for sl in slots if sl["opaque"] for k in range((sl["size"] + 3) // 4)}
@@ -3024,7 +3184,7 @@ def known_names(h):
     if not h.get("globals"):
         return None
     try:
-        return globals_names(globals_list(h["globals"])[2])
+        return globals_names(globals_list(h["globals"], h.get("globals_raw"))[2])
     except Unreadable:
         return None
 
@@ -3246,7 +3406,7 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
     status = 0
     cache = {}
     held = puppet_rows() if puppet else None
-    gslots = globals_list(h.get("globals"))[2] if puppet else None
+    gslots = globals_list(h.get("globals"), h.get("globals_raw"))[2] if puppet else None
     gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
         dh, dw = dump_world(d, h)
@@ -3368,6 +3528,12 @@ IMAGE_MAP = {
 
 def dump_images(path):
     """A dump's GameTime, its RT_GLOBALS and its two images."""
+    tick, dh, images = dump_parts(path)
+    return tick, dh.get("globals"), images
+
+
+def dump_parts(path):
+    """A dump's GameTime, its header and its two images."""
     dbl, stop = blocks(path)
     if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
         raise Unreadable(f"{path}: not a dump (a header and one snapshot block)" +
@@ -3385,7 +3551,7 @@ def dump_images(path):
             images.setdefault(which, bytearray(size))[off:off + len(b) - 8] = b[8:]
     if set(images) != {0, 1}:
         raise Unreadable(f"{path}: a dump without the main block and .data (RK_IMAGE)")
-    return tick, dh.get("globals"), images
+    return tick, dh, images
 
 
 def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False, timeline=0):
@@ -3693,12 +3859,14 @@ def cmd_counts(path, dump):
 def cmd_images(a_path, b_path):
     """The differing bytes no row of replay-globals.tsv covers, as runs, grouped by IMAGE_MAP. A
     byte is reported when it differs in a bit no row names."""
-    ta, ga, ia = dump_images(a_path)
-    tb, gb, ib = dump_images(b_path)
+    ta, ha, ia = dump_parts(a_path)
+    tb, hb, ib = dump_parts(b_path)
+    ga, gb = ha.get("globals"), hb.get("globals")
     if ga != gb:
         raise Unreadable(f"the two dumps were made with different replay-globals.tsv "
-                         f"({(ga or '')[:12]}, {(gb or '')[:12]})")
-    gen, rows, slots, digest = globals_list(ga)
+                         f"({list_shown(ga, ha.get('globals_raw'))}, "
+                         f"{list_shown(gb, hb.get('globals_raw'))})")
+    gen, rows, slots, digest = globals_list(ga, ha.get("globals_raw"))
     cov = gen.coverage(rows)
     print(f"{a_path} (GameTime {ta}) against {b_path} (GameTime {tb})"
           + ("" if ta == tb else ": NOT THE SAME GameTime"))
@@ -4056,11 +4224,14 @@ def main(argv):
             print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
             return 2
         pov_eye, argv = (n, view, seat), argv[:k]
+    as_json = argv[1:2] == ["deaths"] and "--json" in argv
+    if as_json:
+        argv = [a for a in argv if a != "--json"]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
-                                        "compare-fork", "pov", "lossy-check") or \
+                                        "compare-fork", "pov", "lossy-check", "deaths") or \
             (argv[1] in ("pov", "lossy-check") and len(argv) != 3) or \
-            (argv[1] == "segments" and len(argv) != 3) or \
+            (argv[1] in ("segments", "deaths") and len(argv) != 3) or \
             (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
             (argv[1] == "compare-dumps" and len(argv) != 5) or \
@@ -4078,6 +4249,8 @@ def main(argv):
             return cmd_lossy_check(argv[2], timeline, to)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
+        if argv[1] == "deaths":
+            return cmd_deaths(argv[2], as_json)
         if argv[1] == "pov" and pov_eye:
             if pov_check:
                 print(__doc__.strip().split("\n\n")[1], file=sys.stderr)

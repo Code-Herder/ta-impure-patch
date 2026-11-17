@@ -1,0 +1,21 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The reclaim rows of ImpAI's handicap exemption (rows 11 and 12, the reclaim payout 0x4238C4 energy and 0x423918 metal; row 17, the reclaimed unit's credit 0x486CDA), applied by tools/impai/handicap_check.py to impai-handicap.json after impai-handicap-economy.json and impai-handicap-purge.json, keeping every unit already there: for each computer seat -- seat 1 OTA AI, seat 2 ImpAI -- one Fark (ARMFARK) beside a Dragon's Teeth feature (8 metal, so its reclaim pays 20 ticks after it starts: the countdown 15 + (energy + metal) / 2, two a working call, engine/orders.md) and another beside a radar tower (CORRAD, 2 x 2, 50 metal, 51 hit points) of its own seat, each ordered once to reclaim it. The reclaimer is a Fark because no AI re-orders it while it reclaims, and a re-ordered reclaim starts over: the stock builder planner 0x408100 replaces a group-4 builder's head order every 90 ticks unless its def's build-list count +0x152 is 0 (0x408143..0x408151), which a Fark's is (no [CANBUILD] entry, no download entry), and ImpAI orders only an idle builder (impai_brain.c, idle_head). It is not CORE's count-0 builder, the Necro: with canresurrect its reclaim of a feature is a Resurrect, and with no builddistance its ReclaimUnit did not reach the radar tower (handicap_check.py's docstring). The unit is no Dragon's Teeth: a Dragon's Teeth unit cannot be the unit: its FBI has isfeature 1 (CORDRAG, ARMDRAG), and the create of a finished unit with isfeature sets its death kind +0xF5 to 7 and +0x110 bit 14 (0x486161..0x486171), which the unit tick's reaper turns into a death and a feature at once (0x48AFB9..0x48AFD1). Both payout compares run whatever the feature's values (0x4238B3..0x423918, DISASSEMBLED). Each seat's four stand in the part of its economy box that impai-handicap-economy.json leaves empty: seat 1's in x 7040..7184, z 1720..1872 of the box round (7024, 1712), east of the wind generator and the extractor and south of the metal maker; seat 2's in x 5864..6008, z 6740..6904 of the box round (5848, 6744), placed the same way. Both boxes are dry and flat (impai-handicap-economy.json, read from the map's attribute grid).",
+ "setup": {"clear_existing": false},
+ "units": [
+  {"id": "fcons1", "type": "ARMFARK", "owner": 1, "pos": [7056, 1744], "facing": 0,
+   "orders": [{"cmd": "reclaim", "target": "teeth1"}]},
+  {"id": "ucons1", "type": "ARMFARK", "owner": 1, "pos": [7136, 1744], "facing": 0,
+   "orders": [{"cmd": "reclaim", "target": "rad1"}]},
+  {"id": "rad1", "type": "CORRAD", "owner": 1, "pos": [7136, 1808], "facing": 0},
+  {"id": "fcons2", "type": "ARMFARK", "owner": 2, "pos": [5896, 6776], "facing": 0,
+   "orders": [{"cmd": "reclaim", "target": "teeth2"}]},
+  {"id": "ucons2", "type": "ARMFARK", "owner": 2, "pos": [5976, 6776], "facing": 0,
+   "orders": [{"cmd": "reclaim", "target": "rad2"}]},
+  {"id": "rad2", "type": "CORRAD", "owner": 2, "pos": [5976, 6840], "facing": 0}
+ ],
+ "features": [
+  {"id": "teeth1", "type": "DragonsTeeth", "pos": [7056, 1808], "facing": 0},
+  {"id": "teeth2", "type": "DragonsTeeth", "pos": [5896, 6840], "facing": 0}
+ ]
+}

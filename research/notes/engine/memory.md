@@ -210,7 +210,7 @@ inside the teardown. The teardown frees the LOS counters first: `0x464A00`, whos
 `0x491BA9` in `0x491B60` (before `0x466AA0` and `0x483DD0`), walks the eleven records
 `main+0x1B63..+0x2851` and for each frees `+0x7C` (`0x464A2D`) and zeroes
 `+0x7C`/`+0x80`/`+0x84`/`+0x88` (`0x464A24..0x464A38`), calls `0x4801F0(record)`, frees the AI
-objects when `+0x74` is set (`0x40B390(+0x146)`, then `0x408F10` and the free, `+0x74` zeroed at
+objects when `+0x74` is set (`0x40B390(+0x146)`, then `0x408F10` at `0x464A5D` and the free `0x4B4F20` at `0x464A63`, `+0x74` zeroed at
 `0x464A6B`), and frees and nulls `+0xEC` (`0x464A6E..0x464A7E`) [DISASSEMBLED 2026-09-28].
 `0x464700` frees whatever `+0x7C` holds at the next level's load (`0x464855`), and the player
 record's destructor frees it too. The constructor
@@ -231,7 +231,7 @@ Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 | Field | What | Published by the load | Freed / nulled by the teardown |
 | --- | --- | --- | --- |
 | `main+0x14351` | the unit array's **slot count**, `u16` = `10·[main+0x37EE6] + 1` (the name is <span class="pill pill-warn">INFERRED</span>; the arithmetic is not) | `0x4854EF`, **before** `begin` | untouched |
-| `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` at `0x4855D6` | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
+| `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` (`lea` at `0x4855CF`, stored at `0x4855D6`): the last slot itself, so the engine's walks end with `jbe` (`0x401F12`, `0x48BD38`) and a walk runs while `u <= end` [DISASSEMBLED 2026-11-11] | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
 | `main+0x14233` / `+0x14237` | map W / H in 16-px tiles | `LoadMap`, through `ebp = main+0x141FB` (`0x483627`): `[ebp+0x38]` at `0x483881`, `[ebp+0x3C]` at `0x483892` — **before every pointer below** | untouched; stale until the next load |
 | `main+0x1428B` | `TILE_MAP` | `[ebp+0x90]` at `0x483969` (`ebp = main+0x141FB`), the block `MEM_Alloc 0x4D83B0` returned at `0x483962` for `(pxH/32)·(pxW/32)·2` bytes; filled by the one `rep movs` at `0x48397D`/`0x483984` straight after, from the TNT's tile-index data. **Never written again**: no other store to the pointer or through it in the exe, so the map is immutable from LoadMap to the teardown (below). Readers: the minimap build `0x466780` (`0x4668EB`, load time) and the terrain pass `0x483FA0` (`0x4840A6`, `0x4841A9`, `0x4841D6`, `0x484345`) | `0x483DD0`: `MEM_Free 0x4D85A0` at `0x483E9A` (loaded at `0x483E93`), nulled at `0x483EED` |
 | `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
@@ -427,8 +427,9 @@ On the counting path:
   killer's player `+0xF4` (`0x4869BA..0x4869C8`).
 
 Two more reads of `+0x104` come after the stats. `0x486C9E..0x486D1E` (kind 5 with a killer) credits
-`(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. The credit is scaled by a factor that
-depends on `main+0x37EEE` when the killer's `+0xEC` record is active and its `+0x73` is 2. [INFERRED: `+0xD4` is the
+`(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. When the killer's `+0xEC` record is active
+and its `+0x73` is 2 (`0x486CDA`), the credit is × 0.5 on Easy and × 0.7 on Medium, unscaled on Hard
+(`main+0x37EEE` read at `0x486CE6`; row 17 of [sim](sim.html), *Difficulty and the AI handicap*). [INFERRED: `+0xD4` is the
 reclaimer's metal intake, `def+0x18A` the metal cost.] `0x486D24..0x486D50` runs the death explosion
 `0x49B000` only when `rec+9 > 0` and `+0x104 == 0.0` (`0x486D2F`). The explosion's damage is computed
 only on the owner's peer (C's evidence), so elsewhere it is a picture. The severity `rec+9` is read
@@ -481,7 +482,8 @@ owner holds its own value; a copy's value comes from exactly these writers:
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
     `+0x241` bit 18) a `0x11`. The `0x12`, that activation and a def with `+0x241`
-    bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`) all sit behind `finished`
+    bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`: the bit test to `0x48615F`, the
+    writes from `0x486161`) all sit behind `finished`
     (`test edi,edi` at `0x48611A`, else to `0x486177`); every create runs the sight stamp
     `0x482AC0` (`0x486178`) and counts `+0x144` and `+0x140` (`0x486187`, `0x48619C`)
     [DISASSEMBLED 2026-09-28]. The create calls `0x48B090` as `0x48B090(1, 1)`, which newly sets
@@ -641,7 +643,7 @@ freed at death only.
 
 ### `0x4246B0` `FEATURES_Destroy` — the wreck path
 
-`stdcall (cell, force)`, `ret 8`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
+`stdcall (cell, force)`, `ret 8`, the body `0x4246B0..0x424830`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
 [DISASSEMBLED 2026-10-29]. In order:
 
 - A cell whose def is `0xFFFE` (a footprint cell) is resolved to its anchor through its `+0x0A`
@@ -653,7 +655,9 @@ freed at death only.
   loads the wreck pool `main+0x1420B`, record = pool `+ [cell+0x0A]·0x30`; `test [def+0xFE],1`
   (`0x424741`) splits GAF from 3DO features, and a 3DO feature's object is freed at `0x42474F`
   (`FreeObjectState`) and nulled at `0x424754`; then, for either kind, `0x4232F0(index,
-  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument.
+  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument:
+  it goes back on the head (`0x424761..0x42476F`), where the spawn takes its record
+  (`0x423DA8..0x423DC5`), so the free list is last in, first out.
 - **The cells**: the anchor's def is set to `0xFFFF` and its flags bit 0 cleared (`0x42477C` /
   `0x424780`), then every `0xFFFE` cell of the def's `+0x94` × `+0x96` rectangle the same way
   (`0x4247B3..0x4247BE`). **The cell is unlinked last**, so the fork's wreck gather (which reads
@@ -667,7 +671,16 @@ swap `0x423710` (`0x423792`, `0x4237B1`); the spawn `0x423C50`'s footprint (`0x4
 which abandons the spawn on a refusal and keeps what it destroyed so far); the feature tick
 `0x424050` (`0x42442F`, `force` 0, when a burn's sequence ends); the clear of every feature
 `0x424840` (`0x42487A`), itself called only by the console command BurnAll `0x416390` (stored in
-the command table at `0x502040`). The demo recorder observes the entry
+the command table at `0x502040`) and by the scenario applier's `clear_features`
+(`tagpu_scenario.c`, at its tick visit `0x4969D2`, between two steps).
+
+**`0x424840`, the clear of every feature** [DISASSEMBLED 2026-11-11, `0x424840..0x42488D`]: no
+argument, a plain `ret` at `0x42488D`. It walks `main+0x14233 × main+0x14237` cells, stride `0xD`
+from `main+0x14287`, re-reading the main pointer after each call (`0x42487F`), and calls
+`0x4246B0(cell, 1)` (`0x424877..0x42487A`, no `add esp` after it: the callee's `ret 8`) on every
+cell whose def word `+8` is below `0xFFFB` or equal to `0xFFFE` (read at `0x424865`, tested at `0x424869..0x424875`). Force 1
+takes indestructible features and geothermal vents too. **It spawns no successor**: the successor
+comes only from the swap `0x423710`, which this path never calls. The demo recorder observes the entry
 ([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
 and the puppet gate refuses it from the level's first step outside the replay's own calls
 ([recorder.md](recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)).
@@ -723,7 +736,7 @@ exactly **six**:
 | call site | in function | what it does |
 | --- | --- | --- |
 | `0x460630` | `0x4605C0` | the in-game menu's quit path |
-| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0` |
+| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0`. `0x451B60` returns at once off a network game (`test byte [main+0x2A44], 1` at `0x451B66`, the network bit); in one, it calls the player removal `0x452CC0` with the native ID `+4` of each record whose controller `+0x73` is 1 or 2 (`0x451B72..0x451BAB`, ten records of `0x14B`), then the reporter cleanup `0x46C190` ([network](network.html)) (DISASSEMBLED). So in a skirmish the in-game Exit Game reaches the teardown after the blank frame `0x4257A0` and nothing else; `tools/impai/bar.py` ends its games so |
 | `0x49262C` | `0x492360` | |
 | `0x4996AA` | `0x499200` | sets state **7**, handler `0x499880` |
 | `0x49971D`, `0x4997AF` | `0x499200` | teardown, then `0x491D70(1)`, `0x4A9660`, `0x4257A0`, then state **2** with handler `0x496BB0` — the shell. This is EXITMENU→MAINMENU and EXITMENU→RESTART |
@@ -862,12 +875,19 @@ FBI loader.
   2026-10-02]. The filter keeps the order of what it keeps (a `remove_if`: `0x42D4AD..0x42D4D2`
   finds the first type without bit 23, `0x42D4DC..0x42D50E` copies each later type that has it
   down). Bit 23 is the loader's verdict (`0x42A8D0`: set when the FBI's `Version` is not above
-  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` and
-  `0x42B14B..0x42B162`; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
+  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` for a file that did not
+  come from an archive and at `0x42B14B..0x42B162` for a `Copyright` other than Cavedog's, [keys](keys.html),
+  *Read only by the pre-scan*; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
   drops every type without it), and afterwards the battleroom's restriction store's (`0x46E203`,
   `0x46E23B`, in `0x46E160`, *A type's own cap* above, which marks its running at game start
-  INFERRED). Nothing else writes it: the other writers of `+0x241` are the def copy `0x42B370`
-  and the FBI loader `0x42BF40`, whose bit-field writes never touch bit 23.
+  INFERRED) and `0x431740`'s, called at `0x4974DE` in the loader body `0x497180`: when the file
+  `0x4356C0(6)` names from the schema record (`main+0x391E9`) opens (`0x431771`), it clears the bit on
+  every type from 1 (`0x4317B0..0x4317C5`) and sets it again on types the file names
+  (`0x431864..0x431872`, after a `_stricmp` at `0x43182D`) [INFERRED: a mission's unit list]. Nothing
+  else writes it: the other writers of `+0x241` are the def copy `0x42B370` and the FBI loader
+  `0x42BF40`, whose bit-field writes never touch bit 23 [DISASSEMBLED 2026-11-12: of every
+  `0x800000` and `0xFF7FFFFF` immediate in `.text`, only the sites above write `+0x241`, and no
+  instruction writes the bytes `+0x242` or `+0x243` alone].
   The sort covers `[1, count)` (`0x42D54F`, `0x42D557`), so `None`, type 0, stays first. Its
   comparator `0x42DB60` is `_stricmp(a+0x20, b+0x20) < 0` through the CRT's `0x4F8A70`, which,
   with `__lc_handle[LC_CTYPE]` (`0x52A018`) at 0, folds `A`..`Z` alone to lower case and compares

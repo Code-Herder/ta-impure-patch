@@ -38,6 +38,7 @@
 typedef struct RecSeat {
     unsigned char index, controller, side, logo;
     unsigned char ally[11];                 /* the alliance row, record +0x108          */
+    unsigned char ai;                       /* 1 when ImpAI played the seat (byte 15)   */
     unsigned char has_info;                 /* 0 when the record had no PlayerInfo       */
     unsigned char info[REC_INFO_BYTES];
     char          name[RECR_NAME];          /* record +0x2B                              */
@@ -61,8 +62,11 @@ typedef struct RecHeader {
     unsigned     has_options, lostype, cmdrdeath, difficulty, fixed_starts;
     unsigned     nplayers, controlled, viewed;
     unsigned     proj_cap;                  /* RT_PROJECTILES: the projectile pool's records  */
-    char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
-    char         globals[RECR_TEXT + 8];    /* RT_GLOBALS: replay-globals.tsv's SHA-256       */
+    unsigned     sight_cap;                 /* RT_SIGHTCAP: the temporary sight records' cap;
+                                               20, the engine's, when the header has none    */
+    char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT];
+    /* RT_LAYOUT and RT_GLOBALS: the lists' hashes, v0.5.1's read as this build's (list_id) */
+    char         layout[RECR_TEXT + 8], globals[RECR_TEXT + 8];
     unsigned     has_settings_map;
     unsigned     has_wallclock;             /* RT_WALLCLOCK: the start as a FILETIME, UTC, and
                                                the local time's offset from UTC in minutes    */

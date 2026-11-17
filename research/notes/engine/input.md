@@ -171,6 +171,12 @@ the debug `Edge` command, or through `0x4815F0`'s `0xFFFE` cells on a path not a
 
 ### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
 
+NO DRAW byte-matches the sampler's first 16 bytes `0x4C1B80..0x4C1B8F` (the id's range test and the
+index into the byte table `0x4C1C6C`) before it calls it for SPACE. Every key arm of the jump table
+`0x4C1C48` calls GetAsyncKeyState and then `and al,0xFE` -- the first arm's at `0x4C1BA9`, SPACE's
+(`0x20`, index 0, `0x4C1C2D`) at `0x4C1C35` -- so bit 0 (pressed since the last call) never reaches the
+answer and an extra call changes no later one [DISASSEMBLED 2026-11-13; `tagpu_nodraw.c`, THE GATE].
+
 `ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
 (`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
 `push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
@@ -226,7 +232,7 @@ their head; `0x4C24B0`, `0x4C25E0`, `0x4C67C0` and `0x4C6B10` do **not** — the
 | `+0x18E` | ring **head** (write index), advanced and wrapped at `0x4C2E78..0x4C2E82` | disassembly |
 | `+0x192` | ring **tail** (read index), advanced at `0x4C2DB5` | disassembly |
 | `+0x196` | the **current mouse record**, 6 dwords, laid out exactly like a ring entry. Written whole by `0x4C2360`, and x/y alone by each of the three drawing polls | disassembly + live |
-| `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0 | disassembly |
+| `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0; otherwise it takes `GetCursorPos` into `+0x196`/`+0x19A` (`0x4C288E..0x4C28C6`). A frame that does not draw (NO DRAW, `tagpu_nodraw.c`) skips that refresh; the window procedure keeps the record current on every move | disassembly |
 | `+0x1B2` | the current cursor sprite record: size at `+0`/`+2`, read **zero**-extended (`xor edx,edx; mov dx,…`), hotspot at `+4`/`+6`, read **sign**-extended (`movsx`) — so a hotspot may be negative and a size may not. **It is a GAF frame header, whole**, not a cursor-shaped struct that happens to start like one: `0x4C2960` loads `[obj+0x1B2]` and `0x4C297B` pushes it straight to `CopyGafToContext 0x4B7F90` behind the NULL context, so the colour key at `+0x08` and the pixel plane at `+0x10` are the ones every other GAF frame in this engine carries ([effects](../effects.html) `CopyGafToContext`). That is what lets a renderer draw the cursor with no observer on the blit at all — it reads the frame instead. **[VERIFIED 2026-09-09** by disassembly `0x4C28A5`–`0x4C2989`, and by measurement: decoding it through `tagpu_gaf_decode` and drawing it at `k = 1` reproduces the engine's own frame byte for byte ([GUI renderer](../gui-renderer.html) §17), which a wrong key or pixel offset could not.**]** | disassembly + live |
 | `+0x1B6` / `+0x1BA` | the position the sprite was last DRAWN at, i.e. position − hotspot | disassembly |
 | `+0x1BE` / `+0x1C2` / `+0x1C6` | saved-background rect pointers *[INFERRED]*. **Not one per draw path**: `0x4C2870`, `0x4C24B0` and `0x4C67C0` all use `+0x1BE`, `0x4C25E0` uses `+0x1C2`, and no reader of `+0x1C6` was found in this pass | disassembly |
@@ -703,7 +709,7 @@ which draws the same frames by the same rule: `tagpu_wikistage_cursor_frame`).
 | `0x4AB400` | `SetUICursor(ctx, seq)`, `ret 8`, ctx `main+0x519` at every in-game site: `ctx+0x2C = seq` (`0x4AB410`), the animation state at `ctx+0x30` started by `0x4B8B30(ctx+0x30, seq, 0)` (`0x4AB414`), `ctx+0x5C` bit 0 set (animating, `0x4AB41D`), then the frame `0x4B7EE0` names handed to `0x4C2B20` (`0x4AB422..0x4AB428`). It starts the sequence over on every call; each in-game caller stores `main+0x2CBE` and calls only when the index changed (above), so an unchanged cursor keeps animating | disassembly |
 | `0x4B8B30` | animation state init `(state, seq, frame)`, `ret 0xC`: `+0x00` the frame (0 when the asked one is not below the sequence's u16 count `seq+0`, `0x4B8B40..0x4B8B4E`), `+0x08` the sequence, `+0x02` the countdown = that frame's u16 ticks `seq+0x2C+8·frame` (`0x4B8B5B`; `0xFFFF` with no sequence), `+0x04` the loop byte `seq+2` | disassembly |
 | `0x4B8BF0` | animation advance `(state, dt)`, `ret 8`: returns at once with no sequence or a count ≤ 1 (`0x4B8BFB`, unsigned); else subtracts dt from the signed 16-bit countdown (`0x4B8C06`) and, while it is ≤ 0, steps the frame (`0x4B8C11`) and adds the new frame's ticks (`0x4B8C3D`). Past the last frame it goes back to 0 when the loop byte is set (`0x4B8C23`), else clears the sequence (`0x4B8C4B`): nothing is drawn after a non-looping sequence ends | disassembly |
-| `0x4B8B90` | a one-tick step of the same state: a countdown of 2 or more is decremented (`0x4B8BE1`); below that the frame steps with the same wrap or clear and the countdown is reloaded [its callers not traced] | disassembly |
+| `0x4B8B90` | a one-tick step of the same state, `ret 4`: nothing with no sequence (`0x4B8B99`); a countdown of 2 or more is decremented (`0x4B8BE1`, answers 0); below that the frame steps (`0x4B8BA5`), past the last going back to 0 when the loop byte is set and otherwise clearing the sequence (`0x4B8BD2`), the countdown reloaded from the new frame (`0x4B8BC1`), answering 1. So a non-looping sequence of u16 durations dᵢ lasts Σ max(dᵢ, 1) steps (the explosions' life, [weapons](weapons.html), *The shatter and the effect pools' bounds*). Callers: `0x415B4F`, the explosion tick's states A and B (`0x4210BB`, `0x4210CB`), the features' (`0x42407F`, `0x424088`, `0x4243DC`, `0x4243EB`, `0x42446E`, `0x42447D`) and `0x478BFD` | disassembly |
 | `0x4B7EE0` | the state's current frame: `[seq + 0x28 + 8·frame]`, 0 with no sequence | disassembly |
 | `0x4AB5D0` | the UI context's update, from `0x4AA00A` in `0x4A9FD0`: with `ctx+0x5C` bit 0 set it calls `0x4B8BF0(ctx+0x30, ctx+0x9A)` (`0x4AB5F0`) and, when the frame changed, hands the new one to `0x4C2B20` (`0x4AB5FF..0x4AB605`) | disassembly |
 | `0x4A9FD0` | the GUI pump: `ctx+0x9A = 0x4B6340() − ctx+0x96`, then `ctx+0x96` = now (`0x4A9FEE..0x4AA004`): the cursor counts down in the 30 Hz ticks of `0x4B6340` elapsed since the last pump | disassembly |
@@ -837,8 +843,8 @@ store `0x4994C7`) and stores the cursor's world point -- the words `main+0x2CAC`
 three from the current point (`0x49946A..0x49949B`). The release (`0x4993E9..0x499441`) compares
 `|+0x2C92 − +0x2C9E|` and `|+0x2C9A − +0x2CA6|` with 0x20: the world x and z of the press against
 the last point before the release, so the 32 are world units on each axis, and a cursor that
-wanders and comes back still clicks. DISASSEMBLED. The wiki's simulations take the same window
-(`sim.js` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
+wanders and comes back still clicks. DISASSEMBLED. The wiki's simulation takes the same window
+(`tagpu_wikisim.c` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
 
 **`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
 change test.** One call site, `0x4995B3`, which every left-button path above jumps to.
@@ -996,7 +1002,11 @@ unit**: `0x419670` walks the controlled player's block (`main+0x2A43` is the vie
 record `main+0x1B63 + 0x14B·main+0x2A42`, units
 `+0x67` to `+0x6B` inclusive (`0x41972A..0x419753`) — and orders every unit that is selected
 (`+0x110` bit `0x10`, `0x419755`) and whose type (`+0x92`) has `+0x241` bit `0x40`
-(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
+(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`); the action name is
+`VTOL_MOBILEBUILD` (`0x502640`, pushed at `0x41979F`) for a type with `+0x241` bit 11, else
+`MOBILEBUILD` (`0x502654`). The order's position is the footprint's centre, `(2·cx + fx) << 19` and
+`(2·cz + fz) << 19` (`0x419704..0x419717`), a 32-bit `shl` that wraps [DISASSEMBLED 2026-11-11;
+`tasim_place.c` computes it the same way]. The free clears
 bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
 
 The engine ends an order mode in six places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5

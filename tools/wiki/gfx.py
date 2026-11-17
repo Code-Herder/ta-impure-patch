@@ -68,7 +68,7 @@ Each stage pack also carries `minimap.bin`, the minimap picture the engine gener
 THE SIDEBAR PACK (`--side-only --mod <m>`; tools/wiki/sidepacks.py runs it once per compat setup) is the mod's left
 sidebar as the stage draws it and each side's own units for the wiki's demos: `gfx/side/<m>/side.json` and its
 binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.json holds
-  layout   exactly the object tools/wiki/mockup/sim.js `checkLayout` takes: every side that has MAIN2 and GEN screens,
+  layout   exactly the object tagpu_wikidata_layout reads and tagpu_wikilayout_check takes: every side that has MAIN2 and GEN screens,
            in sidedata's order, with the pages of its cast types (`sides[k].types`), and every screen's buttons with
            their roles and rects
   casting  index-aligned with layout.sides: the side's commander and, for every cast, the unit the cast rule picks
@@ -793,7 +793,7 @@ def entry_owners(entry):
 def stage_types(entry, casting=None):
     """The unit types an entry's stage pack exports: the entry's own, then, for each cast its units name, every
     side's type for that cast in `casting` (a side pack's list), each name once. A bound demo's units carry the
-    casting's type names (sim.js bindEntry) and an unbound cast keeps the entry's own type, so the pack holds a model
+    casting's type names (tagpu_wikisim.c THE BOUND ENTRY) and an unbound cast keeps the entry's own type, so the pack holds a model
     for either."""
     units = entry.get("units") or {}             # a text entry has none
     names = list(units)
@@ -807,7 +807,7 @@ def stage_types(entry, casting=None):
 
 
 # THE SOUND KIND TABLE 0x5086D8's keys (+0xC) by kind, 1..23; the kinds the wiki says (tagpu_wikisim.h); the allsound
-# names it plays (WIKI_SNDNAME_*, sim.js SND_NAMES)
+# names it plays (WIKI_SNDNAME_*)
 SND_KEYS = [None, "select", "underattack", "activate", "deactivate", "ok", "arrived", "cant", "unitcomplete", "build",
             "repair", "working", "load", "unload", "cloak", "uncloak", "capture", "count5", "count4", "count3",
             "count2", "count1", "count0", "canceldestruct"]
@@ -1069,14 +1069,14 @@ def write_units(out, eng, entry, report, types, models3d=()):
 
 # --------------------------------------------------------------------------- the left sidebar
 
-# The bounds the sim's layout holds (tools/wiki/mockup/sim.js checkLayout, tagpu_wikisim.h's WIKILAYOUT)
-# SIDE_ROWS: the deepest column, the rows of every stage's ground (stagemap.py GROUND_ROWS x 16, sim.js SIDE_ROWS)
+# The bounds the sim's layout holds (tagpu_wikilayout_check, tagpu_wikidata.h's WIKILAYOUT)
+# SIDE_ROWS: the deepest column, the rows of every stage's ground (stagemap.py GROUND_ROWS x 16, WIKI_SIDE_ROWS)
 SIDE_W, SIDE_MIN_H, SIDE_ROWS = 128, 480, 768
 GROUND_ROWS = SIDE_ROWS // 16   # cells: every stage description's ground (stagemap.py GROUND_ROWS)
 
 
 def map_rows(scene_rows, column):
-    """sim.js's map with the sidebar on: the scene's rows, grown by whole tiles until the map is as tall as the
+    """The simulation's map with the sidebar on (tagpu_wiki_map_rows): the scene's rows, grown by whole tiles until the map is as tall as the
     column's `column` rows."""
     return max(scene_rows, 2 * -(-column // 32))
 SIDE_SCREENS, SIDE_GADGETS, SIDE_PAGES, SIDE_TYPES = 48, 64, 7, 64
@@ -2259,14 +2259,14 @@ def cast_record(u, builds, corpse, height):
             "vent": bool(u["g"]), "g": u["g"], "builds": builds, "corpse": corpse}
 
 
-FEAT_NAME_MAX = 31         # a feature record's name and object, bytes (sim.js checkFeature, WIKIFEATDEF)
-FEAT_FOOT_MAX = 16         # its footprint's side (sim.js FEAT_FOOT, WIKI_FEAT_FOOT)
-FEAT_AMOUNT = 1e7          # its metal and energy bound (sim.js FEAT_AMOUNT, WIKI_FEAT_AMOUNT)
+FEAT_NAME_MAX = 31         # a feature record's name and object, bytes (WIKIFEATDEF)
+FEAT_FOOT_MAX = 16         # its footprint's side (WIKI_FEAT_FOOT)
+FEAT_AMOUNT = 1e7          # its metal and energy bound (WIKI_FEAT_AMOUNT)
 
 
 def corpse_record(eng, u):
     """A unit's wreck as a casting carries it: (the feature record or None, the reason for the report). The record is
-    sim.js checkFeature's, from the section the FBI's `corpse` names, found as Engine.feature finds it (the first
+    the loader's feature record's (tagpu_wikidata.c), from the section the FBI's `corpse` names, found as Engine.feature finds it (the first
     `features\\**\\*.tdf` holding it): footprintx/z as atoi of 16 bits and height of 8 (FeatureDef +0x94/+0x96 and
     +0xFA, as tagpu_wikiasset.c's feature_resolve reads them), metal and energy as strtod (+0xF0, +0xEC) [INFERRED:
     LoadFeature 0x4224B0's reader of those two keys is not mapped], blocking and reclaimable as atoi != 0 (+0xFE bits

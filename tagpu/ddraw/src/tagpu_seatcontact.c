@@ -442,13 +442,15 @@ void tagpu_seatcontact_init(void)
         !tagpu_detour_redirect_ok(s_calls[0], VA_ACQUIRE) ||
         !tagpu_detour_redirect_ok(s_calls[1], VA_ACQUIRE)) {
         tagpu_log("seatcontact: NOT installed: a site does not hold the retail bytes; every seat "
-                  "targets with the viewed player's contacts");
+                  "targets with the viewed player's contacts, and ImpAI's seats see no radar or sonar "
+                  "contact of a player whose contacts they do not receive");
         return;
     }
     if (!(sr = tagpu_detour_stub()) || !(ss = tagpu_detour_stub())) {
         tagpu_detour_stub_free(sr);
         tagpu_detour_stub_free(ss);
-        tagpu_log("seatcontact: NOT installed: no stub memory");
+        tagpu_log("seatcontact: NOT installed: no stub memory; ImpAI's seats see no radar or sonar "
+                  "contact of a player whose contacts they do not receive");
         return;
     }
     stub_radar(sr);
@@ -473,5 +475,6 @@ fail1:
 fail0:
     tagpu_detour_stub_free(sr);
     tagpu_detour_stub_free(ss);
-    tagpu_log("seatcontact: NOT installed: a site could not be written");
+    tagpu_log("seatcontact: NOT installed: a site could not be written; ImpAI's seats see no radar or "
+              "sonar contact of a player whose contacts they do not receive");
 }

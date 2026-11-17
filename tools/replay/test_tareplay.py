@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
-its runs and snapshot chains, and which cells are images, read from files built from the format
-alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
+comment filter, `landing --check`, a sim file's prelude and the reach it asks of each build, a
+recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
+which cells are images, read from files built from the format alone, compare-fork's view of a
+takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
-multiplayer dump's sort chains (tarec.sort_chains). No game runs. The files are read through
+multiplayer dump's sort chains (tarec.sort_chains), a worker's display under clients that come
+and go (one Xvfb, started as a worker starts it), --resume's kept results on stand-in groups, NO
+DRAW's lever, acknowledgement and account, and nodraweq.py's verdict. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
+import hashlib
+import importlib.util
 import io
 import json
+import os
 import re
+import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -64,6 +72,104 @@ print(errors, plain)
                              capture_output=True, text=True, timeout=120)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), "[] []")
+
+
+class CapRefusalFailsTheGame(unittest.TestCase):
+    """A refusal of the GPU memory cap in a game's log fails that game by name, as a COB stop does:
+    the cap is too small for it (talog.cap_refusals)."""
+
+    def test_a_cap_refusal_in_the_log_fails_the_game(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir = Path(d)
+            (gamedir / "log").mkdir()
+            log = gamedir / "log" / "tagpu.log"
+            log.write_text("log: run R1 part 1 of tagpu.log, started\n")
+            lg = tareplay.Log(SimpleNamespace(gamedir=gamedir))         # reads from the launch on
+            with log.open("a") as f:
+                f.write("vk: gpumem: this device's allocations are capped at 320 MiB\n")
+            self.assertEqual(len(lg.read()), 1)
+            with log.open("a") as f:
+                f.write("vk: gpumem: 304 MiB held of the 320 MiB cap (a new high water)\n"
+                        "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held "
+                        "of 320 MiB, 210 allocations\n")
+            with self.assertRaisesRegex(tareplay.Failed, "the GPU memory cap refused an allocation: "
+                                                         "vk: gpumem: the cap refuses an allocation of 33554432"):
+                lg.read()
+
+    REFUSAL = "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held of 320 MiB"
+
+    def folder(self, d):
+        gamedir = Path(d)
+        (gamedir / "log").mkdir()
+        log = gamedir / "log" / "tagpu.log"
+        log.write_bytes(b"log: run R1 part 1 of tagpu.log, started\r\n")
+        return gamedir, log
+
+    def test_the_watch_reads_every_launch_and_the_lines_after_the_last_read(self):
+        """talog.CapWatch: a refusal in a game the next launch rotated away, and one in a line the
+        game was still writing when it ended, are both read, each named once."""
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            caps = tareplay.talog.CapWatch(gamedir)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            log.rename(gamedir / "log" / "tagpu.1.log")          # the next launch
+            log.write_bytes(b"log: run R2 part 1 of tagpu.log, started\r\nvk: up\r\n")
+            self.assertEqual(caps.failure("g"), "the GPU memory cap refused g an allocation: "
+                                                + self.REFUSAL)
+            self.assertIsNone(caps.failure("g"))
+            with log.open("ab") as f:
+                f.write(b"vk: up\r\n" + self.REFUSAL.encode() + b"\r\n" + self.REFUSAL.encode())
+            self.assertEqual(caps.failure(), "the GPU memory cap refused an allocation (2 refusals): "
+                                             + self.REFUSAL)
+
+    def test_a_watch_begins_at_its_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            self.assertIsNone(tareplay.talog.CapWatch(gamedir).failure())
+
+    def lane(self, gamedir, after_last_wait, lane_fails=False):
+        """Run.job on a W lane whose game logs `after_last_wait` once its lane function returns or
+        raises; the fixture's problems and lanes."""
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.game_speed, run.turbo = tareplay.TEST_GAME_SPEED, tareplay.TURBO
+        run.fx = {"g": {"fix": {}, "Ts": [1], "out": gamedir / "out", "rec": Path("rec"),
+                        "procs": {}, "problems": []}}
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.name, w.gamedir, w.last_collection, w.lane = "tareplay-test", gamedir, None, None
+        w.xvfb = SimpleNamespace(display=":9")
+        w.collect = w.stop = Mock()
+
+        def lane(*a):
+            with (gamedir / "log" / "tagpu.log").open("ab") as f:
+                f.write(after_last_wait.encode() + b"\r\n")
+            if lane_fails:
+                raise tareplay.Failed("the HUD's seek: no answer")
+            return []
+        with patch.object(tareplay, "watch_lane", lane), patch.object(tareplay, "say"):
+            run.job(w, "g", "W")
+        return run.fx["g"]
+
+    def test_a_lane_whose_game_refused_after_its_last_wait_fails_by_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL)
+        self.assertEqual(fx["procs"], {"W": "ran"}, "its checks still run")
+        self.assertEqual(fx["problems"], [("W", "FAILED", "the GPU memory cap refused an allocation: "
+                                                          + self.REFUSAL)])
+
+    def test_a_failed_lane_names_the_refusal_beside_its_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL, lane_fails=True)
+        self.assertEqual([p[2] for p in fx["problems"]],
+                         ["the HUD's seek: no answer",
+                          "the GPU memory cap refused an allocation: " + self.REFUSAL])
+
+    def test_a_lane_with_no_refusal_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], "vk: gpumem: 304 MiB held of the 320 MiB cap")
+        self.assertEqual((fx["procs"], fx["problems"]), ({"W": "ran"}, []))
 
 
 class EffectPoolsImageGate(unittest.TestCase):
@@ -164,6 +270,221 @@ class OpaqueGlobals(unittest.TestCase):
         self.assertIn("1 VALUES THAT ARE ADDRESSES", output.getvalue())
 
 
+class ListHashes(unittest.TestCase):
+    """The exclusion file's and the positive list's hashes (each generator's THE FILE'S HASH and
+    THE LIST'S HASH): names, writers, evidence and spelling leave them, every column that decides
+    what the readers read moves them, and v0.5.1's whole-file hash is accepted only while that
+    file's rows and this generator read the bytes v0.5.1's tables read, and then reads in a header
+    as this checkout's hash; a generator that moves a byte fails the build. The build checks the
+    frozen copy of v0.5.1's file against the hash its header carried and the frozen tables against
+    what this generator renders; this checks, where git has the tag, that the copy is byte for byte
+    the published file and the tables are the published header's and generator's. One of the
+    acceptance's sites (each generator's ACCEPTANCE)."""
+    GLOBALS = ("data\t0x51FC88\t4\t-\tglobals\twrite\tseed\t0x4B6C87\tevidence\topaque",
+               "data\t0x51FC8C\t4\t0xFF\tglobals\thold\tnext\t-\tevidence",
+               "data\t0x51FC90\t8\t-\tleave\t-\tclock\t-\tevidence")
+    LAYOUT = ("unit\t0x0\t4\t-\tid:type\tdef\t0x401000\tevidence",
+              "unit\t0x10\t2\t0xFF\tcache\tlow\t0x401000\tevidence")
+
+    def setUp(self):
+        self.gens = {"globals": tarec._generator("replay-globals-gen"),
+                     "layout": tarec._generator("replay-layout-gen")}
+
+    def digest(self, which, rows):
+        gen = self.gens[which]
+        return gen.semantic_digest(gen.parse("\n".join(rows)))
+
+    @staticmethod
+    def edit(rows, i, col, value, *more):
+        """`rows` with row i's column col set to value, and each further (col, value) pair."""
+        out = [r.split("\t") for r in rows]
+        out[i][col] = value
+        for c, v in zip(more[::2], more[1::2]):
+            out[i][c] = v
+        return ["\t".join(r) for r in out]
+
+    def test_names_evidence_and_spelling_leave_the_hash(self):
+        for which, rows, same in (
+                ("globals", self.GLOBALS, [(0, 6, "rng"), (0, 7, "-"), (1, 8, "other words"),
+                                           (0, 1, "0x51fc88"), (1, 3, "0xff"), (0, 3, "0xFFFFFFFF")]),
+                ("layout", self.LAYOUT, [(0, 5, "type"), (1, 6, "0x401004"), (1, 7, "other words"),
+                                         (1, 3, "0xff"), (0, 1, "0x00")])):
+            want = self.digest(which, rows)
+            self.assertEqual(self.digest(which, ["# a comment", ""] + list(rows)), want)
+            for i, col, value in same:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertEqual(self.digest(which, self.edit(rows, i, col, value)), want)
+
+    def test_what_is_recorded_moves_the_hash(self):
+        # the where edit keeps the field's offset in its image (.data's 0x51FC88 is 0x1EC88 from
+        # its start), so only where moves
+        for which, rows, moved in (
+                ("globals", self.GLOBALS, [(1, 1, "0x51FC8D"), (2, 2, "12"), (1, 3, "0xF0"),
+                                           (2, 4, "tick"), (1, 5, "write"),
+                                           (0, 0, "main", 1, "0x1EC88")]),
+                ("layout", self.LAYOUT, [(1, 1, "0x12"), (1, 2, "1"), (1, 3, "0x0F"),
+                                         (1, 4, "timer"), (0, 4, "id:unit"), (1, 0, "player")])):
+            want = self.digest(which, rows)
+            for i, col, value, *more in moved:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertNotEqual(self.digest(which, self.edit(rows, i, col, value, *more)),
+                                        want)
+        plain = [self.GLOBALS[0].rsplit("\t", 1)[0]] + list(self.GLOBALS[1:])
+        self.assertNotEqual(self.digest("globals", plain), self.digest("globals", self.GLOBALS))
+
+    def checkout(self, which):
+        """This checkout's rows of `which`, and the hash v0.5.1's recordings carry for them."""
+        gen = self.gens[which]
+        with open(gen.TSV, encoding="utf-8") as f:
+            rows = gen.parse(f.read())
+        return rows, gen.published(rows)
+
+    def test_the_frozen_copies_are_the_published_files(self):
+        root = Path(__file__).resolve().parents[2]
+        for which, gen in self.gens.items():
+            tagged = f"{gen.PUBLISHED}:{Path(gen.TSV).relative_to(root).as_posix()}"
+            try:
+                published = subprocess.run(["git", "-C", str(root), "show", tagged],
+                                           capture_output=True, check=True).stdout
+            except (OSError, subprocess.CalledProcessError) as e:
+                self.skipTest(f"git cannot show {tagged}: {e}")
+            with self.subTest(which=which):
+                self.assertEqual(Path(gen.PUBLISHED_TSV).read_bytes(), published)
+
+    def test_the_frozen_tables_are_the_published_headers_and_generators(self):
+        """Each frozen table is what v0.5.1 rendered: the layout's, its header's table; the
+        globals', its header's slots and image size, and the opacity and rows its generator
+        derived from its file."""
+        root = Path(__file__).resolve().parents[2]
+
+        def show(rel):
+            try:
+                return subprocess.run(["git", "-C", str(root), "show", f"v0.5.1:{rel}"],
+                                      capture_output=True, check=True).stdout.decode("utf-8")
+            except (OSError, subprocess.CalledProcessError) as e:
+                self.skipTest(f"git cannot show v0.5.1:{rel}: {e}")
+
+        def c_mask(expr):
+            """A mask as the generators write it in C (mask_c): runs of set bits, shifted."""
+            v = 0
+            for term in expr.split("|"):
+                m = re.fullmatch(r"\s*(?:\((0x[0-9a-fA-F]+)u << (\d+)\)|(0x[0-9a-fA-F]+)u)\s*", term)
+                v |= int(m.group(1), 16) << int(m.group(2)) if m.group(1) else int(m.group(3), 16)
+            return v
+
+        lgen, ggen = self.gens["layout"], self.gens["globals"]
+        entries = []
+        for m in re.finditer(r'^    \{ RL_(\w+), RL_(\w+), RL_T_(\w+), (0x[0-9a-f]+), (\d+), '
+                             r'([^,]+), "[^"]*" \},$', show("tagpu/ddraw/inc/tagpu_replay_layout.h"),
+                             re.M):
+            target = m.group(3).lower()
+            entries.append((m.group(1).lower(), m.group(2).lower(),
+                            "" if target == "none" else target, int(m.group(4), 16),
+                            int(m.group(5)), c_mask(m.group(6))))
+        self.assertTrue(entries)
+        self.assertEqual(Path(lgen.PUBLISHED_TABLES).read_text(encoding="ascii"),
+                         lgen.tables(entries))
+
+        header = show("tagpu/ddraw/inc/tagpu_replay_globals.h")
+        slots = [(m.group(1).lower(), int(m.group(2)), int(m.group(3)), int(m.group(4), 16),
+                  c_mask(m.group(5)), c_mask(m.group(6)), c_mask(m.group(7)))
+                 for m in re.finditer(r'^    \{ RG_(\w+), (\d+), (\d+), (0x[0-9a-f]+), '
+                                      r'([^,]+), ([^,]+), ([^,]+), "[^"]*" \},$', header, re.M)]
+        dwords = int(re.search(r"#define REC_GLOBALS_DWORDS (\d+)", header).group(1))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "replay_globals_gen_v051.py"
+            path.write_text(show("tools/replay-globals-gen.py"), encoding="utf-8")
+            old = importlib.util.spec_from_file_location("replay_globals_gen_v051", path)
+            v051 = importlib.util.module_from_spec(old)
+            old.loader.exec_module(v051)
+        rows = v051.parse(Path(ggen.PUBLISHED_TSV).read_text(encoding="utf-8"))
+        sl, n = v051.slots(rows)
+        self.assertEqual(([(s["where"], s["dword"], s["size"], s["offset"], s["write"], s["hold"],
+                            s["react"]) for s in sl], n), (slots, dwords))
+        self.assertEqual(Path(ggen.PUBLISHED_TABLES).read_text(encoding="ascii"),
+                         ggen.tables(sl, n, rows, v051.DATA_BEGIN))
+
+    def test_a_generator_that_moves_a_byte_fails_the_build(self):
+        """A generator edit that packs two 2-byte slots into one dword, or that emits a full mask
+        where the table holds 0, renders this checkout's rows and v0.5.1's alike, so only the
+        frozen tables catch it: the build's check fails, naming them."""
+        gen = self.gens["globals"]
+        real = gen.slots
+
+        def packed(rows):
+            sl, dwords = real(rows)
+            out, saved = [], 0
+            for s in sl:
+                s = dict(s, dword=s["dword"] - saved)
+                if out and s["size"] <= 2 and out[-1]["size"] <= 2 and \
+                        out[-1]["dword"] + 1 == s["dword"] and not out[-1].get("shared"):
+                    s.update(dword=out[-1]["dword"], shared=True)
+                    saved += 1
+                out.append(s)
+            return out, dwords - saved
+
+        rows, _ = self.checkout("globals")
+        self.assertNotEqual(packed(rows)[1], real(rows)[1])
+        self.assert_build_fails(gen, "slots", packed, "dwords\t")
+
+        lgen = self.gens["layout"]
+        plain = lgen.table
+
+        def full_masks(rows):
+            return [(*e[:5], e[5] or (1 << (8 * e[4])) - 1 if e[4] <= 4 else e[5])
+                    for e in plain(rows)]
+
+        self.assert_build_fails(lgen, "table", full_masks, "\t0xffffffff")
+
+    def assert_build_fails(self, gen, name, edit, line):
+        """The generator `gen` with `name` replaced by `edit`: its build check exits 1 on the
+        frozen tables, quoting a line that holds `line`."""
+        err = io.StringIO()
+        with patch.object(gen, name, edit), patch.object(sys, "argv", ["gen", "--check"]), \
+                redirect_stderr(err):
+            self.assertEqual(gen.main(), 1)
+        self.assertIn(Path(gen.PUBLISHED_TABLES).name, err.getvalue())
+        self.assertIn("this generator reads other bytes", err.getvalue())
+        self.assertIn(line.replace("\t", "\\t"), err.getvalue())
+
+    def test_v051_is_accepted_only_with_its_rows(self):
+        for which, gen in self.gens.items():
+            rows, legacy = self.checkout(which)
+            self.assertEqual(tarec.list_id(which, legacy), gen.semantic_digest(rows))
+            moved = [dict(r) for r in rows]
+            moved[-1]["offset"] += 1
+            with self.subTest(which=which), self.assertRaises(gen.Invalid):
+                gen.published(moved)
+
+    def test_a_header_reads_v051s_hashes_as_this_checkouts(self):
+        entry = HeaderCopy.entry
+        current, legacy = {}, {}
+        for which, gen in self.gens.items():
+            rows, legacy[which] = self.checkout(which)
+            current[which] = gen.semantic_digest(rows)
+        def header(layout, globals_):
+            return tarec.header(entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                                entry(tarec.RT_LAYOUT, layout.encode()) +
+                                entry(tarec.RT_GLOBALS, globals_.encode()))
+        old = header(legacy["layout"], legacy["globals"])
+        new = header(current["layout"], current["globals"])
+        self.assertEqual((old["layout"], old["globals"]), (current["layout"], current["globals"]))
+        self.assertEqual((old["layout_raw"], old["globals_raw"]),
+                         (legacy["layout"], legacy["globals"]))
+        self.assertEqual(tarec.list_shown(old["layout"], old["layout_raw"]),
+                         f"{current['layout'][:12]} (recorded as {legacy['layout'][:12]})")
+        self.assertEqual(tarec.list_shown(new["layout"], new["layout_raw"]),
+                         current["layout"][:12])
+        self.assertIsNone(tarec.shape_differs(old, new))
+        self.assertEqual(tarec.globals_list(old["globals"])[3], current["globals"])
+        other = ("1" if current["globals"][0] != "1" else "2") + current["globals"][1:]
+        forked = header(current["layout"], other)
+        self.assertEqual(forked["globals"], other)
+        self.assertEqual(tarec.shape_differs(forked, old), "globals")
+        with self.assertRaises(tarec.Unreadable):
+            tarec.globals_list(other)
+
+
 class PuppetEngineChecks(unittest.TestCase):
     """A puppet's dump holds no native owner-only start and no native owner's query: `tarec counts`
     names each query call site's count as an owner's query, and the R/Q check fails on one."""
@@ -207,9 +528,18 @@ class CompletionCheckpoints(unittest.TestCase):
         with self.assertRaises(tareplay.CouldNotRun):
             tareplay.gametimes("too-short", 2400, "revision", last_min=7800)
 
+    def test_points_stay_clear_of_the_typed_work(self):
+        fix = tareplay.fixtures()["impai-handicap"]
+        typed = [s[0] for s in fix["steps"] if s[1] in ("type", "run", "keys")]
+        for revision in range(256):
+            times = tareplay.gametimes("impai-handicap", fix["end"], str(revision), 3, fix["first"],
+                                       None, fix["last_max"])
+            self.assertEqual(len(times), 4)
+            self.assertFalse([t for t in typed if times[0] <= t <= times[-1]], (revision, times))
+
     def test_ordinary_fixture_keeps_its_sampling(self):
         self.assertEqual(tareplay.gametimes("battle", 2400, "revision"),
-                         tareplay.gametimes("battle", 2400, "revision", last_min=None))
+                         tareplay.gametimes("battle", 2400, "revision", last_min=None, last_max=None))
 
 
 class TurboLanes(unittest.TestCase):
@@ -259,7 +589,7 @@ class RunTo(unittest.TestCase):
 
     def test_steps_at_the_held_tick_run_without_moving_it(self):
         ran = []
-        with patch.object(tareplay, "step", side_effect=lambda w, kind, arg: ran.append(arg)), \
+        with patch.object(tareplay, "step", side_effect=lambda w, kind, arg, log=None: ran.append(arg)), \
              patch.object(tareplay, "hold_at") as hold_at:
             self.assertEqual(tareplay.run_to(Mock(), self.log(1), 1, [(1, "apply", "a.json"),
                                                                       (1, "keys", ["b"])]), 1)
@@ -351,6 +681,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.collect.side_effect = OSError("artifact write failed")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):
@@ -366,6 +697,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.stop.side_effect = tareplay.CouldNotRun("still running")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):
@@ -373,9 +705,461 @@ class FailedWorkerCleanup(unittest.TestCase):
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
 
 
+class ImpaiLevers(unittest.TestCase):
+    """place() removes every ImpAI test lever another tool left in the game folder before a fixture's
+    content writes its own, and leaves the levers that are no ImpAI's."""
+
+    def worker(self, gamedir):
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.gdi = False
+        w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
+        return w
+
+    def place(self, gamedir, fix, gdi=False):
+        reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
+        dll = gamedir.parent / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
+             patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
+             patch.object(tareplay._CLI_API, "Instance"):
+            w = self.worker(gamedir)
+            w.gdi = gdi
+            w.place(fix, dll)
+
+    def test_the_gdi_lever_follows_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.GDI_LEVER).symlink_to(target)
+            self.place(g, {}, gdi=True)
+            self.assertTrue((g / tareplay.GDI_LEVER).is_file())
+            self.assertFalse((g / tareplay.GDI_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, {}, gdi=False)
+            self.assertFalse((g / tareplay.GDI_LEVER).exists())
+
+    def test_left_levers_go(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for name in ("tagpu_impai_check.on", "tagpu_impaiov.on", "tagpu_impai_budget.on", "tagpu_seatai.on"):
+                (g / name).write_text("")
+            self.place(g, {})
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")), [])
+            self.assertTrue((g / "tagpu_seatai.on").exists())
+
+    def test_fixture_content_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_budget.on").write_text("")
+            fix = tareplay.fixtures()["impai-observe"]
+            self.place(g, fix)
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")),
+                             ["tagpu_impai_check.on", "tagpu_impaiov.on"])
+
+    def test_link_is_removed_not_followed(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_check.on").symlink_to(target)
+            tareplay.clear_impai_levers(g)
+            self.assertFalse((g / "tagpu_impai_check.on").is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+
+
+class NoDraw(unittest.TestCase):
+    """NO DRAW's harness side (tareplay.NODRAW_LEVER): the Worker places and removes the lever, refuses it
+    without GDI and a turbo k, the acknowledgement takes only `nodraw: on at 0x4969CD`, and the account lines
+    of a launch's levels add up."""
+
+    def place(self, gamedir, nodraw, gdi=True, turbo=1, shadow=False, posecheck=False):
+        reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
+        dll = gamedir.parent / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
+             patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
+             patch.object(tareplay._CLI_API, "Instance"):
+            w = tareplay.Worker.__new__(tareplay.Worker)
+            w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, turbo, False, False
+            w.gdi, w.nodraw, w.shadow, w.posecheck = gdi, nodraw, shadow, posecheck
+            w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
+            w.place({}, dll)
+
+    def test_the_shadow_and_pose_levers_follow_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            self.place(g, False, shadow=True, posecheck=True)
+            self.assertTrue((g / tareplay.SHADOW_LEVER).is_file())
+            self.assertEqual((g / tareplay.POSE_LEVER).read_text(), "300")
+            self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+            self.place(g, False)
+            self.assertFalse((g / tareplay.SHADOW_LEVER).exists())
+            self.assertFalse((g / tareplay.POSE_LEVER).exists())
+
+    def test_the_lever_follows_the_worker_and_never_writes_through_a_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.NODRAW_LEVER).symlink_to(target)
+            self.place(g, True)
+            self.assertTrue((g / tareplay.NODRAW_LEVER).is_file())
+            self.assertFalse((g / tareplay.NODRAW_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, False)
+            self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+
+    def test_close_leaves_no_test_lever(self):
+        # a ladder's or a fixture's income lever and ImpAI's levels die with the worker, not in the next launch
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for name in ("tagpu_impai_income.on", "tagpu_impai_level.on", tareplay.NODRAW_LEVER, "keep.txt"):
+                (g / name).write_text("x")
+            w = tareplay.Worker.__new__(tareplay.Worker)
+            w.name, w.gamedir = "tareplay-test", g
+            w.hold_lever, w.stop_display, w.lock = Mock(), Mock(), Mock()
+            with patch.object(tareplay, "tacli", return_value=(0, "")):
+                w.close()
+            self.assertEqual(sorted(x.name for x in g.iterdir()), ["keep.txt"])
+
+    def test_a_worker_has_no_draw_unless_it_asks(self):
+        self.assertFalse(tareplay.Worker.nodraw)
+
+    def test_no_draw_without_gdi_or_a_turbo_could_not_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for gdi, turbo in ((False, 1), (True, 0)):
+                with self.assertRaisesRegex(tareplay.CouldNotRun, "no-draw needs GDI and a turbo k"):
+                    self.place(g, True, gdi=gdi, turbo=turbo)
+                self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+
+    def ack(self, lines, nodraw=True):
+        log = tareplay.Log.__new__(tareplay.Log)
+        log.lines, log.nodraw_on = list(lines), False
+        tareplay.nodraw_ack(SimpleNamespace(nodraw=nodraw), log)
+        return log.nodraw_on
+
+    def test_the_ack_takes_the_on_line_alone(self):
+        on = "replay: the frame visit at 0x4969CD in (skippable)\nnodraw: on at 0x4969CD, marked at 0x49692D"
+        self.assertTrue(self.ack(on.split("\n")))
+        self.assertFalse(self.ack(["nodraw: refused line never read"], nodraw=False))
+        for line in ("nodraw: UNAVAILABLE: 0x494930 holds other bytes",
+                     "nodraw: UNAVAILABLE: the skippable stub at 0x4969CD is not in",
+                     "nodraw: tagpu_nodraw.on refused: the renderer is not GDI (tagpu_gdi.on)",
+                     "nodraw: tagpu_nodraw.on refused: no tagpu_turbo.on k (no-draw keeps the turbo's batch)"):
+            with self.assertRaisesRegex(tareplay.CouldNotRun, re.escape(line)):
+                self.ack([line])
+
+    def test_the_accounts_add_up_over_the_launchs_levels(self):
+        lines = ["nodraw: from GameTime 2 to 9001, 8800 running frames not drawn, 12 drawn for the scoreboard, "
+                 "40 drawn otherwise",
+                 "nodraw: from GameTime 1 to 301, 290 running frames not drawn, 0 drawn for the scoreboard, "
+                 "10 drawn otherwise"]
+        acc = None
+        for ln in lines:
+            acc = tareplay.nodraw_add(acc, tareplay.NODRAW_ACCOUNT.search(ln))
+        self.assertEqual(acc, {"from": 2, "to": 301, "skipped": 9090, "board": 12, "drawn": 50})
+        self.assertAlmostEqual(tareplay.nodraw_share(acc), 9090 / 9152)
+        self.assertIsNone(tareplay.nodraw_share(None))
+        self.assertIsNone(tareplay.nodraw_share({"from": 1, "to": 1, "skipped": 0, "board": 0, "drawn": 0}))
+
+
+class Shadow(unittest.TestCase):
+    """THE SHADOW's verdict over a lane's log (tareplay.shadow_verdict), and the group that plays under it."""
+
+    ON = "nodraw: shadow on at 0x469A00 and 0x469BA3"
+    LEVEL = ("nodraw: shadow from GameTime 2 to 2400, 1200 frames compared, 0 differed, 3 not checked, "
+             "50000 units drawn in them")
+    ACCOUNT = ("nodraw: from GameTime 2 to 2400, 1100 running frames not drawn, 0 drawn for the scoreboard, "
+               "5 drawn otherwise, 1100 drawn for the shadow")
+
+    def verdict(self, lines, undrawn=False):
+        (_, v, detail), = tareplay.shadow_verdict("x", "\n".join(lines), undrawn)
+        return v, detail
+
+    def test_a_lane_with_frames_compared_and_none_differing_passes(self):
+        v, detail = self.verdict([self.ON, self.LEVEL])
+        self.assertEqual(v, tareplay.PASS)
+        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked, 50000 units drawn in them")
+        v, detail = self.verdict([self.ON, self.ACCOUNT, self.LEVEL], undrawn=True)
+        self.assertEqual(v, tareplay.PASS, detail)
+        self.assertIn("1100 frames not drawn", detail)
+
+    def test_a_difference_fails_by_name(self):
+        d = ("nodraw: shadow DIFFERS at GameTime 700: the draw passed 40 units, the selection 39; first at 12: "
+             "the draw's slot 300 at site A, the selection's slot 301 at site A")
+        v, detail = self.verdict([self.ON, d, self.LEVEL.replace("0 differed", "1 differed")])
+        self.assertEqual(v, tareplay.FAIL)
+        self.assertIn("GameTime 700", detail)
+
+    def test_progress_lines_stand_for_a_level_that_never_ended(self):
+        progress = ("nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, 0 not checked, "
+                    "900 units drawn in them")
+        v, detail = self.verdict([self.ON, progress])
+        self.assertEqual((v, detail),
+                         (tareplay.PASS, "600 frames compared, 0 differed, 0 not checked, 900 units drawn in them"))
+        v, detail = self.verdict([self.ON, progress, self.LEVEL, progress])
+        self.assertEqual(detail, "1800 frames compared, 0 differed, 3 not checked, 50900 units drawn in them")
+
+    def test_no_shadow_or_nothing_compared_could_not_run_and_no_undrawn_frame_fails(self):
+        v, detail = self.verdict(["nodraw: tagpu_ndshadow.on refused: the renderer is not GDI (tagpu_gdi.on)"])
+        self.assertEqual(v, tareplay.UNRUN)
+        self.assertIn("refused", detail)
+        self.assertEqual(self.verdict([self.ON])[0], tareplay.UNRUN)
+        self.assertEqual(self.verdict([self.ON, self.LEVEL.replace("50000 units", "0 units")])[0], tareplay.UNRUN)
+        v, detail = self.verdict([self.ON, self.LEVEL, self.ACCOUNT.replace("1100 running", "0 running")],
+                                 undrawn=True)
+        self.assertEqual(v, tareplay.FAIL)
+        self.assertIn("no frame went undrawn", detail)
+
+    def test_the_group_nodraw_shadow_plays_its_lanes_under_the_shadow(self):
+        fix = tareplay.fixtures()["nodraw-shadow"]
+        self.assertIs(fix["nodraw"], True)
+        self.assertEqual(tareplay.procs(fix), ("L", "P", "R", "Q"))
+
+
+class NoDrawEq(unittest.TestCase):
+    """nodraweq.py's verdict over four lanes' dumps and pose checks, the dump comparison stood in for: a field is a
+    difference line less its values, the mixed pairs are held to the null twin's fields, and an undrawn lane's pose
+    check to the drawn twins' where they agree."""
+
+    def setUp(self):
+        import nodraweq
+        self.N = nodraweq
+
+    POSE = [40, 0, "0123456789abcdef", "fedcba9876543210"]
+
+    def lanes(self, share=0.99, dumps=("1300", "4000"), poses=("999", "1200")):
+        return {n: {"share": share if nodraw else None,
+                    "dumps": {T: f"{n}-{T}.bin" for T in dumps},
+                    "pose": {G: list(self.POSE) for G in poses}} for n, nodraw in self.N.LANES}
+
+    def verdict(self, lanes, diff):
+        def fields(rec, a, b, T0):
+            self.assertEqual(T0, 1000)
+            return diff(a.name.split("-")[0], b.name.split("-")[0], a.name.split("-")[1][:-4])
+        with patch.object(self.N, "fields", fields):
+            return self.N.judge(Path("rec.imprec"), lanes, 1000)
+
+    def test_a_field_is_its_line_less_its_values(self):
+        self.assertEqual(self.N.field("globals meteorp1: recording 01000000, dump 02000000"), "globals meteorp1")
+        self.assertEqual(self.N.field("unit 12 +0x05C: recording 00000000, dump 01000000"), "unit 12 +0x05C")
+        self.assertEqual(self.N.field("unit 7: live in the dump only"), "unit 7: live in the dump only")
+
+    def test_equal_lanes_pass(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "PASS", r["why"])
+        self.assertEqual(sorted(r["at"]), ["1300", "4000"])
+
+    def test_a_field_only_a_mixed_pair_differs_in_fails(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"} if (x, y) == ("A", "C") and T == "4000"
+                         else set())
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("T 4000: (A,C) differs beyond (A,B)", r["why"][0])
+
+    def test_a_null_twin_that_differs_is_inconclusive_the_meteor_points_too(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"})
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+        r = self.verdict(self.lanes(), lambda x, y, T: {"globals meteorp1"})
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+    def test_a_pose_check_is_read_from_the_log(self):
+        got = self.N.poses(["[t] posecheck: every 300 GameTime",
+                            "[t] posecheck: GameTime 999 units 40 skipped 1 pose 0123456789abcdef aim "
+                            "fedcba9876543210"])
+        self.assertEqual(got, {"999": [40, 1, "0123456789abcdef", "fedcba9876543210"]})
+
+    def test_an_undrawn_pose_the_drawn_twins_agree_against_fails(self):
+        lanes = self.lanes()
+        lanes["C"]["pose"]["1200"][2] = "0000000000000000"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("GameTime 1200: C's pose check", r["why"][0])
+        self.assertEqual(r["poses"], {"judged": 2, "null_differs": []})
+
+    def test_poses_where_the_drawn_twins_differ_are_not_judged(self):
+        lanes = self.lanes()
+        lanes["B"]["pose"]["999"][3] = "0000000000000000"
+        lanes["C"]["pose"]["999"][3] = "1111111111111111"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "PASS", r["why"])
+        self.assertEqual(r["poses"], {"judged": 1, "null_differs": ["999"]})
+        lanes["B"]["pose"]["1200"][3] = "0000000000000000"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+        lanes = self.lanes()
+        del lanes["D"]["pose"]
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+    def test_a_low_undrawn_share_fails_and_no_common_dump_is_inconclusive(self):
+        r = self.verdict(self.lanes(share=0.5), lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "FAIL")
+        lanes = self.lanes()
+        lanes["C"]["dumps"] = {}
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+
+def x_connections(display, threads=4, each=150):
+    """`threads` loops each opening `each` raw X connections to `display`, taking the server's
+    setup answer and closing, so clients keep leaving while others connect: the answers by kind
+    ("accepted", or how the server dropped one)."""
+    answers, lock = {}, threading.Lock()
+
+    def one():
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(30)
+        try:
+            s.connect(f"/tmp/.X11-unix/X{display.lstrip(':')}")
+            s.sendall(struct.pack("<BxHHHHxx", ord("l"), 11, 0, 0, 0))
+            head = b""
+            while len(head) < 8:
+                chunk = s.recv(8 - len(head))
+                if not chunk:
+                    return "closed before the answer"
+                head += chunk
+            return "accepted" if head[0] == 1 else f"refused ({head[0]})"
+        except OSError as e:
+            return type(e).__name__
+        finally:
+            s.close()
+
+    def loop():
+        for _ in range(each):
+            answer = one()
+            with lock:
+                answers[answer] = answers.get(answer, 0) + 1
+
+    workers = [threading.Thread(target=loop) for _ in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join()
+    return answers
+
+
+class PredictorAnswers(unittest.TestCase):
+    """predictor_verdict: the fight predictor's answers from the military's level-end lines."""
+
+    @staticmethod
+    def mil(seat, made, refused):
+        return (f"impai: mil seat={seat} level=2 decisions=186 refused=0 predictions={made} "
+                f"refused_predictions={refused} roots=403 refused_orders=0 left_out=0\n")
+
+    def test_predictions_made_pass(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 53, 0), True)
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("seat 1: 53 predictions, 0 refused", detail)
+
+    def test_a_refusal_fails_where_none_is_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict(
+            "K", self.mil(1, 3, 0) + self.mil(2, 4, 1), False)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("seat 2: 4 predictions, 1 refused", detail)
+
+    def test_no_prediction_fails_only_when_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), False)
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_no_military_line(self):
+        self.assertEqual(tareplay.predictor_verdict("P", "replay: nothing\n", False), [])
+        (label, verdict, detail), = tareplay.predictor_verdict("L", "replay: nothing\n", True)
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_impai_fight_asks_for_predictions(self):
+        self.assertTrue(tareplay.fixtures()["impai-fight"].get("predicts"))
+
+    def test_every_prediction_refused_fails(self):
+        """a tree with no fight content refuses every prediction: impai-fight's L line on one"""
+        line = ("impai: mil seat=1 level=2 decisions=186 refused=0 predictions=50 refused_predictions=50 "
+                "roots=403 refused_orders=58 left_out=0 attacks=1 raids=0 retreats=0 scouts=1 defends=0 "
+                "safe=0 dguns=0 army_max=12/512 enemies_max=7/2048 contacts_max=1/32 predict_max=1/12 "
+                "roots_max=12/40\n")
+        (label, verdict, detail), = tareplay.predictor_verdict("L", line, True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("50 predictions, 50 refused", detail)
+
+
+class NavalAnswers(unittest.TestCase):
+    """naval_verdict: the naval rule played, from the level-end military and economy lines."""
+
+    @staticmethod
+    def lines(seat, naval, plants):
+        return (f"impai: eco seat={seat} decisions=360 orders=40 queued=8 failed=0 army=6 mex=3 energy=2 makers=0 "
+                f"factories=2 cons=4 metal_in=8.0 energy_in=60.0 gametime=5400 sea_plants={plants}\n"
+                f"impai: mil seat={seat} level=2 decisions=180 refused=0 predictions=6 refused_predictions=0 "
+                f"roots=90 refused_orders=0 left_out=0 attacks=0 raids=0 retreats=0 scouts=1 defends=1 safe=0 "
+                f"dguns=0 army_max=6/512 enemies_max=6/2048 contacts_max=1/32 predict_max=1/12 roots_max=8/40 "
+                f"naval={naval} unreached=0 cross=1\n")
+
+    def test_naval_with_a_sea_plant_passes(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 1, 1))
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("seat 1: naval=1 sea_plants=1", detail)
+
+    def test_not_naval_fails(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 0, 0))
+        self.assertEqual(verdict, tareplay.FAIL)
+
+    def test_naval_without_a_sea_plant_fails(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 1, 0))
+        self.assertEqual(verdict, tareplay.FAIL)
+
+    def test_no_military_line(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", "replay: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_the_mil_event_line_is_not_the_level_end(self):
+        line = "impai: mil seat=1 t=900 attack=0 raid=0 scout=1 retreat=0 safe=0 dgun=0 army=6\n"
+        (label, verdict, detail), = tareplay.naval_verdict("L", line)
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_impai_naval_asks_for_the_rule(self):
+        fixes = tareplay.fixtures()
+        for name in ("impai-naval", "stock-impai-naval"):
+            with self.subTest(name=name):
+                self.assertTrue(fixes[name].get("naval"))
+                self.assertTrue(fixes[name].get("predicts"))
+
+
+class WorkerDisplay(unittest.TestCase):
+    """A worker's display accepts every client that connects while others leave: it never
+    regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
+    its display and ended with code 0 before a window."""
+
+    def test_every_client_is_accepted_while_others_leave(self):
+        x = tareplay.start_xvfb()
+        try:
+            self.assertEqual(x_connections(x.display), {"accepted": 600})
+            self.assertIsNone(x.poll())
+        finally:
+            tareplay.stop_xvfb(x)
+
+
 class OfflineOrder(unittest.TestCase):
     """tareplay.Ordered: checks handed to the offline pool read back in the order asked, and the
     first failure in that order is the one raised, before the caller's own later one."""
+
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
 
     @staticmethod
     def slow(value, s=0.2):
@@ -426,15 +1210,136 @@ class OfflineOrder(unittest.TestCase):
         self.assertEqual(r.results(), ["a", 8, "b"])
         self.assertEqual(seen, [threading.current_thread()])
 
-    def test_the_pool_leaves_two_cores_to_each_game(self):
-        with patch("os.cpu_count", return_value=32):
-            self.assertEqual(tareplay.offline_workers(8), min(16, self.gib()))
-            self.assertEqual(tareplay.offline_workers(16), 2)
+    def test_the_pool_asks_a_worker_a_game_and_runs_no_more_than_granted(self):
+        self.assertEqual(tareplay.offline_workers(8), max(2, min(8, self.gib())))
+        self.assertEqual(tareplay.offline_workers(1), 2)
+        with patch.object(tareplay, "_POOL", None), \
+                patch.object(tareplay.runlock, "holding", lambda: True), \
+                patch.object(tareplay.runlock, "workers", lambda: 3), \
+                patch.object(tareplay.runlock, "games", lambda: 8), \
+                patch.object(tareplay.runlock, "slots", lambda: 19):
+            pool = tareplay.offline(8)
+            try:
+                granted = min(3, tareplay.offline_workers(8))
+                self.assertEqual(pool.gate.n, granted)
+                # widened to every slot the run holds, a thread for each as memory allows
+                self.assertEqual(pool.most, granted + tareplay.runlock.game_slots() * 8)
+                self.assertEqual(pool.threads, max(granted, min(pool.most, self.gib())))
+                pool.widen(100)
+                self.assertEqual(pool.gate.n, pool.most, "never past the slots the run holds")
+            finally:
+                pool.shutdown()
+
+    def test_a_run_that_declared_no_workers_has_none_to_widen_into(self):
+        """Nested in a `runlock.py run --slots 8`: workers() is the games' own slots."""
+        with patch.object(tareplay, "_POOL", None), \
+                patch.object(tareplay.runlock, "holding", lambda: True), \
+                patch.object(tareplay.runlock, "workers", lambda: 8), \
+                patch.object(tareplay.runlock, "games", lambda: 4), \
+                patch.object(tareplay.runlock, "slots", lambda: 8):
+            pool = tareplay.offline(8)
+            try:
+                granted = pool.gate.n
+                pool.widen(tareplay.runlock.game_slots() * 4)
+                self.assertEqual(pool.gate.n, granted)
+                self.assertLessEqual(pool.gate.n, 8)
+            finally:
+                pool.shutdown()
+
+    def test_the_pool_runs_no_more_than_its_gate_until_widened(self):
+        pool = tareplay.OfflinePool(6, 2, 6)
+        self.addCleanup(pool.shutdown)
+        lock, live, peak, go = threading.Lock(), [0], [0], threading.Event()
+
+        def task(barrier=None):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            if barrier is not None:
+                barrier.wait()          # all of them at once, or this times out
+            else:
+                go.wait(WAIT_S)
+            with lock:
+                live[0] -= 1
+            return True
+        first = [pool.submit(task) for _ in range(3)]
+        deadline = time.monotonic() + WAIT_S
+        while live[0] < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(live[0], 2)
+        go.set()
+        self.assertTrue(all(f.result(WAIT_S) for f in first))
+        self.assertEqual(peak[0], 2)
+        pool.widen(4)
+        together = threading.Barrier(6, timeout=WAIT_S)
+        self.assertTrue(all(f.result(WAIT_S) for f in [pool.submit(task, together)
+                                                        for _ in range(6)]))
+        self.assertEqual(peak[0], 6)
 
     @staticmethod
     def gib():
         with open("/proc/meminfo") as f:
             return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+
+
+class WidenedPoolSameReport(unittest.TestCase):
+    """THE GAME SLOTS GO TO THE CHECKS: a group's report through a pool widened while its checks
+    run is the serial pool's -- the same summary lines, verdicts in the same order, and the same
+    dumps kept -- whatever order its tarec calls end in."""
+
+    TS = [301, 331, 361, 391]
+
+    def group(self, root):
+        """A group whose four lanes ran, every file its checks name present and empty."""
+        out = root / "g"
+        rec = out / "L" / "g.imprec"
+        names = {"L": [f"l{self.TS[0]}", f"l{self.TS[-1]}", "ln1", "ln2"] + list(tareplay.NULL_VIEWS),
+                 "P": [f"p{self.TS[0]}", f"p{self.TS[-1]}"],
+                 "R": [f"r{self.TS[0]}"] + [f"rt{T}{x}" for T in self.TS[1:] for x in ("c", "-a", "-b")],
+                 "Q": [f"q{self.TS[0]}"]}
+        for proc, ns in names.items():
+            (out / proc).mkdir(parents=True)
+            (out / proc / "tagpu.log").write_text("")
+            for n in ns:
+                (out / proc / f"dump-{n}.bin").write_bytes(b"")
+        rec.write_bytes(b"")
+        return {"name": "g", "fix": {"end": 900}, "Ts": self.TS, "out": out, "rec": rec,
+                "procs": {p: "ran" for p in "LPRQ"}, "want": "LPRQ", "problems": [], "passed": [],
+                "held": [], "game_speed": 20, "turbo": [],
+                "rt": {f"rt{T}": f"replay: g: round trip rt{T}: 35 tables poisoned, residue 0"
+                       for T in self.TS[1:]}}
+
+    @staticmethod
+    def tarec(*args):
+        """A pass, a FAIL or a could-not-run, by the arguments alone, ending at a random time."""
+        key = " ".join(Path(str(a)).name for a in args)
+        h = zlib.crc32(key.encode())
+        time.sleep((h % 7) / 1000)
+        return (0, 0, 0, 1, 2)[h % 5], f"{key}: first\n{key}: {h}"
+
+    def report_on(self, pool, widen=0):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        fx = self.group(root)
+        self.addCleanup(pool.shutdown)
+        with patch.object(tareplay, "_POOL", pool), patch.object(tareplay, "tarec_run", self.tarec):
+            if widen:
+                # the lanes end while the checks run: the pool widens beside them
+                t = threading.Thread(target=lambda: (time.sleep(0.005), pool.widen(widen)))
+                t.start()
+                self.addCleanup(t.join, WAIT_S)
+            lines, failed, unrun = tareplay.fixture_report(fx, keep=False)
+        kept = sorted(str(f.relative_to(root)) for f in root.rglob("*.bin"))
+        verdicts = [(label, v, detail.replace(str(root), "ROOT")) for label, v, detail in fx["verdicts"]]
+        return [ln.replace(str(root), "ROOT") for ln in lines], failed, unrun, verdicts, kept
+
+    def test_a_widened_pool_reports_what_a_serial_one_does(self):
+        serial = self.report_on(tareplay.OfflinePool(1, 1))
+        self.assertTrue(serial[1] and serial[2], "the stand-in grades a FAIL and a could not run")
+        self.assertGreater(len(serial[3]), 30)
+        for _ in range(3):
+            self.assertEqual(self.report_on(tareplay.OfflinePool(12, 2, 12), widen=10), serial)
 
 
 class Scheduling(unittest.TestCase):
@@ -446,7 +1351,9 @@ class Scheduling(unittest.TestCase):
         run.q, run.seq, run.lock = tareplay.queue.PriorityQueue(), tareplay.itertools.count(), \
             threading.Lock()
         run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
+        run.keys, run.kept = {}, []
         run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
+        run.slots = tareplay.GameSlots(2)
         run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
                   for name, want, end in fixtures}
         return run
@@ -477,7 +1384,9 @@ class Scheduling(unittest.TestCase):
             run.put("a", "F")               # so does K
             run.done("a")
             self.assertFalse(run.reports)
+            self.assertFalse(run.slots.lanes_over)
             run.done("a")
+            self.assertTrue(run.slots.lanes_over, "no lane is left: the slots go to the checks")
             self.assertEqual(run.report_of("a").result(), (["== a"], False, False))
             self.assertEqual(run.report_of("a"), run.reports["a"])
         rep.assert_called_once_with(run.fx["a"], False)
@@ -491,7 +1400,704 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(tareplay.report(run), 2)
-        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
+        self.assertEqual((run.out / "summary.txt").read_text(),
+                         "renderer: the players' (the default)\n== a\n")
+
+    def test_a_gdi_run_says_so_and_takes_no_gpu_token(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out, run.gdi = Path(tmp.name), True
+        run.put("a", "L")
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            tareplay.report(run)
+        self.assertTrue((run.out / "summary.txt").read_text().startswith("renderer: GDI (--gdi)"))
+        run.j, run.what = 0, "tareplay run a --gdi"
+        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay, "watch_signals"):
+            tareplay.run_threads(run)
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay",
+                                                 "workers": tareplay.offline_workers(hold.call_args.args[2])})
+
+
+class StandInRun(unittest.TestCase):
+    """A run of stand-in groups -- one L lane each, whose job writes a coverage file and fails or
+    passes as the test says, and a report made of the lanes' outcomes -- through the real Run,
+    run_threads, report and verdict files. No game runs."""
+
+    GROUPS = ("a", "b", "c")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.dll = self.root / "ddraw-cover.dll"
+        self.dll.write_bytes(b"dll")
+        self.tree = "c0ffee"
+        self.played = []
+        self.outcome = {}                   # group -> "pass", "fail" or "unrun" for its next lane
+        self.widened = []                   # the workers the run's game slots gave the pool
+        self.pool = SimpleNamespace(widen=self.widened.append)
+        fixes = {n: {"load": f"{n}.json", "end": 900} for n in self.GROUPS}
+        test = self
+
+        def job(run, w, name, proc):
+            test.played.append(name)
+            fx = run.fx[name]
+            (fx["out"] / proc).mkdir(parents=True, exist_ok=True)
+            (fx["out"] / proc / f"cover-{proc}.bin").write_bytes(name.encode())
+            how = test.outcome.get(name, "pass")
+            if how == "pass":
+                fx["procs"][proc] = "ran"
+            elif how == "retire":               # its game could not be stopped (Run.job)
+                fx["procs"][proc] = "could not run"
+                fx["problems"].append((proc, "could not run", "failed game cleanup"))
+                return False
+            else:
+                kind = "FAILED" if how == "fail" else "could not run"
+                fx["procs"][proc] = kind
+                fx["problems"].append((proc, kind, f"{name} {how}"))
+        for target, name, value in ((tareplay, "fixtures", lambda: fixes),
+                                    (tareplay, "refuse_unended", lambda fxs: None),
+                                    (tareplay, "counts_options", lambda fix: None),
+                                    (tareplay, "chosen_dll", lambda *a: self.dll),
+                                    (tareplay, "gametimes", lambda *a: [301, 331, 361, 391]),
+                                    (tareplay, "procs", lambda fix: ("L",)),
+                                    (tareplay, "tree_key", lambda: self.tree),
+                                    (tareplay, "Worker",
+                                     lambda out: SimpleNamespace(close=lambda: None)),
+                                    (tareplay, "fixture_report", self.report),
+                                    (tareplay, "journal", lambda run: tareplay.tarun.NULL),
+                                    (tareplay, "offline", lambda games=1: self.pool),
+                                    (tareplay.runlock, "hold", lambda *a, **k: True),
+                                    (tareplay.runlock, "games", lambda: 2),
+                                    (tareplay, "watch_signals", lambda: None),
+                                    (tareplay.Run, "job", job)):
+            p = patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    @staticmethod
+    def report(fx, keep):
+        """A group's report from its lanes alone: a FAILED lane fails it, any other problem leaves
+        it could not run; its verdicts are one per lane."""
+        failed = any(kind == "FAILED" for _, kind, _ in fx["problems"])
+        unrun = any(kind != "FAILED" for _, kind, _ in fx["problems"])
+        fx["verdicts"] = [(f"lane {p}", tareplay.PASS if s == "ran" else
+                           tareplay.FAIL if s == "FAILED" else tareplay.UNRUN, s)
+                          for p, s in sorted(fx["procs"].items())]
+        lines = [f"== {fx['name']}: {fx['out']}"] + [f"   {v[1]:4}  {v[0]}: {v[2]}"
+                                                     for v in fx["verdicts"]]
+        return lines, failed, unrun
+
+    def sitting(self, out, resume=False, turbo=1, multiplayer=None):
+        """One sitting of `run a b c` into `out`, as cmd_run plays it, with the two-player groups
+        `multiplayer` ({build: DLL}) beside it as the landing plays them: (exit code, summary)."""
+        args = SimpleNamespace(cmd="run", what="test", keep=False, game_speed=20, turbo=turbo,
+                               cover=False, gdi=False, dll=None, stock_dll=None,
+                               resume=str(out) if resume else None)
+        out.mkdir(parents=True, exist_ok=True)
+        self.played = []
+        with redirect_stdout(io.StringIO()) as said:
+            run = tareplay.Run(list(self.GROUPS), args, out)
+            run.j = 2
+            run.multiplayer = multiplayer or {}
+            tareplay.run_threads(run)
+            status = tareplay.report(run)
+        self.said, self.run = said.getvalue(), run
+        return status, (out / "summary.txt").read_text()
+
+    @staticmethod
+    def groups_of(summary):
+        """The summary without the line a resumed run adds: what the run graded."""
+        return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
+
+
+REAL_WATCH_SIGNALS = tareplay.watch_signals     # StandInRun patches it away
+
+
+class TheStop(unittest.TestCase):
+    """THE STOP: the signal handler does nothing, so a signal that comes while the main thread holds
+    a lock still stops the run; STOP is set before the line; and once it is set, a tacli call starts
+    only to stop a game, in a session of its own."""
+
+    def setUp(self):
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    def test_a_signal_while_the_main_thread_holds_print_reaches_the_stop(self):
+        got = threading.Event()
+        stop = tareplay.SignalStop(lambda signum: got.set())
+        self.addCleanup(stop.close)
+        with tareplay.PRINT:
+            os.kill(os.getpid(), signal.SIGINT)
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.assertTrue(got.wait(10), "the stop thread was not woken")
+
+    def test_stop_sets_stop_before_its_line(self):
+        seen = []
+        with patch.object(tareplay, "say", lambda *a: seen.append(tareplay.STOP.is_set())):
+            tareplay.stop_run(signal.SIGINT)
+            tareplay.stop_run(signal.SIGTERM)
+        self.assertEqual(seen, [True], "one line, said with STOP already set")
+
+    def test_a_closed_output_does_not_keep_the_halt_from_running(self):
+        halted = []
+        w = SimpleNamespace(name="w", halt=lambda: halted.append(1))
+
+        def broken(*a):
+            raise BrokenPipeError
+        with patch.object(tareplay, "say", broken), patch.object(tareplay, "LIVE", {id(w): w}):
+            tareplay.stop_run(signal.SIGINT)
+        self.assertTrue(tareplay.STOP.is_set())
+        self.assertEqual(halted, [1])
+
+    def test_once_stopped_only_a_stop_starts(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv[2], kw.get("start_new_session")))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(tareplay.subprocess, "run", run):
+            tareplay.tacli("ui", "w", "--json")
+            tareplay.STOP.set()
+            with self.assertRaises(tareplay.CouldNotRun):
+                tareplay.tacli("scenario", "load", "w", "x.json")
+            tareplay.tacli("stop", "w", "--hard")
+        self.assertEqual(calls, [("ui", True), ("stop", True)])
+
+    def test_the_halt_stops_the_display_when_the_game_stop_fails(self):
+        w = object.__new__(tareplay.Worker)
+        w.name, w.display_lock, w.xvfb = "w", threading.Lock(), Mock()
+
+        def late(*a, **k):
+            raise subprocess.TimeoutExpired("tacli", 120)
+        with patch.object(tareplay, "tacli", late), redirect_stdout(io.StringIO()):
+            w.halt()
+            w.stop_display()
+        w.xvfb.terminate.assert_called()
+        self.assertEqual(w.xvfb.wait.call_count, 2)
+
+
+class StoppedRun(StandInRun):
+    """A signal in the middle of a stand-in run: every worker in a lane is halted at once, its lane
+    ends, no group starts after it, every worker is closed and the run returns."""
+
+    def setUp(self):
+        super().setUp()
+        self.made, test = [], self
+        both = threading.Barrier(2, timeout=10)
+
+        class Stand:
+            def __init__(self, out):
+                self.name = f"w{len(test.made)}"
+                self.halted, self.closed = threading.Event(), False
+                test.made.append(self)
+
+            def halt(self):
+                self.halted.set()
+
+            def close(self):
+                self.closed = True
+
+        def job(run, w, name, proc):
+            test.played.append(name)
+            # both lanes are taken, so both workers are live, before the one signal
+            if both.wait() == 0:
+                os.kill(os.getpid(), signal.SIGINT)
+            fx = run.fx[name]
+            fx["procs"][proc] = "could not run"
+            fx["problems"].append((proc, "could not run",
+                                   "halted" if w.halted.wait(10) else "never halted"))
+        for target, name, value in ((tareplay, "Worker", Stand), (tareplay.Run, "job", job),
+                                    (tareplay, "watch_signals", REAL_WATCH_SIGNALS)):
+            p = patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(tareplay.unwatch_signals)
+
+    def test_a_signal_halts_every_worker_and_the_run_returns(self):
+        t0 = time.monotonic()
+        status, summary = self.sitting(self.root / "run")
+        self.assertLess(time.monotonic() - t0, 10)
+        self.assertTrue(tareplay.STOP.is_set())
+        self.assertEqual(status, 2)
+        self.assertEqual(len(self.made), 2)
+        self.assertTrue(all(w.halted.is_set() and w.closed for w in self.made))
+        self.assertFalse(tareplay.LIVE, "every worker leaves the live set when it closes")
+        self.assertEqual(len(self.played), 2, "no group starts after the stop")
+        self.assertNotIn("never halted", summary)
+        self.assertEqual(self.said.count("stopping on SIGINT"), 1)
+
+
+def pe_image(stamp=1, checksum=2, export_stamp=3, code=b"\x90"):
+    """A minimal PE32 DLL: the file header at 0x80, one section at file 0x200 holding the export
+    directory, the three fields a link writes its time into (dllkey) set as given, and `code`
+    after the export directory."""
+    b = bytearray(0x400)
+    b[:2] = b"MZ"
+    struct.pack_into("<I", b, 0x3C, 0x80)
+    b[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", b, 0x84, 0x14C, 1, stamp, 0, 0, 0xE0, 0x2102)
+    opt = 0x98
+    struct.pack_into("<H", b, opt, 0x10B)
+    struct.pack_into("<I", b, opt + 64, checksum)
+    struct.pack_into("<II", b, opt + 96, 0x1000, 0x28)              # the export directory
+    struct.pack_into("<8sIIII", b, opt + 0xE0, b".edata", 0x100, 0x1000, 0x200, 0x200)
+    struct.pack_into("<I", b, 0x204, export_stamp)
+    b[0x240:0x240 + len(code)] = code
+    return bytes(b)
+
+
+class DllKey(unittest.TestCase):
+    """dllkey.digest: a DLL's hash less the link's time, so a relink of the same tree keeps a
+    resumed run's key and any other byte changes it."""
+
+    def digest(self, data):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "ddraw.dll"
+            f.write_bytes(data)
+            return tareplay.dllkey.digest(f)
+
+    def test_the_three_link_time_fields_are_left_out(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(pe_image()), [0x88, 0x98 + 64, 0x204])
+        self.assertEqual(self.digest(pe_image(1, 2, 3)), self.digest(pe_image(7, 8, 9)))
+
+    def test_any_other_byte_changes_it(self):
+        self.assertNotEqual(self.digest(pe_image()), self.digest(pe_image(code=b"\xCC")))
+
+    def test_a_file_that_is_no_pe_image_is_hashed_whole(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(b"dll"), [])
+        self.assertEqual(self.digest(b"dll"), hashlib.md5(b"dll").hexdigest())
+
+    def test_no_file_has_no_hash(self):
+        self.assertIsNone(tareplay.dllkey.digest(Path("/nonexistent/ddraw.dll")))
+
+
+class Resume(StandInRun):
+    """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
+    the rest played."""
+
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_partial_run_resumed_gives_the_full_runs_verdict(self):
+        self.outcome = {"b": "fail"}
+        full = self.sitting(self.root / "full")
+        self.assertEqual(full[0], 1)
+        self.outcome = {"b": "fail", "c": "unrun"}          # c cut short
+        part = self.root / "part"
+        self.assertEqual(self.sitting(part)[0], 1)
+        self.assertEqual(sorted(p.parent.name for p in part.glob(f"*/{tareplay.VERDICT}")),
+                         ["a", "b"])
+        self.outcome = {}                                   # b would pass if it were played again
+        status, summary = self.sitting(part, resume=True)
+        self.assertEqual(self.played, ["c"])
+        self.assertEqual(status, full[0])
+        self.assertEqual(self.groups_of(summary), self.groups_of(full[1]))
+        self.assertIn("resumed: kept from the earlier sitting: a b", summary)
+
+    def test_a_fail_is_kept_as_a_fail(self):
+        self.outcome = {"b": "fail"}
+        out = self.root / "run"
+        self.sitting(out)
+        self.outcome = {}
+        status, summary = self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+
+    def test_a_key_that_differs_is_refused_by_name_and_played_again(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = "beef"
+        self.sitting(out, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertIn("a: the kept result is refused, its key differs: tree; played again",
+                      self.said)
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn("its key differs: turbo;", self.said)
+        (self.root / "ddraw-cover.dll").write_bytes(b"rebuilt")
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn(f"its key differs: dlls {self.dll}", self.said)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
+    def test_a_relink_of_the_same_tree_keeps_the_key(self):
+        """`make` between sittings relinks the DLL with a new time in its header: the result is
+        kept. A change to any other byte refuses it (above)."""
+        self.dll.write_bytes(pe_image(stamp=100, checksum=200, export_stamp=100))
+        out = self.root / "run"
+        self.sitting(out)
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160))
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160, code=b"\xCC"))
+        self.sitting(out, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
+    def test_changed_coverage_files_are_refused(self):
+        out = self.root / "run"
+        self.sitting(out)
+        (out / "a" / "L" / "cover-L.bin").write_bytes(b"other")
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, ["a"])
+        self.assertIn("a: the kept result is refused, its coverage files are not the ones it "
+                      "recorded", self.said)
+
+    def test_a_stopped_run_keeps_nothing_it_settles_after_the_stop(self):
+        out = self.root / "run"
+        with patch.object(tareplay, "fixture_report",
+                          lambda fx, keep: (tareplay.STOP.set(), self.report(fx, keep))[1]):
+            self.sitting(out)
+        self.assertEqual(list(out.glob(f"*/{tareplay.VERDICT}")), [])
+
+    def test_a_two_player_group_is_kept_under_its_key(self):
+        out = self.root / "run"
+        self.sitting(out)
+        game = out / tareplay.mp_item("raised") / "game"
+        game.mkdir(parents=True)
+        (game / "cover-mb-H.bin").write_bytes(b"c")
+        reach = {("src/tagpu_recorder.c", "mp_start_send")}
+        self.run.settle_multiplayer("raised", self.dll, reach, [])
+        stock = out / tareplay.mp_item("stock")
+        stock.mkdir()
+        self.sitting(out, resume=True)
+        with redirect_stdout(io.StringIO()):
+            got = self.run.kept_multiplayer({"raised": self.dll, "stock": self.dll})
+        self.assertEqual(got, {"raised": (reach, [])})
+        self.assertIn("multiplayer-raised", self.run.kept)
+        self.assertFalse(stock.exists(), "a group with no kept result is played from nothing")
+        other = self.root / "other.dll"
+        other.write_bytes(b"other")
+        with redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(self.run.kept_multiplayer({"raised": other}), {})
+        self.assertIn("its key differs: dll; played again", said.getvalue())
+
+    def test_a_verdict_file_that_cannot_be_written_is_said_and_the_result_stands(self):
+        self.outcome = {"b": "fail"}
+        real = tareplay.write_atomic
+
+        def write(path, text):
+            if path.parent.name == "b":
+                raise OSError(28, "No space left on device")
+            real(path, text)
+        with patch.object(tareplay, "write_atomic", write):
+            status, summary = self.sitting(self.root / "run")
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+        self.assertIn(f"b: its verdict file {self.root / 'run' / 'b' / tareplay.VERDICT} was not "
+                      f"written (OSError: [Errno 28] No space left on device); the result stands",
+                      self.said)
+        self.assertEqual(sorted(p.parent.name for p in (self.root / "run").glob(
+            f"*/{tareplay.VERDICT}")), ["a", "c"])
+
+    def test_a_dirty_tree_is_never_resumed(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = None
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
+            self.sitting(out, resume=True)
+
+    def test_a_folder_that_does_not_exist_yet_starts_fresh(self):
+        out = self.root / "new" / "run"
+        with patch.dict(tareplay.os.environ):              # out_dir points the decode cache at it
+            made = tareplay.out_dir(SimpleNamespace(resume=str(out), out=None))
+        self.assertEqual(made, out.resolve())
+        self.assertTrue(made.is_dir())
+        status, summary = self.sitting(made, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertEqual(status, 0)
+        self.assertNotIn("resumed:", summary)
+
+
+class ResumeRefusedAtOnce(unittest.TestCase):
+    """main() refuses a --resume it cannot go on with before a command selects anything: a
+    landing's plan takes minutes, and a refusal after it costs them."""
+
+    def refusal(self, resume, tree="c0ffee"):
+        with patch.object(tareplay, "tree_key", lambda: tree), \
+                patch.object(tareplay, "landing_plan", side_effect=AssertionError("selected")), \
+                redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+            tareplay.main(["landing", "--resume", str(resume)])
+        self.assertEqual(stop.exception.code, 2)
+        return err.getvalue()
+
+    def test_a_folder_that_cannot_be_one_is_refused_at_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            taken = Path(d) / "a-file"
+            taken.write_text("")
+            self.assertIn(f"--resume {taken}: not a folder this run can play in", self.refusal(taken))
+
+    def test_a_dirty_tree_is_refused_at_once_and_makes_no_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            self.assertIn("uncommitted or untracked changes", self.refusal(out, tree=None))
+            self.assertFalse(out.exists())
+
+
+class MultiplayerNames(unittest.TestCase):
+    """The two-player games' instances: tools/mp_lobby.sh types each one's name as its player's
+    nickname, so every name the landing can make fits SELGAME's NICKNAME field, and none is another
+    run's or the other build's."""
+
+    def test_every_name_the_landing_makes_fits_the_nickname_and_is_its_own(self):
+        import recmp_create_begin_test as recmp
+        runlock = tareplay.runlock
+        tags = [runlock.slot_tag(k) for k in range(runlock.BUDGET)] + [runlock.FLOCK_TAG]
+        self.assertEqual(sorted(tareplay.MP_LABELS), sorted(tareplay.MP_BUILDS))
+        names = [name for tag in tags for build in tareplay.MP_BUILDS
+                 for name in recmp.instance_names(tag, recmp.label_arg(tareplay.MP_LABELS[build]))]
+        self.assertEqual(len(names), 2 * len(tags) * len(tareplay.MP_BUILDS))
+        self.assertEqual([n for n in names if len(n) > recmp.NICKNAME_CHARS], [])
+        self.assertEqual(len({n.upper() for n in names}), len(names))
+
+    def test_the_impai_form_reads_each_peers_seat_line(self):
+        import recmp_create_begin_test as recmp
+        line = ("impai: seats {} (netai=impai, a network game, level 2) of 4 records; "
+                "other peers' AI seats {}, ImpAI's {}")
+        good = {"H": line.format(2, 3, 3), "J": line.format(3, 2, 2)}
+        self.assertEqual(recmp.impai_seat_problems(good), [])
+        bad = recmp.impai_seat_problems({"H": line.format("none", 3, 3), "J": line.format(3, 2, "none")})
+        self.assertEqual(bad, ["H: ImpAI seats none, not its own AI row 2",
+                               "J: the other peers' ImpAI seats none, not the other peer's AI row 2"])
+        self.assertEqual(recmp.impai_seat_problems({"H": good["H"] + "\n" + good["H"], "J": ""}),
+                         ["H: 2 network ImpAI seat lines, not one", "J: 0 network ImpAI seat lines, not one"])
+        rows = recmp.room_rows({"gadgets": [{"name": "PLAYER2", "text": "ImpAI:MB-S24-I-H"},
+                                            {"name": "READY0", "text": "x"}, {"name": "PLAYER3"}]})
+        self.assertEqual(rows, {2: "ImpAI:MB-S24-I-H", 3: ""})
+
+    def test_the_impai_takeover_needs_every_ai_seat_marked(self):
+        import recmp_play_test as play
+        line = "impai: seats {} (the recording's and impure.cfg's, a takeover) of 4 records; fresh {}"
+        ok, why = play.impai_takeover([line.format("1,2,3", "1,2,3")], {1, 2, 3})
+        self.assertTrue(ok, why)
+        ok, why = play.impai_takeover([line.format("2,3", "3")], {1, 2, 3})
+        self.assertFalse(ok)
+        self.assertIn("not ImpAI's [1]", why)
+        self.assertFalse(play.impai_takeover([], {1})[0])
+        self.assertFalse(play.impai_takeover([line.format("none", "none")], set())[0])
+
+    def test_the_lobby_refuses_a_name_its_nickname_cannot_hold_before_any_menu(self):
+        r = subprocess.run(["bash", str(HERE.parent / "mp_lobby.sh"), "mb-s00-raised-H", "mb-s00-J"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("'mb-s00-raised-H' is 15 characters and its nickname holds 10", r.stderr)
+        self.assertEqual(r.stdout, "")                      # the port check, its first step, never ran
+
+
+class MultiplayerBeside(StandInRun):
+    """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):
+    both builds at once and beside the lanes, never more games than the grant."""
+
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_both_builds_play_at_once_within_the_grant(self):
+        both = threading.Barrier(2, timeout=WAIT_S)
+        seen = []
+
+        def group(build, dll, out, keep, game_over, impai=False):
+            both.wait()                         # both builds in their game at once, or this fails
+            game_over()
+            (out / tareplay.mp_item(build)).mkdir()
+            seen.append(build)
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.runlock, "games", lambda: 4):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(sorted(seen), ["raised", "stock"], self.run.mp_results)
+        self.assertEqual(self.run.mp_results["stock"], ({("src/tagpu_recorder.c", "stock")}, []))
+        self.assertEqual(self.run.slots.lent, 4, "a slot was not given back")
+        self.assertEqual(sum(self.widened), tareplay.runlock.game_slots() * 4)
+        self.assertTrue((self.root / "run" / "multiplayer-raised" / tareplay.VERDICT).is_file())
+
+    def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
+        lock, live, peak = threading.Lock(), [0], [0]
+
+        def group(build, dll, out, keep, game_over, impai=False):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.2)
+            with lock:
+                live[0] -= 1
+            return set(), []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.Run, "settle_multiplayer", lambda *a: None):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(peak[0], 1)
+
+    def test_a_grant_of_one_game_refuses_the_groups_before_a_game(self):
+        played = []
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.runlock, "games", lambda: 1):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(sorted(self.run.mp_results), ["raised", "stock"])
+        reach, problems = self.run.mp_results["stock"]
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER stock: could not run: the two-player game: its 2 games wait on "
+                      "each other and this run may play 1 at once", problems[0])
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
+
+    def test_a_group_whose_verdict_file_fails_keeps_its_result(self):
+        def group(build, dll, out, keep, game_over, impai=False):
+            (out / tareplay.mp_item(build)).mkdir()
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay, "write_atomic", side_effect=OSError("read-only")):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"], ({("src/tagpu_recorder.c", "raised")}, []))
+        self.assertIn("multiplayer-raised: its verdict file", self.said)
+        self.assertIn("(OSError: read-only); the result stands", self.said)
+
+    def test_a_retired_worker_keeps_its_slot(self):
+        """A worker whose game could not be stopped keeps its slot to the run's end: the game may
+        still hold the GPU memory and seat the slot stands for."""
+        self.outcome = {"a": "retire"}
+        self.sitting(self.root / "run")
+        # the retired slot is neither free nor lent: its game may still be running
+        self.assertEqual((self.run.slots.total, self.run.slots.free, self.run.slots.lent),
+                         (0, 0, 1))
+        self.assertEqual(sum(self.widened), tareplay.runlock.game_slots())
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the other worker plays on")
+
+    def test_a_group_left_too_few_slots_by_a_retirement_is_refused(self):
+        """Both workers retire; the group, which asks only once they have, meets a run with no slot
+        left and is refused by name instead of waiting for slots that never come free."""
+        self.outcome = {"a": "retire", "b": "retire"}
+        played, both_retired = [], threading.Event()
+        take, retire = tareplay.GameSlots.take, tareplay.GameSlots.retire
+
+        def retiring(slots, n):
+            retire(slots, n)
+            if slots.total == 0:
+                both_retired.set()
+
+        def taking(slots, n, lane):
+            if not lane:
+                both_retired.wait(WAIT_S)
+            return take(slots, n, lane)
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.GameSlots, "retire", retiring), \
+                patch.object(tareplay.GameSlots, "take", taking):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: 2 game slots asked of a run "
+                                  "of 0"]))
+
+    def test_a_group_that_throws_is_a_problem_by_name(self):
+        def group(*a):
+            raise OSError("no Xvfb")
+        with patch.object(tareplay, "multiplayer_group", group):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: OSError: no Xvfb"]))
+
+
+WAIT_S = 20                     # a bound on a step that takes milliseconds: past it the test is wrong
+
+
+class GameSlotsOrder(unittest.TestCase):
+    """GameSlots: a waiting lane before a two-player group, a group's two at once, no wait past a
+    stop."""
+
+    def setUp(self):
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    def started(self, fn):
+        t = threading.Thread(target=fn)
+        t.start()
+        self.addCleanup(t.join, WAIT_S)
+        return t
+
+    def test_a_waiting_lane_goes_before_a_group(self):
+        slots, order = tareplay.GameSlots(3), []
+        self.assertEqual(slots.take(3, lane=True), 3)
+        group = self.started(lambda: order.append(("group", slots.take(2, lane=False))))
+        lane = self.started(lambda: order.append(("lane", slots.take(1, lane=True))))
+        deadline = time.monotonic() + WAIT_S
+        while slots.lanes_waiting == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        slots.give(2)                   # two free: the group's two, but a lane waits
+        lane.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1)])
+        self.assertTrue(group.is_alive())
+        slots.give(1)
+        group.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1), ("group", 2)])
+        self.assertEqual(slots.free, 0)
+
+    def test_more_slots_than_the_run_has_are_refused(self):
+        with self.assertRaises(ValueError):
+            tareplay.GameSlots(1).take(2, lane=False)
+
+    def test_a_retirement_refuses_a_waiting_group_the_run_can_no_longer_seat(self):
+        slots, got = tareplay.GameSlots(2), []
+        self.assertEqual(slots.take(1, lane=True), 1)
+
+        def group():
+            try:
+                slots.take(2, lane=False)
+            except ValueError as e:
+                got.append(str(e))
+        t = self.started(group)
+        slots.retire(1)
+        t.join(WAIT_S)
+        self.assertEqual(got, ["2 game slots asked of a run of 1"])
+        self.assertEqual((slots.total, slots.free), (1, 1))
+
+    def test_a_stop_ends_the_wait_with_no_slot(self):
+        slots, got = tareplay.GameSlots(1), []
+        slots.take(1, lane=True)
+        t = self.started(lambda: got.append(slots.take(1, lane=False)))
+        tareplay.STOP.set()
+        t.join(WAIT_S)
+        self.assertEqual(got, [0])
+
+    def test_nothing_is_lent_while_a_lane_may_still_come(self):
+        lent = []
+        slots = tareplay.GameSlots(3, spare=lent.append)
+        slots.give(slots.take(2, lane=True))
+        self.assertEqual((lent, slots.free, slots.total), ([], 3, 3))
+
+    def test_the_slots_no_game_takes_again_are_lent_past_the_groups_two(self):
+        """After the lanes, a free slot goes to the pool unless a group that has not asked yet
+        needs it; a retired slot never does; the group still finds its two."""
+        lent = []
+        slots = tareplay.GameSlots(5, groups=1, spare=lent.append)
+        slots.retire(slots.take(1, lane=True))      # its game may still run
+        self.assertEqual(slots.take(1, lane=True), 1)
+        slots.lanes_end()                           # one lane still plays, no other will come
+        self.assertEqual((lent, slots.free), ([1], 2), "three free, two kept for the group")
+        self.assertEqual(slots.take(2, lane=False), 2)
+        slots.give(1)                               # the last lane ends
+        slots.give(2)                               # the group ends
+        self.assertEqual(lent, [1, 1, 2])
+        self.assertEqual((slots.total, slots.free, slots.lent), (0, 0, 4))
+
+    def test_a_refused_group_reserves_nothing(self):
+        lent = []
+        slots = tareplay.GameSlots(1, groups=1, spare=lent.append)
+        slots.lanes_end()
+        self.assertEqual(lent, [], "the group's two are kept until it asks")
+        with self.assertRaises(ValueError):
+            slots.take(2, lane=False)
+        self.assertEqual((lent, slots.lent), ([1], 1))
 
 
 class RewindPolicy(unittest.TestCase):
@@ -546,6 +2152,72 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotIn(4, b.sight)
         self.assertNotIn(4, a.sightw)
         self.assertNotEqual(a.sight[0], b.sight[0])
+
+
+class ForkFreshSeat(unittest.TestCase):
+    """D2 (e): compare-fork leaves out ImpAI's mark, brain, military and unit-block jobs of a seat
+    the takeover newly gave ImpAI, at the fork's first capture only (tarec.fork_fresh_seats)."""
+    SLOTS, FORK_AT = 40, 601
+    TABLES = {0: ("src/tagpu_impai.c:s_seat", 1, 10), 1: ("src/tagpu_impai.c:s_brain", 8, 10),
+              2: ("src/tagpu_impai.c:s_mil", 8, 10), 3: ("src/tagpu_impai.c:s_job", 4, 40),
+              4: ("src/tagpu_impai.c:s_known", 8, 40)}
+    BLOCKS = {0: (1, 10), 1: (11, 20)}        # each seat's unit block, inclusive slots
+
+    def header(self, ai, fork=True):
+        h = {"players": [{"index": i, "controller": 1 if i == 0 else 2, "ai": ai.get(i, 0)}
+                         for i in (0, 1)],
+             "tables": {ix: {"name": n, "stride": s} for ix, (n, s, _) in self.TABLES.items()}}
+        if fork:
+            h["timeline"] = (1, 0, self.FORK_AT)
+        return h
+
+    def world(self, h, tick):
+        w = tarec.World(self.SLOTS, h["tables"], h, dims=(0, 0, 0, 0))
+        w.tick = tick
+        for ix, (_, stride, rows) in self.TABLES.items():
+            w.tables[ix] = bytearray(stride * rows)
+        for seat, (lo, hi) in self.BLOCKS.items():
+            struct.pack_into("<II", w.players[seat], tarec.PL_BLOCKFIRST, lo + 1, hi + 1)
+        return w
+
+    def compare(self, writes, parent_ai=None, tick=FORK_AT, fork=True):
+        """(the difference count, the lines) after fork_view, the fork's header marking seat 1,
+        and `writes` (table, row, byte) set in the fork's world only."""
+        ha, hb = self.header(parent_ai or {}), self.header({1: 1}, fork)
+        a, b = self.world(ha, tick), self.world(hb, tick)
+        for ix, row, value in writes:
+            b.tables[ix][row * self.TABLES[ix][1]] = value
+        tarec.fork_view(a, b, ha, hb)
+        lines, n = a.differences(b, ha["tables"], hb["tables"])
+        return n, lines
+
+    FRESH = [(0, 1, 1), (1, 1, 7), (2, 1, 9), (3, 11, 3), (3, 20, 4)]
+
+    def test_a_fresh_seats_rows_pass_at_the_first_capture(self):
+        self.assertEqual(self.compare(self.FRESH), (0, []))
+
+    def test_the_same_rows_fail_at_the_second_capture(self):
+        n, lines = self.compare(self.FRESH, tick=self.FORK_AT + 1)
+        self.assertEqual(n, 5)
+        for name in ("s_seat", "s_brain", "s_mil", "s_job"):
+            self.assertTrue(any(f"src/tagpu_impai.c:{name} " in ln for ln in lines), name)
+
+    def test_another_seats_rows_fail_at_the_first_capture(self):
+        for write in ((0, 0, 1), (1, 0, 7), (2, 0, 9), (3, 10, 3), (3, 21, 3), (4, 11, 5)):
+            with self.subTest(write=write):
+                n, lines = self.compare([write])
+                self.assertEqual(n, 1, lines)
+                self.assertIn(self.TABLES[write[0]][0], lines[0])
+
+    def test_a_seat_the_parent_marked_is_not_masked(self):
+        self.assertEqual(tarec.fork_fresh_seats(self.header({1: 1}), self.header({1: 1}),
+                                                self.world(self.header({}), self.FORK_AT)), set())
+        n, _ = self.compare(self.FRESH, parent_ai={1: 1})
+        self.assertEqual(n, 5)
+
+    def test_a_header_with_no_fork_masks_nothing(self):
+        n, _ = self.compare(self.FRESH, fork=False)
+        self.assertEqual(n, 5)
 
 
 def counts_compare(live, puppet, rewind=False, cob_exact=False):
@@ -794,8 +2466,10 @@ class HeaderCopy(unittest.TestCase):
     def test_edit(self):
         entry = self.entry
         layout, smap = b"ab" * 32 + b"\0", b"Coast To Coast\0"
+        globals_ = b"cd" * 32 + b"\0"
         head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
-                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap))
+                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap) +
+                entry(tarec.RT_GLOBALS, globals_))
         with tempfile.TemporaryDirectory() as d:
             src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
             src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head)
@@ -807,11 +2481,15 @@ class HeaderCopy(unittest.TestCase):
             ents = dict(tarec.entries(got[0][3]))
             self.assertEqual(ents[tarec.RT_SETTINGS_MAP], b"Q" * 14 + b"\0")
             self.assertEqual(ents[tarec.RT_LAYOUT], layout)
-            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout})
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_hash})
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
             self.assertEqual(ents[tarec.RT_SETTINGS_MAP], smap)
-            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout,
+            tareplay.header_copy(src, dst, {tarec.RT_GLOBALS: tareplay.other_hash})
+            ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
+            self.assertEqual((ents[tarec.RT_GLOBALS], ents[tarec.RT_LAYOUT]),
+                             (b"1" + globals_[1:], layout))
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_hash,
                                             tarec.RT_SETTINGS_MAP: tareplay.no_such_map})
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual((ents[tarec.RT_LAYOUT], ents[tarec.RT_SETTINGS_MAP]),
@@ -898,14 +2576,60 @@ class TakeoverRoster(unittest.TestCase):
                            "world": [4260, 1170]}])
 
     def test_the_old_roster_does_not_complete_the_wait(self):
-        with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster after takeover"):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster dump began"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.head]),
                                      1681, 0)
 
     def test_a_partial_dump_does_not_complete_the_wait(self):
-        with self.assertRaisesRegex(tareplay.CouldNotRun, "roster is incomplete"):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "has no header"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.new]),
                                      1681, 0)
+
+    def test_a_dump_begun_before_the_start_is_skipped_whole(self):
+        log = self.Log([self.head, self.old, self.old, self.head, self.new, self.head])
+        self.assertEqual([u["engine_index"] for u in tareplay.roster_after(log, 2, "t")], [344])
+
+
+class OrderStep(unittest.TestCase):
+    """A fixture's `order` step names its units from a roster dumped after the step began: on a
+    turbo level the newest dump can predate the scenario's units (MEASURED 2026-11-12: `no ARMPW
+    of rank 0 (0 in the roster)` at GameTime 900 on a turbo lane, its newest dump listing none of
+    the scenario's six)."""
+
+    class Log:
+        """The log as the step reads it first, then with a dump the game logs afterwards."""
+
+        def __init__(self, lines, later):
+            self.lines, self.later, self.reads = lines, later, 0
+
+        def read(self):
+            self.reads += 1
+            if self.reads > 1:
+                self.lines += self.later
+                self.later = []
+
+        def wait(self, rx, timeout, start=0):
+            self.read()
+            return next((line for line in self.lines[start:] if re.search(rx, line)), None)
+
+    head = "units: alive=2 onscreen=0 eye=(0,0) me=0\r"
+    com = "  u001 corcom       own=1 idx=501 world=(4944,647,55) screen=(4,5) nano=0.00\r"
+    pw = "  u001 armpw        own=0 idx=2 world=(5090,1683,55) screen=(4,5) nano=0.00\r"
+    com2 = "  u002 corcom       own=1 idx=501 world=(4944,647,55) screen=(4,5) nano=0.00\r"
+
+    def test_the_units_come_from_a_dump_after_the_step(self):
+        log = self.Log([self.com, self.head], [self.pw, self.com2, self.head])
+        arg = {"unit": ["ARMPW", 0], "args": ["attack", "unit", ["CORCOM", 0]]}
+        with patch.object(tareplay, "tacli", return_value=(0, "")) as cli:
+            tareplay.step(Mock(name="w"), "order", arg, log)
+        argv = cli.call_args.args
+        self.assertEqual(argv[2:5], ("attack", "unit", "501"))
+        self.assertEqual(argv[argv.index("--unit") + 1], "2")
+
+    def test_no_log_is_could_not_run(self):
+        arg = {"unit": ["ARMPW", 0], "args": ["stop"]}
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "needs the lane's log"):
+            tareplay.step(Mock(name="w"), "order", arg)
 
 
 class Landing(unittest.TestCase):
@@ -986,6 +2710,204 @@ class Landing(unittest.TestCase):
         with patch.object(tareplay, "fixtures", return_value={}), \
              patch.object(tareplay, "sim_paths", return_value=set()):
             self.assertEqual(tareplay.landing_check("main"), 1)
+
+
+class Prelude(unittest.TestCase):
+    """A sim file's prelude -- the lines above its first SIM_FEATURE -- in the landing tier, in
+    Landing's throwaway repository."""
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    SRC = "src/tagpu_new.c"
+    PATH = tareplay.DD + SRC
+    BODY = ('SIM_FEATURE(newfeat, SIM_PUPPET_RUNS, "one");\n'
+            "\n"
+            "static int f(void)\n{\n    return 1;\n}\n")
+    # a comment that opens on an #include and closes on the next line, as tagpu_patches.c has
+    PRELUDE = ("/* tagpu_new.c -- a new sim file. */\n"
+               "\n"
+               "#include <string.h>   /* the first line of a comment\n"
+               "                         that ends here */\n"
+               '#include "tagpu_simreg.h"\n'
+               "#define K(x) \\\n"
+               "    ((x) + 1)\n"
+               "\n")
+    FIXTURES = {"one": {"load": "one.json"}, "stock-one": {"load": "one.json", "dll": "stock"}}
+
+    def plan(self, includes=frozenset()):
+        """landing_plan against main, the temporary file the only sim file."""
+        feats, problems = tafeat.features_of(self.root / self.PATH, self.SRC)
+        with patch.object(tareplay, "fixtures", return_value=self.FIXTURES), \
+             patch.object(tareplay, "sim_paths", return_value={self.PATH}), \
+             patch.object(tareplay, "includes_of", return_value=set(includes)), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return tareplay.landing_plan("main")
+
+    def add(self, path, text):
+        (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / path).write_text(text)
+        sh(self.root, "git", "add", "-A")
+        sh(self.root, "git", "commit", "-qm", path)
+
+    def to_main(self):
+        """The work so far as the base, so that what follows is the landing."""
+        sh(self.root, "git", "checkout", "-q", "main")
+        sh(self.root, "git", "merge", "-q", "--ff-only", "work")
+        sh(self.root, "git", "checkout", "-q", "work")
+
+    @staticmethod
+    def where(problems):
+        """`KIND place` of each problem, its explanation dropped."""
+        return [": ".join(q.split(": ")[:1]) for q in problems]
+
+    def test_comment_or_directive_lines(self):
+        text = self.PRELUDE + "static int g;\n" + '"s /*"\n' + "/* x */ int h;"
+        n = self.PRELUDE.count("\n")
+        self.assertEqual(tafeat.comment_or_directive_lines(text), set(range(1, n + 1)))
+
+    def test_a_new_sim_files_prelude_is_covered(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        fx, funcs, regions, problems, _, gated_any = self.plan()
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        self.assertEqual(set(funcs), {(self.SRC, "f")})
+        key = f"{self.SRC}:prelude"
+        self.assertEqual(set(regions), {key, "newfeat"})   # newfeat: its SIM_FEATURE line
+        self.assertNotIn(" ", key)              # the note's features= is split on spaces
+        self.assertEqual(regions[key][:2], ([(self.SRC, "f")], tafeat.BOTH))
+        got = {"raised": {(self.SRC, "f")}, "stock": {(self.SRC, "f")}}
+        self.assertEqual(tareplay.uncovered(funcs, regions, got, fx, False), ([], 3, 3))
+
+    def test_code_above_the_first_feature_fails_by_name(self):
+        self.add(self.PATH, self.PRELUDE + "typedef int T;\nstatic int g;\n" + self.BODY)
+        problems = self.plan()[3]
+        n = self.PRELUDE.count("\n")
+        self.assertEqual(self.where(problems), [f"UNFEATURED {self.PATH}:{n + 1}",
+                                                f"UNFEATURED {self.PATH}:{n + 2}"])
+
+    def test_each_build_must_reach_a_function_of_the_file(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        self.to_main()
+        self.commit(self.PATH, self.PRELUDE.replace("<string.h>", "<stdlib.h>") + self.BODY)
+        fx, funcs, regions, problems, _, _ = self.plan()
+        self.assertEqual((problems, funcs), ([], {}))
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        per = {"one": {(self.SRC, "f")}, "stock-one": set()}
+        got = tareplay.reached_by_build(per, self.FIXTURES)
+        self.assertEqual(got, {"raised": {(self.SRC, "f")}, "stock": set()})
+        missed, k, total = tareplay.uncovered(funcs, regions, got, fx, False)
+        self.assertEqual((self.where(missed), k, total), ([f"UNCOVERED {self.SRC}:prelude"], 0, 1))
+        self.assertTrue(missed[0].endswith("ran in the builds raised+stock"), missed[0])
+        per["stock-one"] = {(self.SRC, "f")}
+        got = tareplay.reached_by_build(per, self.FIXTURES)
+        self.assertEqual(tareplay.uncovered(funcs, regions, got, fx, False), ([], 1, 1))
+
+    def test_a_changed_header_asks_the_same_of_each_build(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        self.to_main()
+        header = tareplay.DD + "inc/tagpu_new.h"
+        self.add(header, "#define NEW 1\n")
+        fx, funcs, regions, problems, _, _ = self.plan(includes={header})
+        self.assertEqual((problems, funcs), ([], {}))
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        key = f"{self.SRC}:headers"
+        self.assertEqual(set(regions), {key})
+        self.assertEqual(regions[key][:2], ([(self.SRC, "f")], tafeat.BOTH))
+        got = tareplay.reached_by_build({"one": {(self.SRC, "f")}}, self.FIXTURES)
+        missed, _, _ = tareplay.uncovered(funcs, regions, got, fx, False)
+        self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
+
+
+class EngineFree(unittest.TestCase):
+    """ImpAI's engine-free half in the landing tier: the files `engine-free sim` in the tree's
+    thread-split.allow, a change to one planned from the file itself in Landing's throwaway
+    repository."""
+
+    def test_the_brain_is_sim(self):
+        """Every source of the Makefile's IMPAI_BRAIN_SRCS and the table's is sim, which the
+        Makefile's COVERED reads as tafeat does, so the coverage build instruments it and the
+        landing plans a change to it by its features. The list is make's own expansion of the
+        variable, whatever form its rule takes, read in a scratch directory whose `src` is the
+        tree's: the Makefile writes inc/git.h when it is parsed, and that write goes to the
+        scratch directory, never into a tree a build may be reading."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "src").symlink_to(tafeat.DDRAW / "src")
+            (Path(tmp) / "inc").mkdir()
+            r = subprocess.run(["make", "-s", "--no-print-directory", "-f", str(tafeat.DDRAW / "Makefile"),
+                                "-f", "-", "print-brain-srcs"],
+                               input="print-brain-srcs:\n\t@echo $(IMPAI_BRAIN_SRCS)\n", cwd=tmp,
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        srcs = set(r.stdout.split()) | {"src/impai_table.c"}
+        self.assertTrue(all(re.fullmatch(r"src/impai_\w+\.c", x) for x in srcs), srcs)
+        self.assertGreater(len(srcs), 7)
+        self.assertLessEqual(srcs, set(tafeat.sim_files()))
+        self.assertLessEqual({tareplay.DD + s for s in srcs}, tareplay.sim_paths())
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    add, to_main = Prelude.add, Prelude.to_main
+
+    def plan(self, rel):
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value=set()), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return feats, tareplay.landing_plan("main")
+
+    def edit(self, rel, old, new):
+        """The tree's `rel` as the base, then the landing: `old` replaced by `new` once."""
+        text = (tafeat.DDRAW / rel).read_text()
+        self.assertEqual(text.count(old), 1, old)
+        self.add(tareplay.DD + rel, text)
+        self.to_main()
+        self.commit(tareplay.DD + rel, text.replace(old, new))
+
+    def test_a_military_change_runs_its_groups_and_asks_its_function(self):
+        self.edit("src/impai_mil.c", "#define REACH_PAD    384", "#define REACH_PAD    385")
+        rel = "src/impai_mil.c"
+        feats, (fx, funcs, regions, problems, _, gated_any) = self.plan(rel)
+        feat = tafeat.feature_at(feats, rel, feats[0]["line"])
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertIn("impai-fight", feat["fixtures"])
+        self.assertEqual(fx, set(feat["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, set(regions)), ({}, {feat["name"]}))
+        self.commit(tareplay.DD + rel, (self.root / tareplay.DD / rel).read_text().replace(
+            "#define REACH_PAD    385", "#define REACH_PAD    384").replace(
+            "(uint64_t)(dx * dx + dz * dz));", "(uint64_t)(dx * dx + dz * dz + 0));"))
+        fx, funcs, regions, problems, _, _ = self.plan(rel)[1]
+        self.assertEqual(problems, [])
+        self.assertEqual(set(funcs), {(rel, "dist")})
+        self.assertEqual(funcs[(rel, "dist")], (feat["name"], tafeat.BOTH))
+
+    def test_a_table_alone_runs_its_groups_and_asks_no_function(self):
+        rel = "src/impai_fitparams.c"
+        focus = re.search(r"^ *\S+,   /\* focus \*/$", (tafeat.DDRAW / rel).read_text(), re.M).group(0)
+        self.edit(rel, focus, focus.replace(",", " * 0.5f,", 1))
+        feats, (fx, funcs, regions, problems, why, gated_any) = self.plan(rel)
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, regions), ({}, {}))
+        self.assertTrue(any("holds no function" in w for w in why), why)
+
+    def test_a_table_alones_prelude_and_headers_ask_no_function(self):
+        rel = "src/impai_fitparams.c"
+        header = tareplay.DD + "src/impai_fight.h"
+        self.edit(rel, '#include "impai_fight.h"', '#include "impai_fight.h"\n#define FIT 1')
+        self.add(header, "#define IMPAI_FIGHT_H_CHANGED 1\n")
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value={header}), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            fx, funcs, regions, problems, why, _ = tareplay.landing_plan("main")
+        self.assertEqual((problems, funcs, regions), ([], {}, {}))
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual(sum("the file holds no function" in w for w in why), 2, why)
 
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
@@ -1209,20 +3131,35 @@ class MultiplayerGroup(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def fake_step(self, game=0, play=0, covers=2):
+    def fake_step(self, game=0, play=0, covers=2, impai=False, takeover=0):
+        self.steps = []
+
         def step(argv, log_path):
             argv = [str(a) for a in argv]
             log_path.write_text("first line\nthe last line\n")
             d = Path(argv[argv.index("--out") + 1])
             d.mkdir(parents=True)
             if "recmp_create_begin_test.py" in argv[0]:
+                self.steps.append("game")
                 (d / "native.imprec").write_text("r")
                 (d / "tested-ddraw.dll").write_text("d")
                 for k in range(covers):
                     (d / f"cover-{k}.bin").write_text("c")
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
+                self.assertEqual(argv[argv.index("--label") + 1], tareplay.MP_LABELS["raised"])
+                self.assertEqual("--impai" in argv, impai)
                 return game
+            if "--takeover" in argv:
+                self.steps.append("takeover")
+                self.assertTrue(impai, "a takeover in the stock form")
+                self.assertEqual(argv[argv.index("--takeover") + 1], "450:0")
+                self.assertEqual(argv[argv.index("--seatai") + 1], tareplay.MP_SEATAI)
+                self.assertEqual(argv[argv.index("--cover") + 1], "takeover")
+                (d / "cover-takeover.bin").write_text("c")
+                (d / "fork-native.imprec").write_text("f")
+                return takeover
+            self.steps.append("play")
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)
             (d / "native.imprec").write_text("r")
@@ -1230,16 +3167,17 @@ class MultiplayerGroup(unittest.TestCase):
             return play
         return step
 
-    def group(self, step, check=(0, "0 corrections"), keep=False, read=None):
+    def group(self, step, check=(0, "0 corrections"), keep=False, read=None, impai=False):
         def reached(mapping, covers):
             self.covers = list(covers)
             return self.REACHED
         with patch.object(tareplay, "mp_step", step), \
              patch.object(tareplay, "tarec_run", return_value=check), \
+             patch.object(tareplay, "mp_takeover_at", return_value=450), \
              patch.object(tareplay, "covered_sources", return_value={"src/tagpu_recorder.c"}), \
              patch.object(tareplay.tafeat, "read_map", side_effect=read, return_value={}), \
              patch.object(tareplay.tafeat, "reached", reached):
-            return tareplay.multiplayer_group("raised", self.dll, self.out, keep)
+            return tareplay.multiplayer_group("raised", self.dll, self.out, keep, impai=impai)
 
     def test_what_selects_it(self):
         want = tareplay.wants_multiplayer
@@ -1247,8 +3185,35 @@ class MultiplayerGroup(unittest.TestCase):
         self.assertTrue(want([tareplay.DD + "src/tagpu_recmp_units.c"]))
         self.assertTrue(want([tareplay.DD + "inc/tagpu_recmp.h"]))
         self.assertTrue(want(["tools/replay/tarec.py"]))
+        self.assertTrue(want([tareplay.DD + "src/impai_mil.c"]))
         self.assertFalse(want([tareplay.DD + "src/tagpu_zoom.c"]))
         self.assertFalse(want(["README.md"]))
+
+    def test_what_selects_the_impai_form(self):
+        want = tareplay.wants_impai_multiplayer
+        for p in ("src/impai_mil.c", "src/impai_seats.h", "src/tagpu_impai.c", "src/tagpu_skirmish.c"):
+            self.assertTrue(want([tareplay.DD + p]), p)
+        for p in (tareplay.DD + "src/tagpu_recorder.c", tareplay.DD + "tests/impai_brain_test.c",
+                  "tools/impai/predfit.py"):
+            self.assertFalse(want([p]), p)
+
+    def test_the_impai_form_takes_the_recording_over_and_counts_its_coverage(self):
+        reach, problems = self.group(self.fake_step(impai=True), impai=True)
+        self.assertEqual(problems, [])
+        self.assertEqual(self.steps, ["game", "play", "takeover"])
+        self.assertEqual(sorted(c.name for c in self.covers),
+                         ["cover-0.bin", "cover-1.bin", "cover-play.bin", "cover-takeover.bin"])
+        self.assertFalse((self.out / "multiplayer-raised" / "takeover" / "fork-native.imprec").exists())
+
+    def test_a_failed_takeover_is_a_failure_by_name(self):
+        reach, problems = self.group(self.fake_step(impai=True, takeover=1), impai=True)
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER raised: the takeover failed: the last line", problems[0])
+
+    def test_the_stock_form_takes_nothing_over(self):
+        _, problems = self.group(self.fake_step())
+        self.assertEqual(problems, [])
+        self.assertEqual(self.steps, ["game", "play"])
 
     def test_a_passing_group_reports_the_graded_functions_and_drops_the_big_files(self):
         reach, problems = self.group(self.fake_step())
@@ -3205,7 +5170,8 @@ class PlayingEnd(unittest.TestCase):
         """W: an end line of the playing a seek replaced, before the seek's answer, is not the
         sought playing's"""
         seek = "replay: tenseat: at GameTime 331, sought from 200"
-        dump = "recorder: dump w331 at GameTime 331: 24 units"
+        dump = ("recorder: dump w331 at GameTime 331 -> replays\\dump-w331.bin (8962308 bytes of "
+                "records); 0 records with a body past 0xFFFF bytes not written")
         lines = [self.STOP, seek, dump]
         start = tareplay.after_line(lines, seek, 0)
         self.assertEqual(start, 2)
@@ -3351,10 +5317,12 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "checks", "at"}
+        known = {"player", "order", "switches", "type", "dump", "checks", "at", "seatai"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
+            self.assertTrue(all(isinstance(s, int) and 0 <= s <= 9 for s in t.get("seatai", [])),
+                            name)
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
@@ -3381,6 +5349,52 @@ class TakeoverFixtures(unittest.TestCase):
         # the GameTimes a takeover-end run draws leave T2 inside the recording
         Ts = tareplay.gametimes("takeover-end", fixes["takeover-end"]["end"], "x")
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
+
+    def test_a_fresh_impai_seat_on_both_builds(self):
+        # a two-player recording whose takeover gives ImpAI the seat OTA AI played, so the
+        # takeover's seat_fresh runs (tagpu_impai.c) on each build, which the feature names
+        fixes = tareplay.fixtures()
+        self.assertEqual(fixes["stock-impai-takeover-fresh"].get("dll"), "stock")
+        self.assertIsNone(fixes["impai-takeover-fresh"].get("dll"))
+        src = (tafeat.DDRAW / "src" / "tagpu_impai.c").read_text()
+        seats = re.search(r'SIM_FEATURE\(impai_seats, [A-Z_]+, "([^"]*)"\)', src)[1].split()
+        for name in ("impai-takeover-fresh", "stock-impai-takeover-fresh"):
+            with self.subTest(name=name):
+                self.assertIn(name, seats)
+                t = fixes[name]["takeover"]
+                setup = json.loads((tareplay.SCENARIOS / fixes[name]["load"]).read_text())["setup"]
+                ctl = {p["slot"]: p["controller"] for p in setup["players"]}
+                self.assertEqual(sorted(s for s, c in ctl.items() if c != "off"), [0, 1])
+                self.assertTrue(t["seatai"])
+                for seat in t["seatai"]:
+                    self.assertEqual(ctl[seat], "ai")
+                    self.assertNotEqual(seat, t["player"])
+                self.assertIn("fork", t["checks"])
+
+    def test_stock_twins_play_their_groups_on_both_builds(self):
+        # impai-fight's, place-basic's and impai-naval's stock-limits twins play the same games, so what
+        # only those groups reach (the military's fight and the predictor, the placement shapes, the
+        # naval rule), every line of which compiles in both builds, can be reached on each
+        fixes = tareplay.fixtures()
+        features = {f["name"]: f for f in tafeat.all_features()[0]}
+        for group, covered in (
+                ("impai-fight", (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
+                                 ("src/impai_fitparams.c", "impai_fitparams"),
+                                 ("src/tagpu_impai.c", "impai_mil"))),
+                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq"))),
+                ("impai-naval", (("src/impai_brain.c", "impai_brain"), ("src/impai_econ.c", "impai_econ"),
+                                 ("src/impai_build.c", "impai_build"), ("src/impai_maps.c", "impai_maps"),
+                                 ("src/impai_mil.c", "impai_mil_decide"), ("src/impai_fight.c", "impai_fight"),
+                                 ("src/impai_fitparams.c", "impai_fitparams"), ("src/tagpu_impai.c", "impai_play"),
+                                 ("src/tagpu_impai.c", "impai_mil")))):
+            twin = dict(fixes["stock-" + group])
+            with self.subTest(group=group):
+                self.assertEqual(twin.pop("dll"), "stock")
+                self.assertEqual(twin, fixes[group])
+            for rel, feat in covered:
+                with self.subTest(group=group, feature=feat):
+                    self.assertEqual(features[feat]["file"], rel)
+                    self.assertLessEqual({group, "stock-" + group}, set(features[feat]["fixtures"]))
 
 
 class AiActivity(unittest.TestCase):
@@ -3485,108 +5499,281 @@ class CrashEndsTheWait(unittest.TestCase):
             self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
 
 
-class BusyGameIsNoStall(unittest.TestCase):
-    """A running game that has not answered a peek -- its game thread inside a seek's rebuild --
-    is no progress for Stall, and only STALL_S of it is a hung game; a game that is not running
-    still fails at once."""
+class LogWaitNap(unittest.TestCase):
+    """A log wait sees the line the game appends after any number of reads, across a rotation and
+    through a line the sink is still writing, and its nap decides only how soon: at 0.4 s and at
+    Log.NAP_S it returns the same line. The game writes on a fake clock that each nap advances."""
+
+    HEAD = "log: run R{} part {} of tagpu.log, started now\n"
 
     class Worker:
-        def __init__(self, answers):
-            self.answers = list(answers)
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
 
-        def gametime(self, wait, busy=False):
-            self.busy = busy
-            return self.answers.pop(0)
+        def running(self):
+            return True
 
-    def stall(self, answers):
-        """A Stall over `answers`, made under the patched clock its caller holds."""
-        st = tareplay.Stall(self.Worker(answers))
-        st.EVERY = 0
-        return st
+    @staticmethod
+    def append(path, text):
+        with open(path, "a", newline="") as f:
+            f.write(text)
 
-    def test_unanswered_peeks_within_the_bound_pass(self):
-        with patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70, 80]):
-            st = self.stall([100, None, None, 101])
-            for _ in range(4):
-                st.check()
-        self.assertTrue(st.w.busy)
-        self.assertEqual(st.g, 101)
+    def rotate(self, g, run="1", part=2):
+        """The sink's rotation: the current file becomes .1, a new current file starts with its
+        header."""
+        log = g / "log"
+        (log / "tagpu.log").rename(log / "tagpu.1.log")
+        (log / "tagpu.log").write_text(self.HEAD.format(run, part))
 
-    def test_unanswered_past_the_bound_is_a_hung_game(self):
-        late = tareplay.STALL_S + 1
-        with patch("time.monotonic", side_effect=[0, 0, 0, late, late]):
-            st = self.stall([100, None])
-            st.check()
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "stood at GameTime 100.*unanswered"):
-                st.check()
+    def play(self, nap_s, script, rx, timeout=60):
+        """Log.wait(rx) while the game runs `script`, [(t, text or a callable of the game folder)]
+        in time order: (the line returned, the fake time it returned at, the reads it took)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            (g / "log" / "tagpu.log").write_text(self.HEAD.format("1", 1))
+            log = tareplay.Log(self.Worker(g))
+            log.NAP_S = nap_s
+            clock, reads, todo = [0.0], [0], list(script)
 
-    def test_the_peek_names_a_busy_game_only_while_it_runs(self):
-        w = Mock(name="w", lane=None)
-        w.name = "tareplay-1"
-        busy = (1, "tacli: no peek lines \u2014 is the game past its first frame?")
-        with patch.object(tareplay, "tacli", return_value=busy):
-            w.running.return_value = True
-            self.assertIsNone(tareplay.Worker.gametime(w, 5, busy=True))
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
-                tareplay.Worker.gametime(w, 5)
-            w.running.return_value = False
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
-                tareplay.Worker.gametime(w, 5, busy=True)
+            def nap(s):
+                reads[0] += 1
+                clock[0] += s
+                while todo and todo[0][0] <= clock[0] + 1e-9:
+                    act = todo.pop(0)[1]
+                    act(g) if callable(act) else self.append(g / "log" / "tagpu.log", act)
+
+            with patch.object(tareplay, "nap", nap), patch.object(tareplay.time, "time", lambda: clock[0]):
+                got = log.wait(rx, timeout)
+            return got, round(clock[0], 6), reads[0]
+
+    def both(self, script, rx):
+        slow, fast = self.play(0.4, script, rx), self.play(tareplay.Log.NAP_S, script, rx)
+        self.assertEqual(slow[0], fast[0])
+        return slow, fast
+
+    def test_the_nap_is_the_fast_one(self):
+        self.assertEqual(tareplay.Log.NAP_S, 0.02)
+
+    def test_a_line_appended_after_many_reads_is_seen_as_soon_as_it_is_written(self):
+        slow, fast = self.both([(1.0, "pause: armed for GameTime 3000\n")], r"pause: armed")
+        self.assertEqual(fast[0], "pause: armed for GameTime 3000")
+        self.assertEqual((slow[1], slow[2]), (1.2, 3))
+        self.assertEqual(fast[1], 1.0)
+        self.assertGreater(fast[2], 40)
+
+    def test_the_first_match_wins_at_either_nap(self):
+        rx = r"pause: paused at GameTime \d+"
+        slow, _ = self.both([(0.5, "pause: paused at GameTime 3000\n"),
+                             (0.55, "pause: paused at GameTime 6000\n")], rx)
+        self.assertEqual(slow[0], "pause: paused at GameTime 3000")
+
+    def test_a_line_half_written_at_a_read_is_taken_whole(self):
+        slow, _ = self.both([(0.3, "pause: paused at GameTime 30"), (0.5, "00\n")],
+                            r"pause: paused at GameTime \d+")
+        self.assertEqual(slow[0], "pause: paused at GameTime 3000")
+
+    def test_a_rotation_loses_no_line(self):
+        rx = r"recorder: dump d\d armed"
+        # written to the old file just before the rotation: read under .1 by its key
+        old, _ = self.both([(0.29, "recorder: dump d1 armed\n"), (0.3, self.rotate),
+                            (0.5, "recorder: dump d2 armed\n")], rx)
+        self.assertEqual(old[0], "recorder: dump d1 armed")
+        # written only after it
+        new, _ = self.both([(0.3, self.rotate), (0.31, "units: alive=2\n"),
+                            (0.5, "recorder: dump d2 armed\n")], rx)
+        self.assertEqual(new[0], "recorder: dump d2 armed")
+
+    def test_a_timeout_is_wall_time_at_either_nap(self):
+        slow, fast = self.both([], r"never")
+        self.assertIsNone(slow[0])
+        for (_, at, _), nap_s in ((slow, 0.4), (fast, tareplay.Log.NAP_S)):
+            self.assertGreaterEqual(at, 60 - 1e-6)
+            self.assertLessEqual(at, 60 + nap_s + 1e-6)
 
 
-class RunLock(unittest.TestCase):
-    """tools/runlock.py: one game regression at a time, on a throwaway repository's lock"""
+class WaitRunningStall(unittest.TestCase):
+    """Log.wait_running's bound (Stall, tools/stall.py) never stands between a wait and its line:
+    a line already logged, or logged within Stall.EVERY, is returned with no GameTime read asked
+    and no tacli process started; a level whose GameTime stands still is still named, as could
+    not run. A fake game answers the peek trigger at each nap of a fake clock."""
 
-    TOOLS = Path(__file__).resolve().parents[1]
+    class Worker:
+        lane = None
 
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.tree = Path(self.tmp.name)
-        subprocess.run(["git", "init", "-q", str(self.tree)], check=True)
-        self.lock = tareplay.runlock.lock_path(self.tree)
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
 
-    def tearDown(self):
-        self.tmp.cleanup()
+        def running(self):
+            return True
 
-    def holder(self, hold_s, env=None, wrap=()):
-        code = (f"import sys, time; sys.path.insert(0, {str(self.TOOLS)!r}); import runlock; "
-                f"t = time.monotonic(); runlock.hold(__import__('pathlib').Path({str(self.tree)!r}), "
-                f"'test'); print(round(time.monotonic() - t, 1), flush=True); time.sleep({hold_s})")
-        return subprocess.Popen([*wrap, sys.executable, "-c", code], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env=env)
+    def wait(self, lines, ticks, line_at=None):
+        """wait_running(r"pause: paused") with `lines` logged at its start and the pause's line at
+        `line_at` (None: never), the game answering each read with ticks(t): (the line or the
+        failure, the fake time, the reads answered, whether a request was left)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            logf = g / "log" / "tagpu.log"
+            logf.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\n")
+            log = tareplay.Log(self.Worker(g))
+            log.ALIVE_EVERY = 0
+            with open(logf, "ab") as f:
+                f.write("".join(ln + "\r\n" for ln in lines).encode())
+            trigger = g / "tagpu_peek.trigger"
+            clock, answered, written = [0.0], [0], [False]
 
-    def test_a_second_run_waits_for_the_first(self):
-        a = self.holder(4)
-        self.assertEqual(float(a.stdout.readline()), 0.0)
-        b = self.holder(0)
-        waited = float(b.stdout.readline())
-        a.communicate()
-        _, err = b.communicate()
-        self.assertGreaterEqual(waited, 2.0)
-        self.assertIn("took the run lock after", err)
-        self.assertIn("test", self.lock.read_text())
+            def nap(s):
+                clock[0] += s
+                with open(logf, "ab") as f:
+                    if trigger.exists():
+                        spec = trigger.read_text().strip()
+                        trigger.unlink()
+                        answered[0] += 1
+                        f.write(f"peek: {spec} @0x00512345 = {ticks(clock[0])} (0x0)\r\n".encode())
+                    if line_at is not None and not written[0] and clock[0] >= line_at:
+                        written[0] = True
+                        f.write(b"pause: paused at GameTime 900\r\n")
 
-    def test_a_crashed_holder_leaves_no_lock(self):
-        a = self.holder(60)
-        a.stdout.readline()
-        a.kill(); a.communicate()
-        b = self.holder(0)
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        b.communicate()
+            def no_tacli(*a, **k):
+                raise AssertionError(f"a tacli process during the wait: {a}")
 
-    def test_a_child_of_the_holder_does_not_wait(self):
-        a = self.holder(4)
-        a.stdout.readline()
-        env = dict(__import__("os").environ, RUNLOCK_HELD=str(self.lock))
-        b = self.holder(0, env=env)
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        a.communicate(); b.communicate()
+            with patch.object(tareplay, "nap", nap), patch.object(tareplay, "tacli", no_tacli), \
+                    patch.object(tareplay.stall.time, "monotonic", lambda: clock[0]):
+                log.read()
+                try:
+                    got = log.wait_running(r"pause: paused")
+                except tareplay.CouldNotRun as e:
+                    got = str(e)
+            return got, round(clock[0], 6), answered[0], trigger.exists()
 
-    def test_under_flock_1_on_the_same_file_it_does_not_wait(self):
-        b = self.holder(0, wrap=("flock", str(self.lock)))
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        b.communicate()
-        self.assertEqual(b.returncode, 0)
+    def test_a_line_already_logged_asks_nothing(self):
+        got, at, answered, left = self.wait(["units: alive=3", "pause: paused at GameTime 900"],
+                                            lambda t: 900)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertEqual((at, answered, left), (0.0, 0, False))
+
+    def test_a_line_within_every_asks_nothing(self):
+        got, at, answered, left = self.wait([], lambda t: int(t * 30), line_at=3.0)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertAlmostEqual(at, 3.0, delta=tareplay.Log.NAP_S + 1e-6)
+        self.assertEqual((answered, left), (0, False))
+
+    def test_a_later_line_comes_with_its_reads_answered(self):
+        got, at, answered, left = self.wait([], lambda t: int(t * 30), line_at=12.0)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertEqual((answered, left), (2, False))
+
+    def test_a_level_standing_still_could_not_run(self):
+        got, at, answered, _ = self.wait([], lambda t: 40)
+        self.assertIn("the level stood at GameTime 40 for 120 s while it ran", got)
+        self.assertGreater(at, tareplay.STALL_S)
+        self.assertLessEqual(at, tareplay.STALL_S + tareplay.Stall.EVERY + 1)
+
+
+class ObjectiveLeftOff(unittest.TestCase):
+    """A fixture whose scenarios leave the level's end test disarmed is refused before a game: the
+    last scenario its lanes apply that names `objective` must set it on (objective_left_off)."""
+
+    def scenarios(self, d):
+        for name, setup in (("off.json", {"objective": "off"}), ("on.json", {"objective": "on"}),
+                            ("plain.json", {}), (tareplay.END_SCENARIO.name, {"clear_existing": True})):
+            (Path(d) / name).write_text(json.dumps({"format": "ta-scenario/1", "setup": setup}))
+        return patch.object(tareplay, "SCENARIOS", Path(d))
+
+    def test_an_objective_off_with_no_rearm_is_refused(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            why = tareplay.objective_left_off("x", {"load": "off.json", "end": 900})
+            self.assertIn("x: off.json sets `objective` off", why)
+            self.assertIn(tareplay.REARM_SCENARIO, why)
+            # a re-arm after the end never runs, and a later step that disarms again wins
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "off.json", "end": 900, "steps": [[901, "apply", "on.json"]]}))
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "plain.json", "end": 900,
+                      "steps": [[600, "apply", "off.json"], [300, "apply", "on.json"]]}))
+            # U's paused scenario is taken as last when it disarms
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "plain.json", "end": 900, "rewind_paused": "off.json"}))
+
+    def test_a_rearm_at_or_before_the_end_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            for T in (899, 900):
+                self.assertIsNone(tareplay.objective_left_off(
+                    "x", {"load": "off.json", "end": 900, "steps": [[T, "apply", "on.json"]]}))
+            self.assertIsNone(tareplay.objective_left_off("x", {"load": "plain.json", "end": 900}))
+
+    def test_the_run_refuses_before_a_game(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "x: off.json sets `objective` off"):
+                tareplay.Run(["x"], SimpleNamespace(), Path(d),
+                             fixes={"x": {"load": "off.json", "end": 900}})
+
+    def test_every_fixture_of_both_tiers_ends(self):
+        fixes = {**tareplay.fixtures(), **tareplay.broad_fixtures()}
+        self.assertEqual(tareplay.scenario_objective(fixes["calib-applier"]["load"]), "off")
+        self.assertEqual({n: tareplay.objective_left_off(n, f) for n, f in fixes.items()
+                          if tareplay.objective_left_off(n, f)}, {})
+
+
+class LevelEndBound(unittest.TestCase):
+    """A wait for the level's end fails by name once a peek reads a GameTime past the bound the
+    end was given with and the log shows no teardown (Log.wait_end)."""
+
+    class Worker:
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
+
+        def running(self):
+            return True
+
+    class Stall:
+        """A read answered at every look: the next answer; a (GameTime, line) pair logs the line
+        before the answer, as the game logs what ran before the peek's read"""
+        answers = []
+
+        def __init__(self, log):
+            self.log = log
+
+        def check(self):
+            g = self.answers.pop(0)
+            if isinstance(g, tuple):
+                g, line = g
+                self.log.lines.append(line)
+            return g
+
+        def retire(self):
+            pass
+
+    def wait(self, answers, lines=(), at=5400):
+        with tempfile.TemporaryDirectory() as d:
+            log = tareplay.Log(self.Worker(Path(d)))
+            log.ALIVE_EVERY = 0
+            log.lines = ["scenario: applied=1 failed=0 cleared=31"] + list(lines)
+            log.at = at
+            with patch.object(self.Stall, "answers", list(answers)), \
+                    patch.object(tareplay, "Stall", self.Stall), patch.object(tareplay, "nap"):
+                return log.wait_end(r"recorder: writer: .* closed", 1)
+
+    def test_a_level_that_runs_past_the_bound_fails_by_name(self):
+        limit = 5400 + tareplay.LEVEL_END_TICKS
+        with self.assertRaises(tareplay.Failed) as e:
+            self.wait([5450, 5560, limit, limit + 1, limit + 900],
+                      ["units: alive=1", "impai: pulse seat=1 army=0"])
+        self.assertEqual(str(e.exception), f"the level did not end by GameTime {limit} after the "
+                                           f"end scenario: a peek read GameTime {limit + 1}")
+
+    def test_a_level_that_ends_in_the_bound_returns_its_line(self):
+        closed = "recorder: writer: x.imprec closed: 5580 iterations"
+        self.assertEqual(self.wait([5500, (5580, "recorder: ended after GameTime 5580: the "
+                                               "level ended"), (5580, closed)]), closed)
+
+    def test_the_shell_clock_after_a_teardown_is_no_failure(self):
+        closed = "recorder: writer: x.imprec closed: 5580 iterations"
+        torn = "reclaim: level teardown (gen 1 -> 2) on thread 7 (game 7): flushed 0 queued"
+        self.assertEqual(self.wait([(9000, torn), 9100, (9200, closed)]), closed)
+        # the teardown logged before the answer that read past the bound
+        self.assertEqual(self.wait([(9000, torn), (9100, closed)]), closed)
 
 
 class HudState(unittest.TestCase):
@@ -3635,6 +5822,73 @@ class HudState(unittest.TestCase):
             "replay: x: hud state cache serial 1",
             "replay: x: hud state rewind idle available 1 span 0..0 G 0 T 0",
             "replay: x: hud state result 0 none op 0 refused: "]))
+
+
+class GameLanes(unittest.TestCase):
+    """tareplay.game_lanes: the lanes a run declares to the run lock (tools/runlock.py)"""
+
+    def run_of(self, j, *wants, multiplayer=(), kept=()):
+        return SimpleNamespace(j=j, fx={f"f{k}": {"want": w} for k, w in enumerate(wants)},
+                               multiplayer=multiplayer, kept=list(kept))
+
+    def test_its_workers_no_more_than_the_lanes_it_queues(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R", "Q"), ("L",))), 5)
+        self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
+        self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
+
+    def test_each_two_player_game_is_two_lanes_at_least(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 4)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R"),
+                                                          multiplayer=["raised"])), 3)
+
+    def test_a_kept_group_queues_no_lane(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P"), ("L", "P", "R"),
+                                                          kept=["f1"])), 2)
+
+
+class Deaths(unittest.TestCase):
+    """tarec.deaths reads each RK_EV_DEATH with the step it is in, and killall_check holds a
+    commander's side to the step its slots give."""
+
+    @staticmethod
+    def rec(kind, body):
+        return struct.pack("<HH", kind, len(body)) + body + bytes(-len(body) % 4)
+
+    def death(self, slot, owner, utype, killer=0, kplayer=10):
+        image = bytearray(tarec.REC_UNIT_IMAGE)
+        struct.pack_into("<H", image, 0xA6, utype)
+        image[0xFF] = owner
+        return self.rec(tarec.RK_EV_DEATH,
+                        tarec.DEATH_HEAD.pack(slot + 1, killer, kplayer, 0, 0, 0) + bytes(image))
+
+    def tick(self, t):
+        return self.rec(tarec.RK_TICK, struct.pack("<I", t))
+
+    def test_deaths_and_the_kill_all(self):
+        import killall_check
+        end = lambda slot: self.rec(tarec.RK_EV_DEATH_END, struct.pack("<I", slot + 1))  # noqa: E731
+        stream = (self.tick(1) + self.death(0, 1, 34) + end(0)                    # the apply's clear
+                  + self.tick(40) + self.death(5, 1, 70, killer=3, kplayer=0)     # the commander
+                  + self.death(9, 1, 80, killer=10, kplayer=1) + end(9) + end(5)  # nested, later slot
+                  + self.tick(41) + self.death(2, 1, 80, killer=3, kplayer=1) + end(2))
+        bl = [(tarec.RB_HEADER, 0, 0, b""), (tarec.RB_STREAM, 1, 41, stream)]
+        with patch.object(tarec, "load", return_value=({}, bl, None)):
+            rows = tarec.deaths("x.imprec")
+        self.assertEqual([(r["gametime"], r["slot"], r["type"], r["owner"], r["killer"],
+                           r["killer_player"], r["nested"]) for r in rows],
+                         [(1, 0, 34, 1, None, None, 0), (40, 5, 70, 1, 2, 0, 0),
+                          (40, 9, 80, 1, 9, 1, 1), (41, 2, 80, 1, 2, 1, 0)])
+        ok, rep = killall_check.check(rows, 1, count=2)
+        self.assertTrue(ok, rep)
+        self.assertEqual(rep["commander"]["slot"], 5)
+        late = [dict(r, gametime=42) if r["slot"] == 2 else r for r in rows]
+        ok, rep = killall_check.check(late, 1)
+        self.assertFalse(ok)
+        self.assertEqual([(d["slot"], d["expected"], d["ok"]) for d in rep["deaths"]],
+                         [(9, 40, True), (2, 41, False)])
+        self.assertFalse(killall_check.check(rows, 1, count=3)[0])
+        self.assertIsNone(killall_check.check(rows[:1], 1)[0])
 
 
 if __name__ == "__main__":
