@@ -1575,6 +1575,12 @@ mask `+0x10F` bit 2 selects (`0x47C804..0x47C817`: 2 open, 4 closed): a cell its
 or contested, and a cell it does not set is let go only if it names the structure
 (`0x47C8AE..0x47C8B7`). So a unit that lost a yard cell to the closed structure keeps bit 27 and
 gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it.
+A unit stamped there later finds the cell empty and takes it with no mark on either side. MEASURED
+2026-11-17 in a slice-walkers recording's exact stream: lab 1025, holding yard cells against four
+walkers with bit 27, opened its yard at GameTime 3125 and let go of their shared cells (the lab
+took bit 27 beside its bit 26); nanoframe 1054 took two of them at 3126 unmarked, and the walkers
+kept bit 27 and no cell there to 3391. The replay's occupancy check accepts that state
+(`tools/replay/tarec.py`, THE OCCUPANCY RULE).
 
 **A lab can open its yard and make the nanoframe in it in the same tick** [DISASSEMBLED 2026-10-12].
 YARD_OPEN's one caller is the COB setter (`0x480BAE`), so the yard opens in the lab's script slice:

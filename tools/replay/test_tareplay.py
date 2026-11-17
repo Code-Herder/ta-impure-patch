@@ -3901,6 +3901,28 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         self.assertEqual(len(tarec.occupancy(a, b)), 1)
 
+    def test_contest_an_open_yard_gives_nothing_back(self):
+        # lab 1 (2 x 1) held (2, 1) against walker 2 while closed; YARD_OPEN let the cell go
+        # and kept walker 2's bit 27, and nanoframe 3 took the empty cell unmarked
+        lab = tarec.STRUCTURE | 1 << 26 | 1 << 27 | 1
+        walker = 1 << 27 | 1
+
+        def check(yard, nanoframe, holder=lab, loser=walker):
+            s = self.unit(1, 1, 2, 1, state=holder)
+            s[tarec.U_YARD] = yard
+            units, names = {1: s, 2: self.unit(2, 1, state=loser)}, {(1, 1): (1, 0)}
+            if nanoframe:
+                units[3], names[(2, 1)] = self.unit(2, 1), (3, 0)
+            return tarec.occupancy(*self.worlds(units, names))
+        self.assertEqual(check(tarec.YARD_OPEN, False), [])
+        self.assertEqual(check(tarec.YARD_OPEN, True), [])
+        # the closed yard, a lab that never held the cell, a layer-2 loser: no clause
+        for out in (check(0, False), check(0, True),
+                    check(tarec.YARD_OPEN, False, holder=lab & ~(1 << 26)),
+                    check(tarec.YARD_OPEN, True, loser=1 << 27 | 2)):
+            self.assertEqual(len(out), 1, out)
+            self.assertIn("mobile unit 2's footprint", out[0])
+
     def test_contest_a_structure_named_in_slot_b_fails(self):
         a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
         out = tarec.occupancy(a, b)
