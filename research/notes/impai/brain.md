@@ -521,7 +521,13 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    a bay whose nearest water is under the tower, the map's edge at the member's back, or a second tower whose reach
    overlaps the first's gives none (else a member between two towers would go out of one into the other
    and back at every decision), and the member then attacks the defence if it is seen and is otherwise left to the
-   fight and travel. Else it attacks the defence when it is seen now, from its own
+   fight and travel. **The shore commander** (owner's decision, 2026-11-17): an armed enemy commander confined to a
+   component that does not hold the member's block -- ashore, for a ship -- is weighed as a defence of reach the
+   longer of its ground reach and its D-gun's range, measured from its component's block nearest the member (so
+   from every shore it can walk to); the member moves out as above, attacks it only when it is in the member's own
+   range from where it stands, and inside reach + 192 px is held where it is, so travel does not take it back in.
+   The stay-or-go reads it as not closing on an ATTACK squad that outranges that reach (`contact_closes`), so it is
+   no reason to retreat home. Stood members are passed over by the way home too (`travel_home`). Else it attacks the defence when it is seen now, from its own
    range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and
    the member need not see it: a destroyer reaches 660 px and its eyes 256. **The hysteresis**: the move out ends 64 px
    past the line that orders it, and the member outranges the defence by those 128 px, so a member that stops short

@@ -2425,9 +2425,15 @@ static int squad_reaches(const MDEC* d, int s, int32_t x, int32_t z)
     return 2.0f * near >= total;
 }
 
+static int32_t com_reach(const MDEC* d, unsigned t);
+static int outranges(int32_t own, int32_t r);
+
 /* 1 when contact member e can come within range of squad s: its type (d->sub for one never identified) reaches,
    by its class's label or within min(its threat range, RANGE_MAX) of a block of its own component, the block of
-   s's member nearest it. No test, 1, for no type, a VTOL, or a class with no labels. */
+   s's member nearest it. No test, 1, for no type, a VTOL, or a class with no labels. THE SHORE COMMANDER: an
+   armed enemy commander that cannot walk to that block does not close on an ATTACK squad that outranges its reach
+   (com_reach), since the stand-off holds every member past that reach of each block the commander can walk to --
+   so the squad shells it from range rather than retreating home for it (the owner's decision, 2026-11-17). */
 static int contact_closes(const MDEC* d, int16_t e, int s)
 {
     const IMPAI_REACH* r = d->in->reach;
@@ -2447,6 +2453,9 @@ static int contact_closes(const MDEC* d, int16_t e, int s)
             if (y < best) { best = y; mx = d->army[k].x; mz = d->army[k].z; }
         }
     if (impai_reach_at(r, cls, mx >> 5, mz >> 5) == label) return 1;
+    if (m->type != WQ_NONE && m->armed && d->in->ti[type].cat == IMPAI_C_COMMANDER &&
+        d->st->sq[s].task == IMPAI_SQ_ATTACK && outranges(d->sq[s].range, com_reach(d, type)))
+        return 0;
     return impai_reach_near(r, cls, (uint16_t)label, mx >> 5, mz >> 5,
                             range_held(v && v->threat && type < (unsigned)v->ntypes ? v->threat[type].range : 0) / 32,
                             &ox, &oz);
@@ -4032,7 +4041,7 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    - else, remembered: an attack on the ground at its block, the engine's ground attack (WQ_CAN_ATTACK with no
      target): a structure stands where it was seen, so this sees nothing through the fog, and the member does not
      need its own sight of it -- a destroyer's 660 px against its sight of 330 px.
-   A member so ordered is passed over by fight and travel this decision (MUNIT.stand).
+   A member so ordered is passed over by fight, travel and the way home this decision (MUNIT.stand).
    THE HYSTERESIS: the move out ends STAND_HYST past the line that orders it, and an attack is ordered only on a
    defence the member outranges by STAND_PAD + STAND_HYST, so a member that stops short of its point, or closes to
    its own range to fire (its type's longest reach, which a member with weapons of several ranges may close past
@@ -4056,9 +4065,9 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    scratch roy-test at 386dd7a6). WHY THE STAND-OFF: on Gods of War
    the seat's first destroyer (reach 660 px) sailed to the water nearest its goal, the enemy commander, 231 px
    from a light laser tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks while it killed the
-   tower (MEASURED 2026-11-17, exploit-naval-turtle at 75236135's code, GameTime 11 960..12 560). RESIDUALS: a
-   defence not yet seen is met at the member's sight, which can be inside its reach; mobile units are not stood
-   off; a seen defence out of reach whose block is not given up is a candidate of the squad's fight (target_of) for
+   tower (MEASURED 2026-11-17, exploit-naval-turtle at 75236135's code, GameTime 11 960..12 560). THE SHORE
+   COMMANDER (com_point) is the one mobile stood off. RESIDUALS: a defence not yet seen is met at the member's
+   sight, which can be inside its reach; other mobile units are not stood off; a seen defence out of reach whose block is not given up is a candidate of the squad's fight (target_of) for
    a member the stand-off did not order, and the fight's attack counts as progress. BOUND: the enemy rows once, STAND_MAX defences kept nearest the squad's centroid, and each
    member against them twice (its nearest, and its move out's point), one substitute (point_for, cached) a member at most for each of the move out and in_reach.
    Returns the members ordered at a defence that is progress; *shell, the members shelling a remembered one in
@@ -4115,22 +4124,71 @@ static int stands_from(const MDEC* d, const MUNIT* u, const MENEMY* e, int32_t o
     return outranges(own, ground_reach(d, e->type)) && hurts_type(d, u->type, e->type) && !defence_passed(d, u, e, y);
 }
 
+/* THE SHORE COMMANDER (the owner's decision, 2026-11-17; decisions.md, *A commander at the shore*): an armed enemy
+   commander confined to a component of its class that does not hold the point's block -- a commander ashore, for a
+   ship -- is stood off as a defence is, at its reach -- the longer of its ground reach and its D-gun's range
+   (IMPAI_TINFO.dgun_range), which the ground reach leaves out -- and from where it can walk to rather than where it
+   stands: the block of its component nearest the point, within `rings` rings. So a member keeps that reach plus
+   STAND_PAD from every block the commander can come to, which no walk of the commander's changes. A commander whose
+   class has no labels here, or whose component holds the point's block (it can walk to the member), is no shore
+   commander: the stand-off leaves it to the fight, as before. Its point into (*px, *pz); 0 when it is no shore
+   commander or its component has no block within `rings` rings. BOUND: one impai_reach_near, (2 rings + 1)^2
+   blocks */
+static int32_t com_reach(const MDEC* d, unsigned t)
+{
+    const int32_t g = ground_reach(d, t), dg = t < d->in->nti ? (int32_t)d->in->ti[t].dgun_range : 0;
+    return g > dg ? g : dg;
+}
+
+static int com_point(const MDEC* d, const MENEMY* e, int32_t x, int32_t z, int rings, int32_t* px, int32_t* pz)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const unsigned cls = d->in->ti[e->type].mclass;
+    int lab, ox, oz;
+    if (!r || (d->in->ti[e->type].flags & IMPAI_TF_VTOL) || (lab = impai_reach_at(r, cls, e->x >> 5, e->z >> 5)) <= 0 ||
+        impai_reach_at(r, cls, x >> 5, z >> 5) == lab ||
+        !impai_reach_near(r, cls, (uint16_t)lab, x >> 5, z >> 5, rings, &ox, &oz))
+        return 0;
+    *px = ox * 32 + 16;
+    *pz = oz * 32 + 16;
+    return 1;
+}
+
+/* 1 when (x, z) lies within reach + STAND_PAD of a commander of com[0..nc) that member u stands off from
+   (THE SHORE COMMANDER: its point for (x, z), com_point) */
+static int com_near(const MDEC* d, const MUNIT* u, const int16_t* com, int nc, int32_t x, int32_t z)
+{
+    const int32_t own = ground_reach(d, u->type);
+    int i;
+    for (i = 0; i < nc; i++) {
+        const MENEMY* e = &d->en[com[i]];
+        const int32_t rc = com_reach(d, e->type);
+        int32_t cx, cz;
+        if (outranges(own, rc) && hurts_type(d, u->type, e->type) &&
+            com_point(d, e, x, z, (rc + STAND_PAD) / 32 + 1, &cx, &cz) &&
+            dist(x, z, cx, cz) < (uint32_t)(rc + STAND_PAD))
+            return 1;
+    }
+    return 0;
+}
+
 /* THE STAND-OFF's move out of member u, `best` px from defence t, its reach r: as order, 0 when no point is given
    that lies outside the reach + STAND_PAD of every defence of the squad's, def[0..nd), that u would stand off from
    that point (stands_from) or that the fight content gives a rate on u and u has not passed (defence_passed), t
    among them -- (none, the substitute's within one, or undecided). So a member between two overlapping defences is
    not moved out of one into the other and back (the nearest pick reads stands_from), nor into the reach of one
    that hurts it, and a defence that neither hurts it nor is stood off refuses nothing */
-static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int32_t r, const int16_t* def, int nd)
+static int step_out(MDEC* d, const MUNIT* u, int32_t tx, int32_t tz, uint32_t best, int32_t r, const int16_t* def,
+                    int nd, const int16_t* com, int nc)
 {
     const int32_t own = ground_reach(d, u->type);
-    const int64_t dx = best ? u->x - t->x : d->ax - t->x, dz = best ? u->z - t->z : d->az - t->z;
-    const uint32_t len = best ? best : dist(d->ax, d->az, t->x, t->z);
+    const int64_t dx = best ? u->x - tx : d->ax - tx, dz = best ? u->z - tz : d->az - tz;
+    const uint32_t len = best ? best : dist(d->ax, d->az, tx, tz);
     int32_t px, pz;
     int p, i;
     if (!len) return 0;
-    px = t->x + (int32_t)(dx * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
-    pz = t->z + (int32_t)(dz * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
+    px = tx + (int32_t)(dx * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
+    pz = tz + (int32_t)(dz * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
     px = px < 0 ? 0 : px >= d->mw ? d->mw - 1 : px;
     pz = pz < 0 ? 0 : pz >= d->mh ? d->mh - 1 : pz;
     if ((p = point_for(d, u->type, u->x, u->z, &px, &pz)) <= 0) {
@@ -4144,38 +4202,47 @@ static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int
             (stands_from(d, u, e, own, y) || (hurts_type(d, e->type, u->type) && !defence_passed(d, u, e, y))))
             return 0;
     }
+    if (com_near(d, u, com, nc, px, pz)) return 0;
     return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
 }
 
+#define STAND_COMS 2            /* the commanders one squad's stand-off weighs, the nearest its centroid         */
 static int stand_off(MDEC* d, int s, int* ghost, int* shell)
 {
-    int16_t def[STAND_MAX];
-    uint32_t dd[STAND_MAX];
-    int nd = 0, i, k, seen = 0;
+    int16_t def[STAND_MAX], com[STAND_COMS];
+    uint32_t dd[STAND_MAX], dc[STAND_COMS];
+    int nd = 0, nc = 0, i, k, seen = 0;
     const unsigned L = d->st->sq[s].layer;
     *ghost = -1;
     for (i = 0; i < d->nen; i++) {
         const MENEMY* e = &d->en[i];
-        const int32_t r = e->mobile || !e->armed || e->type == WQ_NONE ? 0 : ground_reach(d, e->type);
+        const int coms = e->type != WQ_NONE && e->type < d->in->nti && e->armed &&
+                         d->in->ti[e->type].cat == IMPAI_C_COMMANDER;
+        const int32_t r = coms ? com_reach(d, e->type)
+                               : e->mobile || !e->armed || e->type == WQ_NONE ? 0 : ground_reach(d, e->type);
+        int16_t* list = coms ? com : def;
+        uint32_t* dl = coms ? dc : dd;
+        int* n = coms ? &nc : &nd;
+        const int cap = coms ? STAND_COMS : STAND_MAX;
         uint32_t y;
         int j;
         if (!outranges(d->sq[s].range, r)) continue;
         if (!e->now && unreached(d, L, e->x, e->z)) continue;
         y = dist(e->x, e->z, d->sq[s].x, d->sq[s].z);
-        if (nd == STAND_MAX && y >= dd[nd - 1]) continue;
-        j = nd < STAND_MAX ? nd++ : nd - 1;
-        while (j > 0 && dd[j - 1] > y) { def[j] = def[j - 1]; dd[j] = dd[j - 1]; j--; }
-        def[j] = (int16_t)i;
-        dd[j] = y;
+        if (*n == cap && y >= dl[*n - 1]) continue;
+        j = *n < cap ? (*n)++ : *n - 1;
+        while (j > 0 && dl[j - 1] > y) { list[j] = list[j - 1]; dl[j] = dl[j - 1]; j--; }
+        list[j] = (int16_t)i;
+        dl[j] = y;
     }
     for (k = 0; k < d->narmy; k++) {
         MUNIT* u = &d->army[k];
         const int32_t own = ground_reach(d, u->type);
         const MENEMY* t = NULL;
         uint32_t best = 0, y;
-        int32_t r = 0;
+        int32_t r = 0, tx = 0, tz = 0;
         uint8_t aim;
-        int got = 0;
+        int got = 0, isc = 0;
         if (u->sq != s) continue;
         u->stand = 0;
         if (d->roots >= d->plan->mil_roots) continue;
@@ -4184,11 +4251,33 @@ static int stand_off(MDEC* d, int s, int* ghost, int* shell)
             const int32_t re = ground_reach(d, e->type);
             y = dist(u->x, u->z, e->x, e->z);
             if (y > (uint32_t)own + REACH_PAD || !stands_from(d, u, e, own, y)) continue;
-            if (!t || y < best) { t = e; best = y; r = re; }
+            if (!t || y < best) { t = e; best = y; r = re; tx = e->x; tz = e->z; }
+        }
+        for (i = 0; i < nc; i++) {
+            const MENEMY* e = &d->en[com[i]];
+            const int32_t rc = com_reach(d, e->type);
+            int32_t px, pz;
+            if (!outranges(own, rc) || !hurts_type(d, u->type, e->type) ||
+                !com_point(d, e, u->x, u->z, (own + REACH_PAD) / 32 + 1, &px, &pz))
+                continue;
+            y = dist(u->x, u->z, px, pz);
+            if (y > (uint32_t)own + REACH_PAD) continue;
+            if (!t || y < best) { t = e; best = y; r = rc; tx = px; tz = pz; isc = 1; }
         }
         if (!t) continue;
-        if (best < (uint32_t)(r + STAND_PAD)) got = step_out(d, u, t, best, r, def, nd);
-        if (got <= 0 && t->now && target_now(d, t, &aim) && can_attack(u, aim)) {
+        if (best < (uint32_t)(r + STAND_PAD)) got = step_out(d, u, tx, tz, best, r, def, nd, com, nc);
+        if (isc) {
+            /* THE SHORE COMMANDER: shelled from where the member stands, never closed on -- an attack only with
+               it in the member's range now; else, within STAND_HYST of the move out's point, held there
+               (THE HOLD), so neither travel nor the fight takes the member back in towards its shore */
+            if (got <= 0 && t->now && dist(u->x, u->z, t->x, t->z) <= (uint32_t)own && target_now(d, t, &aim) &&
+                can_attack(u, aim)) {
+                got = order(d, u->slot, WQ_CAN_ATTACK, t->slot, t->x, t->z);
+                if (got > 0) seen++;
+            } else if (got <= 0 && best >= (uint32_t)(r + STAND_PAD) &&
+                       best < (uint32_t)(r + STAND_PAD + 2 * STAND_HYST))
+                got = order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, u->x, u->z);
+        } else if (got <= 0 && t->now && target_now(d, t, &aim) && can_attack(u, aim)) {
             got = order(d, u->slot, WQ_CAN_ATTACK, t->slot, t->x, t->z);
             if (got > 0 && in_reach(d, u, t, own)) seen++;
             else if (got > 0) *ghost = (int)(t - d->en);
@@ -4365,7 +4454,7 @@ static void travel_home(MDEC* d, int s)
         const MUNIT* u = &d->army[k];
         int32_t px, pz;
         int p;
-        if (u->sq != s) continue;
+        if (u->sq != s || u->stand) continue;
         p = point_home(d, u, n++, &px, &pz);
         if (p <= 0) d->out->unreached++;
         if (p > 0) order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);

@@ -17,4 +17,10 @@ M = [
     ("scout in the substitute", MIL, "klass >= IMPAI_KS || scout_unarmed(d, d->et[k].type)) continue;", "klass >= IMPAI_KS) continue;"),
     ("scout in the picture", MIL, "if (t->klass < IMPAI_KS && !scout_unarmed(d, e->type)) pin.kval", "if (t->klass < IMPAI_KS) pin.kval"),
     ("armed scout dropped", MIL, "           (!th || (!th->dps_ground && !th->dps_air && !th->dps_water));", "           (1 || !th || (!th->dps_ground && !th->dps_air && !th->dps_water));"),
+    ("shore commander closes", MIL, "        d->st->sq[s].task == IMPAI_SQ_ATTACK && outranges(d->sq[s].range, com_reach(d, type)))\n        return 0;", "        d->st->sq[s].task == IMPAI_SQ_ATTACK && outranges(d->sq[s].range, com_reach(d, type)) && 0)\n        return 0;"),
+    ("shore reach without the D-gun", MIL, "    return g > dg ? g : dg;", "    return g + 0 * dg;"),
+    ("shore never held", MIL, "                       best < (uint32_t)(r + STAND_PAD + 2 * STAND_HYST))", "                       best < (uint32_t)(r + STAND_PAD + 2 * STAND_HYST) && 0)"),
+    ("shore attack out of range", MIL, "            if (got <= 0 && t->now && dist(u->x, u->z, t->x, t->z) <= (uint32_t)own && target_now(d, t, &aim) &&", "            if (got <= 0 && t->now && target_now(d, t, &aim) &&"),
+    ("shore never stood off", MIL, "            if (!t || y < best) { t = e; best = y; r = rc; tx = px; tz = pz; isc = 1; }", "            if (!t && 0) { t = e; best = y; r = rc; tx = px; tz = pz; isc = 1; }"),
+    ("travel home re-orders the stood", MIL, "        if (u->sq != s || u->stand) continue;\n        p = point_home", "        if (u->sq != s) continue;\n        p = point_home"),
 ]

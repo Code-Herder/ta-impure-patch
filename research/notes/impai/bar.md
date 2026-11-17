@@ -682,7 +682,8 @@ holds the goal): still failed, the commander and both towers at full health at t
   commander, retreated against the commander and the tower (m -0.945): the commander can come within its reach
   of them over its own shore (cb 1), and the model's commander walks to them and fires its D-gun, a CommandFire
   weapon it counts, killing both in four steps. The wave's prediction credits the range already; what it does not
-  have is a ship that keeps off the shore by the commander's reach -- the stand-off does not stand off mobile units.
+  had was a ship that keeps off the shore by the commander's reach (since built: *A commander at the shore*,
+  [decisions](decisions.html)).
 
 ## Automatic tuning
 

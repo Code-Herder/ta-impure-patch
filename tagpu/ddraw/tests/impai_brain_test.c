@@ -8991,6 +8991,66 @@ static int stand_progress(int tx, int decisions)
     return -1;
 }
 
+/* THE SHORE COMMANDER (impai_mil.c, stand_off, com_point, contact_closes; the owner's decision, 2026-11-17): on the
+   strait's world a destroyer of reach 660, slot 20, the one member of an ATTACK sea squad, in the channel; an enemy
+   commander seen on the east bank (from cell 272, block 136), its ground reach 200 and its D-gun's range 240, so
+   its reach 240, and a damage that wins any fight it closes on; the squad's goal on the east bank 2 240 px south:
+   (a) the destroyer 112 px off the east bank, the commander 288 px inland: no lost prediction -- the commander does
+       not close, the stand-off holding the squad off its shore --, and a move out to 368 px from the bank's nearest
+       block (240 + STAND_PAD + STAND_HYST) -- from the shore it can walk to, not from
+       where it stands (656 px off, past 304);
+   (b) the destroyer 384 px off the bank, the commander 832 px off, past its range: held where it stands (a move to
+       its own point), so travel does not take it back in;
+   (c) the destroyer 384 px off the bank, the commander at the bank's edge 400 px off: an attack on it from where it
+       stands, no move;
+   (d) (a) with the commander's D-gun range 0: its reach 200, the move out to 328 px from the bank. */
+static void ashore_world(int ship_cx, int com_cx, int dgun)
+{
+    stand_world(300);
+    mil_water(W_STRAIT);
+    s_mil.sq[1].layer = TASIM_LAYER_SEA;
+    s_mil.sq[1].tz = 120;
+    s_threat[M_DEST].range = s_threat[M_DEST].hit_range = 660;
+    s_fwp[M_DEST].range = 660;
+    s_fwp[T_COM].dmg = 5000;
+    s_threat[T_COM].dps_ground = s_threat[T_COM].hit_ground = 5000;
+    s_ti[T_COM].dgun_range = (uint16_t)dgun;
+    own(20, M_DEST, ship_cx, 100);
+    s_job[20].kind = IMPAI_JOB_SQUAD;
+    s_job[20].type = M_DEST;
+    s_job[20].squad = 1;
+    enemy(1300, T_COM, com_cx, 100, IMPAI_LOS, 1);
+}
+
+static void check_mil_shore_commander(void)
+{
+    static const char* const NAME[4] = { "(a) 112 px off the bank", "(b) held off the bank, the commander far",
+                                         "(c) held off the bank, the commander at the edge",
+                                         "(d) 112 px off the bank, no D-gun" };
+    static const int SHIP[4] = { 266, 249, 249, 266 }, COM[4] = { 290, 300, 274, 290 };
+    IMPAI_MIL_OUT o;
+    int c, from, att, gnd, mv, mx, mz;
+    for (c = 0; c < 4; c++) {
+        ashore_world(SHIP[c], COM[c], c == 3 ? 0 : 240);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shore commander's decision runs");
+        mil_print(NAME[c], &o, from);
+        stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+        printf("the shore commander, %s: task %d, retreats %u, attacks %d, ground %d, moves %d, point (%d, %d)\n",
+               NAME[c], task_of_slot(20), o.retreats, att, gnd, mv, mx, mz);
+        CHECK(s_mil.lost_t != (uint32_t)s_w.gametime && !o.retreats, "%s: no lost prediction, no retreat", NAME[c]);
+        if (c == 1 || c == 2) CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
+        if (c == 0 || c == 3) {
+            const int want = c == 0 ? 368 : 328, dx = 4368 - mx;
+            CHECK(mv == 1 && !att && !gnd && dx >= want - 24 && dx <= want + 24, "%s: moved out to %d px from the bank, %d",
+                  NAME[c], want, dx);
+        }
+        if (c == 1) CHECK(mv == 1 && !att && !gnd && mx == SHIP[c] * 16 + 8, "%s: held, (%d, %d)", NAME[c], mx, mz);
+        if (c == 2) CHECK(att == 1 && !mv && !gnd, "%s: an attack from where it stands", NAME[c]);
+    }
+    s_ti[T_COM].dgun_range = 0;
+}
+
 /* THE SHELLING HOLDS THE GOAL (impai_mil.c, stand_off, orders): on the strait's world one tank, slot 20, of reach
    600, on the west bank, and a turret of reach 300 remembered on the east bank 576 px from it, past 300 + STAND_PAD
    and within the tank's reach; the squad's goal the turret's block, whose substitute on the west bank the tank
@@ -15859,6 +15919,7 @@ static void check_military(void)
     check_mil_stand_out();
     check_mil_stand_progress();
     check_mil_shell_ghost();
+    check_mil_shore_commander();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();

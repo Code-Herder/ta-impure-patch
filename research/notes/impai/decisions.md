@@ -611,6 +611,17 @@ The owner's answers to the spec's questions:
   before this the turtle got no air plant (MEASURED 2026-11-17 at 73593317). The energy frame stays where it was
   ordered; a builder on any other build (an extractor, a plant, a defence) is not taken, and in a stall the air
   plant for the blind does not hold at all.
+- **A commander at the shore** (owner's decision, 2026-11-17): ships treat an enemy commander they cannot reach --
+  one confined to land, whose class has no way to the ships' water -- like a defence: they stand off past its D-gun
+  reach plus a pad and shell it from range; they do not retreat home for it. **As built**: its reach is the longer of
+  its ground reach and its D-gun's range; the stand-off measures it from the block of the commander's component
+  nearest the member, not from where the commander stands, so no walk along its shore brings a ship into reach;
+  the member moves out when inside reach + 64 px, attacks the commander only when it is in the member's own range
+  from where the member stands, and is held where it is just outside, so travel does not take it back in. The
+  stay-or-go reads such a commander as one that does not close on an ATTACK squad that outranges it (the
+  stand-off keeps it off), so it is no reason to retreat. **What it does not reach**: a commander that can walk
+  to the ships (amphibious into their water) is left to the fight as before; only ATTACK squads stand off; a
+  commander farther inland than the ships' range is not shelled, and the goal's stall window then gives it up.
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
