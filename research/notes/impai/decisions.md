@@ -574,6 +574,19 @@ The owner's answers to the spec's questions:
   type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
   **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
   estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+- **On an island the plant order is a calculation, not "sea, then air"** (owner's decision, 2026-11-17; it replaces
+  the fixed order below): the sea first when there is metal in the water -- the open water patches a sea plant's
+  constructor reaches are at least the island's -- or sea defences are needed (an enemy ship or submarine known);
+  a land plant first when the island is big enough that land constructors pay (at least six open patches its
+  constructors reach and 1 024 blocks of its ground within 1 536 px of the anchor, both the brain writer's
+  hand-written figures); never an air plant first, and aircraft eventually: past the first plant the sea plant
+  until the seat holds two, then an air plant. The owner: "Air should be built eventually but probably not as a
+  first plant on naval maps if there are metal extractors in water. Maybe the AI has to calculate if it's better to
+  go air or water first for resources / defences. Air first is often a bad idea and extremely hard to pull off even
+  for a human. Whether you have a land plant first really depends on the size of the island to know if it's worth
+  it." **What it costs**: the default table buys no aircraft, so the air plant makes constructors until an air
+  share is added for seats whose enemy land cannot reach (in scope, not done); the island's area is read near the
+  base only.
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
@@ -583,7 +596,8 @@ The owner's answers to the spec's questions:
   so the base's defence grows with the army the seat can send and is nothing while it has none; the base meets
   only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet first. A
   share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: a further
-  plant on the island, on the pacing of any further plant, is first the sea plant, by the sea plant's own search
+  plant on the island, on the pacing of any further plant, follows the island's plant order (above; it replaced
+  "first the sea plant, then the air plant" on 2026-11-17): the sea plant by the sea plant's own search
   while its refusals are not spent, and the plant choice's air plant only once a search finds no site at all or no
   builder of the seat offers a sea plant -- one builder that cannot place it now leaves it to the others. Sea before
   air because the default table buys no aircraft, so an air plant there makes only constructors. **Both wait for
@@ -635,7 +649,8 @@ the approval, each with its evidence; the owner may reverse any of them:
   vehicle plant whose army reached no enemy (`exploit-naval-turtle` at 5e4e9c24). **What it costs**: at random
   starts a seat whose real enemy sits on the one start cut off from it builds land plants until it sees an enemy
   structure, and an ally's start is a target.
-- **On an island the first plant is the sea plant** (brain writer's call within Q1, 2026-11-17). With the foe's
+- **On an island the first plant is the sea plant when the island's plant order says sea** (brain writer's call
+  within Q1, 2026-11-17; the order is the owner's, above). With the foe's
   starts as the targets, on an island no plant on the commander's menu has a land army that reaches, and Q1 then
   takes the least value of all; a water plant is no candidate on a dry anchor only because the ring holds no water
   site, so the sea plant is placed by its own search instead, when the military judges the map naval. A builder

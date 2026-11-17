@@ -682,8 +682,10 @@ constructor that builds an extractor, a water-only plant only on a wet anchor, a
 over only in the waived pass (*A plant keeps a way out*); past the first plant on an island (*The island*, below)
 when no candidate the pass may take has a land army -- the choice's own reach agrees with the military's verdict,
 which on Trout Farm came and went on a linked map --, only a water plant or one whose menu offers an air army
-type, the owner's decision (2026-11-17), and the further plant is first the sea plant, by the sea plant's own
-search while its refusals are not spent, then the air plant -- only once a search finds no site at all or no
+type, the owner's decision (2026-11-17), and the further plant follows **the island's plant order** (below): a land
+plant while the seat has none on an island big enough for one; else the sea plant, by the sea plant's own search
+while its refusals are not spent, until the seat holds two sea plants (`ISLE_SEA_BEFORE_AIR`) and none of air, and
+then an air plant. The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
 another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
 to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default
@@ -737,7 +739,8 @@ and the least value of all when none has one: its first purpose is the construct
 on the least value ([decisions](decisions.html)); the land army is the owner's (2026-11-14), since the least value
 alone put TA Zero's GoK on GoKT1AF, an air plant. **A wet anchor** takes the least value of all: the score ranks land armies, and a ring round an anchor below the sea may hold no site
 for a land plant. **The island's first plant**: on a dry anchor, when no candidate has a land army and the
-military judges the map naval, the first plant is the sea plant, placed by the sea plant's own search, while the
+military judges the map naval, the first plant is never an air plant while another can be picked, and is the sea
+plant when **the island's plant order** says sea (below), placed by the sea plant's own search, while the
 level has counted no refusal of the sea plant; a builder that offers none builds the least value of all as before,
 and so does every decision once one refusal is counted -- a search that orders none counts one in its own decision,
 a sea plant's job that ends unbuilt counts one before the next decision's assignment --, so the first plant tries
@@ -746,7 +749,21 @@ plant, not the sixteen `fail_t` windows the sea plant's own want may spend. The 
 may take, a build tech no higher than the seat's top factory's or the lowest candidate's. The opening's purpose is its constructors and the army it can make next, and on an
 island the sea's is the one that reaches: on Gods of War the seat opened on a vehicle plant at GameTime 2 974, its
 shipyard came on the pacing at 9 552, and it held two ships at the cap, 20 000, and attacked nothing (MEASURED
-2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
+2026-11-17, `exploit-naval-turtle` at 5e4e9c24). **The island's plant order** (`isle_order`, the owner's decision of
+2026-11-17) is a calculation, once a decision, over the plants the seat's builders offer and the constructors on
+their menus that build an extractor: **the sea first** when sea defences are needed -- an enemy on or under the water
+known (*the targets known*) -- or the metal lies at sea, the open water patches a sea plant's constructor reaches
+being at least the island's; **a land plant first** when the island is big enough that its constructors pay, at
+least `ISLE_PATCHES` (6) open patches a land plant's constructor reaches and at least `ISLE_BLOCKS` (1 024) blocks of
+its component within 48 rings (1 536 px) of the anchor; never an air plant first. A constructor's patches are THE
+METAL'S REACH counted: those on its class's component at the base whose extractor of its own menu fits, a ship's
+component at a dry anchor being the first labelled block within 32 rings (1 024 px). Both thresholds are
+hand-written, the bar's to move. **Why**: "Air first is often a bad idea and extremely hard to pull off even for a
+human. Whether you have a land plant first really depends on the size of the island to know if it's worth it"
+(the owner); Gods of War's island holds four patches, which the commander takes, and its land plant cost the
+metal of 1.4 destroyers. **Gaps**: the island's area is measured within the window only, so a narrow island
+longer than 3 km reads by its part near the base; the order counts patches open now, so an island whose patches
+the commander has already taken reads small. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
 until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's rules still bound how

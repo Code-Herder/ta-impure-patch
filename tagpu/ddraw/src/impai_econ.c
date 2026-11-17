@@ -157,16 +157,17 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    - its menu holds a constructor whose own menu holds an extractor;
    - it is placed on dry ground, or the anchor is wet (a water-only plant fits no site of the ring otherwise);
    - its way out has not been refused too often (impai_build.c, THE PLANT'S FALLBACK), unless `waived`;
-   - THE ISLAND'S PLANTS (the owner's decision, 2026-11-17): past the seat's first plant, when the military judges
-     the seat on an island (impai_mil.c, island) and no candidate the pass may take has a land army -- the choice's
-     own reach agrees --, only a sea or an air plant (island_plant), and the further plant is first the sea plant,
-     placed by the sea plant's own search (assign, IMPAI_DEC.plant_sea) while the sea refusals are not spent; the
-     air plant when that search orders none. WHY THE AGREEMENT: the military's verdict reads the seat's land army
-     and the rows, and a row on a block the land army does not stand on reads as off the land, so the verdict came
-     and went on a linked map: on Trout Farm it held at GameTime 12 517, the seat's second plant was an air plant
-     beside a lab whose land army reached (s 0.388), and the win came at 54 559 against 45 445 (MEASURED
-     2026-11-17, bar-hota-troutfarm-ca-1 at 31ada7aa; with the agreement the lab again, and 45 445). A plant is for
-     the rest of the game, so it waits for both readings. RESIDUAL: the default table buys no aircraft (impai_table.c,
+   - THE ISLAND'S PLANTS (the owner's decision, 2026-11-17): past the seat's first plant, when the military judges the
+     seat on an island (impai_mil.c, island) and no candidate the pass may take has a land army -- the choice's own
+     reach agrees --, only a sea or an air plant (island_plant), by THE ISLAND'S PLANT ORDER: a land plant instead while
+     the seat has none on an island big enough for one, else the sea plant, placed by the sea plant's own search
+     (assign, IMPAI_DEC.plant_sea) while the sea refusals are not spent, until the seat holds ISLE_SEA_BEFORE_AIR sea
+     plants and none of air, and the air plant then. WHY THE AGREEMENT: the military's verdict reads the seat's land
+     army and the rows, and a row on a block the land army does not stand on reads as off the land, so the verdict came
+     and went on a linked map: on Trout Farm it held at GameTime 12 517, the seat's second plant was an air plant beside
+     a lab whose land army reached (s 0.388), and the win came at 54 559 against 45 445 (MEASURED 2026-11-17,
+     bar-hota-troutfarm-ca-1 at 31ada7aa; with the agreement the lab again, and 45 445). A plant is for the rest of the
+     game, so it waits for both readings. RESIDUAL: the default table buys no aircraft (impai_table.c,
      IMPAI_TABLE_HAND_INIT), so such an air plant makes constructors alone;
    - THE BUILD TECH (IMPAI_TINFO.ctech) fits the want: a tech-up takes only a plant above the seat's highest
      (IMPAI_DEC.ftop); a first or further plant only one at or below max(ftop, lo), lo the least among the
@@ -213,8 +214,9 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    plant whose army is poor here to constructors.
    THE ISLAND'S FIRST PLANT (IMPAI_DEC.plant_sea): on a dry anchor, when no candidate the first plant's pick may
    take (a build tech no higher than the seat's top factory's or the lowest candidate's, plant_pick) has a land
-   army, at least one does, and the military judges the map naval (IMPAI_MIL.naval), the first plant is the sea
-   plant, built where the sea plant is (assign: choose_sea_plant, impai_build_sea_plant), while the level has
+   army, at least one does, and the military judges the map naval (IMPAI_MIL.naval), the first plant is never an
+   air plant while another is pickable, and is the sea plant when THE ISLAND'S PLANT ORDER says sea, built where
+   the sea plant is (assign: choose_sea_plant, impai_build_sea_plant), while the level has
    counted no sea refusal (IMPAI_BRAIN.sea_refused); the least value of all stays the choice for a builder that
    offers no sea plant, and for every decision once one refusal is counted -- a search that orders none counts one
    in its own decision, a sea plant's job that fails counts one before the next decision's assignment
@@ -496,7 +498,7 @@ static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsign
     return s;
 }
 
-typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army, isle; float s; } PLANT_CAND;
+typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army, isle, air; float s; } PLANT_CAND;
 
 static unsigned targets_bought_for(IMPAI_DEC* d);
 
@@ -571,21 +573,156 @@ static unsigned unlock_kept(IMPAI_DEC* d)
     return type_bit(d->cons_frame, st->unlock) ? 0 : st->unlock;
 }
 
-/* THE ISLAND'S PLANTS: 1 when plant type t, its menu menu[0..n), may be a plant past the seat's first on THE
-   ISLAND: a plant placed on water only (IMPAI_TF_WATER), or one whose menu offers an air army type (a class of
-   IMPAI_K_AIRMASK, a value above 0). A sea or an air plant, the owner's decision (2026-11-17): on an island
-   the land army reaches nothing, so a land plant's metal buys nothing the seat can send. A water plant is a
-   candidate only on a wet anchor (THE CANDIDATES). BOUND: n menu reads */
-static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, int n)
+/* a menu menu[0..n) that offers an air army type (a class of IMPAI_K_AIRMASK, a value above 0). BOUND: n reads */
+static int menu_air(const IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int k;
-    if (in->ti[t].flags & IMPAI_TF_WATER) return 1;
     for (k = 0; k < n; k++)
         if (menu[k] < in->nti && in->ti[menu[k]].klass < IMPAI_KS && (IMPAI_K_AIRMASK >> in->ti[menu[k]].klass & 1u) &&
             in->ti[menu[k]].value > 0.0f)
             return 1;
     return 0;
+}
+
+int impai_econ_air_plant(IMPAI_DEC* d, unsigned type)
+{
+    uint16_t plant[PLANT_MENU];
+    int n;
+    if (type >= d->in->nti || d->in->ti[type].cat != IMPAI_C_FACTORY || (d->in->ti[type].flags & IMPAI_TF_WATER))
+        return 0;
+    n = d->q->ops->build_options(d->q, (int)type, plant, PLANT_MENU);
+    return n > 0 && menu_air(d, plant, n);
+}
+
+/* THE ISLAND'S PLANTS: 1 when plant type t, its menu menu[0..n), may be a plant past the seat's first on THE
+   ISLAND: a plant placed on water only (IMPAI_TF_WATER), or an air plant (menu_air). A water plant is a candidate
+   only on a wet anchor (THE CANDIDATES). BOUND: n menu reads */
+static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, int n)
+{
+    return (d->in->ti[t].flags & IMPAI_TF_WATER) || menu_air(d, menu, n);
+}
+
+/* THE ISLAND'S PLANT ORDER (the owner's decision, 2026-11-17): on an island the order of the plants is a
+   calculation, not a fixed "sea, then air":
+   - THE SEA FIRST when sea defences are needed -- an enemy on or under the water known (THE TARGETS KNOWN,
+     impai_tg_known: FLOAT or UNDER) -- or the metal lies at sea: the water patches a sea plant's constructor
+     reaches (cons_patches) are at least the island's;
+   - A LAND PLANT FIRST when the island is big enough that its constructors pay: at least ISLE_PATCHES open
+     patches a land plant's constructor reaches, and at least ISLE_BLOCKS blocks of its component within
+     ISLE_RINGS rings of the anchor -- the island's own measure, its reach label's area and the patches on it;
+   - NEVER AN AIR PLANT FIRST (THE CANDIDATES' first plant), and aircraft eventually: on the island the plants past
+     the first are the sea plant's while the seat holds fewer than ISLE_SEA_BEFORE_AIR sea plants or already has an
+     air plant, and an air plant then.
+   Only the plants it can make count: a plant on a builder's menu of the seat's, its constructor one that builds
+   an extractor. WHY: "Air first is often a bad idea and extremely hard to pull off even for a human. Whether you
+   have a land plant first really depends on the size of the island to know if it's worth it" (the owner,
+   2026-11-17): on Gods of War, an island of four patches, the seat's land plant cost the metal of 1.4 destroyers
+   (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06), and an air plant makes constructors alone under the
+   default table (IMPAI_TABLE_HAND_INIT buys no aircraft). Once a decision (IMPAI_DEC.isle_order). BOUND: the
+   seat's builder types' menus, at most PLANT_LOOK plants and a plant menu read each, each constructor counted once
+   (ISLE_CONS kept; one past them is counted again) -- a menu read, a base label, at most (2 ISLE_SEA_RINGS + 1)^2
+   label reads and the published patches --, and (2 ISLE_RINGS + 1)^2 label reads for the area. */
+#define ISLE_SEA       1
+#define ISLE_LAND      2
+#define ISLE_SEA_RINGS 32       /* a constructor's water searched within 1 024 px of the anchor                */
+#define ISLE_RINGS     48       /* the island measured within 1 536 px of the anchor                           */
+#define ISLE_PATCHES   6        /* [hand-written: the bar's to move] more than the commander's opening takes   */
+#define ISLE_BLOCKS    1024     /* [hand-written: the bar's to move] a 1 024 px square, a ninth of the window */
+#define ISLE_SEA_BEFORE_AIR 2   /* [hand-written: the bar's to move]                                           */
+#define ISLE_CONS      16
+
+/* the open patches constructor type `type` reaches (THE METAL'S REACH, counted): on its class's component at the
+   base (base_label) -- for a class with no block in the base's rings, a ship's at a dry anchor, the first
+   labelled block within ISLE_SEA_RINGS rings --, those an extractor of its own menu fits; its class and label
+   into *cls, *lab (-1: a VTOL or a class with no labels, every patch). Reads d->menu2. */
+static int cons_patches(IMPAI_DEC* d, unsigned type, unsigned* cls, int* lab)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_TINFO* t = &in->ti[type];
+    const int n = d->q->ops->build_options(d->q, (int)type, d->menu2, WQ_TYPES_MAX);
+    IMPAI_MEX mx;
+    int l = -1, ring, i, dx, dz;
+    *cls = t->mclass;
+    *lab = -1;
+    if (n <= 0 || !choose_mex(d, d->menu2, n, &mx)) return 0;
+    if (in->reach && !(t->flags & IMPAI_TF_VTOL) && t->mclass < WQ_MCLASSES) {
+        const int bx = in->st->ax >> 1, bz = in->st->az >> 1;
+        l = base_label(in->reach, t->mclass, bx, bz);
+        for (ring = IMPAI_REACH_RINGS + 1; l == 0 && ring <= ISLE_SEA_RINGS; ring++)
+            for (i = 0; l == 0 && impai_ring_at(ring, i, &dx, &dz); i++) {
+                const int v = impai_reach_at(in->reach, t->mclass, bx + dx, bz + dz);
+                if (v > 0) l = v;
+            }
+        if (l == 0) return 0;
+    }
+    *lab = l;
+    return impai_patch_open_to(d, t->mclass, l, &mx);
+}
+
+/* the blocks of class c's component `lab` within ISLE_RINGS rings of the anchor; a component of no labels (-1)
+   reads as the whole window */
+static int isle_blocks(const IMPAI_DEC* d, unsigned c, int lab)
+{
+    const int bx = d->in->st->ax >> 1, bz = d->in->st->az >> 1;
+    int ring, i, dx, dz, n = 0;
+    if (lab < 0 || !d->in->reach) return (2 * ISLE_RINGS + 1) * (2 * ISLE_RINGS + 1);
+    for (ring = 0; ring <= ISLE_RINGS; ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++)
+            n += impai_reach_at(d->in->reach, c, bx + dx, bz + dz) == lab;
+    return n;
+}
+
+static int isle_order(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    uint16_t plant[PLANT_MENU], ctype[ISLE_CONS];
+    int cnum[ISLE_CONS], clab[ISLE_CONS];
+    unsigned ccls[ISLE_CONS], land_cls = 0;
+    int b, k, j, m, nm = 0, looked = 0, wet = 0, land = 0, land_lab = -1;
+    if (d->isle_order) return d->isle_order;
+    if (in->mil && (impai_tg_known(in->mil, d->now) & ((1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER))))
+        return d->isle_order = ISLE_SEA;
+    for (b = 0; b < d->nbtype; b++) {
+        const int n = d->q->ops->build_options(d->q, d->btype[b], d->menu3, WQ_TYPES_MAX);
+        for (k = 0; k < n && looked < PLANT_LOOK; k++) {
+            const unsigned t = d->menu3[k];
+            int np, water;
+            if (t >= in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
+            looked++;
+            np = d->q->ops->build_options(d->q, (int)t, plant, PLANT_MENU);
+            water = impai_water_plant(in, t);
+            if (!water && menu_air(d, plant, np)) continue;
+            for (j = 0; j < np; j++) {
+                unsigned c = 0;
+                int l = -1, p = 0;
+                if (plant[j] >= in->nti || in->ti[plant[j]].cat != IMPAI_C_CONS) continue;
+                for (m = 0; m < nm && ctype[m] != plant[j]; m++) {}
+                if (m < nm) {
+                    p = cnum[m];
+                    c = ccls[m];
+                    l = clab[m];
+                } else {
+                    if (builds_mex(d, plant[j])) p = cons_patches(d, plant[j], &c, &l);
+                    if (nm < ISLE_CONS) {
+                        ctype[nm] = plant[j];
+                        cnum[nm] = p;
+                        ccls[nm] = c;
+                        clab[nm++] = l;
+                    }
+                }
+                if (water) {
+                    if (p > wet) wet = p;
+                } else if (p > land) {
+                    land = p;
+                    land_cls = c;
+                    land_lab = l;
+                }
+            }
+        }
+    }
+    return d->isle_order = land >= ISLE_PATCHES && land >= wet && isle_blocks(d, land_cls, land_lab) >= ISLE_BLOCKS
+                               ? ISLE_LAND : ISLE_SEA;
 }
 
 static int choose_sea_plant(IMPAI_DEC* d, const uint16_t* menu, int n);
@@ -607,7 +744,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     const unsigned want = targets_bought_for(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
     uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA], looked[PLANT_LOOK];
-    int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype, isle_only = 0;
+    int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype, isle_only = 0, no_air = 0;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
     if (d->count[IMPAI_C_FACTORY] > 0 && cons_room(d)) nsrc += plant_unlocks(d, src + nsrc);
@@ -632,28 +769,45 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
             c[nc].s = plant_score(d, plant, np, T, mask, want, &c[nc].army);
+            c[nc].air = (uint8_t)(!(in->ti[t].flags & IMPAI_TF_WATER) && menu_air(d, plant, np));
             c[nc].isle = (uint8_t)(island && island_plant(d, t, plant, np));
             if (c[nc].ctech < lo) lo = c[nc].ctech;
             nc++;
         }
     }
     if (armed && !up) {
-        int pickable = 0;
+        int pickable = 0, ground = 0;
         for (k = 0; k < nc; k++) {
             if (c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
             if (c[k].army) break;
             pickable = 1;
+            ground |= !c[k].air;
         }
-        d->plant_sea = pickable && k == nc && in->mil && in->mil->naval == 1;
+        /* THE ISLAND'S FIRST PLANT by THE ISLAND'S PLANT ORDER, and never an air plant while another is pickable */
+        no_air = pickable && k == nc && ground;
+        d->plant_sea = pickable && k == nc && in->mil && in->mil->naval == 1 && isle_order(d) == ISLE_SEA;
     }
     if (island) {
+        int air = 0;
         for (k = 0; k < nc; k++)
             if ((up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo)) && c[k].army) break;
         isle_only = k == nc;
-        if (!up) d->plant_sea = isle_only;
+        /* THE ISLAND'S PLANT ORDER past the first plant: a land plant while the seat has none on an island big
+           enough for one; else the sea plant, then an air plant once the seat holds ISLE_SEA_BEFORE_AIR sea
+           plants and none of air */
+        if (isle_only && isle_order(d) == ISLE_LAND &&
+            (int)d->count[IMPAI_C_FACTORY] - (int)d->sea_plants - (int)d->air_plants <= 0) {
+            isle_only = 0;
+            no_air = 1;
+        }
+        for (k = 0; k < nc && isle_only; k++)
+            air |= c[k].isle && c[k].air && (up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo));
+        if (!up)
+            d->plant_sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air);
     }
     for (k = 0; k < nc; k++) {
-        if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle)) continue;
+        if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air))
+            continue;
         if (best < 0 || plant_before(d, &c[k], &c[best], scored, armed)) {
             second = best;
             best = k;

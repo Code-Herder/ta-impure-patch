@@ -9596,6 +9596,113 @@ static void check_island_hold(void)
     s_milp = NULL;
 }
 
+/* THE ISLAND'S PLANT ORDER (impai_econ.c): the coast world, naval, its land 32 x 64 blocks round the anchor, so the
+   island is big by its area; ISLE_LAND, eight 3 x 3 patches on the land, ISLE_SMALL three of them, ISLE_WET ten
+   in the sea 40 deep, where the shipyard's CORCS and its underwater extractor reach them.
+   The first plant (no factory yet):
+   (a) eight land patches, none at sea: a land plant first, no shipyard;
+   (b) the eight and ten at sea: the sea's metal is more, the shipyard;
+   (c) (a) with an enemy ship known (THE TARGETS KNOWN, FLOAT): sea defences, the shipyard;
+   (d) three land patches: the island too small, the shipyard;
+   (e) (d) in the shallow world, no site for a shipyard, the vehicle plant an air plant (its menu offers a bomber)
+       and the cheapest: never air first, the lab.
+   The plants past it, on THE ISLAND, the K-bot lab's menu offering a bomber (an air plant):
+   (f) three land patches, one shipyard: the second shipyard;
+   (g) two shipyards: the air plant, the lab;
+   (h) two shipyards and an air plant already, no patch open, factory_max 8 and the incomes 30 and 1 000 so a
+       fourth plant is wanted: the third shipyard;
+   (i) eight land patches, one shipyard and no land plant: a land plant, the vehicle plant (the lab is an air
+       plant), no shipyard;
+   (j) (i) with a vehicle plant already, as (h)'s pacing: the land plant had, the shipyard;
+   (k) the first plant on an island of 16 x 16 blocks (cells 24..55 x 48..79, the rest sea) holding eight patches:
+       too small by its area, the shipyard. */
+static const SNAP_PATCH ISLE_SMALL_F[] = {
+    { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
+    { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
+    { 46, 74, 46, 74, 48, 76, 9 }, { 52, 70, 52, 70, 54, 72, 9 },
+};
+static const SNAP_PATCH ISLE_PATCHES_F[] = {
+    { 10, 10, 10, 10, 12, 12, 9 },  { 10, 40, 10, 40, 12, 42, 9 },  { 10, 90, 10, 90, 12, 92, 9 },
+    { 30, 15, 30, 15, 32, 17, 9 },  { 30, 110, 30, 110, 32, 112, 9 }, { 50, 20, 50, 20, 52, 22, 9 },
+    { 50, 100, 50, 100, 52, 102, 9 }, { 20, 120, 20, 120, 22, 122, 9 },
+    { 80, 10, 80, 10, 82, 12, 9 },  { 80, 40, 80, 40, 82, 42, 9 },  { 80, 90, 80, 90, 82, 92, 9 },
+    { 90, 20, 90, 20, 92, 22, 9 },  { 90, 110, 90, 110, 92, 112, 9 }, { 100, 30, 100, 30, 102, 32, 9 },
+    { 100, 100, 100, 100, 102, 102, 9 }, { 110, 10, 110, 10, 112, 12, 9 }, { 110, 60, 110, 60, 112, 62, 9 },
+    { 120, 120, 120, 120, 122, 122, 9 },
+};
+enum { ISLE_LAND_N = 8, ISLE_WET_N = 10 };
+static void isle_patches(int land, int wet)
+{
+    static SNAP_PATCH p[ISLE_LAND_N + ISLE_WET_N];
+    int i, n = 0, x, z;
+    for (i = 0; i < land; i++) p[n++] = ISLE_PATCHES_F[i];
+    for (i = 0; i < wet; i++) p[n++] = ISLE_PATCHES_F[ISLE_LAND_N + i];
+    for (i = 0; i < n; i++)
+        for (z = p[i].z0; z <= p[i].z1; z++)
+            for (x = p[i].x0; x <= p[i].x1; x++) s_w.metal[z][x] = 200;
+    s_spots = p;
+    s_nspots = (unsigned)n;
+    s_scanned = 1;
+}
+
+static void check_island_order(void)
+{
+    static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
+    static const char* const NAME[11] = { "(a) eight land patches", "(b) the sea's metal more",
+                                         "(c) an enemy ship known", "(d) three land patches",
+                                         "(e) no shipyard site, the vehicle plant of air",
+                                         "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
+                                         "(i) eight land patches, one shipyard",
+                                         "(j) eight land patches, one shipyard and a land plant",
+                                         "(k) eight patches on a small island" };
+    static IMPAI_PLAN plan;
+    IMPAI_BRAIN_OUT out;
+    int c, sy, land;
+    plan = IMPAI_PLAN_ROW;
+    plan.factory_max = 8;
+    for (c = 0; c < 11; c++) {
+        int from, vp, lab;
+        coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : 9.0f);
+        s_w.unit[2].live = 0;
+        s_plan = c == 7 || c == 9 ? &plan : &IMPAI_PLAN_ROW;
+        if (c == 10) {
+            water_add(&s_w, 0, 0, 63, 127, 40);
+            water_add(&s_w, 24, 48, 55, 79, -10);
+            fake_reach(&s_reach, E_N);
+            s_spots = ISLE_SMALL_F;
+            s_nspots = (unsigned)(sizeof ISLE_SMALL_F / sizeof ISLE_SMALL_F[0]);
+        } else
+            isle_patches(c == 0 || c == 1 || c == 2 || c == 8 || c == 9 ? ISLE_LAND_N : c == 7 ? 0 : 3,
+                         c == 1 ? ISLE_WET_N : 0);
+        s_ti[E_UWMEX].klass = IMPAI_K_BOMBER;
+        if (c == 2) s_smil.tg_t[IMPAI_TG_FLOAT] = (uint32_t)s_w.gametime;
+        if (c == 4) menu_set(&s_w, E_VP, AIRVP, 2);
+        if (c >= 5 && c <= 9) {
+            menu_set(&s_w, E_LAB, AIRLAB, 2);
+            s_smil.island = 1;
+            unit_add(&s_w, 3, E_SY, 66, 100, 1);
+            if (c == 6 || c == 7) unit_add(&s_w, 4, E_SY, 100, 100, 1);
+            if (c == 7) unit_add(&s_w, 5, E_LAB, 30, 20, 1);
+            if (c == 9) unit_add(&s_w, 5, E_VP, 30, 20, 1);
+            s_w.econ[0].energy_in = 1000;
+        }
+        from = s_w.nlog;
+        sea_decide(NAME[c], &sy, &land);
+        (void)out;
+        vp = builds_of(from, E_VP, NULL, NULL);
+        lab = builds_of(from, E_LAB, NULL, NULL);
+        printf("the island's plant order, %s: shipyard %d, vehicle plant %d, lab %d\n", NAME[c], sy, vp, lab);
+        if (c == 0) CHECK(!sy && land == 1, "%s: a land plant first", NAME[c]);
+        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || c == 10)
+            CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
+        if (c == 4) CHECK(!sy && lab == 1 && !vp, "%s: never air first, the lab", NAME[c]);
+        if (c == 6) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
+        if (c == 8) CHECK(!sy && vp == 1 && !lab, "%s: a land plant, the vehicle plant", NAME[c]);
+    }
+    s_plan = &IMPAI_PLAN_ROW;
+    s_milp = NULL;
+}
+
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
    commander is the one builder and the search's site is the shipyard at (64, 60), centre (1088, 1024). An enemy PT
    boat, armed against the air by its threat row, seen 1 092 px from the site: the shipyard is ordered there. Seen
@@ -14892,6 +14999,7 @@ int main(void)
     check_island_plant();
     check_island_plants();
     check_island_hold();
+    check_island_order();
     check_sea_finish();
     check_sea_cmd_safe();
     check_techup();

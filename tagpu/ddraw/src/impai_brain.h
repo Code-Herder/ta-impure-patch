@@ -206,6 +206,7 @@ typedef struct IMPAI_DEC {
        (sea_cx, sea_cz) with sea_alt; 0 none this decision; -1 none at all) -- and whether the decision has
        counted its refusal */
     uint16_t      sea_plants;
+    uint16_t      air_plants;   /* its air plants, finished and frames (impai_econ_air_plant)                 */
     uint16_t      btype[IMPAI_SEA_BUILDERS];
     uint8_t       nbtype;
     /* THE UNLOCKS (impai_econ.c): bit t of cons_done, the seat has a finished constructor of type t; of
@@ -256,9 +257,10 @@ typedef struct IMPAI_DEC {
        read, each type's army classes and its best value in the three gated classes by the reach and without it
        (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate reads without it (bit k); THE TARGETS
        BOUGHT FOR, the target classes the army buys types to hit (bit g, impai.h THE TARGET CLASSES), once read;
-       THE ISLAND'S AGREEMENT, once read: 0 not yet, 1 the economy's reach agrees, 2 not */
+       THE ISLAND'S AGREEMENT, once read: 0 not yet, 1 the economy's reach agrees, 2 not; THE ISLAND'S PLANT
+       ORDER, once read: 0 not yet, ISLE_SEA, ISLE_LAND (impai_econ.c) */
     uint32_t      reach_mask;
-    int           reach_done, isle_agree;
+    int           reach_done, isle_agree, isle_order;
     unsigned      tg_mask;
     int           tg_done;
     int           plant_done, plant_up, plant_sea, plant_sea_menu;
@@ -376,6 +378,8 @@ void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
 int  impai_econ_sea_able(IMPAI_DEC* d);
+/* 1 when `type` is an air plant: a factory not placed on water only whose menu offers an air army type */
+int  impai_econ_air_plant(IMPAI_DEC* d, unsigned type);
 /* THE METAL'S REACH (impai_econ.c): 1 past the seat's first finished factory, with no plant frame standing, when
    more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
    one; judges mr_open, mr_units and mr_make on the way */

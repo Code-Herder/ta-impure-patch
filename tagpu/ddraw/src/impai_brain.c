@@ -350,6 +350,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
     if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
+    if (cat == IMPAI_C_FACTORY && impai_econ_air_plant(d, (unsigned)type)) d->air_plants++;
     if (u->finished) d->done[cat]++;
     if (u->finished && cat == IMPAI_C_CONS) d->gov_c++;
     if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
