@@ -30,17 +30,24 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
 
 1. **Per-seat contacts.** Merge local `main` (per-seat radar and sonar, `tagpu_seatcontact_scan`, [allied sharing](../modules/allied-sharing.html), *For a skirmish AI*) and take ImpAI's contacts from the scan for its own seat. Closed when no ImpAI read of `+0x110` bits 8-10 or of the radar pass for the viewed player is left, and the regression set and the `hota` win check pass on the merged build.
 2. **The levels ordered.** Round 3 (57d39d71, `.data/impai/runs/r3/57d39d71/`) met Hard 100 of 100, Normal 1.000 and Easy 0.996 against OTA AI Hard (no ceiling, [the bar](bar.html), *The rules*), and row check b4. It did not order the levels:
-   - **hn**: Hard won 33, lost 34, with 33 at the cap; the ordering is futile at its first look.
-   - **ne**: Normal won 71 and lost 11, with 18 at the cap; the ordering passes at its second look, the 90-of-100 ladder does not.
-   - **Rows against OTA AI**: L0 to L5 score 0.53 to 0.74 on the development pool with no gradient, so a persona row's limits barely change strength against OTA AI.
+    - **hn**: Hard won 33, lost 34, with 33 at the cap; the ordering is futile at its first look.
+    - **ne**: Normal won 71 and lost 11, with 18 at the cap; the ordering passes at its second look, the 90-of-100 ladder does not.
+    - **Rows against OTA AI**: L0 to L5 score 0.53 to 0.74 on the development pool with no gradient, so a persona row's limits barely change strength against OTA AI.
 
-   The rows are therefore chosen by the mirror. `bar.py`'s `m:<row>` pairs (Hard against a row) and `n:<row>` pairs (Normal's row against a row), with rows harsher than L0 and rows that cut one axis, measure which limits cost strength. Normal is the strongest row Hard beats in 90 of 100 that still meets 0.90 against OTA AI Hard; Easy is the strongest row Normal's beats in 90 of 100 that still meets 0.50. If no row does both, the owner decides. Closed when `hn` and `ne` each pass on the final build. Row check b5 (the yard) failed 2 of 5 and is the brain's to fix.
+    The rows are therefore chosen by the mirror. `bar.py`'s `m:<row>` pairs (Hard against a row) and `n:<row>` pairs (Normal's row against a row), with rows harsher than L0 and rows that cut one axis, measure which limits cost strength. Normal is the strongest row Hard beats in 90 of 100 that still meets 0.90 against OTA AI Hard; Easy is the strongest row Normal's beats in 90 of 100 that still meets 0.50. If no row does both, the owner decides. Closed when `hn` and `ne` each pass on the final build. Row check b5 (the yard) failed 2 of 5 and is the brain's to fix.
+
 3. **The mods batch (A4).** Weapons rated by their real fire rate where a script times it; anti-air bought against air seen; energy per metal from each mod's own costs; TA Zero's tech graph; Lava Mania's expansion; ProTA's predictor against defences. Closed when the fair mod setups win every game and the retail regression set does not regress; the setups whose stock AI cheats are tracked apart.
 4. **The faster per-batch loop** ([testing](testing.html), *Per brain batch and at milestones*): `tools/impai/margin.py`, its tests and its live self-check. Closed when it decides a batch.
 5. **The closing gates on the final build**: the full bar, the replay landing gate, the compatibility suite with ImpAI seats (the Windows half on the owner's desktop, asked first).
     - **The suite** plays ImpAI with `tacompat.py wine --impai [SECONDS] --mp-impai`.
         - It holds every ImpAI seat, in the stage and on each peer of the network game, to the claim: by its last pulse the seat gave orders and completed a unit since its first pulse ([the suite](../compat/suite.md)).
         - That covers every player's setup where Impure runs. `gammata-ota` does not load Impure today (its known gap), so it plays neither. `tazero-wildhunt` plays no network game, only the stage.
+        - **Open: the joiner's ImpAI seat builds nothing** (MEASURED 2026-11-16, Wine, DLL `dll-6357756c`, `--battle 0 --impai 130 --mp-impai`, 58 setups).
+            - Every stage met the claim, but slowly: 1 or 2 units past the commander in 130 s.
+            - Every host's seat met it: 2 to 10 units.
+            - In 40 of 46 network games, the joiner's seat completed nothing past its commander. Its economy gave no order (`eroots=0`, `metal_out=0` at its 591 economy line), and its military gave from 0 to 119.
+            - The six that built are Twilight's content, at 2 or 3 units each.
+            - Plain `retail` reproduces it, so neither TADR nor the loader is involved.
     - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
         - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
 6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
