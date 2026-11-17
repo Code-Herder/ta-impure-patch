@@ -205,6 +205,8 @@ const A = {
     place(M.root);
     const world = document.createElement('div'); world.className = 'world';
     const maxc = Math.max(...Object.values(col));
+    // the tree's own bounds: the last column's card, the last row's card (no trailing gap), which fit() frames
+    this.bw = maxc * W + 236; this.bh = y - GAP;
     world.style.width = (maxc + 1) * W + 'px'; world.style.height = y + 'px';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('width', (maxc + 1) * W); svg.setAttribute('height', y);
@@ -251,7 +253,7 @@ const A = {
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.classList.add('drag'); }
-      this.x = drag.ox + dx; this.y = drag.oy + dy; this.apply();
+      if (drag.moved) { this.fitted = false; this.x = drag.ox + dx; this.y = drag.oy + dy; this.apply(); }
     });
     el.addEventListener('pointerup', e => {
       el.classList.remove('drag');
@@ -265,23 +267,34 @@ const A = {
     el.addEventListener('wheel', e => {
       e.preventDefault();
       const r = el.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
-      const z = Math.min(2, Math.max(0.15, this.z * Math.exp(-e.deltaY * 0.0015)));
+      const z = this.clamp(this.z * Math.exp(-e.deltaY * 0.0015));
+      this.fitted = false;
       this.x = px - (px - this.x) * z / this.z; this.y = py - (py - this.y) * z / this.z; this.z = z; this.apply();
     }, { passive: false });
     el.querySelector('.zoomctl').addEventListener('click', e => {
       const z = e.target.dataset.z;
-      if (z === '+' || z === '-') { this.z = Math.min(2, Math.max(0.15, this.z * (z === '+' ? 1.25 : 0.8))); this.apply(); }
+      if (z === '+' || z === '-') { this.fitted = false; this.z = this.clamp(this.z * (z === '+' ? 1.25 : 0.8)); this.apply(); }
       if (z === 'fit') this.fit();
       if (z === 'all') { this.all = !this.all; e.target.classList.toggle('on', this.all); this.light(); }
     });
-    if (S.sel) this.select(S.sel, { centre: true }); else this.fit();
+    // the default view is the whole tree, as large as the view allows; it stays fitted as the view resizes (the
+    // detail panel opening or closing) until the user pans or zooms
+    this.fit();
     this.light();
+    new ResizeObserver(() => { if (this.fitted) this.fit(); }).observe(el);
   },
   apply() { this.world.style.transform = `translate(${this.x}px,${this.y}px) scale(${this.z})`; },
+  fitZ() {
+    const r = this.el.getBoundingClientRect(), M8 = 12;
+    return Math.min((r.width - 2 * M8) / this.bw, (r.height - 2 * M8) / this.bh);
+  },
+  clamp(z) { return Math.min(3, Math.max(Math.min(0.15, this.fitZ()), z)); },
   fit() {
     const r = this.el.getBoundingClientRect();
-    this.z = Math.min(1, r.width / parseFloat(this.world.style.width), r.height / parseFloat(this.world.style.height)) * 0.95;
-    this.z = Math.max(this.z, 0.15); this.x = 20; this.y = 20; this.apply();
+    if (!r.width || !r.height) return;
+    this.z = Math.min(3, this.fitZ());
+    this.x = (r.width - this.bw * this.z) / 2; this.y = (r.height - this.bh * this.z) / 2;
+    this.fitted = true; this.apply();
   },
   // the spine node a unit lives under: itself, or the builder that first unlocks it
   home(k) { let x = k; while (x && !this.spine.includes(x)) x = M.units[x].first; return x; },
@@ -289,7 +302,7 @@ const A = {
     this.light();
     if (k && opts.centre) {
       const h = this.home(k), r = this.el.getBoundingClientRect();
-      this.z = Math.max(this.z, 0.7);
+      this.z = Math.max(this.z, 0.7); this.fitted = false;
       this.x = r.width / 2 - (this.col[h] * this.W + 118) * this.z; this.y = r.height / 2 - (this.pos[h] + 40) * this.z; this.apply();
     }
   },

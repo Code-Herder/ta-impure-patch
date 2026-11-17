@@ -127,7 +127,8 @@ export function mountStage(host, acts, u, M) {
     let last = performance.now(), acc = 0;
     const frame = now => {
       if (!alive) return;
-      acc += now - last; last = now;
+      // a hidden tab stops the frames; on return, play on rather than catch up every tick (one synchronous host call each)
+      acc = Math.min(acc + now - last, 100); last = now;
       if (world) while (acc >= 1000 / 30) { acc -= 1000 / 30; tick++; try { world.slice(facts); } catch { world = null; } onTick?.(); }
       if (cam.spin && !drag) cam.yaw += 0.004;
       const p = world && world.model(unit);
