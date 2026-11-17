@@ -5895,10 +5895,11 @@ def mp_takeover_at(rec):
 
 def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False):
     """The two-player game on one coverage build: recorded by two humans, allied both ways, and two
-    AIs, each human's opponent, with chat and a selection and a click from each human, so the
-    allies' ribbon reads each human's economy from the contribution channel
-    (recmp_create_begin_test.py, whose own checks fail
-    it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
+    AIs, each human's opponent, with chat, a selection and a click, and a drawing-board line and pin
+    from each human, so the allies' ribbon reads each human's economy from the contribution channel
+    and each peer applies the other's marks (recmp_create_begin_test.py, whose own checks fail
+    it), `tarec check` on its recording, and the recording played to its end with one seek back,
+    600 to 200, so a multiplayer seek composes again (recmp_play_test.py).
     Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
     memory cap, which it names on its last line, the line a failed step reports.
     The ImpAI form (`impai`) plays both hosted AIs as ImpAI's (`--impai`) and then takes the recording
@@ -5926,7 +5927,7 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select", "--allies", "--label", MP_LABELS[build],
+                  "--chat", "--select", "--marks", "--allies", "--label", MP_LABELS[build],
                   *(("--impai",) if impai else ())], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
@@ -5937,7 +5938,7 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False
     J.start(item, "play")
     log = d / "play.log"
     rc = mp_step([HERE / "recmp_play_test.py", rec, "--out", d / "play", "--dll", dll, "--to-end",
-                  "--cover", "play"], log)
+                  "--seek", "600:200", "--cover", "play"], log)
     if rc:
         return failed("play", f"the playing failed: {tail(log)}", log)
     J.finish(item, "play", "pass")

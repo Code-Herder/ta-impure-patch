@@ -58,10 +58,10 @@ const NAMES = ['Fang', 'Kesh', 'Moro', 'Vex', 'Nyx', 'Ash', 'Rook', 'Sable', 'Fl
 const SEAT_COL = ['#233bcb', '#d32b00', '#fbfbfb', '#2f771b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018', '#6fb6e8', '#7a5230',
   '#e070b0', '#18a090', '#8a8a20', '#8a8a8a', '#701c1c', '#9ae040'];
 
-// the four overlay switches are on whenever a replay starts, and never saved; the stats window is closed whenever a
+// the five overlay switches are on whenever a replay starts, and never saved; the stats window is closed whenever a
 // replay starts, and keeps its measure, its split and its place
 const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: false, sm: 'units', ss: 'player', sw: null,
-  ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
+  ov: { cursors: true, clicks: true, selections: true, chat: true, marks: true }, sight: -1, follow: -1, scroll: 0, toast: '',
   // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
   prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false,
@@ -107,10 +107,12 @@ function seats(N = S.np) {
              mi: Math.round(40 + mf * 90), mo: Math.round(20 + mf * 60), ei: Math.round(300 + ef * 600), eo: Math.round(150 + ef * 500) } };
   });
 }
-/* a network game's allies: the players after the first, the second one's energy under 2 % of its storage */
+/* a network game's allies: the players after the first, the second one's energy under 2 % of its storage; on the board
+   the first is drawing with a marker to jump to, the second muted, the third erasing with none, the rest idle with one */
 function allySeats() {
   // the second ally stalls on energy, spending above income; every third shares nothing, the first shares metal only
   return seats(S.na + 1).slice(1).map((p, k) => ({ i: p.i, name: p.name, colour: p.colour, out: k === S.aout, rates: !!S.rates,
+    board: k === 0 ? { act: 1, last: true } : k === 1 ? { mute: true } : k === 2 ? { act: 2 } : { last: true },
     res: { ...p.res, e: k === 1 ? Math.floor(p.res.emax * .01) : p.res.e, eo: k === 1 ? p.res.ei + 40 : p.res.eo,
       ms: S.rates && k % 3 !== 2 ? Math.round(p.res.mmax * .6) : null,
       es: S.rates && k % 3 === 1 ? Math.round(p.res.emax * .35) : null } }));
@@ -334,7 +336,7 @@ layer.addEventListener('click', e => {
       toast(near >= 0 ? 'Bookmark removed' : `Bookmark at ${Math.floor(S.t / 60)}:${String(Math.round(S.t) % 60).padStart(2, '0')}`); break; }
     case 'uiscale': S.hud = UI_STEPS[(UI_STEPS.indexOf(S.hud) + 1) % UI_STEPS.length]; $('#hud').value = S.hud; save(); resize(); return;
     case 'leave': S.playing = false; toast('Leave this replay?'); break;
-    case 'cursors': case 'clicks': case 'selections': case 'chat': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
+    case 'cursors': case 'clicks': case 'selections': case 'chat': case 'marks': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
     case 'stats': S.stat = !S.stat; break;
     case 'fold': { const t = +a.dataset.team; S.fold = S.fold.includes(t) ? S.fold.filter(x => x !== t) : S.fold.concat(t); break; }
     case 'jump': case 'follow': { const i = +a.dataset.seat;

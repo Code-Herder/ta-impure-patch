@@ -1381,6 +1381,9 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
    (0,0,0,0) at every present -- so a frame that produced more quads than this
    carries is one frame that cannot be composited, not a store that has fallen
    out of step. It says so by counting, and the consumer refuses the frame. */
+_Static_assert(2u * TAGPU_PK_MAX_BDMARK + 4u * TAGPU_PK_BD_RECENT <= TAGPU_GUI_SDRAW_BOARD,
+               "the board's minimap quads fit their share of the sharp layer");
+
 static void mir_sdraw(int kind, float x0, float y0, float x1, float y1,
                       float u0, float v0, float u1, float v1,
                       const float col[4], int ck)
@@ -2422,6 +2425,59 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                     float bc[4]; bc[0] = r; bc[1] = g2; bc[2] = b2; bc[3] = 1.0f;
                     mir_sdraw(TAGPU_GUISK_FLAT, x0 * kx, y0 * ky, x1 * kx, y1 * ky,
                               0, 0, 0, 0, bc, 0);
+                }
+            }
+        }
+        /* THE DRAWING BOARD ON THE MINIMAP (tagpu_board.c's marker records), over the view box:
+           each marker a 4-px square and each ally's pointer a 3-px one, in its colour on a black
+           square 2 px larger, and a new marker's ping a square outline whose side grows from 8 to
+           32 px as it ends (g is its half side, as r is the dot's). The box is the one the base picture was drawn on. The engine's minimap arm
+           maps the other way, (pointer - box) * extent / box (0x498DDA..0x498E19, the extent
+           main+0x1422B / +0x1422F), to a PROJECTED point: its y goes to GetTPosition 0x484B50,
+           which finds the ground point whose z - floor(h / 2) is that y (0x484BD6..0x484BEB). So a
+           ground point maps back from x and z - floor(h / 2); the point is data, clamped to the
+           extent before it is scaled.
+           BOUND: at most two quads a record and four a ping, at most TAGPU_PK_BD_RECENT pings,
+           counted here against TAGPU_GUI_SDRAW_BOARD -- the sharp layer's room past its own
+           32, so the board can never cost the frame its cursor. */
+        if (pal && pk->map_pxw > 0 && pk->map_pxh > 0) {
+            const TAGPU_PK_BOARD* bh = tagpu_pk_board(pk);
+            const TAGPU_PK_BDMARK* bm = bh ? tagpu_pk_bdmarks(pk) : NULL;
+            const int black = bh ? bh->black : 0;
+            const float bk[4] = { pal[4 * black] / 255.0f, pal[4 * black + 1] / 255.0f,
+                                  pal[4 * black + 2] / 255.0f, 1.0f };
+            unsigned k, quads = 0, pings = 0;
+            for (k = 0; bm && k < pk->n_bdmark; k++) {
+                int ci = bm[k].colour, wx = bm[k].x;
+                int wz = bm[k].z - (bm[k].h >= 0 ? bm[k].h / 2 : -((1 - bm[k].h) / 2));
+                const float fc[4] = { pal[4 * ci] / 255.0f, pal[4 * ci + 1] / 255.0f,
+                                      pal[4 * ci + 2] / 255.0f, 1.0f };
+                float cx, cy, r;
+                if (bm[k].flags & TAGPU_PK_BDM_EDGE) continue;
+                if (quads + 2u > TAGPU_GUI_SDRAW_BOARD) break;
+                if (wx < 0) wx = 0; else if (wx > pk->map_pxw) wx = pk->map_pxw;
+                if (wz < 0) wz = 0; else if (wz > pk->map_pxh) wz = pk->map_pxh;
+                cx = (float)mx + (float)((double)wx * mw / pk->map_pxw);
+                cy = (float)my + (float)((double)wz * mh / pk->map_pxh);
+                r = (bm[k].flags & TAGPU_PK_BDM_CURSOR) ? 1.5f : 2.0f;
+                mir_sdraw(TAGPU_GUISK_FLAT, (cx - r - 1.0f) * kx, (cy - r - 1.0f) * ky,
+                          (cx + r + 1.0f) * kx, (cy + r + 1.0f) * ky, 0, 0, 0, 0, bk, 0);
+                mir_sdraw(TAGPU_GUISK_FLAT, (cx - r) * kx, (cy - r) * ky, (cx + r) * kx,
+                          (cy + r) * ky, 0, 0, 0, 0, fc, 0);
+                quads += 2u;
+                if (bm[k].ping && pings < TAGPU_PK_BD_RECENT && quads + 4u <= TAGPU_GUI_SDRAW_BOARD) {
+                    const float g = 4.0f + 12.0f * (float)(TAGPU_PK_BD_PING - bm[k].ping) /
+                                           (float)TAGPU_PK_BD_PING;
+                    mir_sdraw(TAGPU_GUISK_FLAT, (cx - g) * kx, (cy - g) * ky, (cx + g) * kx,
+                              (cy - g + 1.0f) * ky, 0, 0, 0, 0, fc, 0);
+                    mir_sdraw(TAGPU_GUISK_FLAT, (cx - g) * kx, (cy + g - 1.0f) * ky, (cx + g) * kx,
+                              (cy + g) * ky, 0, 0, 0, 0, fc, 0);
+                    mir_sdraw(TAGPU_GUISK_FLAT, (cx - g) * kx, (cy - g) * ky, (cx - g + 1.0f) * kx,
+                              (cy + g) * ky, 0, 0, 0, 0, fc, 0);
+                    mir_sdraw(TAGPU_GUISK_FLAT, (cx + g - 1.0f) * kx, (cy - g) * ky, (cx + g) * kx,
+                              (cy + g) * ky, 0, 0, 0, 0, fc, 0);
+                    quads += 4u;
+                    pings++;
                 }
             }
         }

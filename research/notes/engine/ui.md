@@ -2978,7 +2978,18 @@ records 1 to the count `+0xB6` of `[top+4]`, `0x15B` bytes apart, comparing each
 bytes (`0x4E4760`, `0x4A0850`), into that record's `+0xB6`, sets `gi+0xCCA = 1` (`0x4A085E`) and
 calls `0x4A05E0(gi, index)` (`0x4A0868`). It never searches below the top screen, so it is called
 right after the opener has pushed YESORNO. One direct call in the image: `0x4265C9`. Impure calls
-it with `"TITLE"` to retitle Leave's question.
+it with `"TITLE"` to retitle Leave's question, and with `"DRAWKEY"` for the in-game panel's Draw
+key caption ([settings](../modules/settings.html)).
+
+**`0x4A05E0(gi, index)`: a button's accelerator from its caption** [DISASSEMBLED 2026-11-16,
+`0x4A05E0..0x4A07C4`]. Called by the label setter (`0x4A0868`), GUI_Load's build (`0x4A8B83`, and
+`0x4A9038` in the stage-1 build of `GUI_StageUpdateDraw`) and two setters at `0x4A09C0`/`0x4A09EB`
+(`0x4A0A57`, `0x4A0AF8`). For a type-1 button (none with `+0x1B` bit `0x10000`) whose stages
+`+0x136` are not 0 it clears the quickkey `+0x13A` (`0x4A065E..0x4A0668`); for a plain button
+(stages 0) it stores the first non-space character of the caption that no other button of the
+screen holds as its quickkey, compared through `tolower` (`0x4A06DA..0x4A07A2`). The button handler
+acts on a typed character matching it as on a click's release (`0x4A70FB..0x4A7129`), so a plain
+button whose caption changes gets a new key each time.
 
 **A screen's name, and a walk of the stack by name.** A screen's name is its record 0's,
 `[gm+4]+2`, 16 bytes: the field `GUICONTROL_IsOnTop 0x4AB060` compares, and `0x4A07D0` reads at
@@ -3210,10 +3221,12 @@ entry, on the game thread ([GUI gadgets](../gui-gadgets.html) §2.4.1).*
   `id == 2` record whose `assoc` equals the slider's (`0x4A3F37..0x4A3F4A`), tests no active
   flag, and returns 0 on a miss. The arrows' scan for their slider (`0x4A6FA4`) is the same
   shape for `id == 4`, and `GUI_FindGadgetByName 0x49FE60` loops to the same count.
-- **The engine has no wheel of its own.** Its window procedure dispatches `0x200..0x206` only
-  (the table at `0x4B5E3B`, the bound at `0x4B5E41`), so `WM_MOUSEWHEEL` falls to
-  `DefWindowProcA` ([gpu-status](../gpu-status.html) §2.3). Both wheels — the zoom's and the
-  list's — live in our window procedure.
+- **The engine has no wheel and no middle button of its own.** Its window procedure dispatches
+  `0x200..0x206` only: `lea eax,[esi-0x200]` at `0x4B5E3B`, the bound `cmp eax,6` at `0x4B5E41`
+  with `ja 0x4B5FA8` past it, and the jump through the table at `0x4B60F4` at `0x4B5E4A`
+  [DISASSEMBLED]. So `WM_MOUSEWHEEL` and the middle button's `0x207..0x209` fall to the default
+  arm ([gpu-status](../gpu-status.html) §2.3). Both wheels — the zoom's and the list's — and the
+  drawing board's middle click ([board](../modules/board.html)) live in our window procedure.
 
 ### SELMAP's map preview — `0x444A20` [DISASSEMBLED + MEASURED 2026-09-26]
 

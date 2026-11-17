@@ -443,10 +443,15 @@ filed design against the spec:
 |---|---|---|
 | `row_one` | 250 × 27.49 | 250 × 27 |
 | `head_one` | 250 × 23.29 | 250 × 23 |
-| `foot_one` | 204 × 36.48 | 204 × 36 |
+| `foot_one` | 204 × 36.48 | 204 × 36 (five bays; the sixth is spliced, below) |
 | `tp_one` | 284 × 46.6 | 284 × 46 |
 | `rail_forks` | 456 × 43.99 | 456 × 44 |
 | `win_one` | 428 × 274.1 | 428 × 272 |
+
+`foot_one` holds six bays at 244.078 × 36.48 units: the painted plate's second bay with the gap
+after it (x 41.28..81.36 units, cut at the middle of the gaps on either side) is copied once more
+after it, the seam crossfaded over 25 px of the filed image in premultiplied colour, and the kit's
+`xs` bands and `wells` follow the copy (`bay_marks` is the fifth well). No art was repainted.
 
 `rail_one` was painted 420 × 46.51 against 420 × 46. It is now 338.88 units long (*Seamless
 middles*).

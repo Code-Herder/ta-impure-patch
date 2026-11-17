@@ -426,7 +426,7 @@ static void signed_text(C* c, const char* a, const char* b, R box_, const char* 
 
 /* ---- the controls -------------------------------------------------------------------------- */
 
-static const char* const TOGGLES[] = { "stats", "cursors", "clicks", "selections", "chat" };
+static const char* const TOGGLES[] = { "stats", "cursors", "clicks", "selections", "chat", "marks" };
 
 unsigned tagpu_hudlay_toggle(const char* name)
 {
@@ -1652,15 +1652,53 @@ static void picker(C* c)
    drawn, dark; while a resource is under `stall` of its storage and, with the rates known, its
    spending is above its income, it blinks: lit for the first half of every `period` of the wall
    clock (st->wall) and dark for the second; its parts carry their glow, `glow` round the painting's
-   box -------------------------------------------------------------------------------------------- */
+   box. Under the cells, the board's row (board()) -------------------------------------------------- */
 
 static void give(C* c, const HUDSEAT* q, R cb);
+
+/* The board's row of ally q's chip, its box rb: Mute and Last marker at its right, each a control
+   over the chip's own, and the ally's activity in the room to their left. Mute is pressed while
+   on; Last marker is disabled while the ally has no marker shown, and its box is then a control
+   that runs nothing (ally_off), so the click does not fall through to the chip's give. An out
+   ally's chip has no row: it is one group already, and a disabled button's group would end it. */
+static void board(C* c, const TJV* Bd, const HUDSEAT* q, R rb)
+{
+    const TJV *Bt = obj(c, Bd, "button"), *Mu = obj(c, Bd, "mute"), *La = obj(c, Bd, "last"), *Ac = obj(c, Bd, "act");
+    double bw = num(c, Bt, "w"), bg = num(c, Bt, "gap");
+    char mk[HUD_KEYLEN], lk[HUD_KEYLEN];
+    BTN b;
+    PL p;
+    if (q->act == HUD_ACT_DRAW || q->act == HUD_ACT_ERASE) {
+        memset(&p, 0, sizeof p);
+        text(c, str(c, Ac, q->act == HUD_ACT_DRAW ? "drawing" : "erasing"),
+             box(rb.x, rb.y, rb.w - 2 * bw - bg - num(c, Bd, "gap"), rb.h), str(c, Ac, "style"), &p, q->colour, 0);
+    }
+    snprintf(mk, sizeof mk, "%s:%d", str(c, Mu, "act"), q->id);
+    snprintf(lk, sizeof lk, "%s:%d", str(c, La, "act"), q->id);
+    memset(&b, 0, sizeof b);
+    b.key = mk;
+    b.icon = obj(c, Bt, "icon");
+    b.icon_name = str(c, Mu, "icon");
+    b.tip = tj_str(tj_get(Mu, q->mute ? "on_tip" : "tip"), NULL);
+    button(c, &b, Bt, box(rb.x + rb.w - 2 * bw - bg, rb.y, bw, rb.h), q->mute);
+    memset(&b, 0, sizeof b);
+    b.key = lk;
+    b.icon = obj(c, Bt, "icon");
+    b.icon_name = str(c, La, "icon");
+    b.tip = tj_str(tj_get(La, "tip"), NULL);
+    if (!q->last) {
+        b.off = num(c, obj(c, obj(c, c->L, "proposed"), "allies"), "off");
+        hot(c, box(rb.x + rb.w - bw, rb.y, bw, rb.h), "ally_off");
+    }
+    button(c, &b, Bt, box(rb.x + rb.w - bw, rb.y, bw, rb.h), 0);
+}
 
 static void allies(C* c)
 {
     const HUDSTATE* st = c->st;
     const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *Ce = obj(c, A, "cell"), *Lp = obj(c, A, "lamp");
     const TJV *Nm = obj(c, A, "name"), *Sb = obj(c, Ce, "strip"), *Rt = obj(c, Ce, "rates"), *Mk = obj(c, Ce, "mark");
+    const TJV* Bd = obj(c, A, "board");
     double mw = num(c, Mk, "w"), mover = num(c, Mk, "over"), munder = num(c, Mk, "under"), medge = num(c, Mk, "edge");
     uint32_t mrgb = hexrgb(str(c, Mk, "colour")), mergb = hexrgb(str(c, Mk, "edge_colour"));
     double w = num(c, A, "w"), h = num(c, A, "h"), gap = num(c, A, "gap"), r = num(c, A, "r");
@@ -1739,6 +1777,10 @@ static void allies(C* c)
             art(c, str(c, Lp, stalled && lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
         }
         if (q->out) group_end(c);
+        else {
+            p = spec(Bd);
+            board(c, Bd, q, at(place(c, &f, &p), b.x, b.y));
+        }
     }
     if (open >= 0) give(c, &st->seat[open], ob);
 }
@@ -2229,8 +2271,10 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     l->live_hot = 3;
     if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
     if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
-    l->allies_hot = HUD_MAXSEAT + 5;                            /* a chip a seat; give(): the plate,
-                                                                   two sliders, Send; the rewind's button */
+    l->allies_hot = 4 * HUD_MAXSEAT + 5;                        /* a seat: its chip, and board()'s Mute,
+                                                                   Last marker and that one's ally_off;
+                                                                   give(): the plate, two sliders, Send;
+                                                                   the rewind's button */
     if (l->live_hot > n) n = l->live_hot;
     return c.bad ? -1 : n > l->allies_hot ? n : l->allies_hot;
 }
@@ -2289,7 +2333,8 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     }
     st->nteam = 3;
     st->folded = 4;
-    st->toggles = HUD_TOG_STATS | HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+    st->toggles = HUD_TOG_STATS | HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT |
+                  HUD_TOG_MARKS;
     st->sight = 0; st->follow = -1;
     strcpy(st->toast, "toast");
     st->nmark = 3;

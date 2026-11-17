@@ -7055,7 +7055,7 @@ def cmd_replay_timelines(args):
         sys.exit(1)
 
 
-REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat")
+REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat", "marks")
 
 
 def cmd_replay_overlay(args):

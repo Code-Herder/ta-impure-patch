@@ -377,6 +377,11 @@ void  tagpu_zoom_level_end(char* ta);
    written goes to outX, outY. Returns 0, writing nothing, when main is not
    sane. */
 int   tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY);
+/* A jump the player asked for (the drawing board's): tagpu_zoom_place_eye, and the engine's unit
+   follow (a Ctrl+C) released where the eye is written, as the replay's Jump releases it, so the
+   per-frame stepper does not move the target back to the followed unit. The scenario camera
+   releases nothing. Game thread; 0, writing nothing, when main is not sane. */
+int   tagpu_zoom_jump_eye(char* ta, int x, int y);
 
 /* ---- game thread: the replay's Follow and Jump ------------------------ */
 

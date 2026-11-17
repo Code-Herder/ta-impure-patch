@@ -1172,6 +1172,7 @@ static int pl_act(WIKIREPLAY* r, int c, int value)
     case WIKI_HUD_CLICKS: r->tog ^= HUD_TOG_CLICKS; break;
     case WIKI_HUD_SELECTIONS: r->tog ^= HUD_TOG_SELECTIONS; break;
     case WIKI_HUD_CHAT: r->tog ^= HUD_TOG_CHAT; break;
+    case WIKI_HUD_MARKS: r->tog ^= HUD_TOG_MARKS; break;
     case WIKI_HUD_STATS: r->stat_open = !r->stat_open; break;
     case WIKI_HUD_CLOSE: r->stat_open = 0; break;
     case WIKI_HUD_CHIP:

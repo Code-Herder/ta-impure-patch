@@ -157,11 +157,11 @@ typedef struct TAGPU_MKDRAW {
                                    TAGPU_MK_TEX_ART and TAGPU_MK_TEX_ICON    */
 } TAGPU_MKDRAW;
 
-/* THE LIST'S CAP. A full frame records 16 draws -- the selection rects, the
+/* THE LIST'S CAP. A full frame records 20 draws -- the selection rects, the
    icons, the order art and lines, the labels, the bars, the digits, the
-   cursor, the placement, four of the sweep and three of the overlays -- and a
-   draw past the cap drops the whole marker layer for the frame (`mk_draw`), so
-   the cap keeps room above that. */
+   cursor, the placement, four of the sweep, four of the drawing board and
+   three of the overlays -- and a draw past the cap drops the whole marker
+   layer for the frame (`mk_draw`), so the cap keeps room above that. */
 #define TAGPU_MK_MAXDRAW 24
 
 typedef struct TAGPU_MKHAND {

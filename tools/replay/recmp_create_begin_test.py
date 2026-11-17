@@ -33,6 +33,9 @@ room must show both AI rows named `ImpAI:` (IMPAI_NAME; a name reaches the other
 DirectPlay, so the read waits up to LABEL_S for it); once the level is up, each peer's level init
 must mark its own AI record and name the other's among the other peers' ImpAI seats (IMPAI_SEATS:
 the host 2, the joiner 3). Every other check is the same game's.
+--marks has each human hold the drawing board's key and draw a line and a pin (MARKS, below), and
+waits until each peer has applied the other's (`recmp: remote marks`), so the recording carries
+the recording machine's own marks and the ones it received.
 """
 import argparse
 import hashlib
@@ -224,8 +227,13 @@ def dump_stacks(instances, owned, output):
                     f.write(f"winedbg failed: {error}\n")
 
 
+# the drawing board's gesture each human makes: hold `\`, drag a line, a middle click for a pin
+MARKS = ("down:backslash", "mouse:400,300", "down:lbutton", "mouse:450,320", "mouse:500,340",
+         "up:lbutton", "mouse:600,400", "down:mbutton", "up:mbutton", "up:backslash")
+
+
 def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None,
-        impai=False, allies=False):
+        impai=False, allies=False, marks=False):
     """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
     memory cap refused it an allocation (talog.cap_failure), read from its whole log once the game
     has ended, whether the game passed or not."""
@@ -384,6 +392,12 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 for name in owned:
                     command(sys.executable, cli, "keys", name, "ctrl+a", "pclick:512,384")
                 print("each human selected and clicked", flush=True)
+            if marks:
+                for name in owned:
+                    command(sys.executable, cli, "keys", name, *MARKS)
+                wait_for(lambda: all("recmp: remote marks" in talog.run_text(instances / n / "gamedir")
+                                     for n in owned), "a peer applied none of the other's marks", 60)
+                print("each human drew, and each peer applied the other's marks", flush=True)
 
             def gametime():
                 out = command(sys.executable, cli, "peek", host, tareplay.GAMETIME, "--json", timeout=60)
@@ -464,6 +478,7 @@ def main():
                         help="the instances' names carry it: one each game a run plays at once")
     parser.add_argument("--impai", action="store_true",
                         help="both hosted AIs ImpAI's, by the battle room's first step (netai=impai)")
+    parser.add_argument("--marks", action="store_true", help="the humans draw on the board (MARKS)")
     parser.add_argument("--allies", action="store_true",
                         help="the two humans allied both ways (each still fights its own AI): the "
                              "allies' ribbon reads each other's economy from the channel")
@@ -480,7 +495,7 @@ def main():
     refused, failed = {}, False
     try:
         run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
-            args.label, refused, args.impai, args.allies)
+            args.label, refused, args.impai, args.allies, args.marks)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
         failed = True

@@ -39,7 +39,8 @@ int tagpu_recmp_stream_put(RecMpStream* s, const RecMpHeader* h,
         next.ended = seal.final;
     } else {
         if ((h->kind != RECMP_RESOURCES && h->kind != RECMP_ORDERS && h->kind != RECMP_PLAYER && h->kind != RECMP_SEATS && h->kind != RECMP_UNITS && h->kind != RECMP_NAMED && h->kind != RECMP_ROOTS && h->kind != RECMP_EXPLORED && h->kind != RECMP_TEXT &&
-             h->kind != RECMP_POV && h->kind != RECMP_CLICK && h->kind != RECMP_SELECT) ||
+             h->kind != RECMP_POV && h->kind != RECMP_CLICK && h->kind != RECMP_SELECT &&
+             h->kind != RECMP_MARK) ||
             (s->has_seal && h->tick <= s->sealed_tick) ||
             UINT64_MAX - s->data_bytes < h->bytes) return 0;
         next.data_bytes += h->bytes;

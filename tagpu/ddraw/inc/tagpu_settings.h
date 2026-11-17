@@ -76,6 +76,10 @@ typedef enum {
     TS_NETAI,       /* 1 impai | 0 ota: the battle room's first computer step for the
                        seats this peer adds (tagpu_skirmish.c). Answered under
                        tagpu_defaults.off too: tagpu_settings_netai                 */
+    TS_MARKLIFE,    /* 60 | 0: the drawing board's marks fade after this many seconds of game
+                       time, 0 until erased (tagpu_board.c) */
+    TS_DRAWKEY,     /* a virtual key tagpu_settings_drawkey_ok takes: the drawing board's key,
+                       0xDC (VK_OEM_5, `\` on a US layout) by default */
     TS_NKEYS
 } TagpuSetting;
 
@@ -257,6 +261,19 @@ void tagpu_settings_icons(int* scale, int* dist, int* fade);
    distance. The store's, else 1; 0 under tagpu_defaults.off, whose frame is the stock one at 1x.
    Any thread; the render thread asks every frame, the pick every hover query. */
 int  tagpu_settings_radardots(void);
+/* The drawing board's lifetime (TS_MARKLIFE), seconds of game time, 0 until erased: the store's;
+   60 when the store is ignored (tagpu_defaults.off) or not read. Each player's own: nothing sends
+   it, so allies can keep marks for different times. Game thread, every frame. */
+int  tagpu_settings_marklife(void);
+/* The drawing board's key (TS_DRAWKEY), a virtual key: the store's; 0xDC when the store is ignored
+   or not read. Any thread. */
+int  tagpu_settings_drawkey(void);
+/* Whether `vk` may be the draw key: a keyboard key (0x08..0xFE) other than Esc, which ends a
+   binding; Tab, which opens the options; Return and Backspace, which the board's text box reads;
+   the modifiers (Shift, Ctrl, Alt, the Windows keys), which a held key's combinations need; Caps,
+   Num and Scroll Lock, which toggle; F10, which arrives as WM_SYSKEYDOWN; and Print Screen, which
+   sends no key-down. */
+int  tagpu_settings_drawkey_ok(int vk);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing
    there is -- on, the present waits for the vertical blank and the limiter

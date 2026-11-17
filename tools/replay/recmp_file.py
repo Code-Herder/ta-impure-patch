@@ -9,6 +9,84 @@ RECMP_POV_PLAYER = 0xFF
 REC_POV_ZOOM_MIN, REC_POV_ZOOM_MIN_26 = 1024, 16384   # rec_pov_zoom_min: format 26's is 0.25
 
 
+
+BOARD_TEXT, BOARD_COORD = 60, 0x100000
+
+
+def board_ops(body):
+    """tagpu_boardwire_check: a RECMP_MARK body, its version, seat and operations, as a list of
+    (code, id, a, b, text), with the rights mask as a sixth field for EDIT, MOVE, DELETE and ERASE;
+    ValueError when it is not one (tagpu_boardwire.h)."""
+    if len(body) <= 2 or body[0] != 1 or body[1] >= 10:
+        raise ValueError("drawing-board body head")
+    seat, at, ops = body[1], 2, []
+
+    def coords(n):
+        nonlocal at
+        if len(body) - at < 4*n:
+            raise ValueError("drawing-board operation span")
+        v = struct.unpack_from(f"<{n}i", body, at)
+        at += 4*n
+        if any(not -BOARD_COORD <= c <= BOARD_COORD for c in v):
+            raise ValueError("drawing-board coordinate")
+        return v
+
+    def ident():
+        nonlocal at
+        if len(body) - at < 4:
+            raise ValueError("drawing-board operation span")
+        (i,) = struct.unpack_from("<I", body, at)
+        at += 4
+        if i >> 24 >= 10 or not i & 0xFFFFFF:
+            raise ValueError("drawing-board marker id")
+        return i
+
+    def may():
+        nonlocal at
+        if len(body) - at < 2:
+            raise ValueError("drawing-board operation span")
+        (m,) = struct.unpack_from("<H", body, at)
+        at += 2
+        if m >> 10:
+            raise ValueError("drawing-board rights")
+        return m
+
+    def text():
+        nonlocal at
+        if at >= len(body) or body[at] > BOARD_TEXT or len(body) - at - 1 < body[at]:
+            raise ValueError("drawing-board text span")
+        t = body[at+1:at+1+body[at]]
+        at += 1 + body[at]
+        if any(not 0x20 <= c <= 0x7E for c in t):
+            raise ValueError("drawing-board text glyph")
+        return t.decode("ascii")
+
+    while at < len(body):
+        code = body[at]
+        at += 1
+        if code == 1:
+            i = ident(); a = coords(3); t = text()
+            if i >> 24 != seat:
+                raise ValueError("drawing-board marker of another seat")
+            ops.append((code, i, a, None, t))
+        elif code == 2:
+            i = ident(); m = may(); ops.append((code, i, None, None, text(), m))
+            continue
+        elif code == 3:
+            i = ident(); m = may(); ops.append((code, i, coords(3), None, None, m))
+            continue
+        elif code == 4:
+            i = ident(); ops.append((code, i, None, None, None, may()))
+            continue
+        elif code == 5:
+            v = coords(6); ops.append((code, None, v[:3], v[3:], None))
+        elif code == 6:
+            m = may(); ops.append((code, None, coords(3), None, None, m))
+            continue
+        else:
+            raise ValueError("drawing-board operation code")
+    return ops
+
 class Roster:
     """Copied bounded rows; a source roster may order the same identities differently."""
     def __init__(self, raw):
@@ -148,7 +226,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+            elif kind in (1, 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -555,6 +633,10 @@ class History:
                 if not proof:
                     self.orders[slot, which] = state.copy()
                 stage["active"] = False
+        elif kind == 16:
+            # opaque, as tagpu_recmp_history.c keeps it: a body the live game dropped is kept
+            if origin not in self.source_maps:
+                raise ValueError("drawing-board operations precede their source roster")
         elif kind == 4:
             if (self.stages.get(origin, {}).get("active") or origin in self.explored_stages or
                     origin in self.selection_stages):

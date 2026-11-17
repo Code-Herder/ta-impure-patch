@@ -156,8 +156,14 @@ energy is under 2 % of its storage it blinks: lit for the first half of every 0.
 thread's wall clock, so it blinks on while the game is paused. With the allies' rates the lamp also
 needs that resource's spending above its income; without them it is the 2 % test alone. The lit part carries its red glow round the painting.
 
+**The board's row.** Under the cells of an ally still in the game: what the ally is doing on the
+drawing board, `DRAWING...` or `ERASING...` in its colour, at the left; Mute (the eye icon, pressed
+while on) and Last marker (the pin) at the right, 11-unit `lane_button` squares 1.5 apart. What
+they do is the board's ([board](board.html), *Finding marks*); the publisher's fill reads them per
+ally from `tagpu_board_ally` into the HUD record (`ally_mute`, `ally_last`, `ally_act`).
+
 **Where.** Right-aligned under the top bar, the first row 4 units below its lower edge and 6.667 from
-the screen's right; chips 85.333 × 45.333 units with 3.333 between chips and between rows. A row
+the screen's right; chips 85.333 × 59.333 units with 3.333 between chips and between rows. A row
 holds as many chips as fit between the side panel (plus 4 units) and the screen's right; the rest
 wrap to rows below, each right-aligned. A HUD unit is the replay HUD's (the viewport height / 720 ×
 its scale, the `replayhud` setting), so the HUD scale applies, and the top bar's height is the
@@ -165,7 +171,9 @@ engine's at the game's HUD scale.
 
 **Input.** Each chip is a control of the HUD's hit map (key `ally:<record index>`, the index on
 this peer, which numbers itself 0; `ally_off` for an ally out of the game): a press on it is the
-HUD's, not the world's, and opens the give panel on that ally, or closes it when it is open there. As for the HUD's other modes, the hit test
+HUD's, not the world's, and opens the give panel on that ally, or closes it when it is open there.
+The board row's buttons are controls over the chip's (`amute:<index>`, `alast:<index>`, and
+`ally_off` over a disabled Last marker), painted after it, so the hit map tests them first. As for the HUD's other modes, the hit test
 is in client pixels on both input paths, and the HUD takes no press while a menu covers the world.
 
 **An ally out of the game.** A chip whose ally is out by the transfer's own send test (no unit alive,

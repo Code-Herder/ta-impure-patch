@@ -96,7 +96,7 @@
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
 here, and REC_FORMAT says which; this tool reads REC_FORMATS, the closed list tagpu_recfmt.h's
 rec_format_supported takes (26 and 27 differ only in the camera's smallest zoom, pov_zoom_min; 28 adds
-REC_POV_CUT to a sample's flags).
+REC_POV_CUT to a sample's flags; 29 the drawing board's RECMP_MARK contributions).
 A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
@@ -158,8 +158,8 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 28                           # REC_POV_CUT in a sample's flags: the mega map's cut
-REC_FORMATS = (26, 27, REC_FORMAT)            # what a reader takes (rec_format_supported)
+REC_FORMAT = 29                           # the drawing board's RECMP_MARK in a network game
+REC_FORMATS = (26, 27, 28, REC_FORMAT)            # what a reader takes (rec_format_supported)
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)

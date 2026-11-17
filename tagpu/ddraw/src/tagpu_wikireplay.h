@@ -150,13 +150,13 @@ enum { WIKI_LOG_MOVE, WIKI_LOG_DOWN, WIKI_LOG_UP, WIKI_LOG_RELEASE };
    PASS): the stats window's seven measures, the chips from WIKI_CHIP_METAL on in their order (a
    measure's index is its chip's less WIKI_CHIP_METAL) and the one a replay starts on; the samples
    a seat keeps, one at the walk's first tick and one every 30 GameTime to WIKI_GAME_END_MAX, within
-   the game HUD's series (HUD_MAXPT, TAGPU_PK_HUD_POINTS); the four overlay switches, all on at a
+   the game HUD's series (HUD_MAXPT, TAGPU_PK_HUD_POINTS); the five overlay switches, all on at a
    replay's start; a Sight request's "none" (-1 is the full map); the radar pass's 30-tick
    deadline; the pass's fog bits, one a block of the sight grid. */
 #define WIKI_STAT_MEASURES     (WIKI_NCHIP - WIKI_CHIP_METAL)
 #define WIKI_STAT_MEASURE0     (WIKI_CHIP_UNITS - WIKI_CHIP_METAL)
 #define WIKI_STAT_PTS          (WIKI_GAME_END_MAX / WIKI_REPLAY_RATE + 1)
-#define WIKI_REPLAY_TOG_ALL    (HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT)
+#define WIKI_REPLAY_TOG_ALL    (HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT | HUD_TOG_MARKS)
 #define WIKI_REPLAY_NOT_ASKED  (-2)
 #define WIKI_REPLAY_PASS       30
 #define WIKI_REPLAY_FOG        ((WIKI_SIGHT_GRID + 7) / 8)

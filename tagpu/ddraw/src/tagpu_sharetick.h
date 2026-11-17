@@ -45,6 +45,20 @@ int tagpu_share_stored(float out[2]);
    yet run. 0, and nothing asked, while that draw is not installed. Game thread. */
 int tagpu_share_give(unsigned index, float metal, float energy);
 
+/* The drawing board's audience (tagpu_board.c), for the controlled player of a level in play: a
+   bit per record whose marks they see and whose marks their operations may change -- their own,
+   their mutual allies' (tagpu_share_allies' rule, AIs included) and, for a watcher, every
+   record's; a watcher's marks are seen by watchers alone. 0 with no controlled player. Game
+   thread. */
+unsigned tagpu_share_board_seen(void);
+/* the same audience for record `c` (below the ten), whoever controls the level: a replay's Sight
+   seat (tagpu_board.c). 0 for an inactive record. Game thread. */
+unsigned tagpu_share_board_seen_by(unsigned c);
+
+/* Record `index`'s name, NUL-terminated, into out[0..cap): 1, or 0 for no level in play or a
+   record past the ten. Game thread. */
+int tagpu_share_name(unsigned index, char* out, unsigned cap);
+
 /* 1 while a press the tick took is held. */
 int tagpu_sharetick_dragging(void);
 
