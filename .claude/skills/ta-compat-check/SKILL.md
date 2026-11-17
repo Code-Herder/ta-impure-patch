@@ -115,11 +115,13 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   them apart, across runs as well. The report's column reads
   `mp ok`, `mp FAILED`, `no mp` or `-` (not played). `--mp-impai` writes `netai=impai` on both
   peers, adds one computer seat on each (named `ImpAI:` by the battle room's first step) and also
-  judges both peers' ImpAI seat lines, each naming the other's seat ImpAI's.
+  judges both peers' ImpAI seat lines, each naming the other's seat ImpAI's, and each peer's seat by
+  its last pulse: it gave orders and completed a unit (the game plays at least 130 s for it).
 - **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
   each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
   the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
-  lines, no `could not`, no refused turn). The seats go under the registry root the game itself
+  lines, no `could not`, no refused turn, and by its last pulse it gave orders and completed a unit;
+  at least 130 s for that pulse). The seats go under the registry root the game itself
   reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
   skirmish on another map, other seats or another Difficulty fails by name. The single-player
   battle saves and checks its map the same way: a battle on another map fails by name. ImpAI unavailable fails unless the setup says

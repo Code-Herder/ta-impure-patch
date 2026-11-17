@@ -817,6 +817,20 @@ class NoDraw(unittest.TestCase):
             self.place(g, False)
             self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
 
+    def test_close_leaves_no_test_lever(self):
+        # a ladder's or a fixture's income lever and ImpAI's levels die with the worker, not in the next launch
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for name in ("tagpu_impai_income.on", "tagpu_impai_level.on", tareplay.NODRAW_LEVER, "keep.txt"):
+                (g / name).write_text("x")
+            w = tareplay.Worker.__new__(tareplay.Worker)
+            w.name, w.gamedir = "tareplay-test", g
+            w.hold_lever, w.stop_display, w.lock = Mock(), Mock(), Mock()
+            with patch.object(tareplay, "tacli", return_value=(0, "")):
+                w.close()
+            self.assertEqual(sorted(x.name for x in g.iterdir()), ["keep.txt"])
+
     def test_a_worker_has_no_draw_unless_it_asks(self):
         self.assertFalse(tareplay.Worker.nodraw)
 

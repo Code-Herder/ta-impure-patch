@@ -47,6 +47,7 @@
 #include "tagpu_allypanel.h"
 #include "tagpu_seatcontact.h"
 #include "tagpu_impai.h"
+#include "tagpu_income.h"
 #include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
@@ -340,6 +341,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: ImpAI's test levers (tagpu_impai.h), read before the registry closes its lever list
            for the same reason; the install below acts on them. */
         tagpu_impai_levers();
+
+        /* tagpu: the handicap ladder's income lever (tagpu_income.h): reads tagpu_impai_income.on before the
+           registry closes its lever list, and redirects the economy pass's call 0x46555A, byte-matched,
+           disjoint from every site above; with no lever every seat's pass runs as stock. */
+        tagpu_income_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever

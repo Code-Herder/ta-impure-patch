@@ -121,7 +121,9 @@ names the gap). The hives are private because the store `tacli` keeps
   With `--mp-impai` each peer writes `netai=impai` and adds one computer seat in the battle room
   (the host `PLAYER2` twice, Unused → Blocked → AI; the joiner `PLAYER3` once), and the game is
   also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
-  and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name. The peers' unit counts are not compared: the
+  and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name; and each peer's own seat
+  is held to **the claim**: by its last pulse line (`impai: pulse`, once a game minute a seat, its counts since the level began) the seat gave orders (`mroots` + `eroots`) and completed a unit (`built`); a turn taken alone does not show that the seat played (`impai_claim_misses`). The claim needs a pulse, so the game is played
+  past `IMPAI_CLAIM_TICKS` (3900, two game minutes and a margin) whatever `--mp` says. The peers' unit counts are not compared: the
   game is not lockstep — only a unit's owner decides its death and the other peer applies it when
   the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
   two counts read at one GameTime differ by whatever is in flight, which depends on load. Nor are
@@ -167,7 +169,8 @@ names the gap). The hives are private because the store `tacli` keeps
   game time an end scenario keeps one unit of record 1 and turns it back on, so the level ends and
   its teardown writes ImpAI's level-end lines. **Judged by ImpAI's own lines**: the seat line
   marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
-  refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
+  refused turn, record 1 took turns, and **the claim**: by its last pulse line (`impai: pulse`, once a game minute a seat, its counts since the level began) the seat gave orders (`mroots` + `eroots`) and completed a unit (`built`); a turn taken alone does not show that the seat played. The stage is played past
+  `IMPAI_CLAIM_TICKS` (130 s) whatever SECONDS says; the survey plays none and asks no claim. A seat line that marks nothing is **ImpAI unavailable**, the
   reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
   failure unless the setup's expectation says `"impai": "unavailable"`. **Content that did not fit is
   a failure whatever the setup accepts**, named by its line: ImpAI's content is all or none
@@ -175,8 +178,8 @@ names the gap). The hives are private because the store `tacli` keeps
   weapons or types overflow the fight tables (`impai: fight none: … do not fit the tables …`) or whose
   menus overflow theirs (`impai: menus past their tables …`) has no ImpAI seat, and the stage says
   which table rather than reading the empty mark as an accepted gap (`IMPAI_NOFIT`).
-  `tools/impai/netai_check.py` fails the same lines on either peer. Pulse lines are counted
-  and reported, not judged: the military writes one a seat once a game minute. `--impai-seat ota`
+  `tools/impai/netai_check.py` fails the same lines on either peer. The pulse count is also
+  reported. The claim's checks are tested offline in `tools/test_compat_impai.py`. `--impai-seat ota`
   plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
   `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`
   (unavailable and accepted) or `-`.

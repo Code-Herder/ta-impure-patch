@@ -23,7 +23,10 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
     m:<row> ImpAI Hard (no limits) against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard: THE MIRROR
     n:<row> ImpAI on Normal's row NORMAL_ROW against ImpAI on the persona row PERSONA_ROWS[row], Difficulty Hard:
            THE MIRROR, which decides Easy's row once Normal's is chosen
-    dry    OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
+    h:<m>  ImpAI Hard against OTA AI, Difficulty Hard, OTA AI's production times m (the income lever): THE HANDICAP
+    g:<a>.<b> ImpAI against ImpAI, Difficulty Hard, A on the settings a and B on b, each a PERSONA_ROWS row or H,
+           the DLL's Hard with no persona lever: THE GAUNTLET
+    dry   OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
            rate before ImpAI fights
 
 eota, nota and hota are 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A
@@ -36,7 +39,21 @@ game n = 2b - 1 (A at the map's first start) and 2b (its second) of each map, wi
 map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each once every four blocks.
 `ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games and a list cut there is
 whole blocks. The blocks a pair is played to are its run set's: eoh and noh 12 (120 games), ne and hn 10, a
-calibration row 4, a mirror pair 10 (`ids --blocks N` for more, as THE ORDERING's third look asks of the ladder's).
+calibration row 4, a mirror pair 10, a handicap pair 2, a gauntlet pair 2 (`ids --blocks N` for more, as THE
+ORDERING's third look asks of the ladder's).
+
+THE GAUNTLET. `g:<a>.<b>` seats ImpAI on two settings, each through the persona lever (H: none, the DLL's Hard), every
+ImpAI seat at the level lever's `hard`, and plays the development pool, so no settings row is chosen on the maps
+that judge it. tools/impai/gauntlet.py plays a candidate's pairs against a pool of earlier champions and judges
+them; `judge` reports a gauntlet pair's points and judges nothing.
+
+THE HANDICAP. `h:<m>` gives OTA AI's seat the income lever tagpu_impai_income.on at m (tagpu/ddraw/src/
+tagpu_income.c: the seat's production times m at every economy pass, m three places in 1.000..8.000), so one
+multiplier is one pair, its games their own seeds; a game could not run unless the level init's `income: seat=`
+lines name exactly the seats the game armed, at their multipliers (incomes). Its two blocks are one look of the
+handicap ladder (ladder.py), which finds the multiplier at which ImpAI Hard falls to half the points; `judge`
+reports a handicap pair's points and judges nothing. THE CHEAT FLAG reads a handicap seat's income as any other's:
+the lever's first bonus reaches the second economy pass, so the first, `income_t1`'s, is the seat's own.
 
 THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), and the rows between and
 below them (L01, L0a, L0b) and those that cut one axis from Hard's (Hlook, Hreact, Happm, Hatt), each nine
@@ -323,6 +340,17 @@ CALIBRATION = "p:"                      # a calibration pair's name: `p:<row>`
 # `n:<row>`: A on Normal's row, NORMAL_ROW, through the lever too. Each is judged as the ladder is.
 MIRROR, NORMAL_MIRROR = "m:", "n:"
 NORMAL_ROW = "L3"                       # Normal's row: the DLL's, until the calibration chooses another
+# THE HANDICAP: `h:<m>`, ImpAI Hard against OTA AI at Hard with OTA AI's production times m through the income
+# lever, m written with three places in 1.000..8.000 (the lever's own precision), so one multiplier is one pair and
+# its games one set of seeds. A look of the handicap ladder (ladder.py) is HANDICAP_BLOCKS of its blocks.
+HANDICAP = "h:"
+HANDICAP_RX = re.compile(r"h:([1-8]\.[0-9]{3})")
+HANDICAP_BLOCKS = 2
+# THE GAUNTLET: `g:<a>.<b>`, ImpAI on the settings a as A against ImpAI on b as B, each a PERSONA_ROWS row or
+# HARD_ROW, the DLL's Hard with no persona lever. A gauntlet pair is GAUNTLET_BLOCKS of its blocks by default.
+GAUNTLET = "g:"
+HARD_ROW = "H"
+GAUNTLET_BLOCKS = 2
 # THE BLOCKS: a block is every map of its pool played once from each start, 10 games on five maps; block b plays
 # game n = 2b - 1 (A at the first start) and 2b (A at the second) of each map, with the side pairing
 # BLOCK_SIDES[(the map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each
@@ -352,11 +380,17 @@ TABLE = re.compile(r"impai: table seat=(\d+) hash=([0-9a-f]{16}) from=(\w+)")
 # a seat's persona at its init, in the lever's order (tagpu_impai.c, impai_mil_init)
 PERSONA_LINE = re.compile(r"impai: persona seat=(\d+) level=\S+ look=(\d+),(\d+) react=(\d+) "
                           r"apm=(\d+)/(\d+),(\d+)/(\d+) att=(\d+),(\d+) from=(\w+)")
+# a seat's plan constants at its init when the tune lever set any (.data/impai/tune-lever-spec.md: every constant of
+# the lever's table, `<name>=<int>` in its integer encoding), `from=lever`; `from=row` when the lever set none
+TUNE_LINE = re.compile(r"impai: tune seat=(\d+) from=(lever|row) (.*)")
+# a seat the income lever armed, at the level init (tagpu_income.c, tagpu_income_level_init)
+INCOME_LINE = re.compile(r"income: seat=(\d+) mult=(\d+\.\d{3}) from=lever")
 ECO_END = re.compile(r"impai: eco seat=(\d+) (.*)")                       # the level end's (tagpu_impai.c)
 MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ (.*)")
 MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) scout=(\d+)")   # tasks begun
 LEVEL_END = "impai: handicap rows"      # every level end writes it, whoever plays (tagpu_impai_level_end)
 REC_START = re.compile(r"recorder: recording (?!timeline )(.+?\.imprec) from GameTime")
+REC_FORK = re.compile(r"recorder: recording timeline \d+ of (.+?\.imprec) from GameTime")    # a takeover's fork
 REC_CLOSED = re.compile(r"recorder: writer: (.+?\.imprec) closed:")
 RUN_SEEDS = re.compile(r"enginefix: run seeds before the creates: the wire's seed (\d+) at GameTime")      # tagpu_seed_run: only a DLL that seeds before the creates names this form
 # the second-factory decision (tagpu_impai.c, THE SECOND FACTORY): at the decision that orders it, or at the level
@@ -364,6 +398,7 @@ RUN_SEEDS = re.compile(r"enginefix: run seeds before the creates: the wire's see
 SECOND = re.compile(r"impai: second seat=(\d+) gametime=(\d+) naval=(-?\d+) chose=(sea|land|none) "
                     r"sea_site=(found|none|refused|-)")
 PASS_TICKS = 30                         # an economy pass: the income a pass is what is produced in 30 ticks
+FIRST_BONUS = 31                        # the first economy pass an income-lever bonus reaches (tagpu_income.c)
 STALL_WINDOW, STALL_FROM = 3600, 1800
 LEVER_LEVEL, LEVER_TABLE = "tagpu_impai_level.on", "tagpu_impai_table.on"
 # the pause a hold waits for: at its T, or earlier by a seat's units clause; or its T not taken
@@ -413,7 +448,8 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     """The result of `game` already in `out`, or None: a game that ran (not could_not_run) on the same setup (THE
     SETUP; none for the base game) to the same cap, on the same renderer at the same pacing (a result that names
     none was drawn), from the same seed (THE SEED; none for a game that names none), each seat with the table it is
-    to play (a seat's table_hash, where the spec names one) and on the persona row it is to play (none for none)."""
+    to play (a seat's table_hash, where the spec names one), on the persona row and the tune lever's constants it
+    is to play (none for none)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
@@ -433,8 +469,9 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
         want = game["seats"][s].get("table_hash")
         if want and (r.get("tables") or {}).get(s) != want:
             return None
-        if game["seats"][s].get("persona") != ((r.get("seats") or {}).get(s) or {}).get("persona"):
-            return None
+        for key in ("persona", "income", "tune"):
+            if game["seats"][s].get(key) != ((r.get("seats") or {}).get(s) or {}).get(key):
+                return None
     return r
 
 
@@ -449,20 +486,60 @@ def pair_spec(pair: str) -> tuple:
     if pair in PAIRS:
         diff, a, b = PAIRS[pair]
         return diff, a + (None,), b + (None,)
+    if pair.startswith(HANDICAP):
+        income_of(pair)
+        return "hard", ("impai", "hard", None), ("ai", None, None)
+    if pair.startswith(GAUNTLET):
+        a, b = gauntlet_rows(pair)
+        return "hard", ("impai", "hard", PERSONA_ROWS.get(a)), ("impai", "hard", PERSONA_ROWS.get(b))
     kind = next((k for k in (CALIBRATION, MIRROR, NORMAL_MIRROR) if pair.startswith(k)), None)
     row = pair[len(kind):] if kind else None
     if row not in PERSONA_ROWS:
         raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}, or {CALIBRATION}, {MIRROR} or {NORMAL_MIRROR}<row> "
-                       f"of {', '.join(PERSONA_ROWS)}")
+                       f"of {', '.join(PERSONA_ROWS)}, or {HANDICAP}<m>")
     if kind == CALIBRATION:
         return "hard", ("impai", "hard", PERSONA_ROWS[row]), ("ai", None, None)
     a = PERSONA_ROWS[NORMAL_ROW] if kind == NORMAL_MIRROR else None
     return "hard", ("impai", "hard", a), ("impai", "hard", PERSONA_ROWS[row])
 
 
+def income_of(pair: str):
+    """OTA AI's income multiplier of a handicap pair `h:<m>` (THE HANDICAP), a float; None for any other pair.
+    BarError for an `h:` pair whose m is not three places in 1.000..8.000, the items the income lever takes
+    (level_lever.income_error)."""
+    if not pair.startswith(HANDICAP):
+        return None
+    m = HANDICAP_RX.fullmatch(pair)
+    if not m or level_lever.income_error(f"1={m.group(1)}"):
+        raise BarError(f"no pair {pair!r}: a handicap pair is {HANDICAP}<m>, m three places in 1.000..8.000")
+    return float(m.group(1))
+
+
+def gauntlet_rows(pair: str) -> tuple:
+    """(a, b), the settings of a gauntlet pair `g:<a>.<b>` (THE GAUNTLET); BarError for any other pair or a
+    setting that is neither a PERSONA_ROWS row nor HARD_ROW."""
+    rows = pair[len(GAUNTLET):].split(".") if pair.startswith(GAUNTLET) else []
+    if len(rows) != 2 or any(r != HARD_ROW and r not in PERSONA_ROWS for r in rows):
+        raise BarError(f"no pair {pair!r}: a gauntlet pair is {GAUNTLET}<a>.<b>, each {HARD_ROW} or a row of "
+                       f"{', '.join(PERSONA_ROWS)}")
+    return rows[0], rows[1]
+
+
+def gauntlet_pair(a: str, b: str) -> str:
+    """The gauntlet pair of A on the settings `a` against B on `b`; BarError for a setting no pair takes."""
+    pair = f"{GAUNTLET}{a}.{b}"
+    gauntlet_rows(pair)
+    return pair
+
+
+def handicap_pair(mult: float) -> str:
+    """The handicap pair of OTA AI's multiplier `mult`, rounded to the lever's three places."""
+    return f"{HANDICAP}{round(mult, 3):.3f}"
+
+
 def persona_pair(pair: str) -> bool:
-    """A pair that plays a persona row: a calibration row or a mirror pair."""
-    return pair.startswith((CALIBRATION, MIRROR, NORMAL_MIRROR))
+    """A pair that plays a persona row: a calibration row, a mirror pair or a gauntlet pair."""
+    return pair.startswith((CALIBRATION, MIRROR, NORMAL_MIRROR, GAUNTLET))
 
 
 def ladder_pair(pair: str) -> bool:
@@ -471,13 +548,17 @@ def ladder_pair(pair: str) -> bool:
 
 
 def block_pair(pair: str) -> bool:
-    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's, the calibration's and the
-    mirror's."""
-    return pair in BLOCKS or persona_pair(pair)
+    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's, the calibration's, the
+    mirror's and the handicap's."""
+    return pair in BLOCKS or persona_pair(pair) or pair.startswith(HANDICAP)
 
 
 def run_blocks(pair: str) -> int:
     """The blocks a block pair is played to: its run set's."""
+    if pair.startswith(HANDICAP):
+        return HANDICAP_BLOCKS
+    if pair.startswith(GAUNTLET):
+        return GAUNTLET_BLOCKS
     return BLOCKS.get(pair) or (CALIBRATION_BLOCKS if pair.startswith(CALIBRATION) else MIRROR_BLOCKS)
 
 
@@ -530,6 +611,8 @@ def parse_id(gid: str) -> dict:
         spec[s] = {"ai": ai, "level": level}
         if persona:
             spec[s]["persona"] = persona
+    if pair.startswith(HANDICAP):
+        spec["B"]["income"] = income_of(pair)
     return {"id": gid, "pair": pair, "map": m, "sides": {"A": SIDE[sides[0]], "B": SIDE[sides[1]]},
             "start": 0 if n % 2 else 1, "rep": n, "difficulty": diff, "seats": spec, "cap": CAP,
             "seed": game_seed(gid), "recordings": True}
@@ -823,6 +906,37 @@ def personas(lines, seat: dict) -> dict:
     return out
 
 
+def tunes(lines, seat: dict) -> dict:
+    """{A, B: {"from": "lever" | "row", "values": {name: int}}} of each seat of `seat` from its tune line, its
+    first: the init's."""
+    by_seat = {v: k for k, v in seat.items()}
+    out = {}
+    for ln in lines:
+        m = TUNE_LINE.search(ln)
+        if m and int(m.group(1)) in by_seat:
+            vals = {}
+            for kv in m.group(3).split():
+                k, _, v = kv.partition("=")
+                try:
+                    vals[k] = int(v)
+                except ValueError:
+                    continue
+            out.setdefault(by_seat[int(m.group(1))], {"from": m.group(2), "values": vals})
+    return out
+
+
+def incomes(lines, seat: dict) -> dict:
+    """{A, B: the multiplier} of each seat of `seat` the income lever armed, from its level init's line; a seat
+    played at x1 is absent."""
+    by_seat = {v: k for k, v in seat.items()}
+    out = {}
+    for ln in lines:
+        m = INCOME_LINE.search(ln)
+        if m and int(m.group(1)) in by_seat:
+            out.setdefault(by_seat[int(m.group(1))], float(m.group(2)))
+    return out
+
+
 def read_result(lines, seat: dict, game: dict, outcome: str, end: int, upto: int = None) -> dict:
     """What a game's result takes from its launch's log, the level ended: each seat's table hash from its
     `impai: table` line; and for each ImpAI seat its persona (personas), its stalls, its level end (level_end),
@@ -933,7 +1047,9 @@ def cheat_evidence(rs) -> list:
     """THE CHEAT FLAG over one setup's results: a line for each side on which an OTA AI seat's income at t=1
     exceeded an ImpAI seat's on that side (the first such pair of games), and one for the AI-only types OTA AI seats
     completed, with their counts and the first game of each; [] when there is none. Sides are compared with
-    themselves alone: a mod's sides' commanders can make different incomes (TA Zero's)."""
+    themselves alone: a mod's sides' commanders can make different incomes (TA Zero's). A seat the income lever armed
+    is read only from a first iteration before GameTime 31, the second economy pass, which its first bonus reaches
+    (FIRST_BONUS); a later one is left out, never compared."""
     impai, ota, types = {}, [], {}
     for r in rs:
         inc = r.get("income_t1") or {}
@@ -941,9 +1057,11 @@ def cheat_evidence(rs) -> list:
             if s not in inc or s not in (r.get("seats") or {}):
                 continue
             side = r["sides"][s]
+            armed_late = r["seats"][s].get("income") and inc.get("at", 0) >= FIRST_BONUS
             if r["seats"][s]["ai"] == "impai":
-                impai.setdefault(side, (inc[s], r["id"]))
-            else:
+                if not armed_late:
+                    impai.setdefault(side, (inc[s], r["id"]))
+            elif not armed_late:
                 ota.append((side, r.get("difficulty", "hard"), inc[s], r["id"]))
             for name, n in ((r.get("ai_only") or {}).get(s) or {}).items():
                 if r["seats"][s]["ai"] != "impai":
@@ -966,12 +1084,13 @@ def cheat_evidence(rs) -> list:
     return out
 
 
-def recording_of(lines):
+def recording_of(lines, fork: bool = False):
     """(the recording's path as the recorder logged it, its writer closed) of a launch's log; None when it
-    recorded nothing"""
+    recorded nothing. `fork`: the file a takeover appended its timeline to, not a new recording."""
     rec = None
+    start = REC_FORK if fork else REC_START
     for ln in lines:
-        m = REC_START.search(ln)
+        m = start.search(ln)
         if m:
             rec = m.group(1)
     if rec is None:
@@ -1024,6 +1143,20 @@ class Lane:
         table, _ = json.JSONDecoder().raw_decode(o[o.index("{"):])     # stderr's lines follow stdout's
         return ({u["id"]: u["name"] for u in table["units"]},
                 {u["id"]: (float(u["cost"][0]), float(u["cost"][1])) for u in table["units"]})
+
+    def hand_to_stock_ai(self, rec: int) -> None:
+        """Player record `rec`, a human's after a takeover, handed to OTA AI on the held level: cheats on, then the
+        console's `AI` command typed as a chat line (0x416280: type 1 becomes 2; research/notes/modules/impai.md,
+        *The `AI` command*), checked by the record's controller byte `+0x73` reading 2. OTA AI starts on it as it
+        starts on every other seat a takeover gives it: afresh. ImpAI's seats keep playing what they knew."""
+        R = self.R
+        rc, o = R.tacli("switches", self.w.name, "cheats=on", timeout=R.ACK_S)
+        if rc:
+            raise R.CouldNotRun(f"switches cheats=on: {R.last(o)}")
+        R.step(self.w, "type", f"+ai {rec}")
+        got = self.peek(0x1B63 + 0x14B * rec + 0x73, 1)
+        if got != 2:
+            raise R.CouldNotRun(f"the AI command left record {rec} of controller {got}, not OTA AI's 2")
 
     def peek(self, off: int, size: int) -> int:
         R = self.R
@@ -1105,8 +1238,12 @@ class Lane:
             raise BarError(f"{game['id']} is a game of {setup_label(game.get('setup'))}; this lane plays "
                            f"{setup_label((self.setup or {}).get('name'))}")
         install = self.read_install()
-        doc = game_doc(dict(game, difficulty=res["difficulty"]),
-                       start_positions(map_name(game["map"]), vfs=install["vfs"]), install["commanders"])
+        # A SITUATION's own scenario (tools/impai/exploit.py), or the bar's game; a takeover's is the recorded
+        # game's, which only the end reads
+        doc = game.get("doc") or game_doc(dict(game, difficulty=res["difficulty"]),
+                                          start_positions(map_name(game["map"]), vfs=install["vfs"]),
+                                          install["commanders"])
+        takeover = game.get("takeover")
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
         levels = [f"{seat[s]}={game['seats'][s]['level']}" for s in ("A", "B")
@@ -1129,20 +1266,52 @@ class Lane:
         self.lever(LEVER_LEVEL, levels)
         self.lever(LEVER_TABLE, tables)
         self.lever(level_lever.PERSONA_LEVER, persona)
+        income = {s: game["seats"][s]["income"] for s in ("A", "B") if game["seats"][s].get("income")}
+        self.lever(level_lever.INCOME_LEVER, [f"{seat[s]}={m:.3f}" for s, m in income.items()])
+        tune = {s: game["seats"][s]["tune"] for s in ("A", "B")
+                if game["seats"][s]["ai"] == "impai" and game["seats"][s].get("tune")}
+        for s, items in tune.items():
+            why = level_lever.tune_error(seat[s], items)
+            if why:
+                raise BarError(f"{game['id']}: the tune items of seat {s} {why} (impai_plan_ok)")
+        self.lever(level_lever.TUNE_LEVER,
+                   [ln for s, its in tune.items() for ln in level_lever.tune_lines(seat[s], its)])
         self.log = R.Log(self.w)
-        rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
-                        timeout=R.LAUNCH_TIMEOUT)
-        if rc:
-            raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
+        if takeover:
+            # A PUZZLE: the recording taken over at T as OTA AI's seat, the level held at the refresh at or before T
+            # (tacli replay takeover; tagpu_replay.c THE TAKEOVER), then that seat handed back to OTA AI below. The
+            # idle human cannot take it: the takeover refuses a player with no unit.
+            rc, o = R.tacli("replay", "takeover", self.w.name, takeover["recording"], "--at", takeover["at"],
+                            "--player", takeover["player"], "--defaults", "--restart", "--keep-dll",
+                            "--timeout", R.ACK_S, "--json", timeout=R.LAUNCH_TIMEOUT + R.ACK_S)
+            try:
+                got = json.loads(o[o.index("{"):])
+            except ValueError:
+                got = {}
+            if rc or not got.get("taken") or not got.get("held"):
+                raise R.CouldNotRun(f"replay takeover at {takeover['at']}: "
+                                    f"{got.get('line') or got.get('timeout') or R.last(o)}")
+        else:
+            rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
+                            timeout=R.LAUNCH_TIMEOUT)
+            if rc:
+                raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
         T = R.held_start(self.w, self.log)
+        if takeover:
+            self.hand_to_stock_ai(takeover["player"])
         if self.types is None:
             self.types, self.costs = self.type_table()
         res["commander_death"] = self.peek(CMDR_DEATH, 4)
         cap = res["cap"]
         outcome, end = "cap", cap
         looks = []
+        # A SITUATION's waves: each scenario applied on the level held at its GameTime, its units added
+        waves = sorted((int(t), str(f)) for t, f in game.get("waves") or ())
         while True:
-            T = self.hold(next_hold(T, cap), (seat["A"], seat["B"]))
+            want = next_hold(T, cap)
+            if waves and waves[0][0] < want:
+                want = waves[0][0]
+            T = self.hold(want, (seat["A"], seat["B"]))
             alive = {s: self.peek(REC + seat[s] * STRIDE + ALIVE, 2) for s in ("A", "B")}
             looks = (looks + [{"at": T, "seats": {s: {"alive": alive[s]} for s in ("A", "B")}}])[-2:]
             if not alive["A"] or not alive["B"]:
@@ -1153,6 +1322,11 @@ class Lane:
                 break
             if T >= cap:
                 break
+            while waves and waves[0][0] <= T:
+                _t, f = waves.pop(0)
+                rc, o = R.tacli("scenario", "apply", self.w.name, f, timeout=300)
+                if rc:
+                    raise R.CouldNotRun(f"the wave {Path(f).name} at {T}: {R.last(o)}")
         looks[-1]["seats"] = self.look(seat)
         res["looks"] = looks
         R.say(f"lane {self.j}: {game['id']}: at {T}: " + ", ".join(
@@ -1180,10 +1354,27 @@ class Lane:
             if want and (got.get("row"), got.get("from")) != (want, "lever"):
                 raise R.CouldNotRun(f"seat {s} did not play its persona {want} from the lever (its persona line: "
                                     f"{got.get('row')} from {got.get('from')})")
+        for s, items in tune.items():
+            got = tunes(lines[:upto], seat).get(s)
+            if got != {"from": "lever", "values": level_lever.tune_values(items)}:
+                raise R.CouldNotRun(f"seat {s} did not play its tune items from the lever (its `impai: tune` line: "
+                                    f"{got or 'none, a DLL without the tune lever'})")
+        armed = incomes(lines[:upto], seat)
+        if armed != income:
+            raise R.CouldNotRun(f"the income lever armed {armed or 'no seat'}, not {income or 'no seat'} (the "
+                                f"`income: seat=` lines at the level init; tagpu_income.c)")
         res["level_end_at"] = level_end_at(lines)
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
-        src = self.recording()
+        src = self.recording(fork=bool(takeover))
+        if takeover:
+            # the fork is the recording's timeline 1, which the evidence's reader, timeline 0's, does not read: a
+            # puzzle is judged by its looks alone
+            res["wall_s"] = round(time.monotonic() - t0, 1)
+            res["recording"] = self.file_recording(game["id"], src, bool(game.get("recordings")))
+            self.keep_log(game["id"])
+            R.say(f"lane {self.j}: {game['id']}: {outcome} at {end} ({res['wall_s']} s)")
+            return res
         # the values asked at fixed GameTimes (`play --values`), each one the game reached before its end: an
         # iteration at or after the end can hold the end scenario's clear
         ts = sorted(t for t in game.get("values") or () if 0 < t < end)
@@ -1226,11 +1417,12 @@ class Lane:
         self.w.stop(hard=True)
         return n
 
-    def recording(self) -> Path:
+    def recording(self, fork: bool = False) -> Path:
         """The launch's recording in the instance's replays folder, made and closed (its writer's `closed` line, the
-        line that says the file is whole): CouldNotRun otherwise, since THE CHEAT FLAG and a diagnosis read it."""
+        line that says the file is whole): CouldNotRun otherwise, since THE CHEAT FLAG and a diagnosis read it.
+        `fork`: the instance's copy of a taken-over recording, its fork appended."""
         R = self.R
-        rec = recording_of(self.log.lines)
+        rec = recording_of(self.log.lines, fork)
         if rec is None:
             raise R.CouldNotRun("the game made no recording")
         if not rec[1]:
@@ -1690,6 +1882,14 @@ def judge_blocks(pair: str, rs) -> tuple:
         if stalled:
             print(f"  stalls, each a failure (the no-stall rule): {_ids(stalled)}")
         return int(not met or bool(stalled)), 0
+    if pair.startswith(HANDICAP):
+        print(f"  against OTA AI at x{income_of(pair):.3f}: {'at or above' if mean >= 0.5 else 'below'} half the "
+              f"points, reported; the ladder (ladder.py) reads every look's games together")
+        return 0, 0
+    if pair.startswith(GAUNTLET):
+        a, b = gauntlet_rows(pair)
+        print(f"  {a} against {b}: A's points reported; the gauntlet (gauntlet.py) judges a candidate's pairs together")
+        return 0, 0
     easy = ("in it" if EASY_BAND[0] <= mean <= EASY_BAND[1] else
             "above it, a harsher row" if mean > EASY_BAND[1] else "below it, a softer row")
     normal = "at or above it" if mean >= NORMAL_MIN else "below it, a softer row"
@@ -1894,9 +2094,12 @@ def read_ids(arg: str) -> list:
         return ids(arg)
     except BarError:
         pass
-    p = Path(arg)
-    if p.exists():
-        return [x for x in p.read_text().split() if x]
+    try:
+        is_file = Path(arg).is_file()
+    except OSError:             # a comma list longer than a file name can be (ENAMETOOLONG) is no file
+        is_file = False
+    if is_file:
+        return [x for x in Path(arg).read_text().split() if x]
     return [x for x in arg.split(",") if x]
 
 
@@ -1907,10 +2110,68 @@ def default_out(a, what=None) -> Path:
     return a.out or TREE / ".data" / "impai" / "bar" / name
 
 
+def settings_override(items: list) -> dict:
+    """{A or B: the persona lever's row or None} of `play --persona` items `<seat>=<settings>`, each a PERSONA_ROWS
+    row, HARD_ROW (no persona: the DLL's own level) or the lever's nine integers themselves, held to
+    impai_persona_ok's rules (a tuning's candidate row); BarError for any other item or a seat named twice."""
+    out = {}
+    for item in items or []:
+        seat, _, row = item.partition("=")
+        literal = level_lever.PERSONA.fullmatch(f"1={row}") is not None
+        if seat not in ("A", "B") or seat in out or (row != HARD_ROW and row not in PERSONA_ROWS and not literal):
+            raise BarError(f"--persona {item!r}: <A|B>=<{HARD_ROW}, a row of {', '.join(PERSONA_ROWS)} or nine "
+                           f"integers>, a seat once")
+        if literal:
+            why = level_lever.persona_error(f"1={row}")
+            if why:
+                raise BarError(f"--persona {item!r} {why} (impai_persona_ok)")
+        out[seat] = PERSONA_ROWS.get(row, None if row == HARD_ROW else row)
+    return out
+
+
+def tune_override(items: list) -> dict:
+    """{A or B: {name: int}} of `play --tune` items `<seat>=<name>=<int>,...`, each seat's items held to the tune
+    lever's rules (level_lever.tune_error); BarError for any other item or a seat named twice."""
+    out = {}
+    for item in items or []:
+        seat, _, rest = item.partition("=")
+        if seat not in ("A", "B") or seat in out:
+            raise BarError(f"--tune {item!r}: <A|B>=<name>=<int>,..., a seat once")
+        try:
+            got = level_lever.parse_tune([f"1:{kv}" for kv in rest.split(",") if kv])
+        except ValueError as e:
+            raise BarError(f"--tune {item!r}: {e}") from e
+        out[seat] = got.get(1, {})
+    return out
+
+
+def with_settings(game: dict, override: dict, tune: dict = None) -> dict:
+    """`game` with each seat of `override` on its settings (settings_override): the id, and so the seed, unchanged,
+    so two settings play the same games; a result carries the seat's persona, which game_kept compares, so a result
+    of other settings is never kept. BarError for a seat ImpAI does not play."""
+    if not override and not tune:
+        return game
+    seats = {s: dict(v) for s, v in game["seats"].items()}
+    for s, persona in (override or {}).items():
+        if seats[s]["ai"] != "impai":
+            raise BarError(f"{game['id']}: --persona {s}: seat {s} is {seats[s]['ai']}, not ImpAI")
+        seats[s].pop("persona", None)
+        if persona:
+            seats[s]["persona"] = persona
+    for s, items in (tune or {}).items():
+        if seats[s]["ai"] != "impai":
+            raise BarError(f"{game['id']}: --tune {s}: seat {s} is {seats[s]['ai']}, not ImpAI")
+        seats[s].pop("tune", None)
+        if items:
+            seats[s]["tune"] = dict(items)
+    return dict(game, seats=seats)
+
+
 def cmd_play(a) -> int:
     values = [int(t) for t in a.values.split(",") if t] if a.values else []
-    return play_games([dict(parse_id(g), cap=a.cap, setup=a.setup, values=values) for g in read_ids(a.ids)], a,
-                      default_out(a))
+    override, tune = settings_override(a.persona), tune_override(a.tune)
+    return play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override, tune)
+                       for g in read_ids(a.ids)], a, default_out(a))
 
 
 def cmd_row(a) -> int:
@@ -1983,6 +2244,13 @@ def main(argv=None) -> int:
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "
                          "shorter piece's; the bar's games end at 81 000")
+    pl.add_argument("--persona", action="append", default=[], metavar="SEAT=SETTINGS",
+                    help=f"play seat A or B on the persona row SETTINGS, or {HARD_ROW} for none, in every game, the "
+                         f"ids and seeds unchanged (the paired margin test's settings arms); SETTINGS may be the "
+                         f"lever's nine integers themselves")
+    pl.add_argument("--tune", action="append", default=[], metavar="SEAT=NAME=INT,...",
+                    help="play seat A or B with these plan constants through the tune lever in every game, the ids "
+                         "and seeds unchanged (tune.py spsa; level_lever.TUNE_PARAMS)")
     pl.add_argument("--values", default=None, metavar="T,T",
                     help="also read every seat's value at these GameTimes from each game's recording, those the "
                          "game reached before its end (`values` in the result; the paired margin test's report)")

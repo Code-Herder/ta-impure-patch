@@ -28,6 +28,8 @@ Every landing follows the repository's rules: review at the level the diff calls
 
 The plan of record from 2026-11-15 on. Each item names what closes it; the [roadmap page](https://claude.ai/artifact/MUcwBo6NzUdRjquhRHbfqQ) is a view of this section, not its source.
 
+**The release freeze (owner's decisions, 2026-11-16).** The brain freezes after the fix of review `fix-review-b3e84cac` (the sea squad's retreat): one more brain commit, its review, the per-batch loop, then the release gates and the landing on `main`. The release ships with ImpAI as the default AI and its levels as they are: every level beats OTA AI at Hard (round 3: Hard 100 of 100, Normal 1.000, Easy 0.996), while Normal and Hard play about evenly against each other (`hn` 33 to 34) -- the ladder stays unmet for this release and the levels' calibration (item 2) follows it. The naval turtle, the air rush's anti-air, the exploiter puzzles and the remaining held-out maps move to after the release.
+
 1. **Per-seat contacts, and sensors to feed them.** Merge local `main` (per-seat radar and sonar, `tagpu_seatcontact_scan`, [allied sharing](../modules/allied-sharing.html), *For a skirmish AI*) and take ImpAI's contacts from the scan for its own seat -- done on `impai-brain`: no ImpAI read of `+0x110` bits 8-10 is left, and the radar self-check agrees with the scan (impai-observe, 3193 units, no mismatch). Then stand radar and sonar towers by coverage ([the brain](brain.html), *Sensors*), since no seat built one (the owner's game at 57d39d71) -- built on `impai-brain`. Closed when the regression set and the `hota` win check pass on that build.
 2. **The levels ordered.** Round 3 (57d39d71, `.data/impai/runs/r3/57d39d71/`) met Hard 100 of 100, Normal 1.000 and Easy 0.996 against OTA AI Hard (no ceiling, [the bar](bar.html), *The rules*), and row check b4. It did not order the levels:
    - **hn**: Hard won 33, lost 34, with 33 at the cap; the ordering is futile at its first look.
@@ -38,6 +40,11 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
 3. **The mods batch (A4).** Weapons rated by their real fire rate where a script times it; anti-air bought against air seen; energy per metal from each mod's own costs; TA Zero's tech graph; Lava Mania's expansion; ProTA's predictor against defences. Closed when the fair mod setups win every game and the retail regression set does not regress; the setups whose stock AI cheats are tracked apart.
 4. **The faster per-batch loop** ([testing](testing.html), *Per brain batch and at milestones*): `tools/impai/margin.py`, its tests and its live self-check. Closed when it decides a batch.
 5. **The closing gates on the final build**: the full bar, the replay landing gate, the compatibility suite with ImpAI seats (the Windows half on the owner's desktop, asked first).
+    - **The suite** plays ImpAI with `tacompat.py wine --impai [SECONDS] --mp-impai`.
+        - It holds every ImpAI seat, in the stage and on each peer of the network game, to the claim: by its last pulse the seat gave orders and completed a unit ([the suite](../compat/suite.md)).
+        - That covers every player's setup where Impure runs. `gammata-ota` does not load Impure today (its known gap), so it plays neither. `tazero-wildhunt` plays no network game, only the stage.
+    - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
+        - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
 6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
 7. **A3**, below.
 
@@ -70,10 +77,10 @@ Once ImpAI wins every fair game, counting wins measures nothing; A3's tools each
 | Tool | What it measures | What it needs |
 |---|---|---|
 | The paired margin test | a candidate against the last accepted build on the same seeds, by time to win, stopping when a sequential test decides | `margin.py` (*Next*, 4) |
-| The champion gauntlet | a build against a pool of earlier ones, so an intransitive regression shows | settings per seat today (the persona lever); code against code needs two-process network games or a two-brain build |
-| The handicap ladder | OTA AI's income bonus at which ImpAI Hard falls to 50 %: a strength number past 100 % wins | an income bonus per seat |
-| The exploiter suite | scripted air rushes, naval turtles, artillery creep, commander rushes; mid-game puzzles cut from recordings | the scenario and fork tools |
-| Automatic tuning | SPSA or CMA-ES over the hand-set constants (wave thresholds, the lead's 2.5 / 2.0, persona rows) | the paired test |
+| The champion gauntlet | a candidate against a pool of earlier champions, so an intransitive regression shows | settings per seat: `gauntlet.py` over `bar.py`'s `g:<a>.<b>` pairs, and the margin test's settings arms (`--base-row`, `--test-row`); code against code designed, not built: two-process network games recommended over a two-brain build ([the bar](bar.html), *The champion gauntlet*) |
+| The handicap ladder | m*, OTA AI's income multiplier at which ImpAI Hard falls to half the points: a strength number that rises past ×1 | `ladder.py` over the income lever, `bar.py`'s `h:<m>` ([the bar](bar.html), *The handicap ladder*; [the income lever](../modules/income-lever.html)) |
+| The exploiter suite | scripted air rushes, naval turtles, artillery creep, commander rushes; mid-game puzzles cut from recordings | `exploit.py`: the opponent is placed units with attack orders on a seat with its AI off, in waves applied to the held level; the puzzles are takeovers of the build's own recordings ([the bar](bar.html), *The exploiter suite*) |
+| Automatic tuning | SPSA or CMA-ES over the hand-set constants (wave thresholds, the lead's 2.5 / 2.0, persona rows) | the levels' rows by `tune.py levels-line`, one harshness on a line from L0b to Hard, bisected and fitted as the ladder is (built, not yet run: chosen on the brain that ships); the plan's constants by `tune.py spsa` over the tune lever (the harness built, the DLL side specified for the brain writer in `.data/impai/tune-lever-spec.md`), a plan found accepted by `margin.py --test-tune` ([the bar](bar.html), *Automatic tuning*) |
 
 **A learned component** replaces a rule only when the rules are exhausted, and only where it fits:
 

@@ -56,6 +56,8 @@ game ids `bar-<pair>-<map>-<sides>-<n>`:
 | `ne`, `hn` | ImpAI Normal, Hard (the level lever) | ImpAI Easy, Normal | Hard | 10 blocks, 100 |
 | `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
 | `m:<row>`, `n:<row>` | ImpAI Hard; ImpAI on Normal's row (the persona lever) | ImpAI on a persona row (the persona lever) | Hard | 10 blocks, 100, on the development pool |
+| `h:<m>` | ImpAI Hard | OTA AI, its production × m (the income lever) | Hard | 2 blocks, 20: a look of the handicap ladder |
+| `g:<a>.<b>` | ImpAI on the settings a (a persona row, or `H`: none, the DLL's Hard) | ImpAI on the settings b | Hard | 2 blocks, 20, on the development pool: a member of the champion gauntlet |
 | `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
 | `dry` | OTA AI | OTA AI | Hard | 10 |
 
@@ -438,6 +440,16 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`). Each block is
   one admission of the run lock an arm, both arms at once, and about 5 min of play at 6 lanes an arm on the
   reference setup; a run is as many of those as it takes to decide, about 7 for a batch that changes nothing.
+- **Settings instead of builds**: `--base-row` and `--test-row` put each arm's ImpAI seat on a persona row (or `H`,
+  none) through `bar.py play --persona A=<row>`, which keeps the ids and so the seeds. Two rows of one DLL are
+  then compared on the same games as two DLLs are. A run writes its rows to `rows.json` and refuses a directory
+  whose rows differ, and `judge` with rows refuses a result whose ImpAI seat played another persona. MEASURED
+  2026-11-16: `bar-hota-pincushion-aa-1` played with `--persona A=L3` to GameTime 3 600 logged
+  `impai: persona seat=1 ... from=lever` on L3's values, with the id's own seed (1873460876). `--base-tune` and
+  `--test-tune` do the same for the tune lever's plan constants (`<name>=<int>,...`, `bar.py play --tune`), so a plan
+  `tune.py spsa` found is judged against the champion's hand-written plan on the champion's DLL: a run writes them
+  to `tunes.json`, and `judge` refuses a result whose ImpAI seat played other items than its arm's (none for an arm
+  that names none).
 - **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the mean score, the ratio by block, its
   bounds, the reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no
   decision.
@@ -448,6 +460,260 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
   as above, +5.78 after block 1 (not read) and +21.78 after block 2, TEST is not worse; the blocks at 6 lanes
   played in 5.2 and 4.3 min on the reference setup beside round 3 of the bar. A change that alters play diverges
   its games from the first different decision, so its pairs tie only when both reach the cap.
+
+## The handicap ladder
+
+Once ImpAI wins every fair game, wins stop measuring. The ladder's number keeps moving: **m\***, the multiplier on
+OTA AI's production at which ImpAI Hard takes half the points on the bar's five maps (a win 1, a draw 0.5, a game at
+the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\* rises.
+
+- **The lever.** `h:<m>` arms OTA AI's seat with the income lever, `tagpu_impai_income.on` at m: its production
+  times m at every economy pass, credited through the player's ledger one pass after the production it multiplies,
+  gives excluded ([the income lever](../modules/income-lever.html)).
+  - m is written with three places in 1.000..8.000, the lever's own precision, so one multiplier is one pair and
+    its games one set of seeds.
+  - A game could not run unless the level init's `income: seat=` lines name exactly the seats it armed, at their
+    multipliers.
+  - The cheat flag reads an armed seat's income as any other's: the first pass, `income_t1`'s, carries no bonus.
+  - `judge` reports an `h:` pair's points and judges nothing.
+- **The method** (`tools/impai/ladder.py run --dll DLL --tag TAG`) works in x = log2(m), over the bracket [0, 3]
+  (×1 to ×8).
+  - Each look plays the bracket's midpoint, rounded to the lever's places, as the pair's two blocks: 20 games,
+    every map from both starts and every side pairing.
+  - Points of at least one half move the low end up to the look; less move the high end down.
+  - A look never plays a multiplier a look has played: when the next midpoint rounds to one, the bracket is inside
+    the lever's precision, the looks left are skipped and the fit takes those played.
+  - After six looks, a logistic p(x) = 1 / (1 + e^((x − c)/s)) is fitted over all 120 games, points as fractional
+    outcomes. A weak prior on log s (median 0.4, one unit of spread) keeps the fit finite when the looks separate
+    wins from losses outright.
+  - The result is m\* = 2^c with its 90 % interval from the fit's curvature, said to lie beyond ×8 or below ×1
+    when it does.
+- **Why bisection with a fit.** SIMULATED (`ladder.py simulate`, 300 runs a cell, the true point uniform in log2
+  0.3..2.7, ties 0.3). The figures are the RMSE of log2 m\*:
+
+  | slope (log2 m a logit unit) | 6 looks × 20 games | the last midpoint alone | 6 looks × 10 games |
+  |---|---|---|---|
+  | 0.15 | 0.030 (±2 %) | 0.049 | 0.042 |
+  | 0.3 | 0.057 (±4 %) | 0.091 | 0.078 |
+  | 0.5 | 0.091 (±6.5 %) | 0.136 | 0.122 |
+
+  In the design's simulation (looks of 16 games, no ties), a fixed grid of six with the same fit came out between
+  the two: 0.106 at slope 0.3, against 0.117 for the midpoint and 0.074 for bisection with the fit. The bisection
+  spends its games near the half point, where a game says most about c. The slope is not known before a run; the
+  fit measures it.
+- **How it runs.**
+  - A look is two pieces, one `bar.py play` a block on ten lanes. Each is one wave of ten games, well inside
+    batch.py's 600-s deadline (games to the cap took at most 346 s on the mirror's run). They are launched in order
+    through batch.py's piece runner, which stops a piece past the deadline.
+  - The DLL is copied into the run's directory at its first look, and a different one is refused, so one ladder is
+    one build.
+  - `<out>/ladder.json` keeps every finished look, so `run` again goes on from the first look not finished.
+  - A look with a game that could not run, or a cap not scored, is played once more; if it still lacks one, the run
+    stops, could not judge (exit 2).
+  - Six looks are 120 games, about twelve admissions of the run lock.
+  - Its tests, offline (`test_ladder.py`): the bisection, the multiplier's rounding, the fit on simulated games and on
+    a separated set, the report's edges, and a run on a fake player (a threshold bracketed and fitted, a draw's half
+    point, the resume, a missing game played once more then could not judge, another DLL refused); also the `h:`
+    pair's spec, its lever lines, the cheat flag and a kept result's multiplier.
+- **Measured.** The 57d39d71 brain with the lever cherry-picked (`ladder-base` 7621d396), on the bar's five maps,
+  2026-11-16, `.data/impai/runs/ladder/57d39d71/`. ImpAI Hard breaks even with OTA AI Hard at **m\* = ×1.95**
+  (90 % ×1.78..×2.14), slope 0.298 log2 a logit unit:
+
+  | look | ×m | points of 20 games |
+  |---|---|---|
+  | 1 | 2.828 | 0.150 |
+  | 2 | 1.682 | 0.650 |
+  | 3 | 2.181 | 0.525 |
+  | 4 | 2.484 | 0.200 |
+  | 5 | 2.328 | 0.225 |
+  | 6 | 2.253 | 0.300 |
+
+  The looks waited on the run lock beside other runs; the six took 2 h 10 min from the first admission.
+
+## The champion gauntlet
+
+A candidate that beats the last champion can still lose to an older one: strength among settings need not be
+transitive. The gauntlet plays the candidate against a pool of earlier champions directly, ImpAI against ImpAI in
+one build, so a regression that only one of them exposes shows. `tools/impai/gauntlet.py`; `test_gauntlet.py`
+holds it offline.
+
+- **The settings** of a seat are a persona row (`PERSONA_ROWS`, the persona lever) or `H`, none: the DLL's Hard.
+  Tuned tables join them once the table lever's files are versioned; the lever is per seat already
+  (`tagpu_impai_table.on`, which `bar.py play` writes from a seat's `table`).
+- **The games**: against each pool member P the candidate C plays `g:<C>.<P>`, C as A: 2 blocks by default, 20
+  games on the development pool, every map from both starts and every side pairing, so each row sits in both seats
+  and on every start. A game's points are C's (a win 1, a draw or a cap with no lead in value 0.5, a loss 0).
+- **The verdict**, a member at a time: C's mean points m over n games and the one-sided 95 % interval
+  m ± 1.645 × 0.5 / √n. The 0.5 is the most a game's points can spread, so the interval never claims more than the
+  games show, whatever share were draws. **beats** when the interval's low end is above one half, **loses** when
+  its high end is below, **even** otherwise. At 20 games the half-width is 0.184: a member is beaten from 0.684
+  of the points. **The gauntlet fails when C loses to any member**, and says which it beats and which it is even
+  with.
+- **How it runs**: a piece a block, one `bar.py play` on 10 lanes, through `batch.py`'s `play_stage`, as the
+  ladder's looks are. One gauntlet is one build, one candidate, one pool and one block count: `gauntlet.json` in
+  the run's directory holds each member's verdict as it is judged, so `run` again goes on from the first member
+  not judged, and refuses a directory of another gauntlet or DLL. A member with a game that could not run is
+  played once more, then the run stops, could not judge. `gauntlet.py judge DIR` reads the verdicts again from the
+  games.
+- MEASURED 2026-11-16: `bar-g:L3.L0b-acidfoursome-ac-1` played to GameTime 3 600 (27.8 s at one lane) logged both
+  seats' persona lines `from=lever`, seat 1 on L3's values and seat 2 on L0b's.
+
+**Code against code is designed, not built.** It would play two builds' brains in one game, and there are two
+ways to do it.
+
+- **Two processes, a network game** (each peer's DLL runs the ImpAI seat its own peer added, and only that one:
+  [entering the game](engine-seam.html); `netai_check.py` proves it on Two Continents):
+  - *What exists*: `twopeers.py` walks two instances into one battle room under the run lock and a leased
+    DirectPlay port, each peer adds its AI seat, and `--netai impai` on both makes both ImpAI.
+  - *What it needs*: a DLL a peer (`TwoPeers` takes one); the bar's maps rather than Two Continents in the lobby
+    walk; something for the two peers' own commanders, which every network game seats beside the AIs (each
+    allied to its own peer's AI, or killed at the start; that a dead peer's process still runs its AI seat is
+    [INFERRED], not measured); the outcome read from both peers' logs.
+  - *Its cost*: a network game cannot turbo and plays variable batches at speed 20, about 60 ticks a second
+    (MEASURED in the multiplayer recorder's runs, [the multiplayer slice](../tadr-port/demo-recorder-multiplayer-slice.html));
+    the 80 mirror games kept end at a mean GameTime of 62 641 (33 of them at the cap, MEASURED 2026-11-16 from
+    their results), so a game takes about 17 min plus 39 to 46 s of launch and lobby ([INFERRED] in
+    [the compatibility suite](../compat/suite.html)), on two GDI instances, 4 slots. That is about 72 slot-minutes a game, where a skirmish mirror game takes 6.6 to 9.4 (20 games in 6.6
+    to 9.4 min at 10 lanes, above): **8 to 11 times the cost**, 7 games at once on the lock's 28 slots, and
+    20 games in about 55 min against 8. And **no pairing**: a network game is not deterministic, so an id does
+    not replay its game, and two builds cannot be compared seed by seed. A gauntlet member then needs its games
+    judged unpaired, as this gauntlet already judges them.
+- **One process, a two-brain build**: brain Y's sources compiled beside brain X's, every global renamed, with the
+  seat choosing its brain. Skirmish speed and exact pairing stay. Its cost is the interface, which moves with the
+  brain:
+  - the seam (`tagpu_impai.c`) calls 57 global symbols of the brain and its engine-free helpers (`impai_*.c`,
+    `tagpu_worldq.c`, `tasim_snap.c`, `tagpu_placegeo.c`), eight other modules call 14 of them
+    (`tagpu_place.c`, `tagpu_resource.c`, `tagpu_skirmish.c`, `tagpu_sweep.c`, `tagpu_wikisim.c`, `tasim_place.c`,
+    `tasim_worldq.c`, `dllmain.c`; MEASURED from the objects' symbol tables), and the seam itself installs 19
+    engine sites ([the hook map](../modules/hook-map.html));
+  - of the 201 commits that changed `impai_*.c` since 2026-11-08, 91 also changed the seam and 112 a shared header
+    (`impai.h` or `worldq.h`), MEASURED from the log on 2026-11-16. Two arbitrary builds therefore rarely share
+    one seam, and a two-brain build must carry both seams and dispatch each of the 19 sites per seat;
+  - the replay tables double, and a two-brain game replays only on its own two-brain DLL.
+
+  It is cheap to run and dear to keep: every brain change that touches the seam or a shared header breaks it,
+  unless the interface is frozen as a versioned ABI, which is a rule on the brain's development and so the
+  owner's decision.
+- **The recommendation**: the network game, since it works for any two builds without constraining the brain.
+  Its 8 to 11 times the cost suits a gauntlet's few members, not a tuning loop. Its first step is a
+  `netai_check.py`-sized proof that two peers with two DLLs each play their own ImpAI seat to an end on a bar
+  map.
+
+## The exploiter suite
+
+Short situations, each hunting one blind spot, faster and more pointed than whole games. `tools/impai/exploit.py
+run --dll DLL --tag TAG` plays them through the bar's lanes (seats, seeds, holds, results and end) under the run
+lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`games/`, `scenarios/`,
+`verdicts.json`); `test_exploit.py` holds it offline on a fake player.
+
+- **The scripted opponent** is seat B with its AI off from the load (the scenario's `ai: "off"`: a type-1 seat whose
+  units keep the orders they are given and no planner runs), so it is exactly the units the situation places.
+  Its pressure comes in **waves**: scenarios applied without a clear on the level held at their GameTime, each unit
+  created with an `attack` order on ImpAI's ground (TA has no attack-move; an attack on the ground advances and
+  engages). The opponent has no economy. OTA AI has no lever for a forced build list, and a persona limits ImpAI's
+  attention rather than its plan, so placed units are the cheapest honest script: no DLL change.
+- **The situations**, each ImpAI Hard as A in seat 1 at Difficulty Hard:
+
+  | situation | map | the opponent | verdict, at the cap |
+  |---|---|---|---|
+  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), flown at ImpAI's start | ImpAI's commander lives to 18 000 |
+  | `naval-turtle` | Gods of War | its commander and two light laser towers on another island | ImpAI has killed all of it by 20 000 |
+  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000 | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
+  | `commander-rush` | Acid Foursome | its commander alone, a quarter of the way from ImpAI's start, ordered at the load to attack ImpAI's commander | ImpAI's commander lives to 6 000 |
+
+- **The puzzles** are real positions. `exploit.py cut RESULTS_DIR... --out FILE` takes every bar game against OTA AI
+  that ImpAI did not win and whose recording was kept. A game OTA AI won is taken over 18 000 ticks before its end,
+  and ImpAI must still hold a unit at the end (`survives`); a game at the cap is taken over 18 000 ticks before the
+  cap, and ImpAI must end it (`kills`). The takeover (`tacli replay takeover`) is at OTA AI's seat: the idle human
+  holds no unit, which the takeover refuses, and the seat taken becomes a human's. The lane hands it straight back
+  to OTA AI with the console's `AI` command (cheats on; `0x416280` makes type 1 type 2) and reads the record's
+  controller byte back as 2, so OTA AI starts afresh there, as on every seat a takeover gives it, and ImpAI plays
+  on from what it knew. The takeover starts at the recording's refresh at or before the GameTime. `run --puzzles FILE` plays them beside the situations. A recording can
+  be taken over only by a DLL that declares the recorder tables of the build that made it (R0's table check), so
+  puzzles are cut from the games of the build under test, or of one with its tables; another build's takeover is
+  refused, and the puzzle could not run.
+- **One situation is one launch.** A clear removes the units, but ImpAI's seat memory is cleared only at a level's
+  init (`tagpu_impai.c`), so a second situation in the same level would start from the first one's knowledge; and
+  fights are never packed into one level ([tasim calibration](../modules/tasim-calibration.html), *The packed lane*).
+  The seed of each is its id's, so a situation replays exactly.
+- **The verdict**: `commander` (ImpAI's seat not eliminated and no commander lost), `kills` (the opponent's seat
+  holds no unit before the cap), `survives` (ImpAI's seat holds a unit at the cap), `value` (`commander`, and its
+  value at the cap at least the opponent's, or the opponent gone). A situation that could not run, or a value not
+  read, could not run, never a failure. Exit 0 every situation passed, 1 one failed, 2 one could not run.
+
+MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes: the four situations in 47 s of play
+each at most (under a minute from admission to verdict), three passed and one failed. The commander rush ended at
+3 582 with the opponent's commander dead. The air rush passed on its commander, but 20 of the opponent's 26 units
+were still alive at the cap, ImpAI having completed three anti-air units. The artillery creep passed on value, 33 777
+against 26 828, 12 of the opponent's 17 units killed. **The naval turtle failed**: at the cap ImpAI had a shipyard,
+one naval unit and no attack, and the commander and both towers stood untouched.
+The nine puzzles cut from that build's own games of the batch (`batch/c1dc2e70/base`: the eight held-out `p:L5`
+games and `bar-hota-redtriangle-cc-1`, all at the cap) were each taken over at 62 701, the refresh before 62 971, and
+played to 80 971 in 30 to 55 s of play, four lanes, 1.6 min from admission: **one passed** (Steel Jungle `ca-2`,
+the opponent gone at 75 906), **eight failed**, the opponent still holding units at the cap. Lava Alley `ca-4`
+ended with ImpAI at 8 units against 146.
+
+## Automatic tuning
+
+`tools/impai/tune.py` holds two searches, each where its dimensions are: the levels' rows on one line, and SPSA
+over the brain's plan constants. `test_spsa.py` holds both offline: the arithmetic, the line, the fits, the
+determinism and resume of each run, and runs on fake players.
+
+- **The levels' line** (`tune.py levels-line run --level normal|easy`). The levels need an order and two floors,
+  not the best row in nine dimensions, so the row is one number: harshness t in [0, 1] on a fixed line from L0b,
+  the lever's harshest row (t = 0), to Hard's (t = 1). The line is the persona space's diagonal -- each of the
+  nine integers moved in step from L0b's to Hard's and rounded, the looks in steps of 15, the budgets and the
+  attention on a log scale to none -- so every axis relaxes as t grows and every point is a row
+  `impai_persona_ok` accepts; the raw integers are not interpolated, since a budget or attention of 0 is no limit
+  and a straight line from L0b's 2 actions a minute to Hard's 0 would pass through 1. Normal's row is the strongest
+  Hard beats in at least 90 % of the mirror's games while it still takes 0.90 of the points against OTA AI at Hard;
+  Easy's the strongest Normal's row beats so while it takes 0.50.
+    - **The looks** are the handicap ladder's method (*The handicap ladder*): bisection on t, each look the mirror's
+      two blocks (20 games: `m:` ids with the row on B; Easy's `n:` with Normal's row on A) at the bracket's midpoint,
+      on blocks past those the confirmation plays; then a logistic fit over every look's game, the ladder's with its
+      slope prior in t. Six looks.
+    - **The order check.** Bisection and fit both rest on the line being monotone in strength, which is a measurement,
+      not a given: after every look, a pair of looks whose stronger row lost more, by more than 2.576 standard errors
+      of the difference, stops the run as **not monotone**, and the question goes back to the owner. A run that ends
+      states the order as measured.
+    - **The aim.** At the bound itself the 100-game confirmation passes only about half the time (90 of 100 at a true
+      0.90), so the row chosen is where the fit puts the stronger side's chance at 0.95, a little inside it.
+    - **The confirmations** at the row chosen: the mirror's 100 games (at least 90 won) and the calibration's 40
+      against OTA AI (at least the floor). Below the floor, no point on the line meets both bounds -- every lower t is
+      weaker on a monotone line -- and the question goes back to the owner, as does a t90 below 0 (even L0b is not
+      beaten 90 %; the mirror's two blocks of `m:L0b` had Hard at 14 of 20, every miss a draw at the cap, *The
+      mirror*).
+    - **Its error, SIMULATED** (`tune.py levels-line simulate`, 300 runs a slope, the true t90 uniform in [0.15,
+      0.85], rows as the line rounds them): six looks of 20 games put t90 within 0.020, 0.039 and 0.070 (RMSE) at
+      slopes 0.05, 0.1 and 0.2 in t a logit unit, against 0.030, 0.057 and 0.103 for the bracket's midpoint alone;
+      at the aim the true win share at the row chosen is 0.945, 0.940 and 0.926, and the 100-game mirror confirms it
+      in 91, 89 and 81 % of runs.
+    - **Its cost**: 120 games of looks and 140 of confirmation a level, 260, against the 1 600 of 40 SPSA iterations.
+      [INFERRED from the mirror's measured blocks, 6.6 to 9.4 min for ten games at ten lanes] A look is two pieces of
+      ten games at seven lanes, which the lock holds at once, about 10 to 16 min; a level about 2 to 3.5 hours, the
+      confirmation more than half of it.
+    - **Not run live**: the rows are chosen on the brain that ships, once its draws on Steel Jungle and Lava Alley
+      are fixed. A stopped run resumes where it stopped (`line.json`), on the DLL it began on; it is one runs-viewer
+      run with a step a look and one for the confirmation.
+- **SPSA over the plan constants** (`tune.py spsa`, `spsa.py`, Spall's gains, maximising): each iteration perturbs
+  every named constant at once, plays theta+ and theta- on **the same games** (the same ids, so the same seeds --
+  common random numbers; each arm's results apart under `games/<k>-<arm>/`), a new block each iteration, and steps
+  along the difference. The constants reach ImpAI's seat through **the tune lever** `tagpu_impai_tune.on`
+  (`level_lever.py --tune`, `bar.py play --tune A=<name>=<int>,...`): 28 named constants of `IMPAI_PLAN` and the
+  military's and economy's `#define`s, each a coordinate over its range, in integers (floats in thousandths). The
+  DLL's side is specified for the brain writer (`.data/impai/tune-lever-spec.md`: a plan a seat in `IMPAI_MIL`, so
+  SIM_STATE and recorded; `impai_plan_ok`; the lever applied where the persona's is, never on a puppet or in a
+  network game; the init line `impai: tune seat= from=lever ...` the lane checks) and **not built**: until it is,
+  every game of it could not run.
+    - **The objectives**: `margin`, the arms paired on each game of the margin test's block by its measure, the time
+      to win (+1 where theta+ was better, -1 worse, 0 a tie); `handicap`, A's points against OTA AI on its
+      production times the champion's m* (`h:<m>`); `mirror`, A's points against ImpAI Hard with no lever (`g:H.H`).
+    - **A run** is fixed to the DLL it began on and plays an iteration's pieces through `batch.py`'s pieces under the
+      run lock, each stopped past its ten minutes; a game that could not run plays its pieces once more, and an
+      iteration still missing one stops the run, unrun (exit 2). The state (`spsa.json`) is written after each
+      iteration, so a stopped run resumes at the iteration it was in; the same seed is the same run.
+    - **The plan it finds is accepted against the champion** by the paired margin test with tune items on its TEST
+      arm (*The paired margin test*, `--test-tune`), on the champion's DLL.
 
 ## When the default flips
 

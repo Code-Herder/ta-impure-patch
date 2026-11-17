@@ -67,6 +67,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay.h"
 #include "tagpu_impai.h"
+#include "tagpu_income.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudmarks.h"
 #include "tagpu_hudinput.h"
@@ -321,9 +322,10 @@ static void __cdecl reclaim_teardown_pre(void)
        the engine's pops that follow the teardown (tagpu_menu.c, tagpu_menu_level_end), and the
        replay HUD's marker walker is joined while the recording it reads is still the level's. The
        in-game wiki closes here too, forgetting its pause without writing it: the level the pause
-       was taken in is going (tagpu_wiki.c). */
+       was taken in is going (tagpu_wiki.c). The income lever logs its seats' totals (tagpu_income.c). */
     tagpu_rec_level_end();
     tagpu_impai_level_end();
+    tagpu_income_level_end();
     tagpu_menu_level_end();
     tagpu_hudmarks_level_end();
     tagpu_hudinput_level_end();

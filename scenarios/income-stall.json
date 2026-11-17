@@ -1,0 +1,34 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The income lever in a stall (tagpu/ddraw/src/tagpu_income.c; research/notes/modules/income-lever.md): Town & Country at Hard, seat 0 an idle human (ARM), seats 1 and 2 CORE with the AI off, a base energy storage of 10 and nothing stored, and an Automatic Radar Targeting each (CORTARG, EnergyUse 1300). Seat 1 has one solar collector beside its commander, 45 energy a pass, and the `income-stall` test group's content arms it at x5 (tools/impai/level_lever.py --income 1=5); seat 2 has ten, 225 a pass of its own. Both stall on the same demand at the same rate, and tools/impai/income_check.py stall asserts from GameTime 330 that seat 1 spends its bonus as seat 2 spends its production; a bonus credited after the pass would be clamped to the storage of 10 and wasted. The seats with the AI off have no takeover test: a takeover seats them as computer players again.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": false,
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0, "metal": 1000, "energy": 1000},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "ai": "off", "metal": 0, "energy": 0,
+    "storage": {"metal": 1000, "energy": 10}},
+   {"slot": 2, "controller": "ai", "side": "core", "color": 2, "ai": "off", "metal": 0, "energy": 0,
+    "storage": {"metal": 1000, "energy": 10}}
+  ]
+ },
+ "units": [
+  {"id": "s1_targ", "type": "CORTARG", "owner": 1, "pos": [240, 3200]},
+  {"id": "s1_solar0", "type": "CORSOLAR", "owner": 1, "pos": [400, 3200]},
+  {"id": "s2_targ", "type": "CORTARG", "owner": 2, "pos": [240, 3520]},
+  {"id": "s2_solar0", "type": "CORSOLAR", "owner": 2, "pos": [400, 3520]},
+  {"id": "s2_solar1", "type": "CORSOLAR", "owner": 2, "pos": [520, 3520]},
+  {"id": "s2_solar2", "type": "CORSOLAR", "owner": 2, "pos": [640, 3520]},
+  {"id": "s2_solar3", "type": "CORSOLAR", "owner": 2, "pos": [760, 3520]},
+  {"id": "s2_solar4", "type": "CORSOLAR", "owner": 2, "pos": [880, 3520]},
+  {"id": "s2_solar5", "type": "CORSOLAR", "owner": 2, "pos": [1000, 3520]},
+  {"id": "s2_solar6", "type": "CORSOLAR", "owner": 2, "pos": [1120, 3520]},
+  {"id": "s2_solar7", "type": "CORSOLAR", "owner": 2, "pos": [1240, 3520]},
+  {"id": "s2_solar8", "type": "CORSOLAR", "owner": 2, "pos": [1360, 3520]},
+  {"id": "s2_solar9", "type": "CORSOLAR", "owner": 2, "pos": [1480, 3520]}
+ ]
+}

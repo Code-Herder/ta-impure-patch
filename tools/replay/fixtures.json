@@ -491,6 +491,28 @@
    "end": 5400,
    "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
   },
+  "income-mult": {
+   "load": "income-mult.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "--income", "1=2.5"],
+               "files": ["tagpu_impai_income.on"]},
+   "steps": [[35, "type", "+give 1 100 energy"], [35, "type", "+give 1 100 metal"],
+             [35, "type", "+give 2 100 energy"], [35, "type", "+give 2 100 metal"],
+             [75, "run", ["tools/impai/income_check.py", "check", "{instance}"]],
+             [300, "apply", "impai-handicap-economy.json"],
+             [300, "apply", "impai-handicap-army.json"]],
+   "sources": ["tagpu/ddraw/src/tagpu_income.c", "tools/impai/income_check.py"],
+   "first": 91,
+   "end": 5400,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
+  "income-stall": {
+   "load": "income-stall.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "--income", "1=5"],
+               "files": ["tagpu_impai_income.on"]},
+   "steps": [[330, "run", ["tools/impai/income_check.py", "stall", "{instance}"]]],
+   "sources": ["tagpu/ddraw/src/tagpu_income.c", "tools/impai/income_check.py"],
+   "end": 2400
+  },
   "impai-eco": {
    "load": "impai-eco.json", "los": "file",
    "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=hard"], "files": ["tagpu_impai_level.on"]},
