@@ -306,6 +306,9 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        it pages (its first page);
   (w2) the wiki opened: the 3D asset load's line, and its report tagpu_wiki3d.json copied to
        DIR/<setup>/ -- which archive each ground source, feature, unit file and texture came from;
+  (w2t) the tech tree's load, last on the loader's thread (`wikitech: loaded in`): as many sides,
+       units and pictures as the setup's pack (gfx.py tech_pack), which assetcheck.py --side pairs
+       with the native load field for field;
   (w3) Quick Build demo 3 at tick 180 and Build Lines demo 2 at tick 100 captured through
        tagpu_wiki.shot (DIR/<setup>/<entry>-d<demo>-t<tick>.game.png) with the whole display grabbed
        beside each (.screen.png); each stage's ground line, its types line (in 3D, and the boxes) and
@@ -4508,6 +4511,16 @@ def mods_setup(tacompat, setup, dll, out):
         row["report"] = report
         poll("w2")
         print(f"wiki mods: {setup['name']}: (w2) {row['load']}; {len(report['mounts'])} mounts")
+        # (w2t) the tech tree's load, last on the loader's thread: every side, unit and picture of the setup's pack
+        # (gfx.py tech_pack; tools/wiki/assetcheck.py --side pairs the two field for field natively)
+        tech = wait_line(c, start, r"wikitech: (loaded in|no tech tree)", "(w2t) the tech tree's load", 180)
+        tree = json.loads((pack / "techtree" / "tree.json").read_text())
+        want = (len(tree["sides"]), len(tree["units"]), sum(1 for u in tree["units"].values() if u["pic"]))
+        got = re.search(r"(\d+) sides, (\d+) units, (\d+) pictures", tech)
+        assert got and tuple(map(int, got.groups())) == want, \
+            f"(w2t) the tech tree's load is not the pack's {want} sides, units and pictures: {tech}"
+        row["tech"] = tech.split("wikitech: ", 1)[1]
+        print(f"wiki mods: {setup['name']}: (w2t) {row['tech']}")
 
         row["stages"], row["types"], row["drawn"] = {}, {}, {}
         for entry, demo, tick in MODS_SHOTS:

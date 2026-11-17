@@ -330,6 +330,116 @@ static int cmd_side(int argc, char** argv)
     return 0;
 }
 
+/* ---- the tech tree: `wikiassettest tech`, tagpu_wikitech_load printed in gfx.py `tech_pack`'s
+   tree.json shape ({"sides": [...], "units": {...}}), keys lowered as unit_index keys them; text as
+   its bytes, each byte the code point of the same value (gfx.py reads the files as Latin-1), and a
+   picture as {w, h, tkey, fnv} over its palette indices. tools/wiki/assetcheck.py --side pairs it. */
+
+static void tech_bytes(const unsigned char* b)
+{
+    putchar('"');
+    for (; *b; b++)
+        if (*b == '"' || *b == '\\') printf("\\%c", *b);
+        else if (*b < 0x20 || *b >= 0x7F) printf("\\u%04x", *b);
+        else putchar(*b);
+    putchar('"');
+}
+
+static void tech_key(const char* name)
+{
+    char k[WIKITECH_NAME];
+    lowcpy(k, name, sizeof k);
+    tech_bytes((const unsigned char*)k);
+}
+
+static int cmd_tech(int argc, char** argv)
+{
+    static INPUT I;
+    const WIKITECH* t;
+    TAGPU_VFS* vfs;
+    char* report = NULL;
+    struct timespec t0;
+    double ms;
+    int i, k;
+    uint32_t j, q;
+    if (!input_make(argc, argv, &I)) return 2;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    vfs = tagpu_vfs_open(I.in.cwd, (const char (*)[TAGPU_VFS_PATHMAX])I.in.arc, I.in.narc, I.in.names.language);
+    t = tagpu_wikitech_load(&I.in, vfs, &report);
+    ms = ms_since(&t0);
+    if (!report) { fprintf(stderr, "wikiassettest: the tech tree's load wrote no report\n"); return 1; }
+    if (!t) { printf("{\"report\":%s,\"tech\":null}\n", report); return 0; }
+    printf("{\"report\":%s,\"tech\":{\"sides\":[", t->report);
+    for (k = 0; k < t->nside; k++) {
+        const WIKITECHSIDE* sd = &t->side[k];
+        printf("%s{\"name\":", k ? "," : "");
+        tech_bytes((const unsigned char*)sd->name);
+        printf(",\"prefix\":");
+        tech_bytes((const unsigned char*)sd->prefix);
+        printf(",\"commander\":");
+        tech_key(t->unit[sd->commander].name);
+        printf(",\"order\":[");
+        for (j = 0; j < sd->norder; j++) { if (j) putchar(','); tech_key(t->unit[t->order[sd->first + j]].name); }
+        printf("],\"menus\":{");
+        for (j = 0, i = 0; j < sd->norder; j++) {
+            const uint32_t at = sd->first + j;
+            if (!t->mcount[at]) continue;
+            printf("%s", i++ ? "," : "");
+            tech_key(t->unit[t->order[at]].name);
+            putchar(':');
+            putchar('[');
+            for (q = 0; q < t->mcount[at]; q++) { if (q) putchar(','); tech_key(t->unit[t->menu[t->mfirst[at] + q]].name); }
+            putchar(']');
+        }
+        printf("}}");
+    }
+    printf("],\"units\":{");
+    for (i = 0; i < t->nunit; i++) {
+        const WIKITECHUNIT* u = &t->unit[i];
+        int w;
+        printf("%s", i ? "," : "");
+        tech_key(u->name);
+        printf(":{\"name\":");
+        tech_bytes((const unsigned char*)u->name);
+        printf(",\"title\":");
+        tech_bytes(u->title);
+        printf(",\"description\":");
+        tech_bytes(u->desc);
+        printf(",\"structure\":%d,\"mobile\":%d,\"builder\":%d,\"canfly\":%d,\"water\":%d,\"cloaked\":%d,\"stealth\":%d,"
+               "\"hidedamage\":%d,\"level\":%d,\"fp\":[%d,%d],\"health\":%d,\"sight\":%d,\"radar\":%d,",
+               u->structure, u->mobile, u->builder, u->canfly, u->water, u->cloaked, u->stealth, u->hidedamage, u->level,
+               u->fx, u->fz, u->health, u->sight, u->radar);
+        printf("\"metal\":%.17g,\"energy\":%.17g,\"buildtime\":%.17g,\"speed\":%.17g,\"workertime\":%.17g,"
+               "\"energymake\":%.17g,\"metalmake\":%.17g,\"extracts\":%.17g,\"storage\":[%.17g,%.17g],\"weapons\":[",
+               u->metal, u->energy, u->buildtime, u->speed, u->workertime, u->energymake, u->metalmake, u->extracts,
+               u->mstore, u->estore);
+        for (w = 0; w < u->nweapon; w++) {
+            const WIKITECHWEAPON* x = &u->weapon[w];
+            printf("%s{\"id\":", w ? "," : "");
+            tech_bytes((const unsigned char*)x->id);
+            printf(",\"name\":");
+            tech_bytes((const unsigned char*)x->name);
+            if (x->known) printf(",\"range\":%d,\"damage\":%d", x->range, x->damage);
+            putchar('}');
+        }
+        printf("],\"pic\":");
+        if (u->pic >= 0 && u->pic < t->npic) {
+            const WIKITECHPIC* p = &t->pic[u->pic];
+            printf("{\"w\":%d,\"h\":%d,\"tkey\":%d,\"fnv\":\"%08lx\"}", p->w, p->h, p->tkey,
+                   (unsigned long)fnv(FNV0, t->px + p->off, (size_t)(p->w * p->h)));
+        } else printf("null");
+        putchar('}');
+    }
+    printf("}}}\n");
+    fprintf(stderr, "wikiassettest: the tech tree loaded in %.1f ms (%d sides, %d units, %d pictures, %u bytes of pixels)\n",
+            ms, t->nside, t->nunit, t->npic, (unsigned)t->npx);
+    tagpu_vfs_close(vfs);
+    free((void*)t);
+    free(report);
+    input_free(&I);
+    return 0;
+}
+
 /* ---- the fuzz ------------------------------------------------------------------------------------- */
 
 static uint32_t s_rng;
@@ -1174,10 +1284,11 @@ int main(int argc, char** argv)
 {
     if (argc >= 4 && !strcmp(argv[1], "load")) return cmd_load(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "side")) return cmd_side(argc, argv);
+    if (argc >= 4 && !strcmp(argv[1], "tech")) return cmd_tech(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-hpi")) return cmd_fuzz_hpi(argc, argv);
     if (argc == 6 && !strcmp(argv[1], "fuzz-3do")) return cmd_fuzz_3do(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-side")) return cmd_fuzz_side(argc, argv);
-    fprintf(stderr, "usage: wikiassettest load|side GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
+    fprintf(stderr, "usage: wikiassettest load|side|tech GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
                     "                    [--folders k=v,...]\n"
                     "       wikiassettest fuzz-hpi ARCHIVE N SEED\n"
                     "       wikiassettest fuzz-3do ARCHIVE PATH N SEED\n"
