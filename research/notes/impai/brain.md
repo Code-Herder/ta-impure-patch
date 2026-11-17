@@ -788,8 +788,10 @@ least 1.5 times the most enemy sea army value seen in the last three minutes (`I
 HELD, held as THE AIR HELD holds the air); a lost prediction does not count, the island seat's retreats being from
 what stands ashore -- and the economy
 pays: no stall, not in the hold, a steady metal income of `factory_per_m` (8) a pass or more. The figures are the
-writer's. **The air plant waits for no builder**: when no builder free in the decision -- idle or a helper, and not
-held by its far record -- offers the air plant, the decision builds the sea plant as before. On the naval turtle
+writer's. While it holds, the pick ranks the air plants alone: on a wet anchor the sea plant is a candidate too and
+may out-rank them, and the sea plant is placed by its own search, never by the ring. **The air plant waits for no
+builder**: when no builder free in the decision -- idle or a helper, and not held by its far record -- offers the
+air plant (whichever pass chose it, the waived one too), the decision builds the sea plant as before. On the naval turtle
 only the commander offers CORAP and it stood on wind generators whenever the second plant was wanted, so the seat
 built no second plant at all until this rule (MEASURED 2026-11-17 at 73593317); with it the turtle's seat builds
 its second shipyard at 8 587 as before, and its air plant waits for a free commander. The air plant comes in place of the sea plant only once a search finds no site at all or no

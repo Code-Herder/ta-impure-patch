@@ -869,8 +869,14 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             d->plant_sea = sea && !d->plant_air_blind;
         }
     }
+    /* THE AIR PLANT FOR THE BLIND picks among the air plants alone: the sea plant is placed by its own search
+       (assign's plant_sea branch), never by the ring, so a shipyard that out-ranks the air plant is no candidate
+       here. BOUND: plant_air_blind is set only when `air` found an island air candidate under the same ctech
+       bound, so the pass always has one */
+    const int air_only = !up && d->plant_air_blind;
     for (k = 0; k < nc; k++) {
-        if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air))
+        if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air) ||
+            (air_only && !c[k].air))
             continue;
         if (best < 0 || plant_before(d, &c[k], &c[best], scored, armed)) {
             second = best;
@@ -901,11 +907,20 @@ static int plant_free_builder(IMPAI_DEC* d, unsigned t)
     return 0;
 }
 
+/* THE AIR PLANT WAITS FOR NO BUILDER, for either pass's plant t (below) */
+static void air_waits(IMPAI_DEC* d, unsigned t)
+{
+    if (t && d->plant_air_blind && !plant_free_builder(d, t)) {
+        d->plant_air_blind = 0;
+        d->plant_sea = 1;
+    }
+}
+
 /* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK); the
    tech-up's two passes first when it is due, then the further plant's when that is wanted too (THE TECH-UP
    FIRST). At most four passes.
-   THE AIR PLANT WAITS FOR NO BUILDER: when THE AIR PLANT FOR THE BLIND took the plant from the sea plant and no
-   builder free in this decision offers the air plant (plant_free_builder), the decision builds the sea plant as
+   THE AIR PLANT WAITS FOR NO BUILDER (air_waits, after either pass): when THE AIR PLANT FOR THE BLIND took the plant
+   from the sea plant and no builder free in this decision offers the air plant (plant_free_builder), the decision builds the sea plant as
    before, so the yard never waits on a builder busy elsewhere. WHY: on the naval turtle only the commander offers
    CORAP and it stood on wind generators each time the second plant was wanted; the shipyard's CORCS, the builder
    asked, could build neither, and the seat got no second plant to the cap (MEASURED 2026-11-17, exploit-naval-turtle
@@ -920,12 +935,10 @@ static void plant_choice(IMPAI_DEC* d)
     for (up = d->want_tech ? 1 : 0; up >= 0 && (up || d->want_factory); up--) {
         d->plant_up = up;
         d->plant_t = (uint16_t)plant_pick(d, 0, up, &d->plant_via, &d->plant_next, &d->plant_s, &d->plant_next_s);
-        if (d->plant_t && d->plant_air_blind && !plant_free_builder(d, d->plant_t)) {
-            d->plant_air_blind = 0;
-            d->plant_sea = 1;
-        }
+        air_waits(d, d->plant_t);
         if (d->plant_t) return;
         d->plant_tw = (uint16_t)plant_pick(d, 1, up, &via, &next, &s, &next_s);
+        air_waits(d, d->plant_tw);
         if (!d->plant_tw) continue;
         d->plant_via = via;
         d->plant_next = next;
