@@ -144,9 +144,14 @@ static IMPAI_SEAT s_seatst[PLAYER_COUNT];
 SIM_ROWS(s_seatst, SIM_STATE, SIM_ID_PLAYER, NULL);
 
 /* each seat's radar pass, one nibble a slot (worldq.h, WQ_RB_*): the pass's answer between passes, its
-   partial state during one that spans ticks */
+   partial state during one that spans ticks. The row is a bitset, so any four of its bytes can read as an
+   address: OPAQUE keeps the replay's address scan off it (tagpu_simreg.h, SIMF_OPAQUE) */
 static uint8_t s_radar_bits[PLAYER_COUNT][WQ_RADAR_BYTES(TAGPU_PK_DESIGN_SLOTS)];
-SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
+static const SimField s_radar_bits_layout[] = {
+    SIM_FIELD_AT(0, sizeof s_radar_bits[0], SIMF_OPAQUE, SIM_ID_NONE),
+    SIM_FIELD_END
+};
+SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, s_radar_bits_layout);
 
 /* each seat's radar pass's record of every slot whose bit it set (worldq.h, WQ_RADAR_HIT), keyed by slot as
    s_known is, every seat's record of the slot in its row (impai.h, IMPAI_HITROW): the unit's
