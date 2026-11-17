@@ -975,6 +975,13 @@ the files:
 - `0x55554F` in `tagpu_wikistage.c` is the whitebox button colour `SIDE_BUTTON`.
 - `0x502823` and `0x505FEB` in `tools/wiki/sidepacks.py` are the single bytes Mayhem's loader
   patches inside `guis` and `unitpics`.
+- `0x401004` and `0x51FC8D` in `tools/replay/test_tareplay.py` are a test's edits to its own fixture
+  rows of the replay lists: the first into a layout column that must leave the lists' hash alone, the
+  second a globals row's address, which must move it.
+- `0x00512345` in the `peek:` lines of `tools/replay/test_tareplay.py`, `tools/test_stall.py` and
+  `tools/test_logwaits.py` is a placeholder address in a faked log.
+- `0x503921` in `tools/wiki/test_tavfs_profile.py` is a wrong immediate the test plants at `0x42AA26`,
+  inside the `units` push at `0x42AA25`, so the profile refuses the site.
 
 ### The wiki's per-mod tutorials: the controlled player's side, the Interface Type, a unit's display name, the G cells and the type-0 clicks [DISASSEMBLED + MEASURED 2026-10-28]
 

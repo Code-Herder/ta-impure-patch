@@ -790,6 +790,42 @@ pattern [INFERRED: none writes them]): `units` `0x503920`, `textures` `0x503720`
 the compatibility fixtures' executables). The `language` value `0x51FB50` (above, the path
 builder) is set once by WinMain's init.
 
+**Where the loader pushes each name** [DISASSEMBLED 2026-11-17, each site `68 <VA>` read from
+`pristine/TotalA.exe.pristine`]. The wiki's install loader reads every one of these strings out of the
+running mod's image through the sites below and refuses an image whose site does not hold its push
+(`tools/wiki/tavfs.py`, `PROFILE_STRINGS`; `tools/tasim/tasim_load.c` follows the same reads). A path is
+built by `0x4290F0(buf, folder, name, ext)` unless the row says otherwise.
+
+| name | VA, text | pushed at | the read |
+|---|---|---|---|
+| the archive patterns | `0x5028CC` `rev%s.GP3`, `0x5028C4` `*.CCX`, `0x5028BC` `*.UFO`, `0x5028B4` `*.HPI` | `0x41D4EC`, `0x41D540`, `0x41D57A`, `0x41D5B4` | InitTAHPIAry `0x41D4C0`; the first formatted by `0x4E42B0` at `0x41D4F2` with `31` (`0x5028D8`, pushed at `0x41D4E0`) |
+| `units` | `0x503920` `units` | `0x42AA25`, `0x42AB68`, `0x42ABDC`, `0x42D6F1` | the pre-scan `0x42A8D0`'s listing path (built at `0x42AA2B`, listed by `0x4BCA30` at `0x42AA4F`), its per-file open (`0x42AB3E..0x42AB6E`), its `.OVR` open (`0x42ABE2`), and the level's re-read in `0x42D2E0` (`0x42D6E9..0x42D722`) |
+| `*` | `0x50372C` | `0x42AA1C`, `0x42DD03` | the unit listing above; the download listing (`0x42DCFE..0x42DD34`) |
+| `FBI` | `0x503928` | `0x42AA17`, `0x42AB3E`, `0x42D6CF` | the three unit sites above |
+| the weapons folder | `0x50392C` `Weapons` | `0x42A98B`, `0x42E39B` | each listed weapon file's open: the pre-scan's (`0x42A980..0x42A99B`) and the level's weapon load `0x42E310`'s (`0x42E391..0x42E3A1`) |
+| the weapon listing | `0x503934` `Weapons\*.tdf` | `0x42A8EC`, `0x42E350` | the pattern `0x4BCA30` lists in the same two |
+| `TDF` | `0x50341C` | `0x42A980`, `0x42E391`, `0x42D2F3`, `0x42D937`, `0x429EA3`, `0x42DCFE`, `0x42DDA3` | the two weapon opens, moveinfo, sidedata at the level's load and at the menu's, the download listing and its opens |
+| `gamedata` | `0x503360` | `0x42D301`, `0x42D945`, `0x429EB1` | moveinfo's folder and sidedata's |
+| `moveinfo` | `0x503F48` | `0x42D2F8` | the move classes, built at `0x42D307` (`0x42D2F3..0x42D307`) |
+| `sidedata` | `0x503410` | `0x42D93C`, `0x429EA8` | the sides, built at `0x42D94B` (`0x42D937..0x42D94B`) and at `0x429EB7` (`0x429EA3..0x429EB7`) |
+| `download` | `0x503730` | `0x42DD0E`, `0x42DDB0` | the listing's path (built at `0x42DD24`) and each listed file's open (`0x42DDA3..0x42DDB6`) |
+| `guis` | `0x502820` | `0x42D82A`, `0x41AD2C` | the page probe `0x42D824..0x42D83F` (built at `0x42D830`, sized by `0x4BBC40` at `0x42D83A`) and the page loader `0x41AD17..0x41AD5F` (built at `0x41AD4B`, sized at `0x41AD58`; a size of 0 falls through to the side's `%sDL` page, `0x502818` pushed at `0x41AD8E`) |
+| `GUI` | `0x502828` | `0x42D824`, `0x41AD17` | the same two |
+| `features`, `*.tdf` | `0x502C7C`, `0x502C88` | `0x422324`, `0x42231F` | `0x4BCB50(features, *.tdf, -1, 1)`, its arguments set at `0x422310..0x422335` and the call at `0x422339` (`0x422310..0x422331` in the loaders' comments) |
+| `scripts`, `COB` | `0x503740`, `0x503EC8` | `0x42D8DF`, `0x42D8D5` | a type's script from its UnitName (def `+0x20`, `lea` at `0x42D8D2`), built at `0x42D8E5` and loaded by `0x4B2450` at `0x42D8EF` |
+| `objects3d`, `3DO` | `0x5036E4`, `0x5036F0` | `0x42D753`, `0x42D74D` | a type's model, built at `0x42D759` and loaded by `0x4CB560` at `0x42D766` |
+| the Copyright reference, the year template | `0x5038CC`, `0x50390C` | `0x42AABF`, `0x42AAB7` | the pre-scan's `strstr` of the template in the reference; then `mov eax,[0x50390C]` at `0x42B102` and `mov esi,0x5038CC` at `0x42B107` for the compare ([keys](keys.html), the pre-scan) |
+| the Copyright default | `0x5037BC` | `0x42B0E6` | the default `0x4C48C0` copies at `0x42B0FD`, `0x80` bytes, for an FBI without `Copyright` (`0x5037B0`) |
+
+**The level's re-read of a type** (`0x42D6E9..0x42D722`): the path is built at `0x42D709` from the def's
+UnitName, sized by `0x4BBC40` at `0x42D713`, and only a size above 0 reaches the FBI reader `0x42BF40` at
+`0x42D722` (`je` past it at `0x42D71A`), so a type whose own file is empty or missing keeps what the pre-scan
+wrote [INFERRED from the skip]. Two
+types of one UnitName (Total Mayhem's `tronmakenuke.fbi` names `EMPMAKENUKE`) are both re-read from the one
+file of that name (MEASURED 2026-11-13, `tools/tasim/defcheck.py`). **One byte of a name**: the Total Mayhem
+list the profile's test models patches `0x503932` and `0x50393A` (file offsets `0x101F32`, `0x101F3A`), the
+last byte of `Weapons` in each of the two weapon strings, to `M` -- `WeaponM` in both.
+
 **Not established**: run-time patches of these strings by a DLL (TADR's, the loaders); whether a
 mod adds a file layer of its own. The loader reads what the engine mounted at the wiki's first
 open: an archive mounted later in the process (a RESTART's `0x41D4C0`) is not seen.

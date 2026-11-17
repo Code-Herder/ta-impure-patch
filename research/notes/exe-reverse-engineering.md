@@ -265,6 +265,13 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   target differs with the DLL's load address). They are the mod's bytes and stay — Impure's
   reference-image check names them in the log and refuses only what leads into TADR
   ([the takeover](compat/takeover.md) part 4). Not sites of Impure's table.
+- **`0x410000`, `0x4FF618`** — the Patch Loader's `DllMain` gate (`vendor/Total-Annihilation-Patch-Loader/
+  dllmain.c`): it exits the game unless the ten bytes at RVA `0x10000` read `14 68 78 1B 50 00 8D 4C 24 1B`
+  (retail's: the tail of `jne 0x410015` at `0x40FFFF`, then `push 0x501B78` at `0x410001` and
+  `lea ecx,[esp+0x1B]` at `0x410006`), and unless `0x4FF618` reads `DDRAW.dll` -- the name of the import descriptor whose
+  thunks start at `0x4FC02C` -- or the version bytes `0x49E9C0`/`0x49E9C9` are 3 and 1. Read from the
+  pristine image 2026-11-17; the wiki's install loader repeats the gate (`tools/wiki/tavfs.py`,
+  `LOADER_GATE`).
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

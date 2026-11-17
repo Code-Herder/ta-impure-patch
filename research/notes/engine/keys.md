@@ -153,7 +153,7 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   keys**: when `movementclass` names one of the 32 records (`0x440420`, `_stricmp` over the records that
   have a name), the loader copies that record, and the unit's own `FootPrintX` … `badwaterslope` are
   never read; only with no key, or a name no record has, does it read the unit's own section through
-  `0x440340` into a stack record initialised by `0x4402E0` (`0x42CD2F..0x42CD51`) [DISASSEMBLED 2026-11-12]. The unit gets `+4`, `+6`, `+8`, `+0xA`, `+0xC`, `+0xE` at def `+0x14A`,
+  `0x440340` into a stack record initialised by `0x4402E0` (called at `0x42CD36`; `0x42CD2F..0x42CD51`) [DISASSEMBLED 2026-11-12]. The unit gets `+4`, `+6`, `+8`, `+0xA`, `+0xC`, `+0xE` at def `+0x14A`,
   `+0x14C`, `+0x1BE`, `+0x1C0`, `+0x228`, `+0x229` (`0x42CD5D..0x42CD97`); `badslope` and
   `badwaterslope` stay in the class record, which `+0x1B6` points at when a class is named.
 - **Read only by the pre-scan `0x42A8D0`**: `side`, `ai_weight`, `ai_limit`, `wacky`, `Version`,
@@ -162,13 +162,15 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   [DISASSEMBLED 2026-11-12]. **`Version`** (`0x4C4760`, default 0.0) is V; major = `_ftol(floor(V))`,
   minor = `_ftol(floor((V − major) · 10.0))`, the floors the CRT's `0x4E5050` and the product stored as a
   double (`0x42B01F..0x42B05E`), so `3.3` has minor 2; the bit is set when major < `main+1`, or major =
-  `main+1` and minor ≤ `main+2`, and cleared otherwise (`0x42B066..0x42B0A7`, signed bytes; the exe
+  `main+1` and minor ≤ `main+2`, and cleared otherwise (`0x42B066..0x42B0A7`, signed bytes, `movsx` at
+  `0x42B06C` and `0x42B083`; the exe
   writes 3 and 1 there at `0x49E9BD` and `0x49E9C6`, a Patch Loader's `MultiplayerVersionMajor`/`Minor`
   other values). **The file's source**: cleared when `0x4BB650(handle)` says it did not come from an
   archive and `0x50289C` is set (1 in the exe, written by no instruction), and whenever `0x511DE4` is set
-  (`0x42B0AD..0x42B0DC`). **`Copyright`** (`0x4C48C0` into `0x80` bytes, default `Run to the Village!
-  Warn your brother!`), with its bytes 10..13 overwritten by `0000` (the offset `strstr` finds in the
-  reference, `0x42AB0C..0x42AB20`), must equal `Copyright 0000 Humongous Entertainment. All rights
+  (`0x42B0AD..0x42B0DC`). **`Copyright`** (`0x4C48C0` at `0x42B0FD` into `0x80` bytes, default `Run to the Village!
+  Warn your brother!` `0x5037BC`, pushed at `0x42B0E6`), with its bytes 10..13 overwritten by `0000` (the
+  offset `strstr` finds in the reference, `0x42AB0C..0x42AB20`; the template `0x50390C` and the reference
+  `0x5038CC` pushed at `0x42AAB7` and `0x42AABF`, re-read at `0x42B102` and `0x42B107`), must equal `Copyright 0000 Humongous Entertainment. All rights
   reserved.` byte for byte, or the bit is cleared (`0x42B0E2..0x42B162`).
 - **Sidedata**: `canbuild1`..`canbuildN` under `[CANBUILD]` (the format `canbuild%d`, `0x503ED8`,
   at `0x42DA14`).
