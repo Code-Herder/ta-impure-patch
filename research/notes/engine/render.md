@@ -631,7 +631,7 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 
 | VA | Calls | What |
 | --- | --- | --- |
-| `0x469920`, `0x46992F`, `0x469ABB` | `0x46A610` | features |
+| `0x469920`, `0x46992F`, `0x469ABB` | `0x46A610` | features (which of them a player sees: [map](map.html), *What the feature draw shows a player*) |
 | `0x469A00` | `0x45AC20` DrawUnit | **site A** — ground units, `(state&3)==1`, per sort row |
 | `0x469B22` | `0x49BE60` | weapons: laser lines and projectile GAFs |
 | `0x469B2C` | `0x420B00` | explosions and effects |
