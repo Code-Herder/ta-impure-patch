@@ -781,7 +781,11 @@ least 1.5 times the most enemy sea army value seen in the last three minutes (`I
 HELD, held as THE AIR HELD holds the air); a lost prediction does not count, the island seat's retreats being from
 what stands ashore -- and the economy
 pays: no stall, not in the hold, a steady metal income of `factory_per_m` (8) a pass or more. The figures are the
-writer's. The air plant comes in place of the sea plant only once a search finds no site at all or no
+writer's. **The air plant waits for no builder**: when no builder free in the decision -- idle or a helper, and not
+held by its far record -- offers the air plant, the decision builds the sea plant as before. On the naval turtle
+only the commander offers CORAP and it stood on wind generators whenever the second plant was wanted, so the seat
+built no second plant at all until this rule (MEASURED 2026-11-17 at 73593317); with it the turtle's seat builds
+its second shipyard at 8 587 as before, and its air plant waits for a free commander. The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
 another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
 to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default

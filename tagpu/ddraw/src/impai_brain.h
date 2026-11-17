@@ -258,12 +258,13 @@ typedef struct IMPAI_DEC {
        (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate reads without it (bit k); THE TARGETS
        BOUGHT FOR, the target classes the army buys types to hit (bit g, impai.h THE TARGET CLASSES), once read;
        THE ISLAND'S AGREEMENT, once read: 0 not yet, 1 the economy's reach agrees, 2 not; THE ISLAND'S PLANT
-       ORDER, once read: 0 not yet, ISLE_SEA, ISLE_LAND (impai_econ.c) */
+       ORDER, once read: 0 not yet, ISLE_SEA, ISLE_LAND (impai_econ.c); 1 in plant_air_blind while THE AIR PLANT
+       FOR THE BLIND took the plant from the sea plant in this decision (impai_econ.c) */
     uint32_t      reach_mask;
     int           reach_done, isle_agree, isle_order;
     unsigned      tg_mask;
     int           tg_done;
-    int           plant_done, plant_up, plant_sea, plant_sea_menu;
+    int           plant_done, plant_up, plant_sea, plant_sea_menu, plant_air_blind;
     uint16_t      plant_t, plant_tw, plant_next, plant_via;
     float         plant_s, plant_next_s;
     uint16_t      gate_type[IMPAI_GATE_TYPES];

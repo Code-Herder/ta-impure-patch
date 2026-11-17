@@ -601,7 +601,9 @@ The owner's answers to the spec's questions:
   energy stall, not in the hold, and a steady metal income of `factory_per_m` (8 a pass) or more, the plan's own
   pace for a further plant, so the air plant never takes a slot the surplus alone would have paid. **What it does
   not reach**: a seat that never builds a sea army, or one whose income stays under 8, keeps the old order (air
-  past two sea plants).
+  past two sea plants); and the air plant never makes the yard wait: with no free builder offering it, the sea
+  plant comes as before -- on the naval turtle only the commander offers the air plant and it is on energy builds
+  whenever the plant is due, so there the turtle still gets no air plant (MEASURED 2026-11-17 at 73593317).
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence

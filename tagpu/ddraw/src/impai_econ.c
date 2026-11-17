@@ -863,9 +863,11 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
         }
         for (k = 0; k < nc && isle_only; k++)
             air |= c[k].isle && c[k].air && (up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo));
-        if (!up)
-            d->plant_sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air) &&
-                           !(air && air_for_blind(d));
+        if (!up) {
+            const int sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air);
+            d->plant_air_blind = sea && air && air_for_blind(d);
+            d->plant_sea = sea && !d->plant_air_blind;
+        }
     }
     for (k = 0; k < nc; k++) {
         if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air))
@@ -883,9 +885,32 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     return best >= 0 ? c[best].type : 0;
 }
 
+static int on_menu(const uint16_t* menu, int n, unsigned type);
+
+/* 1 when a builder free in this decision -- idle, or a helper (THE RELEASE asks helpers for a plant), and not held
+   from plants by its far record (impai_far) -- offers plant type t. BOUND: at most 2 IMPAI_IDLE_CAP menus read,
+   into menu3 (THE CHOICE's own scratch) */
+static int plant_free_builder(IMPAI_DEC* d, unsigned t)
+{
+    int i;
+    for (i = 0; i < d->nidle + d->nhelpers; i++) {
+        const IMPAI_UNITREF* b = i < d->nidle ? &d->idle[i] : &d->helpers[i - d->nidle];
+        if (!impai_far(d, b) && on_menu(d->menu3, d->q->ops->build_options(d->q, b->type, d->menu3, WQ_TYPES_MAX), t))
+            return 1;
+    }
+    return 0;
+}
+
 /* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK); the
    tech-up's two passes first when it is due, then the further plant's when that is wanted too (THE TECH-UP
-   FIRST). At most four passes. */
+   FIRST). At most four passes.
+   THE AIR PLANT WAITS FOR NO BUILDER: when THE AIR PLANT FOR THE BLIND took the plant from the sea plant and no
+   builder free in this decision offers the air plant (plant_free_builder), the decision builds the sea plant as
+   before, so the yard never waits on a builder busy elsewhere. WHY: on the naval turtle only the commander offers
+   CORAP and it stood on wind generators each time the second plant was wanted; the shipyard's CORCS, the builder
+   asked, could build neither, and the seat got no second plant to the cap (MEASURED 2026-11-17, exploit-naval-turtle
+   at 73593317 with a diagnostic build: want_factory at 8 587..8 782 asked of CORCS alone, the commander at a
+   CORWIN build from 8 407). */
 static void plant_choice(IMPAI_DEC* d)
 {
     uint16_t next, via;
@@ -895,6 +920,10 @@ static void plant_choice(IMPAI_DEC* d)
     for (up = d->want_tech ? 1 : 0; up >= 0 && (up || d->want_factory); up--) {
         d->plant_up = up;
         d->plant_t = (uint16_t)plant_pick(d, 0, up, &d->plant_via, &d->plant_next, &d->plant_s, &d->plant_next_s);
+        if (d->plant_t && d->plant_air_blind && !plant_free_builder(d, d->plant_t)) {
+            d->plant_air_blind = 0;
+            d->plant_sea = 1;
+        }
         if (d->plant_t) return;
         d->plant_tw = (uint16_t)plant_pick(d, 1, up, &via, &next, &s, &next_s);
         if (!d->plant_tw) continue;

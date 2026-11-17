@@ -10362,7 +10362,9 @@ static void check_island_hold(void)
    (s) (p) without the PT boat: no sea army, the second shipyard;
    (t) (p) on an income of 7: the economy does not pay the air plant early, the second shipyard;
    (u) (p) with no area in need of the air scout: the second shipyard;
-   (v) (p) with a vehicle plant in place of the shipyard: never ahead of the first sea plant, the shipyard. */
+   (v) (p) with a vehicle plant in place of the shipyard: never ahead of the first sea plant, the shipyard;
+   (w) (p) with the commander, the one builder offering the lab, held from plants by its far record (its shipyard
+       job ended unbuilt) and an idle sea constructor: the air plant waits for no builder, the CS's shipyard. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -10395,7 +10397,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[22] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[23] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -10409,13 +10411,14 @@ static void check_island_order(void)
                                          "(p) blind, the water held", "(q) blind, an enemy navy seen",
                                          "(r) blind, an equal navy seen", "(s) blind, no sea army",
                                          "(t) blind, the income short", "(u) not blind, the water held",
-                                         "(v) blind, a land plant and no shipyard" };
+                                         "(v) blind, a land plant and no shipyard",
+                                         "(w) blind, the commander held, a CS idle" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 22; c++) {
+    for (c = 0; c < 23; c++) {
         int from, vp, lab;
         const int blind = c >= 15;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
@@ -10466,6 +10469,16 @@ static void check_island_order(void)
         if (blind) {
             s_smil.blind_t = c == 20 ? 0u : (uint32_t)s_w.gametime;
             if (c != 18) unit_add(&s_w, 8, E_PT, 130, 100, 1);
+            if (c == 22) {
+                unit_add(&s_w, 9, E_CS, 130, 104, 1);
+                s_job[1].type = E_COM;
+                s_job[1].build = E_SY;
+                s_job[1].target = (uint16_t)WQ_NONE;
+                s_job[1].cx = 64;
+                s_job[1].cz = 60;
+                s_job[1].kind = IMPAI_JOB_BUILD;
+                s_job[1].since = 1900;
+            }
             if (c == 16 || c == 17) {
                 s_smil.sea_held = (c == 16 ? 2.0f : 1.0f) * s_ti[E_PT].value;
                 s_smil.sea_held_t = (uint32_t)s_w.gametime;
