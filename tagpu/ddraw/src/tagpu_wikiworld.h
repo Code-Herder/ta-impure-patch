@@ -79,6 +79,7 @@
 #define WIKIWORLD_SHOT "tagpu_wiki3d_shot.ppm"
 
 #include "tagpu_fogsrc.h"
+#include "tagpu_wikiasset.h"            /* WIKI3DUNIT */
 
 struct TAGPU_FRAME;
 
@@ -116,5 +117,24 @@ void tagpu_wikiworld_drawn(unsigned frame, int image, double ms);
    `_armed` says it was recorded. */
 int  tagpu_wikiworld_shot_due(unsigned frame);
 void tagpu_wikiworld_shot_armed(unsigned frame, unsigned w, unsigned h);
+
+/* THE WIKI'S UNITS' FRAME, which the stage and the tech tree's unit view (tagpu_wikiview.h) both
+   draw from: the wiki atlas's level and recycle, the bake's and the posed program's frame, the
+   atlas's allowance frame and the shade calibration, in tagpu_native.c's order -- run ONCE per
+   render frame whoever asks first, and answered from that run after. 1 when the atlas is up and a
+   bake may follow this frame, 0 when not. Render thread, after this frame's packet is in. */
+int  tagpu_wikiworld_units_begin(const struct TAGPU_FRAME* f);
+
+/* One posed unit's piece matrices onto the facing `rot` (a 4x3, rows), in the stage's walk order:
+   `pose` its script's posed model (`npose` primitives, matched against the unit's `posed_of`), or
+   npose 0 for the rest pose with what Create() hides hidden. Each piece's 12 floats into `out`,
+   its shade flag into `shaded` and its visibility word into `pvis` -- 0 hidden (an all-zero
+   matrix), 1 drawn dont-cache, 3 drawn and cached. `u` and `bg` are the type's resolved unit and
+   its bake (tagpu_wikiasset.h WIKI3DUNIT, tagpu_posebake.h TAGPU_PBGEOM), each array bg->nparts
+   long. Render thread only: it composes in a static. */
+struct TAGPU_PBGEOM;
+void tagpu_wikiworld_pose_compose(const WIKI3DUNIT* u, const struct TAGPU_PBGEOM* bg,
+                                  const WIKISTAGEPIECE* pose, int npose, const float* rot,
+                                  float* out, unsigned char* shaded, unsigned char* pvis);
 
 #endif

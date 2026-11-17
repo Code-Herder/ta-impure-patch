@@ -1,0 +1,12 @@
+{ "format": 2, "id": "techtree",
+  "frame": "techtree",
+  "demos": [],
+  "title": "Tech tree",
+  "subtitle": "Everything your side can build, from the commander up",
+  "text": [
+    "The tree is read from the game you are running: your side's commander, and every builder and factory its build menus lead to, each one's menu exactly as the sidebar shows it. A mod's own units, levels and upgrades are all there.",
+    "Each card is a builder or a factory. Under its name are the units it is the first to unlock; the line on the left leads back to whatever builds it. Click a card or a unit to light the way to it from the commander, what it builds and what else can build it, and to open its panel.",
+    "The panel shows the unit turning in 3D. Drag to look around it, use the wheel to come closer, and press Walk, Aim, Fire or Build: the unit plays its own animation for it, as it does in the game.",
+    "Some mods let a building be upgraded in place. An upgrade has a dashed purple frame: it is built onto its building and never stands on its own. A unit with upgrades has a purple frame and lists them in its panel.",
+    "Drag the tree to move it and use the wheel to zoom. Fit shows the whole tree again."
+  ] }

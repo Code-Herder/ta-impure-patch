@@ -39,6 +39,7 @@
 #include "tagpu_fps.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_wikiworld.h"
+#include "tagpu_wikiview.h"
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 
@@ -227,7 +228,10 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
 
     /* The in-game wiki's button and window for this frame, from the packet's record, after the
        HUD's: the button takes the rewind button's slot when this frame's live HUD draws none.
-       tagpu_vk_hud.c draws it as a third layer, over everything but the cursor. */
+       tagpu_vk_hud.c draws it as a third layer, over everything but the cursor. The tech tree's
+       unit view takes this frame's pose first: the page draws the note it decides
+       (tagpu_wikiview.h). */
+    tagpu_wikiview_frame(f);
     tagpu_wikistate_present(f);
     /* ...and its stage's 3D ground for the same frame, from what that just laid out: the wiki's
        instances of the world passes take it in tagpu_vk_frame later in this iteration

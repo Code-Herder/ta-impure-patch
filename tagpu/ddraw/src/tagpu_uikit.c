@@ -107,7 +107,20 @@ HUDOP* ui_art(UI* u, int part, UIR r, const UIR* clip)
 }
 void ui_glyph(UI* u, int icon, UIR b)
 {
-    if (icon >= 0) ui_art(u, icon, ui_rect(b.x + b.w * (1 - ICON_F) / 2, b.y + b.h * (1 - ICON_F) / 2, b.w * ICON_F, b.h * ICON_F), NULL);
+    ui_glyph_in(u, icon, b, NULL);
+}
+void ui_glyph_in(UI* u, int icon, UIR b, const UIR* clip)
+{
+    if (icon >= 0) ui_art(u, icon, ui_rect(b.x + b.w * (1 - ICON_F) / 2, b.y + b.h * (1 - ICON_F) / 2, b.w * ICON_F, b.h * ICON_F), clip);
+}
+HUDOP* ui_pic(UI* u, int pic, UIR r, const UIR* clip)
+{
+    HUDOP* p;
+    if (clip && !meets(r, *clip)) return NULL;
+    if (!(p = ui_op(u, HOP_PIC, r))) return NULL;
+    p->part = (int16_t)pic;
+    if (clip) ui_clip(u, p, *clip);
+    return p;
 }
 HUDOP* ui_solid(UI* u, int kind, UIR r, uint32_t rgb, double alpha, const UIR* clip)
 {
@@ -411,17 +424,23 @@ double ui_button_w(UI* u, const UIBUTTONG* g, const char* label)
    keeps, so its text stands inside the box. */
 double ui_button(UI* u, const UIBUTTONG* g, double x, double y, const char* key, const char* label, int icon, int part, int off)
 {
+    return ui_button_in(u, g, x, y, key, label, icon, part, off, NULL);
+}
+double ui_button_in(UI* u, const UIBUTTONG* g, double x, double y, const char* key, const char* label, int icon, int part, int off,
+                    const UIR* clip)
+{
     UITS t = ui_ts(u, g->style, g->line);
     const double w = ui_button_w(u, g, label), h = ui_len(u, g->h);
     int n = ui_pens(u, &t, label, strlen(label));
     double tw = ui_ceil64(u->pen[n]);
     UIR b = ui_rect(x, y, w, h);
+    if (clip && !meets(b, *clip)) return w;
     if (off) ui_group_begin(u, OFF_A);
-    ui_art(u, part, b, NULL);
-    if (!off) ui_hot(u, b, NULL, key);
-    ui_glyph(u, icon, b);
+    ui_art(u, part, b, clip);
+    if (!off) ui_hot(u, b, clip, key);
+    ui_glyph_in(u, icon, b, clip);
     ui_line(u, &t, label, 0, n, x + 2 + ui_len(u, g->pad) + ui_half(w - 4 - 2 * ui_len(u, g->pad) - tw), y + 2 + ui_half(h - 4 - t.L),
-            ui_light(u, part), NULL);
+            ui_light(u, part), clip);
     if (off) ui_group_end(u);
     return w;
 }

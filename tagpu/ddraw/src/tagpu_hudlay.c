@@ -1712,7 +1712,7 @@ static void allies(C* c)
     char key[HUD_KEYLEN];
     PL p;
 
-    if (st->rewind) rewind_button(c, 0);
+    if (hud_draws_rewind(st)) rewind_button(c, 0);
     for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
         const HUDSEAT* q = &st->seat[k];
         int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;

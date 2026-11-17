@@ -4,6 +4,7 @@
 #include <string.h>
 #include "tagpu.h"
 #include "tagpu_wikistate.h"
+#include "tagpu_wikiview.h"
 #include "tagpu_wikilay.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
@@ -19,6 +20,9 @@
 #include "tagpu_wikiframe.h"
 #include "tagpu_modslay.h"
 #include "tagpu_modsui.h"
+#include "tagpu_wikitech.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 /* the frame record's fork block is the packet's (tagpu_wikiframe.h, THE FORKS THE STAGE HUD LISTS) */
 typedef char wikistate_forks_are_the_packets[WIKIFRAME_FORKS == TAGPU_PK_HUD_FORKS && WIKIFRAME_FORK_WATCHED == TAGPU_PK_FORK_WATCHED &&
@@ -33,6 +37,9 @@ static int      s_have, s_haveStage;
 static unsigned s_frame;                /* the render-thread frame the ops are for              */
 static float    s_px;
 static int      s_ox, s_oy;
+static int16_t dev(int o, double snapped);
+/* the unit view's rect and its clip, device pixels x0 y0 x1 y1, and the page's first op over it */
+static int      s_uvOn, s_uv[4], s_uvClip[4], s_uvCut;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
 static int      s_tryPtr;               /* this frame is in Try it yourself with a view, and the
                                            record's pointer lies inside its stage               */
@@ -103,6 +110,9 @@ static int         s_mods;     /* this frame's page is the Mods screen's */
 static unsigned    s_modsGen;  /* ...and its generation */
 static WIKISTAGEART  s_sart;
 static int           s_toastFace;
+static WTART         s_tart;            /* the tech tree's text: its roles' styles and measure     */
+static int           s_tface[WT_ROLES];
+static double tech_measure(void* ctx, int role, double size, const char* s);
 
 static double stage_measure(void* ctx, double size, const char* s)
 {
@@ -139,6 +149,16 @@ static int art_bind(const WIKIART* a)
     s_toastFace = a->draw.style_face[s_sart.style];
     s_sart.measure = stage_measure;
     s_sart.log = stage_log;
+    /* the tech tree's text: layout.json's tech_title, tech_body and tech_label (techtree.js roles) */
+    {
+        static const char* const ROLE[WT_ROLES] = { "tech_title", "tech_body", "tech_label" };
+        memset(&s_tart, 0, sizeof s_tart);
+        for (i = 0; i < WT_ROLES; i++) {
+            if ((s_tart.style[i] = (int16_t)tagpu_hudlay_style_index(a->draw.lay, ROLE[i])) < 0) return 0;
+            s_tface[i] = a->draw.style_face[s_tart.style[i]];
+        }
+        s_tart.measure = tech_measure;
+    }
     for (i = 0; i < WIKI_CURSOR_N; i++) {
         const int k = tagpu_hudlay_part_index(a->draw.lay, CURSOR[i]);
         const HUDPART* p = k >= 0 ? tagpu_hudlay_part(a->draw.lay, k) : NULL;
@@ -327,6 +347,219 @@ const unsigned char* tagpu_wikistate_side(unsigned* gen)
 {
     *gen = s_colGen;
     return s_colRgba;
+}
+
+/* ---- the tech tree entry (tagpu_wikitech.h; wiki.js drawTech) ------------------------------------
+   THE TREE THIS THREAD DRAWS IS ITS OWN, made by tagpu_wikitech_tree from the published block --
+   immutable and never freed, read through tagpu_wikitech_get, whose interlocked read pairs with the
+   loader's one publishing store, so the block is whole -- for the side the packet names, bounded
+   against the block first; made again when the block or the side changes. The game thread
+   hit-tests on a tree of its own made the same way; neither reads the other's.
+
+   THE SHEET (HUD_TEX_TECH) holds the side's pictures through the block's palette, its colour key
+   transparent: shelf-packed tallest first, each with its edge texels repeated one texel out, so a
+   filtered draw of a whole picture clamps at its edges as the canvas's drawImage does and never
+   reads its neighbour. Made when the tree is, with a new generation tagpu_vk_hud.c sends in bands;
+   a picture the sheet has no room for keeps an empty rect and draws its black square alone (said
+   once). Every picture is bounded again here, its size by WIKITECH_PIC and its texels by the
+   block's, before a texel is read. This thread's alone, as is the HUD pass that uploads it. */
+static WIKITECHTREE    s_tt;
+static const WIKITECH* s_ttOf;
+static int             s_ttSide = -1, s_ttOk;
+static const WIKITECHTREE* s_tcur;     /* this frame's tree, NULL none                          */
+static int             s_tentry;       /* this frame's entry is the tech tree's                  */
+static unsigned char*  s_tsheet;       /* HUD_TECH_W x HUD_TECH_H RGBA8, made at the first tree  */
+static float*          s_tuv;          /* each picture of the block: [u0, v0, u1, v1], 0 off it  */
+static int             s_tnuv, s_trows;
+static unsigned        s_tgen;         /* bumped at every new sheet; 0: none yet                 */
+static int             s_tsaidFit, s_tsaidMem;
+static WTCAM           s_tcam;         /* the camera this frame drew                             */
+static float           s_tlo, s_tcv[4];
+
+static double tech_measure(void* ctx, int role, double size, const char* s)
+{
+    const HUDGLOBALS* g = tagpu_hudlay_globals(s_art->draw.lay);
+    const int st = s_tart.style[role];
+    (void)ctx;
+    return tagpu_hudtext_width(&s_art->draw.face[s_tface[role]].info, (float)size, g->style[st].spacing, g->style[st].upper,
+                               s, strlen(s));
+}
+
+/* the side's pictures into the sheet, from row 0 */
+static void tech_sheet(const WIKITECHTREE* T)
+{
+    const WIKITECH* t = T->t;
+    int* idx;
+    int n = 0, i, j, x = 0, y = 0, shelf = 0;
+    if (!s_tsheet && !(s_tsheet = (unsigned char*)calloc((size_t)HUD_TECH_W * HUD_TECH_H, 4))) goto nomem;
+    if (s_tnuv < t->npic) {
+        float* v = (float*)realloc(s_tuv, (size_t)t->npic * 4 * sizeof *v);
+        if (!v) goto nomem;
+        s_tuv = v;
+        s_tnuv = t->npic;
+    }
+    if (s_tuv) memset(s_tuv, 0, (size_t)s_tnuv * 4 * sizeof *s_tuv);
+    memset(s_tsheet, 0, (size_t)s_trows * HUD_TECH_W * 4);
+    s_trows = 0;
+    if (!(idx = (int*)malloc((size_t)(T->n + 1) * sizeof *idx))) goto nomem;
+    for (i = 0; i < T->n; i++) {
+        const int p = t->unit[T->unit[i]].pic;
+        if (p < 0 || p >= t->npic) continue;
+        for (j = 0; j < n && idx[j] != p; j++) {}
+        if (j == n) idx[n++] = p;
+    }
+    /* tallest first, then widest, then by index: an insertion sort over a side's few hundred */
+    for (i = 1; i < n; i++) {
+        const int v = idx[i];
+        const WIKITECHPIC* a = &t->pic[v];
+        for (j = i; j > 0; j--) {
+            const WIKITECHPIC* b = &t->pic[idx[j - 1]];
+            if (b->h > a->h || (b->h == a->h && (b->w > a->w || (b->w == a->w && idx[j - 1] < v)))) break;
+            idx[j] = idx[j - 1];
+        }
+        idx[j] = v;
+    }
+    for (i = 0; i < n; i++) {
+        const WIKITECHPIC* P = &t->pic[idx[i]];
+        const int w = P->w, h = P->h;
+        int px, py;
+        if (w < 1 || h < 1 || w > WIKITECH_PIC || h > WIKITECH_PIC || (uint64_t)P->off + (uint64_t)w * h > t->npx) continue;
+        if (x + w + 2 > HUD_TECH_W) { y += shelf; x = 0; shelf = 0; }
+        if (y + h + 2 > HUD_TECH_H) {
+            if (!s_tsaidFit) {
+                s_tsaidFit = 1;
+                tagpu_logf("wiki: the tech tree's pictures do not all fit its sheet - %d are drawn as their black square "
+                           "(said once)", n - i);
+            }
+            break;
+        }
+        for (py = -1; py <= h; py++)
+            for (px = -1; px <= w; px++) {
+                const int sx = px < 0 ? 0 : px >= w ? w - 1 : px, sy = py < 0 ? 0 : py >= h ? h - 1 : py;
+                const int k = t->px[P->off + (uint32_t)(sy * w + sx)];
+                unsigned char* q = s_tsheet + ((size_t)(y + 1 + py) * HUD_TECH_W + (size_t)(x + 1 + px)) * 4;
+                if (k == P->tkey) { q[0] = q[1] = q[2] = q[3] = 0; continue; }
+                q[0] = t->pal[k * 4];
+                q[1] = t->pal[k * 4 + 1];
+                q[2] = t->pal[k * 4 + 2];
+                q[3] = 255;
+            }
+        s_tuv[idx[i] * 4 + 0] = (float)(x + 1) / HUD_TECH_W;
+        s_tuv[idx[i] * 4 + 1] = (float)(y + 1) / HUD_TECH_H;
+        s_tuv[idx[i] * 4 + 2] = (float)(x + 1 + w) / HUD_TECH_W;
+        s_tuv[idx[i] * 4 + 3] = (float)(y + 1 + h) / HUD_TECH_H;
+        x += w + 2;
+        if (h + 2 > shelf) shelf = h + 2;
+        s_trows = y + shelf;
+    }
+    free(idx);
+    if (++s_tgen == 0) s_tgen = 1;
+    return;
+nomem:
+    /* no picture drawn rather than another side's: a zero rect is one HOP_PIC skips */
+    if (s_tuv) memset(s_tuv, 0, (size_t)s_tnuv * 4 * sizeof *s_tuv);
+    if (!s_tsaidMem) {
+        s_tsaidMem = 1;
+        tagpu_logf("wiki: no memory for the tech tree's picture sheet - its pictures are not drawn (said once)");
+    }
+}
+
+/* this frame's tree for the packet's side: bounded against the published block; NULL while none
+   is published, the side is not the block's, or the tree could not be made */
+static const WIKITECHTREE* tech_tree_rt(const TAGPU_PK_WIKI* w)
+{
+    const WIKITECH* t = NULL;
+    if (tagpu_wikitech_get(&t) != WIKISIDE_READY || !t || w->tech_side < 0 || w->tech_side >= t->nside) return NULL;
+    if (t != s_ttOf || w->tech_side != s_ttSide) {
+        if (s_ttOk) tagpu_wikitech_free(&s_tt);
+        s_ttOk = tagpu_wikitech_tree(t, w->tech_side, &s_tt);
+        s_ttOf = t;
+        s_ttSide = w->tech_side;
+        if (s_ttOk) tech_sheet(&s_tt);
+    }
+    return s_ttOk ? &s_tt : NULL;
+}
+
+/* code-page bytes as UTF-8, each byte its own code point */
+static void latin1(char* d, size_t n, const char* s)
+{
+    size_t o = 0;
+    for (; *s && o + 3 < n; s++) {
+        const unsigned char v = (unsigned char)*s;
+        if (v < 0x80) d[o++] = (char)v;
+        else { d[o++] = (char)(0xC0 | v >> 6); d[o++] = (char)(0x80 | (v & 0x3F)); }
+    }
+    d[o] = 0;
+}
+
+/* before the layout: this frame's tree, and the row's title and All links (wiki.js drawTech) */
+static void tech_page(const TAGPU_PK_WIKI* w, const WIKIART* art)
+{
+    char side[WIKI_SIDE_NAME * 2 + 1];
+    int i, nu = 0, n;
+    s_tcur = NULL;
+    s_page.tech_title[0] = 0;
+    s_page.tech = NULL;
+    s_page.tech_sel = -1;
+    s_page.tech_act = w->tv_act & TAGPU_TV_ALL;
+    s_tentry = w->open && art->data && w->entry >= 0 && w->entry < art->data->nentry && art->data->entry[w->entry].techtree;
+    if (!s_tentry) return;
+    s_page.tech_all = w->tech_all != 0;
+    if (!(s_tcur = tech_tree_rt(w))) return;
+    /* the unit's panel: this thread's tree and the pick bounded by its walk, as the stage bounds it */
+    s_page.tech = s_tcur;
+    s_page.tech_sel = w->tech_sel >= 0 && w->tech_sel < s_tcur->n ? w->tech_sel : -1;
+    for (i = 0; i < s_tcur->n; i++) nu += s_tcur->upgrade[i] != 0;
+    latin1(side, sizeof side, s_tcur->t->side[s_tcur->side].name);
+    n = snprintf(s_page.tech_title, sizeof s_page.tech_title, "%s \xC2\xB7 %d units \xC2\xB7 %d builders and factories", side,
+                 s_tcur->n, s_tcur->nspine);
+    if (nu && n > 0 && (size_t)n < sizeof s_page.tech_title)
+        snprintf(s_page.tech_title + n, sizeof s_page.tech_title - (size_t)n, " \xC2\xB7 %d upgrades", nu);
+}
+
+/* after the layout: the stage, the tree under the packet's view bounded as data -- the pick inside
+   the walk, a camera with every value finite and its zoom between the floor and four times 1:1,
+   else the fit -- or the message while there is no tree */
+static void tech_stage(const TAGPU_PK_WIKI* w, float u)
+{
+    const WIKITECH* t = NULL;
+    const int st = tagpu_wikitech_get(&t);
+    const WIKITECHTREE* T = s_tcur;
+    double cx, cy, cw, ch, cwu;
+    WTCAM fit, cam;
+    int sel = -1;
+    tagpu_wikistage_canvas(s_fr.stage, u, &cx, &cy, &cw, &ch);
+    /* the fit leaves out what a panel over the stage's right covers (wiki.js techCovered) */
+    cwu = cw;
+    if (s_fr.cover > 0 && cx + cw - s_fr.cover * u > 0) cwu = cw - (cx + cw - s_fr.cover * u);
+    if (cwu < 1) cwu = 1;
+    memset(&cam, 0, sizeof cam);
+    if (T) {
+        const double hi = 4.0 * u, cz = w->tech_cam[0], ccx = w->tech_cam[1], ccy = w->tech_cam[2];
+        tagpu_wikitech_fit(T, cwu, ch, u, &fit);
+        s_tlo = (float)(fit.z < 0.2 * u ? fit.z : 0.2 * u);
+        cam = fit;
+        if (!w->tech_fit && isfinite(cz) && isfinite(ccx) && isfinite(ccy) && fabs(ccx) < 1e7 && fabs(ccy) < 1e7 && cz > 0) {
+            cam.z = cz < s_tlo ? s_tlo : cz > hi ? hi : cz;
+            cam.x = ccx;
+            cam.y = ccy;
+        }
+        if (w->tech_sel >= 0 && w->tech_sel < T->n) sel = w->tech_sel;
+    }
+    tagpu_wikitech_stage(T, st == WIKISIDE_PENDING ? "loading\xE2\x80\xA6" : "No tech tree: this mod's could not be read", &cam,
+                         sel, w->tech_all != 0, &s_tart, s_fr.stage, u, &s_stage);
+    s_tcam = cam;
+    s_tcv[0] = (float)(cx + s_ox);
+    s_tcv[1] = (float)(cy + s_oy);
+    s_tcv[2] = (float)cwu;
+    s_tcv[3] = (float)ch;
+}
+
+const unsigned char* tagpu_wikistate_tech(unsigned* gen, int* rows)
+{
+    *gen = s_tgen;
+    *rows = s_trows;
+    return s_tsheet;
 }
 
 const unsigned char* tagpu_wikistate_bar(unsigned* gen)
@@ -632,6 +865,8 @@ static const WIKICASTING* casting_of(int side)
 
 /* the record into the layout's page state: the page's fields, the context its text is filled
    with, and the caption, the keys and the locked build the demo's view holds */
+typedef char wikistate_scrolls_agree[TAGPU_WIKI_NSCROLL == WIKI_NSCROLL && TAGPU_WIKI_SCROLL_UNIT == WIKI_SCROLL_UNIT ? 1 : -1];
+
 static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
 {
     int i;
@@ -730,7 +965,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
     s_have = s_haveStage = s_viewOk = s_viewSide = s_split = s_nover = s_curList = 0;
-    s_frameOn = s_hudOn = s_ntop = 0;
+    s_frameOn = s_hudOn = s_ntop = s_uvOn = 0;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
     s_mods = 0;
     if (s_refused) return;
@@ -771,9 +1006,12 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.W = (float)vw;
     s_page.H = (float)vh;
     s_page.bar = (float)bh * (float)vh / (float)f->game_height / u;
-    /* the rewind button's slot is taken when the same frame's live HUD draws its button */
-    s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hs->live;
+    /* the rewind button's slot is taken when the same frame's HUD draws its button: the live HUD,
+       or the allies' ribbon with the idle rewind beside it */
+    s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hud_draws_rewind(hs);
     page_of(&s_page, w, sv);
+    tech_page(w, art);
+    s_page.tech_note = tagpu_wikiview_note(f->frame_counter);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
         InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the page's layout refused (%s) - the wiki is not drawn this session", err);
@@ -825,8 +1063,10 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
             s_frameOn = 1;
             frame_hud(sv, side, u, w, &sf);
         }
-        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, s_frameOn ? &sf : NULL,
-                              &s_sart, &s_stage);
+        if (s_tentry) tech_stage(w, u);
+        else
+            tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, s_frameOn ? &sf : NULL,
+                                  &s_sart, &s_stage);
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
         if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {
@@ -836,8 +1076,34 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         top_split();
     }
     s_px = u;
+    /* THE UNIT VIEW'S RECT, in the device pixels its ground's op is drawn on (the hit map's edges),
+       for the 3D picture tagpu_vk_wikiview.c composites there, scissored to the panel's clip */
+    s_uvOn = 0;
+    if (w->open && s_fr.uview.w > 0 && s_fr.uview.h > 0 && s_fr.uview_clip.w > 0 && s_fr.uview_clip.h > 0 &&
+        s_fr.uview_cut >= 0 && s_fr.uview_cut <= s_ops.n) {
+        const HUDRECT* r = &s_fr.uview;
+        const HUDRECT* c = &s_fr.uview_clip;
+        s_uv[0] = dev(s_ox, tagpu_hud_snap(r->x * u));
+        s_uv[1] = dev(s_oy, tagpu_hud_snap(r->y * u));
+        s_uv[2] = dev(s_ox, tagpu_hud_edge(r->x, r->w, u));
+        s_uv[3] = dev(s_oy, tagpu_hud_edge(r->y, r->h, u));
+        s_uvClip[0] = dev(s_ox, tagpu_hud_snap(c->x * u));
+        s_uvClip[1] = dev(s_oy, tagpu_hud_snap(c->y * u));
+        s_uvClip[2] = dev(s_ox, tagpu_hud_edge(c->x, c->w, u));
+        s_uvClip[3] = dev(s_oy, tagpu_hud_edge(c->y, c->h, u));
+        s_uvCut = s_fr.uview_cut;
+        s_uvOn = s_uv[2] > s_uv[0] && s_uv[3] > s_uv[1];
+    }
     s_frame = f->frame_counter;
     s_have = 1;
+}
+
+int tagpu_wikistate_uview(unsigned frame, int r[4], int clip[4])
+{
+    int k;
+    if (!s_have || s_frame != frame || !s_uvOn) return 0;
+    for (k = 0; k < 4; k++) { r[k] = s_uv[k]; clip[k] = s_uvClip[k]; }
+    return 1;
 }
 
 static HUDOPLIST stage_list(void)
@@ -853,6 +1119,8 @@ static HUDOPLIST stage_list(void)
     /* the whitebox sidebar's greyed buttons, one group each: without them the draw skips their ops */
     l.grp = s_stage.grp;
     l.ngrp = s_stage.ngrp < WIKI_MAXGRP ? s_stage.ngrp : WIKI_MAXGRP;
+    /* the tech tree's pictures, on the sheet this thread made for the tree it drew */
+    if (s_tentry && s_tcur) { l.pic = s_tuv; l.npic = s_tnuv; }
     return l;
 }
 
@@ -910,6 +1178,9 @@ int tagpu_wikistate_frame(unsigned frame, WIKILISTS* out)
     memset(out, 0, sizeof *out);
     if (!s_have || s_frame != frame) return 0;
     out->page = tagpu_huddraw_list(&s_ops);
+    out->page_cut = s_uvOn ? s_uvCut : out->page.n;
+    /* the unit's panel draws the tree's pictures, from the same sheet as the stage */
+    if (s_tentry && s_tcur) { out->page.pic = s_tuv; out->page.npic = s_tnuv; }
     out->stage.watch = out->over.watch = out->top.watch = -1;
     if (s_haveStage) {
         out->stage = stage_list();
@@ -946,7 +1217,7 @@ static int16_t dev(int o, double snapped)
 }
 
 /* the hit map's room: every page control, every stage HUD control and the question's four */
-_Static_assert(WIKI_MAXHOT == 160 && HUD_MAXHOT == 128, "TAGPU_CMD_WIKIHITS counts the page's and the HUD's controls");
+_Static_assert(WIKI_MAXHOT == 448 && HUD_MAXHOT == 128, "TAGPU_CMD_WIKIHITS counts the page's and the HUD's controls");
 _Static_assert(TAGPU_CMD_WIKIHITS == WIKI_MAXHOT + HUD_MAXHOT + 4, "the hit map holds every control drawn");
 
 /* one hit, in device pixels on the attachment; 0 when the map is full */
@@ -1042,6 +1313,16 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     s_map.entry = (int16_t)s_page.entry;
     s_map.view = (uint8_t)(s_haveStage && s_viewOk);
     s_map.side_h = (int16_t)s_viewSide;
+    /* the tech tree as drawn: the camera, the zoom's floor and the canvas a pointer is read on */
+    if (s_haveStage && s_tentry && s_tcur) {
+        s_map.tech = 1;
+        s_map.tech_side = (int8_t)s_tcur->side;
+        s_map.tech_cam[0] = (float)s_tcam.z;
+        s_map.tech_cam[1] = (float)s_tcam.x;
+        s_map.tech_cam[2] = (float)s_tcam.y;
+        s_map.tech_lo = s_tlo;
+        memcpy(s_map.tech_cv, s_tcv, sizeof s_map.tech_cv);
+    }
     /* a game frame: its world takes a click only on a live frame in Try it, through the frame's fit
        (tagpu_wiki.c live_world), and the stage HUD's playhead run as drawn turns a pointer into a
        tick (TAGPU_CMD_WIKI hud_x0) */

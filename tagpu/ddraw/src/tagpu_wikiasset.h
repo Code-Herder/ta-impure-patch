@@ -482,6 +482,88 @@ typedef struct WIKISIDE {
     const char*    report;              /* the JSON tagpu_wikiside.json holds, NUL-terminated     */
 } WIKISIDE;
 
+/* ---- THE TECH TREE'S DATA (research/notes/ingame-wiki.md, *The tech tree entry*;
+   tools/wiki/gfx.py `tech_pack` is its twin, tools/wiki/assetcheck.py --side pairs the two) ----
+   Every side of sidedata whose commander has an FBI: its walk from the commander over the build
+   menus exactly as the sidebar reads them with that side's prefix (the cast rule's walk, taken to
+   its end), and each walked unit's menu. Each unit walked by any side once, with the figures the
+   tree and the unit panel show, and its picture: its build button's on the first menu of the walk
+   that holds it, by the sidebar's rule (the page's bank or commongui, the download picture, the
+   <unitpics> PCX), and the PCX alone for a unit on no button.
+   ONE BLOCK, IMMUTABLE ONCE PUBLISHED AND NEVER FREED (the native test frees it). Every index in it
+   is one the load made and is bounded by the count beside it: a side's `first` + `norder` is within
+   `norder` of the block, an order entry's `mfirst` + `mcount` within `nmenu`, every unit index
+   below `nunit`, every picture's `off` + w * h within `npx`. */
+#define WIKITECH_NAME    32             /* a UnitName or a weapon's id, as the def's 0x20 bytes     */
+#define WIKITECH_TITLE   32             /* a display name's code-page bytes: def+0x00's 0x20        */
+#define WIKITECH_DESC    256            /* a description's code-page bytes and the terminator       */
+#define WIKITECH_WNAME   64             /* a weapon's name                                         */
+#define WIKITECH_WEAPONS 3              /* Weapon1..3                                              */
+#define WIKITECH_SIDES   WIKI_SIDE_SIDES
+#define WIKITECH_UNITS   4096           /* units walked over every side: the order's uint16 index   */
+#define WIKITECH_PIC     256            /* a picture's side at most                                */
+
+typedef struct {
+    char    id[WIKITECH_NAME];          /* the FBI's WeaponN, trimmed                               */
+    char    name[WIKITECH_WNAME];       /* the section's name=, else its own name                   */
+    int32_t range, damage;              /* atoi of range= and [DAMAGE] default=                     */
+    uint8_t known;                      /* a weapons\*.tdf section has the id                      */
+} WIKITECHWEAPON;
+
+typedef struct {
+    char          name[WIKITECH_NAME];  /* UnitName as its FBI spells it                            */
+    unsigned char title[WIKITECH_TITLE];/* the display name's code-page bytes, NUL-terminated;
+                                           empty: the name                                          */
+    unsigned char desc[WIKITECH_DESC];  /* Description's code-page bytes, NUL-terminated           */
+    uint8_t       structure, mobile, builder, canfly, water, cloaked, stealth, hidedamage;
+    int8_t        level;                /* the category's first LEVELn, -1 none                     */
+    int32_t       fx, fz;               /* the footprint, the engine's atoi saturated to int32      */
+    int32_t       health, sight, radar; /* MaxDamage (saturated), Sight/RadarDistance (a word)      */
+    double        metal, energy, buildtime, speed, workertime;
+    double        energymake;           /* EnergyMake less EnergyUse                               */
+    double        metalmake, extracts, mstore, estore;
+    int32_t       nweapon;
+    WIKITECHWEAPON weapon[WIKITECH_WEAPONS];
+    int32_t       pic;                  /* its picture, an index of `pic`; -1 none                  */
+} WIKITECHUNIT;
+
+typedef struct {
+    int32_t w, h;                       /* 1..WIKITECH_PIC each                                     */
+    int32_t tkey;                       /* its transparent index, -1 none                          */
+    uint32_t off;                       /* its w * h palette indices at px + off, row-major          */
+} WIKITECHPIC;
+
+typedef struct {
+    char     name[WIKI_SIDE_NAME], prefix[WIKI_SIDE_NAME];
+    int32_t  commander;                 /* a unit index: the walk's first entry                     */
+    uint32_t first, norder;             /* its walk: order[first .. first + norder)                 */
+} WIKITECHSIDE;
+
+typedef struct WIKITECH {
+    int32_t             nside;
+    WIKITECHSIDE        side[WIKITECH_SIDES];
+    int8_t              of_engine[WIKITECH_SIDES];  /* the engine's side index (sidedata.tdf's) ->
+                                           its side here; -1 a side the load refused             */
+    uint32_t            norder, nmenu;
+    const uint16_t*     order;          /* every side's walk, a unit index each                     */
+    const uint32_t*     mfirst;         /* index-aligned with `order`: its menu's first entry ...   */
+    const uint16_t*     mcount;         /* ... and its length, 0 when it has none                   */
+    const uint16_t*     menu;           /* the menus' unit indices, in (page, gadget) order         */
+    int32_t             nunit;
+    const WIKITECHUNIT* unit;
+    int32_t             npic;
+    const WIKITECHPIC*  pic;
+    uint32_t            npx;
+    const unsigned char* px;
+    unsigned char       pal[256 * 4];   /* <palette>.PAL as RGBA, alpha 255                          */
+    const char*         report;         /* the load's JSON report, NUL-terminated                    */
+} WIKITECH;
+
+/* The tech tree's load, on the calling thread, over `vfs` opened on `in`'s sources: the block, or
+   NULL when there is no tree (no palette, no sidedata, no side whose commander has an FBI, a bound
+   passed, memory). `*report` as tagpu_wikiside_load's. One allocation; the DLL never frees it. */
+const WIKITECH* tagpu_wikitech_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report);
+
 /* The sidebar's load, on the calling thread, over `vfs` opened on `in`'s sources: the block, or
    NULL when the sidebar is refused (no sidedata, no side with MAIN2 and GEN screens, no palette, a layout tagpu_wikilayout_check refuses, a sheet past WIKISIDE_SHEET_MAXH, memory).
    `*report` gets the report either way, malloc'd, or NULL when memory ran out; the block keeps its
@@ -516,6 +598,16 @@ void          tagpu_wikiasset_start(WIKI3DIN* in);
 enum { WIKISIDE_PENDING, WIKISIDE_READY, WIKISIDE_REFUSED };
 int           tagpu_wikiside_get(const WIKISIDE** out);
 
+/* THE TECH TREE'S PUBLICATION, as the sidebar's (WIKISIDE_*): PENDING until the loader, after the
+   3D assets, has decided; then READY with `*out` the block, or REFUSED for good. ORDERING as
+   tagpu_wikiside_get's. Any thread; the block is never written or freed after. */
+int           tagpu_wikitech_get(const WIKITECH** out);
+
+/* The tech tree refused for good when no loader thread will ever run (the game thread could not
+   make its input): stored only over nothing published, by an interlocked compare, so a load that
+   did run keeps its answer. Any thread. */
+void          tagpu_wikitech_refuse(void);
+
 /* The published load, or NULL while it runs and for good when it failed before publishing (the
    log says why). Any thread; immutable once returned and never freed. */
 const WIKI3D* tagpu_wiki3d_get(void);
@@ -548,5 +640,21 @@ void          tagpu_wikiasset_poll(void);
    when not even the report fit. */
 const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISIDE* side, unsigned char* base,
                                 uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto));
+
+/* THE TECH TREE'S MODELS: every unit of `t` (every side's) resolved as tagpu_wiki3d_load resolves a
+   stage's unit types -- its FBI, model, script, hides and posed order, its textures searched in
+   the bank and bound -- into an arena of its own at `base`, on the same terms: every pointer in it
+   points inside it, and it is immutable and never freed once published. A WIKI3D with no stages,
+   cursors or sound, `unit` in `t->unit`'s order (unit i is t->unit[i]'s; a type that did not
+   resolve has model NULL and draws nothing); its report lists the units as the 3D load's does.
+   NULL when `t` is NULL or not even the report fit. */
+const WIKI3D* tagpu_wikitech3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t, unsigned char* base,
+                                    uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto));
+
+/* ITS PUBLICATION, as the tech tree's (WIKISIDE_*): PENDING until the loader, after the tech tree,
+   has decided; then READY with `*out` the block, or REFUSED for good (no tech tree, no address
+   space, the sources did not open). ORDERING as tagpu_wikiside_get's. Any thread; never written or
+   freed after. */
+int           tagpu_wikitech3d_get(const WIKI3D** out);
 
 #endif
