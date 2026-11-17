@@ -43,7 +43,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
-DIAG = TREE / ".data" / "impai" / "runs" / "diag"
+# the main checkout's .data, which every worktree shares (as build_wiki.py finds the venv)
+_COMMON = subprocess.run(["git", "-C", str(TREE), "rev-parse", "--git-common-dir"], capture_output=True, text=True)
+DATA = (TREE / _COMMON.stdout.strip()).resolve().parent / ".data" if _COMMON.returncode == 0 else TREE / ".data"
+DIAG = DATA / "impai" / "runs" / "diag"
 MAX_LINES = 60
 PER_PATTERN = 10
 NEAR = 300
