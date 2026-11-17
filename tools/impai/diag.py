@@ -191,7 +191,7 @@ def run_games(a) -> int:
     for k, dll in enumerate(a.dll):
         f = out / f"dll{k + 1}"
         pa = argparse.Namespace(verb="diag", dll=dll, lanes=a.lanes, setup=None, gpu=False, draw=False,
-                                keep_all=False, no_curtail=True)
+                                keep_all=True, no_curtail=True)
         rc = max(rc, bar.play_games(games, pa, f))
         folders.append(f)
     print(f"diag: {len(games)} game(s) on {len(a.dll)} DLL(s) in {out}")
