@@ -893,9 +893,23 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
 
 static int on_menu(const uint16_t* menu, int n, unsigned type);
 
+/* THE AIR PLANT TAKES THE ENERGY BUILDER (the owner's decision, 2026-11-17; decisions.md, *The air plant for the
+   blind*): 1 when jobbed builder i may be taken off its job for the air plant for the blind -- its job a BUILD of an
+   energy type (wind, solar, any IMPAI_C_ENERGY) not given in this decision, no energy stall, and its far record not
+   holding it from plants. In a stall the energy build stands (the owner's exception); air_for_blind holds in no
+   stall either, so the clause here is the rule stated where it applies, not its only guard */
+static int energy_leaver(const IMPAI_DEC* d, int i)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_JOB* j = &in->job[d->jobbed[i].slot];
+    return !d->e_stall && j->kind == IMPAI_JOB_BUILD && j->build < in->nti && in->ti[j->build].cat == IMPAI_C_ENERGY &&
+           j->since != d->now && !impai_far(d, &d->jobbed[i]);
+}
+
 /* 1 when a builder free in this decision -- idle, or a helper (THE RELEASE asks helpers for a plant), and not held
-   from plants by its far record (impai_far) -- offers plant type t. BOUND: at most 2 IMPAI_IDLE_CAP menus read,
-   into menu3 (THE CHOICE's own scratch) */
+   from plants by its far record (impai_far) -- offers plant type t; for the air plant for the blind
+   (plant_air_blind) a builder THE AIR PLANT TAKES off an energy build (energy_leaver) too. BOUND: at most
+   4 IMPAI_IDLE_CAP menus read, into menu3 (THE CHOICE's own scratch) */
 static int plant_free_builder(IMPAI_DEC* d, unsigned t)
 {
     int i;
@@ -904,6 +918,10 @@ static int plant_free_builder(IMPAI_DEC* d, unsigned t)
         if (!impai_far(d, b) && on_menu(d->menu3, d->q->ops->build_options(d->q, b->type, d->menu3, WQ_TYPES_MAX), t))
             return 1;
     }
+    for (i = 0; d->plant_air_blind && i < d->njobbed; i++)
+        if (energy_leaver(d, i) &&
+            on_menu(d->menu3, d->q->ops->build_options(d->q, d->jobbed[i].type, d->menu3, WQ_TYPES_MAX), t))
+            return 1;
     return 0;
 }
 
@@ -1587,6 +1605,30 @@ void impai_econ_assign(IMPAI_DEC* d)
         if (assign(d, &d->idle[i], 0)) {
             d->assigned++;
             d->busied++;
+        }
+    }
+    /* THE AIR PLANT TAKES THE ENERGY BUILDER: with the plant still wanted after the idle builders and the choice's
+       plant the air plant for the blind, the first builder on an energy build (energy_leaver) whose menu holds it
+       is given it, replacing the job only when a site takes it. The energy frame stays where it was ordered, for
+       the assist or a later energy want. WHY: on the naval turtle only the commander offers CORAP and it stood on
+       wind generators each time the plant was due, so the yard came first every time (MEASURED 2026-11-17,
+       exploit-naval-turtle at 4487c188, a diagnostic build: the commander's job BUILD CORWIN from 8 407, the plant
+       due from 8 587) */
+    if ((d->want_factory || d->want_tech) && !d->want_sea) {
+        if (!d->plant_done) plant_choice(d);
+        for (i = 0; d->plant_air_blind && i < d->njobbed && d->assigned + keep < in->plan->assign_max &&
+                    d->roots + keep < d->root_cap;
+             i++) {
+            const IMPAI_UNITREF* b = &d->jobbed[i];
+            const unsigned t = d->plant_t ? d->plant_t : d->plant_tw;
+            const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+            if (!t || !energy_leaver(d, i) || !on_menu(d->menu, n, t)) continue;
+            if (d->plant_t ? impai_build_ring(d, b, (int)t) : impai_build_plant_waived(d, b, (int)t)) {
+                plant_ordered(d, (int)t);
+                d->want_factory = d->want_tech = 0;
+                d->assigned++;
+                break;
+            }
         }
     }
     /* THE STALL TAKES THE RECLAIMERS: in an energy stall (impai_brain.c, THE STALLS) a builder at a reclaim, or on

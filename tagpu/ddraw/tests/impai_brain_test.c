@@ -3949,7 +3949,7 @@ static const SNAP_PATCH HOLD_PATCHES[] = {
 
 static void check_held_ground(void)
 {
-    static const char* const NAME[25] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+    static const char* const NAME[28] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
                                          "the front back, not held before", "no view", "an enemy tower in (6, 1)",
                                          "a tower of the seat's in E's cell", "a start in (6, 1)",
                                          "two enemies", "a radar contact", "a contact counted as none",
@@ -10504,7 +10504,13 @@ static void check_island_hold(void)
        and the sea's metal in the CS's reach, where the pick offers the shipyard too) and the lab's value above the
        shipyard's, so the shipyard out-ranks it: the air plant is the pick all the same, the lab;
    (y) (w) with the lab's and the shipyard's plant refusals live, so the plant is the waived pass's: it waits for
-       no builder either, the CS's shipyard. */
+       no builder either, the CS's shipyard;
+   (z) THE AIR PLANT TAKES THE ENERGY BUILDER: (p) with the commander, the one builder offering the lab, busy on a
+       wind generator's build ordered earlier, and an idle sea constructor: the commander's lab, its job the lab's;
+   (aa) (z) in an energy stall: the air plant for the blind does not hold, the commander keeps its wind generator,
+       no lab;
+   (ab) (z) with the commander on an extractor's build: only an energy build is left for it, so the air plant waits
+       for no builder, the CS's shipyard, and the commander keeps its extractor. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -10537,7 +10543,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[25] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[28] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -10554,13 +10560,16 @@ static void check_island_order(void)
                                          "(v) blind, a land plant and no shipyard",
                                          "(w) blind, the commander held, a CS idle",
                                          "(x) blind, the shipyard out-ranks the lab",
-                                         "(y) blind, the commander held, a CS idle, both plants refused" };
+                                         "(y) blind, the commander held, a CS idle, both plants refused",
+                                         "(z) blind, the commander on a wind generator, a CS idle",
+                                         "(aa) blind, the commander on a wind generator, an energy stall",
+                                         "(ab) blind, the commander on an extractor, a CS idle" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 25; c++) {
+    for (c = 0; c < 28; c++) {
         int from, vp, lab;
         const int blind = c >= 15;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
@@ -10619,6 +10628,22 @@ static void check_island_order(void)
             if (c == 24) {
                 s_pref[E_LAB].until = s_pref[E_SY].until = (uint32_t)s_w.gametime + 1000u;
             }
+            if (c >= 25) {
+                unit_add(&s_w, 9, E_CS, 130, 104, 1);
+                s_w.unit[1].list[0].action = A_MOBILEBUILD;
+                s_w.unit[1].list[0].type = c == 27 ? E_MEX : E_WIND;
+                s_w.unit[1].list[0].pos[0] = 50 << 20;
+                s_w.unit[1].list[0].pos[2] = 60 << 20;
+                s_w.unit[1].n = 1;
+                s_job[1].type = E_COM;
+                s_job[1].build = c == 27 ? E_MEX : E_WIND;
+                s_job[1].target = (uint16_t)WQ_NONE;
+                s_job[1].cx = 50;
+                s_job[1].cz = 60;
+                s_job[1].kind = IMPAI_JOB_BUILD;
+                s_job[1].since = (uint32_t)s_w.gametime - 10u;
+                if (c == 26) s_w.econ[0].energy = 0;
+            }
             if (c == 22 || c == 24) {
                 unit_add(&s_w, 9, E_CS, 130, 104, 1);
                 s_job[1].type = E_COM;
@@ -10641,9 +10666,18 @@ static void check_island_order(void)
         lab = builds_of(from, E_LAB, NULL, NULL);
         printf("the island's plant order, %s: shipyard %d, vehicle plant %d, lab %d\n", NAME[c], sy, vp, lab);
         if (c == 0) CHECK(!sy && land == 1, "%s: a land plant first", NAME[c]);
-        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || (c >= 10 && c != 15 && c != 23))
+        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || (c >= 10 && c != 15 && c != 23 && c < 25))
             CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
         if (c == 23) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
+        if (c == 25)
+            CHECK(!sy && lab == 1 && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_LAB,
+                  "%s: the commander taken off the wind generator for the lab", NAME[c]);
+        if (c == 26)
+            CHECK(!lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_WIND,
+                  "%s: the commander kept at its wind generator", NAME[c]);
+        if (c == 27)
+            CHECK(sy == 1 && !lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_MEX,
+                  "%s: the CS's shipyard, the commander kept at its extractor", NAME[c]);
         if (c == 4) CHECK(!sy && lab == 1 && !vp, "%s: never air first, the lab", NAME[c]);
         if (c == 6 || c == 15) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
         if (c == 8) CHECK(!sy && vp == 1 && !lab, "%s: a land plant, the vehicle plant", NAME[c]);

@@ -602,8 +602,15 @@ The owner's answers to the spec's questions:
   pace for a further plant, so the air plant never takes a slot the surplus alone would have paid. **What it does
   not reach**: a seat that never builds a sea army, or one whose income stays under 8, keeps the old order (air
   past two sea plants); and the air plant never makes the yard wait: with no free builder offering it, the sea
-  plant comes as before -- on the naval turtle only the commander offers the air plant and it is on energy builds
-  whenever the plant is due, so there the turtle still gets no air plant (MEASURED 2026-11-17 at 73593317).
+  plant comes as before. **The figures are kept** (owner's decision, 2026-11-17): re-fly after 2 700 ticks, the
+  water held at a sea army of 1.5 times the enemy sea army seen in three minutes, the early air plant at a steady
+  metal income of `factory_per_m` (8).
+  **The air plant takes the energy builder** (owner's decision, 2026-11-17): a due air plant for the blind takes a
+  builder off an energy build -- wind, solar, any energy type -- unless the energy store is in a stall. On the naval
+  turtle only the commander offers the air plant and it was on wind generators whenever the plant was due, so
+  before this the turtle got no air plant (MEASURED 2026-11-17 at 73593317). The energy frame stays where it was
+  ordered; a builder on any other build (an extractor, a plant, a defence) is not taken, and in a stall the air
+  plant for the blind does not hold at all.
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
