@@ -644,8 +644,11 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
    sea plant while all three hold:
    - an enemy area needs the air scout (impai_blind: THE BLIND SPOT, impai_mil.c);
    - THE WATER HELD: the seat's sea army value -- its sea classes' kspent, built, building and queued -- is above 0
-     and at least WATER_HOLD_K times the most enemy sea army value seen lately (IMPAI_MIL.sea_held), and the seat
-     lost no prediction (IMPAI_MIL.lost_t: a squad's retreat or the home losing) within WATER_CALM_T ticks;
+     and at least WATER_HOLD_K times the most enemy sea army value seen lately (IMPAI_MIL.sea_held). A lost
+     prediction does not count against it: the retreats an island seat meets are from what stands ashore -- the
+     commander at its shore, the towers --, which is what the air scout is for, not the water war (MEASURED
+     2026-11-17, exploit-naval-turtle at b54d27f3: a retreat at GameTime 8 460 from the shore, the second plant due
+     at 8 587, no enemy ship seen);
    - the economy pays for it: no metal or energy stall, not in THE HOLD, and a steady metal income (m_steady) of
      factory_per_m a pass or more, the plan's own pace for one more plant.
    WHY: "When blind AND you safely control the water. Not much upside to seeing the island if you're losing the
@@ -653,7 +656,6 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
    naval forces in the early game" (the owner, 2026-11-17). A recorded sea_held that is not a finite non-negative
    number, or a stamp past now, reads as the water not held. The figures are the writer's. */
 #define WATER_HOLD_K  1.5f      /* [hand-written: the bar's to move] the sea army over the enemy's seen         */
-#define WATER_CALM_T  1800u     /* [hand-written: the bar's to move] a minute with no lost prediction           */
 static int air_for_blind(const IMPAI_DEC* d)
 {
     const IMPAI_MIL* m = d->in->mil;
@@ -661,7 +663,6 @@ static int air_for_blind(const IMPAI_DEC* d)
     unsigned k;
     if (!m || d->sea_plants < 1 || d->air_plants || !impai_blind(m, d->now)) return 0;
     if (!(m->sea_held >= 0.0f && m->sea_held < 1e30f) || m->sea_held_t > d->now) return 0;
-    if (m->lost_t && m->lost_t <= d->now && d->now - m->lost_t <= WATER_CALM_T) return 0;
     for (k = IMPAI_K_SRAIDER; k <= IMPAI_K_SSCOUT; k++) own += d->kspent[k];
     if (!(own > 0.0f) || own < WATER_HOLD_K * m->sea_held) return 0;
     return !d->m_stall && !d->e_stall && !d->hold && d->m_steady >= d->in->plan->factory_per_m;

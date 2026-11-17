@@ -10358,7 +10358,7 @@ static void check_island_hold(void)
        second shipyard;
    (q) (p) with an enemy sea army of twice the PT boat's value seen lately (IMPAI_MIL.sea_held): the water not held,
        the second shipyard;
-   (r) (p) with a prediction lost 600 ticks ago: the second shipyard;
+   (r) (p) with an enemy sea army of the PT boat's value seen lately: not 1.5 times it, the second shipyard;
    (s) (p) without the PT boat: no sea army, the second shipyard;
    (t) (p) on an income of 7: the economy does not pay the air plant early, the second shipyard;
    (u) (p) with no area in need of the air scout: the second shipyard;
@@ -10407,7 +10407,7 @@ static void check_island_order(void)
                                          "(n) the sea's metal more, the lab offered 30 times first",
                                          "(o) the sea's metal more, the lab offering the ship constructor",
                                          "(p) blind, the water held", "(q) blind, an enemy navy seen",
-                                         "(r) blind, a prediction lost", "(s) blind, no sea army",
+                                         "(r) blind, an equal navy seen", "(s) blind, no sea army",
                                          "(t) blind, the income short", "(u) not blind, the water held",
                                          "(v) blind, a land plant and no shipyard" };
     static IMPAI_PLAN plan;
@@ -10466,11 +10466,10 @@ static void check_island_order(void)
         if (blind) {
             s_smil.blind_t = c == 20 ? 0u : (uint32_t)s_w.gametime;
             if (c != 18) unit_add(&s_w, 8, E_PT, 130, 100, 1);
-            if (c == 16) {
-                s_smil.sea_held = 2.0f * s_ti[E_PT].value;
+            if (c == 16 || c == 17) {
+                s_smil.sea_held = (c == 16 ? 2.0f : 1.0f) * s_ti[E_PT].value;
                 s_smil.sea_held_t = (uint32_t)s_w.gametime;
             }
-            if (c == 17) s_smil.lost_t = (uint32_t)s_w.gametime - 600u;
         }
         from = s_w.nlog;
         sea_decide(NAME[c], &sy, &land);

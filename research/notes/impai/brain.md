@@ -778,7 +778,8 @@ then an air plant. **The air plant for the blind** (owner's decision, 2026-11-17
 plant and with no air plant, the air plant comes ahead of the next sea plant while an enemy area needs the air
 scout (`impai_blind`), the seat holds the water -- its sea army value, built, building and queued, above 0 and at
 least 1.5 times the most enemy sea army value seen in the last three minutes (`IMPAI_MIL.sea_held`, THE WATER
-HELD, held as THE AIR HELD holds the air), and no prediction lost in the last minute (`lost_t`) -- and the economy
+HELD, held as THE AIR HELD holds the air); a lost prediction does not count, the island seat's retreats being from
+what stands ashore -- and the economy
 pays: no stall, not in the hold, a steady metal income of `factory_per_m` (8) a pass or more. The figures are the
 writer's. The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,

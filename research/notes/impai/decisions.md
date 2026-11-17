@@ -595,7 +595,9 @@ The owner's answers to the spec's questions:
   plant won't hobble your naval forces in the early game." **The heuristic** (the brain writer's figures, the bar's
   to move): (b) the seat's sea army value -- built, building and queued -- is above 0 and at least 1.5 times the
   most enemy sea army value seen in the last three minutes (held, since the picture counts a ship only while it is
-  seen), and no prediction was lost -- a squad's retreat, the home losing -- in the last minute; (c) no metal or
+  seen); a lost prediction does not count against it, since an island seat's retreats come from what stands ashore
+  -- on the naval turtle a retreat from the commander at its shore came 127 ticks before the second plant, no enemy
+  ship ever seen (MEASURED 2026-11-17 at b54d27f3) --, which is what the air scout is for; (c) no metal or
   energy stall, not in the hold, and a steady metal income of `factory_per_m` (8 a pass) or more, the plan's own
   pace for a further plant, so the air plant never takes a slot the surplus alone would have paid. **What it does
   not reach**: a seat that never builds a sea army, or one whose income stays under 8, keeps the old order (air
