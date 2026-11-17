@@ -1950,7 +1950,12 @@ static uint32_t island_classes(IMPAI_DEC* d)
    queued (kspent, this decision's earlier orders included), the factory's menu offers a type of it and the table
    gives it a share; -1 otherwise. So a layer's plant makes its scout first and a scout that died is replaced by the
    next order: scouts are expendable (impai_mil.c, SCOUTING sends them as deep as their legs go). INVARIANT, a
-   bound: a decision buys at most one scout a class, its kspent above 0 after the first. */
+   bound: such an order is one unit, never a surplus's five, and a decision gives at most one a class, its kspent
+   above 0 after the first. The surplus's cheapest buy takes no scout class (IMPAI_K_SCOUTMASK): a surplus is metal
+   for fighting value, and the cheapest type of a plant is often its scout: on Gods of War the seat built five CORPT
+   and two destroyers by the cap (MEASURED 2026-11-17, exploit-naval-turtle at bf92df19: classes sraider:2,
+   sscout:5), where the table's 0.05 share asked for one -- the rest the surplus's [INFERRED]. */
+#define IMPAI_K_SCOUTMASK ((1u << IMPAI_K_LSCOUT) | (1u << IMPAI_K_SSCOUT) | (1u << IMPAI_K_ASCOUT))
 static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
 {
     static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT };
@@ -1972,7 +1977,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
     float cost_m = 0.0f;
-    int k, t = -1, count;
+    int k, t = -1, count, scout = 0;
     if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
     eligible &= island_classes(d);
     m.t = mt;
@@ -1980,7 +1985,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     if (cheapest) {
         uint32_t i;
         for (i = 0; i < m.n; i++)
-            if ((eligible >> mt[i].klass & 1u) &&
+            if ((eligible >> mt[i].klass & 1u) && !(IMPAI_K_SCOUTMASK >> mt[i].klass & 1u) &&
                 (t < 0 || mt[i].value < in->ti[t].value || (mt[i].value == in->ti[t].value && mt[i].type < t)))
                 t = mt[i].type;
         if (t < 0) return 0;
@@ -1994,13 +1999,12 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
             if (type[k] < 0) type[k] = impai_class_type(&mil->table, &mil->pic, &m, (unsigned)k, in->pred);
             if (type[k] > 0 && (unsigned)type[k] < in->nti) cost[k] = in->ti[type[k]].value;
         }
-        if ((k = scout_due(d, share, type, eligible)) < 0 &&
-            (k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0)
-            return 0;
+        if ((k = scout_due(d, share, type, eligible)) >= 0) scout = 1;
+        else if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0) return 0;
         if (type[k] <= 0) return 0;
         t = type[k];
     }
-    count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;
+    count = d->surplus && in->acts >= 0 && !scout ? surplus_count(d, t, &cost_m) : 1;
     if ((int64_t)d->gov_a + count > army_rows(d, t)) {
         if ((int64_t)d->gov_a + count <= IMPAI_ARMY_MAX && d->out->finish_rows < 0xFFFF) d->out->finish_rows++;
         return 0;

@@ -6725,8 +6725,8 @@ static void check_gov_refused(void)
     s_milp = NULL;
 }
 
-/* A SURPLUS: a factory whose menu holds only an air scout, which the table buys none of: with the store at 0.5 no
-   order and fidle 0; at 0.9 the scout, its cheapest army type -- one with no action budget, WQ_QUEUE_MAX of it in
+/* A SURPLUS: a factory whose menu holds only a gunship, which the table buys none of: with the store at 0.5 no
+   order and fidle 0; at 0.9 the gunship, its cheapest army type -- one with no action budget, WQ_QUEUE_MAX of it in
    one order with one. A factory whose menu holds only the constructor, cons_max of them standing, at 0.9: no order
    and fidle 1. */
 static void check_gov_surplus(void)
@@ -6738,13 +6738,13 @@ static void check_gov_surplus(void)
         int from;
         gov_world(1);
         menu_set(&s_w, T_FACTORY, AIR, 1);
-        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
         if (k) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
         s_gov_acts = k == 2 ? 3 : -1;
         from = s_w.nlog;
         CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
         s_gov_acts = -1;
-        printf("governor, an air scout alone, store %.1f%s: queued %d army (count %d), fidle %u, army %u\n",
+        printf("governor, a gunship alone, store %.1f%s: queued %d army (count %d), fidle %u, army %u\n",
                k ? 0.9 : 0.5, k == 2 ? ", a budget of 3" : "", a, queue_count(from, M_SCOUT), bo.fidle, bo.army);
         CHECK(k ? a == 1 && bo.fidle == 0 : a == 0 && bo.fidle == 0, "the surplus buys the cheapest army type, case %d",
               k);
@@ -6762,15 +6762,44 @@ static void check_gov_surplus(void)
     s_milp = NULL;
 }
 
+/* THE SCOUT FIRST in a surplus (impai_econ.c, scout_due, queue_army) on a budget of 3, the store at 0.9:
+   (a) the factory's menu a land scout and the tank, no scout standing: the order is the scout, one unit, never the
+       surplus's five;
+   (b) its menu a land scout and the anti-air K-bot, the table's scout share 0 and nothing in the air, so the table
+       buys nothing: the surplus's cheapest buy takes the K-bot, though the scout is the cheaper. */
+static void check_gov_scout_surplus(void)
+{
+    static const uint16_t MENU[2][2] = { { M_SCOUT, M_TANK }, { M_SCOUT, M_AA } };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 2; k++) {
+        int from;
+        gov_world(1);
+        menu_set(&s_w, T_FACTORY, MENU[k], 2);
+        if (k) s_mil.table.base[IMPAI_K_LSCOUT] = 0.0f;
+        s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        s_gov_acts = 3;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        s_gov_acts = -1;
+        s_mil.table = IMPAI_TABLE_HAND;
+        printf("the scout first in a surplus, case %d: scouts queued %d, tanks %d, anti-air %d\n", k,
+               queue_count(from, M_SCOUT), queue_count(from, M_TANK), queue_count(from, M_AA));
+        if (!k) CHECK(queue_count(from, M_SCOUT) == 1 && !queue_count(from, M_TANK), "(a) one scout");
+        else CHECK(!queue_count(from, M_SCOUT) && queue_count(from, M_AA) >= 1, "(b) the cheapest buy takes no scout");
+    }
+    s_milp = NULL;
+}
+
 /* THE FIVE, bounded, and THE ARMY'S ROWS, on a budget of 8 with the store at 900 of 1 000 and the hold's line at
-   200, so 700 metal above it, each factory's menu the air scout alone:
-   (a) one factory, the scout at 300 metal: two units in the order (700 / 300);
-   (b) two factories, the scout at 150: the first order shares the 700 between the two factories, 2 units; the
+   200, so 700 metal above it, each factory's menu the gunship alone:
+   (a) one factory, the gunship at 300 metal: two units in the order (700 / 300);
+   (b) two factories, the gunship at 150: the first order shares the 700 between the two factories, 2 units; the
        second takes what the first left past its first unit, (700 - 150) / 150, 3 units;
-   (c) one factory, the scout at 40, 510 army units standing: 2 units, what the rows leave;
+   (c) one factory, the gunship at 40, 510 army units standing: 2 units, what the rows leave;
    (d) the same with 512 standing: no order, and the factory counted idle;
    (e) the same with no budget: no order either;
-   (f) two factories, the scout at 40, 508 standing: one order of the 4 units the rows leave, which the governor
+   (f) two factories, the gunship at 40, 508 standing: one order of the 4 units the rows leave, which the governor
        counts whole, so the second factory takes none and is counted idle. */
 static int queue_counts(int from, int* second)
 {
@@ -7195,10 +7224,10 @@ static void check_eco_shares(void)
 }
 
 /* THE FIVE, bounded (impai_econ.c, surplus_count) on a budgeted seat in a surplus, the store at 0.9 of the storage,
-   the factory's menu one air scout: one factory at 300 metal a unit, two units; two at 150, two then three, the
+   the factory's menu one gunship: one factory at 300 metal a unit, two units; two at 150, two then three, the
    second order sharing what the first left; 510 army units, the rows' two; 512, none, with or without a budget,
    the factory counted idle; two factories at 508, one order of the rows' four. THE QUEUED METAL (impai_brain.c):
-   two factories at 150, the second busy with a count node of three scouts -- two past the one it makes, 300 of
+   two factories at 150, the second busy with a count node of three gunships -- two past the one it makes, 300 of
    the store --: the idle one's order is two units, where the whole store buys four and the made unit counted
    too leaves one. A NaN metal cost: one unit, never the queue's five. */
 static void check_gov_five(void)
@@ -7214,7 +7243,7 @@ static void check_gov_five(void)
         int from, first, second;
         gov_world(k == 1 || k == 5 || k == 6 ? 2 : 1);
         menu_set(&s_w, T_FACTORY, AIR, 1);
-        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
         s_w.defs[M_SCOUT].e.cost_m = k == 0 ? 300.0f : k == 1 || k == 6 ? 150.0f : k == 7 ? NAN : 40.0f;
         s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
         if (k == 6) {
@@ -15321,6 +15350,7 @@ static void check_military(void)
     check_gov_pressure();
     check_gov_refused();
     check_gov_surplus();
+    check_gov_scout_surplus();
     check_gov_five();
     check_gov_dry();
     check_army_targets();

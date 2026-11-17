@@ -624,7 +624,9 @@ rate. **The scout first** (owner's decision, 2026-11-17): a surface layer's scou
 a mobile armed type of the classifier's role SCOUT (CORFAV, ARMFAV, ARMFLEA on land, CORPT at sea) -- is the class of
 the order whenever the seat holds none of it, built, building or queued, the menu offers it and the table gives it a
 share (0.05 on each surface layer in the default table), so a layer's plant makes its scout first and replaces a dead
-one with its next order. In surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
+one with its next order; that order is one unit, never a surplus's five. In surplus a factory whose table buy finds
+nothing buys its cheapest army type that is no scout -- the cheapest of a plant is often its scout: with scouts in that buy,
+Gods of War's shipyard made five CORPT beside two destroyers (MEASURED 2026-11-17 at bf92df19) --, and one with no army type at
 all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues up to five units an army order
 in a surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one
 unit otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no
