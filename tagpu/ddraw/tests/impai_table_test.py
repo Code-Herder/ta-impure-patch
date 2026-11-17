@@ -98,7 +98,7 @@ def file_check():
         tablefile.write(changed, t)
         rc, out = run("native", "load", str(changed))
         text = out.decode()
-        if rc != 0 or not text.startswith(f"ok {t.hash_hex()}") or " 12:13:0.75" not in text or \
+        if rc != 0 or not text.startswith(f"ok {t.hash_hex()}") or " 12:14:0.75" not in text or \
                 "counter 2.5 " not in text:
             bad.append(f"a table tablefile.py wrote: the C loader says {text.strip()!r}")
         raw = bytearray(changed.read_bytes())

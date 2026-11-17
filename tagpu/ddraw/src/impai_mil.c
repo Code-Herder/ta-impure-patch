@@ -266,7 +266,7 @@ static int unreached(const MDEC* d, unsigned L, int32_t x, int32_t z)
 static uint8_t layer_of_class(unsigned k)
 {
     if ((IMPAI_K_AIRMASK >> k) & 1u) return TASIM_LAYER_AIR;
-    if (k >= IMPAI_K_SRAIDER && k <= IMPAI_K_SAA) return TASIM_LAYER_SEA;
+    if (k >= IMPAI_K_SRAIDER && k <= IMPAI_K_SSCOUT) return TASIM_LAYER_SEA;
     return TASIM_LAYER_LAND;
 }
 
@@ -2862,8 +2862,9 @@ static int starts_reached(MDEC* d, const MUNIT* u)
 /* 1 when u is at least half its maximum health (THE LAYER'S LAST HEALTHY UNIT, scout_pick) */
 static int healthy(const MUNIT* u) { return 2 * (int64_t)u->hp >= (int64_t)u->hp_max; }
 
-/* the scout of layer L (scouting): the dearest unit of L's scout class (IMPAI_K_LSCOUT, IMPAI_K_ASCOUT; the sea has
-   none) in a FORM squad, else the cheapest of L's FORM units among the fastest quarter of their speeds; -1 none.
+/* the scout of layer L (scouting): the dearest unit of L's scout class (IMPAI_K_LSCOUT, IMPAI_K_SSCOUT,
+   IMPAI_K_ASCOUT) in a FORM squad, else the cheapest of L's FORM units among the fastest quarter of their speeds;
+   -1 none.
    THE LAYER'S LAST HEALTHY UNIT: while the estimate rests on an enemy structure -- L's wave, forming or waiting
    in its FORM squad, has a goal known --, the scout is never L's only healthy army unit (healthy: at least half
    its maximum health, whatever its squad): the pick then takes only a unit below that, and none when there is
@@ -2876,7 +2877,7 @@ static int healthy(const MUNIT* u) { return 2 * (int64_t)u->hp >= (int64_t)u->hp
    75236135's code). BOUND: the army three times. */
 static int scout_pick(const MDEC* d, unsigned L)
 {
-    const unsigned sk = L == TASIM_LAYER_LAND ? IMPAI_K_LSCOUT : L == TASIM_LAYER_AIR ? IMPAI_K_ASCOUT : IMPAI_KS;
+    const unsigned sk = L == TASIM_LAYER_LAND ? IMPAI_K_LSCOUT : L == TASIM_LAYER_SEA ? IMPAI_K_SSCOUT : IMPAI_K_ASCOUT;
     int k, pick = -1, fit = 0, keep;
     int32_t fastest = 0;
     for (k = 0; k < d->narmy; k++) {
@@ -2905,7 +2906,9 @@ static int scout_pick(const MDEC* d, unsigned L)
    squad of one to the start positions that can hold an enemy's base (THE FOE'S STARTS), from scout_next on, round
    the list, those no army unit has stood in first, of those it reaches; with none in any layer it does not go.
    Once its legs have visited every start it reaches, the next leg is the sweep's cell (sweep_goal) with ties to
-   the nearest the scout. It ends at the third point, at a contact, or with no point left it reaches.
+   the nearest the scout. It ends at the third point or with no point left it reaches, never at a contact: a scout is
+   expendable and goes as deep as its legs go (the owner's decision, 2026-11-17), so on the sea a leg to a start
+   ashore is a peek at the shore and the next leg pulls it away.
    THE SCOUT'S LAYER: land first, so a seat whose land army reaches a start scouts with it; the sea and the air only
    when no land scout has a start to go to, so a seat whose land army reaches no start still learns where the enemy
    stands. WHY: on Gods of War, whose starts stand on islands, no land unit reached a start, so the seat sent no
@@ -3194,7 +3197,7 @@ static void tasks(MDEC* d)
             }
         }
         if (q->task == IMPAI_SQ_SCOUT) {
-            if (best >= 0 || task_over(d, s)) back_to_form(d, s);
+            if (task_over(d, s)) back_to_form(d, s);
             else scout_step(d, s);
             continue;
         }

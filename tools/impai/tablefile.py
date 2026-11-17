@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tablefile.py -- ImpAI's response table as a file: the 132 bytes of IMPAI_TABLE, little-endian, then their
+"""tablefile.py -- ImpAI's response table as a file: the 136 bytes of IMPAI_TABLE, little-endian, then their
 FNV-1a 64 as 8 little-endian bytes (tagpu/ddraw/src/impai_table.h, THE FILE).
 
     tablefile.py show FILE          its hash and numbers
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CLASSES = ["lraider", "lassault", "lartillery", "lantiair", "lscout", "sraider", "sassault", "sartillery",
-           "santiair", "fighter", "bomber", "gunship", "ascout"]                       # IMPAI_K_*
+           "santiair", "sscout", "fighter", "bomber", "gunship", "ascout"]                       # IMPAI_K_*
 FEATURES = ["lraider", "lassault", "lartillery", "sea", "fighter", "bomber", "gunship", "defence", "antiair",
             "income", "time", "tech", "air", "lowaa"]                                  # IMPAI_F_*, then derived
 GROUPS = ["aa", "sea"]                                                                 # IMPAI_KG_*
@@ -22,14 +22,14 @@ ROWS = ["aa_air", "lartillery_defence", "lraider_lartillery", "lassault_lraider"
         "fighter_gunship", "bomber_lowaa", "sea_sea"]                                  # IMPAI_R_*
 AIR = {"fighter", "bomber", "gunship", "ascout"}
 SURFACE_LAND = {"lraider", "lassault", "lartillery", "lantiair", "lscout"}
-SURFACE_SEA = {"sraider", "sassault", "sartillery", "santiair"}
+SURFACE_SEA = {"sraider", "sassault", "sartillery", "santiair", "sscout"}
 
 KS = len(CLASSES)
 RESPONSES = len(ROWS)
 FMT = "<" + "f" * KS + "BBHf" * RESPONSES + "ffff"
 TABLE_BYTES = struct.calcsize(FMT)
 FILE_BYTES = TABLE_BYTES + 8
-assert TABLE_BYTES == 132
+assert TABLE_BYTES == 136
 
 
 class TableError(ValueError):

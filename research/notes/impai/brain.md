@@ -167,7 +167,7 @@ What the stock AI does, from the engine map ([orders](../engine/orders.html), *T
 As built (`impai_mil.c`; its engine glue: [ImpAI in the engine](../modules/impai.html), *The military*). One
 decision a seat every `look_mil` ticks of its persona, on a tick the economy never takes:
 
-1. **The army**: the seat's finished mobile units with an army class (A3's thirteen, by layer and role), at most
+1. **The army**: the seat's finished mobile units with an army class (the fourteen, by layer and role), at most
    512. **A type that deals no damage has no class** (`impai_class_of`): the classifier's damage per second, ground
    or air, must be above 0, so a jammer or a radar unit, which takes role SCOUT for having no regular weapon, is
    neither bought nor counted as army -- 17 retail types, the scouts' jammers, spies and radar units and the radar
@@ -384,9 +384,12 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    large mixed squad does not make it count aircraft; a RAID of three to six of a FORM squad's fastest units
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
    once; one SCOUT walks the start positions it reaches in turn -- first those no army unit of the seat has stood
-   in, so a trip that ends at its first contact still reaches a start not yet looked at -- and then the sweep's
+   in, so a trip cut short still leaves a start not yet looked at for the next -- and then the sweep's
    cells (ties to the nearest the scout), three legs, every `scout_period` or while the estimate rests on no
-   structure. **The scout's layer**: the scout is the first of land, sea and air whose FORM squads hold one with a
+   structure. **The scout goes deep** (owner's decision, 2026-11-17): a contact does not end its trip -- only its
+   third leg, no leg left or its lifetime --, so a scout is expendable, and at sea a leg to a start ashore is a peek
+   at the shore the next leg pulls it away from; what it sees becomes rows, and the stand-off shells a remembered
+   defence from them. **The scout's layer**: the scout is the first of land, sea and air whose FORM squads hold one with a
    start to go to -- the dearest of the layer's scout class, else the cheapest of its fastest quarter --, so a land
    army that reaches a start scouts as before, and a seat whose land army reaches none still learns where the enemy
    stands: on Gods of War no land unit reached a start, and the seat sent no scout and saw no enemy to the cap, a
@@ -617,7 +620,11 @@ factories' count nodes, each held to 255 -- a count node holds the unit in progr
 The army unit's class comes from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the
 army's value by class, finished and queued -- the count nodes hold the units in progress, so a frame is counted
 once, by its node) and its type from `impai_class_type` with the predictor's pair
-rate; in surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
+rate. **The scout first** (owner's decision, 2026-11-17): a surface layer's scout class -- `lscout` or `sscout`,
+a mobile armed type of the classifier's role SCOUT (CORFAV, ARMFAV, ARMFLEA on land, CORPT at sea) -- is the class of
+the order whenever the seat holds none of it, built, building or queued, the menu offers it and the table gives it a
+share (0.05 on each surface layer in the default table), so a layer's plant makes its scout first and replaces a dead
+one with its next order. In surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
 all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues up to five units an army order
 in a surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one
 unit otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no

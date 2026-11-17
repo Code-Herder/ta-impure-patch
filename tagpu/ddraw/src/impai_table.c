@@ -12,7 +12,7 @@ SIM_FEATURE(impai_table, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe 
 /* the file format is the struct's bytes: its size and its rows' layout are the format */
 typedef char impai_table_size_is_the_format[sizeof(IMPAI_TABLE) == IMPAI_TABLE_BYTES ? 1 : -1];
 typedef char impai_response_is_8_bytes[sizeof(IMPAI_RESPONSE) == 8 ? 1 : -1];
-typedef char impai_response_rows_at_52[offsetof(IMPAI_TABLE, r) == 52 ? 1 : -1];
+typedef char impai_response_rows_at_56[offsetof(IMPAI_TABLE, r) == 56 ? 1 : -1];
 typedef char impai_classes_fit_a_mask[IMPAI_KS <= 32 ? 1 : -1];
 
 /* ---- the classes ---- */
@@ -79,7 +79,7 @@ unsigned impai_class_of(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out)
         case TASIM_ROLE_ASSAULT:   return IMPAI_K_SASSAULT;
         case TASIM_ROLE_ARTILLERY: return IMPAI_K_SARTY;
         case TASIM_ROLE_ANTIAIR:   return IMPAI_K_SAA;
-        default:                   return IMPAI_K_NONE;
+        default:                   return IMPAI_K_SSCOUT;
         }
     }
     switch (out->role) {
@@ -95,7 +95,7 @@ const char* impai_class_name(unsigned k)
 {
     static const char* const name[IMPAI_KS] = {
         "lraider", "lassault", "lartillery", "lantiair", "lscout", "sraider", "sassault", "sartillery",
-        "santiair", "fighter", "bomber", "gunship", "ascout" };
+        "santiair", "sscout", "fighter", "bomber", "gunship", "ascout" };
     return k < IMPAI_KS ? name[k] : "none";
 }
 
@@ -115,7 +115,7 @@ static float share_of(float v, float total)
 void impai_picture_features(const IMPAI_PICTURE_IN* in, IMPAI_PICTURE* p)
 {
     float sea = in->kval[IMPAI_K_SRAIDER] + in->kval[IMPAI_K_SASSAULT] + in->kval[IMPAI_K_SARTY] +
-                in->kval[IMPAI_K_SAA];
+                in->kval[IMPAI_K_SAA] + in->kval[IMPAI_K_SSCOUT];
     float ratio;
     p->f[IMPAI_F_LRAIDER]  = share_of(in->kval[IMPAI_K_LRAIDER], in->total);
     p->f[IMPAI_F_LASSAULT] = share_of(in->kval[IMPAI_K_LASSAULT], in->total);
@@ -143,7 +143,7 @@ void impai_picture_features(const IMPAI_PICTURE_IN* in, IMPAI_PICTURE* p)
    income; the type choice at counter 1, which prefers a type that counters the picture best while it costs no
    more than e times the cheapest of its class. */
 #define IMPAI_TABLE_HAND_INIT {                                                                             \
-    { 0.25f, 0.45f, 0.15f, 0.0f, 0.05f,  0.25f, 0.45f, 0.15f, 0.0f,  0.0f, 0.0f, 0.0f, 0.0f },              \
+    { 0.25f, 0.45f, 0.15f, 0.0f, 0.05f,  0.25f, 0.45f, 0.15f, 0.0f, 0.05f,  0.0f, 0.0f, 0.0f, 0.0f },              \
     { { IMPAI_F_AIR,      IMPAI_KG_AA,      0, 1.5f },                                                       \
       { IMPAI_F_DEFENCE,  IMPAI_K_LARTY,    0, 0.0f },                                                       \
       { IMPAI_F_LARTY,    IMPAI_K_LRAIDER,  0, 0.0f },                                                       \

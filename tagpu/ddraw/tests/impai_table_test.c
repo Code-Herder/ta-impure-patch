@@ -92,7 +92,7 @@ static void test_classes(void)
         { TASIM_ROLE_ASSAULT,   TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SASSAULT, "sea assault" },
         { TASIM_ROLE_ARTILLERY, TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SARTY,    "sea artillery" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_SEA,  TASIM_RF_MOBILE, TASIM_WF_TOAIR, IMPAI_K_SAA, "sea anti-air" },
-        { TASIM_ROLE_SCOUT,     TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE, "a sea scout is no class" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SSCOUT,   "sea scout" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_TOAIR, IMPAI_K_FIGHTER, "fighter" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_TOAIR | TASIM_WF_DROPPED, IMPAI_K_FIGHTER,
           "anti-air is tested before the drop" },

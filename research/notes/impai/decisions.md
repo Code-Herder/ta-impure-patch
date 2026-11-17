@@ -675,6 +675,22 @@ the approval, each with its evidence; the owner may reverse any of them:
   the cap. A leg is arrived at where travel sends the scout, as a squad's arrival reads it, and a leg with nowhere
   to travel to is over at once. **What it costs**: a ship's scouting trip ends at the water nearest the start, which
   may lie past its sight of it.
+- **Scouts are cheap, fast, bought first and expendable** (owner's decision, 2026-11-17: "we can use cheap scouts to
+  see what is on the island and then shell it from memory or use that to attack. On land we use weasels or
+  equivalent [...] and on water it's ships like skeeters [...] Scouts are expected to die and go as deep as they
+  can."). Each surface layer has a scout class by the classifier's role -- a mobile armed type of role SCOUT: the
+  land scout (`lscout`: ARMFAV, CORFAV, ARMFLEA) and the sea scout (`sscout`, new: CORPT) --, and its plant buys one
+  before any other class whenever the seat holds none of it, built, building or queued, so the first unit of a layer
+  is its scout and a dead scout is replaced by the next order; the table's base share for the sea scout is the land
+  scout's 0.05. A scout's trip no longer ends at its first contact: it walks its legs to the end, so on the sea a
+  leg to a start ashore is a peek at the shore, and the next leg pulls it away. What it sees becomes the seat's rows,
+  and the army shells a remembered defence from them (the stand-off's ground attack, bounded by the unreached ring).
+  **Not the rule**: blind fire at a start never seen -- the owner calls it an option; scouting comes first.
+  **Repair stays removed** (*The mend: removed*, reconfirmed by the owner on 2026-11-17). **What it does not reach**:
+  a seat whose side has no role-SCOUT type on a layer (ARM's skeeter, ARMPT, is a raider by the classifier's
+  thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea
+  scout sees 280 px, less than a destroyer's 330, so on Gods of War it sees no farther inland than the navy (the
+  naval turtle: [the bar](bar.html), *The exploiter suite*).
 - **A type is bought only if its weapons can hit a target class the seat knows or expects** (coordinator's call,
   2026-11-17, approving the brain writer's proposal). The classes are dry, floating, under the sea and air, as the
   engine's can-engage test sorts a target; known are those of the enemies the military counted within 5 400 ticks,

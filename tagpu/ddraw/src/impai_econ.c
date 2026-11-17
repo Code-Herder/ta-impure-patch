@@ -1701,7 +1701,7 @@ static int queue_units(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type, int count
    of the census's lists, at most IMPAI_GATE_TYPES, and one for each idle factory of a type past them. */
 /* type `type`'s army classes and its best value in each gated class by `mask` and without the reach, into
    *classes, best[] and all[]. BOUND: a menu type's class indexes best[] and all[] only once tested below
-   IMPAI_GATE_K -- an army class runs to IMPAI_KS (13), and the rows sit inside IMPAI_DEC, where an overrun
+   IMPAI_GATE_K -- an army class runs to IMPAI_KS (14), and the rows sit inside IMPAI_DEC, where an overrun
    would write the memo's next fields unseen by any sanitizer */
 static void gate_read(IMPAI_DEC* d, unsigned type, unsigned T, uint32_t mask, uint32_t* classes,
                       float best[IMPAI_GATE_K], float all[IMPAI_GATE_K])
@@ -1944,6 +1944,24 @@ static uint32_t island_classes(IMPAI_DEC* d)
     return land < ISLAND_LAND_SHARE * all ? 0xFFFFFFFFu : ~IMPAI_K_LANDMASK;
 }
 
+/* THE SCOUT FIRST (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *Scouts are cheap, fast,
+   bought first and expendable*): a surface layer's scout class -- IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, a mobile armed type
+   of the classifier's role SCOUT -- is the class of the order whenever the seat holds none of it, built, building or
+   queued (kspent, this decision's earlier orders included), the factory's menu offers a type of it and the table
+   gives it a share; -1 otherwise. So a layer's plant makes its scout first and a scout that died is replaced by the
+   next order: scouts are expendable (impai_mil.c, SCOUTING sends them as deep as their legs go). INVARIANT, a
+   bound: a decision buys at most one scout a class, its kspent above 0 after the first. */
+static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
+{
+    static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT };
+    unsigned i;
+    for (i = 0; i < sizeof SK; i++) {
+        const unsigned k = SK[i];
+        if ((eligible >> k & 1u) && share[k] > 0.0f && !(d->kspent[k] > 0.0f) && type[k] > 0) return (int)k;
+    }
+    return -1;
+}
+
 static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, uint32_t eligible, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1976,7 +1994,10 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
             if (type[k] < 0) type[k] = impai_class_type(&mil->table, &mil->pic, &m, (unsigned)k, in->pred);
             if (type[k] > 0 && (unsigned)type[k] < in->nti) cost[k] = in->ti[type[k]].value;
         }
-        if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) return 0;
+        if ((k = scout_due(d, share, type, eligible)) < 0 &&
+            (k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0)
+            return 0;
+        if (type[k] <= 0) return 0;
         t = type[k];
     }
     count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;

@@ -6339,7 +6339,7 @@ static void check_production(void)
     IMPAI_BRAIN_OUT bo;
     WORLDQ q = { &FAKE, &s_w, 0 };
     float s[IMPAI_KS];
-    int n[M_N], k, from, i;
+    int n[M_N], k, from, i, first = -1, again = 0;
     impai_table_shares(&IMPAI_TABLE_HAND, &s_mil.pic, (1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) |
                                                        (1u << IMPAI_K_LARTY) | (1u << IMPAI_K_LSCOUT), s);
     printf("hand table, empty picture, land: raider %.3f assault %.3f artillery %.3f scout %.3f anti-air %.3f "
@@ -6353,7 +6353,11 @@ static void check_production(void)
     s_w.econ[0].metal_in = 3.0f;
     memset(n, 0, sizeof n);
     s_milp = &s_mil;
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i <= 20; i++) {
+        /* the twenty-first decision: every scout dead */
+        if (i == 20)
+            for (k = 100; k < 120; k++)
+                if (s_w.unit[k].type == M_SCOUT) memset(&s_w.unit[k], 0, sizeof s_w.unit[k]);
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_st;
@@ -6375,6 +6379,8 @@ static void check_production(void)
         CHECK(impai_brain_decide(&in, &bo) == 0, "a production decision runs");
         for (k = from; k < s_w.nlog; k++)
             if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type < M_N) {
+                if (first < 0) first = s_w.log[k].c.type;
+                if (i == 20) again = s_w.log[k].c.type;
                 n[s_w.log[k].c.type]++;
                 /* the factory finishes it at once: a unit of the type in a free slot, its queue empty */
                 own(100 + i, s_w.log[k].c.type, 40 + i, 40);
@@ -6383,11 +6389,57 @@ static void check_production(void)
         s_w.gametime += 15;
     }
     s_milp = NULL;
-    printf("production, 20 decisions: raider %d tank %d scout %d\n", n[M_RAIDER], n[M_TANK], n[M_SCOUT]);
+    printf("production, 20 decisions: raider %d tank %d scout %d; the first %d, with every scout dead %d\n",
+           n[M_RAIDER], n[M_TANK], n[M_SCOUT], first, again);
+    CHECK(first == M_SCOUT, "the scout first: the first unit is the scout, %d", first);
+    CHECK(again == M_SCOUT, "the scout first: with every scout dead the next unit is a scout, %d", again);
+    for (k = 100; k < 121; k++)
+        if (s_w.unit[k].type == M_SCOUT) memset(&s_w.unit[k], 0, sizeof s_w.unit[k]);
+    s_w.unit[2].n = 0;
+    s_mil.table.base[IMPAI_K_LSCOUT] = 0.0f;
+    s_milp = &s_mil;
+    in.ti = s_ti;
+    from = s_w.nlog;
+    CHECK(impai_brain_decide(&in, &bo) == 0, "the no-scout-share decision runs");
+    s_milp = NULL;
+    for (again = -1, k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE) again = s_w.log[k].c.type;
+    s_mil.table = IMPAI_TABLE_HAND;
+    CHECK(again >= 0 && again != M_SCOUT, "the scout first: no scout with the table's scout share 0, %d", again);
     CHECK(n[M_RAIDER] + n[M_TANK] + n[M_SCOUT] >= 15, "the factory builds army");
     CHECK(n[M_TANK] * s_ti[M_TANK].value > n[M_RAIDER] * s_ti[M_RAIDER].value &&
               n[M_RAIDER] * s_ti[M_RAIDER].value > n[M_SCOUT] * s_ti[M_SCOUT].value,
           "the value bought follows the shares: assault, raider, scout");
+}
+
+/* SCOUTING GOES DEEP (impai_mil.c, the owner's decision of 2026-11-17): check_mil_raid_scout's scout on its first
+   leg; an armed enemy tank comes into sight beside it, within its reach: the scout stays a SCOUT and its leg goes
+   on. */
+static void check_mil_scout_deep(void)
+{
+    static const WQ_START STARTS[] = { { 328, 328, 0, 0 }, { 6000, 328, 1, 0 }, { 328, 3000, 2, 0 }, { 6000, 3000, 3, 0 } };
+    IMPAI_MIL_OUT o;
+    int k, s = -1, tx, tz;
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 4;
+    own(1, M_TANK, 24, 24);
+    own(7, M_SCOUT, 30, 30);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the deep scout's decision runs");
+    for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    CHECK(s >= 0, "a scout goes");
+    if (s < 0) return;
+    tx = s_mil.sq[s].tx;
+    tz = s_mil.sq[s].tz;
+    s_w.unit[7].pos[0] = (int32_t)(tx * 32 + 16 - 1200) << 16;
+    s_w.unit[7].pos[2] = (int32_t)(tz * 32 + 16) << 16;
+    enemy(1300, M_TANK, (tx * 32 + 16 - 1100) / 16, (tz * 32 + 16) / 16, IMPAI_LOS, 1);
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the deep scout's contact decision runs");
+    printf("the deep scout: task %d, leg (%d, %d) -> (%d, %d)\n", s_mil.sq[s].task, tx, tz, s_mil.sq[s].tx,
+           s_mil.sq[s].tz);
+    CHECK(s_mil.sq[s].task == IMPAI_SQ_SCOUT && s_mil.sq[s].tx == tx && s_mil.sq[s].tz == tz,
+          "a contact does not end the scout's trip");
 }
 
 /* THE GOVERNOR (impai_econ.c) on check_production's harness: the military's world, a commander, one or two
@@ -9566,6 +9618,29 @@ static void check_scout_healthy(void)
     }
 }
 
+/* THE SEA SCOUT (impai_mil.c, scout_pick): check_scout_healthy's (a) world with a submarine and a destroyer of the
+   sea scout class, both healthy and as fast: the scout is the destroyer, its layer's scout class, though the
+   submarine is the cheaper. */
+static void check_scout_sea_class(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, s = -1, who = -1;
+    mil_world();
+    mil_water(W_STRAIT);
+    s_ti[M_DEST].klass = IMPAI_K_SSCOUT;
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.nstarts = 2;
+    own(40, M_SUB, 244, 40);
+    own(41, M_DEST, 246, 40);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea scout class's decision runs");
+    for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    for (k = 40; k < 42; k++) if (s >= 0 && s_job[k].kind == IMPAI_JOB_SQUAD && s_job[k].squad == s) who = k;
+    printf("the sea scout class: scouts %u, the scout %d\n", o.scouts, who);
+    CHECK(o.scouts == 1 && who == 41, "the sea scout class scouts, %d", who);
+}
+
 static void check_scout_layer(void)
 {
     IMPAI_MIL_OUT o;
@@ -10939,6 +11014,7 @@ static void check_frames_once(void)
     f->list[0].count = 1;
     f->n = 1;
     unit_add(&s_w, 5, M_TANK, 30, 32, 0);
+    unit_add(&s_w, 6, M_SCOUT, 34, 32, 1);      /* a scout, so THE SCOUT FIRST holds no order */
     gov_units(M_RAIDER, nr, 100);
     from = s_w.nlog;
     gov_decide(&bo, &cons, &army);
@@ -15218,6 +15294,8 @@ static void check_military(void)
     check_mil_goal_side();
     check_mil_contact_defences();
     check_mil_stand_off();
+    check_mil_scout_deep();
+    check_scout_sea_class();
     check_mil_stand_out();
     check_mil_stand_progress();
     check_mil_estimate();

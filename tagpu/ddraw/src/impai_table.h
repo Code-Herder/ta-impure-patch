@@ -1,6 +1,6 @@
 #ifndef IMPAI_TABLE_H
 #define IMPAI_TABLE_H
-/* impai_table.h -- how ImpAI's army is bought: the thirteen classes a unit type falls into, the picture of the
+/* impai_table.h -- how ImpAI's army is bought: the fourteen classes a unit type falls into, the picture of the
    enemy a seat has seen, the response table that turns the picture into each class's share of the army, and the
    buy, which turns the shares into units. research/notes/impai/brain.md, Adaptation.
 
@@ -19,7 +19,7 @@
 
 /* A class is a role on a layer, with the air layer split by weapon kind:
      land: raider, assault, artillery, anti-air, scout -- the role classifier's roles (tasim_roles.h);
-     sea:  raider, assault, artillery, anti-air -- a sea scout is no class;
+     sea:  raider, assault, artillery, anti-air, scout;
      air:  fighter (the classifier's anti-air), bomber (a DROPPED weapon), air scout (the classifier's scout),
            gunship (any other armed flyer), tested in that order.
    A retail fighter is anti-air by its slot's bad-target category NOTAIR, not by `toairweapon`, which no
@@ -30,7 +30,7 @@
    economy's. Derived from the classifier's output and the def's weapons alone, so every mod is classified by the
    same rule (one table for every mod, research/notes/impai/decisions.md). */
 enum { IMPAI_K_LRAIDER, IMPAI_K_LASSAULT, IMPAI_K_LARTY, IMPAI_K_LAA, IMPAI_K_LSCOUT,
-       IMPAI_K_SRAIDER, IMPAI_K_SASSAULT, IMPAI_K_SARTY, IMPAI_K_SAA,
+       IMPAI_K_SRAIDER, IMPAI_K_SASSAULT, IMPAI_K_SARTY, IMPAI_K_SAA, IMPAI_K_SSCOUT,
        IMPAI_K_FIGHTER, IMPAI_K_BOMBER, IMPAI_K_GUNSHIP, IMPAI_K_ASCOUT, IMPAI_KS };
 #define IMPAI_K_NONE 255
 
@@ -90,15 +90,15 @@ void impai_picture_features(const IMPAI_PICTURE_IN* in, IMPAI_PICTURE* p);
    with the classes the seat cannot build at 0 and the air classes at 0 before `air_from_t`; then the anti-air
    classes together take min(their sum, aa_cap) of the army and every other class the rest in proportion
    (impai_table_shares). The rows' (feature, class) pairs are fixed by name in the default table and tuning
-   moves only the gains: a free class-by-class matrix (13 x 14 numbers) could not be tuned in the engine in
+   moves only the gains: a free class-by-class matrix (14 x 14 numbers) could not be tuned in the engine in
    hours, this table's 9 tier-A numbers can (research/notes/impai/brain.md, Adaptation).
 
    A row's class is one class, or a group whose members the gain is shared among equally, counting only the
    members the seat can build, so the group as a whole moves by gain x feature: AA, the two anti-air classes,
-   and SEA, the four sea classes. A row's feature is one of the twelve or the two derived (IMPAI_F_AIR,
+   and SEA, the four sea classes but the scout. A row's feature is one of the twelve or the two derived (IMPAI_F_AIR,
    IMPAI_F_LOWAA).
 
-   THE FILE. A table on disk is these 132 bytes, little-endian as they lie in memory, followed by their FNV-1a
+   THE FILE. A table on disk is these 136 bytes, little-endian as they lie in memory, followed by their FNV-1a
    64 as 8 little-endian bytes (tools/impai/tablefile.py writes it). impai_table_load refuses the whole file on a
    size or hash mismatch, a row naming a feature or class past its count, a non-zero pad or a non-finite
    number, and clamps each base share and aa_cap to [0, 1]: a loaded table is data that has been bounded. */
@@ -116,7 +116,7 @@ typedef struct IMPAI_TABLE {
     float          tech_m;              /* metal income a pass before tech-up                                */
 } IMPAI_TABLE;
 
-#define IMPAI_TABLE_BYTES      132u
+#define IMPAI_TABLE_BYTES      136u
 #define IMPAI_TABLE_FILE_BYTES (IMPAI_TABLE_BYTES + 8u)
 
 /* The response rows by name: the slot each pair holds in every table. */
