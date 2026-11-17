@@ -1403,7 +1403,8 @@ the marks instead of comparing them, by THE OCCUPANCY RULE (`tarec.occupancy`):
 the stamp's own checks layer by layer, a loser's cell naming the holder that took
 it -- or, inside the footprint of a structure whose yard is open, empty or naming
 a unit that took the freed cell unmarked, since an open yard gives nothing back
-(the engine map's *An open yard gives nothing back*) -- every named slot a live
+(the engine map's *An open yard gives nothing back*; a loosening the owner approved
+on 2026-11-17) -- every named slot a live
 unit whose footprint holds the cell, and every set
 yard bit inside a live structure's footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`,
 `+0x110` bit 29); the dump's marks are then taken into the expected world. The
