@@ -688,6 +688,7 @@ static struct {
     WIKICOB* host;
     int      body;          /* the tree's unit shown; -1 none                                     */
     int      made;          /* the host's making was settled for this body: made, or none to make */
+    int      note;          /* TAGPU_TV_NOTE_*: the host's half of the view's note, once made     */
     int      unit;          /* its handle in the host                                            */
     uint16_t serial;
     uint32_t tick;
@@ -697,7 +698,7 @@ static struct {
     double   yaw, pitch, zoom;
     int      drag, dx, dy;  /* a left press on the view is held; where it went down             */
     double   dyaw, dpitch;  /* the camera it went down on                                        */
-} s_tv = { NULL, -1, 0, 0, 0, 0, 0, TAGPU_TV_TURN, 0, 0.7, 0.45, 1, 0, 0, 0, 0, 0 };
+} s_tv = { NULL, -1, 0, TAGPU_TV_NOTE_LOADING, 0, 0, 0, 0, TAGPU_TV_TURN, 0, 0.7, 0.45, 1, 0, 0, 0, 0, 0 };
 
 static WIKICOBFACT tv_fact(void)
 {
@@ -731,9 +732,11 @@ static int tv_make(void)
     char err[160];
     if (st == WIKISIDE_PENDING) return 0;
     tv_free();
+    s_tv.note = TAGPU_TV_NOTE_NOMODEL;
     if (st == WIKISIDE_READY && w && s_tv.body >= 0 && s_tv.body < w->nunit) {
         const WIKI3DUNIT* u = &w->unit[s_tv.body];
-        if (u->ok && u->script && u->pieces > 0) {
+        if (u->ok && u->model) s_tv.note = TAGPU_TV_NOTE_REST;
+        if (u->ok && u->model && u->script && u->pieces > 0) {
             WIKICOBTYPE ty;
             WIKICOBFACT f;
             memset(&ty, 0, sizeof ty);
@@ -750,6 +753,7 @@ static int tv_make(void)
                 f = tv_fact();
                 f.unit = 1;
                 s_tv.unit = tagpu_wikicob_spawn(s_tv.host, 0, &f, 1);
+                if (s_tv.unit > 0) s_tv.note = TAGPU_TV_NOTE_HINT;
             }
         }
     }
@@ -764,6 +768,7 @@ static void tv_open(int body, int reset)
     tv_free();
     s_tv.body = body;
     s_tv.made = 0;
+    s_tv.note = TAGPU_TV_NOTE_LOADING;
     s_tv.serial++;
     s_tv.act &= TAGPU_TV_TURN;
     s_tv.aim = 0;
@@ -890,6 +895,7 @@ static void tv_fill(TAGPU_PK_WIKI* w)
     w->tv_serial = s_tv.serial;
     w->tv_body = (int16_t)s_tv.body;
     w->tv_act = (uint8_t)(s_tv.act & TAGPU_TV_ALL);
+    w->tv_note = (uint8_t)(s_tv.made ? s_tv.note : TAGPU_TV_NOTE_LOADING);
     w->tv_cam[0] = (float)s_tv.yaw;
     w->tv_cam[1] = (float)s_tv.pitch;
     w->tv_cam[2] = (float)s_tv.zoom;

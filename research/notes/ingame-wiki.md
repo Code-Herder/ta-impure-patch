@@ -2383,9 +2383,20 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   host's serial, the toggles, the camera, the script's pose). `wiki_regression.py techtree` (tt8)
   plays it: the commander's 15 pieces posed, Walk moving them, Reset, a drag and a notch.
 
-Not built: the unit's picture (T4c) -- the view is its dark ground while the script runs behind
-it -- which needs a perspective pipeline of its own, because the game's unit pass draws only the
-engine's fixed projection.
+- **The unit's picture** is the render thread's, drawn by a pipeline of its own, because the
+  game's unit pass draws only the engine's fixed projection: `tagpu_wikiview.c` bakes the body's
+  model with the wiki's bake, poses it by the packet's pieces (the stage's composition, facing the
+  identity) or at rest, and lays its triangles out in the engine's held axes -- the mockup's posed
+  space, into which `unitview.js` takes its rest pose too -- and `tagpu_vk_wikiview.c` draws them
+  under `unitview.js`'s camera into a target twice the view's size each way, then composites it
+  into the view, scissored to the panel, under the page's note (the page's top layer is drawn in
+  two around it). The program is the mockup's: perspective of 0.9 radians, depth tested, back
+  faces culled, a textured quad mapped per pixel (`taQuadST`), the colour lit by the face's own
+  normal (0.45 + 0.65 n·L). The atlas is the wiki's unit atlas, of which the view keeps its own
+  copy: the stage's unit pass uploads only on frames that draw a stage, and this entry has none.
+  The note is `unitview.js`'s: loading, the hint while the script runs, the rest pose with no
+  script, no model, and nothing to draw when the pose hides every piece with faces. (tt8) checks
+  the commander's picture is drawn (`wikiview:`'s vertices) and grabs it with `--shots`.
 
 ## The data format
 

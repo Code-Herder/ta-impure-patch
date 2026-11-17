@@ -26,6 +26,10 @@ void tagpu_wikistate_present(const struct TAGPU_FRAME* f);
    stage lies inside the page's bezel where no later op of the page's base layer reaches. */
 typedef struct {
     HUDOPLIST     page, stage, over, top;   /* the wiki's kit: page, stage under, stage over, TOP */
+    int           page_cut;                 /* the page's first op over the unit view's 3D picture
+                                               (tagpu_wikistate_uview): its top layer is drawn in
+                                               two, [0, page_cut) under the picture and the rest
+                                               over it; page.n when no view is drawn          */
     const HUDOPS* hud;                      /* the stage HUD, NULL none: the HUD's art (tagpu_hudart_get) */
     float         px;                       /* the wiki's unit and the game screen's corner        */
     int           ox, oy;
@@ -40,6 +44,11 @@ typedef struct {
    there is nothing to draw, or when `present` did not run in that frame. The lists point into this
    module's buffers, which hold until the next `present`. */
 int  tagpu_wikistate_frame(unsigned frame, WIKILISTS* out);
+
+/* THE TECH TREE'S UNIT VIEW frame `frame` draws: 1 with its rect and the clip of the panel it lies
+   in, each x0 y0 x1 y1 in device pixels on the attachment, the rect where the view's ground is
+   drawn; 0 when the frame draws none. */
+int  tagpu_wikistate_uview(unsigned frame, int r[4], int clip[4]);
 
 /* THE STAGE THIS FRAME DRAWS, for the 3D stage's producer (tagpu_wikiworld.h): 1 when frame
    `frame` draws a demo's view -- the record's copy, bounded (`*v`, which holds until the next

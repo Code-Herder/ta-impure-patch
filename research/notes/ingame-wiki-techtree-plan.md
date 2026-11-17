@@ -117,7 +117,12 @@ own rule, not the engine's shade rows. So:
   under a perspective camera (`unitview.js` `mat`: 0.9 radians tall, near and far from the
   distance), back faces culled, a textured quad mapped per pixel through `taQuadST`, lit by face as
   the mockup lights it; drawn into a target of the view's size and composited into the panel as a
-  picture of the page's top layer.
+  picture of the page's top layer. *Built* (`tagpu_wikiview.c` lays the posed body out on the
+  render thread; `tagpu_vk_wikiview.c` draws it into a target twice the view's size each way, with
+  its own copy of the wiki's unit atlas, since the stage's unit pass uploads only while a stage is
+  drawn; the page's top layer is drawn in two around the picture so the note lies over it). (tt8)
+  checks the commander's picture is drawn -- 555 vertices, 15 pieces -- and grabs it. The
+  mockup's rest pose now stands in the same held axes as its posed one, as the DLL's does.
 - **T4d: the camera and the checks.** Drag turns, the wheel moves in, Turn spins (a drag stops
   it), Reset; the picture against the mockup's at the same camera, per setup; the cull and the
   quad mapping on ARMCV and ARMSOLAR.

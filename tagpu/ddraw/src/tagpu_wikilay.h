@@ -86,7 +86,8 @@ typedef struct {
     const WIKITECHTREE* tech;
     int      tech_sel;
     unsigned tech_act;          /* the view's toggled actions, drawn pressed: TAGPU_TV_* bits
-                                   (tagpu_wikipk.h) -- Turn alone as a view opens               */
+                                   (tagpu_wikitech.h) -- Turn alone as a view opens             */
+    int      tech_note;         /* the view's note, TAGPU_TV_NOTE_*: unitview.js `say`'s line   */
 } WIKIPAGE;
 
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
@@ -108,6 +109,11 @@ typedef struct {
     float   cover;              /* the left edge, units, of the panel over the stage's right (About or
                                    the unit's panel);
                                    0 when none is open: the tech tree's fit leaves out what it covers */
+    /* THE UNIT VIEW the unit's panel placed (w 0: none this frame), the panel's scroll clip it lies
+       in, and the first op drawn OVER the view's 3D picture -- its note: the picture is composited
+       between the top layer's ops before `uview_cut` and those from it (tagpu_vk_hud.c) */
+    HUDRECT uview, uview_clip;
+    int     uview_cut;
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;

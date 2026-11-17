@@ -533,9 +533,9 @@ static unsigned s_gfx;
    hold, keeps the rest pose turned onto the facing. Each piece's matrix, shade and visibility word
    in posed_pose's words: hidden (flag bit 0 clear) all zeros and 0, visible and cached 3, visible
    dont-cache 1; shaded by bit 2 once any visible piece carries it. */
-static void pose_compose(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const WIKISTAGEPIECE* pose,
-                         int npose, const float* rot, float* out, unsigned char* shaded,
-                         unsigned char* pvis)
+void tagpu_wikiworld_pose_compose(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const WIKISTAGEPIECE* pose,
+                                  int npose, const float* rot, float* out, unsigned char* shaded,
+                                  unsigned char* pvis)
 {
     static float acc[TAGPU_PBMAXPIECE][12];   /* render thread only */
     static unsigned char done[TAGPU_PBMAXPIECE];
@@ -659,7 +659,7 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     rot[5] = 1.0f;
     rot[8] = -m->sn; rot[10] = m->cs;
     pose = u ? pose_of(v, m, u, r, &npose) : NULL;
-    if (pose) pose_compose(u, bg, pose, npose, rot, s_pose, s_shaded, s_pvis);
+    if (pose) tagpu_wikiworld_pose_compose(u, bg, pose, npose, rot, s_pose, s_shaded, s_pvis);
     else for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
         const float* r0 = bg->restOff[0];
@@ -715,22 +715,38 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     return 1;
 }
 
-/* THE UNITS' FRAME, every call in tagpu_native.c's order: the atlas's level and recycle before
-   the bake latches its generation, the bake's and the posed program's frame, the atlas's
-   allowance frame and the shade calibration, then the two windows -- the units', the ghosts'.
-   Returns 1 when every record was handed over, 0 when the bake refused one (its texels not yet
-   painted): the seam then does not draw this frame's hand-over (tagpu_wikiworld_wants). */
-static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, int nunit, int gw, int gh, int ss)
+/* THE UNITS' FRAME'S START, in tagpu_native.c's order: the atlas's level and recycle before the
+   bake latches its generation, the bake's and the posed program's frame, then the atlas's
+   allowance frame and the shade calibration (tagpu_wikiworld.h). */
+static unsigned s_ubFrame;
+static int s_ubHave, s_ubOk;
+int tagpu_wikiworld_units_begin(const TAGPU_FRAME* f)
 {
-    TAGPU_PDVIEW pv;
-    int i, refused = 0;
+    /* ONCE A FRAME BY CONSTRUCTION: the bake's frame advances its own counter and the atlas's ages
+       what waits on the frame before (tagpu_gaf_atlas_frame), so a second call in one frame would
+       expire deferred paints; the stage and the tech tree's unit view both begin here */
+    if (s_ubHave && s_ubFrame == f->frame_counter) return s_ubOk;
+    s_ubHave = 1;
+    s_ubFrame = f->frame_counter;
     tagpu_r3d_atlas_level(WIKI_LEVEL_GEN);
     tagpu_r3d_atlas_recycle();
     tagpu_posebake_frame(f->frame_counter, WIKI_LEVEL_GEN);
     tagpu_posedraw_frame(f->frame_counter);
-    if (!tagpu_r3d_ensure()) return 0;
+    s_ubOk = tagpu_r3d_ensure();
+    if (!s_ubOk) return 0;
     tagpu_r3d_atlas_frame();
     tagpu_r3d_shade_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
+    return 1;
+}
+
+/* THE UNITS' FRAME: its start, then the two windows -- the units', the ghosts'. Returns 1 when
+   every record was handed over, 0 when the bake refused one (its texels not yet painted): the seam
+   then does not draw this frame's hand-over (tagpu_wikiworld_wants). */
+static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, int nunit, int gw, int gh, int ss)
+{
+    TAGPU_PDVIEW pv;
+    int i, refused = 0;
+    if (!tagpu_wikiworld_units_begin(f)) return 0;
     if (!nrec) return 1;
     if (!tagpu_posedraw_ready()) return 0;
     memset(&pv, 0, sizeof pv);

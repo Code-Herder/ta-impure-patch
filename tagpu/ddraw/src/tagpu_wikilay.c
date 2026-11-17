@@ -850,8 +850,31 @@ static double unit_rows(UI* u, const UIPANEL* p, double w, int emit, void* user)
         double ax = 0, ay = 0;
         const double ag = U(c, g->ctl_pair), bh = U(c, g->ctl.h);
         if (emit) {
+            /* the note's line, unitview.js `say` (#unit .view .note: 2 units in, 1 up), clipped to
+               the view: the 3D picture goes under it and over the ground (WIKIFRAME uview_cut) */
+            static const char* const NOTE[TAGPU_TV_NOTES] = {
+                "loading the model...", "drag to orbit \xC2\xB7 wheel to zoom \xC2\xB7 its own COB script poses it",
+                "no script: the rest pose", "no model to draw",
+                "nothing to draw: every piece with faces is hidden" };
+            const int nk = c->st->tech_note >= 0 && c->st->tech_note < TAGPU_TV_NOTES ? c->st->tech_note : 0;
+            const double nl = ts(c, R_TEXT, g->line).L;
+            UIR vc = vr;
+            if (vc.x < clip->x) { vc.w -= clip->x - vc.x; vc.x = clip->x; }
+            if (vc.y < clip->y) { vc.h -= clip->y - vc.y; vc.y = clip->y; }
+            if (vc.x + vc.w > clip->x + clip->w) vc.w = clip->x + clip->w - vc.x;
+            if (vc.y + vc.h > clip->y + clip->h) vc.h = clip->y + clip->h - vc.y;
             ui_solid(&c->u, HOP_SOLID, vr, VIEW_RGB, 1, clip);
             ui_hot(&c->u, vr, clip, "uview");
+            if (c->fr) {
+                const double px = c->u.px;
+                c->fr->uview.x = (float)(vr.x / px); c->fr->uview.y = (float)(vr.y / px);
+                c->fr->uview.w = (float)(vr.w / px); c->fr->uview.h = (float)(vr.h / px);
+                c->fr->uview_clip.x = (float)(clip->x / px); c->fr->uview_clip.y = (float)(clip->y / px);
+                c->fr->uview_clip.w = (float)(clip->w / px); c->fr->uview_clip.h = (float)(clip->h / px);
+                c->fr->uview_cut = c->u.o->n;
+            }
+            if (vc.w > 0 && vc.h > 0)
+                say(c, R_TEXT, NOTE[nk], x + U(c, 2), vr.y + vr.h - U(c, 1) - nl, 0, &vc, 1);
         }
         y += vr.h + gap;
         const unsigned a = c->st->tech_act;

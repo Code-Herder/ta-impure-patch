@@ -311,8 +311,9 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
     scrolls it, and its close button closes it;
   (tt6) Fit returns to the open's fitted camera; All links turns on and off;
   (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes;
-  (tt8) the unit's view: the commander's script runs on the view's host, Walk moves its pieces, Reset makes a new
-       host with Turn kept, a drag turns the camera and stops the spin, a notch moves it in, and the close ends it.
+  (tt8) the unit's view: the commander's script runs on the view's host and its picture is drawn (`wikiview:`'s
+       vertices; --shots grabs it), Walk moves its pieces, Reset makes a new host with Turn kept, a drag turns the
+       camera and stops the spin, a notch moves it in, and the close ends it.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -4108,11 +4109,19 @@ def techtree(c, shots, res):
     # pieces as the ticks run; Reset makes a new host with Turn kept; a drag on the view turns the camera and stops
     # the spin; a notch over it moves the camera in
     k, x, y = d["tech"]["cards_at"][0]
+    start = c.mark()
     c.keys(f"dclick:{round(x)},{round(y)}")
     d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["view"]["host"] and d["tech"]["view"]["tick"] > 5
                   and any(h["key"] == "uview" for h in d["hits"]), "(tt8) the commander's view runs no script")
     v0 = d["tech"]["view"]
     assert v0["act"] == 0x20 and v0["pieces"] > 0, f"(tt8) the view opened with {v0}, not Turn alone and a posed model"
+    # ...and its picture is drawn: the view's pass says what it drew (tagpu_vk_wikiview.c, every 300 frames)
+    drew = wait_line(c, start, r"wikiview: frame \d+: \d+ vertices", "(tt8) the view drew no picture", 30)
+    nv = int(re.search(r"(\d+) vertices", drew).group(1))
+    assert nv >= 300, f"(tt8) the commander's picture is {nv} vertices: {drew}"
+    if shots:
+        time.sleep(1.0)
+        grab(c, shots / f"techtree-{res}-view.png")
     press(c, d, "act:Walk")
     d = wait_dump(c, lambda d: d["tech"]["view"]["act"] & 0x01 and d["tech"]["view"]["tick"] > v0["tick"] + 30,
                   "(tt8) Walk did not turn on, or the ticks stopped")
@@ -4132,7 +4141,7 @@ def techtree(c, shots, res):
         f"(tt8) a drag of 80,20 pixels left the camera at {cam}, not yaw {yaw0 - 0.8:.3f} and pitch 0.65"
     c.keys(f"dwheel:{cx},{cy},1")
     d = wait_dump(c, lambda d: d["tech"]["view"]["cam"][2] < 0.99, "(tt8) a notch over the view did not move the camera in")
-    print(f"wiki techtree: (tt8) the view of {d['tech']['sel_name']} ran {v0['pieces']} pieces; Walk moved them; Reset "
+    print(f"wiki techtree: (tt8) the view of {d['tech']['sel_name']} drew {nv} vertices and ran {v0['pieces']} pieces; Walk moved them; Reset "
           f"made host {d['tech']['view']['serial']}; a drag turned the camera to {cam[0]:.3f}, {cam[1]:.3f}; a notch to "
           f"{d['tech']['view']['cam'][2]:.3f} of the fitted distance")
     press(c, d, "uclose")

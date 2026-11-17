@@ -123,7 +123,7 @@ typedef struct TAGPU_PK_WIKI {
     int16_t  tv_body;           /* the unit shown, an index of the tree's units (an upgrade's
                                    first builder's); -1 none                                 */
     uint8_t  tv_act;            /* the toggled actions, TAGPU_TV_* bits                       */
-    uint8_t  tv_pad;
+    uint8_t  tv_note;           /* TAGPU_TV_NOTE_*, the host's half: LOADING, HINT, REST, NOMODEL */
     uint16_t tv_npose;          /* tv_pose's pieces, in the posed order; 0 the rest pose      */
     float    tv_cam[3];         /* yaw and pitch (radians), and the distance as a factor of the
                                    distance the render thread fits to the model              */

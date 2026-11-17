@@ -638,6 +638,12 @@ def main():
                     cs["thumb"].append(o)
                 elif o["kind"] in cs:
                     cs[o["kind"]].append(o)
+            # the unit view's note is the 3D view's, as the mockup's (COLLECT skips #unit .view): a DLL text inside the
+            # view's hot rect is left out of the pairing
+            for v in [o for o in cs["hot"] if o.get("key") == "uview"]:
+                vx, vy, vw, vh = v["r"]
+                cs["text"] = [o for o in cs["text"] if not (vx <= o["x"] and o["x"] + o["w"] <= vx + vw
+                                                            and vy <= o["y"] and o["y"] + o["h"] <= vy + vh)]
             ds = {k: [e for e in dom["els"] if e["kind"] == k] for k in cs}
             for c in cs["dot"]:
                 c["rgb"] = c["rgba"][:6]

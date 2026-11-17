@@ -4,6 +4,7 @@
 #include <string.h>
 #include "tagpu.h"
 #include "tagpu_wikistate.h"
+#include "tagpu_wikiview.h"
 #include "tagpu_wikilay.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
@@ -36,6 +37,9 @@ static int      s_have, s_haveStage;
 static unsigned s_frame;                /* the render-thread frame the ops are for              */
 static float    s_px;
 static int      s_ox, s_oy;
+static int16_t dev(int o, double snapped);
+/* the unit view's rect and its clip, device pixels x0 y0 x1 y1, and the page's first op over it */
+static int      s_uvOn, s_uv[4], s_uvClip[4], s_uvCut;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
 static int      s_tryPtr;               /* this frame is in Try it yourself with a view, and the
                                            record's pointer lies inside its stage               */
@@ -961,7 +965,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
     s_have = s_haveStage = s_viewOk = s_viewSide = s_split = s_nover = s_curList = 0;
-    s_frameOn = s_hudOn = s_ntop = 0;
+    s_frameOn = s_hudOn = s_ntop = s_uvOn = 0;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
     s_mods = 0;
     if (s_refused) return;
@@ -1007,6 +1011,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hud_draws_rewind(hs);
     page_of(&s_page, w, sv);
     tech_page(w, art);
+    s_page.tech_note = tagpu_wikiview_note(f->frame_counter);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
         InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the page's layout refused (%s) - the wiki is not drawn this session", err);
@@ -1071,8 +1076,34 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         top_split();
     }
     s_px = u;
+    /* THE UNIT VIEW'S RECT, in the device pixels its ground's op is drawn on (the hit map's edges),
+       for the 3D picture tagpu_vk_wikiview.c composites there, scissored to the panel's clip */
+    s_uvOn = 0;
+    if (w->open && s_fr.uview.w > 0 && s_fr.uview.h > 0 && s_fr.uview_clip.w > 0 && s_fr.uview_clip.h > 0 &&
+        s_fr.uview_cut >= 0 && s_fr.uview_cut <= s_ops.n) {
+        const HUDRECT* r = &s_fr.uview;
+        const HUDRECT* c = &s_fr.uview_clip;
+        s_uv[0] = dev(s_ox, tagpu_hud_snap(r->x * u));
+        s_uv[1] = dev(s_oy, tagpu_hud_snap(r->y * u));
+        s_uv[2] = dev(s_ox, tagpu_hud_edge(r->x, r->w, u));
+        s_uv[3] = dev(s_oy, tagpu_hud_edge(r->y, r->h, u));
+        s_uvClip[0] = dev(s_ox, tagpu_hud_snap(c->x * u));
+        s_uvClip[1] = dev(s_oy, tagpu_hud_snap(c->y * u));
+        s_uvClip[2] = dev(s_ox, tagpu_hud_edge(c->x, c->w, u));
+        s_uvClip[3] = dev(s_oy, tagpu_hud_edge(c->y, c->h, u));
+        s_uvCut = s_fr.uview_cut;
+        s_uvOn = s_uv[2] > s_uv[0] && s_uv[3] > s_uv[1];
+    }
     s_frame = f->frame_counter;
     s_have = 1;
+}
+
+int tagpu_wikistate_uview(unsigned frame, int r[4], int clip[4])
+{
+    int k;
+    if (!s_have || s_frame != frame || !s_uvOn) return 0;
+    for (k = 0; k < 4; k++) { r[k] = s_uv[k]; clip[k] = s_uvClip[k]; }
+    return 1;
 }
 
 static HUDOPLIST stage_list(void)
@@ -1147,6 +1178,7 @@ int tagpu_wikistate_frame(unsigned frame, WIKILISTS* out)
     memset(out, 0, sizeof *out);
     if (!s_have || s_frame != frame) return 0;
     out->page = tagpu_huddraw_list(&s_ops);
+    out->page_cut = s_uvOn ? s_uvCut : out->page.n;
     /* the unit's panel draws the tree's pictures, from the same sheet as the stage */
     if (s_tentry && s_tcur) { out->page.pic = s_tuv; out->page.npic = s_tnuv; }
     out->stage.watch = out->over.watch = out->top.watch = -1;

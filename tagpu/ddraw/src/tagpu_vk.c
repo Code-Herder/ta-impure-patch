@@ -146,6 +146,7 @@
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
 #include "tagpu_vk_world.h"
+#include "tagpu_vk_wikiview.h"
 #include "tagpu_vk_fog.h"
 #include "tagpu_native.h"           /* tagpu_native_fogsrc: the frame's fog source */
 #include "tagpu_vk_feat.h"
@@ -2008,6 +2009,7 @@ static void vk_down(void)
         tagpu_vkw_terr_down(&s_pass);
         tagpu_vkw_world_down(&s_pass);
         tagpu_vkw_fog_down(&s_pass);
+        tagpu_vk_wikiview_down(&s_pass);
         /* THE MIP CHAINS' REDUCERS, after the passes whose descriptor sets were allocated with
            their layout: a set may not be written once its layout is gone */
         tagpu_vk_chain_down(&s_pass);
@@ -2575,7 +2577,7 @@ static int vk_present(void)
         tagpu_vk_shadow_down_owed() || tagpu_vk_mark_down_owed() || tagpu_vk_range_down_owed() ||
         tagpu_vk_surf_down_owed() || tagpu_vk_world_down_owed() ||
         tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
-        tagpu_vkw_world_down_owed()) {
+        tagpu_vkw_world_down_owed() || tagpu_vk_wikiview_down_owed()) {
         r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
         if (r != VK_SUCCESS) {
             s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
@@ -2602,6 +2604,11 @@ static int vk_present(void)
         if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_refused(&s_pass);
         if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_refused(&s_pass);
         if (tagpu_vkw_world_down_owed())   tagpu_vkw_world_down_paid(&s_pass);
+        if (tagpu_vk_wikiview_down_owed()) {
+            vklog("the tech tree's unit view was refused its resources - no picture until the lane is "
+                  "next rebuilt");
+            tagpu_vk_wikiview_down_paid(&s_pass);
+        }
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2686,7 +2693,7 @@ static int vk_present(void)
         /* the wiki's 3D stage (tagpu_wikiworld.h): its passes prepared, whether its image is drawn
            whole this frame, its target's extent and the render-thread time it took */
         int wiki_on = 0, wiki_world = 0, wiki_terr = 0, wiki_feat = 0, wiki_unit = 0, wiki_image = 0;
-        int wiki_drawn = 0;
+        int wiki_drawn = 0, wiki_view = 0;
         WIKIWORLDWANT wiki_want;
         uint32_t wtw = 0, wth = 0;
         double wiki_ms = 0.0;
@@ -2864,6 +2871,12 @@ static int vk_present(void)
                 wiki_ms += ms_since(wiki_t0);
             }
             tagpu_wikistate_image(s_pass.frame, wiki_image, wiki_want.ground, wiki_want.resolved);
+            /* the tech tree's unit view: its atlas's upload and its own offscreen pass, recorded
+               whole here, outside any render pass (tagpu_vk_wikiview.h); under the wiki's lever of
+               tagpu_vkfull.on as the stage's passes are */
+            s_inWikiStage = 1;
+            wiki_view = tagpu_vk_wikiview_prepare(&s_pass, cb, fi);
+            s_inWikiStage = 0;
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -3036,9 +3049,11 @@ static int vk_present(void)
                    quad drawn once more, alone, when the wiki says the player's pointer is to be shown
                    (tagpu_wikistate_cursor) -- the same quad the composite drew, so outside the window
                    it lands on its own pixels. */
-                /* THE STAGE'S 3D IMAGE BETWEEN THE WIKI'S TWO CALLS: the page and the stage's
-                   ops under it, the image composited into its rect (tagpu_wikistage_image), then
-                   the stage's ops over it -- draws in record order in one render pass. */
+                /* THE STAGE'S 3D IMAGE AND THE UNIT VIEW'S PICTURE BETWEEN THE WIKI'S THREE CALLS:
+                   the page and the stage's ops under it, the image composited into its rect
+                   (tagpu_wikistage_image), the stage's ops over it and the page's top layer up to
+                   the unit view's note, the view's picture, then the rest of that layer -- draws in
+                   record order in one render pass. */
                 {
                     int wdrew = tagpu_vk_hud_record_wiki(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
                     if (wiki_image) {
@@ -3048,6 +3063,8 @@ static int vk_present(void)
                         wiki_drawn = 1;
                     }
                     wdrew |= tagpu_vk_hud_record_wiki_over(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                    if (wiki_view) tagpu_vk_wikiview_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                    wdrew |= tagpu_vk_hud_record_wiki_top(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
                     if (wdrew && gui_drew && tagpu_wikistate_cursor(s_pass.frame))
                         tagpu_vk_gui_record_cursor(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
                 }
@@ -3257,6 +3274,7 @@ static void passes_down(void)
     tagpu_vkw_terr_down(&s_pass);
     tagpu_vkw_world_down(&s_pass);
     tagpu_vkw_fog_down(&s_pass);
+    tagpu_vk_wikiview_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
        staging and its timestamp pairs are sized by `d->slots`, which is
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above

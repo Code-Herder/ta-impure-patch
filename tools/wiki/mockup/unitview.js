@@ -106,7 +106,13 @@ const PACKS = {};
       if (!m) { say(`no model: ${pack.units.refused[u.name] || 'not in the pack'}`); return; }
       const { all, full } = await unitArrays(base, m);
       if (!alive) return;
-      const restArr = full ? WikiPose.rest(full, m.pieces) : all;
+      // THE HELD AXES for the rest pose too: the posed arrays come out of WikiPose.model in the engine's held axes
+      // ((x, y, z) -> (-x, y, -z), half a turn about Y), so the rest pose is taken into them as well -- the unit stands
+      // the same way posed or not, and the camera is fitted on the bounds of what it draws, as the DLL's view is
+      // (tagpu/ddraw/src/tagpu_wikiview.h)
+      const restFile = full ? WikiPose.rest(full, m.pieces) : all;
+      const restArr = { ...restFile, mesh: restFile.mesh.slice() };
+      for (let i = 0; i < restArr.mesh.length; i += 7) { restArr.mesh[i] = -restArr.mesh[i]; restArr.mesh[i + 2] = -restArr.mesh[i + 2]; }
       // frame the camera on the rest pose's bounds
       const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
       for (let i = 0; i < restArr.mesh.length; i += 7) for (let a = 0; a < 3; a++) {

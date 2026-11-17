@@ -164,6 +164,9 @@ static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb
 static int                   s_wb0, s_wb1;      /* the wiki layer's: s_batch[s_wb0, s_wb1)     */
 static int                   s_wbm;             /* where the stage's ops over its 3D image start:
                                                    [s_wb0, s_wbm) under it, [s_wbm, s_wb1) over */
+static int                   s_wbv;             /* where the page's ops over the tech tree's unit
+                                                   view start: [s_wbm, s_wbv) under its picture,
+                                                   [s_wbv, s_wb1) over it                        */
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
@@ -1234,7 +1237,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, hud, wiki;
     int wcur = 0, wcurSprite = 0;   /* the stage's cursor's instances, and whether they are sprites */
 
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wbv = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
     tagpu_wikistate_drawn(0, 0);
@@ -1310,22 +1313,24 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_nbatch = nb0 + nb1;
         s_tb0 = nb0;
         s_tb1 = nb0 + m1;
-        s_wb0 = s_wbm = s_wb1 = s_nbatch;
-        /* THE WIKI'S LAYER: seven builds in paint order (tagpu_wikistate.h WIKILISTS) -- the page's
+        s_wb0 = s_wbm = s_wbv = s_wb1 = s_nbatch;
+        /* THE WIKI'S LAYER: eight builds in paint order (tagpu_wikistate.h WIKILISTS) -- the page's
            base layer, the stage under its 3D image, the stage over it, a frame:game stage's HUD
            (its base layer, then its top layer) in the HUD's own art and unit, the frame's TOP
-           range, and the page's top layer (About). A wiki kit batch's texture is its
+           range, and the page's top layer (About, the unit's panel) in two: its ops under the
+           tech tree's unit view's picture and those over it. A wiki kit batch's texture is its
            kit index, which the pass holds after the HUD's parts; the stage HUD's are the HUD's.
            Then the partition (tagpu_huddraw_partition): every list's attachment batches in list
            order, then every list's group batches, so [s_wb0, s_wb1) is one run of the
            attachment's, cut at s_wbm -- after the page's base layer and the stage under the
            image -- where the image goes, and the layer pass records the group runs after s_wb1. */
         if (wiki) {
-            enum { NL = 7 };
-            HUDOPLIST hudl;
+            enum { NL = 8 };
+            HUDOPLIST hudl, ptop, pover;
             const HUDOPLIST* list[NL];
             const HUDART* kit[NL];
-            int layer[NL] = { 0, 0, 0, 0, 1, 0, 1 }, k, at[NL], mw[NL], nbw[NL], nm;
+            int layer[NL] = { 0, 0, 0, 0, 1, 0, 1, 1 }, k, at[NL], mw[NL], nbw[NL], nm;
+            const int cut = wl.page_cut >= 0 && wl.page_cut < wl.page.n ? wl.page_cut : wl.page.n;
             const int ninst0 = s_ninst, ngroup0 = s_ngroup;
             float lpx[NL];
             int lox[NL], loy[NL];
@@ -1335,8 +1340,14 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                which the same frame may draw from too */
             hudl.chart_slot = 1;
             hudl.watch = -1;
+            /* the page's ops by pointer and count: their runs, text and groups are the page's */
+            ptop = wl.page;
+            ptop.n = cut;
+            pover = wl.page;
+            pover.op = wl.page.op + cut;
+            pover.n = wl.page.n - cut;
             list[0] = &wl.page; list[1] = &wl.stage; list[2] = &wl.over; list[3] = &hudl; list[4] = &hudl;
-            list[5] = &wl.top; list[6] = &wl.page;
+            list[5] = &wl.top; list[6] = &ptop; list[7] = &pover;
             for (k = 0; k < NL; k++) {
                 const int h_ = k == 3 || k == 4;
                 kit[k] = h_ ? art : &wart->draw;
@@ -1380,6 +1391,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 wiki = 0;
             } else {
                 s_wbm = s_wb0 + mw[0] + mw[1];
+                s_wbv = s_wb0;
+                for (k = 0; k < NL - 1; k++) s_wbv += mw[k];
                 s_wb1 = nm;
             }
         }
@@ -1572,9 +1585,16 @@ int tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
 int tagpu_vk_hud_record_wiki_over(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                   uint32_t w, uint32_t h)
 {
+    (void)d;
+    return draw_batches(cb, slot, w, h, s_wbm, s_wbv);
+}
+
+int tagpu_vk_hud_record_wiki_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                 uint32_t w, uint32_t h)
+{
     int drew;
     (void)d;
-    drew = draw_batches(cb, slot, w, h, s_wbm, s_wb1);
+    drew = draw_batches(cb, slot, w, h, s_wbv, s_wb1);
     s_ninst = 0;
     return drew;
 }
@@ -1628,7 +1648,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_tgen = s_tup = 0;
     s_trow = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wbv = s_wb1 = s_ngroup = 0;
     s_nwparts = 0;
     memset(&s_top, 0, sizeof s_top);
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */

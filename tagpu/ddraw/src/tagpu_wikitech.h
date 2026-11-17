@@ -136,4 +136,11 @@ void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* c
 #define TAGPU_TV_TURN  0x20u
 #define TAGPU_TV_ALL   0x3Fu
 
+/* the unit view's note (TAGPU_PK_WIKI.tv_note, WIKIPAGE.tech_note), unitview.js's `say`: what the
+   view shows. The game thread says which of the first four its host is in; the render thread
+   turns HINT and REST into EMPTY when the pose leaves nothing to draw, and any of them into
+   LOADING while it has no picture yet */
+enum { TAGPU_TV_NOTE_LOADING, TAGPU_TV_NOTE_HINT, TAGPU_TV_NOTE_REST, TAGPU_TV_NOTE_NOMODEL,
+       TAGPU_TV_NOTE_EMPTY, TAGPU_TV_NOTES };
+
 #endif
