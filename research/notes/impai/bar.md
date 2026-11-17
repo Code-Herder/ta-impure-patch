@@ -663,15 +663,26 @@ against the same brain's games before: the air rush passed on its commander agai
 the cap (18 before); the artillery creep passed on value, 34 716 against 27 381 (34 893 against 26 828 before), 7 of
 the opponent's units alive (5 before). Each game took 46 to 50 s of play.
 
-MEASURED 2026-11-17 on the reference setup, the naval turtle at bca430ab (the stand-off, the sea scout): still failed,
-the commander at 2 873 of 3 000 hp and both towers standing at the cap. What loses it: no unit the seat buys sees
-the commander or the west tower -- they stand about 370 and 415 px from the nearest water a boat sails, past the sea
-scout's sight of 280 px and the destroyer's 330, and the air scouts carry no weapon, so they take no class and are
-not bought ([decisions](decisions.html), *No army class without damage*) --; and the sea wave goes late and comes
-back: the first destroyer stood in FORM from 10 800 to 16 470, and two went then and retreated at 18 930, though a
-destroyer outranges every defence there (660 px against 300) -- the prediction does not credit the stand-off's range.
-At bf92df19, whose five skeeters swelled the wave, the first destroyer went at 12 600 and killed the east tower by
-15 000 from out of its reach.
+MEASURED 2026-11-17 on the reference setup, the naval turtle at 9f118119 (the stand-off, the sea scout, one air scout
+a seat): still failed, the commander and both towers at full health at the cap. What loses it:
+
+- **No air plant, so no air scout.** No unit the seat has sees the commander or the west tower -- they stand about
+  370 and 415 px from the nearest water a boat sails, past the sea scout's sight of 280 px and the destroyer's 330
+  -- and the air scout that would ([decisions](decisions.html), *One air scout a seat*) comes from an air plant the
+  seat never gets: its second plant, a shipyard, came at 8 587 on a metal income of 9.7, and a build whose island
+  order took the air plant past one sea plant chose no plant at all to the cap.
+- **With an air plant given** (a scratch situation, a CORAP of ImpAI's set down at its start): the air scout is
+  bought and flies 75 trips, the commander and both towers become rows, and no retreat is taken; yet the three
+  sea waves at the west tower bring the destroyers to 421-527 px of it, inside their 660, and it keeps 750 of 750
+  hp: each ATTACK is back in FORM 1 000 to 1 400 ticks after it left. Not diagnosed: whether the stand-off's ground
+  attack on the remembered tower was given and the engine's ballistic gun could not reach the hill, or the attack
+  ended first.
+- **The retreat, read from the predictions** (a diagnostic build at a7fc308e, no air plant): the sea wave went at
+  16 470 predicted to win (m 1.000 against the tower alone), and at 18 930 its two destroyers, 281 px from the
+  commander, retreated against the commander and the tower (m -0.945): the commander can come within its reach
+  of them over its own shore (cb 1), and the model's commander walks to them and fires its D-gun, a CommandFire
+  weapon it counts, killing both in four steps. The wave's prediction credits the range already; what it does not
+  have is a ship that keeps off the shore by the commander's reach -- the stand-off does not stand off mobile units.
 
 ## Automatic tuning
 
