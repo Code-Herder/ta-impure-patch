@@ -33,17 +33,15 @@ reason, paired as parts.
 The standard library, gcc and playwright-cli; it serves the repository root itself.
 """
 import html
-import http.server
 import json
+from importlib.machinery import SourceFileLoader
 import math
 import os
 import shutil
-import socketserver
 import struct
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import zlib
 from pathlib import Path
@@ -429,16 +427,10 @@ def result(out):
     return json.loads("\n".join(lines)) if lines else None
 
 
-class Quiet(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-
-
 def serve():
-    handler = lambda *a, **k: Quiet(*a, directory=str(ROOT), **k)
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd
+    """The mockup's own server (tools/wiki/serve.py): the page asks its simulation host at POST /sim as it loads
+    (wiki.js checks each entry through simhost.js), and the tech tree's unit view its COB host at POST /cob."""
+    return SourceFileLoader("wikiserve", str(ROOT / "tools/wiki/serve.py")).load_module().server(quiet=True)
 
 
 def pair(cs, ds, key):

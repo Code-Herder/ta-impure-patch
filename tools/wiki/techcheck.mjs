@@ -26,12 +26,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { TASIM_SRCS } from './tasimsrcs.mjs';   // the shared simulation core tagpu_wikisim.c calls
 const require = createRequire(import.meta.url);
 const WikiTech = require('./mockup/techtree.js');
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
 const DDRAW = path.join(ROOT, 'tagpu/ddraw'), PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
-const SRCS = ['src/tagpu_wikitech.c', 'src/tagpu_wikitechdraw.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
+const SRCS = ['src/tagpu_wikitech.c', 'src/tagpu_wikitechdraw.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS,
+  'src/tagpu_wikidata.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c',
   'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 const TOL = 1 / 64;

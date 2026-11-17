@@ -40,6 +40,7 @@ const PACKS = {};
       call: (unit, script, how, args, facts) =>
         changed(cobRequest({ op: 'call', world: id, unit, script, how: HOW[how], args: args || [], facts })).r,
       slice: facts => { changed(cobRequest({ op: 'slice', world: id, facts })); },
+      activate: (unit, on) => changed(cobRequest({ op: 'activate', world: id, unit, on: on ? 1 : 0 })).r,
       model(unit) {
         if (!models) models = cobRequest({ op: 'models', world: id }).models;
         if (!(unit in parsed)) {
