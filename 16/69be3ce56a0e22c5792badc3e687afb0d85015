@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=b7b2d7bd..1669be3c (income lever, tagpu_income.c 0x46555A redirect) findings=7 (M2 L5) fixed-in=37b9ca26; report .data/impai/runs/reviews/high-income-lever-1669be3c.md date=2026-11-16
