@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=6357756c..b3e84cac findings=6 (M1 L5) + 2 nits fixed-in=4a21c027; fix-review-e04b641a: closed except MED-1's order (bookkeeping only); report .data/impai/runs/reviews/fix-review-b3e84cac.md date=2026-11-16
