@@ -610,7 +610,13 @@ The owner's answers to the spec's questions:
   turtle only the commander offers the air plant and it was on wind generators whenever the plant was due, so
   before this the turtle got no air plant (MEASURED 2026-11-17 at 73593317). The energy frame stays where it was
   ordered; a builder on any other build (an extractor, a plant, a defence) is not taken, and in a stall the air
-  plant for the blind does not hold at all.
+  plant for the blind does not hold at all. **What it does not reach**: the take is tried once, before the idle
+  builders; when the builder's ring holds no site for the air plant the sea plant is built instead in the same
+  decision, as before the rule. On the naval turtle the commander's ring at 8 587 held 24 sites, 20 tested, none
+  taking CORAP (none past its reach, none threatened: the base ring is full at its first size), so the second
+  shipyard came and the seat wanted no further plant before the cap at 20 000 (MEASURED 2026-11-17 at 38efc351, a
+  diagnostic build). Holding the yard while the ring grows would make the air plant come, but `ring_grow` returns
+  to 0 at any builder's ring build, so the wait has no bound the ring itself gives; that is the owner's call.
 - **A commander at the shore** (owner's decision, 2026-11-17): ships treat an enemy commander they cannot reach --
   one confined to land, whose class has no way to the ships' water -- like a defence: they stand off past its D-gun
   reach plus a pad and shell it from range; they do not retreat home for it. **As built**: its reach is the longer of

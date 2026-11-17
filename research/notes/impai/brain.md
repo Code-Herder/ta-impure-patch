@@ -806,13 +806,17 @@ what stands ashore -- and the economy
 pays: no stall, not in the hold, a steady metal income of `factory_per_m` (8) a pass or more. The figures are the
 writer's. While it holds, the pick ranks the air plants alone: on a wet anchor the sea plant is a candidate too and
 may out-rank them, and the sea plant is placed by its own search, never by the ring. **The air plant takes the energy
-builder** (owner's decision, 2026-11-17): a builder on an energy build -- not one ordered in this decision, not held
-by its far record, and not in an energy stall -- counts as free for it, and once the idle builders are done the
-first such builder whose menu holds the air plant is given it, replacing its job when a site takes it; the energy
-frame stays. On the naval turtle only the commander offers CORAP and it stood on wind generators whenever the
-plant was due. **The air plant waits for no builder**: when no builder free in the decision -- idle or a helper,
-not held by its far record, or on an energy build as above -- offers the air plant (whichever pass chose it, the
-waived one too), the decision builds the sea plant as before. The air plant comes in place of the sea plant only once a search finds no site at all or no
+builder** (owner's decision, 2026-11-17; `air_take`): before any idle builder is asked, and only when no idle
+builder or helper free of its far record offers the air plant, the first builder on an energy build -- not one
+ordered in this decision, not held by its far record, and not in an energy stall -- whose menu holds it is given
+it, replacing its job when a site takes it; the energy frame stays. On the naval turtle only the commander offers
+CORAP and it stood on wind generators whenever the plant was due. **The air plant waits for no builder and no
+site**: when the take gives it to none -- no such builder, the decision's budget spent, or no site in the
+builder's ring (whichever pass chose it, the waived one too) -- the decision's plant is the sea plant as before, and
+the idle builders that follow are asked for it in the same decision. So a want the air plant holds is in every
+decision the air plant's order or the sea plant's question, never neither: with the take after the idle builders
+and the commander's offer alone holding the plant, the turtle's commander found no CORAP site at any decision from
+8 587 and the seat built no second plant to the cap (MEASURED 2026-11-17 at c7f939c1, a diagnostic build). The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
 another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
 to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default

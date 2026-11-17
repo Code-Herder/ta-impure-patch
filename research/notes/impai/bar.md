@@ -685,6 +685,16 @@ holds the goal): still failed, the commander and both towers at full health at t
   had was a ship that keeps off the shore by the commander's reach (since built: *A commander at the shore*,
   [decisions](decisions.html)).
 
+MEASURED 2026-11-17 on the reference setup, the naval turtle at 38efc351 (the air plant takes the energy builder,
+a commander at the shore): still failed, the opponent's three units alive at the cap. The take reaches the
+commander at 8 587, but its ring at its first size holds no CORAP site (24 sites, 20 tested, none past its reach or
+threatened), so the second shipyard comes in the same decision and the seat wants no further plant before 20 000
+on its income of 9.7: still no air plant, so no air scout (*What it does not reach*, [decisions](decisions.html),
+*The air plant takes the energy builder*). The confirm games, played at c7f939c1 (the take after the idle
+builders; not played again at 38efc351): Red Triangle `ac-1` won at 37 832, Trout Farm `ca-1` at 40 743, Plains &
+Passes `ac-1` at 35 901, Steel Jungle `ca-1` at the cap as before, and `bar-nota-lavamania-ca-2` under ProTA won at
+37 242.
+
 ## Automatic tuning
 
 `tools/impai/tune.py` holds two searches, each where its dimensions are: the levels' rows on one line, and SPSA
