@@ -988,7 +988,7 @@ static void read_definitions(Load* D)
     load_classes(D);
     tagpu_vfs_enum(v, D->p->units, D->unit_list, 0, each_unit, D);
     tagpu_vfs_enum(v, D->weapon_dir, D->weapon_filter, 0, each_weapons_file, D);
-    /* 0x422310..0x422331: 0x4BCB50(<features>, <feature_pattern>, -1, 1) */
+    /* 0x422310..0x422339 (the call at 0x422339): 0x4BCB50(<features>, <feature_pattern>, -1, 1) */
     tagpu_vfs_enum(v, D->p->features, D->p->feature_pattern, 1, each_feature_file, D);
 }
 

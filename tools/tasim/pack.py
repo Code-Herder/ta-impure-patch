@@ -17,7 +17,7 @@ hold each batch to it afterwards (P1 to P5 and P4e, engtrace.py): research/notes
 *The packed lane*.
 
 THE STAGGER: P_k = (30·s·k) mod B. The weapon scan 0x4089A0 examines s = floor(limit/30) + 1 slots of a
-seat's block a step (`imul 0x88888889` at 0x4089C0), its cursor obj+0x39 stepping over every slot,
+seat's block a step (`0x88888889` loaded at 0x4089C0, the `imul` at 0x4089C5), its cursor obj+0x39 stepping over every slot,
 empty or not, and wrapping from the block's last +0x6B to its first +0x67 (0x4089DC..0x4089FB); the
 applier zeroes the cursor at an apply that clears (tagpu_scenario.c reset_weapon_scans) (DISASSEMBLED).
 So the window scanned at step j is [s·j, s·j + s) mod B, and a unit at block position P + p created d

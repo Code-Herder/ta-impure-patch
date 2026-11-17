@@ -126,7 +126,7 @@ PROFILE_STRINGS = (
     ("gui",               0x502820, (0x42D82A,           # the GUI pages: the page probe 0x42D824..0x42D83F
                                      0x41AD2C)),         # and the page loader 0x41AD17..0x41AD5F
     ("gui_ext",           0x502828, (0x42D824, 0x41AD17)),   # "GUI", at the same two sites
-    ("features",          0x502C7C, (0x422324,)),        # the feature listing 0x4BCB50 at 0x422310..0x422331
+    ("features",          0x502C7C, (0x422324,)),        # the feature listing: 0x422310..0x422339, the call to 0x4BCB50 at 0x422339
     ("feature_pattern",   0x502C88, (0x42231F,)),        # its filter
     ("scripts",           0x503740, (0x42D8DF,)),        # a type's script, built by 0x4290F0 at 0x42D8D2..0x42D8EF
     ("script_ext",        0x503EC8, (0x42D8D5,)),        # "COB", its extension
