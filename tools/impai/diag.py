@@ -3,7 +3,7 @@
 asked for.
 
     tools/impai/diag.py run --dll D [--dll D2] (--ids ID[,ID...] | --situation NAME[,NAME...]) [--cap T]
-                            [--grep REGEX]... [--lines N] [--at T[,T...]] [--near W] [--max M] [--lanes L]
+                            [--setup NAME] [--grep REGEX]... [--lines N] [--at T[,T...]] [--near W] [--max M] [--lanes L]
                             [--out DIR]
     tools/impai/diag.py logs DIR [DIR2] [--grep REGEX]... [--lines N] [--at T[,T...]] [--near W] [--max M]
     tools/impai/diag.py build [--export NAME] [--define K=V]...
@@ -182,7 +182,7 @@ def run_games(a) -> int:
         if a.cap:
             games = [dict(g, cap=a.cap) for g in games]
     else:
-        games = [dict(bar.parse_id(g), cap=a.cap or bar.CAP, setup=None, values=[]) for g in bar.read_ids(a.ids)]
+        games = [dict(bar.parse_id(g), cap=a.cap or bar.CAP, setup=a.setup, values=[]) for g in bar.read_ids(a.ids)]
     folders = []
     rc = 0
     missing = [d for d in a.dll if not Path(d).is_file()]
@@ -190,7 +190,7 @@ def run_games(a) -> int:
         raise DiagError(f"no DLL {missing[0]}")
     for k, dll in enumerate(a.dll):
         f = out / f"dll{k + 1}"
-        pa = argparse.Namespace(verb="diag", dll=dll, lanes=a.lanes, setup=None, gpu=False, draw=False,
+        pa = argparse.Namespace(verb="diag", dll=dll, lanes=a.lanes, setup=a.setup, gpu=False, draw=False,
                                 keep_all=True, no_curtail=True)
         rc = max(rc, bar.play_games(games, pa, f))
         folders.append(f)
@@ -286,6 +286,8 @@ def main(argv=None) -> int:
     r.add_argument("--situation", default=None, help="exploit situations, a comma list")
     r.add_argument("--cap", type=int, default=None, help="the GameTime the games end at")
     r.add_argument("--lanes", type=int, default=2)
+    r.add_argument("--setup", default=None,
+                   help="the setup the games play on (tools/compat/setups.json), none the base game")
     r.add_argument("--out", default=None)
     extraction(r)
     lg = sub.add_parser("logs", help="print the lines of finished games")
