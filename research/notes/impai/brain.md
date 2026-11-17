@@ -621,7 +621,8 @@ advanced plant left the two vehicle plants poor for 726 factory-decisions (MEASU
 judges the seat on an island (*The island*, below), the land army classes (land raider to land scout) take an
 order only while their value -- built, building and queued -- is below a quarter of the whole army's, tested
 before each order, so the land army passes the quarter by at most one order; the base faces only what crosses the
-water. Every linked map keeps Q3 whole. **A poor plant beside a store in surplus** buys its cheapest army type of any class,
+water. With values, the cap waits for the economy's reach to agree: no gated class of the seat's factories
+reaches, so the classes it caps are the ones Q3's fallback reads. Every linked map keeps Q3 whole. **A poor plant beside a store in surplus** buys its cheapest army type of any class,
 so no factory idles beside a full store. With no values there is no gate. BARb's build-power cap and its army/builder split are the ideas, read
 for design only. MEASURED before it, the constructor quota (12 at most, four plus one per three metal, taking
 every idle factory first): the first army unit at a median GameTime of 13 500-15 000 against a first factory at
@@ -677,11 +678,12 @@ most `IMPAI_SEA_BUILDERS`, 8, builder types), then on the menus of **the unlocks
 seat's factories make that it has none of finished, at most 8 -- at most `IMPAI_PLANT_CANDS`, 16, candidates, each
 one whose own menu holds a
 constructor that builds an extractor, a water-only plant only on a wet anchor, and a plant the way-out record passes
-over only in the waived pass (*A plant keeps a way out*); past the first plant on an island (*The island*, below),
-only a water plant or one whose menu offers an air army type, the owner's decision (2026-11-17): there the sea
-plant's want takes every further plant, on the pacing of any further plant, so the choice runs only when no sea
-plant can be had and takes an air plant. The default table buys no aircraft, so such a plant makes constructors
-alone. **The build tech** filters them: a plant's build tech
+over only in the waived pass (*A plant keeps a way out*); past the first plant on an island (*The island*, below)
+when no candidate the pass may take has a land army -- the choice's own reach agrees with the military's verdict,
+which on Trout Farm came and went on a linked map --, only a water plant or one whose menu offers an air army
+type, the owner's decision (2026-11-17), and the further plant is first the sea plant, by the sea plant's own
+search while its refusals are not spent, then the air plant. The default table buys no aircraft, so such a plant
+makes constructors alone. **The build tech** filters them: a plant's build tech
 (`IMPAI_TINFO.ctech`) is the highest tech its constructors that can build an extractor build -- the
 constructors its candidacy asks for, so a builder that only lays mines, decoys or jammers does not raise it: TA
 Zero's GoKT2AF was a tech-up candidate only through GoKT2AirJammer, a tech-2 builder whose menu is mines, decoys and

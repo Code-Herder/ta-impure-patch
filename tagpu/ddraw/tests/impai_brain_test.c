@@ -9440,9 +9440,10 @@ static void check_island_plant(void)
     CHECK(sy == 1 && !land, "(f) a land army only on a plant the pick cannot take: the shipyard");
 }
 
-/* THE ISLAND'S PLANTS (impai_econ.c, island_plant; impai_brain.c, economy): the coast world, naval, the lab gone
-   and a finished shipyard at cell (66, 100), so the next plant is the seat's second:
-   (a) on THE ISLAND: a second shipyard, by the sea plant's want, and no land plant;
+/* THE ISLAND'S PLANTS (impai_econ.c, island_plant): the coast world, naval, the lab gone and a finished shipyard
+   at cell (66, 100), so the next plant is the seat's second:
+   (a) on THE ISLAND, no candidate with a land army: a second shipyard, by the sea plant's search, and no land
+       plant;
    (b) on THE ISLAND, the sea plant's refusals spent, the lab and the vehicle plant offering constructors alone:
        THE CHOICE takes no land plant, and none is ordered;
    (c) (b) with the lab's menu also an air army type (the PT boat made a bomber): the lab, an air plant;
@@ -9452,20 +9453,35 @@ static void check_island_plant(void)
        rule for the plants past it does not touch;
    (g) (b) with the commander and so the anchor in the sea at cell (70, 64): THE CHOICE reads the water plants
        there, and takes the shipyard, a sea plant;
-   (h) (a) at a metal income of 2 a pass, below factory_per_m's pacing: no second shipyard. */
+   (h) (a) at a metal income of 2 a pass, below factory_per_m's pacing: no second shipyard;
+   (i) on THE ISLAND, the lab's K-bot a land fighting type and the estimate ashore, which its class reaches: the
+       choice's reach disagrees with the military's verdict, so a land plant by the choice's own rule and no
+       shipyard;
+   (j) (i) with the lab's build tech 3, past the vehicle plant's 1, so the pick cannot take it: its land army does
+       not count, and the second shipyard. */
 static void check_island_plants(void)
 {
     static const uint16_t AIRLAB[] = { E_CK, E_PT };
-    static const char* const NAME[8] = { "(a) the island, a second shipyard", "(b) the island, no sea, no air plant",
+    static const char* const NAME[10] = { "(a) the island, a second shipyard", "(b) the island, no sea, no air plant",
                                          "(c) the island, no sea, the lab an air plant",
                                          "(d) the island, no sea, the bomber of no value", "(e) not the island",
                                          "(f) the island, the first plant", "(g) the island, no sea, a wet anchor",
-                                         "(h) the island, the income below the pacing" };
+                                         "(h) the island, the income below the pacing",
+                                         "(i) the island, the lab's land army reaches",
+                                         "(j) the island, the reaching lab past the build tech" };
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
-    for (c = 0; c < 8; c++) {
+    for (c = 0; c < 10; c++) {
         int from;
         coast_world(C_COAST, 1, c == 7 ? 2.0f : 9.0f);
+        if (c >= 8) {
+            s_ti[E_CK].klass = IMPAI_K_LASSAULT;
+            s_smil.ebx = 10;
+        }
+        if (c == 9) {
+            s_ti[E_LAB].ctech = 3;
+            s_ti[E_VP].ctech = 1;
+        }
         s_w.unit[2].live = 0;
         if (c != 5) unit_add(&s_w, 3, E_SY, 66, 100, 1);
         if (c == 6) unit_add(&s_w, 1, E_COM, 70, 64, 1);
@@ -9484,10 +9500,11 @@ static void check_island_plants(void)
             continue;
         }
         sea_decide(NAME[c], &sy, &land);
-        if (c == 0 || c == 5) CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
+        if (c == 0 || c == 5 || c == 9) CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
         if (c == 1 || c == 3 || c == 7) CHECK(!sy && !land, "%s: no plant, %d %d", NAME[c], sy, land);
         if (c == 2) CHECK(!sy && land == 1 && builds_of(from, E_LAB, NULL, NULL) == 1, "%s: the lab", NAME[c]);
         if (c == 4) CHECK(!sy && land == 1, "%s: a land plant", NAME[c]);
+        if (c == 8) CHECK(!sy && land == 1, "%s: a land plant", NAME[c]);
     }
     s_milp = NULL;
 }
@@ -11893,6 +11910,15 @@ static void check_plant_gate(void)
         CHECK(k ? q[2][M_RAIDER] == 20 && !poor : !q[2][M_RAIDER] && poor == 20,
               "a poor plant %s", k ? "in surplus buys army" : "outside a surplus takes no army order");
     }
+    /* THE ISLAND'S LAND BUDGET waits for the economy's reach (impai_econ.c, island_classes): the military judges an
+       island, but with no reach table every class reaches, so the vehicle plant's raiders and tanks are no Q3
+       fallback and are not capped, though the seat holds no other army */
+    gate_world(VP, 2, NULL, 0, 0);
+    s_mil.island = 1;
+    gate_run(q, &first_cons);
+    s_mil.island = 0;
+    printf("gate, the island verdict with the land reaching: VP raider %d tank %d\n", q[2][M_RAIDER], q[2][M_TANK]);
+    CHECK(q[2][M_RAIDER] + q[2][M_TANK] >= 10, "the island's budget waits for the economy's reach");
     brain_world();
     s_milp = NULL;
 }

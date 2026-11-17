@@ -1496,17 +1496,12 @@ static void economy(IMPAI_DEC* d)
        base's own shore can be too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r
        (MEASURED at 198899ef, bar-nota-troutfarm-aa-2: `sea_site=none`) and its nearest lies off a shore no land
        constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
-       one plant, the stalls, the hold, the refusals and a builder that offers one.
-       THE ISLAND'S PLANTS (owner's decision, 2026-11-17): while the military judges the seat on an island
-       (impai_mil.c, island), every plant past the first is a sea plant through this want, on plant_metal's pacing
-       as any further plant, and THE CHOICE, which runs only while this want does not, takes an air plant and never
-       a land one (impai_econ.c, island_plant): so the sea comes first and the air when no sea plant can be had --
-       no builder offers one, or the refusals are spent. The finish's unpaced want stays the first sea plant's. */
+       one plant, the stalls, the hold, the refusals and a builder that offers one. A further sea plant on an
+       island is THE CHOICE's (impai_econ.c, THE ISLAND'S PLANTS). */
     d->sea_far = (uint8_t)(mil && mil->dry);
     d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
-    d->want_sea = mil && (mil->naval == 1 || d->sea_far) && (!d->sea_plants || mil->island) &&
-                  d->count[IMPAI_C_FACTORY] >= 1 &&
-                  (d->sea_far && !d->sea_plants ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_metal) &&
+    d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
+                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_metal) &&
                   !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'

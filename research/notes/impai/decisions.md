@@ -582,10 +582,16 @@ The owner's answers to the spec's questions:
   take an order only while their value -- built, building and queued -- is below a quarter of the whole army's,
   so the base's defence grows with the army the seat can send and is nothing while it has none; the base meets
   only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet first. A
-  share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: the sea
-  plant's want takes every further plant on the island, on the pacing of any further plant, and the plant choice
-  then takes an air plant only when no sea plant can be had (no builder offers one, or the refusals are spent).
-  Sea before air because the default table buys no aircraft, so an air plant there makes only constructors.
+  share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: a further
+  plant on the island, on the pacing of any further plant, is first the sea plant, by the sea plant's own search
+  while its refusals are not spent, and the plant choice's air plant when that search orders none. Sea before
+  air because the default table buys no aircraft, so an air plant there makes only constructors. **Both wait for
+  the economy's own reach to agree** (the brain writer's call): the plants only when no plant the choice may take
+  has a land army that reaches, the cap only when no gated class of the seat's factories reaches. The military's
+  verdict reads a row on a block the land army does not stand on as off the land, so it came and went on Trout
+  Farm, a linked map: at GameTime 12 517 the seat's second plant was an air plant beside a lab whose army reached,
+  and the win came at 54 559 against 45 445 (MEASURED 2026-11-17, `bar-hota-troutfarm-ca-1` at 31ada7aa; with
+  the agreement the lab again, and 45 445).
   **Why**: on Gods of War the island seat's vehicle plant, its two constructors and its one Leveler cost 1 242
   metal by the cap, 1.4 of the destroyers it had three of (MEASURED 2026-11-17, `exploit-naval-turtle` at
   cc27da06); with the rule its second plant was a second shipyard at 8 527 and it held four destroyers at the cap
