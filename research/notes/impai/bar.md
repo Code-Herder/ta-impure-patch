@@ -663,20 +663,20 @@ against the same brain's games before: the air rush passed on its commander agai
 the cap (18 before); the artillery creep passed on value, 34 716 against 27 381 (34 893 against 26 828 before), 7 of
 the opponent's units alive (5 before). Each game took 46 to 50 s of play.
 
-MEASURED 2026-11-17 on the reference setup, the naval turtle at 9f118119 (the stand-off, the sea scout, one air scout
-a seat): still failed, the commander and both towers at full health at the cap. What loses it:
+MEASURED 2026-11-17 on the reference setup, the naval turtle at 4487c188 (the air plant for the blind, the shelling
+holds the goal): still failed, the commander and both towers at full health at the cap. What loses it:
 
 - **No air plant, so no air scout.** No unit the seat has sees the commander or the west tower -- they stand about
   370 and 415 px from the nearest water a boat sails, past the 256 px the engine's sight table gives any unit on an
-  axis -- and the air scout that would ([decisions](decisions.html), *One air scout a seat*) comes from an air plant the
-  seat never gets: its second plant, a shipyard, came at 8 587 on a metal income of 9.7, and a build whose island
-  order took the air plant past one sea plant chose no plant at all to the cap.
-- **With an air plant given** (a scratch situation, a CORAP of ImpAI's set down at its start): the air scout is
-  bought and flies 75 trips, the commander and both towers become rows, and no retreat is taken; yet the three
-  sea waves at the west tower bring the destroyers to 421-527 px of it, inside their 660, and it keeps 750 of 750
-  hp: each ATTACK is back in FORM 1 000 to 1 400 ticks after it left. Not diagnosed: whether the stand-off's ground
-  attack on the remembered tower was given and the engine's ballistic gun could not reach the hill, or the attack
-  ended first.
+  axis. The air plant may now come ahead of the second shipyard ([decisions](decisions.html), *The air plant for the
+  blind*), and the rule holds at 8 587 (blind, no enemy ship seen, income 8.6), but only the commander offers CORAP
+  and it is on wind generators whenever the plant is wanted, so the seat builds its second shipyard as before (*the
+  air plant waits for no builder*).
+- **With an air plant given** (a scratch situation, a CORAP of ImpAI's set down at its start): the scout finds the
+  towers, the destroyers ground-attack the remembered west tower, and it falls -- 149 of 750 hp at 16 500, gone by
+  19 500; the commander and the east tower stand at the cap. Before the shelling held the goal, each ATTACK moved
+  on at its goal 90 to 690 ticks after the ground attack was given, before the engine had closed the destroyers
+  in to where the gun reaches the point (about 400 px on this hill: a scratch roy-test).
 - **The retreat, read from the predictions** (a diagnostic build at a7fc308e, no air plant): the sea wave went at
   16 470 predicted to win (m 1.000 against the tower alone), and at 18 930 its two destroyers, 281 px from the
   commander, retreated against the commander and the tower (m -0.945): the commander can come within its reach
