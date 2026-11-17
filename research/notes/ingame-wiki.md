@@ -2344,17 +2344,19 @@ last at commit `3b92ed28`), its CSS pixels halved (its card 236 px to our 118 un
 header, the selected card a one-unit halo outside its rim; an edge the cubic from the parent's
 right edge to the child's left at the headers' middles, its handles at the midpoint's x (an
 S-curve), an "also built by" edge dashed; the stage a dot grid every 16 window units, fixed to the
-canvas while the tree pans and zooms over it. It is drawn with what a HUD op list carries: a
-rounded rectangle is three rectangles and a disc at each corner (`HOP_DOT`), the shadow a
-`HOPF_DROP` box, a curve 24 straight pieces, a dashed edge every other one of its own pieces, as
-many as 2-unit dashes fit along it, 8 to 64 -- so a dashed edge is at most 32 lines at any zoom,
-where a dash pattern in pixels would be one line a dash; the cap leaves a long edge's dashes
-longer than the prototype's -- and an edge wholly off the canvas is not drawn. A dimmed card
-(opacity 0.28, the prototype's) is drawn in opaque colours mixed with the stage, so its
-overlapping shapes fade as one layer. `techcheck`'s budget case draws each tree whole at the
-game's stage size with every link: 10 547 ops at most (Escalation), of the stage's 16 384; every
-edge at its cap and every card drawn would be about 12 700 for Escalation, the six setups' largest
-tree. Ops past the list are dropped and counted, never written past it. The faces are the HUD's (the
+canvas while the tree pans and zooms over it. Each shape is one op the HUD shader draws per pixel:
+a rounded rectangle is a `HOP_SOLID` with its corner radius (`HOP_RADIUS`; the `RRECT` mode), the
+shadow a `HOPF_DROP` box with the same radius, so its corners are shaded as the rounded box's; an
+edge is one `HOP_CURVE`, a strip the vertex stage lays along the cubic in `HUD_CURVE_SEG` (24)
+pieces and the fragment stage strokes with butt ends and, for an "also built by" edge, dashes 2
+units on and 2 off from its start, as the canvas's `setLineDash` does, at any zoom; and the dot
+grid is one `HOP_GRID` over the canvas. So the tree's ops are bounded by its cards and edges,
+whatever the zoom or the window: `techcheck`'s budget case, each tree whole at the game's stage
+size with every link, is 1 080 ops at most (Escalation), of the stage's 16 384. A dimmed card
+(opacity 0.28, the prototype's) has its frame drawn in opaque colours mixed with the stage, so its
+overlapping shapes fade as one layer; an edge under a dimmed card is hidden rather than seen
+through it, and its pictures and text are drawn at the opacity, so a picture over its black
+square is a little darker than the prototype's. The faces are the HUD's (the
 prototype's description and footer were the browser's system face), so those two lines read
 narrower than the prototype's.
 
@@ -2463,7 +2465,11 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   from the same pack (`tests/techpack.h`); `wiki_regression.py techtree` plays it in the game:
   the open on the tree, fitted, a click that picks, a drag, a notch about the pointer and a click
   on the zoomed tree, the panel a pick opens with a chip, the wheel and its close, Fit, All links
-  and About narrowing the fit.
+  and About narrowing the fit; and `tools/wiki/treecheck.py` holds the lane's two shots of the
+  fitted tree, with and without every link, to the mockup's canvas at the same camera, pixel for
+  pixel -- the shader's rounded boxes, curves, dashes and grid against Chrome's paths. MEASURED
+  2026-11-17 at 1920 x 1080, stock: 0.76 and 0.80 levels apart on average, 0.4 % of the canvas more
+  than 48 apart, most of it the cards' shrunken pictures and the text.
 
 - **The unit's view** is the game thread's (`tagpu_wiki.c`, THE TECH TREE'S UNIT VIEW): the
   panel's unit -- an upgrade's first builder -- runs its own COB script on a host of its own, made

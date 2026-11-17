@@ -95,8 +95,6 @@ const WikiTech = (() => {
     FOOT: 9,                     // the footer line
     EDGE_Y: 15,                  // where an edge meets a card: the header's middle
     R: 2,                        // a card's corner radius
-    SEG: 24,                     // the pieces an edge's curve is drawn in
-    DASHES: 64,                  // the most pieces a dashed edge is cut in, half of them drawn
     DOT: 16,                     // the stage's dot grid: its pitch, in units of the window, not of the tree
   };
   const cardH = n => C.HEAD + (n ? Math.ceil(n / C.PER) * (C.ICON + C.IGAP) + C.IGAP : 0) + C.FOOT;
@@ -166,9 +164,11 @@ const WikiTech = (() => {
     also: '#6a7058', path: '#7fc4e8', kid: '#9fd68a', sel: '#e8c66a', up: '#d58ae8', pic: '#000000',
     stage: '#151713', dot: '#2a2d25', shadow: '#00000088' };
   const DIM = 0.28;                 // a card the selection does not light (the prototype's opacity)
-  /* A COLOUR SEEN THROUGH `a` OVER THE STAGE, as one opaque colour. A card's shapes overlap (the corners' discs over its
-     rectangles, the rim under the fill), so drawn translucent each overlap would show darker; mixed first, the card fades
-     as one layer, as the prototype's CSS opacity fades it. Under a card is only the stage: the edges run between cards. */
+  /* A COLOUR SEEN THROUGH `a` OVER THE STAGE, as one opaque colour. A card's frame overlaps itself (the fill over the rim,
+     the header's line over the fill), so drawn translucent each overlap would show darker; mixed first, the frame fades
+     as one layer, as the prototype's CSS opacity fades the card. Two differences remain from that: an edge that passes
+     under a dimmed card is hidden by it rather than seen through it, and the card's pictures and text are drawn at the
+     opacity itself, so a picture over its black square shows a little darker than the prototype's. */
   const mix = (hex, a) => {
     if (a >= 1) return hex;
     const c = parseInt(hex.slice(1, 7), 16), st = parseInt(INK.stage.slice(1), 16);
@@ -177,11 +177,14 @@ const WikiTech = (() => {
     return '#' + out.toString(16).padStart(6, '0');
   };
   /* THE GROUND: the stage's fill and its dot grid, fixed to the canvas as the prototype's CSS background is (a pan or a
-     zoom moves the tree over it), a dot every DOT units from the canvas's corner, one unit square, whole pixels */
+     zoom moves the tree over it), a dot every DOT units from the canvas's corner, one unit square, whole pixels. The game
+     draws the grid as one shape (HOP_GRID), so a context that takes it whole -- techcheck's recorder, `grid` -- is
+     handed it whole. */
   function ground(g, W, H, s) {
     g.fillStyle = INK.stage; g.fillRect(0, 0, W, H);
     const p = C.DOT * s, d = Math.max(1, Math.round(s));
     g.fillStyle = INK.dot;
+    if (g.grid) { g.grid(0, 0, W, H, p, d); return; }
     for (let y = 0; Math.round(y) < H; y += p)
       for (let x = 0; Math.round(x) < W; x += p) g.fillRect(Math.round(x), Math.round(y), d, d);
   }
@@ -198,33 +201,18 @@ const WikiTech = (() => {
     g.save();
     g.lineCap = 'butt';
     /* THE EDGES first, under the cards: the walk's (each card to its parent card) and, lit or with `all`, every other
-       builder of a card's unit, dashed. Each is the prototype's cubic from the parent's right edge to the child's left at
-       the headers' middles, its two handles at the midpoint's x, drawn as SEG straight pieces; two cards level are joined
-       by one line, undashed. */
+       builder of a card's unit, dashed 2 units on and 2 off. Each is the prototype's cubic from the parent's right edge to
+       the child's left at the headers' middles, its two handles at the midpoint's x (a HOP_CURVE in the game). */
     const edge = (a, b, style, w, dashed) => {
       const [ax, ay, aw] = L.pos[a], [bx, by] = L.pos[b];
       g.strokeStyle = style; g.lineWidth = Math.max(1, Math.round(w * z));
       // a line one pixel wide sits on a pixel's centre
       const o = g.lineWidth % 2 ? 0.5 : 0;
       const x1 = X(ax + aw), y1 = Y(ay + C.EDGE_Y) + o, x2 = X(bx), y2 = Y(by + C.EDGE_Y) + o, mx = (x1 + x2) / 2;
-      // an edge wholly off the canvas is not drawn, as a card is not
-      if (Math.max(x1, x2) < 0 || Math.min(x1, x2) > g.canvas.width || Math.max(y1, y2) < 0 || Math.min(y1, y2) > g.canvas.height) return;
-      /* DASHED BY ITS OWN PIECES: every other one, each a stroke of its own -- as many pieces as dashes of the
-         prototype's 2 units fit along it (its x and y extents, at least its length), at least 8 and at most DASHES, so
-         a dashed edge is at most DASHES / 2 lines at any zoom (a dash pattern in pixels would be one line a dash, and a
-         long edge zoomed in thousands, past what the stage's op list holds) */
       const dl = Math.max(2, Math.round(2 * z));
-      const n = !dashed ? C.SEG : 2 * Math.min(C.DASHES / 2, Math.max(4, Math.round((Math.abs(x2 - x1) + Math.abs(y2 - y1)) / (2 * dl))));
-      const pt = [[x1, y1]];
-      if (y1 === y2 && !dashed) pt.push([x2, y2]);
-      else
-        for (let i = 1; i <= n; i++) {
-          const t = i / n, u = 1 - t, a0 = u * u * u, a1 = 3 * u * u * t, a2 = 3 * u * t * t, a3 = t * t * t;
-          pt.push([a0 * x1 + (a1 + a2) * mx + a3 * x2, (a0 + a1) * y1 + (a2 + a3) * y2]);
-        }
-      if (dashed)
-        for (let i = 0; i + 1 < pt.length; i += 2) { g.beginPath(); g.moveTo(...pt[i]); g.lineTo(...pt[i + 1]); g.stroke(); }
-      else { g.beginPath(); g.moveTo(...pt[0]); for (const p of pt.slice(1)) g.lineTo(...p); g.stroke(); }
+      g.setLineDash(dashed ? [dl, dl] : []);
+      g.beginPath(); g.moveTo(x1, y1); g.bezierCurveTo(mx, y1, mx, y2, x2, y2); g.stroke();
+      g.setLineDash([]);
     };
     const lines = [];
     for (const k of M.spine) {
@@ -268,19 +256,13 @@ const WikiTech = (() => {
         g.drawImage(im, bx, by, bw, bh);
       }
     };
-    /* A ROUNDED RECTANGLE of whole pixels, filled: three rectangles and a disc at each corner (a HUD op list has no
-       path, but rectangles and discs) */
+    /* A ROUNDED RECTANGLE of whole pixels, its radius at most half its narrower side, filled (a HOP_SOLID with its
+       radius in the game) */
     const rrect = (x, y, w, h, r, col) => {
       if (w <= 0 || h <= 0) return;
       r = Math.max(0, Math.min(r, Math.floor(w / 2), Math.floor(h / 2)));
       g.fillStyle = col;
-      g.fillRect(x + r, y, w - 2 * r, h);
-      g.fillRect(x, y + r, r, h - 2 * r);
-      g.fillRect(x + w - r, y + r, r, h - 2 * r);
-      if (r > 0)
-        for (const [px, py] of [[x + r, y + r], [x + w - r, y + r], [x + r, y + h - r], [x + w - r, y + h - r]]) {
-          g.beginPath(); g.arc(px, py, r, 0, 2 * Math.PI); g.fill();
-        }
+      g.beginPath(); g.roundRect(x, y, w, h, r); g.fill();
     };
     /* A SOFT SHADOW, CSS's box-shadow 0 1u 3u round the card's rounded box: the canvas casts it from the rounded
        rectangle drawn FAR off the canvas and carried back by its offset, so only the shadow lands (a HOP_SOLID with

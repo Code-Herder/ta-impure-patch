@@ -63,8 +63,6 @@ typedef struct {
 #define WT_FOOT   9.0
 #define WT_EDGE_Y 15.0      /* where an edge meets a card                         */
 #define WT_R      2.0       /* a card's corner radius                             */
-#define WT_SEG    24        /* the pieces an edge's curve is drawn in             */
-#define WT_DASHES 64        /* the most pieces a dashed edge is cut in, half drawn */
 #define WT_DOT    16.0      /* the stage's dot grid: its pitch, in window units   */
 #define WT_MARGIN 8.0       /* units round the fitted tree                        */
 

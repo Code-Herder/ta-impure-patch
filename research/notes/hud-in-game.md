@@ -568,7 +568,11 @@ the recorder writes nothing for it.
   do ([The replay HUD's layout](hud-layout.md), *The stats window*, *The chart*). Four new kinds
   of op: `HOP_LINE`, an antialiased stroke with butt ends; `HOP_CHART`, the chart's lines;
   `HOPF_DROP` on a solid, a CSS outer box shadow; and `HOPF_BASE` on a text, an SVG `<text>` on
-  its baseline at its anchor.
+  its baseline at its anchor. The tech tree adds three more, each one instance drawn per pixel: a
+  solid's corner radius (`HOP_RADIUS`, a canvas `roundRect`, the drop shadow's too), `HOP_CURVE`
+  (the tree's S-curve, dashed per pixel; its instance is a strip of `2 (HUD_CURVE_SEG + 1)`
+  vertices the vertex stage lays along the cubic, so its batch carries that count, `HUDBATCH.nv`)
+  and `HOP_GRID` (the tree's dot grid) -- [the in-game wiki](ingame-wiki.html), *The look*.
 - **The chart's lines are data**, one RGBA32F image a chart slot (`tagpu_huddraw_chart(slot, …)`,
   `HUD_CHART_SLOTS` 2: slot 0 this HUD's, `HUD_TEX_CHART`, slot 1 the in-game wiki's stage HUD's,
   `HUD_TEX_CHART_WIKI`; a list's `chart_slot` picks the image its `HOP_CHART` reads, so two stats

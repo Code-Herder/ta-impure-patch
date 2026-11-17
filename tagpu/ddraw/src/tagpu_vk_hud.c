@@ -388,7 +388,7 @@ static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
                         : b->tex >= 0 && b->tex < s_nparts + s_nwparts ? s_part[b->tex].set : s_atlas.set;
     if (!b->count) return;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &set, 0, NULL);
-    vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
+    vkCmdDraw(cb, b->nv > 0 ? (uint32_t)b->nv : 4u, (uint32_t)b->count, 0, (uint32_t)b->first);
 }
 
 /* ---- the groups' layer ------------------------------------------------------------------------ */

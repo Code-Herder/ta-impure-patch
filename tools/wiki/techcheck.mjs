@@ -12,10 +12,12 @@
    `hit` against tagpu_wikitech_hit. techtree.js draws each case into a recording context; a native build of tagpu_wikitechdraw.c
    (tagpu/ddraw/tests/wikitechtest.c) draws the same case into ops. The two are paired one for one: kinds, colours
    (rgba in 1/255ths, the canvas's globalAlpha folded in), strings and pictures equal, every coordinate within 1/64 of a
-   pixel. A canvas call is read as tools/wiki/stagecheck.mjs reads it: fillRect a rect, an undashed strokeRect a ring
-   (the band half the width either side of its edges), a stroked polyline its pieces carried half the width into each
-   corner, dashed by the canvas dash rule from its first point; fillText a line of text on the alphabetic baseline; a
-   drawImage of a unit's picture its picture, filtered or not.
+   pixel. A canvas call is read as the game's op: fillRect a rect, a filled roundRect a rect with its corner radius, one
+   filled with a shadow cast from off the canvas a drop shadow, an undashed strokeRect a ring (the band half the width
+   either side of its edges), a dashed one its pieces by the canvas dash rule, a stroked bezierCurveTo a curve with its
+   dash, the ground's `grid` the dot grid whole; fillText a line of text on the alphabetic baseline; a drawImage of a
+   unit's picture its picture, filtered or not. How the shader draws the shapes is tools/wiki/treecheck.py's: the
+   game's frame against the mockup's canvas.
 
    THE TEXT'S MEASURE is the DLL's: the tree's three plain styles of art/hud/layout.json (tech_title, tech_body,
    tech_label), measured by the C side with tagpu_hudtext_width; the recording's measureText answers each face's advance
@@ -65,38 +67,40 @@ function recorder(em, asked, W, H, U) {
     shadowColor: '#00000000', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
     save() { saved.push([g.globalAlpha, g.shadowColor, g.shadowBlur, g.shadowOffsetX, g.shadowOffsetY, g.fillStyle]); },
     restore() { [g.globalAlpha, g.shadowColor, g.shadowBlur, g.shadowOffsetX, g.shadowOffsetY, g.fillStyle] = saved.pop(); },
-    // a disc: a full arc filled (HOP_DOT, as deep as its radius)
-    arc(x, y, r, a0, a1) {
-      if (a0 !== 0 || Math.abs(a1 - 2 * Math.PI) > 1e-12) throw new Error('an arc that is not a whole circle');
-      path.push({ disc: [x, y, r] });
-    },
-    // a rounded rectangle: only ever filled with a shadow cast from off the canvas (techtree.js `shadow`)
+    /* a rounded rectangle filled (HOP_SOLID with its radius), or filled with a shadow cast from off the canvas
+       (techtree.js `shadow`: HOPF_DROP); its radius as the op carries it, in 1/256 units (HOP_RADIUS) */
     roundRect(x, y, w, h, r) { path.push({ round: [x, y, w, h, r] }); },
     fill() {
       for (const p of path) {
-        if (p.round) {
-          const [x, y, w, h, r] = p.round;
-          if (!(colour(g.shadowColor, 1) & 255) || x + w >= 0 || g.shadowOffsetX <= 0) throw new Error('a rounded rectangle that is not a shadow cast from off the canvas');
-          // its radius as the op carries it, in 1/256 units (HOPD_RADIUS)
-          if (w && h) out.push({ k: 'drop', x: x + g.shadowOffsetX, y, w, h, dy: g.shadowOffsetY, blur: g.shadowBlur,
-            r: Math.round(r / U * 256) / 256 * U, c: colour(g.shadowColor, g.globalAlpha) });
-          continue;
-        }
-        if (!p.disc) throw new Error('a filled path that is not a disc');
-        const [x, y, r] = p.disc;
-        out.push({ k: 'dot', x: x - r, y: y - r, w: 2 * r, h: 2 * r, d: r, c: colour(g.fillStyle, g.globalAlpha) });
+        if (!p.round) throw new Error('a filled path that is not a rounded rectangle');
+        const [x, y, w, h, r] = p.round, rr = Math.round(r / U * 256) / 256 * U;
+        if (!w || !h) continue;
+        if (colour(g.shadowColor, 1) & 255) {
+          if (x + w >= 0 || g.shadowOffsetX <= 0) throw new Error('a shadow not cast from off the canvas');
+          out.push({ k: 'drop', x: x + g.shadowOffsetX, y, w, h, dy: g.shadowOffsetY, blur: g.shadowBlur, r: rr,
+            c: colour(g.shadowColor, g.globalAlpha) });
+        } else out.push({ k: 'rect', x, y, w, h, r: rr, c: colour(g.fillStyle, g.globalAlpha) });
       }
     },
+    // the ground's dot grid, whole (HOP_GRID): techtree.js `ground` hands it here
+    grid(x, y, w, h, pitch, d) { out.push({ k: 'grid', x, y, w, h, pitch, d, c: colour(g.fillStyle, g.globalAlpha) }); },
     setLineDash(d) { dash = d.length % 2 ? [...d, ...d] : [...d]; },
     beginPath() { path = []; },
     moveTo(x, y) { path.push([[x, y]]); },
-    lineTo(x, y) { if (!path.length || path.at(-1).disc) path.push([]); path.at(-1).push([x, y]); },
-    stroke() { for (const p of path) if (!p.disc) stroke(p, false); },
+    lineTo(x, y) { path.at(-1).push([x, y]); },
+    // the tree's edge (HOP_CURVE): only ever the cubic whose handles lie at its ends' middle x, level with each end
+    bezierCurveTo(ax, ay, bx, by, x, y) {
+      const p = path.at(-1), [x0, y0] = p.at(-1);
+      if (p.length !== 1 || ax !== bx || ax !== (x0 + x) / 2 || ay !== y0 || by !== y) throw new Error('a curve that is not the tree\'s edge');
+      if (dash.length && dash[0] !== dash[1]) throw new Error('a curve dashed unevenly');
+      p.curve = { k: 'curve', x0, y0, x1: x, y1: y, w: g.lineWidth, dash: dash.length ? dash[0] : 0, c: colour(g.strokeStyle, g.globalAlpha) };
+    },
+    stroke() { for (const p of path) p.curve ? out.push(p.curve) : stroke(p, false); },
     fillRect(x, y, w, h) {
       if (w < 0) { x += w; w = -w; }
       if (h < 0) { y += h; h = -h; }
       if (colour(g.shadowColor, 1) & 255) throw new Error('a shadow cast from a plain rectangle (techtree.js casts from roundRect)');
-      if (w && h) out.push({ k: 'rect', x, y, w, h, c: colour(g.fillStyle, g.globalAlpha) });
+      if (w && h) out.push({ k: 'rect', x, y, w, h, r: 0, c: colour(g.fillStyle, g.globalAlpha) });
     },
     strokeRect(x, y, w, h) {
       if (!dash.length) {
@@ -158,17 +162,19 @@ function recorder(em, asked, W, H, U) {
 }
 
 /* ---- the C ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, PIC: 10 }, RING = 4, DROP = 8, BASE = 16, INK = 64;
+const HOP = { SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, PIC: 10, CURVE: 11, GRID: 12 }, RING = 4, DROP = 8, BASE = 16, INK = 64;
 function shapes(fr, u, roleOf) {
   const X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
   for (const [kind, flags, part, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade] of fr.ops) {
     if (Math.abs(X(cx)) > TOL || Math.abs(Y(cy)) > TOL || Math.abs(cw * u - fr.w) > TOL || Math.abs(ch * u - fr.h) > TOL)
       out.push({ k: 'clip', clip: [X(cx), Y(cy), cw * u, ch * u] });
-    else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
+    else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, r: style / 256 * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.SOLID && flags === DROP)
       out.push({ k: 'drop', x: X(x), y: Y(y), w: w * u, h: h * u, dy: size * u, blur: shade * u, r: style / 256 * u, c: rgba });
-    else if (kind === HOP.DOT && flags === RING) out.push({ k: 'dot', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
+    else if (kind === HOP.CURVE && !flags)
+      out.push({ k: 'curve', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, dash: shade * u, c: rgba });
+    else if (kind === HOP.GRID && !flags) out.push({ k: 'grid', x: X(x), y: Y(y), w: w * u, h: h * u, pitch: size * u, d: shade * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
     else if (kind === HOP.TEXT && flags === (BASE | INK))
       out.push({ k: 'text', x: X(x), y: Y(y), size: size * u, role: roleOf[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });

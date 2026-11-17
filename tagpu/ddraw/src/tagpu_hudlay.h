@@ -166,8 +166,18 @@ static __inline int hud_draws_rewind(const HUDSTATE* st)
      HOP_PIC    a unit's picture of the tech tree (tagpu_wikitech.h): picture `part` of the published
                 WIKITECH, from the tech sheet (HUD_TEX_TECH), drawn whole into r at the op's
                 opacity; sampled nearest, or filtered when `centre` is 1 (a canvas's
-                imageSmoothingEnabled, which the tree sets when r is smaller than the picture). */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI, HOP_PIC };
+                imageSmoothingEnabled, which the tree sets when r is smaller than the picture);
+     HOP_CURVE  the tech tree's edge: the cubic from (r.x, r.y) to (r.x + r.w, r.y + r.h) whose two
+                handles lie at the ends' middle x, level with each end -- a canvas's
+                bezierCurveTo(mx, y0, mx, y1, x1, y1) -- stroked `size` units wide with butt ends,
+                and dashed when `shade` is above 0, `shade` units on and as many off from its start,
+                as a canvas's setLineDash([d, d]) dashes it. One instance, unsnapped as a canvas path
+                is; never in a group (tagpu_huddraw.c);
+     HOP_GRID   the tech tree's ground: a square of `shade` units at every `size` units from r's
+                top left, across r, each at whole device pixels as a canvas's
+                fillRect(Math.round(k size), Math.round(j size), d, d) puts it. One instance. */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI, HOP_PIC,
+       HOP_CURVE, HOP_GRID };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
@@ -177,10 +187,12 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP
                                r, unsnapped as a canvas arc is -- a canvas arc's stroke, or, as
                                deep as the radius, its fill (tagpu_wikistage.c) */
 #define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
-                               op's colour, painted outside r only; `style`, when above 0, the
-                               box's corner radius in 1/256 units (HOPD_RADIUS), outside which the
-                               rounded box's corners are shaded too */
-#define HOPD_RADIUS 256.0f  /* HOPF_DROP: `style` units of the corner radius a unit */
+                               op's colour, painted outside r only -- outside r rounded, when the
+                               op has a corner radius (HOP_RADIUS) */
+/* HOP_SOLID's corners: `style` above 0 rounds them by style / HOP_RADIUS units, a canvas's
+   roundRect -- the solid filled, or with HOPF_DROP the box its shadow is cast from. Never with
+   HOPF_RING or HOPF_SHADE. A HOP_SOLID's `style` is otherwise 0: only HOP_TEXT names a style. */
+#define HOP_RADIUS  256.0f
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 #define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */

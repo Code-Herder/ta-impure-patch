@@ -41,9 +41,9 @@ asset check already loads each setup's files natively beside `gfx.py`'s pack, so
 comparison went into it (`wikiassettest tech`).
 
 **T2: the tree on the stage.** `tagpu_wikitech.c`, pure: `techtree.js`'s `model`, `layout`,
-`fit`, `hit` and `draw` in C, the draw as HUD ops (rectangles, discs, drop shadows, polylines,
-images, clipped one-line text, in the prototype's look: [the in-game wiki](ingame-wiki.html),
-*The look*); the entry takes the theatre with its stage given to the tree; pan by drag, zoom
+`fit`, `hit` and `draw` in C, the draw as HUD ops (rectangles, rounded rectangles, drop shadows,
+the edges' curves, the dot grid, images, clipped one-line text, in the prototype's look: [the
+in-game wiki](ingame-wiki.html), *The look*); the entry takes the theatre with its stage given to the tree; pan by drag, zoom
 by wheel, Fit, the zoom buttons, All links, a click that selects. *Exit*: `techcheck.mjs` (new)
 pairs `techtree.js` with the C call for op over every setup's tree at three sizes and a set of
 cameras and selections; `wikilaycheck` covers the entry's frame; in the game, the tree drawn

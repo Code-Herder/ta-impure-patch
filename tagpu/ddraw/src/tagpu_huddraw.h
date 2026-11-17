@@ -24,7 +24,12 @@ typedef struct {
                            width or a ring's depth in pixels, dim brightness, saturate        */
 } HUDINST;
 
-enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING, HUDM_TRI };
+enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING, HUDM_TRI,
+       HUDM_RRECT, HUDM_CURVE, HUDM_GRID };
+
+/* A HOP_CURVE's pieces: the vertex stage builds its stroke as a strip of HUD_CURVE_SEG + 1 pairs of
+   vertices, one pair at each end of a piece (tagpu_huddraw.c) */
+#define HUD_CURVE_SEG 24
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
    HUD_TEX_CHART or HUD_TEX_CHART_WIKI (the chart's image of slot 0 or 1, THE CHART'S LINES AS
@@ -52,7 +57,9 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_TECH_SMOOTH (-10)
 #define HUD_TECH_W 2048
 #define HUD_TECH_H 2048
-typedef struct { int tex, first, count; } HUDBATCH;
+/* `nv` the vertices each of its instances is drawn with: 4, a quad, for every mode but CURVE's,
+   2 (HUD_CURVE_SEG + 1); a batch holds instances of one count */
+typedef struct { int tex, first, count, nv; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
    left, and its instances: batches b0 .. b0 + nb - 1, drawn into the layer with the attachment's

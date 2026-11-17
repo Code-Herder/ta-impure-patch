@@ -317,7 +317,9 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, a click on its
        padding leaves the pick, the wheel over it
     scrolls it, and its close button closes it;
-  (tt6) Fit returns to the open's fitted camera; All links turns on and off;
+  (tt6) Fit returns to the open's fitted camera; All links turns on and off; with --shots the fitted tree and the
+       fitted tree with every link grabbed, with their canvases and cameras (tree.json), for tools/wiki/treecheck.py
+       to hold to the mockup's;
   (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes;
   (tt8) the unit's view: the commander's script runs on the view's host and its picture is drawn (`wikiview:`'s
        vertices; --shots grabs it), Walk moves its pieces, Reset makes a new host with Turn kept, a drag turns the
@@ -4077,9 +4079,11 @@ def techtree(c, shots, res):
     fit_cam, cv0 = t["cam"], t["cv"]
     print(f"wiki techtree: (tt1) open on {TECHTREE}: side {t['side']}, {t['n']} units on {t['cards']} cards, fitted at "
           f"z {fit_cam[0]:.4f} in a {cv0[2]:.0f}x{cv0[3]:.0f} canvas")
+    trees = []                                      # the tree's shots for tools/wiki/treecheck.py (tree.json)
     if shots:
         time.sleep(2.0)                             # the sheet's bands: a few frames
         grab(c, shots / f"techtree-{res}-fit.png")
+        trees.append({"file": f"techtree-{res}-fit.png", "res": res, "cv": t["cv"], "cam": t["cam"], "links": 0})
 
     # (tt2) a click on a card picks its unit: the second card, the commander's first builder
     k, x, y = t["cards_at"][1]
@@ -4164,6 +4168,8 @@ def techtree(c, shots, res):
     d = wait_dump(c, lambda d: d["tech"]["all"] == 1, "(tt6) All links did not turn on")
     if shots:
         grab(c, shots / f"techtree-{res}-links.png")
+        trees.append({"file": f"techtree-{res}-links.png", "res": res, "cv": d["tech"]["cv"], "cam": d["tech"]["cam"], "links": 1})
+        (shots / "tree.json").write_text(json.dumps(trees, indent=1))
     press(c, d, "links")
     d = wait_dump(c, lambda d: d["tech"]["all"] == 0, "(tt6) All links did not turn off")
     print("wiki techtree: (tt6) Fit returned to the fitted camera; All links on and off")
