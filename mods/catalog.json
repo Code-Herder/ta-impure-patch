@@ -547,8 +547,8 @@
       "packages": [
         {
           "url": "tazero/tazero-Alpha-5.tar.zst",
-          "sha256": "6795f058b811d0ee8cafb4a9495a57ffbe721f9acd4b9a27e533816e1b9990d1",
-          "size": 89639394,
+          "sha256": "b5fa6f2a039a8835273776328bf0e0904af88758b45c05969d3958940776dc5e",
+          "size": 288482266,
           "files": [
             {
               "path": "TAZero.ini",
@@ -627,8 +627,8 @@
             },
             {
               "path": "tazero.hpi",
-              "sha256": "96b0289af0fe3d639480137a87c1319ab28b6e7d21b5d86c185a545101a197e6",
-              "size": 92782485
+              "sha256": "12fd2903d9d4a14357e4cc8293e526214e22c716acff68eb9867d5977f46fbb0",
+              "size": 291636280
             },
             {
               "path": "tazero.originals.tsv",
