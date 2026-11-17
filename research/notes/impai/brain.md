@@ -645,9 +645,16 @@ each start that can hold an enemy's base -- dry where it lies at or above the se
 where the commander walks the sea floor. With nothing known and no start every class is bought: no evidence
 narrows nothing. **Why**: on Gods of War the island seat's shipyard made two submarines of 1 199 metal each while
 every enemy it knew stood on land (MEASURED 2026-11-17, `exploit-naval-turtle` at d8799688, the seated variant).
-**Gaps**: a radar contact on the water reads as dry, so a submarine waits for a ship's identification; a regular
-weapon that deals no damage still counts; the anti-air classes now wait for an aircraft known as well, which the
-default table's anti-air shares (0 before air is seen) already did.
+With something known and no start that can hold an enemy's base -- fewer than two starts, or every other one empty
+or an ally's -- dry is kept beside it: nothing says where the base stands, so an aircraft known alone does not
+leave every land plant without anti-air buying nothing; where a start is expected dry would add nothing, since a
+type that hits dry hits floating too. **The plant choice** scores a plant only by the types that pass this filter
+(`plant_score`), so it never takes a plant for a unit its factory would not buy. **Gaps**: a radar contact on the
+water reads as dry, so a submarine waits for a ship's identification; a regular weapon that deals no damage still
+counts; the anti-air classes now wait for an aircraft known as well, which the default table's anti-air shares (0
+before air is seen) already did; an enemy land unit wading below the sea with no `floater` reads as dry though a
+waterweapon hits it (`0x49AC0F` refuses only a target above the sea), and a landed aircraft reads as air though it
+is a surface target an anti-air weapon cannot hit (review 1fa981c3's LOW-1).
 **The pressure** (`impai_mil.c`, THE PRESSURE), stamped by the military for the economy: the army-class enemies
 seen now -- and the radar contacts never identified -- that are mobile and armed and stand at the base by the
 defence rule, or within two 256-px cells of any own structure at any distance and nearer it than their own side's

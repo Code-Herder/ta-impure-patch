@@ -461,14 +461,17 @@ static unsigned choice_tech(const IMPAI_DEC* d, int up)
 }
 
 /* S(P) over P's menu (THE SCORE); *army 1 when the menu holds a land army, a gated type that reaches, whatever the
-   values */
-static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask, uint8_t* army)
+   values. A type counts only when its weapons hit a target class the seat buys for (`want`, THE TARGETS BOUGHT
+   FOR), the filter the army orders read the menus through (army_menu), so the choice never takes a plant for a
+   type its factory would not buy -- a mod's land unit with waterweapons alone, against an enemy on land */
+static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask, unsigned want,
+                         uint8_t* army)
 {
     float s = IMPAI_Q_NONE;
     int k;
     *army = 0;
     for (k = 0; k < n; k++) {
-        if (!gated_reaching(d, mask, menu[k])) continue;
+        if (!gated_reaching(d, mask, menu[k]) || !(impai_type_hits(&d->in->ti[menu[k]]) & want)) continue;
         *army = 1;
         if (d->in->tv && d->in->tv[menu[k]].q[T - 1] > s) s = d->in->tv[menu[k]].q[T - 1];
     }
@@ -476,6 +479,8 @@ static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsign
 }
 
 typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army; float s; } PLANT_CAND;
+
+static unsigned targets_bought_for(IMPAI_DEC* d);
 
 /* a before b in THE BEST's order; `scored` 0 ranks by the rest alone, and `armed` (the opening on dry ground) puts
    a plant with a land army first. A plant the seat's own builders build goes before one that waits for an unlock
@@ -583,6 +588,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     const unsigned T = choice_tech(d, up);
     const uint32_t mask = reach_mask_of(d);
     const int island = on_island(d) && d->count[IMPAI_C_FACTORY] > 0;
+    const unsigned want = targets_bought_for(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
     uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA], looked[PLANT_LOOK];
     int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
@@ -609,7 +615,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             c[nc].type = (uint16_t)t;
             c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
-            c[nc].s = plant_score(d, plant, np, T, mask, &c[nc].army);
+            c[nc].s = plant_score(d, plant, np, T, mask, want, &c[nc].army);
             if (c[nc].ctech < lo) lo = c[nc].ctech;
             nc++;
         }
@@ -1348,14 +1354,18 @@ static int finish_buys(const IMPAI_DEC* d)
    expects: the ground of each start that can hold an enemy's base (impai_start_foe, THE FOE'S STARTS; the seat's
    own, the nearest its anchor, left out), where an enemy's commander began -- DRY where it lies at or above the
    sea, FLOAT and UNDER below it, where the commander walks the sea floor and its first structures stand on the
-   water. With nothing known and no such start, every class: no evidence narrows nothing. Once a decision. BOUND:
+   water. With nothing known and no such start, every class: no evidence narrows nothing. With something known and
+   no such start -- fewer than two starts, or none that can hold an enemy's base --, DRY beside it: nothing says
+   where the enemy's base stands, so the land is never narrowed away by an aircraft or a ship alone; with only an
+   aircraft known every land plant whose army has no anti-air would buy nothing. Where a start is expected DRY
+   would add nothing, since every type that hits DRY hits FLOAT too (impai_type_hits). Once a decision. BOUND:
    PLANT_STARTS starts, one ground read each */
 static unsigned targets_bought_for(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     WQ_START st[PLANT_STARTS];
     unsigned m;
-    int ns, own, k;
+    int ns, own, k, foes = 0;
     if (d->tg_done) return d->tg_mask;
     d->tg_done = 1;
     m = in->mil ? impai_tg_known(in->mil, d->now) : 0u;
@@ -1364,6 +1374,7 @@ static unsigned targets_bought_for(IMPAI_DEC* d)
         for (k = 0; k < ns; k++) {
             int32_t pos[3];
             if (k == own || !impai_start_foe(in->view, st[k].seated)) continue;
+            foes = 1;
             pos[0] = (int32_t)((uint32_t)st[k].x << 16);
             pos[1] = 0;
             pos[2] = (int32_t)((uint32_t)st[k].z << 16);
@@ -1371,6 +1382,7 @@ static unsigned targets_bought_for(IMPAI_DEC* d)
                                                                : 1u << IMPAI_TG_DRY;
         }
     }
+    if (m && !foes) m |= 1u << IMPAI_TG_DRY;
     d->tg_mask = m ? m : IMPAI_TG_ALL;
     return d->tg_mask;
 }

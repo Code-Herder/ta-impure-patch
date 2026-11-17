@@ -634,8 +634,8 @@ the approval, each with its evidence; the owner may reverse any of them:
   (coordinator's call on review d8799688's MED-1, 2026-11-17: before it, a sea plant whose jobs kept failing held
   the first plant for up to sixteen `fail_t` windows). **Why**: on Gods of War the seat's vehicle plant came at
   2 974 and its shipyard on the pacing at 9 552, and at the cap it held two ships and had attacked nothing. **What
-  it costs**: the island seat's land economy has the commander alone until its second plant, a land one on the
-  pacing; a seat whose one sea attempt fails builds the land plant one failed job late.
+  it costs**: the island seat's land economy has the commander alone, its plants past the first being sea or air
+  plants (Q3 on an island, above); a seat whose one sea attempt fails builds the land plant one failed job late.
 - **On an island the waves of every layer but land go at the finish's size** (brain writer's call, 2026-11-17):
   while the seat's land army reaches no start that can hold an enemy's base and no enemy row on a naval map, a sea
   or air wave goes at 1 + its layer's waves median units, still predicted to win, inside the attention. **Why**: the
@@ -653,11 +653,16 @@ the approval, each with its evidence; the owner may reverse any of them:
 - **A type is bought only if its weapons can hit a target class the seat knows or expects** (coordinator's call,
   2026-11-17, approving the brain writer's proposal). The classes are dry, floating, under the sea and air, as the
   engine's can-engage test sorts a target; known are those of the enemies the military counted within 5 400 ticks,
-  expected the ground of every start that can hold an enemy's base. With no evidence nothing is narrowed. **Why**:
-  on Gods of War the island seat's shipyard made two submarines of 1 199 metal each while every enemy it knew stood
-  on land. **What it costs**: a submarine waits for a ship or a submarine the seat identifies -- a radar contact on
-  the water counts as dry --; the anti-air classes wait for an aircraft known, which the default table's shares
-  already did.
+  expected the ground of every start that can hold an enemy's base. With no evidence nothing is narrowed, and with
+  something known but no such start dry is kept beside it, so an aircraft or a ship alone never narrows the land
+  away (review 1fa981c3's LOW-3). The plant choice scores a plant only by the types that pass the same filter, so
+  it never takes a plant for a unit its factory would not buy (LOW-2). **Why**: on Gods of War the island seat's
+  shipyard made two submarines of 1 199 metal each while every enemy it knew stood on land. **What it costs**: a
+  submarine waits for a ship or a submarine the seat identifies -- a radar contact on the water counts as dry --;
+  the anti-air classes wait for an aircraft known, which the default table's shares already did. Two misreadings
+  (LOW-1): a land unit wading below the sea, no floater, counts as dry though a waterweapon hits it, and a landed
+  aircraft counts as air though an anti-air weapon cannot hit it; both stand until the unit moves, and neither
+  is worth a read of the unit's height.
 - **A plant the values do not score walks after every scored plant** for the governor's constructor -- a shipyard,
   an air plant: a factory that offers no land fighting class -- and makes one only when no scored plant is idle
   that decision (coordinator's call on the plant choice's high review, 2026-11-14). **Why**: such a plant's best

@@ -6741,28 +6741,42 @@ static void check_gov_dry(void)
    (e) (b) and an enemy known under the sea: the submarine;
    (f) the foe's start in the sea, 40 deep: FLOAT and UNDER expected, the submarine;
    (g) (b) with the submarine alone on the menu: no army order;
-   (h) (f) with the raider alone on the menu, its gun no waterweapon: a gun hits what floats, the raider. */
+   (h) (f) with the raider alone on the menu, its gun no waterweapon: a gun hits what floats, the raider;
+   (i) no start and an aircraft known, the raider alone on the menu: no start says where the base stands, so DRY
+       is kept beside AIR, the raider;
+   (j) (i) with one start, the seat's own: the raider;
+   (k) (i) with two starts, the other left empty, so none can hold an enemy's base: the raider. */
 static void check_army_targets(void)
 {
     static const uint16_t BOTH[] = { M_SUB, M_DEST }, SUB[] = { M_SUB }, RAIDER[] = { M_RAIDER };
-    static const char* const NAME[8] = { "(a) no evidence", "(b) a foe's start on land", "(c) a ship known",
+    static const char* const NAME[11] = { "(a) no evidence", "(b) a foe's start on land", "(c) a ship known",
                                          "(d) the ship known a tick past the hold", "(e) a submarine known",
                                          "(f) the foe's start in the sea", "(g) the submarine alone, a land start",
-                                         "(h) the raider alone, the start in the sea" };
-    static const int WANT[8] = { M_SUB, M_DEST, M_SUB, M_DEST, M_SUB, M_SUB, 0, M_RAIDER };
+                                         "(h) the raider alone, the start in the sea",
+                                         "(i) the raider alone, no start, an aircraft known",
+                                         "(j) the raider alone, one start, an aircraft known",
+                                         "(k) the raider alone, the other start empty, an aircraft known" };
+    static const int WANT[11] = { M_SUB, M_DEST, M_SUB, M_DEST, M_SUB, M_SUB, 0, M_RAIDER, M_RAIDER, M_RAIDER,
+                                  M_RAIDER };
     IMPAI_BRAIN_OUT bo;
     int c, cons, army, k;
-    for (c = 0; c < 8; c++) {
+    for (c = 0; c < 11; c++) {
         int from, sub = 0, dest = 0, raider = 0;
         gov_world(1);
         mil_sea_types();
         s_ti[M_DEST].klass = IMPAI_K_SRAIDER;
-        menu_set(&s_w, T_FACTORY, c == 6 ? SUB : c == 7 ? RAIDER : BOTH, c >= 6 ? 1 : 2);
+        menu_set(&s_w, T_FACTORY, c == 6 ? SUB : c >= 7 ? RAIDER : BOTH, c >= 6 ? 1 : 2);
         gov_units(M_RAIDER, 20, 100);
         s_glv.cons_open = 0;
         s_glv.army_per_cons = 255;
         s_w.gametime = 10000;
-        if (c > 0) {
+        if (c >= 8) s_mil.tg_t[IMPAI_TG_AIR] = 9000u;
+        if (c >= 9) {
+            s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+            s_w.starts[1] = (WQ_START){ 250 * 16 + 8, 125 * 16 + 8, 1, WQ_SEATED_NONE };
+            s_w.nstarts = c == 9 ? 1 : 2;
+        }
+        if (c > 0 && c < 8) {
             s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
             s_w.starts[1] = (WQ_START){ 250 * 16 + 8, 125 * 16 + 8, 1, 0 };
             s_w.nstarts = 2;
@@ -11217,6 +11231,20 @@ static void check_plant_choice(void)
     CHECK(n[T_FACTORY] == 1 && !n[C_ALAB] && !n[C_AVP] && !n[C_HP] && out.plant == T_FACTORY && out.plant_want == 2 &&
               out.plant_T == 1 && out.plant_s == 0.4f && out.plant_next == C_VP && out.plant_next_s == 0.3f,
           "the second plant is the lab, by its AK");
+    /* THE TARGETS BOUGHT FOR in THE SCORE: the second plant with the AK's weapons waterweapons alone and a foe's
+       start on land, so DRY alone expected: the AK hits nothing the seat buys for, the lab has no land army, and the
+       vehicle plant, by its GATOR, is the plant */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    s_ti[C_AK].flags = (uint8_t)((s_ti[C_AK].flags & ~IMPAI_TF_HITDRY) | IMPAI_TF_HITWET);
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 1 };
+    s_w.starts[1] = (WQ_START){ 50 * 32 + 16, 10 * 32 + 16, 1, 2 };
+    s_w.nstarts = 2;
+    plant_decide("the second plant, the AK's waterweapons", &out, n);
+    s_w.nstarts = 0;
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant == C_VP && out.plant_s == 0.3f,
+          "the AK hits no target the seat buys for: the vehicle plant");
     /* THE REACH: the land class's labels differ between the anchor's block and the estimate's, the hover class's
        agree: the hover plant, whose CK builds it; with the labels equal the lab */
     plant_world();
