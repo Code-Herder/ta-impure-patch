@@ -756,7 +756,8 @@ model `objects3d\<object>.3DO` through `0x42A2C0`.
 **The folder names a mod renames in place** (`.data`, every reference passes them as a path or
 pattern [INFERRED: none writes them]): `units` `0x503920`, `textures` `0x503720`, `logos`
 `0x504734`, `logos.GAF` `0x503704`, `objects3d` `0x5036E4`, `scripts` `0x503740`, `anims`
-`0x502E30`, `features` `0x502C7C`, the weapons `0x50392C` and their pattern `0x503934`, `ai` `0x504B10`
+`0x502E30`, `features` `0x502C7C`, the weapons `0x50392C` and their pattern `0x503934` (DISASSEMBLED: the
+pattern pushed at `0x42A8EC` and `0x42E350`, the name at `0x42A98B` and `0x42E39B`, the two weapon loads), `ai` `0x504B10`
 (MEASURED 2026-11-06 by listing every string each mod's table changes: `weaponE`, `WeaponM`, `weaponP`, `ZWeapon`, and
 `aE` and `zi`; no v1 mod renames `features`). Escalation renames `units` to `unitsE`; TA Zero `units`,
 `textures`, `logos` and `logos.GAF` to `ZUnits`, `Textures`, `logoz`, `logoz.GAF` (MEASURED on

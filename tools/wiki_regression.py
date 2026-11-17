@@ -313,7 +313,9 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes;
   (tt8) the unit's view: the commander's script runs on the view's host and its picture is drawn (`wikiview:`'s
        vertices; --shots grabs it), Walk moves its pieces, Reset makes a new host with Turn kept, a drag turns the
-       camera and stops the spin, a notch moves it in, and the close ends it.
+       camera and stops the spin, a notch moves it in, and the close ends it;
+  (tt9) with --shots: ARMCV's and ARMSOLAR's views grabbed with Turn off, with their cameras (views.json), for
+       tools/wiki/viewcheck.py to hold to the mockup's at the same camera.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -4145,7 +4147,53 @@ def techtree(c, shots, res):
           f"made host {d['tech']['view']['serial']}; a drag turned the camera to {cam[0]:.3f}, {cam[1]:.3f}; a notch to "
           f"{d['tech']['view']['cam'][2]:.3f} of the fitted distance")
     press(c, d, "uclose")
-    wait_dump(c, lambda d: d["tech"]["sel"] == -1 and d["tech"]["view"]["body"] == -1, "(tt8) the view outlived its panel")
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == -1 and d["tech"]["view"]["body"] == -1, "(tt8) the view outlived its panel")
+
+    # (tt9) the pictures tools/wiki/viewcheck.py holds to the mockup's: ARMCV, a builder's card, and ARMSOLAR, a chip of
+    # the commander's panel -- the cull and the per-pixel quads -- each view grabbed with Turn off, its camera and rect
+    # written beside it
+    if shots:
+        names = [u[0] for u in d["tech"]["units"]]
+        press(c, d, "fit")
+        d = wait_dump(c, lambda d: d["tech"]["fit"], "(tt9) Fit did not fit the tree")
+        rows = []
+        for name in ("ARMCV", "ARMSOLAR"):
+            k = names.index(name)
+            card = [(x, y) for kk, x, y in d["tech"]["cards_at"] if kk == k]
+            if card:
+                c.keys(f"dclick:{round(card[0][0])},{round(card[0][1])}")
+            else:
+                k0, x0, y0 = d["tech"]["cards_at"][0]
+                c.keys(f"dclick:{round(x0)},{round(y0)}")
+                d = wait_dump(c, lambda d: d["tech"]["sel"] == k0 and any(h["key"] == "scroll:unit" for h in d["hits"]),
+                              f"(tt9) the commander's panel did not open for {name}")
+                while not any(h["key"] == f"unit:{k}" for h in d["hits"]):
+                    assert d["scroll_drawn"][3] < d["scroll_max"][3] - 1e-3, f"(tt9) the commander's panel lists no {name}"
+                    last = d["scroll_drawn"][3]
+                    px, py = c.centre(c.hit(d, "scroll:unit"))
+                    c.keys(f"dwheel:{px},{py},-2")
+                    d = wait_dump(c, lambda d: d["scroll_drawn"][3] > last + 1e-3, "(tt9) the panel did not scroll down")
+                press(c, d, f"unit:{k}")
+            d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["view"]["body"] >= 0 and d["tech"]["view"]["tick"] > 5
+                          and any(h["key"] == "uview" for h in d["hits"]) and d["scroll_drawn"][3] == 0,
+                          f"(tt9) {name}'s view did not open at the panel's top")
+            press(c, d, "act:Turn")
+            d = wait_dump(c, lambda d: not d["tech"]["view"]["act"] & 0x20, f"(tt9) Turn did not stop on {name}")
+            time.sleep(3.0)                             # the script's Create settles; a few frames at the camera
+            d = wait_dump(c, lambda d: True, "(tt9) no dump")
+            r = c.hit(d, "uview")
+            full = shots / f"view-{name}-full.png"
+            grab(c, full)
+            subprocess.run(["convert", str(full), "-crop", f"{r[2] - r[0]}x{r[3] - r[1]}+{r[0]}+{r[1]}", "+repage",
+                            str(shots / f"view-{name}.png")], check=True)
+            full.unlink()
+            rows.append({"unit": name, "mod": d["mod"] if isinstance(d.get("mod"), str) else "", "res": res,
+                         "cam": d["tech"]["view"]["cam"], "rect": r, "file": f"view-{name}.png"})
+            press(c, d, "uclose")
+            d = wait_dump(c, lambda d: d["tech"]["sel"] == -1, f"(tt9) {name}'s panel did not close")
+        (shots / "views.json").write_text(json.dumps(rows, indent=1))
+        print(f"wiki techtree: (tt9) the views of {', '.join(r['unit'] for r in rows)} grabbed at their cameras for "
+              f"tools/wiki/viewcheck.py")
 
 TECH_KINDS = ("Commander", "Factory", "Builder", "Economy", "Defense", "Support", "Land", "Air", "Sea", "Upgrade")
 

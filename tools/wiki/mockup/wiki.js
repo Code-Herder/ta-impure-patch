@@ -42,7 +42,8 @@ const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', 
   // the tech tree entry's unit picked (its panel open) and its All links switch
   if (/^[a-z0-9_]+$/i.test(q.get('unit') || '')) S.unit = q.get('unit').toLowerCase();
   S.links = q.has('links');
-  if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
+  if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1);
+  if (/^[-0-9.,e]+$/i.test(q.get('ucam') || '')) S.ucam = q.get('ucam'); }
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod });
   if (S.side) q.set('side', S.side);
@@ -51,6 +52,7 @@ function syncURL() {
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', '');
     if (theatre() && S.about) q.set('about', '');
     if (techEntry() && S.unit) q.set('unit', S.unit);
+    if (techEntry() && S.unit && S.ucam) q.set('ucam', S.ucam);   // the check's camera (unitview.js), kept
     if (techEntry() && S.links) q.set('links', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));

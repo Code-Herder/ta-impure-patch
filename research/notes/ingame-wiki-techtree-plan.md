@@ -4,7 +4,8 @@ The specification is the mockup ([the in-game wiki](ingame-wiki.html), *The tech
 `tools/wiki/mockup/techtree.js` (the model, the layout, the drawing, the hit test),
 `unitview.js` (the unit's model in 3D) and `wiki.js` (the stage's input and the unit's panel).
 The game reads the tree from the running mod, draws it on the theatre's stage and opens a picked
-unit's panel (T1-T3); the unit in 3D (T4) is left. This note is how the DLL gets to the mockup, in landings, each one finished, verified in the game and reviewed
+unit's panel (T1-T3), and the panel shows the unit in 3D, posed by its own script under an orbit
+camera (T4). This note is how the DLL gets to the mockup, in landings, each one finished, verified in the game and reviewed
 before the next starts (`CLAUDE.md`, *Commit freely, land locally, merge to main once*).
 
 ## What the DLL already has
@@ -125,7 +126,15 @@ own rule, not the engine's shade rows. So:
   mockup's rest pose now stands in the same held axes as its posed one, as the DLL's does.
 - **T4d: the camera and the checks.** Drag turns, the wheel moves in, Turn spins (a drag stops
   it), Reset; the picture against the mockup's at the same camera, per setup; the cull and the
-  quad mapping on ARMCV and ARMSOLAR.
+  quad mapping on ARMCV and ARMSOLAR. *Built*: (tt9) grabs ARMCV's and ARMSOLAR's views with Turn
+  off and writes their cameras; `tools/wiki/viewcheck.py` draws the mockup's view of each at the
+  same camera headless (`unitview.js` `ucam`) and compares the silhouettes and the colour --
+  measured stock at 1920 x 1080: ARMCV 0.961 of the union and 5.9 apart, ARMSOLAR 0.991 and 10.3
+  (bounds 0.90 and 20). It found the fit taken over the faces the bake collapses (ARMSOLAR drawn
+  at a third of its size, 0.248). *Per setup is not run*: every setup's picture is the same code
+  over models the loader resolves as `assetcheck.py --side` pairs them with each setup's pack, so
+  a setup could differ only by a model the pairing already covers; the stock pictures stand for
+  the pass.
 
 ## Open questions
 

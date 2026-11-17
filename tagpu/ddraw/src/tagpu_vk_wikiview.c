@@ -752,8 +752,9 @@ int tagpu_vk_wikiview_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     s_drawSlot = (int)slot;
     if (d->frame - s_saidAt >= 300u) {
         s_saidAt = d->frame;
-        plog(d, "wikiview: frame %u: %d vertices into a %dx%d target -> (%d,%d %dx%d)", d->frame, h.nvert, s->w,
-             s->h, s_vr[0], s_vr[1], vw, vh);
+        plog(d, "wikiview: frame %u: %d vertices into a %dx%d target -> (%d,%d %dx%d), fitted on (%.2f, %.2f, %.2f) "
+                "at %.2f", d->frame, h.nvert, s->w, s->h, s_vr[0], s_vr[1], vw, vh, (double)h.c[0], (double)h.c[1],
+             (double)h.c[2], (double)h.dist);
     }
     return 1;
 }

@@ -112,8 +112,10 @@ static void apply(const float* m, const float* p, float* o)
 }
 
 /* THE FIT, unitview.js's: the centre of the rest pose's bounds and its largest extent * 1.9 + 8,
-   over the body's vertices of the pieces the rest pose draws. 0 when it draws none. */
-static int fit(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const float* g, float* c, float* dist)
+   over the vertices the rest pose draws -- the body's, of the pieces it shows, less the faces the
+   bake collapses, which the mockup's pack does not hold either (a collapsed face can lie far from
+   the model: ARMSOLAR's). 0 when it draws none. */
+static int fit(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const float* g, const float* m, float* c, float* dist)
 {
     static const float I[12] = { 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0 };
     float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f }, q[3], ext = 0;
@@ -123,7 +125,7 @@ static int fit(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const float* g, floa
     for (v = v0; v < v0 + n; v++) {
         const float* gv = g + (size_t)v * TAGPU_PB_GEOMST;
         const int p = (int)(gv[6] + 0.5f);
-        if (p < 0 || p >= bg->nparts || !s_pvis[p]) continue;
+        if (p < 0 || p >= bg->nparts || !s_pvis[p] || m[(size_t)v * TAGPU_PB_MATST + 4] > 0.5f) continue;
         apply(s_pose + (size_t)p * 12, gv, q);
         for (k = 0; k < 3; k++) { if (q[k] < lo[k]) lo[k] = q[k]; if (q[k] > hi[k]) hi[k] = q[k]; }
         any = 1;
@@ -202,7 +204,7 @@ void tagpu_wikiview_frame(const TAGPU_FRAME* f)
     if (body != s_fitBody || bg->serial != s_fitSerial) {
         s_fitBody = body;
         s_fitSerial = bg->serial;
-        if (!fit(u, bg, g, s_fitC, &s_fitDist)) { s_fitC[0] = s_fitC[1] = s_fitC[2] = 0; s_fitDist = 60; }
+        if (!fit(u, bg, g, m, s_fitC, &s_fitDist)) { s_fitC[0] = s_fitC[1] = s_fitC[2] = 0; s_fitDist = 60; }
     }
 
     /* THE POSE: the record's, when it is this model's posed order (the stage's test, pose_of), else

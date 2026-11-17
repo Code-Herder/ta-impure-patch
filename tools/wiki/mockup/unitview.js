@@ -8,7 +8,8 @@
    triangles that kink the texture along the diagonal; and back faces are culled, as the game's body pipeline culls
    them (tagpu_vk_unit.c), so a surface the model closes with two faces wound apart shows its outside.
    The pose is pose.js's (WikiPose). The orbit camera is the owner's choice (2026-11-16): the game's unit pass draws in
-   the engine's fixed projection, so the DLL needs a perspective unit view of its own for it (a gap).
+   the engine's fixed projection, so the DLL draws the view with a perspective pass of its own (tagpu_vk_wikiview.c),
+   which tools/wiki/viewcheck.py holds to this one at the same camera.
 
    mount(host, acts, u, base, cobPack) puts the view in `host` and its action buttons in `acts`: `u` the unit's record
    (techtree.js model), `base` the pack's URL with its slash, `cobPack` its path from the repository root for the host.
@@ -98,6 +99,11 @@ const PACKS = {};
     const say = t => { note.textContent = t; };
     const world_path = () => cobPack;
     const cam = { yaw: 0.7, pitch: 0.45, dist: 60, c: [0, 10, 0], spin: true };
+    // THE CHECK'S CAMERA (tools/wiki/viewcheck.py): `ucam=yaw,pitch,zoom` holds the camera still where the game's view
+    // was grabbed, Turn off, and keeps the drawing buffer so the check can read the canvas back
+    const ucam = (new URLSearchParams(location.search).get('ucam') || '').split(',').map(Number);
+    const fixed = ucam.length === 3 && ucam.every(Number.isFinite);
+    if (fixed) { cam.yaw = ucam[0]; cam.pitch = ucam[1]; cam.spin = false; }
     say('loading the model…');
     (async () => {
       const { pack, atlas, pal } = await packOf(base);
@@ -118,8 +124,8 @@ const PACKS = {};
       for (let i = 0; i < restArr.mesh.length; i += 7) for (let a = 0; a < 3; a++) {
         lo[a] = Math.min(lo[a], restArr.mesh[i + a]); hi[a] = Math.max(hi[a], restArr.mesh[i + a]); }
       cam.c = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
-      cam.dist = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 1.9 + 8;
-      const gl = canvas.getContext('webgl2', { antialias: true });
+      cam.dist = (Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 1.9 + 8) * (fixed ? ucam[2] : 1);
+      const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: fixed });
       const prog = program(gl);
       gl.activeTexture(gl.TEXTURE0);
       const ta = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, ta);
@@ -183,6 +189,7 @@ const PACKS = {};
         gl.bindBuffer(gl.ARRAY_BUFFER, vbo); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW);
         gl.uniformMatrix4fv(uMVP, false, mat(cam.yaw, cam.pitch, cam.dist, w / h, cam.c));
         gl.drawArrays(gl.TRIANGLES, 0, arr.length / 7);
+        host.dataset.ticks = String(tick);
         raf = requestAnimationFrame(frame);
       };
       raf = requestAnimationFrame(frame);

@@ -2396,7 +2396,11 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   copy: the stage's unit pass uploads only on frames that draw a stage, and this entry has none.
   The note is `unitview.js`'s: loading, the hint while the script runs, the rest pose with no
   script, no model, and nothing to draw when the pose hides every piece with faces. (tt8) checks
-  the commander's picture is drawn (`wikiview:`'s vertices) and grabs it with `--shots`.
+  the commander's picture is drawn (`wikiview:`'s vertices) and grabs it with `--shots`; (tt9)
+  grabs ARMCV's and ARMSOLAR's with Turn off, and `tools/wiki/viewcheck.py` holds each to the
+  mockup's at the same camera -- the silhouettes at least 0.90 of their union, the colour at most
+  20 apart. The camera is fitted on the rest pose less the faces the bake collapses, which the
+  mockup's pack does not hold.
 
 ## The data format
 
