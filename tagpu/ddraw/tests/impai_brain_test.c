@@ -747,6 +747,44 @@ static void check_radar_reuse(void)
     }
 }
 
+/* THE SCAN'S END (IMPAI_SEAT.scanned): the patch scan sets the fact at the tick that reads the map's last row, with a
+   patch found or none, and not before; the published count is then that scan's */
+static void check_scan_done(void)
+{
+    static FWORLD w;
+    static IMPAI_ROW rows[FW_SLOTS];
+    static uint8_t bits[WQ_RADAR_BYTES(FW_SLOTS)];
+    static IMPAI_HITROW hits[FW_SLOTS];
+    static SNAP_PATCH clusters[IMPAI_CLUSTERS];
+    static SNAP_SCRATCH scr;
+    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits,
+                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0], 0 }, clusters };
+    const IMPAI_BUDGET b = { 0, 100, FW_H / 2, 100000 };
+    WORLDQ q = { &FAKE, &w, 0 };
+    IMPAI_SEAT st;
+    IMPAI_WORK wk;
+    int metal, x, z;
+    for (metal = 0; metal < 2; metal++) {
+        world_init(&w);
+        memset(rows, 0, sizeof rows);
+        memset(hits, 0, sizeof hits);
+        memset(clusters, 0, sizeof clusters);
+        memset(&st, 0, sizeof st);
+        if (metal)
+            for (z = 10; z <= 12; z++) for (x = 10; x <= 12; x++) w.metal[z][x] = 200;
+        w.gametime = impai_radar_phase(0) + 1;
+        CHECK(impai_know_tick(&q, &st, &a, &b, &scr, &wk) == 0 && !st.scanned && !st.nclusters,
+              "%s: half the map read, not scanned (scanned %u, %u published)", metal ? "a patch" : "no patch",
+              st.scanned, st.nclusters);
+        w.gametime++;
+        CHECK(impai_know_tick(&q, &st, &a, &b, &scr, &wk) == 0 && st.scanned && st.nclusters == (unsigned)metal,
+              "%s: the last row read, scanned (scanned %u, %u published)", metal ? "a patch" : "no patch",
+              st.scanned, st.nclusters);
+        printf("scan's end: %s scanned=%u published=%u\n", metal ? "a patch" : "no patch", st.scanned,
+               st.nclusters);
+    }
+}
+
 /* ---- the brain over the fake world ---- */
 
 static FWORLD s_w;
@@ -862,6 +900,7 @@ static const SNAP_PATCH PATCHES[] = {
 #define NPATCH ((unsigned)(sizeof PATCHES / sizeof PATCHES[0]))
 static const SNAP_PATCH* s_spots = PATCHES;
 static unsigned s_nspots = NPATCH;
+static unsigned s_scanned;          /* IMPAI_BRAIN_IN.scanned: 0, a scan under way, unless a case sets it */
 
 static void brain_world(void)
 {
@@ -871,6 +910,7 @@ static void brain_world(void)
     world_init(&s_w);
     s_spots = PATCHES;
     s_nspots = NPATCH;
+    s_scanned = 0;
     for (i = 0; i < NPATCH; i++)
         for (z = PATCHES[i].z0; z <= PATCHES[i].z1; z++)
             for (x = PATCHES[i].x0; x <= PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
@@ -910,6 +950,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = s_plan;
     in.persona = s_persona;
@@ -968,6 +1009,28 @@ static void check_tinfo(void)
     printf("tinfo mex=%u energy=%u maker=%u factory=%u cons=%u commander=%u other=%u\n", n[IMPAI_C_MEX],
            n[IMPAI_C_ENERGY], n[IMPAI_C_MAKER], n[IMPAI_C_FACTORY], n[IMPAI_C_CONS], n[IMPAI_C_COMMANDER],
            n[IMPAI_C_OTHER]);
+    /* THE GAIN, NET OF THE TYPE'S OWN UPKEEP (impai_tinfo.c): an unarmed building making 5 and using 5 with a radar
+       of 1440 -- retail's ARMRAD -- is no energy building and keeps its radar; making 25 and using 5 it is one, of
+       gain 20 */
+    {
+        TASIM_ROLE_OUT roles[T_N];
+        int k;
+        for (k = 0; k < 2; k++) {
+            s_w.defs[T_TIDAL].e.tidal = 0;
+            s_w.defs[T_TIDAL].e.minwater = 0;
+            s_w.defs[T_TIDAL].e.energymake = k ? 25.0f : 5.0f;
+            s_w.defs[T_TIDAL].e.energyuse = 5.0f;
+            s_w.defs[T_TIDAL].e.radar = 1440;
+            roles_set(roles);
+            CHECK(content_set(&s_w, T_N, roles) == T_N, "tinfo, a radar of make %d", k ? 25 : 5);
+            printf("tinfo, make %d use 5 radar 1440: cat %u egain %g radar %u\n", k ? 25 : 5, s_ti[T_TIDAL].cat,
+                   (double)s_ti[T_TIDAL].egain, s_ti[T_TIDAL].radar);
+            CHECK(k ? s_ti[T_TIDAL].cat == IMPAI_C_ENERGY && s_ti[T_TIDAL].egain == 20.0f
+                    : s_ti[T_TIDAL].cat == IMPAI_C_OTHER && s_ti[T_TIDAL].radar == 1440,
+                  "the gain net of the upkeep: make %d", k ? 25 : 5);
+        }
+        brain_world();
+    }
 }
 
 /* THE ATTACK FACTS THROUGH THE FILLERS' MASK (impai_tinfo_attack): a role input built as both role fillers build
@@ -1652,8 +1715,10 @@ static void check_assist_help(void)
 /* THE UNIT'S OWN LABEL (impai_maps.c, impai_reach_unit): check_assist_help's world with no constructor, so the frame is
    the commander's to help, the commander at (328, 320) px -- its centre in block (10, 10), its first cell (20, 19) in
    block (10, 9) -- and the labels: (a) everywhere 1: it helps; (b) its centre's block 0, as beside a feature's ring:
-   it helps still, by its first cell's block; (c) both blocks 0: it reaches nothing and is given no help. */
-static int own_label_helps(int centre, int first)
+   it helps still, by its first cell's block; (c) both blocks 0, the blocks round them 1, as a commander standing
+   where a feature stood at the level init: it helps, by the label beside (THE LABEL BESIDE); (d) the blocks round
+   them 0 too: it reaches nothing and is given no help. */
+static int own_label_helps(int centre, int first, int ring)
 {
     IMPAI_BRAIN_OUT out;
     FUNIT* f;
@@ -1661,6 +1726,7 @@ static int own_label_helps(int centre, int first)
     reach_world(0);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     for (x = 0; x < (int)(sizeof s_labels / sizeof s_labels[0]); x++) s_labels[x] = 1;
+    for (x = 0; x < 9; x++) s_labels[(8 + x / 3) * (FW_W / 2) + 9 + x % 3] = (uint16_t)ring;
     s_labels[10 * (FW_W / 2) + 10] = (uint16_t)centre;
     s_labels[9 * (FW_W / 2) + 10] = (uint16_t)first;
     s_w.unit[1].pos[0] = 328 << 16;
@@ -1681,11 +1747,22 @@ static int own_label_helps(int centre, int first)
 
 static void check_own_label(void)
 {
-    const int a = own_label_helps(1, 1), b = own_label_helps(0, 1), c = own_label_helps(0, 0);
-    printf("the unit's own label: helps with every block labelled %d, the centre's block unlabelled %d, both %d\n",
-           a, b, c);
-    CHECK(a == 1 && b == 1 && c == 0, "the commander's label is its first cell's block: %d %d %d", a, b, c);
-    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "both blocks unlabelled read 0");
+    const int a = own_label_helps(1, 1, 1), b = own_label_helps(0, 1, 1), c = own_label_helps(0, 0, 1),
+              e = own_label_helps(0, 0, 0);
+    printf("the unit's own label: helps with every block labelled %d, the centre's block unlabelled %d, both, the "
+           "blocks round labelled %d, those too %d\n", a, b, c, e);
+    CHECK(a == 1 && b == 1 && c == 1 && e == 0, "the commander's label is its first cell's block, else the one "
+          "round it: %d %d %d %d", a, b, c, e);
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "both blocks and those round them "
+          "unlabelled read 0");
+    s_labels[8 * (FW_W / 2) + 9] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 3, "both blocks unlabelled: the label "
+          "beside, (9, 8)'s");
+    s_labels[10 * (FW_W / 2) + 11] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 3, "two blocks beside, one label");
+    s_labels[10 * (FW_W / 2) + 9] = 4;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 0, "two labels beside read 0");
+    s_labels[8 * (FW_W / 2) + 9] = s_labels[10 * (FW_W / 2) + 11] = s_labels[10 * (FW_W / 2) + 9] = 0;
     s_labels[9 * (FW_W / 2) + 10] = 5;
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 5, "the first cell's block's label");
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 336 << 16, 2, 2) == 0, "past the edge, one block: (10, 10)'s");
@@ -1693,6 +1770,10 @@ static void check_own_label(void)
     s_labels[10 * (FW_W / 2) + 10] = 7;
     CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 7,
           "the centre's block stands in for the first cell's unlabelled one");
+    s_labels[8 * (FW_W / 2) + 9] = 3;
+    CHECK(impai_reach_unit(&s_reach, 0, 328 << 16, 320 << 16, 2, 2) == 7,
+          "the centre's block before the blocks beside, another label among them");
+    s_labels[8 * (FW_W / 2) + 9] = 0;
     s_labels[10 * (FW_W / 2) + 10] = 0;
     s_labels[9 * (FW_W / 2) + 10] = 1;
     s_labels[9 * (FW_W / 2) + 9] = 6;
@@ -3757,7 +3838,9 @@ static void check_route(void)
    THE SEATS (WQ_START.seated), no rows, the seat's start at the anchor seated by it and two more:
    (q) the start in (6, 1) left empty, seat 1's in (12, 1): E, 4 steps from the anchor and 7 from seat 1's;
    (r) the start in (6, 1) seated by seat 2, the seat's ally, seat 1's in (12, 1): E;
-   (s) the start in (6, 1) seated by seat 1, the one in (12, 1) left empty: H. */
+   (s) the start in (6, 1) seated by seat 1, the one in (12, 1) left empty: H;
+   (t) as (s), seat 1's extractor known in (12, 13) and seat 2's army seen in (12, 1), its base not known: the
+       starts stand for seat 2's base alone, and seat 1's start is none: E. */
 static IMPAI_MIL s_hmil;
 
 /* an enemy structure row of seat `owner` at 256-px cell (cx, cz), row `row` */
@@ -3825,7 +3908,7 @@ static const SNAP_PATCH HOLD_PATCHES[] = {
 
 static void check_held_ground(void)
 {
-    static const char* const NAME[22] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+    static const char* const NAME[23] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
                                          "the front back, not held before", "no view", "an enemy tower in (6, 1)",
                                          "a tower of the seat's in E's cell", "a start in (6, 1)",
                                          "two enemies", "a radar contact", "a contact counted as none",
@@ -3836,16 +3919,18 @@ static void check_held_ground(void)
                                          "the enemy's army alone, a start in (6, 1)",
                                          "the enemy's base in (6, 1)",
                                          "the start in (6, 1) left empty", "the start in (6, 1) an ally's",
-                                         "the start in (6, 1) the enemy's" };
-    static const int OWN[22] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
-    static const int FOE[22] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1, -1, -1, -1 };
-    static const char WANT[22] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
-                                   'E', 'E', 'E', 'H', 'H', 'E', 'E', 'H' };
+                                         "the start in (6, 1) the enemy's",
+                                         "the start in (6, 1) an enemy's whose base is known, another's army seen" };
+    static const int OWN[23] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                 -1 };
+    static const int FOE[23] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1, -1, -1, -1, 12 };
+    static const char WANT[23] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
+                                   'E', 'E', 'E', 'H', 'H', 'E', 'E', 'H', 'E' };
     uint8_t held_b[sizeof s_st.held];
     IMPAI_BRAIN_OUT out;
     unsigned i;
     int c, x, z;
-    for (c = 0; c < 22; c++) {
+    for (c = 0; c < 23; c++) {
         const FCMD* cmd;
         char got;
         brain_world();
@@ -3880,6 +3965,11 @@ static void check_held_ground(void)
             s_rview.allies = 1u << 2;
         }
         if (c == 21) held_seats(2, WQ_SEATED_NONE);
+        if (c == 22) {
+            held_seats(2, WQ_SEATED_NONE);
+            held_base(43, 1, 12, 13);
+            s_rrows[40].seat[0].owner = 2;
+        }
         if (c == 14 || c == 15) {
             s_hmil.ebx = 5 * 8 + 2;
             s_hmil.ebz = 10;
@@ -4391,6 +4481,7 @@ static void egame_world(int metal_map)
         }
     s_spots = metal_map ? NULL : EPATCHES;
     s_nspots = metal_map ? 0 : NEPATCH;
+    s_scanned = 1;
     for (i = 0; i < s_nspots; i++)
         for (z = EPATCHES[i].z0; z <= EPATCHES[i].z1; z++)
             for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = EMETAL[i];
@@ -4881,6 +4972,8 @@ static void check_plan(void)
     CHECK(p->press_k > 0.0f && p->press_hold >= 2u * 150u,
           "the plan's pressure outlives the gap between two military decisions at the longest look");
     CHECK(p->def_max <= 4 && p->def_v > 0.0f, "the plan's ground defences: def_max <= 4, def_v > 0");
+    CHECK(p->sensor_max >= 1 && p->sensor_max <= IMPAI_SENSORS / 2, "the plan's sensors: 1 <= sensor_max <= %d",
+          IMPAI_SENSORS / 2);
     CHECK(p->queue_max <= p->roots / 2, "the plan's factory reserve within half its commands: %u of %u",
           p->queue_max, p->roots);
     CHECK(p->roots <= IMPAI_ROOTS_MAX && p->mil_roots <= IMPAI_MIL_ROOTS_MAX && p->rally_px <= p->comm_r,
@@ -5527,7 +5620,10 @@ static void check_mil_estimate(void)
 
 /* THE STARTS LOOKED AT (impai_mil.c, est_start) on check_mil_estimate's three starts, thirty tanks at home and
    nothing known: (a) the nearer other start, (3216, 1616); (b) a tank standing at it, its sweep cell stood in: the
-   farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks).
+   farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks);
+   (h) the nearer start left empty by the level (WQ_SEATED_NONE), nothing stood in: the farther start; (j) both
+   other starts left empty: no estimate, the block left IMPAI_NO_ANCHOR; THE FOE'S STARTS, every start seated: (k)
+   the nearer seated by an ally: the farther; (l) both seated by foes: the nearer.
    THE BASE'S FLOOR (lead): (d) an enemy extractor's ghost known and the thirty tanks: the lead; (e) the seat's own
    extractors worth more than the tanks' two thirds: the enemy's sum is at least its base, and no lead; (f) the
    same, every sweep cell of the map stood in now: the floor is gone, and the lead; (g) the same, the stamps
@@ -5539,12 +5635,20 @@ static void check_mil_starts_looked(void)
     IMPAI_MIL_OUT o;
     int c, n, k;
     float vt = 0.0f, vm, army_v = 0.0f, e_one = 0.0f, base_v = 0.0f;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 7; c++) {
         mil_world();
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 3;
+        if (c == 3 || c == 4) s_w.starts[1].seated = WQ_SEATED_NONE;
+        if (c == 4) s_w.starts[2].seated = WQ_SEATED_NONE;
+        if (c >= 5) {
+            s_w.starts[0].seated = 1;
+            s_w.starts[1].seated = c == 5 ? 3 : 2;
+            s_w.starts[2].seated = 4;
+            s_allies = c == 5 ? 1u << 2 : 0;
+        }
         for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
-        if (c >= 1) own(40, M_TANK, 3216 / 16, 1616 / 16);
+        if (c == 1 || c == 2) own(40, M_TANK, 3216 / 16, 1616 / 16);
         if (c == 2) own(41, M_TANK, 7216 / 16, 3216 / 16);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the starts' decision runs");
         s_w.gametime += 15;
@@ -5552,7 +5656,9 @@ static void check_mil_starts_looked(void)
         printf("the starts looked at, case %d: the estimate (%d, %d) est_seen %u\n", c, s_mil.ebx * 32 + 16,
                s_mil.ebz * 32 + 16, s_mil.est_seen);
         CHECK(s_mil.est_seen == EST_START &&
-              (c == 1 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32 : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
+              (c == 4   ? s_mil.ebx == IMPAI_NO_ANCHOR && s_mil.ebz == IMPAI_NO_ANCHOR
+               : c == 1 || c == 3 || c == 5 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32
+                                  : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
               "the starts looked at, case %d", c);
     }
     vt = s_ti[M_TANK].value;
@@ -5615,7 +5721,8 @@ static void check_mil_starts_looked(void)
 
 /* RAIDS AND SCOUTING: a tank, three raiders and a scout, too few for a wave; the remembered extractor is raided by
    the three raiders (the fastest type), and scouting sends the scout over the start positions, three legs, then
-   back to FORM. */
+   back to FORM. Every start seated, start 2 by an ally (THE FOE'S STARTS): the legs pass it -- start 3 first, then
+   start 1, then the sweep's cell, two starts reached. */
 static void check_mil_raid_scout(void)
 {
     static const WQ_START STARTS[] = { { 328, 328, 0, 0 }, { 6000, 328, 1, 0 }, { 328, 3000, 2, 0 }, { 6000, 3000, 3, 0 } };
@@ -5662,6 +5769,30 @@ static void check_mil_raid_scout(void)
            s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
     CHECK(s >= 0 && s_mil.sq[s].tx == 6000 / 32 && s_mil.sq[s].tz == 3000 / 32,
           "the scout passes the start already looked at: start 3 first");
+    /* every start seated, start 2 by an ally */
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 4;
+    for (k = 0; k < 4; k++) s_w.starts[k].seated = 1 + k;
+    s_allies = 1u << 2;
+    own(1, M_TANK, 24, 24);
+    own(7, M_SCOUT, 30, 30);
+    s_mil.scout_next = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the allied start's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    CHECK(s >= 0, "a scout goes with an ally's start");
+    for (leg = 0; leg < 3 && s >= 0; leg++) {
+        const int32_t x = s_mil.sq[s].tx * 32 + 16, z = s_mil.sq[s].tz * 32 + 16;
+        int at = -1;
+        for (k = 0; k < 4; k++)
+            if (s_mil.sq[s].tx == STARTS[k].x / 32 && s_mil.sq[s].tz == STARTS[k].z / 32) at = k;
+        printf("scout leg %d, start 2 an ally's: (%d, %d), start %d\n", leg, x, z, at);
+        CHECK(at == (leg == 0 ? 3 : leg == 1 ? 1 : -1), "scout leg %d past the ally's start: start %d", leg, at);
+        s_w.unit[7].pos[0] = x << 16;
+        s_w.unit[7].pos[2] = z << 16;
+        s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "a scout leg's decision runs");
+    }
 }
 
 /* the commander given ARMCOM's retail costs (armcom.fbi: 29 854 metal, 34 125 energy), so its value, 30 423, is
@@ -6138,6 +6269,7 @@ static void check_production(void)
         in.job = s_job; in.njob = FW_SLOTS;
         in.ti = s_ti; in.nti = M_N;
         in.spots = s_spots; in.nspots = s_nspots;
+        in.scanned = s_scanned;
         in.reach = &s_reach;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = s_persona;
@@ -6206,6 +6338,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
@@ -7580,6 +7713,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
@@ -7691,6 +7825,284 @@ static void check_def_want(void)
     n = def_decide(1, tw, at);
     printf("defence want, a metal stall: %d, %s\n", n, n ? def_name(tw[0]) : "none");
     CHECK(n == 1 && tw[0] == D_LLT, "defence want, a metal stall: the tower");
+    s_milp = NULL;
+}
+
+/* THE SENSORS (impai_econ.c). Three sensor types on the builders' menus: RAD, radar 800 px for 50, 20 energy a pass;
+   RADB, radar 1600 for 150, 90 energy, past the flows' 80 unless a case lowers it; SONAR, sonar 1200 for 60,
+   water-only. The anchor is the commander's cell (20, 20), two factories finished at (30, 30) and (40, 30) --
+   factory_max --, two constructors beside the anchor, the energy flows 100 in and 20 out, the map explored. */
+#define S_RAD  M_SUB
+#define S_RADB M_DEST
+#define S_SON  M_AA
+
+static void sensor_type(int t, const char* name, float cost, uint16_t radar, uint16_t sonar, float upkeep, int water)
+{
+    def_set(&s_w, t, name, 2, 2, 0, 0, cost, 0);
+    s_w.defs[t].e.energyuse = upkeep;
+    s_w.defs[t].e.radar = (int16_t)radar;
+    s_w.defs[t].e.sonar = (int16_t)sonar;
+    s_ti[t] = s_ti[T_TURRET];
+    s_ti[t].cat = IMPAI_C_OTHER;
+    s_ti[t].flags = (uint8_t)(water ? IMPAI_TF_WATER : 0u);
+    s_ti[t].value = cost;
+    s_ti[t].klass = IMPAI_K_NONE;
+    s_ti[t].radar = radar;
+    s_ti[t].sonar = sonar;
+    memset(&s_threat[t], 0, sizeof s_threat[t]);
+}
+
+static void sensor_world(void)
+{
+    static const uint16_t MENU[] = { T_MEX, T_SOLAR, T_FACTORY, S_RAD, S_RADB, S_SON };
+    int x, z;
+    gov_world(2);
+    s_w.econ[0].metal = 800.0f;
+    s_w.econ[0].metal_max = 1000.0f;
+    s_w.econ[0].metal_in = 5.0f;
+    s_w.econ[0].energy = 800.0f;
+    s_w.econ[0].energy_max = 1000.0f;
+    s_w.econ[0].energy_in = 100.0f;
+    s_w.econ[0].energy_out = 20.0f;
+    sensor_type(S_RAD, "RAD", 50.0f, 800, 0, 20.0f, 0);
+    sensor_type(S_RADB, "RADB", 150.0f, 1600, 0, 90.0f, 0);
+    sensor_type(S_SON, "SONAR", 60.0f, 0, 1200, 20.0f, 1);
+    menu_set(&s_w, T_CONS, MENU, (int)(sizeof MENU / sizeof MENU[0]));
+    menu_set(&s_w, T_COM, MENU, (int)(sizeof MENU / sizeof MENU[0]));
+    own(10, T_CONS, 24, 20);
+    own(11, T_CONS, 24, 24);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    s_mil.ebx = s_mil.ebz = IMPAI_NO_ANCHOR;
+    s_reach.sea_blocks = 0;
+}
+
+/* one decision: the sensors ordered, their count; the first one's type and footprint centre, px, and the unit
+   given it */
+static int s_sensor_unit;
+static int sensor_decide(uint16_t* type, int32_t* x, int32_t* z)
+{
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    const int from = s_w.nlog;
+    int k, n = 0;
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    memset(&in, 0, sizeof in);
+    in.q = &q;
+    in.st = &s_st;
+    in.pref = s_pref;
+    in.pref_stride = 1;
+    in.job = s_job; in.njob = FW_SLOTS;
+    in.ti = s_ti; in.nti = M_N;
+    in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
+    in.reach = &s_reach;
+    in.plan = &s_glv;
+    in.persona = s_persona;
+    in.acts = -1;
+    in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+    in.snap = &s_snap;
+    in.mil = &s_mil;
+    in.view = &v;
+    CHECK(impai_brain_decide(&in, &bo) == 0, "decide");
+    *type = 0;
+    *x = *z = -1;
+    s_sensor_unit = -1;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->action != A_MOBILEBUILD || (c->type != S_RAD && c->type != S_RADB && c->type != S_SON)) continue;
+        if (!n++) {
+            *type = c->type;
+            *x = c->pos[0] >> 16;
+            *z = c->pos[2] >> 16;
+            s_sensor_unit = c->unit;
+        }
+    }
+    CHECK(bo.sensors == (unsigned)n, "the decision's sensors= counts its orders: %u against %d", bo.sensors, n);
+    return n;
+}
+
+static int64_t sq_px(int32_t x, int32_t z, int32_t px, int32_t pz)
+{
+    return ((int64_t)x - px) * ((int64_t)x - px) + ((int64_t)z - pz) * ((int64_t)z - pz);
+}
+
+static const char* sensor_name(uint16_t t)
+{
+    return t == S_RAD ? "RAD" : t == S_RADB ? "RADB" : t == S_SON ? "SONAR" : "none";
+}
+
+/* WHICH TYPES ARE SENSORS: the radar and the sonar are; a tower with a radar beside its gun, a mobile unit and a
+   plant with a radar are not */
+static void check_sensor_struct(void)
+{
+    const IMPAI_BRAIN_IN in = { .ti = s_ti, .nti = M_N, .view = &(IMPAI_VIEW){ .threat = s_threat, .ntypes = M_N } };
+    IMPAI_TINFO keep[3];
+    uint16_t hit;
+    sensor_world();
+    keep[0] = s_ti[T_TURRET];
+    keep[1] = s_ti[M_RAIDER];
+    keep[2] = s_ti[T_FACTORY];
+    hit = s_threat[T_TURRET].hit_ground;
+    s_ti[T_TURRET].radar = s_ti[M_RAIDER].radar = s_ti[T_FACTORY].radar = 900;
+    s_threat[T_TURRET].hit_ground = 10;
+    printf("sensor types: RAD %d, SONAR %d, the tower %d, the raider %d, the plant %d\n",
+           impai_sensor_struct(&in, S_RAD), impai_sensor_struct(&in, S_SON), impai_sensor_struct(&in, T_TURRET),
+           impai_sensor_struct(&in, M_RAIDER), impai_sensor_struct(&in, T_FACTORY));
+    CHECK(impai_sensor_struct(&in, S_RAD) && impai_sensor_struct(&in, S_SON), "the radar and the sonar are sensors");
+    CHECK(!impai_sensor_struct(&in, T_TURRET), "a tower with a radar is a defence");
+    CHECK(!impai_sensor_struct(&in, M_RAIDER), "a mobile unit with a radar is no sensor structure");
+    CHECK(!impai_sensor_struct(&in, T_FACTORY), "a plant with a radar is a plant");
+    s_ti[T_TURRET] = keep[0];
+    s_ti[M_RAIDER] = keep[1];
+    s_ti[T_FACTORY] = keep[2];
+    s_threat[T_TURRET].hit_ground = hit;
+    s_milp = NULL;
+}
+
+/* THE TYPE: RADB, 1600^2 / 150, over RAD, 800^2 / 50 -- RAD by distance per value --, with both upkeeps within the
+   flows' 80; RADB's past them, RAD; both past them, none */
+static void check_sensor_type(void)
+{
+    static const struct { float rad, radb; uint16_t want; const char* what; } CASE[3] = {
+        { 20.0f, 50.0f, S_RADB, "the most coverage per value" },
+        { 20.0f, 90.0f, S_RAD, "RADB's upkeep past the flows" },
+        { 90.0f, 90.0f, 0, "every upkeep past the flows" } };
+    uint16_t t;
+    int32_t x, z;
+    int k, n;
+    for (k = 0; k < 3; k++) {
+        sensor_world();
+        s_w.defs[S_RAD].e.energyuse = CASE[k].rad;
+        s_w.defs[S_RADB].e.energyuse = CASE[k].radb;
+        n = sensor_decide(&t, &x, &z);
+        printf("sensor type, %s: %d ordered, %s\n", CASE[k].what, n, sensor_name(t));
+        CHECK(CASE[k].want ? n == 1 && t == CASE[k].want : n == 0, "sensor type, %s", CASE[k].what);
+    }
+    s_milp = NULL;
+}
+
+/* THE WANT, each a radar whose centre lies within 600 px (three quarters of RAD's 800) of its point, one a decision:
+   with nothing standing, the anchor; with a radar at the anchor, the nearer of two finished extractors 650 and
+   1290 px out; the far one alone, on a ring around it past the base ring's reach, by a constructor though the
+   commander is asked first; with the anchor covered and no extractor, the front half way to an estimate 1490 px
+   east; for a map with sea, the anchor for sonar, which the water-only sonar on a dry anchor cannot take and a land
+   one can; the anchor covered by a plant with a radar, none; the radar standing, none, and lost, wanted again --
+   each builder's orders done between the decisions.
+   Held back: four sensors standing (sensor_max), an energy stall -- with a radar of no upkeep and no energy type
+   on any menu, so neither the upkeep nor the stall's energy rung holds it back --, one of the two factories
+   unfinished. */
+static void check_sensor_want(void)
+{
+    const int32_t ax = 20 * 16 + 8, az = 20 * 16 + 8;
+    uint16_t t;
+    int32_t x, z, ex, ez, fx;
+    int n, k;
+    /* the anchor */
+    sensor_world();
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, nothing standing: %d %s at %d,%d (anchor %d,%d)\n", n, sensor_name(t), x, z, ax, az);
+    CHECK(n == 1 && t == S_RAD && sq_px(x, z, ax, az) <= 600 * 600, "one radar covering the anchor");
+    /* the nearer extractor */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    own(31, T_MEX, 100, 20);
+    own(32, T_MEX, 60, 20);
+    ex = 60 * 16 + 16;
+    ez = 20 * 16 + 16;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, extractors 650 and 1290 px out: %d %s at %d,%d (the nearer at %d,%d)\n", n, sensor_name(t),
+           x, z, ex, ez);
+    CHECK(n == 1 && sq_px(x, z, ex, ez) <= 600 * 600, "one radar covering the nearer extractor");
+    /* the far extractor alone, on its own ring */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    own(31, T_MEX, 100, 20);
+    ex = 100 * 16 + 16;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, one extractor 1290 px out: %d %s at %d,%d by unit %d (it at %d,%d)\n", n, sensor_name(t), x,
+           z, s_sensor_unit, ex, ez);
+    CHECK(n == 1 && sq_px(x, z, ex, ez) <= 600 * 600 && s_sensor_unit != 1,
+          "a radar on the far extractor's own ring, by a constructor");
+    /* the front */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_mil.ebx = (int16_t)(1800 / 32);
+    s_mil.ebz = (int16_t)(az / 32);
+    fx = ax + (s_mil.ebx * 32 + 16 - ax) / 2;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the front: %d %s at %d,%d (the front at %d,%d)\n", n, sensor_name(t), x, z, fx, az);
+    CHECK(n == 1 && sq_px(x, z, fx, az) <= 600 * 600, "a radar covering the front");
+    /* the sonar */
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_reach.sea_blocks = 1;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, a map with sea, the sonar water-only on a dry anchor: %d\n", n);
+    CHECK(n == 0, "no water-only sonar on a dry anchor");
+    sensor_world();
+    own(30, S_RAD, 22, 20);
+    s_reach.sea_blocks = 1;
+    s_ti[S_SON].flags = 0;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, a map with sea, a land sonar: %d %s at %d,%d\n", n, sensor_name(t), x, z);
+    CHECK(n == 1 && t == S_SON && sq_px(x, z, ax, az) <= 900 * 900, "a sonar covering the anchor");
+    s_reach.sea_blocks = 0;
+    /* the plant's radar */
+    sensor_world();
+    s_ti[T_FACTORY].radar = 900;
+    n = sensor_decide(&t, &x, &z);
+    s_ti[T_FACTORY].radar = 0;
+    printf("sensor want, the anchor covered by the plant's radar: %d\n", n);
+    CHECK(n == 0, "a plant's radar covers the anchor");
+    /* standing, then lost */
+    sensor_world();
+    n = sensor_decide(&t, &x, &z);
+    CHECK(n == 1 && s_sensor_unit > 0, "the first radar");
+    own(30, t, (x - 16) / 16, (z - 16) / 16);
+    for (k = 1; k < s_w.top; k++) s_w.unit[k].n = 0;
+    s_w.gametime += 15;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the anchor covered: %d\n", n);
+    CHECK(n == 0, "nothing more to cover");
+    s_w.unit[30].live = 0;
+    for (k = 1; k < s_w.top; k++) s_w.unit[k].n = 0;
+    s_w.gametime += 15;
+    n = sensor_decide(&t, &x, &z);
+    printf("sensor want, the radar lost: %d %s\n", n, sensor_name(t));
+    CHECK(n == 1 && t == S_RAD, "the radar lost is wanted again");
+    /* held back */
+    for (k = 0; k < 3; k++) {
+        static const char* const WHAT[3] = { "sensor_max standing", "an energy stall", "one factory unfinished" };
+        sensor_world();
+        if (k == 0) {
+            own(30, S_RAD, 120, 120);
+            own(31, S_RAD, 120, 100);
+            own(32, S_RAD, 100, 120);
+            own(33, S_RAD, 110, 110);
+        }
+        if (k == 1) {
+            static const uint16_t NO_ENERGY[] = { T_MEX, T_FACTORY, S_RAD };
+            s_w.econ[0].energy = 100.0f;
+            s_w.econ[0].energy_in = 10.0f;
+            s_w.econ[0].energy_out = 30.0f;
+            s_w.defs[S_RAD].e.energyuse = 0.0f;
+            menu_set(&s_w, T_CONS, NO_ENERGY, 3);
+            menu_set(&s_w, T_COM, NO_ENERGY, 3);
+        }
+        if (k == 2) s_w.unit[2].finished = 0;
+        n = sensor_decide(&t, &x, &z);
+        printf("sensor want, %s: %d\n", WHAT[k], n);
+        CHECK(n == 0, "sensor want, %s: none", WHAT[k]);
+    }
     s_milp = NULL;
 }
 
@@ -8516,7 +8928,7 @@ static void check_dry_wave(void)
    cell (40, 64) on class 2, which walks the sea floor as the engine's commanders' TANKDS2 walks water 100 deep
    (the move class's +0x08, tasim_run defs), a finished K-bot lab, stores full, the military's estimate at block
    (240, 32) */
-enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR, C_STRIP };
+enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR, C_STRIP, C_SPIT, C_SPIT_NEAR };
 static IMPAI_MIL s_smil;
 
 static void coast_world(int kind, int naval, float metal_in)
@@ -8532,13 +8944,17 @@ static void coast_world(int kind, int naval, float metal_in)
         water_add(&s_w, 64, 0, 79, 127, 40);
         water_add(&s_w, 80, 0, 127, 127, -10);
         water_add(&s_w, 128, 0, 511, 127, 40);
-    } else if (kind == C_FAR || kind == C_STRIP) {
+    } else if (kind == C_FAR || kind == C_STRIP || kind == C_SPIT || kind == C_SPIT_NEAR) {
         water_add(&s_w, 64, 0, 107, 127, -10);
         water_add(&s_w, 108, 0, 511, 127, 40);
+        if (kind != C_FAR) water_add(&s_w, 108, 0, 115, 127, 20);
         if (kind == C_STRIP) {
-            water_add(&s_w, 108, 0, 115, 127, 20);
             water_add(&s_w, 108, 56, 113, 57, -10);
             water_add(&s_w, 114, 62, 115, 63, -10);
+        }
+        if (kind == C_SPIT || kind == C_SPIT_NEAR) {
+            water_add(&s_w, 108, 70, 126, 71, -10);
+            water_add(&s_w, 125, kind == C_SPIT ? 66 : 64, 126, 69, -10);
         }
     } else
         water_add(&s_w, 64, 0, 511, 127, kind == C_SHALLOW ? 20 : 40);
@@ -8926,7 +9342,8 @@ static void check_surplus_mex(void)
     s_milp = NULL;
 }
 
-/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor.
+/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor,
+   its yard's one exit the south edge's cells 2 and 3 (THE WAY OUT's `c`, 0x2D; the rest `C` with 0x02, 0x2F).
    (a) No frame on its yard, the constructor at the lab's centre with an ASSIST of it under a guard: one decision
        moves it off the yard grown by its half-size, its job ended, one yard move counted.
    (b) The product's frame on the yard: no move.
@@ -8939,6 +9356,9 @@ static void yard_world(void)
     FUNIT* f;
     int x, z;
     reach_world(1);
+    s_w.defs[T_FACTORY].yarded = 1;
+    memset(s_w.defs[T_FACTORY].yard, 0x2F, 36);
+    s_w.defs[T_FACTORY].yard[5 * 6 + 2] = s_w.defs[T_FACTORY].yard[5 * 6 + 3] = 0x2D;
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
     f = &s_w.unit[3];
@@ -9046,24 +9466,93 @@ static void check_yard_clear(void)
 }
 
 /* THE WALK OFF (impai_brain.c, THE YARD): the constructor at the waiting lab's centre, handed back, its one order a
-   move. (a) The move's point lies off the yard -- the walk the rule gives -- so it is given nothing, at this decision
-   and the next, each counted in yard_left. (b) The point lies on the yard: it is moved off, one order. */
+   move, at GameTime 3 000. (a) The move's point lies off the yard beyond its south exit, (464, 448) -- the walk the
+   rule gives --, and its job is the economy's move there, given now: it is given nothing, at this decision and the
+   next, each counted in yard_left. (b) The point lies on the yard: it is moved off, one order. (c) The point lies
+   off the yard west of it, (320, 368), through the lab's west wall (THE WAY OFF): no walk off, so it is moved, out
+   of the south exit, though it is the economy's move given now. (d) The walk of (a) given WALK_OFF_T + 1 ticks ago: moved again, never where its last point
+   -- its job's cell's centre, (472, 456) -- would put it: the first ring's points and the next ring's south touch
+   it, so the next ring's south-west, (419, 461). (e) The move of (a) with no job of the economy's: moved, one
+   order, to (464, 448). (f) The walk of (a), given now, another constructor idle at (456, 440), on its point:
+   moved where it touches neither that constructor nor its last point, the next ring's south-west, (419, 461).
+   (g) The same, the other constructor on a live walk of its own to (648, 648): it holds not still, and the walk of
+   (a) is trusted -- given nothing. (h) The move of (e), another constructor idle far off at (648, 648), off the
+   region and so given no turn there, on a live walk to (464, 448): the walks first hold that point, and the first is moved
+   where it does not touch it, the next ring's south, (464, 480). (i) The walk of (a), given now, a constructor
+   helping the lab -- its one order a guard of it -- standing on its point at (456, 440): a helper may be passing
+   through, and the walk is trusted -- given nothing. (j) The walk of (a), given now, another constructor whose own
+   walk was given now and has ended -- no order left -- standing on its point at (456, 440): the decision holds no
+   point for it, it holds still, and the first is moved as in (f), to (419, 461). */
 static void check_yard_walk(void)
 {
-    static const char* const NAME[2] = { "a walk off the yard", "a move onto the yard" };
+    static const char* const NAME[10] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
+                                          "a walk lapsed", "a move not the economy's", "a point another stands on",
+                                          "a point another walks from", "a point another walks to",
+                                          "a point a helper stands on", "a point a walk ended on" };
+    static const int32_t TO[10][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
+                                       { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 } };
+    static const int32_t WANT[10][2] = { { 0, 0 },     { -1, -1 },   { -1, -1 },   { 419, 461 }, { 464, 448 },
+                                         { 419, 461 }, { 0, 0 },     { 464, 480 }, { 0, 0 },     { 419, 461 } };
     IMPAI_BRAIN_OUT out;
     int32_t x = 0, z = 0;
     int c, moved, n, left = 0;
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 10; c++) {
         FUNIT* u;
         yard_world();
+        s_w.gametime = 3000;
         memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
         u = &s_w.unit[2];
         u->list[0].action = A_MOVE;
         u->list[0].target = (uint16_t)WQ_NONE;
-        u->list[0].pos[0] = (int32_t)((uint32_t)(c ? 27 * 16 : 20 * 16) << 16);
-        u->list[0].pos[2] = s_w.unit[3].pos[2];
+        u->list[0].pos[0] = (int32_t)((uint32_t)TO[c][0] << 16);
+        u->list[0].pos[2] = TO[c][1] >= 0 ? (int32_t)((uint32_t)TO[c][1] << 16) : s_w.unit[3].pos[2];
         u->n = 1;
+        if (c == 0 || c == 2 || c == 3 || c == 5 || c == 6 || c == 8 || c == 9) {
+            s_job[2].kind = IMPAI_JOB_NONE;
+            s_job[2].type = T_CONS;
+            s_job[2].build = s_job[2].target = (uint16_t)WQ_NONE;
+            s_job[2].cx = (int16_t)(TO[c][0] >> 4);
+            s_job[2].cz = (int16_t)((TO[c][1] >= 0 ? TO[c][1] : s_w.unit[3].pos[2] >> 16) >> 4);
+            s_job[2].since = (uint32_t)s_w.gametime - (c == 3 ? 901u : 0u);
+        }
+        if (c == 5 || c == 6 || c == 9) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+        if (c == 9) {
+            s_job[4].kind = IMPAI_JOB_NONE;
+            s_job[4].type = T_CONS;
+            s_job[4].build = s_job[4].target = (uint16_t)WQ_NONE;
+            s_job[4].cx = 28;
+            s_job[4].cz = 27;
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
+        if (c == 7) unit_add(&s_w, 4, T_CONS, 40, 40, 1);
+        if (c == 8) {
+            FUNIT* h;
+            unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+            h = &s_w.unit[4];
+            h->list[0].action = A_GUARD;
+            h->list[0].target = 3;
+            h->n = 1;
+            s_job[4].kind = IMPAI_JOB_ASSIST;
+            s_job[4].type = T_CONS;
+            s_job[4].build = (uint16_t)WQ_NONE;
+            s_job[4].target = 3;
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
+        if (c == 6 || c == 7) {
+            const int32_t wx = c == 6 ? 648 : 464, wz = c == 6 ? 648 : 448;
+            FUNIT* w = &s_w.unit[4];
+            w->list[0].action = A_MOVE;
+            w->list[0].target = (uint16_t)WQ_NONE;
+            w->list[0].pos[0] = (int32_t)((uint32_t)wx << 16);
+            w->list[0].pos[2] = (int32_t)((uint32_t)wz << 16);
+            w->n = 1;
+            s_job[4].kind = IMPAI_JOB_NONE;
+            s_job[4].type = T_CONS;
+            s_job[4].build = s_job[4].target = (uint16_t)WQ_NONE;
+            s_job[4].cx = (int16_t)(wx >> 4);
+            s_job[4].cz = (int16_t)(wz >> 4);
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
         CHECK(decide(&out) == 0, "decide");
         left = out.yard_left;
         if (!c) {
@@ -9075,26 +9564,64 @@ static void check_yard_walk(void)
         n = count_unit(2, -1);
         printf("the yard, %s: orders %d, moved %d to (%d, %d), yard %u, left %d\n", NAME[c], n, moved, x, z, out.yard,
                left);
-        if (!c)
-            CHECK(!n && !out.yard && left == 2, "the constructor walking off the yard is given nothing: %d orders", n);
+        if (!c || c == 6 || c == 8)
+            CHECK(!n && !out.yard && left == (c ? 1 : 2), "the constructor walking off the yard, %s, is given nothing: "
+                  "%d orders", NAME[c], n);
+        else if (WANT[c][0] >= 0)
+            CHECK(moved && n == 1 && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && !left,
+                  "the constructor, %s: moved to (%d, %d)", NAME[c], x, z);
         else
-            CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && out.yard == 1 && !left,
-                  "the constructor sent onto the yard is moved off it");
+            CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && z >= 26 * 16 && x >= 28 * 16 && x < 30 * 16 &&
+                      out.yard == 1 && !left,
+                  "the constructor %s is moved off it, out of the south exit: (%d, %d)",
+                  c == 1 ? "sent onto the yard" : "walking through the lab", x, z);
     }
 }
 
+/* THE WAY OFF's points of the decision (impai_build.c, impai_way_to): one a builder -- a builder recorded again
+   replaces its own point --, so every builder of the idle and helper lists recorded twice, as THE WALKS FIRST and a
+   move can, fills the 2 x IMPAI_IDLE_CAP points exactly, each its second point, none dropped. */
+static void check_way_to_one(void)
+{
+    static IMPAI_DEC dd;
+    IMPAI_BRAIN_IN bi;
+    IMPAI_UNITREF a;
+    int k, ok = 1;
+    memset(&dd, 0, sizeof dd);
+    memset(&bi, 0, sizeof bi);
+    memset(&a, 0, sizeof a);
+    bi.ti = s_ti;
+    bi.nti = FW_DEFS;
+    dd.in = &bi;
+    a.type = T_CONS;
+    for (k = 0; k < 2 * IMPAI_IDLE_CAP; k++) {
+        a.slot = (uint16_t)(1 + k);
+        impai_way_to(&dd, &a, 32 * k, 16);
+        impai_way_to(&dd, &a, 32 * k, 48);
+    }
+    for (k = 0; k < dd.nway_to; k++)
+        if (dd.way_to[k].slot != 1 + k || dd.way_to[k].x != 32 * k || dd.way_to[k].z != 48) ok = 0;
+    printf("the decision's points, every builder twice: %d points\n", dd.nway_to);
+    CHECK(ok && dd.nway_to == 2 * IMPAI_IDLE_CAP, "one point a builder, its last: %d points", dd.nway_to);
+}
+
 /* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
-   (27..30, 26..33), and a constructor idle with a lone Park stands on it at cell (28, 28), clear of the lab grown by
-   its half-size. (a) It is moved off the way and the lab: the candidates south of the lab lie on the way, so it goes
-   to the north one, (464, 253). (b) With no way kept it is left where it stands. (c) With a second factory, cells
-   (26..31, 12..17), over that north point, it goes to the next candidate clear of both, east, (579, 368). */
+   (27..30, 26..33), and a constructor idle with a lone Park stands on it at (456, 456), clear of the lab grown by
+   its half-size. (a) THE WAY OFF's rings round it, south first -- the line from the lab's centre through it --
+   then south-west and south-east: the nearest ring with a point off the way, 64 px out, gives south-west,
+   (411, 501); south and south-east still touch the way. (b) With no way kept it is left where it stands.
+   (c) With another plant's kept way, cells (22..26, 30..32), over that point -- its plant at cells (16..21,
+   34..39) --, the same ring's next point clear of every way: west, (392, 456). (d) With a solar, cells (22..25, 30..33), over it instead: the
+   same ring's next point the constructor touches no building at, west, (392, 456) -- a walk into the solar would
+   end at its edge, on the way. */
 static void check_yard_way(void)
 {
-    static const char* const NAME[3] = { "its way kept", "no way kept", "a factory north" };
-    static const int32_t WANT[3][2] = { { 464, 253 }, { 0, 0 }, { 579, 368 } };
+    static const char* const NAME[4] = { "its way kept", "no way kept", "another plant's way south-west",
+                                         "a solar south-west" };
+    static const int32_t WANT[4][2] = { { 411, 501 }, { 0, 0 }, { 392, 456 }, { 392, 456 } };
     IMPAI_BRAIN_OUT out;
     int c;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 4; c++) {
         IMPAI_WAYREC* w = &s_st.way[0];
         FUNIT* u;
         int32_t x = 0, z = 0;
@@ -9115,14 +9642,98 @@ static void check_yard_way(void)
             w->r[0][0] = 27; w->r[0][1] = 26; w->r[0][2] = 30; w->r[0][3] = 33;
             s_st.nway = 1;
         }
-        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 26, 12, 1);
+        if (c == 2) {
+            IMPAI_WAYREC* w2 = &s_st.way[1];
+            unit_add(&s_w, 5, T_FACTORY, 16, 34, 1);
+            memset(w2, 0, sizeof *w2);
+            w2->type = T_FACTORY;
+            w2->cx = 16;
+            w2->cz = 34;
+            w2->n = 1;
+            w2->r[0][0] = 22; w2->r[0][1] = 30; w2->r[0][2] = 26; w2->r[0][3] = 32;
+            s_st.nway = 2;
+        }
+        if (c == 3) unit_add(&s_w, 5, T_SOLAR, 22, 30, 1);
         CHECK(decide(&out) == 0, "decide");
         moved = last_move(0, 2, &x, &z);
         printf("the yard, a constructor on the way, %s: moved %d to (%d, %d), yard %u, ways %u\n", NAME[c], moved, x, z,
                out.yard, (unsigned)s_st.nway);
         CHECK(c == 1 ? !moved && !out.yard
-                     : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == 1,
+                     : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == (c == 2 ? 2 : 1),
               "the constructor on the way, %s: (%d, %d)", NAME[c], x, z);
+    }
+}
+
+/* THE WAY OFF (impai_build.c): a constructor idle with a lone Park inside the waiting lab's footprint, at (464, 336),
+   north of its centre (464, 368) -- where round 3's stood (impai_build.c, THE WAY OFF's WHY). (a) It is moved out of
+   the lab's one exit, south, to (464, 448), never north through the lab. (b) The blocks straight south of the exit,
+   column 14 from row 13, on no label, as past Steel Jungle ac-7's way: the first ring's next direction,
+   south-west, (442, 438). (c) Every block from row 13 south on another label: no point beyond the exit's line is
+   on the constructor's own label, so it is left where it stands. (d) The lab's yard map with no exit cell: it is
+   searched round itself and tested on the region and its label alone, north, (464, 272). (e) The constructor
+   flying: round itself, the region alone, north over the lab, (464, 272). (f) Its own block on no label: held to
+   none, south out of the exit, (464, 448). (g) Standing just east of the lab, at (520, 368), its own block
+   (16, 11) and the blocks west of column 16 on its label, every other block on another: each point on its label
+   lies where the straight line crosses the lab, so it is left where it stands. (h) A second constructor inside the
+   lab, at (464, 352): the first goes to (464, 448), and the second, never where it would touch the point the first
+   was sent to this decision, to the next ring's south, (464, 480). */
+static void check_yard_off(void)
+{
+    static const char* const NAME[8] = { "the exit open", "straight out on no label", "the exit on another label",
+                                         "no exit", "flying", "no label of its own", "east of the lab",
+                                         "two inside" };
+    static const int32_t WANT[8][2] = { { 464, 448 }, { 442, 438 }, { 0, 0 }, { 464, 272 }, { 464, 272 },
+                                        { 464, 448 }, { 0, 0 }, { 464, 448 } };
+    static uint16_t keep[sizeof s_labels / sizeof s_labels[0]];
+    const uint32_t vtol = s_ti[T_CONS].flags;
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 8; c++) {
+        FUNIT* u;
+        int32_t x = 0, z = 0, x2 = 0, z2 = 0;
+        int moved, moved2 = 0, bx, bz;
+        yard_world();
+        memcpy(keep, s_labels, sizeof keep);
+        if (c == 7) {
+            unit_add(&s_w, 4, T_CONS, 28, 21, 1);
+            u = &s_w.unit[4];
+            u->pos[0] = (int32_t)((uint32_t)464 << 16);
+            u->pos[2] = (int32_t)((uint32_t)352 << 16);
+            u->list[0].action = A_PARK;
+            u->list[0].flags = 0x1001;
+            u->list[0].target = (uint16_t)WQ_NONE;
+            u->n = 1;
+        }
+        for (bz = 13; (c == 1 || c == 2) && bz < FW_H / 2; bz++)
+            for (bx = 0; bx < FW_W / 2; bx++)
+                if (c == 2 || bx == 14) s_labels[(size_t)bz * (FW_W / 2) + bx] = (uint16_t)(c == 2 ? 3 : 0);
+        for (bz = 0; c == 6 && bz < FW_H / 2; bz++)
+            for (bx = 16; bx < FW_W / 2; bx++)
+                if (bx != 16 || bz != 11) s_labels[(size_t)bz * (FW_W / 2) + bx] = 3;
+        if (c == 3) s_w.defs[T_FACTORY].yard[5 * 6 + 2] = s_w.defs[T_FACTORY].yard[5 * 6 + 3] = 0x2F;
+        if (c == 4) s_ti[T_CONS].flags |= IMPAI_TF_VTOL;
+        if (c == 5) s_labels[(size_t)10 * (FW_W / 2) + 14] = 0;
+        u = &s_w.unit[2];
+        u->pos[0] = (int32_t)((uint32_t)(c == 6 ? 520 : 464) << 16);
+        u->pos[2] = (int32_t)((uint32_t)(c == 6 ? 368 : 336) << 16);
+        u->list[0].action = A_PARK;
+        u->list[0].flags = 0x1001;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->n = 1;
+        CHECK(decide(&out) == 0, "decide");
+        memcpy(s_labels, keep, sizeof keep);
+        s_ti[T_CONS].flags = vtol;
+        moved = last_move(0, 2, &x, &z);
+        if (c == 7) moved2 = last_move(0, 4, &x2, &z2);
+        printf("the way off, %s: moved %d to (%d, %d), yard %u\n", NAME[c], moved, x, z, out.yard);
+        CHECK(c == 2 || c == 6 ? !moved && !out.yard
+                               : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == (c == 7 ? 2 : 1),
+              "the constructor by the lab, %s: (%d, %d)", NAME[c], x, z);
+        if (c == 7) {
+            printf("the way off, two inside, the second: moved %d to (%d, %d)\n", moved2, x2, z2);
+            CHECK(moved2 && x2 == 464 && z2 == 480, "(h) the second constructor clear of the first's point: (%d, %d)",
+                  x2, z2);
+        }
     }
 }
 
@@ -9970,6 +10581,136 @@ static void plant_reach(int split)
     s_umil.ebz = 10;
 }
 
+/* THE METAL'S REACH's world: the plant world with one lab standing at cells (30, 30) and an idle CK; the land
+   class's labels 1 everywhere but, when `cut`, 2 at the three patches' anchor blocks, the hover class's 1 whole --
+   no land constructor reaches a patch, the hover plant's CH every one; the estimate at block (50, 10). Income 1 a
+   pass: no plant is wanted for the income. */
+static void mr_world(int cut)
+{
+    const unsigned blocks = (FW_W / 2) * (FW_H / 2);
+    unsigned i;
+    plant_world();
+    for (i = 0; i < blocks; i++) s_plabels[i] = s_plabels[blocks + i] = 1;
+    if (cut)
+        for (i = 0; i < NPATCH; i++) s_plabels[(unsigned)(PATCHES[i].az >> 1) * (FW_W / 2) + (PATCHES[i].ax >> 1)] = 2;
+    memset(&s_reach, 0, sizeof s_reach);
+    s_reach.labels = s_plabels;
+    s_reach.at[0] = 0;
+    s_reach.at[1] = blocks;
+    s_reach.present = 3u;
+    s_reach.bw = FW_W / 2;
+    s_reach.bh = FW_H / 2;
+    s_umil.ebx = 50;
+    s_umil.ebz = 10;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    s_w.econ[0].metal_in = 1;
+}
+
+/* the constructors of `type` queued since log entry `from` */
+static int queued_of(int from, int type)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++) n += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == type;
+    return n;
+}
+
+/* THE METAL'S REACH (impai_econ.c) over the plant world's three patches:
+   (a) no land constructor reaches one, at an income no plant is wanted for: the hover plant, whose CH does;
+   (b) the land class reaching them: no plant;
+   (c) three extractors standing, as many as the open patches: no plant; two: the hover plant;
+   (d) a finished CH: no plant; (e) a hover plant standing: no plant;
+   (f) at the income the second plant is wanted for, the patches cut off: the hover plant, never the lab;
+   (g) the same with the hover plant of build tech 2, past the seat's 1: the lab, THE CHOICE's own;
+   (h) THE GOVERNOR'S CONSTRUCTOR, with no constructor finished, of a lab making the CK and the CH: the CH while
+       the CK reaches no patch, the CK -- the better workertime for its value -- while it does;
+   (i) the extractor water-only, minwaterdepth 20, over the dry patches: the CH reaches them but builds nothing on
+       them, so no plant;
+   (j) the seat judged naval, its commander -- busy with another hand's moves -- the only builder of a shipyard
+       that makes a sea raider: the reach's want is THE CHOICE's, the hover plant, and never the sea plant's, which
+       no idle builder could order (Steel Jungle ca-1's seat);
+   (k) a lab frame beside the finished lab, and (l) a lab frame alone: no plant, since a frame's constructors are
+       not yet the seat's to judge. */
+static void check_metal_reach(void)
+{
+    static const uint16_t LABMENU2[] = { T_CONS, C_CH, C_AK };
+    IMPAI_BRAIN_OUT out;
+    int n[C_N], c, from;
+    mr_world(1);
+    plant_decide("the reach, the metal cut off", &out, n);
+    CHECK(n[C_HP] == 1 && out.plant == C_HP && out.plant_want == 2 && !n[T_FACTORY] && !n[C_VP],
+          "(a) the metal out of the land constructors' reach: the hover plant");
+    mr_world(0);
+    plant_decide("the reach, the metal reached", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(b) the metal in reach: no plant");
+    for (c = 3; c >= 2; c--) {
+        int k;
+        mr_world(1);
+        for (k = 0; k < c; k++) unit_add(&s_w, 20 + k, T_MEX, 60 + 2 * k, 60, 1);
+        plant_decide(c == 3 ? "the reach, three extractors held" : "the reach, two extractors held", &out, n);
+        CHECK(c == 3 ? !out.plant && !n[C_HP] : out.plant == C_HP && n[C_HP] == 1,
+              "(c) %d extractors against 3 open patches: plant %u", c, out.plant);
+    }
+    mr_world(1);
+    plant_builder(6, C_CH, 24, 26, 0);
+    plant_decide("the reach, a CH finished", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(d) a finished CH reaches the metal: no plant");
+    mr_world(1);
+    unit_add(&s_w, 11, C_HP, 40, 40, 1);
+    plant_decide("the reach, a hover plant standing", &out, n);
+    CHECK(!out.plant && !n[C_HP], "(e) a hover plant standing makes the CH: no plant");
+    mr_world(1);
+    s_w.econ[0].metal_in = 30;
+    plant_decide("the reach, the second plant's income", &out, n);
+    CHECK(out.plant == C_HP && n[C_HP] == 1 && !n[T_FACTORY], "(f) the second plant, the metal cut off: the hover plant");
+    mr_world(1);
+    s_w.econ[0].metal_in = 30;
+    s_ti[C_HP].ctech = 2;
+    plant_decide("the reach, the hover plant past the build tech", &out, n);
+    s_ti[C_HP].ctech = 1;
+    CHECK(out.plant == T_FACTORY && n[T_FACTORY] == 1 && !n[C_HP],
+          "(g) the hover plant past the seat's build tech: the lab, THE CHOICE's own");
+    for (c = 1; c >= 0; c--) {
+        mr_world(c);
+        s_w.unit[4].live = 0;
+        menu_set(&s_w, T_FACTORY, LABMENU2, (int)(sizeof LABMENU2 / sizeof LABMENU2[0]));
+        from = s_w.nlog;
+        plant_decide(c ? "the reach, the governor, the metal cut off" : "the reach, the governor, the metal reached",
+                     &out, n);
+        printf("the reach, the governor, cut %d: CK %d CH %d queued\n", c, queued_of(from, T_CONS),
+               queued_of(from, C_CH));
+        CHECK(c ? queued_of(from, C_CH) == 1 && !queued_of(from, T_CONS)
+                : queued_of(from, T_CONS) == 1 && !queued_of(from, C_CH),
+              "(h) the governor's constructor, cut %d", c);
+    }
+    mr_world(1);
+    s_ti[T_MEX].flags |= IMPAI_TF_WATER;
+    s_w.defs[T_MEX].e.minwater = 20;
+    plant_decide("the reach, the extractor water-only", &out, n);
+    s_ti[T_MEX].flags &= ~IMPAI_TF_WATER;
+    s_w.defs[T_MEX].e.minwater = 0;
+    CHECK(!out.plant && !n[C_HP], "(i) a water-only extractor over dry patches: no plant");
+    {
+        static const uint16_t SYMENU2[] = { C_CS, C_HRAID };
+        mr_world(1);
+        menu_set(&s_w, C_SY, SYMENU2, (int)(sizeof SYMENU2 / sizeof SYMENU2[0]));
+        s_ti[C_HRAID].klass = IMPAI_K_SRAIDER;
+        plant_builder(1, T_COM, 20, 20, 1);
+        s_umil.naval = 1;
+        plant_decide("the reach, a naval seat", &out, n);
+        s_umil.naval = 0;
+        s_ti[C_HRAID].klass = IMPAI_K_LRAIDER;
+        CHECK(out.plant == C_HP && n[C_HP] == 1 && !n[C_SY], "(j) a naval seat short of the reach: the hover plant");
+    }
+    for (c = 0; c < 2; c++) {
+        mr_world(1);
+        if (c) s_w.unit[10].live = 0;
+        unit_add(&s_w, 12, T_FACTORY, 40, 40, 0);
+        plant_decide(c ? "the reach, a lab frame alone" : "the reach, a lab frame beside the lab", &out, n);
+        CHECK(!out.plant && !n[C_HP], "(%c) a plant frame standing: no plant, plant %u", c ? 'l' : 'k', out.plant);
+    }
+}
+
 /* THE CHOICE (impai_econ.c) over the seat's menus, the build tech, the reach, the wet anchor and the ties */
 static void check_plant_choice(void)
 {
@@ -10211,6 +10952,37 @@ static void check_plant_choice(void)
     s_w.gametime = 2000;
     plant_decide("the opening, no land army anywhere", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
+    /* THE BLIND START (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the first
+       plant at once */
+    plant_world();
+    s_w.gametime = 300;
+    s_spots = NULL;
+    s_nspots = 0;
+    s_scanned = 1;
+    plant_decide("a blind start", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a blind start: the first plant before open_t");
+    /* the scan still under way: none published yet is no evidence, and the opening waits as before */
+    plant_world();
+    s_w.gametime = 300;
+    s_spots = NULL;
+    s_nspots = 0;
+    plant_decide("a scan under way", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "before a whole scan: no plant before open_t");
+    /* a patch in sight: the opening's extractors first, as before */
+    plant_world();
+    s_w.gametime = 300;
+    s_scanned = 1;
+    plant_decide("a start with patches", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "patches known: no plant before open_t");
+    /* a metal map: no patch is ever published, and the extractors take the base ring */
+    plant_world();
+    s_w.gametime = 300;
+    s_w.threshold = 255;
+    s_spots = NULL;
+    s_nspots = 0;
+    s_scanned = 1;
+    plant_decide("a metal map", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "a metal map: no plant before open_t");
     s_tvp = NULL;
     s_milp = NULL;
     brain_world();
@@ -10417,6 +11189,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.job = s_job; in.njob = FW_SLOTS;
         in.ti = s_ti; in.nti = s_gnti;
         in.spots = s_spots; in.nspots = s_nspots;
+        in.scanned = s_scanned;
         in.reach = &s_reach;
         in.plan = &s_glv;
         in.persona = s_persona;
@@ -10630,6 +11403,16 @@ static void check_sea_plant(void)
     coast_world(C_COAST, -1, 9);
     sea_decide("COAST, not judged", &sy, &land);
     CHECK(!sy && !land, "the second factory waits for the judgement");
+    /* THE LAND PLANT'S METAL: an income of 6, below factory_per_m's 8, the store full and the lab asking 2 of the
+       3 unspent -- the surplus pays a further plant: naval, the shipyard; not naval, the land plant */
+    for (k = 0; k < 2; k++) {
+        coast_world(C_COAST, !k, 6);
+        s_w.econ[0].metal_out = 3.0f;
+        factory_busy(2, E_CK, 2.0f, 5.0f);
+        sea_decide(k ? "COAST, not naval, a surplus" : "COAST, a surplus", &sy, &land);
+        CHECK(k ? !sy && land == 1 : sy == 1 && !land, "a surplus that pays a further plant: %s",
+              k ? "the land plant" : "the sea plant, not a land one");
+    }
     coast_world(C_SHALLOW, 1, 9);
     sea_decide("SHALLOW", &sy, &land);
     CHECK(!sy && land == 1, "no water deep enough: the land factory in the same decision");
@@ -10777,7 +11560,15 @@ static int build_unit(int from, int type)
    to within builddistance and half the frame's side, less than MobileBuild's reach that built from the shore
    (engine/orders.md, *HelpBuild's walk and its abandon*; builder_near) --; (n) dry, the commander already helping
    it: no order; (o) dry, the commander idle, a lab's frame of the seat's at cell (106, 64), past comm_r and nearer
-   it than the shipyard's: it helps the shipyard -- the rung is the sea plant's alone. */
+   it than the shipyard's: it helps the shipyard -- the rung is the sea plant's alone. THE BUILDER'S REACH again,
+   the commander held: on the SPIT coast the strip's shipyard site and a spit of the mainland's along cells
+   z 70..71 to a nub at x 125..126, z 66..69; (p) the nub's block (62, 33), its centre 93 px from the site's
+   centre, within CORCK's limit of 112, its square of the centres a CORCK on its entries stands at -- (1992, 1064)
+   to (2024, 1096) -- 126 px off at its far corner: no shipyard, the refusal counted; (q) on the SPIT_NEAR coast
+   the nub reaching z 64, its block (62, 32) whose square's far corner is 111 px off: the constructor's shipyard;
+   (r) (p) with a constructor of footprint 3 x 3, its limit 123: its square on the nub's block, pushed 16 px
+   out by its footprint -- (2000, 1072) to (2032, 1104) --, 138 px off at its far corner, where the block's own
+   square's far corner is 115 px off: no shipyard, the refusal counted. */
 static void far_world_at(int kind, int naval, int dry, int cons, float metal_in)
 {
     coast_world(kind, naval, metal_in);
@@ -10901,6 +11692,28 @@ static void check_sea_finish(void)
                       !(s_job[3].kind == IMPAI_JOB_ASSIST && s_job[3].target == 5),
                   "%s: the sea constructor helps it, the land constructor cannot reach it", NAME[k]);
         if (k == 3) CHECK(!orders_to(from, 1), "%s: no new order to the commander", NAME[k]);
+    }
+    far_world_at(C_SPIT, 1, 1, 1, 9);
+    com_window();
+    sea_decide("the finish, (p) the spit's nub, its block's centre within the limit", &sy, &land);
+    CHECK(!sy && s_st.sea_refused == 1,
+          "(p) a block whose centre is within the limit and its standing centres are not: no shipyard, one refusal");
+    far_world_at(C_SPIT_NEAR, 1, 1, 1, 9);
+    com_window();
+    from = s_w.nlog;
+    sea_decide("the finish, (q) the nub's block wholly within the limit", &sy, &land);
+    unit = build_unit(from, E_SY);
+    CHECK(sy == 1 && unit == 3, "(q) a block whose every standing centre is within the limit: the constructor's");
+    {
+        const int16_t fx = s_ti[E_CK].fx, fz = s_ti[E_CK].fz;
+        far_world_at(C_SPIT, 1, 1, 1, 9);
+        com_window();
+        s_ti[E_CK].fx = s_ti[E_CK].fz = 3;
+        sea_decide("the finish, (r) the spit's nub, a constructor of 3 x 3", &sy, &land);
+        s_ti[E_CK].fx = fx;
+        s_ti[E_CK].fz = fz;
+        CHECK(!sy && s_st.sea_refused == 1, "(r) a 3 x 3 constructor's square, pushed 16 px out of the block, past "
+              "the limit: no shipyard, one refusal");
     }
     s_milp = NULL;
 }
@@ -11257,10 +12070,13 @@ static void check_layers(void)
         CHECK(count_action(from, A_ATTACK, 2) == 1 && count_action(from, A_ATTACK, 1) == k &&
               !count_action(from, A_MOVE, 1), "the raider attacks across only where it can travel");
     }
-    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47 */
+    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47. The scan
+       is under way in these two cases, so the opening waits and no plant comes before the explore rung (THE BLIND
+       START would ask one of a seat with no factory and none published) */
     for (k = 0; k < 2; k++) {
         int x, z, cx = -1;
         coast_world(C_COAST, 0, 3);
+        s_scanned = 0;
         s_milp = NULL;
         s_w.unit[1].live = s_w.unit[2].live = 0;
         if (k) unit_add(&s_w, 3, E_CK, 40, 70, 1);
@@ -11281,6 +12097,7 @@ static void check_layers(void)
     {
         int x, z, cx = -1, cz = -1;
         coast_world(C_COAST, 0, 3);
+        s_scanned = 0;
         s_milp = NULL;
         s_w.unit[1].live = s_w.unit[2].live = 0;
         unit_add(&s_w, 3, E_CK, 40, 70, 1);
@@ -11303,29 +12120,30 @@ static void check_layers(void)
     }
 }
 
-/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
-   base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
-   beside the base, nearer a structure of their own side than the anchor -- no base threat, so a FORM squad there
-   is no defence that holds (THE HOME HOLDS) -- which every squad there predicts it loses (retreats). After every
-   decision the table holds become's bound and no unit is left without a squad. Then a recorded table of three land
-   FORM squads and five ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks in the
+   field, 1 300 px from the anchor and as far from the rally point, and toggling an armed enemy tank 300 px from
+   the anchor; every third decision thirty enemy tanks stand beside the field army, nearer a structure of their own
+   side than the anchor -- no base threat --, which every squad there predicts it loses and, its members far from
+   where a retreat takes them (THE RETREAT HOME), retreats. After every decision the table holds become's bound and
+   no unit is left without a squad. Then a recorded table of three land FORM squads and five ATTACK squads: the
+   normalisation leaves one FORM and four ATTACK, every member in a squad. */
 static void check_mil_table(void)
 {
     IMPAI_MIL_OUT o;
     int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
     mil_world();
     enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
-    enemy(1298, T_SOLAR, 25, 55, IMPAI_GHOST, 1);
+    enemy(1298, T_SOLAR, 105, 55, IMPAI_GHOST, 1);
     for (i = 0; i < 60; i++) {
-        own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
-        own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
+        own(1 + 2 * i, M_TANK, 100 + (i % 10) * 2, 30 + (i / 10) * 2);
+        own(2 + 2 * i, M_RAIDER, 101 + (i % 10) * 2, 31 + (i / 10) * 2);
         if (i % 2) enemy(1300, M_TANK, 39, 20, IMPAI_LOS, 1);
         else {
             s_rows[1300].seat[0].how = 0;
             s_w.unit[1300].live = 0;
         }
         for (k = 0; k < 30; k++) {
-            if (i % 3 == 2) enemy(1310 + k, M_TANK, 16 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
+            if (i % 3 == 2) enemy(1310 + k, M_TANK, 100 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
             else {
                 s_rows[1310 + k].seat[0].how = 0;
                 s_w.unit[1310 + k].live = 0;
@@ -11749,18 +12567,24 @@ static void check_mil_attack_room(void)
    of the anchor, nearer owner 1's tank 400 px west of it than the anchor is. The tank stands nearer the anchor
    than any structure of its own side: a threat, and the FORM squad defends. With no structure known the start
    positions stand in: the tank 400 px west is a threat, and one 1 376 px west, 128 px from the enemy start and
-   inside the anchor box, is none. */
+   inside the anchor box, is none -- and a threat when the level seated an ally at that start (THE FOE'S STARTS):
+   no enemy's base stands there. */
 static void check_mil_two_sides(void)
 {
     static const WQ_START STARTS[] = { { 4104, 2056, 0, 0 }, { 2600, 2056, 1, 0 } };
     IMPAI_MIL_OUT o;
     int k, round;
-    for (round = 0; round < 3; round++) {
+    for (round = 0; round < 4; round++) {
         mil_world();
         s_st.ax = 256;
         s_st.az = 128;
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 2;
+        if (round == 3) {
+            s_w.starts[0].seated = 1;
+            s_w.starts[1].seated = 3;
+            s_allies = 1u << 2;
+        }
         for (k = 0; k < 12; k++) own(1 + k, M_TANK, 250 + 2 * (k % 6), 140 + 2 * (k / 6));
         if (round == 0) {
             static const int X[4] = { 40, 60, 440, 460 };
@@ -11772,7 +12596,7 @@ static void check_mil_two_sides(void)
                 }
             }
         }
-        enemy(1310, M_TANK, round == 2 ? 170 : 231, 128, IMPAI_LOS, 1);
+        enemy(1310, M_TANK, round >= 2 ? 170 : 231, 128, IMPAI_LOS, 1);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the two sides decision runs");
         printf("two sides, round %d: ebx %d threats=%u defends=%u\n", round, s_mil.ebx, o.threats, o.defends);
         if (round == 0)
@@ -11780,6 +12604,7 @@ static void check_mil_two_sides(void)
                   "the centre of both sides' structures 96 px west of the anchor, the west tank a threat");
         if (round == 1) CHECK(o.threats == 1 && o.defends == 1, "no structure known: the starts stand in");
         if (round == 2) CHECK(o.threats == 0 && !o.defends, "a tank beside its own start: no threat");
+        if (round == 3) CHECK(o.threats == 1, "a tank beside an ally's start: a threat");
     }
 }
 
@@ -11844,20 +12669,27 @@ static void check_mil_retreat_members(void)
           "every member arrived: FORM, and no RETREAT squad left");
 }
 
-/* AT THE RALLY (impai_mil.c, at_rally): check_mil_stay_or_go's three tanks and a submarine they cannot hurt but
-   outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at cell
-   (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point lies
-   384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px south:
-   no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction, as
-   check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the submarine, a contact that
-   does not threaten the base (a structure is no base threat): one prediction. */
+/* AT THE RALLY and THE RETREAT HOME (impai_mil.c): check_mil_stay_or_go's three tanks and a submarine they cannot
+   hurt but outrun, so the submarine enters their stay-or-go and the defence makes them no DEFEND; the anchor at
+   cell (20, 20), no structure known, so the estimate is the other start, (6 416, 3 216) px, and the rally point
+   lies 384 px from the anchor towards it, about (675, 493) px. (a) The tanks at the rally, the submarine 128 px
+   south: no prediction, no retreat, the tanks the scouting leaves FORM. (b) The same 2 400 px out: one prediction,
+   lost, a retreat, as check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the
+   submarine, a contact that does not threaten the base (a structure is no base threat): one prediction. (d) The
+   tanks a RAID squad at the rally, its point 2 400 px out, the submarine 128 px south: one prediction, lost, every
+   member already where a retreat would take it -- no retreat, the squad back to FORM, the loss stamped for the
+   lead, and no order at the submarine it lost to. (e) The same raid
+   2 400 px out: one prediction, a retreat. (f) The member's index is the one it takes in the layer's RETREAT squad
+   it would join (below). (g) A sea ATTACK of three destroyers up the strait against six, the rally ashore with no
+   water within 1 024 px: no point is not home -- one prediction, lost, a retreat (below). */
 static void check_mil_at_rally(void)
 {
-    static const char* const NAME[3] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally" };
+    static const char* const NAME[5] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally",
+                                         "a raid at the rally, a submarine", "a raid 2 400 px out, a submarine" };
     IMPAI_MIL_OUT o;
-    int c, k;
-    for (c = 0; c < 3; c++) {
-        const int bx = c == 1 ? 180 : 40, bz = c == 1 ? 100 : 29;
+    int c, k, from, at;
+    for (c = 0; c < 5; c++) {
+        const int out = c == 1 || c == 4, bx = out ? 180 : 40, bz = out ? 100 : 29;
         mil_world();
         gunship();
         s_st.ax = s_st.az = 20;
@@ -11867,17 +12699,71 @@ static void check_mil_at_rally(void)
         s_w.starts[1].z = 3216;
         s_w.starts[1].index = 1;
         s_w.nstarts = 2;
-        for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
+        if (c >= 3) {
+            squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, c == 3 ? 90 : 120, c == 3 ? 50 : 70);
+            for (k = 0; k < 3; k++) member(1 + k, M_TANK, bx + 2 * k, bz, 0);
+        } else
+            for (k = 0; k < 3; k++) own(1 + k, M_TANK, bx + 2 * k, bz);
         enemy(1300, c == 2 ? T_TURRET : M_SUB, bx + 2, bz + 8, IMPAI_LOS, 1);
+        from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rally decision runs");
-        mil_print(NAME[c], &o, s_w.nlog);
+        mil_print(NAME[c], &o, from);
+        for (k = from, at = 0; k < s_w.nlog; k++) at += s_w.log[k].c.target == 1300;
         if (!c)
             CHECK(!o.predictions && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && squad_task_of(3) == IMPAI_SQ_FORM,
                   "at the rally: %u predictions, %u retreats, tasks %d %d", o.predictions, o.retreats, squad_task_of(2),
                   squad_task_of(3));
-        else
+        else if (c == 3)
+            CHECK(o.predictions == 1 && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && !at && s_mil.lost_t,
+                  "%s: %u predictions, %u retreats, task %d, %d orders at the submarine, lost at %u", NAME[c],
+                  o.predictions, o.retreats, squad_task_of(2), at, s_mil.lost_t);
+        else if (c == 2)
             CHECK(o.predictions == 1, "%s: %u predictions", NAME[c], o.predictions);
+        else
+            CHECK(o.predictions == 1 && o.retreats == 1, "%s: %u predictions, %u retreats", NAME[c], o.predictions,
+                  o.retreats);
     }
+    /* (f) the layer's RETREAT squad holds a tank 2 400 px out, slot 1, so a FORM tank, slot 2, joining it takes
+       index 1, spread point (610, 364) px; the FORM tank stands at (72, 360), 538 px from that point and 474 from
+       index 0's, 616 px from the rally: predicted, lost, and not home -- a retreat */
+    mil_world();
+    gunship();
+    s_st.ax = s_st.az = 20;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6416;
+    s_w.starts[1].z = 3216;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+    squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_LAND, 674 >> 5, 492 >> 5);
+    member(1, M_TANK, 180, 100, 0);
+    own(2, M_TANK, 4, 22);
+    enemy(1300, M_SUB, 4, 30, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the joined retreat's decision runs");
+    mil_print("a tank whose retreat joins the layer's", &o, from);
+    CHECK(o.predictions == 1 && o.retreats == 1, "a tank home at its own index, not at the index it joins at: %u "
+          "predictions, %u retreats", o.predictions, o.retreats);
+    /* (g) the rally about (675, 493) px, the strait from x 3 840 px: no block of the destroyers' component within
+       SUB_BLOCKS of it */
+    mil_world();
+    s_st.ax = s_st.az = 20;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6416;
+    s_w.starts[1].z = 3216;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+    mil_water(W_STRAIT);
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 128, 120);
+    for (k = 0; k < 3; k++) member(1 + k, M_DEST, 250 + 2 * k, 100, 0);
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_DEST, 250 + 2 * k, 108, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea squad's decision runs");
+    mil_print("a sea ATTACK, the rally ashore", &o, from);
+    CHECK(o.predictions == 1 && o.retreats == 1 && squad_task_of(1) == IMPAI_SQ_RETREAT,
+          "a sea ATTACK whose rally has no water near: %u predictions, %u retreats, task %d", o.predictions,
+          o.retreats, squad_task_of(1));
 }
 
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by
@@ -13132,6 +14018,9 @@ static void check_military(void)
     check_mil_arrival_cache();
     check_def_choice();
     check_def_want();
+    check_sensor_struct();
+    check_sensor_type();
+    check_sensor_want();
     check_reach_summary();
     check_naval();
     check_dry_hunt();
@@ -13166,6 +14055,7 @@ int main(void)
     check_world();
     s_reads_after = s_shared_other = s_orders_taken = 0;   /* check_world drives the ops by hand, outside a decision */
     check_radar_reuse();
+    check_scan_done();
     check_tinfo();
     check_tinfo_attack();
     check_army_damage();
@@ -13229,13 +14119,16 @@ int main(void)
     check_surplus_mex();
     check_yard_clear();
     check_yard_walk();
+    check_way_to_one();
     check_yard_way();
+    check_yard_off();
     check_ctech();
     check_ctech_mex();
     check_ctech_step();
     check_content_price();
     check_values();
     check_plant_choice();
+    check_metal_reach();
     check_plant_gate();
     check_military();
     check_reads_before_orders();

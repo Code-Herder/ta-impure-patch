@@ -24,13 +24,22 @@ typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cell
    feature, its rectangle anchored at the feature's anchor (impai_brain.c, census) */
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head, feat; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
+/* one of the seat's buildings with a radar or sonar distance (impai_econ.c, THE SENSORS): its footprint's centre,
+   px, and its distances */
+typedef struct IMPAI_SENSE { int32_t x, z; uint16_t radar, sonar; } IMPAI_SENSE;
+enum { IMPAI_SENSE_NONE, IMPAI_SENSE_RADAR, IMPAI_SENSE_SONAR };
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 /* THE YARD's region of a waiting factory (impai_brain.c, THE YARD): its footprint, r[0], then the rectangles of its
-   kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used */
-typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; } IMPAI_YARDREG;
+   kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used; the factory's type, whose exits
+   THE WAY OFF reads */
+typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_t type; } IMPAI_YARDREG;
+/* a point a builder leaves a yard for this decision, px, and the builder's half-size and slot (impai_build.c,
+   THE WAY OFF) */
+typedef struct IMPAI_WAYTO { int32_t x, z, h; uint16_t slot, pad; } IMPAI_WAYTO;
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
+#define IMPAI_MR_MEMO      16        /* constructor types THE METAL'S REACH remembers its answer for, a decision */
 #define IMPAI_PLANT_CANDS  16        /* the plant types the plant choice considers (impai_econ.c, THE CHOICE)   */
 #define IMPAI_GATE_TYPES   16        /* the factory types the army orders' gate reads (THE ARMY ORDERS)        */
 /* THE ARMY ORDERS' gated classes are classes 0 .. IMPAI_GATE_K - 1 (IMPAI_GATED, impai.h), the index of the
@@ -87,6 +96,11 @@ typedef struct IMPAI_DEC {
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     uint8_t       fbusy_q[IMPAI_IDLE_CAP];      /* 1: that busy factory's head is a BuildingBuild (THE YARD)  */
+    /* THE WAY OFF's points of the decision: one a builder -- an idle builder's live walk (THE WALKS FIRST), or a
+       builder THE YARD moves off a region, its own point replaced --, so at most the idle and helper lists'
+       2 x IMPAI_IDLE_CAP */
+    IMPAI_WAYTO   way_to[2 * IMPAI_IDLE_CAP];
+    int           nway_to;
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
     int           nbusy;                        /* finished builders at a job, not idle (THE ATTENTION)  */
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
@@ -135,6 +149,13 @@ typedef struct IMPAI_DEC {
     uint16_t      def_n;
     int           want_def;
     int32_t       def_x, def_z;
+    /* THE SENSORS (impai_econ.c): the seat's sensor structures, built, frames and head orders, each once (sens_n);
+       the first IMPAI_SENSORS of its buildings with a radar or sonar distance, sensor structures or not (sens);
+       the want's kind (IMPAI_SENSE_*) and its point, px (impai_brain.c, sensor_want) */
+    IMPAI_SENSE   sens[IMPAI_SENSORS];
+    uint16_t      sens_n, nsens;
+    int           want_sensor;
+    int32_t       sensor_x, sensor_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
     int           explorer_live;
     float         pe_extra;                     /* the energy the seat's frames and build heads will add,
@@ -196,6 +217,13 @@ typedef struct IMPAI_DEC {
                                    the search reaches FAR_PATCH_K x comm_r, the commander as far           */
     uint8_t       sea_able;     /* in THE FINISH AT SEA, a builder offers a sea plant (impai_econ_sea_able)  */
     uint16_t      sea_type;
+    /* THE METAL'S REACH (impai_econ.c), judged at first use in a decision (mr_done): more patches lie open than the
+       seat has extractors (mr_open); a finished constructor of the seat's reaches one (mr_units); a constructor
+       type on a menu of its finished factories does (mr_make); THE REACHING PLANT stands on the seat's menus, so
+       the further plant is only one (mr_only); the constructor types already judged and their answers */
+    uint8_t       mr_done, mr_open, mr_units, mr_make, mr_only, nmr;
+    uint16_t      mr_type[IMPAI_MR_MEMO];
+    uint8_t       mr_val[IMPAI_MR_MEMO];
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     int           sea_untaken;                  /* a builder was refused the site (THE SITE NO BUILDER TAKES)  */
     int           blast_hit;                    /* THE BLAST'S APPROACH refused the commander a point          */
@@ -277,6 +305,18 @@ static inline int impai_def_struct(const IMPAI_BRAIN_IN* in, unsigned type)
            in->view->threat[type].hit_ground > 0;
 }
 
+/* 1 when `type` is a sensor structure (impai_econ.c, THE SENSORS): a building of category OTHER with a radar or
+   sonar distance and no reach of its own -- no ground reach and no anti-air rate --, so a tower carrying a radar
+   beside its gun is a defence, and a plant or an extractor with a radar is its category; 0 with no threat table */
+static inline int impai_sensor_struct(const IMPAI_BRAIN_IN* in, unsigned type)
+{
+    const IMPAI_TINFO* t;
+    if (!in->view || !in->view->threat || type >= (unsigned)in->view->ntypes || type >= in->nti) return 0;
+    t = &in->ti[type];
+    return !(t->flags & IMPAI_TF_MOBILE) && t->cat == IMPAI_C_OTHER && (t->radar || t->sonar) &&
+           !in->view->threat[type].hit_ground && !in->view->threat[type].dps_air;
+}
+
 /* 1 when `type` is a water factory, a plant placed on water only: what the seat's sea plant is */
 static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 {
@@ -331,6 +371,16 @@ void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
 int  impai_econ_sea_able(IMPAI_DEC* d);
+/* THE METAL'S REACH (impai_econ.c): 1 past the seat's first finished factory, with no plant frame standing, when
+   more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
+   one; judges mr_open, mr_units and mr_make on the way */
+int  impai_econ_metal_short(IMPAI_DEC* d);
+/* 1 on A METAL MAP (impai_econ.c): the threshold 255, so no patch is ever published and the extractors stand on the
+   base ring */
+int  impai_metal_map(const IMPAI_DEC* d);
+/* 1 when a plant on the menus of the seat's builders, placed on its ground, makes a constructor that reaches an
+   open patch (THE METAL'S REACH) */
+int  impai_econ_reach_plant(IMPAI_DEC* d);
 /* one more refusal of the sea plant, at most one a decision and one a fail_t (impai_build.c, THE SEA PLANT) */
 void impai_sea_refusal(IMPAI_DEC* d);
 /* THE REACH ABANDON's limit (impai_brain.c): the farthest, px, a builder of `btype` may stand from the centre of an
@@ -345,9 +395,16 @@ typedef struct IMPAI_MEX { uint16_t dry, wet; int16_t wet_min; } IMPAI_MEX;
 /* impai_build.c: each 1 when the builder was given its order. impai_build_spot: the extractor of `mex` for the
    ground at the patch impai_spot_pick gives */
 int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex);
+/* impai_build.c: the published patches that are open -- free of claims, failures and other players' buildings, on
+   held ground -- with their anchor's block on reach label `label` of class `mclass` (label -1: any) and, with mex,
+   an extractor of mex for their ground (THE METAL'S REACH). BOUND: nspots patches */
+int  impai_patch_open_to(IMPAI_DEC* d, unsigned mclass, int label, const IMPAI_MEX* mex);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` at the ring site nearest the defence's point (d->def_x, d->def_z; impai_econ.c, THE GROUND DEFENCES) */
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* `type` covering the sensor want's point (d->sensor_x, d->sensor_z; impai_econ.c, THE SENSORS): 1 ordered, 0 not,
+   -1 a site this builder never takes (impai_build.c) */
+int  impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
@@ -392,6 +449,13 @@ int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* 1 when a unit of `type` standing at px (x, z) touches region g: lies inside one of its rectangles grown by the
    type's half-size (impai_build.c, THE YARD's move) */
 int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
+/* THE WALK OFF's trust in b's walk to px (x, z) (impai_build.c, THE WAY OFF): off g, on b's class's own reach
+   label, clear of the seat's buildings and of what holds still -- the decision's other points and the idle builders
+   it holds no point for --, and reached from where b stands without crossing g's plant */
+int  impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z);
+/* the point (x, z) px builder b leaves a yard for this decision, into IMPAI_DEC.way_to: b's own point replaced,
+   one a builder */
+void impai_way_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t x, int64_t z);
 int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */

@@ -42,6 +42,9 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #define OFF_DIFFICULTY 0x37EEE     /* u32: 0 Easy, 1 Medium, 2 Hard (engine/sim.md)      */
 #define OFF_NETFLAGS 0x2A44        /* u8, bit 0: a network game (engine/ui.md, the network
                                       bit: set in the front end only, cleared in play)    */
+#define OFF_GSTATE   0x391E9       /* GameingState*: its +0 the game's mode, 0x435100's
+                                      answer: 1 campaign, 2 skirmish, 3 network           */
+#define MODE_SKIRMISH 2
 #define CTRL_AI      2
 
 #define IMPAI_ON     0x01u
@@ -440,11 +443,13 @@ static void impai_observe_checks(int seat)
 #define VA_RADAR_PASS 0x00467440u   /* the radar pass: no argument, plain `ret`            */
 
 /* THE RADAR CHECK, the target of the call at 0x46556D under tagpu_impai_check.on alone: the engine's pass
-   runs, then ImpAI's copy (tagpu_worldq.c, wq_radar_step) for the same record, unbudgeted, and every live
-   unit's +0x110 bits 8 and 9 are compared with the copy's, and bit 10 where the pass's first loop cleared it
-   (WQ_RB_KEPT clear: an own or shared unit's bit 10 is older than the pass), and each bit's record with the
-   unit and block of now -- but for the seat's own units, whose record holds the incarnation alone
-   (worldq.h, WQ_RADAR_HIT). The site is reached only in the
+   runs, then ImpAI's pass (tagpu_worldq.c, wq_radar_step: the seat's acquisition contacts) for the same
+   record, and every live unit the pass's first loop does not keep has its +0x110 bits 8 and 9 compared with
+   ImpAI's radar and sonar, and each bit's record with the unit and block of now. For the viewed record the
+   two are one rule: the pass and the scan walk the same emitters and jammers (allied sharing's S in both,
+   tagpu_allysight.c and tagpu_seatcontact.c) and light by the same counters, and nothing runs between them.
+   A kept unit is not compared: a jammer clears its bits in the pass, which the scan does not report, and the
+   publish takes nothing from it. The site is reached only in the
    viewed record's turn (0x465565..0x46556B), so the record is main[0x2A43]. Same contract as 0x467440: no
    argument, a plain `ret`, the callee-saved registers kept. The players phase's run on the loader thread
    (0x497C10) passes through unchecked. */
@@ -478,7 +483,6 @@ static void impai_radar_check(void)
         for (slot = 1; slot < c.nslots; slot++) {
             const unsigned state = *(const unsigned*)(c.units + slot * UNIT_STRIDE + U_STATE);
             const unsigned v = wq_radar_bits(bits, slot);
-            const unsigned mask = v & WQ_RB_KEPT ? 3u : 7u;
             const WQ_RADAR_HIT* h = wq_hit(&hits, slot);
             WQ_OBS o;
             /* a pass in one call: each bit's record is the unit and block of now */
@@ -486,9 +490,9 @@ static void impai_radar_check(void)
             const int rec_ok = !(v & 3u) || seen == WQ_SEEN_OWN ||
                                (seen && h->known && o.birth_known && o.birth == h->birth && o.bx == h->bx &&
                                 o.bz == h->bz);
-            if (!(state & ST_ALIVE)) continue;
+            if (!(state & ST_ALIVE) || (v & WQ_RB_KEPT)) continue;
             s_obs.radar_eval++;
-            if (((state >> 8) & mask) != (v & mask) || !rec_ok) {
+            if (((state >> 8) & 3u) != (v & 3u) || !rec_ok) {
                 s_obs.radar_miss++;
                 if (!s_obs.radar_said) {
                     s_obs.radar_said = 1;
@@ -1537,7 +1541,7 @@ static struct {
     unsigned harvest_lost[PLAYER_COUNT];
     unsigned rc_turned[PLAYER_COUNT], rc_given_up[PLAYER_COUNT], rc_replaced[PLAYER_COUNT], rc_unsafe[PLAYER_COUNT];
     unsigned rc_gone[PLAYER_COUNT], turn_unspent[PLAYER_COUNT], blast_refused[PLAYER_COUNT], com_free[PLAYER_COUNT];
-    unsigned com_idle[PLAYER_COUNT];
+    unsigned com_idle[PLAYER_COUNT], sensors[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1762,6 +1766,7 @@ static void impai_decide(int seat)
         in.e_per_m = s_e_per_m;
         in.spots = s_cluster[seat];
         in.nspots = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+        in.scanned = s_seatst[seat].scanned;
         in.reach = reach_view(&r) ? &r : NULL;
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;
@@ -1850,6 +1855,7 @@ static void impai_decide(int seat)
     s_play.blast_refused[seat] += out.blast_refused;
     s_play.com_free[seat] += out.com_free;
     s_play.com_idle[seat] += out.com_idle;
+    s_play.sensors[seat] += out.sensors;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1878,6 +1884,8 @@ static struct {
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
     unsigned stalled[PLAYER_COUNT], lead_t[PLAYER_COUNT];    /* goals given up; the GameTime the lead first held */
     unsigned rc_taken[PLAYER_COUNT];    /* the commander's ordered reclaims a military order ended (rc_military=) */
+    unsigned pass_sum[PLAYER_COUNT];    /* enemy rows held by a contact alone, summed over the decisions       */
+    unsigned base_t[PLAYER_COUNT];      /* the GameTime the base's estimate first stood on structures known    */
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2124,7 +2132,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "pressed=%u poor=%u hold=%u held=%u released=%u yard=%u yard_left=%u help_refused=%u "
                    "makers_off=%u makers_on=%u finish_rows=%u e_empty=%u f_idle=%u f_all=%u stall_taken=%u harvest_lost=%u "
                    "rc_turned=%u rc_given_up=%u rc_replaced=%u rc_gone=%u rc_unsafe=%u rc_military=%u turn_unspent=%u "
-                   "blast_refused=%u com_idle=%u com_free=%u",
+                   "blast_refused=%u com_idle=%u com_free=%u sensors=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2137,7 +2145,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.finish_rows[i], s_play.e_empty[i], s_play.f_idle[i], s_play.f_all[i],
                    s_play.stall_taken[i], s_play.harvest_lost[i], s_play.rc_turned[i], s_play.rc_given_up[i],
                    s_play.rc_replaced[i], s_play.rc_gone[i], s_play.rc_unsafe[i], s_milp.rc_taken[i],
-                   s_play.turn_unspent[i], s_play.blast_refused[i], s_play.com_idle[i], s_play.com_free[i]);
+                   s_play.turn_unspent[i], s_play.blast_refused[i], s_play.com_idle[i], s_play.com_free[i],
+                   s_play.sensors[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
@@ -2148,7 +2157,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u "
-                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u stalled=%u lead_t=%u",
+                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u stalled=%u lead_t=%u pass_mean=%.1f base_t=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2158,7 +2167,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.waves[i][TASIM_LAYER_LAND],
                    s_milp.waves[i][TASIM_LAYER_SEA], s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i],
-                   s_milp.stalled[i], s_milp.lead_t[i]);
+                   s_milp.stalled[i], s_milp.lead_t[i],
+                   s_milp.decisions[i] ? (double)s_milp.pass_sum[i] / (double)s_milp.decisions[i] : 0.0,
+                   s_milp.base_t[i]);
     }
 }
 
@@ -2217,6 +2228,7 @@ static void impai_content_clear(void)
     s_threat_n = 0;
     memset(s_tinfo, 0, sizeof s_tinfo);
     s_tinfo_n = 0;
+    s_e_per_m = 0.0f;
     memset(s_menu, 0, sizeof s_menu);
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
@@ -2392,6 +2404,11 @@ static void impai_mil_turn(int seat)
     s_milp.press[seat] += out.press;
     s_milp.stalled[seat] += out.stalled;
     s_milp.rc_taken[seat] += out.rc_taken;
+    s_milp.pass_sum[seat] += out.pass_rows;
+    if (out.est_struct && !s_milp.base_t[seat]) {
+        const unsigned now = (unsigned)q.ops->gametime(&q);
+        s_milp.base_t[seat] = now ? now : 1u;
+    }
     if (out.lead && !s_milp.lead_t[seat]) {
         const unsigned now = (unsigned)q.ops->gametime(&q);
         s_milp.lead_t[seat] = now ? now : 1u;
@@ -2624,6 +2641,18 @@ static void impai_starts_line(void)
     tagpu_logf("%s", line);
 }
 
+/* the game's mode, GameingState's +0 (0x435100: `mov eax,[ecx]`): 1 campaign, 2 skirmish, 3 network; 0 with no
+   GameingState */
+static int game_mode(const char* ta)
+{
+    const char* gs;
+    int mode;
+    memcpy(&gs, ta + OFF_GSTATE, sizeof gs);
+    if (!gs) return 0;
+    memcpy(&mode, gs, sizeof mode);
+    return mode;
+}
+
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
    last store (0x497C62), which the game thread waits for before the level's first step: so the
@@ -2632,10 +2661,12 @@ static void impai_starts_line(void)
    the table, and the recorder is the only writer of what a recording carries.
    THE SEAT CHOICE (impai_seats.c, which has the rule) marks only a record the engine runs an AI for
    on this peer: seated, controller 2, its AI object +0x74 set, which 0x464990's player init
-   0x464700 builds for every record but an active type 3 (0x46489D..0x4648C1). In a skirmish the
-   records are impure.cfg's `seatai`, bit i for settings entry i, which is record i: the seat fill
-   0x47A760 activates record i for entry i on every path that seats a skirmish (engine/sim.md,
-   Seating a level). In a network game (main+0x2A44 bit 0) an AI seat is type 2 with its AI object
+   0x464700 builds for every record but an active type 3 (0x46489D..0x4648C1). In a skirmish -- GameingState's
+   mode 2, a new skirmish's or a loaded one's -- the records are impure.cfg's `seatai`, bit i for settings entry
+   i, which is record i: the seat fill 0x47A760 activates record i for entry i on every path that seats a
+   skirmish (engine/sim.md, Seating a level). Any other level that is not a network game -- a campaign
+   mission, mode 1 -- marks none: ImpAI is not built for a mission's scripts, and its computer players stay
+   OTA AI whatever `seatai` names. In a network game (main+0x2A44 bit 0) an AI seat is type 2 with its AI object
    only on the peer that added it and type 3 without one on every other (engine/network.md, A
    computer seat in a network game), and the seam 0x465031 runs only where +0x74 is set, so ImpAI
    plays a seat on its own peer alone, by the engine's structure: which of this peer's AI seats is
@@ -2657,7 +2688,7 @@ void tagpu_impai_level_init(void)
     IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
     IMPAI_SEAT_PICK pick;
     unsigned i;
-    int network;
+    int network, mode;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
     s_ovc.built = 0;
@@ -2674,7 +2705,8 @@ void tagpu_impai_level_init(void)
     if (!ta) return;
     seat_recs(ta, rec);
     network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
-    impai_seats_pick(rec, network, (unsigned)tagpu_settings_seatai(), &pick);
+    mode = game_mode(ta);
+    impai_seats_pick(rec, network, mode == MODE_SKIRMISH, (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         tagpu_logf("impai: seats none: record %d is remote outside a network game", pick.refused);
         return;
@@ -2695,8 +2727,11 @@ void tagpu_impai_level_init(void)
         tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s, "
                    "ImpAI's %s", list, tagpu_settings_netai() ? "impai" : "ota",
                    (unsigned)impai_seats_level(1, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote, rimpai);
-    } else {
+    } else if (mode == MODE_SKIRMISH) {
         tagpu_logf("impai: seats %s (impure.cfg) of %u records", list, pick.live);
+    } else {
+        tagpu_logf("impai: seats %s (mode %d, not a skirmish: impure.cfg's seatai not read) of %u records", list,
+                   mode, pick.live);
     }
 }
 
@@ -2724,8 +2759,9 @@ void tagpu_impai_level_init(void)
    THE THREAD AND THE ORDER: the loader thread is done (the level is in play), the render thread reads none
    of these tables (the overlay's fill runs on the game thread), and the players phase runs in a later step,
    so the table is whole before any turn reads it. The playing's level is single player (main+0x2A44 bit 0
-   is set only in the front end), so the rule reads `seatai`; after TK1 every recorded seat is type 1 or 2
-   with its AI object. */
+   is set only in the front end), so the rule reads `seatai`, as a skirmish's: a recording is made of a
+   skirmish or a network game only (tagpu_recorder.c, a capture starts at mode 2 or 3), so a takeover is never
+   a campaign mission's. After TK1 every recorded seat is type 1 or 2 with its AI object. */
 void tagpu_impai_takeover(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -2742,7 +2778,7 @@ void tagpu_impai_takeover(void)
         return;
     }
     seat_recs(ta, rec);
-    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0,
+    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0, 1,
                      before | (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         seats_set(0);

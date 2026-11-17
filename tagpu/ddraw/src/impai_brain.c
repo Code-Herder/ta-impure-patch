@@ -39,6 +39,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .scout_period = 1800, .task_timeout = 2700,
     .aa_struct_v = 1000.0f, .dgun_reserve = 0.25f,
     .def_max = 4, .def_v = 600.0f,
+    .sensor_max = 4,
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, unsigned look)
@@ -301,6 +302,28 @@ static int handed_back(IMPAI_DEC* d, int slot, const IMPAI_JOB* job, int h, cons
            o->action != d->act_vtol_build && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
+/* THE SENSORS' census (impai_econ.c): a building of the seat's, `type` below nti, built, a frame or at a head --
+   one sensor structure more when it is one, and its coverage while the list has room when it has a radar or sonar
+   distance: a plant or a tower with a radar covers what a radar tower would. The last sensor_max places are kept
+   for sensor structures, so the ones the want counts are placed whatever other buildings carry a radar
+   (sensor_max at most IMPAI_SENSORS / 2: impai_brain_test.c, check_plan). A rectangle is cells, inclusive, so its
+   centre is (x0 + x1 + 1) x 8 px. */
+static void sens_add(IMPAI_DEC* d, unsigned type, const IMPAI_RECT* r)
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    const int sensor = impai_sensor_struct(d->in, type);
+    IMPAI_SENSE* s;
+    if (sensor && d->sens_n < 0xFFFFu) d->sens_n++;
+    if ((!t->radar && !t->sonar) || d->nsens >= IMPAI_SENSORS ||
+        (!sensor && d->nsens >= IMPAI_SENSORS - d->in->plan->sensor_max))
+        return;
+    s = &d->sens[d->nsens++];
+    s->x = ((int32_t)r->x0 + r->x1 + 1) * 8;
+    s->z = ((int32_t)r->z0 + r->z1 + 1) * 8;
+    s->radar = t->radar;
+    s->sonar = t->sonar;
+}
+
 static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -474,6 +497,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             IMPAI_STRUCT* s = &d->structs[d->nstructs++];
             s->slot = u->slot; s->type = (uint16_t)type; s->r = r; s->cat = (uint8_t)cat; s->finished = u->finished;
         }
+        sens_add(d, (unsigned)type, &r);
         if (!u->finished) {
             if (d->nnano < IMPAI_NANO_MAX) unit_ref(&d->nano[d->nnano++], u);
             if (cat == IMPAI_C_ENERGY) d->pe_extra += t->egain;
@@ -557,6 +581,7 @@ static void head_counts(IMPAI_DEC* d)
             continue;
         if (impai_aa_struct(in, c->type)) d->aa_n++;
         if (impai_def_struct(in, c->type)) d->def_n++;
+        sens_add(d, c->type, &c->r);
         if (in->ti[c->type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[c->type].egain;
     }
 }
@@ -1006,15 +1031,30 @@ static void walk_checks(IMPAI_DEC* d)
      region (impai_yard_holds) is moved off (impai_yard_leave) and leaves its list, so no later rule of this
      decision orders it again.
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
-     the unit's idle behaviour (idle_head) -- to a point off the region is walking off already, as the move above
-     sends it, and leaves its list with no order (`yard_left`). WHY: the census lists such a builder idle (THE
-     HAND-BACK), so the rule gave it the move again at every decision until it was off, each time one action of
+     the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
+     region, on the builder's own reach label, clear of the seat's buildings and of what holds still -- the
+     decision's points and the idle builders it holds no point for; a helper, a jobbed builder or the commander
+     passing by does not end a walk --, not through the plant), given by the economy within WALK_OFF_T (walk_live: its
+     job NONE, its type the builder's, its order time at most WALK_OFF_T ago; and its cell the point's within a
+     cell), is walking off already, and leaves its list with no order (`yard_left`). Any other is moved again: a
+     point order through the plant, one to a point another builder now stands still on, or a walk the engine has
+     not ended in WALK_OFF_T -- a move to a point a unit cannot stand on never ends (impai_build.c, THE WAY OFF),
+     and trusted for ever it held its factory for good. So a builder that cannot leave is moved once a
+     WALK_OFF_T, never to the point it last failed by (THE LAST POINT NOT AGAIN).
+   - THE WALKS FIRST: before the decision moves any builder off a region, the point of every idle builder's live
+     economy walk (walk_live, its one order a point order) joins the decision's (impai_way_to), so no builder
+     is sent beside a walk whose turn in the lists comes later, or that has left the region and has no turn. A
+     builder moved again replaces its own point (one point a builder), so the decision's points stay within the
+     idle and helper lists' 2 x IMPAI_IDLE_CAP.
+     WHY: the census lists such a builder idle (THE HAND-BACK), so the rule gave it the move again at every
+     decision until it was off, each time one action of
      the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
      orders of an Easy seat's game (bar-eota-pincushion-ac-1) and 539 of 766 of a Normal one's
      (bar-nota-troutfarm-ca-2), the factories and the other builders starved of actions from GameTime 15 000 and
      31 600 to the end; in the Hard games the same builder was moved at 5 to 8 decisions in a row while it walked.
      So a builder is ordered off a region once a walk; one that cannot leave keeps its walk, and its factory waits
-     on what holds it in.
+     on what holds it in. A WALK THROUGH THE PLANT IS NONE: the move's point is chosen so that the builder never
+     has to cross the plant (impai_build.c, THE WAY OFF), and an order that would is not trusted as a walk off.
    - The commander inside THE COMMANDER'S WINDOW is in neither list and is left to the military; an idle builder
      whose BUILD or reclaim the job checks have not ended is left to them, as the ladder leaves it; a helper whose
      ASSIST the walk check ended this decision has its turn back, its one order of the decision; a busy builder
@@ -1022,20 +1062,53 @@ static void walk_checks(IMPAI_DEC* d)
      factory's next product is the help's, which ends with the product (THE ASSIST, impai_build.c), and no help
      targets a waiting factory: it has no frame. The army keeps off yards and ways where it is sent (impai_mil.c,
      travel_point's yard rule).
-   BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX frames and its at most
-   2 x IMPAI_IDLE_CAP listed builders, two head reads and at most one move a builder, within the roots the factories
+   BOUND: the walks first once a decision, at most IMPAI_IDLE_CAP head and order reads; at most IMPAI_IDLE_CAP
+   factories, each against the census's IMPAI_NANO_MAX frames and its at most 2 x IMPAI_IDLE_CAP listed builders,
+   two head reads and at most one move a builder (THE WAY OFF's search, impai_build.c), within the roots the factories
    leave (THE FACTORIES' ROOTS) less the root THE RELEASE keeps (impai_release_keep, impai_econ.c); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
    IMPAI_WAY_RECTS. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen, and the builders by its factory
    are moved off a yard that is producing, one move each; a builder held in by what this rule does not move -- an
-   enemy, a wreck, a unit of a plant with no kept way -- keeps its walk and its factory waits. */
-static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
+   enemy, a wreck, a unit of a plant with no kept way -- is moved once a WALK_OFF_T, and its factory waits. */
+#define WALK_OFF_T 900          /* GameTime ticks a walk off is trusted for: 30 s, a 900-px walk at 1 px a tick */
+
+/* 1 while b's job is the economy's walk: job NONE, its type b's, its order time at most WALK_OFF_T ago */
+static int walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    return j->kind == IMPAI_JOB_NONE && j->type == b->type && j->since && d->now - j->since <= WALK_OFF_T;
+}
+
+/* the point of b's one order when it is a point order -- naming no unit, no build, not the unit's idle behaviour
+   (idle_head) --, px, into (*x, *z): 1, else 0 */
+static int walk_point(IMPAI_DEC* d, const IMPAI_UNITREF* b, int* x, int* z)
 {
     WQ_ORDER o;
     const int h = d->q->ops->head(d->q, b->slot, &o);
-    return h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
-           o.action != d->act_build && o.action != d->act_vtol_build &&
-           d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1 &&
-           !impai_yard_holds(d, g, b->type, o.pos[0] >> 16, o.pos[2] >> 16);
+    if (!(h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
+          o.action != d->act_build && o.action != d->act_vtol_build &&
+          d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1))
+        return 0;
+    *x = o.pos[0] >> 16;
+    *z = o.pos[2] >> 16;
+    return 1;
+}
+
+static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    int x, z, dcx, dcz;
+    if (!walk_live(d, b) || !walk_point(d, b, &x, &z)) return 0;
+    dcx = (x >> 4) - j->cx;
+    dcz = (z >> 4) - j->cz;
+    return dcx >= -1 && dcx <= 1 && dcz >= -1 && dcz <= 1 && impai_way_off(d, b, g, x, z);
+}
+
+/* THE WALKS FIRST (THE YARD): the decision's points open with every idle builder's live economy walk to a point */
+static void walks_first(IMPAI_DEC* d)
+{
+    int k, x, z;
+    for (k = 0; k < d->nidle; k++)
+        if (walk_live(d, &d->idle[k]) && walk_point(d, &d->idle[k], &x, &z)) impai_way_to(d, &d->idle[k], x, z);
 }
 
 static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)
@@ -1070,6 +1143,7 @@ static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG
     int k, i;
     g->r[0] = s->r;
     g->n = 1;
+    g->type = s->type;
     for (k = 0; k < st->nway && k < IMPAI_WAYS; k++) {
         const IMPAI_WAYREC* w = &st->way[k];
         if (w->type != s->type || w->cx != s->r.x0 || w->cz != s->r.z0) continue;
@@ -1085,7 +1159,7 @@ static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG
 static void yard_clear(IMPAI_DEC* d)
 {
     const int keep = impai_release_keep(d);
-    int f, k;
+    int f, k, first = 1;
     for (f = 0; f < d->nfbusy && d->roots + keep < d->root_cap; f++) {
         const IMPAI_STRUCT* s = NULL;
         IMPAI_YARDREG g;
@@ -1096,6 +1170,10 @@ static void yard_clear(IMPAI_DEC* d)
         for (k = 0; k < d->nframes; k++)
             if (inside(&s->r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
         if (k < d->nframes) continue;
+        if (first) {
+            walks_first(d);
+            first = 0;
+        }
         yard_region(d, s, &g);
         d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, &g, 1, keep);
         d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, &g, 0, keep);
@@ -1109,12 +1187,20 @@ static void yard_clear(IMPAI_DEC* d)
    says so, so the order the two managers run in can never decide which kind of plant takes the slot -- a land
    plant cannot take the slot the sea plant was judged for because the economy ran first. A military that
    refuses every decision holds the seat at one factory; its level-end line's `refused=` shows it. THE SEA PLANT
-   takes factory_per_m's pacing like any second factory: a plant started on the commander's own income alone
-   spends the storage the economy runs on and holds its builder on a frame it cannot finish (MEASURED
-   2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass emptied the seat's
-   metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607). It is wanted only while some
-   builder offers one (impai_econ_sea_able): without that a seat none of whose builders can build one would
-   hold its second factory for ever. */
+   TAKES THE LAND PLANT'S METAL (plant_metal): factory_per_m's pacing, or the surplus that pays a further plant's
+   price (plant_m), so whatever lets a land plant come past the first lets the sea plant come first, and a land
+   plant never takes the slot a naval judgement asked a yard for -- but THE REACHING PLANT (plant_reach, below),
+   which a seat none of whose constructors reaches the open metal is given whatever the judgement and the
+   income: a seat cut off from the metal cannot pay for the yard either. It counts against factory_max as any
+   plant, so the yard after it comes on the surplus (plant_m). The pacing holds: a plant started on the
+   commander's own income alone spends the storage the economy runs on and holds its builder on a frame it cannot
+   finish (MEASURED 2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass
+   emptied the seat's metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607); the surplus
+   pays the plant out of what the seat does not spend (MEASURED 2026-11-15, round 3 at 57d39d71, b5's Red Triangle
+   ac-1 and Trout Farm ca-1: the second plant came on the surplus at a steady income of 6.59 and 6.53 a pass
+   against factory_per_m's 8.00, judged naval, while the sea plant asked the pacing alone -- a land plant, no sea
+   search, no yard). It is wanted only while some builder offers one (impai_econ_sea_able): without that a seat
+   none of whose builders can build one would hold its second factory for ever. */
 /* THE DEFENCE'S POINT (impai_econ.c, THE GROUND DEFENCES): the anchor moved rally_px towards the pressing member's
    block, as the military's rally point is moved towards the enemy base, or that block itself when nearer. The
    block is recorded data: an int16 block, at most 2^20 px from the anchor, so the product below stays within
@@ -1128,6 +1214,73 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
     const uint32_t r = d->in->plan->rally_px;
     d->def_x = de > r ? ax + (int32_t)(dx * r / de) : px;
     d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
+}
+
+/* THE SENSORS' WANT (impai_econ.c, THE SENSORS): the first point of this order that no sensor of its kind covers --
+   none within three quarters of its distance --, into want_sensor and (sensor_x, sensor_z): the anchor; the
+   seat's finished extractors, nearest the anchor first; the front, the anchor moved half way to the military's
+   estimate of the enemy base and at most base_r; for sonar, the anchor, on a map where some sea army class has
+   water (IMPAI_REACH.sea_blocks). The estimate is recorded data, an int16 block, so every product below stays
+   within int64. BOUND: the census's structures, each against at most IMPAI_SENSORS sensors. */
+static int sensed(const IMPAI_DEC* d, int32_t x, int32_t z, int kind)
+{
+    int k;
+    for (k = 0; k < d->nsens; k++) {
+        const uint32_t r = kind == IMPAI_SENSE_SONAR ? d->sens[k].sonar : d->sens[k].radar;
+        const int64_t dx = (int64_t)x - d->sens[k].x, dz = (int64_t)z - d->sens[k].z, c = (int64_t)r * 3 / 4;
+        if (r && dx * dx + dz * dz <= c * c) return 1;
+    }
+    return 0;
+}
+
+static void sensor_set(IMPAI_DEC* d, int kind, int32_t x, int32_t z)
+{
+    d->want_sensor = kind;
+    d->sensor_x = x;
+    d->sensor_z = z;
+}
+
+static void sensor_want(IMPAI_DEC* d, const IMPAI_MIL* m)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const int32_t ax = in->st->ax * 16 + 8, az = in->st->az * 16 + 8;
+    int64_t best = -1;
+    int32_t bx = 0, bz = 0;
+    int i;
+    if (in->st->ax == IMPAI_NO_ANCHOR) return;
+    if (!sensed(d, ax, az, IMPAI_SENSE_RADAR)) {
+        sensor_set(d, IMPAI_SENSE_RADAR, ax, az);
+        return;
+    }
+    for (i = 0; i < d->nstructs; i++) {
+        const IMPAI_STRUCT* s = &d->structs[i];
+        const int32_t x = ((int32_t)s->r.x0 + s->r.x1 + 1) * 8, z = ((int32_t)s->r.z0 + s->r.z1 + 1) * 8;
+        const int64_t dd = ((int64_t)x - ax) * ((int64_t)x - ax) + ((int64_t)z - az) * ((int64_t)z - az);
+        if (s->cat != IMPAI_C_MEX || !s->finished || sensed(d, x, z, IMPAI_SENSE_RADAR)) continue;
+        if (best < 0 || dd < best) {
+            best = dd;
+            bx = x;
+            bz = z;
+        }
+    }
+    if (best >= 0) {
+        sensor_set(d, IMPAI_SENSE_RADAR, bx, bz);
+        return;
+    }
+    if (m && m->ebx != IMPAI_NO_ANCHOR) {
+        const int64_t dx = (int64_t)(m->ebx * 32 + 16) - ax, dz = (int64_t)(m->ebz * 32 + 16) - az;
+        const uint32_t de = impai_isqrt((uint64_t)(dx * dx + dz * dz));
+        const uint32_t f = de / 2 < in->plan->base_r ? de / 2 : in->plan->base_r;
+        if (de > 0) {
+            const int32_t fx = ax + (int32_t)(dx * f / de), fz = az + (int32_t)(dz * f / de);
+            if (!sensed(d, fx, fz, IMPAI_SENSE_RADAR)) {
+                sensor_set(d, IMPAI_SENSE_RADAR, fx, fz);
+                return;
+            }
+        }
+    }
+    if (in->reach && in->reach->sea_blocks && !sensed(d, ax, az, IMPAI_SENSE_SONAR))
+        sensor_set(d, IMPAI_SENSE_SONAR, ax, az);
 }
 
 /* metal as whole units held to 0..10^9: a store or storage read from the record is data; NaN, a negative value and
@@ -1183,7 +1336,7 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = !mil || mil->naval >= 0;
-    int plant_metal, tech_metal = 0;
+    int plant_metal, plant_reach = 0, tech_metal = 0, blind;
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
          SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
@@ -1298,13 +1451,40 @@ static void economy(IMPAI_DEC* d)
         d->plant_e = e_room >= p_e;
         d->plant_e_need = p_e - e_room;
     }
-    /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory */
+    /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory.
+       THE REACHING PLANT (impai_econ.c, THE METAL'S REACH): with no constructor of the seat's reaching the open
+       patches, more of them than its extractors, and a plant on its menus whose constructor does, that plant is
+       wanted whatever the income, below the factory lists' IMPAI_IDLE_CAP (plant_reach), and THE CHOICE's further
+       plant is only such a plant (mr_only). The want is THE CHOICE's alone, never the sea plant's: a naval seat's
+       yard waits on plant_metal as before, and while it is not wanted the reaching plant is the next one. WHY:
+       with the want fed to want_sea, a naval Steel Jungle seat whose only builder of a shipyard was its
+       commander, busy every decision, wanted the yard from GameTime 11 707 to the end and never ran THE CHOICE,
+       which want_sea holds back, nor ordered the yard (MEASURED 2026-11-16, round 3's p:L5 ca-1 with a diagnostic
+       build at 1322160c: `naval=1 chose=none sea_site=-`) */
     plant_metal = d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
                   ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
+    if (d->count[IMPAI_C_FACTORY] >= 1 && !d->pending[IMPAI_C_FACTORY] && impai_econ_metal_short(d) &&
+        impai_econ_reach_plant(d)) {
+        d->mr_only = 1;
+        plant_reach = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
+    }
+    /* THE BLIND START: the first plant is also wanted at once when the seat's patch scan has read the whole map
+       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The opening's extractors stand on patches,
+       and with none in sight the commander has nothing to place them on: it would stand idle to open_t, and only
+       the plant's constructors explore for metal (impai_econ.c, the ladder's explore rung). The opening's own terms
+       are unchanged. INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c),
+       so before the first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map,
+       whose extractors take the base ring and never a patch (impai_metal_map), never takes it. WHY: the seat at
+       Two Continents' start 3, whose nearest patch lies just past the commander's sight, gave no order to GameTime
+       1 806 in an unmapped game, a network game's joining peer and a skirmish alike, and in a mapped skirmish
+       gave its first order at 81 (MEASURED 2026-11-16 with a diagnostic build: nspots 0 at every decision,
+       the commander listed idle with 19 options on its menu). */
+    blind = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
-          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
-         (plant_metal && d->plant_e));
+          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t ||
+           blind)) ||
+         ((plant_metal || plant_reach) && d->plant_e));
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
        land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy
        stands where the land army cannot walk, so the seat wants its sea plant whatever its pacing and its factory
@@ -1320,8 +1500,7 @@ static void economy(IMPAI_DEC* d)
     d->sea_far = (uint8_t)(mil && mil->dry);
     d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
     d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP
-                              : d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) &&
+                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_metal) &&
                   !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
@@ -1346,9 +1525,14 @@ static void economy(IMPAI_DEC* d)
         d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
                       (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
         if (d->want_def) def_point(d, m);
+        /* THE SENSORS (impai_econ.c): with factory_max plants finished, outside the stalls and the hold, below
+           sensor_max */
+        if (d->done[IMPAI_C_FACTORY] >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold &&
+            d->sens_n < plan->sensor_max)
+            sensor_want(d, m);
     }
     /* plant_e_need: the energy a pass short of THE ENERGY TERM, while a plant's metal is there and its energy is not */
-    if (!((plant_metal || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
+    if (!((plant_metal || plant_reach || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
        first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count

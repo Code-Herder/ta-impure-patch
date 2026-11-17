@@ -336,9 +336,11 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
 - The radar pass's watcher rule (PlayerInfo `+0x9B` bit 6: every unit a contact) has no per-seat
   counterpart; a watching seat has no acquisition record.
 - A remote ally's unit shows no resource numbers in the unit panel (decision 2).
-- `tagpu_seatcontact_scan` has no caller yet: the skirmish AI is its first. What it computes is the
-  acquisition's own (the bitmaps, the radar read, the sonar gate), which every skirmish with an AI
-  runs; the scan's loop itself has not run.
+- ImpAI's radar pass is the scan's one caller (`tagpu_worldq.c`, *The seat's radar pass*): once a
+  decision cycle for each ImpAI seat, its radar and sonar bits only. Its self-check compares the scan's
+  bits with the engine's `+0x110` bits 8 and 9 for the viewed seat, the one seat whose engine bits are
+  its own: 3193 units over 186 passes, no mismatch, in the `impai-observe` test group (MEASURED
+  2026-11-15); `TAGPU_SEAT_SEES` and the scan for a seat that is not viewed have no check of that kind.
 - The install is all-or-nothing but not fail-closed: a machine whose exe bytes do not match the
   sites runs stock sight, and its peers are not told: the fingerprint that admits a joiner names
   the game's files ([mods](mods.html), *The fingerprint*), not which of Impure's modules installed.

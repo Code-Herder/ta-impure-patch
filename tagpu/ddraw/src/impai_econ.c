@@ -283,6 +283,129 @@ static int reaches(const IMPAI_DEC* d, uint32_t mask, unsigned type)
     return (t->flags & IMPAI_TF_VTOL) || t->mclass >= WQ_MCLASSES || (mask >> t->mclass & 1u);
 }
 
+/* THE METAL'S REACH. A constructor is worth its extractors only where it reaches the metal: the seat grows its
+   income by the patches its constructors can stand at, and a map whose metal lies where the plants' constructors
+   cannot go holds the seat to what its commander takes. So:
+   - A CONSTRUCTOR TYPE REACHES THE METAL when an OPEN patch -- published, free of claims, failures and other
+     players' buildings, on THE HELD GROUND (impai_build.c) -- has its anchor's block on the label of the type's
+     class at the base (base_label: the label most blocks round the anchor carry; a VTOL type and a class with no
+     labels reach every block) and an extractor of the type's own menu fits the patch's ground (choose_mex,
+     impai_mex_at: a water extractor where the patch lies deep enough, the land one elsewhere).
+   - THE SEAT IS SHORT of reach (impai_econ_metal_short) past its first FINISHED factory, with no plant frame
+     standing -- a frame's constructors are not yet the seat's to judge, and a frame interrupted in the opening
+     would otherwise read as a seat cut off from the metal on any map; THE ASSIST resumes a frame its builders
+     can reach (impai_build.c), and RESIDUAL: one none resumes holds the reach off while it stands --, while
+     MORE PATCHES LIE OPEN than
+     the seat has extractors, built, framed or ordered, and neither a finished constructor of the seat's (the
+     commander apart: THE COMMANDER'S REACH holds it near the anchor) nor a constructor type on the menu of one of
+     its finished factories reaches one. The count is the seat's own measure of what it is cut off from: a patch
+     on an island, or the last few under a cliff, against a base that holds the rest is not worth a plant, while
+     a map whose metal lies mostly beyond reach leaves the seat with fewer extractors than open patches.
+   - THE REACHING PLANT. While the seat is short and a plant on its builders' menus, of its top build tech or
+     lower, makes a constructor that reaches the metal (impai_econ_reach_plant), a further plant is wanted
+     whatever the income (impai_brain.c, economy), and THE CHOICE's further pass takes only such a plant
+     (mr_only), whichever rule wanted it: a plant whose constructors reach no open patch adds nothing to the
+     seat's metal, and a pass that skips the others before they take a candidate's place cannot run out of
+     candidates on them.
+   - THE GOVERNOR'S CONSTRUCTOR (choose_cons) is one that reaches the metal before one that does not, while more
+     patches lie open than the seat has extractors and no finished constructor of the seat's reaches one.
+   WHY, MEASURED 2026-11-15 on Steel Jungle, whose 43 metal patches are all WaterAquaOre lying 64 to 75 under the
+   sea (sjmap.py over the core's load of the map): the land classes' content maps reach none of them, the
+   commander -- amphibious -- took the one or two within its reach, and in round 3's eight p:L5 games ImpAI held
+   one or two extractors for the whole game (a metal income of 2.7 to 8.4 a pass at the end) while the stock AI
+   went to sea for six; ImpAI's plants were a vehicle plant and a lab, whose constructors reach no patch, and the
+   hover plant's (CORCH, ARMCH) reaches all. The rule is the map's metal against the content's movement classes,
+   so on a map whose land constructors reach the land patches it never fires until those are all taken.
+   BOUND, a decision: the judgement once -- the published patches, IMPAI_CLUSTERS_HALF at most, and each finished
+   factory's menu, one read -- and each constructor type judged at most once (IMPAI_MR_MEMO kept; a type past them
+   is judged again when asked), each judgement one menu read of at most WQ_TYPES_MAX types, one base label of
+   (2 REACH_RINGS + 1)^2 reads and the published patches, one claim, held, label and ground test each; THE
+   REACHING PLANT at most PLANT_LOOK plant menus. RESIDUAL: a water-only plant (a shipyard) is no candidate on a
+   dry anchor, as in THE CHOICE, so a seat whose only reaching constructor comes from a shipyard waits on the sea
+   plant's own rules. */
+static int cons_reaches_metal(IMPAI_DEC* d, unsigned type)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_TINFO* t;
+    IMPAI_MEX mx;
+    int n, k, lab, v;
+    if (type >= in->nti) return 0;
+    for (k = 0; k < d->nmr; k++)
+        if (d->mr_type[k] == type) return d->mr_val[k];
+    t = &in->ti[type];
+    n = d->q->ops->build_options(d->q, (int)type, d->menu2, WQ_TYPES_MAX);
+    if (n <= 0 || !choose_mex(d, d->menu2, n, &mx)) {
+        v = 0;
+    } else {
+        lab = !in->reach || (t->flags & IMPAI_TF_VTOL) || t->mclass >= WQ_MCLASSES
+                  ? -1 : base_label(in->reach, t->mclass, in->st->ax >> 1, in->st->az >> 1);
+        v = lab != 0 && impai_patch_open_to(d, t->mclass, lab, &mx);
+    }
+    if (d->nmr < IMPAI_MR_MEMO) {
+        d->mr_type[d->nmr] = (uint16_t)type;
+        d->mr_val[d->nmr++] = (uint8_t)v;
+    }
+    return v;
+}
+
+static void metal_judge(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i, k;
+    if (d->mr_done) return;
+    d->mr_done = 1;
+    if (in->st->ax == IMPAI_NO_ANCHOR ||
+        !(d->mr_open = impai_patch_open_to(d, 0, -1, NULL) > d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX]))
+        return;
+    for (k = 0; k < d->nbtype && !d->mr_units; k++)
+        d->mr_units = (uint8_t)(in->ti[d->btype[k]].cat == IMPAI_C_CONS && cons_reaches_metal(d, d->btype[k]));
+    for (i = 0; i < d->nfidle + d->nfbusy && !d->mr_units && !d->mr_make; i++) {
+        const unsigned f = i < d->nfidle ? d->fidle[i].type : d->fbusy[i - d->nfidle].type;
+        const int n = d->q->ops->build_options(d->q, (int)f, d->menu3, WQ_TYPES_MAX);
+        for (k = 0; k < n && !d->mr_make; k++)
+            d->mr_make = (uint8_t)(d->menu3[k] < in->nti && in->ti[d->menu3[k]].cat == IMPAI_C_CONS &&
+                                   cons_reaches_metal(d, d->menu3[k]));
+    }
+}
+
+int impai_econ_metal_short(IMPAI_DEC* d)
+{
+    if (d->done[IMPAI_C_FACTORY] < 1 || d->count[IMPAI_C_FACTORY] != d->done[IMPAI_C_FACTORY]) return 0;
+    metal_judge(d);
+    return d->mr_open && !d->mr_units && !d->mr_make;
+}
+
+/* plant `type`'s menu, read into plant[], holds a constructor that reaches the metal */
+static int plant_reaches_metal(IMPAI_DEC* d, unsigned type, uint16_t* plant, int cap)
+{
+    const int np = d->q->ops->build_options(d->q, (int)type, plant, cap);
+    int j;
+    for (j = 0; j < np; j++)
+        if (plant[j] < d->in->nti && d->in->ti[plant[j]].cat == IMPAI_C_CONS && cons_reaches_metal(d, plant[j]))
+            return 1;
+    return 0;
+}
+
+int impai_econ_reach_plant(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const int wet = anchor_wet(d);
+    uint16_t plant[PLANT_MENU];
+    int k, j, looked = 0;
+    for (k = 0; k < d->nbtype; k++) {
+        const int n = d->q->ops->build_options(d->q, d->btype[k], d->menu3, WQ_TYPES_MAX);
+        for (j = 0; j < n && looked < PLANT_LOOK; j++) {
+            const unsigned t = d->menu3[j];
+            if (t >= in->nti || in->ti[t].cat != IMPAI_C_FACTORY || ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) ||
+                impai_plant_off(d, (int)t) || in->ti[t].ctech > d->ftop)
+                continue;
+            looked++;
+            if (plant_reaches_metal(d, t, plant, PLANT_MENU)) return 1;
+        }
+    }
+    return 0;
+}
+
 /* the tech level the values are read at: the seat's highest build tech, at least 1, at most IMPAI_QTECH */
 static unsigned value_tech(const IMPAI_DEC* d)
 {
@@ -429,7 +552,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             np = d->q->ops->build_options(d->q, (int)t, plant, PLANT_MENU);
             for (j = 0; j < np && !ok; j++)
                 ok = plant[j] < in->nti && in->ti[plant[j]].cat == IMPAI_C_CONS && builds_mex(d, plant[j]);
-            if (!ok) continue;
+            if (!ok || (d->mr_only && !up && !plant_reaches_metal(d, t, plant, PLANT_MENU))) continue;
             c[nc].type = (uint16_t)t;
             c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
@@ -596,30 +719,96 @@ static int choose_def(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
-/* a factory's constructor: the most workertime per value among those whose own menu holds an extractor */
-static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
+/* THE SENSORS. Past its sight a seat knows only its radar and sonar contacts (tagpu_worldq.c, THE SEAT'S RADAR
+   PASS: its own acquisition's), which feed its picture, the threat maps, the lead's evidence and the hunts; its
+   commander's and its army's own distances reach little past their sight. So once its factory_max plants are
+   finished the ladder stands sensor structures (impai_sensor_struct) by COVERAGE, NOT BY COUNT: a point is covered when it lies
+   within three quarters of the distance of a building of the seat's with a sensor of its kind, built, framed or
+   ordered (the census, sens: a plant with a radar covers too), and the want (impai_brain.c, sensor_want) is the
+   first point not covered of: the anchor; the finished extractors, nearest the anchor first; the front, the
+   anchor moved half way to the estimate of the enemy base, at most base_r; on a map with water a sea army class
+   can use, the anchor for sonar. One a decision, at most sensor_max standing, none in a stall or the hold, and a
+   tower lost is wanted again by the same rule. ONE TRY A DECISION: the first builder that tries the want ends it,
+   ordered or not, so a point no site serves does not spend every builder's site tests; the commander tries the
+   base ring alone and leaves the want to a constructor. A sensor is no army: the classes are mobile types', and
+   a sensor stands where it is built. THE PLANTS FIRST: the plants the
+   pacing asks for are the economy's, and a sensor bought before them delayed them -- the second plant 960 and 1740
+   ticks later on Red Triangle ac-1 and Trout Farm ca-1 with the want past the first factory (MEASURED 2026-11-15,
+   b5's two yard games to 12 000).
+   THE TYPE is the menu's sensor of the want's kind with the most coverage per value, distance^2 / value, ties to
+   the lower type, whose energy upkeep (energyuse) the seat's flows pay -- income less spending, before it is
+   built; once it runs, its upkeep is in the spending the energy rung keeps the income above (THE LADDER, 1.1
+   times energy_out) --, and a water-only type only on a wet anchor, where it takes the base ring alone. No unit
+   list: a content's sensors are its types with a radardistance or a sonardistance and no weapon.
+   THE SITE (impai_build.c, impai_build_sensor) covers the point BY CONSTRUCTION: a site whose footprint centre
+   lies past three quarters of the type's distance from the point is never taken. The base ring's sites first,
+   nearest the point first; then a ring around the point itself, on held ground only.
+   WHY: the brain had no rule for a sensor, and no seat ever built one (MEASURED 2026-11-15: the owner's game of
+   three Hard seats at 57d39d71, 20 minutes, no radar built), so beyond its sight a seat knew what its commander's
+   own radar reached. BOUND: the menu (WQ_TYPES_MAX), one economy-keys read for each sensor type of it. */
+static int choose_sensor(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
+    const float room = d->e.energy_in - d->e.energy_out;
+    const int wet = anchor_wet(d);
+    float best_s = 0.0f;
     int k, best = 0;
     for (k = 0; k < n; k++) {
         const int t = menu[k];
         const IMPAI_TINFO* ti;
+        WQ_DEF_ECON e;
+        uint32_t r;
+        float s;
+        if (!impai_sensor_struct(in, (unsigned)t)) continue;
+        ti = &in->ti[t];
+        r = d->want_sensor == IMPAI_SENSE_SONAR ? ti->sonar : ti->radar;
+        if (!r || !(ti->value > 0.0f)) continue;
+        if ((ti->flags & IMPAI_TF_WATER) && !wet) continue;
+        if (!d->q->ops->def_econ(d->q, t, &e) || !(e.energyuse <= 0.0f || e.energyuse <= room)) continue;
+        s = (float)r * (float)r / ti->value;
+        if (s > best_s || (s == best_s && best && t < best)) {
+            best_s = s;
+            best = t;
+        }
+    }
+    return best;
+}
+
+/* a factory's constructor: the most workertime per value among those whose own menu holds an extractor; while more
+   patches lie open than the seat has extractors and no finished constructor of the seat's reaches one, a
+   constructor that reaches the metal before one that does not (THE METAL'S REACH) */
+static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int k, best = 0, best_r = 0, pref;
+    metal_judge(d);
+    pref = d->mr_open && !d->mr_units;
+    for (k = 0; k < n; k++) {
+        const int t = menu[k];
+        const IMPAI_TINFO* ti;
         float lhs, rhs;
+        int r;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_CONS || in->ti[t].value <= 0) continue;
         ti = &in->ti[t];
-        if (best) {
+        r = pref && cons_reaches_metal(d, (unsigned)t);
+        if (best && r != best_r) {
+            if (r < best_r) continue;
+        } else if (best) {
             lhs = (float)ti->workertime * in->ti[best].value;
             rhs = (float)in->ti[best].workertime * ti->value;
             if (lhs < rhs || (lhs == rhs && t > best)) continue;
         }
-        if (builds_mex(d, t)) best = t;
+        if (builds_mex(d, t)) {
+            best = t;
+            best_r = r;
+        }
     }
     return best;
 }
 
 /* ---- 4. the builders ---- */
 
-/* A METAL MAP: the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
+/* A METAL MAP (impai_metal_map): the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
    it and the patch scan publishes no patch whatever the seat explores; the loader seeds every cell with the
    background (0x4839B3..0x4839E6, engine/map.md), and an extractor yields extractsmetal x its footprint's metal
    wherever it stands. Core Prime Industrial Area is one: SurfaceMetal 255, no metal feature, every cell 255.
@@ -628,7 +817,7 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
    refuses a site only when its footprint holds more than twice the background over its area
    (0x40A5EC..0x40A602, 0x40A76F), which a footprint of 255s never does (DISASSEMBLED). So does ImpAI: the
    extractor goes to the base ring like any other building, and the ladder alone decides how many. */
-static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
+int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
 
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
    site falls through. A HELPER (a builder assisting) answers the rules of a want the seat has now -- the stall's
@@ -686,9 +875,9 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
    recordings' player images). The makers already built are switched by THE MAKERS. */
-/* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening, which ends
-   on the first factory's own terms (impai_brain.c, economy) -- the seat's open_mex extractors finished and
-   open_energy energy buildings standing, or open_t reached --, with the steady income at factory_per_m a pass for
+/* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
+   open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
+   own terms (impai_brain.c, economy) less THE BLIND START, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
    each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
    replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
    is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
@@ -891,15 +1080,23 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->want_aa = 0;
             return 1;
         }
+        if (d->want_sensor && (t = choose_sensor(d, d->menu, n))) {
+            const int y = impai_build_sensor(d, b, t);
+            if (y >= 0) d->want_sensor = 0;
+            if (y > 0) {
+                d->out->sensors++;
+                return 1;
+            }
+        }
     }
     if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
     if (n > 0) {
         if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-                (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
+                (impai_metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
                 impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
-            if (metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+            if (impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
                                 impai_build_ring(d, b, t))
                              : impai_build_spot(d, b, &mx))
                 return 1;

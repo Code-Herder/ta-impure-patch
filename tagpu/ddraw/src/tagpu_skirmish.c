@@ -30,8 +30,9 @@
 #define CTRL_COMPUTER 2
 #define SEATS_MAX     10
 
-/* THE FIRST COMPUTER STEP: 0, OTA AI first and ImpAI second; 1, ImpAI first. */
-#define IMPAI_FIRST_COMPUTER 0
+/* THE FIRST COMPUTER STEP: 1, ImpAI first and OTA AI second -- ImpAI the default AI, OTA AI one click on, as
+   `seatai`'s default (every seat) and `netai`'s (impai) are (tagpu_settings.c); 0 puts OTA AI first. */
+#define IMPAI_FIRST_COMPUTER 1
 
 typedef void (__stdcall* CycleFn)(unsigned seat);
 typedef int (__stdcall* SetTextFn)(void* gui, const char* name, const char* text, int flag);

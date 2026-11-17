@@ -133,13 +133,35 @@ int impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz)
    (104, 183), whose four cells a feature anchored at (204, 367) covers or rings [INFERRED: no passable cell, from
    the feature grid]; every economy rule that reads the builder's label turned it down for the 37 139 ticks to the
    game's end, 89 % of its idle decisions. The centre's block stands in when the first cell's has no label: a unit
-   the map changed under. */
+   the map changed under.
+   THE LABEL BESIDE: where neither block carries a label -- the labels are made once, at the level init, so a unit
+   standing where a feature stood then, since reclaimed or destroyed, stands in a hole of them --, the one label the
+   eight blocks round the first cell's block carry stands in; 0 when they carry none, or two. MEASURED on Trout
+   Farm's south start (bar-hota-troutfarm-aa-1 at ecf62769, a diagnostic build logging each offer of the sea plant;
+   the level's class maps from tools/tasim/classcheck.py's inputs): the level's Truck08 feature is anchored at cell
+   (223, 434), 5 x 3 cells, and class 2's map holds no entry for cells 222..227 x 433..436, its footprint and the
+   class's ring. The commander stood at (3584..3599, 6960..6975) px from GameTime 52 300 to the cap, the truck gone
+   [INFERRED: reclaimed], its first cell's block (111 or 112, 217) and its centre's (112, 217) with no label
+   [INFERRED: the level init's labels, from the core's class map]; the passable ring round the hole is one component
+   with an entry 11 px from the ARMSY site. Each of the shipyard's offers to it from 52 207 to the cap was refused by
+   THE BUILDER'S REACH (impai_build.c), the seat built no sea army against the stock AI's last base on the lake, and
+   the game reached the cap ahead, 78 622 against 56 805. RESIDUAL: a block carries its first passable cell's
+   label, so the one label beside can be another component than the cells round the unit -- a ring block holding
+   two, its first cell of the other --; a hole wider than the blocks round the first cell's block, all eight of
+   them unlabelled, reads 0; and a unit between two components reaches nothing. BOUND: nine more label reads. */
 int impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz)
 {
     const int32_t cx = (int32_t)(((int64_t)x - ((int64_t)fx * 0x80000) + 0x80000) >> 20);
     const int32_t cz = (int32_t)(((int64_t)z - ((int64_t)fz * 0x80000) + 0x80000) >> 20);
-    const int l = impai_reach_at(r, c, cx >> 1, cz >> 1);
-    return l ? l : impai_reach_at(r, c, x >> 21, z >> 21);
+    int l = impai_reach_at(r, c, cx >> 1, cz >> 1), k, got = 0;
+    if (l || (l = impai_reach_at(r, c, x >> 21, z >> 21)) != 0) return l;
+    for (k = 0; k < 9; k++) {
+        const int m = impai_reach_at(r, c, (cx >> 1) + k % 3 - 1, (cz >> 1) + k / 3 - 1);
+        if (m <= 0 || m == got) continue;
+        if (got) return 0;
+        got = m;
+    }
+    return got;
 }
 
 int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox, int* oz)
