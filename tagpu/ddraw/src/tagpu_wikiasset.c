@@ -1572,7 +1572,7 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
     unsigned char* text;
     TAGPU_TDF* t = NULL;
     int sec;
-    strncpy(u->name, type, sizeof u->name - 1);
+    snprintf(u->name, sizeof u->name, "%.*s", (int)sizeof u->name - 1, type);
     /* a level's rule (0x42D709): units\<UnitName>.FBI by path, the language's folder first */
     if (!tagpu_vfs_find_built(L->vfs, L->in->names.units, type, "FBI", &r->f)) {
         snprintf(r->why, sizeof r->why, "no source holds %s\\%s.fbi", L->in->names.units, type);
@@ -1595,8 +1595,8 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
                 r->has_sndcat = 1;
                 snprintf(r->sndcat, sizeof r->sndcat, "%s", sc);
             }
-            strncpy(r->unitname, un ? un : "", sizeof r->unitname - 1);
-            strncpy(r->object, on ? on : r->unitname, sizeof r->object - 1);
+            snprintf(r->unitname, sizeof r->unitname, "%.*s", (int)sizeof r->unitname - 1, un ? un : "");
+            snprintf(r->object, sizeof r->object, "%.*s", (int)sizeof r->object - 1, on ? on : r->unitname);
             /* the facts the stage draws it by (WIKI3DUNIT) */
             r->info = 1;
             u->mobile = tagpu_tdf_int(t, sec, "BMcode", 1) != 0;
@@ -2060,6 +2060,14 @@ typedef struct {
     uint16_t  g[WIKI_FP_MAX];           /* its G rows, when the footprint is within WIKI_FP_MAX   */
     unsigned char title[TITLE_RAW];     /* the display name's code-page bytes; ntitle 0: the name */
     int       ntitle;
+    /* THE TECH TREE'S KEYS (gfx.py `tech_fbi`), each trimmed: Description's code-page bytes (cut
+       at WIKITECH_DESC - 1, `desc_cut` set), MaxDamage, the category's first LEVELn (-1 none),
+       init_cloaked, stealth and hidedamage `and 1`, and Weapon1..3's names (empty: none) */
+    unsigned char desc[WIKITECH_DESC];
+    int       ndesc, desc_cut;
+    long long maxdamage;
+    int       level, cloaked, stealth, hidedamage;
+    char      weapon[WIKITECH_WEAPONS][WIKITECH_NAME];
 } SUNIT;
 typedef struct { char unitmenu[SNAME], unitname[SNAME]; uint32_t menu; long long button; int file; } SENTRY;
 /* a [SIDEn] of sidedata: the layout's names, and the resource bar's raw values (read with the
@@ -2673,6 +2681,46 @@ static void yard_g(SUNIT* u, const char* yard)
 
 typedef struct { SIDE* S; } FBIWALK;
 
+/* `LEVEL` followed by a digit, without case, at its first place in `v` (techtree.js's
+   /LEVEL(\d)/i): the digit, or -1 */
+static int category_level(const char* v)
+{
+    static const char L[] = "level";
+    size_t i, k;
+    for (i = 0; v && v[i]; i++) {
+        for (k = 0; k < 5 && v[i + k] && (v[i + k] | 0x20) == L[k]; k++) {}
+        if (k == 5 && v[i + 5] >= '0' && v[i + 5] <= '9') return v[i + 5] - '0';
+    }
+    return -1;
+}
+
+/* gfx.py `tech_fbi`: the keys the tech tree reads beyond the cast rule's */
+static void tech_keys(const TAGPU_GUIFILE* g, int sec, SUNIT* u)
+{
+    static const char* const WKEY[WIKITECH_WEAPONS] = { "weapon1", "weapon2", "weapon3" };
+    const char* t = tagpu_guifile_get(g, sec, "description");
+    uint32_t bits;
+    size_t nn;
+    int k;
+    py_strip(&t, &nn);
+    u->desc_cut = nn > WIKITECH_DESC - 1;
+    u->ndesc = (int)(u->desc_cut ? WIKITECH_DESC - 1 : nn);
+    memcpy(u->desc, t, (size_t)u->ndesc);
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "maxdamage"), &u->maxdamage, NULL);
+    u->level = category_level(tagpu_guifile_get(g, sec, "category"));
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "init_cloaked"), NULL, &bits);
+    u->cloaked = (int)(bits & 1u);
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "stealth"), NULL, &bits);
+    u->stealth = (int)(bits & 1u);
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "hidedamage"), NULL, &bits);
+    u->hidedamage = (int)(bits & 1u);
+    for (k = 0; k < WIKITECH_WEAPONS; k++) {
+        t = tagpu_guifile_get(g, sec, WKEY[k]);
+        py_strip(&t, &nn);
+        snprintf(u->weapon[k], WIKITECH_NAME, "%.*s", (int)(nn < WIKITECH_NAME ? nn : WIKITECH_NAME - 1), t);
+    }
+}
+
 /* a TDF number stored in a 16-bit field and read back signed: atoi's low 16 bits, sign-extended
    (gfx.py `word`) */
 static int fbi_word(const char* v)
@@ -2755,6 +2803,7 @@ static int fbi_each(void* ctx, const TAGPU_VFILE* f)
         t = tagpu_guifile_get(g, sec, "weapon1");
         py_strip(&t, &nn);
         u->weapon1 = nn > 0;
+        tech_keys(g, sec, u);
         t = tagpu_guifile_get(g, sec, "tedclass");
         py_strip(&t, &nn);
         u->fort = nn == 4 && !tagpu_hpi_stricmp(t, "FORT", 4);
@@ -5300,6 +5349,416 @@ done:
     return out;
 }
 
+/* ---- THE TECH TREE'S LOAD (tagpu_wikiasset.h, THE TECH TREE'S DATA; gfx.py `tech_pack`) ---- */
+
+/* a weapons\*.tdf section, by its name lowered */
+typedef struct { char key[WIKITECH_NAME], name[WIKITECH_WNAME]; int32_t range, damage; int order; } TWEAPON;
+typedef struct { SIDE* S; TWEAPON* w; int n, cap; } TWEAPONS;
+
+static int32_t sat32(long long v) { return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v; }
+
+/* gfx.py `tech_weapons`: every top-level section of every `weapons\*.tdf`, the first listed winning
+   a name; `damage` its first [DAMAGE] sub-section's `default`. The folder is the literal
+   `weapons`, as the 3D load's weapon_each reads it: the executable's own name, `Weapons` at
+   0x50392C with its pattern `Weapons\*.tdf` at 0x503934 (writable .data, pushed by the weapon load
+   at 0x42A8EC and 0x42E350, engine/process.md), is not read, so a mod that renames it is not
+   followed. A name of WIKITECH_NAME bytes or more is one no FBI's weapon id can match. */
+static int tech_weapon_each(void* ctx, const TAGPU_VFILE* f)
+{
+    TWEAPONS* W = (TWEAPONS*)ctx;
+    SIDE* S = W->S;
+    char why[200];
+    unsigned char* b;
+    TAGPU_GUIFILE* g;
+    int i, n;
+    if (!f->size || !(b = tagpu_vfs_load(S->vfs, f, CAP_SIDE, why, sizeof why))) return 1;
+    g = tagpu_guifile_parse(b, f->size, why, sizeof why);
+    free(b);
+    if (!g) { side_rep(S, "refused", "the engine's parser refuses it: %s", f->path, why); return 1; }
+    n = tagpu_guifile_count(g, 0);
+    for (i = 0; i < n && !S->failed; i++) {
+        const int sec = tagpu_guifile_child(g, 0, i), dmg = tagpu_guifile_find(g, sec, "DAMAGE");
+        const char *nm = tagpu_guifile_name(g, sec), *label = tagpu_guifile_get(g, sec, "name");
+        long long v;
+        TWEAPON* x;
+        if (sec < 0 || !nm[0] || strlen(nm) >= WIKITECH_NAME) continue;
+        if (!side_grow(S, (void**)&W->w, &W->cap, W->n + 1, sizeof *W->w)) break;
+        x = &W->w[W->n];
+        lowcpy(x->key, nm, sizeof x->key);
+        scopy(x->name, label ? label : nm, sizeof x->name);
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "range"), &v, NULL);
+        x->range = sat32(v);
+        tagpu_guifile_num(dmg >= 0 ? tagpu_guifile_get(g, dmg, "default") : NULL, &v, NULL);
+        x->damage = sat32(v);
+        x->order = W->n++;
+    }
+    tagpu_guifile_free(g);
+    return !S->failed;
+}
+
+static int tech_weapon_cmp(const void* a, const void* b)
+{
+    const TWEAPON *x = (const TWEAPON*)a, *y = (const TWEAPON*)b;
+    const int c = strcmp(x->key, y->key);
+    return c ? c : x->order - y->order;
+}
+
+static const TWEAPON* tech_weapon_get(const TWEAPONS* W, const char* id)
+{
+    char key[WIKITECH_NAME];
+    int lo = 0, hi = W->n - 1;
+    lowcpy(key, id, sizeof key);
+    while (lo <= hi) {
+        const int mid = (lo + hi) / 2, c = strcmp(key, W->w[mid].key);
+        if (!c) return &W->w[mid];
+        if (c < 0) hi = mid - 1; else lo = mid + 1;
+    }
+    return NULL;
+}
+
+/* gfx.py `side_walk`: breadth-first from `root` over the menus, each unit where it is first met;
+   `seen` one slot a unit. Returns the walk's length. */
+static int tech_walk(SWALK* W, int root, int* order, unsigned char* seen)
+{
+    int n = 0, i, k;
+    memset(seen, 0, (size_t)W->S->nunit);
+    order[n++] = root;
+    seen[root] = 1;
+    for (i = 0; i < n && !W->S->failed; i++) {
+        const SMENU* m = menu(W, order[i]);
+        for (k = 0; k < m->n; k++)
+            if (!seen[m->u[k]]) { seen[m->u[k]] = 1; order[n++] = m->u[k]; }
+    }
+    return n;
+}
+
+/* gfx.py `tech_pictures`: each build button's picture on T's numbered pages as menu_of reads them,
+   a unit's first button winning; `pic` one frame index a unit, -1 unset, set only where unset. A
+   page the layout would refuse is passed over. */
+static void tech_pictures(SWALK* W, int t, int* pic)
+{
+    SIDE* S = W->S;
+    const SUNIT* u = &S->unit[t];
+    int nmine, zero, last, p;
+    S->quiet++;
+    nmine = dl_mine(S, u, W->mine);
+    last = type_pages(S, u->name, W->mine, nmine, &zero);
+    for (p = 1; p <= last && !S->failed; p++) {
+        TAGPU_VFILE f;
+        char file[SNAME + 8];
+        SREC* r;
+        int n = 0, i;
+        snprintf(file, sizeof file, "%s%d", u->name, p);
+        if (!side_find(S, S->in->names.gui, file, "GUI", &f)) snprintf(file, sizeof file, "%sDL", W->prefix);
+        if (!(r = screen_read(S, file, &n, &f))) continue;
+        if (!(r[0].w >= 1 && r[0].w <= WIKI_SIDE_W && r[0].h >= 1 && r[0].y >= 0 && r[0].y + r[0].h <= WIKI_SIDE_ROWS)) {
+            free(r);
+            continue;
+        }
+        fill_downloads(S, r, n, p, W->mine, nmine, file);
+        for (i = 1; i < n; i++) {
+            char unit[WIKI_SIDE_NAME];
+            const SUNIT* x;
+            long long rect[4];
+            SPIC pc;
+            if (!r[i].ok || r[i].id != 1 || !r[i].active || button_grey(S, &r[i], p, n) ||
+                gadget_role(S, &r[i], unit, sizeof unit) != WIKI_ROLE_BUILD || !unit[0] || !(x = unit_get(S, unit)) ||
+                pic[x - S->unit] >= 0)
+                continue;
+            rect[0] = r[i].x; rect[1] = r[i].y; rect[2] = r[i].w; rect[3] = r[i].h;
+            gadget_picture(S, &r[i], WIKI_ROLE_BUILD, unit, file, &pc, rect);
+            if (pc.nf && pc.f[0] >= 0) pic[x - S->unit] = pc.f[0];
+        }
+        free(r);
+    }
+    S->quiet--;
+}
+
+const WIKITECH* tagpu_wikitech_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report)
+{
+    SIDE S;
+    TWEAPONS WP;
+    TAGPU_VFILE f;
+    WIKITECH* out = NULL;
+    SMENU* cache[WIKI_SIDE_SIDES];
+    char why[200], err[200];
+    unsigned char pal[1024], *seen = NULL, **own = NULL;
+    int *mine = NULL, *walk = NULL, *row_of = NULL, *pic = NULL, *rows = NULL, *orders = NULL, *pcx_w = NULL,
+        *pcx_h = NULL;
+    int nrow = 0, norder = 0, i, k, nside = 0, closed = 0, kept[WIKITECH_SIDES];
+    uint32_t nmenu = 0, npx = 0;
+    int32_t npic = 0;
+    WIKITECHSIDE sides[WIKITECH_SIDES];
+    memset(&S, 0, sizeof S);
+    memset(&WP, 0, sizeof WP);
+    memset(cache, 0, sizeof cache);
+    memset(sides, 0, sizeof sides);
+    S.in = in;
+    S.vfs = vfs;
+    S.common = -1;
+    WP.S = &S;
+    *report = NULL;
+    err[0] = 0;
+    sb_raw(&S.rep, "{\"format\":1,\"report\":[");
+    if (!vfs) { snprintf(err, sizeof err, "the sources did not open"); goto done; }
+    if (!tagpu_vfs_find_built(vfs, in->names.palettes, in->names.palette, "PAL", &f) || f.size < 1024 ||
+        !tagpu_vfs_read(vfs, &f, 0, 1024, pal, why, sizeof why)) {
+        snprintf(err, sizeof err, "no %s\\%s.PAL of 256 colours", in->names.palettes, in->names.palette);
+        goto done;
+    }
+    for (i = 0; i < 256; i++) pal[4 * i + 3] = 255;
+    units_index(&S);
+    if (!sides_read(&S)) { snprintf(err, sizeof err, "no sides: sidedata.tdf is missing, refused or empty"); goto done; }
+    tagpu_vfs_enum(vfs, in->names.download, "*.tdf", 0, dl_each, &S);
+    tagpu_vfs_enum(vfs, "weapons", "*.tdf", 0, tech_weapon_each, &WP);
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
+    qsort(WP.w, (size_t)WP.n, sizeof *WP.w, tech_weapon_cmp);
+    for (i = k = 0; i < WP.n; i++) if (!k || strcmp(WP.w[k - 1].key, WP.w[i].key)) WP.w[k++] = WP.w[i];
+    WP.n = k;
+    S.common = side_bank(&S, in->names.commongui);
+    /* BOUND: a walk, a row map, a picture slot and the PCX pixels one slot a unit; every side's walk
+       together at most WIKITECH_SIDES x nunit entries */
+    if (S.nunit > WIKITECH_UNITS) { snprintf(err, sizeof err, "%d units pass %d", S.nunit, WIKITECH_UNITS); goto done; }
+    {
+        const size_t nu = (size_t)(S.nunit ? S.nunit : 1);
+        if (!(mine = (int*)malloc((size_t)(S.ndl ? S.ndl : 1) * sizeof *mine)) || !(walk = (int*)malloc(nu * sizeof *walk)) ||
+            !(seen = (unsigned char*)malloc(nu)) || !(row_of = (int*)malloc(nu * sizeof *row_of)) ||
+            !(pic = (int*)malloc(nu * sizeof *pic)) || !(rows = (int*)malloc(nu * sizeof *rows)) ||
+            !(orders = (int*)malloc(nu * WIKITECH_SIDES * sizeof *orders)) ||
+            !(own = (unsigned char**)calloc(nu, sizeof *own)) || !(pcx_w = (int*)calloc(nu, sizeof *pcx_w)) ||
+            !(pcx_h = (int*)calloc(nu, sizeof *pcx_h))) {
+            snprintf(err, sizeof err, "out of memory");
+            goto done;
+        }
+    }
+    for (i = 0; i < S.nunit; i++) { row_of[i] = -1; pic[i] = -1; }
+    for (k = 0; k < S.nside && nside < WIKITECH_SIDES && !S.failed; k++) {
+        const SSIDE* sd = &S.side[k];
+        const SUNIT* root = unit_get(&S, sd->commander);
+        SWALK W;
+        int j, n;
+        if (!root) {
+            side_rep(&S, "refused", "no %s\\%s.FBI", sd->name, in->names.units, sd->commander[0] ? sd->commander : "(none)");
+            continue;
+        }
+        for (j = 0; j < k && tagpu_hpi_stricmp(S.side[j].prefix, sd->prefix, (size_t)-1); j++) {}
+        if (j < k && cache[j]) cache[k] = cache[j];
+        else if (!(cache[k] = (SMENU*)calloc((size_t)(S.nunit ? S.nunit : 1), sizeof *cache[k]))) { S.failed = 1; break; }
+        W.S = &S;
+        W.cache = cache[k];
+        W.prefix = sd->prefix;
+        W.mine = mine;
+        n = tech_walk(&W, (int)(root - S.unit), walk, seen);
+        /* THE PICTURE a unit's card and chips show: its build button's on the first menu of the walk
+           that holds it */
+        for (j = 0; j < n && !S.failed; j++) if (menu(&W, walk[j])->n) tech_pictures(&W, walk[j], pic);
+        kept[nside] = k;
+        scopy(sides[nside].name, sd->name, sizeof sides[nside].name);
+        scopy(sides[nside].prefix, sd->prefix, sizeof sides[nside].prefix);
+        sides[nside].first = (uint32_t)norder;
+        sides[nside].norder = (uint32_t)n;
+        for (j = 0; j < n; j++) {
+            const int t = walk[j];
+            orders[norder++] = t;
+            nmenu += (uint32_t)menu(&W, t)->n;
+            if (row_of[t] < 0) { row_of[t] = nrow; rows[nrow++] = t; }
+        }
+        sides[nside].commander = row_of[walk[0]];
+        nside++;
+    }
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
+    if (!nside) { snprintf(err, sizeof err, "no side's commander has an FBI"); goto done; }
+    /* the pictures: a frame of the sidebar's registry, else the PCX of a unit on no button */
+    for (i = 0; i < nrow; i++) {
+        const int t = rows[i];
+        int w = 0, h = 0;
+        if (S.unit[t].desc_cut) side_rep(&S, "note", "its description is cut at %d bytes", S.unit[t].name, WIKITECH_DESC - 1);
+        if (pic[t] >= 0) { w = S.fr[pic[t]].w; h = S.fr[pic[t]].h; }
+        else {
+            TAGPU_VFILE pf;
+            unsigned char* b;
+            if (side_find(&S, in->names.unitpics, S.unit[t].name, "PCX", &pf) && (b = side_read(&S, &pf, CAP_PCX, S.unit[t].name))) {
+                if (!pcx_read(b, pf.size, &pcx_w[t], &pcx_h[t], &own[t]))
+                    side_rep(&S, "note", "%s: not an 8-bit one-plane RLE PCX", S.unit[t].name, pf.path);
+                free(b);
+            }
+            w = pcx_w[t]; h = pcx_h[t];
+            if (!own[t]) continue;
+        }
+        if (w < 1 || h < 1 || w > WIKITECH_PIC || h > WIKITECH_PIC) {
+            side_rep(&S, "refused", "its %d x %d picture passes %d a side", S.unit[t].name, w, h, WIKITECH_PIC);
+            pic[t] = -1;
+            free(own[t]);
+            own[t] = NULL;
+            continue;
+        }
+        npic++;
+        npx += (uint32_t)(w * h);
+    }
+    sb_raw(&S.rep, "]");
+    closed = 1;
+    {
+        /* ONE BLOCK: the header, the units and pictures, the 32-bit and 16-bit arrays, the pixels
+           and the report, each array at its own alignment */
+        const size_t o_unit = (sizeof(WIKITECH) + 7) & ~(size_t)7, o_pic = o_unit + (size_t)nrow * sizeof(WIKITECHUNIT),
+                     o_mfirst = o_pic + (size_t)npic * sizeof(WIKITECHPIC), o_order = o_mfirst + (size_t)norder * 4,
+                     o_mcount = o_order + (size_t)norder * 2, o_menu = o_mcount + (size_t)norder * 2,
+                     o_px = o_menu + (size_t)nmenu * 2, o_rep = o_px + npx;
+        unsigned char* blk;
+        WIKITECHUNIT* U;
+        WIKITECHPIC* P;
+        uint32_t* mf;
+        uint16_t *od, *mc, *mn;
+        unsigned char* px;
+        uint32_t at_px = 0, at_menu = 0;
+        int32_t at_pic = 0;
+        if (S.rep.oom) { snprintf(err, sizeof err, "out of memory"); goto done; }
+        sb_raw(&S.rep, ",\"sides\":%d,\"units\":%d,\"pictures\":%d}\n", nside, nrow, npic);
+        if (S.rep.oom || !(blk = (unsigned char*)calloc(1, o_rep + S.rep.n + 1))) { snprintf(err, sizeof err, "out of memory"); goto done; }
+        out = (WIKITECH*)blk;
+        U = (WIKITECHUNIT*)(blk + o_unit);
+        P = (WIKITECHPIC*)(blk + o_pic);
+        mf = (uint32_t*)(blk + o_mfirst);
+        od = (uint16_t*)(blk + o_order);
+        mc = (uint16_t*)(blk + o_mcount);
+        mn = (uint16_t*)(blk + o_menu);
+        px = blk + o_px;
+        out->nside = nside;
+        /* the player's side by the engine's index, which is the side's in sidedata.tdf */
+        for (k = 0; k < WIKITECH_SIDES; k++) out->of_engine[k] = -1;
+        for (k = 0; k < nside; k++)
+            if (kept[k] >= 0 && kept[k] < WIKITECH_SIDES) out->of_engine[kept[k]] = (int8_t)k;
+        memcpy(out->side, sides, sizeof sides);
+        memcpy(out->pal, pal, sizeof out->pal);
+        for (i = 0; i < nrow; i++) {
+            const SUNIT* u = &S.unit[rows[i]];
+            WIKITECHUNIT* x = &U[i];
+            int w;
+            scopy(x->name, u->name, sizeof x->name);
+            memcpy(x->title, u->title, (size_t)(u->ntitle < WIKITECH_TITLE - 1 ? u->ntitle : WIKITECH_TITLE - 1));
+            memcpy(x->desc, u->desc, (size_t)u->ndesc);
+            x->structure = (uint8_t)is_structure(u);
+            x->mobile = (uint8_t)is_mobile(u);
+            x->builder = (uint8_t)is_builder(u);
+            x->canfly = (uint8_t)(u->canfly != 0);
+            x->water = (uint8_t)(u->has_mwd && u->mwd > 0);
+            x->cloaked = (uint8_t)u->cloaked;
+            x->stealth = (uint8_t)u->stealth;
+            x->hidedamage = (uint8_t)u->hidedamage;
+            x->level = (int8_t)u->level;
+            x->fx = sat32(u->fx);
+            x->fz = sat32(u->fz);
+            x->health = sat32(u->maxdamage);
+            x->sight = u->sight;
+            x->radar = u->radar;
+            x->metal = u->buildcostmetal;
+            x->energy = u->buildcostenergy;
+            x->buildtime = u->buildtime;
+            x->speed = u->maxvelocity;
+            x->workertime = u->workertime;
+            x->energymake = net_energy(u);
+            x->metalmake = u->metalmake;
+            x->extracts = u->extracts;
+            x->mstore = u->metalstorage;
+            x->estore = u->energystorage;
+            for (w = 0; w < WIKITECH_WEAPONS; w++) {
+                const TWEAPON* d;
+                WIKITECHWEAPON* y;
+                if (!u->weapon[w][0]) continue;
+                y = &x->weapon[x->nweapon++];
+                scopy(y->id, u->weapon[w], sizeof y->id);
+                if ((d = tech_weapon_get(&WP, u->weapon[w])) != NULL) {
+                    scopy(y->name, d->name, sizeof y->name);
+                    y->range = d->range;
+                    y->damage = d->damage;
+                    y->known = 1;
+                } else scopy(y->name, u->weapon[w], sizeof y->name);
+            }
+            x->pic = -1;
+            if (pic[rows[i]] >= 0 || own[rows[i]]) {
+                const SFRAME* fr = pic[rows[i]] >= 0 ? &S.fr[pic[rows[i]]] : NULL;
+                const int pw = fr ? fr->w : pcx_w[rows[i]], ph = fr ? fr->h : pcx_h[rows[i]];
+                P[at_pic].w = pw;
+                P[at_pic].h = ph;
+                P[at_pic].tkey = fr ? fr->tkey : -1;
+                P[at_pic].off = at_px;
+                memcpy(px + at_px, fr ? fr->px : own[rows[i]], (size_t)(pw * ph));
+                at_px += (uint32_t)(pw * ph);
+                x->pic = at_pic++;
+            }
+        }
+        for (k = 0; k < nside; k++) {
+            SWALK W;
+            uint32_t j;
+            W.S = &S;
+            W.cache = cache[kept[k]];
+            W.prefix = sides[k].prefix;
+            W.mine = mine;
+            for (j = sides[k].first; j < sides[k].first + sides[k].norder; j++) {
+                const SMENU* m = menu(&W, orders[j]);
+                int q;
+                od[j] = (uint16_t)row_of[orders[j]];
+                mf[j] = at_menu;
+                mc[j] = (uint16_t)m->n;
+                for (q = 0; q < m->n; q++) mn[at_menu++] = (uint16_t)row_of[m->u[q]];
+            }
+        }
+        out->norder = (uint32_t)norder;
+        out->nmenu = nmenu;
+        out->order = od;
+        out->mfirst = mf;
+        out->mcount = mc;
+        out->menu = mn;
+        out->nunit = nrow;
+        out->unit = U;
+        out->npic = npic;
+        out->pic = P;
+        out->npx = npx;
+        out->px = px;
+        memcpy(blk + o_rep, S.rep.s, S.rep.n);
+        out->report = (const char*)(blk + o_rep);
+    }
+
+done:
+    if (!out) {
+        LOG("wikitech: no tech tree - %s", err[0] ? err : "?");
+        sb_raw(&S.rep, closed ? ",\"refused\":" : "],\"refused\":");
+        sb_q(&S.rep, err[0] ? err : "?", 0);
+        sb_raw(&S.rep, "}\n");
+    }
+    if (!S.rep.oom && S.rep.s) { *report = S.rep.s; S.rep.s = NULL; }
+    free(S.rep.s);
+    free(S.unit);
+    free(S.dl);
+    free(S.dlfile);
+    for (i = 0; i < S.nbank; i++) bank_free(&S.bank[i]);
+    free(S.bank);
+    for (i = 0; i < S.nfr; i++) { free(S.fr[i].key); free(S.fr[i].px); }
+    free(S.fr);
+    free(S.scr);
+    for (k = 0; k < WIKI_SIDE_SIDES; k++) {
+        int j;
+        if (!cache[k]) continue;
+        for (j = k + 1; j < WIKI_SIDE_SIDES; j++) if (cache[j] == cache[k]) cache[j] = NULL;
+        for (j = 0; j < S.nunit; j++) free(cache[k][j].u);
+        free(cache[k]);
+    }
+    for (i = 0; own && i < S.nunit; i++) free(own[i]);
+    free(own);
+    free(pcx_w);
+    free(pcx_h);
+    free(WP.w);
+    free(mine);
+    free(walk);
+    free(seen);
+    free(row_of);
+    free(pic);
+    free(rows);
+    free(orders);
+    return out;
+}
+
+
 int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, int rows, const unsigned char* alp, unsigned char* out,
                            int* w, int* h, int* offx, int* offy)
 {
@@ -5522,6 +5981,85 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     return w;
 }
 
+/* THE TECH TREE'S MODELS (tagpu_wikiasset.h): tagpu_wiki3d_load's unit pass over every unit of the
+   tree, into an arena of its own. A loader of its own too: the textures every pointer reaches are
+   copied into THIS arena, so the bank is searched again for the names these models hold. */
+const WIKI3D* tagpu_wikitech3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t, unsigned char* base,
+                                    uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto))
+{
+    LOADER L;
+    SB b;
+    WIKI3D* w;
+    UNITREC* urec = NULL;
+    uint32_t w_at, un_at = 0, rep_at, assets;
+    int i, k, nunit = t ? t->nunit : 0;
+    if (!t) return NULL;
+    memset(&L, 0, sizeof L);
+    memset(&b, 0, sizeof b);
+    L.in = in;
+    L.a.base = base;
+    L.a.base32 = base32;
+    L.a.cap = cap > REPORT_RESERVE ? cap - REPORT_RESERVE : 0;
+    L.a.used = 8;
+    L.a.commit = commit;
+    L.a.committed = commit ? 0 : cap;
+    if (!(w_at = alloc(&L.a, sizeof *w))) return NULL;
+    if (nunit < 0 || nunit > WIKITECH_UNITS) nunit = 0;
+    if (nunit && (!(un_at = alloc(&L.a, (uint32_t)(nunit * sizeof(WIKI3DUNIT)))) ||
+                  !(urec = (UNITREC*)calloc((size_t)nunit, sizeof *urec))))
+        nunit = 0;
+    L.vfs = vfs ? vfs : asset_vfs(in);
+    if (L.vfs) {
+        for (i = 0; i < nunit; i++) {
+            WIKI3DUNIT* u = (WIKI3DUNIT*)AT(&L.a, un_at) + i;
+            unit_load(&L, t->unit[i].name, u, &urec[i]);
+            /* no sound pass: the block's sound table is empty, so no unit names a clip in it */
+            u->sound_cat = -1;
+            u->death_sound = -1;
+        }
+        bank_all(&L);
+        bind_all(&L);
+    }
+    assets = L.a.used;
+    sb_raw(&b, "{\"format\":1,\"bank\":[");
+    for (i = 0; i < L.nbank; i++) {
+        sb_raw(&b, "%s{\"gaf\":", i ? "," : "");
+        sb_q(&b, L.bank[i].path, 1);
+        sb_raw(&b, ",\"refused\":");
+        sb_q(&b, L.bank[i].why[0] ? L.bank[i].why : NULL, 0);
+        sb_raw(&b, "}");
+    }
+    sb_raw(&b, "],\"units\":[");
+    for (i = 0; i < nunit; i++) {
+        if (i) sb_raw(&b, ",");
+        unit_report(&b, &L, (const WIKI3DUNIT*)AT(&L.a, un_at) + i, &urec[i]);
+    }
+    sb_raw(&b, "],\"arena_bytes\":%lu}\n", (unsigned long)assets);
+    L.a.cap = cap;
+    L.a.full = 0;
+    w = NULL;
+    if (!b.oom && b.s && (rep_at = put_str(&L.a, b.s, b.n)) != 0) {
+        w = (WIKI3D*)AT(&L.a, w_at);
+        w->nstage = 0;
+        w->stage = NULL;
+        w->nunit = nunit;
+        w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
+        w->report = (const char*)AT(&L.a, rep_at);
+        for (k = 0; k < WIKI_CURSOR_N; k++) w->cursor[k] = NULL;
+        memset(&w->sound, 0, sizeof w->sound);
+        for (k = 0; k < WIKI_NSNDNAME; k++) w->sound.named[k] = -1;
+        w->base = base32;
+        w->bytes = L.a.used;
+    }
+    free(urec);
+    free(b.s);
+    free(L.tex);
+    free(L.bind);
+    free(L.bank);
+    if (!vfs) tagpu_vfs_close(L.vfs);
+    return w;
+}
+
 /* ---- the DLL's thread, publish and trigger --------------------------------------------------------- */
 
 #ifdef _WIN32
@@ -5531,6 +6069,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
 #define DUMP_ASK    "tagpu_wiki3d.dump"
 #define DUMP_OUT    "tagpu_wiki3d.json"
 #define SIDE_OUT    "tagpu_wikiside.json"
+#define TECH_OUT    "tagpu_wikitech.json"
 
 static volatile LONG s_started;
 /* THE LOAD'S ANSWER, once: NULL while the loader runs, then for good the WIKI3D or &s_3d_refused,
@@ -5555,13 +6094,85 @@ static void side_publish(const WIKISIDE* side)
     InterlockedExchangePointer((PVOID*)&s_side, side ? (PVOID)side : (PVOID)&s_side_refused);
 }
 
-static uint32_t commit_pages(unsigned char* base, uint32_t upto)
+/* THE TECH TREE'S ANSWER, once: NULL while the loader has not reached it, then for good the
+   WIKITECH or &s_tech_refused, by one interlocked store (tagpu_wikitech_get) */
+static PVOID volatile s_tech;
+static const char s_tech_refused = 0;
+
+/* THE TECH TREE'S MODELS' ANSWER, once, as the tech tree's: NULL while the loader has not reached
+   it, then for good the WIKI3D or &s_tech3d_refused (tagpu_wikitech3d_get) */
+static PVOID volatile s_tech3d;
+static const char s_tech3d_refused = 0;
+
+#define TECH3D_CAP  (64u << 20)     /* the models' arena: reserved whole, committed as it grows    */
+
+static uint32_t commit_pages_tech3d(unsigned char* base, uint32_t upto);
+
+/* The tech tree's models, after the tree: an arena of their own, reserved and checked as the 3D
+   load's is, published by one interlocked store (ORDERING as side_publish's), or refused. A block
+   that did not load is released before anyone could see it. */
+static void tech3d_run(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t)
+{
+    LARGE_INTEGER f, t0, t1;
+    unsigned char* base;
+    const WIKI3D* w = NULL;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t0);
+    if (!t || !vfs) {
+        InterlockedExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused);
+        return;
+    }
+    if (!(base = (unsigned char*)VirtualAlloc(NULL, TECH3D_CAP, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE))) {
+        LOG("wikitech3d: NOT loaded - %lu MB of address space could not be reserved (%lu)",
+            (unsigned long)(TECH3D_CAP >> 20), (unsigned long)GetLastError());
+    } else if (!tagpu_m3_ptr_ok(base) || !tagpu_m3_ptr_ok(base + TECH3D_CAP - 1)) {
+        LOG("wikitech3d: NOT loaded - the arena at %p lies outside the readers' range", (void*)base);
+        VirtualFree(base, 0, MEM_RELEASE);
+    } else if (!(w = tagpu_wikitech3d_load(in, vfs, t, base, (uint32_t)(uintptr_t)base, TECH3D_CAP, commit_pages_tech3d))) {
+        LOG("wikitech3d: NOT loaded - the arena could not hold the report");
+        VirtualFree(base, 0, MEM_RELEASE);      /* never published, so no reader holds it */
+    } else {
+        int i, ok = 0;
+        QueryPerformanceCounter(&t1);
+        for (i = 0; i < w->nunit; i++) ok += w->unit[i].ok;
+        LOG("wikitech3d: loaded in %.1f ms - arena %lu bytes at %p; %d of %d unit types resolved",
+            (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, (unsigned long)w->bytes, (void*)base, ok,
+            w->nunit);
+    }
+    InterlockedExchangePointer((PVOID*)&s_tech3d, w ? (PVOID)w : (PVOID)&s_tech3d_refused);
+}
+
+/* The tech tree's load and its publication, last on the loader's thread: the sidebar and the 3D
+   assets are published before it, so no demo waits for it. ORDERING as side_publish's: the block is
+   written whole by tagpu_wikitech_load before the one interlocked store. Then its models. */
+static void tech_run(const WIKI3DIN* in, TAGPU_VFS* vfs)
+{
+    LARGE_INTEGER f, t0, t1;
+    const WIKITECH* t;
+    char* report = NULL;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t0);
+    t = vfs ? tagpu_wikitech_load(in, vfs, &report) : NULL;
+    free(report);                           /* the block keeps its own copy */
+    QueryPerformanceCounter(&t1);
+    if (t)
+        LOG("wikitech: loaded in %.1f ms - %d sides, %d units, %d pictures (%lu bytes of pixels)",
+            (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, t->nside, t->nunit, t->npic,
+            (unsigned long)t->npx);
+    InterlockedExchangePointer((PVOID*)&s_tech, t ? (PVOID)t : (PVOID)&s_tech_refused);
+    tech3d_run(in, vfs, t);
+}
+
+static uint32_t commit_to(unsigned char* base, uint32_t upto, uint32_t cap)
 {
     uint32_t to = (upto + COMMIT_STEP - 1) & ~(COMMIT_STEP - 1);
-    if (to > ARENA_CAP) to = ARENA_CAP;
+    if (to > cap) to = cap;
     /* committing a page already committed leaves it as it is, so the prefix is asked again whole */
     return VirtualAlloc(base, to, MEM_COMMIT, PAGE_READWRITE) ? to : 0;
 }
+
+static uint32_t commit_pages(unsigned char* base, uint32_t upto) { return commit_to(base, upto, ARENA_CAP); }
+static uint32_t commit_pages_tech3d(unsigned char* base, uint32_t upto) { return commit_to(base, upto, TECH3D_CAP); }
 
 static DWORD WINAPI loader(LPVOID p)
 {
@@ -5591,26 +6202,29 @@ static DWORD WINAPI loader(LPVOID p)
     if (!(base = (unsigned char*)VirtualAlloc(NULL, ARENA_CAP, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE))) {
         LOG("wiki3d: NOT loaded - %lu MB of address space could not be reserved (%lu)", (unsigned long)(ARENA_CAP >> 20),
             (unsigned long)GetLastError());
-        tagpu_vfs_close(vfs);
         publish_3d(NULL);
+        tech_run(in, vfs);
+        tagpu_vfs_close(vfs);
         free(in);
         return 0;
     }
     if (!tagpu_m3_ptr_ok(base) || !tagpu_m3_ptr_ok(base + ARENA_CAP - 1)) {
         LOG("wiki3d: NOT loaded - the arena at %p lies outside the readers' range", (void*)base);
         VirtualFree(base, 0, MEM_RELEASE);
-        tagpu_vfs_close(vfs);
         publish_3d(NULL);
+        tech_run(in, vfs);
+        tagpu_vfs_close(vfs);
         free(in);
         return 0;
     }
     w = tagpu_wiki3d_load(in, vfs, side, base, (uint32_t)(uintptr_t)base, ARENA_CAP, commit_pages);
-    tagpu_vfs_close(vfs);
     QueryPerformanceCounter(&t1);
     if (!w) {
         LOG("wiki3d: NOT loaded - the arena could not hold the report");
         VirtualFree(base, 0, MEM_RELEASE);      /* never published, so no reader holds it */
         publish_3d(NULL);
+        tech_run(in, vfs);
+        tagpu_vfs_close(vfs);
         free(in);
         return 0;
     }
@@ -5626,6 +6240,8 @@ static DWORD WINAPI loader(LPVOID p)
        WIKI3D is published, so the first sound finds it whole */
     if (!in->sound_off) tagpu_wikisound_make(&w->sound, in->hwnd);
     publish_3d(w);
+    tech_run(in, vfs);
+    tagpu_vfs_close(vfs);
     free(in);
     return 0;
 }
@@ -5638,6 +6254,8 @@ void tagpu_wikiasset_start(WIKI3DIN* in)
         LOG("wiki3d: NOT loaded - CreateThread failed (%lu)", (unsigned long)GetLastError());
         side_publish(NULL);
         publish_3d(NULL);
+        InterlockedExchangePointer((PVOID*)&s_tech, (PVOID)&s_tech_refused);
+        InterlockedExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused);
         free(in);
         return;
     }
@@ -5679,6 +6297,35 @@ int tagpu_wiki3d_answer(const WIKI3D** out)
     return WIKISIDE_READY;
 }
 
+/* ORDERING: an interlocked read, a full barrier, pairs with tech_run's store (or the refusal's);
+   the block is never written after it (tagpu_wikiasset.h, THE TECH TREE'S PUBLICATION) */
+int tagpu_wikitech_get(const WIKITECH** out)
+{
+    const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_tech, NULL, NULL);
+    *out = NULL;
+    if (!v) return WIKISIDE_PENDING;
+    if (v == (PVOID)&s_tech_refused) return WIKISIDE_REFUSED;
+    *out = (const WIKITECH*)v;
+    return WIKISIDE_READY;
+}
+
+void tagpu_wikitech_refuse(void)
+{
+    InterlockedCompareExchangePointer((PVOID*)&s_tech, (PVOID)&s_tech_refused, NULL);
+    InterlockedCompareExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused, NULL);
+}
+
+/* ORDERING as tagpu_wikitech_get's */
+int tagpu_wikitech3d_get(const WIKI3D** out)
+{
+    const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_tech3d, NULL, NULL);
+    *out = NULL;
+    if (!v) return WIKISIDE_PENDING;
+    if (v == (PVOID)&s_tech3d_refused) return WIKISIDE_REFUSED;
+    *out = (const WIKI3D*)v;
+    return WIKISIDE_READY;
+}
+
 /* ORDERING: an interlocked read, a full barrier, pairs with side_publish's store; the block is
    never written after it (tagpu_wikiasset.h, THE SIDEBAR'S PUBLICATION) */
 int tagpu_wikiside_get(const WIKISIDE** out)
@@ -5710,10 +6357,12 @@ void tagpu_wikiasset_poll(void)
 {
     const WIKI3D* w;
     const WIKISIDE* side;
+    const WIKITECH* tech;
     if (GetFileAttributesA(DUMP_ASK) == INVALID_FILE_ATTRIBUTES || !(w = tagpu_wiki3d_get())) return;
     DeleteFileA(DUMP_ASK);
     dump_write(DUMP_OUT, w->report);
     if (tagpu_wikiside_get(&side) == WIKISIDE_READY) dump_write(SIDE_OUT, side->report);
+    if (tagpu_wikitech_get(&tech) == WIKISIDE_READY) dump_write(TECH_OUT, tech->report);
 }
 
 #endif

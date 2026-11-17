@@ -98,7 +98,7 @@ only trace of TADR, 448 and 441 changed runs of the game's code with none into T
 takes Zero's map pack after Alpha 5 (`TA_Zero_Maps.ufo`: Zero's eighteen maps and the `TAZ_*`
 features they and TA Forever's Zero maps name), so `tazero-alpha5` carries it as the fixture
 `tazero-mappack`; without it 6P Wild Hunt stops at load with `Record "TAZ_Raindance_Metal1"
-missing from feature files`. The managed TA Zero package is built from this setup
+missing from feature files`. The managed TA Zero package is built from `tazero-alpha5`
 (`mods/tazero.json` names it), so it carries the pack's `TAZ_*` features too: the fingerprint
 counts them (only `maps\` is left out), and a package without them keeps Start off against a
 TA Forever install, as `managed-tazero`'s network game shows when the package is older than the

@@ -31,12 +31,13 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10072 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (448u + 128u + 4u)   /* TAGPU_CMD_WIKI is 19924 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
                                        loader keeps (WIKI_MAXNODE)                           */
-#define TAGPU_WIKI_NSCROLL 3u       /* the panels that scroll: tree, demos, text (WIKI_SCROLL_*) */
+#define TAGPU_WIKI_NSCROLL 4u       /* the panels that scroll: tree, demos, text, unit (WIKI_SCROLL_*) */
+#define TAGPU_WIKI_SCROLL_UNIT 3    /* the tech tree's unit panel among them (WIKI_SCROLL_UNIT)        */
 #define TAGPU_WIKI_MSG     128u     /* the stage's message: a simulation's refusal fits it       */
 
 /* What the wiki shows this draw. Present in a packet exactly while the wiki can be drawn: in a
@@ -48,7 +49,7 @@
    the 164 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles, 2 KB a replay's
    overlays and minimap pass; MEASURED as sizeof on the DLL's compiler) and a frame:game entry's
    frame record after it (WIKIFRAMEREC, 4600 bytes, 2896 of them a players record's samples; the
-   whole area 172744, the head 328, MEASURED as sizeof on the DLL's compiler) are
+   whole area 177904, the head 5 488, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */
@@ -103,6 +104,30 @@ typedef struct TAGPU_PK_WIKI {
     uint32_t rep_serial;        /* the game thread's count of replays made and freed: the
                                    replay this packet shows, which the hit map drawn from it
                                    names (TAGPU_CMD_WIKI.rep_serial)                         */
+    /* THE TECH TREE ENTRY's view (tagpu_wikitech.h), the game thread's: which side, where the
+       camera is and what is picked. DATA to the render thread, which bounds each before a read: the
+       side against the published tree, the pick against that side's walk, the camera to finite
+       values with a zoom inside the tree's range (tagpu_wikistate.c tech_bound) */
+    int8_t   tech_side;         /* the published tree's side: the player's; -1 none           */
+    uint8_t  tech_fit;          /* the tree is fitted to the canvas the frame draws: tech_cam
+                                   is not read                                               */
+    uint8_t  tech_all;          /* All links: every builder's edge                            */
+    int16_t  tech_sel;          /* the picked unit, an order index of the side's walk; -1 none */
+    float    tech_cam[3];       /* z (device pixels a tree unit), x, y (the tree point at the
+                                   canvas's top-left corner)                                 */
+    /* THE UNIT'S VIEW in the picked unit's panel (tagpu_wiki.c, THE TECH TREE'S UNIT VIEW): the unit
+       it shows and its script's pose, the toggled actions and the orbit camera. DATA to the render
+       thread: the body bounded against the published models, the pose's count against the model's
+       pieces and WIKISTAGE_PIECES, the camera to finite values */
+    uint16_t tv_serial;         /* the view's script: a new one at each new body and each Reset */
+    int16_t  tv_body;           /* the unit shown, an index of the tree's units (an upgrade's
+                                   first builder's); -1 none                                 */
+    uint8_t  tv_act;            /* the toggled actions, TAGPU_TV_* bits                       */
+    uint8_t  tv_note;           /* TAGPU_TV_NOTE_*, the host's half: LOADING, HINT, REST, NOMODEL */
+    uint16_t tv_npose;          /* tv_pose's pieces, in the posed order; 0 the rest pose      */
+    float    tv_cam[3];         /* yaw and pitch (radians), and the distance as a factor of the
+                                   distance the render thread fits to the model              */
+    WIKISTAGEPIECE tv_pose[WIKISTAGE_PIECES];
     WIKISTAGEVIEW stage;        /* the demo's view by value: carried only with has_stage      */
     WIKIFRAMEREC  frame;        /* a frame:game entry's frame record (tagpu_wikiframe.h), `on` 0
                                    for any other entry; DATA, bounded by the render thread's
@@ -169,6 +194,16 @@ typedef struct TAGPU_CMD_WIKI {
                                    state dump alone, which the players lane compares with the
                                    frame's fit                                               */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
+    /* THE TECH TREE as that frame drew it: the camera it drew (fitted or the packet's, bounded),
+       the zoom's least value there, and the canvas in client pixels, its width less what a panel
+       over it covers. tech = 0 on any other frame. DATA: the game thread turns a pointer into a
+       tree point through it and bounds the camera it makes from it again */
+    uint8_t  tech;
+    int8_t   tech_side;         /* the side drawn                                            */
+    float    tech_cam[3];       /* z, x, y                                                   */
+    float    tech_lo;           /* the zoom's floor: the fitted zoom or a fifth of 1:1, the
+                                   smaller                                                   */
+    float    tech_cv[4];        /* the canvas: x0, y0, the uncovered width, the height        */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
     TAGPU_CMD_WIKIBAR bar[TAGPU_WIKI_NSCROLL];

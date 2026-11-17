@@ -276,8 +276,7 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
                                stderr=subprocess.STDOUT, check=False, timeout=120)
                 owned.append(name)
-                command(sys.executable, cli, "create", name, "--private-registry",
-                        "--display", display.display, "--res", "1024x768")
+                command(sys.executable, cli, "create", name, "--display", display.display, "--res", "1024x768")
                 game = instances / name / "gamedir"
                 shutil.copyfile(dll, game / "ddraw.dll")
                 if reproduce:

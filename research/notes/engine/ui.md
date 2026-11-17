@@ -3568,8 +3568,10 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   `0x4301C0`'s default of 12 applies only when the registry value is absent, and it is not
   absent. But it is also **not a property of the template prefix**: `wineprefix/user.reg` and all
   58 `tagpu/instances/*/prefix/user.reg` are **one inode with 59 hard links** (`tacli`'s
-  `clone_prefix` is `cp -al`), and wine rewrites that file **in place at every launch**, so there
-  is a single `Gamma` for the template and every instance and it is whatever TA last stored.
+  `clone_prefix` was `cp -al` then), and wine rewrote that file **in place at every launch**, so
+  there was a single `Gamma` for the template and every instance, whatever TA last stored. Each
+  prefix now has hives of its own ([tacli design](../tacli-design.html), *Every prefix owns its
+  registry hives*), and TA's key is the instance's store.
   Both values have been read hours apart on the same day, on the same DLLs:
   **at 15** the presented factor is `0.5 + 15/24 = 1.125`, applied by **truncation** — the
   presented palette reproduces exactly as `min(255, (int)(entry × 1.125))` in all 256 entries,

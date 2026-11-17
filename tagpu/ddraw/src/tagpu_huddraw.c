@@ -660,6 +660,22 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
         break;
     }
+    case HOP_PIC: {
+        /* a tech tree picture's rect of the sheet whole into the op's box, which the tree snapped to
+           whole device pixels; filtered when `centre` is 1 */
+        const float* uv;
+        if (!c->ops->pic || op->part < 0 || op->part >= c->ops->npic) break;
+        uv = c->ops->pic + (size_t)op->part * 4;
+        if (!(uv[2] > uv[0] && uv[3] > uv[1])) break;
+        if (!(in = emit(c, op->centre == 1 ? HUD_TEX_TECH_SMOOTH : HUD_TEX_TECH, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                        (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+        in->uv[0] = uv[0];
+        in->uv[1] = uv[1];
+        in->uv[2] = uv[2];
+        in->uv[3] = uv[3];
+        colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
     case HOP_BAR: {
         /* the frame's bar `part`: its rows of the bars' picture, the top-left size x 32 texels,
            whole into the op's box, which the stage snapped to whole device pixels */
@@ -821,6 +837,8 @@ HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
     l.chart = &ops->chart;
     l.chart_slot = 0;
     l.watch = -1;
+    l.pic = NULL;
+    l.npic = 0;
     return l;
 }
 

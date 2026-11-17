@@ -30,15 +30,16 @@
 #include "tagpu_hudlay.h"
 #include "tagpu_uikit.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikitech.h"
 
-#define WIKI_MAXHOT    160      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
+#define WIKI_MAXHOT    448      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
 #define WIKI_MAXNODE   1024     /* the tree's nodes the loader keeps: one fold bit each           */
 #define WIKI_CAPTION   WIKI_CAPTION_MAX /* the caption's bytes, with its terminator: every loaded
                                            caption's fill fits                                  */
 
-/* the three panels that scroll, the order of WIKIPAGE.scroll and the keys scroll:tree,
-   scroll:demos and scroll:text */
-enum { WIKI_SCROLL_TREE, WIKI_SCROLL_DEMOS, WIKI_SCROLL_TEXT, WIKI_NSCROLL };
+/* the panels that scroll, the order of WIKIPAGE.scroll and the keys scroll:tree, scroll:demos,
+   scroll:text and scroll:unit (the tech tree's unit panel) */
+enum { WIKI_SCROLL_TREE, WIKI_SCROLL_DEMOS, WIKI_SCROLL_TEXT, WIKI_SCROLL_UNIT, WIKI_NSCROLL };
 
 /* The page as the player has it: what wiki.js keeps in S, and the demo's view (caption, keys). */
 typedef struct {
@@ -74,6 +75,19 @@ typedef struct {
                                    1, as tagpu_wikitext_words takes it                          */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
     int      about;             /* the theatre's About panel is open (a frame:game entry's page) */
+    /* THE TECH TREE ENTRY's row (wiki.js drawTech's #t-title and its controls): the tree's title,
+       UTF-8, "" while none is drawn; All links down */
+    char     tech_title[160];
+    int      tech_all;
+    /* ... and THE UNIT'S PANEL (wiki.js techPanel) over the stage's right, for `tech_sel`, an order
+       index of `tech`'s walk (-1 none; one outside the walk reads as none), never with About.
+       LIFETIME: `tech` is the caller's, built from the published tree and alive through the build;
+       its HOP_PIC ops name pictures of tech->t (tagpu_wikistate.c gives the draw their uv) */
+    const WIKITECHTREE* tech;
+    int      tech_sel;
+    unsigned tech_act;          /* the view's toggled actions, drawn pressed: TAGPU_TV_* bits
+                                   (tagpu_wikitech.h) -- Turn alone as a view opens             */
+    int      tech_note;         /* the view's note, TAGPU_TV_NOTE_*: unitview.js `say`'s line   */
 } WIKIPAGE;
 
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
@@ -92,6 +106,14 @@ typedef struct {
     HUDRECT window;
     int     caption_cut;        /* the strip shows only the caption's first lines */
     int     row_cut;            /* the theatre's row overflows the stage's bezel */
+    float   cover;              /* the left edge, units, of the panel over the stage's right (About or
+                                   the unit's panel);
+                                   0 when none is open: the tech tree's fit leaves out what it covers */
+    /* THE UNIT VIEW the unit's panel placed (w 0: none this frame), the panel's scroll clip it lies
+       in, and the first op drawn OVER the view's 3D picture -- its note: the picture is composited
+       between the top layer's ops before `uview_cut` and those from it (tagpu_vk_hud.c) */
+    HUDRECT uview, uview_clip;
+    int     uview_cut;
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;

@@ -2035,6 +2035,17 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, keep,
                             h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
     bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    /* THE ALLOWANCE BOUNDS WHAT IS DUE SINCE THE LAST ACKNOWLEDGED COPY, which is this pass's only
+       while it is the atlas's one consumer. The wiki's instance shares its atlas with the tech
+       tree's unit view (tagpu_wikiview.h), which acknowledges its own copy on the frames it draws,
+       so this copy can come back further behind than one frame sends: then it takes the page. */
+    if (keep && bytes > TAGPU_VK_STAGE_CAP) {
+        keep = 0;
+        why = "the tiles due since this copy pass what one frame sends";
+        n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, 0,
+                                h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
+        bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    }
     if (keep) {
         if (n > 0 && (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4) ||
                       !tagpu_vk_stage_fits(&s->stage, bytes))) {

@@ -958,40 +958,100 @@ def deploy_dll(inst: Instance):
     shutil.copy2(BUILT_DLL, inst.gamedir / "ddraw.dll")
 
 
+HIVES = ("user.reg", "system.reg", "userdef.reg")
+
+
 def clone_prefix(inst: Instance):
+    """The prefix: a hardlink clone of the template's files, and copies of its three registry
+    hives, which are never linked.
+
+    EVERY HIVE HAS ONE LINK, which is what makes a copy of the template's whole. A wineserver
+    saves a hive with several links by truncating it and writing it in place, and one with a
+    single link into a temporary file it renames over the hive [MEASURED 2026-11-17, wine 9.0: a
+    single-link user.reg changed inode at a save; with a second link it kept its inode, and the
+    other link saw the write]. So a hive no other prefix links is only ever replaced whole, and a
+    copy of it reads one whole save. A hive two prefixes linked was one inode that each one's
+    wineserver rewrote in place: a copy taken during such a save was cut (a compat joiner's
+    system.reg of 1.88 MB against 3.57, with no RpcSs service and no DirectPlay provider). The
+    hives are copied, not linked then replaced, so that no moment exists at which the template's
+    hive has a second link; template_hive_links refuses a template whose hives another prefix
+    still links. The prefix's own TA key is not here but in its registry store (seed_regstore)."""
     if inst.prefix.exists():
         return
     if not TEMPLATE_PREFIX.is_dir():
         die(f"template wine prefix missing: {TEMPLATE_PREFIX}")
-    inst.prefix.parent.mkdir(parents=True, exist_ok=True)
-    # cp -al: a hardlink clone, so the registry hives (user.reg, system.reg, userdef.reg)
-    # are ONE inode with the template's and every other instance's, for good: wine
-    # rewrites a hive in place and never breaks the link [MEASURED 2026-09-26: 392 links to
-    # wineprefix/user.reg; saves that moved its mtime changed the count only by the instances
-    # made meanwhile]. A value written in any prefix is every prefix's. So TA's settings key is not kept here but in the
-    # instance's registry store (seed_regstore); what stays in the prefix is Wine's own
-    # state, which is the same for every instance.
-    r = subprocess.run(["cp", "-al", str(TEMPLATE_PREFIX), str(inst.prefix)],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        die(f"prefix clone failed: {r.stderr.strip()}")
+    refuse_linked_template()
+    inst.prefix.mkdir(parents=True)
+    rest = [str(p) for p in TEMPLATE_PREFIX.iterdir() if p.name not in HIVES]
+    if rest:
+        r = subprocess.run(["cp", "-al", *rest, str(inst.prefix)], capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"prefix clone failed: {r.stderr.strip()}")
+    copy_hives(TEMPLATE_PREFIX, inst.prefix)
 
 
-def privatise_hives(inst: Instance):
-    """Give the prefix hives of its own: each of the three copied into a new file that
-    replaces the hardlink, so the prefix stops sharing the template's inode. Run before any
-    Wine process has started in the prefix -- a wineserver rewrites its hive in place when it
-    exits, and until this runs that write lands in every prefix at once.
-    THE GAP: the copy is read from the shared inode, which a wineserver of another,
-    non-private instance may be rewriting at that moment (truncated, then written front to
-    back), and a hive has no end marker to prove a copy whole. Two private prefixes share no
-    file afterwards; what each starts from is only as whole as the template was when read."""
-    for hive in ("user.reg", "system.reg", "userdef.reg"):
-        p = inst.prefix / hive
+def copy_hives(src: Path, dst: Path):
+    """Each hive of `src` copied into a new file of `dst`'s, written under a temporary name and
+    renamed in, so `dst` never holds a partial hive."""
+    for hive in HIVES:
+        p = src / hive
         if p.exists():
-            tmp = p.with_name(hive + ".private-tmp")
+            tmp = dst / (hive + ".private-tmp")
             shutil.copy2(p, tmp)
-            os.replace(tmp, p)
+            os.replace(tmp, dst / hive)
+
+
+def template_hive_links() -> list:
+    """The instances whose prefix still links one of the template's hives: [] when every hive of
+    the template has a single link, the only state in which a copy of it is whole."""
+    if all(not (TEMPLATE_PREFIX / h).exists() or (TEMPLATE_PREFIX / h).stat().st_nlink == 1
+           for h in HIVES):
+        return []
+    linked = []
+    for prefix in sorted(INSTANCES.glob("*/prefix")):
+        for h in HIVES:
+            try:
+                if (prefix / h).samefile(TEMPLATE_PREFIX / h):
+                    linked.append(prefix.parent.name)
+                    break
+            except OSError:
+                continue
+    return linked or ["(a link outside tagpu/instances)"]
+
+
+def refuse_linked_template():
+    """Die while another prefix links the template's hives: its wineserver rewrites them in
+    place, so a copy taken now may be cut."""
+    linked = template_hive_links()
+    if linked:
+        die(f"the template's registry hives are still linked by {len(linked)} prefix(es): "
+            f"{', '.join(linked[:12])}{' ...' if len(linked) > 12 else ''} -- a wineserver of one "
+            f"rewrites them in place, so a copy now may be cut. Remove them (`tacli rm`) until one "
+            f"is left, which `tacli create <name> --force` then gives hives of its own; a link "
+            f"outside tagpu/instances is removed by hand (clone_prefix).")
+
+
+def own_hives(inst: Instance):
+    """A prefix `--force` kept that still links the template's hives (made by a tacli before
+    clone_prefix copied them) gets copies of its own, from the template while this prefix is its
+    only other link. THE INVARIANT: no wineserver writes the inode while it is read. Its game is
+    not running (refused below), and end_prefix_wineserver then ends this prefix's server and
+    everything attached to it -- a server outlives its game by about a second, and its exit save
+    rewrites the hive in place -- so with no other link, nothing else can open it. With another
+    prefix linking it too, refuse_linked_template."""
+    def links(h):
+        mine, tpl = inst.prefix / h, TEMPLATE_PREFIX / h
+        return mine.exists() and tpl.exists() and mine.samefile(tpl)
+    if not any(links(h) for h in HIVES):
+        return
+    if inst.running():
+        die(f"{inst.name} is running, and its prefix still links the template's registry hives: "
+            f"stop it before `create --force` gives it hives of its own")
+    others = [n for n in template_hive_links() if n != inst.name]
+    if others:
+        refuse_linked_template()
+    end_prefix_wineserver(inst)
+    copy_hives(TEMPLATE_PREFIX, inst.prefix)
 
 
 def install_dplay(inst: Instance) -> str:
@@ -1153,8 +1213,8 @@ def free_dplay_port(port: int) -> int:
 
 
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
-    """`wine reg add` into the instance's prefix -- whose user.reg every prefix shares
-    (clone_prefix). For Wine's own keys, and for TA's only on a launch whose DLL does
+    """`wine reg add` into the instance's prefix, whose hives are its own (clone_prefix). For
+    Wine's own keys, and for TA's only on a launch whose DLL does
     not serve the registry store (local_registry)."""
     run(["wine", "reg", "add", key, "/v", value, "/t", kind, "/d", data, "/f"],
         env=inst.env(), cwd=str(inst.gamedir))
@@ -1198,8 +1258,8 @@ def player_keys(spec: str):
 
 
 def apply_prefix_settings(inst: Instance):
-    """Wine's own registry state that must hold before launch. It lives in the prefix,
-    so it is the same for every instance; TA's key is the instance's store."""
+    """Wine's own registry state that must hold before launch, written into each prefix's own
+    hives; TA's key is the instance's store."""
     # No XRandR: stops wine re-probing outputs, which blanks every physical monitor
     # for seconds at each launch (research/notes/windowed-mode.md).
     reg_add(inst, r"HKCU\Software\Wine\X11 Driver", "UseXRandR", "REG_SZ", "N")
@@ -1211,8 +1271,8 @@ def apply_prefix_settings(inst: Instance):
 # file per instance: `tacli-state/registry.txt` beside TotalA.exe, which the DLL answers
 # TotalA.exe's registry calls from in a test launch (tagpu_regstore.h: the format, the
 # limits, the two signals, and failing closed). For a remote instance that keeps the
-# player's key unwritten; for a local one it is what makes the key the instance's own,
-# because every local prefix's user.reg is one inode (clone_prefix).
+# player's key unwritten; for a local one it keeps TA's key out of Wine's hives, so a test
+# launch reads what the harness wrote and nothing an earlier game left in the prefix.
 #
 # THE STORE IS THE DLL'S WHILE A GAME OF THE INSTANCE RUNS: it rewrites the file on every
 # change the game makes. tacli writes it only after checking that none runs, and only
@@ -1539,8 +1599,7 @@ def local_registry(inst: Instance, meta: dict, values) -> dict:
     Into the instance's store always, made first if the instance has none. The DLL that
     will run decides the rest: one that serves the store (dll_serves_regstore) reads
     only that, and the launch passes it the test token; one that does not -- a
-    `--keep-dll` build from before the store -- reads the prefix's user.reg, which every
-    instance shares, so the values go there as well and the launch says so. Never
+    `--keep-dll` build from before the store -- reads the prefix's own user.reg, so the values go there as well and the launch says so. Never
     refused: an A/B against an old build has to keep running. The caller holds
     regstore_lock."""
     seeded = seed_regstore(inst)
@@ -1723,10 +1782,7 @@ def _create(inst: Instance, args) -> dict:
     shield = args.shield is not False
     kept_seed = inst.meta().get("registry_seed") if inst.exists else None
     clone_prefix(inst)
-    if getattr(args, "private_registry", False):
-        privatise_hives(inst)
-    # a fact of the prefix, not of this call: `--force` keeps a prefix that is already private
-    private = not (inst.prefix / "user.reg").samefile(TEMPLATE_PREFIX / "user.reg")
+    own_hives(inst)
     vsync = getattr(args, "vsync", None) or "on"
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
                    shield=shield, window=window, vsync=vsync)
@@ -1745,7 +1801,6 @@ def _create(inst: Instance, args) -> dict:
         "display": display,
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
-        "private_registry": private,
     }
     inst.save_meta(meta)
     apply_prefix_settings(inst)
@@ -2239,7 +2294,7 @@ def _launch(args) -> dict:
         time.sleep(0.5)
     # The DLL's own word that it serves the store: a game that runs is not enough.
     registry_line = (_await_registry_line(inst, old_log, max(deadline, time.time() + 5),
-                                          args.timeout, "the registry every instance shares")
+                                          args.timeout, "the prefix's registry")
                      if token else None)
     store_lock.close()
     # a --shipped game places itself, as a player's does
@@ -6263,6 +6318,22 @@ def cmd_scenario_load(args):
 REPLAY_REQUEST = "tagpu_replay.play"
 REPLAY_TRIGGER = "tagpu_replay.trigger"
 REPLAY_RX = re.compile(r"replay: (playing|not playing)\b(.*)")
+LOADER_RX = re.compile(r"packet: loader thread \d+ (entered|leaving) 0x497C70")
+
+
+def _replay_stalled(inst: Instance, seen: list, timeout: float) -> str:
+    """What a replay start that never logged its verdict shows: the screen the game is on, how
+    far the level's load got (the loader thread's entry and exit, tagpu_packet_pub.c), and the log's
+    last lines since the request -- the evidence a later look at a reused instance no longer has."""
+    snap = _ui_snapshot(inst, timeout=5.0, soft=True)
+    screen = snap.get("gui") if snap else "no answer to a UI snapshot in 5 s"
+    marks = [m.group(1) for line in seen for m in [LOADER_RX.search(line)] if m]
+    load = ("no loader-thread line since the request" if not marks else
+            "the loader thread entered and has not left" if marks[-1] == "entered" else
+            "the loader thread entered and left")
+    tail = "\n  ".join(line.rstrip() for line in seen[-8:]) or "(no line since the request)"
+    return (f"no `replay: playing` in {timeout:g}s: on screen {screen}; {load}; "
+            f"{len(seen)} log line(s) since the request, the last:\n  {tail}")
 REPLAY_PLAYING_RX = re.compile(r"replay: playing ([A-Za-z0-9_-]+):")
 REPLAY_SEATS_MAX = 10   # every record a game seats: the viewer takes record 10 (tagpu_replay.c)
 REPLAY_SEEK_TIMEOUT = 120.0
@@ -6396,6 +6467,7 @@ def _replay_start(args, verb, tail=""):
             steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
                          + (f" — {how}" if how else ""))
         deadline = time.time() + args.load_timeout
+        seen = []
         while verdict is None:
             if not inst.running():
                 try:
@@ -6406,6 +6478,7 @@ def _replay_start(args, verb, tail=""):
                     f"{args.name} exited while the replay loaded, with no crash report; the log's "
                     f"last lines:\n  " + "\n  ".join(tail))
             got = lines()
+            seen += got
             for i, line in enumerate(got):
                 m = REPLAY_RX.search(line)
                 if m:
@@ -6418,8 +6491,7 @@ def _replay_start(args, verb, tail=""):
                 if report:
                     die(report)
                 if time.time() >= deadline:
-                    die(f"no `replay: playing` in {args.load_timeout:g}s "
-                        f"(tacli log {args.name} -g replay)")
+                    die(_replay_stalled(inst, seen, args.load_timeout))
                 _answer_nap(inst, 0.5)
     finally:
         # a request the Start never read would make the next skirmish a replay
@@ -7725,10 +7797,6 @@ def build_parser():
     c.add_argument("--no-shield", dest="shield", action="store_false", default=None,
                    help="let hardware keyboard/mouse reach the game (default: blocked)")
     c.add_argument("--force", action="store_true")
-    c.add_argument("--private-registry", action="store_true",
-                   help="give the prefix registry hives of its own instead of the template's "
-                        "shared inode, before any Wine process runs in it: its Wine keys and "
-                        "anything a mod writes stay its own, and creates can run at once")
     c.set_defaults(func=cmd_create)
 
     l = sub.add_parser("launch", help="start an instance (creating it if needed)")

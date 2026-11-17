@@ -40,7 +40,7 @@ def run(output):
             directory = Path(tempfile.mkdtemp(prefix="recmp-arena-", dir=instances))
             env = dict(os.environ, WINEPREFIX=str(directory / "prefix"), DISPLAY=display.display, WINEDEBUG="-all")
             command([sys.executable, root / "tools/tacli", "create", directory.name,
-                     "--private-registry", "--display", display.display, "--res", "640x480"], log)
+                     "--display", display.display, "--res", "640x480"], log)
         with (output / "arena.log").open("w") as log:
             command(["wine", exe, "Z:" + str(original).replace("/", "\\")], log, env=env)
         (output / "evidence.json").write_text(json.dumps(dict(

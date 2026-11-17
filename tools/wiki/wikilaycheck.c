@@ -22,6 +22,7 @@
    mockup's frame record, its map and its column, and the output's `stagehud` the frame, the HUD's
    controls, the cursor, the emblems and Leave's question as the game draws them from that record,
    in page device pixels, which wikilaycheck.py pairs with the mockup's own. */
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,7 @@
 #include "tagpu_wikilay.h"
 #include "tagpu_wikistage.h"
 #include "lodepng.h"
+#include "techpack.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
@@ -167,7 +169,73 @@ static int mod_of(const char* s)
 }
 
 /* --check: tagpu_wikilay_check with every casting of each pack's side.json, in the game's faces */
-static int check_packs(const WIKILAY* l, const WIKIDATA* d, const char* huddir, int npack, char** pack, HUDOPS* o)
+/* THE TECH TREE'S PANELS: every unit's panel of every side of each pack's tree (techtree/ beside
+   its side.json), at every scroll from its top to its limit a view at a time, on screens from 4:3
+   to 48:9 and to 4K: none may drop an op, a run, a text, a hit or a group. The bound the layout
+   argues for its hits (WIKI_MAXHOT) holds at any aspect by theatre.about_max; its ops are bounded
+   by HUD_MAXOP only, and this is where that is measured. Prints the most hits and ops a frame
+   took. */
+static int check_tech(const WIKILAY* l, WIKIDATA* d, const UIFACES* f, int npack, char** pack, HUDOPS* o)
+{
+    static const float SCREEN[][2] = { { 1024, 768 }, { 1920, 1080 }, { 3840, 2160 }, { 3840, 1080 }, { 5760, 1080 } };
+    static WIKIPAGE st;
+    static WIKITECHTREE tree;
+    WIKIFRAME fr;
+    char err[256], dir[1024], tp[1100];
+    int k, e, side, s, sel, entry = -1, panels = 0, mhot = 0, mop = 0, mtext = 0, mrun = 0;
+    for (e = 0; e < d->nentry; e++)
+        if (d->entry[e].techtree) entry = e;
+    if (entry < 0) { printf("wikilaycheck: the tech tree's panels: no tech tree entry\n"); return 1; }
+    for (k = 0; k < npack; k++) {
+        const char* slash = strrchr(pack[k], '/');
+        const char* name;
+        WIKITECH* t;
+        snprintf(dir, sizeof dir, "%.*s/techtree", slash ? (int)(slash - pack[k]) : 1, slash ? pack[k] : ".");
+        snprintf(tp, sizeof tp, "%s/tree.json", dir);
+        if (!(t = techpack_load(tp, dir, err, sizeof err))) { printf("wikilaycheck: the tech tree's panels: %s\n", err); return 1; }
+        name = slash ? slash : pack[k];
+        while (name > pack[k] && name[-1] != '/') name--;
+        for (side = 0; side < WIKITECH_SIDES && tagpu_wikitech_tree(t, side, &tree); side++)
+            for (s = 0; s < (int)(sizeof SCREEN / sizeof *SCREEN); s++)
+                for (sel = 0; sel < tree.n; sel++) {
+                    float at = 0;
+                    memset(&st, 0, sizeof st);
+                    st.W = SCREEN[s][0];
+                    st.H = SCREEN[s][1];
+                    st.bar = 24;
+                    st.open = 1;
+                    st.entry = entry;
+                    st.iface = 1;
+                    st.mod = mod_of(name);
+                    st.tech = &tree;
+                    st.tech_sel = sel;
+                    for (;;) {
+                        int i, hot = 0;
+                        st.scroll[WIKI_SCROLL_UNIT] = at;
+                        if (!tagpu_wikilay_build(l, d, f, &st, o, &fr, err, sizeof err) || o->overflow) {
+                            printf("wikilaycheck: the tech tree's panels FAILED: %s side %d unit %d at %.0fx%.0f, scroll %.0f: %s\n",
+                                   dir, side, sel, st.W, st.H, at, o->overflow ? "the page overflows its bounds" : err);
+                            return 1;
+                        }
+                        for (i = 0; i < o->n; i++) hot += o->op[i].kind == HOP_HOT;
+                        if (hot > mhot) mhot = hot;
+                        if (o->n > mop) mop = o->n;
+                        if (o->ntext > mtext) mtext = o->ntext;
+                        if (o->nrun > mrun) mrun = o->nrun;
+                        panels++;
+                        if (fr.scroll_max[WIKI_SCROLL_UNIT] <= at) break;
+                        at += (float)fmax(1.0, st.H / (st.H / 720.0) / 2);   /* half the screen's units a step */
+                    }
+                }
+        techpack_free(t);
+    }
+    printf("wikilaycheck: the tech tree's panels: %d frames of every unit's panel of %d packs, every scroll, 4:3 to 48:9 and 4K, "
+           "built whole: at most %d hits of %d, %d ops of %d, %d runs of %d, %d text bytes of %d\n",
+           panels, npack, mhot, WIKI_MAXHOT, mop, HUD_MAXOP, mrun, HUD_MAXRUN, mtext, HUD_TEXTMAX);
+    return 0;
+}
+
+static int check_packs(const WIKILAY* l, WIKIDATA* d, const char* huddir, int npack, char** pack, HUDOPS* o)
 {
     UIFACES f;
     WIKICASTING* all = NULL;
@@ -196,7 +264,7 @@ static int check_packs(const WIKILAY* l, const WIKIDATA* d, const char* huddir, 
     printf("wikilaycheck: the load-time check passed: the page builds whole with the entries' own names, %d castings of "
            "%d packs and the worst castings, and every caption shows whole in its strip but the worst castings'\n", n, npack);
     free(all);
-    return 0;
+    return check_tech(l, d, &f, npack, pack, o);
 }
 
 /* ---- THE STAGE HUD of a game entry's theatre ---- */
@@ -412,6 +480,7 @@ int main(int argc, char** argv)
     WIKIDATA* d;
     UIFACES f;
     WIKIPAGE* st = (WIKIPAGE*)calloc(1, sizeof(WIKIPAGE));
+    WIKITECH* tech = NULL;
     WIKIFRAME fr;
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
     const HUDLAY* kit;
@@ -502,6 +571,28 @@ int main(int argc, char** argv)
         for (j = 0; j < WIKI_NKEYS; j++)
             if (!strcmp(tagpu_wikidata_key_name(j), tj_str(e, ""))) st->keys |= 1u << j;
     st->about = tj_is(tj_get(S, "about"), TJ_TRUE);
+    snprintf(st->tech_title, sizeof st->tech_title, "%s", tj_str(tj_get(S, "tech_title"), ""));
+    st->tech_all = tj_is(tj_get(S, "tech_all"), TJ_TRUE);
+    /* the unit's panel: the mod's pack made into the tree the game makes (techpack.h), the mockup's
+       side and pick */
+    st->tech_sel = -1;
+    if ((int)tj_num(tj_get(S, "tech_sel"), -1) >= 0) {
+        static WIKITECHTREE tree;
+        char tp[2048];
+        snprintf(tp, sizeof tp, "%s/tree.json", tj_str(tj_get(S, "tech_pack"), "."));
+        if (!(tech = techpack_load(tp, tj_str(tj_get(S, "tech_pack"), "."), err, sizeof err))) {
+            fprintf(stderr, "wikilaycheck: %s\n", err);
+            return 1;
+        }
+        if (!tagpu_wikitech_tree(tech, (int)tj_num(tj_get(S, "tech_side"), 0), &tree)) {
+            fprintf(stderr, "wikilaycheck: the pack made no tree for side %d\n", (int)tj_num(tj_get(S, "tech_side"), 0));
+            return 1;
+        }
+        st->tech = &tree;
+        st->tech_sel = (int)tj_num(tj_get(S, "tech_sel"), -1);
+        /* the view opens with Turn on (unitview.js `cam.spin`) */
+        st->tech_act = TAGPU_TV_TURN;
+    }
     /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
        is checked on the tree's entries whether or not one declares "frame": "game"; the same
        entry is made a game entry here */
@@ -509,13 +600,13 @@ int main(int argc, char** argv)
 
     if (!tagpu_wikilay_build(l, d, &f, st, o, &fr, err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     px = st->H / 720.0;
-    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f],"
-           "\"row_cut\":%d},\"ops\":[\n",
-           o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll_max[0], fr.scroll_max[1], fr.scroll_max[2],
-           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
+    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f,%.4f],"
+           "\"stage\":[%.4f,%.4f,%.4f,%.4f],\"row_cut\":%d},\"ops\":[\n",
+           o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll[3], fr.scroll_max[0], fr.scroll_max[1],
+           fr.scroll_max[2], fr.scroll_max[3], fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
-        static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
+        static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart", "side", "bar", "tri", "pic" };
         double a = (double)(p->rgba & 0xFF) * (p->grp ? o->grp[p->grp - 1] : 1);
         printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f", i ? ",\n" : "", kinds[p->kind],
                p->r.x, p->r.y, p->r.w, p->r.h);
@@ -535,6 +626,20 @@ int main(int argc, char** argv)
             printf(",\"text\":"); json_str(o->text + r->off, r->len);
         }
         if (p->kind == HOP_HOT) { printf(",\"key\":"); json_str(o->text + p->run, (int)strlen(o->text + p->run)); }
+        if (p->kind == HOP_PIC && tech) {
+            /* the unit whose picture it is, by the pack's key: its name in lower case */
+            char key[WIKITECH_NAME] = "";
+            int q, z;
+            for (q = 0; q < tech->nunit; q++)
+                if (tech->unit[q].pic == p->part) {
+                    for (z = 0; z + 1 < (int)sizeof key && tech->unit[q].name[z]; z++)
+                        key[z] = (char)tolower((unsigned char)tech->unit[q].name[z]);
+                    key[z] = 0;
+                    break;
+                }
+            printf(",\"key\":");
+            json_str(key, (int)strlen(key));
+        }
         if (p->flags & HOPF_TOP) printf(",\"top\":1");
         putchar('}');
     }

@@ -45,7 +45,12 @@
    tagpu_wikistate.c composes each frame, 384 KB of RGBA8 sampled nearest, under the same rules --
    sent whole when its generation moves, cleared after the build, hidden while the device holds
    another generation's. A frame:game stage's two bars are one more (HUD_TEX_BAR, 512 KB of RGBA8,
-   tagpu_wikistate_bar), under the same rules.
+   tagpu_wikistate_bar), under the same rules. The tech tree's pictures are one more (HUD_TEX_TECH,
+   2048 x 2048 RGBA8, tagpu_wikistate_tech): too large for one slot's staging, so a new generation is
+   sent in bands of whole rows, as many as the slot's staging has room for each frame, onto the
+   rows earlier bands of the same generation left in place; its pictures stay hidden until the
+   last band of their generation is on the device. One image under two sets: sampled nearest, and
+   filtered with no mips (the glyphs' sampler) for a picture drawn smaller than itself.
 
    EVERY OBJECT HERE BELONGS TO THE LANE'S OWNER (tagpu_vk.c, the lane's states): the render
    thread builds them in the first prepare after the HUD's art and the wiki's have loaded (build),
@@ -123,7 +128,8 @@ static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipe;
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_clamp, s_repeat, s_glyph;
-static TEX                   s_part[MAXPART], s_atlas, s_chart[HUD_CHART_SLOTS], s_sprite, s_side, s_bar;
+static TEX                   s_part[MAXPART], s_atlas, s_chart[HUD_CHART_SLOTS], s_sprite, s_side, s_bar, s_tech;
+static VkDescriptorSet       s_techLin;         /* s_tech's image, filtered (HUD_TEX_TECH_SMOOTH) */
 static VkSampler             s_near;
 static unsigned              s_cgen[HUD_CHART_SLOTS];   /* each chart slot's generation the
                                                            device holds; 0 none               */
@@ -132,6 +138,10 @@ static int                   s_cclear;          /* the charts', the sprite sheet
 static unsigned              s_sgen;            /* the sprite generation the device holds; 0 none */
 static unsigned              s_dgen;            /* the sidebar generation the device holds; 0 none */
 static unsigned              s_bgen;            /* the bars' generation the device holds; 0 none */
+static unsigned              s_tgen;            /* the tech sheet's generation the device holds
+                                                   whole; 0 none                              */
+static unsigned              s_tup;             /* the generation being sent, and its next row */
+static int                   s_trow;
 static int                   s_nparts;          /* the HUD's parts: s_part[0, s_nparts)       */
 static int                   s_nwparts;         /* the wiki's, after them; 0 when it failed    */
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
@@ -154,6 +164,9 @@ static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb
 static int                   s_wb0, s_wb1;      /* the wiki layer's: s_batch[s_wb0, s_wb1)     */
 static int                   s_wbm;             /* where the stage's ops over its 3D image start:
                                                    [s_wb0, s_wbm) under it, [s_wbm, s_wb1) over */
+static int                   s_wbv;             /* where the page's ops over the tech tree's unit
+                                                   view start: [s_wbm, s_wbv) under its picture,
+                                                   [s_wbv, s_wb1) over it                        */
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
@@ -371,6 +384,7 @@ static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
                         : b->tex == HUD_TEX_CHART_WIKI ? s_chart[1].set
                         : b->tex == HUD_TEX_SPRITE ? s_sprite.set : b->tex == HUD_TEX_SIDE ? s_side.set
                         : b->tex == HUD_TEX_BAR ? s_bar.set
+                        : b->tex == HUD_TEX_TECH ? s_tech.set : b->tex == HUD_TEX_TECH_SMOOTH ? s_techLin
                         : b->tex >= 0 && b->tex < s_nparts + s_nwparts ? s_part[b->tex].set : s_atlas.set;
     if (!b->count) return;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &set, 0, NULL);
@@ -753,9 +767,9 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     memset(&ps, 0, sizeof ps);
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     /* a set for each part, the atlas, each chart slot, the sprite sheet, the sidebar, the bars,
-       and each frame slot's layer */
-    ps.descriptorCount = (uint32_t)(s_nparts + s_nwparts) + 4 + HUD_CHART_SLOTS + TAGPU_VK_SLOTS;
-    dpi.maxSets = (uint32_t)(s_nparts + s_nwparts) + 4 + HUD_CHART_SLOTS + TAGPU_VK_SLOTS;
+       the tech sheet's two, and each frame slot's layer */
+    ps.descriptorCount = (uint32_t)(s_nparts + s_nwparts) + 6 + HUD_CHART_SLOTS + TAGPU_VK_SLOTS;
+    dpi.maxSets = (uint32_t)(s_nparts + s_nwparts) + 6 + HUD_CHART_SLOTS + TAGPU_VK_SLOTS;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -781,6 +795,30 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     if (!mk_tex(d, &s_side, VK_FORMAT_R8G8B8A8_UNORM, HUD_SIDE_W, HUD_SIDE_H, 1, s_near)) return 0;
     /* and its game frame's bars, nearest likewise */
     if (!mk_tex(d, &s_bar, VK_FORMAT_R8G8B8A8_UNORM, HUD_BAR_W, HUD_BAR_H, 1, s_near)) return 0;
+    /* the tech tree's pictures: nearest as the canvas draws a picture at its size or larger, and a
+       second set on the same view, filtered, for one drawn smaller */
+    if (!mk_tex(d, &s_tech, VK_FORMAT_R8G8B8A8_UNORM, HUD_TECH_W, HUD_TECH_H, 1, s_near)) return 0;
+    {
+        VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        VkDescriptorImageInfo ii;
+        VkWriteDescriptorSet wr;
+        dai.descriptorPool = s_dpool;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &s_dsl;
+        if (vkAllocateDescriptorSets(d->dev, &dai, &s_techLin) != VK_SUCCESS) return 0;
+        memset(&ii, 0, sizeof ii);
+        ii.sampler = s_glyph;
+        ii.imageView = s_tech.view;
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        memset(&wr, 0, sizeof wr);
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = s_techLin;
+        wr.dstBinding = 40;
+        wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr.pImageInfo = &ii;
+        vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    }
 
     bci.size = IBYTES * d->slots;
     bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -808,6 +846,8 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     s_sgen = 0;
     s_dgen = 0;
     s_bgen = 0;
+    s_tgen = s_tup = 0;
+    s_trow = 0;
     s_cclear = 0;
     plog(d, "hud: the pass is up - %d parts and the wiki's %d, a %dx%d glyph atlas, %u frame slots",
          s_nparts, s_nwparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
@@ -1013,6 +1053,63 @@ static int send_side(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* s
     return 1;
 }
 
+/* The tech sheet's rows that hold pictures, in bands of whole rows, as many as the slot's staging
+   has room for, once its generation has moved; 1 the device holds that generation whole. A band
+   moves the image from SHADER_READ_ONLY, which the build's clear left it in and every band leaves
+   it in, so the rows earlier bands sent are kept. Until the last band is sent its pictures are not
+   drawn (hide_tex). */
+static int send_tech(VkCommandBuffer cb, TAGPU_VKSTAGE* st)
+{
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkBufferImageCopy rg;
+    const VkDeviceSize row = (VkDeviceSize)HUD_TECH_W * 4;
+    VkDeviceSize off;
+    unsigned gen;
+    int rows, n;
+    const unsigned char* a = tagpu_wikistate_tech(&gen, &rows);
+
+    if (!gen || !a || gen == s_tgen) return 1;
+    if (gen != s_tup) { s_tup = gen; s_trow = 0; }
+    if (rows < 0) rows = 0;
+    if (rows > HUD_TECH_H) rows = HUD_TECH_H;
+    if (s_trow >= rows) { s_tgen = gen; return 1; }
+    off = (st->used + 15) & ~(VkDeviceSize)15;
+    if (!st->map || off >= st->cap || (st->cap - off) / row < 1) return 0;
+    n = (int)((st->cap - off) / row);
+    if (n > rows - s_trow) n = rows - s_trow;
+    memcpy(st->map + off, a + (size_t)s_trow * (size_t)row, (size_t)n * (size_t)row);
+    st->used = off + (VkDeviceSize)n * row;
+    b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = s_tech.img;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
+    memset(&rg, 0, sizeof rg);
+    rg.bufferOffset = off;
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageOffset.y = s_trow;
+    rg.imageExtent.width = (uint32_t)HUD_TECH_W;
+    rg.imageExtent.height = (uint32_t)n;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, st->buf, s_tech.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
+    s_trow += n;
+    if (s_trow >= rows) s_tgen = gen;
+    return s_tgen == gen;
+}
+
 /* The wiki stage's game frame's bars, whole, once their generation has moved; 1 the device holds
    them. Until it does the bars are not drawn (hide_tex). */
 static int send_bar(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st)
@@ -1140,7 +1237,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, hud, wiki;
     int wcur = 0, wcurSprite = 0;   /* the stage's cursor's instances, and whether they are sprites */
 
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wbv = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
     tagpu_wikistate_drawn(0, 0);
@@ -1216,22 +1313,24 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_nbatch = nb0 + nb1;
         s_tb0 = nb0;
         s_tb1 = nb0 + m1;
-        s_wb0 = s_wbm = s_wb1 = s_nbatch;
-        /* THE WIKI'S LAYER: seven builds in paint order (tagpu_wikistate.h WIKILISTS) -- the page's
+        s_wb0 = s_wbm = s_wbv = s_wb1 = s_nbatch;
+        /* THE WIKI'S LAYER: eight builds in paint order (tagpu_wikistate.h WIKILISTS) -- the page's
            base layer, the stage under its 3D image, the stage over it, a frame:game stage's HUD
            (its base layer, then its top layer) in the HUD's own art and unit, the frame's TOP
-           range, and the page's top layer (About). A wiki kit batch's texture is its
+           range, and the page's top layer (About, the unit's panel) in two: its ops under the
+           tech tree's unit view's picture and those over it. A wiki kit batch's texture is its
            kit index, which the pass holds after the HUD's parts; the stage HUD's are the HUD's.
            Then the partition (tagpu_huddraw_partition): every list's attachment batches in list
            order, then every list's group batches, so [s_wb0, s_wb1) is one run of the
            attachment's, cut at s_wbm -- after the page's base layer and the stage under the
            image -- where the image goes, and the layer pass records the group runs after s_wb1. */
         if (wiki) {
-            enum { NL = 7 };
-            HUDOPLIST hudl;
+            enum { NL = 8 };
+            HUDOPLIST hudl, ptop, pover;
             const HUDOPLIST* list[NL];
             const HUDART* kit[NL];
-            int layer[NL] = { 0, 0, 0, 0, 1, 0, 1 }, k, at[NL], mw[NL], nbw[NL], nm;
+            int layer[NL] = { 0, 0, 0, 0, 1, 0, 1, 1 }, k, at[NL], mw[NL], nbw[NL], nm;
+            const int cut = wl.page_cut >= 0 && wl.page_cut < wl.page.n ? wl.page_cut : wl.page.n;
             const int ninst0 = s_ninst, ngroup0 = s_ngroup;
             float lpx[NL];
             int lox[NL], loy[NL];
@@ -1241,8 +1340,14 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                which the same frame may draw from too */
             hudl.chart_slot = 1;
             hudl.watch = -1;
+            /* the page's ops by pointer and count: their runs, text and groups are the page's */
+            ptop = wl.page;
+            ptop.n = cut;
+            pover = wl.page;
+            pover.op = wl.page.op + cut;
+            pover.n = wl.page.n - cut;
             list[0] = &wl.page; list[1] = &wl.stage; list[2] = &wl.over; list[3] = &hudl; list[4] = &hudl;
-            list[5] = &wl.top; list[6] = &wl.page;
+            list[5] = &wl.top; list[6] = &ptop; list[7] = &pover;
             for (k = 0; k < NL; k++) {
                 const int h_ = k == 3 || k == 4;
                 kit[k] = h_ ? art : &wart->draw;
@@ -1286,6 +1391,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 wiki = 0;
             } else {
                 s_wbm = s_wb0 + mw[0] + mw[1];
+                s_wbv = s_wb0;
+                for (k = 0; k < NL - 1; k++) s_wbv += mw[k];
                 s_wb1 = nm;
             }
         }
@@ -1323,19 +1430,21 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         clear_image(cb, s_sprite.img);
         clear_image(cb, s_side.img);
         clear_image(cb, s_bar.img);
+        clear_image(cb, s_tech.img);
         s_cclear = 1;
     }
     {
-        unsigned gen, cgen, wgen, sgen, dgen, bgen;
-        int y0, y1;
+        unsigned gen, cgen, wgen, sgen, dgen, bgen, tgen;
+        int y0, y1, trows;
         tagpu_huddraw_atlas(&gen, &y0, &y1);
         tagpu_huddraw_chart(0, &cgen);
         tagpu_huddraw_chart(1, &wgen);
         tagpu_wikistate_sprites(&sgen);
         tagpu_wikistate_side(&dgen);
         tagpu_wikistate_bar(&bgen);
+        tagpu_wikistate_tech(&tgen, &trows);
         due = !s_sent || gen != s_agen || y1 > y0 || cgen != s_cgen[0] || wgen != s_cgen[1] || (sgen && sgen != s_sgen)
-           || (dgen && dgen != s_dgen) || (bgen && bgen != s_bgen);
+           || (dgen && dgen != s_dgen) || (bgen && bgen != s_bgen) || (tgen && tgen != s_tgen);
     }
     if (!due) {
         if (sg->buf) tagpu_vk_stage_drop(d, sg);
@@ -1355,6 +1464,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (s_sent) send_sprite(d, cb, sg);
         if (s_sent) send_side(d, cb, sg);
         if (s_sent) send_bar(d, cb, sg);
+        if (s_sent) send_tech(cb, sg);
     }
     if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
     /* THE TEXT DRAWS ONLY FROM WHAT THE DEVICE HOLDS: this build's glyphs are in the atlas the
@@ -1383,6 +1493,15 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* and the frame's bars only from the ones this frame composed */
         tagpu_wikistate_bar(&gen);
         if (gen != s_bgen) hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_BAR, HUDM_PART);
+        /* and the tech tree's pictures only from the sheet this frame's ops name, whole */
+        {
+            int trows;
+            tagpu_wikistate_tech(&gen, &trows);
+            if (gen != s_tgen) {
+                hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_TECH, HUDM_PART);
+                hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_TECH_SMOOTH, HUDM_PART);
+            }
+        }
     }
     /* a frame with a group has its composites, which bind the layer: it is made whenever there is
        one, even if every region is empty */
@@ -1466,9 +1585,16 @@ int tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
 int tagpu_vk_hud_record_wiki_over(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                   uint32_t w, uint32_t h)
 {
+    (void)d;
+    return draw_batches(cb, slot, w, h, s_wbm, s_wbv);
+}
+
+int tagpu_vk_hud_record_wiki_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                 uint32_t w, uint32_t h)
+{
     int drew;
     (void)d;
-    drew = draw_batches(cb, slot, w, h, s_wbm, s_wb1);
+    drew = draw_batches(cb, slot, w, h, s_wbv, s_wb1);
     s_ninst = 0;
     return drew;
 }
@@ -1501,6 +1627,8 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     free_tex(dev, &s_sprite);
     free_tex(dev, &s_side);
     free_tex(dev, &s_bar);
+    free_tex(dev, &s_tech);
+    s_techLin = VK_NULL_HANDLE;
     /* the sets go back with the pool */
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
@@ -1517,8 +1645,10 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_sgen = 0;
     s_dgen = 0;
     s_bgen = 0;
+    s_tgen = s_tup = 0;
+    s_trow = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wbv = s_wb1 = s_ngroup = 0;
     s_nwparts = 0;
     memset(&s_top, 0, sizeof s_top);
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */

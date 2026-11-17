@@ -32,7 +32,7 @@ def run(output):
             env = dict(os.environ, WINEPREFIX=str(directory / "prefix"), DISPLAY=display.display,
                        WINEDEBUG="-all")
             command([sys.executable, root / "tools/tacli", "create", directory.name,
-                     "--private-registry", "--display", display.display, "--res", "640x480"], log)
+                     "--display", display.display, "--res", "640x480"], log)
         with (output / "explored.log").open("w") as log:
             command(["wine", exe], log, env=env)
         print("PASS: copied per-origin exploration transaction controls", flush=True)

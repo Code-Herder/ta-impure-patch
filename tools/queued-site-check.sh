@@ -42,7 +42,7 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
 fi
 # a registry of its own: an instance sharing the template's hives would take the whole budget
 "$T" rm "$I" --force > /dev/null 2>&1
-"$T" create "$I" --private-registry --display "$D" > "$OUT/create.txt" 2>&1 \
+"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 \
   || fail "create: $(tail -1 "$OUT/create.txt")"
 "$T" scenario load "$I" "$REPO/scenarios/queued-site.json" --defaults --los 0 --restart \
   > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"

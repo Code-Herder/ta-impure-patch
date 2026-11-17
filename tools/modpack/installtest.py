@@ -232,7 +232,7 @@ class Server:
 class Wine:
     def __init__(self):
         subprocess.run([sys.executable, str(TACLI), "rm", INSTANCE, "--force"], capture_output=True)
-        r = subprocess.run([sys.executable, str(TACLI), "create", INSTANCE, "--display", ":99", "--res", "1024x768", "--private-registry"], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(TACLI), "create", INSTANCE, "--display", ":99", "--res", "1024x768"], capture_output=True, text=True)
         if r.returncode:
             sys.exit(f"installtest: tacli create: {r.stderr or r.stdout}")
         meta = json.loads((INSTANCES / INSTANCE / "instance.json").read_text())

@@ -8,16 +8,15 @@ checks ask this program (tools/wiki/wikibuild.mjs wineEnv).
                                           made the first time; exit 2, saying why, when it cannot be had
 
 THE INVARIANT: the prefix shares no file with any other prefix. `wineboot -i` makes every file of it from Wine's own
-install and reads no other prefix, so nothing the checks run writes through to the hives the template prefix
-`wineprefix/` shares, as one inode, with every tacli clone (tacli clone_prefix), and no other prefix's wineserver
-writes into it -- which is also why making it needs no lock. It is made under a name of the making process and renamed
+install and reads no other prefix, so nothing the checks run writes into the template prefix `wineprefix/` or
+any tacli clone, and no other prefix's wineserver writes into it -- which is also why making it needs no lock. It is made under a name of the making process and renamed
 into place only once wineboot's server has exited, so a prefix found at the name is whole; two processes making it at
 once both finish, and the one whose rename comes second discards its own. Nothing deletes it: there is one for the
 repository, shared by every worktree's checks, and several Wine programs in it at once share its one wineserver, as in
 any prefix.
 
-THE REFUSAL: a $WINEPREFIX that is the template, or whose hives are the template's inode (a clone made without
---private-registry), is refused rather than run in.
+THE REFUSAL: a $WINEPREFIX that is the template, or whose hives are the template's inode (a clone made by a tacli
+before clone_prefix copied the hives), is refused rather than run in.
 
 The checks need nothing else of a prefix: their programs are i686 console programs linked -static by the DLL's compiler
 (tools/wiki/wikibuild.mjs, textparity.mjs), run with no game file, no DirectPlay and no registry key of tacli's.
@@ -59,8 +58,8 @@ def check(prefix, tree=TREE):
     for hive in HIVES:
         mine, theirs = prefix / hive, tpl / hive
         if mine.exists() and theirs.exists() and mine.samefile(theirs):
-            raise Refused(f"WINEPREFIX {prefix}: its {hive} is the template's own file (a clone made without "
-                          f"--private-registry)")
+            raise Refused(f"WINEPREFIX {prefix}: its {hive} is the template's own file (a clone made before "
+                          f"tacli copied the hives)")
     return prefix
 
 

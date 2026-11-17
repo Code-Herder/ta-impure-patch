@@ -96,6 +96,10 @@ int    ui_text_put(UI* u, const char* s, size_t n);     /* its offset, -1 with t
 HUDOP* ui_art(UI* u, int part, UIR r, const UIR* clip); /* part < 0 draws nothing                  */
 void   ui_glyph(UI* u, int icon, UIR b);                /* a kit glyph over its part's box, as large
                                                            as fits in 0.6 of it, centred; -1 none  */
+void   ui_glyph_in(UI* u, int icon, UIR b, const UIR* clip);
+/* picture `pic` of the list's table (HOP_PIC, HUDOPLIST.pic) whole into `r`, sampled nearest, as
+   `image-rendering: pixelated` draws an img; nothing when `r` lies outside `clip` */
+HUDOP* ui_pic(UI* u, int pic, UIR r, const UIR* clip);
 HUDOP* ui_solid(UI* u, int kind, UIR r, uint32_t rgb, double alpha, const UIR* clip);
 void   ui_disc(UI* u, UIR b, const UIR* clip);          /* a lock's circle with a 1 px border,
                                                            box-sizing border-box                   */
@@ -217,6 +221,9 @@ double ui_button_w(UI* u, const UIBUTTONG* g, const char* label);
 /* A button with part `part`: its text centred, or its kit glyph (`icon`, -1 none) over it with no
    text; a disabled one faded as one layer and given no control. Returns its width. */
 double ui_button(UI* u, const UIBUTTONG* g, double x, double y, const char* key, const char* label, int icon, int part, int off);
+/* ui_button inside a scroller: every op clipped to `clip`, and nothing when its box lies outside it */
+double ui_button_in(UI* u, const UIBUTTONG* g, double x, double y, const char* key, const char* label, int icon, int part, int off,
+                    const UIR* clip);
 
 typedef struct {
     double h, pad, gap, dot;

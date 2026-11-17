@@ -2612,7 +2612,8 @@ repeated, that "the template wine prefix every instance hardlink-clones carries 
 so "every instance of this project presents at 1.125" and "the world is ~11 % darker than the
 engine presents its own pixels on every instance this project has ever measured".
 
-**What is actually there:**
+**What was there on 2026-09-09** (every prefix's hives are copies now: [tacli design](tacli-design.html),
+*Every prefix owns its registry hives*):
 
 | what | reading |
 |---|---|

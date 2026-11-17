@@ -26,9 +26,9 @@ static const char* const PART[P_N] = { "window", "close", "close_down", "panel",
 
 /* layout.json `roles`, the text of each element */
 enum { R_WINDOW_TITLE, R_ENTRY_TITLE, R_CATEGORY, R_ENTRY, R_DEMO, R_DEMO_NUM, R_SUBTITLE, R_TEXT,
-       R_CAPTION, R_CONTROL, R_BADGE, R_KEYCAP, R_KEYS, R_N };
+       R_CHIP, R_CAPTION, R_CONTROL, R_BADGE, R_KEYCAP, R_KEYS, R_N };
 static const char* const ROLE[R_N] = { "window_title", "entry_title", "category", "entry", "demo",
-    "demo_num", "subtitle", "text", "caption", "control", "badge", "keycap", "keys" };
+    "demo_num", "subtitle", "text", "chip", "caption", "control", "badge", "keycap", "keys" };
 
 /* The mockup's strings: index.html and wiki.js. wikilaycheck.py compares every text, so one that
    drifts from the mockup's is named there. */
@@ -41,6 +41,10 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
 #define S_ABOUT     "About"
+#define S_FIT       "Fit"
+#define S_ZOUT      "\xE2\x88\x92"         /* − (U+2212, &minus;) */
+#define S_ZIN       "+"
+#define S_LINKS     "All links"
 /* a keycap a WIKI_KEY_*, in their order: one for every key, which the assert holds, so no key held
    shows another's name or none */
 static const char* const KEYCAP[] = { "Shift", "Alt", "Ctrl", "Z", "X", "E", "Left-click", "Right-click" };
@@ -74,6 +78,7 @@ typedef struct {
     double text_share, text_para;
     double theatre_about, theatre_min;      /* the About panel's share of the body (percent), the
                                                theatre stage's least height                       */
+    double theatre_about_max;               /* the About panel's most width, in units             */
 } WG;
 
 struct WIKILAY {
@@ -95,7 +100,11 @@ typedef struct {
     const WIKIPAGE*  st;
     WIKIFRAME*       fr;
     char             fill[FILL_N][MAXFILL];     /* the texts filled, by FILL_*                   */
+    UIR              top_box;                   /* the theatre's top layer: its box, and          */
+    int              top_kind;                  /* TOP_* (built after the window: see theatre)    */
 } C;
+
+enum { TOP_NONE, TOP_ABOUT, TOP_UNIT };
 
 /* text.js's fill(e, raw): `raw` (NULL reads "") with entry `e`'s words under the page's casting and
    interface type, into fill buffer `slot`. The words point into the entry and the casting, both
@@ -321,6 +330,25 @@ static void caption(C* c, double x, double y, double w)
                          > cap_h + 1.0 / 64;
 }
 
+/* The tech tree's controls (#ctl in #win.techtree): Fit, the zoom steps out and in and All links
+   (#tt-ctl, the controls' pair between them), then About; none is ever disabled, All links is down
+   while on. Returns their width; draws only with `emit`. */
+static double tech_controls(C* c, double x, double y, int emit)
+{
+    const WG* g = &c->l->g;
+    const double cg = U(c, g->ctl_gap), pair = U(c, g->ctl_pair);
+    const struct { const char* key; const char* label; int on; double after; } b[] = {
+        { "fit", S_FIT, 0, pair }, { "zout", S_ZOUT, 0, pair }, { "zin", S_ZIN, 0, pair },
+        { "links", S_LINKS, c->st->tech_all != 0, cg }, { "about", S_ABOUT, c->st->about != 0, 0 } };
+    double bx = x;
+    int i;
+    for (i = 0; i < 5; i++) {
+        bx += emit ? button(c, bx, y, b[i].key, b[i].label, -1, b[i].on, 0) : ui_button_w(&c->u, &c->l->g.ctl, b[i].label);
+        if (i + 1 < 5) bx += b[i].after;
+    }
+    return bx - x;
+}
+
 /* The controls (#ctl) from (x, y), each ctl_h tall: play, replay, 1x and 2x, Try it yourself, and
    in the theatre About (#c-about), which is never disabled. Returns their width; draws only with
    `emit`. */
@@ -458,19 +486,557 @@ static void about_panel(C* c, UIR box)
     panel(c, WIKI_SCROLL_TEXT, ui_rect(x, y, w, fmax(0, ch - th - sh - bh - gap * (2 + lk))), text_rows, "scroll:text");
 }
 
+/* ---- the tech tree's unit panel (#unit, wiki.js techPanel): its picture, name, description and
+   flags; the 3D view and its actions (unitview.js); its figures and weapons; the walk to it; who
+   builds it; its upgrades; what it builds, by kind. Each chip picks its unit (unit:<order>). ---- */
+
+#define UP_RGB    0xB56AD0u     /* an upgrade's purple (#unit .flag.up, .chip.up, .chip.has) */
+#define SEL_RGB   0xE8C66Au     /* the picked chip's outline (.chip.sel)                     */
+#define VIEW_RGB  0x12140Fu     /* the view's ground, under the 3D view                      */
+#define S_ELLIPSIS "..."       /* three periods: the HUD faces have no ellipsis character */
+#define S_SEP     "\xC2\xBB"   /* » (U+00BB), which the faces have */
+#define UNIT_MAXLIST 1024       /* a chip list's entries: a menu's, at most a side's walk     */
+
+/* the unit of order index `k`'s text, UTF-8: its title (the name when it has none), its
+   description */
+static void unit_title(const WIKITECHTREE* T, int k, char* d, size_t n)
+{
+    const WIKITECHUNIT* x = &T->t->unit[T->unit[k]];
+    if (x->title[0]) tagpu_wikitech_utf8(d, n, x->title, 1);
+    else snprintf(d, n, "%s", x->name);
+}
+
+/* the panel's ink: dark on a light panel, else the text style's own colour */
+static uint32_t unit_ink_rgb(const C* c, int role)
+{
+    return ui_light(&c->u, c->l->part[P_PANEL]) ? 0x1D1D1Bu : c->l->style[c->l->role[role]].rgb;
+}
+
+/* the last text op, if `n0` was the op count before it, recoloured `rgb`: its run's colour, the
+   shadow or outline the face gives it kept */
+static void recolour(C* c, int n0, uint32_t rgb)
+{
+    HUDOP* p;
+    if (c->u.o->n <= n0) return;
+    p = &c->u.o->op[c->u.o->n - 1];
+    if (p->kind == HOP_TEXT && p->nrun) c->u.o->run[p->run].rgb = rgb;
+}
+
+/* a 1 px frame `t` thick round `r`, inset by `in` (CSS outline with outline-offset -in): solid,
+   or dashed in three-pixel dashes */
+static void frame_px(C* c, UIR r, double t, double in, uint32_t rgb, int dashed, const UIR* clip)
+{
+    const UIR o = ui_rect(r.x + in, r.y + in, r.w - 2 * in, r.h - 2 * in);
+    if (!dashed) {
+        ui_solid(&c->u, HOP_SOLID, ui_rect(o.x, o.y, o.w, t), rgb, 1, clip);
+        ui_solid(&c->u, HOP_SOLID, ui_rect(o.x, o.y + o.h - t, o.w, t), rgb, 1, clip);
+        ui_solid(&c->u, HOP_SOLID, ui_rect(o.x, o.y + t, t, o.h - 2 * t), rgb, 1, clip);
+        ui_solid(&c->u, HOP_SOLID, ui_rect(o.x + o.w - t, o.y + t, t, o.h - 2 * t), rgb, 1, clip);
+    } else {
+        double a;
+        for (a = 0; a < o.w; a += 6) {
+            ui_solid(&c->u, HOP_SOLID, ui_rect(o.x + a, o.y, fmin(3, o.w - a), t), rgb, 1, clip);
+            ui_solid(&c->u, HOP_SOLID, ui_rect(o.x + a, o.y + o.h - t, fmin(3, o.w - a), t), rgb, 1, clip);
+        }
+        for (a = 0; a < o.h; a += 6) {
+            ui_solid(&c->u, HOP_SOLID, ui_rect(o.x, o.y + a, t, fmin(3, o.h - a)), rgb, 1, clip);
+            ui_solid(&c->u, HOP_SOLID, ui_rect(o.x + o.w - t, o.y + a, t, fmin(3, o.h - a)), rgb, 1, clip);
+        }
+    }
+}
+
+/* a 128-bit unsigned, for js_fixed's exact compare: the C the DLL builds with has no wider type */
+typedef struct { uint64_t hi, lo; } JSU128;
+
+static JSU128 js_mul(uint64_t a, uint64_t b)
+{
+    const uint64_t al = a & 0xFFFFFFFFu, ah = a >> 32, bl = b & 0xFFFFFFFFu, bh = b >> 32;
+    const uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    const uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFu) + (hl & 0xFFFFFFFFu);
+    JSU128 r;
+    r.lo = (mid << 32) | (ll & 0xFFFFFFFFu);
+    r.hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+    return r;
+}
+
+/* |v| * p >= q / 2, exactly: |v| is m * 2^-s (m < 2^53, 0 < s < 1100), so the test is
+   m * p * 2 >= q * 2^s, both sides in 128 bits. m * p * 2 < 2^53 * 10^4 * 2 < 2^68; a right side
+   past 2^127 is larger than any left one. */
+static int js_ge_half(uint64_t m, int s, uint64_t p, uint64_t q)
+{
+    const JSU128 a = js_mul(m, p * 2);
+    JSU128 b;
+    if (q == 0) return 1;
+    if (s >= 128) return 0;
+    if (s > 64) {
+        if (q >> (128 - s)) return 0;               /* q * 2^s is past 2^128 */
+        b.hi = q << (s - 64);
+        b.lo = 0;
+    } else if (s == 64) {
+        b.hi = q;
+        b.lo = 0;
+    } else {
+        b.hi = s ? q >> (64 - s) : 0;
+        b.lo = q << s;
+    }
+    return a.hi != b.hi ? a.hi > b.hi : a.lo >= b.lo;
+}
+
+/* JS's toFixed: `v` to `f` decimals, the n with n / 10^f nearest the double's EXACT value, the
+   larger on a tie, a minus whenever v < 0 (ECMA-262 Number.prototype.toFixed) -- not the value
+   times 10^f, whose own rounding moves the tie: 1.325 is 1.32499999999999995559..., "1.32" in
+   JS, while 1.325 * 100 rounds to 132.5 exactly. Integer arithmetic on the double's mantissa,
+   for f <= 4 and |v| * 10^f below 2^62, so r, 2 * (r + 1) and m * p * 2 all fit; a value outside
+   that (no figure the panel shows) takes the rounded product. */
+static void js_fixed(char* d, size_t n, double v, int f)
+{
+    const double a = fabs(v);
+    const char* sign = v < 0 ? "-" : "";
+    uint64_t p = 1, r;
+    int i, ex;
+    for (i = 0; i < f; i++) p *= 10;
+    if (f > 4 || !(a * (double)p < 4611686018427387904.0)) {
+        snprintf(d, n, "%s%.*f", sign, f, floor(a * (double)p + 0.5) / (double)p);
+        return;
+    }
+    if (a == 0) r = 0;
+    else {
+        const double fr = frexp(a, &ex);            /* a = fr * 2^ex, fr in [0.5, 1) */
+        const uint64_t m = (uint64_t)ldexp(fr, 53); /* a = m * 2^(ex - 53), exactly  */
+        const int s = 53 - ex;
+        if (s <= 0) r = (uint64_t)a * p;            /* an integer */
+        else {
+            r = (uint64_t)floor(a * (double)p);
+            while (r > 0 && !js_ge_half(m, s, p, 2 * r)) r--;      /* r <= a * p, exactly       */
+            while (js_ge_half(m, s, p, 2 * (r + 1))) r++;          /* ... and a * p < r + 1     */
+            if (js_ge_half(m, s, p, 2 * r + 1)) r++;               /* the half, the larger n    */
+        }
+    }
+    if (f == 0) snprintf(d, n, "%s%llu", sign, (unsigned long long)r);
+    else snprintf(d, n, "%s%llu.%0*llu", sign, (unsigned long long)(r / p), f, (unsigned long long)(r % p));
+}
+
+/* wiki.js techPanel's `f`: from ten thousand, whole thousands with "k"; else the rounded value with
+   thousands separated by commas, as toLocaleString('en') */
+static void js_amount(char* d, size_t n, double v)
+{
+    if (v >= 10000) { snprintf(d, n, "%.0fk", floor(v / 1000 + 0.5)); return; }
+    {
+        /* Math.round, then every three digits grouped; a value past 2^53 is not an integer's
+           digits, and is set whole */
+        const double r = floor(v + 0.5);
+        char g[32], *o = g + sizeof g - 1;
+        unsigned long long q;
+        int k = 0;
+        if (!(fabs(r) < 9007199254740992.0)) { snprintf(d, n, "%.0f", r); return; }
+        q = (unsigned long long)fabs(r);
+        *o = 0;
+        do {
+            if (k && k % 3 == 0) *--o = ',';
+            *--o = (char)('0' + q % 10);
+            q /= 10;
+            k++;
+        } while (q);
+        snprintf(d, n, "%s%s", r < 0 ? "-" : "", o);
+    }
+}
+
+/* one line of `s` in role `role` at (x, top), clipped; returns its width (the intrinsic,
+   rounded up to a sixty-fourth) */
+static double say(C* c, int role, const char* s, double x, double top, int ink, const UIR* clip, int emit)
+{
+    UITS t = ts(c, role, c->l->g.line);
+    const int n = ui_pens(&c->u, &t, s, strlen(s));
+    if (emit && n) ui_line(&c->u, &t, s, 0, n, x, top, ink, clip);
+    return ui_ceil64(c->u.pen[n]);
+}
+
+/* the chip's height (#unit .chip: its padding, the picture, its label's line) */
+static double chip_h(const C* c)
+{
+    return U(c, 1) + U(c, 24) + ts(c, R_CHIP, c->l->g.line).L + U(c, 1);
+}
+
+/* A chip for unit `k` at (x, y): its picture over its label, the label cut with three periods to
+   the chip's width; its outline by what the unit is (.chip.up, .has, .sel). Returns its width. */
+static double chip(C* c, int k, double x, double y, const UIR* clip, int emit)
+{
+    const WIKITECHTREE* T = c->st->tech;
+    const double pad = U(c, 1), cw = U(c, 30), pic = U(c, 24), h = chip_h(c);
+    if (emit && (!clip || (y < clip->y + clip->h && y + h > clip->y))) {
+        const WIKITECHUNIT* x0 = &T->t->unit[T->unit[k]];
+        UITS t = ts(c, R_CHIP, c->l->g.line);
+        char title[WIKITECH_TITLE * 3 + 4], key[HUD_KEYLEN];
+        const UIR pr = ui_rect(x + pad + ui_half(cw - pic), y + pad, pic, pic);
+        const int ink = ui_light(&c->u, c->l->part[P_PANEL]);
+        int n, m = 0;
+        double tw;
+        snprintf(key, sizeof key, "unit:%d", k);
+        ui_hot(&c->u, ui_rect(x, y, cw + 2 * pad, h), clip, key);
+        ui_solid(&c->u, HOP_SOLID, pr, 0, 1, clip);
+        if (x0->pic >= 0) ui_pic(&c->u, x0->pic, pr, clip);
+        if (k == c->st->tech_sel) frame_px(c, ui_rect(pr.x - 2, pr.y - 2, pr.w + 4, pr.h + 4), 2, 0, SEL_RGB, 0, clip);
+        else if (T->upgrade[k]) frame_px(c, pr, 1, 0, UP_RGB, 1, clip);
+        else if (T->upgrades[k].n) frame_px(c, pr, 1, 0, UP_RGB, 0, clip);
+        unit_title(T, k, title, sizeof title);
+        n = ui_pens(&c->u, &t, title, strlen(title));
+        tw = ui_ceil64(c->u.pen[n]);
+        if (tw <= cw) {
+            if (n) ui_line(&c->u, &t, title, 0, n, x + pad + ui_half(cw - tw), y + pad + pic, ink, clip);
+        } else {
+            /* wiki.js chipCut: the most characters that fit with the three periods, then them */
+            char cut[sizeof title + 4];
+            int off[WIKITECH_TITLE * 3 + 4], k2;
+            for (k2 = 0; k2 <= n && k2 < (int)(sizeof off / sizeof *off); k2++) off[k2] = c->u.off[k2];
+            for (m = n - 1; m > 0; m--) {
+                memcpy(cut, title, (size_t)off[m]);
+                memcpy(cut + off[m], S_ELLIPSIS, sizeof S_ELLIPSIS);
+                if (ui_ceil64(c->u.pen[ui_pens(&c->u, &t, cut, strlen(cut))]) <= cw) break;
+            }
+            memcpy(cut, title, (size_t)off[m > 0 ? m : 0]);
+            memcpy(cut + off[m > 0 ? m : 0], S_ELLIPSIS, sizeof S_ELLIPSIS);
+            n = ui_pens(&c->u, &t, cut, strlen(cut));
+            ui_line(&c->u, &t, cut, 0, n, x + pad + ui_half(cw - ui_ceil64(c->u.pen[n])), y + pad + pic, ink, clip);
+        }
+    }
+    return cw + 2 * pad;
+}
+
+/* `n` chips of order indices `ks` as a wrapping flex row, `w` wide at (x, y), the chips' gap between,
+   with `sep` (the walk's ») between each two; returns its height */
+static double chips(C* c, const int32_t* ks, int n, int sep, double x, double y, double w, const UIR* clip, int emit)
+{
+    const double gap = U(c, 1), ch = chip_h(c), cw = U(c, 32);
+    const UITS t = ts(c, R_TEXT, c->l->g.line);
+    const double sw = sep ? say(c, R_TEXT, S_SEP, 0, 0, 0, NULL, 0) : 0;
+    const int ink = ui_light(&c->u, c->l->part[P_PANEL]);
+    double cx = 0, cy = 0;
+    int i;
+    if (n <= 0) return 0;
+    for (i = 0; i < n; i++) {
+        if (sep && i) {
+            if (cx > 0 && cx + sw > w) { cx = 0; cy += ch + gap; }
+            if (emit) {
+                ui_group_begin(&c->u, 0.6);
+                say(c, R_TEXT, S_SEP, x + cx, y + cy + ui_half(ch - t.L), ink, clip, 1);
+                ui_group_end(&c->u);
+            }
+            cx += sw + gap;
+        }
+        if (cx > 0 && cx + cw > w) { cx = 0; cy += ch + gap; }
+        chip(c, ks[i], x + cx, y + cy, clip, emit);
+        cx += cw + gap;
+    }
+    return cy + ch;
+}
+
+/* an h4 of the panel (the category role) and its margin under it: returns its height */
+static double unit_h4(C* c, const char* s, double x, double y, double w, const UIR* clip, int emit)
+{
+    return block(c, R_CATEGORY, c->l->g.line, s, x, y, w, ui_light(&c->u, c->l->part[P_PANEL]), clip, emit) + U(c, 1.5);
+}
+
+/* the list `L` of `T` as order indices into `out` */
+static int unit_list(const WIKITECHTREE* T, WTLIST L, int32_t* out)
+{
+    uint32_t q;
+    for (q = 0; q < L.n && q < UNIT_MAXLIST; q++) out[q] = T->pool[L.at + q];
+    return (int)q;
+}
+
+/* #unit .uh: the picture, then the name, description and flags taking what is left, then the close
+   button at the row's top; centred in the row's height. Returns its height. */
+static double unit_head(C* c, int k, double x, double y, double w, const UIR* clip, int emit)
+{
+    const WIKITECHTREE* T = c->st->tech;
+    const WIKITECHUNIT* x0 = &T->t->unit[T->unit[k]];
+    const double pic = U(c, 32), gap = U(c, 4), bw = U(c, 17), bh = U(c, c->l->g.ctl.h);
+    const double dw = fmax(0, w - pic - gap - gap - bw), fgap = U(c, 2), fpad = U(c, 2);
+    const int ink = ui_light(&c->u, c->l->part[P_PANEL]);
+    const uint32_t frgb = unit_ink_rgb(c, R_TEXT);
+    char title[WIKITECH_TITLE * 3 + 4], desc[WIKITECH_DESC * 2 + 4];
+    const char* flag[5];
+    int up[5], nf = 0, i, pass;
+    double th, dh, fh = 0, h, dy, L = ts(c, R_TEXT, c->l->g.line).L;
+    unit_title(T, k, title, sizeof title);
+    tagpu_wikitech_utf8(desc, sizeof desc, x0->desc, 0);
+    flag[nf] = tagpu_wikitech_kind_name(T->kind[k]); up[nf++] = T->upgrade[k] != 0;
+    if (T->upgradable[k]) { flag[nf] = "Upgradable"; up[nf++] = 1; }
+    if (x0->cloaked) { flag[nf] = "Cloaked"; up[nf++] = 0; }
+    if (x0->canfly) { flag[nf] = "Flies"; up[nf++] = 0; }
+    if (x0->water) { flag[nf] = "Naval"; up[nf++] = 0; }
+    th = block(c, R_ENTRY_TITLE, c->l->g.line, title, 0, 0, dw, ink, NULL, 0);
+    dh = block(c, R_SUBTITLE, c->l->g.line, desc, 0, 0, dw, ink, NULL, 0);
+    /* the flags wrap, the flags' gap across and down; each a 1 px border round its padded text */
+    for (pass = 0; pass < 2; pass++) {
+        double fx = 0, fy = 0;
+        h = fmax(fmax(pic, th + dh + U(c, 1) + fh), bh);
+        dy = y + ui_half(h - (th + dh + U(c, 1) + fh));
+        for (i = 0; i < nf; i++) {
+            const double fw = 1 + fpad + say(c, R_TEXT, flag[i], 0, 0, 0, NULL, 0) + fpad + 1;
+            if (fx > 0 && fx + fw > dw) { fx = 0; fy += L + 2 + fgap; }
+            if (pass && emit) {
+                const double ax = x + pic + gap + fx, ay = dy + th + dh + U(c, 1) + fy;
+                const uint32_t rgb = up[i] ? UP_RGB : frgb;
+                int n0;
+                ui_group_begin(&c->u, 0.85);
+                frame_px(c, ui_rect(ax, ay, fw, L + 2), 1, 0, rgb, 0, clip);
+                n0 = c->u.o->n;
+                say(c, R_TEXT, flag[i], ax + 1 + fpad, ay + 1, ink, clip, 1);
+                if (up[i]) recolour(c, n0, UP_RGB);
+                ui_group_end(&c->u);
+            }
+            fx += fw + fgap;
+        }
+        fh = nf ? fy + L + 2 : 0;
+    }
+    if (emit) {
+        const UIR pr = ui_rect(x, y + ui_half(h - pic), pic, pic);
+        ui_solid(&c->u, HOP_SOLID, pr, 0, 1, clip);
+        if (x0->pic >= 0) ui_pic(&c->u, x0->pic, pr, clip);
+        block(c, R_ENTRY_TITLE, c->l->g.line, title, x + pic + gap, dy, dw, ink, clip, 1);
+        block(c, R_SUBTITLE, c->l->g.line, desc, x + pic + gap, dy + th, dw, ink, clip, 1);
+        {
+            const UIR b = ui_rect(x + w - bw, y, bw, bh);
+            const int part = c->l->part[!strcmp(c->st->held, "uclose") ? P_BUTTON_DOWN : P_BUTTON];
+            if (!clip || (b.y < clip->y + clip->h && b.y + b.h > clip->y)) {
+                ui_art(&c->u, part, b, clip);
+                ui_hot(&c->u, b, clip, "uclose");
+                ui_glyph_in(&c->u, c->l->icon_close, b, clip);
+            }
+        }
+    }
+    return h;
+}
+
+/* #unit .scr's column, the entry's gap between its items */
+static double unit_rows(UI* u, const UIPANEL* p, double w, int emit, void* user)
+{
+    C* c = (C*)user;
+    const WG* g = &c->l->g;
+    const WIKITECHTREE* T = c->st->tech;
+    const int k = c->st->tech_sel, ink = ui_light(&c->u, c->l->part[P_PANEL]);
+    const WIKITECHUNIT* x0 = &T->t->unit[T->unit[k]];
+    /* the body the view shows, whose actions it offers: an upgrade's first builder's */
+    const WIKITECHUNIT* body = T->upgrade[k] && T->parents[k].n ? &T->t->unit[T->unit[T->pool[T->parents[k].at]]] : x0;
+    const double gap = U(c, g->entry_gap), x = p->cx;
+    const UIR* clip = &p->view;
+    const double L = ts(c, R_TEXT, g->line).L;
+    double y = p->cy;
+    int32_t* ks = (int32_t*)malloc(UNIT_MAXLIST * sizeof *ks);
+    char s[256], a[24], b[24];
+    int i, n;
+    (void)u;
+    if (!ks) { c->u.o->overflow = 1; return 0; }
+
+    y += unit_head(c, k, x, y, w, clip, emit) + gap;
+
+    /* an upgrade has no body of its own: the view shows its first builder's */
+    if (T->upgrade[k] && T->parents[k].n) {
+        char bt[WIKITECH_TITLE * 3 + 4];
+        unit_title(T, T->pool[T->parents[k].at], bt, sizeof bt);
+        snprintf(s, sizeof s, "An upgrade has no body of its own. Shown is the %s that builds it.", bt);
+        if (emit) ui_group_begin(&c->u, 0.8);
+        y += block(c, R_TEXT, g->line, s, x, y, w, ink, clip, emit) + gap;
+        if (emit) ui_group_end(&c->u);
+    }
+
+    /* the view (T4 draws the unit in it) and its actions, by what the FBI and the script say it can do */
+    {
+        const UIR vr = ui_rect(x, y, w, U(c, 120));
+        static const char* const ACT[8] = { "Walk", "Take off", "Aim", "Fire", "Build", "On / off", "Turn", "Reset" };
+        int on[8], na = 0;
+        const char* lab[8];
+        double ax = 0, ay = 0;
+        const double ag = U(c, g->ctl_pair), bh = U(c, g->ctl.h);
+        if (emit) {
+            /* the note's line, unitview.js `say` (#unit .view .note: 2 units in, 1 up), clipped to
+               the view: the 3D picture goes under it and over the ground (WIKIFRAME uview_cut) */
+            static const char* const NOTE[TAGPU_TV_NOTES] = {
+                "loading the model...", "drag to orbit \xC2\xB7 wheel to zoom \xC2\xB7 its own COB script poses it",
+                "no script: the rest pose", "no model to draw",
+                "nothing to draw: every piece with faces is hidden" };
+            const int nk = c->st->tech_note >= 0 && c->st->tech_note < TAGPU_TV_NOTES ? c->st->tech_note : 0;
+            const double nl = ts(c, R_TEXT, g->line).L;
+            UIR vc = vr;
+            if (vc.x < clip->x) { vc.w -= clip->x - vc.x; vc.x = clip->x; }
+            if (vc.y < clip->y) { vc.h -= clip->y - vc.y; vc.y = clip->y; }
+            if (vc.x + vc.w > clip->x + clip->w) vc.w = clip->x + clip->w - vc.x;
+            if (vc.y + vc.h > clip->y + clip->h) vc.h = clip->y + clip->h - vc.y;
+            ui_solid(&c->u, HOP_SOLID, vr, VIEW_RGB, 1, clip);
+            ui_hot(&c->u, vr, clip, "uview");
+            if (c->fr) {
+                const double px = c->u.px;
+                c->fr->uview.x = (float)(vr.x / px); c->fr->uview.y = (float)(vr.y / px);
+                c->fr->uview.w = (float)(vr.w / px); c->fr->uview.h = (float)(vr.h / px);
+                c->fr->uview_clip.x = (float)(clip->x / px); c->fr->uview_clip.y = (float)(clip->y / px);
+                c->fr->uview_clip.w = (float)(clip->w / px); c->fr->uview_clip.h = (float)(clip->h / px);
+                c->fr->uview_cut = c->u.o->n;
+            }
+            if (vc.w > 0 && vc.h > 0)
+                say(c, R_TEXT, NOTE[nk], x + U(c, 2), vr.y + vr.h - U(c, 1) - nl, 0, &vc, 1);
+        }
+        y += vr.h + gap;
+        const unsigned a = c->st->tech_act;
+        if (body->mobile && !body->canfly) { lab[na] = ACT[0]; on[na++] = (a & TAGPU_TV_WALK) != 0; }
+        if (body->canfly) { lab[na] = ACT[1]; on[na++] = (a & TAGPU_TV_FLY) != 0; }
+        if (body->nweapon) { lab[na] = ACT[2]; on[na++] = (a & TAGPU_TV_AIM) != 0; lab[na] = ACT[3]; on[na++] = 0; }
+        if (body->builder) { lab[na] = ACT[4]; on[na++] = (a & TAGPU_TV_BUILD) != 0; }
+        if (body->structure && !body->nweapon) { lab[na] = ACT[5]; on[na++] = (a & TAGPU_TV_ON) != 0; }
+        lab[na] = ACT[6]; on[na++] = (a & TAGPU_TV_TURN) != 0;
+        lab[na] = ACT[7]; on[na++] = 0;
+        for (i = 0; i < na; i++) {
+            const double bw = ui_button_w(&c->u, &g->ctl, lab[i]);
+            char key[HUD_KEYLEN];
+            if (ax > 0 && ax + bw > w) { ax = 0; ay += bh + ag; }
+            if (emit) {
+                snprintf(key, sizeof key, "act:%s", lab[i]);
+                ui_button_in(&c->u, &g->ctl, x + ax, y + ay, key, lab[i], -1,
+                             c->l->part[on[i] || !strcmp(c->st->held, key) ? P_BUTTON_DOWN : P_BUTTON], 0, clip);
+            }
+            ax += bw + ag;
+        }
+        y += ay + bh + gap;
+    }
+
+    /* Figures: a grid of four columns, auto 1fr auto 1fr, a name and its value twice a row */
+    {
+        const char* name[16];
+        char val[16][64];
+        int nr = 0;
+        double c1 = 0, c3 = 0, fr;
+        const double cg = U(c, 5);
+#define ROW(nm) (name[nr] = (nm), val[nr++])
+        js_amount(ROW("Metal"), 64, x0->metal);
+        js_amount(ROW("Energy"), 64, x0->energy);
+        js_amount(ROW("Build time"), 64, x0->buildtime);
+        js_amount(ROW("Health"), 64, x0->health);
+        if (x0->speed) js_fixed(ROW("Speed"), 64, x0->speed, 2);
+        snprintf(ROW("Sight"), 64, "%d", (int)x0->sight);
+        if (x0->radar) snprintf(ROW("Radar"), 64, "%d", (int)x0->radar);
+        if (x0->workertime) js_amount(ROW("Build power"), 64, x0->workertime);
+        if (x0->energymake) js_fixed(ROW("Energy +"), 64, x0->energymake, 1);
+        if (x0->extracts) js_fixed(ROW("Extracts"), 64, x0->extracts, 4);
+        if (x0->metalmake) js_fixed(ROW("Metal +"), 64, x0->metalmake, 2);
+        if (x0->mstore || x0->estore) {
+            js_amount(a, sizeof a, x0->mstore);
+            js_amount(b, sizeof b, x0->estore);
+            snprintf(ROW("Storage"), 64, "%s / %s", a, b);
+        }
+        snprintf(ROW("Footprint"), 64, "%d \xC3\x97 %d", (int)x0->fx, (int)x0->fz);
+        snprintf(ROW("Tier"), 64, "%d", T->tier[k]);
+#undef ROW
+        y += unit_h4(c, "Figures", x, y, w, clip, emit);
+        for (i = 0; i < nr; i++) {
+            const double nw = say(c, R_TEXT, name[i], 0, 0, 0, NULL, 0);
+            if (i % 2) c3 = fmax(c3, nw);
+            else c1 = fmax(c1, nw);
+        }
+        fr = fmax(0, (w - c1 - c3 - 3 * cg) / 2);
+        for (i = 0; emit && i < nr; i++) {
+            const double cx = x + (i % 2 ? c1 + cg + fr + cg : 0), ry = y + (i / 2) * L;
+            ui_group_begin(&c->u, 0.7);
+            say(c, R_TEXT, name[i], cx, ry, ink, clip, 1);
+            ui_group_end(&c->u);
+            say(c, R_TEXT, val[i], cx + (i % 2 ? c3 : c1) + cg, ry, ink, clip, 1);
+        }
+        y += ((nr + 1) / 2) * L + gap;
+    }
+
+    /* Weapons: each its name, and its range and damage at the row's right when the files know it */
+    if (x0->nweapon) {
+        y += unit_h4(c, "Weapons", x, y, w, clip, emit);
+        for (i = 0; i < x0->nweapon && i < WIKITECH_WEAPONS; i++) {
+            const WIKITECHWEAPON* wp = &x0->weapon[i];
+            char nm[WIKITECH_WNAME * 2 + 4];
+            tagpu_wikitech_utf8(nm, sizeof nm, (const unsigned char*)wp->name, 0);
+            say(c, R_TEXT, nm, x, y, ink, clip, emit);
+            if (wp->known) {
+                snprintf(s, sizeof s, "range %d \xC2\xB7 damage %d", (int)wp->range, (int)wp->damage);
+                say(c, R_TEXT, s, x + w - say(c, R_TEXT, s, 0, 0, 0, NULL, 0), y, ink, clip, emit);
+            }
+            y += L;
+        }
+        y += gap;
+    }
+
+    /* How to get it: the walk from the commander, › between */
+    y += unit_h4(c, "How to get it", x, y, w, clip, emit);
+    n = tagpu_wikitech_path(T, k, ks, UNIT_MAXLIST);
+    y += chips(c, ks, n < 0 ? 0 : n, 1, x, y, w, clip, emit) + gap;
+
+    if (T->parents[k].n) {
+        snprintf(s, sizeof s, "Built by (%u)", T->parents[k].n);
+        y += unit_h4(c, s, x, y, w, clip, emit);
+        n = unit_list(T, T->parents[k], ks);
+        y += chips(c, ks, n, 0, x, y, w, clip, emit) + gap;
+    }
+    if (T->upgrades[k].n) {
+        snprintf(s, sizeof s, "Upgrades (%u)", T->upgrades[k].n);
+        y += unit_h4(c, s, x, y, w, clip, emit);
+        n = unit_list(T, T->upgrades[k], ks);
+        y += chips(c, ks, n, 0, x, y, w, clip, emit) + gap;
+    }
+    if (T->builds[k].n) {
+        int kind;
+        snprintf(s, sizeof s, "Builds (%u)", T->builds[k].n);
+        y += unit_h4(c, s, x, y, w, clip, emit);
+        for (kind = 0; kind < WT_KINDS; kind++) {
+            uint32_t q;
+            n = 0;
+            for (q = 0; q < T->builds[k].n && n < UNIT_MAXLIST; q++) {
+                const int32_t v = T->pool[T->builds[k].at + q];
+                if (T->kind[v] == kind) ks[n++] = v;
+            }
+            if (!n) continue;
+            y += unit_h4(c, tagpu_wikitech_kind_name(kind), x, y, w, clip, emit);
+            y += chips(c, ks, n, 0, x, y, w, clip, emit);
+        }
+        y += gap;
+    }
+    free(ks);
+    /* the column's height: the last item's bottom, without a gap after it */
+    return y - gap - p->cy;
+}
+
+/* #unit: the panel over the stage's right at `box` (About's place), padded as About is; its column
+   scrolls inside the padding (scroll:unit) */
+static void unit_panel(C* c, UIR box)
+{
+    const WG* g = &c->l->g;
+    const double pt = U(c, g->pnl.pn[0] + g->entry_pad[0]), pr = U(c, g->pnl.pn[1] + g->entry_pad[1]);
+    const double pb = U(c, g->pnl.pn[2] + g->entry_pad[0]), pl = U(c, g->pnl.pn[3] + g->entry_pad[1]);
+    UIPANELG sg;
+    UISCROLL a;
+    memset(&sg, 0, sizeof sg);
+    sg.scrollbar = g->pnl.scrollbar;
+    ui_art(&c->u, c->l->part[P_PANEL], box, NULL);
+    ui_panel(&c->u, &sg, -1, ui_rect(box.x + pl, box.y + pt, fmax(0, box.w - pl - pr), fmax(0, box.h - pt - pb)),
+             c->st->scroll[WIKI_SCROLL_UNIT], unit_rows, c, "scroll:unit", &a);
+    c->fr->scroll[WIKI_SCROLL_UNIT] = a.scroll;
+    c->fr->scroll_max[WIKI_SCROLL_UNIT] = a.scroll_max;
+    c->fr->track[WIKI_SCROLL_UNIT] = a.track;
+    c->fr->thumb_y[WIKI_SCROLL_UNIT] = a.thumb_y;
+    c->fr->thumb_h[WIKI_SCROLL_UNIT] = a.thumb_h;
+}
+
 /* The theatre in the window's body: the tree's column, as wide as on the normal page and the body's
    whole height, with the entry's demos under its row (tree_rows); beside it, the layout's gap
    between, a grid column of the stage's bezel, which takes what the others leave, the row and the
-   caption; then About over the stage.
+   caption; then About or the unit's panel over the stage, built last of all (see below).
 
    THE ROW (#t-row) is a flex row, the controls' gap between its items: the badge when locked, the
    demo's title, and the controls with About. The title is the one item that grows and
    shrinks (flex 1 1 0): it takes the row's free space and clips its line to it, so every control
    keeps its size and place whatever the title. `row_cut` says the fixed part did not fit.
 
-   ABOUT'S ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, which the wiki's pass
-   in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that it lies over, and which
-   the hit map (tagpu_wikistate.c) puts before every other control. */
+   ABOUT'S AND THE UNIT PANEL'S ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own,
+   which the wiki's pass in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that it
+   lies over, and which the hit map (tagpu_wikistate.c) puts before every other control. The
+   theatre only places it (`top_box`, `top_kind`) and sets the cover; tagpu_wikilay_build builds it
+   after the window and the wiki button, so the one list whose ops and hits grow with a mod's
+   menus is the last into the frame's bounds: if a panel ever overflowed them, what it dropped
+   would be its own, never the window's controls. */
 static void theatre(C* c, UIR body)
 {
     const WG* g = &c->l->g;
@@ -478,7 +1044,7 @@ static void theatre(C* c, UIR body)
     const double gap = U(c, g->gap), row_h = U(c, g->ctl.h), cap_h = U(c, g->caption_h);
     const double cg = U(c, g->ctl_gap), t0 = ui_lu(body.w * g->col[0] / 100);
     const int about = c->st->about != 0, wink = ui_light(&c->u, c->l->part[P_WINDOW]);
-    const int lk = locked(c, c->st->entry) || c->st->sim_locked;
+    const int lk = locked(c, c->st->entry) || c->st->sim_locked, tech = e && e->techtree;
     const UIR sbox = ui_rect(body.x + t0 + gap, body.y, fmax(0, body.w - t0 - gap), body.h - gap - row_h - gap - cap_h);
     const double ry = sbox.y + sbox.h + gap;
     double fixed, x = sbox.x, tw;
@@ -487,30 +1053,37 @@ static void theatre(C* c, UIR body)
     stage_in(c, sbox);
 
     /* the row: what its fixed items take, then the title's share */
-    fixed = (lk ? ui_badge_w(&c->u, &c->l->g.bdg, S_BADGE) : 0) + controls(c, 0, 0, 1, 0) + cg * (1 + lk);
+    fixed = (lk ? ui_badge_w(&c->u, &c->l->g.bdg, S_BADGE) : 0) + (tech ? tech_controls(c, 0, 0, 0) : controls(c, 0, 0, 1, 0)) +
+            cg * (1 + lk);
     tw = fmax(0, sbox.w - fixed);
     c->fr->row_cut = fixed > sbox.w;
     if (lk) x += badge(c, x, ry + ui_half(row_h - U(c, g->bdg.h))) + cg;
-    if (has_demo(c)) {
-        /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height */
-        const char* s = filled_or(c, FILL_ROW, e, e->demo[c->st->demo].title, e->demo[c->st->demo].id);
+    if (tech || has_demo(c)) {
+        /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height. The tech
+           tree's is the tree's own (wiki.js drawTech) */
+        const char* s = tech ? c->st->tech_title : filled_or(c, FILL_ROW, e, e->demo[c->st->demo].title, e->demo[c->st->demo].id);
         UITS t = ts(c, R_DEMO, g->line);
         int n = ui_pens(&c->u, &t, s, strlen(s));
         UIR clip = ui_rect(x, ry + ui_half(row_h - t.L), tw, t.L);
         ui_line(&c->u, &t, s, 0, n, x, clip.y, wink, &clip);
     }
     x += tw + cg;
-    controls(c, x, ry, 1, 1);
+    if (tech) tech_controls(c, x, ry, 1);
+    else controls(c, x, ry, 1, 1);
 
     caption(c, sbox.x, ry + row_h + gap, sbox.w);
 
-    c->u.top = 1;
-    if (about) {
-        const double wa = ui_lu(sbox.w * g->theatre_about / 100);
-        about_panel(c, ui_rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
-                            sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])));
+    {
+        /* About, or the tech tree's unit panel, in one place over the stage's right: never both;
+           its share of the bezel, at most theatre.about_max units (#about, #unit max-width) */
+        const double wa = fmin(ui_lu(sbox.w * g->theatre_about / 100), U(c, g->theatre_about_max));
+        const UIR pb = ui_rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
+                               sbox.h - U(c, g->bz[0]) - U(c, g->bz[2]));
+        const int unit = !about && tech && c->st->tech && c->st->tech_sel >= 0 && c->st->tech_sel < c->st->tech->n;
+        c->top_kind = about ? TOP_ABOUT : unit ? TOP_UNIT : TOP_NONE;
+        c->top_box = pb;
+        if (about || unit) c->fr->cover = (float)(pb.x / c->u.px);
     }
-    c->u.top = 0;
 }
 
 /* ---- the window (#win): its part, title and close, and the body's three columns --------------- */
@@ -542,7 +1115,7 @@ static void window_(C* c)
        between */
     body = ui_rect(win.x + U(c, g->wb[3]), win.y + U(c, g->wb[0]), win.w - U(c, g->wb[3]) - U(c, g->wb[1]),
                 win.h - U(c, g->wb[0]) - U(c, g->wb[2]));
-    if (entry(c) && entry(c)->frame == WIKI_FRAME_GAME) {
+    if (entry(c) && (entry(c)->frame == WIKI_FRAME_GAME || entry(c)->techtree)) {
         theatre(c, body);
         return;
     }
@@ -608,15 +1181,27 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
     /* WIKI_MAXHOT, the bound: H is 720 units, so a list's scroller is under 720 units tall, and a row
        with its gap after it is at least layout.json's row.h + row.after, 17.5 today, which puts at
        most 42 rows of each list on screen -- 84 -- beside the window's own 11 controls and the
-       button: under WIKI_MAXHOT, so no control on screen goes without its hit. */
+       button. The tech tree's unit panel adds its chips and its 11 controls (the close, the view,
+       at most 8 actions, the scroller): a chip is 32 units wide with 1 between, in a column at
+       most theatre.about_max (400) wide, so at most 12 a row; it is at least 26 units tall with
+       1 between, so at most (720 + 2 * 26 + 1) / 27 < 29 rows of chips meet the scroller's view
+       -- 336 chips. 84 + 12 + 336 + 11 = 443: under WIKI_MAXHOT, so no control on screen goes
+       without its hit, at any aspect. */
     ui_begin(&c->u, out, f, l->style, l->light, (double)st->H / 720, WIKI_MAXHOT);
     c->l = l; c->d = d; c->st = st; c->fr = fr;
     memset(fr, 0, sizeof *fr);
     out->n = out->nrun = out->ntext = out->overflow = out->ngrp = 0;
     out->first = out->last = 0;
     out->track_x0 = out->track_x1 = 0;
+    c->top_kind = TOP_NONE;
     if (st->open) window_(c);
     wiki_button(c);
+    if (c->top_kind != TOP_NONE) {
+        c->u.top = 1;
+        if (c->top_kind == TOP_ABOUT) about_panel(c, c->top_box);
+        else unit_panel(c, c->top_box);
+        c->u.top = 0;
+    }
     free(c);
     return 1;
 }
@@ -627,7 +1212,8 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
 static int check_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, const WIKIPAGE* st,
                        HUDOPS* scratch, WIKIFRAME* fr, char* err, size_t errn)
 {
-    const int theatre_ = st->open && st->entry >= 0 && st->entry < d->nentry && d->entry[st->entry].frame == WIKI_FRAME_GAME;
+    const int theatre_ = st->open && st->entry >= 0 && st->entry < d->nentry &&
+                         (d->entry[st->entry].frame == WIKI_FRAME_GAME || d->entry[st->entry].techtree);
     if (!tagpu_wikilay_build(l, d, f, st, scratch, fr, err, errn)) return 0;
     if (scratch->overflow) {
         if (err && errn)
@@ -765,7 +1351,7 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
                     }
                 }
             }
-            if (en->frame == WIKI_FRAME_GAME && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
+            if ((en->frame == WIKI_FRAME_GAME || en->techtree) && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
         }
     }
     return 1;
@@ -873,6 +1459,11 @@ static int read_layout(WIKILAY* l, const TJV* L, char* err, size_t errn)
     g->text_para = ui_num(&x, "text", "para", -1);
     g->theatre_about = ui_num(&x, "theatre", "about", -1);
     g->theatre_min = ui_num(&x, "theatre", "stage_min", -1);
+    g->theatre_about_max = ui_num(&x, "theatre", "about_max", -1);
+    if (!x.bad && !(g->theatre_about_max > 0)) {
+        snprintf(err, errn, "wiki layout: theatre.about_max is not a width above 0");
+        x.bad++;
+    }
     if (!x.bad && !(g->theatre_about > 0 && g->theatre_about < 100)) {
         snprintf(err, errn, "wiki layout: theatre.about is not a share of the body above 0 and below 100");
         x.bad++;

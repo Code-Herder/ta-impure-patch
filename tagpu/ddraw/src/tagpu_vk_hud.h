@@ -36,14 +36,18 @@ int  tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
                              uint32_t w, uint32_t h);
 
 /* Draw the wiki's layer, the same way, after the top layer and what is drawn again over it, in
-   two calls with the stage's 3D image between them (tagpu_wikiworld.h): `_wiki` the page and the
-   stage's ops under the image -- every op of the stage on a whitebox frame -- and `_wiki_over` the
-   stage's ops over it. 1 when the call drew. `_wiki_over` is the frame's last call of this pass,
-   made whether or not the first drew. */
+   three calls with the stage's 3D image after the first (tagpu_wikiworld.h) and the tech tree's
+   unit view's picture after the second (tagpu_vk_wikiview.h): `_wiki` the page and the stage's ops
+   under the image -- every op of the stage on a whitebox frame -- `_wiki_over` the stage's ops over
+   it and the page's top layer up to the view's note (WIKILISTS page_cut), and `_wiki_top` the rest
+   of that layer. 1 when the call drew. `_wiki_top` is the frame's last call of this pass, made
+   whether or not the others drew. */
 int  tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                               uint32_t w, uint32_t h);
 int  tagpu_vk_hud_record_wiki_over(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                    uint32_t w, uint32_t h);
+int  tagpu_vk_hud_record_wiki_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                  uint32_t w, uint32_t h);
 
 /* The device pixels the top layer drew this frame, on the attachment: 1 with the rect, 0 when it
    is empty. */

@@ -137,6 +137,14 @@ typedef struct {
     float    give_max[2];           /* what the player can give: the sliders' ends            */
 } HUDSTATE;
 
+/* The rewind button is drawn this frame: always by the live HUD, and by the allies' ribbon when it
+   carries the idle rewind (tagpu_hudlay.c, live and allies). The wiki button takes the slot left of
+   it exactly when this holds (tagpu_wikistate.c), so the two can never land on one slot. */
+static __inline int hud_draws_rewind(const HUDSTATE* st)
+{
+    return st->allies ? st->rewind : st->live;
+}
+
 /* What to draw, in paint order, and where a click lands.
      HOP_LINE   a straight stroke with butt ends, from (r.x, r.y) to (r.x + r.w, r.y + r.h), `size`
                 units wide: an SVG <line>;
@@ -154,8 +162,12 @@ typedef struct {
                 triangle has no shadow and no stroke; every field is still DATA to the draw, which
                 bounds the instance by the three points and draws nothing for a triangle with no
                 area or a point that is not finite (tagpu_huddraw.c). A canvas's filled
-                three-point subpath. */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI };
+                three-point subpath.
+     HOP_PIC    a unit's picture of the tech tree (tagpu_wikitech.h): picture `part` of the published
+                WIKITECH, from the tech sheet (HUD_TEX_TECH), drawn whole into r at the op's
+                opacity; sampled nearest, or filtered when `centre` is 1 (a canvas's
+                imageSmoothingEnabled, which the tree sets when r is smaller than the picture). */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI, HOP_PIC };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
