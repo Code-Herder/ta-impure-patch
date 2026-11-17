@@ -56,7 +56,7 @@ const colour = (s, ga) => {
 };
 
 /* ---- the recording context: techtree.js's calls as shapes ---- */
-function recorder(em, asked, W, H) {
+function recorder(em, asked, W, H, U) {
   const out = [], saved = [];
   let path = [], dash = [];
   const g = {
@@ -70,8 +70,18 @@ function recorder(em, asked, W, H) {
       if (a0 !== 0 || Math.abs(a1 - 2 * Math.PI) > 1e-12) throw new Error('an arc that is not a whole circle');
       path.push({ disc: [x, y, r] });
     },
+    // a rounded rectangle: only ever filled with a shadow cast from off the canvas (techtree.js `shadow`)
+    roundRect(x, y, w, h, r) { path.push({ round: [x, y, w, h, r] }); },
     fill() {
       for (const p of path) {
+        if (p.round) {
+          const [x, y, w, h, r] = p.round;
+          if (!(colour(g.shadowColor, 1) & 255) || x + w >= 0 || g.shadowOffsetX <= 0) throw new Error('a rounded rectangle that is not a shadow cast from off the canvas');
+          // its radius as the op carries it, in 1/256 units (HOPD_RADIUS)
+          if (w && h) out.push({ k: 'drop', x: x + g.shadowOffsetX, y, w, h, dy: g.shadowOffsetY, blur: g.shadowBlur,
+            r: Math.round(r / U * 256) / 256 * U, c: colour(g.shadowColor, g.globalAlpha) });
+          continue;
+        }
         if (!p.disc) throw new Error('a filled path that is not a disc');
         const [x, y, r] = p.disc;
         out.push({ k: 'dot', x: x - r, y: y - r, w: 2 * r, h: 2 * r, d: r, c: colour(g.fillStyle, g.globalAlpha) });
@@ -85,13 +95,7 @@ function recorder(em, asked, W, H) {
     fillRect(x, y, w, h) {
       if (w < 0) { x += w; w = -w; }
       if (h < 0) { y += h; h = -h; }
-      // a shadow cast from a rectangle off the canvas (techtree.js `shadow`): the shadow alone, HOPF_DROP
-      if (colour(g.shadowColor, 1) & 255) {
-        if (x + w >= 0 || g.shadowOffsetX <= 0) throw new Error('a shadow cast from a rectangle on the canvas');
-        if (w && h) out.push({ k: 'drop', x: x + g.shadowOffsetX, y, w, h, dy: g.shadowOffsetY, blur: g.shadowBlur,
-          c: colour(g.shadowColor, g.globalAlpha) });
-        return;
-      }
+      if (colour(g.shadowColor, 1) & 255) throw new Error('a shadow cast from a plain rectangle (techtree.js casts from roundRect)');
       if (w && h) out.push({ k: 'rect', x, y, w, h, c: colour(g.fillStyle, g.globalAlpha) });
     },
     strokeRect(x, y, w, h) {
@@ -163,7 +167,7 @@ function shapes(fr, u, roleOf) {
     else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.SOLID && flags === DROP)
-      out.push({ k: 'drop', x: X(x), y: Y(y), w: w * u, h: h * u, dy: size * u, blur: shade * u, c: rgba });
+      out.push({ k: 'drop', x: X(x), y: Y(y), w: w * u, h: h * u, dy: size * u, blur: shade * u, r: style / 256 * u, c: rgba });
     else if (kind === HOP.DOT && flags === RING) out.push({ k: 'dot', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
     else if (kind === HOP.TEXT && flags === (BASE | INK))
@@ -218,7 +222,7 @@ function draw(tree, c, fr, em, asked, pics) {
     for (const [k, i] of [['z', 0], ['x', 1], ['y', 2]])
       if (Math.abs(f[k] - fr.cam[i]) > 1e-9 * Math.max(1, Math.abs(f[k]))) throw new Error(`the fitted camera's ${k}: ${f[k]} != C ${fr.cam[i]}`);
   }
-  const r = recorder(em, asked, fr.w, fr.h);
+  const r = recorder(em, asked, fr.w, fr.h, c.u);
   WikiTech.ground(r.g, fr.w, fr.h, c.u);
   WikiTech.draw(r.g, M, L, { cam, s: c.u, sel: c.sel, all: c.all, pic: k => pics.get(k) || null, font: role => `400 1px role-${role}` });
   return r.out;

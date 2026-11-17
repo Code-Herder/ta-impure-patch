@@ -118,13 +118,15 @@ static void t_rrect(TB* c, double x, double y, double w, double h, double r, uin
     }
 }
 
-/* techtree.js shadow: CSS's box-shadow 0 `dy` `blur` round the box, painted outside it (HOPF_DROP) */
-static void t_shadow(TB* c, double x, double y, double w, double h, double dy, double blur, double a)
+/* techtree.js shadow: CSS's box-shadow 0 `dy` `blur` round the box rounded by `r`, painted outside
+   it (HOPF_DROP, the radius in `style`) */
+static void t_shadow(TB* c, double x, double y, double w, double h, double r, double dy, double blur, double a)
 {
     HUDOP* p;
     if (w == 0 || h == 0) return;
     if ((p = top(c, HOP_SOLID, x, y, w, h))) {
         p->flags = HOPF_DROP;
+        p->style = (int16_t)floor(r / c->u * HOPD_RADIUS + 0.5);
         p->size = (float)(dy / c->u);
         p->shade = (float)(blur / c->u);
         p->rgba = I_SHADOW_RGB << 8 | (uint32_t)floor(I_SHADOW_A / 255.0 * a * 255 + 0.5);
@@ -385,7 +387,7 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         if (r < 1) r = 1;
         lw = floor(0.5 * z + 0.5);
         if (lw < 1) lw = 1;
-        t_shadow(&c, cx, cy, cw, ch, z, 3 * z, a);
+        t_shadow(&c, cx, cy, cw, ch, r, z, 3 * z, a);
         if (kk == h) {
             double hw = floor(z + 0.5);
             if (hw < 1) hw = 1;

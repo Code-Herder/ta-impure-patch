@@ -282,13 +282,14 @@ const WikiTech = (() => {
           g.beginPath(); g.arc(px, py, r, 0, 2 * Math.PI); g.fill();
         }
     };
-    /* A SOFT SHADOW, CSS's box-shadow 0 1u 3u: the canvas casts it from a rectangle drawn FAR off the canvas and carried
-       back by its offset, so only the shadow lands (a HOP_SOLID with HOPF_DROP, painted outside its box) */
+    /* A SOFT SHADOW, CSS's box-shadow 0 1u 3u round the card's rounded box: the canvas casts it from the rounded
+       rectangle drawn FAR off the canvas and carried back by its offset, so only the shadow lands (a HOP_SOLID with
+       HOPF_DROP and the radius, painted outside the rounded box) */
     const FAR = 1 << 20;
-    const shadow = (x, y, w, h, a) => {
+    const shadow = (x, y, w, h, r, a) => {
       g.save();
       g.globalAlpha = a; g.shadowColor = INK.shadow; g.shadowBlur = 3 * z; g.shadowOffsetX = FAR; g.shadowOffsetY = z;
-      g.fillStyle = '#000000'; g.fillRect(x - FAR, y, w, h);
+      g.fillStyle = '#000000'; g.beginPath(); g.roundRect(x - FAR, y, w, h, r); g.fill();
       g.restore();
     };
     g.textBaseline = 'alphabetic';
@@ -302,7 +303,7 @@ const WikiTech = (() => {
          rim), the rim, the fill inside the rim, and the line under the header -- each a rounded rectangle of whole
          pixels, mixed with the stage when the card is dimmed */
       const r = Math.max(1, Math.round(C.R * z)), lw = Math.max(1, Math.round(0.5 * z));
-      shadow(cx, cy, cw, ch, a);
+      shadow(cx, cy, cw, ch, r, a);
       if (k === h) { const hw = Math.max(1, Math.round(z)); rrect(cx - hw, cy - hw, cw + 2 * hw, ch + 2 * hw, r + hw, INK.sel); }
       const rim = k === h ? INK.sel : onPath.has(k) ? INK.path : kids.has(k) || pars.has(k) ? INK.kid : INK.rim;
       rrect(cx, cy, cw, ch, r, mix(rim, a));

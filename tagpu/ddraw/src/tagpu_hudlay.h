@@ -177,7 +177,10 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP
                                r, unsnapped as a canvas arc is -- a canvas arc's stroke, or, as
                                deep as the radius, its fill (tagpu_wikistage.c) */
 #define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
-                               op's colour, painted outside r only */
+                               op's colour, painted outside r only; `style`, when above 0, the
+                               box's corner radius in 1/256 units (HOPD_RADIUS), outside which the
+                               rounded box's corners are shaded too */
+#define HOPD_RADIUS 256.0f  /* HOPF_DROP: `style` units of the corner radius a unit */
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 #define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */

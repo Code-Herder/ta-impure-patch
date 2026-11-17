@@ -57,7 +57,8 @@
             opacity -- an SVG <g opacity> composites its children first, so lines that cross in
             the faint part show the top one, not the two summed;
      DROP   CSS box-shadow: the box vPx moved down by vUV.x and blurred as SHADE blurs, drawn
-            outside the box only, as an outer shadow is;
+            outside the box only, as an outer shadow is -- outside the box rounded by vUV.y
+            pixels at its corners when that is above 0, so a rounded card's corners are shaded;
      RING   the colour over the band vPrm.y pixels deep inside the circle inscribed in vPx, each
             edge antialiased over a pixel as DOT's is: the disc of the outer radius less the disc
             of the inner, none when the band reaches the centre. Unsnapped, as a canvas arc is.
@@ -173,7 +174,10 @@ static const char* FS =
     "    float s = sign((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x));\n"
     "    c = vCol * (side(p, a, b, s) * side(p, b, q, s) * side(p, q, a, s));\n"
     "  } else {\n"
-    "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) discard;\n"
+    "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) {\n"
+    "      vec2 q = clamp(p, vPx.xy + vec2(vUV.y), vPx.zw - vec2(vUV.y));\n"
+    "      if (vUV.y <= 0.0 || length(p - q) <= vUV.y) discard;\n"
+    "    }\n"
     "    float s = max(vPrm.y, 1e-3);\n"
     "    float ix = phi((p.x - vPx.x) / s) - phi((p.x - vPx.z) / s);\n"
     "    float iy = phi((p.y - vPx.y - vUV.x) / s) - phi((p.y - vPx.w - vUV.x) / s);\n"
@@ -601,7 +605,9 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
             if (!(in = emit(c, -1, HUDM_DROP, x0 - e, y0 - e + (dy < 0 ? dy : 0), x1 + e, y1 + e + (dy > 0 ? dy : 0), op))) break;
             in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
             in->uv[0] = in->uv[2] = dy;
-            in->uv[1] = in->uv[3] = 0;
+            /* the corner radius, in pixels: the box less its rounded corners is what the shadow
+               keeps out of; never more than half the box's narrower side */
+            in->uv[1] = in->uv[3] = op->style > 0 ? fminf(op->style / HOPD_RADIUS * px, 0.5f * fminf(x1 - x0, y1 - y0)) : 0;
             colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
             in->prm[1] = sg;
             break;
