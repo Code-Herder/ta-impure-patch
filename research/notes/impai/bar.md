@@ -663,6 +663,16 @@ against the same brain's games before: the air rush passed on its commander agai
 the cap (18 before); the artillery creep passed on value, 34 716 against 27 381 (34 893 against 26 828 before), 7 of
 the opponent's units alive (5 before). Each game took 46 to 50 s of play.
 
+MEASURED 2026-11-17 on the reference setup, the naval turtle at bca430ab (the stand-off, the sea scout): still failed,
+the commander at 2 873 of 3 000 hp and both towers standing at the cap. What loses it: no unit the seat buys sees
+the commander or the west tower -- they stand about 370 and 415 px from the nearest water a boat sails, past the sea
+scout's sight of 280 px and the destroyer's 330, and the air scouts carry no weapon, so they take no class and are
+not bought ([decisions](decisions.html), *No army class without damage*) --; and the sea wave goes late and comes
+back: the first destroyer stood in FORM from 10 800 to 16 470, and two went then and retreated at 18 930, though a
+destroyer outranges every defence there (660 px against 300) -- the prediction does not credit the stand-off's range.
+At bf92df19, whose five skeeters swelled the wave, the first destroyer went at 12 600 and killed the east tower by
+15 000 from out of its reach.
+
 ## Automatic tuning
 
 `tools/impai/tune.py` holds two searches, each where its dimensions are: the levels' rows on one line, and SPSA
