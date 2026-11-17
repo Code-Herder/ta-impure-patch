@@ -275,8 +275,11 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   `+0x90..+0xA0` of `.text` read). It sums the six current floats of every unit with `+0x110` bit 28 and
   of the `+0xEC` record (`0x401877..0x40193D`), pays the debts first and then the granted from
   current plus production, keeping the fraction paid of each (`0x401A4D..0x401AB1`), and then
-  settles every such unit (the loop `0x401B3D..0x401BAC`, the arithmetic `0x401B42..0x401B99`):
-  produced → last produced, requested → last requested, the three zeroed, and debt := granted ×
+  settles every such unit (the loop `0x401B3D..0x401BAC`, the arithmetic `0x401B42..0x401B99`, `eax` =
+  unit `+0xC0`): produced → last produced, requested → last requested, the three zeroed -- energy produced
+  `+0xBC` → `+0xCC` (`0x401B50..0x401B60`), energy requested `+0xC0` → `+0xD0` (`0x401B49..0x401B4D`), metal
+  produced `+0xD4` → `+0xE4` (`0x401B7E..0x401B8E`), metal requested `+0xD8` → `+0xE8` (`0x401B75..0x401B7B`),
+  each a `mov` out, a store of `ebx` (0) and a `mov` in [DISASSEMBLED 2026-11-17] --, and debt := granted ×
   (1 − the fraction of granted paid) + debt × (1 − the fraction of debts paid), in that order of
   `fmul`, `fsubr` and `faddp`. So a stalled owner's builders fail every request until a later pass
   pays. Before the payment the base storage `+0xDC`/`+0xE0` joins the storages only while `+0x149`
@@ -285,7 +288,10 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   expense `+0x94`/`+0xA0` the summed **requested**, refused requests included (`0x4019DD`,
   `0x401A2D`). The new stored energy and metal `+0x8C`/`+0x98` are held to the storages, the excess
   added to the player's doubles `+0xCC`/`+0xD4` [INFERRED: the totals wasted]
-  (`0x401AB3..0x401B27`).
+  (`0x401AB3..0x401B27`): metal's is `0x401AF0..0x401B27`, the new level stored to `+0x98` at `0x401AFE`
+  whatever it is, compared with `+0xA8` (`0x401AF4`), and when above it replaced by `+0xA8` with the
+  excess added to `+0xD4` (`0x401B0B..0x401B27`); energy's is the same shape at `0x401AB3..0x401AEA`. So a
+  production or payout that lands while the store is full is wasted at the next pass [DISASSEMBLED 2026-11-17].
 
   **What it costs a recording.** `+0xC0`, `+0xC4`, `+0xD8` and `+0xDC` are float accumulators
   that grow every tick a unit builds, repairs, stockpiles or fires a weapon that costs a resource,

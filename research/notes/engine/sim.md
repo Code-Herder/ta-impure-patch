@@ -210,7 +210,14 @@ below were checked against the image.
 | 16 | the respawn: PlayerInfo `+0xA3` × 100 metal → `+0xD4` | same | `0x4654A3: 80 78 73 02 75 38` | `0x4654AF` | `0x4654E1` | `0x4654A9` |
 | 17 | unit death `0x486C9E..`, the kind nibble (argument `+0xA` & `0xF0`) `0x50` [INFERRED: a reclaimed unit]: (1 − victim `+0x104`) × the victim's def `+0x18A` → the killer's (`+0xF0`) `+0xD4` | killer `+0xEC`, `ecx` | `0x486CDA: 80 79 73 02 75 38` | `0x486CE6` | `0x486D18` | `0x486CE0` |
 
-Sites 2 and 3 share one switch (`0x401504..0x40153A`). What each destination field means is the
+Sites 2 and 3 share one switch (`0x401504..0x40153A`). **Where a row's arms meet** [DISASSEMBLED
+2026-11-17]: each scaled arm subtracts its product from the destination and jumps to the one store the
+unscaled `fadd` falls into -- row 8's arms `0x40176B..0x40178D` (the −0.7 and the −0.5 arm, each ending in
+`jmp 0x401795`) and its unscaled `fadd [esi+0xD4]` `0x40178F` meet at the store `0x401795`; row 9's value,
+(1.0 − the target's `+0x104`) × the target's def `+0x18A` (`0x402666..0x402678`, `_ftol` `0x4E43A0` at
+`0x40267E`), reaches the builder's (`esi`) `+0xD4` at `0x4026E3`; row 10's arms `0x41BBCA..0x41BBEC` load
+the frame's (`esi`) `+0xD4` at `0x41BBD0` and `0x41BBE2` and meet the unscaled arm at the store
+`fstp [esi+0xD4]` `0x41BBF4`. What each destination field means is the
 economy pass's ([network](network.html), the economy pass) and [memory](memory.html)'s (the kill
 credit); the rows name the stores, not their meanings. The scaled continuation S is the
 instruction after the type test, `VA + length`. Rows 13 and 14 are reached from any player's
@@ -714,7 +721,8 @@ puts on GameTime ([units](units.md), *The hover wave*).
 
 **The two random streams and where they are seeded.** The simulation RNG `0x51FC88` is seeded once
 a level by the loader `0x497180` from `QueryPerformanceCounter` (`0x49718C`, the two dwords summed,
-then `0x4B6CA0` at `0x49719D`); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
+then `0x4B6CA0` at `0x49719D`, which stores `(x ^ 0x66E29572) | 1` to `0x51FC88` at `0x4B6CAB` and returns at
+`0x4B6CB0`, `ret 4` [DISASSEMBLED 2026-11-17]); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
 `0x4971AE` (the loader thread's stream) and `0x49E8BB` (WinMain, the game thread's), both from
 `time(0)`, and keeps its state per thread at `+0x14` of the block `0x4EB0F0` returns, in neither
 image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **Under the harness's
@@ -887,10 +895,10 @@ The array is written by the `.ota` read before the level and lives for the level
 play but another `.ota` read.
 
 **Who starts at each** (DISASSEMBLED 2026-11-15, `0x4978DA..0x497972`): a new skirmish -- the game state's mode
-`[gs+0]` 2 (`0x435100` is `mov eax,[ecx]; ret`) and `main+0x38D6B` 0 -- with the settings' fixed starts
+`[gs+0]` 2 (`0x435100` is `mov eax,[ecx]; ret`) and `main+0x38D6B` 0 (read at `0x4978FA`) -- with the settings' fixed starts
 `[main+0x29A0]+0x118` set walks the ten records at `main+0x1B63`, stride `0x14B`, and calls the seat setup
 `0x496EE0(r, r)` for each record r whose first dword is set, whose controller `+0x73` is 1, 2 or 3 and whose
-`+0x146` is not 10: record r's commander starts at start r, and a start whose index is no such record's holds
+`+0x146` is not 10 (`cmp byte [rec+0x146],0xA` at `0x497958`): record r's commander starts at start r, and a start whose index is no such record's holds
 nobody. With `+0x118` clear the starts come from a list shuffled with `0x4E4870` (`0x497979..0x497ADC`). ImpAI's
 `starts` op answers each start's record under the first rule (`tagpu_worldq.c`, `start_seated`); the recorder
 keeps `+0x118` in its header and a replay writes it back (`tagpu_replay.c`, `replay_options`).

@@ -1319,7 +1319,9 @@ Helpers the ids reach, all read this session:
   `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
   then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
   when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
-  state** (`0x4B6C38`). The magic multiply equals the exact quotient `s / 127773` for every one of
+  state** (`0x4B6C38`). The body is `0x4B6C30..0x4B6C92`, `ret 4`: the state's load `0x4B6C41`, the
+  products and the subtraction `0x4B6C4C..0x4B6C7A`, the wrap `0x4B6C7C..0x4B6C80`, the store `0x4B6C87`
+  and the `div` `0x4B6C8C` [DISASSEMBLED 2026-11-17]. The magic multiply equals the exact quotient `s / 127773` for every one of
   the 2³² states (MEASURED 2026-11-12, exhaustively), so the step is Schrage's form exactly, a state
   with bit 31 set included. The shared core's port is `ts_rand` (`tasim_fixed.h`);
   `tests/tasim_fixed_test.c` holds it to the engine's own stream, 45 run-to-run chains of 95 to 937
