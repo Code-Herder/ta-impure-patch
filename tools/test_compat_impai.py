@@ -85,6 +85,49 @@ class Claim(unittest.TestCase):
         self.assertGreater(tacompat.IMPAI_CLAIM_TICKS, 2 * 1800)
 
 
+BATTLE = "\n".join([
+    "impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE",
+    "impai: seats 1 (impure.cfg) of 2 records",
+    "scenario: applied=401 failed=0 cleared=2 orders=2/2 errors=0",
+    "impai: mil seat=1 t=640 attack=1 raid=0 scout=0 retreat=0 safe=0 dgun=0 leash=0 army=200",
+])
+
+
+class Battle(unittest.TestCase):
+    def test_the_battle_scenarios_computer_records(self):
+        self.assertEqual(tacompat.battle_ai_records("200v200"), [1])
+
+    def test_an_impai_seat_that_attacked_meets_it(self):
+        self.assertEqual(tacompat.battle_impai_misses(BATTLE, [1]), [])
+
+    def test_a_dll_with_no_impai_is_asked_nothing(self):
+        self.assertEqual(tacompat.battle_impai_misses("scenario: applied=401 failed=0", [1]), [])
+
+    def test_a_seat_left_to_ota_ai_is_named(self):
+        text = BATTLE.replace("impai: seats 1 (impure.cfg)", "impai: seats none (impure.cfg)")
+        miss = tacompat.battle_impai_misses(text, [1])
+        self.assertEqual(len(miss), 1)
+        self.assertIn("the battle's computer seat(s) [1] not ImpAI's", miss[0])
+
+    def test_a_saved_skirmishs_other_computer_seat_is_not_asked(self):
+        # MEASURED 2026-11-16, retail's battle: the player's saved skirmish seats record 3 as well, with no unit
+        text = BATTLE.replace("impai: seats 1 (impure.cfg) of 2 records", "impai: seats 1,3 (impure.cfg) of 4 records")
+        self.assertEqual(tacompat.battle_impai_misses(text, [1]), [])
+
+    def test_a_task_before_the_units_were_placed_does_not_count(self):
+        lines = BATTLE.splitlines()
+        text = "\n".join(lines[:2] + [lines[3], lines[2]])
+        self.assertEqual(tacompat.battle_impai_misses(text, [1]),
+                         ["ImpAI's military began no task for seat 1 in the fight"])
+
+    def test_the_judge_names_it_unless_impai_is_unavailable_by_expectation(self):
+        o = {"battle": {"ok": True, "impai_seat": ["ImpAI's military began no task for seat 1 in the fight"]}}
+        exp = {"outcome": "impure-active"}
+        self.assertIn("the battle's computer seat: ImpAI's military began no task for seat 1 in the fight",
+                      tacompat.battle_seat_misses(o, exp))
+        self.assertEqual(tacompat.battle_seat_misses(o, {**exp, "impai": "unavailable"}), [])
+
+
 SCENARIOS = Path(__file__).resolve().parents[1] / "scenarios"
 
 

@@ -749,6 +749,7 @@ def judge(o: dict, exp: dict) -> list:
                     f"{', '.join(c['missing'])} missing from the engine's {c.get('types', 0)} unit types"))
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
+    miss += battle_seat_misses(o, exp)
     if o.get("smoke") is not None and not o["smoke"].get("ok", False):
         miss.append(f"the Windows in-game smoke failed: {o['smoke'].get('why', '?')}")
     if o.get("mp") is not None and not o["mp"].get("ok", False):
@@ -2162,11 +2163,13 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
             if soak.done():
                 break
         except Stalled as e:
-            return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})"}
+            return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})",
+                    "impai_seat": battle_impai_misses(battle_log(gamedir), battle_ai_records(scenario))}
     why = terrain_drew(gamedir)
     if why:
         return {"ok": False, "hud": hud, "why": f"{why} ({applied})"}
-    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog}
+    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog,
+            "impai_seat": battle_impai_misses(battle_log(gamedir), battle_ai_records(scenario))}
 
 
 # ------------------------------------------------------- the running game's own code
@@ -3335,6 +3338,59 @@ def impai_seating(inst, roots, scen_map: str, seat_ai: str):
                            capture_output=True, check=True, timeout=120)
     subprocess.run(["wineserver", "-w"], env=env, timeout=60)
     store_set(inst["gamedir"], "seatai", str(IMPAI_SEAT) if seat_ai == "impai" else "none")
+
+
+# THE BATTLE'S COMPUTER SEAT IS IMPAI'S wherever the DLL carries ImpAI: the battle's skirmish runs from the player's own
+# store, which names no `seatai`, so the default every player gets applies (every computer seat ImpAI's) and the gate
+# tests what players run. The seat has no builder (the battle scenario clears the start) and the fight ends before the
+# seat's second pulse, so the claim of the stage and the network game does not fit it; what the battle asks is that
+# ImpAI marked exactly the scenario's computer records and that its military began a task for each in the fight.
+IMPAI_MIL_TASK = re.compile(r"^impai: mil seat=(\d+) t=(\d+) ", re.M)
+
+
+def battle_ai_records(scenario: str) -> list:
+    """The records a battle scenario seats as computer players (its setup.players, controller `ai`)."""
+    sc = json.loads((TREE / "scenarios" / f"{scenario}.json").read_text())
+    return sorted(pl["slot"] for pl in sc["setup"].get("players", []) if pl.get("controller") == "ai")
+
+
+def battle_impai_misses(text: str, records: list) -> list:
+    """THE BATTLE'S COMPUTER SEAT IS IMPAI'S, from the battle game's tagpu.log: nothing asked of a DLL with no ImpAI (no
+    seam line); else the level init marked exactly `records`, no `could not` and no content past its tables, and after the
+    scenario's units were placed ImpAI's military began a task (`impai: mil seat= t=`) for every one of them."""
+    if not IMPAI_INSTALLED.search(text):
+        return []
+    st = impai_stage_read(text)
+    miss = [f"ImpAI could not: {line}" for line in st["could_not"]]
+    miss += [f"ImpAI's content did not fit its tables: impai: {line}" for line in st["nofit"]]
+    # the skirmish is the player's saved one, so the level may seat more computer records than the scenario fills
+    # (MEASURED 2026-11-16, retail: `impai: seats 1,3 ... of 4 records`, record 3 left with no unit): each of the
+    # scenario's must be ImpAI's, and a marked record the scenario gives no unit has nothing to be asked
+    unmarked = [r for r in records if r not in (st["marks"] or [])]
+    if unmarked:
+        why = "; ".join(st["why"]) or "no reason line"
+        miss.append(f"ImpAI marked {st['marks'] if st['marks'] is not None else 'no seat line'}: the battle's "
+                    f"computer seat(s) {unmarked} not ImpAI's ({why})")
+        return miss
+    at = text.rfind("scenario: applied=")
+    began = {int(seat) for seat, _ in IMPAI_MIL_TASK.findall(text[at:] if at >= 0 else text)}
+    miss += [f"ImpAI's military began no task for seat {r} in the fight" for r in records if r not in began]
+    return miss
+
+
+def battle_seat_misses(o: dict, exp: dict) -> list:
+    """The judge's part of THE BATTLE'S COMPUTER SEAT IS IMPAI'S: a setup whose expectation says ImpAI is unavailable has
+    no such seat to ask about."""
+    if o.get("battle") is None or exp.get("impai") == "unavailable":
+        return []
+    return [f"the battle's computer seat: {m}" for m in o["battle"].get("impai_seat") or []]
+
+
+def battle_log(gamedir: Path) -> str:
+    try:
+        return (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def impai_pulses(text: str) -> dict:

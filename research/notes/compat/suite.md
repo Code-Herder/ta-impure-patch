@@ -53,7 +53,27 @@ names the gap). The hives are private because the store `tacli` keeps
   300, and one frame that drew no terrain is not the fault. The neighbourhood atlas's own refusal
   (`… neighbourhood atlas is outside … - the terrain restores per tile`) still draws and is not
   matched. A run with no census after the applier is not on the Vulkan lane and is not judged by
-  it. Every game runs silent but with a sound device: Wine is kept off
+  it. **The battle's computer seat is ImpAI's** wherever the DLL carries ImpAI:
+
+    - **Why it is ImpAI's.** The battle's skirmish runs from the player's own store, which names no `seatai`. So the
+      default every player gets applies: every computer seat is ImpAI's (b8). The gate tests what players run.
+    - **What that means for a failure.** A battle UNEXPECTED, or "the battle stood", may be ImpAI's doing. Read the
+      battle's `tagpu.log` for ImpAI's lines before blaming the engine or a mod.
+    - **What is asserted** (`battle_impai_misses`, from the battle's `tagpu.log`):
+        - the level init's `impai: seats` line marks every computer record of the battle scenario (`setup.players`,
+          controller `ai`: record 1 in `200v200` and TA Zero's battles). The skirmish is the player's saved one, so the
+          level may seat more computer records than the scenario fills; those are marked too and asked nothing
+          (MEASURED 2026-11-16, retail on `dll-e04b641a`: `impai: seats 1,3 (impure.cfg) of 4 records`, at the saved
+          skirmish's Easy);
+        - there is no `could not` line and no content past its tables;
+        - after the scenario's units are placed (`scenario: applied=`), ImpAI's military begins a task for every one
+          of those seats (`impai: mil seat= t=`).
+      A DLL with no ImpAI (no seam line) is asked nothing. A setup whose expectation says
+      `"impai": "unavailable"` has no such seat.
+    - **Why not the claim.** The stage's and the network game's claim does not fit the battle: the scenario clears the
+      start, so the seat has no builder, and the 60-second fight ends at GameTime 1800, before the seat's second pulse.
+
+    Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **A setup's folder in a test launch** (`as_test_instance`, after `prepare_wine`): the calibration
