@@ -640,6 +640,12 @@ int  impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, in
    held radius, below max(bw, bh) + the distance of (bx, bz) off the grid */
 int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
                       int* ox, int* oz);
+/* as impai_reach_near, the block of least Euclidean distance: a ring's first block in ring order is its nearest
+   (THE RING ORDER), and a block of ring R lies at least R blocks off, so the rings past the first hit are read
+   while R^2 is below the best squared distance -- to ring ceil(r sqrt 2) at most for a first hit at ring r --,
+   within `radius`. Ties to the lower ring. BOUND: as impai_reach_near's, the radius held the same way */
+int  impai_reach_nearest(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
+                         int* ox, int* oz);
 /* sea_blocks, land_total, land_w and sea_ref from the type information ti[1..nti) over the classes the level
    has labels for. BOUND: nti types, and each sea class's labels read once, at most WQ_MCLASSES x bw x bh */
 void impai_reach_summary(IMPAI_REACH* r, const IMPAI_TINFO* ti, unsigned nti);

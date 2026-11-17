@@ -610,24 +610,44 @@ The owner's answers to the spec's questions:
   turtle only the commander offers the air plant and it was on wind generators whenever the plant was due, so
   before this the turtle got no air plant (MEASURED 2026-11-17 at 73593317). The energy frame stays where it was
   ordered; a builder on any other build (an extractor, a plant, a defence) is not taken, and in a stall the air
-  plant for the blind does not hold at all. **What it does not reach**: the take is tried once, before the idle
-  builders; when the builder's ring holds no site for the air plant the sea plant is built instead in the same
-  decision, as before the rule. On the naval turtle the commander's ring at 8 587 held 24 sites, 20 tested, none
-  taking CORAP (none past its reach, none threatened: the base ring is full at its first size), so the second
-  shipyard came and the seat wanted no further plant before the cap at 20 000 (MEASURED 2026-11-17 at 38efc351, a
-  diagnostic build). Holding the yard while the ring grows would make the air plant come, but `ring_grow` returns
-  to 0 at any builder's ring build, so the wait has no bound the ring itself gives; that is the owner's call.
+  plant for the blind does not hold at all. **The take is for the air plant for the blind only** (owner's answer,
+  2026-11-17): no other plant takes a builder off an energy build. Before the energy builders, every free builder
+  that offers the air plant is asked -- the idle ones, then the helpers --; the first that places it gets it.
+  **Its own site search** (owner's answer, 2026-11-17): on the naval turtle the commander's base ring at 8 587
+  held 24 sites, 20 tested, none taking CORAP (none past its reach, none threatened: the base ring is full at its
+  first size), so the second shipyard came instead and the seat wanted no further plant before the cap at 20 000
+  (MEASURED 2026-11-17 at 38efc351, a diagnostic build). The owner: give the air plant for the blind its own
+  site search outside the base ring -- a safe, unthreatened site the builder can reach -- and do not hold the
+  shipyard up for it. **As built**: the rings from the base ring's present size out to eight more round the base
+  box, nearest first, each site one the builder reaches and every safety test of the base ring's held (no ground
+  threat at the site or on a constructor's route, the commander's reach and safe distance, the way out); the
+  search spends 32 site tests a decision of its own, never the decision's, so the sea plant's search after it
+  keeps all of them, and it never grows the base ring. When no builder places the air plant, the first builder
+  asked for a plant is asked the sea plant's question in the same decision -- the yard is never held up and the
+  want never goes unanswered. **What it does not reach**: the search walks the same sites each decision, so on a
+  map where its first 32 tested sites all fail the sites past them are never tried. On the naval turtle it does
+  not bring the air plant: at 8 587, with the budget lifted to 600 in a diagnostic build, the commander's rings
+  0..4 offered 136 sites within its 1 024 px leash and the engine's site test refused every one, and rings 5..8 lay
+  wholly past the leash (MEASURED 2026-11-17 at d9d34dcb's tree); a CORAP set down 160 px from the commander at
+  the game's start stands and works, so the island's room is gone by the time the plant is due. Only the commander
+  offers CORAP there, so a site past its leash, or the air plant earlier, is the owner's call.
 - **A commander at the shore** (owner's decision, 2026-11-17): ships treat an enemy commander they cannot reach --
   one confined to land, whose class has no way to the ships' water -- like a defence: they stand off past its D-gun
   reach plus a pad and shell it from range; they do not retreat home for it. **As built**: its reach is the longer of
   its ground reach and its D-gun's range; the stand-off measures it from the block of the commander's component
   nearest the member, not from where the commander stands, so no walk along its shore brings a ship into reach;
-  the member moves out when inside reach + 64 px, attacks the commander only when it is in the member's own range
-  from where the member stands, and is held where it is just outside, so travel does not take it back in. The
-  stay-or-go reads such a commander as one that does not close on an ATTACK squad that outranges it (the
-  stand-off keeps it off), so it is no reason to retreat. **What it does not reach**: a commander that can walk
-  to the ships (amphibious into their water) is left to the fight as before; only ATTACK squads stand off; a
-  commander farther inland than the ships' range is not shelled, and the goal's stall window then gives it up.
+  the member moves out when inside reach + 64 px and attacks the commander only when it is in the member's own
+  range from where the member stands. Every other order an ATTACK gives is kept out of that reach: its travel
+  point and its fight's moves are moved out past it (the review of 82cab0f3 found that holding a member where it
+  stood froze every ship near any coast of the commander's landmass, so the hold was replaced by this), the
+  arrival is measured at the moved point, and the fight attacks no target it would have to close on inside it.
+  The stay-or-go reads such a commander as one that does not close on an ATTACK squad only when every member of
+  the squad stands it off, and then a contact's other members still close by their own test. **Scope kept**
+  (owner's answer, 2026-11-17): as built, for any ATTACK squad that cannot reach the commander -- ships ashore,
+  and a land squad facing it across water. **What it does not reach**: a commander that can walk to the ships
+  (amphibious into their water) is left to the fight as before; only ATTACK squads stand off; a commander farther
+  inland than the ships' range is not shelled, and the squad moves on from the stand-off line; the engine's own
+  path to a firing point is not checked.
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence

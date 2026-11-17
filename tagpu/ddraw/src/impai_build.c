@@ -1812,15 +1812,23 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    COVER (impai_build_sensor): with cover above 0, a site whose footprint centre lies past cover px of the key is
    skipped and is no lack of room, as the commander's reach is not. AT A POINT (`at`): the ring around the
    rectangle `at` instead of the base box, grown by gap alone, each site on held ground (THE HELD GROUND), and
-   neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's. */
+   neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's.
+   OUT (out >= 0): a ring of THE AIR PLANT'S OWN SEARCH (impai_build_air), the base box grown by gap + out x (fx + gap)
+   cells; each site the builder reaches (builder_reaches), its site tests counted against AIR_OUT_TESTS in
+   IMPAI_DEC.air_sites rather than the decision's site_tests, and neither its success nor its exhaustion touches
+   ring_grow or a plant type. */
+static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
+#define AIR_OUT_TESTS 32        /* THE AIR PLANT'S OWN SEARCH's site tests a decision, beside site_tests         */
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
-                      uint32_t cover)
+                      uint32_t cover, int out)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int gap = in->plan->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
-    const int grow = gap + (at ? 0 : st->ring_grow * (fx + gap));
+    const int grow = gap + (at ? 0 : (out >= 0 ? out : st->ring_grow) * (fx + gap));
+    int* const tests = out >= 0 ? &d->air_sites : &d->sites;
+    const int cap = out >= 0 ? AIR_OUT_TESTS : (int)in->plan->site_tests;
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0;
@@ -1864,9 +1872,10 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             threat_skipped++;
             continue;
         }
-        if (d->sites >= in->plan->site_tests) return 0;
-        d->sites++;
+        if (*tests >= cap) return 0;
+        (*tests)++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
+        if (out >= 0 && !builder_reaches(d, b, type, cx, cz)) continue;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
             threat_skipped++;
             continue;
@@ -1880,12 +1889,12 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             }
         }
         if (build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
-            if (!at) st->ring_grow = 0;
+            if (!at && out < 0) st->ring_grow = 0;
             return 1;
         }
         if (d->roots >= d->root_cap) return 0;
     }
-    if (at || beyond || threat_skipped) return 0;
+    if (at || out >= 0 || beyond || threat_skipped) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
@@ -1894,13 +1903,13 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
 
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
-    return ring_build(d, b, type, NULL, NULL, 0);
+    return ring_build(d, b, type, NULL, NULL, 0, -1);
 }
 
 int impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const int32_t key[2] = { d->def_x, d->def_z };
-    return ring_build(d, b, type, key, NULL, 0);
+    return ring_build(d, b, type, key, NULL, 0, -1);
 }
 
 /* THE SENSORS' SITE (impai_econ.c, THE SENSORS): a site within three quarters of the type's distance of the want's
@@ -1916,12 +1925,12 @@ int impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     const uint32_t cover = (uint32_t)(d->want_sensor == IMPAI_SENSE_SONAR ? t->sonar : t->radar) * 3u / 4u;
     IMPAI_RECT at;
     if (!cover) return 0;
-    if (ring_build(d, b, type, key, NULL, cover)) return 1;
+    if (ring_build(d, b, type, key, NULL, cover, -1)) return 1;
     if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER) return -1;
     if (t->flags & IMPAI_TF_WATER) return 0;
     at.x0 = at.x1 = (int16_t)(d->sensor_x >> 4);
     at.z0 = at.z1 = (int16_t)(d->sensor_z >> 4);
-    return ring_build(d, b, type, key, &at, cover);
+    return ring_build(d, b, type, key, &at, cover, -1);
 }
 
 int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
@@ -1929,6 +1938,31 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     int ok;
     d->way_waive = 1;
     ok = impai_build_ring(d, b, type);
+    d->way_waive = 0;
+    return ok;
+}
+
+/* THE AIR PLANT'S OWN SEARCH (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *The air plant for
+   the blind*): the air plant for the blind at a site of the rings ring_grow .. ring_grow + AIR_OUT_RINGS round the
+   base box -- the base ring's, then outside it --, nearest first, each site one the builder reaches
+   (builder_reaches) and every test of the base ring's held: no claim, failure or far record, off ground threat and,
+   for a constructor, on a route that passes none, for the commander within comm_r of the anchor and its safe
+   distance, and the plant's way out unless `waived` (THE PLANT'S FALLBACK). The search spends AIR_OUT_TESTS site
+   tests a decision of its own, never the decision's site_tests, so a decision whose air plant finds no site still
+   has every site test the sea plant's search spends after it (impai_econ.c, air_take); neither its success nor its
+   exhaustion touches ring_grow or a plant type's pass-over, which are the base ring's (a way it refuses counts, as
+   THE WAY REFUSALS do anywhere). 1 ordered. BOUND: AIR_OUT_RINGS + 1 place_ring
+   walks of at most PLACE_MAX_SITES sites, AIR_OUT_TESTS site tests a decision, each with one builder_reaches.
+   RESIDUAL: the walk is the same each decision, so while its first AIR_OUT_TESTS sites fail the sites past them
+   are not tested. */
+#define AIR_OUT_RINGS 8
+int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
+{
+    const int g0 = d->in->st->ring_grow;
+    int ok = 0, g;
+    d->way_waive = waived;
+    for (g = g0; !ok && g <= g0 + AIR_OUT_RINGS && d->air_sites < AIR_OUT_TESTS && d->roots < d->root_cap; g++)
+        ok = ring_build(d, b, type, NULL, NULL, 0, g);
     d->way_waive = 0;
     return ok;
 }

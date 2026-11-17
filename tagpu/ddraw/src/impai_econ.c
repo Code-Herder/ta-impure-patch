@@ -906,20 +906,6 @@ static int energy_leaver(const IMPAI_DEC* d, int i)
            j->since != d->now && !impai_far(d, &d->jobbed[i]);
 }
 
-/* 1 when a builder free in this decision -- idle, or a helper (THE RELEASE asks helpers for a plant), and not held
-   from plants by its far record (impai_far) -- offers plant type t. BOUND: at most 4 IMPAI_IDLE_CAP menus read,
-   into menu3 (THE CHOICE's own scratch) */
-static int plant_free_builder(IMPAI_DEC* d, unsigned t)
-{
-    int i;
-    for (i = 0; i < d->nidle + d->nhelpers; i++) {
-        const IMPAI_UNITREF* b = i < d->nidle ? &d->idle[i] : &d->helpers[i - d->nidle];
-        if (!impai_far(d, b) && on_menu(d->menu3, d->q->ops->build_options(d->q, b->type, d->menu3, WQ_TYPES_MAX), t))
-            return 1;
-    }
-    return 0;
-}
-
 /* the air plant for the blind let go: the decision's plant is the sea plant, as before the rule */
 static void air_let_go(IMPAI_DEC* d)
 {
@@ -930,7 +916,7 @@ static void air_let_go(IMPAI_DEC* d)
 /* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK); the
    tech-up's two passes first when it is due, then the further plant's when that is wanted too (THE TECH-UP
    FIRST). At most four passes.
-   The air plant for the blind is let go for the sea plant, when no builder can place it, by air_take. */
+   The air plant for the blind is let go for the sea plant, when air_take placed it nowhere, by the ladder (assign). */
 static void plant_choice(IMPAI_DEC* d)
 {
     uint16_t next, via;
@@ -1414,6 +1400,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
                menu2 and menu3 only, so this builder's menu is still d->menu */
             if (!d->plant_done) plant_choice(d);
+            /* the air plant for the blind is air_take's alone (NEVER NEITHER): one still held here -- air_take placed
+               it nowhere, or the choice was made after air_take returned, its want_sea since spent -- is let go, so
+               the ladder asks the sea plant first */
+            if (d->plant_air_blind) air_let_go(d);
             /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
                THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
                took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
@@ -1577,21 +1567,38 @@ static int release(IMPAI_DEC* d, const IMPAI_UNITREF* h)
     return 0;
 }
 
-/* THE AIR PLANT TAKES THE ENERGY BUILDER, before the idle builders (the owner's decision, 2026-11-17): the choice's
-   plant the air plant for the blind and no free builder offering it (plant_free_builder), the first builder on an
-   energy build (energy_leaver) whose menu holds it is given it, replacing the job only when a site takes it; the
-   energy frame stays where it was ordered, for the assist or a later energy want.
-   THE AIR PLANT WAITS FOR NO BUILDER AND NO SITE: when none is given it -- no leaver, the budget spent, or no site
-   in the leaver's ring -- the decision's plant is the sea plant as before (air_let_go), and the idle builders that
-   follow are asked for the yard in the same decision. ORDER: the take is tried before any idle builder is asked,
-   so a want the air plant holds is, in every decision, either the air plant's order or the sea plant's question;
-   never neither.
-   WHY: on the naval turtle only the commander offers CORAP and it stood on wind generators each time the plant was
-   due; the shipyard's CORCS could build neither, and the seat got no second plant to the cap (MEASURED 2026-11-17,
-   exploit-naval-turtle at 73593317 and 4487c188 with diagnostic builds: the commander's job BUILD CORWIN from
-   8 407, the plant due from 8 587). With the take after the idle builders and the commander's promise holding the
-   plant, its ring took no CORAP site at any decision from 8 587 and the seat built no second plant to the cap,
-   where it had built its second shipyard at 8 587 before (MEASURED 2026-11-17 at c7f939c1, a diagnostic build). */
+/* THE AIR PLANT FOR THE BLIND'S BUILDER, before the idle builders: the choice's plant the air plant for the blind
+   (plant_choice), each builder that can take it is asked in turn -- the idle builders the idle loop would ask (no
+   BUILD or reclaim job, THE ATTENTION's room), then the helpers on an assist, each not held from plants by its far
+   record, then THE AIR PLANT TAKES THE ENERGY BUILDER (the owner's decision, 2026-11-17): the builders on an energy
+   build (energy_leaver) -- whose menu holds the plant; each places it by THE AIR PLANT'S OWN SEARCH
+   (impai_build_air: the base ring, then outside it), and the first that does is given it, its job the plant's, so
+   the loops after this pass it over (the idle loop and the stall's skip a BUILD job, the helpers' an assist that is
+   no longer one); a leaver's energy frame stays where it was ordered, for the assist or a later energy want.
+   NEVER NEITHER, an ordering: no other path orders the air plant for the blind -- the ladder's plant rung lets a
+   plant_air_blind still set go (air_let_go) before it asks anything (assign) --, so when no builder here places it
+   -- none can take it, the budget is spent, or no site takes it -- the first builder the ladder asks for a plant
+   is asked the sea plant's question, as before the rule: in every decision in which the air plant holds the want,
+   it is either ordered here or the sea plant is the ladder's. THE SHIPYARD IS NOT HELD UP: the search spends its
+   own site tests (AIR_OUT_TESTS), never the decision's, so the sea plant's search after it has all of them.
+   WHY THE ORDER: on the naval turtle only the commander offers CORAP and it stood on wind generators each time the
+   plant was due; the shipyard's CORCS could build neither, and the seat got no second plant to the cap (MEASURED
+   2026-11-17, exploit-naval-turtle at 73593317 and 4487c188 with diagnostic builds: the commander's job BUILD CORWIN
+   from 8 407, the plant due from 8 587). WHY THE OWN SEARCH: there the commander's base ring at its first size held
+   24 sites and none took CORAP (MEASURED 2026-11-17 at 82cab0f3's tree, a diagnostic build); the owner's answer is a
+   search outside the base ring, the shipyard not held up for it. */
+static int air_place(IMPAI_DEC* d, const IMPAI_UNITREF* b, unsigned t)
+{
+    if (impai_far(d, b) ||
+        !on_menu(d->menu, d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX), t) ||
+        !impai_build_air(d, b, (int)t, !d->plant_t))
+        return 0;
+    plant_ordered(d, (int)t);
+    d->want_factory = d->want_tech = 0;
+    d->assigned++;
+    return 1;
+}
+
 static void air_take(IMPAI_DEC* d, int keep)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1600,19 +1607,26 @@ static void air_take(IMPAI_DEC* d, int keep)
     if (!(d->want_factory || d->want_tech) || d->want_sea) return;
     if (!d->plant_done) plant_choice(d);
     t = d->plant_t ? d->plant_t : d->plant_tw;
-    if (!t || !d->plant_air_blind || plant_free_builder(d, t)) return;
-    for (i = 0; i < d->njobbed && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap; i++) {
-        const IMPAI_UNITREF* b = &d->jobbed[i];
-        const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-        if (!energy_leaver(d, i) || !on_menu(d->menu, n, t)) continue;
-        if (d->plant_t ? impai_build_ring(d, b, (int)t) : impai_build_plant_waived(d, b, (int)t)) {
-            plant_ordered(d, (int)t);
-            d->want_factory = d->want_tech = 0;
-            d->assigned++;
+    if (!t || !d->plant_air_blind) return;
+    for (i = 0; i < d->nidle + d->nhelpers + d->njobbed && d->assigned + keep < in->plan->assign_max &&
+                d->roots + keep < d->root_cap;
+         i++) {
+        if (i < d->nidle) {
+            const IMPAI_JOB* j = &in->job[d->idle[i].slot];
+            if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO ||
+                !impai_econ_room(d) || !air_place(d, &d->idle[i], t))
+                continue;
+            d->busied++;
             return;
         }
+        if (i < d->nidle + d->nhelpers) {
+            const IMPAI_UNITREF* h = &d->helpers[i - d->nidle];
+            if (in->job[h->slot].kind == IMPAI_JOB_ASSIST && air_place(d, h, t)) return;
+            continue;
+        }
+        if (energy_leaver(d, i - d->nidle - d->nhelpers) && air_place(d, &d->jobbed[i - d->nidle - d->nhelpers], t))
+            return;
     }
-    air_let_go(d);
 }
 
 void impai_econ_assign(IMPAI_DEC* d)

@@ -28,7 +28,8 @@ M = [
 
 # the take moved after the idle builders: the span from the call to the stall's pass, the call at its end
 _src = (Path(__file__).resolve().parents[3] / "tagpu/ddraw/src" / ECON).read_text()
-_a = _src.index("    air_take(d, keep);\n    for (i = 0; i < d->nidle")
-_b = _src.index("    /* THE STALL TAKES THE RECLAIMERS", _a)
-M.append(("take after the idle builders", ECON, _src[_a:_b],
-          _src[_a + len("    air_take(d, keep);\n"):_b] + "    air_take(d, keep);\n"))
+_a = _src.find("    air_take(d, keep);\n    for (i = 0; i < d->nidle")
+_b = _src.find("    /* THE STALL TAKES THE RECLAIMERS", _a) if _a >= 0 else -1
+# a stale anchor is a mutation NOT RUN (mutate.py), never an exception that hides the rest of the list
+M.append(("take after the idle builders", ECON, _src[_a:_b] if _b >= 0 else None,
+          _src[_a + len("    air_take(d, keep);\n"):_b] + "    air_take(d, keep);\n" if _b >= 0 else None))

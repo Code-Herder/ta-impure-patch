@@ -235,6 +235,7 @@ typedef struct IMPAI_DEC {
     int           roots_max, root_cap;
     int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
+    int           air_sites;                    /* THE AIR PLANT'S OWN SEARCH's site tests (impai_build.c) */
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX + 1
        of the anchor, at their blocks' centres, px; listed at the decision's first test of a point within comm_r
        (0 not yet, 1 listed, -1 more than IMPAI_CMD_FOES, which refuses every such point) */
@@ -420,6 +421,9 @@ int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* the air plant for the blind of `type`: the base ring's site, else a site outside it (impai_build.c, THE AIR PLANT'S
+   OWN SEARCH), without a way out when `waived`; 1 ordered */
+int  impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived);
 /* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
 int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 when b is sent to a feature paying more than `min_rate` metal a tick (THE RECLAIM) */

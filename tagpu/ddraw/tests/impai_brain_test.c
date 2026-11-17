@@ -89,6 +89,8 @@ typedef struct FWORLD {
     struct { int16_t x0, z0, x1, z1; int8_t depth; } water[FW_WATER];  /* cells inclusive; depth < 0: land */
     int      nwater;
     int      refuse_type;               /* a type every site test refuses, 0 none                             */
+    int      refuse_box_type;           /* a type the site test refuses where its first cell lies in refuse_box  */
+    struct { int16_t x0, z0, x1, z1; } refuse_box;
     int      refuse_queue_type;         /* a type every factory QUEUE of is refused, 0 none                   */
     int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
     int8_t   cfoot[3][2];               /* the content map's class footprints, folded as the engine's are; 0 a 1 */
@@ -232,7 +234,8 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
 /* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
    fits where the footprint's highest corner lies at least its minwaterdepth under the sea, any other where its
    lowest lies on or above the sea -- with no water every ground is 10 above a sea at 0, so a water type fits
-   nowhere -- and refuse_type nowhere */
+   nowhere -- and refuse_type nowhere, nor refuse_box_type where its
+   first cell lies in refuse_box */
 static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const FWORLD* w = fw(q);
@@ -240,6 +243,9 @@ static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int*
     int s, x, z, hi = -1000, lo = 1000;
     if (!d || type == w->refuse_type || cx < 1 || cz < 1 || cx + d->d.fx >= map_w(w) || cz + d->d.fz >= map_h(w) ||
         !f_explored(q, cx + d->d.fx / 2, cz + d->d.fz / 2))
+        return 0;
+    if (type == w->refuse_box_type && cx >= w->refuse_box.x0 && cx <= w->refuse_box.x1 && cz >= w->refuse_box.z0 &&
+        cz <= w->refuse_box.z1)
         return 0;
     for (z = cz; z <= cz + d->d.fz; z++)
         for (x = cx; x <= cx + d->d.fx; x++) {
@@ -8999,11 +9005,31 @@ static int stand_progress(int tx, int decisions)
        not close, the stand-off holding the squad off its shore --, and a move out to 368 px from the bank's nearest
        block (240 + STAND_PAD + STAND_HYST) -- from the shore it can walk to, not from
        where it stands (656 px off, past 304);
-   (b) the destroyer 384 px off the bank, the commander 832 px off, past its range: held where it stands (a move to
-       its own point), so travel does not take it back in;
+   (b) the destroyer 384 px off the bank, the commander 832 px off, 456 px inland, past its range: no attack -- the
+       engine would close the destroyer to 660 px of it, 204 px off the bank (attack_clear) -- and no move nearer
+       than 304 px to the bank; the goal, which no water reaches, is arrived at (no substitute) and the squad moves
+       on;
    (c) the destroyer 384 px off the bank, the commander at the bank's edge 400 px off: an attack on it from where it
        stands, no move;
-   (d) (a) with the commander's D-gun range 0: its reach 200, the move out to 328 px from the bank. */
+   (d) (a) with the commander's D-gun range 0: its reach 200, the move out to 328 px from the bank;
+   (e) (b)'s destroyer, the commander 936 px inland (so the wave's goal is not the commander, which the squad does
+       not reach), and an enemy plant remembered in the channel 2 240 px south, 424 px off the bank, the goal: it
+       travels there, unheld by the commander's landmass -- 360 px off the bank, where the band the stand-off once
+       held a member in lay;
+   (f) (e) with the plant on the channel's edge, 64 px off the bank: the travel point is moved out to 368 px from
+       the bank's block nearest it (com_clear), at the plant's latitude;
+   (g) (a) with a PT boat beside the destroyer, in the squad -- the submarine's type made a surface boat of reach
+       200, which hits the commander and does not outrange its 240 --: the commander closes on that member
+       (contact_closes holds only a squad every member of which stands it off), so the prediction is lost and the
+       squad retreats;
+   (h) (f) with the destroyer standing at the moved-out point (250, 233): it has arrived where travel sends it
+       (arrived reads com_clear's point), so the ATTACK moves on -- back to FORM, its goal the same plant --
+       rather than stalling short of the plant's own substitute at the bank;
+   (i) (a) with an enemy submarine in the channel 720 px south, past the commander from the squad and past its own
+       reach of 400, but in the commander's contact: the commander does not close, its contact's submarine does
+       (contact_closes reads the contact's other members), so the prediction is made with the contact closing and
+       lost, and the squad retreats -- with the submarine read as not closing, the contact stands off and the
+       prediction holds. */
 static void ashore_world(int ship_cx, int com_cx, int dgun)
 {
     stand_world(300);
@@ -9024,31 +9050,67 @@ static void ashore_world(int ship_cx, int com_cx, int dgun)
 
 static void check_mil_shore_commander(void)
 {
-    static const char* const NAME[4] = { "(a) 112 px off the bank", "(b) held off the bank, the commander far",
-                                         "(c) held off the bank, the commander at the edge",
-                                         "(d) 112 px off the bank, no D-gun" };
-    static const int SHIP[4] = { 266, 249, 249, 266 }, COM[4] = { 290, 300, 274, 290 };
+    static const char* const NAME[9] = { "(a) 112 px off the bank", "(b) off the bank, the commander far",
+                                         "(c) off the bank, the commander at the edge",
+                                         "(d) 112 px off the bank, no D-gun", "(e) a goal down the channel",
+                                         "(f) a goal at the bank's edge", "(g) a PT boat beside the destroyer",
+                                         "(h) at the moved-out point", "(i) an enemy submarine in the commander's contact" };
+    static const int SHIP[9] = { 266, 249, 249, 266, 249, 249, 266, 250, 266 },
+                     COM[9] = { 290, 300, 274, 290, 330, 330, 290, 330, 290 };
     IMPAI_MIL_OUT o;
     int c, from, att, gnd, mv, mx, mz;
-    for (c = 0; c < 4; c++) {
+    for (c = 0; c < 9; c++) {
         ashore_world(SHIP[c], COM[c], c == 3 ? 0 : 240);
+        if (c == 4 || c == 5 || c == 7) enemy(1301, T_FACTORY, c == 4 ? 245 : 266, 240, IMPAI_GHOST, 1);
+        if (c == 7) s_w.unit[20].pos[2] = (233 * 16 + 8) << 16;
+        if (c == 8) enemy(1302, M_SUB, 268, 145, IMPAI_LOS, 1);
+        if (c == 6) {
+            s_ft[M_SUB].flags &= ~IMPAI_FT_SUBMERGED;
+            s_fwp[M_SUB].flags = 0;
+            s_fwp[M_SUB].range = 200;
+            s_threat[M_SUB].range = s_threat[M_SUB].hit_range = 200;
+            own(21, M_SUB, 264, 104);
+            s_job[21].kind = IMPAI_JOB_SQUAD;
+            s_job[21].type = M_SUB;
+            s_job[21].squad = 1;
+        }
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shore commander's decision runs");
         mil_print(NAME[c], &o, from);
         stand_orders(from, &att, &gnd, &mv, &mx, &mz);
         printf("the shore commander, %s: task %d, retreats %u, attacks %d, ground %d, moves %d, point (%d, %d)\n",
                NAME[c], task_of_slot(20), o.retreats, att, gnd, mv, mx, mz);
-        CHECK(s_mil.lost_t != (uint32_t)s_w.gametime && !o.retreats, "%s: no lost prediction, no retreat", NAME[c]);
-        if (c == 1 || c == 2) CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
+        if (c == 6 || c == 8)
+            CHECK(s_mil.lost_t == (uint32_t)s_w.gametime && o.retreats == 1, "%s: the prediction lost, a retreat",
+                  NAME[c]);
+        else
+            CHECK(s_mil.lost_t != (uint32_t)s_w.gametime && !o.retreats, "%s: no lost prediction, no retreat",
+                  NAME[c]);
+        if (c == 2 || c == 4 || c == 5)
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
         if (c == 0 || c == 3) {
             const int want = c == 0 ? 368 : 328, dx = 4368 - mx;
             CHECK(mv == 1 && !att && !gnd && dx >= want - 24 && dx <= want + 24, "%s: moved out to %d px from the bank, %d",
                   NAME[c], want, dx);
         }
-        if (c == 1) CHECK(mv == 1 && !att && !gnd && mx == SHIP[c] * 16 + 8, "%s: held, (%d, %d)", NAME[c], mx, mz);
+        if (c == 1)
+            CHECK(!att && !gnd && (!mv || mx <= 4368 - 304) && task_of_slot(20) != IMPAI_SQ_ATTACK,
+                  "%s: no attack, no move nearer the bank, moved on: (%d, %d)", NAME[c], mx, mz);
+        if (c == 4)
+            CHECK(mv == 1 && !att && mz >= 3700 && mx <= 4368 - 304, "%s: travels south, (%d, %d)", NAME[c], mx, mz);
+        if (c == 7) CHECK(task_of_slot(20) == IMPAI_SQ_FORM, "%s: arrived, back to FORM", NAME[c]);
+        if (c == 5) {
+            const int dx = 4368 - mx;
+            CHECK(mv == 1 && !att && mz >= 3700 && dx >= 368 - 24 && dx <= 368 + 24,
+                  "%s: the point moved out to 368 px from the bank, %d at (%d, %d)", NAME[c], dx, mx, mz);
+        }
         if (c == 2) CHECK(att == 1 && !mv && !gnd, "%s: an attack from where it stands", NAME[c]);
     }
     s_ti[T_COM].dgun_range = 0;
+    s_ft[M_SUB].flags |= IMPAI_FT_SUBMERGED;
+    s_fwp[M_SUB].flags = TASIM_WF_WATER;
+    s_fwp[M_SUB].range = 400;
+    s_threat[M_SUB].range = s_threat[M_SUB].hit_range = 400;
 }
 
 /* THE SHELLING HOLDS THE GOAL (impai_mil.c, stand_off, orders): on the strait's world one tank, slot 20, of reach
@@ -9209,6 +9271,19 @@ static void check_reach_summary(void)
     CHECK(impai_reach_near(&r, 0, 2, 3, 3, 2, &ox, &oz) && ox == 4 && oz == 4, "the nearer ring first: %d,%d", ox, oz);
     CHECK(impai_reach_near(&r, 0, 2, 0, 0, 3, &ox, &oz) && ox == 3 && oz == 1, "off-grid blocks skipped: %d,%d", ox, oz);
     CHECK(impai_reach_at(&r, 0, 8, 0) == 0 && impai_reach_at(&r, 1, 0, 0) == -1, "off the grid 0, no labels -1");
+    /* THE EUCLIDEAN NEAREST (impai_reach_nearest, THE SHORE COMMANDER's point): from (0, 0), label 4 at ring 3's
+       corner (3, 3), 18 squared, found first in ring order, and at ring 4's (4, 0), 16 squared: the nearer is (4, 0),
+       past the first hit's ring; with radius 3, the corner; with (4, 0) gone, the corner */
+    for (i = 0; i < 64; i++) lab[i] = 1;
+    lab[3 * 8 + 3] = lab[0 * 8 + 4] = 4;
+    CHECK(impai_reach_nearest(&r, 0, 4, 0, 0, 8, &ox, &oz) && ox == 4 && oz == 0, "the Euclidean nearest: %d,%d", ox,
+          oz);
+    CHECK(impai_reach_near(&r, 0, 4, 0, 0, 8, &ox, &oz) && ox == 3 && oz == 3, "ring order's first: %d,%d", ox, oz);
+    CHECK(impai_reach_nearest(&r, 0, 4, 0, 0, 3, &ox, &oz) && ox == 3 && oz == 3, "the nearest within 3: %d,%d", ox,
+          oz);
+    lab[0 * 8 + 4] = 1;
+    CHECK(impai_reach_nearest(&r, 0, 4, 0, 0, 8, &ox, &oz) && ox == 3 && oz == 3, "the corner alone: %d,%d", ox, oz);
+    CHECK(!impai_reach_nearest(&r, 0, 5, 0, 0, 8, &ox, &oz), "the Euclidean nearest of no block: none");
     /* the radius held to the grid's farthest block: a centre 5 off the grid's west edge still finds the far corner,
        12 rings away, under a radius of 100 */
     for (i = 0; i < 64; i++) lab[i] = 1;
@@ -10591,7 +10666,15 @@ static void check_island_hold(void)
    (ab) (z) with the commander on an extractor's build: only an energy build is left for it, so the air plant waits
        for no builder, the CS's shipyard, and the commander keeps its extractor;
    (ac) (z) with no site anywhere for the lab: the take finds none, so the air plant waits for no site either -- the
-       CS's shipyard in the same decision, and the commander keeps its wind generator. */
+       CS's shipyard in the same decision, and the commander keeps its wind generator; THE AIR PLANT'S OWN SEARCH
+       spends its own site tests, so the sea plant's search still has the decision's;
+   (ad) (p) with the commander idle and an idle CS, and no site anywhere for the lab: the idle commander offers the
+       lab and places it nowhere, so the air plant is let go -- never neither --, the shipyard in the same decision;
+   (ae) THE AIR PLANT'S OWN SEARCH: (z) with the lab refused wherever its first cell lies at column 52 or east of it,
+       which holds every land site of the base ring at its first size: the commander's lab outside it, west of 52;
+   (af) (ae) with the commander offering no lab and a K-bot constructor, east of a channel 40 deep over columns
+       54..55, on a wind generator's build: the sites outside the base ring lie across the channel, which the K-bot's
+       class does not cross (builder_reaches), so no lab, and the CS's shipyard. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -10624,7 +10707,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[29] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[32] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -10645,13 +10728,16 @@ static void check_island_order(void)
                                          "(z) blind, the commander on a wind generator, a CS idle",
                                          "(aa) blind, the commander on a wind generator, an energy stall",
                                          "(ab) blind, the commander on an extractor, a CS idle",
-                                         "(ac) blind, the commander on a wind generator, no lab site" };
+                                         "(ac) blind, the commander on a wind generator, no lab site",
+                                         "(ad) blind, the commander idle, no lab site",
+                                         "(ae) blind, the commander on a wind generator, no lab site in the base ring",
+                                         "(af) blind, a K-bot on a wind generator, the outer sites across water" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 29; c++) {
+    for (c = 0; c < 32; c++) {
         int from, vp, lab;
         const int blind = c >= 15;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
@@ -10710,7 +10796,11 @@ static void check_island_order(void)
             if (c == 24) {
                 s_pref[E_LAB].until = s_pref[E_SY].until = (uint32_t)s_w.gametime + 1000u;
             }
-            if (c >= 25) {
+            if (c == 29) {
+                unit_add(&s_w, 9, E_CS, 130, 104, 1);
+                s_w.refuse_type = E_LAB;
+            }
+            if (c >= 25 && c != 29) {
                 unit_add(&s_w, 9, E_CS, 130, 104, 1);
                 s_w.unit[1].list[0].action = A_MOBILEBUILD;
                 s_w.unit[1].list[0].type = c == 27 ? E_MEX : E_WIND;
@@ -10726,6 +10816,29 @@ static void check_island_order(void)
                 s_job[1].since = (uint32_t)s_w.gametime - 10u;
                 if (c == 26) s_w.econ[0].energy = 0;
                 if (c == 28) s_w.refuse_type = E_LAB;
+                if (c >= 30) {
+                    s_w.refuse_box_type = E_LAB;
+                    s_w.refuse_box.x0 = 52;
+                    s_w.refuse_box.x1 = 511;
+                    s_w.refuse_box.z0 = 0;
+                    s_w.refuse_box.z1 = 127;
+                }
+                if (c == 31) {
+                    static const uint16_t COMNOLAB[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_VP, E_UWMEX };
+                    static const uint16_t CKLAB[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB };
+                    menu_set(&s_w, E_COM, COMNOLAB, 6);
+                    menu_set(&s_w, E_CK, CKLAB, 5);
+                    water_add(&s_w, 54, 0, 55, 127, 40);
+                    fake_reach(&s_reach, E_N);
+                    s_job[1].kind = IMPAI_JOB_NONE;
+                    s_w.unit[1].n = 0;
+                    unit_add(&s_w, 4, E_CK, 58, 64, 1);
+                    s_w.unit[4].list[0] = s_w.unit[1].list[0];
+                    s_w.unit[4].n = 1;
+                    s_job[4] = s_job[1];
+                    s_job[4].type = E_CK;
+                    s_job[4].kind = IMPAI_JOB_BUILD;
+                }
             }
             if (c == 22 || c == 24) {
                 unit_add(&s_w, 9, E_CS, 130, 104, 1);
@@ -10758,6 +10871,14 @@ static void check_island_order(void)
         if (c == 26)
             CHECK(!lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_WIND,
                   "%s: the commander kept at its wind generator", NAME[c]);
+        if (c == 29) CHECK(sy == 1 && !lab, "%s: the air plant let go, the shipyard", NAME[c]);
+        if (c == 30) {
+            int lx = -1;
+            builds_of(from, E_LAB, &lx, NULL);
+            CHECK(!sy && lab == 1 && lx >= 0 && lx < 52 && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_LAB,
+                  "%s: the commander's lab outside the base ring, column %d", NAME[c], lx);
+        }
+        if (c == 31) CHECK(sy == 1 && !lab, "%s: no lab across the channel, the shipyard", NAME[c]);
         if (c == 27 || c == 28)
             CHECK(sy == 1 && !lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == (c == 27 ? E_MEX : E_WIND),
                   "%s: the CS's shipyard, the commander kept at its %s", NAME[c],
@@ -10769,6 +10890,7 @@ static void check_island_order(void)
     s_plan = &IMPAI_PLAN_ROW;
     s_milp = NULL;
     s_w.refuse_type = 0;
+    s_w.refuse_box_type = 0;
 }
 
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the

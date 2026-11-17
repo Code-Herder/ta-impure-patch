@@ -409,7 +409,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    8 blocks, 256 px on an axis, whatever the type's sight distance. The disc dx^2 + dz^2 <= R^2 in blocks lies inside
    every TABLE1..12 of stock's `los.tdf` and of Escalation's (MEASURED 2026-11-17, each offset in the loader's four
    images); the brain holds R to 8 whatever `numtables` is, so on a content that raises it (Escalation's is 90) it
-   claims less than the engine lights. **The shear**: the stamp is centred on the row (z - h/2) >> 5, h the type's
+   claims less than the engine lights. It assumes `numtables` is 9 or more: the brain does not read it, so under a
+   content with fewer tables the test can claim up to 8 - (`numtables` - 1) blocks the engine does not light (no such
+   content measured). **The shear**: the stamp is centred on the row (z - h/2) >> 5, h the type's
    def `+0x170` byte plus the unit's altitude, clamped to 255, and a unit is seen over the row (z - y/2) >> 5 of its
    own altitude, so each moves 0..4 blocks north and the two differ by up to 4 rows either way. The test is therefore
    the disc of R - 4 around the unsheared blocks, which every such shift keeps inside the stamp's disc of R: it
@@ -524,10 +526,17 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    fight and travel. **The shore commander** (owner's decision, 2026-11-17): an armed enemy commander confined to a
    component that does not hold the member's block -- ashore, for a ship -- is weighed as a defence of reach the
    longer of its ground reach and its D-gun's range, measured from its component's block nearest the member (so
-   from every shore it can walk to); the member moves out as above, attacks it only when it is in the member's own
-   range from where it stands, and inside reach + 192 px is held where it is, so travel does not take it back in.
-   The stay-or-go reads it as not closing on an ATTACK squad that outranges that reach (`contact_closes`), so it is
-   no reason to retreat home. Stood members are passed over by the way home too (`travel_home`). Else it attacks the defence when it is seen now, from its own
+   from every shore it can walk to; the Euclidean nearest block, `impai_reach_nearest`); the member moves out as
+   above and attacks it only when it is in the member's own range from where it stands. No other order of the
+   ATTACK's takes a member into that reach: its travel point and its fight's moves to the centroid are moved out,
+   once, to the reach + 128 px from the commander's point for them on the line through them (`com_clear`, via
+   `squad_move`) -- with no clear point the member stops where it stands --, the arrival measures the member at the
+   moved point (`arrived`), and the fight attacks no target past the member's ground reach whose firing point, at
+   that reach from the target on the line to the member, lies inside it (`attack_clear`). The commanders weighed
+   are the squad's two nearest it outranges (`stand_lists`), for an ATTACK and for the FORM whose arrival decides
+   its wave. The stay-or-go reads it as not closing on an ATTACK squad only when every member of the squad stands
+   it off (`squad_stands_off`), and the contact's other members still close by their own test (`contact_closes`),
+   so it is then no reason to retreat home. Stood members are passed over by the way home too (`travel_home`). Else it attacks the defence when it is seen now, from its own
    range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and
    the member need not see it: a destroyer reaches 660 px and its eyes 256. **The hysteresis**: the move out ends 64 px
    past the line that orders it, and the member outranges the defence by those 128 px, so a member that stops short
@@ -806,17 +815,26 @@ what stands ashore -- and the economy
 pays: no stall, not in the hold, a steady metal income of `factory_per_m` (8) a pass or more. The figures are the
 writer's. While it holds, the pick ranks the air plants alone: on a wet anchor the sea plant is a candidate too and
 may out-rank them, and the sea plant is placed by its own search, never by the ring. **The air plant takes the energy
-builder** (owner's decision, 2026-11-17; `air_take`): before any idle builder is asked, and only when no idle
-builder or helper free of its far record offers the air plant, the first builder on an energy build -- not one
-ordered in this decision, not held by its far record, and not in an energy stall -- whose menu holds it is given
-it, replacing its job when a site takes it; the energy frame stays. On the naval turtle only the commander offers
-CORAP and it stood on wind generators whenever the plant was due. **The air plant waits for no builder and no
-site**: when the take gives it to none -- no such builder, the decision's budget spent, or no site in the
-builder's ring (whichever pass chose it, the waived one too) -- the decision's plant is the sea plant as before, and
-the idle builders that follow are asked for it in the same decision. So a want the air plant holds is in every
-decision the air plant's order or the sea plant's question, never neither: with the take after the idle builders
-and the commander's offer alone holding the plant, the turtle's commander found no CORAP site at any decision from
-8 587 and the seat built no second plant to the cap (MEASURED 2026-11-17 at c7f939c1, a diagnostic build). The air plant comes in place of the sea plant only once a search finds no site at all or no
+builder** (owner's decision, 2026-11-17; `air_take`): before any idle builder is asked, each builder that can take
+the air plant is asked in turn -- the idle builders the idle loop would ask, then the helpers on an assist, each
+free of its far record, then the builders on an energy build (not one ordered in this decision, not held by its
+far record, and not in an energy stall) -- and the first whose menu holds it and that places it is given it, its
+job the plant's; a leaver's energy frame stays. The take is for the air plant for the blind alone (owner's answer,
+2026-11-17). On the naval turtle only the commander offers CORAP and it stood on wind generators whenever the
+plant was due. **Its own site search** (owner's answer, 2026-11-17; `impai_build_air`): the rings from the base
+ring's present size out to eight more round the base box, nearest first, each site one the builder reaches
+(`builder_reaches`) and every test of the base ring's held -- no claim or failure, off ground threat, a
+constructor's route clear, the commander's reach and safe distance, the way out unless the waived pass chose it --,
+on 32 site tests a decision of its own (`AIR_OUT_TESTS`), never the decision's, and never growing the base ring. On
+the turtle the commander's base ring at its first size had 24 sites and none took CORAP (MEASURED 2026-11-17 at
+38efc351). **The air plant waits for no builder and no site**: no other path orders it -- the ladder's plant rung
+lets a `plant_air_blind` still set go before it asks (`air_let_go` in `assign`) --, so when the take places it
+nowhere the first builder asked for a plant is asked the sea plant's question in the same decision, with every site
+test of the decision left. So a want the air plant holds is in every decision the air plant's order or the sea
+plant's question, never neither. RESIDUAL: the search walks the same sites each decision, so where its first 32
+tested sites fail the ones past them are never tried. On the naval turtle no site within the commander's leash
+takes CORAP at 8 587 (136 refused by the engine's site test, MEASURED 2026-11-17), so the turtle still gets no air
+plant. The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
 another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
 to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default

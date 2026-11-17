@@ -182,6 +182,29 @@ int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, i
     return 0;
 }
 
+int impai_reach_nearest(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox,
+                        int* oz)
+{
+    const uint16_t* l = class_labels(r, c);
+    const int fx = bx > r->bw - 1 - bx ? bx : r->bw - 1 - bx, fz = bz > r->bh - 1 - bz ? bz : r->bh - 1 - bz;
+    int64_t best = -1;
+    int ring, i, dx, dz;
+    if (!l) return 0;
+    if (radius > fx && radius > fz) radius = fx > fz ? fx : fz;
+    for (ring = 0; ring <= radius && (best < 0 || (int64_t)ring * ring < best); ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
+            const int x = bx + dx, z = bz + dz;
+            if (x < 0 || z < 0 || x >= r->bw || z >= r->bh || l[(size_t)z * r->bw + x] != label) continue;
+            if (best < 0 || (int64_t)dx * dx + (int64_t)dz * dz < best) {
+                best = (int64_t)dx * dx + (int64_t)dz * dz;
+                *ox = x;
+                *oz = z;
+            }
+            break;
+        }
+    return best >= 0;
+}
+
 static int sea_army(const IMPAI_TINFO* t) { return t->klass >= IMPAI_K_SRAIDER && t->klass <= IMPAI_K_SAA; }
 
 static int land_army(const IMPAI_TINFO* t)
