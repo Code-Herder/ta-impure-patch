@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=fd67c52d..1a9350ea (ImpAI brain batch, fresh read-only reviewer) findings: 0 HIGH, 2 MED, 4 LOW; fixes in the next batch's commits, confirmed by the next review; report .data/impai/runs/reviews/high-batch6-1a9350ea.md date=2026-11-15
