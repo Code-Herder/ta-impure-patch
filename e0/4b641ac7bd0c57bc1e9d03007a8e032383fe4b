@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=b3e84cac..e04b641a findings=5 (M2 L2 nit1) acted=2 (MED-2 documented and checked in 7d15a54c; LOW-2 in edccde66) deferred=3 (MED-1 no-point retreat gives no order, LOW-1 DEFEND flip, nit) by the owner's ship decision 2026-11-16, recorded in landings.md; report .data/impai/runs/reviews/fix-review-e04b641a.md date=2026-11-16
