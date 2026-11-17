@@ -569,13 +569,17 @@ const WikiSim = (() => {
 
   /* A TEXT ENTRY: a page entry whose `demos` is absent or an empty list. Its page is its title, subtitle, badge and
      text and no stage, so it carries nothing a stage or the asset loader would read: no frame, scenes, units, features
-     or pace. A `demos` present and not a list refuses any entry. The message, or null; tagpu_wikidata_entry refuses at
+     or pace. A `demos` present and not a list refuses any entry. THE TECH TREE ENTRY is the one exception to `frame`:
+     `"frame": "techtree"` on an entry with no demos, whose stage is the running mod's build tree (techtree.js), which
+     no simulation plays; a tech tree entry with demos is refused. The message, or null; tagpu_wikidata_entry refuses at
      load what this refuses, in this order and with these words. */
   const TEXT_KEYS = [['frame', 'a frame'], ['scenes', 'scenes'], ['units', 'units'], ['features', 'features'], ['pace', 'a pace']];
+  const TECHTREE = 'techtree';
   function checkText(entry) {
     if (entry.demos !== undefined && !Array.isArray(entry.demos)) return 'has demos that are not a list';
+    if (entry.frame === TECHTREE && entry.demos !== undefined && entry.demos.length) return 'is a tech tree entry with demos';
     if (entry.demos !== undefined && entry.demos.length) return null;
-    for (const [k, what] of TEXT_KEYS) if (entry[k] !== undefined) return `is a text entry with ${what}`;
+    for (const [k, what] of TEXT_KEYS) if (entry[k] !== undefined && !(k === 'frame' && entry[k] === TECHTREE)) return `is a text entry with ${what}`;
     return null;
   }
 

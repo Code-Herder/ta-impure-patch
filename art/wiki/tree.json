@@ -3,4 +3,5 @@
               { "title": "Building", "children": [ { "entry": "quickbuild" }, { "entry": "buildshapes" } ] },
               { "title": "Reclaiming", "children": [ { "entry": "reclaim" } ] },
               { "title": "Camera", "children": [ { "entry": "megamap" } ] } ] },
-            { "title": "Replays", "children": [ { "entry": "watching" }, { "entry": "takeover" }, { "entry": "rewind" }, { "entry": "players" } ] } ] }
+            { "title": "Replays", "children": [ { "entry": "watching" }, { "entry": "takeover" }, { "entry": "rewind" }, { "entry": "players" } ] },
+            { "title": "Units", "children": [ { "entry": "techtree" } ] } ] }

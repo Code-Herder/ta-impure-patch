@@ -336,6 +336,10 @@ typedef struct {
                                            replay HUD's Take over (never with `live`) */
     int              players;           /* a game entry's `players`: its demos play a replay with the
                                            Players set and a camera (never with `live` or `takeover`) */
+    int              techtree;          /* `"frame": "techtree"`: the tech tree entry, a page entry with
+                                           no demos (frame WIKI_FRAME_PAGE) whose stage in the mockup is
+                                           the running mod's build tree (tools/wiki/mockup/techtree.js).
+                                           The game lays it out as a text entry: the tree is not ported */
     int              screen_w, screen_h;/* a players entry's `screen`, cells: the game screen its
                                            recordings were made on; 0 on any other entry */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */

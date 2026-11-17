@@ -25,7 +25,8 @@ const SIDEBARS = ['mod', 'fixture', 'tall', 'off'];
    theatre layout forced on whichever entry is open, for viewing it before an entry declares "frame": "game"; about: the
    theatre's About panel */
 const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', side: null, iface: 1, skin: 'kit', sidebar: 'mod', rewind: true,
-  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set(), theatre: false, about: false };
+  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set(), theatre: false, about: false,
+  unit: null, links: false };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
@@ -38,6 +39,9 @@ const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', 
   if (SIDEBARS.includes(q.get('sidebar'))) S.sidebar = q.get('sidebar');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   S.theatre = q.has('theatre'); S.about = q.has('about');
+  // the tech tree entry's unit picked (its panel open) and its All links switch
+  if (/^[a-z0-9_]+$/i.test(q.get('unit') || '')) S.unit = q.get('unit').toLowerCase();
+  S.links = q.has('links');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod });
@@ -45,7 +49,9 @@ function syncURL() {
   for (const [k, v] of Object.entries({ iface: S.iface, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind })) q.set(k, v);
   if (S.theatre) q.set('theatre', '');
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', '');
-    if (theatre() && S.about) q.set('about', ''); }
+    if (theatre() && S.about) q.set('about', '');
+    if (techEntry() && S.unit) q.set('unit', S.unit);
+    if (techEntry() && S.links) q.set('links', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
@@ -273,7 +279,7 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
    follows it, the controls join the row (#t-row), and the title, subtitle, badge and text go into About (#about). The
    row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every node back in the
    normal page's order. ---- */
-function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
+function theatre() { const e = entry(); return !!e && (e.frame === 'game' || e.frame === 'techtree' || S.theatre); }
 /* a text entry (sim.js checkText): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
 const isText = e => !!e && !e.frame && !(Array.isArray(e.demos) && e.demos.length);
 function arrange() {
@@ -290,11 +296,13 @@ function arrange() {
     wb.append(row);
   }
   win.classList.toggle('theatre', on);
+  win.classList.toggle('techtree', techEntry());
   $('#entry').classList.toggle('text', isText(entry()));
   $('#about').hidden = !(on && S.about);
+  techPanel();
   sizeStage();
 }
-$('#c-about').onclick = () => { buttonSound(); S.about = !S.about; arrange(); controls(); syncURL(); };
+$('#c-about').onclick = () => { buttonSound(); S.about = !S.about; if (S.about) S.unit = null; arrange(); controls(); syncURL(); };
 
 /* ---- the window ---- */
 function setOpen(o) {
@@ -415,6 +423,7 @@ function controls() {
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
   $('#c-about').classList.toggle('on', S.about);
+  $('#c-links').classList.toggle('on', S.links);
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
@@ -456,6 +465,7 @@ const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   if (rep) return drawReplay();
+  if (techEntry()) return drawTech();
   frameClear();
   const g = stage.getContext('2d'), v = view();
   if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard, sim && sim.types);
@@ -478,6 +488,183 @@ function draw() {
   for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
   return v;
 }
+
+/* ---- the tech tree entry ("frame": "techtree"; research/notes/ingame-wiki.md, *The tech tree entry*): the theatre with
+   the running mod's build tree for the player's side on the stage, drawn by techtree.js from the mod's pack
+   (gfx/side/<mod>/techtree/, gfx.py `tech_pack`). The tree opens fitted -- the whole tree as large as the stage's
+   uncovered width allows -- and stays fitted while the stage or a panel changes its room, until the player drags or
+   zooms. A unit picked (a card, an icon, a chip in its panel) lights the way to it and opens its panel over the bezel's
+   right, where About opens; the two never show together. ---- */
+const techEntry = () => { const e = entry(); return !!e && e.frame === 'techtree'; };
+const TECH = {};                      // mod -> 'loading', the pack's tree.json, or { error }
+const TT = { key: null, M: null, L: null, cam: null, fitted: true, drag: null, view: null, panel: null, pics: {} };
+const techBase = () => `gfx/side/${S.mod}/techtree/`;
+function techData() {
+  const mod = S.mod;
+  if (!(mod in TECH)) {
+    TECH[mod] = 'loading';
+    fetch(techBase() + 'tree.json').then(r => r.ok ? r.json() : Promise.reject(new Error(`gfx/side/${mod}/techtree/tree.json: ${r.status}`)))
+      .then(d => { TECH[mod] = d; techPanel(); }, x => { TECH[mod] = { error: x.message }; });
+  }
+  return TECH[mod];
+}
+// the player's side: the side asked for by name without case, else the first (sideIndex's rule)
+const techSide = d => Math.max(0, d.sides.findIndex(s => S.side && s.name.toLowerCase() === String(S.side).toLowerCase()));
+function techModel() {
+  const d = techData();
+  if (!d || d === 'loading' || d.error) return null;
+  const si = techSide(d), key = `${S.mod}|${si}`;
+  if (TT.key !== key) {
+    TT.key = key; TT.M = WikiTech.model(d, si); TT.L = WikiTech.layout(TT.M); TT.fitted = true; TT.cam = null;
+    if (S.unit && !TT.M.units[S.unit]) S.unit = null;
+  }
+  return TT.M;
+}
+function techReset() { TT.key = null; techPanel(); }
+function techPic(k) {
+  const id = `${S.mod}/${k}`, u = TT.M && TT.M.units[k];
+  if (!(id in TT.pics)) {
+    TT.pics[id] = null;
+    if (u && u.pic) { const im = new Image(); im.onload = () => { TT.pics[id] = im; }; im.src = techBase() + u.pic; }
+  }
+  return TT.pics[id];
+}
+// the canvas pixels a panel covers at the stage's right, which the fit leaves out
+function techCovered() {
+  const p = !$('#unit').hidden ? $('#unit') : !$('#about').hidden ? $('#about') : null;
+  if (!p) return 0;
+  const r = stage.getBoundingClientRect();
+  return r.width ? Math.max(0, r.right - p.getBoundingClientRect().left) * stage.width / r.width : 0;
+}
+const techU = () => G.gh / 720;       // canvas pixels a unit
+function techFit() {
+  TT.cam = WikiTech.fit(TT.L, Math.max(1, stage.width - techCovered()), stage.height, techU());
+  TT.fitted = true;
+}
+// the canvas fonts of the card's text roles, from the replay HUD's styles (art/hud/layout.json) the window's roles name
+let HUDSTYLES = null;
+const techFont = role => {
+  const s = HUDSTYLES && HUDSTYLES[LAY.roles[{ title: 'entry', body: 'subtitle', label: 'control' }[role]]];
+  return s ? `${s.weight} 1px '${s.font}', sans-serif` : '600 1px sans-serif';
+};
+function drawTech() {
+  frameClear();
+  const g = stage.getContext('2d'), W = stage.width, H = stage.height;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#16180f'; g.fillRect(0, 0, W, H);
+  const d = techData(), M = techModel();
+  const say = t => { g.fillStyle = '#b7b7ae'; g.font = `${(9 * techU()).toFixed(1)}px sans-serif`; g.textAlign = 'center';
+    g.fillText(t, W / 2, H / 2); g.textAlign = 'start'; };
+  if (!M) {
+    say(d && d.error ? 'No tech tree: this mod has no pack (tools/wiki/sidepacks.py writes it from your install)' : 'loading…');
+    $('#t-title').textContent = '';
+    return null;
+  }
+  if (TT.fitted || !TT.cam) techFit();
+  WikiTech.draw(g, M, TT.L, { cam: TT.cam, s: techU(), sel: S.unit, all: S.links, pic: techPic, font: techFont });
+  const n = M.order.length, nb = M.spine.length, nu = M.order.filter(k => M.units[k].upgrade).length;
+  const t = `${M.side.name} · ${n} units · ${nb} builders and factories${nu ? ` · ${nu} upgrades` : ''}`;
+  if ($('#t-title').textContent !== t) $('#t-title').textContent = t;
+  for (const b of ['#badge', '#t-badge']) if (!$(b).hidden) $(b).hidden = true;
+  return null;
+}
+// a canvas point of the stage from a pointer event, and the tree point under it
+const techPx = e => { const r = stage.getBoundingClientRect(); return [(e.clientX - r.left) * stage.width / r.width, (e.clientY - r.top) * stage.height / r.height]; };
+const techAt = ([px, py]) => [TT.cam.x + px / TT.cam.z, TT.cam.y + py / TT.cam.z];
+// the zoom's range: from the fitted scale (or a fifth of 1:1, the smaller) to four times 1:1
+function techZoom(z, px, py) {
+  const lo = Math.min(WikiTech.fit(TT.L, Math.max(1, stage.width - techCovered()), stage.height, techU()).z, 0.2 * techU());
+  const nz = clamp(z, lo, 4 * techU()), [ux, uy] = techAt([px, py]);
+  TT.cam = { z: nz, x: ux - px / nz, y: uy - py / nz }; TT.fitted = false;
+}
+function techPick(k, centre) {
+  S.unit = k; if (k) S.about = false;
+  if (k && centre && TT.L) {
+    const h = WikiTech.home(TT.M, k), [x, y, w] = TT.L.pos[h], z = Math.max(TT.cam.z, techU());
+    const cw = stage.width - techCovered();
+    TT.cam = { z, x: x + w / 2 - cw / 2 / z, y: y + 20 - stage.height / 2 / z }; TT.fitted = false;
+  }
+  arrange(); controls(); syncURL();
+}
+stage.addEventListener('pointerdown', e => {
+  if (!techEntry() || !TT.cam || e.button !== 0) return;
+  TT.drag = { at: techPx(e), cam: { ...TT.cam }, moved: false }; stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', e => {
+  if (!TT.drag) return;
+  const [px, py] = techPx(e), [ox, oy] = TT.drag.at, k = stage.width / stage.getBoundingClientRect().width;
+  if (!TT.drag.moved && Math.hypot(px - ox, py - oy) < 4 * k) return;
+  TT.drag.moved = true; stage.classList.add('drag');
+  TT.cam = { ...TT.drag.cam, x: TT.drag.cam.x - (px - ox) / TT.drag.cam.z, y: TT.drag.cam.y - (py - oy) / TT.drag.cam.z }; TT.fitted = false;
+});
+stage.addEventListener('pointerup', e => {
+  const d = TT.drag; TT.drag = null; stage.classList.remove('drag');
+  if (!d || d.moved || !techEntry() || !TT.M) return;
+  const [ux, uy] = techAt(techPx(e)), h = WikiTech.hit(TT.M, TT.L, ux, uy);
+  buttonSound(); techPick(h ? h.key : null, false);
+});
+stage.addEventListener('wheel', e => {
+  if (!techEntry() || !TT.cam) return;
+  e.preventDefault();
+  const [px, py] = techPx(e); techZoom(TT.cam.z * Math.exp(-e.deltaY * 0.0015), px, py);
+}, { passive: false });
+$('#c-fit').onclick = () => { buttonSound(); if (TT.L) techFit(); };
+for (const [id, f] of [['#c-zin', 1.25], ['#c-zout', 0.8]])
+  $(id).onclick = () => { buttonSound(); if (TT.cam) techZoom(TT.cam.z * f, (stage.width - techCovered()) / 2, stage.height / 2); };
+$('#c-links').onclick = () => { buttonSound(); S.links = !S.links; controls(); syncURL(); };
+
+/* THE UNIT'S PANEL: its picture, name and description; the model in 3D with the actions its script plays (unitview.js);
+   its figures and weapons; the walk from the commander to it; who builds it; its upgrades; what it builds, by kind. A
+   chip picks its unit and brings its card to the middle. Built again only when the unit, the mod or the side changes. */
+function techPanel() {
+  const el = $('#unit'), M = techEntry() ? techModel() : null, u = M && S.unit ? M.units[S.unit] : null;
+  const key = u ? `${TT.key}|${S.unit}` : null;
+  el.hidden = !u;
+  if (TT.panel === key) return;
+  TT.panel = key;
+  if (TT.view) { TT.view.dispose(); TT.view = null; }
+  // the panel's own children are the kit's painted part and the scrolling column: only the column is written
+  const box = el.querySelector('.scr');
+  if (!u) { box.innerHTML = ''; return; }
+  const pic = k => M.units[k].pic ? techBase() + M.units[k].pic : 'data:,';
+  const chip = k => { const v = M.units[k];
+    return `<span class="chip${v.upgrade ? ' up' : v.upgrades.length ? ' has' : ''}${k === S.unit ? ' sel' : ''}" data-unit="${k}" title="${esc(v.title)} — ${esc(v.description)}">`
+      + `<img src="${pic(k)}" alt=""><span>${esc(v.title)}</span></span>`; };
+  const groups = ks => { const g = {}; for (const k of ks) (g[M.units[k].kind] ||= []).push(k);
+    return WikiTech.KINDS.filter(n => g[n]).map(n => `<h4>${n}</h4><div class="chips">${g[n].map(chip).join('')}</div>`).join(''); };
+  const f = v => v >= 10000 ? `${Math.round(v / 1000)}k` : Math.round(v).toLocaleString('en');
+  const rows = [['Metal', f(u.metal)], ['Energy', f(u.energy)], ['Build time', f(u.buildtime)], ['Health', f(u.health)],
+    u.speed && ['Speed', u.speed.toFixed(2)], ['Sight', u.sight], u.radar && ['Radar', u.radar],
+    u.workertime && ['Build power', f(u.workertime)], u.energymake && ['Energy +', u.energymake.toFixed(1)],
+    u.extracts && ['Extracts', u.extracts.toFixed(4)], u.metalmake && ['Metal +', u.metalmake.toFixed(2)],
+    (u.storage[0] || u.storage[1]) && ['Storage', `${f(u.storage[0])} / ${f(u.storage[1])}`],
+    ['Footprint', u.fp.join(' × ')], ['Tier', u.tier]].filter(Boolean);
+  const flags = [[u.kind, u.upgrade ? ' up' : ''], u.upgradable && ['Upgradable', ' up'], u.cloaked && ['Cloaked', ''],
+    u.canfly && ['Flies', ''], u.water && ['Naval', '']].filter(Boolean);
+  const sec = (t, html) => `<section><h4>${t}</h4>${html}</section>`;
+  /* THE BODY SHOWN: the unit's own model, but for an upgrade the first builder's, which it is built onto -- an
+     upgrade's script hides every piece that has faces (MEASURED 2026-11-16: Escalation's ARMHLT_UPGRADE shows only its
+     empty base after Create, flags 7, 2, 2, 6), and Escalation's abilities (XOMNI, XHACK) have no faces at all */
+  const body = u.upgrade && u.parents.length ? M.units[u.parents[0]] : u;
+  box.innerHTML = `
+    <div class="uh"><img src="${pic(S.unit)}" alt=""><div><span class="ut">${esc(u.title)}</span><span class="us">${esc(u.description)}</span>
+      <div class="flags">${flags.map(([t, c]) => `<span class="flag${c}">${t}</span>`).join('')}</div></div>
+      <button class="ux" data-part="button" data-close title="Close">&#10005;</button></div>
+    ${body !== u ? `<div class="vnote">An upgrade has no body of its own. Shown is the ${esc(body.title)} that builds it.</div>` : ''}
+    <div class="view"></div><div class="acts"></div>
+    ${sec('Figures', `<dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>`)}
+    ${u.weapons.length ? sec('Weapons', u.weapons.map(w => `<div class="weap"><span>${esc(w.name)}</span><span>${w.range != null ? `range ${w.range} · damage ${w.damage}` : ''}</span></div>`).join('')) : ''}
+    ${sec('How to get it', `<div class="chips">${WikiTech.pathTo(M, S.unit).map(chip).join('<span class="sep">›</span>')}</div>`)}
+    ${u.parents.length ? sec(`Built by (${u.parents.length})`, `<div class="chips">${u.parents.map(chip).join('')}</div>`) : ''}
+    ${u.upgrades.length ? sec(`Upgrades (${u.upgrades.length})`, `<div class="chips">${u.upgrades.map(chip).join('')}</div>`) : ''}
+    ${u.builds.length ? sec(`Builds (${u.builds.length})`, groups(u.builds)) : ''}`;
+  TT.view = WikiUnitView.mount(el.querySelector('.view'), el.querySelector('.acts'), body, techBase(), `tools/wiki/mockup/${techBase().replace(/\/$/, '')}`);
+}
+$('#unit').addEventListener('click', e => {
+  if (e.target.closest('[data-close]')) { buttonSound(); techPick(null, false); return; }
+  const c = e.target.closest('[data-unit]');
+  if (c) { buttonSound(); techPick(c.dataset.unit, true); }
+});
 
 /* ---- the frame: a frame:game entry's replay on the whole game frame (frame.js), its HUD and Leave's question ----
    One frame of the page is, in order: the replay's view; the world shown, copied only while no seek is pending (a
@@ -832,13 +1019,13 @@ function paintParts() {
 }
 /* ---- text: the elements of each of the wiki's text roles (uikit.js roleStyles) ---- */
 const ROLE = {
-  window_title: ['#win .wt'], entry_title: ['#e-title'],
-  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li', '#tree [data-demo]', '#t-title'], demo_num: ['#demos li .n'],
-  subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
-  control: ['#ctl button', '#t-row button'], badge: ['#badge', '#t-badge'], keycap: ['.kc'], keys: ['#keys'],
+  window_title: ['#win .wt'], entry_title: ['#e-title', '#unit .ut'],
+  category: ['#tree .cat', '#unit h4'], entry: ['#tree .leaf'], demo: ['#demos li', '#tree [data-demo]', '#t-title'], demo_num: ['#demos li .n'],
+  subtitle: ['#e-sub', '#unit .us'], text: ['#text', '#unit .scr'], caption: ['#caption'],
+  control: ['#ctl button', '#t-row button', '#unit button'], badge: ['#badge', '#t-badge'], keycap: ['.kc'], keys: ['#keys'],
 };
 UIKit.layoutVars(frame, LAY);
-fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => UIKit.roleStyles(ROLE, LAY.roles, L.styles)).catch(x => console.error('wiki styles:', x));
+fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => { HUDSTYLES = L.styles; UIKit.roleStyles(ROLE, LAY.roles, L.styles); }).catch(x => console.error('wiki styles:', x));
 
 /* ---- the frame loop ---- */
 let last = 0;
@@ -863,9 +1050,9 @@ $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value;
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
 $('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
-$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; loadPack(S.mod); sideNote(); sideControl(); renderTree(); renderEntry(); start(); syncURL(); };
+$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; loadPack(S.mod); techReset(); sideNote(); sideControl(); renderTree(); renderEntry(); start(); syncURL(); };
 $('#sidebar').value = S.sidebar; $('#sidebar').onchange = e => { S.sidebar = e.target.value; sideNote(); sideControl(); renderTree(); renderEntry(); start(); syncURL(); };
-$('#side').onchange = e => { S.side = e.target.value; renderTree(); renderEntry(); start(); syncURL(); };
+$('#side').onchange = e => { S.side = e.target.value; techReset(); renderTree(); renderEntry(); start(); syncURL(); };
 $('#iface').value = S.iface; $('#iface').onchange = e => { S.iface = +e.target.value; renderTree(); renderEntry(); start(); syncURL(); };
 window.addEventListener('resize', layout);
 

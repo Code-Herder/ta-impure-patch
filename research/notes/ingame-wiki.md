@@ -97,14 +97,17 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The sound | the events in both simulations (`tagpu_wikisim.c` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
 | The sound's checks | `python3 tagpu/ddraw/tests/wavtest.py` (the WAV parser on hostile files, and against `gfx.py` `wav_pcm` on every pack WAV); `assetcheck.py`'s `sound` element; `simparity.mjs` (hash item 10) and `simcheck.mjs`'s sound rule |
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
+| The tech tree entry | `art/wiki/entries/techtree.json` (`"frame": "techtree"`); in the mockup `tools/wiki/mockup/techtree.js` (the model, the layout, the drawing, the hit test), `unitview.js` (the unit's model in 3D) and `wiki.js` (the stage's input and the unit's panel); the data, each mod's `gfx/side/<mod>/techtree/`, written by `tools/wiki/gfx.py` `tech_pack` through `sidepacks.py` ([below](#the-tech-tree-entry)) |
 | This page | the decisions, the data format and the simulation's contract |
 
-Eight entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
+Nine entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
 **Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
 Sweep**; in Camera, **Mega map and strategic icons**, a text entry
 ([below](#a-text-entry-mega-map-and-strategic-icons)). Under **Replays**, a top-level category after it, the four replay entries in this order:
 **Watching a game**, **Take over a replay**, **Rewind a skirmish** and **Players and the camera**
-([the replay entries' plan](ingame-wiki-replay-plan.html)).
+([the replay entries' plan](ingame-wiki-replay-plan.html)). Under **Units**, the last top-level
+category, **Tech tree**: the running mod's build tree, built in the mockup; the game lays it out as
+a text entry until the tree is ported ([below](#the-tech-tree-entry)).
 
 ## The decisions
 
@@ -2190,6 +2193,94 @@ draws it.
   the folds, the stats window, the samples), the players view (`view_json`) and `frame_img` /
   `frame_clip`; `simparity.mjs --frame` prints the same view beside each players record.
 
+## The tech tree entry
+
+**What it is.** *Units › Tech tree* shows everything the player's side of the running mod can
+build, from its commander up: each builder and factory a card, under it the units it is the first
+to unlock, a line from each card back to whatever builds it. A unit picked -- a card, an icon on
+one, a chip in a panel -- lights the walk to it from the commander, what it builds and what else
+builds it, and opens its panel. Nothing in it is authored per mod: the tree is the mod's own files,
+read by the rules the sidebar is read by.
+
+**The owner's decisions, 2026-11-16.** Four layouts were prototyped over the real data -- a
+research tree, a focus view (built by / the unit / builds), the game's build menus as columns, and
+a tier atlas -- and the research tree was chosen. It is an entry of its own under a new top-level
+category, *Units*, named *Tech tree*. It takes the theatre: the wiki's tree in its column, the
+build tree on the whole stage, the unit's panel over the bezel's right where About opens (the two
+never show together). The tree opens fitted, as large as the stage's uncovered width allows, and
+stays fitted while the stage or a panel changes its room until the player drags or zooms. Two
+cards of one column are never closer than a few pixels. The unit's model turns under a **free orbit
+camera**, chosen over the engine's own fixed projection although the game's unit pass cannot draw
+it (a gap, below). The prototype is on this branch's history (`tools/wiki/techtree-prototype/`,
+`0d3a22a2..3b92ed28`).
+
+**The data** is each mod's pack, `gfx/side/<mod>/techtree/`, which `gfx.py` `tech_pack` writes
+beside the sidebar pack (`sidepacks.py` runs it for each compatibility setup): `tree.json`, every
+side of `sidedata.tdf` whose `commander` the units folder has -- its walk (`side_walk` over
+`menu_of`, the build menus exactly as the sidebar reads them with that side's prefix, the cast
+rule's walk taken to its end) and each builder's menu -- and each unit's FBI figures; `pics/`, the
+build pictures (`<unitpics>\<UnitName>.PCX` in the install's palette); `scene.json` and `units/`,
+every unit's model and COB script (`write_units`, owner 0) for the panel's view and the COB host;
+`pal.bin`. A weapon's name, range and damage come from the first `weapons\*.tdf` section of its
+name (the folder's string is not mapped in the executable, so a mod that renames it is not followed
+[INFERRED]). MEASURED 2026-11-16: stock 132 + 134 units, ProTA 149 + 149, Total Mayhem 237 + 236,
+TA Twilight 248 + 257, TA Escalation 274 + 271, TA Zero 66 + 72 + 72, every unit with its model
+and every one but three with its picture.
+
+**The rules** (`techtree.js` `model`), which the pack does not hold, so the game's port applies the
+same ones:
+
+- **The walk.** A unit's `first` is the builder the walk reached it from: the first in walk order
+  whose menu holds it. What a builder is the first to reach are its `unlocks`. Its `parents` are
+  every builder of the side whose menu holds it.
+- **An upgrade** (or an ability) is what a builder makes that never stands on the field as a unit:
+  a non-structure that is 0 × 0, or born cloaked, stealthed and hiding its damage. MEASURED
+  2026-11-16 over the six setups: 19 in Escalation (a tower's, a geothermal plant's, a fusion
+  plant's upgrade built onto it; *Level 2* and *Level 3 Unit Upgrade* from the advanced labs;
+  *Activate Maximum Intel*, *Activate Commander Hack*), 7 in Total Mayhem (the moho mines' and
+  geothermal plants' upgrades, the EMP missile), none elsewhere, and no mine among them (a mine is
+  born cloaked, 1 × 1, and does not hide its damage). An upgrade is never a card or a child of
+  one: it shows on its builder, dashed purple, and in its panel.
+- **A kind**, for the panel's groups: the commander; a factory (a structure with a menu) or a
+  builder (a mobile unit with a menu), a menu counted without its upgrades, so a tower whose menu
+  is its own upgrade is a defense; economy (a structure that extracts or makes a resource, armed
+  or not, or stores one), defense (armed), support; land, air, sea; upgrade.
+- **The tier**: the category's `LEVELn` where the mod writes one, else one more than the builders
+  crossed on the walk from the commander, at most 4.
+- **The cards** are the commander and every builder and factory; a card's parent is the nearest
+  card up the `first` chain. **Upgradable** is a unit with upgrades, or whose description says it
+  is (Escalation writes "(Upgradable)" on units its labs' upgrades act on); an upgrade never is.
+
+**The layout** (`layout`). A card is 118 units wide, its columns 150 apart, its height a function
+of its icon count alone -- a 30-unit header (the build picture, the title, the description and the
+kind, each one line, clipped), the icons 13 units square, 8 a row, a 9-unit footer -- so the layout
+is exact before anything is drawn. A tidy tree: each childless card takes the next row, a parent is
+centred over its children but never above the cursor, and one cursor runs down the whole tree,
+every card starting at or below it and moving it past its own bottom plus `GAP` (6 units). That is
+the invariant: two cards of one column are at least `GAP` apart, whatever the fonts. The drawing
+is rectangles, polylines (an edge leaves a card's header at its right, turns at the gap's middle
+and enters the child's header), images and clipped one-line text: what a HUD op list carries.
+
+**The panel.** The unit's picture, name, description and flags; its model in 3D (`unitview.js`):
+the pack's mesh posed by the unit's own COB script through the wiki's COB host (`serve.py`, the C
+the DLL's wiki runs), lit by face, turning until dragged; the actions its FBI allows, each the
+engine's own call -- Walk (`StartMoving`, `MoveRate1` / `StopMoving`), Aim (`AimPrimary` with a
+heading stepped every 45 ticks), Fire (`FirePrimary`, `Shot1`), Build (`StartBuilding` /
+`StopBuilding`), On / off (the state setter), Take off -- and Reset. An upgrade has no body of its
+own (Escalation's ARMHLT_UPGRADE shows only its empty base once Create has run, MEASURED
+2026-11-16; its abilities have no faces at all), so the panel shows the builder it is built onto and
+says so. Then its figures and weapons, the walk to it, who builds it, its upgrades and what it
+builds, by kind; each a chip that picks its unit and brings its card to the stage's middle.
+
+**In the game.** `tagpu_wikidata.c` reads `"frame": "techtree"` (`WIKIENTRY.techtree`) as a page
+entry with no demos, refusing one with demos as `sim.js` `checkText` does, so the window lays it
+out as a text entry: its title, subtitle and text. Not built: the tree's data read from the
+running mod on the wiki's asset thread, as `tagpu_wikiasset.c` reads the sidebar (`side_walk`'s
+rules over the engine's own build-menu reads); the tree's ops, its hit map and its camera in
+`tagpu_wikistage.c`; the panel in `tagpu_wikilay.c`; and a perspective unit view on the render
+thread, which the orbit camera needs because the game's unit pass draws only the engine's fixed
+projection. `wikilaycheck.py` has no tech tree case.
+
 ## The data format
 
 ### `art/wiki/tree.json`
@@ -2219,6 +2310,10 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
                "end": 240 } ] }
 ```
 
+- **`"frame"`** is absent (a page entry), `"game"` (a game entry, below) or `"techtree"`: the tech
+  tree entry, a page entry with no demos whose stage is the running mod's build tree. A text entry
+  carries no `frame` but that one, and a tech tree entry with demos is refused (`sim.js`
+  `checkText`, `tagpu_wikidata.c` `tagpu_wikidata_entry`, in that order and with those words).
 - **Time is in simulation ticks**, 30 a second, so a demo plays the same at any frame rate and the
   game's version can be compared tick by tick.
 - **Positions are world units** (a cell is 16), the game's own.
@@ -3169,6 +3264,10 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Gaps
 
+- **The tech tree is the mockup's alone.** The game lays the entry out as a text entry; the data
+  read from the running mod, the tree's ops and hit map, the panel and a perspective unit view are
+  not built ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a mod with
+  no pack (`unknown`, or a setup `sidepacks.py` has not run) says so on the stage.
 - **The replay entries are landed.** Watching, Rewind a skirmish, Take over a replay and
   Players and the camera play in both the mockup and the game ([the plan](ingame-wiki-replay-plan.html),
   *Players, as built*); what they leave open is the plan's *Open* and the roadmap row's *Not covered yet*.
