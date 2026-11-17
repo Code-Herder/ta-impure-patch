@@ -101,7 +101,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | This page | the decisions, the data format and the simulation's contract |
 
 Nine entries. First, at the top level and above every category, **Tech tree**: the running mod's
-build tree, browsed on the stage; the unit's panel and its 3D view are the mockup's alone so far
+build tree, browsed on the stage with each unit's panel; the unit's 3D view is the mockup's alone so far
 ([below](#the-tech-tree-entry)). Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
 **Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
 Sweep**; in Camera, **Mega map and strategic icons**, a text entry
@@ -2228,8 +2228,8 @@ download picture, then `<unitpics>\<UnitName>.PCX`), and the PCX alone for a uni
 `scene.json` and `units/`,
 every unit's model and COB script (`write_units`, owner 0) for the panel's view and the COB host;
 `pal.bin`. A weapon's name, range and damage come from the first `weapons\*.tdf` section of its
-name (the folder's string is not mapped in the executable, so a mod that renames it is not followed
-[INFERRED]). MEASURED 2026-11-16: stock 132 + 134 units, ProTA 149 + 149, Total Mayhem 237 + 236,
+name, in the folder `weapons` as a literal: the executable's own name for it, `Weapons` at
+`0x50392C` with its pattern at `0x503934`, is not read, so a mod that renames it is not followed. MEASURED 2026-11-16: stock 132 + 134 units, ProTA 149 + 149, Total Mayhem 237 + 236,
 TA Twilight 248 + 257, TA Escalation 274 + 271, TA Zero 66 + 72 + 72, every unit with its model
 and a picture of more than one colour.
 
@@ -2287,7 +2287,10 @@ heading stepped every 45 ticks), Fire (`FirePrimary`, `Shot1`), Build (`StartBui
 own (Escalation's ARMHLT_UPGRADE shows only its empty base once Create has run, MEASURED
 2026-11-16; its abilities have no faces at all), so the panel shows the builder it is built onto and
 says so. Then its figures and weapons, the walk to it, who builds it, its upgrades and what it
-builds, by kind; each a chip that picks its unit and brings its card to the stage's middle.
+builds, by kind; each a chip that picks its unit and brings its card to the stage's middle. The
+walk's chips are joined by `»`, and a chip's label too long for it is cut to the most characters
+that fit with three periods (`chipCut`): the HUD faces have neither `›` nor `…` (nor the card's
+clip, which cuts with three periods too).
 
 **In the game.** `tagpu_wikidata.c` reads `"frame": "techtree"` (`WIKIENTRY.techtree`) as a page entry
 with no demos, refusing one with demos as `sim.js` `checkText` does, and the window gives it the
@@ -2317,7 +2320,19 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
 - **The text** is in three plain styles of `art/hud/layout.json`, `tech_title` (Oswald 500),
   `tech_body` (Barlow Condensed 600) and `tech_label` (Oswald 500), measured by
   `tagpu_hudtext_width`; the mockup draws its cards in the same faces (`wiki.js` `techFont`), so
-  the one-line clips and their ellipses fall where the game's do.
+  the one-line clips fall where the game's do, each cut with three periods.
+- **The unit's panel** is the page's (`tagpu_wikilay.c` `unit_panel`), in About's place and the
+  page's top layer, never with About: the render thread hands the layout its own tree and the
+  pick bounded by its walk (`WIKIPAGE.tech`, `tech_sel`), and the layout sets wiki.js
+  `techPanel`'s column -- the header, the view's rect and its actions, the figures' grid, the
+  weapons, the walk, the builders, the upgrades and the builds by kind -- scrolling as one panel
+  (`scroll:unit`, the fourth `TAGPU_WIKI_NSCROLL`). Its pictures are `HOP_PIC` ops of the tree's
+  sheet on the page's list (`ui_pic`); a chip's label is in its own style, `unit_chip` (the body
+  text's face at 0.85 of its size, role `chip`). A chip (`unit:<order>`) picks its unit and
+  centres its card in the uncovered canvas at no less than 1:1 (`tech_pick_chip`), read on the
+  side the frame drew; the close button (`uclose`) closes it, and it opens at its top again. The
+  view's rect (`uview`) is the dark ground the 3D view will draw in, and the actions
+  (`act:<label>`) are laid out and inert: both are T4's.
 - **The pictures** are a sheet of their own (`HUD_TEX_TECH`, 2048 × 2048 RGBA8): the side's
   pictures through the tree's palette, its colour key transparent, shelf-packed tallest first with
   their edge texels repeated one texel out, so a filtered draw clamps at a picture's edge as
@@ -2332,13 +2347,17 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   `techtree.js` call for op over every setup's pack (four cameras and selections a side, every
   card's centre, corner and first icon), measured in the game's faces; `assetcheck.py --side`
   pairs the data with `gfx.py`'s pack and the model and layout with `techtree.js`;
-  `wikilaycheck.py`'s four tech tree cases pair the window; `wiki_regression.py techtree` plays
-  it in the game: the open on the tree, fitted, a click that picks, a drag, a notch about the
-  pointer, Fit, All links and About narrowing the fit.
+  `wikilaycheck.py`'s tech tree cases pair the window, six of them with a unit's panel open (a
+  commander, a factory, an Escalation upgrade and the tower it upgrades, a TA Zero flier, a Total
+  Mayhem ship scrolled to its end): every box, line, picture and control, the panel's tree made
+  from the same pack (`tests/techpack.h`); `wiki_regression.py techtree` plays it in the game:
+  the open on the tree, fitted, a click that picks, a drag, a notch about the pointer and a click
+  on the zoomed tree, the panel a pick opens with a chip, the wheel and its close, Fit, All links
+  and About narrowing the fit.
 
-Not built: the unit's panel (T3) -- a pick lights the walk to the unit, but no panel opens -- and
-the unit in 3D (T4), which needs a perspective view on the render thread because the game's unit
-pass draws only the engine's fixed projection.
+Not built: the unit in 3D (T4) -- the panel's view is its dark ground and its actions do nothing
+-- which needs a perspective view on the render thread because the game's unit pass draws only
+the engine's fixed projection.
 
 ## The data format
 
@@ -3323,9 +3342,9 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Gaps
 
-- **The tech tree has no unit panel in the game.** The tree is read from the running mod and drawn,
-  panned, zoomed and picked on as the mockup's is; the panel a pick opens and the unit in 3D are
-  the mockup's alone ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a
+- **The tech tree's unit has no 3D view in the game.** The tree is read from the running mod and
+  drawn, panned, zoomed and picked on, and a pick opens the unit's panel, as the mockup's do; the
+  panel's view and its actions are the mockup's alone ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a
   mod with no pack (`unknown`, or a setup `sidepacks.py` has not run) says so on the stage; in the
   game a mod whose tree the load refused says so (the log says why).
 - **The replay entries are landed.** Watching, Rewind a skirmish, Take over a replay and

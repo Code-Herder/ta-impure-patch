@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wikilaycheck.py -- the DLL's wiki window (tagpu_wikilay.c) against the mockup's (tools/wiki/mockup/).
 
-    python3 tools/wiki/wikilaycheck.py [--keep DIR]
+    python3 tools/wiki/wikilaycheck.py [--keep DIR] [--case SUBSTRING]
     python3 tools/wiki/wikilaycheck.py --check-only
 
 First, and alone with --check-only (no browser), the layout's load-time check, tagpu_wikilay_check as the game
@@ -123,6 +123,15 @@ CASES = [
     ("1440-esc-techtree-links", (2560, 1440), "mod=escalation&entry=techtree&links", {}),
     ("4k-tazero-techtree-about", (3840, 2160), "mod=tazero&entry=techtree", {"about": True}),
     ("1024-mayhem-techtree-held", (1024, 768), "mod=mayhem&entry=techtree", {"held": "c-zin"}),
+    # the unit's panel (wiki.js techPanel): a unit of each kind in several setups -- the commander, a factory,
+    # an Escalation upgrade and the builder it upgrades, a flier, a ship scrolled to its end -- each with its
+    # picture, flags, figures, weapons, its walk, builders, upgrades and builds
+    ("1080-stock-unit-commander", (1920, 1080), "mod=stock&entry=techtree&unit=armcom", {}),
+    ("1080-stock-unit-factory", (1920, 1080), "mod=stock&entry=techtree&unit=armlab", {}),
+    ("1440-esc-unit-upgrade", (2560, 1440), "mod=escalation&entry=techtree&unit=armhlt_upgrade", {}),
+    ("1440-esc-unit-upgradable", (2560, 1440), "mod=escalation&entry=techtree&unit=armhlt", {"scroll": {"unit": "half"}}),
+    ("4k-tazero-unit-flier", (3840, 2160), "mod=tazero&entry=techtree&unit=gokt1aircon", {}),
+    ("1024-mayhem-unit-ship", (1024, 768), "mod=mayhem&entry=techtree&unit=armcs", {"scroll": {"unit": "max"}}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -152,9 +161,14 @@ COLLECT = r"""async () => {
     else while (sim && sim.tick < A.tick && !sim.done) sim.step();
   }
   if (A.about) $('#c-about').click();
+  // the unit's panel puts its actions in once the model has loaded (unitview.js mount)
+  if ($('#unit') && !$('#unit').hidden) {
+    const t0 = performance.now();
+    while (!document.querySelector('#unit .acts button') && performance.now() - t0 < 20000) await new Promise(r => setTimeout(r, 50));
+  }
   if (A.held) $('#' + A.held).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   await raf(); await raf();
-  const SCR = { tree: '#tree', demos: '#demos', text: '#text' };
+  const SCR = { tree: '#tree', demos: '#demos', text: '#text', unit: '#unit .scr' };
   for (const [k, v] of Object.entries(A.scroll || {})) {
     const e = $(SCR[k]), mx = e.scrollHeight - e.clientHeight;
     e.scrollTop = v === 'max' ? mx : v === 'half' ? Math.round(mx / 2) : v;
@@ -171,8 +185,8 @@ COLLECT = r"""async () => {
     return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)]; };
   // the box an element is clipped to: its scroller's client box, or the strip that hides its overflow
   const clipOf = e => { const s = e.closest('.scr'); if (s) return client(s); const k = e.closest('#caption, #keys, .wt, #t-title'); return k ? B(k) : null; };
-  // the theatre's About is the page's top layer (HOPF_TOP), every element inside it
-  const top = e => !!e.closest('#about');
+  // the theatre's About and the tech tree's unit panel are the page's top layer (HOPF_TOP), every element inside them
+  const top = e => !!e.closest('#about, #unit');
   const els = [];
   const shown = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]');
   for (const e of document.querySelectorAll('#frame [data-part]')) {
@@ -194,6 +208,20 @@ COLLECT = r"""async () => {
     ['c-about', 'about'], ['c-fit', 'fit'], ['c-zout', 'zout'], ['c-zin', 'zin'], ['c-links', 'links']])
     if (!$('#' + id).disabled) hot($('#' + id), key);
   hot($('#stage'), 'stage');
+  /* THE TECH TREE'S UNIT PANEL: a chip picks its unit by its order index in the side's walk, the close button, each of
+     the view's actions by its label, the view; each picture by the unit it shows. The view's own drawing and its note
+     are the 3D view's (unitview.js), not the page's */
+  const TM = WikiPage.tech && WikiPage.tech(), ord = TM ? Object.fromEntries(TM.order.map((k, i) => [k, i])) : {};
+  for (const e of document.querySelectorAll('#unit [data-unit]')) hot(e, 'unit:' + ord[e.dataset.unit]);
+  hot($('#unit .ux'), 'uclose');
+  for (const e of document.querySelectorAll('#unit .acts button')) hot(e, 'act:' + e.textContent);
+  hot($('#unit .view'), 'uview');
+  for (const e of document.querySelectorAll('#unit img')) {
+    if (!shown(e)) continue;
+    const r = B(e), k = clipOf(e), ch = e.closest('[data-unit]');
+    if (k && !overlapY(r, k)) continue;
+    els.push({ kind: 'pic', key: ch ? ch.dataset.unit : S.unit, r, top: true });
+  }
   // the discs: a 1 px border round a fill
   for (const e of document.querySelectorAll('#win .lock, #badge i, #t-badge i')) {
     if (!shown(e)) continue;
@@ -209,7 +237,7 @@ COLLECT = r"""async () => {
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
     const e = t.parentElement;
     // the stage HUD is the game's replay HUD over the stage, paired apart (STAGEHUD)
-    if (!e.closest('#win, #b-wiki') || e.closest('.gl, #stagehud') || !shown(e) || !t.data.trim()) continue;
+    if (!e.closest('#win, #b-wiki') || e.closest('.gl, #stagehud, #unit .view') || !shown(e) || !t.data.trim()) continue;
     const cs = getComputedStyle(e);
     ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
     const lines = [], rg = document.createRange();
@@ -280,14 +308,16 @@ COLLECT = r"""async () => {
   }
   const sim = WikiPage.sim();
   const state = { stagehud, res: S.res, W: f.width, H: f.height, bar: 32, rewind: S.rewind, config: $('#b-gear').matches('.pressed, .on') ? 2 : 1, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
-    fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
+    fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text', 'unit'].map(k => scroll[k].top),
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes,
     iface: S.iface, casting: (WikiPage.context() || {}).casting || null,
     theatre: S.theatre, about: S.about && !!$('#win.theatre'),
     // the tech tree's row: the tree's title as drawTech set it, and All links
-    tech_title: $('#win.techtree') ? $('#t-title').textContent : '', tech_all: !!S.links };
+    tech_title: $('#win.techtree') ? $('#t-title').textContent : '', tech_all: !!S.links,
+    // the unit's panel: the picked unit's order index in the side's walk, the side's index, the mod whose pack it is
+    tech_sel: TM && S.unit && !$('#unit').hidden ? ord[S.unit] : -1, tech_side: TM ? WikiPage.techSide() : 0 };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
 
@@ -503,18 +533,24 @@ def stage_hud(c, d):
 
 
 def main():
-    keep = None
-    if len(sys.argv) == 3 and sys.argv[1] == "--keep":
-        keep = Path(sys.argv[2])
-    only = sys.argv[1:] == ["--check-only"]
+    keep, pick, a = None, None, sys.argv[1:]
+    while len(a) >= 2 and a[0] in ("--keep", "--case"):
+        if a[0] == "--keep":
+            keep = Path(a[1])
+        else:
+            pick = a[1]
+        a = a[2:]
+    only = a == ["--check-only"]
+    cases = [c for c in CASES if not pick or pick in c[0]]
     t0 = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="wikilaycheck"))
     exe, pak = tmp / "wikilaycheck", tmp / "wikipak.bin"
-    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
+    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}", f"-I{SRC.parent / 'tests'}",
                          str(ROOT / "tools/wiki/wikilaycheck.c"), *(str(SRC / f) for f in (
                              "tagpu_wikilay.c", "tagpu_uikit.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
                              "tagpu_pak.c", "lodepng.c", "tagpu_wikiframe.c", "tagpu_wikistage.c", "tagpu_wikisim.c", "tagpu_placegeo.c",
-                             "tagpu_sweepgeo.c", "tagpu_wikicob.c", "tagpu_cobvm.c", "tagpu_cob_safe.c", "tagpu_wikireplay.c")), "-lm", "-o", str(exe)],
+                             "tagpu_sweepgeo.c", "tagpu_wikicob.c", "tagpu_cobvm.c", "tagpu_cob_safe.c", "tagpu_wikireplay.c", "tagpu_wikitech.c")),
+                         "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:
         sys.exit("wikilaycheck: the native build failed\n" + cc.stderr)
@@ -542,7 +578,7 @@ def main():
     bad, glyphs = 0, set()
     run("open", "about:blank")
     try:
-        for name, (gw, gh), query, acts in CASES:
+        for name, (gw, gh), query, acts in cases:
             # the frame fits the page's width less 34 and its height less the controls: a viewport
             # 34 wider than the screen and tall enough draws the frame at the screen's own size
             run("resize", str(gw + 34), str(gh + 900))
@@ -575,6 +611,8 @@ def main():
                 sys.exit(f"wikilaycheck: {name}: the frame is {dom['state']['W']} x {dom['state']['H']}, not the screen's {gw} x {gh}")
             dom["state"]["keys"] = [KEYNAME[k] for k in dom["state"]["keys"]]
             dom["thumbs"] = thumbs(run, tmp, dom)
+            if dom["state"]["tech_sel"] >= 0:
+                dom["state"]["tech_pack"] = str(ROOT / "tools/wiki/mockup/gfx/side" / dom["state"]["mod"] / "techtree")
             sp = tmp / f"{name}.state.json"
             sp.write_text(json.dumps(dom["state"]))
             r = subprocess.run([str(exe), str(ROOT / "art/hud"), str(ROOT / "art/wiki"), str(pak), str(sp)], capture_output=True, text=True)
@@ -591,7 +629,7 @@ def main():
             if ops["overflow"]:
                 bad += 1
                 print("  the DLL's ops overflowed <-- DIFFERS")
-            cs = {"part": [], "hot": [], "dot": [], "text": [], "thumb": []}
+            cs = {"part": [], "hot": [], "dot": [], "text": [], "pic": [], "thumb": []}
             for o in ops["ops"]:
                 o["r"] = [o["x"], o["y"], o["w"], o["h"]]
                 if o["kind"] == "solid" and o["rgba"] == "808078b3":
@@ -601,8 +639,9 @@ def main():
             ds = {k: [e for e in dom["els"] if e["kind"] == k] for k in cs}
             for c in cs["dot"]:
                 c["rgb"] = c["rgba"][:6]
-            keys = {"part": lambda e: e["part"], "hot": lambda e: e["key"], "dot": lambda e: e["rgb"], "text": lambda e: e["text"]}
-            for k in ("part", "hot", "dot", "text"):
+            keys = {"part": lambda e: e["part"], "hot": lambda e: e["key"], "dot": lambda e: e["rgb"], "text": lambda e: e["text"],
+                    "pic": lambda e: e["key"]}
+            for k in ("part", "hot", "dot", "text", "pic"):
                 pairs, oc, od = pair(cs[k], ds[k], keys[k])
                 extra = ""
                 if k == "text":
@@ -651,7 +690,7 @@ def main():
             bad += stage_hud(ops.get("stagehud"), dom["state"].get("stagehud"))
             # each panel's scroll as drawn and its limit
             sc = []
-            for i, pn in enumerate(("tree", "demos", "text")):
+            for i, pn in enumerate(("tree", "demos", "text", "unit")):
                 d = dom["scroll"][pn]
                 sc.append(max(abs(ops["frame"]["scroll"][i] - d["top"]), abs(ops["frame"]["max"][i] - d["max"])))
             flag = " <-- DIFFERS" if max(sc) > TOL else ""
@@ -659,7 +698,7 @@ def main():
             print(f"  scroll  limits and offsets within {max(sc):.4f} units{flag}")
             # the thumbs, which Chrome paints on whole pixels
             worst, miss = 0, []
-            for pn in ("tree", "demos", "text"):
+            for pn in ("tree", "demos", "text", "unit"):
                 d = dom["thumbs"].get(pn)
                 cands = [c for c in cs["thumb"] if abs(c["x"] - ((dom["scroll"][pn]["page"][0] - dom["frame"][0]) / u)) < TOL]
                 if (d is None) != (not cands):
@@ -677,7 +716,7 @@ def main():
         bad += 1
         print(f"the mockup sets {sorted(glyphs)} in the browser's fallback face, which the DLL does not carry: "
               f"the game draws no glyph for them <-- DIFFERS")
-    print(f"wikilaycheck: {len(CASES)} cases in {time.time() - t0:.0f} s: "
+    print(f"wikilaycheck: {len(cases)} cases in {time.time() - t0:.0f} s: "
           + ("the DLL and the mockup agree, every box, line and baseline" if not bad else f"{bad} disagreement(s)"))
     return 1 if bad else 0
 

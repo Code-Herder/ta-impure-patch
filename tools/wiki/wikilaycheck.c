@@ -22,6 +22,7 @@
    mockup's frame record, its map and its column, and the output's `stagehud` the frame, the HUD's
    controls, the cursor, the emblems and Leave's question as the game draws them from that record,
    in page device pixels, which wikilaycheck.py pairs with the mockup's own. */
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,7 @@
 #include "tagpu_wikilay.h"
 #include "tagpu_wikistage.h"
 #include "lodepng.h"
+#include "techpack.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
@@ -412,6 +414,7 @@ int main(int argc, char** argv)
     WIKIDATA* d;
     UIFACES f;
     WIKIPAGE* st = (WIKIPAGE*)calloc(1, sizeof(WIKIPAGE));
+    WIKITECH* tech = NULL;
     WIKIFRAME fr;
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
     const HUDLAY* kit;
@@ -504,6 +507,24 @@ int main(int argc, char** argv)
     st->about = tj_is(tj_get(S, "about"), TJ_TRUE);
     snprintf(st->tech_title, sizeof st->tech_title, "%s", tj_str(tj_get(S, "tech_title"), ""));
     st->tech_all = tj_is(tj_get(S, "tech_all"), TJ_TRUE);
+    /* the unit's panel: the mod's pack made into the tree the game makes (techpack.h), the mockup's
+       side and pick */
+    st->tech_sel = -1;
+    if ((int)tj_num(tj_get(S, "tech_sel"), -1) >= 0) {
+        static WIKITECHTREE tree;
+        char tp[2048];
+        snprintf(tp, sizeof tp, "%s/tree.json", tj_str(tj_get(S, "tech_pack"), "."));
+        if (!(tech = techpack_load(tp, tj_str(tj_get(S, "tech_pack"), "."), err, sizeof err))) {
+            fprintf(stderr, "wikilaycheck: %s\n", err);
+            return 1;
+        }
+        if (!tagpu_wikitech_tree(tech, (int)tj_num(tj_get(S, "tech_side"), 0), &tree)) {
+            fprintf(stderr, "wikilaycheck: the pack made no tree for side %d\n", (int)tj_num(tj_get(S, "tech_side"), 0));
+            return 1;
+        }
+        st->tech = &tree;
+        st->tech_sel = (int)tj_num(tj_get(S, "tech_sel"), -1);
+    }
     /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
        is checked on the tree's entries whether or not one declares "frame": "game"; the same
        entry is made a game entry here */
@@ -511,13 +532,13 @@ int main(int argc, char** argv)
 
     if (!tagpu_wikilay_build(l, d, &f, st, o, &fr, err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     px = st->H / 720.0;
-    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f],"
-           "\"row_cut\":%d},\"ops\":[\n",
-           o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll_max[0], fr.scroll_max[1], fr.scroll_max[2],
-           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
+    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f,%.4f],"
+           "\"stage\":[%.4f,%.4f,%.4f,%.4f],\"row_cut\":%d},\"ops\":[\n",
+           o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll[3], fr.scroll_max[0], fr.scroll_max[1],
+           fr.scroll_max[2], fr.scroll_max[3], fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
-        static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
+        static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart", "side", "bar", "tri", "pic" };
         double a = (double)(p->rgba & 0xFF) * (p->grp ? o->grp[p->grp - 1] : 1);
         printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f", i ? ",\n" : "", kinds[p->kind],
                p->r.x, p->r.y, p->r.w, p->r.h);
@@ -537,6 +558,20 @@ int main(int argc, char** argv)
             printf(",\"text\":"); json_str(o->text + r->off, r->len);
         }
         if (p->kind == HOP_HOT) { printf(",\"key\":"); json_str(o->text + p->run, (int)strlen(o->text + p->run)); }
+        if (p->kind == HOP_PIC && tech) {
+            /* the unit whose picture it is, by the pack's key: its name in lower case */
+            char key[WIKITECH_NAME] = "";
+            int q, z;
+            for (q = 0; q < tech->nunit; q++)
+                if (tech->unit[q].pic == p->part) {
+                    for (z = 0; z + 1 < (int)sizeof key && tech->unit[q].name[z]; z++)
+                        key[z] = (char)tolower((unsigned char)tech->unit[q].name[z]);
+                    key[z] = 0;
+                    break;
+                }
+            printf(",\"key\":");
+            json_str(key, (int)strlen(key));
+        }
         if (p->flags & HOPF_TOP) printf(",\"top\":1");
         putchar('}');
     }

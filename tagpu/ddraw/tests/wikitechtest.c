@@ -24,6 +24,7 @@
 #include "tagpu_hudtext.h"
 #include "tagpu_json.h"
 #include "tagpu_wikitech.h"
+#include "techpack.h"
 
 static char* slurp(const char* path, size_t* n)
 {
@@ -91,161 +92,25 @@ static int measure_file(char** a)
 }
 
 /* a UTF-8 string back in its code page: `cp1252` a title's (gfx.py display_name), else Latin-1 */
-static void bytes_of(unsigned char* d, size_t n, const char* s, int cp1252)
-{
-    static const uint16_t HI[32] = { 0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161,
-        0x203A, 0x0153, 0, 0x017E, 0x0178 };
-    size_t o = 0;
-    const unsigned char* p = (const unsigned char*)s;
-    while (*p && o + 1 < n) {
-        unsigned v = *p++;
-        int k;
-        if (v >= 0xE0) { v = (v & 0x0F) << 12 | (p[0] & 0x3F) << 6 | (p[1] & 0x3F); p += 2; }
-        else if (v >= 0xC0) { v = (v & 0x1F) << 6 | (p[0] & 0x3F); p++; }
-        if (cp1252 && v > 0xFF) for (k = 0; k < 32; k++) if (HI[k] == v) { v = 0x80 + (unsigned)k; break; }
-        d[o++] = (unsigned char)(v > 0xFF ? '?' : v);
-    }
-    d[o] = 0;
-}
-
-static int png_size(const char* path, int* w, int* h)
-{
-    unsigned char b[24];
-    FILE* f = fopen(path, "rb");
-    if (!f) return 0;
-    if (fread(b, 1, 24, f) != 24) { fclose(f); return 0; }
-    fclose(f);
-    *w = b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19];
-    *h = b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23];
-    return 1;
-}
-
 static const TJV* member(const TJV* o, const char* k) { return tj_get(o, k); }
 
 static int draw(char** a)
 {
-    char err[256], path[2048];
+    char err[256];
     size_t n;
-    char *tt, *ct;
-    TJDOC *td, *cd;
-    const TJV *T, *U, *SD, *C, *v;
+    char* ct;
+    TJDOC* cd;
+    const TJV *C, *v;
     WIKITECH* t;
-    WIKITECHUNIT* units;
-    WIKITECHPIC* pics;
-    uint16_t *order, *mcount, *menu;
-    uint32_t* mfirst;
-    int nu = 0, i, ci;
-    uint32_t no = 0, nm = 0;
+    int i, ci;
     WTART art;
     static WIKISTAGEOPS o;
     for (i = 0; i < WT_ROLES; i++) if (!face(&s_face[i], a[3 + i])) return 2;
     memset(&art, 0, sizeof art);
     if (sscanf(a[6], "%hd,%hd,%hd", &art.style[0], &art.style[1], &art.style[2]) != 3) return 2;
     art.measure = measure;
-    if (!(tt = slurp(a[0], &n)) || !(td = tagpu_json_parse(tt, n, err, sizeof err))) { fprintf(stderr, "wikitechtest: %s: %s\n", a[0], err); return 2; }
+    if (!(t = techpack_load(a[0], a[1], err, sizeof err))) { fprintf(stderr, "wikitechtest: %s\n", err); return 2; }
     if (!(ct = slurp(a[2], &n)) || !(cd = tagpu_json_parse(ct, n, err, sizeof err))) { fprintf(stderr, "wikitechtest: %s: %s\n", a[2], err); return 2; }
-    T = tagpu_json_root(td);
-    U = member(T, "units");
-    SD = member(T, "sides");
-    /* THE UNITS in the file's order, each its row index; then every side's walk and menus */
-    if (!(t = calloc(1, sizeof *t)) || !(units = calloc((size_t)U->n + 1, sizeof *units)) || !(pics = calloc((size_t)U->n + 1, sizeof *pics)))
-        return 2;
-    for (v = U->first; v; v = v->next, nu++) {
-        WIKITECHUNIT* x = &units[nu];
-        const TJV *fp = member(v, "fp"), *st = member(v, "storage"), *ws = member(v, "weapons"), *w;
-        const char* cat = tj_str(member(v, "category"), "");
-        size_t k;
-        int pw, ph;
-        snprintf(x->name, sizeof x->name, "%s", tj_str(member(v, "name"), ""));
-        bytes_of(x->title, sizeof x->title, tj_str(member(v, "title"), ""), 1);
-        if (!strcmp((const char*)x->title, x->name)) x->title[0] = 0;
-        bytes_of(x->desc, sizeof x->desc, tj_str(member(v, "description"), ""), 0);
-        x->structure = tj_is(member(v, "structure"), TJ_TRUE);
-        x->mobile = tj_is(member(v, "mobile"), TJ_TRUE);
-        x->builder = tj_is(member(v, "builder"), TJ_TRUE);
-        x->canfly = tj_is(member(v, "canfly"), TJ_TRUE);
-        x->water = tj_is(member(v, "water"), TJ_TRUE);
-        x->cloaked = tj_is(member(v, "cloaked"), TJ_TRUE);
-        x->stealth = tj_is(member(v, "stealth"), TJ_TRUE);
-        x->hidedamage = tj_is(member(v, "hidedamage"), TJ_TRUE);
-        x->level = -1;
-        for (k = 0; cat[k]; k++) {
-            size_t q;
-            for (q = 0; q < 5 && cat[k + q] && (cat[k + q] | 0x20) == "level"[q]; q++) {}
-            if (q == 5 && cat[k + 5] >= '0' && cat[k + 5] <= '9') { x->level = (int8_t)(cat[k + 5] - '0'); break; }
-        }
-        x->fx = (int32_t)tj_num(tj_at(fp, 0), 0);
-        x->fz = (int32_t)tj_num(tj_at(fp, 1), 0);
-        x->health = (int32_t)tj_num(member(v, "health"), 0);
-        x->metal = tj_num(member(v, "metal"), 0);
-        x->energy = tj_num(member(v, "energy"), 0);
-        x->buildtime = tj_num(member(v, "buildtime"), 0);
-        x->energymake = tj_num(member(v, "energymake"), 0);
-        x->metalmake = tj_num(member(v, "metalmake"), 0);
-        x->extracts = tj_num(member(v, "extracts"), 0);
-        x->mstore = tj_num(tj_at(st, 0), 0);
-        x->estore = tj_num(tj_at(st, 1), 0);
-        for (w = ws ? ws->first : NULL; w && x->nweapon < WIKITECH_WEAPONS; w = w->next) x->nweapon++;
-        x->pic = -1;
-        if (tj_is(member(v, "pic"), TJ_STR)) {
-            snprintf(path, sizeof path, "%s/%s", a[1], tj_str(member(v, "pic"), ""));
-            if (!png_size(path, &pw, &ph)) { fprintf(stderr, "wikitechtest: cannot read %s\n", path); return 2; }
-            pics[t->npic].w = pw;
-            pics[t->npic].h = ph;
-            pics[t->npic].tkey = -1;
-            x->pic = t->npic++;
-        }
-    }
-    for (v = SD->first; v; v = v->next) {
-        const TJV* od = member(v, "order");
-        no += (uint32_t)od->n;
-    }
-    {
-        const TJV* s;
-        uint32_t cap = 0;
-        for (s = SD->first; s; s = s->next) {
-            const TJV* m;
-            for (m = member(s, "menus")->first; m; m = m->next) cap += (uint32_t)m->n;
-        }
-        if (!(order = calloc(no + 1, 2)) || !(mfirst = calloc(no + 1, 4)) || !(mcount = calloc(no + 1, 2)) || !(menu = calloc(cap + 1, 2)))
-            return 2;
-    }
-    {
-        const TJV* s;
-        uint32_t at = 0;
-        for (s = SD->first; s; s = s->next) {
-            WIKITECHSIDE* sd = &t->side[t->nside++];
-            const TJV *od = member(s, "order"), *ms = member(s, "menus"), *e;
-            snprintf(sd->name, sizeof sd->name, "%s", tj_str(member(s, "name"), ""));
-            sd->first = at;
-            sd->norder = (uint32_t)od->n;
-            for (e = od->first; e; e = e->next, at++) {
-                const TJV *k2, *m = member(ms, e->str);
-                int u = 0;
-                for (k2 = U->first; k2 && strcmp(k2->key, e->str); k2 = k2->next) u++;
-                order[at] = (uint16_t)u;
-                mfirst[at] = nm;
-                mcount[at] = (uint16_t)(m ? m->n : 0);
-                for (k2 = m ? m->first : NULL; k2; k2 = k2->next) {
-                    const TJV* q;
-                    int x2 = 0;
-                    for (q = U->first; q && strcmp(q->key, k2->str); q = q->next) x2++;
-                    menu[nm++] = (uint16_t)x2;
-                }
-            }
-            sd->commander = order[sd->first];
-        }
-    }
-    t->norder = no;
-    t->nmenu = nm;
-    t->order = order;
-    t->mfirst = mfirst;
-    t->mcount = mcount;
-    t->menu = menu;
-    t->nunit = nu;
-    t->unit = units;
-    t->pic = pics;
     C = tagpu_json_root(cd);
     for (ci = 0, v = C->first; v; v = v->next, ci++) {
         WIKITECHTREE tr;
@@ -299,9 +164,9 @@ static int draw(char** a)
         printf("]}\n");
         tagpu_wikitech_free(&tr);
     }
-    tagpu_json_free(td);
     tagpu_json_free(cd);
-    free(tt); free(ct); free(t); free(units); free(pics); free(order); free(mfirst); free(mcount); free(menu);
+    free(ct);
+    techpack_free(t);
     for (i = 0; i < WT_ROLES; i++) free(s_face[i].ttf);
     return 0;
 }

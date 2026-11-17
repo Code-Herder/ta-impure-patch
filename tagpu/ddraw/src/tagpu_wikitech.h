@@ -12,6 +12,7 @@
 
    Every index is an ORDER index (the side's walk, 0 the commander) unless named a unit index; each
    list is `n` entries of a pool, every entry an order index below `n`. */
+#include <stddef.h>
 #include <stdint.h>
 #include "tagpu_wikiasset.h"
 #include "tagpu_wikistage.h"
@@ -82,6 +83,23 @@ void tagpu_wikitech_fit(const WIKITECHTREE* T, double cw, double ch, double s, W
 /* techtree.js hit: what is under the tree point (px, py): 1 with `*unit` its order index, `*card`
    the card's order index and `*icon` 1 on a card's icon; 0 over no card. */
 int tagpu_wikitech_hit(const WIKITECHTREE* T, double px, double py, int* unit, int* card, int* icon);
+
+/* A title's or description's code-page bytes as UTF-8 into `d` (`n` bytes with the terminator):
+   each byte the code point of its value (the mockup's text, which gfx.py reads as Latin-1), or with
+   `cp1252` a title's rule, Windows-1252 with '?' for a byte that has no character there
+   (gfx.py display_name). Cut at a whole character. */
+void tagpu_wikitech_utf8(char* d, size_t n, const unsigned char* s, int cp1252);
+
+/* techtree.js KINDS[kind], "" outside them */
+const char* tagpu_wikitech_kind_name(int kind);
+
+/* techtree.js home: the card a unit is drawn on -- its own, else the nearest builder the walk reached
+   it from that has one -- as an order index, -1 none */
+int tagpu_wikitech_home(const WIKITECHTREE* T, int k);
+
+/* techtree.js pathTo: the walk from the commander to `k`, its order indices into `out`, the
+   commander first and `k` last. Returns their count, 0 for no unit, -1 when more than `max`. */
+int tagpu_wikitech_path(const WIKITECHTREE* T, int k, int32_t* out, int max);
 
 /* the text roles of a card: its title, its description, its kind line and footer */
 enum { WT_ROLE_TITLE, WT_ROLE_BODY, WT_ROLE_LABEL, WT_ROLES };

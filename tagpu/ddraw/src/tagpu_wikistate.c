@@ -495,10 +495,15 @@ static void tech_page(const TAGPU_PK_WIKI* w, const WIKIART* art)
     int i, nu = 0, n;
     s_tcur = NULL;
     s_page.tech_title[0] = 0;
+    s_page.tech = NULL;
+    s_page.tech_sel = -1;
     s_tentry = w->open && art->data && w->entry >= 0 && w->entry < art->data->nentry && art->data->entry[w->entry].techtree;
     if (!s_tentry) return;
     s_page.tech_all = w->tech_all != 0;
     if (!(s_tcur = tech_tree_rt(w))) return;
+    /* the unit's panel: this thread's tree and the pick bounded by its walk, as the stage bounds it */
+    s_page.tech = s_tcur;
+    s_page.tech_sel = w->tech_sel >= 0 && w->tech_sel < s_tcur->n ? w->tech_sel : -1;
     for (i = 0; i < s_tcur->n; i++) nu += s_tcur->upgrade[i] != 0;
     latin1(side, sizeof side, s_tcur->t->side[s_tcur->side].name);
     n = snprintf(s_page.tech_title, sizeof s_page.tech_title, "%s \xC2\xB7 %d units \xC2\xB7 %d builders and factories", side,
@@ -855,6 +860,8 @@ static const WIKICASTING* casting_of(int side)
 
 /* the record into the layout's page state: the page's fields, the context its text is filled
    with, and the caption, the keys and the locked build the demo's view holds */
+typedef char wikistate_scrolls_agree[TAGPU_WIKI_NSCROLL == WIKI_NSCROLL && TAGPU_WIKI_SCROLL_UNIT == WIKI_SCROLL_UNIT ? 1 : -1];
+
 static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
 {
     int i;
@@ -1139,6 +1146,8 @@ int tagpu_wikistate_frame(unsigned frame, WIKILISTS* out)
     memset(out, 0, sizeof *out);
     if (!s_have || s_frame != frame) return 0;
     out->page = tagpu_huddraw_list(&s_ops);
+    /* the unit's panel draws the tree's pictures, from the same sheet as the stage */
+    if (s_tentry && s_tcur) { out->page.pic = s_tuv; out->page.npic = s_tnuv; }
     out->stage.watch = out->over.watch = out->top.watch = -1;
     if (s_haveStage) {
         out->stage = stage_list();

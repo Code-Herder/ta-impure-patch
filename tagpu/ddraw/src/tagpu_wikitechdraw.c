@@ -148,25 +148,6 @@ static void t_text(TB* c, const WTART* art, int role, const char* s, double x, d
     c->o->ntext += (int)len + 1;
 }
 
-/* code-page bytes as UTF-8, each byte the code point of its value (the mockup's text, which gfx.py
-   reads as Latin-1); `cp1252` takes a title's rule instead: Windows-1252, '?' for a byte with no
-   character there (gfx.py display_name) */
-static void t_utf8(char* d, size_t n, const unsigned char* s, int cp1252)
-{
-    static const uint16_t HI[32] = { 0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161,
-        0x203A, 0x0153, 0, 0x017E, 0x0178 };
-    size_t o = 0;
-    for (; *s && o + 4 < n; s++) {
-        unsigned v = *s;
-        if (cp1252 && v >= 0x80 && v < 0xA0) v = HI[v - 0x80] ? HI[v - 0x80] : '?';
-        if (v < 0x80) d[o++] = (char)v;
-        else if (v < 0x800) { d[o++] = (char)(0xC0 | v >> 6); d[o++] = (char)(0x80 | (v & 0x3F)); }
-        else { d[o++] = (char)(0xE0 | v >> 12); d[o++] = (char)(0x80 | (v >> 6 & 0x3F)); d[o++] = (char)(0x80 | (v & 0x3F)); }
-    }
-    d[o] = 0;
-}
-
 /* the last UTF-8 character of `s` taken off */
 static void t_drop(char* s)
 {
@@ -330,7 +311,8 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         PIC_AT(kk, x + WT_PAD, y + WT_PAD, WT_PIC);
         tx = x + WT_PAD * 2 + WT_PIC;
         tw = w - (tx - x) - WT_PAD;
-        /* each text one line, clipped with an ellipsis, left out under READ device pixels */
+        /* each text one line, cut with three periods (the HUD faces have no ellipsis character), left
+           out under READ device pixels */
 #define CLIP(str_, ux_, uy_, uw_, role_, px_, col_) do { \
             const double sz_ = (px_) * z; \
             if (sz_ >= 6) { \
@@ -338,18 +320,18 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
                 if (art->measure(art->measure_ctx, (role_), sz_, t) > (uw_) * z) { \
                     char e_[sizeof t + 4]; \
                     for (;;) { \
-                        snprintf(e_, sizeof e_, "%s\xE2\x80\xA6", t); \
+                        snprintf(e_, sizeof e_, "%s...", t); \
                         if (!t[0] || !(art->measure(art->measure_ctx, (role_), sz_, e_) > (uw_) * z)) break; \
                         t_drop(t); \
                     } \
-                    if (strlen(t) + 4 <= sizeof t) memcpy(t + strlen(t), "\xE2\x80\xA6", 4); \
+                    if (strlen(t) + 4 <= sizeof t) memcpy(t + strlen(t), "...", 4); \
                 } \
                 t_text(&c, art, (role_), t, TX(ux_), TY(uy_), sz_, ink(&c, (col_))); \
             } \
         } while (0)
-        if (un->title[0]) t_utf8(s, sizeof s, un->title, 1); else snprintf(s, sizeof s, "%s", un->name);
+        if (un->title[0]) tagpu_wikitech_utf8(s, sizeof s, un->title, 1); else snprintf(s, sizeof s, "%s", un->name);
         CLIP(s, tx, y + 10, tw, WT_ROLE_TITLE, 8, I_TEXT);
-        t_utf8(s, sizeof s, un->desc, 0);
+        tagpu_wikitech_utf8(s, sizeof s, un->desc, 0);
         CLIP(s, tx, y + 18, tw, WT_ROLE_BODY, 5.5, I_MUTED);
         if (T->upgrades[kk].n) snprintf(s, sizeof s, "%s \xC2\xB7 T%d \xC2\xB7 %u UP", T_KIND[T->kind[kk]], T->tier[kk], T->upgrades[kk].n);
         else snprintf(s, sizeof s, "%s \xC2\xB7 T%d", T_KIND[T->kind[kk]], T->tier[kk]);

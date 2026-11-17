@@ -261,3 +261,50 @@ int tagpu_wikitech_hit(const WIKITECHTREE* T, double px, double py, int* unit, i
     }
     return 0;
 }
+
+/* code-page bytes as UTF-8, each byte the code point of its value (the mockup's text, which gfx.py
+   reads as Latin-1); `cp1252` takes a title's rule instead: Windows-1252, '?' for a byte with no
+   character there (gfx.py display_name) */
+void tagpu_wikitech_utf8(char* d, size_t n, const unsigned char* s, int cp1252)
+{
+    static const uint16_t HI[32] = { 0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161,
+        0x203A, 0x0153, 0, 0x017E, 0x0178 };
+    size_t o = 0;
+    for (; *s && o + 4 < n; s++) {
+        unsigned v = *s;
+        if (cp1252 && v >= 0x80 && v < 0xA0) v = HI[v - 0x80] ? HI[v - 0x80] : '?';
+        if (v < 0x80) d[o++] = (char)v;
+        else if (v < 0x800) { d[o++] = (char)(0xC0 | v >> 6); d[o++] = (char)(0x80 | (v & 0x3F)); }
+        else { d[o++] = (char)(0xE0 | v >> 12); d[o++] = (char)(0x80 | (v >> 6 & 0x3F)); d[o++] = (char)(0x80 | (v & 0x3F)); }
+    }
+    d[o] = 0;
+}
+
+static const char* const KIND_NAME[WT_KINDS] = { "Commander", "Factory", "Builder", "Economy", "Defense", "Support",
+                                                 "Land", "Air", "Sea", "Upgrade" };
+
+const char* tagpu_wikitech_kind_name(int kind)
+{
+    return kind >= 0 && kind < WT_KINDS ? KIND_NAME[kind] : "";
+}
+
+int tagpu_wikitech_home(const WIKITECHTREE* T, int k)
+{
+    int steps = 0;
+    if (k < 0 || k >= T->n) return -1;
+    while (k >= 0 && T->card[k] < 0 && steps++ < T->n) k = T->first[k];
+    return k >= 0 && T->card[k] >= 0 ? k : -1;
+}
+
+int tagpu_wikitech_path(const WIKITECHTREE* T, int k, int32_t* out, int max)
+{
+    int n = 0, x;
+    /* `first` is acyclic (the walk is breadth-first), so the steps are at most the walk's length */
+    if (k < 0 || k >= T->n) return 0;
+    for (x = k; x >= 0 && x < T->n && n < T->n; x = T->first[x]) n++;
+    if (n > max) return -1;
+    for (x = k; n > 0 && x >= 0; x = T->first[x]) out[--n] = x;
+    for (x = k, n = 0; x >= 0 && x < T->n && n < T->n; x = T->first[x]) n++;
+    return n;
+}

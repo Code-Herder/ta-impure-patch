@@ -204,9 +204,10 @@ const WikiTech = (() => {
       if (px * z < READ) return;
       g.font = font(role, px);
       let s2 = t;
+      // cut with three periods: the HUD faces have no ellipsis character
       if (g.measureText(s2).width > w * z) {
-        while (s2.length && g.measureText(s2 + '…').width > w * z) s2 = s2.slice(0, -1);
-        s2 += '…';
+        while (s2.length && g.measureText(s2 + '...').width > w * z) s2 = s2.slice(0, -1);
+        s2 += '...';
       }
       g.fillText(s2, X(x), Y(y));
     };

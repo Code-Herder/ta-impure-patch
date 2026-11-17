@@ -650,17 +650,35 @@ function techPanel() {
   box.innerHTML = `
     <div class="uh"><img src="${pic(S.unit)}" alt=""><div><span class="ut">${esc(u.title)}</span><span class="us">${esc(u.description)}</span>
       <div class="flags">${flags.map(([t, c]) => `<span class="flag${c}">${t}</span>`).join('')}</div></div>
-      <button class="ux" data-part="button" data-close title="Close">&#10005;</button></div>
+      <button class="ux" data-part="button" data-glyph="i_close i_x" data-close title="Close"><i class="gl">&#10005;</i></button></div>
     ${body !== u ? `<div class="vnote">An upgrade has no body of its own. Shown is the ${esc(body.title)} that builds it.</div>` : ''}
     <div class="view"></div><div class="acts"></div>
     ${sec('Figures', `<dl>${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>`)}
     ${u.weapons.length ? sec('Weapons', u.weapons.map(w => `<div class="weap"><span>${esc(w.name)}</span><span>${w.range != null ? `range ${w.range} · damage ${w.damage}` : ''}</span></div>`).join('')) : ''}
-    ${sec('How to get it', `<div class="chips">${WikiTech.pathTo(M, S.unit).map(chip).join('<span class="sep">›</span>')}</div>`)}
+    ${sec('How to get it', `<div class="chips">${WikiTech.pathTo(M, S.unit).map(chip).join('<span class="sep">»</span>')}</div>`)}
     ${u.parents.length ? sec(`Built by (${u.parents.length})`, `<div class="chips">${u.parents.map(chip).join('')}</div>`) : ''}
     ${u.upgrades.length ? sec(`Upgrades (${u.upgrades.length})`, `<div class="chips">${u.upgrades.map(chip).join('')}</div>`) : ''}
     ${u.builds.length ? sec(`Builds (${u.builds.length})`, groups(u.builds)) : ''}`;
+  chipCut(box);
   TT.view = WikiUnitView.mount(el.querySelector('.view'), el.querySelector('.acts'), body, techBase(), `tools/wiki/mockup/${techBase().replace(/\/$/, '')}`);
 }
+/* A CHIP'S LABEL CUT TO ITS WIDTH with three periods, as the game cuts it (the HUD faces have no ellipsis character): the
+   most characters that fit with them. Again once the faces have loaded and the text styles are set, since a label
+   measured in another face or size is cut elsewhere. */
+function chipCut(box) {
+  const rg = document.createRange();
+  for (const s of box.querySelectorAll('.chip span')) {
+    const full = s.dataset.full || (s.dataset.full = s.textContent), ch = s.parentElement, cs = getComputedStyle(ch);
+    const avail = ch.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const width = t => { s.textContent = t; rg.selectNodeContents(s); return rg.getBoundingClientRect().width; };
+    if (width(full) <= avail) continue;
+    let n = full.length - 1;
+    while (n > 0 && width(full.slice(0, n) + '...') > avail) n--;
+    s.textContent = full.slice(0, n) + '...';
+  }
+}
+// every face that finishes loading: `fonts.ready` can resolve before a text has asked for the faces at all
+document.fonts.addEventListener('loadingdone', () => { const b = $('#unit .scr'); if (b) chipCut(b); });
 $('#unit').addEventListener('click', e => {
   if (e.target.closest('[data-close]')) { buttonSound(); techPick(null, false); return; }
   const c = e.target.closest('[data-unit]');
@@ -1022,11 +1040,14 @@ function paintParts() {
 const ROLE = {
   window_title: ['#win .wt'], entry_title: ['#e-title', '#unit .ut'],
   category: ['#tree .cat', '#unit h4'], entry: ['#tree .leaf'], demo: ['#demos li', '#tree [data-demo]', '#t-title'], demo_num: ['#demos li .n'],
-  subtitle: ['#e-sub', '#unit .us'], text: ['#text', '#unit .scr'], caption: ['#caption'],
+  subtitle: ['#e-sub', '#unit .us'], text: ['#text', '#unit .scr'], chip: ['#unit .chip span'], caption: ['#caption'],
   control: ['#ctl button', '#t-row button', '#unit button'], badge: ['#badge', '#t-badge'], keycap: ['.kc'], keys: ['#keys'],
 };
 UIKit.layoutVars(frame, LAY);
-fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => { HUDSTYLES = L.styles; UIKit.roleStyles(ROLE, LAY.roles, L.styles); }).catch(x => console.error('wiki styles:', x));
+fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => {
+  HUDSTYLES = L.styles; UIKit.roleStyles(ROLE, LAY.roles, L.styles);
+  const b = $('#unit .scr'); if (b) chipCut(b);
+}).catch(x => console.error('wiki styles:', x));
 
 /* ---- the frame loop ---- */
 let last = 0;
@@ -1070,5 +1091,6 @@ requestAnimationFrame(loop);
 // and a frame:game entry's replay, its frame record, and the frame as drawn: its corner and the stage HUD's unit in canvas
 // pixels, its size in game pixels, Leave's question's rects, the viewer's cursor and the emblems' boxes, in canvas pixels
 window.WikiPage = { state: S, sim: () => sim, replay: () => rep, frame: () => FR && FR.rec, frameDrawn: () => FR && FR.hud,
-  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
+  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx, tech: () => TT.M,
+  techSide: () => { const d = techData(); return d && d.sides ? techSide(d) : 0; } };
 })();

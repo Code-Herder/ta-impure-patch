@@ -24,7 +24,8 @@
   "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0},
   "tech_title":  {"font": "Oswald",           "weight": 500, "size": 8,    "colour": "#e2e2da", "upper": false, "spacing": 0,    "shadow": 0},
   "tech_body":   {"font": "Barlow Condensed", "weight": 600, "size": 5.5,  "colour": "#9a9d8e", "upper": false, "spacing": 0,    "shadow": 0},
-  "tech_label":  {"font": "Oswald",           "weight": 500, "size": 5,    "colour": "#9a9d8e", "upper": false, "spacing": 0,    "shadow": 0}
+  "tech_label":  {"font": "Oswald",           "weight": 500, "size": 5,    "colour": "#9a9d8e", "upper": false, "spacing": 0,    "shadow": 0},
+  "unit_chip":   {"font": "Barlow Condensed", "weight": 600, "size": 7.225, "colour": "#c8c8b8", "upper": false, "spacing": 0.02, "shadow": 0.6}
  },
 
  "tip": {"h": 11, "pad": 4, "gap": 2, "margin": 2, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "face_xs"},

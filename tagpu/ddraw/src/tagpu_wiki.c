@@ -638,6 +638,27 @@ static int tech_wheel(double notches, int cx, int cy)
     return 1;
 }
 
+/* A CHIP OF THE UNIT'S PANEL (wiki.js techPick with `centre`): its unit picked and its card brought
+   to the middle of the uncovered canvas at no less than 1:1. The index is the drawn frame's, read
+   on the tree of the side that frame drew (tech_drawn), and bounded by that walk. 0: not taken. */
+static int tech_pick_chip(int k)
+{
+    const WIKITECHTREE* T = tech_tree();
+    int h;
+    if (!tech_drawn(T) || k < 0 || k >= T->n || (h = tagpu_wikitech_home(T, k)) < 0) return 0;
+    s_tsel = k;
+    s_about = 0;
+    {
+        const double* p = T->pos[T->card[h]];
+        const double u = s_hit.u > 0 ? s_hit.u : 1, z0 = tech_cam_now().z, z = z0 > u ? z0 : u;
+        s_tcam.z = z;
+        s_tcam.x = p[0] + p[2] / 2 - s_hit.tech_cv[2] / 2 / z;
+        s_tcam.y = p[1] + 20 - s_hit.tech_cv[3] / 2 / z;
+        s_tfit = 0;
+    }
+    return 1;
+}
+
 /* the tree's controls: Fit, the zoom steps about the uncovered canvas's centre, All links */
 static int tech_press(const char* key)
 {
@@ -647,6 +668,11 @@ static int tech_press(const char* key)
         if (!tech_drawn(tech_tree())) return 1;
         tech_zoom(tech_cam_now().z * (key[1] == 'i' ? 1.25 : 0.8), s_hit.tech_cv[2] / 2, s_hit.tech_cv[3] / 2);
     } else if (!strcmp(key, "links")) s_tall = !s_tall;
+    else if (!strcmp(key, "uclose")) s_tsel = -1;
+    else if (!strncmp(key, "unit:", 5)) {
+        if (!tech_pick_chip(atoi(key + 5))) return 1;
+    } else if (!strncmp(key, "act:", 4) || !strcmp(key, "uview"))
+        return 1;
     else return 0;
     button_sound();
     return 1;
@@ -663,6 +689,8 @@ static void tech_fill(TAGPU_PK_WIKI* w)
         s_tsel = -1;
         s_tfit = 1;
     }
+    /* the panel's column opens at its top: wiki.js empties it when the panel closes */
+    if (s_tsel < 0) s_scroll[TAGPU_WIKI_SCROLL_UNIT] = 0;
     w->tech_side = (int8_t)side;
     w->tech_fit = (uint8_t)s_tfit;
     w->tech_all = (uint8_t)s_tall;
@@ -1349,7 +1377,8 @@ static int entry_relative(const char* key)
 {
     return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try") ||
            !strcmp(key, "about") || !strcmp(key, "fit") || !strcmp(key, "zin") || !strcmp(key, "zout") ||
-           !strcmp(key, "links");
+           !strcmp(key, "links") || !strncmp(key, "unit:", 5) || !strcmp(key, "uclose") || !strncmp(key, "act:", 4) ||
+           !strcmp(key, "uview");
 }
 
 /* A left press on control `key` of the last frame drawn (wiki.js's handlers). Selecting an entry
@@ -1437,7 +1466,7 @@ static void scroll_by(int i, float d)
 /* `notches` of the wheel over the panel under the pointer */
 static void wheel(double notches)
 {
-    static const char* const PANEL[TAGPU_WIKI_NSCROLL] = { "scroll:tree", "scroll:demos", "scroll:text" };
+    static const char* const PANEL[TAGPU_WIKI_NSCROLL] = { "scroll:tree", "scroll:demos", "scroll:text", "scroll:unit" };
     int cx, cy, i, k;
     if (!mouse_last_client(&cx, &cy)) return;
     if (tech_wheel(notches, cx, cy)) return;
@@ -2725,9 +2754,13 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     fprintf(f, ",\"folds\":[");
     for (i = k = 0; i < TAGPU_WIKI_FOLDS * 32; i++)
         if (s_fold[i >> 5] >> (i & 31) & 1u) fprintf(f, "%s%u", k++ ? "," : "", i);
-    fprintf(f, "],\"scroll\":[%.3f,%.3f,%.3f],\"scroll_drawn\":[%.3f,%.3f,%.3f],\"scroll_max\":[%.3f,%.3f,%.3f],",
-            s_scroll[0], s_scroll[1], s_scroll[2], s_hit.scroll[0], s_hit.scroll[1], s_hit.scroll[2],
-            s_hit.scroll_max[0], s_hit.scroll_max[1], s_hit.scroll_max[2]);
+    fprintf(f, "],\"scroll\":[");
+    for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) fprintf(f, "%s%.3f", i ? "," : "", s_scroll[i]);
+    fprintf(f, "],\"scroll_drawn\":[");
+    for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) fprintf(f, "%s%.3f", i ? "," : "", s_hit.scroll[i]);
+    fprintf(f, "],\"scroll_max\":[");
+    for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) fprintf(f, "%s%.3f", i ? "," : "", s_hit.scroll_max[i]);
+    fprintf(f, "],");
     /* the demo: its clock and its state hash (tagpu_wikisim_hash, a replay's tagpu_wikireplay_hash),
        and what the page cost */
     fprintf(f, "\"playing\":%d,\"speed\":%d,\"sim\":%d,\"tick\":%d,\"done\":%d,\"hash\":\"%016llx\","
@@ -2759,6 +2792,17 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 fprintf(f, "%s[%d,%.1f,%.1f]", c ? "," : "", T->spine[c],
                         s_hit.tech_cv[0] + (p[0] + p[2] / 2 - s_hit.tech_cam[1]) * z,
                         s_hit.tech_cv[1] + (p[1] + WT_EDGE_Y - s_hit.tech_cam[2]) * z);
+            }
+        }
+        /* each unit of the walk by its order index: its name, its kind (WT_*) and whether it is an
+           upgrade, so a check can find a chip by the unit it picks */
+        fputs("],\"units\":[", f);
+        if (T) {
+            int c;
+            for (c = 0; c < T->n; c++) {
+                fprintf(f, "%s[", c ? "," : "");
+                jstr(f, T->t->unit[T->unit[c]].name, WIKITECH_NAME);
+                fprintf(f, ",%d,%d]", T->kind[c], T->upgrade[c] != 0);
             }
         }
         fputs("]}", f);

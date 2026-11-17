@@ -30,15 +30,16 @@
 #include "tagpu_hudlay.h"
 #include "tagpu_uikit.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikitech.h"
 
 #define WIKI_MAXHOT    160      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
 #define WIKI_MAXNODE   1024     /* the tree's nodes the loader keeps: one fold bit each           */
 #define WIKI_CAPTION   WIKI_CAPTION_MAX /* the caption's bytes, with its terminator: every loaded
                                            caption's fill fits                                  */
 
-/* the three panels that scroll, the order of WIKIPAGE.scroll and the keys scroll:tree,
-   scroll:demos and scroll:text */
-enum { WIKI_SCROLL_TREE, WIKI_SCROLL_DEMOS, WIKI_SCROLL_TEXT, WIKI_NSCROLL };
+/* the panels that scroll, the order of WIKIPAGE.scroll and the keys scroll:tree, scroll:demos,
+   scroll:text and scroll:unit (the tech tree's unit panel) */
+enum { WIKI_SCROLL_TREE, WIKI_SCROLL_DEMOS, WIKI_SCROLL_TEXT, WIKI_SCROLL_UNIT, WIKI_NSCROLL };
 
 /* The page as the player has it: what wiki.js keeps in S, and the demo's view (caption, keys). */
 typedef struct {
@@ -78,6 +79,12 @@ typedef struct {
        UTF-8, "" while none is drawn; All links down */
     char     tech_title[160];
     int      tech_all;
+    /* ... and THE UNIT'S PANEL (wiki.js techPanel) over the stage's right, for `tech_sel`, an order
+       index of `tech`'s walk (-1 none; one outside the walk reads as none), never with About.
+       LIFETIME: `tech` is the caller's, built from the published tree and alive through the build;
+       its HOP_PIC ops name pictures of tech->t (tagpu_wikistate.c gives the draw their uv) */
+    const WIKITECHTREE* tech;
+    int      tech_sel;
 } WIKIPAGE;
 
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
@@ -96,7 +103,8 @@ typedef struct {
     HUDRECT window;
     int     caption_cut;        /* the strip shows only the caption's first lines */
     int     row_cut;            /* the theatre's row overflows the stage's bezel */
-    float   cover;              /* the left edge, units, of the panel over the stage's right (About);
+    float   cover;              /* the left edge, units, of the panel over the stage's right (About or
+                                   the unit's panel);
                                    0 when none is open: the tech tree's fit leaves out what it covers */
 } WIKIFRAME;
 

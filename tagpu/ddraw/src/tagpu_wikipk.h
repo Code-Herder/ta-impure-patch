@@ -36,7 +36,8 @@
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
                                        loader keeps (WIKI_MAXNODE)                           */
-#define TAGPU_WIKI_NSCROLL 3u       /* the panels that scroll: tree, demos, text (WIKI_SCROLL_*) */
+#define TAGPU_WIKI_NSCROLL 4u       /* the panels that scroll: tree, demos, text, unit (WIKI_SCROLL_*) */
+#define TAGPU_WIKI_SCROLL_UNIT 3    /* the tech tree's unit panel among them (WIKI_SCROLL_UNIT)        */
 #define TAGPU_WIKI_MSG     128u     /* the stage's message: a simulation's refusal fits it       */
 
 /* What the wiki shows this draw. Present in a packet exactly while the wiki can be drawn: in a

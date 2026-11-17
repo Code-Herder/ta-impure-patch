@@ -306,8 +306,10 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
   (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer, and a
     click on the zoomed tree picks the card under it;
-  (tt5) Fit returns to the open's fitted camera; All links turns on and off;
-  (tt6) About narrows the canvas the tree is fitted to, clears the pick, and closes.
+  (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, the wheel over it
+    scrolls it, and its close button closes it;
+  (tt6) Fit returns to the open's fitted camera; All links turns on and off;
+  (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -320,6 +322,9 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        it pages (its first page);
   (w2) the wiki opened: the 3D asset load's line, and its report tagpu_wiki3d.json copied to
        DIR/<setup>/ -- which archive each ground source, feature, unit file and texture came from;
+  (t3) the Tech tree's panels: each card clicked on the fitted tree, and from its panel a chip of every kind not
+       opened yet followed, until a unit of every kind the side's walk holds has had its panel opened (an Escalation or
+       Total Mayhem upgrade among them, through the panel of what it upgrades), each panel scanned by the wheel;
   (w2t) the tech tree's load, last on the loader's thread (`wikitech: loaded in`): as many sides,
        units and pictures as the setup's pack (gfx.py tech_pack), which assetcheck.py --side pairs
        with the native load field for field;
@@ -3974,7 +3979,7 @@ def launched(instance, mode, res):
 
 
 def techtree(c, shots, res):
-    """(tt1)..(tt6): the Tech tree entry (tagpu_wikitech.h), the tree's stage driven through its hit map and read back
+    """(tt1)..(tt7): the Tech tree entry (tagpu_wikitech.h), the tree's stage driven through its hit map and read back
     through the state dump's `tech`: the camera the frame drew, the canvas, and each card's client point."""
     held_at(c, HELD_AT)
     if shots:
@@ -4041,27 +4046,149 @@ def techtree(c, shots, res):
     assert not d["tech"]["fit"] and abs(d["tech"]["cam"][0] - z2) < 1e-6, "(tt4) the click moved the camera"
     print(f"wiki techtree: (tt4) a click on the zoomed tree picked {d['tech']['sel_name']} (order {k2})")
 
-    # (tt5) Fit fits again, to the camera the open drew; All links on and off
+    # (tt5) the pick's panel over the stage's right (wiki.js techPanel): the tree's fit leaves it out; a chip picks its
+    # unit and brings its card to the uncovered canvas's middle at no less than 1:1; the wheel over it scrolls it; its
+    # close button closes it and gives the canvas back
+    d = wait_dump(c, lambda d: page_drawn(d) and d["tech"]["drawn"] and any(h["key"] == "uclose" for h in d["hits"])
+                  and d["tech"]["cv"][2] < cv0[2] - 1, "(tt5) the pick opened no panel over the stage")
+    cvp = d["tech"]["cv"][2]
+    chips = [h for h in d["hits"] if h["key"].startswith("unit:") and int(h["key"][5:]) != d["tech"]["sel"]]
+    assert chips, "(tt5) the panel shows no chip of another unit"
+    k3 = int(chips[0]["key"][5:])
+    press(c, d, chips[0]["key"])
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == k3 and not d["tech"]["fit"] and d["tech"]["drawn"],
+                  f"(tt5) the chip of unit {k3} did not pick it")
+    assert d["tech"]["cam"][0] >= d["u"] - 1e-4, f"(tt5) a chip's pick left the zoom under 1:1: {d['tech']['cam'][0]} < {d['u']}"
+    if shots:
+        grab(c, shots / f"techtree-{res}-panel.png")
+    if d["scroll_max"][3] > 0:
+        x, y = c.centre(c.hit(d, "scroll:unit"))
+        c.keys(f"dwheel:{x},{y},-1")
+        d = wait_dump(c, lambda d: d["scroll_drawn"][3] > 0, "(tt5) the wheel over the panel did not scroll it")
+    print(f"wiki techtree: (tt5) the panel over {cv0[2]:.0f} -> {cvp:.0f} pixels; its chip picked {d['tech']['sel_name']} "
+          f"(order {k3}) at z {d['tech']['cam'][0]:.4f}; scrolled to {d['scroll_drawn'][3]:.1f} of {d['scroll_max'][3]:.1f} units")
+    press(c, d, "uclose")
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == -1 and d["tech"]["drawn"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5
+                  and not any(h["key"] == "uclose" for h in d["hits"]), "(tt5) the close button did not close the panel")
+
+    # (tt6) Fit fits again, to the camera the open drew; All links on and off
     press(c, d, "fit")
     d = wait_dump(c, lambda d: d["tech"]["fit"] and all(abs(a - b) < 1e-4 for a, b in zip(d["tech"]["cam"], fit_cam)),
-                  f"(tt5) Fit did not return to the fitted camera {fit_cam}")
+                  f"(tt6) Fit did not return to the fitted camera {fit_cam}")
     press(c, d, "links")
-    d = wait_dump(c, lambda d: d["tech"]["all"] == 1, "(tt5) All links did not turn on")
+    d = wait_dump(c, lambda d: d["tech"]["all"] == 1, "(tt6) All links did not turn on")
     if shots:
         grab(c, shots / f"techtree-{res}-links.png")
     press(c, d, "links")
-    d = wait_dump(c, lambda d: d["tech"]["all"] == 0, "(tt5) All links did not turn off")
-    print("wiki techtree: (tt5) Fit returned to the fitted camera; All links on and off")
+    d = wait_dump(c, lambda d: d["tech"]["all"] == 0, "(tt6) All links did not turn off")
+    print("wiki techtree: (tt6) Fit returned to the fitted camera; All links on and off")
 
-    # (tt6) About opens over the stage's right: the pick is cleared and the fit leaves out what it covers
+    # (tt7) About opens over the stage's right: the pick is cleared and the fit leaves out what it covers
     press(c, d, "about")
     d = wait_dump(c, lambda d: d["about"] and page_drawn(d) and d["tech"]["drawn"] and d["tech"]["cv"][2] < cv0[2] - 1,
-                  "(tt6) About did not narrow the tree's canvas")
-    assert d["tech"]["sel"] == -1, f"(tt6) About left the pick {d['tech']['sel']}"
-    print(f"wiki techtree: (tt6) About open: the canvas the tree fits {cv0[2]:.0f} -> {d['tech']['cv'][2]:.0f} pixels wide, "
+                  "(tt7) About did not narrow the tree's canvas")
+    assert d["tech"]["sel"] == -1, f"(tt7) About left the pick {d['tech']['sel']}"
+    print(f"wiki techtree: (tt7) About open: the canvas the tree fits {cv0[2]:.0f} -> {d['tech']['cv'][2]:.0f} pixels wide, "
           "nothing picked")
     press(c, d, "about")
-    wait_dump(c, lambda d: not d["about"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5, "(tt6) About did not close")
+    wait_dump(c, lambda d: not d["about"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5, "(tt7) About did not close")
+
+TECH_KINDS = ("Commander", "Factory", "Builder", "Economy", "Defense", "Support", "Land", "Air", "Sea", "Upgrade")
+
+
+def tech_panels(c, what):
+    """(t3): the Tech tree opened; each of its cards (the commander, every builder and factory) clicked with the tree
+    fitted, which opens its panel; from each panel, a chip of every kind not opened yet followed, the panel scanned
+    from its top by the wheel. An upgrade shows only in the panel of what it upgrades, so while none has been opened
+    the panel's economy and defense chips are followed too until one lists an upgrade. Returns the kinds opened, by
+    name, and the units whose panels opened."""
+    d = wait_dump(c, lambda d: d["drawn_open"], f"{what} the page was not drawn")
+    if d["entry"] != TECHTREE:
+        press(c, d, f"entry:{tree_node(entry=TECHTREE)}")
+    d = wait_dump(c, lambda d: d["entry"] == TECHTREE and page_drawn(d) and d["tech"]["drawn"] and d["tech"]["cards_at"],
+                  f"{what} the tree was not drawn")
+    units = d["tech"]["units"]
+    cards = [k for k, _, _ in d["tech"]["cards_at"]]
+    want, seen, opened = {u[1] for u in units}, set(), []
+    UPGRADE = TECH_KINDS.index("Upgrade")
+
+    def open_unit(d, key, pick):
+        press(c, d, key)
+        d = wait_dump(c, lambda d: d["tech"]["sel"] == pick and d["tech"]["drawn"] and any(h["key"] == "scroll:unit" for h in d["hits"]),
+                      f"{what} {key} ({units[pick][0]}) did not open its panel")
+        seen.add(units[pick][1])
+        opened.append(units[pick][0])
+        return d
+
+    def chips_of(d):
+        """every chip of the open panel, the panel scrolled from its top to its end, and the frame left at its top"""
+        sel, got = d["tech"]["sel"], []
+        while d["scroll_drawn"][3] > 0:
+            px, py = c.centre(c.hit(d, "scroll:unit"))
+            c.keys(f"dwheel:{px},{py},20")
+            d = wait_dump(c, lambda d: d["scroll_drawn"][3] == 0, f"{what} the panel did not scroll up")
+        while True:
+            got += [int(h["key"][5:]) for h in d["hits"] if h["key"].startswith("unit:") and int(h["key"][5:]) not in got]
+            if d["scroll_drawn"][3] >= d["scroll_max"][3] - 1e-3:
+                break
+            last = d["scroll_drawn"][3]
+            px, py = c.centre(c.hit(d, "scroll:unit"))
+            c.keys(f"dwheel:{px},{py},-2")
+            d = wait_dump(c, lambda d: d["scroll_drawn"][3] > last + 1e-3, f"{what} the panel did not scroll down")
+        assert d["tech"]["sel"] == sel
+        return got, d
+
+    def show_chip(d, k):
+        """the frame scrolled until chip `k` shows, from the panel's top down"""
+        key = f"unit:{k}"
+        while d["scroll_drawn"][3] > 0:
+            px, py = c.centre(c.hit(d, "scroll:unit"))
+            c.keys(f"dwheel:{px},{py},20")
+            d = wait_dump(c, lambda d: d["scroll_drawn"][3] == 0, f"{what} the panel did not scroll up")
+        while not any(h["key"] == key for h in d["hits"]):
+            assert d["scroll_drawn"][3] < d["scroll_max"][3] - 1e-3, f"{what} the chip {key} is in no frame of the panel"
+            last = d["scroll_drawn"][3]
+            px, py = c.centre(c.hit(d, "scroll:unit"))
+            c.keys(f"dwheel:{px},{py},-1")
+            d = wait_dump(c, lambda d: d["scroll_drawn"][3] > last + 1e-3, f"{what} the panel did not scroll down")
+        return d
+
+    def open_card(d, k):
+        """card `k` clicked on the fitted tree"""
+        press(c, d, "fit")
+        d = wait_dump(c, lambda d: d["tech"]["fit"] and d["tech"]["drawn"], f"{what} Fit did not fit the tree")
+        _, x, y = next(q for q in d["tech"]["cards_at"] if q[0] == k)
+        c.keys(f"dclick:{round(x)},{round(y)}")
+        d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["drawn"] and any(h["key"] == "scroll:unit" for h in d["hits"]),
+                      f"{what} a click on the card of {units[k][0]} did not open its panel")
+        seen.add(units[k][1])
+        opened.append(units[k][0])
+        return d
+
+    for k in cards:
+        if seen >= want:
+            break
+        d = open_card(d, k)
+        chips, d = chips_of(d)
+        for q in chips:
+            if units[q][1] in seen:
+                continue
+            d = open_unit(show_chip(d, q), f"unit:{q}", q)
+            d = open_card(d, k)
+        if UPGRADE in want and UPGRADE not in seen:
+            for q in [q for q in chips if units[q][1] in (3, 4)][:12]:
+                d = open_unit(show_chip(d, q), f"unit:{q}", q)
+                sub, d = chips_of(d)
+                up = next((x for x in sub if units[x][1] == UPGRADE), None)
+                if up is not None:
+                    d = open_unit(show_chip(d, up), f"unit:{up}", up)
+                d = open_card(d, k)
+                if UPGRADE in seen:
+                    break
+    assert seen >= want, f"{what} opened {sorted(TECH_KINDS[s] for s in seen)}, not every kind of {sorted(TECH_KINDS[s] for s in want)}"
+    press(c, d, "uclose")
+    wait_dump(c, lambda d: d["tech"]["sel"] == -1, f"{what} the panel did not close")
+    return [TECH_KINDS[s] for s in sorted(seen)], opened
 
 
 def mp(name):
@@ -4675,6 +4802,10 @@ def mods_setup(tacompat, setup, dll, out):
         poll("w7")
         mods_bars(c, display, pack, out, row, "takeover")
         poll("w8")
+        kinds, opened = tech_panels(c, "(t3)")
+        poll("t3")
+        print(f"wiki mods: {setup['name']}: (t3) the Tech tree's panels of every kind opened, {len(opened)} panels: "
+              f"{', '.join(kinds)} ({' > '.join(opened)})")
         c.keys("esc")
         wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
         time.sleep(2)
