@@ -310,7 +310,9 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
        padding leaves the pick, the wheel over it
     scrolls it, and its close button closes it;
   (tt6) Fit returns to the open's fitted camera; All links turns on and off;
-  (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes.
+  (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes;
+  (tt8) the unit's view: the commander's script runs on the view's host, Walk moves its pieces, Reset makes a new
+       host with Turn kept, a drag turns the camera and stops the spin, a notch moves it in, and the close ends it.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -326,6 +328,8 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
   (t3) the Tech tree's panels: each card clicked on the fitted tree, and from its panel a chip of every kind not
        opened yet followed, until a unit of every kind the side's walk holds has had its panel opened (an Escalation or
        Total Mayhem upgrade among them, through the panel of what it upgrades), each panel scanned by the wheel;
+  (w2m) the tech tree's models, after it (`wikitech3d: loaded in`): every unit of the tree, a model for each the
+       pack has a mesh of (within the few a piece past the bake's bounds refuses; assetcheck.py --side names them);
   (w2t) the tech tree's load, last on the loader's thread (`wikitech: loaded in`): as many sides,
        units and pictures as the setup's pack (gfx.py tech_pack), which assetcheck.py --side pairs
        with the native load field for field;
@@ -4098,7 +4102,41 @@ def techtree(c, shots, res):
     print(f"wiki techtree: (tt7) About open: the canvas the tree fits {cv0[2]:.0f} -> {d['tech']['cv'][2]:.0f} pixels wide, "
           "nothing picked")
     press(c, d, "about")
-    wait_dump(c, lambda d: not d["about"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5, "(tt7) About did not close")
+    d = wait_dump(c, lambda d: not d["about"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5, "(tt7) About did not close")
+
+    # (tt8) the unit's view: the commander's card picked, its script runs on the view's own host; Walk moves its
+    # pieces as the ticks run; Reset makes a new host with Turn kept; a drag on the view turns the camera and stops
+    # the spin; a notch over it moves the camera in
+    k, x, y = d["tech"]["cards_at"][0]
+    c.keys(f"dclick:{round(x)},{round(y)}")
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["view"]["host"] and d["tech"]["view"]["tick"] > 5
+                  and any(h["key"] == "uview" for h in d["hits"]), "(tt8) the commander's view runs no script")
+    v0 = d["tech"]["view"]
+    assert v0["act"] == 0x20 and v0["pieces"] > 0, f"(tt8) the view opened with {v0}, not Turn alone and a posed model"
+    press(c, d, "act:Walk")
+    d = wait_dump(c, lambda d: d["tech"]["view"]["act"] & 0x01 and d["tech"]["view"]["tick"] > v0["tick"] + 30,
+                  "(tt8) Walk did not turn on, or the ticks stopped")
+    walk_pose = d["tech"]["view"]["pose"]
+    assert walk_pose != v0["pose"], "(tt8) a second of walking left every piece where it stood"
+    press(c, d, "act:Reset")
+    d = wait_dump(c, lambda d: d["tech"]["view"]["serial"] == v0["serial"] + 1 and d["tech"]["view"]["host"],
+                  "(tt8) Reset made no new host")
+    assert d["tech"]["view"]["act"] == 0x20, f"(tt8) Reset left the actions {d['tech']['view']['act']:#x}, not Turn alone"
+    yaw0 = d["tech"]["view"]["cam"][0]
+    r = c.hit(d, "uview")
+    cx, cy = c.centre(r)
+    c.keys(f"ddown:{cx},{cy}", f"dmove:{cx + 40},{cy + 10}", f"dmove:{cx + 80},{cy + 20}", f"dup:{cx + 80},{cy + 20}")
+    d = wait_dump(c, lambda d: not d["tech"]["view"]["act"] & 0x20, "(tt8) a drag on the view did not stop the turn")
+    cam = d["tech"]["view"]["cam"]
+    assert abs(cam[0] - (yaw0 - 0.8)) < 0.2 and abs(cam[1] - (0.45 + 0.2)) < 1e-3, \
+        f"(tt8) a drag of 80,20 pixels left the camera at {cam}, not yaw {yaw0 - 0.8:.3f} and pitch 0.65"
+    c.keys(f"dwheel:{cx},{cy},1")
+    d = wait_dump(c, lambda d: d["tech"]["view"]["cam"][2] < 0.99, "(tt8) a notch over the view did not move the camera in")
+    print(f"wiki techtree: (tt8) the view of {d['tech']['sel_name']} ran {v0['pieces']} pieces; Walk moved them; Reset "
+          f"made host {d['tech']['view']['serial']}; a drag turned the camera to {cam[0]:.3f}, {cam[1]:.3f}; a notch to "
+          f"{d['tech']['view']['cam'][2]:.3f} of the fitted distance")
+    press(c, d, "uclose")
+    wait_dump(c, lambda d: d["tech"]["sel"] == -1 and d["tech"]["view"]["body"] == -1, "(tt8) the view outlived its panel")
 
 TECH_KINDS = ("Commander", "Factory", "Builder", "Economy", "Defense", "Support", "Land", "Air", "Sea", "Upgrade")
 
@@ -4781,6 +4819,15 @@ def mods_setup(tacompat, setup, dll, out):
             f"(w2t) the tech tree's load is not the pack's {want} sides, units and pictures: {tech}"
         row["tech"] = tech.split("wikitech: ", 1)[1]
         print(f"wiki mods: {setup['name']}: (w2t) {row['tech']}")
+        # (w2m) the tree's models, after it: every unit of the tree resolved or refused, and a model for each unit the
+        # pack has a mesh of but those with a piece past the bake's bounds (assetcheck.py --side pairs them by name)
+        t3 = wait_line(c, start, r"wikitech3d: (loaded in|NOT loaded)", "(w2m) the tech tree's models' load", 180)
+        got = re.search(r"(\d+) of (\d+) unit types resolved", t3)
+        meshes = len(list((pack / "techtree" / "units").glob("*.0.bin")))
+        assert got and int(got.group(2)) == len(tree["units"]) and meshes - 8 <= int(got.group(1)) <= meshes, \
+            f"(w2m) the models' load is not the pack's {len(tree['units'])} units with {meshes} meshes: {t3}"
+        row["tech3d"] = t3.split("wikitech3d: ", 1)[1]
+        print(f"wiki mods: {setup['name']}: (w2m) {row['tech3d']}")
 
         row["stages"], row["types"], row["drawn"] = {}, {}, {}
         for entry, demo, tick in MODS_SHOTS:

@@ -49,7 +49,7 @@
    the 164 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles, 2 KB a replay's
    overlays and minimap pass; MEASURED as sizeof on the DLL's compiler) and a frame:game entry's
    frame record after it (WIKIFRAMEREC, 4600 bytes, 2896 of them a players record's samples; the
-   whole area 172768, the head 352, MEASURED as sizeof on the DLL's compiler) are
+   whole area 177904, the head 5 488, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */
@@ -115,6 +115,19 @@ typedef struct TAGPU_PK_WIKI {
     int16_t  tech_sel;          /* the picked unit, an order index of the side's walk; -1 none */
     float    tech_cam[3];       /* z (device pixels a tree unit), x, y (the tree point at the
                                    canvas's top-left corner)                                 */
+    /* THE UNIT'S VIEW in the picked unit's panel (tagpu_wiki.c, THE TECH TREE'S UNIT VIEW): the unit
+       it shows and its script's pose, the toggled actions and the orbit camera. DATA to the render
+       thread: the body bounded against the published models, the pose's count against the model's
+       pieces and WIKISTAGE_PIECES, the camera to finite values */
+    uint16_t tv_serial;         /* the view's script: a new one at each new body and each Reset */
+    int16_t  tv_body;           /* the unit shown, an index of the tree's units (an upgrade's
+                                   first builder's); -1 none                                 */
+    uint8_t  tv_act;            /* the toggled actions, TAGPU_TV_* bits                       */
+    uint8_t  tv_pad;
+    uint16_t tv_npose;          /* tv_pose's pieces, in the posed order; 0 the rest pose      */
+    float    tv_cam[3];         /* yaw and pitch (radians), and the distance as a factor of the
+                                   distance the render thread fits to the model              */
+    WIKISTAGEPIECE tv_pose[WIKISTAGE_PIECES];
     WIKISTAGEVIEW stage;        /* the demo's view by value: carried only with has_stage      */
     WIKIFRAMEREC  frame;        /* a frame:game entry's frame record (tagpu_wikiframe.h), `on` 0
                                    for any other entry; DATA, bounded by the render thread's

@@ -85,6 +85,8 @@ typedef struct {
        its HOP_PIC ops name pictures of tech->t (tagpu_wikistate.c gives the draw their uv) */
     const WIKITECHTREE* tech;
     int      tech_sel;
+    unsigned tech_act;          /* the view's toggled actions, drawn pressed: TAGPU_TV_* bits
+                                   (tagpu_wikipk.h) -- Turn alone as a view opens               */
 } WIKIPAGE;
 
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its

@@ -353,6 +353,42 @@ static void tech_key(const char* name)
     tech_bytes((const unsigned char*)k);
 }
 
+/* `wikiassettest tech3d`: the tech tree, then its models (tagpu_wikitech3d_load) into an arena as
+   large as the in-game one: the report on stdout, and on stderr the time, the arena's bytes and how
+   many of the units resolved */
+#define TECH3D_CAP (96u << 20)
+static int cmd_tech3d(int argc, char** argv)
+{
+    static INPUT I;
+    unsigned char* arena;
+    const WIKITECH* t;
+    const WIKI3D* w;
+    TAGPU_VFS* vfs;
+    char* report = NULL;
+    struct timespec t0;
+    double ms;
+    int i, ok = 0;
+    if (!input_make(argc, argv, &I)) return 2;
+    if (!(arena = (unsigned char*)calloc(1, TECH3D_CAP))) return 2;
+    vfs = tagpu_vfs_open(I.in.cwd, (const char (*)[TAGPU_VFS_PATHMAX])I.in.arc, I.in.narc, I.in.names.language);
+    t = tagpu_wikitech_load(&I.in, vfs, &report);
+    if (!t) { fprintf(stderr, "wikiassettest: no tech tree\n"); return 1; }
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    w = tagpu_wikitech3d_load(&I.in, vfs, t, arena, STAND_IN_BASE, TECH3D_CAP, NULL);
+    ms = ms_since(&t0);
+    if (!w) { fprintf(stderr, "wikiassettest: the models' load published nothing\n"); return 1; }
+    for (i = 0; i < w->nunit; i++) ok += w->unit[i].ok;
+    fputs(w->report, stdout);
+    fprintf(stderr, "wikiassettest: the tech tree's models loaded in %.1f ms - arena %lu bytes; %d of %d units resolved\n",
+            ms, (unsigned long)w->bytes, ok, w->nunit);
+    tagpu_vfs_close(vfs);
+    free((void*)t);
+    free(report);
+    free(arena);
+    input_free(&I);
+    return 0;
+}
+
 static int cmd_tech(int argc, char** argv)
 {
     static INPUT I;
@@ -1357,10 +1393,11 @@ int main(int argc, char** argv)
     if (argc >= 4 && !strcmp(argv[1], "side")) return cmd_side(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "tech")) return cmd_tech(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "techlay")) return cmd_techlay(argc, argv);
+    if (argc >= 4 && !strcmp(argv[1], "tech3d")) return cmd_tech3d(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-hpi")) return cmd_fuzz_hpi(argc, argv);
     if (argc == 6 && !strcmp(argv[1], "fuzz-3do")) return cmd_fuzz_3do(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-side")) return cmd_fuzz_side(argc, argv);
-    fprintf(stderr, "usage: wikiassettest load|side|tech|techlay GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
+    fprintf(stderr, "usage: wikiassettest load|side|tech|techlay|tech3d GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
                     "                    [--folders k=v,...]\n"
                     "       wikiassettest fuzz-hpi ARCHIVE N SEED\n"
                     "       wikiassettest fuzz-3do ARCHIVE PATH N SEED\n"

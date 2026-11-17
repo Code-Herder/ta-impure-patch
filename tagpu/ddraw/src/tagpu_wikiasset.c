@@ -1572,7 +1572,7 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
     unsigned char* text;
     TAGPU_TDF* t = NULL;
     int sec;
-    strncpy(u->name, type, sizeof u->name - 1);
+    snprintf(u->name, sizeof u->name, "%.*s", (int)sizeof u->name - 1, type);
     /* a level's rule (0x42D709): units\<UnitName>.FBI by path, the language's folder first */
     if (!tagpu_vfs_find_built(L->vfs, L->in->names.units, type, "FBI", &r->f)) {
         snprintf(r->why, sizeof r->why, "no source holds %s\\%s.fbi", L->in->names.units, type);
@@ -1595,8 +1595,8 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
                 r->has_sndcat = 1;
                 snprintf(r->sndcat, sizeof r->sndcat, "%s", sc);
             }
-            strncpy(r->unitname, un ? un : "", sizeof r->unitname - 1);
-            strncpy(r->object, on ? on : r->unitname, sizeof r->object - 1);
+            snprintf(r->unitname, sizeof r->unitname, "%.*s", (int)sizeof r->unitname - 1, un ? un : "");
+            snprintf(r->object, sizeof r->object, "%.*s", (int)sizeof r->object - 1, on ? on : r->unitname);
             /* the facts the stage draws it by (WIKI3DUNIT) */
             r->info = 1;
             u->mobile = tagpu_tdf_int(t, sec, "BMcode", 1) != 0;
@@ -5981,6 +5981,85 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     return w;
 }
 
+/* THE TECH TREE'S MODELS (tagpu_wikiasset.h): tagpu_wiki3d_load's unit pass over every unit of the
+   tree, into an arena of its own. A loader of its own too: the textures every pointer reaches are
+   copied into THIS arena, so the bank is searched again for the names these models hold. */
+const WIKI3D* tagpu_wikitech3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t, unsigned char* base,
+                                    uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto))
+{
+    LOADER L;
+    SB b;
+    WIKI3D* w;
+    UNITREC* urec = NULL;
+    uint32_t w_at, un_at = 0, rep_at, assets;
+    int i, k, nunit = t ? t->nunit : 0;
+    if (!t) return NULL;
+    memset(&L, 0, sizeof L);
+    memset(&b, 0, sizeof b);
+    L.in = in;
+    L.a.base = base;
+    L.a.base32 = base32;
+    L.a.cap = cap > REPORT_RESERVE ? cap - REPORT_RESERVE : 0;
+    L.a.used = 8;
+    L.a.commit = commit;
+    L.a.committed = commit ? 0 : cap;
+    if (!(w_at = alloc(&L.a, sizeof *w))) return NULL;
+    if (nunit < 0 || nunit > WIKITECH_UNITS) nunit = 0;
+    if (nunit && (!(un_at = alloc(&L.a, (uint32_t)(nunit * sizeof(WIKI3DUNIT)))) ||
+                  !(urec = (UNITREC*)calloc((size_t)nunit, sizeof *urec))))
+        nunit = 0;
+    L.vfs = vfs ? vfs : asset_vfs(in);
+    if (L.vfs) {
+        for (i = 0; i < nunit; i++) {
+            WIKI3DUNIT* u = (WIKI3DUNIT*)AT(&L.a, un_at) + i;
+            unit_load(&L, t->unit[i].name, u, &urec[i]);
+            /* no sound pass: the block's sound table is empty, so no unit names a clip in it */
+            u->sound_cat = -1;
+            u->death_sound = -1;
+        }
+        bank_all(&L);
+        bind_all(&L);
+    }
+    assets = L.a.used;
+    sb_raw(&b, "{\"format\":1,\"bank\":[");
+    for (i = 0; i < L.nbank; i++) {
+        sb_raw(&b, "%s{\"gaf\":", i ? "," : "");
+        sb_q(&b, L.bank[i].path, 1);
+        sb_raw(&b, ",\"refused\":");
+        sb_q(&b, L.bank[i].why[0] ? L.bank[i].why : NULL, 0);
+        sb_raw(&b, "}");
+    }
+    sb_raw(&b, "],\"units\":[");
+    for (i = 0; i < nunit; i++) {
+        if (i) sb_raw(&b, ",");
+        unit_report(&b, &L, (const WIKI3DUNIT*)AT(&L.a, un_at) + i, &urec[i]);
+    }
+    sb_raw(&b, "],\"arena_bytes\":%lu}\n", (unsigned long)assets);
+    L.a.cap = cap;
+    L.a.full = 0;
+    w = NULL;
+    if (!b.oom && b.s && (rep_at = put_str(&L.a, b.s, b.n)) != 0) {
+        w = (WIKI3D*)AT(&L.a, w_at);
+        w->nstage = 0;
+        w->stage = NULL;
+        w->nunit = nunit;
+        w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
+        w->report = (const char*)AT(&L.a, rep_at);
+        for (k = 0; k < WIKI_CURSOR_N; k++) w->cursor[k] = NULL;
+        memset(&w->sound, 0, sizeof w->sound);
+        for (k = 0; k < WIKI_NSNDNAME; k++) w->sound.named[k] = -1;
+        w->base = base32;
+        w->bytes = L.a.used;
+    }
+    free(urec);
+    free(b.s);
+    free(L.tex);
+    free(L.bind);
+    free(L.bank);
+    if (!vfs) tagpu_vfs_close(L.vfs);
+    return w;
+}
+
 /* ---- the DLL's thread, publish and trigger --------------------------------------------------------- */
 
 #ifdef _WIN32
@@ -6020,9 +6099,52 @@ static void side_publish(const WIKISIDE* side)
 static PVOID volatile s_tech;
 static const char s_tech_refused = 0;
 
+/* THE TECH TREE'S MODELS' ANSWER, once, as the tech tree's: NULL while the loader has not reached
+   it, then for good the WIKI3D or &s_tech3d_refused (tagpu_wikitech3d_get) */
+static PVOID volatile s_tech3d;
+static const char s_tech3d_refused = 0;
+
+#define TECH3D_CAP  (64u << 20)     /* the models' arena: reserved whole, committed as it grows    */
+
+static uint32_t commit_pages_tech3d(unsigned char* base, uint32_t upto);
+
+/* The tech tree's models, after the tree: an arena of their own, reserved and checked as the 3D
+   load's is, published by one interlocked store (ORDERING as side_publish's), or refused. A block
+   that did not load is released before anyone could see it. */
+static void tech3d_run(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t)
+{
+    LARGE_INTEGER f, t0, t1;
+    unsigned char* base;
+    const WIKI3D* w = NULL;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t0);
+    if (!t || !vfs) {
+        InterlockedExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused);
+        return;
+    }
+    if (!(base = (unsigned char*)VirtualAlloc(NULL, TECH3D_CAP, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE))) {
+        LOG("wikitech3d: NOT loaded - %lu MB of address space could not be reserved (%lu)",
+            (unsigned long)(TECH3D_CAP >> 20), (unsigned long)GetLastError());
+    } else if (!tagpu_m3_ptr_ok(base) || !tagpu_m3_ptr_ok(base + TECH3D_CAP - 1)) {
+        LOG("wikitech3d: NOT loaded - the arena at %p lies outside the readers' range", (void*)base);
+        VirtualFree(base, 0, MEM_RELEASE);
+    } else if (!(w = tagpu_wikitech3d_load(in, vfs, t, base, (uint32_t)(uintptr_t)base, TECH3D_CAP, commit_pages_tech3d))) {
+        LOG("wikitech3d: NOT loaded - the arena could not hold the report");
+        VirtualFree(base, 0, MEM_RELEASE);      /* never published, so no reader holds it */
+    } else {
+        int i, ok = 0;
+        QueryPerformanceCounter(&t1);
+        for (i = 0; i < w->nunit; i++) ok += w->unit[i].ok;
+        LOG("wikitech3d: loaded in %.1f ms - arena %lu bytes at %p; %d of %d unit types resolved",
+            (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, (unsigned long)w->bytes, (void*)base, ok,
+            w->nunit);
+    }
+    InterlockedExchangePointer((PVOID*)&s_tech3d, w ? (PVOID)w : (PVOID)&s_tech3d_refused);
+}
+
 /* The tech tree's load and its publication, last on the loader's thread: the sidebar and the 3D
    assets are published before it, so no demo waits for it. ORDERING as side_publish's: the block is
-   written whole by tagpu_wikitech_load before the one interlocked store. */
+   written whole by tagpu_wikitech_load before the one interlocked store. Then its models. */
 static void tech_run(const WIKI3DIN* in, TAGPU_VFS* vfs)
 {
     LARGE_INTEGER f, t0, t1;
@@ -6038,15 +6160,19 @@ static void tech_run(const WIKI3DIN* in, TAGPU_VFS* vfs)
             (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, t->nside, t->nunit, t->npic,
             (unsigned long)t->npx);
     InterlockedExchangePointer((PVOID*)&s_tech, t ? (PVOID)t : (PVOID)&s_tech_refused);
+    tech3d_run(in, vfs, t);
 }
 
-static uint32_t commit_pages(unsigned char* base, uint32_t upto)
+static uint32_t commit_to(unsigned char* base, uint32_t upto, uint32_t cap)
 {
     uint32_t to = (upto + COMMIT_STEP - 1) & ~(COMMIT_STEP - 1);
-    if (to > ARENA_CAP) to = ARENA_CAP;
+    if (to > cap) to = cap;
     /* committing a page already committed leaves it as it is, so the prefix is asked again whole */
     return VirtualAlloc(base, to, MEM_COMMIT, PAGE_READWRITE) ? to : 0;
 }
+
+static uint32_t commit_pages(unsigned char* base, uint32_t upto) { return commit_to(base, upto, ARENA_CAP); }
+static uint32_t commit_pages_tech3d(unsigned char* base, uint32_t upto) { return commit_to(base, upto, TECH3D_CAP); }
 
 static DWORD WINAPI loader(LPVOID p)
 {
@@ -6129,6 +6255,7 @@ void tagpu_wikiasset_start(WIKI3DIN* in)
         side_publish(NULL);
         publish_3d(NULL);
         InterlockedExchangePointer((PVOID*)&s_tech, (PVOID)&s_tech_refused);
+        InterlockedExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused);
         free(in);
         return;
     }
@@ -6185,6 +6312,18 @@ int tagpu_wikitech_get(const WIKITECH** out)
 void tagpu_wikitech_refuse(void)
 {
     InterlockedCompareExchangePointer((PVOID*)&s_tech, (PVOID)&s_tech_refused, NULL);
+    InterlockedCompareExchangePointer((PVOID*)&s_tech3d, (PVOID)&s_tech3d_refused, NULL);
+}
+
+/* ORDERING as tagpu_wikitech_get's */
+int tagpu_wikitech3d_get(const WIKI3D** out)
+{
+    const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_tech3d, NULL, NULL);
+    *out = NULL;
+    if (!v) return WIKISIDE_PENDING;
+    if (v == (PVOID)&s_tech3d_refused) return WIKISIDE_REFUSED;
+    *out = (const WIKI3D*)v;
+    return WIKISIDE_READY;
 }
 
 /* ORDERING: an interlocked read, a full barrier, pairs with side_publish's store; the block is

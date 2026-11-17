@@ -641,4 +641,20 @@ void          tagpu_wikiasset_poll(void);
 const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISIDE* side, unsigned char* base,
                                 uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto));
 
+/* THE TECH TREE'S MODELS: every unit of `t` (every side's) resolved as tagpu_wiki3d_load resolves a
+   stage's unit types -- its FBI, model, script, hides and posed order, its textures searched in
+   the bank and bound -- into an arena of its own at `base`, on the same terms: every pointer in it
+   points inside it, and it is immutable and never freed once published. A WIKI3D with no stages,
+   cursors or sound, `unit` in `t->unit`'s order (unit i is t->unit[i]'s; a type that did not
+   resolve has model NULL and draws nothing); its report lists the units as the 3D load's does.
+   NULL when `t` is NULL or not even the report fit. */
+const WIKI3D* tagpu_wikitech3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKITECH* t, unsigned char* base,
+                                    uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto));
+
+/* ITS PUBLICATION, as the tech tree's (WIKISIDE_*): PENDING until the loader, after the tech tree,
+   has decided; then READY with `*out` the block, or REFUSED for good (no tech tree, no address
+   space, the sources did not open). ORDERING as tagpu_wikiside_get's. Any thread; never written or
+   freed after. */
+int           tagpu_wikitech3d_get(const WIKI3D** out);
+
 #endif

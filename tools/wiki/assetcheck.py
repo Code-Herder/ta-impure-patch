@@ -1057,6 +1057,33 @@ def against_sidepacks(mods, retail, pak, language="english"):
                 lay_doc = json.loads(rl.stdout)
                 lines.append(f"assetcheck: tech layout {mod}: tagpu_wikitech.c == techtree.js: "
                              + "; ".join(f"{len(sd['spine'])} cards, {sd['w']:g} x {sd['h']:g} units" for sd in lay_doc))
+            # THE TREE'S MODELS (tagpu_wikitech3d_load against gfx.py write_units): a model resolved for every unit the
+            # pack has a mesh of, and a script for every unit it has a COB of
+            r3 = subprocess.run([str(EXE), "tech3d", str(tree), str(pak), "--exe", str(exe), "--language", language,
+                                 *names], capture_output=True, text=True)
+            if r3.returncode:
+                lines.append(f"assetcheck: tech models {mod}: wikiassettest tech3d FAILED ({r3.returncode}): "
+                             f"{r3.stderr.strip()[-2000:]}")
+                ok = False
+                continue
+            t3 = json.loads(r3.stdout)
+            got_m = {u["name"].lower() for u in t3["units"] if u["model"] and u["model"].get("ok")}
+            got_s = {u["name"].lower() for u in t3["units"] if u["script"]}
+            # a model with a piece past the bake's bounds (4 096 vertices, 512 faces: tagpu_posebake.c, which the game's
+            # unit pass applies too) is refused whole by the load; gfx.py has no such bound
+            bound = {u["name"].lower() for u in t3["units"] if u["model"] and not u["model"].get("ok")
+                     and "past 4096 and 512" in (u["model"].get("why") or "")}
+            want_m = {f.name.split(".")[0] for f in (tech_dir / "units").glob("*.0.bin")} - bound
+            want_s = {f.stem for f in (tech_dir / "units").glob("*.cob")}
+            if got_m != want_m or got_s != want_s:
+                ok = False
+                lines.append(f"assetcheck: tech models {mod}: the native load and gfx.py's units DIFFER: models only native "
+                             f"{sorted(got_m - want_m)[:12]}, only gfx.py {sorted(want_m - got_m)[:12]}; scripts only native "
+                             f"{sorted(got_s - want_s)[:12]}, only gfx.py {sorted(want_s - got_s)[:12]}")
+            else:
+                lines.append(f"assetcheck: tech models {mod}: native == gfx.py: {len(got_m)} models, {len(got_s)} scripts"
+                             f"{', refused past the bake bounds: ' + ', '.join(sorted(bound)) if bound else ''}; "
+                             f"{r3.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
             ref = pack_side(out, mod)
             native = native_side(doc)
             # the 3D load's unit types, which a demo bound to any side's casting draws its models from

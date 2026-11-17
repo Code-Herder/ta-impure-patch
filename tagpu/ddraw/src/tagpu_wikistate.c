@@ -497,6 +497,7 @@ static void tech_page(const TAGPU_PK_WIKI* w, const WIKIART* art)
     s_page.tech_title[0] = 0;
     s_page.tech = NULL;
     s_page.tech_sel = -1;
+    s_page.tech_act = w->tv_act & TAGPU_TV_ALL;
     s_tentry = w->open && art->data && w->entry >= 0 && w->entry < art->data->nentry && art->data->entry[w->entry].techtree;
     if (!s_tentry) return;
     s_page.tech_all = w->tech_all != 0;

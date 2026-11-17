@@ -1905,10 +1905,10 @@ draws it.
   the page demo's place, steps it as above, copies the held view, fills the record after the fill's
   last step (`tagpu_wikiframe_record`: the game's view points into the simulation's arrays, which
   the next step may free; the record holds values only), drains the sound past the view's `quiet`,
-  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 768 bytes with
+  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 177 904 bytes with
   it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
   each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
-  fog bits, the record 4 600, the head 352, sizeof on the DLL's compiler), with the theatre's `about` and
+  fog bits, the record 4 600, the head 5 488, sizeof on the DLL's compiler), with the theatre's `about` and
   `leave_held` and the replay's serial `rep_serial` in the head, a count the game thread
   increments whenever it makes or frees the replay. The reader takes `frame` only from an area of the whole size
   (`tagpu_pk_wiki_frame`). In Try it on a live frame it also answers, once a fill, whether the
@@ -2304,6 +2304,15 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   (`tagpu_wikitech_get`, the sidebar's publication). `of_engine` maps the engine's side index,
   which is the side's in `sidedata.tdf`, to the tree's side; a side the load refused maps to -1 and
   the first side is shown, as wiki.js `techSide` falls back.
+- **The models** of every unit of the tree are read after it by the same thread, into an arena of
+  their own (`tagpu_wikitech3d_load`, `tagpu_wikitech3d_get`): each unit's FBI, model, script,
+  hides and posed order, and the textures its faces name, as the 3D load reads a stage's unit
+  types, `unit[i]` the tree's unit `i`. A model with a piece past the bake's bounds (4 096
+  vertices, 512 faces: `tagpu_posebake.c`, which the game's unit pass applies) is refused whole.
+  MEASURED 2026-11-17 by `wikiassettest tech3d`: stock 266 units in 6.2 MB and 152 ms, ProTA 298
+  in 7.4 MB, TA Twilight 486 in 12.5 MB, TA Zero 210 in 13.2 MB, Total Mayhem 473 in 14.2 MB,
+  TA Escalation 532 of 536 in 26.7 MB and 542 ms (ARMLIFT, CORLIFT, ARMWALK and ARMZIG refused by
+  the bound); `assetcheck.py --side` pairs the models and scripts with the pack's by name.
 - **The model, the layout, the fit and the hit test** are `tagpu_wikitech.c`, **the drawing**
   `tagpu_wikitechdraw.c`: pure ports of `techtree.js`. Each thread makes its own tree from the
   published block, the game thread (`tagpu_wiki.c`) to hit-test and the render thread
@@ -2365,9 +2374,18 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   on the zoomed tree, the panel a pick opens with a chip, the wheel and its close, Fit, All links
   and About narrowing the fit.
 
-Not built: the unit in 3D (T4) -- the panel's view is its dark ground and its actions do nothing
--- which needs a perspective view on the render thread because the game's unit pass draws only
-the engine's fixed projection.
+- **The unit's view** is the game thread's (`tagpu_wiki.c`, THE TECH TREE'S UNIT VIEW): the
+  panel's unit -- an upgrade's first builder -- runs its own COB script on a host of its own, made
+  from the published models once their answer is known (`tagpu_wikitech3d_get`) and again at
+  Reset, a slice a tick at 30 ticks a second; the actions are `unitview.js`'s calls on it, each
+  toggled one drawn pressed (`WIKIPAGE.tech_act`); a drag on the view turns the orbit camera and
+  stops Turn, a notch moves it in; the packet carries what the view shows (`tv_*`: the unit, the
+  host's serial, the toggles, the camera, the script's pose). `wiki_regression.py techtree` (tt8)
+  plays it: the commander's 15 pieces posed, Walk moving them, Reset, a drag and a notch.
+
+Not built: the unit's picture (T4c) -- the view is its dark ground while the script runs behind
+it -- which needs a perspective pipeline of its own, because the game's unit pass draws only the
+engine's fixed projection.
 
 ## The data format
 
@@ -3352,6 +3370,9 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Gaps
 
+- **Four of Escalation's units would show no model in the tech tree's view**: ARMLIFT, CORLIFT,
+  ARMWALK and ARMZIG each have a piece past the bake's 512 faces, which the models' load refuses
+  whole, as the game's own unit pass leaves the piece out.
 - **The tech tree's unit has no 3D view in the game.** The tree is read from the running mod and
   drawn, panned, zoomed and picked on, and a pick opens the unit's panel, as the mockup's do; the
   panel's view and its actions are the mockup's alone ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a

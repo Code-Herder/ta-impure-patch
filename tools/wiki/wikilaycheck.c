@@ -590,6 +590,8 @@ int main(int argc, char** argv)
         }
         st->tech = &tree;
         st->tech_sel = (int)tj_num(tj_get(S, "tech_sel"), -1);
+        /* the view opens with Turn on (unitview.js `cam.spin`) */
+        st->tech_act = TAGPU_TV_TURN;
     }
     /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
        is checked on the tree's entries whether or not one declares "frame": "game"; the same

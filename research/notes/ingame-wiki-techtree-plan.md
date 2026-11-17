@@ -87,11 +87,46 @@ as the engine's own calls. An upgrade shows the builder it is built onto. *Exit*
 the view's picture against the mockup's unit view at the same camera, per setup; the cull and
 the quad mapping checked on ARMCV and ARMSOLAR.
 
+*T4's four landings.* What the game has to start from (read 2026-11-17): no perspective camera
+anywhere in the DLL; the unit shader (`tagpu_posedraw.c` VS, `tagpu_native.c` FS) bakes the
+engine's oblique projection, its depth key, the clockwise front face, the slant shadow, the line
+grid and fog into its stages, so a matrix is not a uniform away; the wiki's 3D load resolves only
+the stages' unit types, into an arena published once (`tagpu_wiki3d_load`), so most of a tree's
+units have no model or script in the game; the wiki's render thread has its own unit atlas, which
+paints a texture frame the first time a bake asks for it, keyed by the frame's address
+(`tagpu_scene.h`'s wiki instance of `render3do`); and the mockup's view lights by face with its
+own rule, not the engine's shade rows. So:
+
+- **T4a: the models.** After the tree, the loader resolves every unit of it as the 3D load
+  resolves a stage's types -- FBI, model, script, hides, posed order, textures from the bank --
+  into an arena of its own, published once and never freed (`tagpu_wikitech3d_load`,
+  `tagpu_wikitech3d_get`). *Exit*: `assetcheck.py --side` pairs it with the pack (a model for
+  every unit the pack has a mesh of, a script for every COB), and the mods run's load line.
+  *Built.* Measured: stock 266 units, 6.2 MB, 152 ms; Escalation 532 of 536, 26.7 MB, 542 ms --
+  the largest, under the arena's 64 MB -- its four refused by the bake's 512 faces a piece.
+- **T4b: the unit's script.** The panel's unit runs its own COB script on the game thread
+  (`tagpu_wikicob.c`, one host for the view), Create, then a slice a tick at 30 ticks a second
+  while the panel is open; the actions are the engine's calls as `unitview.js` makes them; its
+  pieces' poses travel in `TAGPU_PK_WIKI`, bounded on the render thread. An upgrade's view is the
+  builder it is built onto. *Built*, with the orbit camera's input (T4d's first half): (tt8) runs
+  the commander's script (15 pieces), Walk moves them, Reset makes a new host with Turn kept, a
+  drag of 80 x 20 pixels turns the camera 0.8 and 0.2 radians and stops Turn, a notch scales the
+  distance by e^-0.1. The packet's head grew to 5 488 bytes with the pose.
+- **T4c: the picture.** A pipeline of its own for the view: the pieces' rest vertices from
+  `tagpu_posebake_unit` (the wiki's instance, the stage's atlas), posed by the packet's pieces,
+  under a perspective camera (`unitview.js` `mat`: 0.9 radians tall, near and far from the
+  distance), back faces culled, a textured quad mapped per pixel through `taQuadST`, lit by face as
+  the mockup lights it; drawn into a target of the view's size and composited into the panel as a
+  picture of the page's top layer.
+- **T4d: the camera and the checks.** Drag turns, the wheel moves in, Turn spins (a drag stops
+  it), Reset; the picture against the mockup's at the same camera, per setup; the cull and the
+  quad mapping on ARMCV and ARMSOLAR.
+
 ## Open questions
 
-- The game's unit pass draws in the engine's fixed projection; T4 needs a perspective camera of
-  its own. Whether it is a new pipeline over `tagpu_posebake`'s vertices or the unit pipeline
-  with its matrix replaced is T4's first question.
+- *(answered for T4)* The unit pipeline cannot take a perspective matrix without a new vertex
+  stage, a new depth rule and a new front face, and its fragment stage carries the engine's line
+  grid, fog and shadows: T4c is a pipeline of its own over the same baked vertices.
 - The tree's pictures *(answered in T2)*: a sheet of their own, 2048 × 2048 RGBA8, holding the
   shown side's pictures; Escalation's 274 use 916 rows (its pictures are not all 64 × 64: 19 are
   128 × 192 and 7 128 × 128). It is larger than a frame slot's staging, so it is sent in bands.

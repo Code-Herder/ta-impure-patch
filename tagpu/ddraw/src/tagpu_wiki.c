@@ -671,6 +671,242 @@ static int tech_pick_chip(int k)
     return 1;
 }
 
+/* THE TECH TREE'S UNIT VIEW (wiki.js unitview `mount`), this thread's: the unit the picked unit's
+   panel shows -- an upgrade's first builder, as the panel says -- running its own script on a host
+   of its own (tagpu_wikicob.h) at WIKI_TPS ticks a second, the actions toggled on it, and the orbit
+   camera. The render thread draws the model from the packet (tv_*): the published models' unit
+   `body` (tagpu_wikitech3d_get, immutable and never freed, `unit[i]` the tree's unit i), posed by
+   tv_pose, under the camera.
+
+   THE HOST IS MADE for a body once its model's answer is known, and again at Reset; a body with no
+   script (or none published) has no host and stands at rest. The host copies the script and the
+   model's shape when made (tagpu_wikicob_new), so nothing of the published block is held past it.
+   The facts are the mockup's: one unit, owner 0, at the origin, built, at full health. */
+#define TV_SPIN   0.008     /* radians a tick: unitview.js's 0.004 a frame at 60 frames a second */
+#define TV_STEPS  3         /* ticks one fill plays at most: unitview.js plays on after 100 ms   */
+static struct {
+    WIKICOB* host;
+    int      body;          /* the tree's unit shown; -1 none                                     */
+    int      made;          /* the host's making was settled for this body: made, or none to make */
+    int      unit;          /* its handle in the host                                            */
+    uint16_t serial;
+    uint32_t tick;
+    double   acc;
+    unsigned act;           /* TAGPU_TV_*                                                         */
+    int32_t  aim;           /* the aim's heading, 0..65535                                       */
+    double   yaw, pitch, zoom;
+    int      drag, dx, dy;  /* a left press on the view is held; where it went down             */
+    double   dyaw, dpitch;  /* the camera it went down on                                        */
+} s_tv = { NULL, -1, 0, 0, 0, 0, 0, TAGPU_TV_TURN, 0, 0.7, 0.45, 1, 0, 0, 0, 0, 0 };
+
+static WIKICOBFACT tv_fact(void)
+{
+    WIKICOBFACT f;
+    memset(&f, 0, sizeof f);
+    f.unit = s_tv.unit;
+    f.health = 100;
+    return f;
+}
+
+/* the unit the panel of pick `k` shows: an upgrade's first builder's (tagpu_wikilay.c unit_rows) */
+static int tv_body_of(const WIKITECHTREE* T, int k)
+{
+    if (!T || k < 0 || k >= T->n) return -1;
+    if (T->upgrade[k] && T->parents[k].n) return T->unit[T->pool[T->parents[k].at]];
+    return T->unit[k];
+}
+
+static void tv_free(void)
+{
+    if (s_tv.host) tagpu_wikicob_free(s_tv.host);
+    s_tv.host = NULL;
+    s_tv.unit = 0;
+}
+
+/* the host for the body, once its models' answer is known: 1 settled (made, or nothing to make) */
+static int tv_make(void)
+{
+    const WIKI3D* w = NULL;
+    const int st = tagpu_wikitech3d_get(&w);
+    char err[160];
+    if (st == WIKISIDE_PENDING) return 0;
+    tv_free();
+    if (st == WIKISIDE_READY && w && s_tv.body >= 0 && s_tv.body < w->nunit) {
+        const WIKI3DUNIT* u = &w->unit[s_tv.body];
+        if (u->ok && u->script && u->pieces > 0) {
+            WIKICOBTYPE ty;
+            WIKICOBFACT f;
+            memset(&ty, 0, sizeof ty);
+            ty.cob = u->script;
+            ty.ncob = u->nscript;
+            ty.pieces = u->pieces;
+            ty.visible = u->visible;
+            ty.offset = &u->offset[0][0];
+            ty.parent = u->parent;
+            ty.top = u->top;
+            if (!(s_tv.host = tagpu_wikicob_new(1, &ty, 1, err, sizeof err)))
+                tagpu_logf("wiki: the tech tree's view of %s has no script host - %s", u->name, err);
+            else {
+                f = tv_fact();
+                f.unit = 1;
+                s_tv.unit = tagpu_wikicob_spawn(s_tv.host, 0, &f, 1);
+            }
+        }
+    }
+    s_tv.made = 1;
+    return 1;
+}
+
+/* a new body (`reset` 0: the camera and Turn as a new mount has them), or Reset of the one shown
+   (`reset` 1: the camera and Turn kept, every other action off) */
+static void tv_open(int body, int reset)
+{
+    tv_free();
+    s_tv.body = body;
+    s_tv.made = 0;
+    s_tv.serial++;
+    s_tv.act &= TAGPU_TV_TURN;
+    s_tv.aim = 0;
+    if (!reset) {
+        s_tv.tick = 0;
+        s_tv.acc = 0;
+        s_tv.act = TAGPU_TV_TURN;
+        s_tv.yaw = 0.7;
+        s_tv.pitch = 0.45;
+        s_tv.zoom = 1;
+        s_tv.drag = 0;
+    }
+    if (body >= 0) tv_make();
+}
+
+/* one engine call on the view's unit by name; nothing without a host (unitview.js `call`) */
+static void tv_call(const char* script, int how, int32_t a0, int argc)
+{
+    WIKICOBFACT f = tv_fact();
+    int32_t args[2];
+    args[0] = a0;
+    args[1] = 0;
+    if (s_tv.host && s_tv.unit > 0) tagpu_wikicob_call(s_tv.host, s_tv.unit, script, how, argc, args, &f, 1);
+}
+
+/* the fill's ticks: the body the pick shows, its host once the models are known, then the ticks
+   the time owes, each a slice, the aim's turn every 45 and Turn's spin (unitview.js `frame`) */
+static void tv_update(double dt)
+{
+    const int body = s_open && tech_entry() ? tv_body_of(tech_tree(), s_tsel) : -1;
+    int n;
+    if (body != s_tv.body) tv_open(body, 0);
+    if (body < 0) return;
+    if (!s_tv.made) tv_make();
+    s_tv.acc += dt * WIKI_TPS;
+    if (s_tv.acc > TV_STEPS) s_tv.acc = TV_STEPS;
+    for (n = 0; s_tv.acc >= 1; n++) {
+        WIKICOBFACT f = tv_fact();
+        s_tv.acc -= 1;
+        s_tv.tick++;
+        if (s_tv.host && s_tv.unit > 0) tagpu_wikicob_slice(s_tv.host, &f, 1);
+        if ((s_tv.act & TAGPU_TV_AIM) && s_tv.tick % 45 == 0) {
+            s_tv.aim = (s_tv.aim + 12000) & 0xFFFF;
+            tv_call("AimPrimary", WIKICOB_ARGS, s_tv.aim > 32767 ? s_tv.aim - 65536 : s_tv.aim, 2);
+        }
+        if (s_tv.act & TAGPU_TV_TURN) s_tv.yaw += TV_SPIN;
+    }
+}
+
+/* an action's button (unitview.js `buttons`): each the call the engine makes, the toggles flipped
+   whether or not a script took the call, as the mockup's are */
+static void tv_action(const char* label)
+{
+    unsigned bit = 0;
+    if (s_tv.body < 0) return;
+    if (!strcmp(label, "Walk")) {
+        bit = TAGPU_TV_WALK;
+        if (!(s_tv.act & bit)) { tv_call("StartMoving", WIKICOB_NOW, 0, 0); tv_call("MoveRate1", WIKICOB_NOW, 0, 0); }
+        else tv_call("StopMoving", WIKICOB_NOW, 0, 0);
+    } else if (!strcmp(label, "Take off")) {
+        bit = TAGPU_TV_FLY;
+        tv_call(!(s_tv.act & bit) ? "Activate" : "Deactivate", WIKICOB_NOW, 0, 0);
+        if (s_tv.host && s_tv.unit > 0) tagpu_wikicob_activate(s_tv.host, s_tv.unit, !(s_tv.act & bit));
+    } else if (!strcmp(label, "Aim")) {
+        bit = TAGPU_TV_AIM;
+        if (!(s_tv.act & bit)) tv_call("AimPrimary", WIKICOB_ARGS, 0, 2);
+    } else if (!strcmp(label, "Fire")) {
+        tv_call("FirePrimary", WIKICOB_LATER, 0, 0);
+        tv_call("Shot1", WIKICOB_LATER, 0, 0);
+    } else if (!strcmp(label, "Build")) {
+        bit = TAGPU_TV_BUILD;
+        if (!(s_tv.act & bit)) tv_call("StartBuilding", WIKICOB_ARGS, 0, 1);
+        else tv_call("StopBuilding", WIKICOB_LATER, 0, 0);
+    } else if (!strcmp(label, "On / off")) {
+        bit = TAGPU_TV_ON;
+        if (s_tv.host && s_tv.unit > 0) tagpu_wikicob_activate(s_tv.host, s_tv.unit, !(s_tv.act & bit));
+    } else if (!strcmp(label, "Turn")) bit = TAGPU_TV_TURN;
+    else if (!strcmp(label, "Reset")) {
+        if (s_tv.host) tv_open(s_tv.body, 1);
+        return;
+    }
+    s_tv.act ^= bit;
+}
+
+/* the orbit (unitview.js's pointer events): a press on the view takes the camera from the turn,
+   a drag turns it 0.01 radians a pixel, the pitch held to +-1.4; the wheel moves it in and out */
+static int tv_down(int cx, int cy)
+{
+    if (s_tv.body < 0) return 0;
+    s_tv.drag = 1;
+    s_tv.dx = cx;
+    s_tv.dy = cy;
+    s_tv.dyaw = s_tv.yaw;
+    s_tv.dpitch = s_tv.pitch;
+    s_tv.act &= ~TAGPU_TV_TURN;
+    return 1;
+}
+static void tv_move(int cx, int cy)
+{
+    if (!s_tv.drag || cx < 0) return;
+    s_tv.yaw = s_tv.dyaw - (cx - s_tv.dx) * 0.01;
+    s_tv.pitch = s_tv.dpitch + (cy - s_tv.dy) * 0.01;
+    if (s_tv.pitch > 1.4) s_tv.pitch = 1.4;
+    if (s_tv.pitch < -1.4) s_tv.pitch = -1.4;
+}
+static void tv_up(void) { s_tv.drag = 0; }
+
+/* a notch over the view: unitview.js's dist *= exp(deltaY * 0.001) at Chrome's 100 a notch, the
+   factor held to what a float carries */
+static int tv_wheel(double notches, int cx, int cy)
+{
+    char key[TAGPU_WIKI_KEY];
+    if (s_tv.body < 0 || !hit(cx, cy, key) || strcmp(key, "uview")) return 0;
+    s_tv.zoom *= exp(notches * 100 * 0.001);
+    if (s_tv.zoom < 1e-3) s_tv.zoom = 1e-3;
+    if (s_tv.zoom > 1e3) s_tv.zoom = 1e3;
+    return 1;
+}
+
+/* the view into the packet: the pose of the script's last slice, its pieces in the posed order */
+static void tv_fill(TAGPU_PK_WIKI* w)
+{
+    int n = 0, k;
+    w->tv_serial = s_tv.serial;
+    w->tv_body = (int16_t)s_tv.body;
+    w->tv_act = (uint8_t)(s_tv.act & TAGPU_TV_ALL);
+    w->tv_cam[0] = (float)s_tv.yaw;
+    w->tv_cam[1] = (float)s_tv.pitch;
+    w->tv_cam[2] = (float)s_tv.zoom;
+    if (s_tv.host && s_tv.unit > 0) {
+        const unsigned char* m = tagpu_wikicob_model(s_tv.host, s_tv.unit, &n);
+        if (!m || n <= 0 || n > WIKISTAGE_PIECES) n = 0;
+        for (k = 0; k < n; k++) {
+            const unsigned char* p = m + TAGPU_COBVM_PRIM_BASE + (size_t)k * TAGPU_COBVM_PRIM_BYTES;
+            WIKISTAGEPIECE* q = &w->tv_pose[k];
+            memcpy(q->pos, p + TAGPU_COBVM_PRIM_POS, sizeof q->pos);
+            memcpy(q->turn, p + TAGPU_COBVM_PRIM_TURN, sizeof q->turn);
+            memcpy(&q->flags, p + TAGPU_COBVM_PRIM_FLAGS, sizeof q->flags);
+        }
+    }
+    w->tv_npose = (uint16_t)n;
+}
+
 /* the tree's controls: Fit, the zoom steps about the uncovered canvas's centre, All links */
 static int tech_press(const char* key)
 {
@@ -683,8 +919,8 @@ static int tech_press(const char* key)
     else if (!strcmp(key, "uclose")) s_tsel = -1;
     else if (!strncmp(key, "unit:", 5)) {
         if (!tech_pick_chip(atoi(key + 5))) return 1;
-    } else if (!strncmp(key, "act:", 4) || !strcmp(key, "uview"))
-        return 1;
+    } else if (!strncmp(key, "act:", 4)) tv_action(key + 4);
+    else if (!strcmp(key, "uview")) return 1;
     else return 0;
     button_sound();
     return 1;
@@ -1481,7 +1717,7 @@ static void wheel(double notches)
     static const char* const PANEL[TAGPU_WIKI_NSCROLL] = { "scroll:tree", "scroll:demos", "scroll:text", "scroll:unit" };
     int cx, cy, i, k;
     if (!mouse_last_client(&cx, &cy)) return;
-    if (tech_wheel(notches, cx, cy)) return;
+    if (tv_wheel(notches, cx, cy) || tech_wheel(notches, cx, cy)) return;
     for (i = 0; i < (int)s_hit.n; i++) {
         const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
         if (cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) continue;
@@ -1805,7 +2041,9 @@ static void page_fill(TAGPU_PK_WIKI* w)
     w->shot = s_shot;
     w->rep_serial = s_repSerial;
     w->about = (uint8_t)s_about;
+    tv_update(dt);
     tech_fill(w);
+    tv_fill(w);
     w->leave_held = (uint8_t)(!frame_try() ? 0 : !strcmp(s_press.held, "yes") ? 1 : !strcmp(s_press.held, "no") ? 2 : 0);
     memset(&w->frame, 0, sizeof w->frame);
     if (s_repOn && e) replay_fill(w, e);
@@ -2168,6 +2406,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
             else if (!strcmp(key, "close")) { held(key); wiki_close("the close button"); }
             else if (!strcmp(key, "wiki")) { held(key); wiki_close("the wiki button"); }
             else if (!strcmp(key, "stage") && tech_down(cx, cy, gx < 0)) {}
+            else if (!strcmp(key, "uview") && tv_down(cx, cy)) {}
             else page_press(key);
         }
         return 1;
@@ -2213,7 +2452,7 @@ static int release(unsigned bit)
     s_owedBtn &= ~bit;
     try_release(bit);
     if (bit == B_L) frame_up();
-    if (bit == B_L) tech_up();
+    if (bit == B_L) { tech_up(); tv_up(); }
     if (owed && bit == B_L) { s_held[0] = 0; s_drag = -1; }
     if (s_engBtn & bit) return s_open ? TAGPU_WIKI_FROZEN : 0;
     return owed || s_open;
@@ -2315,7 +2554,7 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
            hands every TAGPU_M_LUP to tagpu_wiki_mouse), which ends its drag in release(). */
         if (s_drag >= 0 && s_dragReal && !(wp & MK_LBUTTON)) s_drag = -1;
         if (s_tdrag && s_tdragReal && !(wp & MK_LBUTTON)) s_tdrag = 0;
-        if (s_open) { note_client(cx, cy); bar_drag(cy); tech_move(cx, cy); try_pointer(cx, cy, 1, wp); }
+        if (s_open) { note_client(cx, cy); bar_drag(cy); tech_move(cx, cy); tv_move(cx, cy); try_pointer(cx, cy, 1, wp); }
         return s_open;
     case WM_MOUSEWHEEL:
         /* a notch is WHEEL_DELTA; up scrolls toward the top */
@@ -2365,7 +2604,7 @@ int tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy)
     if (tagpu_modsui_is_open()) return tagpu_modsui_mouse(code, cx, cy);
     switch (code) {
     case TAGPU_M_MOVE:
-        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); tech_move(cx, cy); try_pointer(cx, cy, 0, 0); }
+        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); tech_move(cx, cy); tv_move(cx, cy); try_pointer(cx, cy, 0, 0); }
         return s_open;
     case TAGPU_M_WHEELUP:
     case TAGPU_M_WHEELDN:
@@ -2819,7 +3058,21 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 fprintf(f, ",%d,%d]", T->kind[c], T->upgrade[c] != 0);
             }
         }
-        fputs("]}", f);
+        /* the unit view: the unit shown (a tree unit index), its script host, the toggles and the
+           camera, and a hash of the pose the next fill sends (FNV-1a over its pieces) */
+        {
+            uint32_t h = 2166136261u;
+            int n = 0, k;
+            const unsigned char* m = s_tv.host && s_tv.unit > 0 ? tagpu_wikicob_model(s_tv.host, s_tv.unit, &n) : NULL;
+            if (!m || n < 0 || n > WIKISTAGE_PIECES) n = 0;
+            for (k = 0; m && k < n * TAGPU_COBVM_PRIM_BYTES; k++)
+                h = (h ^ m[TAGPU_COBVM_PRIM_BASE + k]) * 16777619u;
+            fprintf(f, "],\"view\":{\"body\":%d,\"host\":%d,\"serial\":%u,\"tick\":%lu,\"act\":%u,"
+                       "\"cam\":[%.4f,%.4f,%.4f],\"pieces\":%d,\"pose\":%lu}",
+                    s_tv.body, s_tv.host != NULL && s_tv.unit > 0, (unsigned)s_tv.serial, (unsigned long)s_tv.tick,
+                    s_tv.act, s_tv.yaw, s_tv.pitch, s_tv.zoom, n, (unsigned long)h);
+        }
+        fputs("}", f);
     }
     /* a replay: its transport, and the frame record this fill placed, in tools/wiki/framecheck.mjs's
        shape (tests/wikiframetest.c dump_rec) */

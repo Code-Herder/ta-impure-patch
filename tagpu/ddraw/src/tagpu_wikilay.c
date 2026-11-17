@@ -854,12 +854,13 @@ static double unit_rows(UI* u, const UIPANEL* p, double w, int emit, void* user)
             ui_hot(&c->u, vr, clip, "uview");
         }
         y += vr.h + gap;
-        if (body->mobile && !body->canfly) { lab[na] = ACT[0]; on[na++] = 0; }
-        if (body->canfly) { lab[na] = ACT[1]; on[na++] = 0; }
-        if (body->nweapon) { lab[na] = ACT[2]; on[na++] = 0; lab[na] = ACT[3]; on[na++] = 0; }
-        if (body->builder) { lab[na] = ACT[4]; on[na++] = 0; }
-        if (body->structure && !body->nweapon) { lab[na] = ACT[5]; on[na++] = 0; }
-        lab[na] = ACT[6]; on[na++] = 1;
+        const unsigned a = c->st->tech_act;
+        if (body->mobile && !body->canfly) { lab[na] = ACT[0]; on[na++] = (a & TAGPU_TV_WALK) != 0; }
+        if (body->canfly) { lab[na] = ACT[1]; on[na++] = (a & TAGPU_TV_FLY) != 0; }
+        if (body->nweapon) { lab[na] = ACT[2]; on[na++] = (a & TAGPU_TV_AIM) != 0; lab[na] = ACT[3]; on[na++] = 0; }
+        if (body->builder) { lab[na] = ACT[4]; on[na++] = (a & TAGPU_TV_BUILD) != 0; }
+        if (body->structure && !body->nweapon) { lab[na] = ACT[5]; on[na++] = (a & TAGPU_TV_ON) != 0; }
+        lab[na] = ACT[6]; on[na++] = (a & TAGPU_TV_TURN) != 0;
         lab[na] = ACT[7]; on[na++] = 0;
         for (i = 0; i < na; i++) {
             const double bw = ui_button_w(&c->u, &g->ctl, lab[i]);

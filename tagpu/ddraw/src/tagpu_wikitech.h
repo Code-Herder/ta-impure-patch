@@ -126,4 +126,14 @@ void tagpu_wikitech_draw(const WIKITECHTREE* T, const WTCAM* cam, int sel, int a
 void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
                           HUDRECT stage, double u, WIKISTAGEOPS* o);
 
+/* the unit view's toggled actions (TAGPU_PK_WIKI.tv_act, WIKIPAGE.tech_act), wiki.js unitview's
+   buttons with `.on` */
+#define TAGPU_TV_WALK  0x01u
+#define TAGPU_TV_FLY   0x02u        /* Take off */
+#define TAGPU_TV_AIM   0x04u
+#define TAGPU_TV_BUILD 0x08u
+#define TAGPU_TV_ON    0x10u        /* On / off */
+#define TAGPU_TV_TURN  0x20u
+#define TAGPU_TV_ALL   0x3Fu
+
 #endif
