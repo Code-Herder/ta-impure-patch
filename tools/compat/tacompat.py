@@ -3356,8 +3356,8 @@ def battle_ai_records(scenario: str) -> list:
 
 def battle_impai_misses(text: str, records: list) -> list:
     """THE BATTLE'S COMPUTER SEAT IS IMPAI'S, from the battle game's tagpu.log: nothing asked of a DLL with no ImpAI (no
-    seam line); else the level init marked exactly `records`, no `could not` and no content past its tables, and after the
-    scenario's units were placed ImpAI's military began a task (`impai: mil seat= t=`) for every one of them."""
+    seam line); else the level init marked exactly `records`, no `could not` and no content past its tables, and once the
+    applier was armed ImpAI's military began a task (`impai: mil seat= t=`) for every one of them."""
     if not IMPAI_INSTALLED.search(text):
         return []
     st = impai_stage_read(text)
@@ -3372,7 +3372,15 @@ def battle_impai_misses(text: str, records: list) -> list:
         miss.append(f"ImpAI marked {st['marks'] if st['marks'] is not None else 'no seat line'}: the battle's "
                     f"computer seat(s) {unmarked} not ImpAI's ({why})")
         return miss
-    at = text.rfind("scenario: applied=")
+    # The fight starts at the applier's arming, not at its `applied=` line: that line is written on a later render
+    # frame, after the game-thread tick has placed the units, so ImpAI's first task (game thread) can precede it.
+    # `applier armed` is written before the state turns ST_ARMED (tagpu_scenario.c, an interlocked exchange), which
+    # is what lets the tick place anything, so every task on the scenario's units follows it in the log. It is
+    # written once a process (install_tick_hook), so a log with a second apply has no anchor for that one.
+    applies = text.count("scenario: applied=")
+    if applies > 1:
+        return miss + [f"the battle's log holds {applies} scenario applies; the fight's start is known only for one"]
+    at = text.rfind("scenario: applier armed")
     began = {int(seat) for seat, _ in IMPAI_MIL_TASK.findall(text[at:] if at >= 0 else text)}
     miss += [f"ImpAI's military began no task for seat {r} in the fight" for r in records if r not in began]
     return miss

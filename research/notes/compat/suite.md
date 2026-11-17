@@ -66,8 +66,11 @@ names the gap). The hives are private because the store `tacli` keeps
           (MEASURED 2026-11-16, retail on `dll-e04b641a`: `impai: seats 1,3 (impure.cfg) of 4 records`, at the saved
           skirmish's Easy);
         - there is no `could not` line and no content past its tables;
-        - after the scenario's units are placed (`scenario: applied=`), ImpAI's military begins a task for every one
-          of those seats (`impai: mil seat= t=`).
+        - once the applier is armed (`scenario: applier armed`), ImpAI's military begins a task for every one of those
+          seats (`impai: mil seat= t=`). The anchor is the arming and not `scenario: applied=`: that line is written on
+          a render frame after the game-thread tick has placed the units, so the seat's first task can come before it,
+          while the arming is written before the state that lets the tick place anything. It is written once a
+          process, so a battle log with two applies fails by name.
       A DLL with no ImpAI (no seam line) is asked nothing. A setup whose expectation says
       `"impai": "unavailable"` has no such seat.
     - **Why not the claim.** The stage's and the network game's claim does not fit the battle: the scenario clears the
