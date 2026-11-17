@@ -771,8 +771,9 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.W = (float)vw;
     s_page.H = (float)vh;
     s_page.bar = (float)bh * (float)vh / (float)f->game_height / u;
-    /* the rewind button's slot is taken when the same frame's live HUD draws its button */
-    s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hs->live;
+    /* the rewind button's slot is taken when the same frame's HUD draws its button: the live HUD,
+       or the allies' ribbon with the idle rewind beside it */
+    s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hud_draws_rewind(hs);
     page_of(&s_page, w, sv);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
         InterlockedExchange(&s_refused, 1);

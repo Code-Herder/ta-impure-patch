@@ -100,14 +100,14 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The tech tree entry | `art/wiki/entries/techtree.json` (`"frame": "techtree"`); in the mockup `tools/wiki/mockup/techtree.js` (the model, the layout, the drawing, the hit test), `unitview.js` (the unit's model in 3D) and `wiki.js` (the stage's input and the unit's panel); the data, each mod's `gfx/side/<mod>/techtree/`, written by `tools/wiki/gfx.py` `tech_pack` through `sidepacks.py` ([below](#the-tech-tree-entry)) |
 | This page | the decisions, the data format and the simulation's contract |
 
-Nine entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
+Nine entries. First, at the top level and above every category, **Tech tree**: the running mod's
+build tree, built in the mockup; the game lays it out as a text entry until the tree is ported
+([below](#the-tech-tree-entry)). Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
 **Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
 Sweep**; in Camera, **Mega map and strategic icons**, a text entry
 ([below](#a-text-entry-mega-map-and-strategic-icons)). Under **Replays**, a top-level category after it, the four replay entries in this order:
 **Watching a game**, **Take over a replay**, **Rewind a skirmish** and **Players and the camera**
-([the replay entries' plan](ingame-wiki-replay-plan.html)). Under **Units**, the last top-level
-category, **Tech tree**: the running mod's build tree, built in the mockup; the game lays it out as
-a text entry until the tree is ported ([below](#the-tech-tree-entry)).
+([the replay entries' plan](ingame-wiki-replay-plan.html)).
 
 ## The decisions
 
@@ -2195,7 +2195,7 @@ draws it.
 
 ## The tech tree entry
 
-**What it is.** *Units › Tech tree* shows everything the player's side of the running mod can
+**What it is.** *Tech tree*, the wiki's first entry, shows everything the player's side of the running mod can
 build, from its commander up: each builder and factory a card, under it the units it is the first
 to unlock, a line from each card back to whatever builds it. A unit picked -- a card, an icon on
 one, a chip in a panel -- lights the walk to it from the commander, what it builds and what else
@@ -2204,8 +2204,9 @@ read by the rules the sidebar is read by.
 
 **The owner's decisions, 2026-11-16.** Four layouts were prototyped over the real data -- a
 research tree, a focus view (built by / the unit / builds), the game's build menus as columns, and
-a tier atlas -- and the research tree was chosen. It is an entry of its own under a new top-level
-category, *Units*, named *Tech tree*. It takes the theatre: the wiki's tree in its column, the
+a tier atlas -- and the research tree was chosen. It is an entry of its own named *Tech tree*, the
+first row of the wiki's tree, at the top level rather than under a category (the owner's word,
+2026-11-16, after a first placement under a *Units* category). It takes the theatre: the wiki's tree in its column, the
 build tree on the whole stage, the unit's panel over the bezel's right where About opens (the two
 never show together). The tree opens fitted, as large as the stage's uncovered width allows, and
 stays fitted while the stage or a panel changes its room until the player drags or zooms. Two

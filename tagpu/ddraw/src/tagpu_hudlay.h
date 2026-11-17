@@ -137,6 +137,14 @@ typedef struct {
     float    give_max[2];           /* what the player can give: the sliders' ends            */
 } HUDSTATE;
 
+/* The rewind button is drawn this frame: always by the live HUD, and by the allies' ribbon when it
+   carries the idle rewind (tagpu_hudlay.c, live and allies). The wiki button takes the slot left of
+   it exactly when this holds (tagpu_wikistate.c), so the two can never land on one slot. */
+static __inline int hud_draws_rewind(const HUDSTATE* st)
+{
+    return st->allies ? st->rewind : st->live;
+}
+
 /* What to draw, in paint order, and where a click lands.
      HOP_LINE   a straight stroke with butt ends, from (r.x, r.y) to (r.x + r.w, r.y + r.h), `size`
                 units wide: an SVG <line>;
