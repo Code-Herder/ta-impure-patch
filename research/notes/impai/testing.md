@@ -47,3 +47,26 @@ A win is ImpAI's opponent gone before the cap; a game at the cap is no win, and 
 **The exploiter suite** (`tools/impai/exploit.py run --dll DLL --tag TAG [--puzzles FILE]`, [the bar](bar.html), *The exploiter suite*) hunts one blind spot a situation: an air rush, a naval turtle, artillery creep and a commander rush against a scripted opponent, each a short seeded game of its own launch (cap 6 000 to 20 000), and puzzles taken over from the build's own recordings of the games it did not win (`exploit.py cut`). A failed situation is a finding for the brain writer, not a gate.
 
 The full bar (500-780 games), the handicap ladder (`ladder.py run`, 120 games in six looks) and the 16 games against the setups whose stock AI cheats run at milestones only: before the default flips and before every `v*` tag. Every batch of games registers one run in the runs viewer (`tools/tarun.py`), its games nested under it: `batch.py`'s run has a step a gate, the margin test's run nested under it; `ladder.py`'s has a step a look.
+
+## One-call diagnosis
+
+`tools/impai/diag.py` gives the brain writer's diagnosis loop in one call. It plays a few games, or reads games already played, and prints only the lines asked for, at most 60 by default:
+
+```
+tools/impai/diag.py run --dll D [--dll D2] --ids ID[,ID...] | --situation NAME[,...] [--cap T]
+                        [--grep REGEX]... [--lines N] [--at T[,T...]] [--near W] [--max M] [--lanes L] [--out DIR]
+tools/impai/diag.py logs DIR [DIR2] [--grep REGEX]... [--lines N] [--at T[,T...]] [--near W] [--max M]
+tools/impai/diag.py build [--export NAME] [--define K=V]...
+```
+
+- **`run`** plays bar ids or exploit situations as `bar.py play` does: under the run lock, on GDI with no draw, each game from its own seed. Each DLL's games go to a folder of their own (`dll1`, `dll2` under `--out`, by default `.data/impai/runs/diag/run-<time>/`). A game already in its folder is not played again, so a second call with other patterns reads the same games. The print is then `logs`'s.
+- **`logs`** prints each game's result line: the winner, the end tick and the seed, or why the game could not run. Under it come the game's `impai:` lines that each `--grep` matches, the first N of each pattern (`--lines`, 10 by default), with a count of the rest.
+    - `--at` keeps only the lines whose GameTime (`t=` or `gametime=`) lies within `--near` ticks (300 by default) of a GameTime it names.
+    - Given two folders, it prints the first GameTime at which the two games' matched lines differ, with both lines. Every matched line is compared, not only the printed ones.
+    - Whatever the `--max` cap leaves out is counted in the last line.
+- **`build`** makes a scratch DLL of the tree as it is on disk, uncommitted edits included, into `.data/impai/runs/diag/<NAME>/ddraw.dll`. It leaves `tagpu/ddraw`'s own objects and DLLs alone.
+    - It copies `tagpu/ddraw` (sources and generated headers, no build products) to `<NAME>/tree/tagpu/ddraw`, beside links to the tree's `tools`, `art`, `mods` and `unditherer`, and builds it there with `tools/runlock.py make`.
+    - Each `--define K=V` is a `CPPFLAGS += -DK=V` line in the copy's `config.mk`. Defines that differ from the copy's last build start it from no object, since make cannot see a flag change.
+    - It prints the DLL's path, or only the compiler's errors and warnings.
+
+`test_diag.py` covers the arguments and the extraction offline, against a fixture log and a fake player.
