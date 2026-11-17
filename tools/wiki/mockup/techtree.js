@@ -158,7 +158,10 @@ const WikiTech = (() => {
     edge: '#5b6050', also: '#6a7058', path: '#7fc4e8', kid: '#9fd68a', sel: '#e8c66a', up: '#c98ae0', pic: '#000' };
   function draw(g, M, L, o) {
     const { cam, s } = o, z = cam.z;
-    const X = u => (u - cam.x) * z, Y = u => (u - cam.y) * z;
+    /* EVERY EDGE ON A WHOLE PIXEL: a rectangle's corners are rounded to canvas pixels and its size is the difference,
+       so a card's rim and an icon's frame stay one crisp line at any zoom instead of smearing across two */
+    const X = u => Math.round((u - cam.x) * z), Y = u => Math.round((u - cam.y) * z);
+    const box = (x, y, w, h) => [X(x), Y(y), X(x + w) - X(x), Y(y + h) - Y(y)];
     const sel = o.sel && M.units[o.sel] ? o.sel : null, h = sel && home(M, sel);
     const onPath = new Set(h ? pathTo(M, h) : []), kids = new Set(h ? M.units[h].builds : []);
     const pars = new Set(sel ? M.units[sel].parents : []), focus = !!h;
@@ -169,10 +172,12 @@ const WikiTech = (() => {
     // builder of a card's unit
     const edge = (a, b, style, w) => {
       const [ax, ay, aw] = L.pos[a], [bx, by] = L.pos[b], mx = (ax + aw + bx) / 2;
-      g.strokeStyle = style; g.lineWidth = Math.max(1, w * z);
+      g.strokeStyle = style; g.lineWidth = Math.max(1, Math.round(w * z));
       g.beginPath();
-      g.moveTo(X(ax + aw), Y(ay + C.EDGE_Y)); g.lineTo(X(mx), Y(ay + C.EDGE_Y));
-      g.lineTo(X(mx), Y(by + C.EDGE_Y)); g.lineTo(X(bx), Y(by + C.EDGE_Y));
+      // a line one pixel wide sits on a pixel's centre
+      const o = g.lineWidth % 2 ? 0.5 : 0;
+      g.moveTo(X(ax + aw), Y(ay + C.EDGE_Y) + o); g.lineTo(X(mx) + o, Y(ay + C.EDGE_Y) + o);
+      g.lineTo(X(mx) + o, Y(by + C.EDGE_Y) + o); g.lineTo(X(bx), Y(by + C.EDGE_Y) + o);
       g.stroke();
     };
     const lines = [];
@@ -192,7 +197,11 @@ const WikiTech = (() => {
     g.globalAlpha = 1;
     // the cards
     const font = (role, px) => o.font(role).replace(/\d+(\.\d+)?px/, `${(px * z).toFixed(2)}px`);
+    /* TEXT TOO SMALL TO READ IS LEFT OUT: a line whose size is under READ canvas pixels would draw as a smear, so the
+       card shows its picture, rim and icons alone until the zoom makes the text legible */
+    const READ = 6;
     const clip = (t, x, y, w, role, px) => {
+      if (px * z < READ) return;
       g.font = font(role, px);
       let s2 = t;
       if (g.measureText(s2).width > w * z) {
@@ -201,21 +210,29 @@ const WikiTech = (() => {
       }
       g.fillText(s2, X(x), Y(y));
     };
+    /* A PICTURE: nearest-neighbour when drawn at its own size or larger, so its pixels stay square; filtered at high
+       quality when drawn smaller, so it shrinks to a softened likeness rather than to every nth pixel */
     const picAt = (k, x, y, side) => {
-      const im = o.pic(k);
-      g.fillStyle = INK.pic; g.fillRect(X(x), Y(y), side * z, side * z);
-      if (im) { g.imageSmoothingEnabled = side * z < 40; g.drawImage(im, X(x), Y(y), side * z, side * z); }
+      const im = o.pic(k), [bx, by, bw, bh] = box(x, y, side, side);
+      g.fillStyle = INK.pic; g.fillRect(bx, by, bw, bh);
+      if (im) {
+        g.imageSmoothingEnabled = bw < im.width;
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(im, bx, by, bw, bh);
+      }
     };
     g.textBaseline = 'alphabetic';
     for (const k of M.spine) {
       const [x, y, w, hh] = L.pos[k], u = M.units[k];
       if (X(x + w) < 0 || Y(y + hh) < 0 || X(x) > g.canvas.width || Y(y) > g.canvas.height) continue;
       g.globalAlpha = focus && !lit(k) ? 0.3 : 1;
-      g.fillStyle = INK.bg; g.fillRect(X(x), Y(y), w * z, hh * z);
-      g.fillStyle = INK.head; g.fillRect(X(x), Y(y), w * z, C.HEAD * z);
+      const [cx, cy, cw, ch] = box(x, y, w, hh);
+      g.fillStyle = INK.bg; g.fillRect(cx, cy, cw, ch);
+      g.fillStyle = INK.head; g.fillRect(...box(x, y, w, C.HEAD));
       const rim = k === h ? INK.sel : onPath.has(k) ? INK.path : kids.has(k) || pars.has(k) ? INK.kid : INK.rim;
-      g.strokeStyle = rim; g.lineWidth = Math.max(1, (k === h ? 1.5 : 0.75) * z);
-      g.strokeRect(X(x), Y(y), w * z, hh * z);
+      const lw = Math.max(1, Math.round((k === h ? 1.5 : 0.75) * z)), ho = lw / 2;
+      g.strokeStyle = rim; g.lineWidth = lw;
+      g.strokeRect(cx + ho, cy + ho, cw - lw, ch - lw);
       picAt(k, x + C.PAD, y + C.PAD, C.PIC);
       const tx = x + C.PAD * 2 + C.PIC, tw = w - (tx - x) - C.PAD;
       g.fillStyle = INK.text; clip(u.title, tx, y + 10, tw, 'title', 8);
@@ -228,9 +245,10 @@ const WikiTech = (() => {
         picAt(x2, ix, iy, C.ICON);
         const v = M.units[x2], mark = x2 === sel ? INK.sel : v.upgrade ? INK.up : v.upgrades.length ? INK.up : null;
         if (mark) {
-          g.strokeStyle = mark; g.lineWidth = Math.max(1, (x2 === sel ? 1.2 : 0.7) * z);
-          if (v.upgrade && x2 !== sel) g.setLineDash([2 * z, 1.5 * z]);
-          g.strokeRect(X(ix), Y(iy), C.ICON * z, C.ICON * z);
+          const [mx, my, mw, mh] = box(ix, iy, C.ICON, C.ICON), ml = Math.max(1, Math.round((x2 === sel ? 1.2 : 0.7) * z));
+          g.strokeStyle = mark; g.lineWidth = ml;
+          if (v.upgrade && x2 !== sel) g.setLineDash([Math.max(2, Math.round(2 * z)), Math.max(1, Math.round(1.5 * z))]);
+          g.strokeRect(mx + ml / 2, my + ml / 2, mw - ml, mh - ml);
           g.setLineDash([]);
         }
       });

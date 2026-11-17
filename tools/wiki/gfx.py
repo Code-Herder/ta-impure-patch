@@ -2383,6 +2383,37 @@ def tech_weapons(eng, report):
     return out
 
 
+def tech_pictures(eng, art, units, downloads, tname, prefix, report):
+    """{unit lowered: the frame its build button shows} on every numbered page of `tname`'s menu for the side whose
+    prefix is `prefix`: menu_of's reading of the pages, each build button pictured by the sidebar's own rule
+    (gadget_picture: the page's bank or commongui by the button's name, then the unit's download picture, then its
+    `<unitpics>` PCX). A button pictured by no frame (a label) gives nothing."""
+    out = {}
+    got = type_pages(eng, units[tname.lower()]["name"], downloads, prefix, [])
+    if not got:
+        return out
+    pages, mine = got
+    for page, file in pages:
+        if not page:
+            continue
+        try:
+            path, where, recs = read_screen(eng, file, [])
+            check_panel(file, recs[0])
+        except SideError:
+            continue
+        fill_downloads(recs, page, mine, file, [])
+        for g in recs[1:]:
+            if g is None or g["id"] != 1:
+                continue
+            role, unit, grey, hidden = button_state(g, units, page, False, len(recs))
+            if role != "build" or not unit or grey or hidden or unit.lower() in out:
+                continue
+            pic, _rect = gadget_picture(art, g, role, unit, file, f"{file}#{g['index']}", report)
+            if pic.get("frames"):
+                out[unit.lower()] = art.frames[pic["frames"][0]]
+    return out
+
+
 def tech_pack(eng, out, palette, report):
     """`out`/tree.json, `out`/pics/<unit>.png (the build picture, `<unitpics>\\<UnitName>.PCX` in the install's
     palette) and `out`/units/ with `out`/scene.json (every unit's model and COB script, write_units with owner 0, which
@@ -2391,8 +2422,9 @@ def tech_pack(eng, out, palette, report):
     sides = read_sides(eng, report)
     downloads = read_downloads(eng, report)
     weapons = tech_weapons(eng, report)
+    art = SideArt(eng, report)
     (out / "pics").mkdir(parents=True, exist_ok=True)
-    cache, rows, tree = {}, {}, []
+    cache, rows, tree, pictures = {}, {}, [], {}
     for s in sides:
         root = s["commander"].lower()
         if root not in units:
@@ -2402,6 +2434,11 @@ def tech_pack(eng, out, palette, report):
         def menu(t, prefix=s["prefix"]):
             return [x for x in menu_of(eng, units, downloads, t, prefix, cache) if x in units]
         order, _depth = side_walk(root, menu)
+        # THE PICTURE a unit's card and chips show: its build button's on the first menu of the walk that holds it
+        for t in order:
+            if menu(t):
+                for k, fr in tech_pictures(eng, art, units, downloads, t, s["prefix"], report).items():
+                    pictures.setdefault(k, fr)
         tree.append({"name": s["name"], "prefix": s["prefix"], "commander": root, "order": order,
                      "menus": {t: menu(t) for t in order if menu(t)}})
         for t in order:
@@ -2426,14 +2463,18 @@ def tech_pack(eng, out, palette, report):
                        "weapons": ws, "cloaked": atoi(x.get("init_cloaked")) & 1 == 1,
                        "stealth": atoi(x.get("stealth")) & 1 == 1, "hidedamage": atoi(x.get("hidedamage")) & 1 == 1,
                        "fp": [u["fx"], u["fz"]], "pic": None}
-            hit = eng.load(eng.dirs["unitpics"], u["name"], "PCX")
-            if hit:
+            fr = pictures.get(t)
+            if fr is None:
+                # a unit on no build button (the commander): its <unitpics> PCX, the rule's last picture
+                hit = eng.load(eng.dirs["unitpics"], u["name"], "PCX")
                 try:
-                    w, h, px = read_pcx(hit[0])
-                    (out / "pics" / f"{t}.png").write_bytes(ta3do.write_indexed_png(w, h, px, palette))
-                    rows[t]["pic"] = f"pics/{t}.png"
+                    fr = Pixels(*read_pcx(hit[0]), None) if hit else None
                 except ValueError as e:
                     report.append({"element": f"unitpic {u['name']}", "refused": f"{hit[1]}: {e}"})
+            if fr is not None:
+                (out / "pics" / f"{t}.png").write_bytes(
+                    ta3do.write_indexed_png(fr.width, fr.height, fr.pixels, palette, fr.transparent))
+                rows[t]["pic"] = f"pics/{t}.png"
     if not tree:
         return 0
     meshes = write_units(out, eng, {}, report, [rows[k]["name"] for k in rows])

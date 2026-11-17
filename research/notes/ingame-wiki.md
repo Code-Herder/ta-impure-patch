@@ -2218,14 +2218,19 @@ it (a gap, below). The prototype is on this branch's history (`tools/wiki/techtr
 beside the sidebar pack (`sidepacks.py` runs it for each compatibility setup): `tree.json`, every
 side of `sidedata.tdf` whose `commander` the units folder has -- its walk (`side_walk` over
 `menu_of`, the build menus exactly as the sidebar reads them with that side's prefix, the cast
-rule's walk taken to its end) and each builder's menu -- and each unit's FBI figures; `pics/`, the
-build pictures (`<unitpics>\<UnitName>.PCX` in the install's palette); `scene.json` and `units/`,
+rule's walk taken to its end) and each builder's menu -- and each unit's FBI figures; `pics/`, each
+unit's picture: its build button's on the first menu of the walk that holds it, by the sidebar's
+own rule (`gadget_picture`: the page's bank or commongui by the button's name, then the unit's
+download picture, then `<unitpics>\<UnitName>.PCX`), and the PCX alone for a unit on no button
+(the commander) -- Escalation's mine PCXs are a single colour (MEASURED 2026-11-16: every pixel of
+`unitpicE\XMINE5.PCX` is index 0) and its mines are pictured by the spy's page bank instead;
+`scene.json` and `units/`,
 every unit's model and COB script (`write_units`, owner 0) for the panel's view and the COB host;
 `pal.bin`. A weapon's name, range and damage come from the first `weapons\*.tdf` section of its
 name (the folder's string is not mapped in the executable, so a mod that renames it is not followed
 [INFERRED]). MEASURED 2026-11-16: stock 132 + 134 units, ProTA 149 + 149, Total Mayhem 237 + 236,
 TA Twilight 248 + 257, TA Escalation 274 + 271, TA Zero 66 + 72 + 72, every unit with its model
-and every one but three with its picture.
+and a picture of more than one colour.
 
 **The rules** (`techtree.js` `model`), which the pack does not hold, so the game's port applies the
 same ones:
@@ -2260,6 +2265,12 @@ every card starting at or below it and moving it past its own bottom plus `GAP` 
 the invariant: two cards of one column are at least `GAP` apart, whatever the fonts. The drawing
 is rectangles, polylines (an edge leaves a card's header at its right, turns at the gap's middle
 and enters the child's header), images and clipped one-line text: what a HUD op list carries.
+Every rectangle's corners are rounded to canvas pixels and a line one pixel wide sits on a pixel's
+centre, so rims stay one crisp line at any zoom; a picture is drawn nearest-neighbour at its own
+size or larger and filtered at high quality smaller; a text line under 6 canvas pixels is left out
+rather than drawn as a smear, so a zoomed-out tree shows pictures, rims and icons alone. In the
+mockup the stage's canvas is the chosen resolution's pixels, so `res=1920x1080` on a 4K screen is
+shown stretched and soft; `res=` the screen's own shows what the game would draw.
 
 **The panel.** The unit's picture, name, description and flags; its model in 3D (`unitview.js`):
 the pack's mesh posed by the unit's own COB script through the wiki's COB host (`serve.py`, the C
