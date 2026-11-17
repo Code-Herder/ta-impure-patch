@@ -473,18 +473,28 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    of its life while counted as a fighter ([decisions](decisions.html), *The step back: removed*). **The stand-off**,
    before an ATTACK squad's targets and travel: a member never closes on a static defence it outranges -- an armed
    enemy structure seen now or remembered, its reach R its type's ground reach (the threat row's `hit_range`), the
-   member's own at least R + 64 px (`STAND_PAD`) and the fight content giving it a rate on the defence. Against
-   the nearest such defence within its reach + 384 px, a member inside R + 64 px moves out to R + 64 px on the line
-   from it through the member; else it attacks the defence when it is seen now, from its own range; else it
-   attacks the ground at the defence's remembered block -- a structure stands where it was seen, and the member
-   need not see it: a destroyer reaches 660 px and sees 330. A remembered defence is shelled only while the
-   squad's layer has not given its block up, and shelling it is no progress (*the goal's progress*), so a squad
-   whose only work is a ghost gives its goal up in `task_timeout` + its travel, and the ghost's block with it, and
-   travel then lights the block or meets the defence alive; an attack on a seen defence is progress. Why: on Gods
-   of War the first destroyer sailed to the water nearest its goal, the enemy commander, 231 px from a light laser
-   tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks (MEASURED 2026-11-17 at 75236135's
+   member's own at least R + 128 px (`STAND_PAD` 64 + `STAND_HYST` 64) and the fight content giving it a rate on
+   the defence. Against the nearest such defence within its reach + 384 px, a member inside R + 64 px moves out to
+   R + 128 px on the line from it through the member, the point held to the map and then to its substitute; the
+   move is given only when the point it goes to lies outside R + 64 px -- a bay whose nearest water is under the
+   tower, or the map's edge at the member's back, gives none, and the member then attacks the defence if it is seen
+   and is otherwise left to the fight and travel. Else it attacks the defence when it is seen now, from its own
+   range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and
+   the member need not see it: a destroyer reaches 660 px and sees 330. **The hysteresis**: the move out ends 64 px
+   past the line that orders it, and the member outranges the defence by those 128 px, so a member that stops short
+   of its point or closes to its own range to fire still stands outside R + 64 px at the next decision. **Progress**:
+   an attack on a defence is progress only when the member has it in range or travels to a point in range (the
+   defence's own point or its substitute); a defence out of reach is shelled as a ghost is. Such a defence -- a
+   ghost, or a seen one the member is neither in range of nor inside the reach of -- is attacked only while the
+   squad's layer has not given its block up, by the stand-off or by the fight, and shelling it is no progress
+   (*the goal's progress*), so a squad whose only work is such a defence gives its goal up in `task_timeout` + its
+   travel, and the defence's block with it, and travel then lights the block or meets the defence alive. Why: on
+   Gods of War the first destroyer sailed to the water nearest its goal, the enemy commander, 231 px from a light
+   laser tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks (MEASURED 2026-11-17 at 75236135's
    code). **Gaps**: a defence not yet seen is met at the member's sight, which can be inside its reach; mobile units
-   are not stood off; at most 32 defences a squad, the nearest its centroid. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
+   are not stood off; at most 32 defences a squad, the nearest its centroid; a member with weapons of several
+   ranges is placed by its longest, and the engine may close it further for a shorter one (not measured); a seen
+   defence out of reach whose block is not given up is a fight candidate whose attack counts as progress. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
    have it touch a factory's footprint or a kept way out to the next point of the grid that does not (the yard
    rule, *Task allocation*), which the arrival reads too; a move toward a unit passes no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.

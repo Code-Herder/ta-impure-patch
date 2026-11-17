@@ -7581,15 +7581,73 @@ static void check_mil_contact_defences(void)
     }
 }
 
-/* THE STAND-OFF (impai_mil.c, stand_off): an ATTACK squad of twelve tanks, their ground reach 600 px here, going
-   east to a goal far off; a turret south of the squad's first tank (slot 20) -- armed, its reach 400, 500 hp, 10 a
-   shot, so the stay-or-go holds:
-   (a) seen 304 px off, inside its reach + STAND_PAD (464): the tank moves out, to 464 px from it;
+/* the stand-off's world: mil_world, a turret type of reach `reach` -- armed, 500 hp, 10 a shot, so the stay-or-go
+   holds --, the tanks' ground reach 600 px, squad 1 an ATTACK of the land layer going to block (200, 50) */
+static void stand_world(int reach)
+{
+    mil_world();
+    s_threat[M_TANK].range = s_threat[M_TANK].hit_range = 600;
+    s_w.defs[T_TURRET].hp = s_ft[T_TURRET].hp = 500;
+    s_w.defs[T_TURRET].armed = 1;
+    s_ft[T_TURRET].value = 300.0f;
+    s_ft[T_TURRET].w[0] = T_TURRET;
+    s_fwp[T_TURRET].range = reach;
+    s_fwp[T_TURRET].reload = 30;
+    s_fwp[T_TURRET].burst = 1;
+    s_fwp[T_TURRET].dmg = 10;
+    s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 10;
+    s_threat[T_TURRET].range = s_threat[T_TURRET].hit_range = (uint16_t)reach;
+    s_threat[T_TURRET].layer = TASIM_LAYER_LAND;
+    enemy(1290, T_MEX, 400, 100, IMPAI_GHOST, 1);
+    s_mil.sq[1].task = IMPAI_SQ_ATTACK;
+    s_mil.sq[1].layer = TASIM_LAYER_LAND;
+    s_mil.sq[1].target = (uint16_t)WQ_NONE;
+    s_mil.sq[1].tx = 200;
+    s_mil.sq[1].tz = 50;
+    s_mil.sq[1].since = (uint32_t)s_w.gametime;
+    s_mil.sq[1].counted = 1;
+}
+
+/* a tank of squad 1 in slot `slot` at cell (cx, cz) */
+static void stand_tank(int slot, int cx, int cz)
+{
+    own(slot, M_TANK, cx, cz);
+    s_job[slot].kind = IMPAI_JOB_SQUAD;
+    s_job[slot].type = M_TANK;
+    s_job[slot].squad = 1;
+}
+
+/* slot 20's orders from log entry `from` on: attacks on slot 1300, ground attacks, moves, the last point */
+static void stand_orders(int from, int* att, int* gnd, int* mv, int* mx, int* mz)
+{
+    int k;
+    *att = *gnd = *mv = 0;
+    *mx = *mz = -1;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* m = &s_w.log[k].c;
+        if (m->unit != 20) continue;
+        if (m->action == A_ATTACK && m->target == 1300) (*att)++;
+        if (m->action == A_ATTACK && m->target == (uint16_t)WQ_NONE) {
+            (*gnd)++;
+            *mx = m->pos[0] >> 16;
+            *mz = m->pos[2] >> 16;
+        }
+        if (m->action == A_MOVE) {
+            (*mv)++;
+            *mx = m->pos[0] >> 16;
+            *mz = m->pos[2] >> 16;
+        }
+    }
+}
+
+/* THE STAND-OFF (impai_mil.c, stand_off): stand_world's squad of twelve tanks going east; a turret of reach 400
+   south of the squad's first tank (slot 20):
+   (a) seen 304 px off, inside its reach + STAND_PAD (464): the tank moves out, to 464 + STAND_HYST = 528 px from it;
    (b) seen 544 px off: the tank attacks it, from where it stands;
    (c) remembered 544 px off, not seen: the tank attacks the ground at its block;
    (d) (c) with that block given up by the land layer: no attack, the tank travels on;
-   (e) (c) with the turret's reach 560, which the tank's 600 does not pass by STAND_PAD: no attack and no move
-       out, the tank travels on as in (d). */
+   (e) (c) with the turret's reach 480, which the tank's 600 does not pass by STAND_PAD + STAND_HYST: no attack and
+       no move out, the tank travels on as in (d). */
 static int task_of_slot(int slot);
 static void check_mil_stand_off(void)
 {
@@ -7599,33 +7657,8 @@ static void check_mil_stand_off(void)
     IMPAI_MIL_OUT o;
     int c, k, from, att, gnd, mv, mx, mz, tx = -1, tz = -1;
     for (c = 0; c < 5; c++) {
-        mil_world();
-        s_threat[M_TANK].range = s_threat[M_TANK].hit_range = 600;
-        s_w.defs[T_TURRET].hp = s_ft[T_TURRET].hp = 500;
-        s_w.defs[T_TURRET].armed = 1;
-        s_ft[T_TURRET].value = 300.0f;
-        s_ft[T_TURRET].w[0] = T_TURRET;
-        s_fwp[T_TURRET].range = 400;
-        s_fwp[T_TURRET].reload = 30;
-        s_fwp[T_TURRET].burst = 1;
-        s_fwp[T_TURRET].dmg = 10;
-        s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 10;
-        s_threat[T_TURRET].range = s_threat[T_TURRET].hit_range = c == 4 ? 560 : 400;
-        s_threat[T_TURRET].layer = TASIM_LAYER_LAND;
-        enemy(1290, T_MEX, 400, 100, IMPAI_GHOST, 1);
-        s_mil.sq[1].task = IMPAI_SQ_ATTACK;
-        s_mil.sq[1].layer = TASIM_LAYER_LAND;
-        s_mil.sq[1].target = (uint16_t)WQ_NONE;
-        s_mil.sq[1].tx = 200;
-        s_mil.sq[1].tz = 50;
-        s_mil.sq[1].since = (uint32_t)s_w.gametime;
-        s_mil.sq[1].counted = 1;
-        for (k = 0; k < 12; k++) {
-            own(20 + k, M_TANK, 100 + 2 * (k % 6), 100 - 2 * (k / 6));
-            s_job[20 + k].kind = IMPAI_JOB_SQUAD;
-            s_job[20 + k].type = M_TANK;
-            s_job[20 + k].squad = 1;
-        }
+        stand_world(c == 4 ? 480 : 400);
+        for (k = 0; k < 12; k++) stand_tank(20 + k, 100 + 2 * (k % 6), 100 - 2 * (k / 6));
         enemy(1300, T_TURRET, 100, c ? 134 : 119, c < 2 ? IMPAI_LOS : IMPAI_GHOST, c < 2);
         if (c == 3) {
             s_mil.unreached[0].bx = 50;
@@ -7636,30 +7669,14 @@ static void check_mil_stand_off(void)
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the stand-off decision runs");
         mil_print(NAME[c], &o, from);
-        att = gnd = mv = 0;
-        mx = mz = -1;
-        for (k = from; k < s_w.nlog; k++) {
-            const WQ_CMD* m = &s_w.log[k].c;
-            if (m->unit != 20) continue;
-            if (m->action == A_ATTACK && m->target == 1300) att++;
-            if (m->action == A_ATTACK && m->target == (uint16_t)WQ_NONE) {
-                gnd++;
-                mx = m->pos[0] >> 16;
-                mz = m->pos[2] >> 16;
-            }
-            if (m->action == A_MOVE) {
-                mv++;
-                mx = m->pos[0] >> 16;
-                mz = m->pos[2] >> 16;
-            }
-        }
+        stand_orders(from, &att, &gnd, &mv, &mx, &mz);
         printf("the stand-off, %s: task %d, attacks %d, ground attacks %d, moves %d, point (%d, %d)\n", NAME[c],
                task_of_slot(20), att, gnd, mv, mx, mz);
         CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
         if (c == 0) {
             const int dz = mz - (s_rows[1300].seat[0].bz * 32 + 16);
-            CHECK(mv == 1 && !att && !gnd && mx >= 0 && dz <= -440 && dz >= -490,
-                  "%s: moved out to 464 px from it, %d px", NAME[c], -dz);
+            CHECK(mv == 1 && !att && !gnd && mx >= 0 && dz <= -505 && dz >= -555,
+                  "%s: moved out to 528 px from it, %d px", NAME[c], -dz);
         }
         if (c == 1) CHECK(att == 1 && !gnd && !mv, "%s: an attack on it", NAME[c]);
         if (c == 2)
@@ -8734,6 +8751,113 @@ static void mil_water(int kind)
     mil_sea_types();
     fake_reach(&s_mreach, M_N);
     s_mil_reach = &s_mreach;
+}
+
+/* THE STAND-OFF's move out held outside the reach (impai_mil.c, step_out): one tank, slot 20, 264 px from a seen
+   turret of reach 300, so inside 300 + STAND_PAD:
+   (a) the turret south of the tank, the map's north edge 72 px behind it: the point out, 428 px north of the
+       turret, held to the map, lies 336 px from it -- no move, the tank attacks the turret;
+   (b) on the strait's world, the tank on the west bank 152 px east of the turret: the point out, 428 px east of
+       it, is in the channel and its substitute the west bank 160 px from it -- no move, an attack;
+   (c) on dry ground, as (b): the move out, to 428 px from it;
+   (d) (a) with the turret remembered, not seen: no move and no ground attack from within its reach, the tank
+       travels on. */
+static void check_mil_stand_out(void)
+{
+    static const char* const NAME[4] = { "(a) the map's edge behind", "(b) the strait's water behind",
+                                         "(c) dry ground behind", "(d) the map's edge behind, remembered" };
+    IMPAI_MIL_OUT o;
+    int c, from, att, gnd, mv, mx, mz;
+    for (c = 0; c < 4; c++) {
+        stand_world(300);
+        if (c == 1) mil_water(W_STRAIT);
+        if (c == 0 || c == 3) {
+            stand_tank(20, 100, 4);
+            enemy(1300, T_TURRET, 100, 20, c ? IMPAI_GHOST : IMPAI_LOS, !c);
+        } else {
+            stand_tank(20, 238, 100);
+            enemy(1300, T_TURRET, 228, 100, IMPAI_LOS, 1);
+        }
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the move out's decision runs");
+        mil_print(NAME[c], &o, from);
+        stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+        printf("the move out, %s: task %d, attacks %d, moves %d, point (%d, %d)\n", NAME[c], task_of_slot(20), att, mv,
+               mx, mz);
+        CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
+        if (c < 2) CHECK(att == 1 && !mv && !gnd, "%s: no move into the reach, an attack", NAME[c]);
+        else if (c == 3) CHECK(!att && !gnd && mv == 1 && mz > 72 + 48, "%s: the travel's move, %d", NAME[c], mz);
+        else {
+            const int dx = mx - (s_rows[1300].seat[0].bx * 32 + 16);
+            CHECK(mv == 1 && !att && dx >= 405 && dx <= 455, "%s: moved out to 428 px from it, %d px", NAME[c], dx);
+        }
+    }
+}
+
+/* THE STAND-OFF's progress (impai_mil.c, stand_off, in_reach): on the strait's world one tank, slot 20, on the
+   west bank, its goal on the east bank, an ATTACK that comes no nearer it; a turret of reach 300 seen on the east
+   bank:
+   (a) 864 px off, the nearest west-bank point 816 px from it, past the tank's 600: the attack on it is no progress,
+       the squad gives its goal up, the turret's block first into the ring and the goal after it; over the next
+       60 decisions the stand-off passes the turret and the tank travels;
+   (b) 624 px off, the west bank's edge 576 px from it: the attack is progress, the goal held through (a)'s time
+       and as long again;
+   (c) 576 px off, in the tank's range, its block given up by the land layer: the tank still attacks it. */
+static int stand_progress(int tx, int decisions)
+{
+    IMPAI_MIL_OUT o;
+    int i;
+    stand_world(300);
+    mil_water(W_STRAIT);
+    s_mil.sq[1].tx = 150;
+    s_mil.sq[1].tz = 50;
+    s_mil.sq[1].closest = IMPAI_CLOSEST_NONE;
+    stand_tank(20, 236, 100);
+    enemy(1300, T_TURRET, tx, 100, IMPAI_LOS, 1);
+    for (i = 0; i < decisions; i++) {
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the stand-off's progress decision runs");
+        if (o.stalled) return i;
+        s_w.gametime += 15;
+    }
+    return -1;
+}
+
+static void check_mil_stand_progress(void)
+{
+    const IMPAI_GOALFAIL* f = s_mil.unreached;
+    IMPAI_MIL_OUT o;
+    int a, b, i, from, att, gnd, mv, mx, mz;
+    a = stand_progress(290, 2000);
+    printf("the stand-off's progress, (a) out of reach: given up at decision %d, ring (%d, %d) (%d, %d)\n", a, f[0].bx,
+           f[0].bz, f[1].bx, f[1].bz);
+    CHECK(a > 0 && f[0].bx == s_rows[1300].seat[0].bx && f[0].bz == s_rows[1300].seat[0].bz &&
+              f[0].layer == TASIM_LAYER_LAND && s_mil.unreached_next == 2,
+          "(a) the goal given up, the turret's block first");
+    from = s_w.nlog;
+    for (i = 0; i < 60; i++) {
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(a) the decisions after run");
+    }
+    stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+    printf("the stand-off's progress, (a) 60 decisions after: %d attacks, %d ground attacks, %d moves\n", att, gnd, mv);
+    CHECK(!att && !gnd && mv >= 1, "(a) the given-up turret not stood at, the tank travels: %d attacks, %d moves", att,
+          mv);
+    b = stand_progress(275, 2 * a + 2);
+    printf("the stand-off's progress, (b) in reach from the bank: given up at decision %d\n", b);
+    CHECK(a > 0 && b < 0, "(b) the goal held through %d decisions", 2 * a + 2);
+    stand_world(300);
+    mil_water(W_STRAIT);
+    stand_tank(20, 236, 100);
+    enemy(1300, T_TURRET, 272, 100, IMPAI_LOS, 1);
+    s_mil.unreached[0].bx = s_rows[1300].seat[0].bx;
+    s_mil.unreached[0].bz = s_rows[1300].seat[0].bz;
+    s_mil.unreached[0].t = (uint32_t)s_w.gametime;
+    s_mil.unreached[0].layer = TASIM_LAYER_LAND;
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the decision runs");
+    stand_orders(from, &att, &gnd, &mv, &mx, &mz);
+    printf("the stand-off's progress, (c) in range, given up: %d attacks, %d moves\n", att, mv);
+    CHECK(att == 1 && !mv, "(c) a defence in range is attacked though its block is given up");
 }
 
 /* THE REACH PRIMITIVES: the summary's thresholds and figures, a block top, the ring order, the nearest block of
@@ -15094,6 +15218,8 @@ static void check_military(void)
     check_mil_goal_side();
     check_mil_contact_defences();
     check_mil_stand_off();
+    check_mil_stand_out();
+    check_mil_stand_progress();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();
