@@ -697,22 +697,29 @@ the approval, each with its evidence; the owner may reverse any of them:
   **Repair stays removed** (*The mend: removed*, reconfirmed by the owner on 2026-11-17). **What it does not reach**:
   a seat whose side has no role-SCOUT type on a layer (ARM's skeeter, ARMPT, is a raider by the classifier's
   thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea
-  scout sees 280 px, less than a destroyer's 330, so on Gods of War it sees no farther inland than the navy (the
+  scout's eyes reach no farther than a destroyer's -- the engine holds every unit's sight to 8 blocks, 256 px on an
+  axis ([engine/map](../engine/map.html), *The sight table and the stamp*) --, so on Gods of War it sees no farther
+  inland than the navy (the
   naval turtle: [the bar](bar.html), *The exploiter suite*).
 - **One air scout a seat** (owner's decision, 2026-11-17: yes to one unarmed air scout per seat, an explicit
   exception to *No army class without damage*). An aircraft of role SCOUT that deals nothing -- CORFINK, ARMPEEP,
   the AWACs, the seaplane scouts -- takes the air scout's class, and the seat buys one, under *The scout is one*,
   while a known or expected enemy area -- a start that can hold an enemy's base, or the base's estimate -- is out of
   sight of every land and sea army unit the seat has: none reaches it, and none's nearest point of its own
-  component lies within its sight distance of it (THE BLIND SPOT). The scout flies there first, beside any scout of
-  another layer, and what it sees becomes rows the ships shell from memory (the stand-off's ground attack). The air
-  plant stays never-first: the scout comes from an air plant the plant rules already give (on an island, *air past
-  two sea plants*). **Why**: on Gods of War the enemy commander and its west tower stand ~370 and ~415 px from the
-  nearest water, past every ship's sight, so nothing the seat bought saw them to the cap (MEASURED 2026-11-17 at
-  bca430ab). **What it costs**: an air scout in an air FORM squad is weighed in that layer's waves as any unit --
-  its hp, no damage --, and goes to defend with it; an enemy one presses nothing (THE PRESSURE takes armed members
-  only), and the fight content's digest changes with the class, so `predfit check` needs a refit to the same
-  coefficients. **What it does not reach**: the turtle's seat gets no air plant before the cap (its second sea
+  component has it in its eyes -- the engine's sight table, at most 8 blocks (THE BLIND SPOT). The scout flies
+  there first, beside any scout of another layer, and what it sees becomes rows the ships shell from memory (the
+  stand-off's ground attack). The air plant stays never-first. **Why**: on Gods of War the enemy commander and its
+  west tower stand ~370 and ~415 px from the nearest water, past every ship's eyes, so nothing the seat bought saw
+  them to the cap (MEASURED 2026-11-17 at bca430ab). **The air scout is scout only** (owner's decision,
+  2026-11-17): it is never in a wave, a defence or any army sum; between trips it waits at home in no squad. **Re-fly
+  only when needed** (owner's decision, 2026-11-17): it flies only to an area no land or sea unit sees and that it
+  has not had in its eyes for `IMPAI_EYED_REFRESH` -- 2 700 ticks, 90 s, the writer's figure inside the owner's
+  "about 1-2 game minutes" --, each leg to the nearest such area, and home when none is left; so a start that stays
+  empty (random starts, or one an ally watches) costs one look a refresh, not a trip at every decision. Only a unit
+  of the air scout's class makes the trip: a seat without one sends none of its aircraft, which would otherwise
+  detach a fighter to a blind area at every decision. **What it costs**: an enemy air scout presses
+  nothing (THE PRESSURE takes armed members only), and the fight content's digest changes with the class, so
+  `predfit check` needs a refit to the same coefficients. **What it does not reach**: the turtle's seat gets no air plant before the cap (its second sea
   plant came at GameTime 8 587, metal income 9.7 at the cap, MEASURED at bca430ab), so there the scout waits on the
   economy.
 - **A type is bought only if its weapons can hit a target class the seat knows or expects** (coordinator's call,

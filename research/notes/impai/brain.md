@@ -386,7 +386,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    goal, each flip a wave (MEASURED; the cache's part [INFERRED]). **Gap**: a squad of more than 8 types tests its 8 dearest, so a minor anti-air member of a
    large mixed squad does not make it count aircraft; a RAID of three to six of a FORM squad's fastest units
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
-   once; one SCOUT of land or sea, or of the air outside a blind spot's trip, walks the start positions it reaches in turn -- first those no army unit of the seat has stood
+   once; one SCOUT of land, sea or air -- never the air scout, which is in no FORM squad -- walks the start positions it reaches in turn -- first those no army unit of the seat has stood
    in, so a trip cut short still leaves a start not yet looked at for the next -- and then the sweep's
    cells (ties to the nearest the scout), three legs, every `scout_period` or while the estimate rests on no
    structure. **The scout goes deep** (owner's decision, 2026-11-17): a contact does not end its trip -- only its
@@ -397,17 +397,30 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    army that reaches a start scouts as before, and a seat whose land army reaches none still learns where the enemy
    stands: on Gods of War no land unit reached a start, and the seat sent no scout and saw no enemy to the cap, a
    submarine and a destroyer at home (MEASURED 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). **The blind spot**
-   (owner's decision, 2026-11-17): each military decision looks for the first enemy area -- a start that can hold an
-   enemy's base, then the base's estimate -- that no land or sea army unit of the seat can bring its sight over: none
-   reaches the area's block, and none's substitute point lies within its type's sight distance (`IMPAI_TINFO.sight`)
-   of it. Finding one stamps `IMPAI_MIL.blind_t`, which the economy reads for `IMPAI_BLIND_HOLD` (900 ticks) to buy
-   the air scout. Builders and the commander are not weighed, and a seat with no land or sea army is blind to every
-   area; at most 16 army units of distinct type and component are weighed, and a decision whose substitutes' cache
-   is half full answers no area blind. On Gods of War the enemy commander and its west tower stand ~370 and ~415 px
-   from the nearest water BOATS4 sails, past a destroyer's sight of 330 and a skeeter's of 280. **The air scout's
-   trip**: while a blind spot stands and no air scout is out, the air layer's scout goes to that area first,
-   whatever the period and whatever scout of another layer is out; its later legs are any scout's, and what it sees
-   becomes rows the stand-off shells. **The layer's last
+   (owner's decisions, 2026-11-17): each military decision finds the enemy areas -- each start that can hold an
+   enemy's base, and the base's estimate -- that need the air scout: no land or sea army unit of the seat can bring
+   its sight over the area -- none reaches the area's block, and none's substitute point has it in its eyes -- and
+   no air scout had it in its eyes within `IMPAI_EYED_REFRESH` (2 700 ticks, the writer's figure for the owner's
+   "about 1-2 game minutes"; `IMPAI_MIL.eyed`, the estimate's stamp kept only while it stays in its sweep cell).
+   **The eyes** are the engine's sight table: the stamp lights the offsets of `los.tdf`'s TABLE R round the unit's
+   block, R = SightDistance / 32 held to 8 ([engine/map](../engine/map.html), *The sight table and the stamp*), so a
+   Chebyshev radius of at most 8 blocks, 256 px on an axis, whatever the type's sight distance. The test is the disc
+   dx^2 + dz^2 <= R^2 in blocks, which lies inside every TABLE1..9 of the table measured (Escalation's `los.tdf`,
+   whose TABLE8 has stock's 212 offsets), so it claims sight only where the table lights, terrain aside. Any area in
+   need stamps `IMPAI_MIL.blind_t`, which the economy reads for `IMPAI_BLIND_HOLD` (900 ticks) to buy the air scout.
+   Builders and the commander are not weighed, and a seat with no land or sea army is blind to every area; at most
+   16 army units of distinct type and component are weighed, an area eyed lately is not asked, and the first
+   undecided answer (the substitutes' cache half full) ends the walk. On Gods of War the enemy commander and its
+   west tower stand ~370 and ~415 px from the nearest water BOATS4 sails, past any ship's eyes. **The air scout is
+   scout only** (owner's decision, 2026-11-17): a unit of the `ascout` class is in no squad but its own trip's, and
+   no army sum counts it -- no wave, defence, retreat, home side, pressure, commander's side, layer median, the
+   island's land share or the army buy's total; a recording that holds one in a FORM squad lets it go. **The air
+   scout's trip** (re-fly only when needed, owner's decision, 2026-11-17): with an area in need and no trip under
+   way, the dearest air scout goes to the area in need nearest it, as a SCOUT squad of one beside any other layer's
+   scout; a leg ends when its point is in the scout's eyes, the next leg is the nearest area still in need, and with
+   none the trip turns home to the rally point, where the scout is let go of and waits in no squad. A leg that
+   outlives its task turns home. Only an `ascout` unit makes this trip: a seat without one sends no aircraft to a
+   blind area. What the scout sees becomes rows the stand-off shells. **The layer's last
    healthy unit**: while the estimate rests on an enemy structure -- the layer's wave, forming or waiting, has a
    goal known --, the scout is never the layer's only healthy army unit (at least half its health,
    whatever its squad, a unit of the scout class not counted): the pick takes only a unit below that, or one of the
@@ -500,7 +513,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    and back at every decision), and the member then attacks the defence if it is seen and is otherwise left to the
    fight and travel. Else it attacks the defence when it is seen now, from its own
    range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and
-   the member need not see it: a destroyer reaches 660 px and sees 330. **The hysteresis**: the move out ends 64 px
+   the member need not see it: a destroyer reaches 660 px and its eyes 256. **The hysteresis**: the move out ends 64 px
    past the line that orders it, and the member outranges the defence by those 128 px, so a member that stops short
    of its point or closes to its own range to fire still stands outside R + 64 px at the next decision. **Progress**:
    an attack on a defence is progress only when the member has it in range or travels to a point in range (the
@@ -641,8 +654,8 @@ rate. **The scout first** (owner's decision, 2026-11-17): a layer's scout class 
 mobile armed type of the classifier's role SCOUT (CORFAV, ARMFAV, ARMFLEA on land, CORPT at sea) -- is the class of the
 order whenever the seat holds none of it, built, building or queued, the menu offers it and the table gives it a
 share, so a layer's plant makes its scout first and replaces a dead one with its next order. **One air scout a seat**
-(owner's decision, 2026-11-17): the air's class is wanted, whatever the share, only while a blind spot stands
-(`impai_blind`), and passes the menu's target filter -- it is bought to see, not to hit. The air plant it needs comes
+(owner's decision, 2026-11-17): the air's class is wanted, whatever the share, only while an area needs it
+(`impai_blind`, *The blind spot*), and passes the menu's target filter -- it is bought to see, not to hit. The air plant it needs comes
 by the plant rules alone, never first. **The scout is one**:
 no other buy takes a scout class -- the table's share (0.05 on each surface layer in the default table) is only the
 switch, and the surplus's cheapest buy passes them -- and its order is one unit, never a surplus's five. A share is a

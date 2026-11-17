@@ -667,8 +667,8 @@ MEASURED 2026-11-17 on the reference setup, the naval turtle at 9f118119 (the st
 a seat): still failed, the commander and both towers at full health at the cap. What loses it:
 
 - **No air plant, so no air scout.** No unit the seat has sees the commander or the west tower -- they stand about
-  370 and 415 px from the nearest water a boat sails, past the sea scout's sight of 280 px and the destroyer's 330
-  -- and the air scout that would ([decisions](decisions.html), *One air scout a seat*) comes from an air plant the
+  370 and 415 px from the nearest water a boat sails, past the 256 px the engine's sight table gives any unit on an
+  axis -- and the air scout that would ([decisions](decisions.html), *One air scout a seat*) comes from an air plant the
   seat never gets: its second plant, a shipyard, came at 8 587 on a metal income of 9.7, and a build whose island
   order took the air plant past one sea plant chose no plant at all to the cap.
 - **With an air plant given** (a scratch situation, a CORAP of ImpAI's set down at its start): the air scout is

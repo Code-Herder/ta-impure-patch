@@ -36,6 +36,8 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
 #define ETYPES       64         /* distinct enemy types the picture weighs                                  */
 #define SIDE_IN      64         /* entries gathered for one side before impai_fight_side merges them        */
 #define STARTS       16
+_Static_assert(STARTS + 1 == IMPAI_AREAS, "THE AREAS: every start and the estimate have an eyed[] stamp");
+_Static_assert(IMPAI_SWEEP <= 256, "IMPAI_MIL.eyed_cell holds a sweep cell");
 #define SUB_BLOCKS   32         /* a move's point is moved at most this many 32-px blocks (1024 px)          */
 #define SUB_CACHE    32         /* the substitutes one decision computes                                     */
 #define HOME_BLOCKS  192        /* THE HOME POINT lies at most this many 32-px blocks from the rally (6 144 px)  */
@@ -263,6 +265,12 @@ static int unreached(const MDEC* d, unsigned L, int32_t x, int32_t z)
     return 0;
 }
 
+/* THE AIR SCOUT IS SCOUT ONLY (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *One air
+   scout a seat*): an army unit of class IMPAI_K_ASCOUT belongs to no squad but its own trip's (THE AIR SCOUT'S
+   TRIP), and no army sum counts it -- no wave, defence, retreat, home, pressure or commander's side, and no
+   layer's median. It stays in the census so its trip travels as any squad does */
+static int scout_only(const MUNIT* u) { return u->klass == IMPAI_K_ASCOUT; }
+
 static uint8_t layer_of_class(unsigned k)
 {
     if ((IMPAI_K_AIRMASK >> k) & 1u) return TASIM_LAYER_AIR;
@@ -322,6 +330,26 @@ static void free_squad(MDEC* d, int s)
     d->st->sq[s].target = (uint16_t)WQ_NONE;
     memset(&d->sq[s], 0, sizeof d->sq[s]);
     d->sq[s].contact = -1;
+}
+
+/* the member of squad s that is an air scout (scout_only), the squad of THE AIR SCOUT'S TRIP; -1 none. BOUND: the
+   army once */
+static int ascout_member(const MDEC* d, int s)
+{
+    int k;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s && scout_only(&d->army[k])) return k;
+    return -1;
+}
+
+/* THE AIR SCOUT'S TRIP ended: squad s freed and each member's job cleared, so the census finds the air scout in no
+   squad and squads() leaves it there (THE AIR SCOUT IS SCOUT ONLY) */
+static void ascout_release(MDEC* d, int s)
+{
+    int k;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s) job_clear(&d->in->job[d->army[k].slot]);
+    free_squad(d, s);
 }
 
 /* squad `from`'s members and this decision's figures into squad `to`, and `from` freed. Before squads() has
@@ -504,7 +532,7 @@ static void back_to_form(MDEC* d, int s) { become(d, s, IMPAI_SQ_FORM, d->rx, d-
    induction over every transition. COST: 16 x 16 compares. */
 static void normalise(MDEC* d)
 {
-    int k, j, attacks = 0, raids = 0, scouts = 0;
+    int k, j, attacks = 0, raids = 0, scouts = 0, ascouts = 0;
     for (k = 0; k < IMPAI_SQUADS; k++) {
         const IMPAI_SQUAD* q = &d->st->sq[k];
         if (q->task == IMPAI_SQ_FREE) continue;
@@ -518,9 +546,12 @@ static void normalise(MDEC* d)
     }
     for (k = 0; k < IMPAI_SQUADS; k++) {
         const unsigned t = d->st->sq[k].task;
-        if ((t == IMPAI_SQ_ATTACK && ++attacks > IMPAI_ATTACKS_MAX) ||
-            (t == IMPAI_SQ_RAID && ++raids > IMPAI_RAIDS_MAX) || (t == IMPAI_SQ_SCOUT && ++scouts > 1))
+        if (t == IMPAI_SQ_SCOUT && ascout_member(d, k) >= 0) {
+            if (++ascouts > 1) ascout_release(d, k);
+        } else if ((t == IMPAI_SQ_ATTACK && ++attacks > IMPAI_ATTACKS_MAX) ||
+                   (t == IMPAI_SQ_RAID && ++raids > IMPAI_RAIDS_MAX) || (t == IMPAI_SQ_SCOUT && ++scouts > 1)) {
             back_to_form(d, k);
+        }
     }
 }
 
@@ -655,6 +686,12 @@ static void census(MDEC* d)
            and the economy voids one only for another type in the slot, so each listed army unit is a squad's
            (SQUAD) or none yet, which squads() joins to its layer's FORM squad */
         m->sq = j->kind == IMPAI_JOB_SQUAD && d->st->sq[j->squad].task != IMPAI_SQ_FREE ? j->squad : IMPAI_SQUADS;
+        /* THE AIR SCOUT IS SCOUT ONLY: one in any squad but a SCOUT squad (a recording made before the rule) is let
+           go, so it never joins a FORM squad's sums */
+        if (scout_only(m) && m->sq < IMPAI_SQUADS && d->st->sq[m->sq].task != IMPAI_SQ_SCOUT) {
+            job_clear(j);
+            m->sq = IMPAI_SQUADS;
+        }
         /* THE SWEEP: the army unit stands in its cell now; at most IMPAI_ARMY_MAX writes */
         d->st->swept[sweep_cell(d, m->x, m->z)] = sweep_stamp(d);
     }
@@ -666,7 +703,7 @@ static void census(MDEC* d)
         for (L = 0; L < TASIM_LAYERS; L++) {
             for (k = n = 0; k < d->narmy; k++) {
                 const float x = d->army[k].value;
-                if (d->army[k].layer != L) continue;
+                if (d->army[k].layer != L || scout_only(&d->army[k])) continue;
                 for (i = n; i > 0 && vals[i - 1] > x; i--) vals[i] = vals[i - 1];
                 vals[i] = x;
                 n++;
@@ -684,6 +721,7 @@ static void squads(MDEC* d)
     for (k = 0; k < d->narmy; k++) {
         MUNIT* u = &d->army[k];
         int s = u->sq;
+        if (s >= IMPAI_SQUADS && scout_only(u)) continue;
         if (s >= IMPAI_SQUADS) {
             if ((s = squad_of(d, IMPAI_SQ_FORM, u->layer)) < 0) {
                 d->out->left_squad++;
@@ -763,6 +801,7 @@ static uint16_t substitute(const MDEC* d)
     if (n) return types[n / 2];
     for (k = 0; k < d->narmy; k++) {
         const float x = d->army[k].value;
+        if (scout_only(&d->army[k])) continue;
         for (i = n; i > 0 && (vals[i - 1] > x || (vals[i - 1] == x && types[i - 1] > d->army[k].type)); i--) {
             vals[i] = vals[i - 1];
             types[i] = types[i - 1];
@@ -2862,15 +2901,15 @@ static int starts_reached(MDEC* d, const MUNIT* u)
 /* 1 when u is at least half its maximum health (THE LAYER'S LAST HEALTHY UNIT, scout_pick) */
 static int healthy(const MUNIT* u) { return 2 * (int64_t)u->hp >= (int64_t)u->hp_max; }
 
-/* the scout of layer L (scouting): the dearest unit of L's scout class (IMPAI_K_LSCOUT, IMPAI_K_SSCOUT,
-   IMPAI_K_ASCOUT) in a FORM squad, else the cheapest of L's FORM units among the fastest quarter of their speeds;
-   -1 none.
+/* the scout of layer L (scouting): the dearest unit of L's scout class (IMPAI_K_LSCOUT, IMPAI_K_SSCOUT) in a FORM
+   squad, else the cheapest of L's FORM units among the fastest quarter of their speeds; -1 none. The air scout
+   class is in no FORM squad (THE AIR SCOUT IS SCOUT ONLY), so the air layer's scout is the fallback's.
    THE LAYER'S LAST HEALTHY UNIT: while the estimate rests on an enemy structure -- L's wave, forming or waiting
    in its FORM squad, has a goal known --, the scout is never L's only healthy army unit (healthy: at least half
    its maximum health, whatever its squad): the pick then takes only a unit below that, and none when there is
-   none. A unit of the scout class is never held, nor counted among the healthy: scouts are expendable (the
-   owner's decision, 2026-11-17), and the air scout deals nothing. While nothing is known the wave's goal is a guess and the scout is how it gets a real one, so a navy
-   of one healthy ship still scouts: on an island a sea layer's wave is one median unit (form_attack), so a rule
+   none. A unit of a scout class is never held, nor counted among the healthy: scouts are expendable (the owner's
+   decision, 2026-11-17). While nothing is known the wave's goal is a guess and the scout is how it gets a real
+   one, so a navy of one healthy ship still scouts: on an island a sea layer's wave is one median unit (form_attack), so a rule
    that held a forming wave's only unit whatever was known would never scout with it, the state scouting's WHY
    measured (no enemy seen to the cap). WHY: on Gods of War the scout took the second of the seat's two
    destroyers, its one healthy unit, the first at 750 of 3 150 hp, east across the map from GameTime 15 600 to
@@ -2902,15 +2941,18 @@ static int scout_pick(const MDEC* d, unsigned L)
     return pick;
 }
 
-/* squad s, FREE, sent as a SCOUT squad of army unit `pick` alone to (x, z) */
+/* squad s, FREE, sent as a SCOUT squad of army unit `pick` alone to (x, z); `pick` from its squad, or from none
+   (an air scout, THE AIR SCOUT IS SCOUT ONLY) */
 static void send_scout(MDEC* d, int s, int pick, int32_t x, int32_t z)
 {
     MUNIT* u = &d->army[pick];
     const int from = u->sq;
-    d->sq[from].n--;
-    d->sq[from].value -= u->value;
-    d->sq[from].sx -= u->x;
-    d->sq[from].sz -= u->z;
+    if (from < IMPAI_SQUADS) {
+        d->sq[from].n--;
+        d->sq[from].value -= u->value;
+        d->sq[from].sx -= u->x;
+        d->sq[from].sz -= u->z;
+    }
     d->st->sq[s].layer = u->layer;
     become(d, s, IMPAI_SQ_SCOUT, x, z, (uint16_t)WQ_NONE);
     join(d, u, s);
@@ -2925,34 +2967,95 @@ static void send_scout(MDEC* d, int s, int pick, int32_t x, int32_t z)
     d->out->scouts++;
 }
 
+/* THE EYES' DISC: the engine's sight (the stamp 0x482270) lights the offsets of los.tdf's TABLE R around the unit's
+   block, R = SightDistance / 32 held to numtables - 1 = 8 blocks (0x48230D..0x482366; engine/map.md, *The sight
+   table and the stamp*): a Chebyshev radius of R that the table does not fill (TABLE8 lights 212 of the square's 288
+   offsets). The disc dx^2 + dz^2 <= R^2 lies inside every TABLE1..TABLE9 of the table we measured (MEASURED
+   2026-11-17 over Escalation's los.tdf, whose TABLE8 has stock's 212 offsets), so the test claims sight only where
+   the table lights, terrain aside: an area it calls seen at 256 px on an axis is seen, one at 300 px is not. */
+#define SIGHT_BLOCKS_MAX 8
+static int in_eyes(unsigned sight, int32_t ux, int32_t uz, int32_t x, int32_t z)
+{
+    const int32_t r = (int32_t)(sight >> 5) < SIGHT_BLOCKS_MAX ? (int32_t)(sight >> 5) : SIGHT_BLOCKS_MAX;
+    const int32_t dx = (x >> 5) - (ux >> 5), dz = (z >> 5) - (uz >> 5);
+    return (int64_t)dx * dx + (int64_t)dz * dz <= (int64_t)r * r;
+}
+
 /* 1 when army unit u can bring its sight over (x, z) (THE BLIND SPOT): it reaches the point's block (unit_reaches),
-   or its substitute (point_for) lies within its type's sight distance of the point; -1 undecided: the substitutes'
-   cache half full, the other half kept for the orders' travel this decision (orders runs after scouting). The reach
-   is asked first, so a point the unit reaches is answered whatever the cache holds */
+   or its substitute (point_for) has the point in its eyes (in_eyes); -1 undecided: the substitutes' cache half full,
+   the other half kept for the orders' travel this decision (orders runs after scouting). The reach is asked first,
+   so a point the unit reaches is answered whatever the cache holds */
 static int sees_area(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     int32_t sx = x, sz = z;
     int p;
     if (unit_reaches(d, u->type, u->x, u->z, x, z)) return 1;
     if (d->nsub_pt >= SUB_CACHE / 2 || (p = point_for(d, u->type, u->x, u->z, &sx, &sz)) < 0) return -1;
-    return p > 0 && dist(sx, sz, x, z) <= (uint32_t)d->in->ti[u->type].sight;
+    return p > 0 && in_eyes(d->in->ti[u->type].sight, sx, sz, x, z);
 }
 
-/* THE BLIND SPOT (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *One air scout a seat*): the
-   first enemy area -- each start that can hold an enemy's base (THE FOE'S STARTS), then the enemy base's estimate
-   -- that no land or sea army unit of the seat can bring its sight over (sees_area), its point into (*x, *z); 0 when
-   each is in some such unit's sight, or an answer is undecided (no area is called blind on a capacity). A seat with
-   no land or sea army unit is blind to every area. WHY: on Gods of War the enemy commander and its west tower stand
-   ~370 and ~415 px from the nearest water the seat's ships sail, past a destroyer's sight of 330 and a skeeter's of
-   280, so nothing the seat bought saw them to the cap (MEASURED 2026-11-17, exploit-naval-turtle at bca430ab). The
-   seat's builders and commander are not weighed. BOUND: STARTS + 1 areas, each against BLIND_KEYS army units of
-   distinct (type, component), one sees_area each; a unit past the keys is not weighed, which can only call an area
-   blind. */
+/* THE AREAS: area a < nstarts is start a when it can hold an enemy's base (THE FOE'S STARTS, start_foe), area STARTS
+   the enemy base's estimate when there is one; its point into (*x, *z), 0 when a is no area */
+static int area_point(const MDEC* d, int a, int32_t* x, int32_t* z)
+{
+    if (a < d->nstarts) {
+        if (!start_foe(d, a)) return 0;
+        *x = d->starts[a].x;
+        *z = d->starts[a].z;
+        return 1;
+    }
+    if (a != STARTS || d->st->ebx == IMPAI_NO_ANCHOR) return 0;
+    *x = d->st->ebx * 32 + 16;
+    *z = d->st->ebz * 32 + 16;
+    return 1;
+}
+
+/* THE AIR SCOUT'S EYES: each area (THE AREAS) an air scout of the seat has in its eyes (in_eyes, from where it flies)
+   stamps IMPAI_MIL.eyed with this decision's sweep_stamp, the estimate's with its sweep cell. BOUND: the army times
+   IMPAI_AREAS */
+static void air_eyes(MDEC* d)
+{
+    int k, a;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        if (!scout_only(u)) continue;
+        for (a = 0; a < IMPAI_AREAS; a++) {
+            int32_t x, z;
+            if (!area_point(d, a, &x, &z) || !in_eyes(d->in->ti[u->type].sight, u->x, u->z, x, z)) continue;
+            d->st->eyed[a] = sweep_stamp(d);
+            if (a == STARTS) d->st->eyed_cell = (uint8_t)sweep_cell(d, x, z);
+        }
+    }
+}
+
+/* 1 when area a, at (x, z), was in an air scout's eyes within IMPAI_EYED_REFRESH (THE AIR SCOUT'S EYES): its stamp
+   set, not past now, and for the estimate taken in the cell the estimate is in now. A stamp k stands for GameTime
+   k x 64, and 1 for 0 (sweep_stamp writes 1 for the first 64 ticks) */
+static int eyed_fresh(const MDEC* d, int a, int32_t x, int32_t z)
+{
+    const uint32_t t = d->st->eyed[a] > 1 ? (uint32_t)d->st->eyed[a] * 64u : 0u;
+    if (!d->st->eyed[a] || t > d->now || d->now - t > IMPAI_EYED_REFRESH) return 0;
+    return a != STARTS || d->st->eyed_cell == sweep_cell(d, x, z);
+}
+
+/* THE BLIND SPOT (the owner's decisions, 2026-11-17; research/notes/impai/decisions.md, *One air scout a seat*): the
+   areas (THE AREAS) that need the air scout, as a mask, bit a for area a: those no land or sea army unit of the
+   seat can bring its sight over (sees_area) and no air scout had in its eyes within IMPAI_EYED_REFRESH
+   (eyed_fresh) -- RE-FLY ONLY WHEN NEEDED. An undecided answer ends the walk, so no area is called blind on a
+   capacity; an area eyed lately is not asked at all, so the substitutes' cache goes to the areas that are not, and
+   a start that stays empty (an unseated level's, or one an ally watches) is looked at once a refresh, not at every
+   decision. A seat with no land or sea army unit is blind to every area. WHY: on Gods of War the enemy commander
+   and its west tower stand ~370 and ~415 px from the nearest water the seat's ships sail, past the 256 px any
+   unit's eyes reach on an axis (in_eyes), so nothing the seat bought saw them to the cap (MEASURED 2026-11-17,
+   exploit-naval-turtle at bca430ab). The seat's builders and commander are not weighed. BOUND: IMPAI_AREAS areas,
+   each against BLIND_KEYS army units of distinct (type, component), one sees_area each; a unit past the keys is
+   not weighed, which can only call an area blind. */
 #define BLIND_KEYS 16
-static int blind_spot(MDEC* d, int32_t* x, int32_t* z)
+static uint32_t blind_spot(MDEC* d)
 {
     int16_t key[BLIND_KEYS];
     int nkey = 0, k, j, a, r = 0;
+    uint32_t need = 0;
     for (k = 0; k < d->narmy && nkey < BLIND_KEYS; k++) {
         const MUNIT* u = &d->army[k];
         const int lu = d->in->reach ? impai_reach_at(d->in->reach, d->in->ti[u->type].mclass, u->x >> 5, u->z >> 5) : 0;
@@ -2965,67 +3068,123 @@ static int blind_spot(MDEC* d, int32_t* x, int32_t* z)
         }
         if (j == nkey) key[nkey++] = (int16_t)k;
     }
-    for (a = 0; a <= d->nstarts; a++) {
+    for (a = 0; a < IMPAI_AREAS; a++) {
         int32_t px, pz;
-        if (a < d->nstarts) {
-            if (!start_foe(d, a)) continue;
-            px = d->starts[a].x;
-            pz = d->starts[a].z;
-        } else {
-            if (d->st->ebx == IMPAI_NO_ANCHOR) continue;
-            px = d->st->ebx * 32 + 16;
-            pz = d->st->ebz * 32 + 16;
-        }
+        if (!area_point(d, a, &px, &pz) || eyed_fresh(d, a, px, pz)) continue;
         for (j = 0; j < nkey && !(r = sees_area(d, &d->army[key[j]], px, pz)); j++) {}
-        if (j == nkey) {
-            *x = px;
-            *z = pz;
-            return 1;
-        }
-        if (r < 0) return 0;
+        if (j == nkey) need |= 1u << a;
+        else if (r < 0) break;
     }
-    return 0;
+    return need;
 }
 
-/* SCOUTING: every scout_period, or while the estimate rests on no enemy structure, and with no land or sea scout
-   out: the scout of the first layer, in the order land, sea, air, that has a start to go to (scout_pick,
-   next_point) goes as a squad of one to the start positions that can hold an enemy's base (THE FOE'S STARTS), from
-   scout_next on, round the list, those no army unit has stood in first, of those it reaches; with none in any
-   layer it does not go -- the air too while an air scout is out. Once its legs have visited every start it
-   reaches, the next leg is the sweep's cell (sweep_goal) with ties to the nearest the scout. It ends at the third
-   point or with no point left it reaches, never at a contact: a scout is expendable and goes as deep as its legs
-   go (the owner's decision, 2026-11-17), so on the sea a leg to a start ashore is a peek at the shore and the next
-   leg pulls it away.
+/* the area of mask `need` (THE BLIND SPOT) nearest (x, z), its point into (*nx, *nz), ties to the lower index; 0
+   when the mask holds none */
+static int need_nearest(const MDEC* d, uint32_t need, int32_t x, int32_t z, int32_t* nx, int32_t* nz)
+{
+    int a, got = 0;
+    uint32_t best = 0;
+    for (a = 0; a < IMPAI_AREAS; a++) {
+        int32_t px, pz;
+        uint32_t y;
+        if (!(need >> a & 1u) || !area_point(d, a, &px, &pz)) continue;
+        y = dist(x, z, px, pz);
+        if (!got || y < best) {
+            got = 1;
+            best = y;
+            *nx = px;
+            *nz = pz;
+        }
+    }
+    return got;
+}
+
+static int task_over(const MDEC* d, int s);
+
+/* THE AIR SCOUT'S TRIP (the owner's decisions, 2026-11-17; decisions.md, *One air scout a seat*), at each decision
+   after the tasks: the eyes stamped (air_eyes) and the areas that need a look found (blind_spot), which stamps
+   IMPAI_MIL.blind_t for the economy (THE SCOUT FIRST). With no trip under way and an area in need, the dearest air
+   scout in no squad goes as a SCOUT squad of one to the area nearest it. A trip's leg ends when the leg's point is
+   in its eyes; it goes on to the area in need nearest it, and with none left it turns home, to the rally point
+   (flags ASCOUT_HOME), where it is let go of (ascout_release) and waits in no squad until an area needs it again;
+   one on its way home turns back out to an area in need. A leg that outlives its task (THE TASK'S LIFETIME, a leg's
+   lifetime counted from the leg's start) turns home, and the trip home outlived ends it there. Only a unit of
+   class IMPAI_K_ASCOUT ever makes this trip: a seat without one sends no aircraft to a blind area, so an air army
+   is never detached a fighter at a time. BOUND: blind_spot once, the army a few times, one squad written. */
+#define ASCOUT_HOME 0xFF        /* IMPAI_SQUAD.flags of an air scout's trip on its way home                 */
+static void air_scout(MDEC* d)
+{
+    uint32_t need;
+    int s, m = -1, k, over;
+    int32_t x, z;
+    IMPAI_SQUAD* q;
+    const MUNIT* u;
+    air_eyes(d);
+    need = blind_spot(d);
+    if (need) d->st->blind_t = d->now ? d->now : 1;
+    for (s = 0; s < IMPAI_SQUADS; s++)
+        if (d->st->sq[s].task == IMPAI_SQ_SCOUT && (m = ascout_member(d, s)) >= 0) break;
+    if (s == IMPAI_SQUADS) {
+        int pick = -1;
+        if (!need) return;
+        for (k = 0; k < d->narmy; k++)
+            if (scout_only(&d->army[k]) && d->army[k].sq >= IMPAI_SQUADS &&
+                (pick < 0 || d->army[k].value > d->army[pick].value))
+                pick = k;
+        if (pick < 0 || !need_nearest(d, need, d->army[pick].x, d->army[pick].z, &x, &z)) return;
+        for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
+        if (s < IMPAI_SQUADS) send_scout(d, s, pick, x, z);
+        return;
+    }
+    q = &d->st->sq[s];
+    u = &d->army[m];
+    over = task_over(d, s);
+    if (q->flags != ASCOUT_HOME && !over &&
+        !in_eyes(d->in->ti[u->type].sight, u->x, u->z, q->tx * 32 + 16, q->tz * 32 + 16))
+        return;
+    if ((q->flags == ASCOUT_HOME || !over) && need_nearest(d, need, u->x, u->z, &x, &z)) {
+        q->flags = (uint8_t)(q->flags == ASCOUT_HOME ? 0 : q->flags < ASCOUT_HOME - 1 ? q->flags + 1 : q->flags);
+        q->tx = (int16_t)(x >> 5);
+        q->tz = (int16_t)(z >> 5);
+        q->since = d->now;
+        return;
+    }
+    if (q->flags != ASCOUT_HOME) {
+        q->flags = ASCOUT_HOME;
+        q->tx = (int16_t)(d->rx >> 5);
+        q->tz = (int16_t)(d->rz >> 5);
+        q->since = d->now;
+        return;
+    }
+    if (over || dist(u->x, u->z, d->rx, d->rz) <= ARRIVE_PX) ascout_release(d, s);
+}
+
+/* SCOUTING: THE AIR SCOUT'S TRIP first (air_scout); then every scout_period, or while the estimate rests on no
+   enemy structure, and with no land or sea scout out: the scout of the first layer, in the order land, sea, air,
+   that has a start to go to (scout_pick, next_point) goes as a squad of one to the start positions that can hold an
+   enemy's base (THE FOE'S STARTS), from scout_next on, round the list, those no army unit has stood in first, of
+   those it reaches; with none in any layer it does not go -- the air too while an air squad scouts. Once its legs
+   have visited every start it reaches, the next leg is the sweep's cell (sweep_goal) with ties to the nearest the
+   scout. It ends at the third point or with no point left it reaches, never at a contact: a scout is expendable
+   and goes as deep as its legs go (the owner's decision, 2026-11-17), so on the sea a leg to a start ashore is a
+   peek at the shore and the next leg pulls it away. The air scout is never this scout: it is in no FORM squad.
    THE SCOUT'S LAYER: land first, so a seat whose land army reaches a start scouts with it; the sea and the air only
    when no land scout has a start to go to, so a seat whose land army reaches no start still learns where the enemy
    stands. WHY: on Gods of War, whose starts stand on islands, no land unit reached a start, so the seat sent no
    scout and saw no enemy to the cap, a submarine and a destroyer of its own at home (MEASURED 2026-11-17,
    exploit-naval-turtle at 5e4e9c24: scouts=0, enemies_max=0 at GameTime 20 000).
-   THE AIR SCOUT'S TRIP: while THE BLIND SPOT finds an area (stamped for the economy, IMPAI_MIL.blind_t) and no air
-   scout is out, the air layer's scout (scout_pick) goes to that area first, whatever the period and whatever scout
-   of another layer is out, its later legs as any scout's: what it sees becomes the seat's rows, which the stand-off
-   shells from memory. BOUND: one blind_spot, three picks and one more, each the army three times, and at most three
-   next_point. */
+   ONE SCOUT SQUAD besides the air scout's trip: normalise sends a second back to FORM. BOUND: air_scout, three picks,
+   each the army three times, and at most three next_point. */
 static void scouting(MDEC* d)
 {
     static const uint8_t LAYERS[] = { TASIM_LAYER_LAND, TASIM_LAYER_SEA, TASIM_LAYER_AIR };
-    int k = -1, s, l, pick = -1, air_out = 0, out = 0;
-    int32_t bx, bz;
+    int k = -1, s, l, pick = -1, air_out = 0;
+    air_scout(d);
     for (s = 0; s < IMPAI_SQUADS; s++)
-        if (d->st->sq[s].task == IMPAI_SQ_SCOUT) {
-            if (d->st->sq[s].layer == TASIM_LAYER_AIR) air_out = 1;
-            else out = 1;
-        }
-    if (blind_spot(d, &bx, &bz)) {
-        d->st->blind_t = d->now ? d->now : 1;
-        if (!air_out && (pick = scout_pick(d, TASIM_LAYER_AIR)) >= 0) {
-            for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
-            if (s == IMPAI_SQUADS) return;
-            send_scout(d, s, pick, bx, bz);
+        if (d->st->sq[s].task == IMPAI_SQ_SCOUT && ascout_member(d, s) < 0) {
+            if (d->st->sq[s].layer != TASIM_LAYER_AIR) return;
             air_out = 1;
         }
-    }
-    if (out) return;
     if (d->nstarts < 2 || (d->st->scout_t && d->now - d->st->scout_t < d->plan->scout_period && d->est_struct)) return;
     for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
     if (s == IMPAI_SQUADS) return;
@@ -3285,6 +3444,7 @@ static void tasks(MDEC* d)
             }
         }
         if (q->task == IMPAI_SQ_SCOUT) {
+            if (ascout_member(d, s) >= 0) continue;     /* THE AIR SCOUT'S TRIP: air_scout, in scouting */
             if (task_over(d, s)) back_to_form(d, s);
             else scout_step(d, s);
             continue;
@@ -3613,7 +3773,8 @@ static void pressure(MDEC* d)
     float army_v = 0.0f;
     int j;
     if (!pm || !(d->press_p > 0.0f)) return;
-    for (j = 0; j < d->narmy; j++) army_v += d->army[j].value;
+    for (j = 0; j < d->narmy; j++)
+        if (!scout_only(&d->army[j])) army_v += d->army[j].value;
     if (!(at_base > 0.0f && d->home_v < k * at_base) && !(d->press_out > 0.0f && army_v < k * d->press_out) &&
         !d->home_lost)
         return;
@@ -3862,12 +4023,23 @@ static int defence_passed(const MDEC* d, const MUNIT* u, const MENEMY* e, uint32
            y >= (uint32_t)(re + STAND_PAD) && unreached(d, d->st->sq[u->sq].layer, e->x, e->z);
 }
 
+/* 1 when member u, its ground reach `own` px, stands off defence e, y px off (THE STAND-OFF): u outranges e, the
+   fight content gives u a rate on it, and u has not passed it (defence_passed). The nearest pick and step_out's
+   refusal read this one predicate, so a point step_out refuses is exactly one the pick would step out of again */
+static int stands_from(const MDEC* d, const MUNIT* u, const MENEMY* e, int32_t own, uint32_t y)
+{
+    return outranges(own, ground_reach(d, e->type)) && hurts_type(d, u->type, e->type) && !defence_passed(d, u, e, y);
+}
+
 /* THE STAND-OFF's move out of member u, `best` px from defence t, its reach r: as order, 0 when no point is given
-   that lies outside the reach + STAND_PAD of every defence the squad weighs, def[0..nd), t among them -- so a
-   member between two overlapping defences is not moved out of one into the other and back -- (none, the
-   substitute's within one, or undecided) */
+   that lies outside the reach + STAND_PAD of every defence of the squad's, def[0..nd), that u would stand off from
+   that point (stands_from) or that the fight content gives a rate on u and u has not passed (defence_passed), t
+   among them -- (none, the substitute's within one, or undecided). So a member between two overlapping defences is
+   not moved out of one into the other and back (the nearest pick reads stands_from), nor into the reach of one
+   that hurts it, and a defence that neither hurts it nor is stood off refuses nothing */
 static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int32_t r, const int16_t* def, int nd)
 {
+    const int32_t own = ground_reach(d, u->type);
     const int64_t dx = best ? u->x - t->x : d->ax - t->x, dz = best ? u->z - t->z : d->az - t->z;
     const uint32_t len = best ? best : dist(d->ax, d->az, t->x, t->z);
     int32_t px, pz;
@@ -3883,7 +4055,10 @@ static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int
     }
     for (i = 0; i < nd; i++) {
         const MENEMY* e = &d->en[def[i]];
-        if (dist(px, pz, e->x, e->z) < (uint32_t)(ground_reach(d, e->type) + STAND_PAD)) return 0;
+        const uint32_t y = dist(px, pz, e->x, e->z);
+        if (y < (uint32_t)(ground_reach(d, e->type) + STAND_PAD) &&
+            (stands_from(d, u, e, own, y) || (hurts_type(d, e->type, u->type) && !defence_passed(d, u, e, y))))
+            return 0;
     }
     return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
 }
@@ -3924,8 +4099,7 @@ static int stand_off(MDEC* d, int s, int* ghost)
             const MENEMY* e = &d->en[def[i]];
             const int32_t re = ground_reach(d, e->type);
             y = dist(u->x, u->z, e->x, e->z);
-            if (!outranges(own, re) || y > (uint32_t)own + REACH_PAD || !hurts_type(d, u->type, e->type)) continue;
-            if (defence_passed(d, u, e, y)) continue;
+            if (y > (uint32_t)own + REACH_PAD || !stands_from(d, u, e, own, y)) continue;
             if (!t || y < best) { t = e; best = y; r = re; }
         }
         if (!t) continue;
@@ -4570,7 +4744,7 @@ static void commander(MDEC* d)
         uint32_t gap = 0x7FFFFFFFu;
         memset(&a, 0, sizeof a);
         for (k = 0; k < d->narmy; k++)
-            if (dist(d->army[k].x, d->army[k].z, d->com_x, d->com_z) <= CMD_ARMY_PX) {
+            if (!scout_only(&d->army[k]) && dist(d->army[k].x, d->army[k].z, d->com_x, d->com_z) <= CMD_ARMY_PX) {
                 side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
                 if (e >= 0) {
                     const uint32_t y = dist(d->army[k].x, d->army[k].z, d->en[e].x, d->en[e].z);

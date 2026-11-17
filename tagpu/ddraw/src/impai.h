@@ -775,6 +775,11 @@ _Static_assert(sizeof(IMPAI_EXEC) == 2900, "IMPAI_EXEC is 2900 bytes");
    remembered; that centroid kept after no structure is known any longer */
 enum { EST_START = 0, EST_STRUCT = 1, EST_KEPT = 2 };
 
+#define IMPAI_AREAS      17             /* the enemy areas THE BLIND SPOT weighs: 16 starts and the estimate     */
+#define IMPAI_EYED_REFRESH 2700         /* ticks an area the air scout had in its eyes needs no new look: ninety
+                                           seconds (the owner's "about 1-2 game minutes") [hand-written: the bar's
+                                           to move]                                                          */
+
 /* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
    here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
    had seen of the enemy at its last military decision, which its factories buy against. */
@@ -864,9 +869,16 @@ typedef struct IMPAI_MIL {
     IMPAI_PERSONA persona;
     IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
     /* THE BLIND SPOT (impai_mil.c, blind_spot): the GameTime of the last military decision that found an enemy area
-       out of sight of every land and sea army unit of the seat, 0 never; recorded data, read through
-       impai_blind. The economy then buys the seat's one air scout (impai_econ.c, THE SCOUT FIRST) */
+       out of sight of every land and sea army unit of the seat and not in the air scout's eyes within
+       IMPAI_EYED_REFRESH, 0 never; recorded data, read through impai_blind. The economy then buys the seat's one air
+       scout (impai_econ.c, THE SCOUT FIRST) */
     uint32_t      blind_t;
+    /* THE AIR SCOUT'S EYES (impai_mil.c, air_eyes): the GameTime / 64 at which an air scout of the seat last had each
+       enemy area in its eyes -- start k at eyed[k], the enemy base's estimate at eyed[IMPAI_AREAS - 1], whose
+       stamp counts only while the estimate stays in sweep cell eyed_cell --, 0 never. Recorded data: a stamp past
+       now reads as never */
+    uint16_t      eyed[IMPAI_AREAS];
+    uint8_t       eyed_cell, eyed_pad;
 } IMPAI_MIL;
 /* THE ISLAND's byte is the one unreached[] was aligned past, so the record's size and every later field's offset
    are the ones recordings made before it hold */

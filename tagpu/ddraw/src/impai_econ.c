@@ -1938,6 +1938,7 @@ static uint32_t island_classes(IMPAI_DEC* d)
     unsigned k;
     if (!on_island(d) || !island_agrees(d)) return 0xFFFFFFFFu;
     for (k = 0; k < IMPAI_KS; k++) {
+        if (k == IMPAI_K_ASCOUT) continue;      /* THE AIR SCOUT IS SCOUT ONLY (impai_mil.c): in no army sum */
         all += d->kspent[k];
         if (IMPAI_K_LANDMASK >> k & 1u) land += d->kspent[k];
     }
@@ -2008,8 +2009,15 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
             if (type[k] < 0) type[k] = impai_class_type(&mil->table, &mil->pic, &m, (unsigned)k, in->pred);
             if (type[k] > 0 && (unsigned)type[k] < in->nti) cost[k] = in->ti[type[k]].value;
         }
-        if ((k = scout_due(d, share, type, eligible)) >= 0) scout = 1;
-        else if ((k = impai_buy_next(share, d->kspent, cost, eligible & ~IMPAI_K_SCOUTMASK, FLT_MAX)) < 0) return 0;
+        if ((k = scout_due(d, share, type, eligible)) >= 0) {
+            scout = 1;
+        } else {
+            /* THE AIR SCOUT IS SCOUT ONLY (impai_mil.c): its value is in no army sum, the shares' total included */
+            float spent[IMPAI_KS];
+            memcpy(spent, d->kspent, sizeof spent);
+            spent[IMPAI_K_ASCOUT] = 0.0f;
+            if ((k = impai_buy_next(share, spent, cost, eligible & ~IMPAI_K_SCOUTMASK, FLT_MAX)) < 0) return 0;
+        }
         if (type[k] <= 0) return 0;
         t = type[k];
     }
