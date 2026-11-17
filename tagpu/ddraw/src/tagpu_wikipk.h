@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10132 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (448u + 128u + 4u)   /* TAGPU_CMD_WIKI is 19924 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the

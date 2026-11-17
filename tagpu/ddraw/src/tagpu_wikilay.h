@@ -32,7 +32,7 @@
 #include "tagpu_wikidata.h"
 #include "tagpu_wikitech.h"
 
-#define WIKI_MAXHOT    160      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
+#define WIKI_MAXHOT    448      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
 #define WIKI_MAXNODE   1024     /* the tree's nodes the loader keeps: one fold bit each           */
 #define WIKI_CAPTION   WIKI_CAPTION_MAX /* the caption's bytes, with its terminator: every loaded
                                            caption's fill fits                                  */

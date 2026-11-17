@@ -78,6 +78,7 @@ typedef struct {
     double text_share, text_para;
     double theatre_about, theatre_min;      /* the About panel's share of the body (percent), the
                                                theatre stage's least height                       */
+    double theatre_about_max;               /* the About panel's most width, in units             */
 } WG;
 
 struct WIKILAY {
@@ -99,7 +100,11 @@ typedef struct {
     const WIKIPAGE*  st;
     WIKIFRAME*       fr;
     char             fill[FILL_N][MAXFILL];     /* the texts filled, by FILL_*                   */
+    UIR              top_box;                   /* the theatre's top layer: its box, and          */
+    int              top_kind;                  /* TOP_* (built after the window: see theatre)    */
 } C;
+
+enum { TOP_NONE, TOP_ABOUT, TOP_UNIT };
 
 /* text.js's fill(e, raw): `raw` (NULL reads "") with entry `e`'s words under the page's casting and
    interface type, into fill buffer `slot`. The words point into the entry and the casting, both
@@ -540,15 +545,75 @@ static void frame_px(C* c, UIR r, double t, double in, uint32_t rgb, int dashed,
     }
 }
 
-/* JS's toFixed: `v` to `f` decimals, a half away from zero rounded up */
+/* a 128-bit unsigned, for js_fixed's exact compare: the C the DLL builds with has no wider type */
+typedef struct { uint64_t hi, lo; } JSU128;
+
+static JSU128 js_mul(uint64_t a, uint64_t b)
+{
+    const uint64_t al = a & 0xFFFFFFFFu, ah = a >> 32, bl = b & 0xFFFFFFFFu, bh = b >> 32;
+    const uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    const uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFu) + (hl & 0xFFFFFFFFu);
+    JSU128 r;
+    r.lo = (mid << 32) | (ll & 0xFFFFFFFFu);
+    r.hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+    return r;
+}
+
+/* |v| * p >= q / 2, exactly: |v| is m * 2^-s (m < 2^53, 0 < s < 1100), so the test is
+   m * p * 2 >= q * 2^s, both sides in 128 bits. m * p * 2 < 2^53 * 10^4 * 2 < 2^68; a right side
+   past 2^127 is larger than any left one. */
+static int js_ge_half(uint64_t m, int s, uint64_t p, uint64_t q)
+{
+    const JSU128 a = js_mul(m, p * 2);
+    JSU128 b;
+    if (q == 0) return 1;
+    if (s >= 128) return 0;
+    if (s > 64) {
+        if (q >> (128 - s)) return 0;               /* q * 2^s is past 2^128 */
+        b.hi = q << (s - 64);
+        b.lo = 0;
+    } else if (s == 64) {
+        b.hi = q;
+        b.lo = 0;
+    } else {
+        b.hi = s ? q >> (64 - s) : 0;
+        b.lo = q << s;
+    }
+    return a.hi != b.hi ? a.hi > b.hi : a.lo >= b.lo;
+}
+
+/* JS's toFixed: `v` to `f` decimals, the n with n / 10^f nearest the double's EXACT value, the
+   larger on a tie, a minus whenever v < 0 (ECMA-262 Number.prototype.toFixed) -- not the value
+   times 10^f, whose own rounding moves the tie: 1.325 is 1.32499999999999995559..., "1.32" in
+   JS, while 1.325 * 100 rounds to 132.5 exactly. Integer arithmetic on the double's mantissa,
+   for f <= 4 and |v| * 10^f below 2^62, so r, 2 * (r + 1) and m * p * 2 all fit; a value outside
+   that (no figure the panel shows) takes the rounded product. */
 static void js_fixed(char* d, size_t n, double v, int f)
 {
-    double p = 1, r;
-    int i;
+    const double a = fabs(v);
+    const char* sign = v < 0 ? "-" : "";
+    uint64_t p = 1, r;
+    int i, ex;
     for (i = 0; i < f; i++) p *= 10;
-    r = floor(fabs(v) * p);
-    if (fabs(v) * p - r >= 0.5) r += 1;
-    snprintf(d, n, "%s%.*f", v < 0 && r > 0 ? "-" : "", f, r / p);
+    if (f > 4 || !(a * (double)p < 4611686018427387904.0)) {
+        snprintf(d, n, "%s%.*f", sign, f, floor(a * (double)p + 0.5) / (double)p);
+        return;
+    }
+    if (a == 0) r = 0;
+    else {
+        const double fr = frexp(a, &ex);            /* a = fr * 2^ex, fr in [0.5, 1) */
+        const uint64_t m = (uint64_t)ldexp(fr, 53); /* a = m * 2^(ex - 53), exactly  */
+        const int s = 53 - ex;
+        if (s <= 0) r = (uint64_t)a * p;            /* an integer */
+        else {
+            r = (uint64_t)floor(a * (double)p);
+            while (r > 0 && !js_ge_half(m, s, p, 2 * r)) r--;      /* r <= a * p, exactly       */
+            while (js_ge_half(m, s, p, 2 * (r + 1))) r++;          /* ... and a * p < r + 1     */
+            if (js_ge_half(m, s, p, 2 * r + 1)) r++;               /* the half, the larger n    */
+        }
+    }
+    if (f == 0) snprintf(d, n, "%s%llu", sign, (unsigned long long)r);
+    else snprintf(d, n, "%s%llu.%0*llu", sign, (unsigned long long)(r / p), f, (unsigned long long)(r % p));
 }
 
 /* wiki.js techPanel's `f`: from ten thousand, whole thousands with "k"; else the rounded value with
@@ -557,10 +622,22 @@ static void js_amount(char* d, size_t n, double v)
 {
     if (v >= 10000) { snprintf(d, n, "%.0fk", floor(v / 1000 + 0.5)); return; }
     {
+        /* Math.round, then every three digits grouped; a value past 2^53 is not an integer's
+           digits, and is set whole */
         const double r = floor(v + 0.5);
-        const long long q = (long long)fabs(r);
-        if (q >= 1000) snprintf(d, n, "%s%lld,%03lld", r < 0 ? "-" : "", q / 1000, q % 1000);
-        else snprintf(d, n, "%s%lld", r < 0 ? "-" : "", q);
+        char g[32], *o = g + sizeof g - 1;
+        unsigned long long q;
+        int k = 0;
+        if (!(fabs(r) < 9007199254740992.0)) { snprintf(d, n, "%.0f", r); return; }
+        q = (unsigned long long)fabs(r);
+        *o = 0;
+        do {
+            if (k && k % 3 == 0) *--o = ',';
+            *--o = (char)('0' + q % 10);
+            q /= 10;
+            k++;
+        } while (q);
+        snprintf(d, n, "%s%s", r < 0 ? "-" : "", o);
     }
 }
 
@@ -580,8 +657,8 @@ static double chip_h(const C* c)
     return U(c, 1) + U(c, 24) + ts(c, R_CHIP, c->l->g.line).L + U(c, 1);
 }
 
-/* A chip for unit `k` at (x, y): its picture over its label, the label cut with an ellipsis to the
-   chip's width; its outline by what the unit is (.chip.up, .has, .sel). Returns its width. */
+/* A chip for unit `k` at (x, y): its picture over its label, the label cut with three periods to
+   the chip's width; its outline by what the unit is (.chip.up, .has, .sel). Returns its width. */
 static double chip(C* c, int k, double x, double y, const UIR* clip, int emit)
 {
     const WIKITECHTREE* T = c->st->tech;
@@ -626,7 +703,7 @@ static double chip(C* c, int k, double x, double y, const UIR* clip, int emit)
 }
 
 /* `n` chips of order indices `ks` as a wrapping flex row, `w` wide at (x, y), the chips' gap between,
-   with `sep` (the walk's ›) between each two; returns its height */
+   with `sep` (the walk's ») between each two; returns its height */
 static double chips(C* c, const int32_t* ks, int n, int sep, double x, double y, double w, const UIR* clip, int emit)
 {
     const double gap = U(c, 1), ch = chip_h(c), cw = U(c, 32);
@@ -922,16 +999,20 @@ static void unit_panel(C* c, UIR box)
 /* The theatre in the window's body: the tree's column, as wide as on the normal page and the body's
    whole height, with the entry's demos under its row (tree_rows); beside it, the layout's gap
    between, a grid column of the stage's bezel, which takes what the others leave, the row and the
-   caption; then About over the stage.
+   caption; then About or the unit's panel over the stage, built last of all (see below).
 
    THE ROW (#t-row) is a flex row, the controls' gap between its items: the badge when locked, the
    demo's title, and the controls with About. The title is the one item that grows and
    shrinks (flex 1 1 0): it takes the row's free space and clips its line to it, so every control
    keeps its size and place whatever the title. `row_cut` says the fixed part did not fit.
 
-   ABOUT'S ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, which the wiki's pass
-   in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that it lies over, and which
-   the hit map (tagpu_wikistate.c) puts before every other control. */
+   ABOUT'S AND THE UNIT PANEL'S ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own,
+   which the wiki's pass in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that it
+   lies over, and which the hit map (tagpu_wikistate.c) puts before every other control. The
+   theatre only places it (`top_box`, `top_kind`) and sets the cover; tagpu_wikilay_build builds it
+   after the window and the wiki button, so the one list whose ops and hits grow with a mod's
+   menus is the last into the frame's bounds: if a panel ever overflowed them, what it dropped
+   would be its own, never the window's controls. */
 static void theatre(C* c, UIR body)
 {
     const WG* g = &c->l->g;
@@ -968,18 +1049,17 @@ static void theatre(C* c, UIR body)
 
     caption(c, sbox.x, ry + row_h + gap, sbox.w);
 
-    c->u.top = 1;
     {
-        /* About, or the tech tree's unit panel, in one place over the stage's right: never both */
-        const double wa = ui_lu(sbox.w * g->theatre_about / 100);
+        /* About, or the tech tree's unit panel, in one place over the stage's right: never both;
+           its share of the bezel, at most theatre.about_max units (#about, #unit max-width) */
+        const double wa = fmin(ui_lu(sbox.w * g->theatre_about / 100), U(c, g->theatre_about_max));
         const UIR pb = ui_rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
                                sbox.h - U(c, g->bz[0]) - U(c, g->bz[2]));
         const int unit = !about && tech && c->st->tech && c->st->tech_sel >= 0 && c->st->tech_sel < c->st->tech->n;
-        if (about) about_panel(c, pb);
-        else if (unit) unit_panel(c, pb);
+        c->top_kind = about ? TOP_ABOUT : unit ? TOP_UNIT : TOP_NONE;
+        c->top_box = pb;
         if (about || unit) c->fr->cover = (float)(pb.x / c->u.px);
     }
-    c->u.top = 0;
 }
 
 /* ---- the window (#win): its part, title and close, and the body's three columns --------------- */
@@ -1077,15 +1157,27 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
     /* WIKI_MAXHOT, the bound: H is 720 units, so a list's scroller is under 720 units tall, and a row
        with its gap after it is at least layout.json's row.h + row.after, 17.5 today, which puts at
        most 42 rows of each list on screen -- 84 -- beside the window's own 11 controls and the
-       button: under WIKI_MAXHOT, so no control on screen goes without its hit. */
+       button. The tech tree's unit panel adds its chips and its 11 controls (the close, the view,
+       at most 8 actions, the scroller): a chip is 32 units wide with 1 between, in a column at
+       most theatre.about_max (400) wide, so at most 12 a row; it is at least 26 units tall with
+       1 between, so at most (720 + 2 * 26 + 1) / 27 < 29 rows of chips meet the scroller's view
+       -- 336 chips. 84 + 12 + 336 + 11 = 443: under WIKI_MAXHOT, so no control on screen goes
+       without its hit, at any aspect. */
     ui_begin(&c->u, out, f, l->style, l->light, (double)st->H / 720, WIKI_MAXHOT);
     c->l = l; c->d = d; c->st = st; c->fr = fr;
     memset(fr, 0, sizeof *fr);
     out->n = out->nrun = out->ntext = out->overflow = out->ngrp = 0;
     out->first = out->last = 0;
     out->track_x0 = out->track_x1 = 0;
+    c->top_kind = TOP_NONE;
     if (st->open) window_(c);
     wiki_button(c);
+    if (c->top_kind != TOP_NONE) {
+        c->u.top = 1;
+        if (c->top_kind == TOP_ABOUT) about_panel(c, c->top_box);
+        else unit_panel(c, c->top_box);
+        c->u.top = 0;
+    }
     free(c);
     return 1;
 }
@@ -1343,6 +1435,11 @@ static int read_layout(WIKILAY* l, const TJV* L, char* err, size_t errn)
     g->text_para = ui_num(&x, "text", "para", -1);
     g->theatre_about = ui_num(&x, "theatre", "about", -1);
     g->theatre_min = ui_num(&x, "theatre", "stage_min", -1);
+    g->theatre_about_max = ui_num(&x, "theatre", "about_max", -1);
+    if (!x.bad && !(g->theatre_about_max > 0)) {
+        snprintf(err, errn, "wiki layout: theatre.about_max is not a width above 0");
+        x.bad++;
+    }
     if (!x.bad && !(g->theatre_about > 0 && g->theatre_about < 100)) {
         snprintf(err, errn, "wiki layout: theatre.about is not a share of the body above 0 and below 100");
         x.bad++;

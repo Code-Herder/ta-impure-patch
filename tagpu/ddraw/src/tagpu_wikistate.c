@@ -1184,7 +1184,7 @@ static int16_t dev(int o, double snapped)
 }
 
 /* the hit map's room: every page control, every stage HUD control and the question's four */
-_Static_assert(WIKI_MAXHOT == 160 && HUD_MAXHOT == 128, "TAGPU_CMD_WIKIHITS counts the page's and the HUD's controls");
+_Static_assert(WIKI_MAXHOT == 448 && HUD_MAXHOT == 128, "TAGPU_CMD_WIKIHITS counts the page's and the HUD's controls");
 _Static_assert(TAGPU_CMD_WIKIHITS == WIKI_MAXHOT + HUD_MAXHOT + 4, "the hit map holds every control drawn");
 
 /* one hit, in device pixels on the attachment; 0 when the map is full */

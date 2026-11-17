@@ -583,10 +583,21 @@ static void tech_zoom(double z, double px, double py)
 }
 
 /* a left press at client (cx, cy) on the tree's stage: held, to be a drag or a click */
+/* client point (cx, cy) on the tree's uncovered canvas, as the last frame drew it */
+static int tech_in_canvas(int cx, int cy)
+{
+    return cx >= s_hit.tech_cv[0] && cy >= s_hit.tech_cv[1] && cx < s_hit.tech_cv[0] + s_hit.tech_cv[2] &&
+           cy < s_hit.tech_cv[1] + s_hit.tech_cv[3];
+}
+
 static int tech_down(int cx, int cy, int real)
 {
     const WIKITECHTREE* T = tech_tree();
     if (!tech_entry() || !tech_drawn(T)) return 0;
+    /* only the canvas the tree is drawn uncovered on: a press on a panel's padding over the stage,
+       which has no control of its own, falls through to the stage's hit, and is the panel's, as
+       the mockup's #unit and #about take it */
+    if (!tech_in_canvas(cx, cy)) return 0;
     s_tdrag = 1;
     s_tdragReal = real;
     s_tmoved = 0;
@@ -630,10 +641,7 @@ static void tech_up(void)
 static int tech_wheel(double notches, int cx, int cy)
 {
     const WIKITECHTREE* T = tech_tree();
-    if (!tech_entry() || !tech_drawn(T)) return 0;
-    if (cx < s_hit.tech_cv[0] || cy < s_hit.tech_cv[1] || cx >= s_hit.tech_cv[0] + s_hit.tech_cv[2] ||
-        cy >= s_hit.tech_cv[1] + s_hit.tech_cv[3])
-        return 0;
+    if (!tech_entry() || !tech_drawn(T) || !tech_in_canvas(cx, cy)) return 0;
     tech_zoom(tech_cam_now().z * exp(-notches * 100 * 0.0015), cx - s_hit.tech_cv[0], cy - s_hit.tech_cv[1]);
     return 1;
 }
@@ -648,6 +656,10 @@ static int tech_pick_chip(int k)
     if (!tech_drawn(T) || k < 0 || k >= T->n || (h = tagpu_wikitech_home(T, k)) < 0) return 0;
     s_tsel = k;
     s_about = 0;
+    /* the panel keeps the scroll it was drawn at, as the browser keeps #unit's scrollTop held to
+       the limit of what it showed: the asked one may be past that limit */
+    if (s_scroll[TAGPU_WIKI_SCROLL_UNIT] > s_hit.scroll[TAGPU_WIKI_SCROLL_UNIT])
+        s_scroll[TAGPU_WIKI_SCROLL_UNIT] = s_hit.scroll[TAGPU_WIKI_SCROLL_UNIT];
     {
         const double* p = T->pos[T->card[h]];
         const double u = s_hit.u > 0 ? s_hit.u : 1, z0 = tech_cam_now().z, z = z0 > u ? z0 : u;
@@ -2441,11 +2453,13 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
         s_hit.bar[i].per_px = bounded(s_hit.bar[i].per_px, 1e6f);
     }
-    /* the tech tree as drawn: a zoom inside the render thread's own range, a corner as far as it
-       draws one (tagpu_wikistate.c tech_stage), a canvas on the screen; anything else is no tree */
+    /* the tech tree as drawn: a floor inside the render thread's own range, a zoom it can draw -- a
+       fitted one is not held to 4:1 (tagpu_wikistate.c tech_stage fits a one-column tree at 12
+       pixels a unit at 1080p), only finite and positive; the game thread's own steps clamp
+       theirs -- a corner as far as it draws one, a canvas on the screen; anything else is no tree */
     s_hit.tech = (uint8_t)(s_hit.tech != 0);
     s_hit.tech_lo = bounded(s_hit.tech_lo, 4 * s_hit.u);
-    s_hit.tech_cam[0] = bounded(s_hit.tech_cam[0], 4 * s_hit.u);
+    s_hit.tech_cam[0] = bounded(s_hit.tech_cam[0], 1e6f);
     for (i = 1; i < 3; i++)
         if (!(s_hit.tech_cam[i] > -1e7f && s_hit.tech_cam[i] < 1e7f)) s_hit.tech_cam[i] = 0;
     for (i = 0; i < 4; i++) s_hit.tech_cv[i] = bounded(s_hit.tech_cv[i], 32767);

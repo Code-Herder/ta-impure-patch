@@ -1908,7 +1908,7 @@ draws it.
   and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 768 bytes with
   it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
   each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
-  fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about` and
+  fog bits, the record 4 600, the head 352, sizeof on the DLL's compiler), with the theatre's `about` and
   `leave_held` and the replay's serial `rep_serial` in the head, a count the game thread
   increments whenever it makes or frees the replay. The reader takes `frame` only from an area of the whole size
   (`tagpu_pk_wiki_frame`). In Try it on a live frame it also answers, once a fill, whether the
@@ -1926,9 +1926,10 @@ draws it.
   of the record's `bar`: on a live frame the economy moves those about once a tick), bumping a
   generation `tagpu_vk_hud.c` sends whole as `HUD_TEX_BAR` (`HOP_BAR` ops); splits the frame's TOP
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
-  (About), the question, the stage HUD cut to the canvas, the page. Each hit carries
+  (About or the tech tree's unit panel), the question, the stage HUD cut to the canvas, the page. Each hit carries
   its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
-  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 132 bytes), with the stage HUD's playhead run
+  `TAGPU_CMD_WIKIHITS` is 448 + 128 + 4 (the record 19 924 bytes; the page's 448 hold every chip
+  the unit panel can show, `tagpu_wikilay.c`'s bound), with the stage HUD's playhead run
   as drawn, the end it stood for, on a live strip the span it stood for (`hud_first`, `hud_G`:
   first to max(G, first), the record's; 0, 0 on any other frame), on a takeover's watching frame
   with the lanes open **the lanes it drew** (`nlane`, `lane_id[3]`: the fork each lane showed, in
@@ -2309,7 +2310,7 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   (`tagpu_wikistate.c`) to draw, so neither reads the other's.
 - **The view is the game thread's**: the pick, fitted or not, the camera, All links
   (`TAGPU_PK_WIKI` `tech_*`). The render thread bounds each as data, fits the tree to the canvas
-  less what About covers (`WIKIFRAME.cover`), and posts back the camera it drew, the zoom's floor
+  less what About or the unit's panel covers (`WIKIFRAME.cover`), and posts back the camera it drew, the zoom's floor
   and the canvas in client pixels (`TAGPU_CMD_WIKI` `tech_*`); every drag, notch and click is read
   against those, the tree the player saw. A left press on the stage that moves 4 client pixels is
   a drag, the camera following the pointer; one that does not is a click, which picks the card or
@@ -2322,7 +2323,16 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   `tagpu_hudtext_width`; the mockup draws its cards in the same faces (`wiki.js` `techFont`), so
   the one-line clips fall where the game's do, each cut with three periods.
 - **The unit's panel** is the page's (`tagpu_wikilay.c` `unit_panel`), in About's place and the
-  page's top layer, never with About: the render thread hands the layout its own tree and the
+  page's top layer, never with About, and built after the window's controls so that nothing it
+  holds can take their room in the frame's bounds. Its box (and About's) is at most
+  `theatre.about_max` units wide (400, the mockup's `max-width`), so a row holds at most 12
+  chips at any aspect and the page's hits (`WIKI_MAXHOT`, 448) hold every control a frame can
+  show; `wikilaycheck.py --check-only` builds every unit's panel of every setup, at every scroll
+  and on screens from 4:3 to 48:9 and 4K, and measures the most a frame took (MEASURED
+  2026-11-17: 93 hits, 397 ops of 4096, 122 runs of 2048). A press on its padding, which has no
+  control, is not the tree's (`tech_down` takes only the uncovered canvas). The figures are set
+  as `toFixed` sets them, from the double's exact value (`js_fixed`), and the amounts as
+  `toLocaleString('en')`. The render thread hands the layout its own tree and the
   pick bounded by its walk (`WIKIPAGE.tech`, `tech_sel`), and the layout sets wiki.js
   `techPanel`'s column -- the header, the view's rect and its actions, the figures' grid, the
   weapons, the walk, the builders, the upgrades and the builds by kind -- scrolling as one panel

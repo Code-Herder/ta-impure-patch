@@ -132,6 +132,8 @@ CASES = [
     ("1440-esc-unit-upgradable", (2560, 1440), "mod=escalation&entry=techtree&unit=armhlt", {"scroll": {"unit": "half"}}),
     ("4k-tazero-unit-flier", (3840, 2160), "mod=tazero&entry=techtree&unit=gokt1aircon", {}),
     ("1024-mayhem-unit-ship", (1024, 768), "mod=mayhem&entry=techtree&unit=armcs", {"scroll": {"unit": "max"}}),
+    # 21:9: the panel at theatre.about_max, not its share; ARMCK's speed 1.325 is 1.32 in toFixed, a figure the product rounds up
+    ("3440-esc-unit-builder", (3440, 1440), "mod=escalation&entry=techtree&unit=armck", {}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}

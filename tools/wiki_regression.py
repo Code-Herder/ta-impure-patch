@@ -306,7 +306,8 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
   (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer, and a
     click on the zoomed tree picks the card under it;
-  (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, the wheel over it
+  (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, a click on its
+       padding leaves the pick, the wheel over it
     scrolls it, and its close button closes it;
   (tt6) Fit returns to the open's fitted camera; All links turns on and off;
   (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes.
@@ -4061,6 +4062,12 @@ def techtree(c, shots, res):
     assert d["tech"]["cam"][0] >= d["u"] - 1e-4, f"(tt5) a chip's pick left the zoom under 1:1: {d['tech']['cam'][0]} < {d['u']}"
     if shots:
         grab(c, shots / f"techtree-{res}-panel.png")
+    # a click on the panel's padding, beside its scroller, is the panel's: the tree under it is not picked on
+    r = c.hit(d, "scroll:unit")
+    c.keys(f"dclick:{r[0] - 3},{(r[1] + r[3]) // 2}")
+    d = wait_dump(c, lambda d: d["tech"]["drawn"], "(tt5) no frame after the click on the panel's padding")
+    assert d["tech"]["sel"] == k3 and any(h["key"] == "uclose" for h in d["hits"]), \
+        f"(tt5) a click on the panel's padding reached the tree: the pick is {d['tech']['sel']}, not {k3}"
     if d["scroll_max"][3] > 0:
         x, y = c.centre(c.hit(d, "scroll:unit"))
         c.keys(f"dwheel:{x},{y},-1")

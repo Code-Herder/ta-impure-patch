@@ -144,7 +144,7 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #win.theatre #ctl { flex: none; }
 #about { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); box-sizing: border-box; }
 #about[hidden] { display: none; }
-#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); display: flex; flex-direction: column;
+#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); max-width: calc(var(--w-theatre-about_max) * var(--u)); display: flex; flex-direction: column;
   gap: calc(var(--w-entry-gap) * var(--u)); padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
   calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
 #win.theatre #p-text { flex: 1 1 0; }
@@ -180,7 +180,7 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #win.techtree #stage { cursor: grab; }
 #win.techtree #stage.drag { cursor: grabbing; }
 #unit { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); right: calc(var(--bz-r) * var(--u));
-  width: calc(var(--w-theatre-about) * 1%); box-sizing: border-box; display: flex; flex-direction: column;
+  width: calc(var(--w-theatre-about) * 1%); max-width: calc(var(--w-theatre-about_max) * var(--u)); box-sizing: border-box; display: flex; flex-direction: column;
   padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
   calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
 #unit[hidden] { display: none; }
