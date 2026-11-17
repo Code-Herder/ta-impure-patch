@@ -28,6 +28,8 @@ Every landing follows the repository's rules: review at the level the diff calls
 
 The plan of record from 2026-11-15 on. Each item names what closes it; the [roadmap page](https://claude.ai/artifact/MUcwBo6NzUdRjquhRHbfqQ) is a view of this section, not its source.
 
+**The release freeze (owner's decisions, 2026-11-16).** The brain freezes after the fix of review `fix-review-b3e84cac` (the sea squad's retreat): one more brain commit, its review, the per-batch loop, then the release gates and the landing on `main`. The release ships with ImpAI as the default AI and its levels as they are: every level beats OTA AI at Hard (round 3: Hard 100 of 100, Normal 1.000, Easy 0.996), while Normal and Hard play about evenly against each other (`hn` 33 to 34) -- the ladder stays unmet for this release and the levels' calibration (item 2) follows it. The naval turtle, the air rush's anti-air, the exploiter puzzles and the remaining held-out maps move to after the release.
+
 1. **Per-seat contacts.** Merge local `main` (per-seat radar and sonar, `tagpu_seatcontact_scan`, [allied sharing](../modules/allied-sharing.html), *For a skirmish AI*) and take ImpAI's contacts from the scan for its own seat. Closed when no ImpAI read of `+0x110` bits 8-10 or of the radar pass for the viewed player is left, and the regression set and the `hota` win check pass on the merged build.
 2. **The levels ordered.** Round 3 (57d39d71, `.data/impai/runs/r3/57d39d71/`) met Hard 100 of 100, Normal 1.000 and Easy 0.996 against OTA AI Hard (no ceiling, [the bar](bar.html), *The rules*), and row check b4. It did not order the levels:
    - **hn**: Hard won 33, lost 34, with 33 at the cap; the ordering is futile at its first look.
