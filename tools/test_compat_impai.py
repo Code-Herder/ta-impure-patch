@@ -88,6 +88,7 @@ class Claim(unittest.TestCase):
 BATTLE = "\n".join([
     "impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE",
     "impai: seats 1 (impure.cfg) of 2 records",
+    "scenario: applier armed, tick detour at 0x004969D2 -> stub 1DE60000",
     "scenario: applied=401 failed=0 cleared=2 orders=2/2 errors=0",
     "impai: mil seat=1 t=640 attack=1 raid=0 scout=0 retreat=0 safe=0 dgun=0 leash=0 army=200",
 ])
@@ -114,11 +115,28 @@ class Battle(unittest.TestCase):
         text = BATTLE.replace("impai: seats 1 (impure.cfg) of 2 records", "impai: seats 1,3 (impure.cfg) of 4 records")
         self.assertEqual(tacompat.battle_impai_misses(text, [1]), [])
 
-    def test_a_task_before_the_units_were_placed_does_not_count(self):
+    def test_a_task_before_the_applier_was_armed_does_not_count(self):
         lines = BATTLE.splitlines()
-        text = "\n".join(lines[:2] + [lines[3], lines[2]])
+        text = "\n".join(lines[:2] + [lines[4], lines[2], lines[3]])
         self.assertEqual(tacompat.battle_impai_misses(text, [1]),
                          ["ImpAI's military began no task for seat 1 in the fight"])
+
+    def test_a_task_between_the_arming_and_the_applied_line_counts(self):
+        # MEASURED 2026-11-17, managed-mayhem: the seat's attack logged before the render frame's `applied=` line
+        lines = BATTLE.splitlines()
+        text = "\n".join(lines[:3] + [lines[4], lines[3]])
+        self.assertEqual(tacompat.battle_impai_misses(text, [1]), [])
+
+    def test_a_log_without_the_arming_line_counts_from_the_applied_line(self):
+        lines = BATTLE.splitlines()
+        text = "\n".join(lines[:2] + [lines[4], lines[3]])
+        self.assertEqual(tacompat.battle_impai_misses(text, [1]),
+                         ["ImpAI's military began no task for seat 1 in the fight"])
+
+    def test_a_log_with_two_applies_is_named(self):
+        text = BATTLE + "\nscenario: applied=401 failed=0 cleared=2 orders=2/2 errors=0"
+        self.assertIn("the battle's log holds 2 scenario applies; the fight's start is known only for one",
+                      tacompat.battle_impai_misses(text, [1]))
 
     def test_the_judge_names_it_unless_impai_is_unavailable_by_expectation(self):
         o = {"battle": {"ok": True, "impai_seat": ["ImpAI's military began no task for seat 1 in the fight"]}}
