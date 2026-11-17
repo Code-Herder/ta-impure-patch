@@ -699,6 +699,22 @@ the approval, each with its evidence; the owner may reverse any of them:
   thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea
   scout sees 280 px, less than a destroyer's 330, so on Gods of War it sees no farther inland than the navy (the
   naval turtle: [the bar](bar.html), *The exploiter suite*).
+- **One air scout a seat** (owner's decision, 2026-11-17: yes to one unarmed air scout per seat, an explicit
+  exception to *No army class without damage*). An aircraft of role SCOUT that deals nothing -- CORFINK, ARMPEEP,
+  the AWACs, the seaplane scouts -- takes the air scout's class, and the seat buys one, under *The scout is one*,
+  while a known or expected enemy area -- a start that can hold an enemy's base, or the base's estimate -- is out of
+  sight of every land and sea army unit the seat has: none reaches it, and none's nearest point of its own
+  component lies within its sight distance of it (THE BLIND SPOT). The scout flies there first, beside any scout of
+  another layer, and what it sees becomes rows the ships shell from memory (the stand-off's ground attack). The air
+  plant stays never-first: the scout comes from an air plant the plant rules already give (on an island, *air past
+  two sea plants*). **Why**: on Gods of War the enemy commander and its west tower stand ~370 and ~415 px from the
+  nearest water, past every ship's sight, so nothing the seat bought saw them to the cap (MEASURED 2026-11-17 at
+  bca430ab). **What it costs**: an air scout in an air FORM squad is weighed in that layer's waves as any unit --
+  its hp, no damage --, and goes to defend with it; an enemy one presses nothing (THE PRESSURE takes armed members
+  only), and the fight content's digest changes with the class, so `predfit check` needs a refit to the same
+  coefficients. **What it does not reach**: the turtle's seat gets no air plant before the cap (its second sea
+  plant came at GameTime 8 587, metal income 9.7 at the cap, MEASURED at bca430ab), so there the scout waits on the
+  economy.
 - **A type is bought only if its weapons can hit a target class the seat knows or expects** (coordinator's call,
   2026-11-17, approving the brain writer's proposal). The classes are dry, floating, under the sea and air, as the
   engine's can-engage test sorts a target; known are those of the enemies the military counted within 5 400 ticks,
@@ -913,7 +929,8 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   Pin Cushion game, 4.6 % of the army's value at about four times a combat unit's build time per value
   (MEASURED). 17 retail types lose their class -- ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC,
   CORSPY, CORTRUCK, CORVOYR, CORVRAD, ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK, CORHUNT -- and over the six
-  contents no type that deals damage does. The scouting rule still prefers a land scout, now an armed one, and
+  contents no type that deals damage does. **The owner's one exception** (2026-11-17, *One air scout a seat* below):
+  the six air scouts take the air scout's class again. The scouting rule still prefers a land scout, now an armed one, and
   takes the fastest-quarter cheapest member when none stands. The class is part of the fight content's digest
   and enters no fight, so the predictor's coefficients refit to the same values under the new digest.
   **Not covered**: Total Mayhem gives its jammers and radar units a 720-damage vertical-launch rocket their scripts

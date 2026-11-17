@@ -1619,7 +1619,7 @@ static unsigned targets_bought_for(IMPAI_DEC* d)
    and the army's rows (THE ARMY'S ROWS) are left to the units that can finish. With no plant to make them the
    factories buy as usual: a dry hunt with no water it can reach would otherwise build no army at all.
    RESIDUAL: a water-weapon type with no sonar of its own sees nothing under the sea, and the finish then waits for
-   a sonar elsewhere. */
+   a sonar elsewhere. THE AIR SCOUT passes both filters: it is bought to see, not to hit (THE SCOUT FIRST). */
 static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1629,10 +1629,10 @@ static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
         const unsigned t = d->menu[k];
-        if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f) ||
-            !(impai_type_hits(&in->ti[t]) & want))
+        if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f)) continue;
+        if (in->ti[t].klass != IMPAI_K_ASCOUT && (!(impai_type_hits(&in->ti[t]) & want) ||
+                                                  (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2)))))
             continue;
-        if (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2))) continue;
         mt[m].type = (uint16_t)t;
         mt[m].klass = in->ti[t].klass;
         mt[m].pad = 0;
@@ -1956,15 +1956,22 @@ static uint32_t island_classes(IMPAI_DEC* d)
    WHY: a share is a share of what the layer can build, so the table's 0.05 grew to a sixth of a navy of destroyers
    and skeeters alone, and the cheapest type of a plant is often its scout: on Gods of War the seat built five CORPT
    and two destroyers by the cap (MEASURED 2026-11-17, exploit-naval-turtle at bf92df19 and 949ed052: classes
-   sraider:2, sscout:5). */
+   sraider:2, sscout:5).
+   ONE AIR SCOUT A SEAT (the owner's decision, 2026-11-17; decisions.md, *One air scout a seat*): the air's scout class
+   is wanted, whatever the table's share, while the military finds an enemy area out of sight of every land and sea
+   army unit of the seat (impai_blind, THE BLIND SPOT in impai_mil.c) -- an unarmed aircraft of role SCOUT takes the
+   class (impai_table.c, THE AIR SCOUT) --, and only then. The air plant it needs comes by the plant rules alone, never
+   first (THE ISLAND'S PLANT ORDER). */
 #define IMPAI_K_SCOUTMASK ((1u << IMPAI_K_LSCOUT) | (1u << IMPAI_K_SSCOUT) | (1u << IMPAI_K_ASCOUT))
 static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
 {
     static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT };
+    const int blind = d->in->mil && impai_blind(d->in->mil, d->now);
     unsigned i;
     for (i = 0; i < sizeof SK; i++) {
         const unsigned k = SK[i];
-        if ((eligible >> k & 1u) && share[k] > 0.0f && !(d->kspent[k] > 0.0f) && type[k] > 0) return (int)k;
+        const int wanted = k == IMPAI_K_ASCOUT ? blind : share[k] > 0.0f;
+        if ((eligible >> k & 1u) && wanted && !(d->kspent[k] > 0.0f) && type[k] > 0) return (int)k;
     }
     return -1;
 }

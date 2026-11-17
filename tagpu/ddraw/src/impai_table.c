@@ -55,11 +55,17 @@ unsigned impai_class_of(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out)
        out are 17 (MEASURED 2026-11-14 over the fight content -- no slot, or [DAMAGE] default and every row 0 --
        and over `tasim_run roles`' damage per second):
        ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC, CORSPY, CORTRUCK, CORVOYR and CORVRAD, which
-       were land scouts, and ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK and CORHUNT, which were air scouts. The
-       negated compares class a NaN as none. NOT CAUGHT HERE: a slot whose weapon deals damage but the engine
+       were land scouts, and ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK and CORHUNT, the air scouts, which THE AIR
+       SCOUT below classes again. The negated compares class a NaN as none. NOT CAUGHT HERE: a slot whose weapon deals damage but the engine
        never fires -- Total Mayhem's jammers carry a vertical-launch rocket their scripts have no aim script for
-       (research/notes/impai/decisions.md, No army class without damage). */
-    if (!(out->dps_ground > 0.0) && !(out->dps_air > 0.0)) return IMPAI_K_NONE;
+       (research/notes/impai/decisions.md, No army class without damage).
+       THE AIR SCOUT, the owner's one exception (decisions.md, *One air scout a seat*): an aircraft of role SCOUT
+       that deals nothing -- CORFINK, ARMPEEP, the AWACs, the seaplane scouts -- takes IMPAI_K_ASCOUT, so a seat can
+       buy its one air scout (impai_econ.c, THE SCOUT FIRST) to see what no land or sea unit of it can. No share
+       buys one (THE SCOUT IS ONE), and an enemy one presses nothing: THE PRESSURE and THE BASE'S THREATS take
+       only armed members (impai_mil.c). */
+    if (!(out->dps_ground > 0.0) && !(out->dps_air > 0.0))
+        return out->layer == TASIM_LAYER_AIR && out->role == TASIM_ROLE_SCOUT ? IMPAI_K_ASCOUT : IMPAI_K_NONE;
     switch (out->role) {
     case TASIM_ROLE_RAIDER: case TASIM_ROLE_ASSAULT: case TASIM_ROLE_ARTILLERY: case TASIM_ROLE_ANTIAIR:
     case TASIM_ROLE_SCOUT:

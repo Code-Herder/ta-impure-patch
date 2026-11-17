@@ -6794,6 +6794,42 @@ static void check_gov_scout_surplus(void)
     s_milp = NULL;
 }
 
+/* ONE AIR SCOUT A SEAT (impai_econ.c, scout_due, army_menu): a factory whose menu holds an air scout -- M_SCOUT of
+   the air scout's class, hitting nothing, the table's share of it 0 -- and the tank:
+   (a) THE BLIND SPOT stamped this tick: the order is the air scout, one unit, though it hits no target class;
+   (b) never stamped: the tank;
+   (c) stamped IMPAI_BLIND_HOLD + 1 ticks ago: the tank;
+   (d) stamped this tick, an air scout standing: the tank. */
+static void check_gov_air_scout(void)
+{
+    static const uint16_t MENU[] = { M_SCOUT, M_TANK };
+    static const char* const NAME[4] = { "(a) blind now", "(b) never blind", "(c) blind long ago",
+                                         "(d) blind now, a scout standing" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        int from;
+        gov_world(1);
+        menu_set(&s_w, T_FACTORY, MENU, 2);
+        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        s_ti[M_SCOUT].flags &= (uint8_t)~(IMPAI_TF_HITDRY | IMPAI_TF_HITWET | IMPAI_TF_HITAIR);
+        s_mil.table.base[IMPAI_K_ASCOUT] = 0.0f;
+        if (k == 2) s_w.gametime += 1800;      /* a multiple of the decisions' periods, past the hold */
+        s_mil.blind_t = k == 1 ? 0u : k == 2 ? (uint32_t)s_w.gametime - IMPAI_BLIND_HOLD - 1u : (uint32_t)s_w.gametime;
+        if (k == 3) unit_add(&s_w, 6, M_SCOUT, 34, 32, 1);
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        s_mil.table = IMPAI_TABLE_HAND;
+        printf("one air scout a seat, %s: scouts queued %d, tanks %d\n", NAME[k], queue_count(from, M_SCOUT),
+               queue_count(from, M_TANK));
+        if (!k) CHECK(queue_count(from, M_SCOUT) == 1 && !queue_count(from, M_TANK), "%s: one air scout", NAME[k]);
+        else CHECK(!queue_count(from, M_SCOUT) && queue_count(from, M_TANK) >= 1, "%s: the tank", NAME[k]);
+    }
+    s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_mil.blind_t = 0;
+    s_milp = NULL;
+}
+
 /* THE FIVE, bounded, and THE ARMY'S ROWS, on a budget of 8 with the store at 900 of 1 000 and the hold's line at
    200, so 700 metal above it, each factory's menu the gunship alone:
    (a) one factory, the gunship at 300 metal: two units in the order (700 / 300);
@@ -9635,29 +9671,45 @@ static void check_island(void)
    (a) two submarines, the second at 20 % of its health, an extractor's ghost known: the scout is the damaged one;
    (b) the healthy one alone, the ghost known: no scout, the layer's only healthy unit kept for its wave;
    (c) the healthy one alone, nothing known: the rule holds nothing -- it goes, here as the island's wave of one
-       to the start (no land enemy known, so the seat is on an island). */
+       to the start (no land enemy known, so the seat is on an island);
+   (d) (b) with a healthy destroyer of the sea scout class in an ATTACK squad: the scout class is not counted among
+       the healthy, so the submarine is still kept. */
 static void check_scout_healthy(void)
 {
-    static const char* const NAME[3] = { "(a) a damaged submarine beside a healthy one", "(b) one healthy, the enemy known",
-                                         "(c) one healthy, nothing known" };
+    static const char* const NAME[4] = { "(a) a damaged submarine beside a healthy one", "(b) one healthy, the enemy known",
+                                         "(c) one healthy, nothing known", "(d) (b) and a scout-class ship away" };
     IMPAI_MIL_OUT o;
     int c, k, s, sub;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 4; c++) {
         mil_world();
         mil_water(W_STRAIT);
         s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
         s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
         s_w.nstarts = 2;
         for (k = 0; k < (c ? 1 : 2); k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+        if (c == 3) {
+            s_ti[M_DEST].klass = IMPAI_K_SSCOUT;
+            own(41, M_DEST, 250, 40);
+            s_job[41].kind = IMPAI_JOB_SQUAD;
+            s_job[41].type = M_DEST;
+            s_job[41].squad = 1;
+            s_mil.sq[1].task = IMPAI_SQ_ATTACK;
+            s_mil.sq[1].layer = TASIM_LAYER_SEA;
+            s_mil.sq[1].target = (uint16_t)WQ_NONE;
+            s_mil.sq[1].tx = 145;
+            s_mil.sq[1].tz = 50;
+            s_mil.sq[1].since = (uint32_t)s_w.gametime;
+            s_mil.sq[1].counted = 1;
+        }
         if (!c) s_w.unit[41].hp = (int)s_w.defs[M_SUB].hp / 5;
-        if (c < 2) enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        if (c != 2) enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the last healthy unit's decision runs");
         for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
         for (sub = -1, k = 40; k < 42; k++) if (s >= 0 && s_job[k].kind == IMPAI_JOB_SQUAD && s_job[k].squad == s) sub = k;
         printf("the layer's last healthy unit, %s: scouts %u, the scout %d, attacks %u\n", NAME[c], o.scouts, sub,
                o.attacks);
         if (c == 0) CHECK(o.scouts == 1 && sub == 41, "%s: the damaged one scouts, %d", NAME[c], sub);
-        if (c == 1) CHECK(!o.scouts && s < 0, "%s: no scout", NAME[c]);
+        if (c == 1 || c == 3) CHECK(!o.scouts && sub < 0, "%s: no scout", NAME[c]);
         if (c == 2) CHECK(o.scouts + o.attacks == 1, "%s: it goes, %u scouts, %u attacks", NAME[c], o.scouts, o.attacks);
     }
 }
@@ -9683,6 +9735,119 @@ static void check_scout_sea_class(void)
     for (k = 40; k < 42; k++) if (s >= 0 && s_job[k].kind == IMPAI_JOB_SQUAD && s_job[k].squad == s) who = k;
     printf("the sea scout class: scouts %u, the scout %d\n", o.scouts, who);
     CHECK(o.scouts == 1 && who == 41, "the sea scout class scouts, %d", who);
+}
+
+/* THE BLIND SPOT and THE AIR SCOUT'S TRIP (impai_mil.c, blind_spot, scouting) on check_scout_layer's strait world,
+   the foe's start 10 blocks past the channel's east edge, two submarines in the channel, an extractor's ghost on
+   the west bank -- the estimate -- and a tank beside it, and an air scout -- M_SCOUT as a VTOL of the air scout's
+   class -- at home:
+   (a) the submarines' sight 0: the start is out of every land and sea unit's sight -- the blind spot stamped, and
+       the air scout goes to the start as a SCOUT squad of the air layer, beside the sea scout;
+   (b) their sight 400, past the 320 px from the channel's edge to the start: no blind spot, no air trip;
+   (c) (a) with the foe's start on the west bank, which the tank reaches: no blind spot (the air layer may still
+       scout as the third layer, SCOUTING);
+   (d) (a) with the air scout the air layer's only healthy unit and the enemy known: it still goes -- a scout is
+       never held as THE LAYER'S LAST HEALTHY UNIT;
+   (e) (b) without the tank: the start is in the ships' sight, the estimate -- the ghost on the west bank -- in no
+       unit's: the air scout goes to the estimate;
+   (f) (a) with the air scout built after the sea scout left: at the next decision it goes, the sea scout still out;
+   (g) (a) with the submarines built after the air scout left: at the next decision the sea scout goes, the air
+       scout still out. */
+static void check_air_scout_trip(void)
+{
+    static const char* const NAME[4] = { "(a) out of the ships' sight", "(b) in the ships' sight",
+                                         "(c) a land start the tank reaches", "(e) the estimate out of every sight" };
+    IMPAI_MIL_OUT o;
+    int c, k, s, air;
+    for (c = 0; c < 4; c++) {
+        mil_world();
+        mil_water(W_STRAIT);
+        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+        s_ti[M_SUB].sight = c == 1 || c == 3 ? 400 : 0;
+        s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+        s_w.starts[1] = c == 2 ? (WQ_START){ 1616, 1616, 1, 0 } : (WQ_START){ 4656, 1616, 1, 0 };
+        s_w.nstarts = 2;
+        for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+        own(42, M_SCOUT, 22, 22);
+        if (c < 3) own(7, M_TANK, 96, 96);
+        enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the air scout's decision runs");
+        for (s = -1, k = 0; k < IMPAI_SQUADS; k++)
+            if (s_mil.sq[k].task == IMPAI_SQ_SCOUT && s_mil.sq[k].layer == TASIM_LAYER_AIR) s = k;
+        air = s >= 0 && s_job[42].kind == IMPAI_JOB_SQUAD && s_job[42].squad == s;
+        printf("the air scout's trip, %s: blind_t %u, air squad %d, the plane in it %d, leg (%d, %d), scouts %u\n",
+               NAME[c], s_mil.blind_t, s, air, s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1,
+               s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1, o.scouts);
+        if (!c)
+            CHECK(s_mil.blind_t == (uint32_t)s_w.gametime && air && s_mil.sq[s].tx == 4656 / 32 &&
+                      s_mil.sq[s].tz == 1616 / 32 && o.scouts == 2,
+                  "%s: the blind spot stamped and the air scout sent there beside the sea scout", NAME[c]);
+        else if (c == 3)
+            CHECK(s_mil.blind_t == (uint32_t)s_w.gametime && air && s_mil.sq[s].tx == 1616 / 32 &&
+                      s_mil.sq[s].tz == 1616 / 32,
+                  "%s: the air scout sent to the estimate", NAME[c]);
+        else CHECK(!s_mil.blind_t && (c == 2 || s < 0), "%s: no blind spot, no air trip", NAME[c]);
+    }
+    s_ti[M_SUB].sight = 0;
+    mil_world();
+    mil_water(W_STRAIT);
+    s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+    s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.nstarts = 2;
+    own(42, M_SCOUT, 22, 22);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the lone air scout's decision runs");
+    air = s_job[42].kind == IMPAI_JOB_SQUAD && s_job[42].squad < IMPAI_SQUADS &&
+          s_mil.sq[s_job[42].squad].task == IMPAI_SQ_SCOUT;
+    printf("the air scout's trip, (d) the air layer's only healthy unit, the enemy known: scouting %d\n", air);
+    CHECK(air, "(d) the air scout is never held as the layer's last healthy unit");
+    mil_world();
+    mil_water(W_STRAIT);
+    s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+    s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.nstarts = 2;
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    own(7, M_TANK, 96, 96);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(f) the sea scout's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++)
+        if (s_mil.sq[k].task == IMPAI_SQ_SCOUT && s_mil.sq[k].layer == TASIM_LAYER_SEA) s = k;
+    own(42, M_SCOUT, 22, 22);
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(f) the air scout's decision runs");
+    air = s_job[42].kind == IMPAI_JOB_SQUAD && s_job[42].squad < IMPAI_SQUADS &&
+          s_mil.sq[s_job[42].squad].task == IMPAI_SQ_SCOUT;
+    printf("the air scout's trip, (f) built after the sea scout left: sea squad %d task %u, air scouting %d\n", s,
+           s >= 0 ? s_mil.sq[s].task : 99, air);
+    CHECK(s >= 0 && s_mil.sq[s].task == IMPAI_SQ_SCOUT && air, "(f) the air scout goes, the sea scout still out");
+    mil_world();
+    mil_water(W_STRAIT);
+    s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+    s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.nstarts = 2;
+    own(42, M_SCOUT, 22, 22);
+    own(7, M_TANK, 96, 96);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(g) the air scout's decision runs");
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(g) the sea scout's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++)
+        if (s_mil.sq[k].task == IMPAI_SQ_SCOUT && s_mil.sq[k].layer == TASIM_LAYER_SEA) s = k;
+    air = s_job[42].kind == IMPAI_JOB_SQUAD && s_job[42].squad < IMPAI_SQUADS &&
+          s_mil.sq[s_job[42].squad].task == IMPAI_SQ_SCOUT;
+    printf("the air scout's trip, (g) the submarines built after the air scout left: sea squad %d, air scouting %d\n",
+           s, air);
+    CHECK(s >= 0 && air, "(g) the sea scout goes, the air scout still out");
+    s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_ti[M_SCOUT].flags &= (uint8_t)~IMPAI_TF_VTOL;
 }
 
 static void check_scout_layer(void)
@@ -15366,6 +15531,7 @@ static void check_military(void)
     check_gov_refused();
     check_gov_surplus();
     check_gov_scout_surplus();
+    check_gov_air_scout();
     check_gov_five();
     check_gov_dry();
     check_army_targets();
@@ -15411,6 +15577,7 @@ static void check_military(void)
     check_dry_wave();
     check_island();
     check_scout_layer();
+    check_air_scout_trip();
     check_scout_healthy();
     check_dry_army_reach();
     check_dry_given_up();

@@ -224,7 +224,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_HITWET 0x40u           /* ... that is a waterweapon                                            */
 #define IMPAI_TF_HITAIR 0x80u           /* ... in an anti-air slot (tasim_roles_slot_antiair)                   */
 
-/* One type, 36 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 40 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
    ordered (DISASSEMBLED, engine/orders.md, *What each resolver mode answers*; impai_mil.c, can_attack) */
 #define IMPAI_TA_CANATTACK 0x01u    /* +0x245 bit 4 (0x43F154)                                             */
@@ -262,8 +262,11 @@ typedef struct IMPAI_TINFO {
                                    (TASIM_ROLE_IN.explode_aoe); 0 none                                          */
     uint16_t radar, sonar;      /* its radardistance and sonardistance, px (WQ_DEF_ECON): a sensor's coverage
                                    (impai_econ.c, THE SENSORS)                                                  */
+    uint16_t sight;             /* its sightdistance +0x202, px (TASIM_ROLE_IN.sight): THE BLIND SPOT's reach of
+                                   a land or sea unit's eyes (impai_mil.c)                                      */
+    uint16_t pad;
 } IMPAI_TINFO;
-_Static_assert(sizeof(IMPAI_TINFO) == 36, "IMPAI_TINFO is 36 bytes, as its comment says");
+_Static_assert(sizeof(IMPAI_TINFO) == 40, "IMPAI_TINFO is 40 bytes, as its comment says");
 
 /* THE TARGET CLASSES: where an enemy stands, as the can-engage test 0x49ABB0 sorts it for a weapon (DISASSEMBLED,
    engine/weapons.md, *The can-engage test*), bit g of a mask for class g:
@@ -860,6 +863,10 @@ typedef struct IMPAI_MIL {
        impai_persona_ok (tagpu_impai.c, seat_persona) */
     IMPAI_PERSONA persona;
     IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
+    /* THE BLIND SPOT (impai_mil.c, blind_spot): the GameTime of the last military decision that found an enemy area
+       out of sight of every land and sea army unit of the seat, 0 never; recorded data, read through
+       impai_blind. The economy then buys the seat's one air scout (impai_econ.c, THE SCOUT FIRST) */
+    uint32_t      blind_t;
 } IMPAI_MIL;
 /* THE ISLAND's byte is the one unreached[] was aligned past, so the record's size and every later field's offset
    are the ones recordings made before it hold */
@@ -879,6 +886,15 @@ static inline unsigned impai_tg_known(const IMPAI_MIL* m, uint32_t now)
     for (g = 0; g < IMPAI_TGS; g++)
         if (m->tg_t[g] && m->tg_t[g] <= now && now - m->tg_t[g] <= IMPAI_TG_HOLD) mask |= 1u << g;
     return mask;
+}
+
+/* THE BLIND SPOT at GameTime now: 1 when the stamp (IMPAI_MIL.blind_t) is set, not past now and within
+   IMPAI_BLIND_HOLD of it -- the one reading of the recorded stamp */
+#define IMPAI_BLIND_HOLD 900            /* ticks a blind spot keeps the air scout wanted: thirty seconds, many
+                                           military decisions [hand-written: the bar's to move]                 */
+static inline int impai_blind(const IMPAI_MIL* m, uint32_t now)
+{
+    return m->blind_t && m->blind_t <= now && now - m->blind_t <= IMPAI_BLIND_HOLD;
 }
 
 /* a seat's military at a level's start: no squad, no estimate; the level, the persona and the table given */

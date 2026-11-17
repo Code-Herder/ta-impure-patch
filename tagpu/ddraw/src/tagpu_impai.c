@@ -824,6 +824,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         impai_tinfo_attack(&in[t], &s_tinfo[t]);
         s_tinfo[t].blast_r = (uint16_t)(in[t].explode_aoe / 2u);
+        s_tinfo[t].sight = in[t].sight;
         dguns += s_tinfo[t].dgun_range > 0;
         attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
         blasts += s_tinfo[t].blast_r > 0;
