@@ -30,7 +30,7 @@ enum { I_BG    = RGB24(0x2a, 0x2c, 0x25), I_HEAD  = RGB24(0x33, 0x35, 0x2d), I_R
        I_ALSO  = RGB24(0x6a, 0x70, 0x58), I_PATH  = RGB24(0x7f, 0xc4, 0xe8), I_KID  = RGB24(0x9f, 0xd6, 0x8a),
        I_SEL   = RGB24(0xe8, 0xc6, 0x6a), I_UP    = RGB24(0xc9, 0x8a, 0xe0), I_PIC  = RGB24(0x00, 0x00, 0x00),
        I_STAGE = RGB24(0x16, 0x18, 0x0f), I_SAY   = RGB24(0xb7, 0xb7, 0xae) };   /* the stage's fill and its message's
-                                                                                (wiki.js drawTech) */   /* the stage's fill and its message's (wiki.js drawTech) */
+                                                                                (wiki.js drawTech) */
 
 static uint32_t ink(TB* c, uint32_t rgb) { return rgb << 8 | (uint32_t)floor(c->ga * 255 + 0.5); }
 

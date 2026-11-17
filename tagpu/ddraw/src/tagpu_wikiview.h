@@ -52,6 +52,14 @@ typedef struct {
 /* Frame `frame`'s picture: 1 with what to draw, 0 when the frame has none. */
 int  tagpu_wikiview_hand(unsigned frame, TAGPU_WIKIVIEWHAND* h);
 
+/* THE UPLOAD THE VIEW OWES ON A FRAME WITH NO PICTURE: 1 with the atlas and the table (no vertices)
+   when the view baked this frame and the atlas has tiles due. The allowance waits on its consumer
+   (tagpu_gaf.h `tagpu_gaf_atlas_frame`), and a bake the allowance defers draws nothing: a view that
+   uploaded only with a picture would never send the tiles in the way of the next bake, and would say
+   "loading" for as long as the unit is picked. On the tech entry the view is the atlas's only
+   consumer. */
+int  tagpu_wikiview_owed(unsigned frame, TAGPU_WIKIVIEWHAND* h);
+
 /* The view's copy of the atlas is at `serial` (tagpu_gaf_atlas_ack; `keep` 0 when it holds none).
    The wiki's stage's unit pass acknowledges the same atlas on the frames it draws; the two never
    draw in one frame, and each takes the whole page when the tiles due since its own copy pass what

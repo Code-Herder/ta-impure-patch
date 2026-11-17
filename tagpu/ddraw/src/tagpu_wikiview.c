@@ -88,6 +88,7 @@ static unsigned      s_frame;
 static float         s_c[3], s_dist, s_yaw, s_pitch, s_zoom;
 static const unsigned char* s_pal;
 static unsigned      s_palSerial;
+static unsigned      s_palFrame = ~0u;  /* the frame s_pal was read for: the view bakes this frame  */
 /* the fit, kept for the body and the bake it was taken from */
 static int           s_fitBody = -1;
 static unsigned      s_fitSerial;
@@ -172,6 +173,7 @@ void tagpu_wikiview_frame(const TAGPU_FRAME* f)
     if (!u->ok || !u->model) { s_note = TAGPU_TV_NOTE_NOMODEL; return; }
     if (!(s_pal = tagpu_pal_engine())) return;
     s_palSerial = tagpu_pal_engine_serial();
+    s_palFrame = s_frame;
     if (!tagpu_wikiworld_units_begin(f)) return;
 
     /* THE RUN: the readers' walk of the model, every node inside the arena (the stage's rule) */
@@ -273,6 +275,16 @@ int tagpu_wikiview_hand(unsigned frame, TAGPU_WIKIVIEWHAND* h)
     h->yaw = s_yaw;
     h->pitch = s_pitch;
     h->zoom = s_zoom;
+    h->pal = s_pal;
+    h->palSerial = s_palSerial;
+    return 1;
+}
+
+int tagpu_wikiview_owed(unsigned frame, TAGPU_WIKIVIEWHAND* h)
+{
+    memset(h, 0, sizeof *h);
+    if (frame != s_palFrame || !tagpu_r3d_atlas_owed()) return 0;
+    if (!tagpu_r3d_atlas_view(&h->atlas) || !h->atlas.idx) return 0;
     h->pal = s_pal;
     h->palSerial = s_palSerial;
     return 1;

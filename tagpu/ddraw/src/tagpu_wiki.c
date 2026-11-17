@@ -698,6 +698,8 @@ static struct {
     double   yaw, pitch, zoom;
     int      drag, dx, dy;  /* a left press on the view is held; where it went down             */
     double   dyaw, dpitch;  /* the camera it went down on                                        */
+    int      dragReal;      /* by the real path: its release can be lost, and the first real move
+                               with the button up ends it (tagpu_wiki_message, WM_MOUSEMOVE)      */
 } s_tv = { NULL, -1, 0, TAGPU_TV_NOTE_LOADING, 0, 0, 0, 0, TAGPU_TV_TURN, 0, 0.7, 0.45, 1, 0, 0, 0, 0, 0 };
 
 static WIKICOBFACT tv_fact(void)
@@ -855,10 +857,11 @@ static void tv_action(const char* label)
 
 /* the orbit (unitview.js's pointer events): a press on the view takes the camera from the turn,
    a drag turns it 0.01 radians a pixel, the pitch held to +-1.4; the wheel moves it in and out */
-static int tv_down(int cx, int cy)
+static int tv_down(int cx, int cy, int real)
 {
     if (s_tv.body < 0) return 0;
     s_tv.drag = 1;
+    s_tv.dragReal = real;
     s_tv.dx = cx;
     s_tv.dy = cy;
     s_tv.dyaw = s_tv.yaw;
@@ -877,14 +880,15 @@ static void tv_move(int cx, int cy)
 static void tv_up(void) { s_tv.drag = 0; }
 
 /* a notch over the view: unitview.js's dist *= exp(deltaY * 0.001) at Chrome's 100 a notch, the
-   factor held to what a float carries */
+   factor held to the picture's bounds */
 static int tv_wheel(double notches, int cx, int cy)
 {
     char key[TAGPU_WIKI_KEY];
     if (s_tv.body < 0 || !hit(cx, cy, key) || strcmp(key, "uview")) return 0;
     s_tv.zoom *= exp(notches * 100 * 0.001);
-    if (s_tv.zoom < 1e-3) s_tv.zoom = 1e-3;
-    if (s_tv.zoom > 1e3) s_tv.zoom = 1e3;
+    /* the picture's own bounds (tagpu_wikiview.c): a factor past them would be notches that move nothing */
+    if (s_tv.zoom < 1.0 / 64) s_tv.zoom = 1.0 / 64;
+    if (s_tv.zoom > 64) s_tv.zoom = 64;
     return 1;
 }
 
@@ -2412,7 +2416,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
             else if (!strcmp(key, "close")) { held(key); wiki_close("the close button"); }
             else if (!strcmp(key, "wiki")) { held(key); wiki_close("the wiki button"); }
             else if (!strcmp(key, "stage") && tech_down(cx, cy, gx < 0)) {}
-            else if (!strcmp(key, "uview") && tv_down(cx, cy)) {}
+            else if (!strcmp(key, "uview") && tv_down(cx, cy, gx < 0)) {}
             else page_press(key);
         }
         return 1;
@@ -2560,6 +2564,7 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
            hands every TAGPU_M_LUP to tagpu_wiki_mouse), which ends its drag in release(). */
         if (s_drag >= 0 && s_dragReal && !(wp & MK_LBUTTON)) s_drag = -1;
         if (s_tdrag && s_tdragReal && !(wp & MK_LBUTTON)) s_tdrag = 0;
+        if (s_tv.drag && s_tv.dragReal && !(wp & MK_LBUTTON)) s_tv.drag = 0;
         if (s_open) { note_client(cx, cy); bar_drag(cy); tech_move(cx, cy); tv_move(cx, cy); try_pointer(cx, cy, 1, wp); }
         return s_open;
     case WM_MOUSEWHEEL:

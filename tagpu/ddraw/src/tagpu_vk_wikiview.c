@@ -624,6 +624,12 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s, cons
         if (n == 0) tagpu_vk_stage_drop(d, &s->stage);
     } else {
         if (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)a->dim * 4)) return 0;
+        plog(d, "wikiview: the whole atlas, %u KB, through the banded path - %s",
+             (unsigned)((VkDeviceSize)a->dim * rows * 4 / 1024),
+             !s_aHave ? "the first upload since the image was made"
+             : s_aPal != h->palSerial ? "a palette move"
+             : (int)(a->whole - s_aSerial) > 0 ? "the atlas was made again"
+             : "the tiles due since this copy pass what one frame sends");
         rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_aImg, s_aHave, a->idx, a->key, a->dim, 0, 0, a->dim, rows,
                                    h->pal, NULL);
         if (rc <= 0) return rc;
@@ -687,11 +693,9 @@ int tagpu_vk_wikiview_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     s_drawSlot = -1;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
-    if (!tagpu_wikiview_hand(d->frame, &h) || !tagpu_wikistate_uview(d->frame, s_vr, s_vc)) return 0;
-    if (h.nvert <= 0 || h.nvert > TAGPU_WV_MAXVERT || !h.pal) return 0;
-    vw = s_vr[2] - s_vr[0];
-    vh = s_vr[3] - s_vr[1];
-    if (vw < 1 || vh < 1 || vw > VIEW_MAX || vh > VIEW_MAX) return 0;
+    /* a frame with no picture still sends the tiles due: tagpu_wikiview_owed */
+    if (!tagpu_wikiview_hand(d->frame, &h) && !tagpu_wikiview_owed(d->frame, &h)) return 0;
+    if (h.nvert < 0 || h.nvert > TAGPU_WV_MAXVERT || !h.pal) return 0;
     if (h.atlas.dim < 1 || h.atlas.dim > ATLAS_MAX) return 0;
 
     if (s_state == ST_UNBUILT) {
@@ -713,7 +717,13 @@ int tagpu_vk_wikiview_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
         s_downOwed = 1;
         return 0;
     }
-    if (!s_aHave) return 0;
+    /* A FRAME WHOSE COPY DID NOT GO IS NOT DRAWN: its uvs may address cells painted this frame that
+       the device has not received (tagpu_vk_stage.h, WHAT A FRAME SAMPLES); the next frame sends it */
+    if (rc == 0 || h.nvert == 0) return 0;
+    if (!tagpu_wikistate_uview(d->frame, s_vr, s_vc)) return 0;
+    vw = s_vr[2] - s_vr[0];
+    vh = s_vr[3] - s_vr[1];
+    if (vw < 1 || vh < 1 || vw > VIEW_MAX || vh > VIEW_MAX) return 0;
     if (!buf_size(d, s, VOFF + (VkDeviceSize)h.nvert * VSTRIDE) || !target_size(d, s, vw * SS, vh * SS)) {
         plog(d, "wikiview: slot %u would not take a %dx%d view - the pass comes down", (unsigned)slot, vw, vh);
         s_state = ST_REFUSED;

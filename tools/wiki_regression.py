@@ -4133,14 +4133,20 @@ def techtree(c, shots, res):
     d = wait_dump(c, lambda d: d["tech"]["view"]["serial"] == v0["serial"] + 1 and d["tech"]["view"]["host"],
                   "(tt8) Reset made no new host")
     assert d["tech"]["view"]["act"] == 0x20, f"(tt8) Reset left the actions {d['tech']['view']['act']:#x}, not Turn alone"
-    yaw0 = d["tech"]["view"]["cam"][0]
     r = c.hit(d, "uview")
     cx, cy = c.centre(r)
+    # the first drag stops the turn, whose yaw runs until the press: only its pitch is exact; the second, on a
+    # still camera, is exact in both
     c.keys(f"ddown:{cx},{cy}", f"dmove:{cx + 40},{cy + 10}", f"dmove:{cx + 80},{cy + 20}", f"dup:{cx + 80},{cy + 20}")
     d = wait_dump(c, lambda d: not d["tech"]["view"]["act"] & 0x20, "(tt8) a drag on the view did not stop the turn")
     cam = d["tech"]["view"]["cam"]
-    assert abs(cam[0] - (yaw0 - 0.8)) < 0.2 and abs(cam[1] - (0.45 + 0.2)) < 1e-3, \
-        f"(tt8) a drag of 80,20 pixels left the camera at {cam}, not yaw {yaw0 - 0.8:.3f} and pitch 0.65"
+    assert abs(cam[1] - (0.45 + 0.2)) < 1e-3, f"(tt8) a drag of 80,20 pixels left the pitch at {cam[1]:.3f}, not 0.65"
+    yaw0 = cam[0]
+    c.keys(f"ddown:{cx},{cy}", f"dmove:{cx - 40},{cy}", f"dup:{cx - 40},{cy}")
+    d = wait_dump(c, lambda d: abs(d["tech"]["view"]["cam"][0] - yaw0) > 1e-4, "(tt8) a second drag did not turn the camera")
+    cam = d["tech"]["view"]["cam"]
+    assert abs(cam[0] - (yaw0 + 0.4)) < 1e-3 and abs(cam[1] - 0.65) < 1e-3, \
+        f"(tt8) a drag of -40,0 pixels on a still camera left it at {cam}, not yaw {yaw0 + 0.4:.3f} and pitch 0.65"
     c.keys(f"dwheel:{cx},{cy},1")
     d = wait_dump(c, lambda d: d["tech"]["view"]["cam"][2] < 0.99, "(tt8) a notch over the view did not move the camera in")
     print(f"wiki techtree: (tt8) the view of {d['tech']['sel_name']} drew {nv} vertices and ran {v0['pieces']} pieces; Walk moved them; Reset "
