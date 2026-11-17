@@ -12,7 +12,7 @@ SIM_FEATURE(impai_seat_rules, SIM_PUPPET_OWNER, "impai-handicap impai-observe im
 #define CTRL_AI     2
 #define CTRL_REMOTE 3
 
-void impai_seats_pick(const IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS], int network, unsigned seatai,
+void impai_seats_pick(const IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS], int network, int skirmish, unsigned seatai,
                       IMPAI_SEAT_PICK* out)
 {
     unsigned i;
@@ -34,7 +34,7 @@ void impai_seats_pick(const IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS], int network, un
     if (out->refused >= 0) return;
     for (i = 0; i < IMPAI_SEAT_RECS; i++)
         if (rec[i].active && rec[i].control == CTRL_AI && rec[i].ai_object &&
-            (network ? rec[i].named : (seatai >> i & 1u)))
+            (network ? rec[i].named : skirmish && (seatai >> i & 1u)))
             out->marks |= 1u << i;
 }
 

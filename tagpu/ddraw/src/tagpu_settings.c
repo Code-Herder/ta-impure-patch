@@ -156,10 +156,11 @@ static const Key s_key[TS_NKEYS] = {
     { "sensorview",  O_ONOFF, N(O_ONOFF), 1 },
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
-    /* no seat ImpAI's: every computer seat plays OTA AI, the stock AI */
-    { "seatai",      NULL,    0,          0 },
-    /* OTA AI, the stock AI, as `seatai`'s default is */
-    { "netai",       O_NETAI, N(O_NETAI), 0 },
+    /* every seat ImpAI's: a skirmish's computer seats play ImpAI, OTA AI one click on (the seat
+       button, tagpu_skirmish.c); a campaign mission's stay OTA AI (tagpu_impai.c, THE SEAT CHOICE) */
+    { "seatai",      NULL,    0,          0x3FF },
+    /* ImpAI first in the battle room, as `seatai`'s default is */
+    { "netai",       O_NETAI, N(O_NETAI), 1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];

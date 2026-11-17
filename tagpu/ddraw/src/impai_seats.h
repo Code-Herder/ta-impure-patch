@@ -48,10 +48,11 @@ typedef struct IMPAI_SEAT_PICK {
     int      refused;      /* the first type-3 record of a level that is not a network game, else -1  */
 } IMPAI_SEAT_PICK;
 
-/* The marks for one live level. `network`: the level is a network game (main+0x2A44 bit 0). `seatai`:
-   bit i, a skirmish's record i plays ImpAI; a network game reads each record's `named` instead. Bits past
+/* The marks for one live level. `network`: the level is a network game (main+0x2A44 bit 0). `skirmish`: it is
+   a skirmish (GameingState's mode 2, 0x435100). `seatai`: bit i, a skirmish's record i plays ImpAI; a network
+   game reads each record's `named` instead, and any other level -- a campaign mission -- marks none. Bits past
    the ten records are ignored. */
-void impai_seats_pick(const IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS], int network, unsigned seatai,
+void impai_seats_pick(const IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS], int network, int skirmish, unsigned seatai,
                       IMPAI_SEAT_PICK* out);
 
 /* 1 when the name field `name` (at most `cap` bytes, not necessarily terminated) begins IMPAI_NAME_PREFIX. */

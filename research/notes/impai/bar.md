@@ -451,5 +451,10 @@ sequential test that stops as soon as the games decide; `test_margin.py` holds i
 
 ## When the default flips
 
-At A2, once Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the 90 % ladder and the
-no-stall rule ([landings](landings.html)).
+**The default has flipped, with the ladder unmet, by the owner's decision** (2026-11-16, [landings](landings.html),
+*Next, in order*): ImpAI is the skirmish default -- `seatai`'s default every seat, the seat button's first computer
+step ImpAI, `netai`'s default `impai` ([ImpAI in the engine](../modules/impai.html), *The seat choice* and *The
+network choice*) -- and the levels ship as they are. The condition this section set, and which still measures the
+levels for a later release: Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the
+90 % ladder and the no-stall rule. Every harness launch writes `seatai` and `netai` itself, so the bar's games, the
+batch and the replay test groups play the seats they name, whatever the default.

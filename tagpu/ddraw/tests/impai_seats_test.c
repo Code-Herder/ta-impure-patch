@@ -1,6 +1,7 @@
-/* impai_seats_test.c -- the level init's seat choice (src/impai_seats.h) over hand-made records: skirmishes, the
-   network games the engine produces on each peer (engine/network.md, A computer seat in a network game) and the
-   states the rule refuses, the AI names and the level rule. Engine-free, so the same source builds natively, under AddressSanitizer and
+/* impai_seats_test.c -- the level init's seat choice (src/impai_seats.h) over hand-made records: skirmishes,
+   campaign missions, the network games the engine produces on each peer (engine/network.md, A computer seat in a
+   network game) and the states the rule refuses, the AI names and the level rule. Engine-free, so the same
+   source builds natively, under AddressSanitizer and
    UndefinedBehaviorSanitizer, and with the DLL's compiler under Wine (tests/impai_seats_test.py); each build
    prints the same transcript, which the driver compares. Exit 1 at the first case whose marks, remote AI seats,
    live count or refusal differ from what the case expects. */
@@ -31,7 +32,7 @@ static IMPAI_SEAT_REC rec_of(char c)
 typedef struct CASE {
     const char* name;
     const char* recs;           /* IMPAI_SEAT_RECS characters, rec_of's */
-    int network;
+    int network, skirmish;      /* `skirmish`: GameingState's mode 2 */
     unsigned seatai, named;     /* `named`: bit i, record i's name begins ImpAI: */
     const char* marks;          /* impai_seats_list's spelling */
     const char* remote_ai;
@@ -41,26 +42,30 @@ typedef struct CASE {
 } CASE;
 
 static const CASE CASES[] = {
-    { "skirmish, no seat chosen", "haa.......", 0, 0x000, 0x3FF, "none", "none", "none", 3, -1 },
-    { "skirmish, seatai 2", "haa.......", 0, 0x004, 0x000, "2", "none", "none", 3, -1 },
-    { "skirmish, seatai names a human and an empty record", "haa.......", 0, 0x009, 0x3FF, "none", "none", "none", 3, -1 },
-    { "skirmish, every seat", "haaaaaaaaa", 0, 0x3FF, 0x000, "1,2,3,4,5,6,7,8,9", "none", "none", 10, -1 },
-    { "skirmish, an AI seat with no AI object", "hao.......", 0, 0x006, 0x000, "1", "none", "none", 3, -1 },
-    { "skirmish, bits past the ten records", "haa.......", 0, 0xFFFFFC00u, 0x000, "none", "none", "none", 3, -1 },
-    { "skirmish, a remote record refuses", "har.......", 0, 0x002, 0x3FF, "none", "none", "none", 3, 2 },
-    { "skirmish, a remote AI record refuses", "hRa.......", 0, 0x006, 0x3FF, "none", "none", "none", 3, 1 },
+    { "skirmish, no seat chosen", "haa.......", 0, 1, 0x000, 0x3FF, "none", "none", "none", 3, -1 },
+    { "skirmish, seatai 2", "haa.......", 0, 1, 0x004, 0x000, "2", "none", "none", 3, -1 },
+    { "skirmish, seatai names a human and an empty record", "haa.......", 0, 1, 0x009, 0x3FF, "none", "none", "none", 3, -1 },
+    { "skirmish, every seat", "haaaaaaaaa", 0, 1, 0x3FF, 0x000, "1,2,3,4,5,6,7,8,9", "none", "none", 10, -1 },
+    { "skirmish, an AI seat with no AI object", "hao.......", 0, 1, 0x006, 0x000, "1", "none", "none", 3, -1 },
+    { "skirmish, bits past the ten records", "haa.......", 0, 1, 0xFFFFFC00u, 0x000, "none", "none", "none", 3, -1 },
+    { "skirmish, a remote record refuses", "har.......", 0, 1, 0x002, 0x3FF, "none", "none", "none", 3, 2 },
+    { "skirmish, a remote AI record refuses", "hRa.......", 0, 1, 0x006, 0x3FF, "none", "none", "none", 3, 1 },
+    /* a campaign mission (mode 1): its computer players stay OTA AI whatever seatai names */
+    { "campaign, every seat chosen", "haa.......", 0, 0, 0x3FF, 0x000, "none", "none", "none", 3, -1 },
+    { "campaign, seatai 2", "haa.......", 0, 0, 0x004, 0x3FF, "none", "none", "none", 3, -1 },
+    { "campaign, a remote record still refuses", "har.......", 0, 0, 0x3FF, 0x000, "none", "none", "none", 3, 2 },
     /* recmp_create_begin_test.py's game: the host's rows 0 and 2, the joiner's 1 and 3 */
-    { "host, its AI named ImpAI", "hraR......", 1, 0x000, 0x004, "2", "3", "none", 4, -1 },
-    { "host, its AI named AI", "hraR......", 1, 0x3FF, 0x000, "none", "3", "none", 4, -1 },
-    { "host, the joiner's AI named ImpAI", "hraR......", 1, 0x000, 0x008, "none", "3", "3", 4, -1 },
-    { "joiner, its AI on another row", "rh.aR.....", 1, 0x000, 0x018, "3", "4", "4", 4, -1 },
-    { "joiner, neither named", "rhRa......", 1, 0x000, 0x000, "none", "2", "none", 4, -1 },
-    { "network, seatai is not read", "hraR......", 1, 0x3FF, 0x000, "none", "3", "none", 4, -1 },
-    { "network, a human named ImpAI is no seat", "hraR......", 1, 0x000, 0x003, "none", "3", "none", 4, -1 },
-    { "network, only the named rows", "haaraR....", 1, 0x000, 0x00A, "1", "5", "none", 6, -1 },
-    { "network, no AI object", "hor.......", 1, 0x000, 0x3FF, "none", "none", "none", 3, -1 },
-    { "network, every remote record", "hrrrRRRRRa", 1, 0x000, 0x3FF, "9", "4,5,6,7,8", "4,5,6,7,8", 10, -1 },
-    { "network, empty", "..........", 1, 0x000, 0x3FF, "none", "none", "none", 0, -1 },
+    { "host, its AI named ImpAI", "hraR......", 1, 0, 0x000, 0x004, "2", "3", "none", 4, -1 },
+    { "host, its AI named AI", "hraR......", 1, 0, 0x3FF, 0x000, "none", "3", "none", 4, -1 },
+    { "host, the joiner's AI named ImpAI", "hraR......", 1, 0, 0x000, 0x008, "none", "3", "3", 4, -1 },
+    { "joiner, its AI on another row", "rh.aR.....", 1, 0, 0x000, 0x018, "3", "4", "4", 4, -1 },
+    { "joiner, neither named", "rhRa......", 1, 0, 0x000, 0x000, "none", "2", "none", 4, -1 },
+    { "network, seatai is not read", "hraR......", 1, 0, 0x3FF, 0x000, "none", "3", "none", 4, -1 },
+    { "network, a human named ImpAI is no seat", "hraR......", 1, 0, 0x000, 0x003, "none", "3", "none", 4, -1 },
+    { "network, only the named rows", "haaraR....", 1, 0, 0x000, 0x00A, "1", "5", "none", 6, -1 },
+    { "network, no AI object", "hor.......", 1, 0, 0x000, 0x3FF, "none", "none", "none", 3, -1 },
+    { "network, every remote record", "hrrrRRRRRa", 1, 0, 0x000, 0x3FF, "9", "4,5,6,7,8", "4,5,6,7,8", 10, -1 },
+    { "network, empty", "..........", 1, 0, 0x000, 0x3FF, "none", "none", "none", 0, -1 },
 };
 
 /* the names: the prefix test over a field, and the AI name the add and the toggle write */
@@ -92,12 +97,12 @@ int main(void)
             rec[i] = rec_of(k->recs[i]);
             rec[i].named = (uint8_t)(k->named >> i & 1u);
         }
-        impai_seats_pick(rec, k->network, k->seatai, &pick);
+        impai_seats_pick(rec, k->network, k->skirmish, k->seatai, &pick);
         impai_seats_list(pick.marks, marks);
         impai_seats_list(pick.remote_ai, remote);
         impai_seats_list(pick.remote_impai, rimpai);
-        printf("%-48s %s network=%d marks=%s remote_ai=%s remote_impai=%s live=%u refused=%d\n", k->name,
-               k->recs, k->network, marks, remote, rimpai, pick.live, pick.refused);
+        printf("%-48s %s network=%d skirmish=%d marks=%s remote_ai=%s remote_impai=%s live=%u refused=%d\n",
+               k->name, k->recs, k->network, k->skirmish, marks, remote, rimpai, pick.live, pick.refused);
         if (strcmp(marks, k->marks) || strcmp(remote, k->remote_ai) || strcmp(rimpai, k->remote_impai) ||
             pick.live != k->live || pick.refused != k->refused) {
             printf("FAIL %s: want marks=%s remote_ai=%s remote_impai=%s live=%u refused=%d\n", k->name, k->marks,

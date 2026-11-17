@@ -42,6 +42,9 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #define OFF_DIFFICULTY 0x37EEE     /* u32: 0 Easy, 1 Medium, 2 Hard (engine/sim.md)      */
 #define OFF_NETFLAGS 0x2A44        /* u8, bit 0: a network game (engine/ui.md, the network
                                       bit: set in the front end only, cleared in play)    */
+#define OFF_GSTATE   0x391E9       /* GameingState*: its +0 the game's mode, 0x435100's
+                                      answer: 1 campaign, 2 skirmish, 3 network           */
+#define MODE_SKIRMISH 2
 #define CTRL_AI      2
 
 #define IMPAI_ON     0x01u
@@ -2637,6 +2640,18 @@ static void impai_starts_line(void)
     tagpu_logf("%s", line);
 }
 
+/* the game's mode, GameingState's +0 (0x435100: `mov eax,[ecx]`): 1 campaign, 2 skirmish, 3 network; 0 with no
+   GameingState */
+static int game_mode(const char* ta)
+{
+    const char* gs;
+    int mode;
+    memcpy(&gs, ta + OFF_GSTATE, sizeof gs);
+    if (!gs) return 0;
+    memcpy(&mode, gs, sizeof mode);
+    return mode;
+}
+
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
    last store (0x497C62), which the game thread waits for before the level's first step: so the
@@ -2645,10 +2660,12 @@ static void impai_starts_line(void)
    the table, and the recorder is the only writer of what a recording carries.
    THE SEAT CHOICE (impai_seats.c, which has the rule) marks only a record the engine runs an AI for
    on this peer: seated, controller 2, its AI object +0x74 set, which 0x464990's player init
-   0x464700 builds for every record but an active type 3 (0x46489D..0x4648C1). In a skirmish the
-   records are impure.cfg's `seatai`, bit i for settings entry i, which is record i: the seat fill
-   0x47A760 activates record i for entry i on every path that seats a skirmish (engine/sim.md,
-   Seating a level). In a network game (main+0x2A44 bit 0) an AI seat is type 2 with its AI object
+   0x464700 builds for every record but an active type 3 (0x46489D..0x4648C1). In a skirmish -- GameingState's
+   mode 2, a new skirmish's or a loaded one's -- the records are impure.cfg's `seatai`, bit i for settings entry
+   i, which is record i: the seat fill 0x47A760 activates record i for entry i on every path that seats a
+   skirmish (engine/sim.md, Seating a level). Any other level that is not a network game -- a campaign
+   mission, mode 1 -- marks none: ImpAI is not built for a mission's scripts, and its computer players stay
+   OTA AI whatever `seatai` names. In a network game (main+0x2A44 bit 0) an AI seat is type 2 with its AI object
    only on the peer that added it and type 3 without one on every other (engine/network.md, A
    computer seat in a network game), and the seam 0x465031 runs only where +0x74 is set, so ImpAI
    plays a seat on its own peer alone, by the engine's structure: which of this peer's AI seats is
@@ -2670,7 +2687,7 @@ void tagpu_impai_level_init(void)
     IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
     IMPAI_SEAT_PICK pick;
     unsigned i;
-    int network;
+    int network, mode;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
     s_ovc.built = 0;
@@ -2687,7 +2704,8 @@ void tagpu_impai_level_init(void)
     if (!ta) return;
     seat_recs(ta, rec);
     network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
-    impai_seats_pick(rec, network, (unsigned)tagpu_settings_seatai(), &pick);
+    mode = game_mode(ta);
+    impai_seats_pick(rec, network, mode == MODE_SKIRMISH, (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         tagpu_logf("impai: seats none: record %d is remote outside a network game", pick.refused);
         return;
@@ -2708,8 +2726,11 @@ void tagpu_impai_level_init(void)
         tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s, "
                    "ImpAI's %s", list, tagpu_settings_netai() ? "impai" : "ota",
                    (unsigned)impai_seats_level(1, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote, rimpai);
-    } else {
+    } else if (mode == MODE_SKIRMISH) {
         tagpu_logf("impai: seats %s (impure.cfg) of %u records", list, pick.live);
+    } else {
+        tagpu_logf("impai: seats %s (mode %d, not a skirmish: impure.cfg's seatai not read) of %u records", list,
+                   mode, pick.live);
     }
 }
 
@@ -2737,8 +2758,9 @@ void tagpu_impai_level_init(void)
    THE THREAD AND THE ORDER: the loader thread is done (the level is in play), the render thread reads none
    of these tables (the overlay's fill runs on the game thread), and the players phase runs in a later step,
    so the table is whole before any turn reads it. The playing's level is single player (main+0x2A44 bit 0
-   is set only in the front end), so the rule reads `seatai`; after TK1 every recorded seat is type 1 or 2
-   with its AI object. */
+   is set only in the front end), so the rule reads `seatai`, as a skirmish's: a recording is made of a
+   skirmish or a network game only (tagpu_recorder.c, a capture starts at mode 2 or 3), so a takeover is never
+   a campaign mission's. After TK1 every recorded seat is type 1 or 2 with its AI object. */
 void tagpu_impai_takeover(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -2755,7 +2777,7 @@ void tagpu_impai_takeover(void)
         return;
     }
     seat_recs(ta, rec);
-    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0,
+    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0, 1,
                      before | (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         seats_set(0);
