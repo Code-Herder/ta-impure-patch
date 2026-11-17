@@ -1807,13 +1807,15 @@ static void side_commander_first(const MDEC* d, const SIDEIN* rest, uint16_t fla
     for (k = 0; k < rest->n && out->n < SIDE_IN; k++) out->e[out->n++] = rest->e[k];
 }
 
-/* the armed enemy structures within NEAR_DEF_PX of (x, z), seen or remembered */
-static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
+/* the armed enemy structures within NEAR_DEF_PX of (x, z), seen or remembered, but contact c's own members: a
+   side that holds contact c's members holds each structure once */
+static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z, int c)
 {
     int k;
     for (k = 0; k < d->nen; k++) {
         const MENEMY* e = &d->en[k];
-        if (!e->mobile && e->armed && dist(e->x, e->z, x, z) <= NEAR_DEF_PX) side_add(s, e->type, 65535);
+        if (!e->mobile && e->armed && e->contact != c + 1 && dist(e->x, e->z, x, z) <= NEAR_DEF_PX)
+            side_add(s, e->type, 65535);
     }
 }
 
@@ -1890,7 +1892,7 @@ static void side_contact(const MDEC* d, int c, SIDEIN* out)
     memset(out, 0, sizeof *out);
     for (e = d->ct[c].first; e >= 0; e = d->en[e].next)
         side_add(out, d->en[e].type != WQ_NONE ? d->en[e].type : d->sub, 65535);
-    side_defences(d, out, d->ct[c].x, d->ct[c].z);
+    side_defences(d, out, d->ct[c].x, d->ct[c].z, c);
 }
 
 /* a contact's member nearest (x, z), ties to the earlier in its list; -1 for a contact of none */
@@ -2005,8 +2007,8 @@ static int contact_counts(const MDEC* d, int c, MWEIGH* w)
     return 0;
 }
 
-/* side_contact restricted to the members that enter the side's stay-or-go, with the defences near the contact,
-   which are structures and so always enter */
+/* side_contact restricted to the members that enter the side's stay-or-go, with the defences near the contact
+   that are not its members, which are structures and so always enter */
 static void side_contact_counts(const MDEC* d, int c, MWEIGH* w, SIDEIN* out)
 {
     int16_t e;
@@ -2015,7 +2017,7 @@ static void side_contact_counts(const MDEC* d, int c, MWEIGH* w, SIDEIN* out)
         const uint16_t t = member_type(d, &d->en[e]);
         if (member_counts(d, w, t)) side_add(out, t, 65535);
     }
-    side_defences(d, out, d->ct[c].x, d->ct[c].z);
+    side_defences(d, out, d->ct[c].x, d->ct[c].z, c);
 }
 
 /* contact_nearest over the members that enter the side's stay-or-go; -1 for none */
@@ -2665,7 +2667,10 @@ static int split(MDEC* d, int s, const uint8_t* go)
    commander never touched (MEASURED 2026-11-17, a diagnostic build logging each wave's and each retreat's
    sides). RESIDUALS: the contact floods IMPAI_CONTACT_PX at a time over what is seen, so a base spread past
    GOAL_SIDE_PX is weighed short here and can still turn a wave back; the enemy's mobiles at its base are weighed
-   only once seen, the picture keeping no mobile it does not see now. A row whose type the fight content does not
+   only once seen, the picture keeping no mobile it does not see now. The other way, this side can be the
+   heavier, and a wave then waits where it would have won: the contact holds what is seen now, this side the
+   remembered unarmed structures too, and a remembered row stays until its block is lit again (impai_know.c), so a
+   structure destroyed out of sight is weighed here until the seat looks. A row whose type the fight content does not
    hold (no hp) is left out: the predictor refuses a side that holds it, and at the contact such a refusal takes
    no retreat either (tasks), so the two tests still agree. BOUND: the enemy rows, IMPAI_ENEMY_MAX, one
    member_counts each (memoized by type) */

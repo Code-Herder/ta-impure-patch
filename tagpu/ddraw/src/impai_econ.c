@@ -609,20 +609,28 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
      impai_tg_known: FLOAT or UNDER) -- or the metal lies at sea: the water patches a sea plant's constructor
      reaches (cons_patches) are at least the island's;
    - A LAND PLANT FIRST when the island is big enough that its constructors pay: at least ISLE_PATCHES open
-     patches a land plant's constructor reaches, and at least ISLE_BLOCKS blocks of its component within
-     ISLE_RINGS rings of the anchor -- the island's own measure, its reach label's area and the patches on it;
+     patches of THE ISLAND a land plant's constructor's extractor fits, more than the sea's, and at least
+     ISLE_BLOCKS blocks of THE ISLAND within ISLE_RINGS rings of the anchor. THE ISLAND is the base component
+     (base_label) of THE ISLAND'S CLASS (isle_class), the class most of the content's land army types travel by,
+     not the constructor's own: a hover or amphibious constructor's component spans the sea, and measured by it
+     the sea's blocks and patches read as the island's. With no such class -- no labels, or no land army type on
+     a labelled class -- the constructor's own class measures it. RESIDUAL: a sea plant whose constructor walks
+     the land too (a floating hover plant's) counts the island's patches as the sea's, which only leans to the
+     sea;
    - NEVER AN AIR PLANT FIRST (THE CANDIDATES' first plant), and aircraft eventually: on the island the plants past
      the first are the sea plant's while the seat holds fewer than ISLE_SEA_BEFORE_AIR sea plants or already has an
      air plant, and an air plant then.
    Only the plants it can make count: a plant on a builder's menu of the seat's, its constructor one that builds
-   an extractor. WHY: "Air first is often a bad idea and extremely hard to pull off even for a human. Whether you
+   an extractor; each plant type read once (looked[]), whatever builders offer it.
+   WHY: "Air first is often a bad idea and extremely hard to pull off even for a human. Whether you
    have a land plant first really depends on the size of the island to know if it's worth it" (the owner,
    2026-11-17): on Gods of War, an island of four patches, the seat's land plant cost the metal of 1.4 destroyers
    (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06), and an air plant makes constructors alone under the
-   default table (IMPAI_TABLE_HAND_INIT buys no aircraft). Once a decision (IMPAI_DEC.isle_order). BOUND: the
-   seat's builder types' menus, at most PLANT_LOOK plants and a plant menu read each, each constructor counted once
-   (ISLE_CONS kept; one past them is counted again) -- a menu read, a base label, at most (2 ISLE_SEA_RINGS + 1)^2
-   label reads and the published patches --, and (2 ISLE_RINGS + 1)^2 label reads for the area. */
+   default table (IMPAI_TABLE_HAND_INIT buys no aircraft). A tie of the two counts is the sea's. Once a decision
+   (IMPAI_DEC.isle_order). BOUND: the seat's builder types' menus, at most PLANT_LOOK distinct plants and a plant
+   menu read each, each constructor counted once a side (ISLE_CONS kept; one past them is counted again) -- a menu
+   read, a base label, at most (2 ISLE_SEA_RINGS + 1)^2 label reads and the published patches --, WQ_MCLASSES
+   counts and one base label for THE ISLAND, and (2 ISLE_RINGS + 1)^2 label reads for the area. */
 #define ISLE_SEA       1
 #define ISLE_LAND      2
 #define ISLE_SEA_RINGS 32       /* a constructor's water searched within 1 024 px of the anchor                */
@@ -635,8 +643,9 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
 /* the open patches constructor type `type` reaches (THE METAL'S REACH, counted): on its class's component at the
    base (base_label) -- for a class with no block in the base's rings, a ship's at a dry anchor, the first
    labelled block within ISLE_SEA_RINGS rings --, those an extractor of its own menu fits; its class and label
-   into *cls, *lab (-1: a VTOL or a class with no labels, every patch). Reads d->menu2. */
-static int cons_patches(IMPAI_DEC* d, unsigned type, unsigned* cls, int* lab)
+   into *cls, *lab (-1: a VTOL or a class with no labels, every patch). With isle_c >= 0 the component is THE
+   ISLAND instead, class isle_c's label isle_l (0: the anchor on none of its ground, no patch). Reads d->menu2. */
+static int cons_patches(IMPAI_DEC* d, unsigned type, unsigned* cls, int* lab, int isle_c, int isle_l)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO* t = &in->ti[type];
@@ -646,6 +655,11 @@ static int cons_patches(IMPAI_DEC* d, unsigned type, unsigned* cls, int* lab)
     *cls = t->mclass;
     *lab = -1;
     if (n <= 0 || !choose_mex(d, d->menu2, n, &mx)) return 0;
+    if (isle_c >= 0) {
+        *cls = (unsigned)isle_c;
+        *lab = isle_l;
+        return isle_l > 0 ? impai_patch_open_to(d, (unsigned)isle_c, isle_l, &mx) : 0;
+    }
     if (in->reach && !(t->flags & IMPAI_TF_VTOL) && t->mclass < WQ_MCLASSES) {
         const int bx = in->st->ax >> 1, bz = in->st->az >> 1;
         l = base_label(in->reach, t->mclass, bx, bz);
@@ -673,23 +687,39 @@ static int isle_blocks(const IMPAI_DEC* d, unsigned c, int lab)
     return n;
 }
 
+/* THE ISLAND'S CLASS: the labelled class with the most of the content's land army types (IMPAI_REACH.land_w),
+   ties to the lower; -1 none */
+static int isle_class(const IMPAI_REACH* r)
+{
+    int c, best = -1;
+    if (!r) return -1;
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if ((r->present >> c & 1u) && r->land_w[c] && (best < 0 || r->land_w[c] > r->land_w[best])) best = c;
+    return best;
+}
+
 static int isle_order(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    uint16_t plant[PLANT_MENU], ctype[ISLE_CONS];
-    int cnum[ISLE_CONS], clab[ISLE_CONS];
+    int ic, il;
+    uint16_t plant[PLANT_MENU], ctype[ISLE_CONS], looked[PLANT_LOOK];
+    int cnum[ISLE_CONS], clab[ISLE_CONS], cwet[ISLE_CONS];
     unsigned ccls[ISLE_CONS], land_cls = 0;
-    int b, k, j, m, nm = 0, looked = 0, wet = 0, land = 0, land_lab = -1;
+    int b, k, j, m, nm = 0, nl = 0, wet = 0, land = 0, land_lab = -1;
     if (d->isle_order) return d->isle_order;
     if (in->mil && (impai_tg_known(in->mil, d->now) & ((1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER))))
         return d->isle_order = ISLE_SEA;
+    ic = isle_class(in->reach);
+    il = ic >= 0 ? base_label(in->reach, (unsigned)ic, in->st->ax >> 1, in->st->az >> 1) : -1;
     for (b = 0; b < d->nbtype; b++) {
         const int n = d->q->ops->build_options(d->q, d->btype[b], d->menu3, WQ_TYPES_MAX);
-        for (k = 0; k < n && looked < PLANT_LOOK; k++) {
+        for (k = 0; k < n && nl < PLANT_LOOK; k++) {
             const unsigned t = d->menu3[k];
-            int np, water;
+            int np, water, seen = 0;
             if (t >= in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
-            looked++;
+            for (j = 0; j < nl; j++) seen |= looked[j] == t;
+            if (seen) continue;
+            looked[nl++] = (uint16_t)t;
             np = d->q->ops->build_options(d->q, (int)t, plant, PLANT_MENU);
             water = impai_water_plant(in, t);
             if (!water && menu_air(d, plant, np)) continue;
@@ -697,15 +727,17 @@ static int isle_order(IMPAI_DEC* d)
                 unsigned c = 0;
                 int l = -1, p = 0;
                 if (plant[j] >= in->nti || in->ti[plant[j]].cat != IMPAI_C_CONS) continue;
-                for (m = 0; m < nm && ctype[m] != plant[j]; m++) {}
+                for (m = 0; m < nm && (ctype[m] != plant[j] || cwet[m] != water); m++) {}
                 if (m < nm) {
                     p = cnum[m];
                     c = ccls[m];
                     l = clab[m];
                 } else {
-                    if (builds_mex(d, plant[j])) p = cons_patches(d, plant[j], &c, &l);
+                    if (builds_mex(d, plant[j]))
+                        p = cons_patches(d, plant[j], &c, &l, water ? -1 : ic, il);
                     if (nm < ISLE_CONS) {
                         ctype[nm] = plant[j];
+                        cwet[nm] = water;
                         cnum[nm] = p;
                         ccls[nm] = c;
                         clab[nm++] = l;
@@ -721,7 +753,7 @@ static int isle_order(IMPAI_DEC* d)
             }
         }
     }
-    return d->isle_order = land >= ISLE_PATCHES && land >= wet && isle_blocks(d, land_cls, land_lab) >= ISLE_BLOCKS
+    return d->isle_order = land >= ISLE_PATCHES && land > wet && isle_blocks(d, land_cls, land_lab) >= ISLE_BLOCKS
                                ? ISLE_LAND : ISLE_SEA;
 }
 

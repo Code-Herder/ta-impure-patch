@@ -299,8 +299,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    and take the next nearest. **The commander comes first**: it is the win condition of a
    commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
    longer known, or on arrival. Then the nearest contact within the squad's longest range + 384 that has a member
-   entering the squad's **stay-or-go** is predicted against those members and the defences near it (the fight
-   predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
+   entering the squad's **stay-or-go** is predicted against those members and the armed structures near it that
+   are not members, each structure weighed once (the fight predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
    (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **The side
    that fights** is the squad's members first, then every army unit of another ATTACK, RAID, DEFEND or FORM squad
    that stands within its own range + 384 of the contact's member nearest the squad, whatever its own squad is
@@ -361,7 +361,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    whole way home, and the cap with 280 units against 61 (MEASURED 2026-11-17 with a build logging both sides).
    **Gaps**: the contact floods 768 px at a time over what is seen, so a base spread past 1 280 px is weighed short
    at departure; the enemy's mobiles at its base count only once seen, the picture keeping no mobile it does not
-   see now. It forms none while its arrival at the goal is undecided (below). **Each layer
+   see now. The other way the goal's side can be the heavier, and a wave waits where it would have won: the
+   contact holds what is seen now, the goal's side the remembered unarmed structures too, and a remembered row
+   stays until its block is lit again, so a structure destroyed out of sight weighs until the seat looks. It forms none while its arrival at the goal is undecided (below). **Each layer
    counts its own waves and takes its own median** (`IMPAI_MIL.waves`, one count a layer), so each new wave of a
    layer is one median unit of that layer bigger, and **a wave that destroys its target starts its layer over**:
    an ATTACK whose structure target the seat no longer holds a row for, while it stands within its range and 256 px
@@ -763,17 +765,23 @@ shipyard came on the pacing at 9 552, and it held two ships at the cap, 20 000, 
 2026-11-17) is a calculation, once a decision, over the plants the seat's builders offer and the constructors on
 their menus that build an extractor: **the sea first** when sea defences are needed -- an enemy on or under the water
 known (*the targets known*) -- or the metal lies at sea, the open water patches a sea plant's constructor reaches
-being at least the island's; **a land plant first** when the island is big enough that its constructors pay, at
-least `ISLE_PATCHES` (6) open patches a land plant's constructor reaches and at least `ISLE_BLOCKS` (1 024) blocks of
-its component within 48 rings (1 536 px) of the anchor; never an air plant first. A constructor's patches are THE
-METAL'S REACH counted: those on its class's component at the base whose extractor of its own menu fits, a ship's
-component at a dry anchor being the first labelled block within 32 rings (1 024 px). Both thresholds are
+being at least the island's (a tie is the sea's); **a land plant first** when the island is big enough that its
+constructors pay, at least `ISLE_PATCHES` (6) open patches of **the island** a land plant's constructor's extractor
+fits, more than the sea's, and at least `ISLE_BLOCKS` (1 024) blocks of the island within 48 rings (1 536 px) of the
+anchor; never an air plant first. **The island** is the base component of the class most of the content's land army
+types travel by (`isle_class`, `IMPAI_REACH.land_w`), not the land constructor's own class: a hover or amphibious
+constructor's component spans the sea, and measured by it the sea's blocks and patches read as the island's; with
+no such class the constructor's own class measures it. A sea constructor's patches are THE METAL'S REACH counted: those on its class's component at the
+base whose extractor of its own menu fits, a ship's component at a dry anchor being the first labelled block within
+32 rings (1 024 px). Each plant type is read once whatever builders offer it, and a constructor offered by a land
+and a sea plant is measured on each side. Both thresholds are
 hand-written, the bar's to move. **Why**: "Air first is often a bad idea and extremely hard to pull off even for a
 human. Whether you have a land plant first really depends on the size of the island to know if it's worth it"
 (the owner); Gods of War's island holds four patches, which the commander takes, and its land plant cost the
 metal of 1.4 destroyers. **Gaps**: the island's area is measured within the window only, so a narrow island
 longer than 3 km reads by its part near the base; the order counts patches open now, so an island whose patches
-the commander has already taken reads small. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
+the commander has already taken reads small; a sea plant whose constructor also walks the land (a floating hover
+plant's) counts the island's patches as the sea's, which only leans to the sea. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
 until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's rules still bound how

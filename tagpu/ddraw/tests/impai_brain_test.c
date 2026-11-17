@@ -7547,6 +7547,40 @@ static void check_air_held(void)
           "the air held: air_seen %g %g %g %g", (double)seen[0], (double)seen[1], (double)seen[2], (double)seen[3]);
 }
 
+
+/* THE STAY-OR-GO's defences (impai_mil.c, side_contact_counts): check_mil_stay_or_go's twelve tanks, and turrets
+   seen in reach (check_mil_goal_side's: armed, range 400, 4 000 hp, 150 a shot), members of the contact the
+   squad weighs and armed structures near it both:
+   (a) three turrets, each weighed once: no retreat -- weighed as members and again as defences, six, it retreated;
+   (b) six turrets: the squad retreats. */
+static void check_mil_contact_defences(void)
+{
+    static const int N[2] = { 3, 6 };
+    IMPAI_MIL_OUT o;
+    int c, k;
+    for (c = 0; c < 2; c++) {
+        mil_world();
+        s_w.defs[T_TURRET].hp = s_ft[T_TURRET].hp = 4000;
+        s_w.defs[T_TURRET].armed = 1;
+        s_ft[T_TURRET].value = 300.0f;
+        s_ft[T_TURRET].w[0] = T_TURRET;
+        s_fwp[T_TURRET].range = 400;
+        s_fwp[T_TURRET].reload = 30;
+        s_fwp[T_TURRET].burst = 1;
+        s_fwp[T_TURRET].dmg = 150;
+        s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 150;
+        s_threat[T_TURRET].range = s_threat[T_TURRET].hit_range = 400;
+        s_threat[T_TURRET].layer = TASIM_LAYER_LAND;
+        for (k = 0; k < 12; k++) own(1 + k, M_TANK, 200 + 2 * (k % 6), 100 + 2 * (k / 6));
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        for (k = 0; k < N[c]; k++) enemy(1300 + k, T_TURRET, 204 + 2 * (k % 4), 110 + 2 * (k / 4), IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the contact's defences decision runs");
+        printf("the stay-or-go's defences, %d turrets seen: %u retreats, %u predictions\n", N[c], o.retreats,
+               o.predictions);
+        CHECK(o.predictions == 1 && o.retreats == (unsigned)c, "%d turrets: %u retreats", N[c], o.retreats);
+    }
+}
+
 static void check_mil_stay_or_go(void)
 {
     static const char* const NAME[5] = { "a gunship over the wave", "twenty tanks against the wave",
@@ -9664,7 +9698,17 @@ static void check_island_hold(void)
        plant), no shipyard;
    (j) (i) with a vehicle plant already, as (h)'s pacing: the land plant had, the shipyard;
    (k) the first plant on an island of 16 x 16 blocks (cells 24..55 x 48..79, the rest sea) holding eight patches:
-       too small by its area, the shipyard. */
+       too small by its area, the shipyard;
+   (l) (k) with the land plants' constructors on class 2, which walks the sea floor (an amphibious or hover
+       constructor's shape), and the content's land army on class 0 (the summary's land_w, set): the island is
+       class 0's, still too small, the shipyard -- measured by class 2's component, the whole map, it read big;
+   (m) eight land patches and eight at sea: a tie is the sea's, the shipyard;
+   (n) (b) with a K-bot and a vehicle constructor in the census before the commander, each offering the
+       extractor and the lab 15 times, the commander's menu the 31st to the 33rd plant offered: each plant is read
+       once, so the commander's shipyard is, and the sea's metal is more, the shipyard;
+   (o) (b) with the content's land army on class 0 and the lab offering the shipyard's constructor besides its
+       K-bot: that constructor is measured on each side, the island's patches for the lab and the sea's for the
+       shipyard, so the sea's metal is more, the shipyard. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -9697,32 +9741,57 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[11] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[15] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
                                          "(i) eight land patches, one shipyard",
                                          "(j) eight land patches, one shipyard and a land plant",
-                                         "(k) eight patches on a small island" };
+                                         "(k) eight patches on a small island",
+                                         "(l) a small island, amphibious constructors",
+                                         "(m) eight land patches, eight at sea",
+                                         "(n) the sea's metal more, the lab offered 30 times first",
+                                         "(o) the sea's metal more, the lab offering the ship constructor" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 11; c++) {
+    for (c = 0; c < 15; c++) {
         int from, vp, lab;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : 9.0f);
         s_w.unit[2].live = 0;
         s_plan = c == 7 || c == 9 ? &plan : &IMPAI_PLAN_ROW;
-        if (c == 10) {
+        if (c == 11) {
+            s_w.defs[E_CK].d.mclass = s_w.defs[E_CV].d.mclass = 2;
+            s_ti[E_CK].mclass = s_ti[E_CV].mclass = 2;
+        }
+        if (c == 13) {
+            static const uint16_t LABS[16] = { E_MEX, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB,
+                                               E_LAB, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB, E_LAB };
+            menu_set(&s_w, E_CK, LABS, 16);
+            menu_set(&s_w, E_CV, LABS, 16);
+            unit_add(&s_w, 1, E_CK, 30, 60, 1);
+            unit_add(&s_w, 4, E_CV, 34, 60, 1);
+            unit_add(&s_w, 6, E_COM, 40, 64, 1);
+        }
+        if (c == 14) {
+            static const uint16_t LABCS[] = { E_CK, E_CS };
+            menu_set(&s_w, E_LAB, LABCS, 2);
+            s_reach.land_w[0] = 1;
+        }
+        if (c == 10 || c == 11) {
             water_add(&s_w, 0, 0, 63, 127, 40);
             water_add(&s_w, 24, 48, 55, 79, -10);
             fake_reach(&s_reach, E_N);
+            if (c == 11) s_reach.land_w[0] = 1;
             s_spots = ISLE_SMALL_F;
             s_nspots = (unsigned)(sizeof ISLE_SMALL_F / sizeof ISLE_SMALL_F[0]);
         } else
-            isle_patches(c == 0 || c == 1 || c == 2 || c == 8 || c == 9 ? ISLE_LAND_N : c == 7 ? 0 : 3,
-                         c == 1 ? ISLE_WET_N : 0);
+            isle_patches(c == 0 || c == 1 || c == 2 || c == 8 || c == 9 || c >= 12 ? ISLE_LAND_N
+                         : c == 7                                                          ? 0
+                                                                                           : 3,
+                         c == 1 || c >= 13 ? ISLE_WET_N : c == 12 ? ISLE_LAND_N : 0);
         s_ti[E_UWMEX].klass = IMPAI_K_BOMBER;
         if (c == 2) s_smil.tg_t[IMPAI_TG_FLOAT] = (uint32_t)s_w.gametime;
         if (c == 4) menu_set(&s_w, E_VP, AIRVP, 2);
@@ -9742,7 +9811,7 @@ static void check_island_order(void)
         lab = builds_of(from, E_LAB, NULL, NULL);
         printf("the island's plant order, %s: shipyard %d, vehicle plant %d, lab %d\n", NAME[c], sy, vp, lab);
         if (c == 0) CHECK(!sy && land == 1, "%s: a land plant first", NAME[c]);
-        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || c == 10)
+        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || c >= 10)
             CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
         if (c == 4) CHECK(!sy && lab == 1 && !vp, "%s: never air first, the lab", NAME[c]);
         if (c == 6) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
@@ -14898,6 +14967,7 @@ static void check_military(void)
     check_mil_home_holds();
     check_mil_attack();
     check_mil_goal_side();
+    check_mil_contact_defences();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();
