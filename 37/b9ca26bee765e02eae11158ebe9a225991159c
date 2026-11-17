@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=1669be3c..37b9ca26 (income lever fix review) findings=6 (L4 + 2 nits) verdict=ready; report .data/impai/runs/reviews/fix-review-income-37b9ca26.md date=2026-11-16
