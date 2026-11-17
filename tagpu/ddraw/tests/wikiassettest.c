@@ -41,6 +41,7 @@
 #include <time.h>
 #include <dirent.h>
 #include "../src/tagpu_wikiasset.c"
+#include "../src/tagpu_wikitech.h"
 
 #define STAND_IN_BASE 0x10000000u       /* the arena's address in its 32-bit fields here */
 #define ARENA_CAP     (32u << 20)
@@ -433,6 +434,76 @@ static int cmd_tech(int argc, char** argv)
     printf("}}}\n");
     fprintf(stderr, "wikiassettest: the tech tree loaded in %.1f ms (%d sides, %d units, %d pictures, %u bytes of pixels)\n",
             ms, t->nside, t->nunit, t->npic, (unsigned)t->npx);
+    tagpu_vfs_close(vfs);
+    free((void*)t);
+    free(report);
+    input_free(&I);
+    return 0;
+}
+
+/* `wikiassettest techlay`: tagpu_wikitech_tree over every side of the load, printed per side as
+   techtree.js's model and layout name them, keyed by the unit's name lowered: {kind, tier, upgrade,
+   upgradable, first, builds, upgrades, parents, unlocks}, the spine and each card's sp, and each
+   card's [x, y, w, h] with the tree's w and h. tools/wiki/assetcheck.py --side pairs it. */
+static const char* const TECH_KIND[WT_KINDS] = { "Commander", "Factory", "Builder", "Economy", "Defense", "Support",
+                                                 "Land", "Air", "Sea", "Upgrade" };
+
+static void tech_list(const WIKITECHTREE* T, WTLIST l)
+{
+    uint32_t q;
+    putchar('[');
+    for (q = 0; q < l.n; q++) { if (q) putchar(','); tech_key(T->t->unit[T->unit[T->pool[l.at + q]]].name); }
+    putchar(']');
+}
+
+static int cmd_techlay(int argc, char** argv)
+{
+    static INPUT I;
+    const WIKITECH* t;
+    TAGPU_VFS* vfs;
+    char* report = NULL;
+    int s, i;
+    if (!input_make(argc, argv, &I)) return 2;
+    vfs = tagpu_vfs_open(I.in.cwd, (const char (*)[TAGPU_VFS_PATHMAX])I.in.arc, I.in.narc, I.in.names.language);
+    t = tagpu_wikitech_load(&I.in, vfs, &report);
+    if (!t) { fprintf(stderr, "wikiassettest: no tech tree\n"); return 1; }
+    putchar('[');
+    for (s = 0; s < t->nside; s++) {
+        WIKITECHTREE T;
+        if (!tagpu_wikitech_tree(t, s, &T)) { fprintf(stderr, "wikiassettest: side %d made no tree\n", s); return 1; }
+        printf("%s{\"units\":{", s ? "," : "");
+        for (i = 0; i < T.n; i++) {
+            printf("%s", i ? "," : "");
+            tech_key(t->unit[T.unit[i]].name);
+            printf(":{\"kind\":\"%s\",\"tier\":%d,\"upgrade\":%d,\"upgradable\":%d,\"first\":", TECH_KIND[T.kind[i]],
+                   T.tier[i], T.upgrade[i], T.upgradable[i]);
+            if (T.first[i] >= 0) tech_key(t->unit[T.unit[T.first[i]]].name); else printf("null");
+            printf(",\"builds\":"); tech_list(&T, T.builds[i]);
+            printf(",\"upgrades\":"); tech_list(&T, T.upgrades[i]);
+            printf(",\"parents\":"); tech_list(&T, T.parents[i]);
+            printf(",\"unlocks\":"); tech_list(&T, T.unlocks[i]);
+            putchar('}');
+        }
+        printf("},\"spine\":[");
+        for (i = 0; i < T.nspine; i++) { if (i) putchar(','); tech_key(t->unit[T.unit[T.spine[i]]].name); }
+        printf("],\"sp\":{");
+        for (i = 0; i < T.nspine; i++) {
+            const int32_t p = T.sp[T.spine[i]];
+            printf("%s", i ? "," : "");
+            tech_key(t->unit[T.unit[T.spine[i]]].name);
+            putchar(':');
+            if (p >= 0) tech_key(t->unit[T.unit[p]].name); else printf("null");
+        }
+        printf("},\"pos\":{");
+        for (i = 0; i < T.nspine; i++) {
+            printf("%s", i ? "," : "");
+            tech_key(t->unit[T.unit[T.spine[i]]].name);
+            printf(":[%.17g,%.17g,%.17g,%.17g]", T.pos[i][0], T.pos[i][1], T.pos[i][2], T.pos[i][3]);
+        }
+        printf("},\"w\":%.17g,\"h\":%.17g}", T.w, T.h);
+        tagpu_wikitech_free(&T);
+    }
+    printf("]\n");
     tagpu_vfs_close(vfs);
     free((void*)t);
     free(report);
@@ -1285,10 +1356,11 @@ int main(int argc, char** argv)
     if (argc >= 4 && !strcmp(argv[1], "load")) return cmd_load(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "side")) return cmd_side(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "tech")) return cmd_tech(argc, argv);
+    if (argc >= 4 && !strcmp(argv[1], "techlay")) return cmd_techlay(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-hpi")) return cmd_fuzz_hpi(argc, argv);
     if (argc == 6 && !strcmp(argv[1], "fuzz-3do")) return cmd_fuzz_3do(argc, argv);
     if (argc == 5 && !strcmp(argv[1], "fuzz-side")) return cmd_fuzz_side(argc, argv);
-    fprintf(stderr, "usage: wikiassettest load|side|tech GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
+    fprintf(stderr, "usage: wikiassettest load|side|tech|techlay GAMEDIR PAK [--mounts FILE] [--exe EXE] [--language L] [--archive A]\n"
                     "                    [--folders k=v,...]\n"
                     "       wikiassettest fuzz-hpi ARCHIVE N SEED\n"
                     "       wikiassettest fuzz-3do ARCHIVE PATH N SEED\n"

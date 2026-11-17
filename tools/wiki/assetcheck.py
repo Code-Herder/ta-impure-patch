@@ -78,7 +78,8 @@ ta3do = tavfs.ta3do
 tascene = tavfs.tascene
 
 SRCS = ["tests/wikiassettest.c", "src/tagpu_hpi.c", "src/tagpu_vfs.c", "src/tagpu_tdf.c", "src/tagpu_json.c",
-        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c", "src/tagpu_wav.c"]
+        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c", "src/tagpu_wav.c",
+        "src/tagpu_wikitech.c"]
 NAME_VAS = {"units": 0x503920, "textures": 0x503720, "logos": 0x504734, "logos_gaf": 0x503704,
             "objects3d": 0x5036E4, "scripts": 0x503740, "anims": 0x502E30, "features": 0x502C7C}
 FEATURE_BITS = ["animating", "animtrans", "shadtrans", "flamable", "geothermal", "blocking", "reclaimable",
@@ -1038,6 +1039,24 @@ def against_sidepacks(mods, retail, pak, language="english"):
                 lines.append(f"assetcheck: tech tree {mod}: native == gfx.py: {len(tnat['sides'])} sides, "
                              f"{len(tnat['units'])} units, {sum(1 for u in tnat['units'].values() if u['pic'])} pictures "
                              f"byte for byte; {rt.stderr.strip().split(': ', 1)[-1]}")
+            # THE TREE'S MODEL AND LAYOUT (tagpu_wikitech.c against techtree.js) over the same tree
+            rl = subprocess.run([str(EXE), "techlay", str(tree), str(pak), "--exe", str(exe), "--language", language,
+                                 *names], capture_output=True, text=True)
+            jl = subprocess.run(["node", str(HERE / "techlay.mjs"), str(tech_dir / "tree.json")], capture_output=True,
+                                text=True)
+            if rl.returncode or jl.returncode:
+                lines.append(f"assetcheck: tech layout {mod}: FAILED: {(rl.stderr + jl.stderr).strip()[-2000:]}")
+                ok = False
+                continue
+            lbad = diff(json.loads(rl.stdout), json.loads(jl.stdout), exact=True)
+            if lbad:
+                ok = False
+                lines.append(f"assetcheck: tech layout {mod}: tagpu_wikitech.c and techtree.js DIFFER in {len(lbad)} place(s):")
+                lines += [f"  {b}" for b in lbad[:40]]
+            else:
+                lay_doc = json.loads(rl.stdout)
+                lines.append(f"assetcheck: tech layout {mod}: tagpu_wikitech.c == techtree.js: "
+                             + "; ".join(f"{len(sd['spine'])} cards, {sd['w']:g} x {sd['h']:g} units" for sd in lay_doc))
             ref = pack_side(out, mod)
             native = native_side(doc)
             # the 3D load's unit types, which a demo bound to any side's casting draws its models from
