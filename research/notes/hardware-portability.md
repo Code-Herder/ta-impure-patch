@@ -377,9 +377,7 @@ the plan's shape and what the work settled.
     jump-table entries at the parser's loop tail, and an exe that differs there is not run;
   - The keys and values the game reads and writes, and each call site, are in the engine map
     ([exe reverse engineering](exe-reverse-engineering.html) §"The registry").
-- **Local instances use the same store.** Every local prefix's `user.reg` is one inode (the
-  `cp -al` clone, which wine never breaks), so TA's key was one for every local instance; each
-  local gamedir now holds `tacli-state/registry.txt`, seeded by reading the template's
+- **Local instances use the same store.** Each local gamedir holds `tacli-state/registry.txt`, seeded by reading the template's
   `user.reg`, and a local launch whose DLL serves it passes the token and checks the run's
   served line as a remote launch does. A `--keep-dll` build without the store runs on the shared
   file with a warning. A tacli from before the store writes its values into the shared file and

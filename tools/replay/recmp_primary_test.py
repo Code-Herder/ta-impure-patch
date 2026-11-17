@@ -67,7 +67,7 @@ def run(args, output, refused=None):
                     subprocess.run([sys.executable, str(TREE / "tools/tacli"), "rm", name, "--force"],
                                    capture_output=True, text=True, timeout=120)
                     owned.append(name)
-                    cli("create", name, "--private-registry", "--display", display.display,
+                    cli("create", name, "--display", display.display,
                         "--res", "1024x768")
                     shutil.copyfile(dll, instances / name / "gamedir/ddraw.dll")
                     cli("arm", name, "recorder.off")

@@ -148,9 +148,11 @@ scores 0 magenta and shows no game.
   is a function of the build (a static frame, a pose, a table), or two peers of one network game.
 - **A foreign tree's `tacli` cannot make instances** (no wine prefix template outside a real
   checkout). Make the instance from a real checkout and swap the DLL as above. If you do set up a
-  second tree, `wineprefix` there must be a `cp -al` clone and not a symlink — `cp -al` on a
-  symlink copies the symlink, every instance then points at the shared template, and the game
-  exits during launch with no `ErrorLog.txt` and a healthy-looking `tagpu.log`.
+  second tree, `wineprefix` there must be a real folder, not a symlink — `cp -al` on a symlink
+  copies the symlink, every instance then points at the shared template, and the game exits
+  during launch with no `ErrorLog.txt` and a healthy-looking `tagpu.log` — and its three hives
+  (`user.reg`, `system.reg`, `userdef.reg`) copies, not links: `cp -al` the rest, then `cp` the
+  hives over. A hive linked from another tree makes every `tacli create` refuse.
 - **The `*own` levers are written by `scenario load`** from the passes already armed, and it
   prints `auto-armed …` for each. An instance armed by hand with the same pass list and a plain
   `tacli launch` also gets them. Compare a build against itself in the same instance rather than

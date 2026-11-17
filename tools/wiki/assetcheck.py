@@ -78,7 +78,8 @@ ta3do = tavfs.ta3do
 tascene = tavfs.tascene
 
 SRCS = ["tests/wikiassettest.c", "src/tagpu_hpi.c", "src/tagpu_vfs.c", "src/tagpu_tdf.c", "src/tagpu_json.c",
-        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c", "src/tagpu_wav.c"]
+        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c", "src/tagpu_wav.c",
+        "src/tagpu_wikitech.c"]
 NAME_VAS = {"units": 0x503920, "textures": 0x503720, "logos": 0x504734, "logos_gaf": 0x503704,
             "objects3d": 0x5036E4, "scripts": 0x503740, "anims": 0x502E30, "features": 0x502C7C}
 FEATURE_BITS = ["animating", "animtrans", "shadtrans", "flamable", "geothermal", "blocking", "reclaimable",
@@ -933,6 +934,50 @@ def native_side(doc):
             "bar": art["bar"], "logos": art["logos"], "gui": art["gui"]}
 
 
+def tech_ref(tech_dir):
+    """gfx.py `tech_pack`'s tree.json and pictures in `wikiassettest tech`'s shape: the title by display_name's rule
+    left as the file's text, every flag an integer, the category's first LEVELn as `level`, a picture's palette
+    indices hashed."""
+    from PIL import Image  # noqa: E402  (the venv's)
+    doc = json.loads((tech_dir / "tree.json").read_text())
+    units = {}
+    for k, u in doc["units"].items():
+        m = re.search(r"LEVEL(\d)", u["category"], re.I)
+        pic = None
+        if u["pic"]:
+            im = Image.open(tech_dir / u["pic"])
+            t = im.info.get("transparency")
+            pic = {"w": im.width, "h": im.height, "tkey": t if isinstance(t, int) else -1,
+                   "fnv": f"{fnv(0x811C9DC5, im.tobytes()):08x}"}
+        units[k] = {"name": u["name"], "title": u["title"], "description": u["description"],
+                    **{f: int(u[f]) for f in ("structure", "mobile", "builder", "canfly", "water", "cloaked", "stealth",
+                                              "hidedamage")},
+                    "level": int(m.group(1)) if m else -1, "fp": u["fp"], "health": u["health"], "sight": u["sight"],
+                    "radar": u["radar"], **{f: float(u[f]) for f in ("metal", "energy", "buildtime", "speed",
+                                                                     "workertime", "energymake", "metalmake",
+                                                                     "extracts")},
+                    "storage": [float(x) for x in u["storage"]],
+                    "weapons": [{k2: w[k2] for k2 in ("id", "name", "range", "damage") if k2 in w} for w in u["weapons"]],
+                    "pic": pic}
+    return {"sides": [{k: sd[k] for k in ("name", "prefix", "commander", "order", "menus")} for sd in doc["sides"]],
+            "units": units}
+
+
+def tech_native(doc):
+    """`wikiassettest tech`'s tree with each title read by display_name's rule: the bytes as Windows-1252, a byte
+    with no character '?', an empty one the UnitName; every figure a float"""
+    import gfx as gfxpy  # noqa: E402  (beside this file)
+    t = doc["tech"]
+    for u in t["units"].values():
+        raw = u["title"].encode("latin-1")
+        u["title"] = "".join("?" if bytes([b]) in gfxpy.CP1252_UNMAPPED else bytes([b]).decode("cp1252")
+                             for b in raw) or u["name"]
+        for f in ("metal", "energy", "buildtime", "speed", "workertime", "energymake", "metalmake", "extracts"):
+            u[f] = float(u[f])
+        u["storage"] = [float(x) for x in u["storage"]]
+    return t
+
+
 def against_sidepacks(mods, retail, pak, language="english"):
     """Section 6 of the header, per setup: (all equal, lines to print)."""
     sys.path.insert(0, str(REPO / "tools" / "compat"))
@@ -969,6 +1014,76 @@ def against_sidepacks(mods, retail, pak, language="english"):
                 ok = False
                 continue
             doc = json.loads(r.stdout)
+            # THE TECH TREE (tagpu_wikitech_load against gfx.py tech_pack): every side's walk and menus, every unit's
+            # figures and its picture's palette indices
+            rt = subprocess.run([str(EXE), "tech", str(tree), str(pak), "--exe", str(exe), "--language", language, *names],
+                                capture_output=True, text=True)
+            tech_dir = out / "side" / mod / "techtree"
+            if rt.returncode or not (tech_dir / "tree.json").exists():
+                lines.append(f"assetcheck: tech tree {mod}: wikiassettest tech FAILED ({rt.returncode}) or gfx.py wrote no "
+                             f"tree: {rt.stderr.strip()[-2000:]}")
+                ok = False
+                continue
+            tdoc = json.loads(rt.stdout)
+            if tdoc["tech"] is None:
+                lines.append(f"assetcheck: tech tree {mod}: the native load made none: {tdoc['report'].get('refused')}")
+                ok = False
+                continue
+            tnat, tref = tech_native(tdoc), tech_ref(tech_dir)
+            tbad = diff(tnat, tref, exact=True)
+            if tbad:
+                ok = False
+                lines.append(f"assetcheck: tech tree {mod}: the native load and gfx.py's tree DIFFER in {len(tbad)} place(s):")
+                lines += [f"  {b}" for b in tbad[:40]]
+            else:
+                lines.append(f"assetcheck: tech tree {mod}: native == gfx.py: {len(tnat['sides'])} sides, "
+                             f"{len(tnat['units'])} units, {sum(1 for u in tnat['units'].values() if u['pic'])} pictures "
+                             f"byte for byte; {rt.stderr.strip().split(': ', 1)[-1]}")
+            # THE TREE'S MODEL AND LAYOUT (tagpu_wikitech.c against techtree.js) over the same tree
+            rl = subprocess.run([str(EXE), "techlay", str(tree), str(pak), "--exe", str(exe), "--language", language,
+                                 *names], capture_output=True, text=True)
+            jl = subprocess.run(["node", str(HERE / "techlay.mjs"), str(tech_dir / "tree.json")], capture_output=True,
+                                text=True)
+            if rl.returncode or jl.returncode:
+                lines.append(f"assetcheck: tech layout {mod}: FAILED: {(rl.stderr + jl.stderr).strip()[-2000:]}")
+                ok = False
+                continue
+            lbad = diff(json.loads(rl.stdout), json.loads(jl.stdout), exact=True)
+            if lbad:
+                ok = False
+                lines.append(f"assetcheck: tech layout {mod}: tagpu_wikitech.c and techtree.js DIFFER in {len(lbad)} place(s):")
+                lines += [f"  {b}" for b in lbad[:40]]
+            else:
+                lay_doc = json.loads(rl.stdout)
+                lines.append(f"assetcheck: tech layout {mod}: tagpu_wikitech.c == techtree.js: "
+                             + "; ".join(f"{len(sd['spine'])} cards, {sd['w']:g} x {sd['h']:g} units" for sd in lay_doc))
+            # THE TREE'S MODELS (tagpu_wikitech3d_load against gfx.py write_units): a model resolved for every unit the
+            # pack has a mesh of, and a script for every unit it has a COB of
+            r3 = subprocess.run([str(EXE), "tech3d", str(tree), str(pak), "--exe", str(exe), "--language", language,
+                                 *names], capture_output=True, text=True)
+            if r3.returncode:
+                lines.append(f"assetcheck: tech models {mod}: wikiassettest tech3d FAILED ({r3.returncode}): "
+                             f"{r3.stderr.strip()[-2000:]}")
+                ok = False
+                continue
+            t3 = json.loads(r3.stdout)
+            got_m = {u["name"].lower() for u in t3["units"] if u["model"] and u["model"].get("ok")}
+            got_s = {u["name"].lower() for u in t3["units"] if u["script"]}
+            # a model with a piece past the bake's bounds (4 096 vertices, 512 faces: tagpu_posebake.c, which the game's
+            # unit pass applies too) is refused whole by the load; gfx.py has no such bound
+            bound = {u["name"].lower() for u in t3["units"] if u["model"] and not u["model"].get("ok")
+                     and "past 4096 and 512" in (u["model"].get("why") or "")}
+            want_m = {f.name.split(".")[0] for f in (tech_dir / "units").glob("*.0.bin")} - bound
+            want_s = {f.stem for f in (tech_dir / "units").glob("*.cob")}
+            if got_m != want_m or got_s != want_s:
+                ok = False
+                lines.append(f"assetcheck: tech models {mod}: the native load and gfx.py's units DIFFER: models only native "
+                             f"{sorted(got_m - want_m)[:12]}, only gfx.py {sorted(want_m - got_m)[:12]}; scripts only native "
+                             f"{sorted(got_s - want_s)[:12]}, only gfx.py {sorted(want_s - got_s)[:12]}")
+            else:
+                lines.append(f"assetcheck: tech models {mod}: native == gfx.py: {len(got_m)} models, {len(got_s)} scripts"
+                             f"{', refused past the bake bounds: ' + ', '.join(sorted(bound)) if bound else ''}; "
+                             f"{r3.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
             ref = pack_side(out, mod)
             native = native_side(doc)
             # the 3D load's unit types, which a demo bound to any side's casting draws its models from

@@ -165,7 +165,7 @@ def run(args, output):
                                WINEDEBUG="-all", WINEDLLOVERRIDES=OVERRIDES)
                     owned.append((directory, env))
                     command([sys.executable, root / "tools/tacli", "create", directory.name,
-                             "--private-registry", "--display", display.display,
+                             "--display", display.display,
                              "--res", "640x480"], setup)
                     command(["bash", root / "tools/dpinstall.sh", prefix], setup)
                     command([sys.executable, root / "tools/dpport.py", prefix, args.port], setup)

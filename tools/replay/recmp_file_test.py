@@ -431,7 +431,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
             env = dict(os.environ, WINEPREFIX=str(directory / "prefix"), DISPLAY=display.display,
                        WINEDEBUG="-all")
             command([sys.executable, root / "tools/tacli", "create", directory.name,
-                     "--private-registry", "--display", display.display, "--res", "640x480"], log)
+                     "--display", display.display, "--res", "640x480"], log)
         if skirmish_file:
             with (output / "skirmish-read.log").open("w") as log:
                 command(["wine", exe, "skirmish", "Z:" + str(skirmish_file).replace("/", "\\")], log, env=env)

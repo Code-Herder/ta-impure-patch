@@ -144,7 +144,7 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #win.theatre #ctl { flex: none; }
 #about { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); box-sizing: border-box; }
 #about[hidden] { display: none; }
-#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); display: flex; flex-direction: column;
+#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); max-width: calc(var(--w-theatre-about_max) * var(--u)); display: flex; flex-direction: column;
   gap: calc(var(--w-entry-gap) * var(--u)); padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
   calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
 #win.theatre #p-text { flex: 1 1 0; }
@@ -170,3 +170,51 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #frame.kit #win { border: 0; background: none; }
 #frame.kit #win .wt { --ink: initial; --shade: initial; }
 #frame.kit #b-wiki, #frame.kit #b-gear { border: 0; }
+
+/* ---- the tech tree entry (wiki.js `techEntry`, techtree.js): the theatre with the build tree on the stage. The demo
+   controls give way to the tree's (Fit, the zoom steps, All links); a unit picked opens its panel over the bezel's
+   right, where About opens, and the two never show together ---- */
+#win:not(.techtree) #tt-ctl, #win.techtree #c-play, #win.techtree #c-replay, #win.techtree #ctl .sp, #win.techtree #c-try { display: none; }
+#tt-ctl { display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
+#tt-ctl button.on, #c-links.on { --ink: #f0f0ea; }
+#win.techtree #stage { cursor: grab; }
+#win.techtree #stage.drag { cursor: grabbing; }
+#unit { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); right: calc(var(--bz-r) * var(--u));
+  width: calc(var(--w-theatre-about) * 1%); max-width: calc(var(--w-theatre-about_max) * var(--u)); box-sizing: border-box; display: flex; flex-direction: column;
+  padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
+  calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
+#unit[hidden] { display: none; }
+#unit .scr { flex: 1 1 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: calc(var(--w-entry-gap) * var(--u)); }
+#unit .uh { display: flex; gap: calc(4 * var(--u)); align-items: center; }
+#unit .uh img { width: calc(32 * var(--u)); height: calc(32 * var(--u)); image-rendering: pixelated; flex: none; background: #000; }
+#unit .uh > div { min-width: 0; flex: 1; }
+#unit .ut, #unit .us { display: block; }
+#unit .flags { display: flex; flex-wrap: wrap; gap: calc(2 * var(--u)); margin-top: calc(1 * var(--u)); }
+#unit .flag { border: 1px solid currentColor; padding: 0 calc(2 * var(--u)); opacity: .85; }
+#unit .flag.up { color: #b56ad0; }
+/* every kit part paints a canvas over its own box (uikit.css canvas.skin, inset 0): a button must be its own containing
+   block, or its part fills the panel */
+#unit button { position: relative; }
+#unit .ux { flex: none; align-self: flex-start; width: calc(17 * var(--u)); height: calc(var(--w-controls-h) * var(--u)); padding: 0; box-sizing: border-box; }
+#unit .view { position: relative; flex: none; height: calc(120 * var(--u)); background: radial-gradient(ellipse at 50% 70%, #3a3f30, #12140f 75%); }
+#unit .view canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+#unit .view .note { position: absolute; left: calc(2 * var(--u)); bottom: calc(1 * var(--u)); color: #b7b7ae; pointer-events: none; }
+#unit .vnote { opacity: .8; }
+#unit .acts { display: flex; flex-wrap: wrap; gap: calc(var(--w-controls-pair) * var(--u)); }
+#unit .acts button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u));
+  min-width: calc(var(--w-controls-min) * var(--u)); box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+  white-space: nowrap; }
+#unit h4 { margin: 0 0 calc(1.5 * var(--u)); }
+#unit dl { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 0 calc(5 * var(--u)); margin: 0; }
+#unit dt { opacity: .7; } #unit dd { margin: 0; }
+#unit .weap { display: flex; justify-content: space-between; gap: calc(4 * var(--u)); }
+#unit .chips { display: flex; flex-wrap: wrap; gap: calc(1 * var(--u)); align-items: center; }
+#unit .chip { display: inline-flex; flex-direction: column; align-items: center; width: calc(30 * var(--u)); cursor: pointer; padding: calc(1 * var(--u)); }
+#unit .chip img { width: calc(24 * var(--u)); height: calc(24 * var(--u)); image-rendering: pixelated; background: #000; }
+#unit .chip span { max-width: 100%; overflow: hidden; white-space: nowrap; }
+#unit .chip:hover img { outline: 1px solid #e8c66a; }
+#unit .chip.up img { outline: 1px dashed #b56ad0; outline-offset: -1px; }
+#unit .chip.has img { outline: 1px solid #b56ad0; outline-offset: -1px; }
+#unit .chip.sel img { outline: 2px solid #e8c66a; }
+#unit .sep { opacity: .6; }
+#frame:not(.kit) #unit { background: #d3d3ce; border: 1px solid #1d1d1b; }

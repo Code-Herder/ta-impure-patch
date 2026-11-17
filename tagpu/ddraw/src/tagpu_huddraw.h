@@ -45,6 +45,13 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_BAR_W      2048         /* the widest bar: 16 x WIKISTAGE_MAP, frame x 128 .. Wg - 1 */
 #define HUD_BAR_H      64           /* the top bar's 32 rows, then the bottom bar's 32          */
 #define HUD_TEX_CHART_WIKI (-8)
+/* the tech tree's picture sheet (tagpu_wikistate.c tech_sheet), HUD_TECH_W x HUD_TECH_H RGBA8, its
+   pictures' rects named by the op list's `pic`: sampled nearest (HUD_TEX_TECH) or filtered
+   (HUD_TEX_TECH_SMOOTH), one image under two samplers */
+#define HUD_TEX_TECH        (-9)
+#define HUD_TEX_TECH_SMOOTH (-10)
+#define HUD_TECH_W 2048
+#define HUD_TECH_H 2048
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
@@ -114,6 +121,9 @@ typedef struct {
                                    HUD's (HUD_TEX_CHART), 1 the wiki stage HUD's
                                    (HUD_TEX_CHART_WIKI); any other value draws no chart      */
     int             watch;      /* an op whose instances the build counts; -1: none          */
+    const float*    pic;        /* HOP_PIC: each picture's [u0, v0, u1, v1] on the tech sheet,
+                                   u1 <= u0 for a picture not on it; NULL with npic 0: none   */
+    int             npic;
 } HUDOPLIST;
 
 /* `ops` as a list, its chart in slot 0. */

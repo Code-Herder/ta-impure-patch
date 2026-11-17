@@ -355,21 +355,24 @@ after 400 lone clients).
 key under it live in `<gamedir>/tacli-state/registry.txt`, which the DLL answers TotalA.exe's
 registry calls from in a test launch (`tagpu_regstore.h`: the format, the limits, the two signals,
 failing closed; §"The registry: a file in the test folder" below is the same mechanism on a remote
-machine). The prefix cannot hold it: `wineprefix/user.reg` and every instance's are **one inode**,
-because `cp -al` links the hives and wine rewrites a hive in place rather than through a
-temporary file [MEASURED 2026-09-26: the file's mtime moved at each wineserver's save while its
-link count, 392, grew only with the three instances made, to 395; the reason in wine's source,
-`server/registry.c`'s `save_branch` writing a file with several links directly, is INFERRED]. A
-value written there by one instance is every instance's, and each wineserver saves its whole
-in-memory copy back when it saves. **`create --private-registry` is the exception**: it copies
-the three hives into files of the prefix's own right after the clone, before any Wine process
-has run in it, and records `private_registry` in `instance.json`. The compat suite makes its
-instances this way, because its games run with the store off and mods write keys of their own;
-and two such creates share no file afterwards, so they can run at once. **The gap**: the copy is
-read from the shared inode, which a wineserver of another, non-private instance may be rewriting
-in place at that moment, and a hive has no end marker to prove the copy whole. Closing it by
-construction means copying from hive files no wineserver ever opens, a snapshot outside every
-prefix — which would also fix what a private prefix starts from at the snapshot's contents.
+machine). The store keeps TA's key out of Wine's hives, which hold Wine's own state.
+
+**Every prefix owns its registry hives.** `clone_prefix` hard-links the template's other files
+and *copies* its three hives (`user.reg`, `system.reg`, `userdef.reg`), so no hive has a second
+link. That is what makes the copies whole: a wineserver saves a hive with several links by
+truncating it and writing it in place, and one with a single link into a temporary file it renames
+over the hive [MEASURED 2026-11-17, wine 9.0: a single-link `user.reg` changed inode at a save;
+with a second link it kept its inode and the other link saw the write]. The template's hives are
+therefore only ever replaced whole, and a copy reads one whole save. A hive two prefixes link is
+one inode each one's wineserver rewrites in place: a value one instance writes is every
+instance's, and a copy taken during such a save is cut [MEASURED 2026-11-17: a compat joiner's
+`system.reg` of 1.88 MB against 3.57, with no RpcSs service and no DirectPlay provider, so its
+DirectPlay list was empty]. `create` refuses while any
+prefix still links a template hive (`refuse_linked_template`, naming them: a tacli older than the
+copy made it). `create --force` on such a prefix copies its hives when it is the template's only
+other link and is not running, after ending the prefix's wineserver, whose exit save would
+otherwise rewrite the inode during the copy (`own_hives`); with several linked, `tacli rm` all but
+one first, and a link from outside `tagpu/instances` is removed by hand.
 
 - **How the DLL finds it.** `GetModuleFileNameW(NULL)` names the gamedir: a launch logs
   `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder beside

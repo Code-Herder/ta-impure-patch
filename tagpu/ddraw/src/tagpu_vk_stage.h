@@ -35,8 +35,11 @@
        send a whole page are a pass's first upload after it is built (the
        session's first level, and after every teardown or resize, which runs
        every pass's `_down`), the terrain's new atlas at a level's start, a
-       palette move, and an atlas or mirror made, lost or begun for a new
-       level -- none of them a frame of play, and each caller logs the cause
+       palette move, an atlas or mirror made, lost or begun for a new
+       level, and a consumer of an atlas with two (the wiki's unit atlas: the
+       stage's unit pass and the tech tree's view) whose copy fell more than
+       one frame's staging behind the other's acknowledgement, on a switch
+       between the wiki's entries -- none of them a frame of play, and each caller logs the cause
        when it sends one. The one way play can reach it is a device that
        refused the repack's move buffer (tagpu_vk_stage_move_ready); the
        caller then takes that repack as a whole page and logs it as a wait in

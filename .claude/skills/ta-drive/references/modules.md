@@ -204,7 +204,7 @@ histories; these are fixture journals, not playable `.imprec` recordings. Missin
 deadline and must fail incomplete, as does the abandoned-drain control; elapsed
 time cannot prove successful receipt.
 Run this standalone fixture separately from menu-driving tests: its instance removal can race the global `tacli ls` inventory used by `mp_lobby.sh`. Choose a free discovery port and a new output directory. The runner creates and
-removes two private-registry prefixes and an X display, retaining logs and test
+removes two prefixes and an X display, retaining logs and test
 executables. It uses primary-session stand-ins; it does not launch TA or verify
 terminal recording completeness, bandwidth, recording or playback.
 
@@ -882,7 +882,7 @@ from inside its start-up. **`tacli launch` cannot start them**: it adds `-xtacli
 `tacli-state/`, and the DLL then refuses the launch because `win32.dll`, a static import of the
 exe, is not loaded at attach. Drive them the way the compat suite does:
 
-1. Build the instance from the suite's folder: `tacli create <n> --private-registry --display <d>`,
+1. Build the instance from the suite's folder: `tacli create <n> --display <d>`,
    then `rsync -a` the suite's `compat-<setup>-<tag>/gamedir/` over it, leaving out `tacli-state`, `log`
    and `tagpu_*`.
 2. Move the `gamedir/tacli-state` folder aside (the suite gives it an `.off` suffix; a launch

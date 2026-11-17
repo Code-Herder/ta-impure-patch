@@ -84,6 +84,9 @@ binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.
            sidedata rects, `ecol`, `mcol` and its font, `fnt/<font>.bin`; `logos`, the badge frames; `gui`, the GUI
            colour table (0x4AC7D0's 256 entries)
   report   every element's source, and every refusal, by name
+`gfx/side/<m>/techtree/`, the tech tree entry's data (`tech_pack`): every side's walk from its commander over the
+build menus and each unit's figures (tree.json), the build pictures (pics/), and every unit's model and script
+(scene.json, units/, pal.bin) for the unit panel's view and the COB host;
 and with `--stages`, `gfx/side/<m>/stage/`: the stage packs above, laid out as in gfx/ (`<entry>.<scene>/scene.json`,
 `palette/`, `shaders/`, `index.json`), resolved from the mod's install and holding, beside each entry's own unit
 types, every side's type for each cast the entry's units name (`stage_types`). The mockup draws a demo bound to the
@@ -2343,6 +2346,146 @@ def bar_art(eng, art, s, fonts, report):
             "rects": {r: rects[r] for r in BAR_RECTS}, "ecol": ecol, "mcol": mcol, "font": fonts[source][0]}
 
 
+# ---- the tech tree: every unit a side can reach from its commander, by the build menus
+#
+# research/notes/ingame-wiki.md, *The tech tree entry*. The tree is the cast rule's walk (side_walk over menu_of, the
+# build menus exactly as the sidebar reads them for that side's prefix) taken to its end instead of stopping at the
+# casts: each side of sidedata with a commander the units folder has. Each unit carries the FBI figures the entry's
+# card and panel show; the view's rules (what is an upgrade, a factory, a tier) are the mockup's, tools/wiki/mockup/
+# techtree.js, so the pack holds facts and no classification.
+
+TECH_KEYS = ("description", "maxdamage", "category", "tedclass", "weapon1", "weapon2", "weapon3", "init_cloaked",
+             "stealth", "hidedamage")
+
+
+def tech_fbi(eng, u):
+    """The FBI's UNITINFO keys the tech tree reads beyond unit_record's, trimmed; a key the FBI lacks is absent."""
+    blob = eng.vfs.read_from(u["fbi"], u["where"])
+    ui = next(s for s in tavfs.tdf_sections(blob) if s["_name"].lower() == "unitinfo")
+    return {k: ui["keys"][k].strip() for k in TECH_KEYS if k in ui["keys"]}
+
+
+def tech_weapons(eng, report):
+    """Every `weapons\\*.tdf` section by its name without case: {name lowered: {name, range, damage}}, the first file
+    listed winning a name. `damage` is the [DAMAGE] sub-section's `default`. The folder is the stock name [INFERRED: its
+    string's address in the executable is not mapped, so a mod that renames it is not followed]."""
+    out = {}
+    for path, where in eng.vfs.enumerate("weapons", "*.tdf", False):
+        try:
+            secs = tavfs.tdf_sections(eng.vfs.read_from(path, where))
+        except (tavfs.TdfError, tavfs.VfsError, ta3do.HpiError, struct.error, OSError) as e:
+            report.append({"element": f"weapons {path}", "refused": str(e)})
+            continue
+        for s in secs:
+            dmg = next((x["keys"].get("default") for x in s["sub"] if x["_name"].lower() == "damage"), None)
+            out.setdefault(s["_name"].lower(), {"name": s["keys"].get("name", s["_name"]).strip(),
+                                               "range": atoi(s["keys"].get("range")), "damage": atoi(dmg)})
+    return out
+
+
+def tech_pictures(eng, art, units, downloads, tname, prefix, report):
+    """{unit lowered: the frame its build button shows} on every numbered page of `tname`'s menu for the side whose
+    prefix is `prefix`: menu_of's reading of the pages, each build button pictured by the sidebar's own rule
+    (gadget_picture: the page's bank or commongui by the button's name, then the unit's download picture, then its
+    `<unitpics>` PCX). A button pictured by no frame (a label) gives nothing."""
+    out = {}
+    got = type_pages(eng, units[tname.lower()]["name"], downloads, prefix, [])
+    if not got:
+        return out
+    pages, mine = got
+    for page, file in pages:
+        if not page:
+            continue
+        try:
+            path, where, recs = read_screen(eng, file, [])
+            check_panel(file, recs[0])
+        except SideError:
+            continue
+        fill_downloads(recs, page, mine, file, [])
+        for g in recs[1:]:
+            if g is None or g["id"] != 1:
+                continue
+            role, unit, grey, hidden = button_state(g, units, page, False, len(recs))
+            if role != "build" or not unit or grey or hidden or unit.lower() in out:
+                continue
+            pic, _rect = gadget_picture(art, g, role, unit, file, f"{file}#{g['index']}", report)
+            if pic.get("frames"):
+                out[unit.lower()] = art.frames[pic["frames"][0]]
+    return out
+
+
+def tech_pack(eng, out, palette, report):
+    """`out`/tree.json, `out`/pics/<unit>.png (the build picture, `<unitpics>\\<UnitName>.PCX` in the install's
+    palette) and `out`/units/ with `out`/scene.json (every unit's model and COB script, write_units with owner 0, which
+    tools/wiki/serve.py's COB host opens by this folder's path). Returns the number of units, or 0 with no tree."""
+    units = unit_index(eng, report)
+    sides = read_sides(eng, report)
+    downloads = read_downloads(eng, report)
+    weapons = tech_weapons(eng, report)
+    art = SideArt(eng, report)
+    (out / "pics").mkdir(parents=True, exist_ok=True)
+    cache, rows, tree, pictures = {}, {}, [], {}
+    for s in sides:
+        root = s["commander"].lower()
+        if root not in units:
+            report.append({"element": f"tech tree {s['name']}", "refused": f"no units\\{s['commander']}.FBI"})
+            continue
+
+        def menu(t, prefix=s["prefix"]):
+            return [x for x in menu_of(eng, units, downloads, t, prefix, cache) if x in units]
+        order, _depth = side_walk(root, menu)
+        # THE PICTURE a unit's card and chips show: its build button's on the first menu of the walk that holds it
+        for t in order:
+            if menu(t):
+                for k, fr in tech_pictures(eng, art, units, downloads, t, s["prefix"], report).items():
+                    pictures.setdefault(k, fr)
+        tree.append({"name": s["name"], "prefix": s["prefix"], "commander": root, "order": order,
+                     "menus": {t: menu(t) for t in order if menu(t)}})
+        for t in order:
+            if t in rows:
+                continue
+            u = units[t]
+            x = tech_fbi(eng, u)
+            ws = []
+            for k in ("weapon1", "weapon2", "weapon3"):
+                if x.get(k):
+                    w = weapons.get(x[k].lower())
+                    ws.append({"id": x[k], **(w or {"name": x[k]})})
+            rows[t] = {"name": u["name"], "title": u["title"], "description": x.get("description", ""),
+                       "structure": is_structure(u), "mobile": is_mobile(u), "builder": is_builder(u),
+                       "canfly": bool(u["canfly"]),
+                       "water": u["minwaterdepth"] is not None and u["minwaterdepth"] > 0,
+                       "metal": u["buildcostmetal"], "energy": u["buildcostenergy"], "buildtime": u["buildtime"],
+                       "health": atoi(x.get("maxdamage")), "speed": u["maxvelocity"], "sight": u["sightdistance"],
+                       "radar": u["radardistance"], "workertime": u["workertime"], "energymake": net_energy(u),
+                       "metalmake": u["metalmake"], "extracts": u["extractsmetal"],
+                       "storage": [u["metalstorage"], u["energystorage"]], "category": x.get("category", ""),
+                       "weapons": ws, "cloaked": atoi(x.get("init_cloaked")) & 1 == 1,
+                       "stealth": atoi(x.get("stealth")) & 1 == 1, "hidedamage": atoi(x.get("hidedamage")) & 1 == 1,
+                       "fp": [u["fx"], u["fz"]], "pic": None}
+            fr = pictures.get(t)
+            if fr is None:
+                # a unit on no build button (the commander): its <unitpics> PCX, the rule's last picture
+                hit = eng.load(eng.dirs["unitpics"], u["name"], "PCX")
+                try:
+                    fr = Pixels(*read_pcx(hit[0]), None) if hit else None
+                except ValueError as e:
+                    report.append({"element": f"unitpic {u['name']}", "refused": f"{hit[1]}: {e}"})
+            if fr is not None:
+                (out / "pics" / f"{t}.png").write_bytes(
+                    ta3do.write_indexed_png(fr.width, fr.height, fr.pixels, palette, fr.transparent))
+                rows[t]["pic"] = f"pics/{t}.png"
+    if not tree:
+        return 0
+    meshes = write_units(out, eng, {}, report, [rows[k]["name"] for k in rows])
+    (out / "pal.bin").write_bytes(bytes(b for c in palette for b in (*c, 255)))
+    (out / "scene.json").write_text(json.dumps({"format": "ta-scene/1", "units": meshes}))
+    (out / "tree.json").write_text(json.dumps({"format": 1, "note": "derived from the local install by "
+                                               "tools/wiki/gfx.py; gitignored, never committed",
+                                               "sides": tree, "units": rows}))
+    return len(rows)
+
+
 def side_pack(eng, mod, descs, rows, out, pal, report, sights):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
@@ -2725,7 +2868,8 @@ def main(argv=None):
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1
         lay = pack["layout"]
-        print(f"gfx.py: wrote {out}/: {len(lay['screens'])} screens; "
+        ntech = tech_pack(eng, out / "techtree", palette, report)
+        print(f"gfx.py: wrote {out}/: {ntech} units in the tech tree; {len(lay['screens'])} screens; "
               + "; ".join(f"{s['name']}: casts {sum(1 for c in cs['casts'].values() if c)}/{len(CASTS)}, types "
                           f"{', '.join(f'{t} ({len(v['pages'])} pages)' for t, v in s['types'].items()) or 'none'}"
                           for s, cs in zip(lay["sides"], pack["casting"]))

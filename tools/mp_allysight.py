@@ -157,7 +157,7 @@ def play(run, variant, out, dll, port, display):
     names = [token + "H", token + "J"]
     try:
         for name in names:
-            run.tacli("create", name, "--private-registry", "--display", display.display,
+            run.tacli("create", name, "--display", display.display,
                       "--res", "1024x768")
             game = tareplay.INSTANCES / name / "gamedir"
             (game / "ddraw.dll").write_bytes(dll.read_bytes())

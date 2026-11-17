@@ -1113,13 +1113,12 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
 def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     """A fresh tacli instance holding the setup's folder.
 
-    Its registry is PRIVATE (`create --private-registry`): a cloned prefix's hives are
-    otherwise one inode with every other instance's, and TA, TADR and the Patch Loader all
-    write the registry. tacli unlinks them before any Wine process runs in the prefix, so no
-    two prepares share a file and any number run at once."""
+    Its registry hives are its own (tacli clone_prefix copies them, never links them), and TA,
+    TADR and the Patch Loader all write the registry: no two prepares share a file, so any
+    number run at once."""
     name = inst_name(setup["name"], suffix)
     tacli("rm", name, "--force")
-    r = tacli("create", name, "--display", f":{display}", "--res", "1024x768", "--private-registry")
+    r = tacli("create", name, "--display", f":{display}", "--res", "1024x768")
     if r.returncode != 0:
         die(f"tacli create {name}: {(r.stderr or r.stdout).strip()}")
     try:
@@ -1127,8 +1126,6 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     except (OSError, ValueError) as e:
         die(f"{name}: tacli made no readable instance.json ({e})")
     gamedir, prefix = Path(meta["gamedir"]), Path(meta["prefix"])
-    if not meta.get("private_registry"):
-        die(f"{name}: tacli made the prefix without registry hives of its own")
     if DPLAY_SRC.is_dir():
         subprocess.run(["bash", str(DPINSTALL), str(prefix), str(DPLAY_SRC)],
                        capture_output=True, check=True)
@@ -3380,7 +3377,10 @@ def battle_impai_misses(text: str, records: list) -> list:
     applies = text.count("scenario: applied=")
     if applies > 1:
         return miss + [f"the battle's log holds {applies} scenario applies; the fight's start is known only for one"]
+    # a log with no arming line (a DLL older than the line) keeps the stricter anchor, the apply's own line
     at = text.rfind("scenario: applier armed")
+    if at < 0:
+        at = text.rfind("scenario: applied=")
     began = {int(seat) for seat, _ in IMPAI_MIL_TASK.findall(text[at:] if at >= 0 else text)}
     miss += [f"ImpAI's military began no task for seat {r} in the fight" for r in records if r not in began]
     return miss

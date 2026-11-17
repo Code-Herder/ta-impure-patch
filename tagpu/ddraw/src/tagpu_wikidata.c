@@ -1602,7 +1602,8 @@ static int text_keys(R* r, const TJV* root)
                                           { "features", "features" }, { "pace", "a pace" } };
     size_t i;
     for (i = 0; i < sizeof KEY / sizeof KEY[0]; i++)
-        if (tj_get(root, KEY[i][0])) return refuse(r, "is a text entry with", KEY[i][1]);
+        if (tj_get(root, KEY[i][0]) && !(i == 0 && r->e->techtree))
+            return refuse(r, "is a text entry with", KEY[i][1]);
     return 1;
 }
 
@@ -1628,13 +1629,15 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     /* `frame` absent, or "game"; a game entry has no pace */
     c = tj_get(root, "frame");
     e->frame = c && tj_is(c, TJ_STR) && !strcmp(c->str, "game") ? WIKI_FRAME_GAME : WIKI_FRAME_PAGE;
+    /* `"frame": "techtree"` is a page entry with no demos, the tech tree's */
+    e->techtree = c && tj_is(c, TJ_STR) && !strcmp(c->str, "techtree");
     /* `live` and `takeover` a game entry's, booleans, never both true; the rule
        refuses anything else below */
     e->live = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "live"), TJ_TRUE);
     e->takeover = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "takeover"), TJ_TRUE);
     e->players = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "players"), TJ_TRUE);
     if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
-    else if (c && e->frame != WIKI_FRAME_GAME) refuse(&r, "has a frame other than \"game\"", NULL);
+    else if (c && e->frame != WIKI_FRAME_GAME && !e->techtree) refuse(&r, "has a frame other than \"game\"", NULL);
     else if (e->frame == WIKI_FRAME_GAME && tj_get(root, "pace")) refuse(&r, "is a game entry with a pace", NULL);
     else if ((c = tj_get(root, "live")) && (e->frame != WIKI_FRAME_GAME || !(tj_is(c, TJ_TRUE) || tj_is(c, TJ_FALSE))))
         refuse(&r, "has a live that is not a game entry's true or false", NULL);
@@ -1646,6 +1649,8 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
         refuse(&r, "is a replay, a live game, a takeover's replay or a players' replay, never two", NULL);
     else if ((dv = tj_get(root, "demos")) && !tj_is(dv, TJ_ARR))
         refuse(&r, "has demos that are not a list", NULL);
+    else if (e->techtree && count(dv))
+        refuse(&r, "is a tech tree entry with demos", NULL);
     else if (!count(dv)) {
         /* A TEXT ENTRY: a page entry with no demos, `demos` absent or empty. Its
            page is its title, subtitle, badge and text and no stage, so it may carry nothing a stage

@@ -54,7 +54,7 @@
           <div id="e-sub"></div>
           <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
-            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="stagehud" class="hud" hidden></div><canvas id="stagetop"></canvas><div id="about" data-part="panel" hidden></div></div>
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="stagehud" class="hud" hidden></div><canvas id="stagetop"></canvas><div id="about" data-part="panel" hidden></div><div id="unit" data-part="panel" hidden><div class="scr"></div></div></div>
           </div>
           <div id="caption"></div>
           <div id="keys"></div>
@@ -63,6 +63,7 @@
             <button id="c-replay" title="Replay" data-part="button" data-glyph="i_replay"><i class="gl">&#10226;</i></button>
             <span class="sp"><button id="c-x1" data-part="button">1&times;</button><button id="c-x2" data-part="button">2&times;</button></span>
             <button id="c-try" data-part="button"></button>
+            <span class="tt" id="tt-ctl"><button id="c-fit" data-part="button">Fit</button><button id="c-zout" data-part="button">&minus;</button><button id="c-zin" data-part="button">+</button><button id="c-links" data-part="button">All links</button></span>
             <button id="c-about" data-part="button">About</button>
           </div>
           <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
@@ -103,6 +104,8 @@ resolves from the local install into the gitignored <code>gfx/</code>), <code>ss
 <script src="stage.js"></script>
 <script src="../../hudart/mockup/hud.js"></script>
 <script src="sound.js"></script>
+<script src="techtree.js"></script>
+<script src="unitview.js"></script>
 <script src="../../uikit/uikit.js"></script>
 <script src="wiki.js"></script>
 </body>
