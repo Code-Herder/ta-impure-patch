@@ -1,1 +1,1 @@
-landing-review: model=claude-opus-5-5 effort=medium range=42fa5cc8..5176bb59 (+f509e6e8) findings=4 (M2 L2) acted=0 open (next brain batch); report .data/impai/runs/reviews/fix-review-5176bb59.md date=2026-11-17
+landing-review: model=claude-opus-5-5 effort=medium range=42fa5cc8..5176bb59 (+f509e6e8) findings=4 (M2 L2) acted=4 fixed-in=d29af946 (confirmed by fix-review-133c30c2); report .data/impai/runs/reviews/fix-review-5176bb59.md date=2026-11-17
