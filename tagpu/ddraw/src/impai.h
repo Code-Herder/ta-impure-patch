@@ -840,6 +840,11 @@ typedef struct IMPAI_MIL {
        Recorded data, compared with 0 only */
     uint8_t       lead;
     uint8_t       unreached_next;     /* the ring's next entry, held below IMPAI_UNREACHED before it indexes   */
+    /* THE ISLAND (impai_mil.c, island): 1 when the last military decision found the seat's land army reaching
+       nothing that can hold an enemy on a naval map; the economy then builds no land plant past the first and
+       holds the land army to THE ISLAND'S LAND BUDGET (impai_econ.c). Recorded data, compared with 0 only. It
+       stands where the record had padding before unreached[], so the record's size is unchanged */
+    uint8_t       island;
     IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];
     /* THE LEAD's evidence and memory (impai_mil.c, lead), recorded data: the GameTime of the seat's last lost
        prediction -- a squad's retreat, the home losing --, 0 never, held to now; and the enemy's mobile value at

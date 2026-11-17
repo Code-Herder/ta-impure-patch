@@ -6793,6 +6793,51 @@ static void check_army_targets(void)
     s_milp = NULL;
 }
 
+/* THE ISLAND'S LAND BUDGET (impai_econ.c, island_classes): the governor's world, no constructor the plan allows, the
+   raider's value 100 and the destroyer's 300 (a sea assault), twenty raiders of the seat's, so its land army's
+   value is 2 000:
+   (a) not on THE ISLAND, the raider's menu: the raider (Q3);
+   (b) on THE ISLAND, no sea army: no army order;
+   (c) on THE ISLAND, twenty destroyers: the land army a quarter of the army's 8 000 exactly, no army order;
+   (d) on THE ISLAND, twenty-one destroyers: below a quarter, the raider;
+   (e) (b) with the menu the raider and the destroyer: the destroyer, the land class refused, not the order. */
+static void check_island_budget(void)
+{
+    static const uint16_t RAIDER[] = { M_RAIDER }, BOTH[] = { M_RAIDER, M_DEST };
+    static const char* const NAME[5] = { "(a) not the island", "(b) the island, no sea army",
+                                         "(c) the island, a quarter exactly", "(d) the island, below a quarter",
+                                         "(e) the island, the destroyer on the menu" };
+    static const int DEST[5] = { 0, 0, 20, 21, 0 };
+    static const int WANT[5] = { M_RAIDER, 0, 0, M_RAIDER, M_DEST };
+    IMPAI_BRAIN_OUT bo;
+    int c, cons, army, k;
+    for (c = 0; c < 5; c++) {
+        int from, raider = 0, dest = 0;
+        gov_world(1);
+        mil_sea_types();
+        menu_set(&s_w, T_FACTORY, c == 4 ? BOTH : RAIDER, c == 4 ? 2 : 1);
+        s_ti[M_RAIDER].value = 100.0f;
+        s_ti[M_DEST].value = 300.0f;
+        gov_units(M_RAIDER, 20, 100);
+        gov_units(M_DEST, DEST[c], 200);
+        s_glv.cons_open = 0;
+        s_glv.army_per_cons = 255;
+        s_mil.island = (uint8_t)(c > 0);
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &cons, &army) == 0, "decide: %s", NAME[c]);
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.verb == WQ_CMD_QUEUE) {
+                raider += s_w.log[k].c.type == M_RAIDER;
+                dest += s_w.log[k].c.type == M_DEST;
+            }
+        printf("the island's land budget, %s: army %d (raider %d, destroyer %d)\n", NAME[c], army, raider, dest);
+        CHECK(WANT[c] ? army == 1 && raider == (WANT[c] == M_RAIDER) && dest == (WANT[c] == M_DEST) : !army,
+              "%s: %s", NAME[c], WANT[c] == M_RAIDER ? "the raider" : WANT[c] ? "the destroyer" : "no army order");
+        s_mil.island = 0;
+    }
+    s_milp = NULL;
+}
+
 /* THE TARGETS KNOWN (impai_mil.c, targets_known): the military's world, enemies seen by the seat's sight. A tank and
    a ship (a type placed on water only) stamp DRY and FLOAT with the decision's GameTime and nothing else; a later
    decision that sees a submarine (held submerged by the fight content) and an aircraft stamps UNDER and AIR and
@@ -9379,6 +9424,58 @@ static void check_island_plant(void)
     s_ti[E_VP].ctech = 1;
     sea_decide("the first plant, the lab's land army past the build tech", &sy, &land);
     CHECK(sy == 1 && !land, "(f) a land army only on a plant the pick cannot take: the shipyard");
+}
+
+/* THE ISLAND'S PLANTS (impai_econ.c, island_plant; impai_brain.c, economy): the coast world, naval, the lab gone
+   and a finished shipyard at cell (66, 100), so the next plant is the seat's second:
+   (a) on THE ISLAND: a second shipyard, by the sea plant's want, and no land plant;
+   (b) on THE ISLAND, the sea plant's refusals spent, the lab and the vehicle plant offering constructors alone:
+       THE CHOICE takes no land plant, and none is ordered;
+   (c) (b) with the lab's menu also an air army type (the PT boat made a bomber): the lab, an air plant;
+   (d) (c) with the bomber's value 0: no army type, no plant;
+   (e) not on THE ISLAND: a land plant and no shipyard, Q3 and the one sea plant unchanged on a linked map;
+   (f) on THE ISLAND with no factory yet: the first plant is the shipyard (THE ISLAND'S FIRST PLANT), which the
+       rule for the plants past it does not touch;
+   (g) (b) with the commander and so the anchor in the sea at cell (70, 64): THE CHOICE reads the water plants
+       there, and takes the shipyard, a sea plant;
+   (h) (a) at a metal income of 2 a pass, below factory_per_m's pacing: no second shipyard. */
+static void check_island_plants(void)
+{
+    static const uint16_t AIRLAB[] = { E_CK, E_PT };
+    static const char* const NAME[8] = { "(a) the island, a second shipyard", "(b) the island, no sea, no air plant",
+                                         "(c) the island, no sea, the lab an air plant",
+                                         "(d) the island, no sea, the bomber of no value", "(e) not the island",
+                                         "(f) the island, the first plant", "(g) the island, no sea, a wet anchor",
+                                         "(h) the island, the income below the pacing" };
+    IMPAI_BRAIN_OUT out;
+    int c, sy, land;
+    for (c = 0; c < 8; c++) {
+        int from;
+        coast_world(C_COAST, 1, c == 7 ? 2.0f : 9.0f);
+        s_w.unit[2].live = 0;
+        if (c != 5) unit_add(&s_w, 3, E_SY, 66, 100, 1);
+        if (c == 6) unit_add(&s_w, 1, E_COM, 70, 64, 1);
+        s_smil.island = (uint8_t)(c != 4);
+        if (c == 1 || c == 2 || c == 3 || c == 6) s_st.sea_refused = IMPAI_SEA_REFUSALS;
+        if (c == 2 || c == 3) {
+            menu_set(&s_w, E_LAB, AIRLAB, 2);
+            s_ti[E_PT].klass = IMPAI_K_BOMBER;
+            if (c == 3) s_ti[E_PT].value = 0.0f;
+        }
+        from = s_w.nlog;
+        if (c == 6) {
+            CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+            printf("sea plant %s: plant %u want %u\n", NAME[c], out.plant, out.plant_want);
+            CHECK(out.plant == E_SY && out.plant_want == 2, "%s: the shipyard chosen", NAME[c]);
+            continue;
+        }
+        sea_decide(NAME[c], &sy, &land);
+        if (c == 0 || c == 5) CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
+        if (c == 1 || c == 3 || c == 7) CHECK(!sy && !land, "%s: no plant, %d %d", NAME[c], sy, land);
+        if (c == 2) CHECK(!sy && land == 1 && builds_of(from, E_LAB, NULL, NULL) == 1, "%s: the lab", NAME[c]);
+        if (c == 4) CHECK(!sy && land == 1, "%s: a land plant", NAME[c]);
+    }
+    s_milp = NULL;
 }
 
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
@@ -14529,6 +14626,7 @@ static void check_military(void)
     check_gov_five();
     check_gov_dry();
     check_army_targets();
+    check_island_budget();
     check_targets_known();
     check_gov_finish_rows();
     check_eco_shares();
@@ -14651,6 +14749,7 @@ int main(void)
     check_attention_eco();
     check_sea_plant();
     check_island_plant();
+    check_island_plants();
     check_sea_finish();
     check_sea_cmd_safe();
     check_techup();

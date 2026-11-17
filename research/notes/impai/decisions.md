@@ -574,6 +574,24 @@ The owner's answers to the spec's questions:
   type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
   **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
   estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+- **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
+  decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
+  reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
+  budget, and every plant past the first is a sea or an air plant. Q3 stays as it is on every linked map, so a map
+  of three or more players keeps its land army. **The cap** (the brain writer's choice): the land army classes
+  take an order only while their value -- built, building and queued -- is below a quarter of the whole army's,
+  so the base's defence grows with the army the seat can send and is nothing while it has none; the base meets
+  only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet first. A
+  share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: the sea
+  plant's want takes every further plant on the island, on the pacing of any further plant, and the plant choice
+  then takes an air plant only when no sea plant can be had (no builder offers one, or the refusals are spent).
+  Sea before air because the default table buys no aircraft, so an air plant there makes only constructors.
+  **Why**: on Gods of War the island seat's vehicle plant, its two constructors and its one Leveler cost 1 242
+  metal by the cap, 1.4 of the destroyers it had three of (MEASURED 2026-11-17, `exploit-naval-turtle` at
+  cc27da06); with the rule its second plant was a second shipyard at 8 527 and it held four destroyers at the cap
+  (the scratch build of the change). **What it costs**: an island seat whose menus offer no sea plant builds no
+  land plant past its first; a linked map misread as an island (THE ISLAND's gaps, [brain](brain.html)) loses
+  its land army to the cap.
 
 The first bar runs of the plant choice (13 games, 2026-11-14) found three faults. The fixes are design calls within
 the approval, each with its evidence; the owner may reverse any of them:

@@ -617,7 +617,11 @@ reach). **A class no type of the
 seat reaches in** is read without the reach, as on a linked map, so the land plants still build it by value for
 the base's defence ([decisions](decisions.html)); per class, because one amphibious type reaching on Trout Farm's
 advanced plant left the two vehicle plants poor for 726 factory-decisions (MEASURED 2026-11-14, r3
-`bar-eota-troutfarm-cc-1`). **A poor plant beside a store in surplus** buys its cheapest army type of any class,
+`bar-eota-troutfarm-cc-1`). **The island's land budget** (owner's decision, 2026-11-17): while the military
+judges the seat on an island (*The island*, below), the land army classes (land raider to land scout) take an
+order only while their value -- built, building and queued -- is below a quarter of the whole army's, tested
+before each order, so the land army passes the quarter by at most one order; the base faces only what crosses the
+water. Every linked map keeps Q3 whole. **A poor plant beside a store in surplus** buys its cheapest army type of any class,
 so no factory idles beside a full store. With no values there is no gate. BARb's build-power cap and its army/builder split are the ideas, read
 for design only. MEASURED before it, the constructor quota (12 at most, four plus one per three metal, taking
 every idle factory first): the first army unit at a median GameTime of 13 500-15 000 against a first factory at
@@ -666,7 +670,11 @@ most `IMPAI_SEA_BUILDERS`, 8, builder types), then on the menus of **the unlocks
 seat's factories make that it has none of finished, at most 8 -- at most `IMPAI_PLANT_CANDS`, 16, candidates, each
 one whose own menu holds a
 constructor that builds an extractor, a water-only plant only on a wet anchor, and a plant the way-out record passes
-over only in the waived pass (*A plant keeps a way out*). **The build tech** filters them: a plant's build tech
+over only in the waived pass (*A plant keeps a way out*); past the first plant on an island (*The island*, below),
+only a water plant or one whose menu offers an air army type, the owner's decision (2026-11-17): there the sea
+plant's want takes every further plant, on the pacing of any further plant, so the choice runs only when no sea
+plant can be had and takes an air plant. The default table buys no aircraft, so such a plant makes constructors
+alone. **The build tech** filters them: a plant's build tech
 (`IMPAI_TINFO.ctech`) is the highest tech its constructors that can build an extractor build -- the
 constructors its candidacy asks for, so a builder that only lays mines, decoys or jammers does not raise it: TA
 Zero's GoKT2AF was a tech-up candidate only through GoKT2AirJammer, a tech-2 builder whose menu is mines, decoys and
@@ -1004,7 +1012,9 @@ row is known. Once enemy structures are known, or were, a start the level seated
 its occupant is unknown, and the rows say where the enemy stands; at random starts a second start on the seat's
 own land otherwise kept the island off for the whole game. A land army that crosses the water ends it. While it holds, a wave of any layer but land goes at the finish's size, 1 + that layer's waves
 median units, still predicted to win, but inside the attention, since no land operation competes for it there. The
-economy reads the same evidence its own way for the first plant (*The island's first plant*, above). **Why**: on
+economy reads the same evidence its own way for the first plant (*The island's first plant*, above), and the
+military's verdict, kept in `IMPAI_MIL.island`, for the plants past it and the land army's budget (*The
+candidates*, *The island's land budget*, above). **Why**: on
 an island map the land army has nothing it can reach, and the 8 median units a sea wave asks never came: on Gods
 of War the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED 2026-11-17,
 `exploit-naval-turtle` at 5e4e9c24). **Gaps**: a row on a block the land army's classes do not stand on -- a
@@ -1173,8 +1183,8 @@ prediction made with a side that cannot close has no reference kind and is count
 
 **Gaps** (named, not closed): submarines are weighed against surface ships only by `can_attack`; no land unit is
 ferried; hover and amphibious plants are not preferred on island maps, and a hover minority in a land squad waits
-with it; no advanced sea plant on tech-up; no sea or air scouting; land plants keep buying land army on an island
-map, the table's shares not reweighted by reach (A4); mixed-layer predictions have no reference kind; the labels and
+with it; no advanced sea plant on tech-up, so an island seat whose plants are all sea plants never techs up; a seat the island misjudges keeps or caps its land army by the misjudgement, and the table's
+shares are not reweighted by reach (A4); mixed-layer predictions have no reference kind; the labels and
 tops are the level init's, so features destroyed or created later, and a saved game's, are not in them; the sea plant
 is at the earliest the second factory and with `factory_max` 1 there is none outside a dry hunt; any water factory counts as the sea
 plant, even one whose menu has no sea army type; the builder's reach proves a place within the limit, not that the

@@ -183,7 +183,6 @@ typedef struct MDEC {
     int                 press_base;
     uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
     uint8_t             was_lead;           /* IMPAI_MIL.lead before this decision's lead: THE FINISH'S END    */
-    uint8_t             island;             /* THE ISLAND (island): this decision's                            */
     float               own_v;              /* the seat's finished units' value (census, THE LEAD)            */
     float               own_sv;             /* of it, its structures' (THE BASE'S FLOOR)                      */
     float               raid_held;          /* THE LEAD's raid memory as this decision read it (lead): THE
@@ -1246,7 +1245,7 @@ static void dry_hunt(MDEC* d)
                            ((d->st->sea_t && d->now - d->st->sea_t <= IMPAI_DRY_T) || land_looked(d, &lr)));
 }
 
-/* THE ISLAND, each decision after THE DRY HUNT: 1 into MDEC.island when the map is naval (THE NAVAL JUDGEMENT), the
+/* THE ISLAND, each decision after THE DRY HUNT: 1 into IMPAI_MIL.island when the map is naval (THE NAVAL JUDGEMENT), the
    level a finish level (impai_finish_level: labels, a land army type and a sea block), and the seat's land army
    reaches nothing that can hold an enemy, and at least one such thing is known -- with none there is no evidence,
    and no island. What can hold an enemy: every enemy row of a type that is not a VTOL, at its block (THE LAND
@@ -1257,7 +1256,9 @@ static void dry_hunt(MDEC* d)
    structures are known, or were (impai_est_known), a start the level seated at random (WQ_START.seated 0) is no
    longer evidence: its occupant is unknown, and the rows say where the enemy stands. A land army that crosses the
    water, hovers or amphibious units holding half its value, ends it. What it changes: the waves of every layer
-   but land go at the finish's size (THE WAVE), so the sea's few ships go as soon as they would win. WHY: on an
+   but land go at the finish's size (THE WAVE), so the sea's few ships go as soon as they would win; and the
+   economy builds no land plant past the first and holds the land army to a base-defence budget (impai_econ.c,
+   THE ISLAND'S PLANTS and THE ISLAND'S LAND BUDGET, the owner's decision of 2026-11-17). WHY: on an
    island map the land army has nothing it can reach, and the 8 median units a wave asks of the sea alone never
    came: on Gods of War the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED
    2026-11-17, exploit-naval-turtle at 5e4e9c24). WHY THE RANDOM STARTS GIVE WAY: at random starts every start but
@@ -1273,7 +1274,7 @@ static void island(MDEC* d)
     LANDREACH lr;
     const int known = impai_est_known(d->st);
     int k, any = 0;
-    d->island = 0;
+    d->st->island = 0;
     if (d->st->naval != 1 || !impai_finish_level(d->in->reach)) return;
     land_reach(d, &lr);
     for (k = 0; k < d->nstarts; k++) {
@@ -1287,7 +1288,7 @@ static void island(MDEC* d)
         if (land_block(d, &lr, e->x >> 5, e->z >> 5, e->under, 0)) return;
         any = 1;
     }
-    d->island = (uint8_t)any;
+    d->st->island = (uint8_t)any;
 }
 
 /* THE LEAD, each decision after THE NAVAL JUDGEMENT and before THE DRY HUNT: the seat is far ahead when its live
@@ -2660,7 +2661,7 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     uint16_t t;
     uint8_t go[IMPAI_ARMY_MAX];
     const unsigned L = d->st->sq[s].layer;
-    const float base = (d->st->dry || d->island) && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
+    const float base = (d->st->dry || d->st->island) && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
     if (L >= TASIM_LAYERS || d->st->ebx == IMPAI_NO_ANCHOR || d->v[L] <= 0.0f ||
         d->sq[s].value < (base + (d->st->lead ? 0.0f : (float)d->st->waves[L])) * d->v[L] ||
         !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz)) != 0)
