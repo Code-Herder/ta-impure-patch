@@ -3,8 +3,8 @@
 The specification is the mockup ([the in-game wiki](ingame-wiki.html), *The tech tree entry*):
 `tools/wiki/mockup/techtree.js` (the model, the layout, the drawing, the hit test),
 `unitview.js` (the unit's model in 3D) and `wiki.js` (the stage's input and the unit's panel).
-The game today reads `"frame": "techtree"` and lays the entry out as a text entry. This note is
-how the DLL gets to the mockup, in landings, each one finished, verified in the game and reviewed
+The game reads the tree from the running mod, draws it on the theatre's stage and opens a picked
+unit's panel (T1-T3); the unit in 3D (T4) is left. This note is how the DLL gets to the mockup, in landings, each one finished, verified in the game and reviewed
 before the next starts (`CLAUDE.md`, *Commit freely, land locally, merge to main once*).
 
 ## What the DLL already has
@@ -65,6 +65,19 @@ description, flags, the figures and weapons, the walk to it, who builds it, its 
 builds by kind, each a chip that selects; About and the panel never show together. *Exit*:
 `wikilaycheck` pairs it with `wiki.js`'s panel; in the game, a unit of each kind opened in two
 setups, Escalation's upgrades among them.
+
+*Built (`7c1a2393`).* The panel is the page's (`tagpu_wikilay.c` `unit_panel`), laid out from the
+render thread's own tree, in About's place and the top layer; its pictures are `HOP_PIC` ops of
+the tree's sheet on the page's list. What the landing found: the HUD faces have neither `…` nor
+`›`, so a cut text ends in three periods -- the panel's chips and, since this landing, the cards'
+clips, whose ellipsis the game drew as a missing glyph -- and the walk is joined by `»`; the
+mockup cuts its chips itself (`chipCut`), since the browser's `text-overflow` can only draw `…`,
+and cuts them again once the faces and the text styles have loaded (`document.fonts.ready` can
+resolve before any text asks for a face). `wikilaycheck`'s six panel cases agree box for box,
+line for line and picture for picture. In the game: `wiki_regression.py techtree` opens the panel
+on a pick (the canvas narrows 1404 -> 866 pixels), follows a chip at 1:1 and closes it; the mods
+run's (t3) opens a unit of every kind each setup's side holds -- in Escalation all ten kinds,
+ARMASP_UPGRADE among them, 36 panels; ProTA nine, 21 panels.
 
 **T4: the unit in 3D.** A perspective view of one unit in the panel's view rect on the render
 thread: the model posed by its own COB script through the wiki's COB host (`tagpu_wikicob.c`),

@@ -1905,7 +1905,7 @@ draws it.
   the page demo's place, steps it as above, copies the held view, fills the record after the fill's
   last step (`tagpu_wikiframe_record`: the game's view points into the simulation's arrays, which
   the next step may free; the record holds values only), drains the sound past the view's `quiet`,
-  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 760 bytes with
+  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 768 bytes with
   it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
   each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
   fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about` and
@@ -1928,7 +1928,7 @@ draws it.
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
   (About), the question, the stage HUD cut to the canvas, the page. Each hit carries
   its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
-  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 108 bytes), with the stage HUD's playhead run
+  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 132 bytes), with the stage HUD's playhead run
   as drawn, the end it stood for, on a live strip the span it stood for (`hud_first`, `hud_G`:
   first to max(G, first), the record's; 0, 0 on any other frame), on a takeover's watching frame
   with the lanes open **the lanes it drew** (`nlane`, `lane_id[3]`: the fork each lane showed, in

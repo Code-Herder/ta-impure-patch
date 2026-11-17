@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10108 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10132 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -49,7 +49,7 @@
    the 164 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles, 2 KB a replay's
    overlays and minimap pass; MEASURED as sizeof on the DLL's compiler) and a frame:game entry's
    frame record after it (WIKIFRAMEREC, 4600 bytes, 2896 of them a players record's samples; the
-   whole area 172760, the head 344, MEASURED as sizeof on the DLL's compiler) are
+   whole area 172768, the head 352, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */
