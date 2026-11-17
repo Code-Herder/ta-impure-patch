@@ -98,7 +98,11 @@ only trace of TADR, 448 and 441 changed runs of the game's code with none into T
 takes Zero's map pack after Alpha 5 (`TA_Zero_Maps.ufo`: Zero's eighteen maps and the `TAZ_*`
 features they and TA Forever's Zero maps name), so `tazero-alpha5` carries it as the fixture
 `tazero-mappack`; without it 6P Wild Hunt stops at load with `Record "TAZ_Raindance_Metal1"
-missing from feature files`. Every TA Zero game announces one rejected type in chat at entry:
+missing from feature files`. The managed TA Zero package is built from this setup
+(`mods/tazero.json` names it), so it carries the pack's `TAZ_*` features too: the fingerprint
+counts them (only `maps\` is left out), and a package without them keeps Start off against a
+TA Forever install, as `managed-tazero`'s network game shows when the package is older than the
+setup (`modpack.py packages tazero`, then `catalog`). Every TA Zero game announces one rejected type in chat at entry:
 `COB: ZZZ (welcome.to/yankspankers), type 270 disabled. Script ZZZ.COB: piece index exceeds model
 allocation`. ZZZ is the recorder drop-in's demo tower (`TADEMOZ.ufo`, TA Forever's first tazero
 package): its script declares four pieces (`base`, `plasturret`, `bouy`, `light`) over a model of
