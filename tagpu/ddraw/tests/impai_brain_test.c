@@ -7588,28 +7588,47 @@ static void check_army_damage(void)
 /* THE SUBSTITUTE IS AN ARMY TYPE (impai_mil.c, substitute): a radar contact never identified beside identified
    enemies seen now, the seat's own army three tanks. (a) The enemy commander, a constructor and a raider: the
    raider, though the constructor is the median of the three by value. (b) The enemy commander alone: the seat's
-   own median army type, the tank, not the commander. */
+   own median army type, the tank, not the commander. (c) The commander, a raider and an air scout that deals
+   nothing, of more value than the raider: the raider -- the enemy's unarmed air scout is never the substitute --,
+   and the picture's air seen 0, the scout counted in no class. (d) (c) with the air scout armed: the air scout, and
+   its value seen in the air. */
 static void check_mil_substitute(void)
 {
     IMPAI_MIL_OUT o;
     int k, c;
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 4; c++) {
         mil_world();
         for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 60);
         enemy(1300, M_RAIDER, 300, 20, IMPAI_RADAR, 1);
         s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
         s_rows[1300].seat[0].owner = 0xFF;
         enemy(1301, T_COM, 300, 120, IMPAI_LOS, 1);
-        if (!c) {
-            enemy(1302, T_CONS, 304, 120, IMPAI_LOS, 1);
+        if (c != 1) {
+            enemy(1302, c ? M_SCOUT : T_CONS, 304, 120, IMPAI_LOS, 1);
             enemy(1303, M_RAIDER, 308, 120, IMPAI_LOS, 1);
         }
+        if (c >= 2) {
+            s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+            s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+            s_ti[M_SCOUT].value = s_ti[M_RAIDER].value + 100.0f;
+            s_threat[M_SCOUT].dps_ground = (uint16_t)(c == 3 ? 10 : 0);
+            s_threat[M_SCOUT].dps_air = s_threat[M_SCOUT].dps_water = 0;
+        }
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the substitute decision runs");
-        printf("substitute, %s: values com %.0f cons %.0f raider %.0f; radar_as %u\n",
-               c ? "the commander alone" : "a commander, a constructor and a raider", (double)s_ti[T_COM].value,
-               (double)s_ti[T_CONS].value, (double)s_ti[M_RAIDER].value, s_mil.radar_as);
-        CHECK(s_mil.radar_as == (c ? M_TANK : M_RAIDER), "the substitute: %u", s_mil.radar_as);
+        printf("substitute, %s: values com %.0f cons %.0f raider %.0f; radar_as %u, air seen %.0f\n",
+               c == 3 ? "a commander, an armed air scout and a raider"
+               : c == 2 ? "a commander, an unarmed air scout and a raider"
+               : c    ? "the commander alone"
+                      : "a commander, a constructor and a raider",
+               (double)s_ti[T_COM].value, (double)s_ti[T_CONS].value, (double)s_ti[M_RAIDER].value, s_mil.radar_as,
+               (double)s_mil.air_seen);
+        CHECK(s_mil.radar_as == (c == 1 ? M_TANK : c == 3 ? M_SCOUT : M_RAIDER), "the substitute: %u", s_mil.radar_as);
+        if (c == 3) CHECK(s_mil.air_seen > 0.0f, "the armed air scout seen in the air: %.0f", (double)s_mil.air_seen);
+        if (c == 2)
+            CHECK(s_mil.air_seen == 0.0f, "the unarmed air scout in no class: air seen %.0f", (double)s_mil.air_seen);
     }
+    s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_ti[M_SCOUT].flags &= (uint8_t)~IMPAI_TF_VTOL;
 }
 
 /* THE STAY-OR-GO (impai_mil.c, member_counts) far from the base, where a contact is no base threat, the estimate

@@ -741,7 +741,12 @@ the approval, each with its evidence; the owner may reverse any of them:
   "about 1-2 game minutes" --, each leg to the nearest such area, and home when none is left; so a start that stays
   empty (random starts, or one an ally watches) costs one look a refresh, not a trip at every decision. Only a unit
   of the air scout's class makes the trip: a seat without one sends none of its aircraft, which would otherwise
-  detach a fighter to a blind area at every decision. **What it costs**: an enemy air scout presses
+  detach a fighter to a blind area at every decision. **The enemy's air scouts stay out**: the exception is for the
+  seat's own buy, so an enemy air scout that deals nothing is never what a radar dot counts as (*the substitute*)
+  and counts in no class of the picture, as before the class took it. With it in the substitute's median, on
+  bar-nota-lavamania-ca-2 under ProTA nine radar dots were weighed as air scouts, the stay-or-go retreated 344
+  times against 164 and the game reached the cap where the brain before the class won at 57 495 (MEASURED
+  2026-11-17; the brain with the rule, built beside *A commander at the shore* at c7f40dd4, wins it at 37 242). **What it costs**: an enemy air scout presses
   nothing (THE PRESSURE takes armed members only), and the fight content's digest changes with the class, so
   `predfit check` needs a refit to the same coefficients. **What it does not reach**: the turtle's seat gets no air plant before the cap (its second sea
   plant came at GameTime 8 587, metal income 9.7 at the cap, MEASURED at bca430ab), so there the scout waits on the

@@ -190,7 +190,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    merges duplicates into the lowest-indexed and sends ATTACK, RAID and SCOUT squads past their bound to FORM.
 2. **The picture**, from the seat's own column only: enemy rows seen now (own sight, an ally's, the radar pass),
    and structures also as ghosts; a radar contact never identified counts as the median identified enemy mobile
-   type **of an army class** -- never a commander, a builder or a type that deals nothing --, else the seat's own
+   type **of an army class** -- never a commander, a builder or a type that deals nothing, the enemy's unarmed air
+   scouts included (`scout_unarmed`, which keeps them out of the picture's class values too) --, else the seat's own
    median army type: early in a game the identified mobiles are the commander and its builders, which made every
    dot a commander with its D-gun (ARMCOM at 12 of 13 retreats on Lava Mania against TADR's install) or a target
    that deals nothing (CORCA, ProTA; MEASURED 2026-11-14). The air classes stay in: a dot carries no height, and

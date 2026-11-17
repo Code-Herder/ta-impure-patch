@@ -788,13 +788,28 @@ static void etype_add(MDEC* d, uint16_t type, float value)
    AN ARMY TYPE, a bound: a radar dot counts as a type some enemy factory builds for its army -- never a commander
    (TASIM_RF_COMMANDER has no class), never a builder (role BUILDER has none) and never a type that deals no damage
    (impai_class_of). klass is below IMPAI_KS by its own test, and every et[] type is below nti (picture adds only
-   identified rows). WHY: early in a game the identified mobiles are the commander and its builders, and the
+   identified rows), and never the enemy's air scout that deals nothing (scout_unarmed). WHY: early in a game the identified mobiles are the commander and its builders, and the
    median of them made every dot a commander with its D-gun (value 24 109-30 423 retail) -- ARMCOM at 12 of 13
    retreats on Lava Mania against TADR's install -- or a builder, a target that deals nothing (CORCA, ProTA), both
    MEASURED 2026-11-14 from the recordings' s_mil radar_as. The air classes stay in: a dot carries no height
    (IMPAI_SEEN), so the median of what was identified is the best guess, and a squad's stay-or-go decides what
    to do about an aircraft it cannot fight (tasks, member_counts). IMPAI_MIL.radar_as, the builders' ground map
    (impai_maps_build) and THE PRESSURE's sub_hits_ground all read this one answer. */
+/* 1 when type t is the air scout's class and deals nothing (no ground, air or water damage on its threat row, or no
+   row): the owner's one exception to *No army class without damage* is for the seat's own buy (impai_table.c, THE
+   AIR SCOUT), so the enemy's such scouts stay out of what that rule kept them out of -- THE SUBSTITUTE and the
+   picture's class values (picture). WHY: on bar-nota-lavamania-ca-2 under ProTA, once the class took the enemy's
+   unarmed air scouts, a squad's prediction there weighed nine more members (m 0.652 against 0.760 at GameTime
+   41 002) and the seat retreated 344 times to the champion's 164 and reached the cap, where the champion won at
+   57 495 (MEASURED 2026-11-17, the a7fc308e and 9f118119 brains with a prediction log) */
+static int scout_unarmed(const MDEC* d, unsigned t)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const IMPAI_THREAT* th = v && v->threat && t < (unsigned)v->ntypes ? &v->threat[t] : NULL;
+    return t < d->in->nti && d->in->ti[t].klass == IMPAI_K_ASCOUT &&
+           (!th || (!th->dps_ground && !th->dps_air && !th->dps_water));
+}
+
 static uint16_t substitute(const MDEC* d)
 {
     uint16_t types[ETYPES > IMPAI_ARMY_MAX ? ETYPES : IMPAI_ARMY_MAX];
@@ -802,7 +817,7 @@ static uint16_t substitute(const MDEC* d)
     int k, i, n = 0;
     for (k = 0; k < d->net; k++) {
         const float x = d->in->ti[d->et[k].type].value;
-        if (d->in->ti[d->et[k].type].klass >= IMPAI_KS) continue;
+        if (d->in->ti[d->et[k].type].klass >= IMPAI_KS || scout_unarmed(d, d->et[k].type)) continue;
         for (i = n; i > 0 && (vals[i - 1] > x || (vals[i - 1] == x && types[i - 1] > d->et[k].type)); i--) {
             vals[i] = vals[i - 1];
             types[i] = types[i - 1];
@@ -971,7 +986,7 @@ static void picture(MDEC* d)
             const IMPAI_THREAT* th = v->threat && e->type < (unsigned)v->ntypes ? &v->threat[e->type] : NULL;
             pin.total += e->value;
             if (e->mobile) {
-                if (t->klass < IMPAI_KS) pin.kval[t->klass] += e->value;
+                if (t->klass < IMPAI_KS && !scout_unarmed(d, e->type)) pin.kval[t->klass] += e->value;
                 mobile_value += e->value;
             } else {
                 if (th && th->dps_air > th->dps_ground) pin.aa_struct += e->value;

@@ -14,4 +14,7 @@ M = [
     ("free builder ignores energy", ECON, "    for (i = 0; d->plant_air_blind && i < d->njobbed; i++)", "    for (i = 0; d->plant_air_blind && 0 && i < d->njobbed; i++)"),
     ("any build taken", ECON, " && in->ti[j->build].cat == IMPAI_C_ENERGY &&", " &&"),
     ("taken in a stall", ECON, "    return !d->e_stall && j->kind == IMPAI_JOB_BUILD", "    return j->kind == IMPAI_JOB_BUILD"),
+    ("scout in the substitute", MIL, "klass >= IMPAI_KS || scout_unarmed(d, d->et[k].type)) continue;", "klass >= IMPAI_KS) continue;"),
+    ("scout in the picture", MIL, "if (t->klass < IMPAI_KS && !scout_unarmed(d, e->type)) pin.kval", "if (t->klass < IMPAI_KS) pin.kval"),
+    ("armed scout dropped", MIL, "           (!th || (!th->dps_ground && !th->dps_air && !th->dps_water));", "           (1 || !th || (!th->dps_ground && !th->dps_air && !th->dps_water));"),
 ]
