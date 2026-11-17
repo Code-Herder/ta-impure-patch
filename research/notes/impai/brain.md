@@ -390,7 +390,15 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    start to go to -- the dearest of the layer's scout class, else the cheapest of its fastest quarter --, so a land
    army that reaches a start scouts as before, and a seat whose land army reaches none still learns where the enemy
    stands: on Gods of War no land unit reached a start, and the seat sent no scout and saw no enemy to the cap, a
-   submarine and a destroyer at home (MEASURED 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A ship reaches a
+   submarine and a destroyer at home (MEASURED 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). **The layer's last
+   healthy unit**: while the estimate rests on an enemy structure -- the layer's wave, forming or waiting, has a
+   goal known --, the scout is never the layer's only healthy army unit (at least half its health,
+   whatever its squad): the pick takes only a unit below that, and none when there is none. While nothing is known
+   the rule holds nothing, so a navy of one healthy ship still scouts: on an island a sea wave is one median unit,
+   and a rule that held a forming wave's only unit whatever was known would never scout with it. On Gods of War
+   the scout took the second of two destroyers, the one healthy, the first at 750 of 3 150 hp, east across the
+   map from GameTime 15 600 to the cap while the enemy's tower and commander were known (MEASURED 2026-11-17 at
+   75236135's code). A ship reaches a
    start, which stands on land, when a block of its component lies within 1 024 px of it. A leg is arrived at as a
    squad's (*the arrival*): within 256 px of the point travel sends the scout to -- its spread point when it reaches
    that, else the leg's substitute --, and a leg travel gives no point at all is over at once. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
@@ -462,7 +470,21 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    fight first. **Every member fights**, whatever its health: the squad's side in each prediction, its wave's
    threshold, the home and the stand count every member, so every member counted is one that fights -- no army type
    heals by itself, and a member that left fights below a share of its health would leave every fight for the rest
-   of its life while counted as a fighter ([decisions](decisions.html), *The step back: removed*). A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
+   of its life while counted as a fighter ([decisions](decisions.html), *The step back: removed*). **The stand-off**,
+   before an ATTACK squad's targets and travel: a member never closes on a static defence it outranges -- an armed
+   enemy structure seen now or remembered, its reach R its type's ground reach (the threat row's `hit_range`), the
+   member's own at least R + 64 px (`STAND_PAD`) and the fight content giving it a rate on the defence. Against
+   the nearest such defence within its reach + 384 px, a member inside R + 64 px moves out to R + 64 px on the line
+   from it through the member; else it attacks the defence when it is seen now, from its own range; else it
+   attacks the ground at the defence's remembered block -- a structure stands where it was seen, and the member
+   need not see it: a destroyer reaches 660 px and sees 330. A remembered defence is shelled only while the
+   squad's layer has not given its block up, and shelling it is no progress (*the goal's progress*), so a squad
+   whose only work is a ghost gives its goal up in `task_timeout` + its travel, and the ghost's block with it, and
+   travel then lights the block or meets the defence alive; an attack on a seen defence is progress. Why: on Gods
+   of War the first destroyer sailed to the water nearest its goal, the enemy commander, 231 px from a light laser
+   tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks (MEASURED 2026-11-17 at 75236135's
+   code). **Gaps**: a defence not yet seen is met at the member's sight, which can be inside its reach; mobile units
+   are not stood off; at most 32 defences a squad, the nearest its centroid. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
    have it touch a factory's footprint or a kept way out to the next point of the grid that does not (the yard
    rule, *Task allocation*), which the arrival reads too; a move toward a unit passes no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.

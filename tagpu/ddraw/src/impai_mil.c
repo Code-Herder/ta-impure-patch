@@ -52,6 +52,7 @@ typedef struct MUNIT {          /* an army unit of the census                   
     uint32_t hp_max;
     float    value;
     int32_t  range, speed;
+    uint8_t  stand;             /* 1 when THE STAND-OFF ordered it this decision: fight and travel pass it    */
 } MUNIT;
 
 typedef struct MENEMY {         /* an enemy row of the seat's column                                       */
@@ -2859,19 +2860,35 @@ static int starts_reached(MDEC* d, const MUNIT* u)
 }
 
 /* the scout of layer L (scouting): the dearest unit of L's scout class (IMPAI_K_LSCOUT, IMPAI_K_ASCOUT; the sea has
-   none) in a FORM squad, else the cheapest of L's FORM units among the fastest quarter of their speeds; -1 none */
+   none) in a FORM squad, else the cheapest of L's FORM units among the fastest quarter of their speeds; -1 none.
+   THE LAYER'S LAST HEALTHY UNIT: while the estimate rests on an enemy structure -- L's wave, forming or waiting
+   in its FORM squad, has a goal known --, the scout is never L's only healthy army unit (healthy: at least half
+   its maximum health, whatever its squad): the pick then takes only a unit below that, and none when there is
+   none. While nothing is known the wave's goal is a guess and the scout is how it gets a real one, so a navy
+   of one healthy ship still scouts: on an island a sea layer's wave is one median unit (form_attack), so a rule
+   that held a forming wave's only unit whatever was known would never scout with it, the state scouting's WHY
+   measured (no enemy seen to the cap). WHY: on Gods of War the scout took the second of the seat's two
+   destroyers, its one healthy unit, the first at 750 of 3 150 hp, east across the map from GameTime 15 600 to
+   the cap while the enemy's tower and commander were known (MEASURED 2026-11-17, exploit-naval-turtle at
+   75236135's code). BOUND: the army three times. */
+static int healthy(const MUNIT* u) { return 2 * (int64_t)u->hp >= (int64_t)u->hp_max; }
+
 static int scout_pick(const MDEC* d, unsigned L)
 {
     const unsigned sk = L == TASIM_LAYER_LAND ? IMPAI_K_LSCOUT : L == TASIM_LAYER_AIR ? IMPAI_K_ASCOUT : IMPAI_KS;
-    int k, pick = -1;
+    int k, pick = -1, fit = 0, keep;
     int32_t fastest = 0;
-    for (k = 0; k < d->narmy; k++)
-        if (d->army[k].sq < IMPAI_SQUADS && d->st->sq[d->army[k].sq].task == IMPAI_SQ_FORM && d->army[k].layer == L &&
-            d->army[k].speed > fastest)
-            fastest = d->army[k].speed;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        if (u->layer != L) continue;
+        fit += healthy(u);
+        if (u->sq < IMPAI_SQUADS && d->st->sq[u->sq].task == IMPAI_SQ_FORM && u->speed > fastest) fastest = u->speed;
+    }
+    keep = d->est_struct && fit <= 1;
     for (k = 0; k < d->narmy; k++) {
         const MUNIT* u = &d->army[k];
         if (u->sq >= IMPAI_SQUADS || d->st->sq[u->sq].task != IMPAI_SQ_FORM || u->layer != L) continue;
+        if (keep && healthy(u)) continue;
         if (u->klass == sk) {
             if (pick < 0 || d->army[pick].klass != sk || u->value > d->army[pick].value) pick = k;
         } else if (u->speed * 4 >= fastest * 3 && (pick < 0 || (d->army[pick].klass != sk &&
@@ -2893,7 +2910,7 @@ static int scout_pick(const MDEC* d, unsigned L)
    stands. WHY: on Gods of War, whose starts stand on islands, no land unit reached a start, so the seat sent no
    scout and saw no enemy to the cap, a submarine and a destroyer of its own at home (MEASURED 2026-11-17,
    exploit-naval-turtle at 5e4e9c24: scouts=0, enemies_max=0 at GameTime 20 000). BOUND: three picks, each the army
-   twice, and at most three next_point. */
+   three times, and at most three next_point. */
 static void scouting(MDEC* d)
 {
     static const uint8_t LAYERS[] = { TASIM_LAYER_LAND, TASIM_LAYER_SEA, TASIM_LAYER_AIR };
@@ -3619,7 +3636,8 @@ static int can_attack(const MUNIT* u, uint8_t aim)
 
 /* One order of resolver mode `mode` to army unit u, at target slot `target` or point (x, z): none when the
    decision's orders are spent, when the resolver answers 0 or -1 (counted), or when the unit's head already
-   says it -- the same action and target, or a move within HEAD_NEAR_PX of the point; for the commander, not
+   says it -- the same action and target, or for a move or a ground attack (no target) the same action within
+   HEAD_NEAR_PX of the point; for the commander, not
    while an economy order to it is pending, which will replace that head (impai_brain.c, THE COMMANDER'S
    MARKERS). No node pointer is kept: the head is a copy. An order to the commander the WORLDQ takes sets the
    military's marker. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
@@ -3640,7 +3658,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     h = d->q->ops->head(d->q, slot, &o);
     if (h == 1 && o.action == a &&
         !(d->com && slot == d->com && impai_com_marked(d->in->brain->com_until, d->now, d->in->persona)) &&
-        (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
+        ((mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN) && target != WQ_NONE
              ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
         return 2;
     c.verb = WQ_CMD_NEW;
@@ -3688,6 +3706,112 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
         }
     }
     return target;
+}
+
+/* THE STAND-OFF: an ATTACK squad's member never closes on a static defence it outranges. A defence is an armed
+   enemy structure the seat holds a row for, seen now or remembered; its reach R is its type's ground reach (the
+   threat row's hit_range: what it hits a surface unit with), and member u OUTRANGES it when u's own ground reach
+   is at least R + STAND_PAD and the fight content gives u a rate on it. For each member, the nearest defence it
+   outranges within its reach + REACH_PAD -- the distance at which the squad engages a contact -- decides its
+   order before any target or travel point:
+   - inside R + STAND_PAD of it: a move out to the point R + STAND_PAD from it on the line from it through the
+     member (move_to), the anchor's side for a member on its point;
+   - else, the defence seen now (target_now, can_attack): an attack on it, which the engine carries out from the
+     member's own range, past the defence's;
+   - else, remembered: an attack on the ground at its block, the engine's ground attack (WQ_CAN_ATTACK with no
+     target): a structure stands where it was seen, so this sees nothing through the fog, and the member does not
+     need its own sight of it -- a destroyer's 660 px against its sight of 330 px.
+   A member so ordered is passed over by fight and travel this decision (MUNIT.stand).
+   TERMINATION: a ghost stays until its block is lit (impai_know.c), which a member held at R + STAND_PAD may never
+   do, so a remembered defence is shelled only while the squad's layer has not given its block up (unreached), and
+   the shelling is no progress (THE GOAL'S PROGRESS): a squad whose only work is shelling ghosts stalls in
+   task_timeout + its travel and gives up its goal and, with it, the last ghost it shelled (*ghost), which
+   travel then passes -- lighting its block or meeting it alive, seen. An attack on a seen defence is progress.
+   WHY: on Gods of War the seat's first destroyer (reach 660 px) sailed to the water nearest its goal, the enemy
+   commander, 231 px from a light laser tower (reach 300 px), and lost 2 400 of its 3 150 hp there in 600 ticks
+   while it killed the tower (MEASURED 2026-11-17, exploit-naval-turtle at 75236135's code, GameTime 11 960..12
+   560). RESIDUALS: a defence not yet seen is met at the member's sight, which can be inside its reach; mobile
+   units are not stood off. BOUND: the enemy rows once, STAND_MAX defences kept nearest the squad's centroid, and
+   each member against them. Returns the members ordered at a defence seen now. */
+#define STAND_PAD 64            /* [hand-written: the bar's to move] past a defence's reach                      */
+#define STAND_MAX 32            /* the defences one squad's stand-off weighs, the nearest its centroid           */
+
+/* enemy or own type t's ground reach, px: its threat row's hit_range, 0 none */
+static int32_t ground_reach(const MDEC* d, unsigned t)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    return v && v->threat && t < (unsigned)v->ntypes ? (int32_t)v->threat[t].hit_range : 0;
+}
+
+/* 1 when a ground reach of `own` px outranges a defence's reach of r px (THE STAND-OFF) */
+static int outranges(int32_t own, int32_t r) { return r > 0 && r + STAND_PAD <= own; }
+
+/* 1 when the fight content gives own type a a rate on enemy type b */
+static int hurts_type(const MDEC* d, unsigned a, unsigned b)
+{
+    float r;
+    int32_t range;
+    return fc_type(d, a) && fc_type(d, b) && impai_fight_rate(d->in->fc, d->in->fit, a, b, &r, &range) == 0 &&
+           r > 0.0f;
+}
+
+static int stand_off(MDEC* d, int s, int* ghost)
+{
+    int16_t def[STAND_MAX];
+    uint32_t dd[STAND_MAX];
+    int nd = 0, i, k, seen = 0;
+    const unsigned L = d->st->sq[s].layer;
+    *ghost = -1;
+    for (i = 0; i < d->nen; i++) {
+        const MENEMY* e = &d->en[i];
+        const int32_t r = e->mobile || !e->armed || e->type == WQ_NONE ? 0 : ground_reach(d, e->type);
+        uint32_t y;
+        int j;
+        if (!outranges(d->sq[s].range, r)) continue;
+        if (!e->now && unreached(d, L, e->x, e->z)) continue;
+        y = dist(e->x, e->z, d->sq[s].x, d->sq[s].z);
+        if (nd == STAND_MAX && y >= dd[nd - 1]) continue;
+        j = nd < STAND_MAX ? nd++ : nd - 1;
+        while (j > 0 && dd[j - 1] > y) { def[j] = def[j - 1]; dd[j] = dd[j - 1]; j--; }
+        def[j] = (int16_t)i;
+        dd[j] = y;
+    }
+    for (k = 0; k < d->narmy; k++) {
+        MUNIT* u = &d->army[k];
+        const int32_t own = ground_reach(d, u->type);
+        const MENEMY* t = NULL;
+        uint32_t best = 0, y;
+        int32_t r = 0, px, pz;
+        uint8_t aim;
+        int got;
+        if (u->sq != s) continue;
+        u->stand = 0;
+        if (d->roots >= d->plan->mil_roots) continue;
+        for (i = 0; i < nd; i++) {
+            const MENEMY* e = &d->en[def[i]];
+            const int32_t re = ground_reach(d, e->type);
+            y = dist(u->x, u->z, e->x, e->z);
+            if (!outranges(own, re) || y > (uint32_t)own + REACH_PAD || !hurts_type(d, u->type, e->type)) continue;
+            if (!t || y < best) { t = e; best = y; r = re; }
+        }
+        if (!t) continue;
+        if (best < (uint32_t)(r + STAND_PAD)) {
+            const int64_t dx = best ? u->x - t->x : d->ax - t->x, dz = best ? u->z - t->z : d->az - t->z;
+            const uint32_t len = best ? best : dist(d->ax, d->az, t->x, t->z);
+            if (!len) continue;
+            px = t->x + (int32_t)(dx * (r + STAND_PAD) / (int64_t)len);
+            pz = t->z + (int32_t)(dz * (r + STAND_PAD) / (int64_t)len);
+            got = move_to(d, u->slot, u->type, u->x, u->z, px, pz);
+        } else if (t->now && target_now(d, t, &aim) && can_attack(u, aim)) {
+            got = order(d, u->slot, WQ_CAN_ATTACK, t->slot, t->x, t->z);
+            seen += got > 0;
+        } else {
+            got = order(d, u->slot, WQ_CAN_ATTACK, (uint16_t)WQ_NONE, t->x, t->z);
+            if (got > 0) *ghost = (int)(t - d->en);
+        }
+        u->stand = (uint8_t)(got > 0);
+    }
+    return seen;
 }
 
 /* A fighting squad's orders. The candidates are the TARGETS seen-now members of its contact nearest its
@@ -3770,14 +3894,14 @@ static int fight(MDEC* d, int s)
     for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         const MUNIT* u = &d->army[k];
         int target;
-        if (u->sq != s) continue;
+        if (u->sq != s || u->stand) continue;
         if ((target = target_of(d, u, cand, caim, nc, focus, fi)) >= 0 &&
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z) > 0)
             attacking++;
     }
     for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots && attacking; k++) {
         const MUNIT* u = &d->army[k];
-        if (u->sq != s || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
+        if (u->sq != s || u->stand || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
             dist(u->x, u->z, d->sq[s].x, d->sq[s].z) <= SPREAD_PX)
             continue;
         move_to(d, u->slot, u->type, u->x, u->z, d->sq[s].x, d->sq[s].z);
@@ -3795,7 +3919,7 @@ static void travel(MDEC* d, int s, int32_t x, int32_t z)
         int32_t px, pz;
         if (u->sq != s) continue;
         travel_point(d, u, n++, x, z, &px, &pz);
-        move_to(d, u->slot, u->type, u->x, u->z, px, pz);
+        if (!u->stand) move_to(d, u->slot, u->type, u->x, u->z, px, pz);
     }
 }
 
@@ -3922,15 +4046,21 @@ static int goal_failed(const MDEC* d, int s, int32_t x, int32_t z)
 }
 
 /* squad s gives its goal up: into the ring, oldest overwritten, and on (move_on) */
+/* block (bx, bz) given up by layer L now: into the ring of THE UNREACHED GOALS, oldest overwritten */
+static void unreached_add(MDEC* d, unsigned L, int bx, int bz)
+{
+    IMPAI_GOALFAIL* f = &d->st->unreached[d->st->unreached_next % IMPAI_UNREACHED];
+    f->bx = (int16_t)bx;
+    f->bz = (int16_t)bz;
+    f->t = d->now ? d->now : 1u;
+    f->layer = (uint8_t)L;
+    d->st->unreached_next = (uint8_t)((d->st->unreached_next % IMPAI_UNREACHED + 1) % IMPAI_UNREACHED);
+}
+
 static void give_up(MDEC* d, int s)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
-    IMPAI_GOALFAIL* f = &d->st->unreached[d->st->unreached_next % IMPAI_UNREACHED];
-    f->bx = q->tx;
-    f->bz = q->tz;
-    f->t = d->now ? d->now : 1u;
-    f->layer = q->layer;
-    d->st->unreached_next = (uint8_t)((d->st->unreached_next % IMPAI_UNREACHED + 1) % IMPAI_UNREACHED);
+    unreached_add(d, q->layer, q->tx, q->tz);
     d->out->stalled++;
     move_on(d, s);
 }
@@ -3967,13 +4097,18 @@ static void orders(MDEC* d)
            water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
            back to FORM first (move_on), so it is never sent to where it stands. */
         const int fought = d->sq[s].contact >= 0 && q->task != IMPAI_SQ_RETREAT && q->task != IMPAI_SQ_SCOUT;
-        if (fought && fight(d, s) > 0) {
+        int ghost = -1;
+        const int stood = q->task == IMPAI_SQ_ATTACK ? stand_off(d, s, &ghost) : 0;
+        if ((fought && fight(d, s) > 0) || stood) {
             if (q->task == IMPAI_SQ_ATTACK) goal_stalled(d, s, 1);
         } else {
             if (q->task == IMPAI_SQ_ATTACK) {
                 const int at = attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16);
                 if (at == 1) move_on(d, s);
-                else if (at == 0 && goal_stalled(d, s, 0)) give_up(d, s);
+                else if (at == 0 && goal_stalled(d, s, 0)) {
+                    if (ghost >= 0) unreached_add(d, q->layer, d->en[ghost].x >> 5, d->en[ghost].z >> 5);
+                    give_up(d, s);
+                }
             }
             if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT || d->sq[s].held) travel_home(d, s);
             else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16);

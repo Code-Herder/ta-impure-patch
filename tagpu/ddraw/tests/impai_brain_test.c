@@ -7581,6 +7581,99 @@ static void check_mil_contact_defences(void)
     }
 }
 
+/* THE STAND-OFF (impai_mil.c, stand_off): an ATTACK squad of twelve tanks, their ground reach 600 px here, going
+   east to a goal far off; a turret south of the squad's first tank (slot 20) -- armed, its reach 400, 500 hp, 10 a
+   shot, so the stay-or-go holds:
+   (a) seen 304 px off, inside its reach + STAND_PAD (464): the tank moves out, to 464 px from it;
+   (b) seen 544 px off: the tank attacks it, from where it stands;
+   (c) remembered 544 px off, not seen: the tank attacks the ground at its block;
+   (d) (c) with that block given up by the land layer: no attack, the tank travels on;
+   (e) (c) with the turret's reach 560, which the tank's 600 does not pass by STAND_PAD: no attack and no move
+       out, the tank travels on as in (d). */
+static int task_of_slot(int slot);
+static void check_mil_stand_off(void)
+{
+    static const char* const NAME[5] = { "(a) a turret seen inside its reach", "(b) a turret seen past it",
+                                         "(c) a turret remembered", "(d) a turret remembered, given up",
+                                         "(e) a turret remembered, not outranged" };
+    IMPAI_MIL_OUT o;
+    int c, k, from, att, gnd, mv, mx, mz, tx = -1, tz = -1;
+    for (c = 0; c < 5; c++) {
+        mil_world();
+        s_threat[M_TANK].range = s_threat[M_TANK].hit_range = 600;
+        s_w.defs[T_TURRET].hp = s_ft[T_TURRET].hp = 500;
+        s_w.defs[T_TURRET].armed = 1;
+        s_ft[T_TURRET].value = 300.0f;
+        s_ft[T_TURRET].w[0] = T_TURRET;
+        s_fwp[T_TURRET].range = 400;
+        s_fwp[T_TURRET].reload = 30;
+        s_fwp[T_TURRET].burst = 1;
+        s_fwp[T_TURRET].dmg = 10;
+        s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 10;
+        s_threat[T_TURRET].range = s_threat[T_TURRET].hit_range = c == 4 ? 560 : 400;
+        s_threat[T_TURRET].layer = TASIM_LAYER_LAND;
+        enemy(1290, T_MEX, 400, 100, IMPAI_GHOST, 1);
+        s_mil.sq[1].task = IMPAI_SQ_ATTACK;
+        s_mil.sq[1].layer = TASIM_LAYER_LAND;
+        s_mil.sq[1].target = (uint16_t)WQ_NONE;
+        s_mil.sq[1].tx = 200;
+        s_mil.sq[1].tz = 50;
+        s_mil.sq[1].since = (uint32_t)s_w.gametime;
+        s_mil.sq[1].counted = 1;
+        for (k = 0; k < 12; k++) {
+            own(20 + k, M_TANK, 100 + 2 * (k % 6), 100 - 2 * (k / 6));
+            s_job[20 + k].kind = IMPAI_JOB_SQUAD;
+            s_job[20 + k].type = M_TANK;
+            s_job[20 + k].squad = 1;
+        }
+        enemy(1300, T_TURRET, 100, c ? 134 : 119, c < 2 ? IMPAI_LOS : IMPAI_GHOST, c < 2);
+        if (c == 3) {
+            s_mil.unreached[0].bx = 50;
+            s_mil.unreached[0].bz = 67;
+            s_mil.unreached[0].t = (uint32_t)s_w.gametime;
+            s_mil.unreached[0].layer = TASIM_LAYER_LAND;
+        }
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the stand-off decision runs");
+        mil_print(NAME[c], &o, from);
+        att = gnd = mv = 0;
+        mx = mz = -1;
+        for (k = from; k < s_w.nlog; k++) {
+            const WQ_CMD* m = &s_w.log[k].c;
+            if (m->unit != 20) continue;
+            if (m->action == A_ATTACK && m->target == 1300) att++;
+            if (m->action == A_ATTACK && m->target == (uint16_t)WQ_NONE) {
+                gnd++;
+                mx = m->pos[0] >> 16;
+                mz = m->pos[2] >> 16;
+            }
+            if (m->action == A_MOVE) {
+                mv++;
+                mx = m->pos[0] >> 16;
+                mz = m->pos[2] >> 16;
+            }
+        }
+        printf("the stand-off, %s: task %d, attacks %d, ground attacks %d, moves %d, point (%d, %d)\n", NAME[c],
+               task_of_slot(20), att, gnd, mv, mx, mz);
+        CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
+        if (c == 0) {
+            const int dz = mz - (s_rows[1300].seat[0].bz * 32 + 16);
+            CHECK(mv == 1 && !att && !gnd && mx >= 0 && dz <= -440 && dz >= -490,
+                  "%s: moved out to 464 px from it, %d px", NAME[c], -dz);
+        }
+        if (c == 1) CHECK(att == 1 && !gnd && !mv, "%s: an attack on it", NAME[c]);
+        if (c == 2)
+            CHECK(gnd == 1 && !att && !mv && mx == s_rows[1300].seat[0].bx * 32 + 16 && mz == s_rows[1300].seat[0].bz * 32 + 16,
+                  "%s: a ground attack at its block", NAME[c]);
+        if (c >= 3) CHECK(!att && !gnd && mv == 1, "%s: no attack, a move", NAME[c]);
+        if (c == 3) {
+            tx = mx;
+            tz = mz;
+        }
+        if (c == 4) CHECK(mx == tx && mz == tz, "%s: the travel's move, as (d)'s, not a move out", NAME[c]);
+    }
+}
+
 static void check_mil_stay_or_go(void)
 {
     static const char* const NAME[5] = { "a gunship over the wave", "twenty tanks against the wave",
@@ -9317,6 +9410,38 @@ static void check_island(void)
        the leg's spread point, block (123, 48), is water the submarine reaches, so travel sends it there, while the
        start's own substitute, the corner (129, 54), lies 271 px from it, past ARRIVE_PX; at the spread point the
        scout has arrived, as THE ARRIVAL measures it. */
+/* THE LAYER'S LAST HEALTHY UNIT (impai_mil.c, scout_pick) on check_scout_layer's strait world, its start across
+   the channel, no land army:
+   (a) two submarines, the second at 20 % of its health, an extractor's ghost known: the scout is the damaged one;
+   (b) the healthy one alone, the ghost known: no scout, the layer's only healthy unit kept for its wave;
+   (c) the healthy one alone, nothing known: the rule holds nothing -- it goes, here as the island's wave of one
+       to the start (no land enemy known, so the seat is on an island). */
+static void check_scout_healthy(void)
+{
+    static const char* const NAME[3] = { "(a) a damaged submarine beside a healthy one", "(b) one healthy, the enemy known",
+                                         "(c) one healthy, nothing known" };
+    IMPAI_MIL_OUT o;
+    int c, k, s, sub;
+    for (c = 0; c < 3; c++) {
+        mil_world();
+        mil_water(W_STRAIT);
+        s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+        s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+        s_w.nstarts = 2;
+        for (k = 0; k < (c ? 1 : 2); k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+        if (!c) s_w.unit[41].hp = (int)s_w.defs[M_SUB].hp / 5;
+        if (c < 2) enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the last healthy unit's decision runs");
+        for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+        for (sub = -1, k = 40; k < 42; k++) if (s >= 0 && s_job[k].kind == IMPAI_JOB_SQUAD && s_job[k].squad == s) sub = k;
+        printf("the layer's last healthy unit, %s: scouts %u, the scout %d, attacks %u\n", NAME[c], o.scouts, sub,
+               o.attacks);
+        if (c == 0) CHECK(o.scouts == 1 && sub == 41, "%s: the damaged one scouts, %d", NAME[c], sub);
+        if (c == 1) CHECK(!o.scouts && s < 0, "%s: no scout", NAME[c]);
+        if (c == 2) CHECK(o.scouts + o.attacks == 1, "%s: it goes, %u scouts, %u attacks", NAME[c], o.scouts, o.attacks);
+    }
+}
+
 static void check_scout_layer(void)
 {
     IMPAI_MIL_OUT o;
@@ -14968,6 +15093,7 @@ static void check_military(void)
     check_mil_attack();
     check_mil_goal_side();
     check_mil_contact_defences();
+    check_mil_stand_off();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();
@@ -15036,6 +15162,7 @@ static void check_military(void)
     check_dry_wave();
     check_island();
     check_scout_layer();
+    check_scout_healthy();
     check_dry_army_reach();
     check_dry_given_up();
     check_dry_under();
