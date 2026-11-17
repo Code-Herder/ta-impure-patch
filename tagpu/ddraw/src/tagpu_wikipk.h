@@ -103,6 +103,17 @@ typedef struct TAGPU_PK_WIKI {
     uint32_t rep_serial;        /* the game thread's count of replays made and freed: the
                                    replay this packet shows, which the hit map drawn from it
                                    names (TAGPU_CMD_WIKI.rep_serial)                         */
+    /* THE TECH TREE ENTRY's view (tagpu_wikitech.h), the game thread's: which side, where the
+       camera is and what is picked. DATA to the render thread, which bounds each before a read: the
+       side against the published tree, the pick against that side's walk, the camera to finite
+       values with a zoom inside the tree's range (tagpu_wikistate.c tech_bound) */
+    int8_t   tech_side;         /* the published tree's side: the player's; -1 none           */
+    uint8_t  tech_fit;          /* the tree is fitted to the canvas the frame draws: tech_cam
+                                   is not read                                               */
+    uint8_t  tech_all;          /* All links: every builder's edge                            */
+    int16_t  tech_sel;          /* the picked unit, an order index of the side's walk; -1 none */
+    float    tech_cam[3];       /* z (device pixels a tree unit), x, y (the tree point at the
+                                   canvas's top-left corner)                                 */
     WIKISTAGEVIEW stage;        /* the demo's view by value: carried only with has_stage      */
     WIKIFRAMEREC  frame;        /* a frame:game entry's frame record (tagpu_wikiframe.h), `on` 0
                                    for any other entry; DATA, bounded by the render thread's
@@ -169,6 +180,16 @@ typedef struct TAGPU_CMD_WIKI {
                                    state dump alone, which the players lane compares with the
                                    frame's fit                                               */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
+    /* THE TECH TREE as that frame drew it: the camera it drew (fitted or the packet's, bounded),
+       the zoom's least value there, and the canvas in client pixels, its width less what a panel
+       over it covers. tech = 0 on any other frame. DATA: the game thread turns a pointer into a
+       tree point through it and bounds the camera it makes from it again */
+    uint8_t  tech;
+    int8_t   tech_side;         /* the side drawn                                            */
+    float    tech_cam[3];       /* z, x, y                                                   */
+    float    tech_lo;           /* the zoom's floor: the fitted zoom or a fifth of 1:1, the
+                                   smaller                                                   */
+    float    tech_cv[4];        /* the canvas: x0, y0, the uncovered width, the height        */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
     TAGPU_CMD_WIKIBAR bar[TAGPU_WIKI_NSCROLL];

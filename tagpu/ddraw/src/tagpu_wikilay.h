@@ -74,6 +74,10 @@ typedef struct {
                                    1, as tagpu_wikitext_words takes it                          */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
     int      about;             /* the theatre's About panel is open (a frame:game entry's page) */
+    /* THE TECH TREE ENTRY's row (wiki.js drawTech's #t-title and its controls): the tree's title,
+       UTF-8, "" while none is drawn; All links down */
+    char     tech_title[160];
+    int      tech_all;
 } WIKIPAGE;
 
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
@@ -92,6 +96,8 @@ typedef struct {
     HUDRECT window;
     int     caption_cut;        /* the strip shows only the caption's first lines */
     int     row_cut;            /* the theatre's row overflows the stage's bezel */
+    float   cover;              /* the left edge, units, of the panel over the stage's right (About);
+                                   0 when none is open: the tech tree's fit leaves out what it covers */
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;

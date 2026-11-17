@@ -14,6 +14,7 @@
    list is `n` entries of a pool, every entry an order index below `n`. */
 #include <stdint.h>
 #include "tagpu_wikiasset.h"
+#include "tagpu_wikistage.h"
 
 /* a unit's kind, for the panel's groups (techtree.js KINDS, in its order) */
 enum { WT_COMMANDER, WT_FACTORY, WT_BUILDER, WT_ECONOMY, WT_DEFENSE, WT_SUPPORT, WT_LAND, WT_AIR, WT_SEA,
@@ -69,5 +70,42 @@ void tagpu_wikitech_free(WIKITECHTREE* tr);
 
 /* A card's height for `n` icons (techtree.js cardH): exact before anything is drawn. */
 double tagpu_wikitech_card_h(uint32_t n);
+
+/* THE CAMERA (techtree.js): canvas pixels = (tree units - (x, y)) * z, (x, y) the tree point at the
+   canvas's top-left corner. */
+typedef struct { double z, x, y; } WTCAM;
+
+/* techtree.js fit: the whole tree as large as a canvas cw x ch device pixels allows, centred, with
+   WT_MARGIN units round it at `s` device pixels a unit */
+void tagpu_wikitech_fit(const WIKITECHTREE* T, double cw, double ch, double s, WTCAM* out);
+
+/* techtree.js hit: what is under the tree point (px, py): 1 with `*unit` its order index, `*card`
+   the card's order index and `*icon` 1 on a card's icon; 0 over no card. */
+int tagpu_wikitech_hit(const WIKITECHTREE* T, double px, double py, int* unit, int* card, int* icon);
+
+/* the text roles of a card: its title, its description, its kind line and footer */
+enum { WT_ROLE_TITLE, WT_ROLE_BODY, WT_ROLE_LABEL, WT_ROLES };
+
+/* What the drawing reads besides the tree: each role's style in layout.json `styles` and its
+   measure, `measure(ctx, role, size, s)` the advance of the UTF-8 string `s` at `size` device
+   pixels in that role's face, as tagpu_hudtext_width gives it. */
+typedef struct {
+    int16_t style[WT_ROLES];
+    double (*measure)(void* ctx, int role, double size, const char* s);
+    void*   measure_ctx;
+} WTART;
+
+/* techtree.js draw, call for op, into `o` (emptied first): the tree under camera `cam` on the stage's
+   canvas -- `stage` in HUD units, snapped to device pixels by tagpu_wikistage_canvas, `u` device
+   pixels a unit -- with `sel` the selected unit's order index (-1 none) and `all` every builder's
+   edge. Every op clips to the canvas; a picture is a HOP_PIC of the unit's WIKITECH picture. */
+void tagpu_wikitech_draw(const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art, HUDRECT stage,
+                         double u, WIKISTAGEOPS* o);
+
+/* wiki.js drawTech: the stage the entry shows, into `o` (emptied first) -- its fill, then the tree
+   as tagpu_wikitech_draw draws it, or with no tree (`T` NULL) the message `msg` centred at nine
+   units, in the description's style. */
+void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
+                          HUDRECT stage, double u, WIKISTAGEOPS* o);
 
 #endif

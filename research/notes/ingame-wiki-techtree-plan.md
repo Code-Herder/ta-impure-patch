@@ -35,6 +35,10 @@ every count. *Exit*: `tools/wiki/techdata.py` (new) compares the loader's tree, 
 native build over each compatibility setup's files, with `tech_pack`'s `tree.json`: every side's
 walk, every menu and every figure equal, every picture byte-identical.
 
+*Built (`f1b3c3b9`).* The exit is `assetcheck.py --side` rather than a `techdata.py`: the
+asset check already loads each setup's files natively beside `gfx.py`'s pack, so the tree's
+comparison went into it (`wikiassettest tech`).
+
 **T2: the tree on the stage.** `tagpu_wikitech.c`, pure: `techtree.js`'s `model`, `layout`,
 `fit`, `hit` and `draw` in C, the draw as HUD ops (rectangles, polylines, images, clipped
 one-line text); the entry takes the theatre with its stage given to the tree; pan by drag, zoom
@@ -42,6 +46,19 @@ by wheel, Fit, the zoom buttons, All links, a click that selects. *Exit*: `techc
 pairs `techtree.js` with the C call for op over every setup's tree at three sizes and a set of
 cameras and selections; `wikilaycheck` covers the entry's frame; in the game, the tree drawn
 in all six setups and a selection made.
+
+*Built (`d50f7330`, then this landing).* The model and layout came first (`d50f7330`, paired by
+`assetcheck.py --side` through `wikiassettest techlay`), then the drawing, split into
+`tagpu_wikitechdraw.c` so the asset test compiles the model without the stage, and the window.
+What the landing found: the measuring dry run of `techcheck.mjs` has to repeat until it asks for
+nothing new, since a clip asks for its shortened strings only once it has the full string's
+width; the tree's text needed plain styles of its own (`tech_title`, `tech_body`, `tech_label`)
+for the mockup and the game to set the same widths; and the regression's tree nodes, which named
+entries by their position, shifted when the Tech tree went first, so they are looked up by entry
+and title now. In the game (`wiki_regression.py techtree`, 1920 × 1080, stock): the tree opens
+fitted at z 1.3556 in a 1404 × 842 canvas, a click on the second card picks ARMLAB, a 120 × 40
+pixel drag moves the camera 88.52 × 29.51 tree units, a notch zooms 1.3556 → 1.5750 about the
+pointer, and About narrows the fitted canvas to 866 pixels.
 
 **T3: the unit panel.** The panel over the bezel's right (`tagpu_wikilay.c`): picture, title,
 description, flags, the figures and weapons, the walk to it, who builds it, its upgrades, what it
@@ -62,6 +79,6 @@ the quad mapping checked on ARMCV and ARMSOLAR.
 - The game's unit pass draws in the engine's fixed projection; T4 needs a perspective camera of
   its own. Whether it is a new pipeline over `tagpu_posebake`'s vertices or the unit pipeline
   with its matrix replaced is T4's first question.
-- The tree's pictures: every unit of Escalation's two sides is 271 + 274 pictures of 64 x 64,
-  about 2.2 MB of palette indices, over the sidebar sheet's size. T1 measures it and gives the
-  tree an atlas of its own if the sheet cannot hold it.
+- The tree's pictures *(answered in T2)*: a sheet of their own, 2048 × 2048 RGBA8, holding the
+  shown side's pictures; Escalation's 274 use 916 rows (its pictures are not all 64 × 64: 19 are
+  128 × 192 and 7 128 × 128). It is larger than a frame slot's staging, so it is sent in bands.

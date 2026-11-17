@@ -5622,6 +5622,10 @@ const WIKITECH* tagpu_wikitech_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
         mn = (uint16_t*)(blk + o_menu);
         px = blk + o_px;
         out->nside = nside;
+        /* the player's side by the engine's index, which is the side's in sidedata.tdf */
+        for (k = 0; k < WIKITECH_SIDES; k++) out->of_engine[k] = -1;
+        for (k = 0; k < nside; k++)
+            if (kept[k] >= 0 && kept[k] < WIKITECH_SIDES) out->of_engine[kept[k]] = (int8_t)k;
         memcpy(out->side, sides, sizeof sides);
         memcpy(out->pal, pal, sizeof out->pal);
         for (i = 0; i < nrow; i++) {

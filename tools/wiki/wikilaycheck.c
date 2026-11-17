@@ -502,6 +502,8 @@ int main(int argc, char** argv)
         for (j = 0; j < WIKI_NKEYS; j++)
             if (!strcmp(tagpu_wikidata_key_name(j), tj_str(e, ""))) st->keys |= 1u << j;
     st->about = tj_is(tj_get(S, "about"), TJ_TRUE);
+    snprintf(st->tech_title, sizeof st->tech_title, "%s", tj_str(tj_get(S, "tech_title"), ""));
+    st->tech_all = tj_is(tj_get(S, "tech_all"), TJ_TRUE);
     /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
        is checked on the tree's entries whether or not one declares "frame": "game"; the same
        entry is made a game entry here */

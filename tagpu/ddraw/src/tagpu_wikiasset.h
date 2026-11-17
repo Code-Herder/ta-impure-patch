@@ -542,6 +542,8 @@ typedef struct {
 typedef struct WIKITECH {
     int32_t             nside;
     WIKITECHSIDE        side[WIKITECH_SIDES];
+    int8_t              of_engine[WIKITECH_SIDES];  /* the engine's side index (sidedata.tdf's) ->
+                                           its side here; -1 a side the load refused             */
     uint32_t            norder, nmenu;
     const uint16_t*     order;          /* every side's walk, a unit index each                     */
     const uint32_t*     mfirst;         /* index-aligned with `order`: its menu's first entry ...   */

@@ -68,11 +68,11 @@ CASES = [
     ("1080-stock-quickbuild", (1920, 1080), "mod=stock&entry=quickbuild", {}),
     ("1080-esc-quickbuild-locked", (1920, 1080), "mod=escalation&entry=quickbuild", {"tick": 75}),
     ("1440-esc-buildshapes", (2560, 1440), "mod=escalation&entry=buildshapes&demo=3", {"speed": 2, "tick": 60}),
-    ("4k-stock-quickbuild-folded", (3840, 2160), "mod=stock&entry=quickbuild", {"fold": ["t.0.0"]}),
+    ("4k-stock-quickbuild-folded", (3840, 2160), "mod=stock&entry=quickbuild", {"fold": ["t.1.0"]}),
     ("4k-esc-buildshapes-scrolled", (3840, 2160), "mod=escalation&entry=buildshapes", {"scroll": {"text": "half"}}),
     ("3440-tazero-quickbuild-held", (3440, 1440), "mod=tazero&entry=quickbuild&demo=5", {"held": "c-try", "tick": 40}),
     ("1080-tazero-buildshapes-locked", (1920, 1080), "mod=tazero&entry=buildshapes&demo=2", {}),
-    ("3440-stock-buildshapes-allfolded", (3440, 1440), "mod=stock&entry=buildshapes&rewind=0", {"fold": ["t.0"]}),
+    ("3440-stock-buildshapes-allfolded", (3440, 1440), "mod=stock&entry=buildshapes&rewind=0", {"fold": ["t.1"]}),
     ("1024-esc-quickbuild", (1024, 768), "mod=escalation&entry=quickbuild", {"tick": 100}),
     ("1024-stock-buildshapes-scrolled", (1024, 768), "mod=stock&entry=buildshapes&demo=2",
      {"scroll": {"text": "max"}, "tick": 30}),
@@ -95,7 +95,7 @@ CASES = [
     ("1080-esc-watching-about-scrolled", (1920, 1080), "mod=escalation&entry=watching&demo=4",
      {"about": True, "scroll": {"text": "max"}}),
     ("720-tazero-watching", (1280, 720), "mod=tazero&entry=watching&demo=7", {}),
-    ("720-tazero-watching-folded", (1280, 720), "mod=tazero&entry=watching&demo=7", {"fold": ["t.1"]}),
+    ("720-tazero-watching-folded", (1280, 720), "mod=tazero&entry=watching&demo=7", {"fold": ["t.2"]}),
     ("4k-stock-watching-try-held", (3840, 2160), "mod=stock&entry=watching&demo=2", {"held": "c-try", "speed": 2}),
     ("3440-mayhem-watching-question", (3440, 1440), "mod=mayhem&entry=watching&demo=7", {"question": True}),
     # a live entry, Rewind a skirmish: the live HUD on the stage and the wiki's emblem at the live place (right[0]);
@@ -117,6 +117,12 @@ CASES = [
     ("1024-stock-takeover-armed", (1024, 768), "mod=stock&entry=takeover&demo=3", {"tick": 400}),
     ("4k-tazero-takeover-warning", (3840, 2160), "mod=tazero&entry=takeover&demo=4", {"tick": 580}),
     ("1080-stock-takeover-live", (1920, 1080), "mod=stock&entry=takeover", {"tick": 640}),
+    # the tech tree entry: the theatre with the tree's row -- its title, Fit, the zoom steps, All links and About --
+    # All links down, About open over the stage, the window at the smallest screen
+    ("1080-stock-techtree", (1920, 1080), "mod=stock&entry=techtree", {}),
+    ("1440-esc-techtree-links", (2560, 1440), "mod=escalation&entry=techtree&links", {}),
+    ("4k-tazero-techtree-about", (3840, 2160), "mod=tazero&entry=techtree", {"about": True}),
+    ("1024-mayhem-techtree-held", (1024, 768), "mod=mayhem&entry=techtree", {"held": "c-zin"}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -185,7 +191,7 @@ COLLECT = r"""async () => {
   for (const e of document.querySelectorAll('[data-entry]')) hot(e, 'entry:' + nodes.findIndex(n => n.entry === e.dataset.entry));
   for (const e of document.querySelectorAll('[data-demo]')) hot(e, 'demo:' + e.dataset.demo);
   for (const [id, key] of [['c-play', 'play'], ['c-replay', 'replay'], ['c-x1', 'x1'], ['c-x2', 'x2'], ['c-try', 'try'],
-    ['c-about', 'about']])
+    ['c-about', 'about'], ['c-fit', 'fit'], ['c-zout', 'zout'], ['c-zin', 'zin'], ['c-links', 'links']])
     if (!$('#' + id).disabled) hot($('#' + id), key);
   hot($('#stage'), 'stage');
   // the discs: a 1 px border round a fill
@@ -279,7 +285,9 @@ COLLECT = r"""async () => {
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes,
     iface: S.iface, casting: (WikiPage.context() || {}).casting || null,
-    theatre: S.theatre, about: S.about && !!$('#win.theatre') };
+    theatre: S.theatre, about: S.about && !!$('#win.theatre'),
+    // the tech tree's row: the tree's title as drawTech set it, and All links
+    tech_title: $('#win.techtree') ? $('#t-title').textContent : '', tech_all: !!S.links };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
 

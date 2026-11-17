@@ -29,6 +29,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> players --launch [--shots DIR]
                                                       Players and the camera, a players entry: its frame with a
                                                       camera, the records and the view, and Try it's Players set
+    wiki_regression.py <instance> techtree --launch [--shots DIR]
+                                                      the Tech tree: the tree drawn, picked on, panned,
+                                                      zoomed, fitted, All links and About
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
@@ -87,9 +90,10 @@ sp, in order:
 owner: the whole window by its id on the instance's display (`import -window`, the ta-capture
 skill's window grab).
 page, on the same launch as sp:
-  (p1) the open picks the tree's first entry and its first demo, playing, and draws every control;
-  (p2) entry:3 selects the second entry, demo:1 its second demo, afresh;
-  (p3) fold:1 folds the Building category (Building's entry rows not drawn) and unfolds it;
+  (p1) the open picks the tree's first entry, the Tech tree, drawn with no demo; Quick Build picked from the
+       tree starts its first demo, playing, and every control is drawn;
+  (p2) Build Lines picked selects it, demo:1 its second demo, afresh;
+  (p3) the Building category's fold folds it (Building's entry rows not drawn) and unfolds it;
   (p4) two wheel notches down over the text scroll it two steps, one up one back, each held to
        the limit the drawn frame posted;
   (p5) the text's thumb dragged 12 px scrolls it by the travel the drawn frame gave it;
@@ -294,6 +298,15 @@ the game's frames as the mockup draws them):
        stage's found in the one picture against the same frames, both at the game's scale, and
        cropped side by side (`<res>-cursor-real.pair.png`);
   (c3) Esc closes the window.
+techtree, the Tech tree entry (research/notes/ingame-wiki.md, *The tech tree entry*), read through the
+state dump's `tech`: the view asked, the camera the last frame drew, its canvas and each card's client point:
+  (tt1) the open lands on the tree's first entry, the Tech tree, its tree drawn fitted with nothing picked,
+        its row drawing Fit, the zoom steps, All links and About and no demo control (DIR gets the frame);
+  (tt2) a click on the second card's centre picks its unit;
+  (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
+  (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer;
+  (tt5) Fit returns to the open's fitted camera; All links turns on and off;
+  (tt6) About narrows the canvas the tree is fitted to, clears the pick, and closes.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -746,6 +759,15 @@ def press(c, d, key):
     return t0
 
 
+def to_entry(c, entry, what):
+    """The open page moved to `entry` from the tree, if it is not on it, its first demo playing: the open lands on the
+    tree's first entry, the Tech tree, which has none"""
+    d = wait_dump(c, lambda d: d["drawn_open"], f"{what} the page was not drawn")
+    if d["entry"] != entry:
+        press(c, d, f"entry:{tree_node(entry)}")
+    return wait_dump(c, lambda d: d["entry"] == entry and page_drawn(d) and d["sim"], f"{what} entry {entry} was not drawn playing")
+
+
 def fresh(d, t0):
     """Whether the dump's demo can have started after `t0`: the clock steps at most 30 ticks a
     second times the speed, plus the 8 one frame may carry, so a demo that ran on from before is
@@ -803,22 +825,29 @@ def text_scroll(c, d):
 
 
 MEGAMAP = "megamap"                            # (p8) the text entry: Quality of Life > Camera
+TECHTREE = "techtree"                          # the tree's first entry: the Tech tree (techtree lane)
 
 
 def page(c, shot=None):
     """(p1)..(p8): the page's controls, against the dump's state."""
     held_at(c, HELD_AT)
+    qb, bs = f"entry:{tree_node('quickbuild')}", f"entry:{tree_node('buildshapes')}"
+    qol, bld = f"fold:{tree_node(title='Quality of Life')}", f"fold:{tree_node(title='Building')}"
     d = c.open_wiki(expect_pause=True)
-    d = wait_dump(c, lambda d: d["drawn_open"] and "entry:3" in keys_of(d, "entry:"), "(p1) the page was not drawn")
-    assert (d["entry"], d["demo"], d["sim"], d["stage"]) == ("quickbuild", "snap", 1, 1), \
-        f"(p1) the open did not pick the tree's first entry and its first demo, playing: {d['entry']}/{d['demo']}"
-    for k in ("fold:0", "fold:1", "entry:2", "entry:3", "demo:0", "play", "replay", "x1", "x2", "try",
+    d = wait_dump(c, lambda d: d["drawn_open"] and qb in keys_of(d, "entry:"), "(p1) the page was not drawn")
+    assert (d["entry"], d["sim"]) == (TECHTREE, 0), \
+        f"(p1) the open did not pick the tree's first entry, {TECHTREE}, with no demo: {d['entry']}/{d['demo']}"
+    press(c, d, qb)
+    d = wait_dump(c, lambda d: (d["entry"], d["demo"], d["sim"], d["stage"]) == ("quickbuild", "snap", 1, 1) and
+                  page_drawn(d) and "demo:0" in keys_of(d, "demo:"),
+                  f"(p1) {qb} did not start quickbuild's first demo, playing")
+    for k in (qol, bld, qb, bs, "demo:0", "play", "replay", "x1", "x2", "try",
               "stage", "scroll:tree", "scroll:demos", "scroll:text", "close", "wiki", "window"):
         c.hit(d, k)
-    print(f"wiki page: (p1) open on quickbuild/snap, {len(d['hits'])} controls drawn")
+    print(f"wiki page: (p1) open on {TECHTREE}, then quickbuild/snap, {len(d['hits'])} controls drawn")
 
-    press(c, d, "entry:3")
-    d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", "(p2) entry:3 did not select buildshapes")
+    press(c, d, bs)
+    d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", f"(p2) {bs} did not select buildshapes")
     d = wait_dump(c, lambda d: "demo:9" in keys_of(d, "demo:"), "(p2) buildshapes' ten demos were not drawn")
     t0 = press(c, d, "demo:1")
     d = wait_dump(c, lambda d: d["demo"] == "line" and fresh(d, t0), "(p2) demo:1 did not start buildshapes/line")
@@ -827,14 +856,15 @@ def page(c, shot=None):
         grab(c, shot)
     text_h = text_height(c, d)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's and Camera's entries and the Replays category's Watching, Take
-    # over, Rewind and Players are drawn either way
-    rest = sorted(f"entry:{tree_node(e)}" for e in ("reclaim", MEGAMAP, WATCH, TAKEOVER, REWIND, PLAYERS))
-    press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == rest, "(p3) fold:1 did not fold Building")
-    press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == sorted(["entry:2", "entry:3", *rest]),
-                  "(p3) fold:1 did not unfold Building")
+    # Building's leaves are Quick Build and Build Lines; the Tech tree, Reclaiming's and Camera's entries and the
+    # Replays category's Watching, Take over, Rewind and Players are drawn either way
+    rest = sorted(f"entry:{tree_node(e)}" for e in (TECHTREE, "reclaim", MEGAMAP, WATCH, TAKEOVER, REWIND, PLAYERS))
+    nb = tree_node(title="Building")
+    press(c, d, bld)
+    d = wait_dump(c, lambda d: d["folds"] == [nb] and keys_of(d, "entry:") == rest, f"(p3) {bld} did not fold Building")
+    press(c, d, bld)
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == sorted([qb, bs, *rest]),
+                  f"(p3) {bld} did not unfold Building")
     print("wiki page: (p3) Building folded and unfolded")
 
     d = text_scroll(c, d)
@@ -1174,8 +1204,8 @@ def demos(c, shots, res):
         if "wiki check: the replay " in ln:
             print(f"wiki demos: (d1) {ln.split('wiki check: ', 1)[1]}")
 
-    d = c.open_wiki(expect_pause=True)
-    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(d2) the page was not drawn")
+    c.open_wiki(expect_pause=True)
+    d = to_entry(c, "quickbuild", "(d2)")
     t0 = press(c, d, "demo:3")
     wait_dump(c, lambda d: d["demo"] == "bestfit" and fresh(d, t0), "(d2) demo:3 did not start quickbuild/bestfit")
     n1, s1, d = tick_rate(c, 1)
@@ -1255,8 +1285,8 @@ def demos(c, shots, res):
     wait_dump(c, lambda d: not d["open"], "(d5) Esc did not close the window")
 
 
-TRY_DEMOS = (("quickbuild", 2, "snap", 83), ("buildshapes", 3, "line", 60))   # (entry, its tree node,
-                                         # the demo, the input before which the stage is grabbed)
+TRY_DEMOS = (("quickbuild", "snap", 83), ("buildshapes", "line", 60))   # (entry, the demo, the input before
+                                         # which the stage is grabbed)
 TRY_KEYS = {"shift": "shift", "alt": "alt", "ctrl": "ctrl", "z": "z", "x": "x"}
 SIDE_W = 128                             # the sidebar's column, in the stage's world units left of x = 0
 
@@ -1520,9 +1550,10 @@ def try_it(c, shot=None):
     simulation against sim.js fed what the game logged."""
     held_at(c, HELD_AT)
     d = c.open_wiki(expect_pause=True)
-    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(t1) the page was not drawn")
+    d = wait_dump(c, lambda d: d["drawn_open"], "(t1) the page was not drawn")
     ring = c.ring()
-    for entry, node, demo, grab_at in TRY_DEMOS:
+    for entry, demo, grab_at in TRY_DEMOS:
+        node = tree_node(entry)
         if d["entry"] != entry:
             press(c, d, f"entry:{node}")
             d = wait_dump(c, lambda d: d["entry"] == entry and page_drawn(d) and "demo:1" in keys_of(d, "demo:"), f"(t1) entry:{node} did not select {entry}")
@@ -1715,6 +1746,7 @@ def stage3d(c, shots, res):
     lever.unlink(missing_ok=True)
     start = c.mark()
     c.open_wiki(expect_pause=True)
+    to_entry(c, "quickbuild", "(s1)")
     line = wait_line(c, start, r"wiki3d: loaded in", "(s1) the 3D asset load", 120)
     print(f"wiki stage3d: (s1) {line.split('wiki3d: ', 1)[1]}")
     line = wait_line(c, start, r"wiki3d: stage \S+: the ground", "(s1) the first stage's ground", 30)
@@ -1911,6 +1943,7 @@ def units(c, shots, res):
     lever.unlink(missing_ok=True)
     start = c.mark()
     c.open_wiki(expect_pause=True)
+    to_entry(c, "quickbuild", "(u1)")
     line = wait_line(c, start, r"wiki3d: loaded in", "(u1) the 3D asset load", 120)
     print(f"wiki units: (u1) {line.split('wiki3d: ', 1)[1]}")
     line = wait_line(c, start, r"wiki3d: \S+: the types in 3D:", "(u1) the first stage's types", 30)
@@ -2393,23 +2426,23 @@ REWIND_BAR = ("button", 90)                    # (r3), (w7) the first demo early
 REWIND_STRIDE = 10                             # (r2), (r3) simparity's records every this many demo ticks
 
 
-def tree_node(entry):
-    """The tree's node index of `entry` (art/wiki/tree.json in depth-first order, categories counted), the page's
-    `entry:<n>` control"""
+def tree_node(entry=None, title=None):
+    """The tree's node index of `entry`, or of the category titled `title` (art/wiki/tree.json in depth-first order,
+    categories counted): the page's `entry:<n>` or `fold:<n>` control"""
     n = 0
 
     def walk(nodes):
         nonlocal n
         for x in nodes:
             k, n = n, n + 1
-            if x.get("entry") == entry:
+            if (entry is not None and x.get("entry") == entry) or (title is not None and x.get("title") == title):
                 return k
             r = walk(x.get("children", []))
             if r is not None:
                 return r
         return None
     k = walk(json.loads((TREE / "art/wiki/tree.json").read_text())["tree"])
-    assert k is not None, f"art/wiki/tree.json has no entry {entry}"
+    assert k is not None, f"art/wiki/tree.json has no {'entry ' + entry if entry else 'category ' + title}"
     return k
 
 
@@ -3939,6 +3972,86 @@ def launched(instance, mode, res):
     return stop
 
 
+def techtree(c, shots, res):
+    """(tt1)..(tt6): the Tech tree entry (tagpu_wikitech.h), the tree's stage driven through its hit map and read back
+    through the state dump's `tech`: the camera the frame drew, the canvas, and each card's client point."""
+    held_at(c, HELD_AT)
+    if shots:
+        shots.mkdir(parents=True, exist_ok=True)
+    c.open_wiki(expect_pause=True)
+    # (tt1) the open lands on the tree's first entry, its tree drawn fitted, nothing picked, and its row's controls
+    d = wait_dump(c, lambda d: d["entry"] == TECHTREE and page_drawn(d) and d["tech"]["drawn"], "(tt1) the tree was not drawn",
+                  seconds=120)
+    t = d["tech"]
+    assert t["on"] and t["fit"] and t["sel"] == -1 and t["n"] > 0 and t["cards"] > 1 and len(t["cards_at"]) == t["cards"], \
+        f"(tt1) the tree's state: {json.dumps({k: v for k, v in t.items() if k != 'cards_at'})}"
+    for k in ("fit", "zout", "zin", "links", "about", "stage"):
+        c.hit(d, k)
+    for k in ("play", "replay", "x1", "x2", "try"):
+        assert not [h for h in d["hits"] if h["key"] == k], f"(tt1) the tree's row draws the demo control {k}"
+    fit_cam, cv0 = t["cam"], t["cv"]
+    print(f"wiki techtree: (tt1) open on {TECHTREE}: side {t['side']}, {t['n']} units on {t['cards']} cards, fitted at "
+          f"z {fit_cam[0]:.4f} in a {cv0[2]:.0f}x{cv0[3]:.0f} canvas")
+    if shots:
+        time.sleep(2.0)                             # the sheet's bands: a few frames
+        grab(c, shots / f"techtree-{res}-fit.png")
+
+    # (tt2) a click on a card picks its unit: the second card, the commander's first builder
+    k, x, y = t["cards_at"][1]
+    c.keys(f"dclick:{round(x)},{round(y)}")
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == k, f"(tt2) a click on card {k} at {x:.0f},{y:.0f} did not pick it")
+    name = d["tech"]["sel_name"]
+    print(f"wiki techtree: (tt2) a click on the second card picked {name} (order {k})")
+    if shots:
+        grab(c, shots / f"techtree-{res}-picked.png")
+
+    # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing
+    z, x0, y0 = d["tech"]["cam"]
+    sx, sy = round(cv0[0] + cv0[2] / 2), round(cv0[1] + cv0[3] / 2)
+    c.keys(f"ddown:{sx},{sy}", f"dmove:{sx + 60},{sy + 20}", f"dmove:{sx + 120},{sy + 40}", f"dup:{sx + 120},{sy + 40}")
+    want = (x0 - 120 / z, y0 - 40 / z)
+    d = wait_dump(c, lambda d: not d["tech"]["fit"] and abs(d["tech"]["cam"][1] - want[0]) < 1e-3 and
+                  abs(d["tech"]["cam"][2] - want[1]) < 1e-3, f"(tt3) a drag of 120,40 did not move the camera to {want}")
+    assert d["tech"]["sel"] == k, f"(tt3) the drag changed the pick: {d['tech']['sel']}"
+    print(f"wiki techtree: (tt3) a drag of 120,40 pixels moved the camera by {120 / z:.2f},{40 / z:.2f} tree units")
+
+    # (tt4) a wheel notch up zooms about the pointer: the tree point under it stays, the zoom up by e^0.15 or to 4:1
+    z, x0, y0 = d["tech"]["cam"]
+    px, py = round(cv0[0] + cv0[2] / 3), round(cv0[1] + cv0[3] / 3)
+    under = (x0 + (px - cv0[0]) / z, y0 + (py - cv0[1]) / z)
+    zw = min(z * math.exp(0.15), 4 * d["u"])
+    c.keys(f"dwheel:{px},{py},1")
+    d = wait_dump(c, lambda d: d["tech"]["cam"][0] > z * 1.0001, "(tt4) a notch up did not zoom in")
+    z2, x2, y2 = d["tech"]["cam"]
+    at = (x2 + (px - cv0[0]) / z2, y2 + (py - cv0[1]) / z2)
+    assert abs(at[0] - under[0]) < 1e-3 and abs(at[1] - under[1]) < 1e-3, \
+        f"(tt4) the tree point under the pointer moved: {under} -> {at}"
+    assert abs(z2 - zw) < 1e-4 * zw, f"(tt4) a notch zoomed {z} to {z2}, not {zw}"
+    print(f"wiki techtree: (tt4) a notch up zoomed {z:.4f} -> {z2:.4f} about the pointer")
+
+    # (tt5) Fit fits again, to the camera the open drew; All links on and off
+    press(c, d, "fit")
+    d = wait_dump(c, lambda d: d["tech"]["fit"] and all(abs(a - b) < 1e-4 for a, b in zip(d["tech"]["cam"], fit_cam)),
+                  f"(tt5) Fit did not return to the fitted camera {fit_cam}")
+    press(c, d, "links")
+    d = wait_dump(c, lambda d: d["tech"]["all"] == 1, "(tt5) All links did not turn on")
+    if shots:
+        grab(c, shots / f"techtree-{res}-links.png")
+    press(c, d, "links")
+    d = wait_dump(c, lambda d: d["tech"]["all"] == 0, "(tt5) All links did not turn off")
+    print("wiki techtree: (tt5) Fit returned to the fitted camera; All links on and off")
+
+    # (tt6) About opens over the stage's right: the pick is cleared and the fit leaves out what it covers
+    press(c, d, "about")
+    d = wait_dump(c, lambda d: d["about"] and page_drawn(d) and d["tech"]["drawn"] and d["tech"]["cv"][2] < cv0[2] - 1,
+                  "(tt6) About did not narrow the tree's canvas")
+    assert d["tech"]["sel"] == -1, f"(tt6) About left the pick {d['tech']['sel']}"
+    print(f"wiki techtree: (tt6) About open: the canvas the tree fits {cv0[2]:.0f} -> {d['tech']['cv'][2]:.0f} pixels wide, "
+          "nothing picked")
+    press(c, d, "about")
+    wait_dump(c, lambda d: not d["about"] and abs(d["tech"]["cv"][2] - cv0[2]) < 0.5, "(tt6) About did not close")
+
+
 def mp(name):
     """(m): the compatibility suite's two-player start on the retail setup, then the wiki on the
     host."""
@@ -4043,7 +4156,7 @@ def stage_of(entry, demo):
 # stands selected on its first page at rest (TA Zero: its side's GEN, the ARMCK having no page there), and the
 # demo whose build trip TA Zero cannot reach, which locks at its first build (tick 20) and plays on elsewhere
 SIDE_STATE = ("quickbuild", 1, 10)
-SIDE_LOCK = ("buildshapes", 3, 0, 20)         # (entry, its tree node, the demo's index, its first build's tick)
+SIDE_LOCK = ("buildshapes", 0, 20)            # (entry, the demo's index, its first build's tick)
 LOCK_RGB = (0xD0, 0x18, 0x18)                 # the badge's disc (tagpu_uikit.h UI_LOCK_RGB, wiki.css .lock)
 SIDE_PACKS = TREE / "tools/wiki/mockup/gfx/side"
 
@@ -4330,7 +4443,8 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
 
     # (b4) the demo played in the player's context: held at sim.js's lock with the badge where sim.js
     # locks it, playing on past its first build elsewhere
-    entry, node, k, at = SIDE_LOCK
+    entry, k, at = SIDE_LOCK
+    node = tree_node(entry)
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
                         *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf, "--ctx", ctxf, "--scripts", pack))],
                        capture_output=True, text=True, timeout=120)
@@ -4647,7 +4761,7 @@ def offline_runs(shards=1, check_shards=1):
     fixture, without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then
     the DLL's code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and
     under Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
-    (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
+    (scenecheck), the tech tree's drawing and hit test on each pack's tree (techcheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
     them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits each
     simparity run, `check_shards` each simcheck run and stagecheck into that many processes, which together check what
     one does. The longest come first, as a pool starts the checks in this order."""
@@ -4665,7 +4779,8 @@ def offline_runs(shards=1, check_shards=1):
             [(" ".join(["simparity", *wine, f"--shard {k}/{shards}"]), [wiki / "simparity.mjs", *wine, "--shard", f"{k}/{shards}"])
              for k in range(1, shards + 1)]
     runs += [("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
-             ("sidecheck", [wiki / "sidecheck.mjs"]), ("scenecheck", [wiki / "scenecheck.mjs"])]
+             ("sidecheck", [wiki / "sidecheck.mjs"]), ("scenecheck", [wiki / "scenecheck.mjs"]),
+             ("techcheck", [wiki / "techcheck.mjs"])]
     runs = [(name, ["node", *cmd]) for name, cmd in runs]
     runs += [("wikilaycheck --check-only", [sys.executable, wiki / "wikilaycheck.py", "--check-only"])]
     if not packs:
@@ -4703,7 +4818,8 @@ def offline_checks():
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
-GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind", "takeover", "players")
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind", "takeover", "players",
+              "techtree")
 GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind", "takeover", "players"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
@@ -4921,7 +5037,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
     p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "watch",
-                                    "rewind", "takeover", "players", "mp", "mods", "offline", "gate"))
+                                    "rewind", "takeover", "players", "techtree", "mp", "mods", "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -4983,6 +5099,8 @@ def main():
                     takeover(c, a.shots, a.res)
                 elif a.mode == "players":
                     players(c, a.shots, a.res)
+                elif a.mode == "techtree":
+                    techtree(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

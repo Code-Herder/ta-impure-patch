@@ -98,6 +98,7 @@
 #include "tagpu_wikitext.h"
 #include "tagpu_replays.h"
 #include "tagpu_pak.h"
+#include "tagpu_wikitech.h"
 
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"
@@ -473,6 +474,184 @@ static int snd_type(void* c, const char* name, WIKISNDTYPE* out);
 static void button_sound(void)
 {
     tagpu_wikisound_named(sound_of(), WIKI_SNDNAME_OPTIONS);
+}
+
+/* ---- the tech tree entry (tagpu_wikitech.h; wiki.js techEntry and its stage's handlers) ----------
+   THE TREE'S VIEW IS THIS THREAD'S: which unit is picked, whether the tree is fitted, where the
+   camera is when it is not, and All links. The render thread draws from the packet's copy and
+   posts back the camera it drew (TAGPU_CMD_WIKI tech_cam), so a drag, a notch or a click acts on
+   the tree the player saw: a fitted tree's camera is the drawn one, since only the render thread
+   knows the canvas it was fitted to.
+
+   THE HIT TEST'S TREE IS THIS THREAD'S OWN, made from the published block (immutable, never freed,
+   tagpu_wikitech_get) by the same pure function the render thread makes its own with: neither
+   thread reads the other's. It is made again when the block or the side changes. */
+static WTCAM        s_tcam;                     /* the camera when not fitted                     */
+static int          s_tfit = 1;                 /* the tree is fitted to the canvas drawn         */
+static int          s_tsel = -1;                /* the picked unit, an order index; -1 none       */
+static int          s_tall;                     /* All links                                     */
+static int          s_tside = -1;               /* the side the pick and the camera are of        */
+static int          s_tdrag;                    /* a left press on the tree's stage is held       */
+static int          s_tdragReal, s_tmoved;      /* by the real path; it has moved past the slop   */
+static int          s_tdx, s_tdy;               /* where it went down, client pixels              */
+static WTCAM        s_tdcam;                    /* the camera it went down on                     */
+static WIKITECHTREE s_tt;                       /* the hit test's tree                            */
+static const WIKITECH* s_ttOf;
+static int          s_ttSide = -1, s_ttOk;
+
+/* client pixels a press moves before it is a drag (wiki.js's 4 CSS pixels at the mockup's scale) */
+#define TECH_SLOP 4
+
+static int tech_entry(void)
+{
+    const WIKIENTRY* e = entry_of(data());
+    return e && e->techtree;
+}
+
+/* the published tree's side for the player's: the engine's side through the block's map, else
+   the first (wiki.js techSide: the side asked for, else the first); -1 while nothing is published */
+static int tech_side(const WIKITECH** out)
+{
+    const WIKITECH* t = NULL;
+    int k;
+    *out = NULL;
+    if (tagpu_wikitech_get(&t) != WIKISIDE_READY || !t || t->nside < 1) return -1;
+    *out = t;
+    k = s_side >= 0 && s_side < WIKITECH_SIDES ? t->of_engine[s_side] : -1;
+    return k >= 0 && k < t->nside ? k : 0;
+}
+
+/* the hit test's tree for this frame: NULL while none is published or it could not be made */
+static const WIKITECHTREE* tech_tree(void)
+{
+    const WIKITECH* t;
+    const int side = tech_side(&t);
+    if (side < 0) return NULL;
+    if (t != s_ttOf || side != s_ttSide) {
+        if (s_ttOk) tagpu_wikitech_free(&s_tt);
+        s_ttOk = tagpu_wikitech_tree(t, side, &s_tt);
+        s_ttOf = t;
+        s_ttSide = side;
+    }
+    return s_ttOk ? &s_tt : NULL;
+}
+
+/* the drawn tree's facts, from the hit map: 1 when the last frame drew this side's tree */
+static int tech_drawn(const WIKITECHTREE* T)
+{
+    return T && s_hit.drawn && s_hit.tech && s_hit.tech_side == T->side && s_hit.tech_cam[0] > 0 &&
+           s_hit.tech_cv[2] > 0 && s_hit.tech_cv[3] > 0;
+}
+
+/* the camera a step starts from: the asked one, or the drawn one while the tree is fitted */
+static WTCAM tech_cam_now(void)
+{
+    WTCAM c = s_tcam;
+    if (s_tfit) { c.z = s_hit.tech_cam[0]; c.x = s_hit.tech_cam[1]; c.y = s_hit.tech_cam[2]; }
+    return c;
+}
+
+/* wiki.js techZoom: zoom `z` about canvas point (px, py), held between the drawn floor and four
+   times 1:1 */
+static void tech_zoom(double z, double px, double py)
+{
+    const WTCAM c = tech_cam_now();
+    const double lo = s_hit.tech_lo > 0 ? s_hit.tech_lo : c.z, hi = 4.0 * s_hit.u;
+    double nz = z < lo ? lo : z > hi ? hi : z;
+    if (!(nz > 0) || !(c.z > 0)) return;
+    s_tcam.z = nz;
+    s_tcam.x = c.x + px / c.z - px / nz;
+    s_tcam.y = c.y + py / c.z - py / nz;
+    s_tfit = 0;
+}
+
+/* a left press at client (cx, cy) on the tree's stage: held, to be a drag or a click */
+static int tech_down(int cx, int cy, int real)
+{
+    const WIKITECHTREE* T = tech_tree();
+    if (!tech_entry() || !tech_drawn(T)) return 0;
+    s_tdrag = 1;
+    s_tdragReal = real;
+    s_tmoved = 0;
+    s_tdx = cx;
+    s_tdy = cy;
+    s_tdcam = tech_cam_now();
+    return 1;
+}
+
+static void tech_move(int cx, int cy)
+{
+    if (!s_tdrag || cx < 0) return;
+    if (!s_tmoved && (cx - s_tdx) * (cx - s_tdx) + (cy - s_tdy) * (cy - s_tdy) < TECH_SLOP * TECH_SLOP) return;
+    s_tmoved = 1;
+    s_tcam.z = s_tdcam.z;
+    s_tcam.x = s_tdcam.x - (cx - s_tdx) / s_tdcam.z;
+    s_tcam.y = s_tdcam.y - (cy - s_tdy) / s_tdcam.z;
+    s_tfit = 0;
+}
+
+/* the left release: a press that did not move picks what is under it (wiki.js techPick, centre
+   false), or nothing */
+static void tech_up(void)
+{
+    const WIKITECHTREE* T;
+    int unit, card, icon;
+    if (!s_tdrag) return;
+    s_tdrag = 0;
+    if (s_tmoved || !tech_entry() || !tech_drawn(T = tech_tree())) return;
+    button_sound();
+    {
+        const WTCAM c = tech_cam_now();
+        const double px = s_tdx - s_hit.tech_cv[0], py = s_tdy - s_hit.tech_cv[1];
+        s_tsel = tagpu_wikitech_hit(T, c.x + px / c.z, c.y + py / c.z, &unit, &card, &icon) ? unit : -1;
+    }
+    if (s_tsel >= 0) s_about = 0;
+}
+
+/* a wheel notch over the tree's stage: wiki.js's exp(-deltaY * 0.0015) with Chrome's 100 a notch */
+static int tech_wheel(double notches, int cx, int cy)
+{
+    const WIKITECHTREE* T = tech_tree();
+    if (!tech_entry() || !tech_drawn(T)) return 0;
+    if (cx < s_hit.tech_cv[0] || cy < s_hit.tech_cv[1] || cx >= s_hit.tech_cv[0] + s_hit.tech_cv[2] ||
+        cy >= s_hit.tech_cv[1] + s_hit.tech_cv[3])
+        return 0;
+    tech_zoom(tech_cam_now().z * exp(-notches * 100 * 0.0015), cx - s_hit.tech_cv[0], cy - s_hit.tech_cv[1]);
+    return 1;
+}
+
+/* the tree's controls: Fit, the zoom steps about the uncovered canvas's centre, All links */
+static int tech_press(const char* key)
+{
+    if (!tech_entry()) return 0;
+    if (!strcmp(key, "fit")) s_tfit = 1;
+    else if (!strcmp(key, "zin") || !strcmp(key, "zout")) {
+        if (!tech_drawn(tech_tree())) return 1;
+        tech_zoom(tech_cam_now().z * (key[1] == 'i' ? 1.25 : 0.8), s_hit.tech_cv[2] / 2, s_hit.tech_cv[3] / 2);
+    } else if (!strcmp(key, "links")) s_tall = !s_tall;
+    else return 0;
+    button_sound();
+    return 1;
+}
+
+/* the packet's copy of the tree's view; a new side starts fitted with nothing picked (wiki.js
+   techModel) */
+static void tech_fill(TAGPU_PK_WIKI* w)
+{
+    const WIKITECH* t;
+    const int side = tech_entry() ? tech_side(&t) : -1;
+    if (side >= 0 && side != s_tside) {
+        s_tside = side;
+        s_tsel = -1;
+        s_tfit = 1;
+    }
+    w->tech_side = (int8_t)side;
+    w->tech_fit = (uint8_t)s_tfit;
+    w->tech_all = (uint8_t)s_tall;
+    w->tech_sel = (int16_t)(side >= 0 ? s_tsel : -1);
+    w->tech_cam[0] = (float)s_tcam.z;
+    w->tech_cam[1] = (float)s_tcam.x;
+    w->tech_cam[2] = (float)s_tcam.y;
 }
 
 /* A UNIT'S DEATH (tagpu_wikisim.h WIKI_SND_DEATH): its type's death WAV, looked up through the
@@ -1110,6 +1289,7 @@ static void page_open(void)
     s_costMax = 0;
     s_costFrames = 0;
     s_drag = -1;
+    s_tdrag = 0;
     s_saidHead = 0;
     s_about = 0;
     /* a sound object the load did not make, the settings muting then, is made now they do not */
@@ -1127,6 +1307,7 @@ static void page_close(void)
     tagpu_wikisound_stop();
     s_want = 0;
     s_drag = -1;
+    s_tdrag = 0;
     tagpu_logf("wiki: the page cost this thread at most %.3f ms in one frame over %u frames",
                s_costMax, s_costFrames);
 }
@@ -1149,7 +1330,8 @@ static int key_index(const char* key, const char* prefix, int n)
 static int entry_relative(const char* key)
 {
     return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try") ||
-           !strcmp(key, "about");
+           !strcmp(key, "about") || !strcmp(key, "fit") || !strcmp(key, "zin") || !strcmp(key, "zout") ||
+           !strcmp(key, "links");
 }
 
 /* A left press on control `key` of the last frame drawn (wiki.js's handlers). Selecting an entry
@@ -1208,7 +1390,9 @@ static void page_press(const char* key)
     } else if (!strcmp(key, "about")) {
         button_sound();
         s_about = !s_about;
-    }
+        if (s_about) s_tsel = -1;
+    } else
+        tech_press(key);
 }
 
 /* EVERY SCROLL IS CLAMPED TO THE LIMITS OF THE FRAME THE PLAYER SAW: the hit map's, taken from
@@ -1238,6 +1422,7 @@ static void wheel(double notches)
     static const char* const PANEL[TAGPU_WIKI_NSCROLL] = { "scroll:tree", "scroll:demos", "scroll:text" };
     int cx, cy, i, k;
     if (!mouse_last_client(&cx, &cy)) return;
+    if (tech_wheel(notches, cx, cy)) return;
     for (i = 0; i < (int)s_hit.n; i++) {
         const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
         if (cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) continue;
@@ -1561,6 +1746,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     w->shot = s_shot;
     w->rep_serial = s_repSerial;
     w->about = (uint8_t)s_about;
+    tech_fill(w);
     w->leave_held = (uint8_t)(!frame_try() ? 0 : !strcmp(s_press.held, "yes") ? 1 : !strcmp(s_press.held, "no") ? 2 : 0);
     memset(&w->frame, 0, sizeof w->frame);
     if (s_repOn && e) replay_fill(w, e);
@@ -1922,6 +2108,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
             if (src != WIKIHIT_PAGE) frame_down(src, key, cx);
             else if (!strcmp(key, "close")) { held(key); wiki_close("the close button"); }
             else if (!strcmp(key, "wiki")) { held(key); wiki_close("the wiki button"); }
+            else if (!strcmp(key, "stage") && tech_down(cx, cy, gx < 0)) {}
             else page_press(key);
         }
         return 1;
@@ -1967,6 +2154,7 @@ static int release(unsigned bit)
     s_owedBtn &= ~bit;
     try_release(bit);
     if (bit == B_L) frame_up();
+    if (bit == B_L) tech_up();
     if (owed && bit == B_L) { s_held[0] = 0; s_drag = -1; }
     if (s_engBtn & bit) return s_open ? TAGPU_WIKI_FROZEN : 0;
     return owed || s_open;
@@ -2067,7 +2255,8 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
            began. An injected press's release always comes by the injected path (deliver_mouse
            hands every TAGPU_M_LUP to tagpu_wiki_mouse), which ends its drag in release(). */
         if (s_drag >= 0 && s_dragReal && !(wp & MK_LBUTTON)) s_drag = -1;
-        if (s_open) { note_client(cx, cy); bar_drag(cy); try_pointer(cx, cy, 1, wp); }
+        if (s_tdrag && s_tdragReal && !(wp & MK_LBUTTON)) s_tdrag = 0;
+        if (s_open) { note_client(cx, cy); bar_drag(cy); tech_move(cx, cy); try_pointer(cx, cy, 1, wp); }
         return s_open;
     case WM_MOUSEWHEEL:
         /* a notch is WHEEL_DELTA; up scrolls toward the top */
@@ -2117,7 +2306,7 @@ int tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy)
     if (tagpu_modsui_is_open()) return tagpu_modsui_mouse(code, cx, cy);
     switch (code) {
     case TAGPU_M_MOVE:
-        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); try_pointer(cx, cy, 0, 0); }
+        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); tech_move(cx, cy); try_pointer(cx, cy, 0, 0); }
         return s_open;
     case TAGPU_M_WHEELUP:
     case TAGPU_M_WHEELDN:
@@ -2158,6 +2347,7 @@ void tagpu_wiki_cancel(void)
     tagpu_modsui_cancel();
     s_held[0] = 0;
     s_drag = -1;
+    s_tdrag = 0;
     tagpu_wikiframe_press_init(&s_press);
     try_release_all(1);
 }
@@ -2521,6 +2711,31 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                     : s_repOn ? (unsigned long long)tagpu_wikireplay_hash(&s_rep) : 0ull,
             w->has_stage, s_costMax, s_costFrames, s_clockS, s_clipped, s_turbo, s_pauseAt, s_about);
     jstr(f, s_msg, sizeof s_msg);
+    /* the tech tree: the view asked, and as the last hit map says it was drawn -- the camera, the
+       floor and the canvas -- with the picked unit's name */
+    {
+        const WIKITECHTREE* T = tech_entry() ? tech_tree() : NULL;
+        fprintf(f, ",\"tech\":{\"on\":%d,\"side\":%d,\"n\":%d,\"cards\":%d,\"fit\":%d,\"all\":%d,\"sel\":%d,\"sel_name\":",
+                tech_entry(), T ? T->side : -1, T ? T->n : 0, T ? T->nspine : 0, s_tfit, s_tall, s_tsel);
+        if (T && s_tsel >= 0 && s_tsel < T->n) jstr(f, T->t->unit[T->unit[s_tsel]].name, WIKITECH_NAME);
+        else fputs("\"\"", f);
+        fprintf(f, ",\"drawn\":%d,\"drawn_side\":%d,\"cam\":[%.6f,%.6f,%.6f],\"lo\":%.6f,\"cv\":[%.1f,%.1f,%.1f,%.1f]",
+                s_hit.tech, s_hit.tech_side, s_hit.tech_cam[0], s_hit.tech_cam[1], s_hit.tech_cam[2], s_hit.tech_lo,
+                s_hit.tech_cv[0], s_hit.tech_cv[1], s_hit.tech_cv[2], s_hit.tech_cv[3]);
+        /* each card's centre in client pixels through the drawn camera, so a check can click one */
+        fputs(",\"cards_at\":[", f);
+        if (T && tech_drawn(T)) {
+            int c;
+            for (c = 0; c < T->nspine; c++) {
+                const double* p = T->pos[c];
+                const double z = s_hit.tech_cam[0];
+                fprintf(f, "%s[%d,%.1f,%.1f]", c ? "," : "", T->spine[c],
+                        s_hit.tech_cv[0] + (p[0] + p[2] / 2 - s_hit.tech_cam[1]) * z,
+                        s_hit.tech_cv[1] + (p[1] + WT_EDGE_Y - s_hit.tech_cam[2]) * z);
+            }
+        }
+        fputs("]}", f);
+    }
     /* a replay: its transport, and the frame record this fill placed, in tools/wiki/framecheck.mjs's
        shape (tests/wikiframetest.c dump_rec) */
     if (s_repOn) {
@@ -2804,6 +3019,8 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
     w->entry = w->demo = -1;
     w->iface = (uint8_t)s_iface;
     w->cast_side = -1;
+    w->tech_side = -1;
+    w->tech_sel = -1;
     w->config = (uint8_t)tagpu_menu_bar_cog();
     if (mouse_last_client(&cx, &cy)) {
         w->ptr_x = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
@@ -2881,6 +3098,7 @@ void tagpu_wiki_level_end(void)
     sim_free();
     s_held[0] = 0;
     s_drag = -1;
+    s_tdrag = 0;
     s_escClose = 0;
     memset(&s_hit, 0, sizeof s_hit);
 }

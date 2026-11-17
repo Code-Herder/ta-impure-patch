@@ -543,8 +543,9 @@ function techFit() {
 }
 // the canvas fonts of the card's text roles, from the replay HUD's styles (art/hud/layout.json) the window's roles name
 let HUDSTYLES = null;
+// the tree's own plain styles (art/hud/layout.json tech_*): the face alone, as the game measures and draws it
 const techFont = role => {
-  const s = HUDSTYLES && HUDSTYLES[LAY.roles[{ title: 'entry', body: 'subtitle', label: 'control' }[role]]];
+  const s = HUDSTYLES && HUDSTYLES[`tech_${role}`];
   return s ? `${s.weight} 1px '${s.font}', sans-serif` : '600 1px sans-serif';
 };
 function drawTech() {

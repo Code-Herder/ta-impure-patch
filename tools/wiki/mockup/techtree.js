@@ -196,7 +196,7 @@ const WikiTech = (() => {
     for (const [a, b, st, w, rank] of lines) { g.globalAlpha = focus && !rank ? 0.35 : 1; edge(a, b, st, w); }
     g.globalAlpha = 1;
     // the cards
-    const font = (role, px) => o.font(role).replace(/\d+(\.\d+)?px/, `${(px * z).toFixed(2)}px`);
+    const font = (role, px) => o.font(role).replace(/\d+(\.\d+)?px/, `${px * z}px`);
     /* TEXT TOO SMALL TO READ IS LEFT OUT: a line whose size is under READ canvas pixels would draw as a smear, so the
        card shows its picture, rim and icons alone until the zoom makes the text legible */
     const READ = 6;
@@ -238,7 +238,7 @@ const WikiTech = (() => {
       g.fillStyle = INK.text; clip(u.title, tx, y + 10, tw, 'title', 8);
       g.fillStyle = INK.muted; clip(u.description, tx, y + 18, tw, 'body', 5.5);
       g.fillStyle = u.upgradable ? INK.up : INK.muted;
-      clip(`${u.kind.toUpperCase()} · T${u.tier}${u.upgrades.length ? ` · ⬆${u.upgrades.length}` : ''}`, tx, y + 26, tw, 'label', 5);
+      clip(`${u.kind.toUpperCase()} · T${u.tier}${u.upgrades.length ? ` · ${u.upgrades.length} UP` : ''}`, tx, y + 26, tw, 'label', 5);
       const icons = cardIcons(M, k);
       icons.forEach((x2, i) => {
         const ix = x + C.PAD + (i % C.PER) * (C.ICON + C.IGAP), iy = y + C.HEAD + C.IGAP + Math.floor(i / C.PER) * (C.ICON + C.IGAP);

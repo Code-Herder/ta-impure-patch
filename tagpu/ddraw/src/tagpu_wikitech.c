@@ -2,6 +2,7 @@
    `layout`, rule for rule. */
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "tagpu_wikitech.h"
 
 double tagpu_wikitech_card_h(uint32_t n)
@@ -25,13 +26,6 @@ static int says_upgradable(const unsigned char* d)
         for (k = 0; k < 6 && d[i + k] && (d[i + k] | 0x20) == W[k]; k++) {}
         if (k == 6) return 1;
     }
-    return 0;
-}
-
-static int has(const int32_t* pool, WTLIST l, int32_t v)
-{
-    uint32_t i;
-    for (i = 0; i < l.n; i++) if (pool[l.at + i] == v) return 1;
     return 0;
 }
 
@@ -228,4 +222,42 @@ done:
     if (!ok) { tagpu_wikitech_free(&T); return 0; }
     *out = T;
     return 1;
+}
+
+/* ---- THE CAMERA AND THE HIT TEST (techtree.js fit, hit) ---- */
+
+void tagpu_wikitech_fit(const WIKITECHTREE* T, double cw, double ch, double s, WTCAM* out)
+{
+    const double a = T->w > 0 ? (cw - 2 * WT_MARGIN * s) / T->w : 1e-3, b = T->h > 0 ? (ch - 2 * WT_MARGIN * s) / T->h : 1e-3;
+    double z = a < b ? a : b;
+    if (!(z > 1e-3)) z = 1e-3;
+    out->z = z;
+    out->x = T->w / 2 - cw / 2 / z;
+    out->y = T->h / 2 - ch / 2 / z;
+}
+
+int tagpu_wikitech_hit(const WIKITECHTREE* T, double px, double py, int* unit, int* card, int* icon)
+{
+    int c;
+    for (c = 0; c < T->nspine; c++) {
+        const double* p = T->pos[c];
+        const int k = T->spine[c];
+        const WTLIST ic = T->icons[k];
+        const double ix = px - p[0] - WT_PAD, iy = py - p[1] - WT_HEAD - WT_IGAP, step = WT_ICON + WT_IGAP;
+        if (px < p[0] || px >= p[0] + p[2] || py < p[1] || py >= p[1] + p[3]) continue;
+        *card = k;
+        if (iy >= 0 && ix >= 0) {
+            const double col = floor(ix / step), row = floor(iy / step);
+            const double i = row * WT_PER + col;
+            if (col < WT_PER && fmod(ix, step) < WT_ICON && fmod(iy, step) < WT_ICON && i < ic.n) {
+                *unit = T->pool[ic.at + (uint32_t)i];
+                *icon = 1;
+                return 1;
+            }
+        }
+        *unit = k;
+        *icon = 0;
+        return 1;
+    }
+    return 0;
 }

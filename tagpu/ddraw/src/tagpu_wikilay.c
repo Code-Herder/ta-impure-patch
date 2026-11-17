@@ -41,6 +41,10 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
 #define S_ABOUT     "About"
+#define S_FIT       "Fit"
+#define S_ZOUT      "\xE2\x88\x92"         /* − (U+2212, &minus;) */
+#define S_ZIN       "+"
+#define S_LINKS     "All links"
 /* a keycap a WIKI_KEY_*, in their order: one for every key, which the assert holds, so no key held
    shows another's name or none */
 static const char* const KEYCAP[] = { "Shift", "Alt", "Ctrl", "Z", "X", "E", "Left-click", "Right-click" };
@@ -321,6 +325,25 @@ static void caption(C* c, double x, double y, double w)
                          > cap_h + 1.0 / 64;
 }
 
+/* The tech tree's controls (#ctl in #win.techtree): Fit, the zoom steps out and in and All links
+   (#tt-ctl, the controls' pair between them), then About; none is ever disabled, All links is down
+   while on. Returns their width; draws only with `emit`. */
+static double tech_controls(C* c, double x, double y, int emit)
+{
+    const WG* g = &c->l->g;
+    const double cg = U(c, g->ctl_gap), pair = U(c, g->ctl_pair);
+    const struct { const char* key; const char* label; int on; double after; } b[] = {
+        { "fit", S_FIT, 0, pair }, { "zout", S_ZOUT, 0, pair }, { "zin", S_ZIN, 0, pair },
+        { "links", S_LINKS, c->st->tech_all != 0, cg }, { "about", S_ABOUT, c->st->about != 0, 0 } };
+    double bx = x;
+    int i;
+    for (i = 0; i < 5; i++) {
+        bx += emit ? button(c, bx, y, b[i].key, b[i].label, -1, b[i].on, 0) : ui_button_w(&c->u, &c->l->g.ctl, b[i].label);
+        if (i + 1 < 5) bx += b[i].after;
+    }
+    return bx - x;
+}
+
 /* The controls (#ctl) from (x, y), each ctl_h tall: play, replay, 1x and 2x, Try it yourself, and
    in the theatre About (#c-about), which is never disabled. Returns their width; draws only with
    `emit`. */
@@ -478,7 +501,7 @@ static void theatre(C* c, UIR body)
     const double gap = U(c, g->gap), row_h = U(c, g->ctl.h), cap_h = U(c, g->caption_h);
     const double cg = U(c, g->ctl_gap), t0 = ui_lu(body.w * g->col[0] / 100);
     const int about = c->st->about != 0, wink = ui_light(&c->u, c->l->part[P_WINDOW]);
-    const int lk = locked(c, c->st->entry) || c->st->sim_locked;
+    const int lk = locked(c, c->st->entry) || c->st->sim_locked, tech = e && e->techtree;
     const UIR sbox = ui_rect(body.x + t0 + gap, body.y, fmax(0, body.w - t0 - gap), body.h - gap - row_h - gap - cap_h);
     const double ry = sbox.y + sbox.h + gap;
     double fixed, x = sbox.x, tw;
@@ -487,20 +510,23 @@ static void theatre(C* c, UIR body)
     stage_in(c, sbox);
 
     /* the row: what its fixed items take, then the title's share */
-    fixed = (lk ? ui_badge_w(&c->u, &c->l->g.bdg, S_BADGE) : 0) + controls(c, 0, 0, 1, 0) + cg * (1 + lk);
+    fixed = (lk ? ui_badge_w(&c->u, &c->l->g.bdg, S_BADGE) : 0) + (tech ? tech_controls(c, 0, 0, 0) : controls(c, 0, 0, 1, 0)) +
+            cg * (1 + lk);
     tw = fmax(0, sbox.w - fixed);
     c->fr->row_cut = fixed > sbox.w;
     if (lk) x += badge(c, x, ry + ui_half(row_h - U(c, g->bdg.h))) + cg;
-    if (has_demo(c)) {
-        /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height */
-        const char* s = filled_or(c, FILL_ROW, e, e->demo[c->st->demo].title, e->demo[c->st->demo].id);
+    if (tech || has_demo(c)) {
+        /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height. The tech
+           tree's is the tree's own (wiki.js drawTech) */
+        const char* s = tech ? c->st->tech_title : filled_or(c, FILL_ROW, e, e->demo[c->st->demo].title, e->demo[c->st->demo].id);
         UITS t = ts(c, R_DEMO, g->line);
         int n = ui_pens(&c->u, &t, s, strlen(s));
         UIR clip = ui_rect(x, ry + ui_half(row_h - t.L), tw, t.L);
         ui_line(&c->u, &t, s, 0, n, x, clip.y, wink, &clip);
     }
     x += tw + cg;
-    controls(c, x, ry, 1, 1);
+    if (tech) tech_controls(c, x, ry, 1);
+    else controls(c, x, ry, 1, 1);
 
     caption(c, sbox.x, ry + row_h + gap, sbox.w);
 
@@ -509,6 +535,7 @@ static void theatre(C* c, UIR body)
         const double wa = ui_lu(sbox.w * g->theatre_about / 100);
         about_panel(c, ui_rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
                             sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])));
+        c->fr->cover = (float)((sbox.x + sbox.w - U(c, g->bz[1]) - wa) / c->u.px);
     }
     c->u.top = 0;
 }
@@ -542,7 +569,7 @@ static void window_(C* c)
        between */
     body = ui_rect(win.x + U(c, g->wb[3]), win.y + U(c, g->wb[0]), win.w - U(c, g->wb[3]) - U(c, g->wb[1]),
                 win.h - U(c, g->wb[0]) - U(c, g->wb[2]));
-    if (entry(c) && entry(c)->frame == WIKI_FRAME_GAME) {
+    if (entry(c) && (entry(c)->frame == WIKI_FRAME_GAME || entry(c)->techtree)) {
         theatre(c, body);
         return;
     }
@@ -627,7 +654,8 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
 static int check_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, const WIKIPAGE* st,
                        HUDOPS* scratch, WIKIFRAME* fr, char* err, size_t errn)
 {
-    const int theatre_ = st->open && st->entry >= 0 && st->entry < d->nentry && d->entry[st->entry].frame == WIKI_FRAME_GAME;
+    const int theatre_ = st->open && st->entry >= 0 && st->entry < d->nentry &&
+                         (d->entry[st->entry].frame == WIKI_FRAME_GAME || d->entry[st->entry].techtree);
     if (!tagpu_wikilay_build(l, d, f, st, scratch, fr, err, errn)) return 0;
     if (scratch->overflow) {
         if (err && errn)
@@ -765,7 +793,7 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f, c
                     }
                 }
             }
-            if (en->frame == WIKI_FRAME_GAME && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
+            if ((en->frame == WIKI_FRAME_GAME || en->techtree) && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
         }
     }
     return 1;

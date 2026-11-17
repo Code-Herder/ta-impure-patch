@@ -1905,7 +1905,7 @@ draws it.
   the page demo's place, steps it as above, copies the held view, fills the record after the fill's
   last step (`tagpu_wikiframe_record`: the game's view points into the simulation's arrays, which
   the next step may free; the record holds values only), drains the sound past the view's `quiet`,
-  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 744 bytes with
+  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 760 bytes with
   it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
   each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
   fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about` and
@@ -2289,14 +2289,56 @@ own (Escalation's ARMHLT_UPGRADE shows only its empty base once Create has run, 
 says so. Then its figures and weapons, the walk to it, who builds it, its upgrades and what it
 builds, by kind; each a chip that picks its unit and brings its card to the stage's middle.
 
-**In the game.** `tagpu_wikidata.c` reads `"frame": "techtree"` (`WIKIENTRY.techtree`) as a page
-entry with no demos, refusing one with demos as `sim.js` `checkText` does, so the window lays it
-out as a text entry: its title, subtitle and text. Not built: the tree's data read from the
-running mod on the wiki's asset thread, as `tagpu_wikiasset.c` reads the sidebar (`side_walk`'s
-rules over the engine's own build-menu reads); the tree's ops, its hit map and its camera in
-`tagpu_wikistage.c`; the panel in `tagpu_wikilay.c`; and a perspective unit view on the render
-thread, which the orbit camera needs because the game's unit pass draws only the engine's fixed
-projection. `wikilaycheck.py` has no tech tree case.
+**In the game.** `tagpu_wikidata.c` reads `"frame": "techtree"` (`WIKIENTRY.techtree`) as a page entry
+with no demos, refusing one with demos as `sim.js` `checkText` does, and the window gives it the
+theatre (`tagpu_wikilay.c` `theatre`) with the tree's row: the tree's title (*ARM · 132 units · 22
+builders and factories*, wiki.js `drawTech`) and Fit, −, +, All links and About (`tech_controls`),
+the demo controls left out. The plan and what is left: [the plan](ingame-wiki-techtree-plan.html).
+
+- **The data** is read from the running mod by the wiki's loader thread after the 3D arena
+  (`tagpu_wikitech_load`, `tagpu_wikiasset.c`) and published immutable, never freed
+  (`tagpu_wikitech_get`, the sidebar's publication). `of_engine` maps the engine's side index,
+  which is the side's in `sidedata.tdf`, to the tree's side; a side the load refused maps to -1 and
+  the first side is shown, as wiki.js `techSide` falls back.
+- **The model, the layout, the fit and the hit test** are `tagpu_wikitech.c`, **the drawing**
+  `tagpu_wikitechdraw.c`: pure ports of `techtree.js`. Each thread makes its own tree from the
+  published block, the game thread (`tagpu_wiki.c`) to hit-test and the render thread
+  (`tagpu_wikistate.c`) to draw, so neither reads the other's.
+- **The view is the game thread's**: the pick, fitted or not, the camera, All links
+  (`TAGPU_PK_WIKI` `tech_*`). The render thread bounds each as data, fits the tree to the canvas
+  less what About covers (`WIKIFRAME.cover`), and posts back the camera it drew, the zoom's floor
+  and the canvas in client pixels (`TAGPU_CMD_WIKI` `tech_*`); every drag, notch and click is read
+  against those, the tree the player saw. A left press on the stage that moves 4 client pixels is
+  a drag, the camera following the pointer; one that does not is a click, which picks the card or
+  icon under it, or nothing. A wheel notch zooms by e^0.15 (wiki.js's `exp(-deltaY · 0.0015)` at
+  Chrome's 100 a notch) about the pointer, between the floor -- the fitted zoom or a fifth of 1:1,
+  the smaller -- and four times 1:1. Fit fits again; − and + zoom ×0.8 and ×1.25 about the
+  uncovered canvas's centre; About clears the pick.
+- **The text** is in three plain styles of `art/hud/layout.json`, `tech_title` (Oswald 500),
+  `tech_body` (Barlow Condensed 600) and `tech_label` (Oswald 500), measured by
+  `tagpu_hudtext_width`; the mockup draws its cards in the same faces (`wiki.js` `techFont`), so
+  the one-line clips and their ellipses fall where the game's do.
+- **The pictures** are a sheet of their own (`HUD_TEX_TECH`, 2048 × 2048 RGBA8): the side's
+  pictures through the tree's palette, its colour key transparent, shelf-packed tallest first with
+  their edge texels repeated one texel out, so a filtered draw clamps at a picture's edge as
+  `drawImage` does. `HOP_PIC` draws one nearest, or filtered (the glyphs' sampler, no mips) when it
+  is drawn smaller than itself. The sheet is larger than a frame slot's staging (2 MB), so
+  `tagpu_vk_hud.c` sends a new one in bands of whole rows, as many as the staging holds, and hides
+  its pictures until the last band is on the device. MEASURED 2026-11-17 over the six setups'
+  trees: Escalation's sides use 916 of the 2048 rows (274 and 271 pictures, four bands), Total
+  Mayhem's 656 and 592, TA Twilight's 560, stock's and ProTA's 362, TA Zero's 230; no picture
+  left off.
+- **The checks.** `tools/wiki/techcheck.mjs` pairs the drawing and the hit test with
+  `techtree.js` call for op over every setup's pack (four cameras and selections a side, every
+  card's centre, corner and first icon), measured in the game's faces; `assetcheck.py --side`
+  pairs the data with `gfx.py`'s pack and the model and layout with `techtree.js`;
+  `wikilaycheck.py`'s four tech tree cases pair the window; `wiki_regression.py techtree` plays
+  it in the game: the open on the tree, fitted, a click that picks, a drag, a notch about the
+  pointer, Fit, All links and About narrowing the fit.
+
+Not built: the unit's panel (T3) -- a pick lights the walk to the unit, but no panel opens -- and
+the unit in 3D (T4), which needs a perspective view on the render thread because the game's unit
+pass draws only the engine's fixed projection.
 
 ## The data format
 
@@ -3281,10 +3323,11 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Gaps
 
-- **The tech tree is the mockup's alone.** The game lays the entry out as a text entry; the data
-  read from the running mod, the tree's ops and hit map, the panel and a perspective unit view are
-  not built ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a mod with
-  no pack (`unknown`, or a setup `sidepacks.py` has not run) says so on the stage.
+- **The tech tree has no unit panel in the game.** The tree is read from the running mod and drawn,
+  panned, zoomed and picked on as the mockup's is; the panel a pick opens and the unit in 3D are
+  the mockup's alone ([*The tech tree entry*](#the-tech-tree-entry)). In the mockup, the tree of a
+  mod with no pack (`unknown`, or a setup `sidepacks.py` has not run) says so on the stage; in the
+  game a mod whose tree the load refused says so (the log says why).
 - **The replay entries are landed.** Watching, Rewind a skirmish, Take over a replay and
   Players and the camera play in both the mockup and the game ([the plan](ingame-wiki-replay-plan.html),
   *Players, as built*); what they leave open is the plan's *Open* and the roadmap row's *Not covered yet*.
