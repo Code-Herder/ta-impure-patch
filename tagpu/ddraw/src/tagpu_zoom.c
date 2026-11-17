@@ -2475,8 +2475,9 @@ static unsigned s_appliedSeq;              /* game thread only */
 static int      s_appliedDx, s_appliedDy;
 static unsigned s_epoch;                   /* bumped at every level end (game thread) */
 /* the scenario camera's eye, owed to the next apply (tagpu_zoom_place_eye),
-   and whether the apply runs at all (game thread only) */
-static int      s_placeOn, s_placeX, s_placeY, s_applyLive;
+   whether that apply releases the unit follow (tagpu_zoom_jump_eye), and
+   whether the apply runs at all (game thread only) */
+static int      s_placeOn, s_placeX, s_placeY, s_placeRelease, s_applyLive;
 
 /* ---- the replay's Follow and Jump, the game thread's half -------------------
 
@@ -2666,6 +2667,8 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        (tagpu_zoom_place_eye). */
     if (s_placeOn) {
         s_placeOn = 0;
+        if (s_placeRelease) release_follow(ta, "a jump");
+        s_placeRelease = 0;
         eye[0] = s_placeX; eye[1] = s_placeY;
         scr[0] = s_placeX; scr[1] = s_placeY;
         moved = applied = 1;
@@ -2783,6 +2786,7 @@ void tagpu_zoom_level_end(char* ta)
     s_gFolCap = 0.0f;
     s_gFolLast = 0;
     s_placeOn = 0;                        /* a placement is the old level's */
+    s_placeRelease = 0;
     s_applyLive = 0;
     if (s_fol.epoch) follow_end(TAGPU_FOLLOW_LEVEL);
     /* THE GROUND GOES BACK TO THE ENGINE HERE (the publisher latches it down
@@ -2835,6 +2839,14 @@ int tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY)
     }
     if (outX) *outX = x;
     if (outY) *outY = y;
+    return 1;
+}
+
+int tagpu_zoom_jump_eye(char* ta, int x, int y)
+{
+    if (!tagpu_zoom_place_eye(ta, x, y, NULL, NULL)) return 0;
+    if (s_applyLive) s_placeRelease = 1;
+    else release_follow(ta, "a jump");
     return 1;
 }
 

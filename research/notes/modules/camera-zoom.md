@@ -1241,7 +1241,11 @@ range's:
   engine's own where it cannot be computed) and hands it to the command apply at the top of the
   next in-play draw, which writes the eye and the scroll target before that draw reads the eye or
   builds the engine's fog grid, then recomputes the minimap box, sets its dirty bit and clears
-  bit 3 of `main+0x14281`, whether or not the sim ticks. The first packet carrying the new eye
+  bit 3 of `main+0x14281`, whether or not the sim ticks. It releases nothing. A jump the player
+  asks for — the drawing board's edge arrow, `Ctrl`+`\` and the allies' ribbon's Last marker —
+  goes through `tagpu_zoom_jump_eye`, the same hand-over with the unit follow released
+  (`release_follow`) where the apply writes the eye, as the replay's Jump releases it, so an
+  earlier `Ctrl`+`C` does not have the stepper pull the camera back. The first packet carrying the new eye
   therefore carries tables whose reach is about it. Measured 2026-09-24, `camonly.json` (a camera
   line and nothing else) applied at rest after the eye was parked at (6000, 6000): the first frame
   drawn from the new eye (2376, 726) was not held, the fog oracle read `differ=0` from then on and

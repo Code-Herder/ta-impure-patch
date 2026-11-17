@@ -243,7 +243,7 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
     }
     if (!p->h.sequence || (p->h.kind != RECMP_RESOURCES && p->h.kind != RECMP_ORDERS && p->h.kind != RECMP_PLAYER && p->h.kind != RECMP_SEATS && p->h.kind != RECMP_UNITS && p->h.kind != RECMP_NAMED && p->h.kind != RECMP_ROOTS && p->h.kind != RECMP_EXPLORED && p->h.kind != RECMP_TEXT &&
         p->h.kind != RECMP_POV && p->h.kind != RECMP_CLICK && p->h.kind != RECMP_SELECT &&
-        p->h.kind != RECMP_SEAL)) {
+        p->h.kind != RECMP_MARK && p->h.kind != RECMP_SEAL)) {
         why = "unknown kind or sequence zero";
         goto invalid;
     }
@@ -634,7 +634,7 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
         bytes > RECMP_BODY_MAX || (bytes && !body) ||
         (c->capture_seen && tick != c->capture_tick) ||
         (kind != RECMP_RESOURCES && kind != RECMP_ORDERS && kind != RECMP_PLAYER && kind != RECMP_SEATS && kind != RECMP_UNITS && kind != RECMP_NAMED && kind != RECMP_ROOTS && kind != RECMP_EXPLORED && kind != RECMP_TEXT &&
-         kind != RECMP_POV && kind != RECMP_CLICK && kind != RECMP_SELECT)) {
+         kind != RECMP_POV && kind != RECMP_CLICK && kind != RECMP_SELECT && kind != RECMP_MARK)) {
         fail(c, E_INVALIDARG);
         SetEvent(c->wake);
         return 0;
@@ -701,6 +701,15 @@ void tagpu_recmp_abort(RecMpChannel* c, HRESULT reason)
     if (!c) return;
     fail(c, FAILED(reason) ? reason : E_ABORT);
     SetEvent(c->wake);
+}
+
+unsigned tagpu_recmp_head_kind(RecMpChannel* c)
+{
+    unsigned r;
+    if (!c || acquire(&c->failed) || acquire(&c->consumption)) return 0;
+    r = acquire(&c->rx.read);
+    if (r == acquire(&c->rx.published)) return 0;
+    return c->rx.packet[r % MP_QUEUE_SLOTS].h.kind;
 }
 
 int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out)

@@ -12,13 +12,14 @@
 /* The match's start message alone carries this: a peer's refusal there means no contributions
    for the whole game, where a peer older than format 28 would otherwise take the match and
    refuse its first flagged camera sample (REC_POV_CUT) in play. RECMP_VERSION stays: the
-   envelopes and the keys it stamps are stored in recordings, which keep opening. */
-#define RECMP_START_VERSION 3u
+   envelopes and the keys it stamps are stored in recordings, which keep opening. 4: a peer takes
+   RECMP_MARK, which an older one would refuse at its first drawing-board operation. */
+#define RECMP_START_VERSION 4u
 #define RECMP_ACTORS 10u
 enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
        RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7, RECMP_UNITS = 8,
        RECMP_NAMED = 9, RECMP_ROOTS = 10, RECMP_EXPLORED = 11, RECMP_TEXT = 12,
-       RECMP_POV = 13, RECMP_CLICK = 14, RECMP_SELECT = 15 };
+       RECMP_POV = 13, RECMP_CLICK = 14, RECMP_SELECT = 15, RECMP_MARK = 16 };
 
 #pragma pack(push, 1)
 typedef struct {
@@ -162,6 +163,9 @@ int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out);
 /* One consumer, as for take. The game supplies its actual B2 application tick;
    each consumed source packet receives a distinct recording-local ordinal. */
 int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_tick);
+/* The kind of the packet take would return next, 0 with none (or a failed or ended channel).
+   The consumer's thread only: nothing but its own take moves the head. */
+unsigned tagpu_recmp_head_kind(RecMpChannel* c);
 /* An immutable consumption cut is available only after end, and only while
    consumption has not ended. A source with no consumed packet has sequence/order
    zero; it still needs a received seal. */

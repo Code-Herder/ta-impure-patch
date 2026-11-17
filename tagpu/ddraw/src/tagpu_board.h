@@ -1,0 +1,81 @@
+#ifndef TAGPU_BOARD_H
+#define TAGPU_BOARD_H
+/* tagpu_board.c -- the drawing board (research/notes/modules/board.md): while the draw key is
+   held, a left drag draws a line on the ground, a middle click places a marker, a double click
+   opens a text box for a marker's text, a drag on a marker moves it, a right drag erases and a
+   right double click on a marker deletes it. Drawn on Vulkan only, in a level in play, never on a
+   puppet seat; in a network game every peer receives every player's operations, and each player
+   sees their own marks, their mutual allies' and, as a watcher, everyone's.
+
+   Every function here runs on the GAME thread: the keys and buttons from the window procedure
+   (tagpu_shield.c), the pointer's world point from the in-play mouse handler (tagpu_route.c),
+   the fill from the packet's publisher. The render thread sees the board only as the packet's
+   copied tables (PK_BOARD, PK_BDSEG, PK_BDMARK). */
+#include "tagpu_packet.h"
+
+/* DLL attach, after tagpu_route_init: arms when the router's right-press stub is installed */
+void tagpu_board_init(void);
+/* the level's teardown (tagpu_packet_pub.c): every mark, the gesture and the text box cleared */
+void tagpu_board_level_end(void);
+
+/* A key the window procedure delivers: 0 not the board's; 1 taken; 2 taken, and its character
+   goes to tagpu_board_char rather than to the engine (the text box is open). */
+int tagpu_board_key(unsigned vk, int up);
+/* A character the window procedure delivers: 1 when the board took it -- every character while
+   the draw key is held or the text box is open -- and the engine must not see it. */
+int tagpu_board_char(unsigned ch);
+/* A mouse button message (WM_[LRM]BUTTON{DOWN,UP,DBLCLK}) the window procedure delivers: 1 when
+   the board took it, and the engine must not see it. */
+int tagpu_board_mouse(unsigned msg);
+/* THE DRAW KEY'S BINDING (the in-game panel's Draw key row, tagpu_menu.c): bind(1) makes the next
+   key pressed that tagpu_settings_drawkey_ok takes the draw key, stored as TS_DRAWKEY -- a key
+   already down when it was armed does not count; Esc ends it unchanged, as do bind(0), the window losing the keyboard and the level's end. binding: it
+   waits for that key. Game thread. */
+void tagpu_board_bind(int on);
+int  tagpu_board_binding(void);
+/* the window lost the keyboard or the mouse: the key, the gesture, the text box and a binding end */
+void tagpu_board_cancel(void);
+
+/* The in-play handler's record at the right-press branch (tagpu_route.c): the world point and
+   the region bits are this record's. Never consumes it. */
+void tagpu_board_record(const int* rec, unsigned msg);
+
+/* A RECMP_MARK body another peer sent, renumbered to this peer's seats (tagpu_recorder.c, in
+   delivery order): its operations applied as its seat's when this player sees that seat
+   (tagpu_share_board_seen), each under the rights it carries cut to what this player sees; a seat
+   this player does not see is counted and not stored. 0, and nothing applied, for a body
+   tagpu_boardwire_check refuses. Game thread. */
+int tagpu_board_apply(const void* body, unsigned bytes);
+/* a body the channel dropped before tagpu_board_apply: counted in the level's `refused=` */
+void tagpu_board_refused(void);
+
+/* A MULTIPLAYER REPLAY'S MARKS (tagpu_replay.c, mp_apply_held): a recorded RECMP_MARK body,
+   renumbered to the recording's seats, applied at its application tick `tick` as its seat's under
+   the rights it carries, whatever seat the viewer watches -- the fill picks what the Sight shows.
+   Nothing is said, pinged or counted as received. 0 for a body tagpu_boardwire_check refuses.
+   replay_clear empties the store: a seek, which then applies every body up to its target again.
+   Game thread. */
+int  tagpu_board_replay_apply(const void* body, unsigned bytes, uint32_t tick);
+void tagpu_board_replay_clear(void);
+
+/* THE ALLIES' RIBBON (tagpu_hudstate.c, tagpu_hudinput.c), by a seat's player record index.
+   ally: its activity, TAGPU_PK_BDACT_*, NONE while muted; `*muted` whether this player has muted
+   it, `*last` whether its last new marker is still on the board and shown. mute: its marks and
+   pointer hidden on this player's screen, or shown again; the level's end shows every seat again.
+   jump: the camera to its last new marker at the next frame, nothing when there is none shown. */
+int  tagpu_board_ally(unsigned seat, int* muted, int* last);
+void tagpu_board_mute(unsigned seat);
+void tagpu_board_jump(unsigned seat);
+
+/* The player's operations not yet sent, as one RECMP_MARK body of at most `cap` bytes, taken out
+   of the queue: its bytes, 0 when none is queued. Game thread. */
+unsigned tagpu_board_outbox(unsigned char* body, unsigned cap);
+/* the queue emptied: a game with no channel to send it on, or one that has failed */
+void tagpu_board_outbox_drop(void);
+
+/* The packet's tables, from the publisher. 1 with `h` filled in a level in play; `*ns` segments
+   and `*nm` markers written, at most the caps, `*cut` set when more would have been. */
+int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, unsigned* ns,
+                     TAGPU_PK_BDMARK* marks, unsigned maxm, unsigned* nm, int* cut);
+
+#endif

@@ -21,6 +21,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
 #include "tagpu_sharetick.h"
+#include "tagpu_board.h"
 #include "tagpu_log.h"
 #include "dd.h"
 
@@ -30,11 +31,12 @@
 
 static const unsigned SPEEDS[5] = { 5, 10, 20, 40, 80 };   /* 1/2x .. 8x; 10 = 1x                 */
 static const unsigned SCALES[4] = { 75, 100, 125, 150 };
-static const struct { const char* key; int ov; unsigned bit; } SWITCHES[4] = {
+static const struct { const char* key; int ov; unsigned bit; } SWITCHES[5] = {
     { "cursors",    TAGPU_OV_CURSORS,    HUD_TOG_CURSORS },
     { "clicks",     TAGPU_OV_CLICKS,     HUD_TOG_CLICKS },
     { "selections", TAGPU_OV_SELECTIONS, HUD_TOG_SELECTIONS },
     { "chat",       TAGPU_OV_CHAT,       HUD_TOG_CHAT },
+    { "marks",      TAGPU_OV_MARKS,      HUD_TOG_MARKS },
 };
 typedef char hud_key_fits[(TAGPU_PK_HUD_KEY == HUD_KEYLEN && TAGPU_PK_HUD_TOAST == HUD_TOASTLEN) ? 1 : -1];
 
@@ -776,8 +778,10 @@ static void live_fill(TAGPU_PK_HUD* h)
 /* ---- the replay HUD ------------------------------------------------------------------------- */
 
 /* THE ALLIES' RIBBON: a chip opens the give panel on its ally, or closes it when it is open there;
-   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. The panel's plate,
-   its sliders and an out ally's chip (ally_off) take a click and run nothing. */
+   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. Its board row's
+   Mute and Last marker are the board's (tagpu_board_mute, tagpu_board_jump), by the chip's player
+   record index, which both bound. The panel's plate, its sliders, an out ally's chip and a
+   disabled Last marker (ally_off) take a click and run nothing. */
 static void allies_act(const char* key, size_t k, int n)
 {
     if (IS("ally") && n >= 0 && n < (int)TAGPU_PK_HUD_SEATS) {
@@ -787,6 +791,10 @@ static void allies_act(const char* key, size_t k, int n)
             s_giveAmt[0] = s_giveAmt[1] = 0;
             memcpy(s_giveName, s_name[n], sizeof s_giveName);
         }
+    } else if (IS("amute") && n >= 0) {
+        tagpu_board_mute((unsigned)n);
+    } else if (IS("alast") && n >= 0) {
+        tagpu_board_jump((unsigned)n);
     } else if (IS("give_send") && s_give >= 0) {
         if ((s_giveAmt[0] > 0 || s_giveAmt[1] > 0) && !tagpu_share_give((unsigned)s_give, s_giveAmt[0], s_giveAmt[1]))
             toast("Nothing given: giving is not available in this game");
@@ -875,7 +883,7 @@ static void act(const char* key)
     } else if (IS("scroll_down")) {
         scroll_by(1);
     } else {
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < (int)(sizeof SWITCHES / sizeof *SWITCHES); i++)
             if (k == strlen(SWITCHES[i].key) && !strncmp(key, SWITCHES[i].key, k))
                 tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
     }
@@ -1062,7 +1070,7 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     h->folded = (uint16_t)s_folded;
     h->scroll = (uint8_t)(s_scroll < 255 ? s_scroll : 255);
     h->toggles = 0;
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < (int)(sizeof SWITCHES / sizeof *SWITCHES); i++)
         if (tagpu_replay_overlay(SWITCHES[i].ov)) h->toggles |= (uint8_t)SWITCHES[i].bit;
     if (s_statOpen) h->toggles |= (uint8_t)HUD_TOG_STATS;
     h->stat_open = (uint8_t)s_statOpen;

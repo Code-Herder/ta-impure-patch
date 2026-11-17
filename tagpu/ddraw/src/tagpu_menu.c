@@ -68,6 +68,7 @@
 #include "tagpu_hud.h"
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
+#include "tagpu_board.h"
 #include "tagpu_profiles.h"
 #include "tagpu_resource.h"
 #include "tagpu_opt.h"
@@ -240,7 +241,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS,
+       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS, R_MARKLIFE, R_DRAWKEY,
        R_RANGES, R_RSHIFT, R_RCURSOR, R_RSVIEW, R_RSENSOR, R_RGROUND, R_RAIR, R_RNUKE, R_RCANNON, R_RLRPC, R_COUNT };
 
 /* the rows a column holds: the left one takes the odd row */
@@ -287,6 +288,13 @@ static const Row s_row[R_COUNT] = {
        icons come in (tagpu_icon.c, read every frame). The in-game panel's
        alone, as Mega map zoom in is. */
     { "RADARDOTS", "Radar dots",        "Zoomed out|Always",        2 },
+    /* how long the drawing board's lines and markers stay (tagpu_board.c, read every frame). The
+       in-game panel's alone, as Mega map zoom in is. */
+    { "MARKLIFE",  "Board marks",       "Fade 60 s|Until erased",   2 },
+    /* the drawing board's key: a plain button whose caption is the key's name, rewritten on the
+       open panel (drawkey_tick); a click arms the board's binding (tagpu_board_bind), and the next
+       key pressed is the key. The in-game panel's alone, as Mega map zoom in is. */
+    { "DRAWKEY",   "Draw key",          "",                         0 },
     /* the weapon range rings (tagpu_rangeown.c, which reads the store every
        frame): on, the attack rings only under Shift, the rings of the unit
        under the cursor -- BAR's gui_attackrange_gl4 options --, the own and
@@ -1009,8 +1017,37 @@ static int common(char* b, int cap, int at, int id, int assoc, const char* name,
     return at;
 }
 
+/* THE DRAW KEY'S CAPTION: "Press a key" while the board's binding waits, else the key's name as
+   the keyboard layout gives it, or its number; in the engine font's printable glyphs, without the
+   .GUI's separators `;` and `|`, and at most 13 characters: the button's plate is drawn 120 px
+   wide whatever its width (gui-gadgets.md), and about 13 characters fit it. */
+static void drawkey_caption(char* out, int cap)
+{
+    unsigned vk = (unsigned)tagpu_settings_drawkey();
+    UINT scan = MapVirtualKeyA(vk, 0 /* MAPVK_VK_TO_VSC */);
+    LONG lp = (LONG)(scan << 16);
+    char name[64];
+    int n = 0, i;
+    if (tagpu_board_binding()) { lstrcpynA(out, "Press a key", cap); return; }
+    /* the navigation keys that share a scan code with the keypad's are the extended ones */
+    switch (vk) {
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT:
+    case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_DIVIDE: case VK_NUMLOCK:
+        lp |= 1L << 24;
+        break;
+    }
+    if (scan) n = GetKeyNameTextA(lp, name, sizeof name);
+    if (n <= 0) _snprintf(name, sizeof name, "Key 0x%02X", vk);
+    name[sizeof name - 1] = 0;
+    for (i = 0; name[i] && i < 13 && i < cap - 1; i++)
+        out[i] = name[i] < 0x20 || name[i] > 0x7E || name[i] == ';' || name[i] == '|' ? '?' : name[i];
+    out[i] = 0;
+}
+
 static int build_gui(char* b, int cap, int rows)
 {
+    char dk[128];
+    drawkey_caption(dk, sizeof dk);
     int at = 0, i;
 
     at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
@@ -1045,7 +1082,7 @@ static int build_gui(char* b, int cap, int rows)
         at = common(b, cap, at, 1, 0, s_row[i].name, x0 + CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
-            s_row[i].text, s_row[i].stages);
+            i == R_DRAWKEY ? dk : s_row[i].text, s_row[i].stages);
     }
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", rows * 2 + 3);
     at = common(b, cap, at, 5, 0, "PROFILE", LBL_X, DIV_BOT + 8, TITLE_W, 24, 1, 15, 0);
@@ -1103,6 +1140,7 @@ static void read_state(void)
     if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
         s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = tagpu_settings_radardots() ? 1 : 0;
+    s_stage[R_MARKLIFE] = tagpu_settings_marklife() ? 0 : 1;
     s_stage[R_RANGES]  = setting_or(TS_RANGES, 1) ? 1 : 0;
     s_stage[R_RSHIFT]  = setting_or(TS_RANGESHIFT, 0) ? 1 : 0;
     s_stage[R_RCURSOR] = setting_or(TS_RANGECURSOR, 1) ? 1 : 0;
@@ -1180,7 +1218,8 @@ static int row_greyed(int row)
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
         row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS ||
-        row == R_RANGES || row == R_RSVIEW || row == R_RSENSOR) return 0;
+        row == R_MARKLIFE || row == R_DRAWKEY || row == R_RANGES || row == R_RSVIEW ||
+        row == R_RSENSOR) return 0;
     /* the rings' own options bite only while the rings are on; the sensor
        rows are drawn whether or not they are */
     if (row > R_RANGES && row < R_COUNT) return s_stage[R_RANGES] == 0;
@@ -1281,6 +1320,30 @@ static int on_stack(char* main_p, void* gm)
 
    An ordinary click on one of our own rows never reaches this path: it is
    answered by `menu_accept`. */
+static unsigned s_dkShown;              /* the Draw key caption the panel shows (drawkey_tick) */
+
+/* THE DRAW KEY'S ROW HAS NO ACCELERATOR. The engine gives a plain button one: 0x4A05E0, which
+   GUI_Load's build (0x4A8B83, 0x4A9038) and the label setter 0x4A07D0 (0x4A0868) call, clears a
+   button's quickkey +0x13A when its stages +0x136 are not 0 and otherwise stores the first
+   character of its caption no other button holds (0x4A06DA..0x4A07A2); the button handler acts on
+   a typed character matching it as on a click's release (0x4A70FB..0x4A7129). The row is the
+   panel's one plain button, so its caption -- `\`, `Q` -- would be a key that arms a binding. So
+   its quickkey is zeroed after every writer this module causes: the panel's load and stage-1
+   build in slot_open and each caption in drawkey_tick, all on the game thread before its pump
+   takes the next key; drawkey_tick also zeroes it at every frame the panel is up. */
+static void drawkey_noaccel(char* gm)
+{
+    char* ctrls = gm ? *(char**)(gm + GM_CTRLS) : NULL;
+    int count, i;
+    if (!ctrls) return;
+    count = *(short*)(ctrls + 0xB6);
+    if (count <= 0 || count >= GUI_RECORDS) return;
+    for (i = 1; i <= count; i++) {
+        char* g = ctrls + (size_t)i * STRIDE;
+        if (g[0] == 1 && !memcmp(g + G_NAME, "DRAWKEY", 8)) g[0x13A] = 0;
+    }
+}
+
 static void slot_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
@@ -1288,6 +1351,7 @@ static void slot_open(char* main_p, int fresh)
     char* ctrls;
     void* gm;
 
+    s_dkShown = 0;                          /* the panel loads the caption written at attach */
     lstrcpynA(s_saved, expect, sizeof s_saved);
     lstrcpynA(expect, SCREEN, 16);
     /* 0x20 is what 0x495207 passes; 0x400 additionally suppresses GUI_Load's
@@ -1331,6 +1395,7 @@ static void slot_open(char* main_p, int fresh)
        so the plane exists only now. Repaint it from the player's own install
        and ask for the redraw. */
     repaint_ground(ctrls);
+    drawkey_noaccel((char*)gm);
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
@@ -1513,6 +1578,8 @@ static void commit_one(int row)
     case R_WHEEL:   tagpu_profiles_set_wheel(s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     case R_RADARDOTS: tagpu_settings_set(TS_RADARDOTS, s_stage[R_RADARDOTS]); break;
+    case R_MARKLIFE: tagpu_settings_set(TS_MARKLIFE, s_stage[R_MARKLIFE] ? 0 : 60); break;
+    case R_DRAWKEY: break;                  /* a binding writes the key (tagpu_board_bind) */
     case R_RANGES:  tagpu_settings_set(TS_RANGES, s_stage[R_RANGES]); break;
     case R_RSHIFT:  tagpu_settings_set(TS_RANGESHIFT, s_stage[R_RSHIFT]); break;
     case R_RCURSOR: tagpu_settings_set(TS_RANGECURSOR, s_stage[R_RCURSOR]); break;
@@ -1579,6 +1646,12 @@ void __stdcall tagpu_menu_oncommand(void* gi)
     int row = menu_row_of(gi);
     if (row < 0 || row_held(row)) return;
 
+    /* the draw key's row binds rather than cycles: a click arms the binding, a second ends it */
+    if (row == R_DRAWKEY) {
+        tagpu_board_bind(!tagpu_board_binding());
+        menu_accept(gi);
+        return;
+    }
     if (row == R_STYLE) {
         /* alternates Classic and Classic++; Custom is derived, so it is never
            a destination -- from Custom the click goes to Classic++ */
@@ -1929,6 +2002,34 @@ static int leave_open(char* main_p)
 }
 
 /* ---- the per-frame tick, on the game thread ------------------------------ */
+
+/* THE DRAW KEY'S ROW ON THE OPEN PANEL: its caption (drawkey_caption) written through the
+   engine's own label setter whenever the key or the binding changes -- the panel is loaded from
+   the file written at attach, so a key bound since then, or a binding, is only ever shown this
+   way -- and a binding ended when the panel is not up, so a key pressed after it closes plays.
+   s_dkShown is what the panel shows: the key, bit 16 a binding, 0 nothing written yet. */
+static void drawkey_tick(char* main_p)
+{
+    char* top;
+    char cap[128];
+    unsigned want;
+    if (!s_gm) {
+        if (tagpu_board_binding()) tagpu_board_bind(0);
+        s_dkShown = 0;
+        return;
+    }
+    want = (unsigned)tagpu_settings_drawkey() | (tagpu_board_binding() ? 0x10000u : 0u);
+    top = *(char**)(main_p + OFF_TOPGUI);
+    /* only on our own screen while it is the top one: the setter writes the TOP screen */
+    if (want != s_dkShown && top && *(void**)(top + GM_ONCMD) == (void*)tagpu_menu_oncommand) {
+        memset(cap, 0, sizeof cap);
+        drawkey_caption(cap, sizeof cap);
+        ((set_label_fn)VA_SETLABEL)(main_p + OFF_GUIINFO, "DRAWKEY", cap);
+        s_dkShown = want;
+    }
+    drawkey_noaccel((char*)s_gm);
+}
+
 static void menu_tick(void)
 {
     static int s_firstTick;
@@ -1969,6 +2070,7 @@ static void menu_tick(void)
     }
     if (tagpu_hudinput_leave_due()) tagpu_hudinput_leave_opened(leave_open(main_p));
     tagpu_hudinput_leave_shown(named_on_stack(main_p, YESORNO_SCREEN));
+    drawkey_tick(main_p);
 }
 
 static int __cdecl before_update(void* entry_esp)
@@ -2149,7 +2251,8 @@ static const short VC0_SLD[2] = { 244, 336 };
    one slot each, top down, closing up over the gaps they leave. */
 static int vis_shown(int row)
 {
-    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS && row < R_RANGES;
+    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS && row != R_MARKLIFE &&
+           row != R_DRAWKEY && row < R_RANGES;
 }
 
 /* how many of the first `rows` rows the front-end screen shows */
@@ -3012,6 +3115,8 @@ static void vis_restore(void)
     s_stage[R_WHEEL]   = tagpu_profiles_policy()->wheel_default;
     s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = 1;
+    s_stage[R_MARKLIFE] = 0;
+    s_stage[R_DRAWKEY] = 0;
     s_stage[R_RANGES]  = 1;
     s_stage[R_RSHIFT]  = 0;
     s_stage[R_RCURSOR] = 1;
@@ -3024,6 +3129,7 @@ static void vis_restore(void)
     s_stage[R_RLRPC]   = 0;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
+    if (!row_held(R_DRAWKEY)) tagpu_settings_set(TS_DRAWKEY, tagpu_settings_preset(TS_DRAWKEY));
     /* the mod's default again, by removing the key: a value written here would stay when the
        mod's default changes */
     if (!row_held(R_RESOURCE)) tagpu_profiles_restore_choice(TAGPU_CHOICE_RADIUS, -1);
@@ -3694,7 +3800,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 25 rows */
+    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 27 rows */
     static char gui[24576];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel

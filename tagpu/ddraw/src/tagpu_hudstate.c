@@ -20,6 +20,7 @@
 #include "tagpu_recreader.h"
 #include "tagpu_pal.h"
 #include "tagpu_sharetick.h"
+#include "tagpu_board.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
 #include "dd.h"
@@ -76,7 +77,8 @@ int tagpu_hudstate_mode(void)
 }
 
 /* THE ALLIES' RECORD: the clock, the scale and the allies (tagpu_share_allies), each a seat whose
-   `seat` is its player record's index; no markers, no forks, no stats. */
+   `seat` is its player record's index, with its board controls (tagpu_board_ally); no markers, no
+   forks, no stats. */
 static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
 {
     TAGPU_SHARE_ALLY a[TAGPU_PK_HUD_SEATS];
@@ -111,6 +113,12 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
         }
         h->ally_share[i][0] = a[i].share[0];
         h->ally_share[i][1] = a[i].share[1];
+        {
+            int muted, last;
+            h->ally_act[i] = (uint8_t)tagpu_board_ally((unsigned)a[i].index, &muted, &last);
+            if (muted) h->ally_mute |= (uint16_t)(1u << i);
+            if (last) h->ally_last |= (uint16_t)(1u << i);
+        }
     }
     h->nseat = (uint8_t)n;
     tagpu_hudinput_fill(h);
@@ -392,7 +400,9 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
                 (unsigned)q->colour, q->units, q->lost ? "true" : "false", q->out ? "true" : "false",
                 q->rates ? "true" : "false", q->m, q->mmax, q->mi, q->mo, q->e, q->emax, q->ei, q->eo);
         if (q->ms >= 0) fprintf(f, ",\"ms\":%.9g", q->ms); else fprintf(f, ",\"ms\":null");
-        if (q->es >= 0) fprintf(f, ",\"es\":%.9g}}", q->es); else fprintf(f, ",\"es\":null}}");
+        if (q->es >= 0) fprintf(f, ",\"es\":%.9g}", q->es); else fprintf(f, ",\"es\":null}");
+        fprintf(f, ",\"board\":{\"mute\":%s,\"last\":%s,\"act\":%d}}", q->mute ? "true" : "false",
+                q->last ? "true" : "false", q->act);
     }
     fprintf(f, "],\"teams\":[");
     for (i = 0; i < st->nteam; i++) {
@@ -616,6 +626,10 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         q->rates = h->mode == TAGPU_PK_HUD_ALLIES && (h->ally_rates >> i & 1);
         q->ms = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][0] : -1;
         q->es = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][1] : -1;
+        q->mute = h->mode == TAGPU_PK_HUD_ALLIES && (h->ally_mute >> i & 1);
+        q->last = h->mode == TAGPU_PK_HUD_ALLIES && (h->ally_last >> i & 1);
+        q->act = h->mode != TAGPU_PK_HUD_ALLIES ? 0 : h->ally_act[i] == TAGPU_PK_BDACT_DRAW ? HUD_ACT_DRAW
+               : h->ally_act[i] == TAGPU_PK_BDACT_ERASE ? HUD_ACT_ERASE : 0;
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
         q->id = s->seat;

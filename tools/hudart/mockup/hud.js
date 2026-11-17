@@ -331,7 +331,7 @@ const HUD = (() => {
      is a control: its plate, the player's colour down its left edge, the name, and a cell a resource with the storage as
      a strip along its bottom. Its lamp is always drawn, dark; while either resource is under `stall` of its storage it
      blinks, lit for the first half of every `period` by the wall clock the state carries (st.wall, seconds) and dark for
-     the second; its parts carry their glow, `glow` round the painting's box ---- */
+     the second; its parts carry their glow, `glow` round the painting's box. Under the cells, the board's row ---- */
   function allies(st) {
     const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
     const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
@@ -367,6 +367,20 @@ const HUD = (() => {
       });
       { const lb = place(F, P);
         inner += art(stall && lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
+      // the board's row, under the cells of an ally still in the game: the ally's activity, then Mute (pressed while on)
+      // and Last marker at its right; Last marker, disabled while the ally has no marker shown, is then a control that
+      // runs nothing (ally_off), so the click does not fall through to the chip's give
+      if (!p.out) {
+        const B = A.board, Bt = B.button, rb = place(F, B), bd = p.board || {};
+        const mb = { x: rb.x + rb.w - 2 * Bt.w - Bt.gap, y: rb.y, w: Bt.w, h: rb.h }, xb = { ...mb, x: rb.x + rb.w - Bt.w };
+        if (bd.act === 1 || bd.act === 2)
+          inner += text(B.act[bd.act === 1 ? 'drawing' : 'erasing'], { x: rb.x, y: rb.y, w: rb.w - 2 * Bt.w - Bt.gap - B.gap, h: rb.h }, B.act.style, {}, p.colour);
+        inner += button({ act: B.mute.act, tip: bd.mute ? B.mute.on_tip : B.mute.tip, icon: { name: B.mute.icon, padf: Bt.icon.padf }, data: { seat: p.i } },
+          Bt, mb, st, !!bd.mute);
+        if (!bd.last) inner += `<div class="box" data-act="ally_off" style="${rect(xb)}"></div>`;
+        inner += button({ act: B.last.act, tip: B.last.tip, icon: { name: B.last.icon, padf: Bt.icon.padf }, data: { seat: p.i }, ...(bd.last ? {} : { off: A.off }) },
+          Bt, xb, st, false);
+      }
       // an ally who is out of the game takes no give: its chip is drawn disabled, and its click is the HUD's and runs nothing
       h += `<div class="box" ${p.out ? 'data-act="ally_off"' : `data-act="ally" data-seat="${p.i}"`} style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
         + art(A.part, zero(A.w, A.h)) + inner + `</div>`;

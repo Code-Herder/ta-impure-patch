@@ -192,6 +192,14 @@ key goes to `GetAsyncKeyState` (IAT `0x4FC350`), so the answer is the key's stat
 the state carried by the message being handled; cnc-ddraw's `fake_GetAsyncKeyState` answers the
 input Impure injects.
 
+**`\` repeats the last typed command, in SoftwareDebugMode only [DISASSEMBLED 2026-11-15].** The
+in-game key switch `0x495E90` indexes its bytes `0x496694` by the key less 9 (`lea eax,[ebp-9]` at
+`0x495EB7`, the bound `0xEF` at `0x495EBA`), so `\` (`0x5C`) reads the byte at `0x4966E7`, `0x0D`,
+and jumps through `0x4965F4[0x0D]` to `0x49637A`. That arm tests `main+0x37F2F` bit 1 and goes to
+the default `0x4965CE` without it; with it, it calls the typed-command handler `0x417B50(line, -1)`
+(`0x496390..0x496393`). Impure's drawing board takes the key's `WM_KEYDOWN`, `WM_KEYUP` and
+`WM_CHAR` in the window procedure ([board](../modules/board.html)), so in play the arm never runs.
+
 **Alt+Z and Alt+X do nothing in play [DISASSEMBLED 2026-10-25].** The keydown translator
 `0x4C1D50` (which takes `WM_SYSKEYDOWN` too, `0x4B5DC3`) pushes a letter lower-cased (`0x4C213D`),
 or as `letter + 0x69` with Ctrl held (`0x4C212D`); Alt changes nothing there. The in-game key switch
@@ -593,7 +601,10 @@ edges; [render](render.html), the build cursor's gate) and records which one it 
 
 The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the
 scroll extent (`main+0x1422B`/`+0x1422F`, the map less 32 and 128 px — §"Engine defects we
-patch"); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
+patch"): `x = (px - box_x) * extentW / box_w` and `y = (py - box_y) * extentH / box_h`, signed
+32-bit multiply then `idiv`, the box's four words sign-extended (`0x498DDA..0x498E19`, DISASSEMBLED
+2026-11-16) — a projected point: the y goes to `GetTPosition 0x484B50`, which finds the ground point
+whose `z - (h >> 1)` is that y (`0x484BD6..0x484BEB`); the drawing board's minimap dots invert it ([board](../modules/board.html)); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
 form already documented in `gpu-status.md` §2.3b. The tail converts the world point to a cell
 pair at `main+0x2C8E` (`>> 0x14`) and stores the **hovered feature id** as a WORD at
 `main+0x2CBC` — live: `0xFFFF` over open ground, `87` over a lab wreck.
@@ -1212,7 +1223,13 @@ register, `ecx` among them; EFLAGS differ on the consumed way only, where `0x499
 In mode 1, at either Interface Type, a right press on the ground with movers selected is
 deferred to its release there (at Type 0 without Ctrl, whose press `0x49917A` sends to
 `0x41CC60`), and a mode-2 left drag reaches the module through the `0x4993BF` stub
-([formation move](../modules/formation.html)).
+([formation move](../modules/formation.html)). Before it asks the formation move, the stub hands
+the same record to the drawing board (`tagpu_board_record`), which reads the world point
+`main+0x2CAA` and the region bits `main+0x2CC6` that `0x498DA0` has just written for it and never
+consumes the record. IdleTick hands the handler the mouse object's last move every frame, so the
+stub sees a record a frame with the pointer's current point in every mode, paused or not
+(MEASURED 2026-11-15: a line drawn while paused follows the pointer;
+[board](../modules/board.html)).
 
 **What the module reads for it.** `0x4C1B80` for Shift, Ctrl and Alt at each evaluation (the ids:
 *`KeyboardHotkeySampler 0x4C1B80`*); `0x48CD80` for the ring's unit, asked on the same record that

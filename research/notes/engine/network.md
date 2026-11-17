@@ -136,7 +136,9 @@ GetPlayerData for the primary ID, not from a private packet. The game thread als
 | `0x4481B8..0x4481C9`, `0x4481BE` | The ready button's own map test: the call `0x4373A0` at `0x4481BE`, on `main+0x391E9`, against PlayerInfo `+0xA9`. Stock's check of the map, which is why the fingerprint leaves `maps\` out. |
 | `0x505DB4`, `0x505EA0`, `0x505E38`, `0x505EC4` | `"START"`, `"LOUNGE2.GUI"`, `"OUTPUT"`, `"SYNCHING"`. |
 
-`0x463CA0(text, 8, 0, 10)` puts a line in the room's Messages box, as it does for chat ([ui](ui.html)); a source row of 10 plays no sound (`0x463DED`), and it keeps 0x40 bytes (`0x463D10`).
+`0x463CA0(text, 8, 0, 10)` puts a line in the room's Messages box, as it does for chat ([ui](ui.html)); a source row of 10 plays no sound (`0x463DED`), and it keeps 0x40 bytes (`0x463D10`). In play, a
+row below 10 leads the line with that player's colour square (MEASURED 2026-11-16: the drawing
+board's `Name: text` line with the sender's row, [board](../modules/board.html)).
 
 MEASURED 2026-11-06 on Wine, two instances: the print reaches each peer through `GetPlayerData`, a grayed START with both ready, and a click placed at its rectangle by the display server left both players in the room.
 

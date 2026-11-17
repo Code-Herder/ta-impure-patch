@@ -96,6 +96,7 @@
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
+#include "tagpu_board.h"
 #include "tagpu_rangeown.h"
 #include "tagpu_impai.h"
 #include "tagpu_formation.h"  /* the formation move's dots, copied in THIS draw */
@@ -421,6 +422,10 @@ typedef char pk_form_size  [(sizeof(TAGPU_PK_FORMDOT) == 12 &&
 typedef char pk_form_layout[(offsetof(TagpuFormDot, x) == offsetof(TAGPU_PK_FORMDOT, x) &&
                              offsetof(TagpuFormDot, alt) == offsetof(TAGPU_PK_FORMDOT, alt) &&
                              offsetof(TagpuFormDot, z) == offsetof(TAGPU_PK_FORMDOT, z)) ? 1 : -1];
+/* the drawing board's three records: tagpu_board.c fills them by name and the marker pass reads
+   them by name, so only the sizes the acquire's strides assume are pinned */
+typedef char pk_board_size[(sizeof(TAGPU_PK_BOARD) == 96 && sizeof(TAGPU_PK_BDSEG) == 28 &&
+                            sizeof(TAGPU_PK_BDMARK) == 80) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -3166,6 +3171,36 @@ static unsigned fill_sweep(TAGPU_PACKET* p, unsigned* cursor)
     return need;
 }
 
+/* THE DRAWING BOARD, COPIED BY VALUE: tagpu_board.c answers on this game thread from its own
+   game-thread store (tagpu_board.h). The header and at most TAGPU_PK_MAX_BDSEG segments and
+   TAGPU_PK_MAX_BDMARK markers, the caps the acquire checks again with every field; what the caps
+   or the packet's room cut sets the table's bit, and the marker pass then draws what arrived. */
+static TAGPU_PK_BOARD  s_bdHead;
+static TAGPU_PK_BDSEG  s_bdSegs[TAGPU_PK_MAX_BDSEG];
+static TAGPU_PK_BDMARK s_bdMarks[TAGPU_PK_MAX_BDMARK];
+
+static unsigned fill_board(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned ns = 0, nm = 0, need = *cursor, e;
+    int cut = 0;
+    if (!tagpu_board_fill(&s_bdHead, s_bdSegs, TAGPU_PK_MAX_BDSEG, &ns, s_bdMarks,
+                          TAGPU_PK_MAX_BDMARK, &nm, &cut)) return need;
+    if (ns > TAGPU_PK_MAX_BDSEG) ns = TAGPU_PK_MAX_BDSEG;
+    if (nm > TAGPU_PK_MAX_BDMARK) nm = TAGPU_PK_MAX_BDMARK;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_BOARD;
+    e = append_table(p, cursor, &s_bdHead, 1u, (unsigned)sizeof(TAGPU_PK_BOARD),
+                     &p->off_board, &p->n_board, TAGPU_PK_TRUNC_BOARD);
+    if (e > need) need = e;
+    if (!p->n_board) return need;      /* no tables without their header */
+    e = append_table(p, cursor, s_bdSegs, ns, (unsigned)sizeof(TAGPU_PK_BDSEG),
+                     &p->off_bdseg, &p->n_bdseg, TAGPU_PK_TRUNC_BOARD);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_bdMarks, nm, (unsigned)sizeof(TAGPU_PK_BDMARK),
+                     &p->off_bdmark, &p->n_bdmark, TAGPU_PK_TRUNC_BOARD);
+    if (e > need) need = e;
+    return need;
+}
+
 /* THE FORMATION MOVE'S DOTS, COPIED BY VALUE: tagpu_formation.c answers on this game thread from
    its own game-thread gesture state (tagpu_formation.h). At most TAGPU_PK_MAX_FORM, the cap the
    acquire checks again with every coordinate; dots cut by the cap or by the packet's room set the
@@ -3623,6 +3658,10 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the reclaim sweep: 26 KB at most (the header and 1281 items of 20 B) ---- */
     e = fill_sweep(p, &cursor);
     if (e > need) need = e;
+    /* ---- the drawing board: 136 KB at most (the header, 4096 segments of 28 B and 256
+       markers of 80 B) ---- */
+    e = fill_board(p, &cursor);
+    if (e > need) need = e;
     /* ---- the formation move's dots: 18 KB at most (1500 of 12 B) ---- */
     e = fill_form(p, &cursor);
     if (e > need) need = e;
@@ -3942,6 +3981,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
         tagpu_resource_level_end();
         tagpu_place_level_end();
         tagpu_sweep_level_end();
+        tagpu_board_level_end();
         tagpu_formation_level_end();
         tagpu_rangeown_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }

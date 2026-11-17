@@ -1128,8 +1128,9 @@ cannot see an address recorded as a value; the scan looks for one instead.
   The landing tier's reach includes **the two-player game**, on each build, whenever the recorder
   or its multiplayer half changed: two humans, allied both ways (`--allies`, so the allies' ribbon
   reads each one's economy from the contribution channel), and two AIs, each human's opponent,
-  with chat, a selection and a click from each human, `tarec check` on its recording, and the recording played to its end
-  (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
+  with chat, a selection and a click and a drawing-board line and pin from each human, `tarec
+  check` on its recording, and the recording played to its end with one seek back, from GameTime
+  600 to 200 (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
   both builds at once beside the test groups' lanes. A change to ImpAI's files or to the battle
   room's ImpAI step (`impai_*`, `tagpu_impai.*`, `tagpu_skirmish.c`) plays it too, in its **ImpAI
   form**: both hosted AIs ImpAI's by the battle room's first step (`--impai`: both peers launched

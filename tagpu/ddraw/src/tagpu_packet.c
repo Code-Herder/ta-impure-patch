@@ -498,6 +498,16 @@ static int table_ok(const TAGPU_PACKET* p, unsigned off, unsigned n, unsigned st
     if (n > TAGPU_PK_TABLE_MAX) return 0;        /* a count is a loop bound      */
     return area_ok(p, off, n * stride);
 }
+static int board_coord(int32_t v) { return v >= -TAGPU_PK_PLACE_COORD && v <= TAGPU_PK_PLACE_COORD; }
+/* a board text: `len` glyphs of the engine font's range, then a NUL */
+static int board_text_ok(const char* t, unsigned len)
+{
+    unsigned k;
+    if (len > TAGPU_PK_BD_TEXT || t[len]) return 0;
+    for (k = 0; k < len; k++)
+        if ((unsigned char)t[k] < TAGPU_PK_GLYPH_LO || (unsigned char)t[k] > TAGPU_PK_GLYPH_HI) return 0;
+    return 1;
+}
 /* one unit's or wreck's piece run, inside the PIECES TABLE rather than merely
    inside the record: a run that pointed at the units table would read a unit's
    bytes as a pose */
@@ -724,6 +734,35 @@ static const char* frame_valid(const void* rec)
                  e->size > TAGPU_PK_IMPAI_SIDE))
                 return "impai cell shade or side";
         }
+    }
+    /* the drawing board: the marker pass walks both counts, projects every point with arithmetic
+       the coordinate bound keeps from overflowing, and draws each text glyph by glyph up to its
+       length */
+    if (!table_ok(p, p->off_board, p->n_board, sizeof(TAGPU_PK_BOARD))) return "board header";
+    if (!table_ok(p, p->off_bdseg, p->n_bdseg, sizeof(TAGPU_PK_BDSEG))) return "board segments";
+    if (!table_ok(p, p->off_bdmark, p->n_bdmark, sizeof(TAGPU_PK_BDMARK))) return "board markers";
+    if (p->n_board > 1u || p->n_bdseg > TAGPU_PK_MAX_BDSEG || p->n_bdmark > TAGPU_PK_MAX_BDMARK ||
+        ((p->n_bdseg || p->n_bdmark) && !p->n_board))
+        return "board counts";
+    if (p->n_board) {
+        const TAGPU_PK_BOARD* h = tagpu_pk_board(p);
+        const TAGPU_PK_BDSEG* s = tagpu_pk_bdsegs(p);
+        const TAGPU_PK_BDMARK* m = tagpu_pk_bdmarks(p);
+        unsigned k, c;
+        if (h->flags > 15u || !board_text_ok(h->text, h->len)) return "board header fields";
+        if (h->erase < 0 || h->erase > TAGPU_PK_PLACE_COORD) return "board eraser";
+        for (c = 0; c < 3; c++)
+            if (!board_coord(h->pen[c]) || !board_coord(h->box[c])) return "board pen or box";
+        for (k = 0; k < p->n_bdseg; k++)
+            for (c = 0; c < 3; c++)
+                if (!board_coord(s[k].a[c]) || !board_coord(s[k].b[c])) return "board segment end";
+        for (k = 0; k < p->n_bdmark; k++)
+            if (!board_coord(m[k].x) || !board_coord(m[k].h) || !board_coord(m[k].z) ||
+                (m[k].flags != 0u && m[k].flags != TAGPU_PK_BDM_EDIT &&
+                 m[k].flags != TAGPU_PK_BDM_CURSOR && m[k].flags != TAGPU_PK_BDM_EDGE) ||
+                m[k].ping > TAGPU_PK_BD_PING || (m[k].ping && m[k].flags > TAGPU_PK_BDM_EDIT) ||
+                !board_text_ok(m[k].text, m[k].len))
+                return "board marker";
     }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its

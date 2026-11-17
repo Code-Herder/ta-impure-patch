@@ -126,7 +126,7 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The recorder writes format 28 and the readers take formats 26, 27 and 28, which differ only in the camera sample's zoom minimum and its `REC_POV_CUT` flag ([perspective streams](demo-recorder-perspective-streams.md)); the start message carries `RECMP_START_VERSION` (3), raised for format 28, because the envelopes and public keys stored in recording files keep `RECMP_VERSION` (2) and `recmp_file.py` reads it. A peer on an older build refuses the start: it logs `recmp: start metadata refused: no contributions`, the host's binding fails (`transmit queue full: binding never completed`, or `stopped before binding completed` in a short game) and its recording ends `INCOMPLETE`, so the match has no complete recording while the game plays on. MEASURED 2026-11-05 with this build against the build before the raise, in each role: both games passed tick 2,000 after the refusal, and two peers on one build bound 2/2 with nothing lost. A multiplayer header carries
+The recorder writes format 29 and the readers take formats 26 to 29: 27 lowers the camera sample's zoom minimum, 28 adds its `REC_POV_CUT` flag ([perspective streams](demo-recorder-perspective-streams.md)), and 29 adds the drawing board's `RECMP_MARK` contributions ([board](../modules/board.html)). The start message carries `RECMP_START_VERSION` (4), raised for format 29 (and before it for 28), because the envelopes and public keys stored in recording files keep `RECMP_VERSION` (2) and `recmp_file.py` reads it. A peer on an older build refuses the start: it logs `recmp: start metadata refused: no contributions`, the host's binding fails (`transmit queue full: binding never completed`, or `stopped before binding completed` in a short game) and its recording ends `INCOMPLETE`, so the match has no complete recording while the game plays on. MEASURED 2026-11-05 with this build against the build before the raise, in each role: both games passed tick 2,000 after the refusal, and two peers on one build bound 2/2 with nothing lost. A multiplayer header carries
 no `RT_HOLD`, so its stream holds nothing, and a reader refuses one that does. Without `RT_HOLD`
 the orders frame writes scheme 1, each list against the same list's last image node by node:
 scheme 2's nodes matched by action and issue time cost size on an exact stream. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
@@ -2010,10 +2010,10 @@ Owner decisions, 2026-10-06: 4a, each player's explored map (above); 4b,
 chat played back with its audiences, every message in full-map mode and only
 what a player received in that player's view, with a hide-chat toggle; 4c,
 every player's camera, cursor, clicks and selections recorded and shown as
-overlays, in skirmish recordings too (the human seat). Pings and drawings are
-dropped until Impure has such a feature: stock TA has none [INFERRED: no ping
-or marker message found; TADR's markers are not ported], and a future one
-follows chat's audience rules.
+overlays, in skirmish recordings too (the human seat). Stock TA has no ping or
+drawing [INFERRED: no ping or marker message found]; Impure's drawing board
+([board](../modules/board.html)) contributes its operations as kind 16 below.
+A playback does not show them yet.
 
 4c is its own plan, [demo-recorder-perspective-streams.md](demo-recorder-perspective-streams.md).
 Its skirmish landings 4c-1 to 4c-3 record the human seat in the primary stream
@@ -2026,6 +2026,7 @@ run between two peers ([4c-4 as built](demo-recorder-perspective-streams.md#4c-4
 | 13 | `RECMP_POV` | one `RecPov`, 32 bytes: view, applied zoom, camera centre, cursor | at most every 6 ticks (5 Hz), when it changed and the transmit queue has 64 free slots |
 | 14 | `RECMP_CLICK` | one `RecClick`, 20 bytes | from the click redirects, at the channel's capture tick |
 | 15 | `RECMP_SELECT` | a `RecSel` head and at most 670 `(slot, birth)` entries | the whole selection, BEGIN to END, when it changed other than by a death |
+| 16 | `RECMP_MARK` | the drawing board's operations, `tagpu_boardwire.h`: a version, the sender's seat, then POINT, EDIT, MOVE, DELETE, LINE and ERASE in the sender's numbering of the seats | every frame the player has drawn, at the channel's capture tick; taken at the capture point or, at the head of the queue, between two (format 29) |
 
 Every payload's player byte is 0xFF, since the origin names the actor. A
 selection's slots lie in the actor's roster block. A seal is refused while a

@@ -314,7 +314,10 @@ typedef struct TAGPU_GUISDRAW {
 /* 2 harness quads + 1 cursor + 1 minimap base + 4 view-box edges + the reclaim
    popup's 8 (plate, tongue, three bars, three labels) and its tag = 17. Nearly
    doubled, because a bound wants room and this one is carried BY VALUE. */
-#define TAGPU_GUI_SDRAW_MAX 32
+#define TAGPU_GUI_SDRAW_BOARD 640   /* the drawing board's minimap quads: two a marker
+                                       or pointer record and four a ping, counted where
+                                       they are drawn (tagpu_gui_surf.c)            */
+#define TAGPU_GUI_SDRAW_MAX (32 + TAGPU_GUI_SDRAW_BOARD)
 
 typedef struct TAGPU_GUIHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_gui_handover` refuses any other:
@@ -368,9 +371,10 @@ typedef struct TAGPU_GUIHAND {
        reset. */
     unsigned             colRearm;
 
-    /* ---- the sharp layer's draws, BY VALUE. 16 x 60 bytes is small enough
-       to copy and it retires the whole question of what they point into: the
-       op arena is reallocated per present, and this list is not in it. */
+    /* ---- the sharp layer's draws, BY VALUE: the producer fills only the
+       `nsdraw` used, and the hand-over copies the whole struct, which retires
+       the whole question of what they point into: the op arena is
+       reallocated per present, and this list is not in it. */
     int                  sharpW, sharpH;   /* 0 = no layer this frame        */
     int                  nsdraw;
     TAGPU_GUISDRAW       sdraw[TAGPU_GUI_SDRAW_MAX];

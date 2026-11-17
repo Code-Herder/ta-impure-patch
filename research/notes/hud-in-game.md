@@ -63,8 +63,8 @@ device space where the dump said it was drawn, through `tacli hud`):
 - pause and resume; the speed through every preset and the wrap from 8× to ½×; ±10 s; a bookmark
   added and removed, with `replays\index.dat` changed each time; the scale button through 100,
   125, 150, 75 and back to 100, written to `impure.cfg`; a team folded and unfolded;
-- the four switches, each logging its line (`replay: overlay cursors off` … `replay: chat
-  hidden`);
+- the switches, each logging its line (`replay: overlay cursors off` … `replay: chat
+  hidden`; `replay: overlay marks off` for Marks);
 - hover showing a row's Jump, Sight and Follow; Sight on seat 2, then Sight again (record 10, the
   full map); Follow, then Follow again (`follow ended: free cam`); Jump; on a seat whose camera
   was not recorded, the toast "Camera was not recorded" (seen in a capture);
@@ -135,9 +135,10 @@ The owner's decisions:
   up to a game second. After a paused seek, a takeover that leaves the game paused or a return to
   now the rates stay the earlier ones until the game runs: the same engine rule, left for a later
   landing by the owner's choice of 2026-11-01.
-- **The foot plate's five buttons:** game stats, which opens and closes the stats window, then
-  Cursors, Clicks, Selections and Chat, the four switches of the dock's old Overlays menu. The
-  map button and the capture button are removed (2026-10-08).
+- **The foot plate's six buttons:** game stats, which opens and closes the stats window, then
+  Cursors, Clicks, Selections, Marks and Chat. Marks shows or hides the drawing board's lines and
+  markers in a multiplayer recording ([board](modules/board.html)). The map button and the
+  capture button are removed (2026-10-08).
 - **The army value is every finished unit that can move, at its type's metal cost, the commander
   excluded** (2026-10-09).
 - **The stats window keeps its measure, its split and its place for the session**, never in
@@ -422,7 +423,7 @@ The owner's decisions:
   replay's speed and pause, the HUD's scale, up to ten seats (each with `pov`, its camera
   recorded) and up to 320 markers, and the HUD's own state as its input keeps it
   (`tagpu_hudinput_fill`): the pointer in client pixels (`px`, `py`; -1 when not known), the
-  folded teams, the four switches (`toggles`), the column's scroll as asked, the recorded seats
+  folded teams, the five switches (`toggles`), the column's scroll as asked, the recorded seats
   Sight and Follow are set to (-1: the full map, the free camera), the key held down and the
   toast. The render thread turns the pointer into HUD units for the hover, and Sight's and
   Follow's seats into rows.
