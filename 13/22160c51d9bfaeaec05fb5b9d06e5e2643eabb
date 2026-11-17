@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=57d39d71..1322160c (ImpAI brain batch 9) findings=9 (H0 M2 L7) fixed-in=c1dc2e70; fix-review-c1dc2e70 confirms MED-1, MED-2, LOW-1/2/4/6 closed; report .data/impai/runs/reviews/high-batch9-1322160c.md date=2026-11-16
