@@ -3797,7 +3797,9 @@ static void check_route(void)
    THE SEATS (WQ_START.seated), no rows, the seat's start at the anchor seated by it and two more:
    (q) the start in (6, 1) left empty, seat 1's in (12, 1): E, 4 steps from the anchor and 7 from seat 1's;
    (r) the start in (6, 1) seated by seat 2, the seat's ally, seat 1's in (12, 1): E;
-   (s) the start in (6, 1) seated by seat 1, the one in (12, 1) left empty: H. */
+   (s) the start in (6, 1) seated by seat 1, the one in (12, 1) left empty: H;
+   (t) as (s), seat 1's extractor known in (12, 13) and seat 2's army seen in (12, 1), its base not known: the
+       starts stand for seat 2's base alone, and seat 1's start is none: E. */
 static IMPAI_MIL s_hmil;
 
 /* an enemy structure row of seat `owner` at 256-px cell (cx, cz), row `row` */
@@ -3865,7 +3867,7 @@ static const SNAP_PATCH HOLD_PATCHES[] = {
 
 static void check_held_ground(void)
 {
-    static const char* const NAME[22] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+    static const char* const NAME[23] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
                                          "the front back, not held before", "no view", "an enemy tower in (6, 1)",
                                          "a tower of the seat's in E's cell", "a start in (6, 1)",
                                          "two enemies", "a radar contact", "a contact counted as none",
@@ -3876,16 +3878,18 @@ static void check_held_ground(void)
                                          "the enemy's army alone, a start in (6, 1)",
                                          "the enemy's base in (6, 1)",
                                          "the start in (6, 1) left empty", "the start in (6, 1) an ally's",
-                                         "the start in (6, 1) the enemy's" };
-    static const int OWN[22] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
-    static const int FOE[22] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1, -1, -1, -1 };
-    static const char WANT[22] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
-                                   'E', 'E', 'E', 'H', 'H', 'E', 'E', 'H' };
+                                         "the start in (6, 1) the enemy's",
+                                         "the start in (6, 1) an enemy's whose base is known, another's army seen" };
+    static const int OWN[23] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                 -1 };
+    static const int FOE[23] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1, -1, -1, -1, 12 };
+    static const char WANT[23] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
+                                   'E', 'E', 'E', 'H', 'H', 'E', 'E', 'H', 'E' };
     uint8_t held_b[sizeof s_st.held];
     IMPAI_BRAIN_OUT out;
     unsigned i;
     int c, x, z;
-    for (c = 0; c < 22; c++) {
+    for (c = 0; c < 23; c++) {
         const FCMD* cmd;
         char got;
         brain_world();
@@ -3920,6 +3924,11 @@ static void check_held_ground(void)
             s_rview.allies = 1u << 2;
         }
         if (c == 21) held_seats(2, WQ_SEATED_NONE);
+        if (c == 22) {
+            held_seats(2, WQ_SEATED_NONE);
+            held_base(43, 1, 12, 13);
+            s_rrows[40].seat[0].owner = 2;
+        }
         if (c == 14 || c == 15) {
             s_hmil.ebx = 5 * 8 + 2;
             s_hmil.ebz = 10;
@@ -9425,21 +9434,23 @@ static void check_yard_clear(void)
    region and so given no turn there, on a live walk to (464, 448): the walks first hold that point, and the first is moved
    where it does not touch it, the next ring's south, (464, 480). (i) The walk of (a), given now, a constructor
    helping the lab -- its one order a guard of it -- standing on its point at (456, 440): a helper may be passing
-   through, and the walk is trusted -- given nothing. */
+   through, and the walk is trusted -- given nothing. (j) The walk of (a), given now, another constructor whose own
+   walk was given now and has ended -- no order left -- standing on its point at (456, 440): the decision holds no
+   point for it, it holds still, and the first is moved as in (f), to (419, 461). */
 static void check_yard_walk(void)
 {
-    static const char* const NAME[9] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
-                                         "a walk lapsed", "a move not the economy's", "a point another stands on",
-                                         "a point another walks from", "a point another walks to",
-                                         "a point a helper stands on" };
-    static const int32_t TO[9][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
-                                      { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 } };
-    static const int32_t WANT[9][2] = { { 0, 0 },     { -1, -1 },   { -1, -1 },   { 419, 461 }, { 464, 448 },
-                                        { 419, 461 }, { 0, 0 },     { 464, 480 }, { 0, 0 } };
+    static const char* const NAME[10] = { "a walk off the yard", "a move onto the yard", "a walk through the lab",
+                                          "a walk lapsed", "a move not the economy's", "a point another stands on",
+                                          "a point another walks from", "a point another walks to",
+                                          "a point a helper stands on", "a point a walk ended on" };
+    static const int32_t TO[10][2] = { { 464, 448 }, { 27 * 16, -1 }, { 20 * 16, -1 }, { 464, 448 }, { 464, 448 },
+                                       { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 }, { 464, 448 } };
+    static const int32_t WANT[10][2] = { { 0, 0 },     { -1, -1 },   { -1, -1 },   { 419, 461 }, { 464, 448 },
+                                         { 419, 461 }, { 0, 0 },     { 464, 480 }, { 0, 0 },     { 419, 461 } };
     IMPAI_BRAIN_OUT out;
     int32_t x = 0, z = 0;
     int c, moved, n, left = 0;
-    for (c = 0; c < 9; c++) {
+    for (c = 0; c < 10; c++) {
         FUNIT* u;
         yard_world();
         s_w.gametime = 3000;
@@ -9450,7 +9461,7 @@ static void check_yard_walk(void)
         u->list[0].pos[0] = (int32_t)((uint32_t)TO[c][0] << 16);
         u->list[0].pos[2] = TO[c][1] >= 0 ? (int32_t)((uint32_t)TO[c][1] << 16) : s_w.unit[3].pos[2];
         u->n = 1;
-        if (c == 0 || c == 2 || c == 3 || c == 5 || c == 6 || c == 8) {
+        if (c == 0 || c == 2 || c == 3 || c == 5 || c == 6 || c == 8 || c == 9) {
             s_job[2].kind = IMPAI_JOB_NONE;
             s_job[2].type = T_CONS;
             s_job[2].build = s_job[2].target = (uint16_t)WQ_NONE;
@@ -9458,7 +9469,15 @@ static void check_yard_walk(void)
             s_job[2].cz = (int16_t)((TO[c][1] >= 0 ? TO[c][1] : s_w.unit[3].pos[2] >> 16) >> 4);
             s_job[2].since = (uint32_t)s_w.gametime - (c == 3 ? 901u : 0u);
         }
-        if (c == 5 || c == 6) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+        if (c == 5 || c == 6 || c == 9) unit_add(&s_w, 4, T_CONS, 28, 27, 1);
+        if (c == 9) {
+            s_job[4].kind = IMPAI_JOB_NONE;
+            s_job[4].type = T_CONS;
+            s_job[4].build = s_job[4].target = (uint16_t)WQ_NONE;
+            s_job[4].cx = 28;
+            s_job[4].cz = 27;
+            s_job[4].since = (uint32_t)s_w.gametime;
+        }
         if (c == 7) unit_add(&s_w, 4, T_CONS, 40, 40, 1);
         if (c == 8) {
             FUNIT* h;
@@ -12576,10 +12595,11 @@ static void check_mil_retreat_members(void)
    lost, a retreat, as check_mil_stay_or_go's (c). (c) At the rally against an enemy turret in place of the
    submarine, a contact that does not threaten the base (a structure is no base threat): one prediction. (d) The
    tanks a RAID squad at the rally, its point 2 400 px out, the submarine 128 px south: one prediction, lost, every
-   member already where a retreat would release it -- no retreat, the squad still a RAID, and no order at the
-   submarine it lost to. (e) The same raid
+   member already where a retreat would take it -- no retreat, the squad back to FORM, the loss stamped for the
+   lead, and no order at the submarine it lost to. (e) The same raid
    2 400 px out: one prediction, a retreat. (f) The member's index is the one it takes in the layer's RETREAT squad
-   it would join (below). */
+   it would join (below). (g) A sea ATTACK of three destroyers up the strait against six, the rally ashore with no
+   water within 1 024 px: no point is not home -- one prediction, lost, a retreat (below). */
 static void check_mil_at_rally(void)
 {
     static const char* const NAME[5] = { "a submarine at the rally", "a submarine 2 400 px out", "a turret at the rally",
@@ -12612,9 +12632,9 @@ static void check_mil_at_rally(void)
                   "at the rally: %u predictions, %u retreats, tasks %d %d", o.predictions, o.retreats, squad_task_of(2),
                   squad_task_of(3));
         else if (c == 3)
-            CHECK(o.predictions == 1 && !o.retreats && squad_task_of(2) == IMPAI_SQ_RAID && !at,
-                  "%s: %u predictions, %u retreats, task %d, %d orders at the submarine", NAME[c], o.predictions,
-                  o.retreats, squad_task_of(2), at);
+            CHECK(o.predictions == 1 && !o.retreats && squad_task_of(2) == IMPAI_SQ_FORM && !at && s_mil.lost_t,
+                  "%s: %u predictions, %u retreats, task %d, %d orders at the submarine, lost at %u", NAME[c],
+                  o.predictions, o.retreats, squad_task_of(2), at, s_mil.lost_t);
         else if (c == 2)
             CHECK(o.predictions == 1, "%s: %u predictions", NAME[c], o.predictions);
         else
@@ -12642,6 +12662,26 @@ static void check_mil_at_rally(void)
     mil_print("a tank whose retreat joins the layer's", &o, from);
     CHECK(o.predictions == 1 && o.retreats == 1, "a tank home at its own index, not at the index it joins at: %u "
           "predictions, %u retreats", o.predictions, o.retreats);
+    /* (g) the rally about (675, 493) px, the strait from x 3 840 px: no block of the destroyers' component within
+       SUB_BLOCKS of it */
+    mil_world();
+    s_st.ax = s_st.az = 20;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6416;
+    s_w.starts[1].z = 3216;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+    mil_water(W_STRAIT);
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 128, 120);
+    for (k = 0; k < 3; k++) member(1 + k, M_DEST, 250 + 2 * k, 100, 0);
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_DEST, 250 + 2 * k, 108, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea squad's decision runs");
+    mil_print("a sea ATTACK, the rally ashore", &o, from);
+    CHECK(o.predictions == 1 && o.retreats == 1 && squad_task_of(1) == IMPAI_SQ_RETREAT,
+          "a sea ATTACK whose rally has no water near: %u predictions, %u retreats, task %d", o.predictions,
+          o.retreats, squad_task_of(1));
 }
 
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by

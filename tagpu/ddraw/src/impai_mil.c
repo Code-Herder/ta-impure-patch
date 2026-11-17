@@ -1128,15 +1128,19 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
    seated there is neither the seat's nor an ally's (IMPAI_VIEW.seat, allies). A start the level left empty
    (WQ_SEATED_NONE) holds no base; at a level whose starts were random (seated 0) any record may stand at any other
    start. The estimate (est_start), the scouting's points (next_point, starts_reached) and the base threat's sides
-   (nearer_anchor) read this one test, as the economy's held ground reads the same rule (impai_build.c,
-   start_foe). The seated record is data: one past WQ_SEATS holds no base. */
+   (nearer_anchor) read this one test, and the economy's held ground the seated half of it (impai_start_foe, from
+   impai_build.c). The seated record is data: one past WQ_SEATS holds no base. RESIDUAL: at random starts an ally's
+   start counts as a foe's, the level recording no seat at any start. */
+int impai_start_foe(const IMPAI_VIEW* v, int32_t seated)
+{
+    const int32_t r = seated - 1;
+    if (!seated) return 1;
+    return seated > 0 && r < WQ_SEATS && !(v && (r == (int32_t)v->seat || ((v->allies >> r) & 1u)));
+}
+
 static int start_foe(const MDEC* d, int k)
 {
-    const IMPAI_VIEW* v = d->in->view;
-    const int32_t s = d->starts[k].seated, r = s - 1;
-    if (k == d->own_start) return 0;
-    if (!s) return 1;
-    return s > 0 && r < WQ_SEATS && !(v && (r == (int32_t)v->seat || ((v->allies >> r) & 1u)));
+    return k != d->own_start && impai_start_foe(d->in->view, d->starts[k].seated);
 }
 
 /* THE STARTS LOOKED AT, the estimate before any enemy structure is known (EST_START): the start position nearest the
@@ -2854,14 +2858,20 @@ static int at_rally(const MDEC* d, int s, int c)
            dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX;
 }
 
-/* THE RETREAT HOME: a squad of any task that loses its prediction while every member already stands where a
-   retreat would release it (member_home, the test THE RETREAT RELEASES ON ARRIVAL makes, each member at the index
-   it takes in the RETREAT squad it would become or join: become's merge keeps the army's order) takes no retreat
-   and, this decision, not the contact: no RETREAT, no lost prediction for the lead's evidence, and a FORM squad
-   forms its wave (form_attack, which waits while the squad has a contact); a RAID, an ATTACK and a DEFEND go on
-   with their task. INVARIANT: a squad that becomes a RETREAT holds a member the release does not hand back at
-   once, which walks; its members already home are handed back to FORM, where the next lost prediction holds them
-   here -- so no squad is sent back, round after round, to where it stands. WHY: such a squad became RETREAT, was
+/* THE RETREAT HOME: a squad of any task that loses its prediction while every member already stands within RALLY_PX
+   of the point a retreat would take it to (member_at_rally: travel_point at the index the member takes in the
+   RETREAT squad it would become or join -- become's merge keeps the army's order --, a point found) takes no
+   retreat and, this decision, not the contact; the lost prediction is stamped all the same (lost, the lead's
+   evidence). A FORM squad forms its wave if it would win (form_attack: its size, its goal, and the prediction
+   against every enemy mobile seen now that enters its stay-or-go and the defences at the goal); a RAID, an ATTACK
+   and a DEFEND go back to FORM where they stand (back_to_form), so a squad at home that has lost does not walk on
+   at its goal. INVARIANT: a squad that becomes a RETREAT holds a member the release does not hand back at once,
+   which walks, or one with no point (below); its members already home are handed back to FORM, where the next lost
+   prediction holds them here -- so no squad whose members have points is sent back, round after round, to where
+   it stands. NO POINT IS NOT HOME: a member with no point (point_for 0: no block of its class's component within
+   SUB_BLOCKS of the rally -- a ship, the rally ashore with no water within 1 024 px) is not home here, though the
+   release reads it as arrived (THE ARRIVAL); held as home, a lost sea ATTACK went on at the force it lost to.
+   WHY: such a squad became RETREAT, was
    released to FORM in the same decision and was predicted again at the next, each round a prediction, a retreat
    and a lost prediction, with no attack order and no wave formed while it stood where it was, for as long as a
    contact stood within its reach -- range and REACH_PAD -- of there: on ProTA's Lava Mania
@@ -2876,14 +2886,26 @@ static int at_rally(const MDEC* d, int s, int c)
    with a member still to walk home falls back as before, so a wave or a raid that meets a stronger force on its
    way still does. RESIDUAL: a squad so held may stand within reach of the contact it lost to -- artillery
    out-ranging the rally -- answered only by its units' own fire, and is predicted again at each decision, one of
-   the plan's predict_max. BOUND: the squad's members, point_for's cost each, once a lost prediction. */
+   the plan's predict_max. A squad of members with no point becomes a RETREAT that gives no move (move_to) and is
+   released where it stands at the next decision: it stops, it does not withdraw, and as FORM it is sent back
+   every other decision while the contact stays in its reach. BOUND: the squad's members, point_for's cost each,
+   once a lost prediction. */
+/* THE RETREAT HOME's test of army unit u, the n-th member: within RALLY_PX of the point travel gives it, a point
+   found -- not member_home, which reads no point as arrived */
+static int member_at_rally(MDEC* d, MUNIT* u, int n)
+{
+    int32_t px, pz;
+    travel_point(d, u, n, d->rx, d->rz, &px, &pz);
+    return point_for(d, u->type, u->x, u->z, &px, &pz) > 0 && dist(u->x, u->z, px, pz) <= RALLY_PX;
+}
+
 static int retreat_home(MDEC* d, int s)
 {
     const int to = task_squad(d, s, IMPAI_SQ_RETREAT);
     int k, n = 0;
     for (k = 0; k < d->narmy; k++) {
         const int sq = d->army[k].sq, i = sq == s || (to >= 0 && sq == to) ? n++ : -1;
-        if (sq == s && !member_home(d, &d->army[k], i)) return 0;
+        if (sq == s && !member_at_rally(d, &d->army[k], i)) return 0;
     }
     return 1;
 }
@@ -2897,7 +2919,8 @@ static int retreat_home(MDEC* d, int s)
    member_counts) is predicted against those members and the defences near it -- below retreat_margin the squad
    falls back to the rally point, otherwise it fights; a DEFEND squad in the anchor box (THE HOME HOLDS) and a FORM
    squad at the rally point against a base threat (AT THE RALLY) fight unpredicted, and a squad whose retreat would
-   end where it stands takes no retreat and not the contact (THE RETREAT HOME) --, and a FORM squad with none forms
+   end where it stands takes no retreat and not the contact, a squad that is not FORM going back to FORM (THE
+   RETREAT HOME) --, and a FORM squad with none forms
    a wave. A contact with no member that enters is no
    contact for the squad: no retreat test, no fight, and a FORM squad under aircraft it can neither hurt nor
    outrun still forms its wave. Every prediction comes out of the plan's predict_max; a squad left without one
@@ -2975,10 +2998,14 @@ static void tasks(MDEC* d)
                 if (predict(d, &a, &b, gap, squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s),
                             &m) == 0 &&
                     m < plan->retreat_margin) {
+                    lost(d);
                     if (!retreat_home(d, s)) {
                         become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
                         d->out->retreats++;
-                        lost(d);
+                        continue;
+                    }
+                    if (q->task != IMPAI_SQ_FORM) {
+                        back_to_form(d, s);
                         continue;
                     }
                     best = -1;

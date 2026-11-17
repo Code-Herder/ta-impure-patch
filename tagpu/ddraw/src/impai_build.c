@@ -1130,18 +1130,28 @@ static int touch_ref(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_UNI
            touch(x, z, hb, u->pos[0] >> 16, u->pos[2] >> 16, half_px(d, u->type));
 }
 
+/* 1 when the decision holds a point for the builder in `slot` (IMPAI_DEC.way_to) */
+static int way_held(const IMPAI_DEC* d, uint16_t slot)
+{
+    int k;
+    for (k = 0; k < d->nway_to; k++)
+        if (d->way_to[k].slot == slot) return 1;
+    return 0;
+}
+
 /* 1 when b at px (x, z), half-size hb, touches another builder the census lists where it stands, the commander,
    or a point the decision has sent another builder to (OFF THE SEAT'S BUILDINGS AND BUILDERS). With `still`, what
-   holds still alone: the decision's points, and the idle builders on no economy walk (impai_walk_live), whose
-   points the decision already holds (THE WALKS FIRST, impai_brain.c); a helper, a jobbed builder and the commander
-   may be passing through, and their positions are not where they will stand */
+   holds still alone: the decision's points, and the idle builders the decision holds no point for -- an idle
+   builder on a live economy walk has its point among them (THE WALKS FIRST, impai_brain.c), and one whose walk
+   ended stands where it is; a helper, a jobbed builder and the commander may be passing through, and their
+   positions are not where they will stand. BOUND: the points, at most 2 IMPAI_IDLE_CAP, once an idle builder */
 static int way_off_crowded(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t hb, int64_t x, int64_t z, int still)
 {
     int k;
     for (k = 0; k < d->nway_to; k++)
         if (d->way_to[k].slot != b->slot && touch(x, z, hb, d->way_to[k].x, d->way_to[k].z, d->way_to[k].h)) return 1;
     for (k = 0; k < d->nidle; k++)
-        if ((!still || !impai_walk_live(d, &d->idle[k])) && touch_ref(d, b, &d->idle[k], hb, x, z)) return 1;
+        if ((!still || !way_held(d, d->idle[k].slot)) && touch_ref(d, b, &d->idle[k], hb, x, z)) return 1;
     if (still) return 0;
     for (k = 0; k < d->nhelpers; k++)
         if (touch_ref(d, b, &d->helpers[k], hb, x, z)) return 1;
@@ -1483,13 +1493,11 @@ static int held_sources(const IMPAI_DEC* d, uint8_t* dist, int own, int kind)
 
 #define HELD_STARTS 16
 
-/* whether start s can hold the base of an enemy whose base the rows do not hold (`based`): any record's, or a seated
-   record's that is neither the seat's nor an ally's */
+/* whether start s can hold the base of an enemy whose base the rows do not hold (`based`): THE FOE'S STARTS
+   (impai_start_foe), less a seated record the rows already place */
 static int start_foe(const IMPAI_VIEW* v, const WQ_START* s, uint32_t based)
 {
-    const int32_t r = s->seated - 1;
-    if (!s->seated) return 1;
-    return s->seated > 0 && r < WQ_SEATS && r != (int32_t)v->seat && !(v->allies >> r & 1u) && !(based >> r & 1u);
+    return impai_start_foe(v, s->seated) && !(s->seated > 0 && (based >> (s->seated - 1) & 1u));
 }
 
 /* THE ENEMIES' BASES into the enemy's dist, queued after its n sources; the sources queued */

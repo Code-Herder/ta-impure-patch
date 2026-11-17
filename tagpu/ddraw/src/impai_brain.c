@@ -1033,8 +1033,8 @@ static void walk_checks(IMPAI_DEC* d)
    - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
      the unit's idle behaviour (idle_head) -- to a point the move above could have chosen (impai_way_off: off the
      region, on the builder's own reach label, clear of the seat's buildings and of what holds still -- the
-     decision's points and the idle builders on no walk; a helper, a jobbed builder or the commander passing by
-     does not end a walk --, not through the plant), given by the economy within WALK_OFF_T (impai_walk_live: its
+     decision's points and the idle builders it holds no point for; a helper, a jobbed builder or the commander
+     passing by does not end a walk --, not through the plant), given by the economy within WALK_OFF_T (walk_live: its
      job NONE, its type the builder's, its order time at most WALK_OFF_T ago; and its cell the point's within a
      cell), is walking off already, and leaves its list with no order (`yard_left`). Any other is moved again: a
      point order through the plant, one to a point another builder now stands still on, or a walk the engine has
@@ -1042,7 +1042,7 @@ static void walk_checks(IMPAI_DEC* d)
      and trusted for ever it held its factory for good. So a builder that cannot leave is moved once a
      WALK_OFF_T, never to the point it last failed by (THE LAST POINT NOT AGAIN).
    - THE WALKS FIRST: before the decision moves any builder off a region, the point of every idle builder's live
-     economy walk (impai_walk_live, its one order a point order) joins the decision's (impai_way_to), so no builder
+     economy walk (walk_live, its one order a point order) joins the decision's (impai_way_to), so no builder
      is sent beside a walk whose turn in the lists comes later, or that has left the region and has no turn. A
      builder moved again replaces its own point (one point a builder), so the decision's points stay within the
      idle and helper lists' 2 x IMPAI_IDLE_CAP.
@@ -1071,7 +1071,8 @@ static void walk_checks(IMPAI_DEC* d)
    enemy, a wreck, a unit of a plant with no kept way -- is moved once a WALK_OFF_T, and its factory waits. */
 #define WALK_OFF_T 900          /* GameTime ticks a walk off is trusted for: 30 s, a 900-px walk at 1 px a tick */
 
-int impai_walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
+/* 1 while b's job is the economy's walk: job NONE, its type b's, its order time at most WALK_OFF_T ago */
+static int walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_JOB* j = &d->in->job[b->slot];
     return j->kind == IMPAI_JOB_NONE && j->type == b->type && j->since && d->now - j->since <= WALK_OFF_T;
@@ -1096,7 +1097,7 @@ static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG
 {
     const IMPAI_JOB* j = &d->in->job[b->slot];
     int x, z, dcx, dcz;
-    if (!impai_walk_live(d, b) || !walk_point(d, b, &x, &z)) return 0;
+    if (!walk_live(d, b) || !walk_point(d, b, &x, &z)) return 0;
     dcx = (x >> 4) - j->cx;
     dcz = (z >> 4) - j->cz;
     return dcx >= -1 && dcx <= 1 && dcz >= -1 && dcz <= 1 && impai_way_off(d, b, g, x, z);
@@ -1107,7 +1108,7 @@ static void walks_first(IMPAI_DEC* d)
 {
     int k, x, z;
     for (k = 0; k < d->nidle; k++)
-        if (impai_walk_live(d, &d->idle[k]) && walk_point(d, &d->idle[k], &x, &z)) impai_way_to(d, &d->idle[k], x, z);
+        if (walk_live(d, &d->idle[k]) && walk_point(d, &d->idle[k], &x, &z)) impai_way_to(d, &d->idle[k], x, z);
 }
 
 static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)

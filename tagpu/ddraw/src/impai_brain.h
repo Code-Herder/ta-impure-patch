@@ -448,14 +448,11 @@ int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
 /* THE WALK OFF's trust in b's walk to px (x, z) (impai_build.c, THE WAY OFF): off g, on b's class's own reach
    label, clear of the seat's buildings and of what holds still -- the decision's other points and the idle builders
-   on no walk --, and reached from where b stands without crossing g's plant */
+   it holds no point for --, and reached from where b stands without crossing g's plant */
 int  impai_way_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g, int64_t x, int64_t z);
 /* the point (x, z) px builder b leaves a yard for this decision, into IMPAI_DEC.way_to: b's own point replaced,
    one a builder */
 void impai_way_to(IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t x, int64_t z);
-/* 1 while b's job is the economy's walk (impai_brain.c, THE WALK OFF): job NONE, its type b's, its order time at
-   most WALK_OFF_T ago */
-int  impai_walk_live(const IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */

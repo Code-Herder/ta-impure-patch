@@ -145,8 +145,10 @@ int impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz)
    [INFERRED: the level init's labels, from the core's class map]; the passable ring round the hole is one component
    with an entry 11 px from the ARMSY site. Each of the shipyard's offers to it from 52 207 to the cap was refused by
    THE BUILDER'S REACH (impai_build.c), the seat built no sea army against the stock AI's last base on the lake, and
-   the game reached the cap ahead, 78 622 against 56 805. RESIDUAL: a unit between two components reaches nothing.
-   BOUND: nine more label reads. */
+   the game reached the cap ahead, 78 622 against 56 805. RESIDUAL: a block carries its first passable cell's
+   label, so the one label beside can be another component than the cells round the unit -- a ring block holding
+   two, its first cell of the other --; a hole wider than the blocks round the first cell's block, all eight of
+   them unlabelled, reads 0; and a unit between two components reaches nothing. BOUND: nine more label reads. */
 int impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz)
 {
     const int32_t cx = (int32_t)(((int64_t)x - ((int64_t)fx * 0x80000) + 0x80000) >> 20);

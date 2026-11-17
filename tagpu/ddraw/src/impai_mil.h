@@ -83,6 +83,10 @@ int    impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out);
 int    impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti,
                           unsigned nti, const IMPAI_PERSONA* p, uint32_t now, int ctype, int to_point, int32_t cx,
                           int32_t cz, int32_t x, int32_t z);
+/* THE FOE'S STARTS' seated half (impai_mil.c): 1 when a start whose WQ_START.seated is `seated` can hold an
+   enemy's base -- the starts random (0), or seated by a record below WQ_SEATS that is neither v's seat nor an ally;
+   v NULL tests no seat */
+int    impai_start_foe(const IMPAI_VIEW* v, int32_t seated);
 /* The task's letter in the pulse line: f, F, D, R, A, B (retreat: back), S */
 char   impai_mil_letter(unsigned task);
 
