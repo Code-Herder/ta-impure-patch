@@ -1026,17 +1026,23 @@ def refuse_linked_template():
     if linked:
         die(f"the template's registry hives are still linked by {len(linked)} prefix(es): "
             f"{', '.join(linked[:12])}{' ...' if len(linked) > 12 else ''} -- a wineserver of one "
-            f"rewrites them in place, so a copy now may be cut. Give each hives of its own with "
-            f"`tacli create <name> --force` while no game of it runs (clone_prefix).")
+            f"rewrites them in place, so a copy now may be cut. Remove them (`tacli rm`) until one "
+            f"is left, which `tacli create <name> --force` then gives hives of its own; a link "
+            f"outside tagpu/instances is removed by hand (clone_prefix).")
 
 
 def own_hives(inst: Instance):
     """A prefix `--force` kept that still links the template's hives (made by a tacli before
     clone_prefix copied them) gets copies of its own, from the template while this prefix is its
-    only other link: its game is not running (create refuses a running one), so nothing writes
-    the inode while it is read. With another prefix linking it too, refuse_linked_template."""
-    if not any((inst.prefix / h).exists() and (inst.prefix / h).samefile(TEMPLATE_PREFIX / h)
-               for h in HIVES):
+    only other link. THE INVARIANT: no wineserver writes the inode while it is read. Its game is
+    not running (refused below), and end_prefix_wineserver then ends this prefix's server and
+    everything attached to it -- a server outlives its game by about a second, and its exit save
+    rewrites the hive in place -- so with no other link, nothing else can open it. With another
+    prefix linking it too, refuse_linked_template."""
+    def links(h):
+        mine, tpl = inst.prefix / h, TEMPLATE_PREFIX / h
+        return mine.exists() and tpl.exists() and mine.samefile(tpl)
+    if not any(links(h) for h in HIVES):
         return
     if inst.running():
         die(f"{inst.name} is running, and its prefix still links the template's registry hives: "
@@ -1044,6 +1050,7 @@ def own_hives(inst: Instance):
     others = [n for n in template_hive_links() if n != inst.name]
     if others:
         refuse_linked_template()
+    end_prefix_wineserver(inst)
     copy_hives(TEMPLATE_PREFIX, inst.prefix)
 
 
@@ -1206,8 +1213,8 @@ def free_dplay_port(port: int) -> int:
 
 
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
-    """`wine reg add` into the instance's prefix -- whose user.reg every prefix shares
-    (clone_prefix). For Wine's own keys, and for TA's only on a launch whose DLL does
+    """`wine reg add` into the instance's prefix, whose hives are its own (clone_prefix). For
+    Wine's own keys, and for TA's only on a launch whose DLL does
     not serve the registry store (local_registry)."""
     run(["wine", "reg", "add", key, "/v", value, "/t", kind, "/d", data, "/f"],
         env=inst.env(), cwd=str(inst.gamedir))
@@ -1251,8 +1258,8 @@ def player_keys(spec: str):
 
 
 def apply_prefix_settings(inst: Instance):
-    """Wine's own registry state that must hold before launch. It lives in the prefix,
-    so it is the same for every instance; TA's key is the instance's store."""
+    """Wine's own registry state that must hold before launch, written into each prefix's own
+    hives; TA's key is the instance's store."""
     # No XRandR: stops wine re-probing outputs, which blanks every physical monitor
     # for seconds at each launch (research/notes/windowed-mode.md).
     reg_add(inst, r"HKCU\Software\Wine\X11 Driver", "UseXRandR", "REG_SZ", "N")
@@ -1264,8 +1271,8 @@ def apply_prefix_settings(inst: Instance):
 # file per instance: `tacli-state/registry.txt` beside TotalA.exe, which the DLL answers
 # TotalA.exe's registry calls from in a test launch (tagpu_regstore.h: the format, the
 # limits, the two signals, and failing closed). For a remote instance that keeps the
-# player's key unwritten; for a local one it is what makes the key the instance's own,
-# because every local prefix's user.reg is one inode (clone_prefix).
+# player's key unwritten; for a local one it keeps TA's key out of Wine's hives, so a test
+# launch reads what the harness wrote and nothing an earlier game left in the prefix.
 #
 # THE STORE IS THE DLL'S WHILE A GAME OF THE INSTANCE RUNS: it rewrites the file on every
 # change the game makes. tacli writes it only after checking that none runs, and only
@@ -1592,8 +1599,7 @@ def local_registry(inst: Instance, meta: dict, values) -> dict:
     Into the instance's store always, made first if the instance has none. The DLL that
     will run decides the rest: one that serves the store (dll_serves_regstore) reads
     only that, and the launch passes it the test token; one that does not -- a
-    `--keep-dll` build from before the store -- reads the prefix's user.reg, which every
-    instance shares, so the values go there as well and the launch says so. Never
+    `--keep-dll` build from before the store -- reads the prefix's own user.reg, so the values go there as well and the launch says so. Never
     refused: an A/B against an old build has to keep running. The caller holds
     regstore_lock."""
     seeded = seed_regstore(inst)
@@ -2288,7 +2294,7 @@ def _launch(args) -> dict:
         time.sleep(0.5)
     # The DLL's own word that it serves the store: a game that runs is not enough.
     registry_line = (_await_registry_line(inst, old_log, max(deadline, time.time() + 5),
-                                          args.timeout, "the registry every instance shares")
+                                          args.timeout, "the prefix's registry")
                      if token else None)
     store_lock.close()
     # a --shipped game places itself, as a player's does
@@ -6317,7 +6323,7 @@ LOADER_RX = re.compile(r"packet: loader thread \d+ (entered|leaving) 0x497C70")
 
 def _replay_stalled(inst: Instance, seen: list, timeout: float) -> str:
     """What a replay start that never logged its verdict shows: the screen the game is on, how
-    far the level's load got (the loader thread's entry and exit, tagpu_packet.c), and the log's
+    far the level's load got (the loader thread's entry and exit, tagpu_packet_pub.c), and the log's
     last lines since the request -- the evidence a later look at a reused instance no longer has."""
     snap = _ui_snapshot(inst, timeout=5.0, soft=True)
     screen = snap.get("gui") if snap else "no answer to a UI snapshot in 5 s"

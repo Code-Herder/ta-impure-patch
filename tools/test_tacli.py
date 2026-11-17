@@ -4199,6 +4199,22 @@ class LocalRegistry(unittest.TestCase):
         self.assertEqual(hive.read_bytes(), self.hive.read_bytes())
         self.assertEqual(self.hive.stat().st_nlink, 1)
 
+    def test_force_ends_the_prefixs_wineserver_before_it_copies_the_hives(self):
+        self.linked("old")
+        order = []
+        with patch.object(tacli, "end_prefix_wineserver", lambda inst: order.append("ended") or []), \
+             patch.object(tacli, "copy_hives", lambda src, dst: order.append("copied")):
+            self.assertEqual(self.main("create", "old", "--force")[0], 0)
+        self.assertEqual(order, ["ended", "copied"])
+
+    def test_a_refusal_names_the_way_out(self):
+        for name in ("old", "older"):
+            self.assertEqual(self.main("create", name)[0], 0)
+        for name in ("old", "older"):
+            self.linked(name, create=False)
+        err = self.main("create", "new")[2]
+        self.assertIn("`tacli rm`", err)
+
     def test_force_refuses_a_linked_prefix_while_another_links_the_template_too(self):
         for name in ("old", "older"):
             self.assertEqual(self.main("create", name)[0], 0)
@@ -4293,7 +4309,7 @@ class LocalRegistry(unittest.TestCase):
         code, out, err = self.main("launch", "l1", "--no-restore-pointer")
         self.assertEqual(code, 1)
         self.assertIn("did not enter test mode", err)
-        self.assertIn("the registry every instance shares", err)
+        self.assertIn("the prefix's registry", err)
 
     def test_the_launch_fails_when_the_run_logs_no_registry_line(self):
         self.assertEqual(self.main("create", "l1")[0], 0)

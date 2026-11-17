@@ -369,8 +369,10 @@ instance's, and a copy taken during such a save is cut [MEASURED 2026-11-17: a c
 `system.reg` of 1.88 MB against 3.57, with no RpcSs service and no DirectPlay provider, so its
 DirectPlay list was empty]. `create` refuses while any
 prefix still links a template hive (`refuse_linked_template`, naming them: a tacli older than the
-copy made it), and `create --force` on such a prefix copies its hives when it is the template's
-only other link and is not running (`own_hives`).
+copy made it). `create --force` on such a prefix copies its hives when it is the template's only
+other link and is not running, after ending the prefix's wineserver, whose exit save would
+otherwise rewrite the inode during the copy (`own_hives`); with several linked, `tacli rm` all but
+one first, and a link from outside `tagpu/instances` is removed by hand.
 
 - **How the DLL finds it.** `GetModuleFileNameW(NULL)` names the gamedir: a launch logs
   `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder beside

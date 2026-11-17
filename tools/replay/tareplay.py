@@ -4883,7 +4883,7 @@ class Run:
 
     def kept_multiplayer(self, dlls):
         """{build: (reach, problems)} of the two-player groups of {build: DLL} a resumed run keeps;
-        every other group's folder emptied, to be played whole."""
+        every other group's folder set aside (set_aside), to be played whole."""
         kept = {}
         for build, dll in dlls.items():
             d = self.out / mp_item(build)
