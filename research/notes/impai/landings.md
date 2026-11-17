@@ -53,7 +53,14 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
     - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
         - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
 6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
-7. **A3**, below.
+7. **A3**, below. After the release, in this order (owner, 2026-11-16: keep improving the design):
+    - **The exploiter suite's findings**: the naval turtle (Gods of War, 0 attacks), the air rush's anti-air, the mid-game puzzles (8 of 9 failing).
+    - **The water maps' slower finish**: the release build's margin against 57d39d71 (Red Triangle, Trout Farm, Plains & Passes slowest); the naval second plant is not the cause alone, since b5 fails 2 of 5 without it.
+    - **The held-out maps**: Steel Jungle and Lava Alley, still reaching the cap not ahead.
+    - **The levels ordered** (item 2), on the brain those fixes leave.
+    - **The mods batch** (item 3).
+    - **Automatic tuning**: the tune lever's DLL side, then `tune.py spsa` and `levels-line`.
+    - **Code against code** in the gauntlet: the owner's decision between two-process network games and a frozen brain ABI.
 
 ## Where it stands
 
