@@ -6322,9 +6322,11 @@ static void check_mil_due(void)
 }
 
 /* THE ARMY'S PRODUCTION (impai_econ.c, factories_army): a finished factory offering the raider, the tank and the
-   scout, fed metal, decides twenty times with the military's default table over an empty picture; each idle
-   decision queues one unit of the class furthest below its share, so the value bought follows the shares. The
-   shares of A3's hand table over the land classes are printed beside the spec's hand composition. */
+   scout, fed metal, decides twenty times with the military's default table over an empty picture: the first unit
+   is the scout (THE SCOUT FIRST), and each idle decision after queues one unit of the class furthest below its
+   share, the scout aside (THE SCOUT IS ONE), so the value bought follows the shares. A twenty-first decision with
+   every scout dead queues a scout; with the table's scout share 0, none. The shares of A3's hand table over the land
+   classes are printed beside the spec's hand composition. */
 static float rate_zero(const void* ctx, uint16_t i, uint16_t j)
 {
     (void)ctx; (void)i; (void)j;
@@ -6393,6 +6395,7 @@ static void check_production(void)
            n[M_RAIDER], n[M_TANK], n[M_SCOUT], first, again);
     CHECK(first == M_SCOUT, "the scout first: the first unit is the scout, %d", first);
     CHECK(again == M_SCOUT, "the scout first: with every scout dead the next unit is a scout, %d", again);
+    CHECK(n[M_SCOUT] == 2, "the scout is one: %d scouts over the 21 decisions, the first and the dead one's", n[M_SCOUT]);
     for (k = 100; k < 121; k++)
         if (s_w.unit[k].type == M_SCOUT) memset(&s_w.unit[k], 0, sizeof s_w.unit[k]);
     s_w.unit[2].n = 0;

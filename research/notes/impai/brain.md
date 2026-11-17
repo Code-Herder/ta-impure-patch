@@ -620,13 +620,16 @@ factories' count nodes, each held to 255 -- a count node holds the unit in progr
 The army unit's class comes from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the
 army's value by class, finished and queued -- the count nodes hold the units in progress, so a frame is counted
 once, by its node) and its type from `impai_class_type` with the predictor's pair
-rate. **The scout first** (owner's decision, 2026-11-17): a surface layer's scout class -- `lscout` or `sscout`,
-a mobile armed type of the classifier's role SCOUT (CORFAV, ARMFAV, ARMFLEA on land, CORPT at sea) -- is the class of
-the order whenever the seat holds none of it, built, building or queued, the menu offers it and the table gives it a
-share (0.05 on each surface layer in the default table), so a layer's plant makes its scout first and replaces a dead
-one with its next order; that order is one unit, never a surplus's five. In surplus a factory whose table buy finds
-nothing buys its cheapest army type that is no scout -- the cheapest of a plant is often its scout: with scouts in that buy,
-Gods of War's shipyard made five CORPT beside two destroyers (MEASURED 2026-11-17 at bf92df19) --, and one with no army type at
+rate. **The scout first** (owner's decision, 2026-11-17): a layer's scout class -- `lscout`, `sscout` or `ascout`, a
+mobile armed type of the classifier's role SCOUT (CORFAV, ARMFAV, ARMFLEA on land, CORPT at sea) -- is the class of the
+order whenever the seat holds none of it, built, building or queued, the menu offers it and the table gives it a
+share, so a layer's plant makes its scout first and replaces a dead one with its next order. **The scout is one**:
+no other buy takes a scout class -- the table's share (0.05 on each surface layer in the default table) is only the
+switch, and the surplus's cheapest buy passes them -- and its order is one unit, never a surplus's five. A share is a
+share of what the layer can build, so 0.05 grew to a sixth of a navy of destroyers and skeeters alone, and a plant's
+cheapest type is often its scout: Gods of War's seat built five CORPT and two destroyers by the cap (MEASURED
+2026-11-17 at bf92df19). In surplus a factory whose table buy finds nothing buys its cheapest army type that is no
+scout, and one with no army type at
 all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues up to five units an army order
 in a surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one
 unit otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no

@@ -1945,20 +1945,22 @@ static uint32_t island_classes(IMPAI_DEC* d)
 }
 
 /* THE SCOUT FIRST (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *Scouts are cheap, fast,
-   bought first and expendable*): a surface layer's scout class -- IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, a mobile armed type
-   of the classifier's role SCOUT -- is the class of the order whenever the seat holds none of it, built, building or
-   queued (kspent, this decision's earlier orders included), the factory's menu offers a type of it and the table
-   gives it a share; -1 otherwise. So a layer's plant makes its scout first and a scout that died is replaced by the
-   next order: scouts are expendable (impai_mil.c, SCOUTING sends them as deep as their legs go). INVARIANT, a
-   bound: such an order is one unit, never a surplus's five, and a decision gives at most one a class, its kspent
-   above 0 after the first. The surplus's cheapest buy takes no scout class (IMPAI_K_SCOUTMASK): a surplus is metal
-   for fighting value, and the cheapest type of a plant is often its scout: on Gods of War the seat built five CORPT
-   and two destroyers by the cap (MEASURED 2026-11-17, exploit-naval-turtle at bf92df19: classes sraider:2,
-   sscout:5), where the table's 0.05 share asked for one -- the rest the surplus's [INFERRED]. */
+   bought first and expendable*): a layer's scout class -- IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT, a mobile
+   armed type of the classifier's role SCOUT -- is the class of the order whenever the seat holds none of it, built,
+   building or queued (kspent, this decision's earlier orders included), the factory's menu offers a type of it and
+   the table gives it a share; -1 otherwise. So a layer's plant makes its scout first and a scout that died is
+   replaced by the next order: scouts are expendable (impai_mil.c, SCOUTING sends them as deep as their legs go).
+   THE SCOUT IS ONE: no other buy takes a scout class (IMPAI_K_SCOUTMASK) -- not the table's share, which is only
+   the switch, nor the surplus's cheapest -- and its order is one unit, never a surplus's five. INVARIANT, a bound:
+   the seat orders a layer's scout only while it holds none, so at most one is built, building or queued at a time.
+   WHY: a share is a share of what the layer can build, so the table's 0.05 grew to a sixth of a navy of destroyers
+   and skeeters alone, and the cheapest type of a plant is often its scout: on Gods of War the seat built five CORPT
+   and two destroyers by the cap (MEASURED 2026-11-17, exploit-naval-turtle at bf92df19 and 949ed052: classes
+   sraider:2, sscout:5). */
 #define IMPAI_K_SCOUTMASK ((1u << IMPAI_K_LSCOUT) | (1u << IMPAI_K_SSCOUT) | (1u << IMPAI_K_ASCOUT))
 static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
 {
-    static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT };
+    static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT };
     unsigned i;
     for (i = 0; i < sizeof SK; i++) {
         const unsigned k = SK[i];
@@ -2000,7 +2002,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
             if (type[k] > 0 && (unsigned)type[k] < in->nti) cost[k] = in->ti[type[k]].value;
         }
         if ((k = scout_due(d, share, type, eligible)) >= 0) scout = 1;
-        else if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0) return 0;
+        else if ((k = impai_buy_next(share, d->kspent, cost, eligible & ~IMPAI_K_SCOUTMASK, FLT_MAX)) < 0) return 0;
         if (type[k] <= 0) return 0;
         t = type[k];
     }

@@ -681,8 +681,12 @@ the approval, each with its evidence; the owner may reverse any of them:
   can."). Each surface layer has a scout class by the classifier's role -- a mobile armed type of role SCOUT: the
   land scout (`lscout`: ARMFAV, CORFAV, ARMFLEA) and the sea scout (`sscout`, new: CORPT) --, and its plant buys one
   before any other class whenever the seat holds none of it, built, building or queued, so the first unit of a layer
-  is its scout and a dead scout is replaced by the next order; the table's base share for the sea scout is the land
-  scout's 0.05. A scout's trip no longer ends at its first contact: it walks its legs to the end, so on the sea a
+  is its scout and a dead scout is replaced by the next order. **The scout is one** (brain writer's call, the same
+  day): no other buy takes a scout class -- the table's share, 0.05 on each surface layer, is only the switch --, so
+  a layer holds one scout at a time. **Why**: a share is a share of what the layer can build, and at sea, with the
+  destroyer the only other class a seat's targets allowed, 0.05 became a sixth of the navy: five CORPT beside two
+  destroyers on Gods of War (MEASURED 2026-11-17 at bf92df19). **What it costs**: the land army no longer carries
+  the jeeps the share bought as fighters (16 of 64 army units on Steel Jungle `ca-1` at d8799688). A scout's trip no longer ends at its first contact: it walks its legs to the end, so on the sea a
   leg to a start ashore is a peek at the shore, and the next leg pulls it away. What it sees becomes the seat's rows,
   and the army shells a remembered defence from them (the stand-off's ground attack, bounded by the unreached ring).
   **Not the rule**: blind fire at a start never seen -- the owner calls it an option; scouting comes first.
