@@ -304,7 +304,8 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
         its row drawing Fit, the zoom steps, All links and About and no demo control (DIR gets the frame);
   (tt2) a click on the second card's centre picks its unit;
   (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
-  (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer;
+  (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer, and a
+    click on the zoomed tree picks the card under it;
   (tt5) Fit returns to the open's fitted camera; All links turns on and off;
   (tt6) About narrows the canvas the tree is fitted to, clears the pick, and closes.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
@@ -4028,6 +4029,17 @@ def techtree(c, shots, res):
         f"(tt4) the tree point under the pointer moved: {under} -> {at}"
     assert abs(z2 - zw) < 1e-4 * zw, f"(tt4) a notch zoomed {z} to {z2}, not {zw}"
     print(f"wiki techtree: (tt4) a notch up zoomed {z:.4f} -> {z2:.4f} about the pointer")
+    # ... and a click on the zoomed, dragged tree picks the card under it: read through the camera drawn
+    cv = d["tech"]["cv"]
+    inside = [(kk, cx, cy) for kk, cx, cy in d["tech"]["cards_at"]
+              if kk != d["tech"]["sel"] and cv[0] + 10 < cx < cv[0] + cv[2] - 10 and cv[1] + 10 < cy < cv[1] + cv[3] - 10]
+    assert inside, "(tt4) no card other than the pick lies inside the zoomed canvas"
+    k2, x, y = inside[0]
+    c.keys(f"dclick:{round(x)},{round(y)}")
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == k2, f"(tt4) a click on card {k2} at {x:.0f},{y:.0f} of the zoomed tree "
+                  "did not pick it")
+    assert not d["tech"]["fit"] and abs(d["tech"]["cam"][0] - z2) < 1e-6, "(tt4) the click moved the camera"
+    print(f"wiki techtree: (tt4) a click on the zoomed tree picked {d['tech']['sel_name']} (order {k2})")
 
     # (tt5) Fit fits again, to the camera the open drew; All links on and off
     press(c, d, "fit")
