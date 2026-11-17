@@ -210,7 +210,7 @@ inside the teardown. The teardown frees the LOS counters first: `0x464A00`, whos
 `0x491BA9` in `0x491B60` (before `0x466AA0` and `0x483DD0`), walks the eleven records
 `main+0x1B63..+0x2851` and for each frees `+0x7C` (`0x464A2D`) and zeroes
 `+0x7C`/`+0x80`/`+0x84`/`+0x88` (`0x464A24..0x464A38`), calls `0x4801F0(record)`, frees the AI
-objects when `+0x74` is set (`0x40B390(+0x146)`, then `0x408F10` and the free, `+0x74` zeroed at
+objects when `+0x74` is set (`0x40B390(+0x146)`, then `0x408F10` at `0x464A5D` and the free `0x4B4F20` at `0x464A63`, `+0x74` zeroed at
 `0x464A6B`), and frees and nulls `+0xEC` (`0x464A6E..0x464A7E`) [DISASSEMBLED 2026-09-28].
 `0x464700` frees whatever `+0x7C` holds at the next level's load (`0x464855`), and the player
 record's destructor frees it too. The constructor

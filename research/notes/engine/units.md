@@ -545,7 +545,7 @@ fill zeroed: MEASURED 2026-11-12, a unit created where a dead one stood began wi
   count, a byte: the slot init stores 0 (`0x49E0C8`), BuildWeapon `0x402B70` adds one a missile
   (`0x402BB9`) and starts no missile at 200 or more (`0x402CCA`), AutoAim takes one a stockpile shot
   (`0x49E45B`), and the give copies slots 0–2 where the new unit's slot is present (`0x488759`,
-  `0x4887AB`); BuildWeapon and AutoAim then call the build menu's relabel `0x41C150`, which writes
+  `0x4887AB`); BuildWeapon and AutoAim then call the build menu's relabel `0x41C150` (`0x402BC3`, `0x49E45E`), which writes
   label buffers only, and Impure's scenario `stock` key writes slot 0's and calls it too
   (`tagpu_scenario.c` `dress_unit`). DIS; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
   at init. The init sets bit 1 when the slot's weapon `*(def + 0x1EE + 4i)` has an ID byte `+0x10A` other
@@ -649,7 +649,7 @@ index `+0xA6` holds.
 - **`+0xF4`**, the player index of the last attacker, 10 for none (create `0x485C83`; the
   attacker's `+0xFF` at each hit, `0x489DC0`; `0x44FE40(DPID)` at death, `0x486787`); **`+0xF5`**,
   the kind of the last hit (`0x489DAC`; 7 at completion for def `+0x241` bit 24, `0x41B9FE`,
-  `0x486167`, in the create `0x485F50` at `0x48614D..0x486167`; the restore `0x487289`), which the
+  `0x486167`, in the create `0x485F50` at `0x48614D..0x486167`, bit 24 read at `0x486153..0x48615F`, `shr edx,0x18` at `0x486159`; the restore `0x487289`), which the
   reaper hands to the death message (`0x48AFC9` → `0x4864B0(unit, +0xF5)`) and the AI reads
   (`0x405E13` and `0x415953` compare it with 5, `0x4071CA` with 1). Every store of `+0xF5` in
   `.text` is one of these (DISASSEMBLED 2026-11-12), so a create for a def without bit 24 leaves
@@ -741,13 +741,13 @@ simulation reader before its next writer, the economy pass, for a unit with bit 
 **The hover wave ran on the wall clock; Impure runs it on GameTime.** `0x48A870(unit)` — from the
 unit tick (`0x48AFB0`), the `0x2C` receiver (`0x48BA4C`) and the creates (`0x486109`, `0x486306`) —
 runs when `+0x110` bit 16 is set or def `+0x241` bit 12 (`canhover`) is (`0x48A877..0x48A893`),
-clears bit 16, and acts only on a unit with a mover on layer 1. With def `+0x241` bit 20 it sets the
-altitude `+0x6E` to the terrain height `0x485070(pos)`, or with bit 12 also set to the larger of that
-and the sea level less the waterline def `+0x22C`; with bit 19 (`floater`) to the sea level less the
-waterline; otherwise it calls `0x48A490(unit)` (`0x48A969`). `0x48A490` fits the unit to the
+clears bit 16, and acts only on a unit with a mover on layer 1. With def `+0x241` bit 20 (tested first,
+`0x48A8C5..0x48A8CD`) it sets the altitude `+0x6E` to the terrain height `0x485070(pos)`, or with bit 12
+also set to the larger of that and the sea level less the waterline def `+0x22C` (`0x48A8CF..0x48A935`);
+with bit 19 (`floater`) to the sea level less the waterline (`0x48A938..0x48A966`); otherwise it calls `0x48A490(unit)` (`0x48A969`). `0x48A490` fits the unit to the
 heights at its footprint's four corners and writes the altitude word `+0x70` (`0x48A797`) and the
 tilts `+0x68` (`0x48A7B7`) and `+0x64` (`0x48A7DB`). For a def with bit 12, alive and not dying
-(`0x48A60C..0x48A630`), each corner's height is first raised to the sea level (`0x48A643..0x48A660`;
+(`0x48A60C..0x48A630`), each corner's height is first raised to the sea level (`0x48A643..0x48A664`;
 any other unit keeps the terrain's, so one at sea fits the sea floor [DISASSEMBLED 2026-11-14]) and then
 gets a wave `sin(phase) · amplitude` (`0x4B7123`: the 512-entry table `0x509F00`, `>> 13`). The phase is `((clock & 0x1F) + 8·corner) << 11` plus `+0xAA`
 (`0x48A66A..0x48A684`). The amplitude is `c − c·m/60` (`0x48A6FF..0x48A714`), `c` from def `+0x192`

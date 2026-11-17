@@ -492,7 +492,9 @@ A failing `GetStatus` returns at once (`0x4CF5F8`).
   `honk`, or `sing` when (GameTime / 30) & 7 is nonzero, while `0x51E698` is set (`0x47FE25..0x47FE4D`;
   the `+Sing` command's handler `0x4172E0` toggles it, its record at `0x501E64`). UseWindowsSound
   plays it through `0x49F6C0` (`PlaySoundA`, IAT `0x4FC3D4`, `0x47FE75..0x47FE83`); otherwise
-  fxvol 0, Sound Mode 0 or NoDirectSound skips the play (`0x47FEA8..0x47FEC2`) and
+  fxvol 0, Sound Mode 0 or NoDirectSound skips the play (`0x47FEA8..0x47FEC2`: fxvol `main+0x37F0C`
+  at `0x47FEB0`, Sound Mode `main+0x37F19 & 7` at `0x47FEB9`, `0x51E690` at `0x47FEC2`, each a jump to
+  the write below) and
   `0x4D0640(file, −585, 0)` plays it (`0x47FED0`, `0x47FED6`), which is `0x4D02A0(file, 1, −585, 0)`:
   the file opened through the archive layer and played by name each time, **no point passed**.
   **Every one of those branches then writes the kind's next time**, GameTime + 30 × interval

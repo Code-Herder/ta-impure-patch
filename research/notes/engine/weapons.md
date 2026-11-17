@@ -1057,7 +1057,9 @@ callers: acquisition `0x40B914`, retaliation `0x4070D0`/`0x407125`/`0x40714F`, t
   that is not a `floater` (def `+0x241` bit 19) with `y` (`+0x70`) above the sea; `0x49AC3B` returns
   0 for a `canhover` target (bit 12) with `y + height/2` (def `+0x170`) above it; and the range test
   `0x49AC47..0x49ACA2`, the high words of `dx²` and `dz²` (16.16 positions `+0x6A`, `+0x72`) summed
-  against range² (weapon `+0xDC`). "Above" is `y > sea`, so a building standing at the sea level
+  against range² (weapon `+0xDC`): each square a 64-bit product `0x4E4400` shifted right by 32 with
+  `0x4E43D0`, `dx²` at `0x49AC6F..0x49AC79` and `dz²` at `0x49AC88..0x49AC92`, then `cmp`/`setle` at
+  `0x49ACA0..0x49ACA2` [DISASSEMBLED 2026-11-17]. "Above" is `y > sea`, so a building standing at the sea level
   (a spawn at `height` 75 on a sea of 75) is not a surface target.
 - **Other weapons**: the shooter's top at or below the sea returns 0 (`0x49ACD4`), the target's
   top likewise (`0x49ACFB`); `toairweapon` (bit 17) needs a flying target (`0x49AD07`,
@@ -1176,7 +1178,8 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   `TargetCleared`; stock clears the aiming bit at `0x49E1EA` for a lost one), the fire-function
   test at `0x49E1F2`, then `0x49E1FD` (`mov eax,[ebx+0x111]`, reached only from `0x49E1F7`'s fall
   through): `ebx` the weapon, `edi` the unit, `esi` the slot's state byte, `[esp+0x10]` the slot
-  index. Bit 19 takes the turret's aim path; otherwise bit 4 (`vlaunch`) starts the aim script
+  index. Bit 19 (`shr edx,0x13` at `0x49E205`, `test dl,1` at `0x49E208`, `je 0x49E33D` at `0x49E20B` without it) takes the turret's aim
+  path; otherwise bit 4 (`vlaunch`, tested at `0x49E342`) starts the aim script
   (`0x4B0A70`) and sets the state's bit 0. At reload 0 it then asks `0x49AA80`, the stock and
   energy (the player `[edi+0xEC]`: `+0x8C` against weapon `+0xC0`, `+0x98` against `+0xC4`),
   `0x48A190`, and calls the fire function `[ebx+0x60]` at `0x49E43C`, its only call site. The next

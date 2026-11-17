@@ -2012,7 +2012,9 @@ XOR a player's bit into a word only when that bit is clear, and `0x485466..0x485
 `0x4816A0`, with a nonzero argument, writes `0xFFFF` to every word while `main+0x14281` bit 0 is clear
 and 0 while it is set (`0x4816BB..0x4816FB`) [DISASSEMBLED 2026-11-13]. So once the level starts
 Mapped, every bit stays set, and the pathfinder's map reader `0x40D7B0` never takes its "unexplored is
-passable" answer (`0x40D817..0x40D83B`, *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+passable" answer (`0x40D817..0x40D83B`: the word's bit numbered by the byte `+0x78` of the pathfinder object,
+`this` (`ecx`, kept at `[esp+0x10]` from `0x40D7BC`) [INFERRED: the searching player], is tested at `0x40D82D`, and with it clear the reader returns
+2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
 accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
 the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
 (`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they
@@ -2085,8 +2087,8 @@ row (`0x4824F8..0x482547`), so every row of the circle inside the grid is stampe
 
 **The temporary sight records** `main+0x1427B`, `main+0x14277` of them, at most 20 (`0x48292C`), 36
 bytes each. **The block is allocated at two sites**, each `push 0x2D0` (20 × 36) to the allocator
-`0x4D83B0` with the count zeroed beside it: LoadMap's at `0x483D88` (count `0x483D92`, pointer
-`0x483DA6`), the one a level runs, and `0x481500`'s at `0x481505` (count `0x48150F`, pointer
+`0x4D83B0` with the count zeroed beside it: LoadMap's at `0x483D88` (count `0x483D92`, the allocator
+called at `0x483D98`, pointer `0x483DA6`), the one a level runs, and `0x481500`'s at `0x481505` (count `0x48150F`, pointer
 `0x481527`), a function nothing calls, as nothing calls the free `0x481530` (DIS 2026-11-13: no `E8`/`E9`
 to either and no stored pointer to them in the image). Their frees are `0x481535` and `0x483DD7`
 (`0x483DD0`, called at `0x491BB3`). Every access to the count and the block in `.text` is at one of

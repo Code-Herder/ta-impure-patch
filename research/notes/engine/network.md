@@ -789,7 +789,7 @@ at `0x48605D` (`test esi,esi`), the take, which writes the type at `0x486086`; a
 `0x486040`, the step: `test dx,dx` ends a requested index there (`jne 0x4861BD`, which returns NULL
 like `0x486053`), and otherwise the next slot is tried while it is at most `[player+0x6B]`
 (`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
-tried, and only when it lies inside the owner's block `[+0x67, +0x6B]` (`0x486026..0x486030`, NULL
+tried, and only when it lies inside the owner's block `[+0x67, +0x6B]` (`0x48600B..0x486030`, the compares at `0x486026..0x486030`; NULL
 otherwise). Only the argument's low word counts (`test dx,dx` at `0x486006`; `and ecx,0xFFFF` at
 `0x48600D`), and the slot is formed as `main+0x14357 + 0x118·index` (`0x486013..0x486023`), the
 array's own index, never a position in the block; 0 is "the first free slot", and slot 0 is no
