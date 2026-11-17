@@ -42,12 +42,11 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
     - **The suite** plays ImpAI with `tacompat.py wine --impai [SECONDS] --mp-impai`.
         - It holds every ImpAI seat, in the stage and on each peer of the network game, to the claim: by its last pulse the seat gave orders and completed a unit since its first pulse ([the suite](../compat/suite.md)).
         - That covers every player's setup where Impure runs. `gammata-ota` does not load Impure today (its known gap), so it plays neither. `tazero-wildhunt` plays no network game, only the stage.
-        - **Open: the joiner's ImpAI seat builds nothing** (MEASURED 2026-11-16, Wine, DLL `dll-6357756c`, `--battle 0 --impai 130 --mp-impai`, 58 setups).
+        - **The suite's run on DLL `dll-6357756c`** (MEASURED 2026-11-16, Wine, `--battle 0 --impai 130 --mp-impai`, 58 setups):
             - Every stage met the claim, but slowly: 1 or 2 units past the commander in 130 s.
             - Every host's seat met it: 2 to 10 units.
-            - In 40 of 46 network games, the joiner's seat completed nothing past its commander. Its economy gave no order (`eroots=0`, `metal_out=0` at its 591 economy line), and its military gave from 0 to 119.
-            - The six that built are Twilight's content, at 2 or 3 units each.
-            - Plain `retail` reproduces it, so neither TADR nor the loader is involved.
+            - In 40 of 46 network games the joiner's seat completed nothing. That was the test, not ImpAI: the joiner's half placed its wave within 264 pixels of StartPos4, the joiner's seat, so the seat's commander met an enemy inside its safe distance and fled.
+            - With the waves moved clear of every start ([the suite](../compat/suite.md), *the fight stays off the seats*), each joiner's seat completed 3 units past its commander on `retail+tadr1`, `loader+tadr-ota` and `mayhem-11.3.0`. The other setups' network games are not played again yet.
     - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
         - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
 6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
