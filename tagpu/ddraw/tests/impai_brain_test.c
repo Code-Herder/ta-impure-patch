@@ -8845,31 +8845,43 @@ static void mil_water(int kind)
        it, is in the channel and its substitute the west bank 160 px from it -- no move, an attack;
    (c) on dry ground, as (b): the move out, to 428 px from it;
    (d) (a) with the turret remembered, not seen: no move and no ground attack from within its reach, the tank
-       travels on. */
+       travels on;
+   (e) (c) with a second seen turret, slot 1301, 608 px east of the first, their reaches + STAND_PAD overlapping:
+       the point out, 428 px east of the first, is 180 px from the second -- no move, the tank attacks the first;
+   (f) (e) with the tank at that point, the second its nearest: the point out of the second is 180 px from the
+       first -- no move, the tank attacks the second. Without the second's check the tank went out of one into the
+       other and back, each decision. */
 static void check_mil_stand_out(void)
 {
-    static const char* const NAME[4] = { "(a) the map's edge behind", "(b) the strait's water behind",
-                                         "(c) dry ground behind", "(d) the map's edge behind, remembered" };
+    static const char* const NAME[6] = { "(a) the map's edge behind", "(b) the strait's water behind",
+                                         "(c) dry ground behind", "(d) the map's edge behind, remembered",
+                                         "(e) a second turret ahead", "(f) between the two, the second nearer" };
     IMPAI_MIL_OUT o;
-    int c, from, att, gnd, mv, mx, mz;
-    for (c = 0; c < 4; c++) {
+    int c, k, from, att, gnd, mv, mx, mz;
+    for (c = 0; c < 6; c++) {
+        int att2 = 0;
         stand_world(300);
         if (c == 1) mil_water(W_STRAIT);
         if (c == 0 || c == 3) {
             stand_tank(20, 100, 4);
             enemy(1300, T_TURRET, 100, 20, c ? IMPAI_GHOST : IMPAI_LOS, !c);
         } else {
-            stand_tank(20, 238, 100);
+            stand_tank(20, c == 5 ? 256 : 238, 100);
             enemy(1300, T_TURRET, 228, 100, IMPAI_LOS, 1);
+            if (c >= 4) enemy(1301, T_TURRET, 266, 100, IMPAI_LOS, 1);
         }
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the move out's decision runs");
         mil_print(NAME[c], &o, from);
         stand_orders(from, &att, &gnd, &mv, &mx, &mz);
-        printf("the move out, %s: task %d, attacks %d, moves %d, point (%d, %d)\n", NAME[c], task_of_slot(20), att, mv,
-               mx, mz);
+        for (k = from; k < s_w.nlog; k++)
+            att2 += s_w.log[k].c.unit == 20 && s_w.log[k].c.action == A_ATTACK && s_w.log[k].c.target == 1301;
+        printf("the move out, %s: task %d, attacks %d + %d, moves %d, point (%d, %d)\n", NAME[c], task_of_slot(20), att,
+               att2, mv, mx, mz);
         CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "%s: the squad still attacks", NAME[c]);
         if (c < 2) CHECK(att == 1 && !mv && !gnd, "%s: no move into the reach, an attack", NAME[c]);
+        else if (c == 4) CHECK(att == 1 && !att2 && !mv && !gnd, "%s: no move into the second's reach", NAME[c]);
+        else if (c == 5) CHECK(!att && att2 == 1 && !mv && !gnd, "%s: no move back into the first's reach", NAME[c]);
         else if (c == 3) CHECK(!att && !gnd && mv == 1 && mz > 72 + 48, "%s: the travel's move, %d", NAME[c], mz);
         else {
             const int dx = mx - (s_rows[1300].seat[0].bx * 32 + 16);

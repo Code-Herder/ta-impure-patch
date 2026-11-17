@@ -479,9 +479,11 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    member's own at least R + 128 px (`STAND_PAD` 64 + `STAND_HYST` 64) and the fight content giving it a rate on
    the defence. Against the nearest such defence within its reach + 384 px, a member inside R + 64 px moves out to
    R + 128 px on the line from it through the member, the point held to the map and then to its substitute; the
-   move is given only when the point it goes to lies outside R + 64 px -- a bay whose nearest water is under the
-   tower, or the map's edge at the member's back, gives none, and the member then attacks the defence if it is seen
-   and is otherwise left to the fight and travel. Else it attacks the defence when it is seen now, from its own
+   move is given only when the point it goes to lies outside the reach + 64 px of every defence the squad weighs --
+   a bay whose nearest water is under the tower, the map's edge at the member's back, or a second tower whose reach
+   overlaps the first's gives none (else a member between two towers would go out of one into the other
+   and back at every decision), and the member then attacks the defence if it is seen and is otherwise left to the
+   fight and travel. Else it attacks the defence when it is seen now, from its own
    range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and
    the member need not see it: a destroyer reaches 660 px and sees 330. **The hysteresis**: the move out ends 64 px
    past the line that orders it, and the member outranges the defence by those 128 px, so a member that stops short

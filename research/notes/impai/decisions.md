@@ -690,6 +690,10 @@ the approval, each with its evidence; the owner may reverse any of them:
   leg to a start ashore is a peek at the shore, and the next leg pulls it away. What it sees becomes the seat's rows,
   and the army shells a remembered defence from them (the stand-off's ground attack, bounded by the unreached ring).
   **Not the rule**: blind fire at a start never seen -- the owner calls it an option; scouting comes first.
+  **The replacements' cost is accepted** (coordinator's call on review 133c30c2's LOW-1): nothing bounds how often a
+  dead scout is replaced but the one built, building or queued a layer at a time, so a seat whose scout dies on every
+  trip pays a scout's price every trip -- what the owner's "expected to die" buys. A cooldown waits for a game that
+  shows the cost: 3 to 9 land scouts a game in the confirm set at bca430ab.
   **Repair stays removed** (*The mend: removed*, reconfirmed by the owner on 2026-11-17). **What it does not reach**:
   a seat whose side has no role-SCOUT type on a layer (ARM's skeeter, ARMPT, is a raider by the classifier's
   thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea

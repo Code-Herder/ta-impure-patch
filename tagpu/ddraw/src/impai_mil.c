@@ -3697,9 +3697,11 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    its order before any target or travel point:
    - inside R + STAND_PAD of it: a move out (step_out) to R + STAND_PAD + STAND_HYST from it, on the line from it
      through the member (the anchor's side for a member on its point), held to the map, or to the point's
-     substitute (point_for) -- given only when the point it goes to lies outside R + STAND_PAD, so a member in a
-     bay whose nearest water is under the tower, or with the map's edge at its back, is never ordered to stand
-     inside the reach it was moved for; with no such point it attacks the defence if seen, else it is not stood;
+     substitute (point_for) -- given only when the point it goes to lies outside R + STAND_PAD of it and of every
+     other defence the squad weighs, each by its own reach, so a member in a bay whose nearest water is under the
+     tower, with the map's edge at its back, or between two towers whose reaches overlap, is never ordered to stand
+     inside a reach it was moved for, nor moved out of one into the other and back each decision; with no such
+     point it attacks the defence if seen, else it is not stood;
    - else, the defence seen now (target_now, can_attack): an attack on it, which the engine carries out from the
      member's own range, past the defence's;
    - else, remembered: an attack on the ground at its block, the engine's ground attack (WQ_CAN_ATTACK with no
@@ -3726,7 +3728,7 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    defence not yet seen is met at the member's sight, which can be inside its reach; mobile units are not stood
    off; a seen defence out of reach whose block is not given up is a candidate of the squad's fight (target_of) for
    a member the stand-off did not order, and the fight's attack counts as progress. BOUND: the enemy rows once, STAND_MAX defences kept nearest the squad's centroid, and each
-   member against them, one substitute (point_for, cached) a member at most for each of the move out and in_reach.
+   member against them twice (its nearest, and its move out's point), one substitute (point_for, cached) a member at most for each of the move out and in_reach.
    Returns the members ordered at a defence that is progress. */
 #define STAND_PAD  64           /* [hand-written: the bar's to move] past a defence's reach                      */
 #define STAND_HYST 64           /* [hand-written: the bar's to move] the move out's point past STAND_PAD         */
@@ -3772,14 +3774,16 @@ static int defence_passed(const MDEC* d, const MUNIT* u, const MENEMY* e, uint32
            y >= (uint32_t)(re + STAND_PAD) && unreached(d, d->st->sq[u->sq].layer, e->x, e->z);
 }
 
-/* THE STAND-OFF's move out of member u, `best` px from defence t, its reach r: as order, 0 when no point outside
-   r + STAND_PAD is given (none, the substitute's within it, or undecided) */
-static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int32_t r)
+/* THE STAND-OFF's move out of member u, `best` px from defence t, its reach r: as order, 0 when no point is given
+   that lies outside the reach + STAND_PAD of every defence the squad weighs, def[0..nd), t among them -- so a
+   member between two overlapping defences is not moved out of one into the other and back -- (none, the
+   substitute's within one, or undecided) */
+static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int32_t r, const int16_t* def, int nd)
 {
     const int64_t dx = best ? u->x - t->x : d->ax - t->x, dz = best ? u->z - t->z : d->az - t->z;
     const uint32_t len = best ? best : dist(d->ax, d->az, t->x, t->z);
     int32_t px, pz;
-    int p;
+    int p, i;
     if (!len) return 0;
     px = t->x + (int32_t)(dx * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
     pz = t->z + (int32_t)(dz * (r + STAND_PAD + STAND_HYST) / (int64_t)len);
@@ -3789,7 +3793,10 @@ static int step_out(MDEC* d, const MUNIT* u, const MENEMY* t, uint32_t best, int
         d->out->unreached++;
         return 0;
     }
-    if (dist(px, pz, t->x, t->z) < (uint32_t)(r + STAND_PAD)) return 0;
+    for (i = 0; i < nd; i++) {
+        const MENEMY* e = &d->en[def[i]];
+        if (dist(px, pz, e->x, e->z) < (uint32_t)(ground_reach(d, e->type) + STAND_PAD)) return 0;
+    }
     return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
 }
 
@@ -3834,7 +3841,7 @@ static int stand_off(MDEC* d, int s, int* ghost)
             if (!t || y < best) { t = e; best = y; r = re; }
         }
         if (!t) continue;
-        if (best < (uint32_t)(r + STAND_PAD)) got = step_out(d, u, t, best, r);
+        if (best < (uint32_t)(r + STAND_PAD)) got = step_out(d, u, t, best, r, def, nd);
         if (got <= 0 && t->now && target_now(d, t, &aim) && can_attack(u, aim)) {
             got = order(d, u->slot, WQ_CAN_ATTACK, t->slot, t->x, t->z);
             if (got > 0 && in_reach(d, u, t, own)) seen++;
