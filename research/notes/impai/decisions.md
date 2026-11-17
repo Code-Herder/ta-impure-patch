@@ -902,6 +902,14 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   whether it stays or goes, so it decides neither the retreat nor the wave. 185 of 200 retreats on a base-game
   Pin Cushion had an aircraft nearest (CORVENG 121), and the army of 70 to 169 units sat at home from GameTime
   41 000 to 72 600. The anti-air answer itself is A3's.
+- **A wave leaves against what will decide whether it stays** (brain writer's call, 2026-11-17): its departure is
+  predicted against the mobiles seen now that its stay-or-go weighs and every enemy structure the seat holds a row
+  for within 1 280 px of the goal, seen or remembered, armed or not -- the side its stay-or-go meets at a base's
+  contact -- over the goal's armed defences alone. **Why**: with the two tests weighing different sides, the waves
+  on `bar-hota-plainspasses-ac-1` left at margin 0.12 and turned back at −0.45, 50 times, each retreat the whole
+  way home, and the game reached the cap with 280 units against 61. **Chosen over** dropping unarmed structures
+  from the stay-or-go: a wave's fire is spread over a base's plants, so a stay-or-go that saw only the defenders
+  would hold the wave in a fight it is losing.
 - **The enemy's plants are a wave's goal**, after the commander seen or remembered and before the estimate's
   most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID

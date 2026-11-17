@@ -2652,6 +2652,39 @@ static int split(MDEC* d, int s, const uint8_t* go)
     return n;
 }
 
+/* THE GOAL'S SIDE, what a wave is predicted against before it leaves: every enemy mobile seen now that enters its
+   stay-or-go (member_counts), wherever it stands, and every enemy structure the seat holds a row for -- seen now
+   or remembered, armed or not -- within GOAL_SIDE_PX of the goal. INVARIANT, the wave's two tests weigh one side:
+   at the goal THE STAY-OR-GO weighs the contact's members that enter it -- a base's contact holds its unarmed
+   structures, a structure always entering, whose hp the wave's fire is spread over -- and the defences near it
+   (side_contact_counts), so a wave goes only against what decides whether it stays. WHY: on
+   bar-hota-plainspasses-ac-1 at 1001266a the waves left predicted to win against the armed structures near the
+   goal and the mobiles seen at home -- 6 entries against 23 at GameTime 42 600 (m 0.121) -- and fell back at the
+   base's contact against its laboratory, wind and solar plants, builders and defenders -- 12 entries against 13
+   at 42 690 (m -0.448) --: 50 retreats in a game whose army reached 280 units against 61 at the cap, the enemy's
+   commander never touched (MEASURED 2026-11-17, a diagnostic build logging each wave's and each retreat's
+   sides). RESIDUALS: the contact floods IMPAI_CONTACT_PX at a time over what is seen, so a base spread past
+   GOAL_SIDE_PX is weighed short here and can still turn a wave back; the enemy's mobiles at its base are weighed
+   only once seen, the picture keeping no mobile it does not see now. A row whose type the fight content does not
+   hold (no hp) is left out: the predictor refuses a side that holds it, and at the contact such a refusal takes
+   no retreat either (tasks), so the two tests still agree. BOUND: the enemy rows, IMPAI_ENEMY_MAX, one
+   member_counts each (memoized by type) */
+#define GOAL_SIDE_PX (IMPAI_CONTACT_PX + NEAR_DEF_PX)
+static void side_goal(const MDEC* d, MWEIGH* w, SIDEIN* b, int32_t tx, int32_t tz)
+{
+    int k;
+    memset(b, 0, sizeof *b);
+    for (k = 0; k < d->nen; k++) {
+        const MENEMY* e = &d->en[k];
+        const uint16_t t = member_type(d, e);
+        if (e->now && e->mobile) {
+            if (member_counts(d, w, t)) side_add(b, t, 65535);
+        } else if (!e->mobile && fc_type(d, t) && d->in->fc->t[t].hp &&
+                   dist(e->x, e->z, goal_point(tx), goal_point(tz)) <= GOAL_SIDE_PX)
+            side_add(b, t, 65535);
+    }
+}
+
 static void form_attack(MDEC* d, int s, MWEIGH* w)
 {
     SIDEIN a, b;
@@ -2670,11 +2703,7 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     memset(&a, 0, sizeof a);
     for (k = 0; k < d->narmy; k++)
         if (go[k]) side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
-    memset(&b, 0, sizeof b);
-    for (k = 0; k < d->nen; k++)
-        if (d->en[k].now && d->en[k].mobile && member_counts(d, w, member_type(d, &d->en[k])))
-            side_add(&b, member_type(d, &d->en[k]), 65535);
-    side_defences(d, &b, tx, tz);
+    side_goal(d, w, &b, tx, tz);
     if (predict(d, &a, &b, squad_gap(d, s, tx, tz), 1, 1, &m) < 0 ||
         !(m > d->plan->attack_margin))
         return;

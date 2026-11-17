@@ -5616,6 +5616,55 @@ static void check_mil_attack(void)
     CHECK(!o.scouts, "no scout: the whole FORM squad went");
 }
 
+/* THE GOAL'S SIDE (impai_mil.c, side_goal): check_mil_attack's twelve tanks and an extractor remembered at cell
+   (150, 100), a turret remembered beside it (armed, range 400, 4 000 hp, 150 a shot, value 300) and twenty solar plants
+   remembered (unarmed, 20 000 hp each, value 200); a plant beside the turret (unarmed, 500 hp, value 50) holds the
+   wave's goal there (THE GOAL: the plants before the estimate's structures):
+   (a) the solars within GOAL_SIDE_PX of the goal: the wave is predicted against them and the turret, as THE
+       STAY-OR-GO weighs a base's contact at the goal, and does not go;
+   (b) no solar: the turret alone, the wave goes;
+   (c) the solars 3 000 px from the goal: not the goal's, the wave goes. */
+static void check_mil_goal_side(void)
+{
+    static const char* const NAME[3] = { "(a) the solars at the goal", "(b) the turret alone",
+                                         "(c) the solars far off" };
+    IMPAI_MIL_OUT o;
+    int k, c, from;
+    for (c = 0; c < 3; c++) {
+        mil_world();
+        s_w.defs[T_TURRET].hp = s_ft[T_TURRET].hp = 4000;
+        s_w.defs[T_TURRET].armed = 1;
+        s_ft[T_TURRET].value = 300.0f;
+        s_ft[T_TURRET].w[0] = T_TURRET;
+        s_fwp[T_TURRET].range = 400;
+        s_fwp[T_TURRET].reload = 30;
+        s_fwp[T_TURRET].burst = 1;
+        s_fwp[T_TURRET].dmg = 150;
+        s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 150;
+        s_threat[T_TURRET].range = s_threat[T_TURRET].hit_range = 400;
+        s_threat[T_TURRET].layer = TASIM_LAYER_LAND;
+        s_w.defs[T_SOLAR].hp = s_ft[T_SOLAR].hp = 20000;
+        s_ft[T_SOLAR].value = 200.0f;
+        s_w.defs[T_FACTORY].hp = s_ft[T_FACTORY].hp = 500;
+        s_ft[T_FACTORY].value = 50.0f;
+        for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+        enemy(1300, T_MEX, 150, 100, IMPAI_GHOST, 1);
+        enemy(1301, T_TURRET, 154, 100, IMPAI_GHOST, 1);
+        enemy(1302, T_FACTORY, 150, 104, IMPAI_GHOST, 1);
+        for (k = 0; c != 1 && k < 20; k++)
+            enemy(1310 + k, T_SOLAR, (c ? 340 : 160) + 6 * (k % 5), (c ? 186 : 86) + 6 * (k / 5), IMPAI_GHOST, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the goal's side decision runs");
+        mil_print(NAME[c], &o, from);
+        printf("the goal's side, %s: goal (%d, %d)\n", NAME[c], s_mil.ebx, s_mil.ebz);
+        if (!c)
+            CHECK(!o.attacks && o.predictions >= 1 && !o.refused_predictions, "%s: no wave, %u attacks", NAME[c],
+                  o.attacks);
+        else
+            CHECK(o.attacks == 1 && !o.refused_predictions, "%s: the wave goes, %u attacks", NAME[c], o.attacks);
+    }
+}
+
 /* THE ENEMY BASE'S ESTIMATE (impai_mil.c, picture), two starts besides the seat's, thirty tanks at home:
    (a) nothing known: the nearer other start, EST_START, no lead;
    (b) an extractor's ghost known: its block, EST_STRUCT, and THE LEAD begins;
@@ -14848,6 +14897,7 @@ static void check_military(void)
     check_mil_retreat();
     check_mil_home_holds();
     check_mil_attack();
+    check_mil_goal_side();
     check_mil_estimate();
     check_mil_starts_looked();
     check_mil_raid_scout();

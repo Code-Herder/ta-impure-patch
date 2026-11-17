@@ -350,8 +350,18 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    Pin Cushion had an aircraft nearest, the army sitting at home in RETREAT or FORM from GameTime 41 000 to 72 600
    (MEASURED 2026-11-14). A contact with no member that enters is no contact for the squad. With no
    contact a FORM squad of a layer worth `wave_value` + that layer's waves median army units of that layer attacks
-   the goal above when the prediction against the enemy mobiles seen now that enter its stay-or-go and the goal's
-   defences passes `attack_margin`; it forms none while its arrival at the goal is undecided (below). **Each layer
+   the goal above when the prediction against **the goal's side** passes `attack_margin`: the enemy mobiles seen now
+   that enter its stay-or-go, wherever they stand, and every enemy structure the seat holds a row for, seen or
+   remembered, armed or not, within 1 280 px of the goal (`GOAL_SIDE_PX`, the contact's 768 and the defences'
+   512). The stay-or-go at the goal weighs a base's contact with its unarmed structures, a structure always
+   entering, so the wave leaves only against what decides whether it stays. Why: on `bar-hota-plainspasses-ac-1`
+   at 1001266a the waves left predicted against the goal's armed structures and the mobiles seen at home -- 6
+   entries against 23 at GameTime 42 600, margin 0.121 -- and fell back at the base's contact against its lab,
+   wind and solar plants, builders and defenders -- 12 against 13 at 42 690, −0.448 --: 50 retreats, each the
+   whole way home, and the cap with 280 units against 61 (MEASURED 2026-11-17 with a build logging both sides).
+   **Gaps**: the contact floods 768 px at a time over what is seen, so a base spread past 1 280 px is weighed short
+   at departure; the enemy's mobiles at its base count only once seen, the picture keeping no mobile it does not
+   see now. It forms none while its arrival at the goal is undecided (below). **Each layer
    counts its own waves and takes its own median** (`IMPAI_MIL.waves`, one count a layer), so each new wave of a
    layer is one median unit of that layer bigger, and **a wave that destroys its target starts its layer over**:
    an ATTACK whose structure target the seat no longer holds a row for, while it stands within its range and 256 px
