@@ -375,6 +375,9 @@ int  impai_econ_sea_able(IMPAI_DEC* d);
    more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
    one; judges mr_open, mr_units and mr_make on the way */
 int  impai_econ_metal_short(IMPAI_DEC* d);
+/* 1 on A METAL MAP (impai_econ.c): the threshold 255, so no patch is ever published and the extractors stand on the
+   base ring */
+int  impai_metal_map(const IMPAI_DEC* d);
 /* 1 when a plant on the menus of the seat's builders, placed on its ground, makes a constructor that reaches an
    open patch (THE METAL'S REACH) */
 int  impai_econ_reach_plant(IMPAI_DEC* d);

@@ -1336,7 +1336,7 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = !mil || mil->naval >= 0;
-    int plant_metal, plant_reach = 0, tech_metal = 0;
+    int plant_metal, plant_reach = 0, tech_metal = 0, blind;
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
          SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
@@ -1468,9 +1468,22 @@ static void economy(IMPAI_DEC* d)
         d->mr_only = 1;
         plant_reach = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
     }
+    /* THE BLIND START: the first plant is also wanted at once when the seat's patch scan has read the whole map
+       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The opening's extractors stand on patches,
+       and with none in sight the commander has nothing to place them on: it would stand idle to open_t, and only
+       the plant's constructors explore for metal (impai_econ.c, the ladder's explore rung). The opening's own terms
+       are unchanged. INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c),
+       so before the first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map,
+       whose extractors take the base ring and never a patch (impai_metal_map), never takes it. WHY: the seat at
+       Two Continents' start 3, whose nearest patch lies just past the commander's sight, gave no order to GameTime
+       1 806 in an unmapped game, a network game's joining peer and a skirmish alike, and in a mapped skirmish
+       gave its first order at 81 (MEASURED 2026-11-16 with a diagnostic build: nspots 0 at every decision,
+       the commander listed idle with 19 options on its menu). */
+    blind = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
-          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
+          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t ||
+           blind)) ||
          ((plant_metal || plant_reach) && d->plant_e));
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
        land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy

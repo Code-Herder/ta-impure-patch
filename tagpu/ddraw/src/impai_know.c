@@ -105,9 +105,11 @@ static void publish(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, int 
 }
 
 /* The patch scan: clu_rows map rows a tick through the game's own patch rule (tasim_snap_patches, which floods
-   only explored metal), into the pending half; at the last row the pending half becomes the published one.
-   A row whose floods need more than one tick's budget makes no progress, and is passed over with its patches
-   unreported, so the scan always advances; a full pending half ends the scan at once. */
+   only explored metal), into the pending half; at the last row the pending half becomes the published one and
+   the seat is `scanned`: from then on its published count is a whole scan's, so none published means no
+   explored patch, not a scan still under way (THE BLIND START, impai_brain.c). A row whose floods need more
+   than one tick's budget makes no progress, and is passed over with its patches unreported, so the scan always
+   advances; a full pending half ends the scan at once. */
 static void patch_scan(const WORLDQ* q, IMPAI_SEAT* st, SNAP_PATCH* clusters, const IMPAI_BUDGET* b,
                        SNAP_SCRATCH* scr, IMPAI_WORK* w)
 {
@@ -135,6 +137,7 @@ static void patch_scan(const WORLDQ* q, IMPAI_SEAT* st, SNAP_PATCH* clusters, co
         memset(clusters + IMPAI_CLUSTERS_HALF, 0, IMPAI_CLUSTERS_HALF * sizeof *clusters);
         st->npending = 0;
         st->clu_row = 0;
+        st->scanned = 1;
         w->scans = 1;
     }
 }

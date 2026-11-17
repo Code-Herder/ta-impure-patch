@@ -747,6 +747,44 @@ static void check_radar_reuse(void)
     }
 }
 
+/* THE SCAN'S END (IMPAI_SEAT.scanned): the patch scan sets the fact at the tick that reads the map's last row, with a
+   patch found or none, and not before; the published count is then that scan's */
+static void check_scan_done(void)
+{
+    static FWORLD w;
+    static IMPAI_ROW rows[FW_SLOTS];
+    static uint8_t bits[WQ_RADAR_BYTES(FW_SLOTS)];
+    static IMPAI_HITROW hits[FW_SLOTS];
+    static SNAP_PATCH clusters[IMPAI_CLUSTERS];
+    static SNAP_SCRATCH scr;
+    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits,
+                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0], 0 }, clusters };
+    const IMPAI_BUDGET b = { 0, 100, FW_H / 2, 100000 };
+    WORLDQ q = { &FAKE, &w, 0 };
+    IMPAI_SEAT st;
+    IMPAI_WORK wk;
+    int metal, x, z;
+    for (metal = 0; metal < 2; metal++) {
+        world_init(&w);
+        memset(rows, 0, sizeof rows);
+        memset(hits, 0, sizeof hits);
+        memset(clusters, 0, sizeof clusters);
+        memset(&st, 0, sizeof st);
+        if (metal)
+            for (z = 10; z <= 12; z++) for (x = 10; x <= 12; x++) w.metal[z][x] = 200;
+        w.gametime = impai_radar_phase(0) + 1;
+        CHECK(impai_know_tick(&q, &st, &a, &b, &scr, &wk) == 0 && !st.scanned && !st.nclusters,
+              "%s: half the map read, not scanned (scanned %u, %u published)", metal ? "a patch" : "no patch",
+              st.scanned, st.nclusters);
+        w.gametime++;
+        CHECK(impai_know_tick(&q, &st, &a, &b, &scr, &wk) == 0 && st.scanned && st.nclusters == (unsigned)metal,
+              "%s: the last row read, scanned (scanned %u, %u published)", metal ? "a patch" : "no patch",
+              st.scanned, st.nclusters);
+        printf("scan's end: %s scanned=%u published=%u\n", metal ? "a patch" : "no patch", st.scanned,
+               st.nclusters);
+    }
+}
+
 /* ---- the brain over the fake world ---- */
 
 static FWORLD s_w;
@@ -862,6 +900,7 @@ static const SNAP_PATCH PATCHES[] = {
 #define NPATCH ((unsigned)(sizeof PATCHES / sizeof PATCHES[0]))
 static const SNAP_PATCH* s_spots = PATCHES;
 static unsigned s_nspots = NPATCH;
+static unsigned s_scanned;          /* IMPAI_BRAIN_IN.scanned: 0, a scan under way, unless a case sets it */
 
 static void brain_world(void)
 {
@@ -871,6 +910,7 @@ static void brain_world(void)
     world_init(&s_w);
     s_spots = PATCHES;
     s_nspots = NPATCH;
+    s_scanned = 0;
     for (i = 0; i < NPATCH; i++)
         for (z = PATCHES[i].z0; z <= PATCHES[i].z1; z++)
             for (x = PATCHES[i].x0; x <= PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
@@ -910,6 +950,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = s_plan;
     in.persona = s_persona;
@@ -4440,6 +4481,7 @@ static void egame_world(int metal_map)
         }
     s_spots = metal_map ? NULL : EPATCHES;
     s_nspots = metal_map ? 0 : NEPATCH;
+    s_scanned = 1;
     for (i = 0; i < s_nspots; i++)
         for (z = EPATCHES[i].z0; z <= EPATCHES[i].z1; z++)
             for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = EMETAL[i];
@@ -6227,6 +6269,7 @@ static void check_production(void)
         in.job = s_job; in.njob = FW_SLOTS;
         in.ti = s_ti; in.nti = M_N;
         in.spots = s_spots; in.nspots = s_nspots;
+        in.scanned = s_scanned;
         in.reach = &s_reach;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = s_persona;
@@ -6295,6 +6338,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
@@ -7669,6 +7713,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
@@ -7858,6 +7903,7 @@ static int sensor_decide(uint16_t* type, int32_t* x, int32_t* z)
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
+    in.scanned = s_scanned;
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
@@ -10906,6 +10952,37 @@ static void check_plant_choice(void)
     s_w.gametime = 2000;
     plant_decide("the opening, no land army anywhere", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
+    /* THE BLIND START (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the first
+       plant at once */
+    plant_world();
+    s_w.gametime = 300;
+    s_spots = NULL;
+    s_nspots = 0;
+    s_scanned = 1;
+    plant_decide("a blind start", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a blind start: the first plant before open_t");
+    /* the scan still under way: none published yet is no evidence, and the opening waits as before */
+    plant_world();
+    s_w.gametime = 300;
+    s_spots = NULL;
+    s_nspots = 0;
+    plant_decide("a scan under way", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "before a whole scan: no plant before open_t");
+    /* a patch in sight: the opening's extractors first, as before */
+    plant_world();
+    s_w.gametime = 300;
+    s_scanned = 1;
+    plant_decide("a start with patches", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "patches known: no plant before open_t");
+    /* a metal map: no patch is ever published, and the extractors take the base ring */
+    plant_world();
+    s_w.gametime = 300;
+    s_w.threshold = 255;
+    s_spots = NULL;
+    s_nspots = 0;
+    s_scanned = 1;
+    plant_decide("a metal map", &out, n);
+    CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "a metal map: no plant before open_t");
     s_tvp = NULL;
     s_milp = NULL;
     brain_world();
@@ -11112,6 +11189,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.job = s_job; in.njob = FW_SLOTS;
         in.ti = s_ti; in.nti = s_gnti;
         in.spots = s_spots; in.nspots = s_nspots;
+        in.scanned = s_scanned;
         in.reach = &s_reach;
         in.plan = &s_glv;
         in.persona = s_persona;
@@ -11992,10 +12070,13 @@ static void check_layers(void)
         CHECK(count_action(from, A_ATTACK, 2) == 1 && count_action(from, A_ATTACK, 1) == k &&
               !count_action(from, A_MOVE, 1), "the raider attacks across only where it can travel");
     }
-    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47 */
+    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47. The scan
+       is under way in these two cases, so the opening waits and no plant comes before the explore rung (THE BLIND
+       START would ask one of a seat with no factory and none published) */
     for (k = 0; k < 2; k++) {
         int x, z, cx = -1;
         coast_world(C_COAST, 0, 3);
+        s_scanned = 0;
         s_milp = NULL;
         s_w.unit[1].live = s_w.unit[2].live = 0;
         if (k) unit_add(&s_w, 3, E_CK, 40, 70, 1);
@@ -12016,6 +12097,7 @@ static void check_layers(void)
     {
         int x, z, cx = -1, cz = -1;
         coast_world(C_COAST, 0, 3);
+        s_scanned = 0;
         s_milp = NULL;
         s_w.unit[1].live = s_w.unit[2].live = 0;
         unit_add(&s_w, 3, E_CK, 40, 70, 1);
@@ -13973,6 +14055,7 @@ int main(void)
     check_world();
     s_reads_after = s_shared_other = s_orders_taken = 0;   /* check_world drives the ops by hand, outside a decision */
     check_radar_reuse();
+    check_scan_done();
     check_tinfo();
     check_tinfo_attack();
     check_army_damage();

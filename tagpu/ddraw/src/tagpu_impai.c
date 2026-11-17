@@ -1766,6 +1766,7 @@ static void impai_decide(int seat)
         in.e_per_m = s_e_per_m;
         in.spots = s_cluster[seat];
         in.nspots = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+        in.scanned = s_seatst[seat].scanned;
         in.reach = reach_view(&r) ? &r : NULL;
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;

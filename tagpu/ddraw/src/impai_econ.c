@@ -808,7 +808,7 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 
 /* ---- 4. the builders ---- */
 
-/* A METAL MAP: the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
+/* A METAL MAP (impai_metal_map): the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
    it and the patch scan publishes no patch whatever the seat explores; the loader seeds every cell with the
    background (0x4839B3..0x4839E6, engine/map.md), and an extractor yields extractsmetal x its footprint's metal
    wherever it stands. Core Prime Industrial Area is one: SurfaceMetal 255, no metal feature, every cell 255.
@@ -817,7 +817,7 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
    refuses a site only when its footprint holds more than twice the background over its area
    (0x40A5EC..0x40A602, 0x40A76F), which a footprint of 255s never does (DISASSEMBLED). So does ImpAI: the
    extractor goes to the base ring like any other building, and the ladder alone decides how many. */
-static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
+int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
 
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
    site falls through. A HELPER (a builder assisting) answers the rules of a want the seat has now -- the stall's
@@ -875,9 +875,9 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
    recordings' player images). The makers already built are switched by THE MAKERS. */
-/* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening, which ends
-   on the first factory's own terms (impai_brain.c, economy) -- the seat's open_mex extractors finished and
-   open_energy energy buildings standing, or open_t reached --, with the steady income at factory_per_m a pass for
+/* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
+   open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
+   own terms (impai_brain.c, economy) less THE BLIND START, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
    each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
    replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
    is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
@@ -1093,10 +1093,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     if (n > 0) {
         if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-                (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
+                (impai_metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
                 impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
-            if (metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+            if (impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
                                 impai_build_ring(d, b, t))
                              : impai_build_spot(d, b, &mx))
                 return 1;

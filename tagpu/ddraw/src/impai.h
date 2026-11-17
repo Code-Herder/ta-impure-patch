@@ -78,6 +78,9 @@ typedef struct IMPAI_SEAT {
     WQ_RADAR radar;             /* the radar pass in progress                                             */
     uint32_t known_gen;         /* bumped on every write of this seat's rows or patches                   */
     uint32_t radar_done;        /* the gametime the last pass was published                               */
+    uint8_t  scanned;           /* 1 once the patch scan has read the whole map this level: nclusters is a
+                                   whole scan's count from then on (impai_know.c, the patch scan)          */
+    uint8_t  pad[3];
 } IMPAI_SEAT;
 
 /* Every seat's radar record of one slot (worldq.h, WQ_RADAR_HIT), 160 bytes: a table keyed by slot, as the
@@ -631,6 +634,8 @@ typedef struct IMPAI_BRAIN_IN {
     IMPAI_JOB*         job;  unsigned njob;     /* slot-indexed, njob >= nslots                              */
     const IMPAI_TINFO* ti;   unsigned nti;      /* type-indexed, nti == ndefs                                */
     const SNAP_PATCH*  spots; unsigned nspots;  /* the seat's published metal patches                       */
+    unsigned           scanned;         /* IMPAI_SEAT.scanned: nspots is a whole scan's count; 0, it may not be
+                                           (THE BLIND START, impai_brain.c)                                  */
     const IMPAI_REACH* reach;           /* NULL: no reach test                                                */
     const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
     const IMPAI_PLAN*  plan;
