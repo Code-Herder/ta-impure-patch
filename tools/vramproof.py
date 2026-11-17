@@ -415,7 +415,7 @@ def play(args, out):
             servers.append(server)
             tacli("rm", name, "--force", timeout=120)
             rc, o = tacli("create", name, "--display", f":{server.tacompat_display}",
-                          "--private-registry", timeout=300)
+                          timeout=300)
             if rc:
                 raise CouldNotRun(f"tacli create {name}: {last(o)}")
             made.append(name)

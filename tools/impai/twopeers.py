@@ -133,7 +133,7 @@ class TwoPeers:
             subprocess.run([sys.executable, str(self.cli), "rm", name, "--force"], stdout=self.log,
                            stderr=subprocess.STDOUT, check=False, timeout=120)
             self.owned.append(name)
-            self.tacli("create", name, "--private-registry", "--display", self.display.display, "--res", "1024x768")
+            self.tacli("create", name, "--display", self.display.display, "--res", "1024x768")
             shutil.copyfile(self.dll, self.gamedir(name) / "ddraw.dll")
             gdi = self.gamedir(name) / tareplay.GDI_LEVER
             gdi.unlink(missing_ok=True)     # unlinked first: a link is never written through

@@ -4930,16 +4930,12 @@ def gate_instance_name(mode):
 
 
 def gate_instance(name, *create):
-    """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
-    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every instance of the gate is made
-    private before Wine first runs in it, and the offline checks' prefix shares no file with the template
-    (wine_prefix), so no wineserver of the gate ever writes the template's hives and the gate's own lanes never tear
-    a copy it makes. No locked run plays a non-private instance beside it either: a run on one takes the whole budget
-    (resource_regression.hold_instance). tacli's THE GAP, a copy read while a wineserver of another, non-private
-    instance rewrites the template's, stays open to a game started outside every lock."""
+    """The instance `name` made afresh. Its registry hives are its own (tacli clone_prefix copies them), so lanes
+    running at once share no hive, and the copies are whole: no prefix links the template's hives, so Wine only ever
+    replaces them whole (tacli clone_prefix, EVERY HIVE HAS ONE LINK)."""
     if tacli_api().Instance(name).exists:
         tacli("rm", name, "--force", timeout=120)
-    tacli("create", name, "--private-registry", *create, timeout=300)
+    tacli("create", name, *create, timeout=300)
     return tacli_api().Instance(name)
 
 

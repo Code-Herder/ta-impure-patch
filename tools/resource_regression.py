@@ -53,17 +53,13 @@ def tacli_api():
 def hold_instance(what, instance, lanes=1, gpu=True, suite=None):
     """The machine's run lock for a run that plays on `instance`, an instance its caller named
     (tools/runlock.py): `lanes` and the instance's resource, so another run on it waits and runs on
-    other instances go beside it. The whole budget instead when the instance's prefix still shares
-    the template's registry hives: its wineserver rewrites them in place, under the copy every
-    other run's new private instance takes of them (tacli privatise_hives, THE GAP). The GPU memory
+    other instances go beside it. The GPU memory
     of a game a lane, under `suite`'s cap (runlock.hold), unless `gpu` is False, for a run whose
     games render with GDI."""
     sys.path.insert(0, str(TREE / "tools"))
     import runlock
     inst = tacli_api().Instance(instance)
-    meta = inst.meta_or_none() or {}
-    alone = meta.get("type") != "remote" and not meta.get("private_registry")
-    took = runlock.hold(TREE, what, None if alone else lanes, [runlock.instance_resource(instance)], gpu=gpu,
+    took = runlock.hold(TREE, what, lanes, [runlock.instance_resource(instance)], gpu=gpu,
                         suite=suite)
     # from the hold on, no other run plays in this folder: what its log says is this run's games'
     _CAPS[instance] = talog.CapWatch(inst.gamedir)

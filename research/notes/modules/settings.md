@@ -385,8 +385,8 @@ and writes, is [exe reverse engineering](../exe-reverse-engineering.html) §"The
 **Every tacli launch of a DLL that has this module runs in test mode, local ones included** (a
 `--keep-dll` build from before it runs on the shared registry, and tacli warns). A remote
 instance's test folder holds `tacli-state\registry.txt` so the player's key is never written; a
-local instance's gamedir holds `tacli-state/registry.txt` because every local prefix's
-`user.reg` is one inode, so the store is what makes TA's key the instance's own ([tacli design](../tacli-design.html) §"The
+local instance's gamedir holds it too, so a test launch reads the instance's key from the file the
+harness writes rather than from Wine's hives ([tacli design](../tacli-design.html) §"The
 registry: a store per instance"). Under wine `GetModuleFileNameW(NULL)` names the gamedir,
 although `TotalA.exe` there is a symlink into the Steam install: a local launch logs `entered by
 the -xtacli-test token and the tacli-state folder beside TotalA.exe` [MEASURED 2026-09-26, wine

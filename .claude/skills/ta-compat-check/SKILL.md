@@ -303,11 +303,10 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
   is safe; it tests nothing new until the next run.
-- Instances are made with `tacli create --private-registry` — hives of their own before any
-  Wine process runs — so `--prep-jobs` (8) are made at once. Without the flag a create's
-  wineserver rewrites the hive every prefix shares, and two at once would write it together.
-  The copy itself is read from that shared hive: a tacli instance of yours exiting during the
-  preparation can leave one prefix a torn copy (tacli-design.md, the gap).
+- Every `tacli create` gives its prefix copies of the template's registry hives, never links,
+  so `--prep-jobs` (8) are made at once and each copy is whole (tacli-design.md, *Every prefix owns
+  its registry hives*). A prefix with an empty DirectPlay list or no RpcSs service had a cut hive;
+  `create` refuses while an older prefix still links the template's.
 - **A network game that never starts**: read `mp-sockets.txt` (every game socket, with its
   prefix) and the two `mp-*-wine.log` in the setup's results. Re-run the setup with
   `TACOMPAT_WINEDEBUG=+winsock` to trace the sockets — DirectPlay's DLLs are native, so Wine's

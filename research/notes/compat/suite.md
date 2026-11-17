@@ -19,14 +19,12 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   plain URLs, and TA Zero's and TA Twilight's setups layer one fixture per package in that order.
 - `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>-<tag>`, the
   run's tag: the lowest slot of the run lock it holds, `tools/runlock.py` TAGS), made with
-  `tacli create --private-registry` — registry hives of its own, copied out of the template's
-  shared inode before any Wine process runs in the prefix — its own Xvfb display, and the overlay
-  of its fixtures on the retail gamedir (the copy is read from the shared inode, which another,
-non-private instance's wineserver may be rewriting at that moment: [tacli](../tacli-design.md)
-names the gap). The hives are private because the store `tacli` keeps
-  TA's key in is off here (a player's launch, below), so a mod's own key (`Software\TotalM`,
-  `Software\TA Zero`) and a TADR DLL's writes reach the prefix's registry; and because they are
-  private, `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
+  `tacli create`, whose registry hives are its own, copied from the template's ([tacli](../tacli-design.md),
+  *Every prefix owns its registry hives*), its own Xvfb display, and the overlay of its fixtures on
+  the retail gamedir. That matters here because the store `tacli` keeps TA's key in is off (a
+  player's launch, below), so a mod's own key (`Software\TotalM`, `Software\TA Zero`) and a TADR
+  DLL's writes reach the prefix's registry; and because no two prefixes share a hive,
+  `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
   `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
   and last — while the game is still alive — reads its code out of the process (below). Three

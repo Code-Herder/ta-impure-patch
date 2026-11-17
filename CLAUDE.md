@@ -344,10 +344,8 @@ apart by construction: what a run makes for itself (instance names, results fold
 **tag**, the lowest slot it holds, so no two live runs share one; each network game **leases its
 DirectPlay port** (`tools/dpport.py`); and what a run is given — the instance its caller names, a
 fixed output folder — is a named **resource** the admission takes beside the slots, so a second
-run on the same instance waits and a run on another goes beside it. Only two runs take all 28:
-`tacompat.py clean`, which removes every run's instances, and a run on a caller's instance whose
-prefix still shares the template's registry hives (made without `--private-registry`), whose
-wineserver rewrites them under every other run's copy. A chain of games scripted by hand goes
+run on the same instance waits and a run on another goes beside it. Only one run takes all 28:
+`tacompat.py clean`, which removes every run's instances. A chain of games scripted by hand goes
 through the wrapper, `tools/runlock.py run --lanes N [--vram G] [--suite S] --what TEXT
 [--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU, whose lanes are
 GDI's; `--slots W` in place of `--lanes N` for W slots outright);

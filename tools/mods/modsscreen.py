@@ -89,7 +89,7 @@ class Game:
         global _caps
         cap_report()                    # the instance this one replaces, before it goes
         tacli("rm", instance(), "--force", check=False)
-        tacli("create", instance(), "--display", display, "--res", "1280x720", "--private-registry")
+        tacli("create", instance(), "--display", display, "--res", "1280x720")
         self.display = display
         self.dir = Path(json.loads((INSTANCES / instance() / "instance.json").read_text())["gamedir"])
         _caps = talog.CapWatch(self.dir)

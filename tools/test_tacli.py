@@ -4161,17 +4161,52 @@ class LocalRegistry(unittest.TestCase):
         self.assertEqual(self.ta_writes(), [])
         self.assertEqual(self.hive.read_bytes(), before)
 
-    def test_private_registry_leaves_the_shared_hive_before_wine_runs(self):
-        self.assertEqual(self.main("create", "shared")[0], 0)
-        code, _, err = self.main("create", "own", "--private-registry")
+    def test_every_prefix_gets_copies_of_the_hives_and_the_template_keeps_one_link(self):
+        (self.hive.parent / "drive_c").mkdir()
+        (self.hive.parent / "drive_c" / "a.txt").write_text("x")
+        self.assertEqual(self.main("create", "a")[0], 0)
+        self.assertEqual(self.main("create", "b")[0], 0)
+        for name in ("a", "b"):
+            prefix = tacli.Instance(name).prefix
+            self.assertFalse((prefix / "user.reg").samefile(self.hive))
+            self.assertEqual((prefix / "user.reg").read_bytes(), self.hive.read_bytes())
+            self.assertTrue((prefix / "drive_c" / "a.txt").samefile(self.hive.parent / "drive_c" / "a.txt"))
+            self.assertFalse(list(prefix.glob("*.private-tmp")))
+        self.assertEqual(self.hive.stat().st_nlink, 1)
+        self.assertNotIn("private_registry", json.loads((tacli.INSTANCES / "a" / "instance.json").read_text()))
+
+    def linked(self, name, create=True):
+        """An instance whose prefix links the template's user.reg, as a tacli before the copy made it."""
+        if create:
+            self.assertEqual(self.main("create", name)[0], 0)
+        hive = tacli.Instance(name).prefix / "user.reg"
+        hive.unlink()
+        os.link(self.hive, hive)
+        return hive
+
+    def test_create_refuses_while_another_prefix_links_the_template_hives(self):
+        self.linked("old")
+        code, _, err = self.main("create", "new")
+        self.assertNotEqual(code, 0)
+        self.assertIn("still linked by 1 prefix(es): old", err)
+        self.assertFalse(tacli.Instance("new").prefix.exists())
+
+    def test_force_gives_a_linked_prefix_its_own_hives_when_it_is_the_only_link(self):
+        hive = self.linked("old")
+        code, _, err = self.main("create", "old", "--force")
         self.assertEqual(code, 0, err)
-        shared = tacli.Instance("shared").prefix / "user.reg"
-        own = tacli.Instance("own").prefix / "user.reg"
-        self.assertTrue(shared.samefile(self.hive))
-        self.assertFalse(own.samefile(self.hive))
-        self.assertEqual(own.read_bytes(), self.hive.read_bytes())
-        self.assertTrue(json.loads((tacli.INSTANCES / "own" / "instance.json").read_text())
-                        ["private_registry"])
+        self.assertFalse(hive.samefile(self.hive))
+        self.assertEqual(hive.read_bytes(), self.hive.read_bytes())
+        self.assertEqual(self.hive.stat().st_nlink, 1)
+
+    def test_force_refuses_a_linked_prefix_while_another_links_the_template_too(self):
+        for name in ("old", "older"):
+            self.assertEqual(self.main("create", name)[0], 0)
+        for name in ("old", "older"):
+            self.linked(name, create=False)
+        code, _, err = self.main("create", "old", "--force")
+        self.assertNotEqual(code, 0)
+        self.assertIn("older", err)
 
     def test_the_first_launch_of_an_instance_without_a_store_seeds_it(self):
         self.assertEqual(self.main("create", "l1")[0], 0)
@@ -4813,6 +4848,36 @@ class KnownGame(unittest.TestCase):
                 self.assertFalse(inst.running())
             self.assertEqual(len(listings), 3)
 
+
+
+class ReplayStalled(unittest.TestCase):
+    """A replay start that never logs its verdict says where the game stood (_replay_stalled)."""
+
+    def stalled(self, seen, snap):
+        with patch.object(tacli, "_ui_snapshot", lambda inst, timeout=0, soft=False: snap):
+            return tacli._replay_stalled(None, seen, 180)
+
+    def test_a_load_that_never_left_is_named_with_the_screen_and_the_last_lines(self):
+        seen = ["input: batch 1 done: 4 events",
+                "packet: loader thread 292 entered 0x497C70 (entry #1; game thread 272)",
+                "impai: menus side=0 builders=53"]
+        text = self.stalled(seen, {"gui": "SKIRMISH"})
+        self.assertIn("no `replay: playing` in 180s: on screen SKIRMISH;", text)
+        self.assertIn("the loader thread entered and has not left", text)
+        self.assertIn("3 log line(s) since the request", text)
+        self.assertIn("impai: menus side=0 builders=53", text)
+
+    def test_a_load_that_left_and_a_game_with_no_ui_answer(self):
+        seen = ["packet: loader thread 292 entered 0x497C70 (entry #1)",
+                "packet: loader thread 292 leaving 0x497C70 (load flags 0x0003)"]
+        text = self.stalled(seen, None)
+        self.assertIn("on screen no answer to a UI snapshot in 5 s", text)
+        self.assertIn("the loader thread entered and left", text)
+
+    def test_no_line_at_all(self):
+        text = self.stalled([], {"gui": "MAINMENU"})
+        self.assertIn("no loader-thread line since the request", text)
+        self.assertIn("(no line since the request)", text)
 
 if __name__ == "__main__":
     unittest.main()

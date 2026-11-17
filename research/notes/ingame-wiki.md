@@ -1284,9 +1284,8 @@ unless said).
   lock itself until it exits (`runlock.fds`, `runlock.release`), so the lock cannot go while one
   plays, however the gate ends. One gate runs in a worktree at a time (`wikigate.lock` in the
   worktree's git directory), since one worktree's offline checks build into the same files.
-  Every game lane's prefix has registry hives of its own (`tacli create --private-registry`; the
-  mods lanes' `prepare_wine` already makes them so), because Wine rewrites a hive in place and the
-  template's is one inode with every clone's: lanes at once on the shared one could tear it. The
+  Every game lane's prefix has registry hives of its own (`tacli create` copies them), so lanes at
+  once share no hive. The
   checks that run a Wine build (`textparity --wine`, and every `simparity` shard through its `wine`
   build and `hostchan.cjs`) run in a prefix that shares no file with any other: `wikigate-wine` in
   the repository's common git directory, one for every worktree, made by `wineboot -i` the first
@@ -1297,8 +1296,8 @@ unless said).
   hives, and making it needs no lock; it is made under a name of the making process and renamed into
   place once its wineserver has exited, so a prefix found there is whole, and two makers at once both
   finish with the second discarding its own. A `WINEPREFIX` given to them is checked instead: the
-  template itself, or a prefix whose hives are the template's inode (a clone made without
-  `--private-registry`), is refused and the check cannot run (exit 2). The checks need nothing more
+  template itself, or a prefix whose hives are the template's inode (a clone made before
+  `tacli` copied the hives), is refused and the check cannot run (exit 2). The checks need nothing more
   of a prefix: their programs are i686 console programs linked `-static`, with no game file, no
   DirectPlay and no registry key of tacli's, and several of them share its one wineserver. It took
   17 to 23 s to make and holds 1.3 GB (MEASURED 2026-11-11, Wine 9.0). The
