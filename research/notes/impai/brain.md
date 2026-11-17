@@ -374,7 +374,13 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    once; one SCOUT walks the start positions it reaches in turn -- first those no army unit of the seat has stood
    in, so a trip that ends at its first contact still reaches a start not yet looked at -- and then the sweep's
    cells (ties to the nearest the scout), three legs, every `scout_period` or while the estimate rests on no
-   structure. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
+   structure. **The scout's layer**: the scout is the first of land, sea and air whose FORM squads hold one with a
+   start to go to -- the dearest of the layer's scout class, else the cheapest of its fastest quarter --, so a land
+   army that reaches a start scouts as before, and a seat whose land army reaches none still learns where the enemy
+   stands: on Gods of War no land unit reached a start, and the seat sent no scout and saw no enemy to the cap, a
+   submarine and a destroyer at home (MEASURED 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A ship reaches a
+   start, which stands on land, when a block of its component lies within 1 024 px of it, the substitute it
+   travels to, and it arrives at that substitute. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
    seat's own whose sweep cell no army unit of the seat has stood in and whose centre the land army reaches, the
    nearest other start once all have been; only a start that can hold an enemy's base is a candidate -- **the
    foe's starts**: not the seat's own and, where the level seated its starts, neither left empty
@@ -666,22 +672,30 @@ class's component at the base is the label most blocks within 8 rings (256 px) o
 larger class's block can be impassable right at the commander's start, or a pocket beside it, while the yards
 round it stand on other ground, and the anchor's 0 read as no evidence made CORREAP "reach" on Trout Farm where
 CORGATOR did not --, none there meaning the class does not reach. The targets are the military's estimate once it rests on enemy structures
-seen or remembered (`IMPAI_MIL.est_seen`), and before that every start position but the seat's own: the estimate
-is then only the nearest other start, which on Trout Farm is cut off by water while the real enemy was
-land-linked. A class reaches when one target has a block of its base component within 8 rings: any, not all,
+seen or remembered (`IMPAI_MIL.est_seen`), and before that every start that can hold an enemy's base -- **the
+foe's starts**, the military's and the held ground's own rule: not the seat's own and, where the level seated its
+starts, neither left empty nor an ally's: the estimate is then only the nearest such start, which on Trout Farm
+is cut off by water while the real enemy was land-linked. An empty start on the seat's own island made every land
+class reach on Gods of War, so the seat opened on a vehicle plant whose army reached no enemy (MEASURED
+2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A class reaches when one target has a block of its base component within 8 rings: any, not all,
 because before the enemy is known the map needs a class's extra mobility only when no plausible enemy is reached
 otherwise ([decisions](decisions.html)). A VTOL always reaches; with no labels for a class, no military, no anchor
 or no target every class reaches. A hover's mobility therefore adds nothing where the land classes reach and is
 what makes its plant score where they do not; a route that is only much shorter over water does not count.
-**Gaps**: until a structure is seen, a seat whose real enemy sits on the one start cut off from it builds land
-plants; an ally's start is a target too, since the brain has no read of which start a player holds or of the
-teams. **The best** is the highest score, then a plant the seat's own builders build before one that waits for
+**Gaps**: at random starts, until a structure is seen, a seat whose real enemy sits on the one start cut off from
+it builds land plants, and an ally's start is a target. **The best** is the highest score, then a plant the seat's own builders build before one that waits for
 an unlock, then the least value, then the lower type, so with no values the choice is the least value among the
 plants the seat can build now. **The opening** (no factory counted yet) is the least value among the candidates with a land army, unscored,
 and the least value of all when none has one: its first purpose is the constructors, and A1's economy bench passed
 on the least value ([decisions](decisions.html)); the land army is the owner's (2026-11-14), since the least value
 alone put TA Zero's GoK on GoKT1AF, an air plant. **A wet anchor** takes the least value of all: the score ranks land armies, and a ring round an anchor below the sea may hold no site
-for a land plant. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
+for a land plant. **The island's first plant**: on a dry anchor, when no candidate has a land army and the
+military judges the map naval, the first plant is the sea plant, placed by the sea plant's own search; a builder
+that offers none, or a decision whose search orders none, builds the least value of all as before, so the first
+plant never waits on the sea. The opening's purpose is its constructors and the army it can make next, and on an
+island the sea's is the one that reaches: on Gods of War the seat opened on a vehicle plant at GameTime 2 974, its
+shipyard came on the pacing at 9 552, and it held two ships at the cap, 20 000, and attacked nothing (MEASURED
+2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
 until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's rules still bound how
@@ -954,6 +968,19 @@ attention let a seat run up to two more operations than its `att_mil` while the 
 identified carries no type, so an aircraft only the radar sees over the water reads as an enemy off the land and
 can start a hunt the remnants on land do not justify -- the factories then buy for the sea until the land army
 identifies one of them.
+
+**The island** (`impai_mil.c`, THE ISLAND), each decision after the dry hunt: on a naval map, a level with labels,
+a land army type and a sea block, the seat's land army reaches nothing that can hold an enemy -- no foe's start
+and no enemy row but an aircraft stands on a block it reaches (*the land army's reach* above, the content's land
+classes before the seat has a land army), and at least one such start or row is known. A land army that crosses
+the water ends it. While it holds, a wave of any layer but land goes at the finish's size, 1 + that layer's waves
+median units, still predicted to win, but inside the attention, since no land operation competes for it there. The
+economy reads the same evidence its own way for the first plant (*The island's first plant*, above). **Why**: on
+an island map the land army has nothing it can reach, and the 8 median units a sea wave asks never came: on Gods
+of War the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED 2026-11-17,
+`exploit-naval-turtle` at 5e4e9c24). **Gap**: a start or row on a block the land army's classes do not stand on --
+a cliff, a feature -- reads as off the land, so one such start can make a linked map read as an island; the waves
+still need the prediction.
 
 **The lead.** Each military decision after the naval judgement and before the dry hunt asks whether the seat is far
 ahead: its live value -- each finished unit of its own, its type's value -- against the enemy's as the seat

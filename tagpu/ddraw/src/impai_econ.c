@@ -110,15 +110,17 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      the yards' ground does not join; a class with no label within the rings has no ground at the base, and does
      not reach. RESIDUAL: past BASE_LABELS distinct labels in the rings the later ones are not counted.
    - THE TARGETS: once enemy structures have been seen (impai_est_known), the military's estimate, their
-     value-weighted centroid or the last one kept; before that, every start position but the seat's own (the one
-     nearest the anchor):
-     the military's estimate is then only the nearest other start, which on Trout Farm is cut off by water from
+     value-weighted centroid or the last one kept; before that, every start position that can hold an enemy's
+     base (THE FOE'S STARTS, impai_start_foe: not the seat's own -- the one nearest the anchor -- and, where the
+     level seated its starts, neither left empty nor an ally's), the military's and the held ground's own rule:
+     the military's estimate is then only the nearest such start, which on Trout Farm is cut off by water from
      the anchor while the enemy, at another start, was land-linked (MEASURED 2026-11-14, plantchoice r1 and r3's
-     Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them.
-     An empty start stays plausible: which starts the players hold is not on that screen. RESIDUAL: an ally's
-     start is a target too -- the lobby shows the teams, but the WORLDQ has no read of a player's start index
-     and alliance yet, which excluding them needs. With fewer than two starts, the estimate; with no estimate
-     either, every bit is set.
+     Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them,
+     and at fixed starts the battle room shows who stands at each. WHY THE FOE'S STARTS: an empty start on the
+     seat's own island made every land class reach, so Gods of War's seat opened on a vehicle plant whose army
+     reached no enemy (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24: `reach=fffff83f chose=CORVP`,
+     every other start empty but two, neither land-linked). With no such start, or fewer than two starts, the
+     estimate; with no estimate either, every bit is set.
    - A class reaches when one target has a block of the base's component within REACH_RINGS rings (a start's own
      block may be impassable to a large class as the anchor's may). Any, not all: the extra mobility of a class
      counts only where the map needs it, and before the enemy is known the map needs it only when no plausible
@@ -191,6 +193,16 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    least value. The runner-up is kept for the plant line. A tech-up whose best candidate scores below 0 still goes
    ahead (owner's decision, 2026-11-14): it brings the tech-2 constructors and economy, and THE ARMY ORDERS keep a
    plant whose army is poor here to constructors.
+   THE ISLAND'S FIRST PLANT (IMPAI_DEC.plant_sea): on a dry anchor, when no candidate for the first plant has a land
+   army and the military judges the map naval (IMPAI_MIL.naval), the first plant is the sea plant, built where the
+   sea plant is (assign: choose_sea_plant, impai_build_sea_plant); the least value of all stays the choice for a
+   builder that offers no sea plant and in a decision whose search orders none, so the first plant never waits on
+   the sea (a search that orders none counts a refusal, as the sea plant's does). A water plant is no candidate
+   on a dry anchor, since the ring holds no water site, so "the least value of all" reads the dry plants alone, and
+   on an island none of them has an army that reaches. WHY: the owner's rule is the opening's constructors and the
+   army it can make next, and on an island the sea army is the one the seat can send: on Gods of War the seat
+   opened on a vehicle plant at GameTime 2 974, its shipyard came on the pacing at 9 552, and it ended at the cap
+   with two ships and nothing attacked (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24).
 
    WHY, MEASURED 2026-11-14 over 377 bar seat-games: the least value with the offer -- the highest classifier tech
    of a plant's units, a graph distance -- took CORE's hover plant as the tech-up in 167 of 170 seats (CORHP 1 883
@@ -244,11 +256,11 @@ static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
                 (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
                 own = k;
         for (k = 0; k < ns; k++)
-            if (k != own) {
+            if (k != own && impai_start_foe(d->in->view, st[k].seated)) {
                 tx[n] = st[k].x >> 5;
                 tz[n++] = st[k].z >> 5;
             }
-        return n;
+        if (n) return n;
     }
     if (mil->ebx == IMPAI_NO_ANCHOR) return 0;
     tx[0] = mil->ebx;
@@ -560,6 +572,10 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             if (c[nc].ctech < lo) lo = c[nc].ctech;
             nc++;
         }
+    }
+    if (armed && !up) {
+        for (k = 0; k < nc && !c[k].army; k++) {}
+        d->plant_sea = nc > 0 && k == nc && in->mil && in->mil->naval == 1;
     }
     for (k = 0; k < nc; k++) {
         if (!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
@@ -1062,6 +1078,13 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
                menu2 and menu3 only, so this builder's menu is still d->menu */
             if (!d->plant_done) plant_choice(d);
+            /* THE ISLAND'S FIRST PLANT, by the sea plant's own search; a decision whose search orders none builds
+               the land plant, so the first plant never waits on the sea */
+            if (d->plant_sea && (t = choose_sea_plant(d, d->menu, n)) && impai_build_sea_plant(d, b, t) > 0) {
+                plant_ordered(d, t);
+                d->want_factory = d->want_tech = 0;
+                return 1;
+            }
             if ((d->plant_t && on_menu(d->menu, n, d->plant_t) && impai_build_ring(d, b, (t = d->plant_t))) ||
                 (!d->plant_t && d->plant_tw && on_menu(d->menu, n, d->plant_tw) &&
                  impai_build_plant_waived(d, b, (t = d->plant_tw)))) {

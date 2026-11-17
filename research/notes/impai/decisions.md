@@ -596,13 +596,35 @@ the approval, each with its evidence; the owner may reverse any of them:
 - **A poor plant buys army in a surplus**, its cheapest type of any class. **Why**: the governor promises that no
   factory idles beside a full store, and part 4's "or nothing" was about the metal a poor army would cost, which a
   full store does not lack.
-- **The reach targets every other start until an enemy structure is seen**, and a class reaches when it reaches
-  one of them. A class's component at the base is the label most blocks within 8 rings of the anchor carry, not
-  the anchor's block alone. Allies' starts are still targets: the brain has no read of the teams yet.
+- **The reach targets every start that can hold an enemy's base until an enemy structure is seen** -- the foe's
+  starts, the military's and the held ground's rule: not the seat's own and, where the level seated its starts,
+  neither left empty nor an ally's -- and a class reaches when it reaches one of them. A class's component at the
+  base is the label most blocks within 8 rings of the anchor carry, not the anchor's block alone.
   **Why**: ImpAI's guess, the nearest other start, sits across the water on Trout Farm, while the enemy there was
   land-linked, so the hover plant was chosen for a route the map did not need. Separately, the anchor's impassable
-  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. **What it costs**: a seat whose real
-  enemy sits on the one start cut off from it builds land plants until it sees an enemy structure.
+  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. The foe's starts since 2026-11-17: an
+  empty start on the seat's own island of Gods of War made every land class reach, and the seat opened on a
+  vehicle plant whose army reached no enemy (`exploit-naval-turtle` at 5e4e9c24). **What it costs**: at random
+  starts a seat whose real enemy sits on the one start cut off from it builds land plants until it sees an enemy
+  structure, and an ally's start is a target.
+- **On an island the first plant is the sea plant** (brain writer's call within Q1, 2026-11-17). With the foe's
+  starts as the targets, on an island no plant on the commander's menu has a land army that reaches, and Q1 then
+  takes the least value of all; a water plant is no candidate on a dry anchor only because the ring holds no water
+  site, so the sea plant is placed by its own search instead, when the military judges the map naval. A builder
+  that offers none, or a search that orders none that decision, builds the land plant as before: the first plant
+  never waits on the sea. **Why**: on Gods of War the seat's vehicle plant came at 2 974 and its shipyard on the
+  pacing at 9 552, and at the cap it held two ships and had attacked nothing. **What it costs**: the island seat's
+  land economy has the commander alone until its second plant, a land one on the pacing.
+- **On an island the waves of every layer but land go at the finish's size** (brain writer's call, 2026-11-17):
+  while the seat's land army reaches no start that can hold an enemy's base and no enemy row on a naval map, a sea
+  or air wave goes at 1 + its layer's waves median units, still predicted to win, inside the attention. **Why**: the
+  finish's own reason -- the land army has nothing it can reach --, and the 8 median units a sea wave asks never
+  came on Gods of War. **What it costs**: a start on a block the land army's classes do not stand on reads as off
+  the land, so such a start can make a linked map read as an island, where the sea's waves then go small.
+- **The scout is the first layer's that has a start to go to**, land, then sea, then air (brain writer's call,
+  2026-11-17). **Why**: on Gods of War no land unit reached a start, so no scout went and the seat saw no enemy to
+  the cap. **What it costs**: a ship's scouting trip ends at the water nearest the start, which may lie past its
+  sight of it.
 - **A plant the values do not score walks after every scored plant** for the governor's constructor -- a shipyard,
   an air plant: a factory that offers no land fighting class -- and makes one only when no scored plant is idle
   that decision (coordinator's call on the plant choice's high review, 2026-11-14). **Why**: such a plant's best

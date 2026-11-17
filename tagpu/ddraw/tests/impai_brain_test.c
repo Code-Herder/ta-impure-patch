@@ -8662,6 +8662,8 @@ static void dry_wave(const char* name, int dry, int subs, int tanks, int held, I
     for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
     for (k = 0; k < held; k++) held_squad(9 + k, IMPAI_SQ_ATTACK, 30 + k, 50, 60 + 4 * k);
     enemy(1301, T_FACTORY, 280, 100, IMPAI_GHOST, 1);
+    /* not dry: an extractor's ghost on the west bank, a land enemy, so the map is no island (THE ISLAND) */
+    if (!dry) enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the finish's wave decision runs: %s", name);
     mil_print(name, o, from);
@@ -8919,6 +8921,117 @@ static void check_dry_wave(void)
     s_mil_reach = NULL;
 }
 
+/* THE ISLAND (impai_mil.c, island) on the strait world: two submarines in the channel, an enemy plant's ghost on the
+   east bank, the seat's start (328, 328) on the west bank and the other (6 416, 3 216) on the east, not dry -- the
+   land stamp fresh --, the starts seated (`west` > 0) or random:
+   (a) nothing the land army reaches, an island: the sea wave goes at two median units, the finish's size;
+   (b) a third start on the west bank seated by a foe: the land reaches it, no island, no sea wave below wave_value;
+   (c) that start left empty (WQ_SEATED_NONE): it holds no base, an island again;
+   (d) an amphibious K-bot at home, class 2 crossing the channel: the land army reaches the east bank, no island;
+   (e) an extractor's ghost on the west bank, a land enemy: no island;
+   (f) the content's raider, tank and scout amphibious, so its land classes link the banks and the map is not
+       naval, while the seat's land army, one K-bot of class 0, does not cross: no island off a naval map. */
+static void island_case(const char* name, int west, int amph, int ghost, int want)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    if (amph == 1) {
+        s_ti[M_AA].mclass = 2;
+        s_w.defs[M_AA].d.mclass = 2;
+    }
+    if (amph == 2) {
+        s_ti[M_RAIDER].mclass = s_ti[M_TANK].mclass = s_ti[M_SCOUT].mclass = 2;
+        s_w.defs[M_RAIDER].d.mclass = s_w.defs[M_TANK].d.mclass = s_w.defs[M_SCOUT].d.mclass = 2;
+    }
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)IMPAI_DRY_T + 1000;
+    s_mil.land_t = (uint32_t)s_w.gametime;
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, west ? 1 : 0 };
+    s_w.starts[1] = (WQ_START){ 6416, 3216, 1, west ? 2 : 0 };
+    s_w.nstarts = 2;
+    if (west) {
+        s_w.starts[2] = (WQ_START){ 1616, 1616, 2, west == 1 ? 3 : WQ_SEATED_NONE };
+        s_w.nstarts = 3;
+    }
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    if (amph) own(30, M_AA, 24, 24);
+    if (ghost) enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    enemy(1301, T_FACTORY, 280, 100, IMPAI_GHOST, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the island's decision runs: %s", name);
+    mil_print(name, &o, from);
+    printf("the island, %s: dry=%u naval=%d sea waves %u\n", name, s_mil.dry, s_mil.naval, o.waves[TASIM_LAYER_SEA]);
+    CHECK(!s_mil.dry && s_mil.naval == (amph == 2 ? 0 : 1) && o.waves[TASIM_LAYER_SEA] == (unsigned)want,
+          "%s: naval %d, %u sea waves, want %d", name, s_mil.naval, o.waves[TASIM_LAYER_SEA], want);
+    s_mil_reach = NULL;
+}
+
+static void check_island(void)
+{
+    island_case("(a) an island", 0, 0, 0, 1);
+    island_case("(b) a foe's start on the west bank", 1, 0, 0, 0);
+    island_case("(c) the west bank's start left empty", 2, 0, 0, 1);
+    island_case("(d) an amphibious K-bot at home", 0, 1, 0, 0);
+    island_case("(e) a land enemy's ghost on the west bank", 0, 0, 1, 0);
+    island_case("(f) the content's land classes link the banks, not naval", 0, 2, 0, 0);
+}
+
+/* THE SCOUT'S LAYER (impai_mil.c, scouting) on the strait world: the seat's start (328, 328) on the west bank, a foe's
+   (4 656, 1 616) on the east bank 10 blocks past the channel, so a ship's substitute for it lies on the channel's east
+   edge, block (135, 50); two submarines in the channel, an extractor's ghost on the west bank (no island).
+   (a) no land army: the scout is a submarine, a SCOUT squad of the sea layer sent to the start; moved to the
+       substitute, it has arrived, and its next leg is the sweep's;
+   (b) a scout K-bot at home besides, and a foe's start on the west bank it reaches: the land scout goes first. */
+static void check_scout_layer(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, s = -1, sub = -1;
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.nstarts = 2;
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);   /* a land enemy known: no island, so no wave takes the ships */
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea scout's decision runs");
+    for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    for (k = 40; k < 42; k++) if (s >= 0 && s_job[k].kind == IMPAI_JOB_SQUAD && s_job[k].squad == s) sub = k;
+    printf("the scout's layer (a): scouts %u, squad %d layer %u leg (%d, %d), the submarine %d\n", o.scouts, s,
+           s >= 0 ? s_mil.sq[s].layer : 99, s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1, s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1,
+           sub);
+    CHECK(o.scouts == 1 && s >= 0 && s_mil.sq[s].layer == TASIM_LAYER_SEA && sub >= 0 &&
+              s_mil.sq[s].tx == 4656 / 32 && s_mil.sq[s].tz == 1616 / 32,
+          "(a) no land army: a submarine scouts the start across the channel");
+    if (sub >= 0) {
+        s_w.unit[sub].pos[0] = (135 * 32 + 16) << 16;
+        s_w.unit[sub].pos[2] = (50 * 32 + 16) << 16;
+    }
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea scout's second decision runs");
+    printf("the scout's layer (a), at the substitute: task %u legs %u leg (%d, %d)\n", s >= 0 ? s_mil.sq[s].task : 99,
+           s >= 0 ? s_mil.sq[s].flags : 99, s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1, s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
+    CHECK(s >= 0 && s_mil.sq[s].task == IMPAI_SQ_SCOUT && s_mil.sq[s].flags == 1 &&
+              !(s_mil.sq[s].tx == 4656 / 32 && s_mil.sq[s].tz == 1616 / 32),
+          "(a) at the substitute the scout has arrived: its next leg is the sweep's");
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.starts[0] = (WQ_START){ 328, 328, 0, 0 };
+    s_w.starts[1] = (WQ_START){ 4656, 1616, 1, 0 };
+    s_w.starts[2] = (WQ_START){ 1616, 1616, 2, 0 };
+    s_w.nstarts = 3;
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    own(7, M_SCOUT, 30, 30);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the land scout's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    printf("the scout's layer (b): scouts %u, layer %u, the K-bot's squad %d\n", o.scouts,
+           s >= 0 ? s_mil.sq[s].layer : 99, s_job[7].kind == IMPAI_JOB_SQUAD ? s_job[7].squad : -1);
+    CHECK(o.scouts == 1 && s >= 0 && s_mil.sq[s].layer == TASIM_LAYER_LAND && s_job[7].kind == IMPAI_JOB_SQUAD &&
+              s_job[7].squad == s,
+          "(b) a land scout with a start to go to goes first");
+    s_mil_reach = NULL;
+}
+
 /* THE SEA PLANT on the economy's types: land over x 0..63, then COAST sea 40 deep, SHALLOW 20 deep, or LAKE, a
    lake over 64..79 cut from the sea by land past the commander's reach (sea from 128); FAR, land over 0..107 and
    the sea from 108, a shipyard's centre there 1 150 px from the anchor or more, past comm_r and within
@@ -9000,6 +9113,40 @@ static void sea_decide(const char* name, int* sy, int* land)
     printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u factories=%u\n", name,
            *sy, x0, z0, *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused, out.count[IMPAI_C_FACTORY]);
     CHECK(out.sites <= s_plan->site_tests, "%s: %u site tests of %u", name, out.sites, s_plan->site_tests);
+}
+
+/* THE ISLAND'S FIRST PLANT (impai_econ.c): the coast world with no factory yet, past open_t, the commander the one
+   builder, the estimate in the sea; the lab and the vehicle plant make constructors only, so no plant has a land
+   army:
+   (a) naval: the first plant is the shipyard, by the sea plant's search;
+   (b) not naval: the vehicle plant, the least value;
+   (c) naval, the lab's K-bot made a land fighting type and the estimate moved ashore, which its class reaches:
+       the lab, the plant with a land army;
+   (d) naval, the water too shallow for a shipyard (SHALLOW): the vehicle plant in the same decision. */
+static void check_island_plant(void)
+{
+    int sy, land;
+    coast_world(C_COAST, 1, 9);
+    s_w.unit[2].live = 0;
+    sea_decide("the island's first plant", &sy, &land);
+    CHECK(sy == 1 && !land, "(a) an island: the first plant is the shipyard");
+    coast_world(C_COAST, 0, 9);
+    s_w.unit[2].live = 0;
+    sea_decide("the first plant, not naval", &sy, &land);
+    CHECK(!sy && land == 1, "(b) not naval: the first plant is a land one");
+    coast_world(C_COAST, 1, 9);
+    s_w.unit[2].live = 0;
+    s_ti[E_CK].klass = IMPAI_K_LASSAULT;
+    s_smil.ebx = 10;
+    {
+        const int from = s_w.nlog;
+        sea_decide("the first plant, a land army that reaches", &sy, &land);
+        CHECK(!sy && land == 1 && builds_of(from, E_LAB, NULL, NULL) == 1, "(c) a land army that reaches: the lab");
+    }
+    coast_world(C_SHALLOW, 1, 9);
+    s_w.unit[2].live = 0;
+    sea_decide("the island's first plant, no water deep enough", &sy, &land);
+    CHECK(!sy && land == 1, "(d) no site for a shipyard: the land plant in the same decision");
 }
 
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
@@ -10757,6 +10904,24 @@ static void check_plant_choice(void)
     plant_builder(4, T_CONS, 26, 24, 0);
     plant_decide("the land route there", &out, n);
     CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "the land route there: the lab");
+    /* THE TARGETS are THE FOE'S STARTS: the route east missing, the seat's start at the anchor, a start on its own
+       side at block (20, 10) and a foe's at (50, 10) across. Left empty, the near start is no target and the land
+       class reaches none: the hover plant; seated by a foe, it is a target: the lab */
+    for (int c = 0; c < 2; c++) {
+        plant_world();
+        plant_reach(1);
+        s_w.starts[0] = (WQ_START){ 328, 328, 0, 1 };
+        s_w.starts[1] = (WQ_START){ 20 * 32 + 16, 10 * 32 + 16, 1, c ? 3 : WQ_SEATED_NONE };
+        s_w.starts[2] = (WQ_START){ 50 * 32 + 16, 10 * 32 + 16, 2, 2 };
+        s_w.nstarts = 3;
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        plant_builder(4, T_CONS, 26, 24, 0);
+        plant_decide(c ? "the near start a foe's" : "the near start left empty", &out, n);
+        CHECK(c ? n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u
+                : n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u,
+              "the near start %s", c ? "a foe's: the lab" : "left empty, no target: the hover plant");
+    }
+    s_w.nstarts = 0;
     /* THE BASE'S COMPONENT: the land class's anchor block and the two rings round it impassable, the route
        missing: the nearest labelled block is the base's component, so the land class does not reach -- the
        anchor's 0 is no evidence that it does */
@@ -12775,6 +12940,10 @@ static void check_mil_at_rally(void)
         const int x0 = c == 2 ? 450 : c == 3 ? 241 : 250, z0 = c == 3 ? 30 : 100;
         int moves = 0, stops = 0, near_home = 0, heads = 0, later = 0, ordered = 0;
         rally_starts();
+        /* an amphibious K-bot at home (class 2 crosses the water): the land army reaches the other start, so the
+           map is no island and the sea squad's waves keep wave_value (impai_mil.c, THE ISLAND) */
+        s_ti[M_AA].mclass = 2;
+        s_w.defs[M_AA].d.mclass = 2;
         if (c == 2 || c == 4) {
             s_w.nwater = 0;
             s_w.sea = 50;
@@ -12787,6 +12956,7 @@ static void check_mil_at_rally(void)
             mil_water(W_STRAIT);
         squad_task(0, form ? IMPAI_SQ_FORM : IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 128, 120);
         for (k = 0; k < n; k++) member(1 + k, M_DEST, c == 4 ? 200 + 8 * k : x0 + 2 * k, c == 4 ? 40 : z0, 0);
+        own(30, M_AA, 24, 24);
         if (!form)
             for (k = 0; k < 6; k++) enemy(1300 + k, M_DEST, x0 + 2 * k, z0 + 8, IMPAI_LOS, 1);
         for (k = 1; k <= n; k++) {
@@ -14152,6 +14322,8 @@ static void check_military(void)
     check_dry_hunt();
     check_mil_start_banks();
     check_dry_wave();
+    check_island();
+    check_scout_layer();
     check_dry_army_reach();
     check_dry_given_up();
     check_dry_under();
@@ -14231,6 +14403,7 @@ int main(void)
     check_plan();
     check_attention_eco();
     check_sea_plant();
+    check_island_plant();
     check_sea_finish();
     check_sea_cmd_safe();
     check_techup();
