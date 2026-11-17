@@ -3202,6 +3202,7 @@ STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint 
 U_LOSER = 1 << 27       # unit +0x110: the contest's loser, which a holder's clear re-claims
 U_HOLDER = 1 << 26      # unit +0x110: the holder of a cell a loser contests
 U_MARKS = U_LOSER | U_HOLDER    # the footprint writers' alone
+YARD_OPEN = 1 << 2      # unit +0x10F (U_YARD): the yard open, YARD_OPEN 0x47DAC0's one write
 
 
 def rect(u):
@@ -3310,12 +3311,21 @@ def occupancy(w, dw):
     mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's contest,
     0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a unit's
     clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for the
-    bit-27 units: DISASSEMBLED); each slot a cell names is a live unit whose footprint holds the
+    bit-27 units: DISASSEMBLED) -- or, for a layer-1 loser, lies in the footprint of a live
+    structure whose yard is open (+0x10F bit 2) and which carries the holder's mark, and names
+    anything or nothing: YARD_OPEN 0x47DAC0 calls no clear, and the structure's re-claim lets go
+    each cell it names that the open mask does not set (0x47C8AE..0x47C8B7), so a unit that lost
+    a yard cell to the closed yard keeps bit 27 and no cell, and a later stamp takes the empty
+    cell uncontested (DISASSEMBLED; the engine map's *An open yard gives nothing back*; MEASURED
+    in a slice-walkers recording's exact stream, the recording machine's own world: lab 1025's
+    yard opened at GameTime 3125 under four losers, and nanoframe 1054 took two of the freed
+    cells at 3126, unmarked); each slot a cell names is a live unit whose footprint holds the
     cell, a mobile unit of that slot's layer or a structure in slot A; a yard bit lies inside a
     live structure's footprint; and the contest's marks, +0x110 bits 26 and 27, are taken from
     the dump too. The differences those checks find. Not checked: which cells of a structure's
     footprint name it -- the stamp files a structure only at the cells its yardmap sets under the
-    current mask (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per
+    current mask (0x47CD82..0x47CD9F), which a dump does not carry, nor so whether an open
+    yard's cell under a loser is one the open mask lets go -- nor, the marks being per
     unit, which cell a mark was set for. So a mark no present contest explains passes: an extra
     bit 26, or bit 27 on a unit every cell of which names it. A mark outlives the contest that
     set it: a unit's clear drops only its own marks (0x47D286..0x47D2A7) and a re-claim only its
@@ -3328,6 +3338,8 @@ def occupancy(w, dw):
     yards = footprints(dw)
     rects = {slot: rect(u) for slot, u in dw.units.items()}
     state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
+    open_yards = [rects[slot] for slot, u in dw.units.items()
+                  if structure(u) and u[U_YARD] & YARD_OPEN and state[slot] & U_HOLDER]
     for slot, u in sorted(dw.units.items()):
         if structure(u) or not stamped(u, w.gw, w.gh):
             continue
@@ -3339,7 +3351,7 @@ def occupancy(w, dw):
                            "is past the dump's grid")
                 continue
             want = struct.unpack_from("<HH", dw.grid, i)[layer(u) - 1]
-            if want == slot:
+            if want == slot or lost and layer(u) == 1 and any((cx, cz) in r for r in open_yards):
                 continue
             if lost and want in dw.units and (cx, cz) in rects[want] and \
                     (layer(dw.units[want]) == layer(u) or

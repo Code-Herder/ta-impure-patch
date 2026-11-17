@@ -612,13 +612,18 @@ lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`gam
   created with an `attack` order on ImpAI's ground (TA has no attack-move; an attack on the ground advances and
   engages). The opponent has no economy. OTA AI has no lever for a forced build list, and a persona limits ImpAI's
   attention rather than its plan, so placed units are the cheapest honest script: no DLL change.
+- **The seats stand at their starts.** ImpAI's anchor, home and empty-start rules all read the seat's start, so a
+  situation places ImpAI's commander at its seat's start and the opponent's at its own, seat k at StartPos(k + 1) as
+  the bar's fixed starts seat them, and declares it `seated`; `exploit.seated_start_misses` names a commander off its
+  seat's start, and `test_exploit.py` checks every seated situation against the installed maps. The commander rush
+  alone is not seated: its opponent's commander is the rush, set down away from every start.
 - **The situations**, each ImpAI Hard as A in seat 1 at Difficulty Hard:
 
   | situation | map | the opponent | verdict, at the cap |
   |---|---|---|---|
-  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), flown at ImpAI's start | ImpAI's commander lives to 18 000 |
-  | `naval-turtle` | Gods of War | its commander and two light laser towers on another island | ImpAI has killed all of it by 20 000 |
-  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000 | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
+  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), taking off beside its start and flown at ImpAI's, 5 680 wu away | ImpAI's commander lives to 18 000 |
+  | `naval-turtle` | Gods of War | its commander at its start and two light laser towers beside it, on an island apart from ImpAI's | ImpAI has killed all of it by 20 000 |
+  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000, the tower 4 400, 3 600, 3 040 and 2 560 wu from it | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
   | `commander-rush` | Acid Foursome | its commander alone, a quarter of the way from ImpAI's start, ordered at the load to attack ImpAI's commander | ImpAI's commander lives to 6 000 |
 
 - **The puzzles** are real positions. `exploit.py cut RESULTS_DIR... --out FILE` takes every bar game against OTA AI
@@ -641,7 +646,7 @@ lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`gam
   value at the cap at least the opponent's, or the opponent gone). A situation that could not run, or a value not
   read, could not run, never a failure. Exit 0 every situation passed, 1 one failed, 2 one could not run.
 
-MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes: the four situations in 47 s of play
+MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes, with the situations placed before their seats stood at their starts: the four situations in 47 s of play
 each at most (under a minute from admission to verdict), three passed and one failed. The commander rush ended at
 3 582 with the opponent's commander dead. The air rush passed on its commander, but 20 of the opponent's 26 units
 were still alive at the cap, ImpAI having completed three anti-air units. The artillery creep passed on value, 33 777
@@ -652,6 +657,11 @@ games and `bar-hota-redtriangle-cc-1`, all at the cap) were each taken over at 6
 played to 80 971 in 30 to 55 s of play, four lanes, 1.6 min from admission: **one passed** (Steel Jungle `ca-2`,
 the opponent gone at 75 906), **eight failed**, the opponent still holding units at the cap. Lava Alley `ca-4`
 ended with ImpAI at 8 units against 146.
+
+MEASURED 2026-11-17 on the reference setup, the d8799688 brain, the Acid Foursome situations at their seats' starts
+against the same brain's games before: the air rush passed on its commander again, the opponent holding 20 units at
+the cap (18 before); the artillery creep passed on value, 34 716 against 27 381 (34 893 against 26 828 before), 7 of
+the opponent's units alive (5 before). Each game took 46 to 50 s of play.
 
 ## Automatic tuning
 
