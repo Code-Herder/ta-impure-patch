@@ -1798,6 +1798,18 @@ class Resume(StandInRun):
         self.assertEqual(sorted(p.parent.name for p in (self.root / "run").glob(
             f"*/{tareplay.VERDICT}")), ["a", "c"])
 
+    def test_a_group_played_again_keeps_its_earlier_folder_beside_it(self):
+        self.outcome = {"c": "unrun"}
+        out = self.root / "run"
+        self.sitting(out)
+        (out / "c" / "K").mkdir(parents=True, exist_ok=True)
+        (out / "c" / "K" / "tagpu.log").write_text("why K could not run\n")
+        self.outcome = {}
+        self.sitting(out, resume=True)
+        self.assertEqual((out / "c.earlier" / "K" / "tagpu.log").read_text(), "why K could not run\n")
+        self.assertFalse((out / "c" / "K" / "tagpu.log").exists())
+        self.assertFalse((out / "a.earlier").exists())
+
     def test_a_dirty_tree_is_never_resumed(self):
         out = self.root / "run"
         self.sitting(out)

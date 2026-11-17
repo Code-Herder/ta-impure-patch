@@ -646,7 +646,7 @@ class Worker:
                 if rc:
                     raise CouldNotRun(f"tacli rm {self.name}: {last(o)}")
             rc, o = tacli("create", self.name, "--display", self.xvfb.display, "--slot", "0",
-                          "--private-registry", timeout=300)
+                          timeout=300)
             if rc:
                 raise CouldNotRun(f"tacli create {self.name}: {last(o)}")
             # keep 2: the prune keeps one recording besides the new one, which prune_step's
@@ -4558,7 +4558,9 @@ def first_lanes(fxs):
 # pattern), so a group the run did not finish has none. `run`, `landing` and `broad` given
 # `--resume DIR` play in DIR again: a group whose verdict file holds a PASS or a FAIL under the
 # key this sitting computes is read back -- its summary lines, its checks' verdicts, its recording
-# and its coverage files -- and every other group's folder is emptied and the group played whole.
+# and its coverage files -- and every other group is played whole in an empty folder, its earlier
+# one kept beside it as `<group>.earlier` (set_aside): a lane that could not run left its game's
+# log there, the only record of why, since the instance's own log is overwritten by later games.
 # A FAIL is kept as a FAIL: a resume never plays a failed group again. The landing's two-player
 # groups are kept the same way (Run.kept_multiplayer). The verdict file is written after the
 # result is stored in this sitting (keep_verdict): a file that cannot be written is said by name,
@@ -4704,6 +4706,17 @@ def key_differs(then: dict, now: dict) -> list:
     return out
 
 
+def set_aside(d: Path):
+    """A group folder a resume plays again, renamed to `<name>.earlier` (replacing an older one)
+    rather than deleted, when it holds anything: *resuming a run*."""
+    if d.is_dir() and any(d.iterdir()):
+        earlier = d.with_name(d.name + ".earlier")
+        shutil.rmtree(earlier, ignore_errors=True)
+        d.rename(earlier)
+    else:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def read_kept(d: Path, key: dict) -> "tuple[dict | None, str | None]":
     """(the verdict file in `d`, None) when it is kept under `key`; (None, why) when it is refused;
     (None, None) when there is none."""
@@ -4814,7 +4827,7 @@ class Run:
             if doc:
                 self.adopt(name, doc)
             else:
-                shutil.rmtree(fx["out"], ignore_errors=True)
+                set_aside(fx["out"])
         for name in first_lanes(self.fx):
             if name not in self.kept:
                 self.put(name, "L")
@@ -4884,7 +4897,7 @@ class Run:
                 self.kept.append(mp_item(build))
                 say(f"{mp_item(build)}: kept from the earlier sitting: {doc['result']}")
             else:
-                shutil.rmtree(d, ignore_errors=True)
+                set_aside(d)
         return kept
 
     def settle_multiplayer(self, build, dll, reach, problems):
