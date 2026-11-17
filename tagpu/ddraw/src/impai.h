@@ -861,6 +861,10 @@ typedef struct IMPAI_MIL {
     IMPAI_PERSONA persona;
     IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
 } IMPAI_MIL;
+/* THE ISLAND's byte is the one unreached[] was aligned past, so the record's size and every later field's offset
+   are the ones recordings made before it hold */
+_Static_assert(offsetof(IMPAI_MIL, island) + 1 == offsetof(IMPAI_MIL, unreached),
+               "IMPAI_MIL.island stands in the padding before unreached[]");
 
 /* 1 when the military's estimate rests on enemy structures seen, now or before (EST_STRUCT, EST_KEPT): the one
    reading of est_seen, so a recorded byte past the enum reads as EST_START in the military and the economy alike */

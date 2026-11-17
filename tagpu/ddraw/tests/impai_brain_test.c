@@ -6809,23 +6809,28 @@ static void check_army_targets(void)
 
 /* THE ISLAND'S LAND BUDGET (impai_econ.c, island_classes): the governor's world, no constructor the plan allows, the
    raider's value 100 and the destroyer's 300 (a sea assault), twenty raiders of the seat's, so its land army's
-   value is 2 000:
+   value is 2 000; on THE ISLAND the estimate stands at block (40, 4), on the land's second component, which the
+   raider's class does not reach, so the economy's reach agrees (THE ISLAND'S AGREEMENT, read from the menus with
+   no values):
    (a) not on THE ISLAND, the raider's menu: the raider (Q3);
    (b) on THE ISLAND, no sea army: no army order;
    (c) on THE ISLAND, twenty destroyers: the land army a quarter of the army's 8 000 exactly, no army order;
    (d) on THE ISLAND, twenty-one destroyers: below a quarter, the raider;
-   (e) (b) with the menu the raider and the destroyer: the destroyer, the land class refused, not the order. */
+   (e) (b) with the menu the raider and the destroyer: the destroyer, the land class refused, not the order;
+   (f) (b) with the estimate where the gov world keeps it, on the raider's component: the economy's reach disagrees,
+       so no budget, the raider. */
 static void check_island_budget(void)
 {
     static const uint16_t RAIDER[] = { M_RAIDER }, BOTH[] = { M_RAIDER, M_DEST };
-    static const char* const NAME[5] = { "(a) not the island", "(b) the island, no sea army",
+    static const char* const NAME[6] = { "(a) not the island", "(b) the island, no sea army",
                                          "(c) the island, a quarter exactly", "(d) the island, below a quarter",
-                                         "(e) the island, the destroyer on the menu" };
-    static const int DEST[5] = { 0, 0, 20, 21, 0 };
-    static const int WANT[5] = { M_RAIDER, 0, 0, M_RAIDER, M_DEST };
+                                         "(e) the island, the destroyer on the menu",
+                                         "(f) the island, the estimate the raider reaches" };
+    static const int DEST[6] = { 0, 0, 20, 21, 0, 0 };
+    static const int WANT[6] = { M_RAIDER, 0, 0, M_RAIDER, M_DEST, M_RAIDER };
     IMPAI_BRAIN_OUT bo;
     int c, cons, army, k;
-    for (c = 0; c < 5; c++) {
+    for (c = 0; c < 6; c++) {
         int from, raider = 0, dest = 0;
         gov_world(1);
         mil_sea_types();
@@ -6837,6 +6842,8 @@ static void check_island_budget(void)
         s_glv.cons_open = 0;
         s_glv.army_per_cons = 255;
         s_mil.island = (uint8_t)(c > 0);
+        s_mil.ebx = (int16_t)(c > 0 && c < 5 ? 40 : s_mil.ebx);
+        s_mil.ebz = (int16_t)(c > 0 && c < 5 ? 4 : s_mil.ebz);
         from = s_w.nlog;
         CHECK(gov_decide(&bo, &cons, &army) == 0, "decide: %s", NAME[c]);
         for (k = from; k < s_w.nlog; k++)
@@ -9193,6 +9200,15 @@ static void island_case(const char* name, int west, int amph, int ghost, int wan
     printf("the island, %s: dry=%u naval=%d sea waves %u\n", name, s_mil.dry, s_mil.naval, o.waves[TASIM_LAYER_SEA]);
     CHECK(!s_mil.dry && s_mil.naval == (amph == 2 ? 0 : 1) && o.waves[TASIM_LAYER_SEA] == (unsigned)want,
           "%s: naval %d, %u sea waves, want %d", name, s_mil.naval, o.waves[TASIM_LAYER_SEA], want);
+    CHECK(s_mil.island == (want != 0), "%s: the island %u", name, s_mil.island);
+    if (want) {
+        /* a decision with no anchor judges nothing, and leaves no island standing */
+        const int ax = s_st.ax;
+        s_st.ax = IMPAI_NO_ANCHOR;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && !s_mil.island, "%s, then no anchor: the island %u", name,
+              s_mil.island);
+        s_st.ax = ax;
+    }
     s_mil_reach = NULL;
 }
 
@@ -9505,6 +9521,77 @@ static void check_island_plants(void)
         if (c == 2) CHECK(!sy && land == 1 && builds_of(from, E_LAB, NULL, NULL) == 1, "%s: the lab", NAME[c]);
         if (c == 4) CHECK(!sy && land == 1, "%s: a land plant", NAME[c]);
         if (c == 8) CHECK(!sy && land == 1, "%s: a land plant", NAME[c]);
+    }
+    s_milp = NULL;
+}
+
+/* THE ISLAND'S PLANTS held for the sea plant, and THE ISLAND'S AGREEMENT aimed at the foe's starts too: the coast
+   world, naval, on THE ISLAND, a finished shipyard at cell (66, 100), the lab's menu its K-bot and the underwater
+   extractor's type made a bomber (an air plant; the PT boat stays the shipyard's sea army), the refusals not spent:
+   (a) the commander's shipyard job ended unbuilt, so its far record holds it from plants, and an idle K-bot whose
+       menu holds no shipyard: the K-bot builds no air plant, the sea plant held for the commander; past fail_t
+       the commander's second shipyard;
+   (b) every builder's menu without the shipyard (the commander's too): no builder offers the sea plant, so the
+       air plant, the lab;
+   (c) the K-bot a land fighting type, the estimate on structures seen at block (240, 32) in the sea, and the
+       enemy's start at (320, 320) px on the land the K-bot's class reaches: the economy's reach disagrees, so the
+       land plant by the choice's own rule and no shipyard; with that start left empty, the shipyard;
+   (d) (c) at random starts (both seated 0): with enemy structures known a start seated at random is no evidence,
+       as the military reads it, so the shipyard. */
+static void check_island_hold(void)
+{
+    static const uint16_t AIRLAB[] = { E_CK, E_UWMEX };
+    static const uint16_t CKNOSY[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP };
+    static const uint16_t COMNOSY[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_UWMEX };
+    int c, sy, land;
+    for (c = 0; c < 5; c++) {
+        int from;
+        coast_world(C_COAST, 1, 9.0f);
+        s_w.unit[2].live = 0;
+        unit_add(&s_w, 3, E_SY, 66, 100, 1);
+        s_smil.island = 1;
+        menu_set(&s_w, E_LAB, AIRLAB, 2);
+        s_ti[E_UWMEX].klass = IMPAI_K_BOMBER;
+        if (c == 0) {
+            unit_add(&s_w, 4, E_CK, 30, 60, 1);
+            menu_set(&s_w, E_CK, CKNOSY, 6);
+            s_job[1].type = E_COM;
+            s_job[1].build = E_SY;
+            s_job[1].target = (uint16_t)WQ_NONE;
+            s_job[1].cx = 64;
+            s_job[1].cz = 60;
+            s_job[1].kind = IMPAI_JOB_BUILD;
+            s_job[1].since = 1900;
+        }
+        if (c == 1) menu_set(&s_w, E_COM, COMNOSY, 7);
+        if (c >= 2) {
+            s_ti[E_CK].klass = IMPAI_K_LASSAULT;
+            s_smil.est_seen = EST_STRUCT;
+            s_w.starts[0].x = 640;
+            s_w.starts[0].z = 1024;
+            s_w.starts[0].seated = c == 4 ? 0 : 1;
+            s_w.starts[1].x = 320;
+            s_w.starts[1].z = 320;
+            s_w.starts[1].seated = c == 2 ? 2 : c == 4 ? 0 : WQ_SEATED_NONE;
+            s_w.nstarts = 2;
+        }
+        from = s_w.nlog;
+        sea_decide(c == 0   ? "the island's plants held, the commander far"
+                   : c == 1 ? "the island's plants, no sea plant offered"
+                   : c == 2 ? "the island, a foe's start the land reaches"
+                   : c == 3 ? "the island, that start left empty" : "the island, random starts, structures seen",
+                   &sy, &land);
+        if (c == 0) {
+            CHECK(!sy && !land, "(a) the commander held far: no air plant from the K-bot, %d %d", sy, land);
+            s_w.gametime += (int)s_plan->fail_t + 15;
+            sea_decide("the island's plants held, past fail_t", &sy, &land);
+            CHECK(sy == 1 && !land, "(a) past fail_t: the commander's second shipyard, %d %d", sy, land);
+        }
+        if (c == 1)
+            CHECK(!sy && land == 1 && builds_of(from, E_LAB, NULL, NULL) == 1, "(b) no sea plant offered: the lab");
+        if (c == 2) CHECK(!sy && land == 1, "(c) a foe's start the land reaches: a land plant, %d %d", sy, land);
+        if (c == 3) CHECK(sy == 1 && !land, "(c) that start left empty: the shipyard, %d %d", sy, land);
+        if (c == 4) CHECK(sy == 1 && !land, "(d) random starts, structures seen: the shipyard, %d %d", sy, land);
     }
     s_milp = NULL;
 }
@@ -14804,6 +14891,7 @@ int main(void)
     check_sea_plant();
     check_island_plant();
     check_island_plants();
+    check_island_hold();
     check_sea_finish();
     check_sea_cmd_safe();
     check_techup();

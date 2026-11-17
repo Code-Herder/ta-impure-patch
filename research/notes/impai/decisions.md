@@ -584,10 +584,14 @@ The owner's answers to the spec's questions:
   only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet first. A
   share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: a further
   plant on the island, on the pacing of any further plant, is first the sea plant, by the sea plant's own search
-  while its refusals are not spent, and the plant choice's air plant when that search orders none. Sea before
+  while its refusals are not spent, and the plant choice's air plant only once a search finds no site at all or no
+  builder of the seat offers a sea plant -- one builder that cannot place it now leaves it to the others. Sea before
   air because the default table buys no aircraft, so an air plant there makes only constructors. **Both wait for
   the economy's own reach to agree** (the brain writer's call): the plants only when no plant the choice may take
-  has a land army that reaches, the cap only when no gated class of the seat's factories reaches. The military's
+  has a land army that reaches, the cap only when no army type of a gated class on the seat's factories' menus
+  reaches -- both aimed at the estimate and the foe's starts together, so an estimate first taken from structures
+  on a lake does not stand for an enemy base the land army reaches (the brain writer's call on review 1001266a's
+  MED-2). The military's
   verdict reads a row on a block the land army does not stand on as off the land, so it came and went on Trout
   Farm, a linked map: at GameTime 12 517 the seat's second plant was an air plant beside a lab whose army reached,
   and the win came at 54 559 against 45 445 (MEASURED 2026-11-17, `bar-hota-troutfarm-ca-1` at 31ada7aa; with

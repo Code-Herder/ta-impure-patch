@@ -621,8 +621,9 @@ advanced plant left the two vehicle plants poor for 726 factory-decisions (MEASU
 judges the seat on an island (*The island*, below), the land army classes (land raider to land scout) take an
 order only while their value -- built, building and queued -- is below a quarter of the whole army's, tested
 before each order, so the land army passes the quarter by at most one order; the base faces only what crosses the
-water. With values, the cap waits for the economy's reach to agree: no gated class of the seat's factories
-reaches, so the classes it caps are the ones Q3's fallback reads. Every linked map keeps Q3 whole. **A poor plant beside a store in surplus** buys its cheapest army type of any class,
+water. The cap waits for the economy's reach to agree (**the island's agreement**): no army type of a gated class
+on a menu of the seat's factories, as the army buy offers it, reaches the targets (*The reach*, below, the estimate
+and the foe's starts on an island), read from the menus and so the same with or without values. Every linked map keeps Q3 whole. **A poor plant beside a store in surplus** buys its cheapest army type of any class,
 so no factory idles beside a full store. With no values there is no gate. BARb's build-power cap and its army/builder split are the ideas, read
 for design only. MEASURED before it, the constructor quota (12 at most, four plus one per three metal, taking
 every idle factory first): the first army unit at a median GameTime of 13 500-15 000 against a first factory at
@@ -655,7 +656,7 @@ water reads as dry, so a submarine waits for a ship's identification; a regular 
 counts; the anti-air classes now wait for an aircraft known as well, which the default table's anti-air shares (0
 before air is seen) already did; an enemy land unit wading below the sea with no `floater` reads as dry though a
 waterweapon hits it (`0x49AC0F` refuses only a target above the sea), and a landed aircraft reads as air though it
-is a surface target an anti-air weapon cannot hit (review 1fa981c3's LOW-1).
+is a surface target an anti-air weapon cannot hit.
 **The pressure** (`impai_mil.c`, THE PRESSURE), stamped by the military for the economy: the army-class enemies
 seen now -- and the radar contacts never identified -- that are mobile and armed and stand at the base by the
 defence rule, or within two 256-px cells of any own structure at any distance and nearer it than their own side's
@@ -682,8 +683,11 @@ over only in the waived pass (*A plant keeps a way out*); past the first plant o
 when no candidate the pass may take has a land army -- the choice's own reach agrees with the military's verdict,
 which on Trout Farm came and went on a linked map --, only a water plant or one whose menu offers an air army
 type, the owner's decision (2026-11-17), and the further plant is first the sea plant, by the sea plant's own
-search while its refusals are not spent, then the air plant. The default table buys no aircraft, so such a plant
-makes constructors alone. **The build tech** filters them: a plant's build tech
+search while its refusals are not spent, then the air plant -- only once a search finds no site at all or no
+builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
+another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
+to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default
+table buys no aircraft, so such a plant makes constructors alone. **The build tech** filters them: a plant's build tech
 (`IMPAI_TINFO.ctech`) is the highest tech its constructors that can build an extractor build -- the
 constructors its candidacy asks for, so a builder that only lays mines, decoys or jammers does not raise it: TA
 Zero's GoKT2AF was a tech-up candidate only through GoKT2AirJammer, a tech-2 builder whose menu is mines, decoys and
@@ -716,7 +720,11 @@ foe's starts**, the military's and the held ground's own rule: not the seat's ow
 starts, neither left empty nor an ally's: the estimate is then only the nearest such start, which on Trout Farm
 is cut off by water while the real enemy was land-linked. An empty start on the seat's own island made every land
 class reach on Gods of War, so the seat opened on a vehicle plant whose army reached no enemy (MEASURED
-2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A class reaches when one target has a block of its base component within 8 rings: any, not all,
+2026-11-17, `exploit-naval-turtle` at 5e4e9c24). On an island (*The island*, below) the targets are the estimate
+and the foe's starts together -- a start seated at random left out once enemy structures are known, as the military
+reads it --, so the economy agrees with the verdict only when its land army reaches none of them: an estimate taken
+from structures first seen on water, a lake's tidal generators or shipyard, stands where no land class reaches on a
+map whose enemy base the land army does reach. A class reaches when one target has a block of its base component within 8 rings: any, not all,
 because before the enemy is known the map needs a class's extra mobility only when no plausible enemy is reached
 otherwise ([decisions](decisions.html)). A VTOL always reaches; with no labels for a class, no military, no anchor
 or no target every class reaches. A hover's mobility therefore adds nothing where the land classes reach and is

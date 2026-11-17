@@ -251,15 +251,17 @@ typedef struct IMPAI_DEC {
        reaches a plausible enemy base from the base) once read; the plant choice once made -- the plant, the
        waived pass's plant when no type passes the refusals, the runner-up, both scores, the constructor the
        plant waits for (THE UNLOCKS, 0 none), whether the pass that found it was a tech-up's, and whether the
-       plant is the sea plant (THE ISLAND'S FIRST PLANT, THE ISLAND'S PLANTS) --; and the distinct factory types the gate has
+       plant is the sea plant (THE ISLAND'S FIRST PLANT, THE ISLAND'S PLANTS) and whether a builder of the seat's
+       offers one --; and the distinct factory types the gate has
        read, each type's army classes and its best value in the three gated classes by the reach and without it
        (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate reads without it (bit k); THE TARGETS
-       BOUGHT FOR, the target classes the army buys types to hit (bit g, impai.h THE TARGET CLASSES), once read */
+       BOUGHT FOR, the target classes the army buys types to hit (bit g, impai.h THE TARGET CLASSES), once read;
+       THE ISLAND'S AGREEMENT, once read: 0 not yet, 1 the economy's reach agrees, 2 not */
     uint32_t      reach_mask;
-    int           reach_done;
+    int           reach_done, isle_agree;
     unsigned      tg_mask;
     int           tg_done;
-    int           plant_done, plant_up, plant_sea;
+    int           plant_done, plant_up, plant_sea, plant_sea_menu;
     uint16_t      plant_t, plant_tw, plant_next, plant_via;
     float         plant_s, plant_next_s;
     uint16_t      gate_type[IMPAI_GATE_TYPES];

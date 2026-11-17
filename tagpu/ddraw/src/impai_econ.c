@@ -120,7 +120,13 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      seat's own island made every land class reach, so Gods of War's seat opened on a vehicle plant whose army
      reached no enemy (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24: `reach=fffff83f chose=CORVP`,
      every other start empty but two, neither land-linked). With no such start, or fewer than two starts, the
-     estimate; with no estimate either, every bit is set.
+     estimate; with no estimate either, every bit is set. ON THE ISLAND (on_island) the targets are the estimate
+     and the foe's starts together, a start the level seated at random left out once enemy structures are known
+     (the military's own reading, impai_mil.c, THE ISLAND), so the economy agrees with the verdict only when its
+     land army reaches none of them. WHY: the verdict reads the rows, and an estimate taken from structures first
+     seen on water -- a lake's tidal generators or shipyard -- stands where no land class reaches on a map whose
+     enemy base the land army does reach; aimed at that one estimate the agreement would have held the seat to
+     sea and air plants and a capped land army for good.
    - A class reaches when one target has a block of the base's component within IMPAI_REACH_RINGS rings (a start's own
      block may be impassable to a large class as the anchor's may). Any, not all: the extra mobility of a class
      counts only where the map needs it, and before the enemy is known the map needs it only when no plausible
@@ -132,7 +138,8 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    only filters: a hover's mobility adds nothing where the land classes reach, and is what makes its plant score
    where they do not. A route much shorter over water is not counted (owner's decision,
    research/notes/impai/decisions.md). BOUND: once a decision, for each class with labels, one spiral at the
-   anchor and one at each target, each at most (2 IMPAI_REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
+   anchor and one at each target, each at most (2 IMPAI_REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS + 1
+   targets.
 
    THE SCORE of plant P at the tech level T (choice_tech), at most IMPAI_QTECH: max(ftop, 1), the enemy taken at the
    seat's own tech, and for a tech-up the level above it, the tech its candidates are built for (owner's decision,
@@ -270,31 +277,36 @@ static int own_start(const IMPAI_DEC* d, const WQ_START* st, int ns)
     return own;
 }
 
-/* THE TARGETS' 32-px blocks into tx/tz: 0 none */
+/* THE ISLAND (impai_mil.c, island): the last military decision found the seat's land army reaching nothing that
+   can hold an enemy on a naval map. Read as recorded data, compared with 0 only */
+static int on_island(const IMPAI_DEC* d) { return d->in->mil && d->in->mil->island != 0; }
+
+/* THE TARGETS' 32-px blocks into tx/tz, at most PLANT_STARTS + 1: 0 none */
 static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
 {
     const IMPAI_MIL* mil = d->in->mil;
+    const int known = impai_est_known(mil), isle = on_island(d);
     WQ_START st[PLANT_STARTS];
     int ns = 0, own, k, n = 0;
-    if (!impai_est_known(mil) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+    if ((isle || !known) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
         own = own_start(d, st, ns);
         for (k = 0; k < ns; k++)
-            if (k != own && impai_start_foe(d->in->view, st[k].seated)) {
+            if (k != own && impai_start_foe(d->in->view, st[k].seated) && !(isle && known && st[k].seated == 0)) {
                 tx[n] = st[k].x >> 5;
                 tz[n++] = st[k].z >> 5;
             }
-        if (n) return n;
+        if (n && !isle) return n;
     }
-    if (mil->ebx == IMPAI_NO_ANCHOR) return 0;
-    tx[0] = mil->ebx;
-    tz[0] = mil->ebz;
-    return 1;
+    if (mil->ebx == IMPAI_NO_ANCHOR) return n;
+    tx[n] = mil->ebx;
+    tz[n] = mil->ebz;
+    return n + 1;
 }
 
 static uint32_t reach_mask_of(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int tx[PLANT_STARTS], tz[PLANT_STARTS], nt, k, ox, oz;
+    int tx[PLANT_STARTS + 1], tz[PLANT_STARTS + 1], nt, k, ox, oz;
     unsigned c;
     if (d->reach_done) return d->reach_mask;
     d->reach_done = 1;
@@ -559,10 +571,6 @@ static unsigned unlock_kept(IMPAI_DEC* d)
     return type_bit(d->cons_frame, st->unlock) ? 0 : st->unlock;
 }
 
-/* THE ISLAND (impai_mil.c, island): the last military decision found the seat's land army reaching nothing that
-   can hold an enemy on a naval map. Read as recorded data, compared with 0 only */
-static int on_island(const IMPAI_DEC* d) { return d->in->mil && d->in->mil->island != 0; }
-
 /* THE ISLAND'S PLANTS: 1 when plant type t, its menu menu[0..n), may be a plant past the seat's first on THE
    ISLAND: a plant placed on water only (IMPAI_TF_WATER), or one whose menu offers an air army type (a class of
    IMPAI_K_AIRMASK, a value above 0). A sea or an air plant, the owner's decision (2026-11-17): on an island
@@ -579,6 +587,8 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
             return 1;
     return 0;
 }
+
+static int choose_sea_plant(IMPAI_DEC* d, const uint16_t* menu, int n);
 
 /* One pass of THE CHOICE, a tech-up's when `up`: its plant, 0 none, the constructor it needs first (THE UNLOCKS)
    into *via, 0 none, and its runner-up and their scores. A plant is read once (looked[]) and takes a candidate's
@@ -603,6 +613,8 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     if (d->count[IMPAI_C_FACTORY] > 0 && cons_room(d)) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
+        if (island && b < nown && !d->plant_sea_menu && n > 0)
+            d->plant_sea_menu = choose_sea_plant(d, d->menu3, n) != 0;
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
             const unsigned t = d->menu3[k];
             int seen = 0, np, ok = 0;
@@ -1142,18 +1154,26 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                menu2 and menu3 only, so this builder's menu is still d->menu */
             if (!d->plant_done) plant_choice(d);
             /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
-               THE ISLAND'S PLANTS past it the same way while the refusals are not spent */
+               THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
+               took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
+               offers a sea plant: a builder that cannot place it now -- not its turn in this decision, a site past
+               its reach, another sea type on its menu, its far record live, none on its menu -- leaves it to the
+               decision's other builders and to later decisions, so a plant held for the rest of the game is never
+               taken for one builder's answer */
+            int y = 1;
             if (d->plant_sea &&
-                (d->count[IMPAI_C_FACTORY] ? in->st->sea_refused < IMPAI_SEA_REFUSALS : !in->st->sea_refused) &&
-                (t = choose_sea_plant(d, d->menu, n)) &&
-                impai_build_sea_plant(d, b, t) > 0) {
-                plant_ordered(d, t);
-                d->want_factory = d->want_tech = 0;
-                return 1;
+                (d->count[IMPAI_C_FACTORY] ? in->st->sea_refused < IMPAI_SEA_REFUSALS : !in->st->sea_refused)) {
+                y = (t = choose_sea_plant(d, d->menu, n)) ? impai_build_sea_plant(d, b, t) : 0;
+                if (y > 0) {
+                    plant_ordered(d, t);
+                    d->want_factory = d->want_tech = 0;
+                    return 1;
+                }
+                y = !d->count[IMPAI_C_FACTORY] || y < 0 || !d->plant_sea_menu;
             }
-            if ((d->plant_t && on_menu(d->menu, n, d->plant_t) && impai_build_ring(d, b, (t = d->plant_t))) ||
-                (!d->plant_t && d->plant_tw && on_menu(d->menu, n, d->plant_tw) &&
-                 impai_build_plant_waived(d, b, (t = d->plant_tw)))) {
+            if (y && ((d->plant_t && on_menu(d->menu, n, d->plant_t) && impai_build_ring(d, b, (t = d->plant_t))) ||
+                      (!d->plant_t && d->plant_tw && on_menu(d->menu, n, d->plant_tw) &&
+                       impai_build_plant_waived(d, b, (t = d->plant_tw))))) {
                 plant_ordered(d, t);
                 d->want_factory = d->want_tech = 0;
                 return 1;
@@ -1685,27 +1705,52 @@ static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
     return rows < c ? (rows > 1 ? (int)rows : 1) : c;
 }
 
+/* THE ISLAND'S AGREEMENT: 1 when the economy's own reach agrees with THE ISLAND -- no army type of a gated class on
+   the menu of one of the seat's factories, as the army buy offers it (army_menu), reaches THE TARGETS (THE REACH,
+   gated_reaching), which on the island are the estimate and the foe's starts together. Read from the menus, not
+   the values, so a level with no values reads it the same. Once a decision. BOUND: the factories, at most
+   IMPAI_GATE_TYPES distinct types read, one menu read each */
+static int island_agrees(IMPAI_DEC* d)
+{
+    IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
+    uint16_t seen[IMPAI_GATE_TYPES];
+    const uint32_t mask = reach_mask_of(d);
+    int i, j, ns = 0, reached = 0;
+    uint32_t k, n;
+    if (d->isle_agree) return d->isle_agree == 1;
+    for (i = 0; i < d->nfidle + d->nfbusy && !reached && ns < IMPAI_GATE_TYPES; i++) {
+        const unsigned type = i < d->nfidle ? d->fidle[i].type : d->fbusy[i - d->nfidle].type;
+        for (j = 0; j < ns && seen[j] != type; j++) {}
+        if (j < ns) continue;
+        seen[ns++] = (uint16_t)type;
+        n = army_menu(d, type, mt);
+        for (k = 0; k < n && !reached; k++) reached = gated_reaching(d, mask, mt[k].type);
+    }
+    d->isle_agree = reached ? 2 : 1;
+    return !reached;
+}
+
 /* THE ISLAND'S LAND BUDGET (owner's decision, 2026-11-17): on THE ISLAND (on_island) the land army classes
    (IMPAI_K_LRAIDER..IMPAI_K_LSCOUT) may take an order only while their value -- built, building and queued,
    kspent -- is below ISLAND_LAND_SHARE of the whole army's, so the land factories build a base defence that
-   grows with the army the seat can send, and nothing while it has none. With values, only while the economy's
-   reach agrees: no gated class of the seat's factories reaches (gate_noreach, THE ARMY ORDERS' Q3 fallback), as
-   THE ISLAND'S PLANTS wait for the choice's reach (WHY THE AGREEMENT there). Read before each order, with this
-   decision's earlier orders in kspent. INVARIANT, a bound: on the island the land army's value passes the share
-   by at most the one order the last test let through -- its type's value times its count, at most WQ_QUEUE_MAX
-   units. A value not finite fails the test and refuses the land classes. WHY: on an island the land army reaches
-   nothing, and the metal it takes is the sea's and the air's: on Gods of War the seat's vehicle plant, its two
-   constructors and its one Leveler cost 1 242 metal by the cap, 1.4 of the destroyers (887 each) it had three of
-   (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06). A quarter: the base faces only what crosses the water,
-   hovercraft and amphibious units, which the sea army and the air meet first [hand-written: the bar's to move]. */
+   grows with the army the seat can send, and nothing while it has none. Only while the economy's reach agrees
+   (THE ISLAND'S AGREEMENT), as THE ISLAND'S PLANTS wait for the choice's reach (WHY THE AGREEMENT there). Read
+   before each order, with this decision's earlier orders in kspent. INVARIANT, a bound: on the island the land
+   army's value passes the share by at most the one order the last test let through -- its type's value times its
+   count, at most WQ_QUEUE_MAX units. A value not finite fails the test and refuses the land classes. WHY: on an
+   island the land army reaches nothing, and the metal it takes is the sea's and the air's: on Gods of War the
+   seat's vehicle plant, its two constructors and its one Leveler cost 1 242 metal by the cap, 1.4 of the
+   destroyers (887 each) it had three of (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06). A quarter: the
+   base faces only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet
+   first [hand-written: the bar's to move]. */
 #define ISLAND_LAND_SHARE 0.25f
 #define IMPAI_K_LANDMASK  ((1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) | (1u << IMPAI_K_LARTY) | \
                            (1u << IMPAI_K_LAA) | (1u << IMPAI_K_LSCOUT))
-static uint32_t island_classes(const IMPAI_DEC* d)
+static uint32_t island_classes(IMPAI_DEC* d)
 {
     float land = 0.0f, all = 0.0f;
     unsigned k;
-    if (!on_island(d) || (d->in->tv && d->gate_noreach != IMPAI_GATED)) return 0xFFFFFFFFu;
+    if (!on_island(d) || !island_agrees(d)) return 0xFFFFFFFFu;
     for (k = 0; k < IMPAI_KS; k++) {
         all += d->kspent[k];
         if (IMPAI_K_LANDMASK >> k & 1u) land += d->kspent[k];

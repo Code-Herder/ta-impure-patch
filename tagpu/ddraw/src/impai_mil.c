@@ -4511,7 +4511,12 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     if (d->gh < 1) d->gh = 1;
     if (d->gw > IMPAI_GRID_MAX) d->gw = IMPAI_GRID_MAX;
     if (d->gh > IMPAI_GRID_MAX) d->gh = IMPAI_GRID_MAX;
-    if (in->brain->ax == IMPAI_NO_ANCHOR) return 0;
+    /* a decision with no anchor judges nothing, so THE ISLAND is not left standing from an earlier one: the economy
+       reads it at every decision (impai_econ.c, THE ISLAND'S PLANTS, THE ISLAND'S LAND BUDGET) */
+    if (in->brain->ax == IMPAI_NO_ANCHOR) {
+        d->st->island = 0;
+        return 0;
+    }
     d->ax = in->brain->ax * 16 + 8;
     d->az = in->brain->az * 16 + 8;
     if ((d->nstarts = q->ops->starts(q, d->starts, STARTS)) < 0) d->nstarts = 0;
