@@ -804,6 +804,27 @@ static void air_held(MDEC* d, IMPAI_PICTURE_IN* pin)
     }
 }
 
+/* THE TARGETS KNOWN: each target class (impai.h, THE TARGET CLASSES) of an enemy the decision counts stamps
+   IMPAI_MIL.tg_t with now, which the economy's army buy reads (impai_econ.c, THE TARGETS BOUGHT FOR). An enemy is
+   UNDER when the decision holds it under the sea (MENEMY.under: by sonar alone, or a type the fight content holds
+   submerged); else AIR for a VTOL type, FLOAT for a type placed on water only, and DRY for any other -- a contact
+   never identified among them, which the radar finds only above the sea (UNDER THE SEA, picture). RESIDUAL: such a
+   contact on the water is a ship as often as a hovercraft, and reads as DRY: a type with waterweapons alone waits
+   for the ship's identification. BOUND: the decision's enemies, IMPAI_ENEMY_MAX; types below nti (picture) */
+static void targets_known(MDEC* d)
+{
+    unsigned mask = 0, g;
+    int k;
+    for (k = 0; k < d->nen; k++) {
+        const MENEMY* e = &d->en[k];
+        const unsigned f = e->type != WQ_NONE ? d->in->ti[e->type].flags : 0u;
+        mask |= 1u << (e->under ? IMPAI_TG_UNDER : (f & IMPAI_TF_VTOL) ? IMPAI_TG_AIR
+                                 : (f & IMPAI_TF_WATER) ? IMPAI_TG_FLOAT : IMPAI_TG_DRY);
+    }
+    for (g = 0; g < IMPAI_TGS; g++)
+        if (mask >> g & 1u) d->st->tg_t[g] = d->now;
+}
+
 /* The seat's column of the knowledge rows, bounded by the view's row count: an enemy row is one whose owner is
    neither the seat nor an ally, or a radar contact never identified. Seen now (own sight, an ally's, or the
    radar pass) counts as present; a ghost counts only for a structure. Every type is held below nti before it
@@ -894,6 +915,7 @@ static void picture(MDEC* d)
         }
     }
     air_held(d, &pin);
+    targets_known(d);
     pin.own_extractors = (uint32_t)d->own_mex;
     pin.gametime = d->now;
     pin.tech = d->tech;
@@ -976,14 +998,14 @@ static void naval(MDEC* d)
     }
     if (!impai_mostly_water(r) && r->land_total && d->st->ebx != IMPAI_NO_ANCHOR) {
         if (!d->est_struct)
-            off = !impai_land_link(r, abx, abz, d->st->ebx, d->st->ebz);
+            off = !impai_land_link(r, abx, abz, d->st->ebx, d->st->ebz, 0);
         else {
             float linked = 0.0f, total = 0.0f;
             for (k = 0; k < d->nen; k++) {
                 const MENEMY* e = &d->en[k];
                 if (e->mobile || e->type == WQ_NONE) continue;
                 total += e->value;
-                if (impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5)) linked += e->value;
+                if (impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5, 0)) linked += e->value;
             }
             off = 2.0f * linked < total;
         }
@@ -1099,16 +1121,18 @@ static void land_reach(const MDEC* d, LANDREACH* lr)
 
 /* 1 when block (bx, bz) is the land's for a row there, under the sea or not (`under`): half the land army's value
    reaches it -- of the units with a water weapon alone for a row under the sea --, a block off the grid, or with no
-   land army the content's test for a row not under the sea (THE LAND ARMY'S REACH) */
-static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz, int under)
+   land army the content's test for a row not under the sea (THE LAND ARMY'S REACH); a unit reaches it when its
+   component holds a block within `rings` rings of it (impai_reach_near; 0, the block itself), and the content's
+   test reads the same rings (impai_land_link). BOUND: one impai_reach_near a key, or one impai_land_link */
+static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz, int under, int rings)
 {
     const IMPAI_REACH* r = d->in->reach;
     float v = under ? lr->any_water : lr->any;
-    int k;
+    int k, ox, oz;
     if (bx < 0 || bz < 0 || bx >= r->bw || bz >= r->bh) return 1;
-    if (!(lr->total > 0.0f)) return !under && impai_land_link(r, d->ax >> 5, d->az >> 5, bx, bz);
+    if (!(lr->total > 0.0f)) return !under && impai_land_link(r, d->ax >> 5, d->az >> 5, bx, bz, rings);
     for (k = 0; k < lr->nkey; k++)
-        if (impai_reach_at(r, lr->key[k].cls, bx, bz) == lr->key[k].label)
+        if (impai_reach_near(r, lr->key[k].cls, lr->key[k].label, bx, bz, rings, &ox, &oz))
             v += under ? lr->key[k].water : lr->key[k].value;
     return 2.0f * v >= lr->total;
 }
@@ -1125,7 +1149,7 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
         int32_t x, z;
         if (d->st->swept[c] > since) continue;
         sweep_centre(d, c, &x, &z);
-        if (land_block(d, lr, x >> 5, z >> 5, 0)) return 0;
+        if (land_block(d, lr, x >> 5, z >> 5, 0, 0)) return 0;
     }
     return 1;
 }
@@ -1179,7 +1203,7 @@ static int est_start(const MDEC* d)
         if (!start_foe(d, k)) continue;
         if (best < 0 || y < bd) { best = k; bd = y; }
         sweep_centre(d, c, &cx, &cz);
-        if (!d->st->swept[c] && (open < 0 || y < od) && (!d->in->reach || land_block(d, &lr, cx >> 5, cz >> 5, 0))) {
+        if (!d->st->swept[c] && (open < 0 || y < od) && (!d->in->reach || land_block(d, &lr, cx >> 5, cz >> 5, 0, 0))) {
             open = k;
             od = y;
         }
@@ -1204,7 +1228,7 @@ static void dry_hunt(MDEC* d)
     for (k = 0; k < d->nen && !(land && off); k++) {
         const MENEMY* e = &d->en[k];
         if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
-        if (!land_block(d, &lr, e->x >> 5, e->z >> 5, e->under)) off = 1;
+        if (!land_block(d, &lr, e->x >> 5, e->z >> 5, e->under, 0)) off = 1;
         else if (!unreached(d, TASIM_LAYER_LAND, e->x, e->z)) land |= !d->st->dry || (e->now && e->type != WQ_NONE);
     }
     for (k = 0; k < WQ_SEATS && !(land && off); k++) {
@@ -1213,7 +1237,7 @@ static void dry_hunt(MDEC* d)
         if (f->slot == WQ_NONE || !f->slot || d->now < f->t || d->now - f->t > IMPAI_FOE_FRESH ||
             (v && (k == v->seat || ((v->allies >> k) & 1u))))
             continue;
-        if (!land_block(d, &lr, f->bx, f->bz, 0)) off = 1;
+        if (!land_block(d, &lr, f->bx, f->bz, 0, 0)) off = 1;
         else if (!d->st->dry && !unreached(d, TASIM_LAYER_LAND, f->bx * 32 + 16, f->bz * 32 + 16)) land = 1;
     }
     if (land) d->st->land_t = stamp;
@@ -1224,34 +1248,43 @@ static void dry_hunt(MDEC* d)
 
 /* THE ISLAND, each decision after THE DRY HUNT: 1 into MDEC.island when the map is naval (THE NAVAL JUDGEMENT), the
    level a finish level (impai_finish_level: labels, a land army type and a sea block), and the seat's land army
-   reaches nothing that can hold an enemy: no start that can hold an enemy's base (THE FOE'S STARTS) and no enemy row
-   of a type that is not a VTOL stands on a block the land army reaches (THE LAND ARMY'S REACH, land_block: before
-   the seat has a land army the content's land classes, impai_land_link), and at least one such start or row is
-   known -- with neither there is no evidence, and no island. A land army that crosses the water, hovers or
-   amphibious units holding half its value, ends it. What it changes: the waves of every layer but land go at the
-   finish's size (THE WAVE), so the sea's few ships go as soon as they would win. WHY: on an island map the land
-   army has nothing it can reach, and the 8 median units a wave asks of the sea alone never came: on Gods of War
-   the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED 2026-11-17,
-   exploit-naval-turtle at 5e4e9c24). RESIDUAL: a start or row on a block of the land's component that the land
-   army's classes do not stand on -- a cliff, a feature -- reads as off the land, so one such start is enough
-   to read a linked map as an island while the others are; the waves then still need the prediction. BOUND: the
-   starts (STARTS) and the enemy rows (IMPAI_ENEMY_MAX), each one land_block; the army once (land_reach). */
+   reaches nothing that can hold an enemy, and at least one such thing is known -- with none there is no evidence,
+   and no island. What can hold an enemy: every enemy row of a type that is not a VTOL, at its block (THE LAND
+   ARMY'S REACH, land_block: before the seat has a land army the content's land classes, impai_land_link); and every
+   start that can hold an enemy's base (THE FOE'S STARTS), which the land army reaches when its component holds a
+   block within IMPAI_REACH_RINGS rings of the start -- the economy's reach of a target (impai_econ.c, THE REACH), so
+   a start on a cliff or a feature the land classes do not stand on reads by the ground round it. Once enemy
+   structures are known, or were (impai_est_known), a start the level seated at random (WQ_START.seated 0) is no
+   longer evidence: its occupant is unknown, and the rows say where the enemy stands. A land army that crosses the
+   water, hovers or amphibious units holding half its value, ends it. What it changes: the waves of every layer
+   but land go at the finish's size (THE WAVE), so the sea's few ships go as soon as they would win. WHY: on an
+   island map the land army has nothing it can reach, and the 8 median units a wave asks of the sea alone never
+   came: on Gods of War the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED
+   2026-11-17, exploit-naval-turtle at 5e4e9c24). WHY THE RANDOM STARTS GIVE WAY: at random starts every start but
+   the seat's own can hold an enemy, so a second start on the seat's own land kept the island off for the whole
+   game, wherever the enemy's structures were seen. RESIDUALS: a row on a block the land army's classes do not
+   stand on -- a cliff, a feature -- reads as off the land; with every start round the land army's ground read so,
+   or none known, a linked map reads as an island, and the waves still need the prediction. At random starts with
+   more than one enemy, once one enemy's structures are known, a second enemy's base on the seat's own land that no
+   row shows yet reads as none. BOUND: the starts (STARTS), each one land_block of at most LAND_KEYS ring searches of
+   IMPAI_REACH_RINGS, and the enemy rows (IMPAI_ENEMY_MAX), each one exact land_block; the army once (land_reach). */
 static void island(MDEC* d)
 {
     LANDREACH lr;
+    const int known = impai_est_known(d->st);
     int k, any = 0;
     d->island = 0;
     if (d->st->naval != 1 || !impai_finish_level(d->in->reach)) return;
     land_reach(d, &lr);
     for (k = 0; k < d->nstarts; k++) {
-        if (!start_foe(d, k)) continue;
-        if (land_block(d, &lr, d->starts[k].x >> 5, d->starts[k].z >> 5, 0)) return;
+        if (!start_foe(d, k) || (known && d->starts[k].seated == 0)) continue;
+        if (land_block(d, &lr, d->starts[k].x >> 5, d->starts[k].z >> 5, 0, IMPAI_REACH_RINGS)) return;
         any = 1;
     }
     for (k = 0; k < d->nen; k++) {
         const MENEMY* e = &d->en[k];
         if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
-        if (land_block(d, &lr, e->x >> 5, e->z >> 5, e->under)) return;
+        if (land_block(d, &lr, e->x >> 5, e->z >> 5, e->under, 0)) return;
         any = 1;
     }
     d->island = (uint8_t)any;
@@ -2860,16 +2893,18 @@ static void scouting(MDEC* d)
     d->out->scouts++;
 }
 
-/* the scout's leg: arrived within ARRIVE_PX of the point it travels to -- the leg's point, or the substitute its
-   class stops at (point_for), as travel sends it --, the next leg (SCOUTING) */
+/* the scout's leg: arrived within ARRIVE_PX of the point travel sends it to (arrived: its spread point, or the
+   substitute its class stops at, point_for), the next leg (SCOUTING); undecided, the leg goes on as it is. A leg
+   travel gives no point, no substitute either, is arrived at once, as THE ARRIVAL reads it, so the scout does not
+   stand out its lifetime short of a point it cannot go to */
 static void scout_step(MDEC* d, int s)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
     int32_t x = q->tx * 32 + 16, z = q->tz * 32 + 16;
+    float at, total;
     int k, m;
+    if (arrived(d, s, x, z, ARRIVE_PX, &at, &total) <= 0) return;
     for (m = 0; m < d->narmy && d->army[m].sq != s; m++) {}
-    if (m < d->narmy) point_for(d, d->army[m].type, d->army[m].x, d->army[m].z, &x, &z);
-    if (dist(d->sq[s].x, d->sq[s].z, x, z) > ARRIVE_PX) return;
     if (++q->flags >= SCOUT_LEGS || d->nstarts < 2 || m == d->narmy) {
         back_to_form(d, s);
         return;

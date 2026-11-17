@@ -95,18 +95,31 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
      keeps every friendly unit clear of (impai_mil.c, THE D-GUN'S GUARD); none otherwise, and none when the radius
      passes the 255 px dgun_r holds, so no guard is ever narrower than the shot (retail ARM_ and
      CORE_DISINTEGRATOR: areaofeffect 48, a 24 px radius; MEASURED 2026-11-13, `tasim_run defs`).
+   - WHAT IT HITS (IMPAI_TF_HITDRY, HITWET, HITAIR; impai.h, THE TARGET CLASSES): of its regular weapons -- the
+     classifier's, not CommandFire, stockpile or interceptor (tasim_roles.c, regular) --, one that is neither a
+     waterweapon nor a toairweapon, one that is a waterweapon, one in an anti-air slot (tasim_roles_slot_antiair,
+     the classifier's and the fight content's rule). The other flags are the def's and stay.
    BOUND: nweapons is held to the input's slots; an energy not finite reads as 0. */
 _Static_assert(((TASIM_F245_CANATTACK | TASIM_F245_CANDGUN) & ~TASIM_ROLE_F245) == 0,
                "the type facts test only +0x245 bits the role fillers copy");
 _Static_assert(((TASIM_F241_KAMIKAZE | TASIM_F241_CANHOVER | TASIM_F241_CANFLY) & ~TASIM_ROLE_F241) == 0,
                "the type facts test only +0x241 bits the role fillers copy");
-_Static_assert(((TASIM_WF_TOAIR | TASIM_WF_WATER | TASIM_WF_DROPPED | TASIM_WF_COMMANDFIRE) & ~TASIM_ROLE_WF) == 0,
+_Static_assert(((TASIM_WF_TOAIR | TASIM_WF_WATER | TASIM_WF_DROPPED | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE |
+                 TASIM_WF_INTERCEPTOR) & ~TASIM_ROLE_WF) == 0,
                "the type facts test only +0x111 bits the role fillers copy");
 void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
 {
     const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
     const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
-    unsigned k, r = 0;
+    unsigned k, r = 0, hits = 0;
+    for (k = 0; k < nw; k++) {
+        const uint32_t f = in->w[k].flags;
+        if (f & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR)) continue;
+        if (!(f & (TASIM_WF_WATER | TASIM_WF_TOAIR))) hits |= IMPAI_TF_HITDRY;
+        if (f & TASIM_WF_WATER) hits |= IMPAI_TF_HITWET;
+        if (tasim_roles_slot_antiair(in, (int)k)) hits |= IMPAI_TF_HITAIR;
+    }
+    t->flags = (uint8_t)((t->flags & ~(IMPAI_TF_HITDRY | IMPAI_TF_HITWET | IMPAI_TF_HITAIR)) | hits);
     t->attack = (uint8_t)(((in->flags245 & TASIM_F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
                           ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
                           ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |

@@ -253,9 +253,12 @@ typedef struct IMPAI_DEC {
        plant waits for (THE UNLOCKS, 0 none), whether the pass that found it was a tech-up's, and whether the
        first plant is the sea plant (THE ISLAND'S FIRST PLANT) --; and the distinct factory types the gate has
        read, each type's army classes and its best value in the three gated classes by the reach and without it
-       (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate reads without it (bit k) */
+       (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate reads without it (bit k); THE TARGETS
+       BOUGHT FOR, the target classes the army buys types to hit (bit g, impai.h THE TARGET CLASSES), once read */
     uint32_t      reach_mask;
     int           reach_done;
+    unsigned      tg_mask;
+    int           tg_done;
     int           plant_done, plant_up, plant_sea;
     uint16_t      plant_t, plant_tw, plant_next, plant_via;
     float         plant_s, plant_next_s;

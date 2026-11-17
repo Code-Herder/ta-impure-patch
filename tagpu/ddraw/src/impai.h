@@ -219,6 +219,10 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
 #define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
+/* what its weapons hit (impai_tinfo_attack): a regular weapon -- not CommandFire, stockpile or interceptor -- */
+#define IMPAI_TF_HITDRY 0x20u           /* ... that is neither a waterweapon nor a toairweapon                  */
+#define IMPAI_TF_HITWET 0x40u           /* ... that is a waterweapon                                            */
+#define IMPAI_TF_HITAIR 0x80u           /* ... in an anti-air slot (tasim_roles_slot_antiair)                   */
 
 /* One type, 36 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
@@ -260,6 +264,28 @@ typedef struct IMPAI_TINFO {
                                    (impai_econ.c, THE SENSORS)                                                  */
 } IMPAI_TINFO;
 _Static_assert(sizeof(IMPAI_TINFO) == 36, "IMPAI_TINFO is 36 bytes, as its comment says");
+
+/* THE TARGET CLASSES: where an enemy stands, as the can-engage test 0x49ABB0 sorts it for a weapon (DISASSEMBLED,
+   engine/weapons.md, *The can-engage test*), bit g of a mask for class g:
+   - DRY, above the sea and not floating: a waterweapon refuses a target that is no `floater` with its y above the
+     sea (0x49AC0F), and a hovercraft above it (0x49AC3B); every other weapon but a toairweapon hits it;
+   - FLOAT, on the water: a type placed on water only (IMPAI_TF_WATER) and not held submerged -- a ship, whose
+     altitude the fix-up sets to the sea level less its waterline (`floater`, 0x48A938, engine/units.md), or a
+     structure on the water: the water path passes it, and its top stands above the sea for the other weapons;
+   - UNDER, under the sea: the other weapons refuse a target whose top is at or below it (0x49ACFB), so only a
+     waterweapon hits it;
+   - AIR, an aircraft, which the fight content hits only through an anti-air slot (impai_fight.c, hurts). */
+enum { IMPAI_TG_DRY, IMPAI_TG_FLOAT, IMPAI_TG_UNDER, IMPAI_TG_AIR, IMPAI_TGS };
+#define IMPAI_TG_ALL ((1u << IMPAI_TGS) - 1u)
+
+/* the target classes type t's weapons hit (THE TARGET CLASSES): DRY and FLOAT with a weapon for the surface
+   (IMPAI_TF_HITDRY), FLOAT and UNDER with a waterweapon (IMPAI_TF_HITWET), AIR with an anti-air slot */
+static inline unsigned impai_type_hits(const IMPAI_TINFO* t)
+{
+    return ((t->flags & IMPAI_TF_HITDRY) ? (1u << IMPAI_TG_DRY) | (1u << IMPAI_TG_FLOAT) : 0u) |
+           ((t->flags & IMPAI_TF_HITWET) ? (1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER) : 0u) |
+           ((t->flags & IMPAI_TF_HITAIR) ? 1u << IMPAI_TG_AIR : 0u);
+}
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
    tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is
@@ -606,7 +632,9 @@ int  impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz);
    round the first cell's block carry (THE LABEL BESIDE, impai_maps.c). -1 and 0 as impai_reach_at. */
 int  impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz);
 /* the first block in ring order within `radius` rings of (bx, bz) whose class-c label is `label`, into (ox,
-   oz): 1, or 0 for none. Off-grid blocks are skipped. BOUND: at most (2 radius + 1)^2 label reads */
+   oz): 1, or 0 for none. Off-grid blocks are skipped, and the radius is held to the ring of the grid's block
+   farthest from (bx, bz): no ring past it holds a block. BOUND: at most (2 radius' + 1)^2 label reads, radius' the
+   held radius, below max(bw, bh) + the distance of (bx, bz) off the grid */
 int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
                       int* ox, int* oz);
 /* sea_blocks, land_total, land_w and sea_ref from the type information ti[1..nti) over the classes the level
@@ -614,9 +642,12 @@ int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, 
 void impai_reach_summary(IMPAI_REACH* r, const IMPAI_TINFO* ti, unsigned nti);
 /* more than half of the level's blocks carry a label of some sea army class */
 int  impai_mostly_water(const IMPAI_REACH* r);
-/* 1 when blocks a and b are LAND-LINKED: the classes whose labels agree there, both nonzero, hold at least half
-   of land_total; 1 too with no evidence (land_total 0, a block off the grid) */
-int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz);
+/* 1 when blocks a and b are LAND-LINKED within `radius` rings of b: the classes whose label at a is nonzero and
+   lies on a block within `radius` rings of b (impai_reach_near; 0, b itself) hold at least half of land_total; 1
+   too with no evidence (land_total 0, a block off the grid). BOUND: one impai_reach_near a class with land types */
+int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz, int radius);
+#define IMPAI_REACH_RINGS 8     /* 256 px round a block: where a class's label is looked for about the anchor or a
+                                   target (impai_econ.c, THE REACH) and about a start (impai_mil.c, THE ISLAND)   */
 /* the distinct nonzero sea_ref labels within `radius` rings of (bx, bz), nearest ring first, at most cap, into
    out: their count. BOUND: at most (2 radius + 1)^2 label reads */
 int  impai_sea_labels(const IMPAI_REACH* r, int bx, int bz, int radius, uint16_t* out, int cap);
@@ -701,6 +732,8 @@ typedef struct IMPAI_GOALFAIL {       /* 12 bytes                               
 #define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land enemy known (impai_mil.c)          */
 #define IMPAI_AIR_KS     4              /* the air classes, IMPAI_K_FIGHTER .. IMPAI_K_ASCOUT                     */
 #define IMPAI_AIR_HOLD   5400           /* ticks THE AIR HELD keeps a class's value [hand-written: the bar's to move] */
+#define IMPAI_TG_HOLD    5400           /* ticks THE TARGETS KNOWN keep a class known [hand-written: the bar's to
+                                           move, as IMPAI_AIR_HOLD]                                              */
 #define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
                                            bar's to move]                                                        */
 typedef struct IMPAI_FOE {            /* 12 bytes                                                              */
@@ -766,6 +799,9 @@ typedef struct IMPAI_MIL {
     float    air_held[IMPAI_AIR_KS];  /* THE AIR HELD (impai_mil.c): each air class's most value seen at once,
                                          IMPAI_K_FIGHTER on, recorded data bounded where it is read            */
     uint32_t air_held_t[IMPAI_AIR_KS];    /* the GameTime it was last seen at that much or more               */
+    uint32_t tg_t[IMPAI_TGS];         /* THE TARGETS KNOWN (impai_mil.c): the GameTime of the last military
+                                         decision that knew an enemy of each target class, 0 never; recorded
+                                         data, read through impai_tg_known                                     */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
@@ -824,6 +860,17 @@ typedef struct IMPAI_MIL {
 /* 1 when the military's estimate rests on enemy structures seen, now or before (EST_STRUCT, EST_KEPT): the one
    reading of est_seen, so a recorded byte past the enum reads as EST_START in the military and the economy alike */
 static inline int impai_est_known(const IMPAI_MIL* m) { return m->est_seen == EST_STRUCT || m->est_seen == EST_KEPT; }
+
+/* THE TARGETS KNOWN at GameTime now: the target classes whose stamp (IMPAI_MIL.tg_t) is set, not past now and
+   within IMPAI_TG_HOLD of it, as a mask -- the one reading of the recorded stamps, so a stamp restored in the
+   future or older than the hold knows nothing */
+static inline unsigned impai_tg_known(const IMPAI_MIL* m, uint32_t now)
+{
+    unsigned g, mask = 0;
+    for (g = 0; g < IMPAI_TGS; g++)
+        if (m->tg_t[g] && m->tg_t[g] <= now && now - m->tg_t[g] <= IMPAI_TG_HOLD) mask |= 1u << g;
+    return mask;
+}
 
 /* a seat's military at a level's start: no squad, no estimate; the level, the persona and the table given */
 void  impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona, const IMPAI_TABLE* table,

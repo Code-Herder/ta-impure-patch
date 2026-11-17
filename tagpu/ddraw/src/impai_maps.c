@@ -167,8 +167,10 @@ int impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int
 int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox, int* oz)
 {
     const uint16_t* l = class_labels(r, c);
+    const int fx = bx > r->bw - 1 - bx ? bx : r->bw - 1 - bx, fz = bz > r->bh - 1 - bz ? bz : r->bh - 1 - bz;
     int ring, i, dx, dz;
     if (!l) return 0;
+    if (radius > fx && radius > fz) radius = fx > fz ? fx : fz;
     for (ring = 0; ring <= radius; ring++)
         for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
             const int x = bx + dx, z = bz + dz;
@@ -226,10 +228,11 @@ int impai_mostly_water(const IMPAI_REACH* r)
     return 2u * (uint64_t)r->sea_blocks > (uint64_t)r->bw * r->bh;
 }
 
-int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz)
+int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz, int radius)
 {
     uint64_t linked = 0;
     unsigned c;
+    int ox, oz;
     if (!r || !r->labels || !r->land_total || ax < 0 || az < 0 || bx < 0 || bz < 0 || ax >= r->bw || az >= r->bh ||
         bx >= r->bw || bz >= r->bh)
         return 1;
@@ -238,7 +241,7 @@ int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz)
         uint16_t la;
         if (!l) continue;
         la = l[(size_t)az * r->bw + ax];
-        if (la && la == l[(size_t)bz * r->bw + bx]) linked += r->land_w[c];
+        if (la && impai_reach_near(r, c, la, bx, bz, radius, &ox, &oz)) linked += r->land_w[c];
     }
     return 2u * linked >= r->land_total;
 }

@@ -104,8 +104,8 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
 /* ---- THE CHOICE: which plant the seat builds next ----
 
    THE REACH (reach_mask_of): bit c is set when movement class c reaches a plausible enemy base from the base.
-   - THE BASE'S COMPONENT: the label most of the blocks within REACH_RINGS rings of the anchor's 32-px block carry
-     (base_label). The anchor is where the commander stood, and the content map can hold a larger class's block
+   - THE BASE'S COMPONENT: the label most of the blocks within IMPAI_REACH_RINGS rings of the anchor's 32-px block
+     carry (base_label). The anchor is where the commander stood, and the content map can hold a larger class's block
      there impassable (a feature, a slope) where the plants' yards around it are not, or a pocket beside it that
      the yards' ground does not join; a class with no label within the rings has no ground at the base, and does
      not reach. RESIDUAL: past BASE_LABELS distinct labels in the rings the later ones are not counted.
@@ -121,7 +121,7 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      reached no enemy (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24: `reach=fffff83f chose=CORVP`,
      every other start empty but two, neither land-linked). With no such start, or fewer than two starts, the
      estimate; with no estimate either, every bit is set.
-   - A class reaches when one target has a block of the base's component within REACH_RINGS rings (a start's own
+   - A class reaches when one target has a block of the base's component within IMPAI_REACH_RINGS rings (a start's own
      block may be impassable to a large class as the anchor's may). Any, not all: the extra mobility of a class
      counts only where the map needs it, and before the enemy is known the map needs it only when no plausible
      enemy is reached otherwise -- "a hover only where the route to the enemy needs water" (owner, 2026-11-14).
@@ -132,7 +132,7 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    only filters: a hover's mobility adds nothing where the land classes reach, and is what makes its plant score
    where they do not. A route much shorter over water is not counted (owner's decision,
    research/notes/impai/decisions.md). BOUND: once a decision, for each class with labels, one spiral at the
-   anchor and one at each target, each at most (2 REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
+   anchor and one at each target, each at most (2 IMPAI_REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
 
    THE SCORE of plant P at the tech level T (choice_tech), at most IMPAI_QTECH: max(ftop, 1), the enemy taken at the
    seat's own tech, and for a tech-up the level above it, the tech its candidates are built for (owner's decision,
@@ -193,16 +193,21 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    least value. The runner-up is kept for the plant line. A tech-up whose best candidate scores below 0 still goes
    ahead (owner's decision, 2026-11-14): it brings the tech-2 constructors and economy, and THE ARMY ORDERS keep a
    plant whose army is poor here to constructors.
-   THE ISLAND'S FIRST PLANT (IMPAI_DEC.plant_sea): on a dry anchor, when no candidate for the first plant has a land
-   army and the military judges the map naval (IMPAI_MIL.naval), the first plant is the sea plant, built where the
-   sea plant is (assign: choose_sea_plant, impai_build_sea_plant); the least value of all stays the choice for a
-   builder that offers no sea plant and in a decision whose search orders none, so the first plant never waits on
-   the sea (a search that orders none counts a refusal, as the sea plant's does). A water plant is no candidate
-   on a dry anchor, since the ring holds no water site, so "the least value of all" reads the dry plants alone, and
-   on an island none of them has an army that reaches. WHY: the owner's rule is the opening's constructors and the
-   army it can make next, and on an island the sea army is the one the seat can send: on Gods of War the seat
-   opened on a vehicle plant at GameTime 2 974, its shipyard came on the pacing at 9 552, and it ended at the cap
-   with two ships and nothing attacked (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24).
+   THE ISLAND'S FIRST PLANT (IMPAI_DEC.plant_sea): on a dry anchor, when no candidate the first plant's pick may
+   take (a build tech no higher than the seat's top factory's or the lowest candidate's, plant_pick) has a land
+   army, at least one does, and the military judges the map naval (IMPAI_MIL.naval), the first plant is the sea
+   plant, built where the sea plant is (assign: choose_sea_plant, impai_build_sea_plant), while the level has
+   counted no sea refusal (IMPAI_BRAIN.sea_refused); the least value of all stays the choice for a builder that
+   offers no sea plant, and for every decision once one refusal is counted -- a search that orders none counts one
+   in its own decision, a sea plant's job that fails counts one before the next decision's assignment
+   (impai_brain.c, job_checks) --, so the first plant tries the sea once and then builds on land: a seat whose sea
+   plant cannot be finished waits one failed job for its first plant, not the sixteen fail_t windows the sea
+   plant's own want may spend. A water plant is no candidate on a dry anchor, since the ring holds no water site,
+   so "the least value of all" reads the dry plants alone, and on an island none of them has an army that reaches.
+   WHY: the owner's rule is the opening's constructors and the army it can make next, and on an island the sea
+   army is the one the seat can send: on Gods of War the seat opened on a vehicle plant at GameTime 2 974, its
+   shipyard came on the pacing at 9 552, and it ended at the cap with two ships and nothing attacked (MEASURED
+   2026-11-17, exploit-naval-turtle at 5e4e9c24).
 
    WHY, MEASURED 2026-11-14 over 377 bar seat-games: the least value with the offer -- the highest classifier tech
    of a plant's units, a graph distance -- took CORE's hover plant as the tech-up in 167 of 170 seats (CORHP 1 883
@@ -213,20 +218,19 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
 #define PLANT_VIA    8          /* THE UNLOCKS: constructor types a pass looks through                       */
 #define PLANT_LOOK   (2 * IMPAI_PLANT_CANDS)  /* plant menus a pass of THE CHOICE reads               */
 
-#define REACH_RINGS  8          /* 256 px round the anchor or a target                                       */
 #define PLANT_STARTS 16
 
 #define BASE_LABELS  8          /* distinct labels base_label counts; a ninth and later one is not counted    */
 
-/* class c's base component: the label most blocks within REACH_RINGS rings of block (bx, bz) carry, ties to the
-   one met first in ring order -- the yards stand round the anchor, and one passable pocket next to it must not
-   speak for the ground they stand on; 0 none; -1 the level has no labels for c. BOUND: (2 REACH_RINGS + 1)^2
+/* class c's base component: the label most blocks within IMPAI_REACH_RINGS rings of block (bx, bz) carry, ties to
+   the one met first in ring order -- the yards stand round the anchor, and one passable pocket next to it must not
+   speak for the ground they stand on; 0 none; -1 the level has no labels for c. BOUND: (2 IMPAI_REACH_RINGS + 1)^2
    label reads and BASE_LABELS counters */
 static int base_label(const IMPAI_REACH* r, unsigned c, int bx, int bz)
 {
     int lab[BASE_LABELS], cnt[BASE_LABELS], n = 0, ring, i, k, dx, dz, best = -1;
     if (impai_reach_at(r, c, bx, bz) < 0) return -1;
-    for (ring = 0; ring <= REACH_RINGS; ring++)
+    for (ring = 0; ring <= IMPAI_REACH_RINGS; ring++)
         for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
             const int l = impai_reach_at(r, c, bx + dx, bz + dz);
             if (l <= 0) continue;
@@ -243,18 +247,26 @@ static int base_label(const IMPAI_REACH* r, unsigned c, int bx, int bz)
     return best < 0 ? 0 : lab[best];
 }
 
+/* the seat's own start of st[0..ns): the one nearest the anchor, ties to the lower index */
+static int own_start(const IMPAI_DEC* d, const WQ_START* st, int ns)
+{
+    const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
+    int own = 0, k;
+    for (k = 1; k < ns; k++)
+        if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
+            (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
+            own = k;
+    return own;
+}
+
 /* THE TARGETS' 32-px blocks into tx/tz: 0 none */
 static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
 {
     const IMPAI_MIL* mil = d->in->mil;
     WQ_START st[PLANT_STARTS];
-    const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
-    int ns = 0, own = 0, k, n = 0;
+    int ns = 0, own, k, n = 0;
     if (!impai_est_known(mil) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
-        for (k = 1; k < ns; k++)
-            if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
-                (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
-                own = k;
+        own = own_start(d, st, ns);
         for (k = 0; k < ns; k++)
             if (k != own && impai_start_foe(d->in->view, st[k].seated)) {
                 tx[n] = st[k].x >> 5;
@@ -283,7 +295,7 @@ static uint32_t reach_mask_of(IMPAI_DEC* d)
         int any = 0;
         if (a < 0) continue;
         for (k = 0; k < nt && a > 0 && !any; k++)
-            any = impai_reach_near(in->reach, c, (uint16_t)a, tx[k], tz[k], REACH_RINGS, &ox, &oz);
+            any = impai_reach_near(in->reach, c, (uint16_t)a, tx[k], tz[k], IMPAI_REACH_RINGS, &ox, &oz);
         if (!any) d->reach_mask &= ~(1u << c);
     }
     return d->reach_mask;
@@ -331,7 +343,7 @@ static int reaches(const IMPAI_DEC* d, uint32_t mask, unsigned type)
    BOUND, a decision: the judgement once -- the published patches, IMPAI_CLUSTERS_HALF at most, and each finished
    factory's menu, one read -- and each constructor type judged at most once (IMPAI_MR_MEMO kept; a type past them
    is judged again when asked), each judgement one menu read of at most WQ_TYPES_MAX types, one base label of
-   (2 REACH_RINGS + 1)^2 reads and the published patches, one claim, held, label and ground test each; THE
+   (2 IMPAI_REACH_RINGS + 1)^2 reads and the published patches, one claim, held, label and ground test each; THE
    REACHING PLANT at most PLANT_LOOK plant menus. RESIDUAL: a water-only plant (a shipyard) is no candidate on a
    dry anchor, as in THE CHOICE, so a seat whose only reaching constructor comes from a shipyard waits on the sea
    plant's own rules. */
@@ -574,8 +586,13 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
         }
     }
     if (armed && !up) {
-        for (k = 0; k < nc && !c[k].army; k++) {}
-        d->plant_sea = nc > 0 && k == nc && in->mil && in->mil->naval == 1;
+        int pickable = 0;
+        for (k = 0; k < nc; k++) {
+            if (c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
+            if (c[k].army) break;
+            pickable = 1;
+        }
+        d->plant_sea = pickable && k == nc && in->mil && in->mil->naval == 1;
     }
     for (k = 0; k < nc; k++) {
         if (!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
@@ -1078,9 +1095,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
                menu2 and menu3 only, so this builder's menu is still d->menu */
             if (!d->plant_done) plant_choice(d);
-            /* THE ISLAND'S FIRST PLANT, by the sea plant's own search; a decision whose search orders none builds
-               the land plant, so the first plant never waits on the sea */
-            if (d->plant_sea && (t = choose_sea_plant(d, d->menu, n)) && impai_build_sea_plant(d, b, t) > 0) {
+            /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal */
+            if (d->plant_sea && !in->st->sea_refused && (t = choose_sea_plant(d, d->menu, n)) &&
+                impai_build_sea_plant(d, b, t) > 0) {
                 plant_ordered(d, t);
                 d->want_factory = d->want_tech = 0;
                 return 1;
@@ -1297,10 +1314,47 @@ static int finish_buys(const IMPAI_DEC* d)
     return d->sea_plants || (d->sea_able && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !impai_sea_none_now(d));
 }
 
+/* THE TARGETS BOUGHT FOR: the target classes (impai.h, THE TARGET CLASSES) the seat knows -- an enemy of the class
+   counted by a military decision within IMPAI_TG_HOLD (impai_tg_known, THE TARGETS KNOWN in impai_mil.c) -- or
+   expects: the ground of each start that can hold an enemy's base (impai_start_foe, THE FOE'S STARTS; the seat's
+   own, the nearest its anchor, left out), where an enemy's commander began -- DRY where it lies at or above the
+   sea, FLOAT and UNDER below it, where the commander walks the sea floor and its first structures stand on the
+   water. With nothing known and no such start, every class: no evidence narrows nothing. Once a decision. BOUND:
+   PLANT_STARTS starts, one ground read each */
+static unsigned targets_bought_for(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    WQ_START st[PLANT_STARTS];
+    unsigned m;
+    int ns, own, k;
+    if (d->tg_done) return d->tg_mask;
+    d->tg_done = 1;
+    m = in->mil ? impai_tg_known(in->mil, d->now) : 0u;
+    if ((ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+        own = own_start(d, st, ns);
+        for (k = 0; k < ns; k++) {
+            int32_t pos[3];
+            if (k == own || !impai_start_foe(in->view, st[k].seated)) continue;
+            pos[0] = (int32_t)((uint32_t)st[k].x << 16);
+            pos[1] = 0;
+            pos[2] = (int32_t)((uint32_t)st[k].z << 16);
+            m |= d->q->ops->ground(d->q, pos) < (int)d->m.sea ? (1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER)
+                                                               : 1u << IMPAI_TG_DRY;
+        }
+    }
+    d->tg_mask = m ? m : IMPAI_TG_ALL;
+    return d->tg_mask;
+}
+
 /* factory type `type`'s army types into mt (at most IMPAI_MENU_MAX): its menu's types with an army class and a
-   value; reads into d->menu. THE FINISH AT SEA (impai_brain.c, economy): while the military's dry hunt holds and
-   the finish has a plant (finish_buys), only types with a water weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the
-   weapons that hit a unit under the sea (can_attack, impai_mil.c) -- so a land plant offers none and stands idle,
+   value that can hit a target class the seat buys for (THE TARGETS BOUGHT FOR, impai_type_hits) -- so a class
+   none of whose types can is not bought, and a class is bought in the types that can: a submarine, whose
+   waterweapons hit nothing above the sea, waits for a target on or under the water; reads into d->menu. WHY: on
+   Gods of War the seat's shipyard made two submarines of 1 199 metal each while every enemy it knew stood on land
+   (MEASURED 2026-11-17, exploit-naval-turtle at d8799688, the seated variant). THE FINISH AT SEA (impai_brain.c,
+   economy): while the military's dry hunt holds and the finish has a plant (finish_buys), only types with a water
+   weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the weapons that hit a unit under the sea (can_attack, impai_mil.c)
+   -- so a land plant offers none and stands idle,
    and the army's rows (THE ARMY'S ROWS) are left to the units that can finish. With no plant to make them the
    factories buy as usual: a dry hunt with no water it can reach would otherwise build no army at all.
    RESIDUAL: a water-weapon type with no sonar of its own sees nothing under the sea, and the finish then waits for
@@ -1310,10 +1364,13 @@ static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
     const IMPAI_BRAIN_IN* in = d->in;
     const int n = d->q->ops->build_options(d->q, (int)type, d->menu, WQ_TYPES_MAX);
     const int dry = in->mil && in->mil->dry && finish_buys(d);
+    const unsigned want = targets_bought_for(d);
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
         const unsigned t = d->menu[k];
-        if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f)) continue;
+        if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f) ||
+            !(impai_type_hits(&in->ti[t]) & want))
+            continue;
         if (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2))) continue;
         mt[m].type = (uint16_t)t;
         mt[m].klass = in->ti[t].klass;

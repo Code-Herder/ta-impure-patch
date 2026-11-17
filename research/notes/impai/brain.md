@@ -379,8 +379,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    army that reaches a start scouts as before, and a seat whose land army reaches none still learns where the enemy
    stands: on Gods of War no land unit reached a start, and the seat sent no scout and saw no enemy to the cap, a
    submarine and a destroyer at home (MEASURED 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A ship reaches a
-   start, which stands on land, when a block of its component lies within 1 024 px of it, the substitute it
-   travels to, and it arrives at that substitute. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
+   start, which stands on land, when a block of its component lies within 1 024 px of it. A leg is arrived at as a
+   squad's (*the arrival*): within 256 px of the point travel sends the scout to -- its spread point when it reaches
+   that, else the leg's substitute --, and a leg travel gives no point at all is over at once. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
    seat's own whose sweep cell no army unit of the seat has stood in and whose centre the land army reaches, the
    nearest other start once all have been; only a start that can hold an enemy's base is a candidate -- **the
    foe's starts**: not the seat's own and, where the level seated its starts, neither left empty
@@ -622,6 +623,27 @@ for design only. MEASURED before it, the constructor quota (12 at most, four plu
 every idle factory first): the first army unit at a median GameTime of 13 500-15 000 against a first factory at
 3 300-3 600, five or six constructors and no army at 12 000 at every level (196 seat-games, 2026-11-13); in a
 game against a human, 95 % of the factory-ticks went to constructors.
+
+**The targets bought for** (`impai_econ.c`, `army_menu`): a factory's army menu holds only the types whose weapons
+can hit a target class the seat knows or expects, so a class none of whose types can is not bought, and a class is
+bought in the types that can. **The target classes** (`impai.h`) are where an enemy stands as the engine's
+can-engage test `0x49ABB0` sorts it ([weapons](../engine/weapons.html), *The can-engage test*): **dry** -- above
+the sea and not floating, which a waterweapon refuses (`0x49AC0F`, a hovercraft `0x49AC3B`) --, **floating** -- a
+ship or a structure on the water, which both kinds hit --, **under** the sea, which only a waterweapon hits
+(`0x49ACFB`), and **air**, which the fight content hits only through an anti-air slot. A type's weapons
+(`impai_tinfo_attack`, from the role input, so the DLL and tasim agree): a regular weapon that is neither a
+waterweapon nor a toairweapon hits dry and floating targets, a waterweapon floating and under, an anti-air slot the
+air. **Known**: each military decision stamps the classes of the enemies it counts (`IMPAI_MIL.tg_t`, THE TARGETS
+KNOWN) -- under for a row held under the sea, air for a VTOL, floating for a type placed on water only, dry for
+anything else, a contact never identified included, since the radar finds nothing under the sea --, and a class
+stays known for `IMPAI_TG_HOLD` (5 400) ticks after the last decision that knew one. **Expected**: the ground of
+each start that can hold an enemy's base -- dry where it lies at or above the sea, floating and under below it,
+where the commander walks the sea floor. With nothing known and no start every class is bought: no evidence
+narrows nothing. **Why**: on Gods of War the island seat's shipyard made two submarines of 1 199 metal each while
+every enemy it knew stood on land (MEASURED 2026-11-17, `exploit-naval-turtle` at d8799688, the seated variant).
+**Gaps**: a radar contact on the water reads as dry, so a submarine waits for a ship's identification; a regular
+weapon that deals no damage still counts; the anti-air classes now wait for an aircraft known as well, which the
+default table's anti-air shares (0 before air is seen) already did.
 **The pressure** (`impai_mil.c`, THE PRESSURE), stamped by the military for the economy: the army-class enemies
 seen now -- and the radar contacts never identified -- that are mobile and armed and stand at the base by the
 defence rule, or within two 256-px cells of any own structure at any distance and nearer it than their own side's
@@ -690,9 +712,13 @@ and the least value of all when none has one: its first purpose is the construct
 on the least value ([decisions](decisions.html)); the land army is the owner's (2026-11-14), since the least value
 alone put TA Zero's GoK on GoKT1AF, an air plant. **A wet anchor** takes the least value of all: the score ranks land armies, and a ring round an anchor below the sea may hold no site
 for a land plant. **The island's first plant**: on a dry anchor, when no candidate has a land army and the
-military judges the map naval, the first plant is the sea plant, placed by the sea plant's own search; a builder
-that offers none, or a decision whose search orders none, builds the least value of all as before, so the first
-plant never waits on the sea. The opening's purpose is its constructors and the army it can make next, and on an
+military judges the map naval, the first plant is the sea plant, placed by the sea plant's own search, while the
+level has counted no refusal of the sea plant; a builder that offers none builds the least value of all as before,
+and so does every decision once one refusal is counted -- a search that orders none counts one in its own decision,
+a sea plant's job that ends unbuilt counts one before the next decision's assignment --, so the first plant tries
+the sea once and then builds on land: a seat whose sea plant cannot be finished waits one failed job for its first
+plant, not the sixteen `fail_t` windows the sea plant's own want may spend. The candidates read are those the pick
+may take, a build tech no higher than the seat's top factory's or the lowest candidate's. The opening's purpose is its constructors and the army it can make next, and on an
 island the sea's is the one that reaches: on Gods of War the seat opened on a vehicle plant at GameTime 2 974, its
 shipyard came on the pacing at 9 552, and it held two ships at the cap, 20 000, and attacked nothing (MEASURED
 2026-11-17, `exploit-naval-turtle` at 5e4e9c24). A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
@@ -970,17 +996,21 @@ can start a hunt the remnants on land do not justify -- the factories then buy f
 identifies one of them.
 
 **The island** (`impai_mil.c`, THE ISLAND), each decision after the dry hunt: on a naval map, a level with labels,
-a land army type and a sea block, the seat's land army reaches nothing that can hold an enemy -- no foe's start
-and no enemy row but an aircraft stands on a block it reaches (*the land army's reach* above, the content's land
-classes before the seat has a land army), and at least one such start or row is known. A land army that crosses
-the water ends it. While it holds, a wave of any layer but land goes at the finish's size, 1 + that layer's waves
+a land army type and a sea block, the seat's land army reaches nothing that can hold an enemy -- no enemy row but
+an aircraft stands on a block it reaches (*the land army's reach* above, the content's land classes before the
+seat has a land army), and no foe's start has a block it reaches within `IMPAI_REACH_RINGS` (8) rings, the
+economy's reach of a target, so a start on a cliff reads by the ground round it -- and at least one such start or
+row is known. Once enemy structures are known, or were, a start the level seated at random is no longer evidence:
+its occupant is unknown, and the rows say where the enemy stands; at random starts a second start on the seat's
+own land otherwise kept the island off for the whole game. A land army that crosses the water ends it. While it holds, a wave of any layer but land goes at the finish's size, 1 + that layer's waves
 median units, still predicted to win, but inside the attention, since no land operation competes for it there. The
 economy reads the same evidence its own way for the first plant (*The island's first plant*, above). **Why**: on
 an island map the land army has nothing it can reach, and the 8 median units a sea wave asks never came: on Gods
 of War the seat held a submarine and a destroyer at the cap and attacked nothing (MEASURED 2026-11-17,
-`exploit-naval-turtle` at 5e4e9c24). **Gap**: a start or row on a block the land army's classes do not stand on --
-a cliff, a feature -- reads as off the land, so one such start can make a linked map read as an island; the waves
-still need the prediction.
+`exploit-naval-turtle` at 5e4e9c24). **Gaps**: a row on a block the land army's classes do not stand on -- a
+cliff, a feature -- reads as off the land, and with every start read so too a linked map reads as an island; the
+waves still need the prediction. At random starts with more than one enemy, once one enemy's structures are known,
+a second enemy's base on the seat's own land that no row shows yet reads as none.
 
 **The lead.** Each military decision after the naval judgement and before the dry hunt asks whether the seat is far
 ahead: its live value -- each finished unit of its own, its type's value -- against the enemy's as the seat
