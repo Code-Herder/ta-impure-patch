@@ -188,45 +188,18 @@ const A = {
     for (const k of spine) { let p = M.units[k].first; while (p && !spine.includes(p)) p = M.units[p].first; sp[k] = p; }
     const col = {};
     for (const k of spine) col[k] = sp[k] ? col[sp[k]] + 1 : 0;
-    // rows: a tidy tree, each leaf the next row, a parent centred over its children
     const kids = {}; for (const k of spine) if (sp[k]) (kids[sp[k]] ||= []).push(k);
-    const W = 300, GAP = 14, pos = {}, h = {};
+    const W = 300, GAP = 10, pos = {};
     const unl = k => [...M.units[k].unlocks.filter(x => !spine.includes(x)), ...M.units[k].upgrades];
-    for (const k of spine) h[k] = 58 + Math.ceil(Math.max(unl(k).length, 1) / 8) * 28 + 18;
-    let y = 0;
-    const place = k => {
-      const ks = kids[k] || [];
-      if (!ks.length) { pos[k] = y; y += h[k] + GAP; return; }
-      const y0 = y; ks.forEach(place);
-      const top = pos[ks[0]], bot = pos[ks.at(-1)] + h[ks.at(-1)];
-      pos[k] = Math.max(y0, (top + bot) / 2 - h[k] / 2);
-      if (pos[k] + h[k] + GAP > y) y = pos[k] + h[k] + GAP;
-    };
-    place(M.root);
     const world = document.createElement('div'); world.className = 'world';
-    const maxc = Math.max(...Object.values(col));
-    // the tree's own bounds: the last column's card, the last row's card (no trailing gap), which fit() frames
-    this.bw = maxc * W + 236; this.bh = y - GAP;
-    world.style.width = (maxc + 1) * W + 'px'; world.style.height = y + 'px';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', (maxc + 1) * W); svg.setAttribute('height', y);
     world.append(svg);
-    this.edges = [];
-    const edge = (a, b, cls) => {
-      const x1 = col[a] * W + 236, y1 = pos[a] + 28, x2 = col[b] * W, y2 = pos[b] + 28, mx = (x1 + x2) / 2;
-      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      p.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
-      if (cls) p.setAttribute('class', cls);
-      svg.append(p); this.edges.push({ a, b, p, cls });
-    };
-    for (const k of spine) if (sp[k]) edge(sp[k], k);
-    // every other builder that also builds a spine node: dashed, shown on focus or with "all edges"
-    for (const k of spine) for (const p of M.units[k].parents) if (p !== sp[k] && spine.includes(p)) edge(p, k, 'also');
+    el.append(world);
     this.nodes = {};
     for (const k of spine) {
       const u = M.units[k], n = document.createElement('div');
       n.className = 'node'; n.dataset.k = k;
-      n.style.left = col[k] * W + 'px'; n.style.top = pos[k] + 'px';
+      n.style.left = col[k] * W + 'px';
       const more = u.builds.length - u.unlocks.length;
       n.innerHTML = `<div class="hd"><img class="pic" src="${pic(k)}" alt=""><div><b>${esc(u.title)}</b><small>${esc(u.description)}</small>
         <span class="kind">${u.kind}${u.tier ? ' · T' + u.tier : ''}</span></div></div>
@@ -234,8 +207,54 @@ const A = {
         <div class="ft">${u.unlocks.length} new${more ? ` · +${more} also built elsewhere` : ''}${u.upgrades.length ? ` · ${u.upgrades.length} upgrade(s)` : ''}</div>`;
       world.append(n); this.nodes[k] = n;
     }
+    this.edges = [];
+    const edge = (a, b, cls) => {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      if (cls) p.setAttribute('class', cls);
+      svg.append(p); this.edges.push({ a, b, p, cls });
+    };
+    for (const k of spine) if (sp[k]) edge(sp[k], k);
+    // every other builder that also builds a spine node: dashed, shown on focus or with "all edges"
+    for (const k of spine) for (const p of M.units[k].parents) if (p !== sp[k] && spine.includes(p)) edge(p, k, 'also');
+    const maxc = Math.max(...Object.values(col));
+    /* ROWS: a tidy tree over each card's MEASURED height (a wrapped description or footer makes a card taller than its
+       icons say), each leaf the next row, a parent centred over its children. One cursor `y` runs down the whole tree
+       and every card starts at or below it and moves it past its own bottom plus GAP, so no two cards share a row
+       band: GAP is the least space between any two cards of a column, whatever the fonts. */
+    this.layout = () => {
+      const h = {};
+      for (const k of spine) h[k] = this.nodes[k].offsetHeight;
+      let y = 0;
+      const place = k => {
+        const ks = kids[k] || [];
+        if (!ks.length) { pos[k] = y; y += h[k] + GAP; return; }
+        const y0 = y; ks.forEach(place);
+        const top = pos[ks[0]], bot = pos[ks.at(-1)] + h[ks.at(-1)];
+        pos[k] = Math.max(y0, (top + bot) / 2 - h[k] / 2);
+        if (pos[k] + h[k] + GAP > y) y = pos[k] + h[k] + GAP;
+      };
+      place(M.root);
+      for (const k of spine) this.nodes[k].style.top = pos[k] + 'px';
+      // the tree's own bounds: the last column's card, the last row's card (no trailing gap), which fit() frames
+      this.bw = maxc * W + 236; this.bh = y - GAP;
+      world.style.width = (maxc + 1) * W + 'px'; world.style.height = y + 'px';
+      svg.setAttribute('width', (maxc + 1) * W); svg.setAttribute('height', y);
+      for (const e of this.edges) {
+        const x1 = col[e.a] * W + 236, y1 = pos[e.a] + 28, x2 = col[e.b] * W, y2 = pos[e.b] + 28, mx = (x1 + x2) / 2;
+        e.p.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+      }
+    };
+    this.layout();
+    // a card that changes height after this (a face or a picture arriving and changing the wrapping) lays the tree out
+    // again, so the gap holds on the final metrics and not only on the first ones
+    let queued = false;
+    const relayout = new ResizeObserver(() => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; if (this.world === world) { this.layout(); if (this.fitted) this.fit(); } });
+    });
+    for (const k of spine) relayout.observe(this.nodes[k]);
     this.svgAll = svg;
-    el.append(world);
     el.insertAdjacentHTML('beforeend', `<div class="zoomctl"><button data-z="-">−</button><button data-z="+">+</button>
       <button data-z="fit">Fit</button><button data-z="all" class="${this.all ? 'on' : ''}">All edges</button></div>
       <div class="legend"><span><i style="background:var(--path)"></i>path from the commander</span>

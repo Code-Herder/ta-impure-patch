@@ -55,6 +55,8 @@ header input { width: 16ch; }
 .node { position: absolute; width: 236px; background: var(--panel2); border: 1px solid #4a4d42; border-radius: 4px;
   box-shadow: 0 2px 6px #0008; transition: opacity .15s; }
 .node > .hd { display: flex; gap: 8px; align-items: center; padding: 6px; cursor: pointer; border-bottom: 1px solid #000; }
+/* the picture never shrinks: before it loads a flex item may, and the text would wrap differently once it does */
+.node > .hd .pic { flex: none; }
 .node > .hd b { font: 700 14px/1.1 'Oswald', sans-serif; letter-spacing: .02em; }
 .node > .hd small { display: block; color: var(--muted); font-size: 11px; line-height: 1.2; }
 .node .unl { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; }
