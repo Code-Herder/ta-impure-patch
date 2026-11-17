@@ -714,8 +714,8 @@ the approval, each with its evidence; the owner may reverse any of them:
   **Repair stays removed** (*The mend: removed*, reconfirmed by the owner on 2026-11-17). **What it does not reach**:
   a seat whose side has no role-SCOUT type on a layer (ARM's skeeter, ARMPT, is a raider by the classifier's
   thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea
-  scout's eyes reach no farther than a destroyer's -- the engine holds every unit's sight to 8 blocks, 256 px on an
-  axis ([engine/map](../engine/map.html), *The sight table and the stamp*) --, so on Gods of War it sees no farther
+  scout's eyes reach no farther than a destroyer's -- under stock's `numtables` the engine holds every unit's sight
+  to 8 blocks, 256 px on an axis ([engine/map](../engine/map.html), *The sight table and the stamp*) --, so on Gods of War it sees no farther
   inland than the navy (the
   naval turtle: [the bar](bar.html), *The exploiter suite*).
 - **One air scout a seat** (owner's decision, 2026-11-17: yes to one unarmed air scout per seat, an explicit

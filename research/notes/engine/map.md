@@ -2296,7 +2296,11 @@ j's two words (`0x4339E8..0x4339FE`). **The stock file** (MEASURED over the inst
 closed first quadrant, so each image covers one quadrant; the lines are swap-symmetric, so a table's
 loaded union is eight-fold, (±a, ±b) and (±b, ±a); TABLE i reaches Chebyshev radius i, point j of a
 ray at distance j + 1, no ray on the unit's own block; TABLE8 48 rays, 332 point visits, 212 offsets;
-TABLE9 is never reached at `numtables` 9 ([line-of-sight](../line-of-sight.md) §3).
+TABLE9 is never reached at `numtables` 9 ([line-of-sight](../line-of-sight.md) §3). The file carries TABLE1..12;
+for each, the disc dx² + dz² ≤ i² of blocks lies inside the loaded union, and so it does in Escalation's
+`gamedatE\LOS.tdf` (`numtables` 90) for TABLE1..12 (MEASURED 2026-11-17, the four images above; unions of 9 / 21 /
+37 / 61 / 101 / 137 / 177 / 213 offsets for stock's TABLE1..8 with the own block, 5 / 17 / 33 / 57 / 89 / 121 / 169 /
+213 for Escalation's). ImpAI's sight test rests on it (`impai_mil.c`, THE EYES' DISC).
 
 **The index.** The stamp takes `idx = trunc(SightDistance / 32)` from the record's sight word, sign
 extended (`movsx` at `0x48230D`; the FBI loader stores `sightdistance` unclamped as def `+0x202`'s

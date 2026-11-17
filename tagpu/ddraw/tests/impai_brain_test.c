@@ -9821,9 +9821,9 @@ static void check_scout_sea_class(void)
    (a) the submarines' sight 0, the start 300 px past the edge: the blind spot stamped, the air scout sent to the
        start as a SCOUT squad beside the sea scout, and both still out at the next decision (ONE SCOUT SQUAD besides
        the air scout's trip);
-   (b) their sight 400, the start 300 px past the edge along the axis: still blind -- THE EYES' DISC holds sight
-       to 8 blocks, 256 px on an axis;
-   (c) their sight 400, the start 7 blocks past the edge: in their eyes -- no blind spot, no trip;
+   (b) their sight 400, the start 5 blocks past the edge along the axis: still blind -- THE EYES' DISC holds sight
+       to 8 blocks and THE SHEAR's bound takes 4 off;
+   (c) their sight 400, the start 4 blocks past the edge: in their eyes -- no blind spot, no trip;
    (d) the foe's start on the west bank, which the tank reaches: no blind spot;
    (e) (c) without the tank: the estimate -- the ghost on the west bank -- in no unit's sight: the trip goes there;
    (f) the air scout alone, the enemy known: it goes;
@@ -9834,7 +9834,14 @@ static void check_scout_sea_class(void)
    (i) THE AIR SCOUT IS SCOUT ONLY: (c)'s world with the air scout in the air layer's FORM squad, as a recording
        made before the rule holds it: it is let go of and the squad freed;
    (j) (h)'s two blind starts with the air scout 600 px north of the second: the trip goes to the second, the
-       nearer, not the first by its index. */
+       nearer, not the first by its index;
+   (k) THE SHEAR: (h) with the air scout 6 blocks south of the first start: an aircraft's stamp may stand 4 rows
+       north of it, so the first is not eyed and the trip goes there; 4 blocks south of it: eyed, the trip goes to
+       the second;
+   (l) THE LEG TRIED: (a)'s one blind start, the air scout sent and never moved: past the leg's lifetime it turns
+       home, and at the next decision it is still on its way home, not out to the same start again;
+   (m) a dead air scout's SCOUT squad (squad 0, no member) and a sea scout's (squad 1) on its leg: the sea scout's
+       squad stays a SCOUT squad on that leg, not sent back to FORM (and out again on a new trip). */
 static void ascout_world(int start_x, int sub_sight)
 {
     mil_world();
@@ -9871,10 +9878,10 @@ static void ascout_next(IMPAI_MIL_OUT* o, uint32_t ticks)
 
 static void check_air_scout_trip(void)
 {
-    static const char* const NAME[5] = { "(a) out of the ships' sight", "(b) 300 px along the axis",
-                                         "(c) 7 blocks past the edge", "(d) a land start the tank reaches",
+    static const char* const NAME[5] = { "(a) out of the ships' sight", "(b) 5 blocks past the edge",
+                                         "(c) 4 blocks past the edge", "(d) a land start the tank reaches",
                                          "(e) the estimate out of every sight" };
-    static const int START_X[5] = { 4636, 4636, 4560, 1616, 4560 };
+    static const int START_X[5] = { 4636, 4496, 4464, 1616, 4464 };
     const uint32_t look = IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     IMPAI_MIL_OUT o;
     int c, k, s;
@@ -9973,7 +9980,7 @@ static void check_air_scout_trip(void)
            s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
     CHECK(s >= 0 && s_mil.sq[s].tz == 3600 / 32, "(j) the trip goes to the nearer area");
 
-    ascout_world(4560, 400);
+    ascout_world(4464, 400);
     for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
     own(42, M_SCOUT, 22, 22);
     own(7, M_TANK, 96, 96);
@@ -9989,6 +9996,75 @@ static void check_air_scout_trip(void)
            s_mil.sq[3].task);
     CHECK(s_job[42].kind != IMPAI_JOB_SQUAD && s_mil.sq[3].task == IMPAI_SQ_FREE,
           "(i) the air scout let go of, the FORM squad freed");
+
+    for (c = 0; c < 2; c++) {
+        const int south = c == 0 ? 6 : 4;
+        ascout_world(4636, 0);
+        s_w.starts[2] = (WQ_START){ 4636, 3600, 2, 0 };
+        s_w.nstarts = 3;
+        for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+        own(42, M_SCOUT, 22, 22);
+        s_w.unit[42].pos[0] = 4636 << 16;
+        s_w.unit[42].pos[2] = (1616 + 32 * south) << 16;
+        own(7, M_TANK, 96, 96);
+        enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(k) the decision runs");
+        s = ascout_sq();
+        printf("the air scout's trip, (k) %d blocks south of the first start: leg (%d, %d)\n", south,
+               s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1, s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
+        CHECK(s >= 0 && s_mil.sq[s].tz == (c == 0 ? 1616 : 3600) / 32,
+              "(k) %d blocks south: %s", south, c == 0 ? "not eyed under the shear, the trip to the first"
+                                                       : "eyed, the trip to the second");
+    }
+
+    ascout_world(4636, 0);
+    for (k = 0; k < 2; k++) own(40 + k, M_SUB, 244 + 2 * k, 40);
+    own(42, M_SCOUT, 22, 22);
+    own(7, M_TANK, 96, 96);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(l) the decision runs");
+    s = ascout_sq();
+    CHECK(s >= 0 && s_mil.sq[s].tx == 4636 / 32 && s_mil.sq[s].flags != 0xFF, "(l) the air scout sent to the start");
+    ascout_next(&o, 20000u);
+    s = ascout_sq();
+    printf("the air scout's trip, (l) past the leg's lifetime: its squad %d, flags %u, leg (%d, %d)\n", s,
+           s >= 0 ? s_mil.sq[s].flags : 0, s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1,
+           s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
+    CHECK(s >= 0 && s_mil.sq[s].flags == 0xFF, "(l) the leg outlived: the trip turns home");
+    ascout_next(&o, look);
+    s = ascout_sq();
+    printf("the air scout's trip, (l) the next decision: its squad %d, flags %u, leg (%d, %d)\n", s,
+           s >= 0 ? s_mil.sq[s].flags : 0, s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1,
+           s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
+    CHECK(s < 0 || (s_mil.sq[s].flags == 0xFF && s_mil.sq[s].tx != 4636 / 32),
+          "(l) the start tried: the trip does not turn out to it again");
+
+    ascout_world(4636, 0);
+    own(41, M_DEST, 246, 40);
+    s_ti[M_DEST].klass = IMPAI_K_SSCOUT;
+    own(7, M_TANK, 96, 96);
+    enemy(1310, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    s_mil.sq[0].task = IMPAI_SQ_SCOUT;
+    s_mil.sq[0].layer = TASIM_LAYER_AIR;
+    s_mil.sq[0].target = (uint16_t)WQ_NONE;
+    s_mil.sq[0].tx = 4636 / 32;
+    s_mil.sq[0].tz = 1616 / 32;
+    s_mil.sq[0].since = (uint32_t)s_w.gametime;
+    s_mil.sq[1].task = IMPAI_SQ_SCOUT;
+    s_mil.sq[1].layer = TASIM_LAYER_SEA;
+    s_mil.sq[1].target = (uint16_t)WQ_NONE;
+    s_mil.sq[1].tx = 135;
+    s_mil.sq[1].tz = 50;
+    s_mil.sq[1].since = (uint32_t)s_w.gametime;
+    s_job[41].kind = IMPAI_JOB_SQUAD;
+    s_job[41].type = M_DEST;
+    s_job[41].squad = 1;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(m) the decision runs");
+    printf("the air scout's trip, (m) a dead air scout's squad: squad 1's task %u, the sea scout's squad %u\n",
+           s_mil.sq[1].task, s_job[41].squad);
+    CHECK(s_job[41].kind == IMPAI_JOB_SQUAD && s_job[41].squad == 1 && s_mil.sq[1].task == IMPAI_SQ_SCOUT &&
+              s_mil.sq[1].tx == 135,
+          "(m) the sea scout's squad stays a SCOUT squad on its leg");
     s_ti[M_SUB].sight = 0;
     s_ti[M_SCOUT].sight = 0;
     s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;

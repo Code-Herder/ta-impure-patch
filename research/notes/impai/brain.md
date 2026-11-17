@@ -403,10 +403,17 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    no air scout had it in its eyes within `IMPAI_EYED_REFRESH` (2 700 ticks, the writer's figure for the owner's
    "about 1-2 game minutes"; `IMPAI_MIL.eyed`, the estimate's stamp kept only while it stays in its sweep cell).
    **The eyes** are the engine's sight table: the stamp lights the offsets of `los.tdf`'s TABLE R round the unit's
-   block, R = SightDistance / 32 held to 8 ([engine/map](../engine/map.html), *The sight table and the stamp*), so a
-   Chebyshev radius of at most 8 blocks, 256 px on an axis, whatever the type's sight distance. The test is the disc
-   dx^2 + dz^2 <= R^2 in blocks, which lies inside every TABLE1..9 of the table measured (Escalation's `los.tdf`,
-   whose TABLE8 has stock's 212 offsets), so it claims sight only where the table lights, terrain aside. Any area in
+   block, R = SightDistance / 32 held to `numtables` - 1 -- 8 under stock's `numtables` 9 --
+   ([engine/map](../engine/map.html), *The sight table and the stamp*), so under stock a Chebyshev radius of at most
+   8 blocks, 256 px on an axis, whatever the type's sight distance. The disc dx^2 + dz^2 <= R^2 in blocks lies inside
+   every TABLE1..12 of stock's `los.tdf` and of Escalation's (MEASURED 2026-11-17, each offset in the loader's four
+   images); the brain holds R to 8 whatever `numtables` is, so on a content that raises it (Escalation's is 90) it
+   claims less than the engine lights. **The shear**: the stamp is centred on the row (z - h/2) >> 5, h the type's
+   def `+0x170` byte plus the unit's altitude, clamped to 255, and a unit is seen over the row (z - y/2) >> 5 of its
+   own altitude, so each moves 0..4 blocks north and the two differ by up to 4 rows either way. The test is therefore
+   the disc of R - 4 around the unsheared blocks, which every such shift keeps inside the stamp's disc of R: it
+   claims sight only where the table lights, whatever the heights, terrain aside -- 128 px on an axis under stock,
+   up to 4 blocks short of what the engine lights (the exact row needs def `+0x170`, which the brain does not read). Any area in
    need stamps `IMPAI_MIL.blind_t`, which the economy reads for `IMPAI_BLIND_HOLD` (900 ticks) to buy the air scout.
    Builders and the commander are not weighed, and a seat with no land or sea army is blind to every area; at most
    16 army units of distinct type and component are weighed, an area eyed lately is not asked, and the first
@@ -419,7 +426,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    way, the dearest air scout goes to the area in need nearest it, as a SCOUT squad of one beside any other layer's
    scout; a leg ends when its point is in the scout's eyes, the next leg is the nearest area still in need, and with
    none the trip turns home to the rally point, where the scout is let go of and waits in no squad. A leg that
-   outlives its task turns home. Only an `ascout` unit makes this trip: a seat without one sends no aircraft to a
+   outlives its task turns home and counts its area as looked at until the refresh, so an area the scout cannot get
+   over costs one leg a refresh, not a loop out and home. The scout's squad, once the scout is dead, is not counted
+   as the seat's one land or sea SCOUT squad. Only an `ascout` unit makes this trip: a seat without one sends no aircraft to a
    blind area. What the scout sees becomes rows the stand-off shells. **The layer's last
    healthy unit**: while the estimate rests on an enemy structure -- the layer's wave, forming or waiting, has a
    goal known --, the scout is never the layer's only healthy army unit (at least half its health,

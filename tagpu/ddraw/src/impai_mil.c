@@ -343,6 +343,15 @@ static int ascout_member(const MDEC* d, int s)
     return -1;
 }
 
+/* 1 when an army unit of the census is in squad s */
+static int squad_manned(const MDEC* d, int s)
+{
+    int k;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s) return 1;
+    return 0;
+}
+
 /* THE AIR SCOUT'S TRIP ended: squad s freed and each member's job cleared, so the census finds the air scout in no
    squad and squads() leaves it there (THE AIR SCOUT IS SCOUT ONLY) */
 static void ascout_release(MDEC* d, int s)
@@ -528,9 +537,10 @@ static void back_to_form(MDEC* d, int s) { become(d, s, IMPAI_SQ_FORM, d->rx, d-
 /* THE NORMALISATION, at each decision's start, after the census and before the squads' figures: a squad whose
    task or layer is past its enum -- a recorded byte -- is freed; duplicates of a per-layer task (FORM, DEFEND,
    RETREAT) merge into the lowest-indexed; ATTACK squads past the IMPAI_ATTACKS_MAX-th, RAID past the
-   IMPAI_RAIDS_MAX-th and SCOUT past the first go back to FORM (become). It makes become's bound a fact of every
-   decision, whatever a recorded or restored table holds and whatever a later edit adds, rather than an
-   induction over every transition. COST: 16 x 16 compares. */
+   IMPAI_RAIDS_MAX-th and SCOUT past the first go back to FORM (become). A SCOUT squad no unit of the census is in
+   (its scout died, the air scout's above all) is not counted, so it sends no living scout back. It makes become's
+   bound a fact of every decision, whatever a recorded or restored table holds and whatever a later edit adds,
+   rather than an induction over every transition. COST: 16 x 16 compares, and the army once a SCOUT squad. */
 static void normalise(MDEC* d)
 {
     int k, j, attacks = 0, raids = 0, scouts = 0, ascouts = 0;
@@ -549,6 +559,8 @@ static void normalise(MDEC* d)
         const unsigned t = d->st->sq[k].task;
         if (t == IMPAI_SQ_SCOUT && ascout_member(d, k) >= 0) {
             if (++ascouts > 1) ascout_release(d, k);
+        } else if (t == IMPAI_SQ_SCOUT && !squad_manned(d, k)) {
+            continue;
         } else if ((t == IMPAI_SQ_ATTACK && ++attacks > IMPAI_ATTACKS_MAX) ||
                    (t == IMPAI_SQ_RAID && ++raids > IMPAI_RAIDS_MAX) || (t == IMPAI_SQ_SCOUT && ++scouts > 1)) {
             back_to_form(d, k);
@@ -2987,17 +2999,29 @@ static void send_scout(MDEC* d, int s, int pick, int32_t x, int32_t z)
 }
 
 /* THE EYES' DISC: the engine's sight (the stamp 0x482270) lights the offsets of los.tdf's TABLE R around the unit's
-   block, R = SightDistance / 32 held to numtables - 1 = 8 blocks (0x48230D..0x482366; engine/map.md, *The sight
-   table and the stamp*): a Chebyshev radius of R that the table does not fill (TABLE8 lights 212 of the square's 288
-   offsets). The disc dx^2 + dz^2 <= R^2 lies inside every TABLE1..TABLE9 of the table we measured (MEASURED
-   2026-11-17 over Escalation's los.tdf, whose TABLE8 has stock's 212 offsets), so the test claims sight only where
-   the table lights, terrain aside: an area it calls seen at 256 px on an axis is seen, one at 300 px is not. */
+   block, R = SightDistance / 32 held to numtables - 1 (0x48232E..0x48233A), which is 8 blocks under stock's numtables
+   9 (engine/map.md, *The sight table and the stamp*): a Chebyshev radius of R that the table does not fill (TABLE8
+   lights 212 of the square's 288 offsets). The disc dx^2 + dz^2 <= R^2 lies inside every TABLE1..TABLE12 of stock's
+   los.tdf and of Escalation's, each offset taken in the loader's four images (MEASURED 2026-11-17 over both files).
+   A content whose numtables is above 9 lets sight past 8 blocks; the test holds R to 8 all the same, so there it
+   claims less than the engine lights, never more.
+   THE SHEAR: the emitter 0x4825B0 centres the stamp on the row (z - h/2) >> 5, h = def+0x170 + the unit's altitude
+   clamped to 0..255 (0x4825EA..0x48261C), and a unit is seen over the block of (x >> 5, (z - y/2) >> 5), y its
+   altitude, a byte for anything standing on the ground (tasim_sight.c, loop 5). Each half-height is 0..127 px, so
+   each row moves 0..4 blocks north of z >> 5, and the stamp's centre stands within 4 rows of the area's row either
+   way. BOUND: the test is the disc of R - 4 around the unsheared blocks; any shift s of at most 4 rows keeps such an
+   offset within R of the sheared centre (|v + s| <= |v| + 4), so the test claims sight only where the engine lights,
+   whatever the heights, terrain aside. RESIDUAL: it claims up to 4 blocks less than the engine lights -- the exact
+   row needs def+0x170, which the brain does not read: an area seen at 128 px on an axis is seen, one at 160 px is
+   not. */
 #define SIGHT_BLOCKS_MAX 8
+#define SHEAR_BLOCKS     4      /* 127 px of a half-height, rounded up to blocks */
 static int in_eyes(unsigned sight, int32_t ux, int32_t uz, int32_t x, int32_t z)
 {
-    const int32_t r = (int32_t)(sight >> 5) < SIGHT_BLOCKS_MAX ? (int32_t)(sight >> 5) : SIGHT_BLOCKS_MAX;
+    const int32_t r = ((int32_t)(sight >> 5) < SIGHT_BLOCKS_MAX ? (int32_t)(sight >> 5) : SIGHT_BLOCKS_MAX) -
+                      SHEAR_BLOCKS;
     const int32_t dx = (x >> 5) - (ux >> 5), dz = (z >> 5) - (uz >> 5);
-    return (int64_t)dx * dx + (int64_t)dz * dz <= (int64_t)r * r;
+    return r >= 0 && (int64_t)dx * dx + (int64_t)dz * dz <= (int64_t)r * r;
 }
 
 /* 1 when army unit u can bring its sight over (x, z) (THE BLIND SPOT): it reaches the point's block (unit_reaches),
@@ -3032,6 +3056,12 @@ static int area_point(const MDEC* d, int a, int32_t* x, int32_t* z)
 /* THE AIR SCOUT'S EYES: each area (THE AREAS) an air scout of the seat has in its eyes (in_eyes, from where it flies)
    stamps IMPAI_MIL.eyed with this decision's sweep_stamp, the estimate's with its sweep cell. BOUND: the army times
    IMPAI_AREAS */
+static void eye_stamp(MDEC* d, int a, int32_t x, int32_t z)
+{
+    d->st->eyed[a] = sweep_stamp(d);
+    if (a == STARTS) d->st->eyed_cell = (uint8_t)sweep_cell(d, x, z);
+}
+
 static void air_eyes(MDEC* d)
 {
     int k, a;
@@ -3040,10 +3070,20 @@ static void air_eyes(MDEC* d)
         if (!scout_only(u)) continue;
         for (a = 0; a < IMPAI_AREAS; a++) {
             int32_t x, z;
-            if (!area_point(d, a, &x, &z) || !in_eyes(d->in->ti[u->type].sight, u->x, u->z, x, z)) continue;
-            d->st->eyed[a] = sweep_stamp(d);
-            if (a == STARTS) d->st->eyed_cell = (uint8_t)sweep_cell(d, x, z);
+            if (area_point(d, a, &x, &z) && in_eyes(d->in->ti[u->type].sight, u->x, u->z, x, z)) eye_stamp(d, a, x, z);
         }
+    }
+}
+
+/* THE LEG TRIED: a leg that outlived its task stamps the areas at its block as THE AIR SCOUT'S EYES would, so they
+   need no look until IMPAI_EYED_REFRESH. BOUND: an area the scout cannot get over (anti-air, a leg it never ends)
+   costs one leg a refresh, not a loop out and home for the rest of the game */
+static void leg_tried(MDEC* d, int tx, int tz)
+{
+    int a;
+    for (a = 0; a < IMPAI_AREAS; a++) {
+        int32_t x, z;
+        if (area_point(d, a, &x, &z) && x >> 5 == tx && z >> 5 == tz) eye_stamp(d, a, x, z);
     }
 }
 
@@ -3065,7 +3105,7 @@ static int eyed_fresh(const MDEC* d, int a, int32_t x, int32_t z)
    a start that stays empty (an unseated level's, or one an ally watches) is looked at once a refresh, not at every
    decision. A seat with no land or sea army unit is blind to every area. WHY: on Gods of War the enemy commander
    and its west tower stand ~370 and ~415 px from the nearest water the seat's ships sail, past the 256 px any
-   unit's eyes reach on an axis (in_eyes), so nothing the seat bought saw them to the cap (MEASURED 2026-11-17,
+   unit's eyes reach on an axis, so nothing the seat bought saw them to the cap (MEASURED 2026-11-17,
    exploit-naval-turtle at bca430ab). The seat's builders and commander are not weighed. BOUND: IMPAI_AREAS areas,
    each against BLIND_KEYS army units of distinct (type, component), one sees_area each; a unit past the keys is
    not weighed, which can only call an area blind. */
@@ -3127,7 +3167,8 @@ static int task_over(const MDEC* d, int s);
    in its eyes; it goes on to the area in need nearest it, and with none left it turns home, to the rally point
    (flags ASCOUT_HOME), where it is let go of (ascout_release) and waits in no squad until an area needs it again;
    one on its way home turns back out to an area in need. A leg that outlives its task (THE TASK'S LIFETIME, a leg's
-   lifetime counted from the leg's start) turns home, and the trip home outlived ends it there. Only a unit of
+   lifetime counted from the leg's start) turns home and stamps its area tried (leg_tried), so the way home turns
+   out only to another area in need; the trip home outlived ends it there. Only a unit of
    class IMPAI_K_ASCOUT ever makes this trip: a seat without one sends no aircraft to a blind area, so an air army
    is never detached a fighter at a time. BOUND: blind_spot once, the army a few times, one squad written. */
 #define ASCOUT_HOME 0xFF        /* IMPAI_SQUAD.flags of an air scout's trip on its way home                 */
@@ -3169,6 +3210,7 @@ static void air_scout(MDEC* d)
         return;
     }
     if (q->flags != ASCOUT_HOME) {
+        if (over) leg_tried(d, q->tx, q->tz);
         q->flags = ASCOUT_HOME;
         q->tx = (int16_t)(d->rx >> 5);
         q->tz = (int16_t)(d->rz >> 5);
