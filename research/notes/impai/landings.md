@@ -44,15 +44,12 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
     - **The suite** plays ImpAI with `tacompat.py wine --impai [SECONDS] --mp-impai`.
         - It holds every ImpAI seat, in the stage and on each peer of the network game, to the claim: by its last pulse the seat gave orders and completed a unit since its first pulse ([the suite](../compat/suite.md)).
         - That covers every player's setup where Impure runs. `gammata-ota` does not load Impure today (its known gap), so it plays neither. `tazero-wildhunt` plays no network game, only the stage.
-        - **Open: the joiner's ImpAI seat builds nothing** (MEASURED 2026-11-16, Wine, DLL `dll-6357756c`, `--battle 0 --impai 130 --mp-impai`, 58 setups).
-            - Every stage met the claim, but slowly: 1 or 2 units past the commander in 130 s.
-            - Every host's seat met it: 2 to 10 units.
-            - In 40 of 46 network games, the joiner's seat completed nothing past its commander. Its economy gave no order (`eroots=0`, `metal_out=0` at its 591 economy line), and its military gave from 0 to 119.
-            - The six that built are Twilight's content, at 2 or 3 units each.
-            - Plain `retail` reproduces it, so neither TADR nor the loader is involved.
+        - **The joiner's ImpAI seat built nothing** (MEASURED 2026-11-16, Wine, `dll-6357756c`, `--battle 0 --impai 130 --mp-impai`, 58 setups: 40 of 46 joiners completed nothing past the commander). Two causes, neither in the network code:
+            - **A start with no patch in sight**: the joiner is record 3 at Two Continents' start 3, whose nearest patch lies past the commander's sight in the battle room's unmapped game, and the opening waited on extractors it could not place to `open_t`. A skirmish on Mapping 1 reproduces it. Fixed by THE BLIND START (294e0bb6, [the brain](brain.html)): first plant at GameTime 81 in that skirmish, 51 on the joining peer; `netai_check` passes.
+            - **The scenario's fight on the judged seat**: `compat-mp-join.json` spawned the joiner's human wave 400 px from that commander, inside its safe distance, so it fled from the first contact. The waves move away from every AI start, with a check that refuses a scenario placing armed units near one (the tooling track); the compat rows play again on the corrected scenarios.
     - **The replay landing gate**, from the integration branch against `main`, selects every test group, because the recorder's own headers changed. It also plays the two-player game on both builds, in the ImpAI form.
         - It needs the coverage builds rebuilt in the tree it runs from: `make COVER=1` and `make LIMITS=stock COVER=1`. It refuses a DLL older than its sources.
-6. **The default flips** (b8) and A4 closes. Publishing stays the owner's (`/git_publish`).
+6. **The default flips** (b8, 1ab64657 on `impai-brain`): ImpAI is the skirmish default (`seatai` all seats, read only in a skirmish, GameingState mode 2, so campaign missions keep OTA AI) and the network default (`netai=impai`); OTA AI is one click on the seat button. Measured on GDI: a fresh store seats ImpAI, a loaded skirmish save reads mode 2, a campaign mission seats none, and every harness launch writes both keys. A4 closes with the release. Publishing stays the owner's (`/git_publish`).
 7. **A3**, below. After the release, in this order (owner, 2026-11-16: keep improving the design):
     - **The exploiter suite's findings**: the naval turtle (Gods of War, 0 attacks), the air rush's anti-air, the mid-game puzzles (8 of 9 failing).
     - **The water maps' slower finish**: the release build's margin against 57d39d71 (Red Triangle, Trout Farm, Plains & Passes slowest); the naval second plant is not the cause alone, since b5 fails 2 of 5 without it.
