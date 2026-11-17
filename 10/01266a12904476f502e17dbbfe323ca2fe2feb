@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=cc27da06..1001266a findings=5 (M2 L3) acted=0 open (next brain batch); report .data/impai/runs/reviews/fix-review-1001266a.md date=2026-11-17
