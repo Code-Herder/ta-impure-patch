@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=cc9163fe..58e72362 (the merge of main: its conflict resolutions and the unit view's /cob client) findings=3 acted=3 rejected=0 fixes=069a34c1 date=2026-11-17
