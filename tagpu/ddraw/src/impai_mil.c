@@ -38,6 +38,7 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
 #define STARTS       16
 _Static_assert(STARTS + 1 == IMPAI_AREAS, "THE AREAS: every start and the estimate have an eyed[] stamp");
 _Static_assert(IMPAI_SWEEP <= 256, "IMPAI_MIL.eyed_cell holds a sweep cell");
+_Static_assert(IMPAI_K_SSCOUT - IMPAI_K_SRAIDER + 1 == 5, "THE WATER HELD sums the five sea classes");
 #define SUB_BLOCKS   32         /* a move's point is moved at most this many 32-px blocks (1024 px)          */
 #define SUB_CACHE    32         /* the substitutes one decision computes                                     */
 #define HOME_BLOCKS  192        /* THE HOME POINT lies at most this many 32-px blocks from the rally (6 144 px)  */
@@ -843,6 +844,23 @@ static void air_held(MDEC* d, IMPAI_PICTURE_IN* pin)
     }
 }
 
+/* THE WATER HELD: the enemy sea army value the picture counts now (the sea classes' kval), held as the most seen at
+   once for IMPAI_SEA_HOLD ticks after the seat last saw that much or more, as THE AIR HELD holds each air class --
+   the picture counts a mobile enemy only while it is seen, so a navy out of sight would read as none. Only the
+   economy reads it (impai_econ.c, THE AIR PLANT FOR THE BLIND); the picture's shares are not changed. A recorded
+   value that is not a finite non-negative number, or a tick past now, is let go */
+static void sea_held(MDEC* d, const IMPAI_PICTURE_IN* pin)
+{
+    float seen = 0.0f;
+    unsigned k;
+    for (k = IMPAI_K_SRAIDER; k <= IMPAI_K_SSCOUT; k++) seen += pin->kval[k];
+    if (!(d->st->sea_held >= 0.0f && d->st->sea_held < 1e30f) || seen >= d->st->sea_held ||
+        !(d->st->sea_held_t <= d->now && d->now - d->st->sea_held_t <= IMPAI_SEA_HOLD)) {
+        d->st->sea_held = seen;
+        d->st->sea_held_t = d->now;
+    }
+}
+
 /* THE TARGETS KNOWN: each target class (impai.h, THE TARGET CLASSES) of an enemy the decision counts stamps
    IMPAI_MIL.tg_t with now, which the economy's army buy reads (impai_econ.c, THE TARGETS BOUGHT FOR). An enemy is
    UNDER when the decision holds it under the sea (MENEMY.under: by sonar alone, or a type the fight content holds
@@ -954,6 +972,7 @@ static void picture(MDEC* d)
         }
     }
     air_held(d, &pin);
+    sea_held(d, &pin);
     targets_known(d);
     pin.own_extractors = (uint32_t)d->own_mex;
     pin.gametime = d->now;

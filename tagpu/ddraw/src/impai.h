@@ -776,6 +776,8 @@ _Static_assert(sizeof(IMPAI_EXEC) == 2900, "IMPAI_EXEC is 2900 bytes");
 enum { EST_START = 0, EST_STRUCT = 1, EST_KEPT = 2 };
 
 #define IMPAI_AREAS      17             /* the enemy areas THE BLIND SPOT weighs: 16 starts and the estimate     */
+#define IMPAI_SEA_HOLD   5400           /* ticks THE WATER HELD keeps an enemy sea value seen: three minutes
+                                           [hand-written: the bar's to move]                                     */
 #define IMPAI_EYED_REFRESH 2700         /* ticks an area the air scout had in its eyes needs no new look: ninety
                                            seconds (the owner's "about 1-2 game minutes") [hand-written: the bar's
                                            to move]                                                          */
@@ -871,7 +873,7 @@ typedef struct IMPAI_MIL {
     /* THE BLIND SPOT (impai_mil.c, blind_spot): the GameTime of the last military decision that found an enemy area
        out of sight of every land and sea army unit of the seat and not in the air scout's eyes within
        IMPAI_EYED_REFRESH, 0 never; recorded data, read through impai_blind. The economy then buys the seat's one air
-       scout (impai_econ.c, THE SCOUT FIRST) */
+       scout (impai_econ.c, THE SCOUT FIRST) and may raise its air plant early (THE AIR PLANT FOR THE BLIND) */
     uint32_t      blind_t;
     /* THE AIR SCOUT'S EYES (impai_mil.c, air_eyes): the GameTime / 64 at which an air scout of the seat last had each
        enemy area in its eyes -- start k at eyed[k], the enemy base's estimate at eyed[IMPAI_AREAS - 1], whose
@@ -879,6 +881,11 @@ typedef struct IMPAI_MIL {
        now reads as never */
     uint16_t      eyed[IMPAI_AREAS];
     uint8_t       eyed_cell, eyed_pad;
+    /* THE WATER HELD (impai_mil.c, sea_held): the most enemy sea army value seen at once, sea_held, held for
+       IMPAI_SEA_HOLD ticks after the seat last saw that much or more, at sea_held_t; recorded data, a value not
+       finite or below 0 or a tick past now let go where it is read (impai_econ.c, THE AIR PLANT FOR THE BLIND) */
+    float         sea_held;
+    uint32_t      sea_held_t;
 } IMPAI_MIL;
 /* THE ISLAND's byte is the one unreached[] was aligned past, so the record's size and every later field's offset
    are the ones recordings made before it hold */

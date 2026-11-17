@@ -587,6 +587,19 @@ The owner's answers to the spec's questions:
   it." **What it costs**: the default table buys no aircraft, so the air plant makes constructors until an air
   share is added for seats whose enemy land cannot reach (in scope, not done); the island's area is read near the
   base only.
+- **The air plant for the blind** (owner's decision, 2026-11-17): on an island the air plant may come ahead of the
+  second sea plant -- never ahead of the first, never the first plant -- while (a) an enemy area needs the air
+  scout (*One air scout a seat*), (b) the seat safely holds the water and (c) the economy pays for it without
+  stalling the yard. The owner: "When blind AND you safely control the water. Not much upside to seeing the island
+  if you're losing the water war. We need a heuristic that is not too safe but also a bit cautious, so that an air
+  plant won't hobble your naval forces in the early game." **The heuristic** (the brain writer's figures, the bar's
+  to move): (b) the seat's sea army value -- built, building and queued -- is above 0 and at least 1.5 times the
+  most enemy sea army value seen in the last three minutes (held, since the picture counts a ship only while it is
+  seen), and no prediction was lost -- a squad's retreat, the home losing -- in the last minute; (c) no metal or
+  energy stall, not in the hold, and a steady metal income of `factory_per_m` (8 a pass) or more, the plan's own
+  pace for a further plant, so the air plant never takes a slot the surplus alone would have paid. **What it does
+  not reach**: a seat that never builds a sea army, or one whose income stays under 8, keeps the old order (air
+  past two sea plants).
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence

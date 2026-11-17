@@ -619,7 +619,7 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
      sea;
    - NEVER AN AIR PLANT FIRST (THE CANDIDATES' first plant), and aircraft eventually: on the island the plants past
      the first are the sea plant's while the seat holds fewer than ISLE_SEA_BEFORE_AIR sea plants or already has an
-     air plant, and an air plant then.
+     air plant, and an air plant then -- or sooner, past one sea plant, under THE AIR PLANT FOR THE BLIND.
    Only the plants it can make count: a plant on a builder's menu of the seat's, its constructor one that builds
    an extractor; each plant type read once (looked[]), whatever builders offer it.
    WHY: "Air first is often a bad idea and extremely hard to pull off even for a human. Whether you
@@ -638,6 +638,34 @@ static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, in
 #define ISLE_PATCHES   6        /* [hand-written: the bar's to move] more than the commander's opening takes   */
 #define ISLE_BLOCKS    1024     /* [hand-written: the bar's to move] a 1 024 px square, a ninth of the window */
 #define ISLE_SEA_BEFORE_AIR 2   /* [hand-written: the bar's to move]                                           */
+
+/* THE AIR PLANT FOR THE BLIND (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *The air plant
+   for the blind*): on the island, with one sea plant or more and no air plant, the air plant comes ahead of the next
+   sea plant while all three hold:
+   - an enemy area needs the air scout (impai_blind: THE BLIND SPOT, impai_mil.c);
+   - THE WATER HELD: the seat's sea army value -- its sea classes' kspent, built, building and queued -- is above 0
+     and at least WATER_HOLD_K times the most enemy sea army value seen lately (IMPAI_MIL.sea_held), and the seat
+     lost no prediction (IMPAI_MIL.lost_t: a squad's retreat or the home losing) within WATER_CALM_T ticks;
+   - the economy pays for it: no metal or energy stall, not in THE HOLD, and a steady metal income (m_steady) of
+     factory_per_m a pass or more, the plan's own pace for one more plant.
+   WHY: "When blind AND you safely control the water. Not much upside to seeing the island if you're losing the
+   water war ... a heuristic that is not too safe but also a bit cautious, so that an air plant won't hobble your
+   naval forces in the early game" (the owner, 2026-11-17). A recorded sea_held that is not a finite non-negative
+   number, or a stamp past now, reads as the water not held. The figures are the writer's. */
+#define WATER_HOLD_K  1.5f      /* [hand-written: the bar's to move] the sea army over the enemy's seen         */
+#define WATER_CALM_T  1800u     /* [hand-written: the bar's to move] a minute with no lost prediction           */
+static int air_for_blind(const IMPAI_DEC* d)
+{
+    const IMPAI_MIL* m = d->in->mil;
+    float own = 0.0f;
+    unsigned k;
+    if (!m || d->sea_plants < 1 || d->air_plants || !impai_blind(m, d->now)) return 0;
+    if (!(m->sea_held >= 0.0f && m->sea_held < 1e30f) || m->sea_held_t > d->now) return 0;
+    if (m->lost_t && m->lost_t <= d->now && d->now - m->lost_t <= WATER_CALM_T) return 0;
+    for (k = IMPAI_K_SRAIDER; k <= IMPAI_K_SSCOUT; k++) own += d->kspent[k];
+    if (!(own > 0.0f) || own < WATER_HOLD_K * m->sea_held) return 0;
+    return !d->m_stall && !d->e_stall && !d->hold && d->m_steady >= d->in->plan->factory_per_m;
+}
 #define ISLE_CONS      16
 
 /* the open patches constructor type `type` reaches (THE METAL'S REACH, counted): on its class's component at the
@@ -835,7 +863,8 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
         for (k = 0; k < nc && isle_only; k++)
             air |= c[k].isle && c[k].air && (up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo));
         if (!up)
-            d->plant_sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air);
+            d->plant_sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air) &&
+                           !(air && air_for_blind(d));
     }
     for (k = 0; k < nc; k++) {
         if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air))

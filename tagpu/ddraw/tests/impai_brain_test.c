@@ -9936,6 +9936,30 @@ static void check_air_scout_trip(void)
     s_ti[M_SCOUT].flags &= (uint8_t)~IMPAI_TF_VTOL;
 }
 
+/* THE WATER HELD (impai_mil.c, sea_held) on the strait world: an enemy destroyer seen in the channel holds its value;
+   out of sight at the next decision the value is held; past IMPAI_SEA_HOLD it is let go. */
+static void check_water_held(void)
+{
+    const uint32_t look = IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    IMPAI_MIL_OUT o;
+    float seen, held;
+    mil_world();
+    mil_water(W_STRAIT);
+    own(7, M_TANK, 96, 96);
+    enemy(1320, M_DEST, 250, 60, IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the water held's decision runs");
+    seen = s_mil.sea_held;
+    s_w.unit[1320].live = 0;
+    memset(&s_rows[1320], 0, sizeof s_rows[1320]);
+    s_w.gametime += (int)look;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the water held's second decision runs");
+    held = s_mil.sea_held;
+    s_w.gametime += IMPAI_SEA_HOLD + 1;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the water held's third decision runs");
+    printf("the water held: seen %.1f, held %.1f, let go %.1f\n", seen, held, s_mil.sea_held);
+    CHECK(seen > 0.0f && held == seen && s_mil.sea_held == 0.0f, "the destroyer's value seen, held, let go");
+}
+
 static void check_scout_layer(void)
 {
     IMPAI_MIL_OUT o;
@@ -10327,7 +10351,18 @@ static void check_island_hold(void)
        once, so the commander's shipyard is, and the sea's metal is more, the shipyard;
    (o) (b) with the content's land army on class 0 and the lab offering the shipyard's constructor besides its
        K-bot: that constructor is measured on each side, the island's patches for the lab and the sea's for the
-       shipyard, so the sea's metal is more, the shipyard. */
+       shipyard, so the sea's metal is more, the shipyard.
+   THE AIR PLANT FOR THE BLIND, on (f)'s world (one shipyard, the lab an air plant):
+   (p) an enemy area in need of the air scout (IMPAI_MIL.blind_t now), a PT boat of the seat's and no enemy sea
+       army seen, no prediction lost, the income 9 against factory_per_m 8: the air plant, the lab, before the
+       second shipyard;
+   (q) (p) with an enemy sea army of twice the PT boat's value seen lately (IMPAI_MIL.sea_held): the water not held,
+       the second shipyard;
+   (r) (p) with a prediction lost 600 ticks ago: the second shipyard;
+   (s) (p) without the PT boat: no sea army, the second shipyard;
+   (t) (p) on an income of 7: the economy does not pay the air plant early, the second shipyard;
+   (u) (p) with no area in need of the air scout: the second shipyard;
+   (v) (p) with a vehicle plant in place of the shipyard: never ahead of the first sea plant, the shipyard. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -10360,7 +10395,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[15] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[22] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -10370,15 +10405,20 @@ static void check_island_order(void)
                                          "(l) a small island, amphibious constructors",
                                          "(m) eight land patches, eight at sea",
                                          "(n) the sea's metal more, the lab offered 30 times first",
-                                         "(o) the sea's metal more, the lab offering the ship constructor" };
+                                         "(o) the sea's metal more, the lab offering the ship constructor",
+                                         "(p) blind, the water held", "(q) blind, an enemy navy seen",
+                                         "(r) blind, a prediction lost", "(s) blind, no sea army",
+                                         "(t) blind, the income short", "(u) not blind, the water held",
+                                         "(v) blind, a land plant and no shipyard" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 15; c++) {
+    for (c = 0; c < 22; c++) {
         int from, vp, lab;
-        coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : 9.0f);
+        const int blind = c >= 15;
+        coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
         s_w.unit[2].live = 0;
         s_plan = c == 7 || c == 9 ? &plan : &IMPAI_PLAN_ROW;
         if (c == 11) {
@@ -10407,21 +10447,30 @@ static void check_island_order(void)
             s_spots = ISLE_SMALL_F;
             s_nspots = (unsigned)(sizeof ISLE_SMALL_F / sizeof ISLE_SMALL_F[0]);
         } else
-            isle_patches(c == 0 || c == 1 || c == 2 || c == 8 || c == 9 || c >= 12 ? ISLE_LAND_N
+            isle_patches(c == 0 || c == 1 || c == 2 || c == 8 || c == 9 || (c >= 12 && !blind) ? ISLE_LAND_N
                          : c == 7                                                          ? 0
                                                                                            : 3,
-                         c == 1 || c >= 13 ? ISLE_WET_N : c == 12 ? ISLE_LAND_N : 0);
+                         c == 1 || (c >= 13 && !blind) ? ISLE_WET_N : c == 12 ? ISLE_LAND_N : 0);
         s_ti[E_UWMEX].klass = IMPAI_K_BOMBER;
         if (c == 2) s_smil.tg_t[IMPAI_TG_FLOAT] = (uint32_t)s_w.gametime;
         if (c == 4) menu_set(&s_w, E_VP, AIRVP, 2);
-        if (c >= 5 && c <= 9) {
+        if ((c >= 5 && c <= 9) || blind) {
             menu_set(&s_w, E_LAB, AIRLAB, 2);
             s_smil.island = 1;
-            unit_add(&s_w, 3, E_SY, 66, 100, 1);
+            unit_add(&s_w, 3, c == 21 ? E_VP : E_SY, c == 21 ? 30 : 66, c == 21 ? 20 : 100, 1);
             if (c == 6 || c == 7) unit_add(&s_w, 4, E_SY, 100, 100, 1);
             if (c == 7) unit_add(&s_w, 5, E_LAB, 30, 20, 1);
             if (c == 9) unit_add(&s_w, 5, E_VP, 30, 20, 1);
             s_w.econ[0].energy_in = 1000;
+        }
+        if (blind) {
+            s_smil.blind_t = c == 20 ? 0u : (uint32_t)s_w.gametime;
+            if (c != 18) unit_add(&s_w, 8, E_PT, 130, 100, 1);
+            if (c == 16) {
+                s_smil.sea_held = 2.0f * s_ti[E_PT].value;
+                s_smil.sea_held_t = (uint32_t)s_w.gametime;
+            }
+            if (c == 17) s_smil.lost_t = (uint32_t)s_w.gametime - 600u;
         }
         from = s_w.nlog;
         sea_decide(NAME[c], &sy, &land);
@@ -10430,10 +10479,10 @@ static void check_island_order(void)
         lab = builds_of(from, E_LAB, NULL, NULL);
         printf("the island's plant order, %s: shipyard %d, vehicle plant %d, lab %d\n", NAME[c], sy, vp, lab);
         if (c == 0) CHECK(!sy && land == 1, "%s: a land plant first", NAME[c]);
-        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || c >= 10)
+        if (c == 1 || c == 2 || c == 3 || c == 5 || c == 7 || c == 9 || (c >= 10 && c != 15))
             CHECK(sy == 1 && !land, "%s: the shipyard", NAME[c]);
         if (c == 4) CHECK(!sy && lab == 1 && !vp, "%s: never air first, the lab", NAME[c]);
-        if (c == 6) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
+        if (c == 6 || c == 15) CHECK(!sy && lab == 1, "%s: the air plant, the lab", NAME[c]);
         if (c == 8) CHECK(!sy && vp == 1 && !lab, "%s: a land plant, the vehicle plant", NAME[c]);
     }
     s_plan = &IMPAI_PLAN_ROW;
@@ -15664,6 +15713,7 @@ static void check_military(void)
     check_island();
     check_scout_layer();
     check_air_scout_trip();
+    check_water_held();
     check_scout_healthy();
     check_dry_army_reach();
     check_dry_given_up();
