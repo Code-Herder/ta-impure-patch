@@ -603,6 +603,11 @@ int           tagpu_wikiside_get(const WIKISIDE** out);
    tagpu_wikiside_get's. Any thread; the block is never written or freed after. */
 int           tagpu_wikitech_get(const WIKITECH** out);
 
+/* The tech tree refused for good when no loader thread will ever run (the game thread could not
+   make its input): stored only over nothing published, by an interlocked compare, so a load that
+   did run keeps its answer. Any thread. */
+void          tagpu_wikitech_refuse(void);
+
 /* The published load, or NULL while it runs and for good when it failed before publishing (the
    log says why). Any thread; immutable once returned and never freed. */
 const WIKI3D* tagpu_wiki3d_get(void);

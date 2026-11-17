@@ -387,7 +387,7 @@ static void tech_sheet(const WIKITECHTREE* T)
     const WIKITECH* t = T->t;
     int* idx;
     int n = 0, i, j, x = 0, y = 0, shelf = 0;
-    if (!s_tsheet && !(s_tsheet = (unsigned char*)malloc((size_t)HUD_TECH_W * HUD_TECH_H * 4))) goto nomem;
+    if (!s_tsheet && !(s_tsheet = (unsigned char*)calloc((size_t)HUD_TECH_W * HUD_TECH_H, 4))) goto nomem;
     if (s_tnuv < t->npic) {
         float* v = (float*)realloc(s_tuv, (size_t)t->npic * 4 * sizeof *v);
         if (!v) goto nomem;
@@ -452,6 +452,8 @@ static void tech_sheet(const WIKITECHTREE* T)
     if (++s_tgen == 0) s_tgen = 1;
     return;
 nomem:
+    /* no picture drawn rather than another side's: a zero rect is one HOP_PIC skips */
+    if (s_tuv) memset(s_tuv, 0, (size_t)s_tnuv * 4 * sizeof *s_tuv);
     if (!s_tsaidMem) {
         s_tsaidMem = 1;
         tagpu_logf("wiki: no memory for the tech tree's picture sheet - its pictures are not drawn (said once)");
@@ -492,6 +494,7 @@ static void tech_page(const TAGPU_PK_WIKI* w, const WIKIART* art)
     char side[WIKI_SIDE_NAME * 2 + 1];
     int i, nu = 0, n;
     s_tcur = NULL;
+    s_page.tech_title[0] = 0;
     s_tentry = w->open && art->data && w->entry >= 0 && w->entry < art->data->nentry && art->data->entry[w->entry].techtree;
     if (!s_tentry) return;
     s_page.tech_all = w->tech_all != 0;

@@ -101,7 +101,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | This page | the decisions, the data format and the simulation's contract |
 
 Nine entries. First, at the top level and above every category, **Tech tree**: the running mod's
-build tree, built in the mockup; the game lays it out as a text entry until the tree is ported
+build tree, browsed on the stage; the unit's panel and its 3D view are the mockup's alone so far
 ([below](#the-tech-tree-entry)). Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
 **Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
 Sweep**; in Camera, **Mega map and strategic icons**, a text entry
@@ -1928,7 +1928,7 @@ draws it.
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
   (About), the question, the stage HUD cut to the canvas, the page. Each hit carries
   its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
-  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 072 bytes), with the stage HUD's playhead run
+  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 108 bytes), with the stage HUD's playhead run
   as drawn, the end it stood for, on a live strip the span it stood for (`hud_first`, `hud_G`:
   first to max(G, first), the record's; 0, 0 on any other frame), on a takeover's watching frame
   with the lanes open **the lanes it drew** (`nlane`, `lane_id[3]`: the fork each lane showed, in

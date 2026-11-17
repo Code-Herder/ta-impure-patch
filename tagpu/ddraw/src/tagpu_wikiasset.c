@@ -5359,8 +5359,10 @@ static int32_t sat32(long long v) { return v > INT32_MAX ? INT32_MAX : v < INT32
 
 /* gfx.py `tech_weapons`: every top-level section of every `weapons\*.tdf`, the first listed winning
    a name; `damage` its first [DAMAGE] sub-section's `default`. The folder is the literal
-   `weapons` [INFERRED: the executable's string for it is not mapped, so a mod that renames it is
-   not followed]. A name of WIKITECH_NAME bytes or more is one no FBI's weapon id can match. */
+   `weapons`, as the 3D load's weapon_each reads it: the executable's own name, `Weapons` at
+   0x50392C with its pattern `Weapons\*.tdf` at 0x503934 (writable .data, pushed by the weapon load
+   at 0x42A8EC and 0x42E350, engine/process.md), is not read, so a mod that renames it is not
+   followed. A name of WIKITECH_NAME bytes or more is one no FBI's weapon id can match. */
 static int tech_weapon_each(void* ctx, const TAGPU_VFILE* f)
 {
     TWEAPONS* W = (TWEAPONS*)ctx;
@@ -6074,9 +6076,9 @@ static DWORD WINAPI loader(LPVOID p)
     if (!(base = (unsigned char*)VirtualAlloc(NULL, ARENA_CAP, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE))) {
         LOG("wiki3d: NOT loaded - %lu MB of address space could not be reserved (%lu)", (unsigned long)(ARENA_CAP >> 20),
             (unsigned long)GetLastError());
+        publish_3d(NULL);
         tech_run(in, vfs);
         tagpu_vfs_close(vfs);
-        publish_3d(NULL);
         free(in);
         return 0;
     }
@@ -6168,8 +6170,8 @@ int tagpu_wiki3d_answer(const WIKI3D** out)
     return WIKISIDE_READY;
 }
 
-/* ORDERING: an interlocked read, a full barrier, pairs with side_publish's store; the block is
-   never written after it (tagpu_wikiasset.h, THE SIDEBAR'S PUBLICATION) */
+/* ORDERING: an interlocked read, a full barrier, pairs with tech_run's store (or the refusal's);
+   the block is never written after it (tagpu_wikiasset.h, THE TECH TREE'S PUBLICATION) */
 int tagpu_wikitech_get(const WIKITECH** out)
 {
     const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_tech, NULL, NULL);
@@ -6180,6 +6182,13 @@ int tagpu_wikitech_get(const WIKITECH** out)
     return WIKISIDE_READY;
 }
 
+void tagpu_wikitech_refuse(void)
+{
+    InterlockedCompareExchangePointer((PVOID*)&s_tech, (PVOID)&s_tech_refused, NULL);
+}
+
+/* ORDERING: an interlocked read, a full barrier, pairs with side_publish's store; the block is
+   never written after it (tagpu_wikiasset.h, THE SIDEBAR'S PUBLICATION) */
 int tagpu_wikiside_get(const WIKISIDE** out)
 {
     const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_side, NULL, NULL);

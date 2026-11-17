@@ -105,7 +105,7 @@ const unsigned char* tagpu_wikistate_side(unsigned* gen);
 const unsigned char* tagpu_wikistate_bar(unsigned* gen);
 
 /* The tech tree's picture sheet (HUD_TEX_TECH): HUD_TECH_W x HUD_TECH_H RGBA8 of which rows
-   [0, *rows) hold pictures, the rest transparent, with its generation, 0 while none was made, and
+   [0, *rows) hold pictures, the rest transparent (zeroed when made, and each new side clears the rows the last one used), with its generation, 0 while none was made, and
    bumped at every new sheet; NULL before the first. Render thread only, as the sidebar column's. */
 const unsigned char* tagpu_wikistate_tech(unsigned* gen, int* rows);
 

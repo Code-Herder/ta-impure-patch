@@ -543,12 +543,29 @@ static int tech_drawn(const WIKITECHTREE* T)
            s_hit.tech_cv[2] > 0 && s_hit.tech_cv[3] > 0;
 }
 
-/* the camera a step starts from: the asked one, or the drawn one while the tree is fitted */
+/* the camera the last frame drew */
+static WTCAM tech_cam_drawn(void)
+{
+    WTCAM c;
+    c.z = s_hit.tech_cam[0];
+    c.x = s_hit.tech_cam[1];
+    c.y = s_hit.tech_cam[2];
+    return c;
+}
+
+/* THE CAMERA A STEP STARTS FROM: the asked one, so several steps between two hit maps each move it
+   (as scroll_by does), but first held by the rule the render thread draws it by (tagpu_wikistate.c
+   tech_stage) against the drawn frame's floor and unit -- the zoom between the floor and four
+   times 1:1, a corner past 1e7 drawn as the fit -- so the step starts from the camera the player
+   sees even after the floor or the unit moved under it (About opened or closed, the window
+   resized). A fitted tree's is the drawn one. */
 static WTCAM tech_cam_now(void)
 {
-    WTCAM c = s_tcam;
-    if (s_tfit) { c.z = s_hit.tech_cam[0]; c.x = s_hit.tech_cam[1]; c.y = s_hit.tech_cam[2]; }
-    return c;
+    const double lo = s_hit.tech_lo, hi = 4.0 * s_hit.u;
+    if (s_tfit || !(fabs(s_tcam.x) < 1e7 && fabs(s_tcam.y) < 1e7 && s_tcam.z > 0)) return tech_cam_drawn();
+    if (lo > 0 && s_tcam.z < lo) s_tcam.z = lo;
+    if (hi > 0 && s_tcam.z > hi) s_tcam.z = hi;
+    return s_tcam;
 }
 
 /* wiki.js techZoom: zoom `z` about canvas point (px, py), held between the drawn floor and four
@@ -601,7 +618,8 @@ static void tech_up(void)
     if (s_tmoved || !tech_entry() || !tech_drawn(T = tech_tree())) return;
     button_sound();
     {
-        const WTCAM c = tech_cam_now();
+        /* the pick is read on the tree the player clicked: the drawn camera */
+        const WTCAM c = tech_cam_drawn();
         const double px = s_tdx - s_hit.tech_cv[0], py = s_tdy - s_hit.tech_cv[1];
         s_tsel = tagpu_wikitech_hit(T, c.x + px / c.z, c.y + py / c.z, &unit, &card, &icon) ? unit : -1;
     }
@@ -2394,6 +2412,15 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
         s_hit.bar[i].per_px = bounded(s_hit.bar[i].per_px, 1e6f);
     }
+    /* the tech tree as drawn: a zoom inside the render thread's own range, a corner as far as it
+       draws one (tagpu_wikistate.c tech_stage), a canvas on the screen; anything else is no tree */
+    s_hit.tech = (uint8_t)(s_hit.tech != 0);
+    s_hit.tech_lo = bounded(s_hit.tech_lo, 4 * s_hit.u);
+    s_hit.tech_cam[0] = bounded(s_hit.tech_cam[0], 4 * s_hit.u);
+    for (i = 1; i < 3; i++)
+        if (!(s_hit.tech_cam[i] > -1e7f && s_hit.tech_cam[i] < 1e7f)) s_hit.tech_cam[i] = 0;
+    for (i = 0; i < 4; i++) s_hit.tech_cv[i] = bounded(s_hit.tech_cv[i], 32767);
+    if (s_hit.tech_side < 0 || s_hit.tech_side >= WIKITECH_SIDES || !(s_hit.tech_cam[0] > 0)) s_hit.tech = 0;
 }
 
 /* ---- the record ------------------------------------------------------------------------------ */
@@ -2934,6 +2961,7 @@ static void assets_start(void)
     if (!(in = (WIKI3DIN*)calloc(1, sizeof *in))) {
         /* no loader thread, so no sidebar answer will ever be published: the fixture stands */
         s_assets = ASSETS_FAILED;
+        tagpu_wikitech_refuse();
         tagpu_logf("wiki3d: NOT loaded - out of memory for its input; the sidebar is the fixture's");
         return;
     }

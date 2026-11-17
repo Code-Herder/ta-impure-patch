@@ -234,12 +234,16 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
     uint8_t* rank = NULL;
     double* lw_of = NULL;
     int h = -1, nl = 0, i, k;
+    size_t ne = 1;
     uint32_t q;
 #define TX(v) floor(((v) - cam->x) * z + 0.5)
 #define TY(v) floor(((v) - cam->y) * z + 0.5)
+    /* THE EDGES' BOUND: one a card to its parent card and one for each of its unit's other builders,
+       so at most the cards plus their parents -- counted, since a mod's menus that build each other
+       make that as many as the cards squared */
+    for (i = 0; i < T->nspine; i++) ne += 1 + T->parents[T->spine[i]].n;
     if (!(path = calloc((size_t)T->n, 1)) || !(kids = calloc((size_t)T->n, 1)) || !(pars = calloc((size_t)T->n, 1)) ||
-        !(ln = malloc((size_t)(T->nspine + T->n * 4 + 1) * sizeof *ln)) || !(rank = malloc((size_t)(T->nspine + T->n * 4 + 1))) ||
-        !(lw_of = malloc((size_t)(T->nspine + T->n * 4 + 1) * sizeof *lw_of)))
+        !(ln = malloc(ne * sizeof *ln)) || !(rank = malloc(ne)) || !(lw_of = malloc(ne * sizeof *lw_of)))
         goto done;
     /* the selection: its card (techtree.js home), the walk to that card, its card's builds, its own
        parents */
