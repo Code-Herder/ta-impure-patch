@@ -3,15 +3,15 @@
 own ddraw.dll and playing the one computer seat it added.
 
     tools/impai/codeduel.py --a DLL_A --b DLL_B --out DIR [--map NAME] [--sides aa|ac|ca|cc] [--cap T] [--port N]
-                            [--no-humans]
+                            [--no-humans] [--same-build]
 
 One game of two instances (twopeers.py: a private display, a DirectPlay port leased for the game), under the run
 lock for two game lanes on GDI, no GPU memory (tools/runlock.py). The host H runs DLL_A and the joiner J DLL_B,
 both launched with `--netai impai`; in the battle room the host adds a computer seat, A, and the joiner one, B.
-The game plays until an AI seat holds no unit or the host's GameTime reaches the cap, each peer then leaves
-through its menus, so its teardown writes ImpAI's level-end lines, and DIR/result.json is the game's result in
-bar.py's shape (`outcome` A, B or cap, `draw`, `end_tick`, `value`), so bar.outcome_of reads its points, a game
-at the cap's by THE VALUE AT THE CAP.
+The game plays until an AI seat holds no unit, its level ends or the host's GameTime reaches the cap, each peer
+then leaves through its menus (THE LEAVE), so its teardown writes ImpAI's level-end lines, and DIR/result.json
+is the game's result in bar.py's shape (`outcome` A, B or cap, `draw`, `end_tick`, `value`), so bar.outcome_of
+reads its points, a game at the cap's by THE VALUE AT THE CAP.
 
 THE MAP is one of bar.py's (a key of bar.MAPS, or a map's own name); the battle room loads it by name. With
 fixed locations the humans take the map's first two start positions and the AI seats the next two, in row
@@ -62,7 +62,48 @@ seated player records are read with one `tacli peek`, which the DLL logs line by
 = <value>`), so a peer's log holds its own looks and the judge needs the two logs alone for the outcome. The
 first look reads all ten records with their team, their alliances, their start position and their unit block;
 the others the seated records' `[rec]`, DirectPlay ID +4, controller +0x73, units alive +0x144 and commanders
-lost +0x106. A round of looks is the host's and then the joiner's, so the two logs hold the same rounds.
+lost +0x106. Every look reads the game-over word too (THE END AS THE ENGINE LEFT IT). A round of looks is the
+host's and then the joiner's, so the two logs hold the same rounds.
+
+THE END AS THE ENGINE LEFT IT. With the humans idle a level ends on its own, and within seconds of a seat's
+last unit: MEASURED on the six whole games of 2026-11-18 that a seat lost, the loser's human was out already
+in each, the winner's level ended 80 to 240 ticks after its last look with the loser's units, and the loser's
+about 80 ticks after that, once the winner's peer had left the session. A look every LOOK_S seconds does not
+always land between a seat's last unit and its level's end (two of those six: the winner's last look still held
+one unit of the loser's), so the end is read from what the engine leaves behind, not from a look's timing:
+  - main +0x3923B, the game-over word (engine/recorder.md; engine/network.md, *The other ends of a network
+    level*): bit 2 stops the level, bit 4 is the local human's win and bit 6 its loss. The level init clears
+    them and nothing writes them after the stop, so a look made at any time after a level's end reads how it
+    ended. MEASURED 2026-11-18 on six duels: 0 at every look in play; 0x44 on both peers after a level that
+    both commanders' deaths ended (GameTime 341 and 325); 0x34 on the joiner, at four peeks 3 s apart, once
+    the host had left it alone with its own seat.
+  - The won bit is set by the victory test alone, 0x490080 (0x4658B4..0x4658CC), which passes when no record
+    but the local human's allies holds a unit: on a peer whose human is allied to its own AI seat and not to
+    the other (the teams check), a win is the engine's statement that the other seat holds no unit. So a
+    look that holds the stop bit and the won bit, without the lost bit, names the peer's own seat the winner
+    (`by` "won"), and no record count of that look is read: the teardown zeroes the units alive.
+  - A peer left alone wins as well: a peer that leaves has its seats removed on the other (0x452CC0), and a
+    removed seat holds no unit. MEASURED: on the joiner, after the host had left, the host's two records
+    read `[rec]` 0, DirectPlay ID 0xFFFFFFFF and controller 0 beside the won word 0x34; after a win in
+    play (the gauntlet of 2026-11-18, 10h's first try, the joiner's look after its level end) all four
+    records read seated. So the won bit names the winner only where both seats' records are still seated in
+    that look; with one freed the view is `left`, as for a record freed in play.
+  - The lost bit and a stop with neither say that the level ended, not which seat lost (the end test
+    0x4655E2 gives it to every human once none holds a unit): that peer's view is `ended`.
+  - No line of the DLL names the seats' units at a level's end, so the loser's peer shows the loss only when
+    one of its looks did. A line at the level end, before the teardown, with the game-over word and each
+    seated record's DirectPlay ID, controller, units alive and commanders lost would make both peers' ends
+    independent of every look.
+
+THE LEAVE. tools/mp_leave.sh walks one peer to its main menu, each step decided from the screen on top: the
+watch notice over a game whose human is out, a paused game (THE VALUE AT THE CAP leaves it paused; the peer
+whose key paused it leaves first and its leave lifts the pause), a menu of the surrender's, or ENDMSN where
+the level has ended. A peer that does not arrive does not end the run: the other still leaves, the result's
+`leave` names the failure, and the judge reads both logs as they are. MEASURED 2026-11-18 on six duels: the
+notice takes the Pause key (the host's did not stop the game in the three games with the notice on it, the
+joiner's did); any peer's key lifts a pause (the host's lifted one the joiner's had set, from under its
+notice once that was answered); and the peer left behind was on ENDMSN when its leave began, in all six: it
+had won, or no human was left in its game.
 
 THE CLOCKS. Each peer counts its own GameTime, and the two run apart. MEASURED 2026-11-17 on four duels at once
 to a cap of 20 000: in one the joiner's GameTime stayed 15 ticks ahead of the host's all game; in three it
@@ -82,7 +123,8 @@ peers), so the harness stops the game with its own Pause key and reads the units
   - once the host's look is at or past the cap, the Pause key on the host (the joiner if the host's does
     not take), and both peers looked at until their GameTime stands at two looks in a row. A network game's
     pause is every peer's: MEASURED on Lava Mania, the key on the host at GameTime 6 059 (the joiner at
-    6 147) and both stood, at 6 087 and 6 171, through two reads 6 s apart, and ran on at the second press;
+    6 147) and both stood, at 6 087 and 6 171, through two reads 6 s apart, and ran on at the second press.
+    The game stays paused after the read, and the leave lifts the pause (THE LEAVE);
   - on each peer, each seat's unit block (its player record's first and last unit, +0x67 and +0x6B, 0x118 a
     unit) is peeked from its first slot on, the bytes +0xA6..+0x113 of a slot: its type's index +0xA6, its
     owner +0xFF, the fraction left to build +0x104 (0.0 finished) and the alive bit 0x10000000 of +0x110,
@@ -114,12 +156,24 @@ THE JUDGE (`judge`), from the two logs:
     at or past the cap: `cap`, and no later look of its is read; the joiner, with no seat gone at any look, is
     at the cap with it (THE CLOCKS). A seat whose record is freed is a peer that left, and a level that ended
     before either is `ended`;
+  - a level that ended before a look decided: the look that holds the stop bit decides it (THE END AS THE
+    ENGINE LEFT IT), the peer's own seat the winner by its won bit, else `ended`;
   - the outcome: both peers' views agree -- the same winner, its loser gone on both within SLACK ticks, the
-    joiner's lead taken off -- or the game is `desync`, the failure named with both views. `left`, `ended` and
-    a failed check below are `could not run`;
+    joiner's lead taken off -- or the game is `desync`, the failure named with both views. `left`, both
+    `ended` and a failed check below are `could not run`;
+  - THE END ONE PEER SHOWS: one peer's view names the winner and the other's is `ended`, its level's end and
+    its last look within SLACK ticks of the first peer's. The outcome is the first peer's, and `unverified`
+    names the peer whose log does not show the loss, with its last look and its game-over word: a level
+    that ends on its own does so as a consequence of the loss, but that log alone cannot tell it from a
+    game whose peers had come apart. Further apart than SLACK, it is a `desync`;
   - the brain of each seat: at its level end each peer logged ImpAI turns (`impai: calls`) for its own marked
     seat and no other, and no line of its log begins with a line stem only the other peer's DLL holds (THE
-    FINGERPRINT);
+    FINGERPRINT). A peer whose leave failed wrote no level end: its pulse lines (`impai: pulse`, one a game
+    minute for each seat ImpAI plays there) must then be its own seat's alone, and `unverified` names the
+    turns line they stand for; pulses of another seat, or none, fail the game;
+  - `unverified`: the checks the game's evidence could not make, each by name, beside `failed`, the checks
+    it made and failed. A result with an outcome and an unverified check is still that outcome, and whoever
+    counts the game decides (gauntlet.py counts it and names it in its report);
   - a game at the cap: its `value` from the harness's read of both peers (THE VALUE AT THE CAP, cap_value),
     which bar.by_value scores;
   - `pulse`: each seat's `vlive` of its own peer's last pulse line before the end (`impai: pulse`, once a
@@ -132,7 +186,9 @@ its log's lines against the two files: `stems` takes from a DLL every printable 
 line does (`module: text`, up to its first conversion), and `only_stems` the ones one DLL holds and the other
 does not. A line that begins with a stem only the other DLL holds cannot have come from this peer's DLL. The
 result carries, for each peer, how many of its lines begin with a stem only its own DLL holds (`own`) and only
-the other's (`other`, which must be 0); two DLLs no line tells apart fail the check.
+the other's (`other`, which must be 0); two DLLs no line tells apart fail the check. Two DLLs that are one
+file, or that hold the same stems, are refused before anything is launched (told_apart); --same-build plays
+them, the judge leaves the fingerprint out, and the result's `same_build` says so.
 
 Exit 0 when the game has an outcome (A, B or cap), 1 for a desync, 2 when it could not be run or judged.
 """
@@ -186,6 +242,12 @@ STAND_LOOKS, STAND_S = 5, 0.5           # the looks a Pause key is given to stan
 NO_TEAM = 5
 PEEK = re.compile(rf"^peek: \*0x{MAIN:X}\+0x([0-9A-F]+):\d @0x[0-9A-F]+ = (\d+) ", re.M)
 LEVEL_END = re.compile(rf"^(?:impai: calls seat=|{re.escape(bar.LEVEL_END)})", re.M)
+LEVEL_END_T = re.compile(rf"^(?:impai: calls seat=\d+ n=\d+|{re.escape(bar.LEVEL_END)} scaled/exempt) gametime=(\d+)",
+                         re.M)
+# THE END AS THE ENGINE LEFT IT: main's game-over word (engine/recorder.md, main +0x3923B), which the level
+# init clears and nothing writes between a level's end and the next level's init
+OVER = 0x3923B
+OVER_STOP, OVER_WON, OVER_LOST = 0x04, 0x10, 0x40
 STEM = re.compile(rb"[a-z][a-z0-9_]*: [\x20-\x24\x26-\x5b\x5d-\x7e]{10,}")     # no conversion, no escape
 PULSE_TICKS = 1800
 
@@ -218,7 +280,7 @@ def spec(rec: int, off: int) -> str:
 def look_specs(recs, seating: bool = False) -> list:
     """One look's peeks: GameTime first, which is where the judge starts a look."""
     offs = list(PLAY) + (list(SEATING) if seating else [])
-    return [f"*0x{MAIN:X}+0x{GAMETIME:X}:4"] + [spec(i, off) for i in recs for off in offs]
+    return [f"*0x{MAIN:X}+0x{GAMETIME:X}:4", f"*0x{MAIN:X}+0x{OVER:X}:2"] + [spec(i, off) for i in recs for off in offs]
 
 
 def play_text(text: str) -> str:
@@ -228,8 +290,8 @@ def play_text(text: str) -> str:
 
 
 def looks(text: str) -> list:
-    """The looks a log holds, in order: [{"t": GameTime, "recs": {i: {field: value}}}], a record kept when the
-    look read every PLAY field of it."""
+    """The looks a log holds, in order: [{"t": GameTime, "over": the game-over word where the look read it,
+    "recs": {i: {field: value}}}], a record kept when the look read every PLAY field of it."""
     out, cur = [], None
     names = {**PLAY, **SEATING}
     for m in PEEK.finditer(text):
@@ -237,6 +299,8 @@ def looks(text: str) -> list:
         if addr == GAMETIME:
             cur = {"t": val, "recs": {}}
             out.append(cur)
+        elif cur is not None and addr == OVER:
+            cur["over"] = val
         elif cur is not None and REC <= addr < REC + RECORDS * STRIDE:
             i, off = divmod(addr - REC, STRIDE)
             if off in names:
@@ -254,19 +318,60 @@ def record_of(look: dict, dpid: int):
     return None
 
 
-def view(lks: list, dpid: dict, cap) -> dict:
+def game_looks(text: str) -> list:
+    """A log's looks of its game: those before its level-end lines, then the first later look whose game-over
+    word holds the stop bit. A record read after the teardown holds no count of the game's, and that one
+    look is read for its word alone (view)."""
+    play = play_text(text)
+    after = next((lk for lk in looks(text[len(play):]) if lk.get("over", 0) & OVER_STOP), None)
+    return looks(play) + ([after] if after else [])
+
+
+def in_play(lks: list) -> list:
+    """The looks of `lks` at a level still in play: every one before the first that holds the stop bit."""
+    out = []
+    for lk in lks:
+        if lk.get("over", 0) & OVER_STOP:
+            break
+        out.append(lk)
+    return out
+
+
+def level_end_t(text: str):
+    """The GameTime of the log's level end, from the DLL's level-end lines; None without one."""
+    m = LEVEL_END_T.search(text)
+    return int(m.group(1)) if m else None
+
+
+def view(lks: list, dpid: dict, cap, own: str = None) -> dict:
     """One peer's view of the game from its looks: {"outcome": A | B | draw | cap | left | ended | unfinished,
-    "t": the GameTime of the look that decided it, "gone": {seat: GameTime}, "last": {"t", seat: units alive},
-    "lost": {seat: the GameTime of the first look with a commander lost}}. `dpid` is {A, B: DirectPlay ID};
-    `cap` is None for the joiner, whose clock is not the cap's (THE CLOCKS); `ended` is given by the caller,
-    who knows whether the log's level ended."""
+    "by": "look", or "won" for an outcome its engine's end names, "t": the GameTime of the look that decided
+    it, "gone": {seat: GameTime}, "last": {"t", seat: units alive}, "lost": {seat: the GameTime of the first
+    look with a commander lost}, "over": an ended level's game-over word}. `dpid` is {A, B: DirectPlay ID};
+    `cap` is None for the joiner, whose clock is not the cap's (THE CLOCKS); `own` is the peer's own seat.
+
+    A look whose game-over word holds the stop bit is the level's end on this peer (THE END AS THE ENGINE
+    LEFT IT) and no count of it is read: with the won bit and not the lost one the peer's own seat has won,
+    whatever look came before, unless a seat's record is freed in it, which is a win by the other peer's
+    leaving (`left`); else the level `ended` with no loser named. `ended` for a log whose level ended with
+    no such look is given by the caller, who holds the log."""
     held, gone, lost, last = set(), {}, {}, {}
     for lk in lks:
+        over = lk.get("over", 0)
+        if over & OVER_STOP:
+            end = {"t": lk["t"], "gone": gone, "last": last, "lost": lost, "over": over}
+            if not (own and over & OVER_WON and not over & OVER_LOST):
+                return {"outcome": "ended", "by": None, **end}
+            freed = [s for s in ("A", "B") if record_of(lk, dpid[s]) is None]
+            if freed:
+                return {"outcome": "left", "by": "look", "who": freed[0], **end}
+            return {"outcome": own, "by": "won", **end}
         alive = {}
         for s in ("A", "B"):
             i = record_of(lk, dpid[s])
             if i is None:
-                return {"outcome": "left", "who": s, "t": lk["t"], "gone": gone, "last": last, "lost": lost}
+                return {"outcome": "left", "by": "look", "who": s, "t": lk["t"], "gone": gone, "last": last,
+                        "lost": lost}
             alive[s] = lk["recs"][i]["alive"]
             if lk["recs"][i]["lost"] and s not in lost:
                 lost[s] = lk["t"]
@@ -277,10 +382,10 @@ def view(lks: list, dpid: dict, cap) -> dict:
         last = {"t": lk["t"], **alive}
         if gone:
             who = "draw" if len(gone) == 2 else "B" if "A" in gone else "A"
-            return {"outcome": who, "t": lk["t"], "gone": gone, "last": last, "lost": lost}
+            return {"outcome": who, "by": "look", "t": lk["t"], "gone": gone, "last": last, "lost": lost}
         if cap is not None and lk["t"] >= cap:
-            return {"outcome": "cap", "t": lk["t"], "gone": gone, "last": last, "lost": lost}
-    return {"outcome": "unfinished", "t": last.get("t"), "gone": gone, "last": last, "lost": lost}
+            return {"outcome": "cap", "by": "look", "t": lk["t"], "gone": gone, "last": last, "lost": lost}
+    return {"outcome": "unfinished", "by": None, "t": last.get("t"), "gone": gone, "last": last, "lost": lost}
 
 
 def last_pulse(text: str, seat: int, upto: int):
@@ -485,38 +590,63 @@ def humans_gone(texts: dict, lks: dict, first: dict, dpid: dict) -> tuple:
     return out, bad
 
 
-def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None, no_humans: bool = False) -> dict:
+def turns_of(p: str, text: str, mark: int, unleft: dict) -> tuple:
+    """(the peer's ImpAI turns for its own seat or None, the failures, the checks not made) of THE JUDGE's
+    brain check. The turns line is the level end's, which a peer that did not leave never wrote: its pulse
+    lines then stand for it, by name, when they are its own seat's alone."""
+    turns = netai_check.calls(text)
+    if not turns and unleft.get(p) and not LEVEL_END.search(text):
+        pulsed = [int(m.group(1)) for m in netai_check.PULSE.finditer(text)]
+        if pulsed and set(pulsed) == {mark}:
+            return None, [], [f"{p}: it did not leave ({unleft[p]}), so its log has no level end and no line of "
+                              f"ImpAI's turns: its {len(pulsed)} pulse lines, all its own seat {mark}'s, stand "
+                              f"for it"]
+        return None, [f"{p}: it did not leave ({unleft[p]}) and its pulse lines are seat "
+                      f"{sorted(set(pulsed)) or 'none'}'s, not its own seat {mark}'s alone"], []
+    if set(turns) != {mark} or not turns[mark]:
+        return None, [f"{p}: ImpAI's turns at its level end {turns or 'none'}, not for its own seat {mark} alone"], []
+    return turns[mark], [], []
+
+
+def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None, no_humans: bool = False,
+          unleft: dict = None) -> dict:
     """The game's result from the two peers' logs (THE JUDGE) and, for a game at the cap, their reads of the
     units there (`at_cap`, cap_value's). `only` is only_stems of the two DLLs, None to leave the fingerprint
-    out; `no_humans` judges THE HUMANS GONE's seating in place of THE HUMANS STAY's. Keys: outcome (A, B, cap,
-    desync, could not run), draw, reason, end_tick, cap, value, pulse, lead, clock, seats, peers, humans,
-    humans_out, failed."""
+    out; `no_humans` judges THE HUMANS GONE's seating in place of THE HUMANS STAY's; `unleft` is {peer: why
+    its leave failed}. Keys: outcome (A, B, cap, desync, could not run), draw, reason, end_tick, cap, value,
+    pulse, lead, clock, seats, peers, humans, humans_out, failed, unverified, leave."""
     texts = {"H": host, "J": join}
+    unleft = unleft or {}
     plays = {p: play_text(texts[p]) for p in PEERS}
-    lks = {p: looks(plays[p]) for p in PEERS}
+    lks = {p: game_looks(texts[p]) for p in PEERS}
+    live = {p: in_play(lks[p]) for p in PEERS}
     res = {"outcome": "could not run", "draw": False, "reason": "", "end_tick": None, "cap": cap, "value": {},
-           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": [],
-           "humans": "none" if no_humans else "idle"}
-    short = [p for p in PEERS if not lks[p]]
+           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": [], "unverified": [],
+           "leave": {p: unleft.get(p) for p in PEERS}, "humans": "none" if no_humans else "idle"}
+    short = [p for p in PEERS if not live[p]]
     if short:
         res["reason"] = f"no look in the log of {', '.join(short)}"
         return res
-    first = {p: lks[p][0] for p in PEERS}
-    res["clock"] = {p: lks[p][-1]["t"] for p in PEERS}      # THE CLOCKS: the last round of looks
+    first = {p: live[p][0] for p in PEERS}
+    k = min(len(live[p]) for p in PEERS) - 1                # THE CLOCKS: the last round both peers were in play at
+    res["clock"] = {p: live[p][k]["t"] for p in PEERS}
     ahead = res["clock"]["J"] - res["clock"]["H"]
     marks, dpid, bad = seats(texts, first)
+    unverified = res["unverified"]
     if len(dpid) == 2:
         if no_humans:
-            res["humans_out"], out = humans_gone(texts, lks, first, dpid)
+            res["humans_out"], out = humans_gone(texts, live, first, dpid)
             bad += out
         else:
             bad += teams(first, dpid)
-        res["peers"] = {"H": view(lks["H"], dpid, cap), "J": view(lks["J"], dpid, None)}
+        res["peers"] = {"H": view(lks["H"], dpid, cap, "A"), "J": view(lks["J"], dpid, None, "B")}
         if res["peers"]["H"]["outcome"] == "cap" and res["peers"]["J"]["outcome"] == "unfinished":
             res["peers"]["J"]["outcome"] = "cap"
         for p in PEERS:
-            if res["peers"][p]["outcome"] == "unfinished" and LEVEL_END.search(texts[p]):
-                res["peers"][p]["outcome"] = "ended"
+            if LEVEL_END.search(texts[p]):
+                res["peers"][p]["end"] = level_end_t(texts[p])
+                if res["peers"][p]["outcome"] == "unfinished":
+                    res["peers"][p]["outcome"] = "ended"
         for s, p in SEAT_PEER.items():
             r = first[p]["recs"][marks[p]]
             res["seats"][s] = {"peer": p, "dpid": dpid[s], "start": r.get("start"), "team": r.get("team"),
@@ -524,13 +654,12 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
     for p in PEERS:
         if p not in marks:
             continue
-        turns = netai_check.calls(texts[p])
-        if set(turns) != {marks[p]} or not turns[marks[p]]:
-            bad.append(f"{p}: ImpAI's turns at its level end {turns or 'none'}, not for its own seat "
-                       f"{marks[p]} alone")
-        else:
+        turns, failed, unmade = turns_of(p, texts[p], marks[p], unleft)
+        bad += failed
+        unverified += unmade
+        if turns:
             seat = next(s for s, q in SEAT_PEER.items() if q == p)
-            res["seats"].get(seat, {})["calls"] = turns[marks[p]]
+            res["seats"].get(seat, {})["calls"] = turns
     if only is not None:
         fp = {p: {"own": stem_lines(texts[p], only[p]), "other": stem_lines(texts[p], only[o])}
               for p, o in (("H", "J"), ("J", "H"))}
@@ -552,24 +681,49 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
         if got:
             res["pulse"][s] = got
     res["lead"] = lead(res["pulse"])
-    said = {p: f"{res['peers'][p]['outcome']} at GameTime {res['peers'][p]['t']}" for p in PEERS}
+    how = {"look": "", "won": " by its human's won bit", None: ""}
+    said = {p: f"{res['peers'][p]['outcome']}{how[res['peers'][p]['by']]} at GameTime {res['peers'][p]['t']}"
+            for p in PEERS}
     for p in PEERS:
         if res["peers"][p]["outcome"] == "left":
             res["reason"] = f"{p}: {said[p]}: seat {res['peers'][p]['who']}'s record is freed there: its peer left"
             return res
+
+    def on_host(p, t):                  # THE CLOCKS: a GameTime of peer p, on the host's clock
+        return t - ahead if p == "J" else t
+
+    o, end_tick, both = vh["outcome"], vh["t"], "on both peers"
     if vh["outcome"] != vj["outcome"]:
-        res["outcome"] = "desync"
-        res["reason"] = f"the peers disagree: the host's records say {said['H']}, the joiner's {said['J']}"
-        return res
-    o = vh["outcome"]
-    if o in ("ended", "unfinished"):
-        why = {"ended": "its level ended with both AI seats holding units" + (
-                   "" if no_humans else " (THE HUMANS STAY: the engine ends a network game once no human holds "
-                                        "a unit)"),
+        named = [p for p in PEERS if res["peers"][p]["outcome"] in ("A", "B")]
+        ended = [p for p in PEERS if res["peers"][p]["outcome"] == "ended"]
+        if len(named) != 1 or len(ended) != 1:
+            res["outcome"] = "desync"
+            res["reason"] = f"the peers disagree: the host's records say {said['H']}, the joiner's {said['J']}"
+            return res
+        # THE END ONE PEER SHOWS
+        p, e = named[0], ended[0]
+        vp, ve = res["peers"][p], res["peers"][e]
+        # its last look still held the seat's units, so the end is no earlier than it, whatever the line says
+        t_end = max(ve["t"], ve.get("end") or 0)
+        if abs(on_host(p, vp["t"]) - on_host(e, t_end)) > SLACK:
+            res["outcome"] = "desync"
+            res["reason"] = (f"the peers disagree on when: the host's records say {said['H']}, the joiner's "
+                             f"{said['J']}, more than {SLACK} ticks apart with the joiner's clock {ahead} ahead")
+            return res
+        o, end_tick = vp["outcome"], on_host(p, vp["t"])
+        loser = "B" if o == "A" else "A"
+        word = f"its game-over word {ve['over']:#x}" if ve.get("over") is not None else "no look of its game-over word"
+        both = f"on peer {p}{how[vp['by']] or ' at its look'}"
+        unverified.append(f"{e}: its level ended at GameTime {t_end} with no look of seat {loser} gone (its last "
+                          f"look {ve['last']}, {word}): seat {loser}'s loss is peer {p}'s evidence alone")
+    elif o in ("ended", "unfinished"):
+        why = {"ended": "its level ended with both AI seats holding units at their last looks and no won bit "
+                        "read" + ("" if no_humans else " (THE HUMANS STAY: the engine ends a network game once "
+                                                       "no human holds a unit)"),
                "unfinished": "its looks stop before an outcome and before the cap"}[o]
         res["reason"] = f"both peers: {said['H']} and {said['J']}: {why}"
         return res
-    if o in ("A", "B", "draw") and abs(vh["t"] - (vj["t"] - ahead)) > SLACK:
+    elif o in ("A", "B", "draw") and abs(vh["t"] - (vj["t"] - ahead)) > SLACK:
         res["outcome"] = "desync"
         res["reason"] = (f"the peers disagree on when: the host's records say {said['H']}, the joiner's "
                          f"{said['J']}, more than {SLACK} ticks apart with the joiner's clock {ahead} ahead")
@@ -590,9 +744,9 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
         else:
             said_cap += f", with no value ({why})"
     res["outcome"], res["draw"] = ("cap", o == "draw") if o in ("cap", "draw") else (o, False)
-    res["end_tick"] = cap if o == "cap" else vh["t"]
+    res["end_tick"] = cap if o == "cap" else end_tick
     res["reason"] = {"cap": said_cap, "draw": "both seats gone at one look"}.get(
-        o, f"seat {'B' if o == 'A' else 'A'} held no unit on both peers")
+        o, f"seat {'B' if o == 'A' else 'A'} held no unit {both}")
     return res
 
 
@@ -608,11 +762,15 @@ def map_of(name: str) -> tuple:
 
 def look(tp, name: str, recs, seating: bool = False) -> dict:
     """One look at `name`, read back as the judge reads it from the log. A peek another tool makes of the
-    same instance at the same moment can take this one's answer, so a short answer is asked again."""
+    same instance at the same moment can take this one's answer, and a level's teardown answers none, so a
+    short answer is asked again."""
     from twopeers import CouldNotRun
     specs = look_specs(recs, seating)
     for _ in range(3):
-        o = tp.tacli("peek", name, *specs, "--json", timeout=60)
+        try:
+            o = tp.tacli("peek", name, *specs, "--json", timeout=60)
+        except CouldNotRun:             # no answer at all: a level's teardown runs no frame visit
+            continue
         rows = json.loads(o[o.index("{"):])["peeks"] if "{" in o else []
         if len(rows) == len(specs):
             text = "".join(f"peek: {p['spec']} @0x0 = {str(p['value']).split()[0]} \n" for p in rows)
@@ -633,7 +791,8 @@ def stands(tp, recs: dict, seen: dict) -> bool:
 
 def read_cap(tp, first: dict, dpid: dict, recs: dict, seen: dict) -> tuple:
     """THE VALUE AT THE CAP's read: ({peer: {"t", "alive", "value"}, "paused": the peer whose Pause key
-    stopped the game, or None}, {peer: its units}). The game runs on at its end."""
+    stopped the game, or None}, {peer: its units}). The game stays paused: the leave lifts the pause from
+    the pause bit it reads (tools/mp_leave.sh), on that peer first (run)."""
     peers = dict(zip(PEERS, (tp.host, tp.join)))
     paused = None
     for p, n in peers.items():
@@ -655,8 +814,6 @@ def read_cap(tp, first: dict, dpid: dict, recs: dict, seen: dict) -> tuple:
             raise CouldNotRun(f"{n}: no value of a seat's: {e}") from None
         at_cap[p] = {"t": read["t"], "alive": read["alive"], "value": value}
         units[p] = read["units"]
-    if paused:
-        tp.tacli("keys", peers[paused], "pause")
     return at_cap, units
 
 
@@ -693,7 +850,33 @@ def watch_room(tp, sides: str):
             tp.click(name, f"SIDE{row}", 20)
 
 
-def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, no_humans: bool = False) -> dict:
+def told_apart(a: bytes, b: bytes):
+    """None when THE FINGERPRINT can tell the two DLLs' logs apart, else why it cannot."""
+    if a == b:
+        return "the two DLLs are one file, byte for byte"
+    only = only_stems(a, b)
+    if not only["H"] and not only["J"]:
+        return "the two DLLs hold the same log line stems"
+    return None
+
+
+def leave_all(tp, paused) -> dict:
+    """Each peer back at its main menu (TwoPeers.leave): {peer: why its leave failed}, {} when both arrived.
+    The peer whose Pause key stopped the game leaves first: its key is the one known to take, and its leave
+    lifts the pause before the other peer's menus are walked. A leave that fails does not end the run: the
+    other peer still leaves, both logs are read, and the judge names what the failure leaves unshown."""
+    from twopeers import CouldNotRun
+    unleft = {}
+    for p, n in sorted(zip(PEERS, (tp.host, tp.join)), key=lambda pn: pn[0] != paused):
+        try:
+            tp.leave(n)
+        except (CouldNotRun, subprocess.TimeoutExpired) as e:
+            unleft[p] = str(e)
+    return unleft
+
+
+def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, no_humans: bool = False,
+        same_build: bool = False) -> dict:
     from twopeers import STALL_S, CouldNotRun, TwoPeers
     key, name = map_of(map_name)
     t0 = time.monotonic()
@@ -720,7 +903,7 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, 
             time.sleep(NEAR_S if seen[tp.host][-1]["t"] >= cap - NEAR else LOOK_S)
             for n in peers:
                 seen[n].append(look(tp, n, recs[n]))
-            views = {tp.host: view(seen[tp.host], dpid, cap), tp.join: view(seen[tp.join], dpid, None)}
+            views = {tp.host: view(seen[tp.host], dpid, cap, "A"), tp.join: view(seen[tp.join], dpid, None, "B")}
             if views[tp.host]["outcome"] == "cap":
                 break                   # THE CLOCKS: the cap is the host's, and its read follows at once
             done = [n for n in peers if views[n]["outcome"] != "unfinished"]
@@ -741,14 +924,16 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, 
         if views[tp.host]["outcome"] == "cap" and views[tp.join]["outcome"] == "unfinished":
             at_cap, units = read_cap(tp, first, dpid, recs, seen)
             (out / "cap-units.json").write_text(json.dumps(units) + "\n")
-        for n in peers:
-            tp.leave(n)
+            (out / "cap-read.json").write_text(json.dumps(at_cap) + "\n")     # on the disk before the leave
+        unleft = leave_all(tp, (at_cap or {}).get("paused"))
         texts = {p: tp.run_log(n) for p, n in zip(PEERS, peers)}
         port = tp.port
     dlls = {"H": a, "J": b}
     data = {p: d.read_bytes() for p, d in dlls.items()}
-    res = judge(texts["H"], texts["J"], cap, only_stems(data["H"], data["J"]), at_cap, no_humans)
-    res["cap_read"] = at_cap
+    # --same-build: nothing tells one build's log from itself, so THE FINGERPRINT is left out, by name
+    only = None if same_build else only_stems(data["H"], data["J"])
+    res = judge(texts["H"], texts["J"], cap, only, at_cap, no_humans, unleft)
+    res["cap_read"], res["same_build"] = at_cap, same_build
     for s, p in SEAT_PEER.items():
         res["seats"].setdefault(s, {}).update(dll=dlls[p].name, sha256=hashlib.sha256(data[p]).hexdigest())
     if tp.refused:                      # the peers have stopped (TwoPeers.refused)
@@ -771,11 +956,22 @@ def main(argv=None) -> int:
     p.add_argument("--cap", type=int, default=CAP, help=f"the host's GameTime the game plays to (default {CAP})")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
     p.add_argument("--no-humans", action="store_true", help="THE HUMANS GONE: both humans watch, under the duel lever")
+    p.add_argument("--same-build", action="store_true",
+                   help="the two DLLs may be one build: THE FINGERPRINT's check is left out, and the result says so")
     a = p.parse_args(argv)
     try:
         map_of(a.map)
     except ValueError as e:
         p.error(str(e))
+    try:
+        why = None if a.same_build else told_apart(a.a.read_bytes(), a.b.read_bytes())
+    except OSError as e:
+        print(f"could not run: {e}", file=sys.stderr)
+        return 2
+    if why:                             # before anything is launched: the judge could not name the brains
+        print(f"could not run: {why}: nothing would tell the builds' logs apart (THE FINGERPRINT); "
+              f"--same-build plays them without that check", file=sys.stderr)
+        return 2
     import runlock
     import tareplay
 
@@ -791,7 +987,8 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port, a.no_humans)
+        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port, a.no_humans,
+                  same_build=a.same_build)
     except (OSError, ValueError, subprocess.SubprocessError, tareplay.CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2
@@ -809,8 +1006,12 @@ def main(argv=None) -> int:
         print(f"  peer {q}: {v.get('outcome')} at GameTime {v.get('t')}, last look {v.get('last')}, "
               f"fingerprint {v.get('fingerprint')}")
     print(f"  the clocks at the last round of looks: {res['clock']}")
+    if res["same_build"]:
+        print("  --same-build: the fingerprint check was left out")
     for f in res["failed"]:
         print(f"FAIL: {f}")
+    for f in res["unverified"]:
+        print(f"UNVERIFIED: {f}")
     print(f"{res['outcome'].upper()}: {res['reason']}; end tick {res['end_tick']}, lead {res['lead']}; "
           f"{res['launch_s']} s to the game, {res['play_s']} s of play at {res['ticks_per_s']} ticks a second, "
           f"{res['slots']} slots")

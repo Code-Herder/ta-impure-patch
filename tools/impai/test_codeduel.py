@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """test_codeduel -- codeduel.py's judge on small fixture logs, offline: two peers' logs to a result, a
-disagreement between the peers, a game at the cap and its value, a level the engine ended, and the fingerprint;
-and the cap's read of both peers' units on a fake game.
+disagreement between the peers, a game at the cap and its value, a level the engine ended and what its game-over
+word names, a peer that did not leave, and the fingerprint; the cap's read of both peers' units on a fake game;
+and tools/mp_leave.sh against a fake tacli, screen by screen.
 
     python3 tools/impai/test_codeduel.py
 
@@ -11,7 +12,10 @@ the joiner's in 1, seat A in 2 and seat B in 3; the joiner lists its own human f
 way round, so a seat is found by its DirectPlay ID and not by its row. The fake game (FakeGame) answers
 `tacli peek`, `keys` and `units` from each peer's memory: its clock, its records and its unit blocks."""
 import json
+import os
+import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -33,10 +37,11 @@ def peek(off: int, val: int) -> str:
     return f"peek: *0x{cd.MAIN:X}+0x{off:X}:4 @0x0A000000 = {val} (0x{val:08X})\n"
 
 
-def look(peer: str, t: int, alive: dict, lost=(), seating=False, gone=(), team=TEAM) -> str:
+def look(peer: str, t: int, alive: dict, lost=(), seating=False, gone=(), team=TEAM, over=None) -> str:
     """One look of `peer` at GameTime t: `alive` {seat: units}, humans 1; `gone` names the seats whose record
-    is freed; `seating` adds the first look's fields."""
-    out = peek(cd.GAMETIME, t)
+    is freed; `seating` adds the first look's fields; `over` is the game-over word, None for a look that
+    did not read it."""
+    out = peek(cd.GAMETIME, t) + (peek(cd.OVER, over) if over is not None else "")
     rows = ROWS[peer]
     for i, who in enumerate(rows):
         base = cd.REC + i * cd.STRIDE
@@ -66,14 +71,19 @@ def level_end(seat: int, t: int) -> str:
             f"impai: handicap rows scaled/exempt gametime={t}: 1=0/0\n")
 
 
-def log(peer: str, looks_: list, pulses=((7, 30000), (1807, 31000)), end=4000, extra="", turns=2, team=TEAM) -> str:
-    """A peer's log: `looks_` is [(t, {seat: alive}, kwargs)], the first written with the seating fields."""
+def log(peer: str, looks_: list, pulses=((7, 30000), (1807, 31000)), end=4000, extra="", turns=2, team=TEAM,
+        over=None, pulse_seat=2, end_gone=()) -> str:
+    """A peer's log: `looks_` is [(t, {seat: alive}, kwargs)], the first written with the seating fields.
+    `over` is the game-over word the look after the level end reads and `end_gone` the seats whose record
+    is freed in it; `end` None is a peer that never left: no level end and no look after it."""
     text = "log: run 1 part 1 of tagpu.log\n" + extra + SEATS_LINE
     for k, (t, alive, kw) in enumerate(looks_):
         text += look(peer, t, alive, seating=not k, **({"team": team} if not k else {}), **kw)
-        text += "".join(pulse(2, pt, v) for pt, v in pulses if (looks_[k - 1][0] if k else -1) < pt <= t)
+        text += "".join(pulse(pulse_seat, pt, v) for pt, v in pulses if (looks_[k - 1][0] if k else -1) < pt <= t)
+    if end is None:
+        return text
     # a look after the teardown reads no count of the game's: the judge stops at the level end
-    return text + level_end(turns, end) + look(peer, end, {"A": 0, "B": 0})
+    return text + level_end(turns, end) + look(peer, end, {"A": 0, "B": 0}, over=over, gone=end_gone)
 
 
 PLAYED = [(100, {"A": 1, "B": 1}, {}), (2000, {"A": 9, "B": 14}, {})]
@@ -111,12 +121,25 @@ class FakePeers:
 
 
 class LiveLook(unittest.TestCase):
-    FULL = [77] + [1, 0x102, 2, 9, 0]
+    FULL = [77, 0] + [1, 0x102, 2, 9, 0]
 
     def test_a_look_is_read_back_as_the_log_holds_it(self):
         tp = FakePeers([self.FULL])
         self.assertEqual(cd.look(tp, "x-H", [2]),
-                         {"t": 77, "recs": {2: {"active": 1, "dpid": 0x102, "control": 2, "alive": 9, "lost": 0}}})
+                         {"t": 77, "over": 0,
+                          "recs": {2: {"active": 1, "dpid": 0x102, "control": 2, "alive": 9, "lost": 0}}})
+
+    def test_a_peek_with_no_answer_is_asked_again(self):
+        from twopeers import CouldNotRun
+
+        class Teardown(FakePeers):
+            def tacli(self, *args, timeout=None):
+                if not self.asked:
+                    self.asked += 1
+                    raise CouldNotRun("no peek lines")
+                return super().tacli(*args, timeout=timeout)
+        tp = Teardown([self.FULL, self.FULL])
+        self.assertEqual(cd.look(tp, "x-H", [2])["t"], 77)
 
     def test_a_short_answer_is_asked_again_and_three_give_the_game_up(self):
         tp = FakePeers([self.FULL[:3], self.FULL])
@@ -222,8 +245,8 @@ class CapRead(unittest.TestCase):
         both = {"A": a, "B": army(9, 3)}
         game = FakeGame({"H": both, "J": both})
         at_cap, units = self.read(game)
-        self.assertEqual(game.keys, [("H", "pause"), ("H", "pause")])      # paused for the read, then on
-        self.assertFalse(game.paused)
+        self.assertEqual(game.keys, [("H", "pause")])       # paused for the read, and left so for the leave
+        self.assertTrue(game.paused)
         va = 2500 + 25000 / 60 + 4 * (100 + 1200 / 60)
         vb = 2500 + 25000 / 60 + 9 * (50 + 600 / 60)
         for p in cd.PEERS:
@@ -261,7 +284,7 @@ class CapRead(unittest.TestCase):
         both = {"A": army(1), "B": army(1)}
         game = FakeGame({"H": both, "J": both}, takes=("J",))
         at_cap, _units = self.read(game)
-        self.assertEqual(game.keys, [("H", "pause"), ("J", "pause"), ("J", "pause")])
+        self.assertEqual(game.keys, [("H", "pause"), ("J", "pause")])
         self.assertEqual(at_cap["paused"], "J")
 
     def test_a_game_no_key_stops_is_read_as_it_runs(self):
@@ -448,6 +471,333 @@ class Judge(unittest.TestCase):
         self.assertIn("H: its level init read netai=ota", r["reason"])
 
 
+STOP, WON, LOST = cd.OVER_STOP, cd.OVER_STOP | cd.OVER_WON | 0x20, cd.OVER_STOP | cd.OVER_LOST
+
+
+class EngineEnd(unittest.TestCase):
+    """THE END AS THE ENGINE LEFT IT and THE END ONE PEER SHOWS."""
+
+    SEEN = PLAYED + [(3900, {"A": 0, "B": 30}, {"lost": ("A",)})]       # a look of seat A gone
+    BEFORE = PLAYED + [(3700, {"A": 1, "B": 30}, {})]                   # the last look before the level ended
+
+    def test_the_look_after_the_end_is_kept_for_its_word_alone(self):
+        text = log("J", self.BEFORE, end=3960, over=WON) + look("J", 3960, {"A": 0, "B": 0}, over=WON)
+        lks = cd.game_looks(text)
+        self.assertEqual([(lk["t"], lk.get("over")) for lk in lks], [(100, None), (2000, None), (3700, None),
+                                                                      (3960, WON)])
+        self.assertEqual([lk["t"] for lk in cd.in_play(lks)], [100, 2000, 3700])
+        self.assertEqual(cd.level_end_t(text), 3960)
+        # a log whose looks never read the word keeps none of the looks after its level end
+        self.assertEqual([lk["t"] for lk in cd.game_looks(log("J", self.BEFORE, end=3960))], [100, 2000, 3700])
+
+    def test_a_stop_bit_look_reads_no_count(self):
+        dpid = {"A": DPID["A"], "B": DPID["B"]}
+        v = cd.view(cd.game_looks(log("J", self.BEFORE, end=3960, over=WON)), dpid, None, "B")
+        self.assertEqual((v["outcome"], v["by"], v["t"], v["gone"], v["over"]), ("B", "won", 3960, {}, WON))
+        self.assertEqual(v["last"], {"t": 3700, "A": 1, "B": 30})      # both counts are 0 after the teardown
+        for over in (LOST, STOP, WON | cd.OVER_LOST):
+            v = cd.view(cd.game_looks(log("J", self.BEFORE, end=3960, over=over)), dpid, None, "B")
+            self.assertEqual((v["outcome"], v["by"]), ("ended", None), hex(over))
+
+    def test_a_win_by_the_other_peer_s_leaving_is_no_outcome(self):
+        # the host's process went away: the joiner, left alone with its seat, won, and the host's seats are freed
+        gone = {"over": WON, "end_gone": ("A", "human H")}
+        v = cd.view(cd.game_looks(log("J", self.BEFORE, end=3960, **gone)), {"A": DPID["A"], "B": DPID["B"]},
+                    None, "B")
+        self.assertEqual((v["outcome"], v["who"], v["over"]), ("left", "A", WON))
+        r = cd.judge(log("H", self.BEFORE, end=3960, over=LOST), log("J", self.BEFORE, end=3960, **gone), 6000)
+        self.assertEqual((r["outcome"], r["unverified"]), ("could not run", []))
+        self.assertIn("J: left at GameTime 3960: seat A's record is freed there: its peer left", r["reason"])
+        # the loser's peer ends because the winner's left: its freed records there are the way a level ends
+        r = cd.judge(log("H", self.BEFORE, end=4040, over=LOST, end_gone=("B", "human J")),
+                     log("J", self.BEFORE, end=3960, over=WON), 6000)
+        self.assertEqual((r["outcome"], len(r["unverified"])), ("B", 1))
+
+    def test_an_end_between_two_looks_is_the_winner_s_won_bit(self):
+        r = cd.judge(log("H", self.SEEN), log("J", self.BEFORE, end=3960, over=WON), 6000)
+        self.assertEqual((r["outcome"], r["end_tick"], r["failed"], r["unverified"]), ("B", 3900, [], []))
+        self.assertEqual((r["peers"]["J"]["by"], r["peers"]["J"]["end"]), ("won", 3960))
+        self.assertEqual(r["reason"], "seat A held no unit on both peers")
+
+    def test_the_clocks_are_the_last_round_both_peers_were_in_play_at(self):
+        r = cd.judge(log("H", self.SEEN), log("J", self.BEFORE, end=3960, over=WON), 6000)
+        self.assertEqual(r["clock"], {"H": 3900, "J": 3700})
+        ahead = [(t + 500, a, kw) for t, a, kw in self.BEFORE]         # the joiner's clock 500 ahead all game
+        r = cd.judge(log("H", PLAYED + [(3700, {"A": 1, "B": 30}, {}), (3900, {"A": 0, "B": 30}, {})]),
+                     log("J", ahead, end=4460, over=WON), 6000)
+        self.assertEqual((r["outcome"], r["clock"], r["unverified"]), ("B", {"H": 3700, "J": 4200}, []))
+
+    def test_the_end_one_peer_shows_is_that_peer_s_outcome_and_named(self):
+        for over, word in ((None, "no look of its game-over word"), (LOST, "its game-over word 0x44")):
+            r = cd.judge(log("H", self.SEEN), log("J", self.BEFORE, end=3960, over=over), 6000)
+            self.assertEqual((r["outcome"], r["end_tick"], r["failed"]), ("B", 3900, []))
+            self.assertEqual(r["reason"], "seat A held no unit on peer H at its look")
+            self.assertEqual(r["unverified"], [
+                f"J: its level ended at GameTime 3960 with no look of seat A gone (its last look "
+                f"{{'t': 3700, 'A': 1, 'B': 30}}, {word}): seat A's loss is peer H's evidence alone"])
+            self.assertEqual(bar.POINTS[bar.outcome_of(r)[0]], 0.0)
+
+    def test_neither_peer_s_look_showed_it_and_the_winner_s_word_names_it(self):
+        both = PLAYED + [(3700, {"A": 30, "B": 1}, {})]
+        r = cd.judge(log("H", both, end=3960, over=WON), log("J", both, end=4040, over=LOST), 6000)
+        self.assertEqual((r["outcome"], r["end_tick"]), ("A", 3960))
+        self.assertEqual(r["reason"], "seat B held no unit on peer H by its human's won bit")
+        self.assertEqual(len(r["unverified"]), 1)
+        self.assertIn("J: its level ended at GameTime 4040 with no look of seat B gone", r["unverified"][0])
+        # with no word read on either peer nothing names a loser
+        r = cd.judge(log("H", both, end=3960), log("J", both, end=4040), 6000)
+        self.assertEqual((r["outcome"], r["unverified"]), ("could not run", []))
+
+    def test_an_end_far_from_the_other_peer_s_look_is_a_desync(self):
+        late = self.BEFORE + [(3900 + cd.SLACK + 50, {"A": 2, "B": 30}, {})]
+        r = cd.judge(log("H", self.SEEN + [(3900 + cd.SLACK + 50, {"A": 0, "B": 30}, {})]),
+                     log("J", late, end=3900 + cd.SLACK + 90, over=LOST), 6000)
+        self.assertEqual(r["outcome"], "desync")
+        self.assertIn("on when", r["reason"])
+
+    def test_two_won_bits_are_a_desync(self):
+        both = PLAYED + [(3700, {"A": 30, "B": 30}, {})]
+        r = cd.judge(log("H", both, end=3960, over=WON), log("J", both, end=3960, over=WON), 6000)
+        self.assertEqual(r["outcome"], "desync")
+
+
+class Unleft(unittest.TestCase):
+    """A peer whose leave failed: no level end in its log."""
+
+    WON = PLAYED + [(3900, {"A": 0, "B": 30}, {})]
+    WHY = {"H": "mp_leave: x-H is not at its main menu after 16 actions: LOUNGE2.GUI"}
+
+    def test_the_outcome_is_kept_and_the_missing_turns_are_named(self):
+        r = cd.judge(log("H", self.WON, end=None), log("J", self.WON), 6000, unleft=self.WHY)
+        self.assertEqual((r["outcome"], r["failed"]), ("B", []))
+        self.assertEqual(r["leave"], {"H": self.WHY["H"], "J": None})
+        self.assertEqual(r["unverified"], [
+            f"H: it did not leave ({self.WHY['H']}), so its log has no level end and no line of ImpAI's turns: "
+            f"its 2 pulse lines, all its own seat 2's, stand for it"])
+        self.assertNotIn("calls", r["seats"]["A"])
+        self.assertEqual(r["seats"]["B"]["calls"], 4000)
+
+    def test_a_game_at_the_cap_keeps_its_value(self):
+        at = PLAYED + [(6010, {"A": 20, "B": 40}, {})]
+        at_cap = {"H": {"t": 6040, "value": {"A": 100.0, "B": 300.0}},
+                  "J": {"t": 6100, "value": {"A": 100.0, "B": 300.0}}, "paused": "H"}
+        why = dict(self.WHY, J="mp_leave: x-J answered no UI snapshot 12 reads in a row: NONE")
+        r = cd.judge(log("H", at, end=None), log("J", at, end=None), 6000, None, at_cap, unleft=why)
+        self.assertEqual((r["outcome"], r["value"]["B"]["live"], len(r["unverified"])), ("cap", 300.0, 2))
+        self.assertEqual(bar.outcome_of(r)[0], "B")
+
+    def test_pulses_of_another_seat_or_none_fail_the_game(self):
+        for kw, said in (({"pulse_seat": 3}, "its pulse lines are seat [3]'s"), ({"pulses": ()}, "seat none's")):
+            r = cd.judge(log("H", self.WON, end=None, **kw), log("J", self.WON), 6000, unleft=self.WHY)
+            self.assertEqual((r["outcome"], r["unverified"]), ("could not run", []))
+            self.assertIn(said, r["reason"])
+
+    def test_no_level_end_on_a_peer_that_left_fails_as_before(self):
+        r = cd.judge(log("H", self.WON, end=None), log("J", self.WON), 6000)
+        self.assertEqual(r["outcome"], "could not run")
+        self.assertIn("H: ImpAI's turns at its level end none", r["reason"])
+
+    def test_a_level_that_ended_before_the_failed_leave_is_judged_by_its_own_lines(self):
+        r = cd.judge(log("H", self.WON), log("J", self.WON), 6000, unleft=self.WHY)
+        self.assertEqual((r["outcome"], r["unverified"], r["leave"]["H"]), ("B", [], self.WHY["H"]))
+
+
+class FakeLeaver:
+    host, join = "x-H", "x-J"
+
+    def __init__(self, fails=()):
+        self.fails, self.left = fails, []
+
+    def leave(self, name):
+        from twopeers import CouldNotRun
+        self.left.append(name)
+        if name in self.fails:
+            raise CouldNotRun(f"mp_leave: {name} is not running")
+
+
+class LeaveAll(unittest.TestCase):
+    def test_the_peer_that_paused_leaves_first(self):
+        for paused, order in ((None, ["x-H", "x-J"]), ("H", ["x-H", "x-J"]), ("J", ["x-J", "x-H"])):
+            tp = FakeLeaver()
+            self.assertEqual(cd.leave_all(tp, paused), {})
+            self.assertEqual(tp.left, order)
+
+    def test_a_failed_leave_is_named_and_the_other_peer_still_leaves(self):
+        tp = FakeLeaver(fails=("x-H",))
+        self.assertEqual(cd.leave_all(tp, None), {"H": "mp_leave: x-H is not running"})
+        self.assertEqual(tp.left, ["x-H", "x-J"])
+
+
+FAKE_TACLI = r'''#!/usr/bin/env python3
+"""A game's screens for mp_leave.sh: the state in state.json beside this file."""
+import json, sys
+from pathlib import Path
+path = Path(__file__).with_name("state.json")
+st = json.loads(path.read_text())
+verb, args = sys.argv[1], sys.argv[3:]
+NEXT = {("MSGBOX.GUI", "OK"): [st.get("under", "ARMMAIN2.GUI")], ("TABMENU.GUI", "OPTIONS"): ["ARMOPT.GUI"],
+        ("ARMOPT.GUI", "EXIT"): ["EXITMENU.GUI"], ("EXITMENU.GUI", "MAINMENU"): ["YESORNO.GUI"],
+        ("YESORNO.GUI", "CHOICE1"): [None, None, "MAINMENU.GUI"], ("ENDMSN.GUI", "MainMenu"): ["MAINMENU.GUI"]}
+rc, said = 0, ""
+st["n"] = st.get("n", 0) + 1
+for ev in st.get("events", []):         # what the engine does on its own, at this script's n-th call
+    if ev["at"] == st["n"]:
+        st["screens"] = list(ev["screens"])
+top = st["screens"][0]
+if verb == "ui" and args[:1] == ["--json"]:
+    if top == "GONE":
+        rc, said = 1, f"tacli: {sys.argv[2]} is not running"
+    elif top is None:
+        rc, said = 1, "tacli: no UI snapshot appeared"
+    else:
+        print(json.dumps({"ok": True, "gui": top.lower() if st.get("lower") else top, "under": ["ARMMAIN2.GUI"],
+                          "gadgets": [{"name": "OK"}]}, indent=2))
+    if len(st["screens"]) > 1:
+        st["screens"].pop(0)            # a teardown's reads without a UI, then the screen it loads
+elif verb == "ui" and args[0] == "click":
+    st["did"].append(f"click {args[1]}")
+    if (top, args[1]) in NEXT:
+        st["screens"] = list(NEXT[(top, args[1])])
+    else:
+        rc, said = 1, f"tacli: no gadget {args[1]!r} on {top}"
+elif verb == "ui" and args[0] == "wait":
+    rc = 0 if top == "TABMENU.GUI" else 1
+elif verb == "keys":
+    st["did"].append(f"key {args[0]}")
+    if args[0] == "pause" and st.get("pause_takes", True):
+        st["paused"] = not st.get("paused", False)
+    elif args[0] == "tab" and top in ("ARMMAIN2.GUI", "CORMAIN2.GUI") and not st.get("paused"):
+        st["screens"] = ["TABMENU.GUI"]
+elif verb == "peek":
+    v = 1 if st.get("paused") else 0
+    print(json.dumps({"name": sys.argv[2], "peeks": [{"spec": args[0], "addr": 1, "value": f"{v} (0x{v:04X})"}]},
+                     indent=2))
+path.write_text(json.dumps(st))
+if said:
+    print(said, file=sys.stderr)
+sys.exit(rc)
+'''
+
+
+class MpLeave(unittest.TestCase):
+    """tools/mp_leave.sh beside a fake tacli: the script's own text, each step read from the fake's screen."""
+
+    WALK = ["key tab", "click OPTIONS", "click EXIT", "click MAINMENU", "click CHOICE1"]
+
+    def leave(self, **state):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shutil.copy(Path(cd.TREE) / "tools/mp_leave.sh", tmp / "mp_leave.sh")
+            (tmp / "tacli").write_text(FAKE_TACLI)
+            (tmp / "tacli").chmod(0o755)
+            (tmp / "bin").mkdir()
+            (tmp / "bin/sleep").write_text("#!/bin/sh\n")              # the script's waits, without the wait
+            (tmp / "bin/sleep").chmod(0o755)
+            (tmp / "state.json").write_text(json.dumps(dict(state, did=[])))
+            r = subprocess.run(["bash", str(tmp / "mp_leave.sh"), "x-H"], capture_output=True, text=True,
+                               timeout=120, env=dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}"))
+            return r, json.loads((tmp / "state.json").read_text())
+
+    def test_a_game_in_play_is_surrendered_through_its_menus(self):
+        for main in ("ARMMAIN2.GUI", "CORMAIN2.GUI"):
+            r, st = self.leave(screens=[main])
+            self.assertEqual((r.returncode, st["did"]), (0, self.WALK), r.stderr)
+        self.assertIn("x-H is at its main menu: CORMAIN2.GUI TABMENU.GUI ARMOPT.GUI EXITMENU.GUI YESORNO.GUI "
+                      "NONE NONE MAINMENU.GUI", r.stdout)
+
+    def test_the_watch_notice_is_answered_first(self):
+        r, st = self.leave(screens=["MSGBOX.GUI"])
+        self.assertEqual((r.returncode, st["did"]), (0, ["click OK"] + self.WALK), r.stderr)
+
+    def test_a_paused_game_is_unpaused_before_its_menus(self):
+        r, st = self.leave(screens=["ARMMAIN2.GUI"], paused=True)
+        self.assertEqual((r.returncode, st["did"], st["paused"]), (0, ["key pause"] + self.WALK, False), r.stderr)
+        r, st = self.leave(screens=["MSGBOX.GUI"], paused=True)         # the notice is over the paused game
+        self.assertEqual((r.returncode, st["did"]), (0, ["click OK", "key pause"] + self.WALK), r.stderr)
+
+    def test_a_level_that_has_ended_goes_to_its_main_menu(self):
+        r, st = self.leave(screens=["ENDMSN.GUI"])
+        self.assertEqual((r.returncode, st["did"]), (0, ["click MainMenu"]), r.stderr)
+        r, st = self.leave(screens=["ENDMSN.GUI"], lower=True)          # whatever case the snapshot names it in
+        self.assertEqual((r.returncode, st["did"]), (0, ["click MainMenu"]), r.stderr)
+        r, st = self.leave(screens=["MAINMENU.GUI"])
+        self.assertEqual((r.returncode, st["did"]), (0, []), r.stderr)
+
+    def test_a_level_that_ends_under_the_leave(self):
+        # after the notice's read: the Tab key finds a teardown, three reads without a UI, then ENDMSN
+        r, st = self.leave(screens=["MSGBOX.GUI"], events=[{"at": 5, "screens": [None, None, None, "ENDMSN.GUI"]}])
+        self.assertEqual((r.returncode, st["did"][-1]), (0, "click MainMenu"), r.stderr)
+        self.assertNotIn("click CHOICE1", st["did"])
+        # under each click of the walk in turn: the click finds ENDMSN where its gadget is not
+        for at in range(2, 16):
+            r, st = self.leave(screens=["ARMMAIN2.GUI"], events=[{"at": at, "screens": ["ENDMSN.GUI"]}])
+            self.assertEqual((r.returncode, st["did"][-1]), (0, "click MainMenu"), (at, r.stderr, st["did"]))
+
+    def test_a_notice_that_comes_up_under_the_leave(self):
+        r, st = self.leave(screens=["ARMMAIN2.GUI"], under="TABMENU.GUI",
+                           events=[{"at": 5, "screens": ["MSGBOX.GUI"]}])
+        self.assertEqual((r.returncode, st["did"]), (0, ["key tab", "click OK"] + self.WALK[1:]), r.stderr)
+
+    def test_a_screen_with_no_way_on_fails_by_name(self):
+        r, st = self.leave(screens=["LOUNGE2.GUI"])
+        self.assertEqual((r.returncode, st["did"]), (1, ["key tab"] * 16))
+        self.assertIn("mp_leave: x-H is not at its main menu after 16 actions: LOUNGE2.GUI LOUNGE2.GUI", r.stderr)
+
+    def test_a_pause_no_key_lifts_fails_by_name(self):
+        r, st = self.leave(screens=["ARMMAIN2.GUI"], paused=True, pause_takes=False)
+        self.assertEqual((r.returncode, set(st["did"])), (1, {"key pause"}))
+        self.assertIn("ARMMAIN2.GUI(paused) ARMMAIN2.GUI(paused)", r.stderr)
+
+    def test_no_ui_at_all_and_an_instance_that_is_gone_fail_by_name(self):
+        r, st = self.leave(screens=[None])
+        self.assertEqual((r.returncode, st["did"]), (1, []))
+        self.assertIn("answered no UI snapshot 12 reads in a row", r.stderr)
+        r, st = self.leave(screens=["GONE"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("mp_leave: x-H is not running", r.stderr)
+
+
+def two_dlls(tmp: Path) -> tuple:
+    """Two files THE FINGERPRINT tells apart."""
+    a, b = tmp / "a.dll", tmp / "b.dll"
+    a.write_bytes(b"\0impai: a line of build one only\0")
+    b.write_bytes(b"\0impai: a line of build two only\0")
+    return a, b
+
+
+class SameBuild(unittest.TestCase):
+    def test_what_the_fingerprint_cannot_tell_apart(self):
+        one = b"\0impai: a line both builds hold\0"
+        self.assertIn("one file", cd.told_apart(one, one))
+        self.assertIn("the same log line stems", cd.told_apart(one + b"\x01", one + b"\x02"))
+        self.assertIsNone(cd.told_apart(one, one + b"impai: a line of the second build\0"))
+
+    def main(self, tmp, a, b, *argv):
+        with mock.patch.object(cd, "run", side_effect=ValueError("x")) as run, mock.patch("runlock.hold") as hold, \
+                mock.patch("runlock.together", return_value=None), mock.patch("builtins.print") as said:
+            rc = cd.main(["--a", str(a), "--b", str(b), "--out", str(tmp / "o"), *argv])
+        return rc, run, hold, " ".join(str(c.args[0]) for c in said.call_args_list)
+
+    def test_one_build_twice_is_refused_before_anything_is_launched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            a, _b = two_dlls(tmp)
+            twin = tmp / "twin.dll"
+            twin.write_bytes(a.read_bytes())
+            rc, run, hold, said = self.main(tmp, a, twin)
+            self.assertEqual((rc, run.called, hold.called, (tmp / "o").exists()), (2, False, False, False))
+            self.assertIn("could not run: the two DLLs are one file, byte for byte", said)
+            rc, run, hold, said = self.main(tmp, a, tmp / "missing.dll")
+            self.assertEqual((rc, run.called, hold.called), (2, False, False))
+
+    def test_the_flag_plays_it_and_reaches_the_game(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            a, _b = two_dlls(tmp)
+            rc, run, _hold, _said = self.main(tmp, a, a, "--same-build")
+            self.assertEqual((rc, run.call_args.kwargs), (2, {"same_build": True}))
+
+
 class Fingerprint(unittest.TestCase):
     A = b"\x00impai: seats %s of %u records\x00oldfix: armed at the old site 0x%X\x00shared: a line of both %d\x00"
     B = b"\x00impai: seats %s of %u records\x00newfix: installed: the site 0x%X\x00shared: a line of both %d\x00"
@@ -546,7 +896,8 @@ class NoHumans(unittest.TestCase):
         played = self.WON[:2]
         r = cd.judge(gone_log("H", played), gone_log("J", played), 6000, no_humans=True)
         self.assertEqual(r["outcome"], "could not run")
-        self.assertTrue(r["reason"].endswith("its level ended with both AI seats holding units"))
+        self.assertTrue(r["reason"].endswith("its level ended with both AI seats holding units at their last "
+                                             "looks and no won bit read"))
 
 
 class FakeRoom:
@@ -582,8 +933,9 @@ class WatchRoom(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp, mock.patch.object(cd, "run", side_effect=ValueError("x")) \
                     as run, mock.patch("runlock.hold"), mock.patch("runlock.together", return_value=None), \
                     mock.patch("builtins.print"):
-                rc = cd.main(["--a", "a.dll", "--b", "b.dll", "--out", str(Path(tmp) / "o"), *argv])
-            self.assertEqual((rc, run.call_args.args[-1]), (2, want))
+                dlls = two_dlls(Path(tmp))
+                rc = cd.main(["--a", str(dlls[0]), "--b", str(dlls[1]), "--out", str(Path(tmp) / "o"), *argv])
+            self.assertEqual((rc, run.call_args.args[-1], run.call_args.kwargs), (2, want, {"same_build": False}))
 
 
 class Maps(unittest.TestCase):

@@ -277,6 +277,17 @@ class Code(unittest.TestCase):
         self.assertEqual([r["try"] for r in rows], ["t2", "t1", "t1", "t1"])
         self.assertIn("played once more (old1-01h-acidfoursome-aa: t1: desync: the peers disagree)", self.said)
 
+    def test_a_game_with_an_unverified_check_counts_and_is_named(self):
+        said = "J: its level ended at GameTime 3960 with no look of seat A gone"
+        p = FakeDuels(lambda g, k: dict(cand_wins(g, k), unverified=[said] if g["id"].startswith("old1-01h") else []))
+        self.assertEqual(self.run_(p, pool=("old1",)), gauntlet.PASS)
+        self.assertEqual(len(p.played), 4)                      # no game is played again for it
+        rows = self.state()["members"]["old1"]["rows"]
+        self.assertEqual([r["unverified"] for r in rows], [[said], [], [], []])
+        self.assertEqual(rows[0]["points"], 1.0)
+        self.assertIn("; 1 counted with a check its evidence could not make, named below", self.said)
+        self.assertIn(f"      unverified: {said}", self.said)
+
     def test_two_failures_are_could_not_judge_and_run_again_goes_on(self):
         lost = "old2-02j-luschaven-ac"
         p = FakeDuels(lambda g, k: (None if k == 1 else {"outcome": "could not run", "reason": "no lobby"})

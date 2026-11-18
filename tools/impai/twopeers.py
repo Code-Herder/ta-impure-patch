@@ -37,6 +37,8 @@ import tareplay  # noqa: E402
 
 MAP = "Two Continents"
 STALL_S = 120                           # GameTime standing still this long gives the game up
+LEAVE_S = 900                           # past mp_leave.sh's own bound: its actions and reads, each at its
+                                        # longest wait
 REC, STRIDE = 0x1B63, 0x14B             # main's player records (tagpu_engine.h)
 RECORDS = 10
 CouldNotRun = tareplay.CouldNotRun
@@ -193,12 +195,16 @@ class TwoPeers:
             time.sleep(2)
 
     def leave(self, name):
-        """The peer back at its main menu through the game's own menus, so its teardown runs."""
-        gui = json.loads(self.tacli("ui", name, "--json"))["gui"].upper()
-        if gui == "ENDMSN.GUI":
-            self.tacli("ui", name, "click", "MainMenu", "--timeout", "30")
-        elif gui != "MAINMENU.GUI":
-            self.command("bash", TREE / "tools/mp_leave.sh", name, timeout=300)
+        """The peer back at its main menu through the game's own menus, so its teardown runs and the DLL
+        writes its level-end lines. tools/mp_leave.sh decides each step from the screen on top, whatever a
+        game in play or over has there; CouldNotRun names the screens it read when it does not arrive."""
+        r = subprocess.run(["bash", str(TREE / "tools/mp_leave.sh"), name], capture_output=True, text=True,
+                           timeout=LEAVE_S)
+        self.log.write(r.stdout + r.stderr)
+        self.log.flush()
+        if r.returncode:
+            said = r.stderr.strip().splitlines()
+            raise CouldNotRun(said[-1] if said else f"mp_leave.sh {name} failed ({r.returncode}); see driver.log")
 
     def run_log(self, name) -> str:
         return talog.run_text(self.gamedir(name))
