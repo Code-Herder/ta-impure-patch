@@ -871,10 +871,12 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         /* the cells' box to the pixel past their last, the cells themselves by arithmetic in the
            CELLS mode: px holds the unsnapped box, uv the first cell and the count (DATA: bounded to
            the image) */
-        const int c0 = op->part % HUD_CELLS, r0 = op->part / HUD_CELLS, n = (int)op->size, m = (int)op->shade;
         const float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
-        if (op->part < 0 || n < 1 || m < 1 || c0 + n > HUD_CELLS || r0 + m > HUD_CELLS || !(x1 > x0) || !(y1 > y0) ||
-            op->centre > 2)
+        int c0, r0, n, m;
+        if (!(op->size >= 1 && op->size <= HUD_CELLS) || !(op->shade >= 1 && op->shade <= HUD_CELLS)) break;
+        c0 = op->part % HUD_CELLS; r0 = op->part / HUD_CELLS;
+        n = (int)op->size; m = (int)op->shade;
+        if (op->part < 0 || c0 + n > HUD_CELLS || r0 + m > HUD_CELLS || !(x1 > x0) || !(y1 > y0) || op->centre > 2)
             break;
         if (!(in = emit(c, HUD_TEX_CELLS, HUDM_CELLS, floorf(x0 + 0.5f), floorf(y0 + 0.5f), floorf(x1 + 0.5f) + 1,
                         floorf(y1 + 0.5f) + 1, op)))

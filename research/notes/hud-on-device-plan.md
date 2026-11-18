@@ -67,6 +67,10 @@ twice on every seam, and the grid's ends were antialiased. stagecheck pairs each
 image's hash with the mockup's. On the largest map the demos show (4 608 cells) the ground, grid
 and fog took up to some 14 000 ops (4 608 cells, about 4 750 grid pieces, up to 4 608 fog cells);
 they take 2. The whitebox minimap is still an op a cell and is what now bounds the map's size.
+stagecheck pairs the op and the image, not the pixels: nothing renders the shader's cell rule
+against the mockup's fillRects, so their agreement rests on the rule being one formula on both
+sides and on the whitebox picture looked at (the stage3d lane's `nomap` lever shot). A pixel check
+of that shot against the mockup is the gap.
 
 **D4: no mapped instance buffer.** Every other list -- the replay HUD, the page, the stage HUD,
 the whitebox's units -- is built into the frame's staging and copied into a device-local buffer of
