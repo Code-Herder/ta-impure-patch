@@ -923,8 +923,11 @@ static void job_checks(IMPAI_DEC* d)
             reclaim_check(d, b, d->jobbed_idle[i], j, age);
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
+            /* an explorer or a look (impai_build.c, THE RING'S LOOK) that stands idle with its cell unseen has arrived
+               without seeing it, or lost its order: the cell fails as at the timeout, so it is not asked again
+               for fail_t */
             if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
-            else if (age > in->plan->job_timeout) {
+            else if (d->jobbed_idle[i] || age > in->plan->job_timeout) {
                 impai_fail_add(d, j->cx, j->cz);
                 impai_job_end(j);
             }

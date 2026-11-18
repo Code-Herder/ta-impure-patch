@@ -263,6 +263,12 @@ typedef struct IMPAI_DEC {
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
+    /* THE RING'S UNSEEN SITES (impai_build.c): the nearest site a base ring left builder `unseen_slot` in this
+       decision because the seat has not explored its centre, cell (unseen_cx, unseen_cz), and the point the
+       builder walks to to see it, px; slot 0: none */
+    uint16_t      unseen_slot;
+    int16_t       unseen_cx, unseen_cz;
+    int32_t       unseen_px, unseen_pz;
     int           roots_max, root_cap;
     int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
@@ -467,6 +473,7 @@ int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
    -1 a site this builder never takes (impai_build.c) */
 int  impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+int  impai_build_look(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */

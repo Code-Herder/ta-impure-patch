@@ -1406,6 +1406,7 @@ static void check_ladder_rows(void)
         { "short-reclaim", M | H | HB, 0,                      0,       0, 0, 0 },
         { "energy",        M,          0,                      0,       0, 0, 0 },
         { "maker",         M,          0,                      0,       0, 0, 0 },
+        { "look",          M,          0,                      0,       0, 0, 0 },
         { "explore",       M | B,      0,                      0,       0, 0, 0 },
         { "harvest",       M | B,      0,                      0,       0, 0, 0 },
         { "assist",        M | B,      0,                      0,       0, 0, 0 },
@@ -1764,6 +1765,105 @@ static void check_ring_reach(void)
             if (cell) CHECK(!in10, "unit %u is given a ring site under ground threat", c->unit);
         }
     }
+}
+
+/* THE RING'S UNSEEN SITES and THE RING'S LOOK (impai_build.c): reach_world's commander at the anchor (20, 20) in
+   an energy stall, the seat's map explored for x, z < 32 alone and the wind generator refused wherever its first cell lies
+   there, as a start hemmed in by ground no plant fits. Rings 0 and 1 lie on explored ground and are refused -- in
+   the first decision, the stall's rung and the energy rung each asking the ring --, so the ring grows to 2,
+   whose east and south sides stand at cell 34, their centres unexplored: from the second decision the commander is
+   sent to see the nearest (a move, its job an explore of that centre's cell, within comm_r) and the ring stays at
+   2 with no site test spent on unseen ground, at every decision until the seat has seen. With the ground seen
+   the wind generator is built there, on the first site outside the refused box. A commander that stands idle with
+   its look's cell unseen -- its order list emptied, as on arrival -- has that cell failed by the job's check and
+   looks at another. A builder that walks nowhere (no label under it) is sent nowhere: the unseen sites are refused
+   ones, and the ring grows as it does on a refusal. */
+static void check_ring_unseen(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int k, x, z, n, built = 0;
+    unsigned i;
+    reach_world(0);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
+    s_w.refuse_box_type = T_WIND;
+    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
+    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
+    for (k = 0; k < 40; k++) {
+        const int32_t apos[3] = { (s_st.ax * 16 + 8) << 16, 0, (s_st.az * 16 + 8) << 16 };
+        s_w.gametime += 15;
+        n = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        CHECK(out.sites < s_plan->site_tests, "unseen ground costs no site test: %u at decision %d", out.sites, k);
+        if (!k) {
+            CHECK(s_job[1].kind == IMPAI_JOB_NONE && s_st.ring_grow == 2 && s_w.nlog == n,
+                  "the rings refused on explored ground grow: %u", s_st.ring_grow);
+            continue;
+        }
+        c = last_cmd(n);
+        if (k == 1 && c)
+            printf("ring unseen: ring_grow=%u, the commander looks at cell %d,%d\n", s_st.ring_grow, s_job[1].cx,
+                   s_job[1].cz);
+        CHECK(s_st.ring_grow == 2, "the ring does not grow past unseen ground: %u at decision %d", s_st.ring_grow, k);
+        CHECK(c && c->c.verb == WQ_CMD_NEW && c->c.unit == 1 && c->c.action == A_MOVE &&
+                  s_job[1].kind == IMPAI_JOB_EXPLORE, "the commander is sent to look at decision %d", k);
+        CHECK(!s_w.explored[s_job[1].cz][s_job[1].cx] && (s_job[1].cx >= 32 || s_job[1].cz >= 32) &&
+                  impai_dist_px(apos, s_job[1].cx * 16 + 8, s_job[1].cz * 16 + 8) <= s_plan->comm_r,
+              "at an unexplored centre within comm_r: %d,%d", s_job[1].cx, s_job[1].cz);
+        impai_job_end(&s_job[1]);       /* the walk cut short, the site still unseen: the next decision looks again */
+    }
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    for (k = 0; k < 3 && !built; k++) {
+        s_w.gametime += 15;
+        n = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        c = last_cmd(n);
+        built = c && c->c.action == A_MOBILEBUILD && c->c.type == T_WIND;
+    }
+    c = last_cmd(0);
+    printf("ring unseen, the ground seen: built=%d ring_grow=%u\n", built, s_st.ring_grow);
+    CHECK(built && (cmd_x0(&c->c) >= 32 || cmd_z0(&c->c) >= 32) && s_st.ring_grow == 0,
+          "the wind generator on the ground the look showed: %d", built);
+
+    reach_world(0);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
+    s_w.refuse_box_type = T_WIND;
+    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
+    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
+    for (k = 0; k < 2; k++) {
+        s_w.gametime += 15;
+        CHECK(decide(&out) == 0, "decide");
+    }
+    x = s_job[1].cx;
+    z = s_job[1].cz;
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[1].kind == IMPAI_JOB_EXPLORE && s_job[1].cx == x && s_job[1].cz == z && !s_st.nfail,
+          "a look on its way is left at it");
+    s_w.unit[1].n = 0;
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    for (k = 0, n = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) n += s_st.fail[k].cx == x && s_st.fail[k].cz == z;
+    printf("ring unseen, the look idle at %d,%d: failed %d, the next look at %d,%d, ring_grow=%u\n", x, z, n,
+           s_job[1].cx, s_job[1].cz, s_st.ring_grow);
+    CHECK(n == 1 && s_job[1].kind == IMPAI_JOB_EXPLORE && (s_job[1].cx != x || s_job[1].cz != z) &&
+              !s_w.explored[s_job[1].cz][s_job[1].cx] && s_st.ring_grow == 2,
+          "an idle look's cell fails and the commander looks at another: %d,%d", s_job[1].cx, s_job[1].cz);
+
+    reach_world(0);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
+    s_w.refuse_box_type = T_WIND;
+    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
+    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
+    for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 0;
+    for (k = 0; k < 6; k++) {
+        s_w.gametime += 15;
+        CHECK(decide(&out) == 0, "decide");
+    }
+    printf("ring unseen, a builder that walks nowhere: orders=%d ring_grow=%u\n", s_w.nlog, s_st.ring_grow);
+    CHECK(!s_w.nlog && s_job[1].kind == IMPAI_JOB_NONE && s_st.ring_grow > 2,
+          "sites it cannot walk to see are refused ones, and the ring grows: %u", s_st.ring_grow);
+    s_w.refuse_box_type = 0;
 }
 
 /* one enemy row of seat 0 at block (bx, bz), slot 40: type `type` (WQ_NONE: a contact never identified, owner
@@ -16465,6 +16565,7 @@ int main(void)
     check_far_patch();
     check_factory();
     check_ring_reach();
+    check_ring_unseen();
     check_ring_cmd_safe();
     check_cmd_safe_orders();
     check_ring_raid();
