@@ -38,6 +38,9 @@ class TestOpening(unittest.TestCase):
     def test_an_id_names_a_map_of_the_bars_and_a_start(self):
         self.assertEqual(opening.parse_id("unmapped-lavaalley-3"), ("lavaalley", 3))
         self.assertTrue(opening.is_id("unmapped-x") and not opening.is_id("bar-hota-troutfarm-ca-1"))
+        self.assertEqual(opening.parse_id("mapped-lavaalley-3"), ("lavaalley", 3))
+        self.assertTrue(opening.mapping("mapped-lavaalley-3") and not opening.mapping("unmapped-lavaalley-3"))
+        self.assertEqual(opening.spec("mapped-lavaalley-3")["seed"], opening.spec("unmapped-lavaalley-3")["seed"])
         for bad in ("unmapped-nowhere-2", "unmapped-steeljungle-0", "unmapped-steeljungle", "unmapped-steeljungle-2-1"):
             with self.assertRaises(bar.BarError):
                 opening.parse_id(bad)

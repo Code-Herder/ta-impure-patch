@@ -11,6 +11,10 @@ start a network game would fill before S is filled, nothing attacks, and the gam
 the template's human with no unit. ImpAI plays arm, the idle seats core. `<map>` is a key of bar.MAPS, the base
 game's; the game is played to CAP ticks, exact from its id's seed (bar.game_seed) and recorded, as an exploiter
 situation is, and judged a pass while ImpAI's seat holds a unit at the cap (exploit.py's `survives`).
+THE MAPPED TWIN, `mapped-<map>-<S>`: the same game, seed included, with `mapping` true. An ImpAI seat knows the
+map's layout in an unmapped game (tagpu_worldq_open_layout), so the two play the opening alike but for what the
+engine itself does by a player's explored map: its pathfinder takes a block the unit's owner has not explored as
+passable (0x40D7B0), so a walk over unexplored ground can take another way in the unmapped game.
 MEASURED 2026-11-18 (GDI, no draw, the reference setup): a game plays in about 22 s; the level's own
 `impai: starts` line seats ImpAI's seat at the start the id names (`2:272,4912@3` on Steel Jungle's start 2,
 `3:128,8672@4` in the four-seat game of Lava Alley's start 3: start, position, seat + 1); and on the three
@@ -53,7 +57,7 @@ sys.path.insert(0, str(HERE))
 import bar  # noqa: E402
 
 CAP = 6000
-ID = re.compile(r"unmapped-([a-z0-9]+)-([1-9])")
+ID = re.compile(r"(?:un)?mapped-([a-z0-9]+)-([1-9])")
 SIDES = {"A": "arm", "B": "core"}
 PLANT = re.compile(r"^impai: plant seat=(\d+) gametime=(\d+) .*?\bchose=(\S+)", re.M)
 EXTRACTOR = re.compile(r"(?:MEX|MOHO|UWMME)$")        # the base game's extractors: ARMMEX, CORUWMEX, ARMMOHO, ...
@@ -63,14 +67,19 @@ UNITS_MARGIN, UNITS_SHARE = 2, 0.25
 
 
 def is_id(gid: str) -> bool:
-    return gid.startswith("unmapped-")
+    return gid.startswith(("unmapped-", "mapped-"))
+
+
+def mapping(gid: str) -> bool:
+    """An opening's level is mapped: its MAPPED TWIN's id, `mapped-<map>-<S>`."""
+    return gid.startswith("mapped-")
 
 
 def parse_id(gid: str) -> tuple:
     """(the map's key, ImpAI's seat and start S) of an opening's id; BarError for any other."""
     m = ID.fullmatch(gid)
     if not m or m.group(1) not in bar.MAPS:
-        raise bar.BarError(f"not an unmapped opening's id: {gid!r} (unmapped-<map>-<start 1..9>, a map of "
+        raise bar.BarError(f"not an opening's id: {gid!r} ([un]mapped-<map>-<start 1..9>, a map of "
                            f"{', '.join(bar.MAPS)})")
     return m.group(1), int(m.group(2))
 
@@ -87,7 +96,7 @@ def spec(gid: str, cap: int = CAP) -> dict:
     return {"id": gid, "pair": "opening", "map": bar.map_name(m), "sides": dict(SIDES), "start": s,
             "seat": {"A": s, "B": idle_seats(s)[0]}, "rep": 1, "difficulty": "hard",
             "seats": {"A": {"ai": "impai", "level": "hard"}, "B": {"ai": "ai", "level": None}}, "cap": cap,
-            "seed": bar.game_seed(gid), "recordings": True, "setup": None, "values": [], "waves": [],
+            "seed": bar.game_seed(f"unmapped-{m}-{s}"), "recordings": True, "setup": None, "values": [], "waves": [],
             "verdict": "survives"}
 
 
@@ -102,7 +111,7 @@ def game(gid: str, sdir: Path, cap: int = CAP, starts: dict = None) -> dict:
         starts = bar.start_positions(g["map"], seats=max(idle + [s]) + 1)
     doc = json.loads(bar.TEMPLATE.read_text())
     st = doc["setup"]
-    st["map"], st["difficulty"], st["mapping"] = g["map"], g["difficulty"], False
+    st["map"], st["difficulty"], st["mapping"] = g["map"], g["difficulty"], mapping(gid)
     doc["units"] = []
     for k in sorted(idle + [s]):
         if k + 1 not in starts:

@@ -2020,7 +2020,31 @@ and 0 while it is set (`0x4816BB..0x4816FB`) [DISASSEMBLED 2026-11-13]. So once 
 Mapped, every bit stays set, and the pathfinder's map reader `0x40D7B0` never takes its "unexplored is
 passable" answer (`0x40D817..0x40D83B`: the word's bit numbered by the byte `+0x78` of the pathfinder object,
 `this` (`ecx`, kept at `[esp+0x10]` from `0x40D7BC`) [INFERRED: the searching player], is tested at `0x40D82D`, and with it clear the reader returns
-2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid.
+
+**What Mapped gives a player** [DISASSEMBLED 2026-11-18]. Mapped is `LosType` bit 0 clear and nothing in a
+player's record. The level load's `0x4816A0(1)` -- `0x497AE5`, after the seat loop `0x497A7F..0x497ADC` and
+`0x465E30` -- fills every word of the explored map with one byte, `0xFF` when the bit is clear and `0x00` when
+it is set (`0x4816BB..0x4816FB`: `al = LosType & 1`, `neg al; sbb eax,eax`, `and eax,0xFFFF0001`,
+`add eax,0xFFFF`, the low byte stored by `rep stos`): all sixteen bits of a word at once, every player's and
+those no record numbers. No routine gives one player the map: the stamp `0x481930` sets a bit where its record
+sees, the copier `0x485420` ORs one player's bit into another's, and the saved game's loader `0x484FA0` reads
+the whole map. A network peer is sent the map as one player's bit to OR into another's, the share's kind-3
+`0x16` message, received through the copier (`0x4558B8`) [no other sender was looked for]; the watcher switch refills it for every player on the watcher's own machine
+(`0x4656B5`, `0x4656C5`, then `0x4656CE`), so two peers' maps differ by design. **A player who is not the viewed
+one has its bit read by the simulation in one place**, the pathfinder's reader above: in an unmapped level a
+unit is routed over a block its owner has not explored as over free ground, whoever views the game (MEASURED
+2026-11-18: one opening played Mapped and unmapped by an ImpAI seat that reads no explored bit for its
+decisions gives the same orders on the same ticks and then parts in a field made from a unit's position, on
+three maps of four by GameTime 589 -- [testing](../impai/testing.html), the unmapped openings; the unit's
+paths themselves were not compared). The stamp's
+own test and the copier are the bit's other engine readers; the census's rows above serve the viewed player's
+display, cursor and orders, each by its row [the rows not re-derived here for which player's bit each takes].
+Impure's readers of a seat's own bit are `tagpu_worldq.c`'s (`discovered`, `sight_lit`) and allied sharing's
+backfill, which hands an owner's bit to every receiver it gains through the copier
+([allied sharing](../modules/allied-sharing.html)). So a write that set one seat's bit in every word would reach
+each human the seat shares with, and whoever views the seat; ImpAI writes none, and its seat's view does not
+read the bit for the map's layout ([ImpAI in the engine](../modules/impai.html), *What a seat knows*). **The site test's
 accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
 the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
 (`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they

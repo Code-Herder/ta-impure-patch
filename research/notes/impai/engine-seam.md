@@ -47,6 +47,16 @@ personas*) names the incarnations it was decided for (`WQ_CMD.inc`, `birth`, `tb
 or the slot has none, so a unit that took the slot since is never ordered and never targeted. `order_test` answers
 every check `order` makes, in the same order, and calls no root: the enqueue's answer is the order's.
 
+## The map's layout
+
+From [the map](../engine/map.html), *What Mapped gives a player*, and [Orders and the AI](../engine/orders.html), `0x47D2E0` (DISASSEMBLED):
+
+- **Mapped is the level's, not a record's.** The level load's `0x4816A0(1)` (`0x497AE5`) sets every bit of every word of the explored map `main+0x14273` when `LosType` bit 0 is clear, and no routine gives one player the map.
+- **Who reads a seat's own bit**: the engine's pathfinder for the seat's units (`0x40D7B0`: an unexplored block is passable), the stamp's own test, and the copier `0x485420`, through which allied sharing hands the bit to every receiver the seat gains and the share message hands it to a peer; a human who views the seat is shown the map by it (`main+0x2A43`). The site test, the reclaim resolver and `0x408090` read the viewed player's bit whatever record they are given.
+- **So ImpAI writes no explored map.** A seat's bit set in every word would give the map to each human the seat shares with and to whoever views it. Its views answer the layout from the map itself instead (`tagpu_worldq_open_layout`: `explored`, and so `metal`, `coverage`, the patch scan and the feature rule), and its site test's thunk skips the refusal of an unmapped centre at `0x47D3FA`. Both read engine memory and write none, and in a mapped level both answer what the bit answers, since it is set everywhere.
+- **What stays the seat's sight**: every unit it knows (`unit_los`, the radar pass), and the flag a unit on a footprint refuses on in the site test.
+- **What the engine still does by the bit**: the pathfinder. An unmapped seat's units take unexplored blocks as free ground until they see them; no ImpAI rule reads that, and closing it would take a write at `0x40D817`'s test.
+
 ## Difficulty and the seat
 
 From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](../engine/sim.html), *Difficulty and the AI handicap* (DISASSEMBLED):
