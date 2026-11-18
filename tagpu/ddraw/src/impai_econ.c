@@ -1565,6 +1565,10 @@ static int rung_maker(IMPAI_DEC* d, IMPAI_ASK* a)
            impai_build_ring(d, a->b, t);
 }
 
+/* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
+   is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
+   reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
+   asked with min_rate 0 at the short reclaim's rung while the seat is short; this is its one other zero-rate ask */
 static int rung_harvest(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     return (a->n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, a->b, 0.0);
