@@ -2084,9 +2084,9 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    explosion DRAW emits particles** — 0x420B00's debris loop calls 0x421550
    (0x420B18), which calls the grey-smoke emitter 0x472810 (0x421583) and the
    fire emitter 0x472AB0 (0x4215AA), and both append to a layer. Those two
-   emit only in a frame that ran a tick (tagpu_patches.c, fix_debris_emission),
-   so they land in the tick's first draw, before the gather of the tick's
-   first publish. The cache does not rest on that: the argument below holds
+   emit only in the first explosion draw after GameTime moves
+   (tagpu_patches.c, fix_debris_emission), so they land in the tick's first
+   draw, before the gather of the tick's first publish. The cache does not rest on that: the argument below holds
    for any append after the gather.
 
    What actually licenses the cache is weaker and is enough:

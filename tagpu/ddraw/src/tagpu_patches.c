@@ -1983,55 +1983,91 @@ static int fix_download_records(void)
 SIM_FEATURE(debris_emission, SIM_PUPPET_INDEPENDENT, "battle");
 
 /* A FLYING PIECE'S SMOKE AND FIRE, ONCE A TICK. The piece update 0x421550 (stdcall(ctx, sys),
-   reached only from the explosion DRAW 0x420B00 at 0x420B18, DrawGameScreen's 0x469B2C) emits a
-   grey smoke puff `call 0x472810` at 0x421583 when sys+0x28 bit 1 is set and a fire
-   `call 0x472AB0` at 0x4215AA when bit 0 is, both at the piece's position piece+0x16 and on
-   layer 9 (`push 9` at 0x42156A, 0x421591), on EVERY DRAW [DISASSEMBLED]. The piece itself moves
-   only in the tick 0x4213B0. So the engine emits one puff per piece per draw, all of a tick's
-   puffs on one point, and the draw rate is not the tick rate: Impure presents from its own thread,
-   so the engine's frame loop turns over as fast as the scene allows -- 236 to 482 draws a second
-   in a battle at 1024x768 under Xvfb, 4 to 29 draws in one tick of fx-rockets, 3200 to 4900 a
-   second on a sparse map (MEASURED; engine/sim.md *the draw rate*). A burning piece therefore
-   piled up to dozens of puffs a tick, a number that swung with every frame's cost, and filled
-   layer 9 -- where every impact puff lives too -- towards its cap, past which each emitter
-   destroys the layer's OLDEST object: the smoke of a battle flickered as the draw rate moved.
-   THE RULE: a piece emits in a draw only when that draw follows a tick. DeltaTime main+0x38A3B
-   is the count of ticks the frame function runs before its draw: the scheduler 0x495230 is its
-   only writer in play (0x4953AE..0x4953FE), the frame function reads it for the step
-   (0x496932 -> 0x49693E) and then draws (0x4969CD -> DrawGameScreen 0x468CF0), and Impure's
-   pacing writes it only between those two (tagpu_replay.c's turbo and pause, as the number of
-   ticks the frame then runs). So DeltaTime != 0 at the emitter is exactly "a tick ran in this
-   frame": one puff and one flame per piece per tick at any draw rate, none while paused (stock
-   kept emitting onto frozen pieces), and k at once still one -- as a frame running k ticks always
-   was. THE STUB TAIL-JUMPS into the emitter, so the emitter sees its stock return address
-   (0x421588, 0x4215AF) and the recorder's sink keys (replay-absent.tsv) are unchanged. Visual
-   only: the emitters draw the C runtime's rand, never the simulation's. */
+   reached in play only from the explosion DRAW 0x420B00 at 0x420B18; its other caller, 0x4211A0
+   at 0x4211B3, has none) emits a grey smoke puff `call 0x472810` at 0x421583 when sys+0x28 bit 1
+   is set and a fire `call 0x472AB0` at 0x4215AA when bit 0 is, both at the piece's position
+   piece+0x16 and on layer 9 (`push 9` at 0x42156A, 0x421591), on EVERY DRAW [DISASSEMBLED]. The
+   piece itself moves only in the tick 0x4213B0. Of the engine's 57 calls to its emitters these
+   two are the only ones DrawGameScreen reaches (a call-graph sweep of all 57). So the engine
+   emits one puff per piece per draw, all of a tick's puffs on one point, and the draw rate is not the tick rate: Impure presents
+   from its own thread, so the engine's frame loop turns over as fast as the scene allows -- 236
+   to 482 draws a second in a battle at 1024x768 under Xvfb, 4 to 29 draws in one tick of
+   fx-rockets, 3200 to 4900 a second on a sparse map (MEASURED; engine/sim.md *the draw rate*).
+   A burning piece's trail therefore got as dense as that tick's number of draws -- a solid rope
+   that pulsed with every frame's cost -- and the flood filled layer 9, where every impact puff
+   lives too, towards its cap, past which each emitter destroys the layer's OLDEST object. The
+   particle draws themselves are pure and the frame packet gathers once a tick, so what varied
+   was the smoke's density from one tick to the next, not one frame against the next.
+   THE RULE: a piece emits only in an explosion draw whose GameTime main+0x38A47 differs from the
+   one the previous explosion draw saw. The latch is taken once per draw at 0x420B00's own entry,
+   which every draw of the effects passes through -- the frame's 0x469B2C, tagpu_fxown.c's stub
+   in its place, MakePoster 0x495C76 and the movie recorder 0x4962C2 through DrawGameScreen -- so
+   it holds whatever wrote GameTime and whatever skipped the scheduler: a paused or menu frame
+   (0x496920 -> 0x496969, 0x496918 -> 0x49697B) still draws but advances nothing, and emits
+   nothing; a frame that ran k ticks emits once, as it did in stock; a load or a replay seek that
+   moves GameTime emits once. THE STUBS TAIL-JUMP: the emitters see their stock return addresses
+   (0x421588, 0x4215AF) and the explosion draw its stock one, so the recorder's sink keys
+   (replay-absent.tsv) are unchanged. Visual only: the emitters draw the C runtime's rand, never
+   the simulation's, and the particle pool is a presentation row (replay-globals.tsv,
+   particlepool). Both latch words are SIM_PRIVATE on that ground: written and read by the
+   explosion draw only, never by the simulation -- the same class as tagpu_impai.c's GameTime
+   last logged. Game thread only: 0x420B00's callers all run there. */
+static volatile int           s_debrisTick;   /* the GameTime the last explosion draw saw     */
+SIM_VAR(s_debrisTick, SIM_PRIVATE);
+static volatile unsigned char s_debrisEmit;   /* 1 iff this explosion draw's GameTime moved   */
+SIM_VAR(s_debrisEmit, SIM_PRIVATE);
+
+static unsigned char* fix_put32(unsigned char* p, const volatile void* a)
+{
+    unsigned int v = (unsigned int)(size_t)a;
+    memcpy(p, &v, 4);
+    return p + 4;
+}
+
 static int fix_debris_emission(void)
 {
+    static const unsigned char entry[5] = { 0x83, 0xEC, 0x14, 0x53, 0x55 };   /* sub esp,0x14; push ebx; push ebp */
     static const unsigned char smoke[5] = { 0xE8, 0x88, 0x12, 0x05, 0x00 };   /* call 0x472810 */
     static const unsigned char fire[5]  = { 0xE8, 0x01, 0x15, 0x05, 0x00 };   /* call 0x472AB0 */
-    FIXSITE site[2];
+    FIXSITE site[3];
     unsigned char* c;
     unsigned char* p;
     int k;
     memset(site, 0, sizeof site);
-    site[0].va = 0x00421583u; site[0].n = 5; memcpy(site[0].was, smoke, 5);
-    site[1].va = 0x004215AAu; site[1].n = 5; memcpy(site[1].was, fire, 5);
-    if (!fix_match(site, 2)) return FIX_BYTES;
-    c = fix_code(2 * 32);
+    site[0].va = 0x00420B00u; site[0].n = 5; memcpy(site[0].was, entry, 5);
+    site[1].va = 0x00421583u; site[1].n = 5; memcpy(site[1].was, smoke, 5);
+    site[2].va = 0x004215AAu; site[2].n = 5; memcpy(site[2].was, fire, 5);
+    if (!fix_match(site, 3)) return FIX_BYTES;
+    c = fix_code(48 + 2 * 32);
     if (!c) return FIX_STUB;
+
+    /* the latch, at the explosion draw's entry: eax and ecx are free there (the stdcall callee
+       reads neither before it writes it, 0x420B00..0x420B0C), and its first three instructions
+       follow it unchanged */
+    p = c;
+    fix_branch(&site[0], 0xE9, p);
+    *p++ = 0xA1; *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;     /* mov eax,[0x511DE8]       */
+    *p++ = 0x8B; *p++ = 0x80; *p++ = 0x47; *p++ = 0x8A; *p++ = 0x03;     /* mov eax,                 */
+    *p++ = 0x00;                                                        /*   [eax+0x38A47] GameTime */
+    *p++ = 0x31; *p++ = 0xC9;                                           /* xor ecx,ecx              */
+    *p++ = 0x3B; *p++ = 0x05; p = fix_put32(p, &s_debrisTick);          /* cmp eax,[s_debrisTick]   */
+    *p++ = 0x0F; *p++ = 0x95; *p++ = 0xC1;                              /* setne cl                 */
+    *p++ = 0x88; *p++ = 0x0D; p = fix_put32(p, &s_debrisEmit);          /* mov [s_debrisEmit],cl    */
+    *p++ = 0xA3; p = fix_put32(p, &s_debrisTick);                       /* mov [s_debrisTick],eax   */
+    memcpy(p, entry, 5); p += 5;                                        /* the stolen prologue      */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00420B05u);                      /* jmp 0x420B05             */
+
     for (k = 0; k < 2; k++) {
-        p = c + 32 * k;
-        fix_branch(&site[k], 0xE8, p);
-        *p++ = 0xA1; *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;     /* mov eax,[0x511DE8]  */
-        *p++ = 0x83; *p++ = 0xB8; *p++ = 0x3B; *p++ = 0x8A; *p++ = 0x03;     /* cmp dword            */
-        *p++ = 0x00; *p++ = 0x00;                                           /*   [eax+0x38A3B],0    */
-        *p++ = 0x75; *p++ = 0x03;                                           /* jne emit             */
-        *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                              /* ret 8: no tick ran   */
-        *p++ = 0xE9;                                                        /* emit: jmp emitter    */
+        p = c + 48 + 32 * k;
+        fix_branch(&site[1 + k], 0xE8, p);
+        *p++ = 0x80; *p++ = 0x3D; p = fix_put32(p, &s_debrisEmit);      /* cmp byte [s_debrisEmit], */
+        *p++ = 0x00;                                                    /*   0                      */
+        *p++ = 0x75; *p++ = 0x03;                                       /* jne emit                 */
+        *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                          /* ret 8: GameTime stood    */
+        *p++ = 0xE9;                                                    /* emit: jmp emitter        */
         tagpu_detour_rel(p, k == 0 ? 0x00472810u : 0x00472AB0u);
     }
-    return fix_write(site, 2);
+    return fix_write(site, 3);
 }
 
 SIM_FEATURE(oom_message, SIM_PUPPET_RUNS, "battle");
@@ -10237,8 +10273,8 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
-              "enginefix: a flying piece's smoke and fire once a tick, not once a draw "
-              "(0x421583, 0x4215AA) %s", fix_state(debris));
+              "enginefix: a flying piece's smoke and fire once per GameTime step, not once a draw "
+              "(latch 0x420B00; 0x421583, 0x4215AA) %s", fix_state(debris));
     b[sizeof b - 1] = 0;
     plog(b);
 

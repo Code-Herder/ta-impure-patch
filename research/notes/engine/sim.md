@@ -521,9 +521,11 @@ not `0x470EB0`. Their callers, classified:
 - **The explosion draw.** `0x421550` is called from the explosion draw `0x420B00` (`0x420B18`; the
   draw from DrawGameScreen at `0x469B2C`) and from `0x4211A0` (`0x4211B3`), which has no caller; it
   emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`
-  (`0x472AB0`'s only call). So those two follow the frame rate, not the tick, in stock; Impure emits them only in a
-  frame that ran a tick (DeltaTime, below, not zero), once a piece a tick at any draw rate and none while paused
-  ([engine patches](../modules/engine-patches.html), the flying pieces' emission).
+  (`0x472AB0`'s only call). So those two follow the frame rate, not the tick, in stock. Impure emits them only in
+  an explosion draw whose GameTime `main+0x38A47` differs from the one the previous explosion draw saw, latched once a draw at `0x420B00`'s entry: once a piece per frame that ran ticks -- a frame of k ticks emits once, as stock
+  did at 1997 draw rates -- and none in a paused or menu frame, which still draws (below)
+  ([engine patches](../modules/engine-patches.html), the flying pieces' emission). No other emitter call is
+  reached from DrawGameScreen: of the 57 calls into the emitters, a call-graph sweep finds only these two.
 - **The simulation.** `0x472630` (a flare) from the explosion add `0x420A30` (`0x420AE1`) and the
   corpse `0x486360` (`0x48644B`). The add emits it when its 4th argument is 0 and the point's y
   word `+6` is above the sea level byte `main+0x1427F` (`0x420ABE..0x420AD8`); the recorder keys it
@@ -1000,8 +1002,13 @@ and the setter are in *The speeds* above, the step's iteration in
   `+0x38A4D` × 0.1 (`0x4FDA28`), × the lag scale when it applies, + the fraction `+0x38A43`; the
   floor goes to **DeltaTime** `main+0x38A3B` and the rest back to the fraction
   (`0x495236..0x4953B9`; its stores `0x4953AE`, `0x4953CE`, `0x4953E2` and `0x4953FE` are its only writers in play,
-  by a `.text` scan for the displacement, the load wait's `0x498175` aside). DeltaTime is 0 while the pause bit `+0x38A51` bit 0 is set
-  (`0x4953D9..0x4953E2`). **The clamp `0x4953F5`**: a due above 5 becomes 5, the excess dropped,
+  by a `.text` scan for the displacement, the load wait's `0x498175` aside, and the saved-game load's block read
+  `0x4660A7..0x4660B1`, 0x1C bytes from the file into `+0x38A37..+0x38A52` through `0x4B4C80`). The scheduler stores 0
+  when it runs with the pause bit `+0x38A51` bit 0 set (`0x4953D9..0x4953E2`), but a skirmish frame with that bit or
+  the menu bit `+0x37EBE` bit 0 set never calls it (`0x496920 -> 0x496969`, `0x496918 -> 0x49697B`) and still draws
+  (`0x4969CD`): through a skirmish pause DeltaTime keeps the count of the last frame that stepped, so it does not say
+  whether this frame ran a tick. The Pause key's handler `0x495E90` (`0x496971`) sets the bit after that frame's step
+  and before its draw. **The clamp `0x4953F5`**: a due above 5 becomes 5, the excess dropped,
   and the throttle counter `+0x38A4F` takes one (past 10 the live speed drops by one); an unclamped
   frame gives one back (past −100 the live speed rises by one, up to the ceiling `+0x38A4B`)
   (`0x4953EF..0x49547B`). The lag scale applies only when the oldest type-3 record lags 900 ticks
