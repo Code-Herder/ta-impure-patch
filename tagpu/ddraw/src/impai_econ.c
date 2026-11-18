@@ -1448,7 +1448,8 @@ static int stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
    plant's rung was asked of such a builder and gave it no order the yield is over for the level
    (IMPAI_BRAIN.open_stall_over), whatever ended the walk. So the yield costs a stalled seat the site tests of
    one decision at most, once, and from the next decision the stall's rung is the top rung as it is past the
-   opening. A plant's row not asked -- no request standing, the builder held by its far record -- is no walk and
+   opening. Only the ladder passes a builder on: the reclaimers' pass (impai_econ_assign), which asks no row
+   under the stall's, asks the stall's energy itself. A plant's row not asked -- no request standing, the builder held by its far record -- is no walk and
    ends nothing: the stall's energy is asked at once.
    BOUNDS. It ends with the first factory ordered (the census's pending count) or counted (IMPAI_BRAIN.opened,
    set by the census before the ladder is asked), so it puts at most one plant ahead of the stall's energy; one
@@ -1910,9 +1911,13 @@ void impai_econ_assign(IMPAI_DEC* d)
        checks list only an idle builder idle, so a reclaimer never answered the stall -- on Escalation the
        commander reclaimed into a full metal store while the energy stood at 0 (MEASURED 2026-11-15, the economy
        diagnosis at d665a00a). A builder on a BUILD is left at it: its frame stands where it was ordered, and THE
-       STALLS keep the plants that frame would be from being ordered in a stall. The rung's yield is the
-       reclaimers' too: while THE STALL YIELDS TO THE FIRST PLANT the rung gives nothing, the reclaimer keeps its
-       job, and its next idle decision asks it the plant and then the stall's energy. */
+       STALLS keep the plants that frame would be from being ordered in a stall. THE YIELD IS THE LADDER'S
+       ALONE: the stall's energy is asked here directly, whether or not THE STALL YIELDS TO THE FIRST PLANT holds.
+       A reclaimer is asked no row under the stall's, so one passed on would be asked neither the plant nor the
+       energy and would keep its job through the stall, to job_timeout at the longest; the yield's invariant
+       rests on the row under the plant asking the same builder in the same assignment. What it gives up: a seat
+       whose builder is at a reclaim when the opening's stall begins takes one energy building before its first
+       plant, and is passed on to the plant at its next idle decision. */
     for (i = 0; d->e_stall && i < d->njobbed && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap;
          i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
@@ -1926,7 +1931,7 @@ void impai_econ_assign(IMPAI_DEC* d)
         memset(&a, 0, sizeof a);
         a.b = b;
         a.n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-        if (a.n > 0 && rung_stall_energy(d, &a)) {
+        if (a.n > 0 && stall_energy(d, &a)) {
             d->assigned++;
             if (ordered) d->out->stall_taken++;
         }
