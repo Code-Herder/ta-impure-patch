@@ -1809,6 +1809,17 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
    and switch the seat's plant type, for a raid that lasts a few decisions.
+   THE RING'S UNSEEN SITES: a site inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz < H:
+   0x47D302..0x47D352; one outside them is refused wherever the seat has looked, and is the site test's as
+   before) whose footprint centre the seat has not explored is never tested -- the seat's
+   site test refuses it whatever its ground (tagpu_impai.c, THE SEAT'S OWN SITE TEST), so it costs no site test --
+   and, where the builder can walk to see it (look_point), it is no lack of room: the ring does not grow past
+   ground nobody has judged. The nearest such site of a base ring is kept for the builder (IMPAI_DEC.unseen_*),
+   and the ladder's look rung sends it there when it has nothing to build (impai_build_look, THE RING'S LOOK). A site
+   the builder cannot walk to see is skipped as a refused one, so a ring of them is exhausted and grows.
+   INVARIANT, an ordering: ring_grow passes a ring only when every site of it that the cheap tests left was
+   refused by the site test or cannot be walked to; so in a level the seat has not mapped the ring never grows
+   past the builder's sight on untested ground, where every site test fails and none could ever pass.
    COVER (impai_build_sensor): with cover above 0, a site whose footprint centre lies past cover px of the key is
    skipped and is no lack of room, as the commander's reach is not. AT A POINT (`at`): the ring around the
    rectangle `at` instead of the base box, grown by gap alone, each site on held ground (THE HELD GROUND), and
@@ -1819,6 +1830,7 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    builder's own --, its site tests counted against AIR_OUT_TESTS in IMPAI_DEC.air_sites rather than the decision's
    site_tests, and neither its success nor its exhaustion touches ring_grow or a plant type. */
 static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
+static int look_point(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int cx, int cz, int32_t* px, int32_t* pz);
 #define AIR_OUT_TESTS 32        /* THE AIR PLANT'S OWN SEARCH's site tests a decision, beside site_tests         */
 #define AIR_REACH_REFUSALS 32   /* THE AIR PLANT'S OWN SEARCH's sites one builder may find out of its reach     */
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
@@ -1833,7 +1845,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     const int cap = out >= 0 ? AIR_OUT_TESTS : (int)in->plan->site_tests;
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
-    unsigned n, k, beyond = 0, threat_skipped = 0;
+    unsigned n, k, beyond = 0, threat_skipped = 0, unseen = 0;
     if (at) box = *at;
     else if (d->has_bbox) box = d->bbox;
     else {
@@ -1878,6 +1890,19 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             if (++d->air_reach >= AIR_REACH_REFUSALS) return 0;
             continue;
         }
+        if (cx >= 1 && cz >= 1 && cx + fx < d->m.w && cz + fz < d->m.h &&
+            !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) {
+            int32_t px, pz;
+            if (!unseen && !look_point(d, b, cx + fx / 2, cz + fz / 2, &px, &pz)) continue;
+            if (!unseen++ && !at && out < 0 && d->unseen_slot != b->slot) {
+                d->unseen_slot = b->slot;
+                d->unseen_cx = (int16_t)(cx + fx / 2);
+                d->unseen_cz = (int16_t)(cz + fz / 2);
+                d->unseen_px = px;
+                d->unseen_pz = pz;
+            }
+            continue;
+        }
         if (*tests >= cap) return 0;
         (*tests)++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
@@ -1899,7 +1924,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         }
         if (d->roots >= d->root_cap) return 0;
     }
-    if (at || out >= 0 || beyond || threat_skipped) return 0;
+    if (at || out >= 0 || beyond || threat_skipped || unseen) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
@@ -2335,6 +2360,61 @@ int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     in->st->explorer = b->slot;
     d->explorer_live = 1;
     return 1;
+}
+
+/* The point builder b walks to to see cell (cx, cz): the cell's centre when its block carries b's label, else the
+   centre of the nearest block within EXPLORE_NEAR that does (impai_reach_near), as THE EXPLORE CELL takes its
+   point; 0 when b reaches neither -- no label where it stands, water for a land constructor, another island. No
+   test as builder_label says. BOUND: one label read, and at most (2 EXPLORE_NEAR + 1)^2 = 49 more. */
+static int look_point(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int cx, int cz, int32_t* px, int32_t* pz)
+{
+    const IMPAI_REACH* rc = d->in->reach;
+    const unsigned cls = d->in->ti[b->type].mclass;
+    const int l = builder_label(d, b);
+    int ox, oz;
+    *px = cx * 16 + 8;
+    *pz = cz * 16 + 8;
+    if (l < 0) return 1;
+    if (!l) return 0;
+    if (impai_reach_at(rc, cls, cx >> 1, cz >> 1) == l) return 1;
+    if (!impai_reach_near(rc, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) return 0;
+    *px = ox * 32 + 16;
+    *pz = oz * 32 + 16;
+    return 1;
+}
+
+/* THE RING'S LOOK: builder b, left a site by a base ring in this decision only because the seat has not explored its
+   centre (THE RING'S UNSEEN SITES), walks to see it: a move (resolver mode 2) to the site's look point at the
+   ground's height, its job an explore of the centre's cell, so the explore's checks are its own (impai_brain.c,
+   job_checks and THE WALK CHECK). One look a builder a decision. The site passed the ring's tests before it was
+   kept -- within comm_r of the anchor and off THE COMMANDER'S SAFE DISTANCE for the commander, off ground threat
+   for every builder --, a constructor's straight way there is held to THE ROUTE as an explorer's is, and
+   order_mode refuses the commander a point THE BLAST'S APPROACH does.
+   TERMINATION, by construction: a site kept unseen leaves that state within job_timeout of the first decision
+   that has a command for its builder and nothing above this rung -- the job ends at the centre explored, when
+   the ring's next walk gives it to the site test; or the builder stands idle with the centre unseen (it
+   arrived, or its order was dropped), the job times out, the walk check turns it back, the route is threatened
+   or the resolver refuses the move, each of which records the cell in the fail ring (impai_brain.c,
+   job_checks), which the ring skips for fail_t as a refused site. So a ring is built on, or exhausted, and
+   never waits on a site no decision can change. */
+int impai_build_look(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const int cx = d->unseen_cx, cz = d->unseen_cz;
+    int32_t pos[3];
+    if (!d->unseen_slot || d->unseen_slot != b->slot) return 0;
+    d->unseen_slot = 0;
+    if (d->in->ti[b->type].cat != IMPAI_C_COMMANDER && route_threatened(d, b, d->unseen_px, d->unseen_pz)) {
+        impai_fail_add(d, cx, cz);
+        return 0;
+    }
+    pos[0] = (int32_t)((uint32_t)d->unseen_px << 16);
+    pos[1] = 0;
+    pos[2] = (int32_t)((uint32_t)d->unseen_pz << 16);
+    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
+    if (order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_EXPLORE, cx, cz)) return 1;
+    /* refused with a command to spare: the resolver or the commander's rules, a refusal the fail ring passes */
+    if (d->roots < d->root_cap) impai_fail_add(d, cx, cz);
+    return 0;
 }
 
 /* ---- assisting ---- */
