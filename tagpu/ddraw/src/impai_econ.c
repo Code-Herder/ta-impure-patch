@@ -1436,9 +1436,7 @@ static int stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
 /* THE STALL YIELDS TO THE FIRST PLANT. The stall's energy is the ladder's top rung, and in the opening it would
    stand above the first plant for as long as the stall lasts: the opening's own energy buildings cost energy, so
    they bring the first stall forward, and each idle decision of it takes the commander for one more energy
-   building before the plant is asked. MEASURED 2026-11-18 with THE OPENING'S ENERGY alone, GameTime of the first
-   stall and energy buildings begun before the first plant: Red Triangle 937, 4; Metal Heck 734, 5; Luschaven's
-   start 3, 5 and no plant by 6 000. So while the seat has never had a factory and none is ordered, once
+   building before the plant is asked (decisions.md, *The opening's order*, has the games). So while the seat has never had a factory and none is ordered, once
    open_energy energy buildings are counted or ordered (THE OPENING'S TERMS, the first factory's own) the stall's
    rung passes a builder on to the plant's rungs, and the row below them asks it the stall's energy in the same
    decision when they gave it no order.
@@ -1629,7 +1627,7 @@ static int rung_mex(IMPAI_DEC* d, IMPAI_ASK* a)
     IMPAI_MEX mx;
     int t;
     if (!(choose_mex(d, d->menu, a->n, &mx) && !surplus_waits(d))) return 0;
-    if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
+    if (d->done[IMPAI_C_MEX] > 0 && impai_econ_open_mex(d) &&
         (impai_metal_map(d) || impai_spot_pick(d, a->b, &mx, NULL)) &&
         impai_build_reclaim(d, a->b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
         return 1;

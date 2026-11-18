@@ -1889,8 +1889,11 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    exhaustion at the widest (the type then passed over unless waived), and the commander's 0 at a ring left for
    its reach. So no order, exhaustion or pass-over of another type moves it; no growth stands at the widest ring
    for a later walk to meet, whether the walks that climbed it were refused by the site test or left their sites
-   for the builder's far record, which counts as a refusal; and the growths of one type start at the base, so the
-   type THE CHOICE takes after a pass-over is walked from the base outward. WHY TWO: the commander leaves a site
+   for the builder's far record, which counts as a refusal. A type's two growths are 0 until its first walk, so a
+   type THE CHOICE first takes after another's pass-over is walked from the base outward. A PASS-OVER PUTS BACK
+   ONE GROWTH AT MOST: the growth of the walk that exhausted the widest ring; the type's other growth stands
+   where its own walks left it, and a pass-over by way refusals (way_refused) writes neither, so a type back from
+   its pass-over is walked on from the growths it kept. WHY TWO: the commander leaves a site
    past its reach for another builder. One growth for both would stand at the ring the commander leaves, with the
    rings inside it never walked again until a constructor asks for the type, or go back to the base under the
    constructor whose site lies past that ring. The commander's own goes back to 0 at a ring it leaves for its
@@ -1924,10 +1927,8 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    THE PLANT'S WALK CLIMBS (ring_build): a plant's base-ring walk that exhausts a ring below the widest walks the
    next ring in the same decision -- to an order, a site that is left, a way out deferred, the decision's site
    tests, or the widest ring's exhaustion. WHY: a plant walk that orders nothing hands its builder to the rungs
-   below it for a whole job, so a climb of one ring a decision costs a job a ring. MEASURED 2026-11-18,
-   bar-hota-metalheck-ca-2 and -aa-2, the plant's own growth with one ring a decision: the vehicle plant's ring 0
-   holds 4 sites, 3 under the extractors' claims and 1 refused; the commander took an extractor (ca-2) or six wind
-   generators in a stall (aa-2) and the first plant was ordered at 3 254 for 2 474 and at 5 324 for 2 324. BOUND:
+   below it for a whole job, so a climb of one ring a decision costs a job a ring (decisions.md, *The plant's
+   ring is its own*, has the games). BOUND:
    IMPAI_RING_WIDEST + 1 rings a walk, each one place_ring; the site tests are the decision's, and a walk they
    cut is exhausted or not by THE CUT RING GROWS, the next decision's walk going on from the growth it reached.
    INVARIANT, an ordering: a plant's walk that tests a site or meets no site ends the decision in an order, in a
