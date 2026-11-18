@@ -2,12 +2,14 @@
 """thinkview.py -- one page that shows what ImpAI was thinking through recorded games: the war room and the
 flight recorder as one instrument.
 
-    tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR]... --out DIR [--step N] [--max-bytes B] [--bare]
+    tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR]... [--gamedir DIR]... [--content FILE]...
+                             --out DIR [--step N] [--max-bytes B] [--bare]
 
-Writes DIR/index.html and, for each recording, DIR/<name>.js: the page (thinkview.html, beside this file) and one
-data file a recording, which the page loads when the recording is picked. The page needs no server and no
-network but its fonts: open index.html. --bare writes the page without the document around it (doctype, head,
-body), for a host that wraps what it is given in its own.
+Writes DIR/index.html and, for each recording, DIR/<name>.js and DIR/<map>.<crc>.map.webp: the page (thinkview.html,
+beside this file), one data file a recording and seat, which the page loads when it is picked, and the map's
+picture, one a map file. A recording several ImpAI seats played is a data file a seat (`<name>-seat<S>.js`) unless --seat names
+one. The page needs no server and no network but its fonts: open index.html. --bare writes the page without the
+document around it (doctype, head, body), for a host that wraps what it is given in its own.
 
 THE VIEW is two halves of one clock. THE FLIGHT RECORDER is the whole game on one time axis: a lane a squad
 with its tasks as spans, a lane a judgement of the seat's (naval, island, dry hunt, lead, pressure, base threat,
@@ -16,7 +18,17 @@ recorder's cursor stands on: the seat's anchor and base box, its units by job, e
 line, the enemy base's estimate, and the enemy as the seat knows it (in sight, a radar or sonar contact, a
 remembered ghost) over the enemy as it is, which the page draws faintly and can hide.
 
-EVERYTHING IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
+THE GROUND UNDER THE WAR ROOM (thinkmap.py). The map's picture is rendered from the game's own map file, found
+in the archives the recording's header lists (--gamedir DIR names a game directory to look in; by default the
+one the recording lies in, `<gamedir>/replays/`, then the install tavfs.py finds). The heights, the metal and the
+features are the recording's own feature grid: the metal and the heights as the first sample holds them, a
+feature from the sample it is first seen at to the sample it is gone at. A unit type's facts -- it extracts
+metal, it floats, it flies -- are its FBI's in the same archives, by the name the content file gives its number
+(--content FILE names a content file of predfit.py's for a mod; the first whose count is the recording's names
+the types). What could not be read is a line of the page, never a guess. THE PICTURE IS DERIVED FROM THE
+ORIGINAL GAME: it is written into --out and nowhere else.
+
+EVERYTHING ELSE IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
 (thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
 (--tree DIR names the tree that made it). What think.py's extract does not keep -- where each unit stands, and
 each seat's metal income -- is read from the same stream in one more pass (sample), through tarec.py's own
@@ -45,11 +57,13 @@ import math
 import re
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import think  # noqa: E402
+import thinkmap  # noqa: E402
 
 TEMPLATE = HERE / "thinkview.html"
 MAX_BYTES = 3_000_000
@@ -337,7 +351,9 @@ def unit_lives(ex) -> list:
 
 def sample(path, ticks) -> tuple:
     """((the map's width, height in px), {tick: {"units": [(slot, x, z, structure, frame), ...], "metal": {seat:
-    income}}}) at each of `ticks`, read from the recording's stream through tarec.py: a unit's place is its
+    income}}}, the ground: {"track": thinkmap.Track of the feature grid over the samples or None without numpy,
+    "archives": the header's, "map": its map's name}) at each of `ticks`, read from the recording's stream
+    through tarec.py: a unit's place is its
     footprint's centre in px (tarec.rect), `structure` tarec.structure, `frame` 1 while its build fraction is not
     0; a seat's income its player record's last pass (bar.py's PLAYER_METAL_IN), {} when bar.py cannot be
     loaded. The world is taken as tick T's last record leaves it, which is what think.py's tick T holds."""
@@ -348,11 +364,16 @@ def sample(path, ticks) -> tuple:
         metal_at = bar.PLAYER_METAL_IN
     except Exception:                                           # noqa: BLE001
         metal_at = None
-    want, out = set(ticks), {}
+    want, out, track = set(ticks), {}, None
     try:
         h, bl, _stop = tarec.load(str(path))
         seats = [p["index"] for p in h["players"]]
         built = struct.Struct("<f")
+        gw, gh = h["features"][0], h["features"][1]
+        try:
+            track = thinkmap.Track(gw, gh)
+        except ImportError:
+            track = None
 
         def take(w):
             units = []
@@ -367,6 +388,8 @@ def sample(path, ticks) -> tuple:
             if metal_at is not None:
                 metal = {s: num(struct.unpack_from("<f", w.players[s], metal_at)[0]) for s in seats}
             out[w.tick] = {"units": units, "metal": metal}
+            if track is not None:
+                track.take(w.tick, w.grid)
 
         def on_record(w, kind, _b):
             if kind is None and w.tick in want and w.tick not in out:
@@ -374,10 +397,68 @@ def sample(path, ticks) -> tuple:
         w = tarec.stream_to(h, bl, on_record=on_record)
         if w.tick in want and w.tick not in out:
             take(w)
-        gw, gh = h["features"][0], h["features"][1]
     except Exception as e:                                      # noqa: BLE001
         raise ViewError(f"{path}: its stream could not be sampled ({type(e).__name__}: {e})") from None
-    return (gw * CELL_PX, gh * CELL_PX), out
+    return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map")}
+
+
+def game_dirs(recs: list, given: list) -> list:
+    """The game directories a map file is looked for in: --gamedir's, else each recording's own (it lies in
+    `<gamedir>/replays/`) and the install tavfs.py finds."""
+    if given:
+        return [Path(d) for d in given]
+    out = [Path(r).resolve().parent.parent for r in recs if Path(r).resolve().parent.name.lower() == "replays"]
+    try:
+        out.append(Path(thinkmap._tavfs().find_install(None)))
+    except (Exception, SystemExit):                             # noqa: BLE001
+        pass
+    return list(dict.fromkeys(d for d in out if d.is_dir()))
+
+
+def terrain(found: dict, names: dict, dirs: list, pictures: dict) -> dict:
+    """The ground's part of a recording's data (thinkview.html, THE GROUND): {"ground": the recording's heights,
+    metal and features with the defs' names, "map": the picture's entry or None, "kinds": {type: its facts},
+    "said": what could not be read or rendered}. `found` is sample's third answer, `names` {type index: name} of
+    the types the data names; the picture, rendered once a map file, is kept in `pictures` by the file's CRC as
+    (bytes, entry) for the command to write under the entry's name, `<map>.<crc>.map.webp`."""
+    out = {"ground": {}, "map": None, "kinds": {}, "said": []}
+    track = (found or {}).get("track")
+    if track is None or track.defs is None:
+        out["said"].append("no sample of the recording's feature grid (numpy is needed): no heights, metal or features")
+        return out
+    try:
+        src = thinkmap.Source(found.get("archives"), dirs)
+        tnt, where = thinkmap.tnt_of(src, found.get("map") or "")
+        out["said"] += thinkmap.checked(tnt, track)
+    except thinkmap.MapError as e:
+        out["ground"] = dict(track.ground(), defs={}, named=0)
+        out["said"].append(f"the map's picture is not drawn: {e}")
+        return out
+    table, lost = thinkmap.feature_table(src, tnt.feature_names())
+    out["ground"] = dict(track.ground(tnt.sealevel), defs=table, named=len(table))
+    if lost:
+        out["said"].append("no features/**.tdf holds " + ", ".join(lost[:6]) + (f" and {len(lost) - 6} more" if len(lost) > 6 else ""))
+    out["kinds"] = {str(i): k for i, k in thinkmap.unit_kinds(src, names).items()}
+    if names and not out["kinds"]:
+        out["said"].append("no units/<name>.fbi of the types' names in the recording's archives: extractors are not told apart")
+    key = zlib.crc32(tnt.blob)
+    file = (re.sub(r"[^A-Za-z0-9._-]+", "-", found.get("map") or "").strip("-") or "map") + f".{key:08x}.map.webp"
+    if key not in pictures:
+        try:
+            blob, _where = src.open("palettes/palette.pal")
+            img, n = thinkmap.render(tnt, thinkmap.palette(blob))
+            raw, q, (w, h) = thinkmap.encode(img)
+            pictures[key] = (raw, {"file": file, "w": w, "h": h, "px": [tnt.mw * thinkmap.TILE_PX, tnt.mh * thinkmap.TILE_PX],
+                                   "from": where, "tile": n, "quality": q, "bytes": len(raw),
+                                   "archives": src.notes() if src.listed else ["the recording lists no archive: the install's own mount order"]})
+        except ImportError:
+            pictures[key] = (None, None)
+            out["said"].append("the map's picture is not drawn: Pillow and numpy are needed")
+        except thinkmap.MapError as e:
+            pictures[key] = (None, None)
+            out["said"].append(f"the map's picture is not drawn: {e}")
+    out["map"] = pictures[key][1]
+    return out
 
 
 def seat_frames(ex, lay, seat, ticks, used: set) -> dict:
@@ -430,6 +511,23 @@ def seat_frames(ex, lay, seat, ticks, used: set) -> dict:
     return out
 
 
+def interned(table: dict, flat: list, n: int) -> list:
+    """`flat`'s rows of `n` values as their indices in `table` ({row: index}, grown here): a builder's job or a
+    remembered row stands for many samples, and is written once."""
+    return [table.setdefault(tuple(flat[i:i + n]), len(table)) for i in range(0, len(flat), n)]
+
+
+def held_steps(sets: list) -> list:
+    """The held grounds' cell lists as steps, [[cells added, cells removed], ...], each from the one before it and
+    the first from none: held ground grows and shrinks a cell or two at a time."""
+    out, before = [], set()
+    for cells in sets:
+        now = set(cells)
+        out.append([sorted(now - before), sorted(before - now)])
+        before = now
+    return out
+
+
 def plan_value(tree, name: str):
     """A number the plan's defaults give `name` in impai_brain.c's text (`.base_r = 1536`), None when the tree
     names none: the plan is no recorded state, so its text is the one place the figure stands."""
@@ -468,9 +566,11 @@ def enum_names(lay, seat) -> dict:
     return out
 
 
-def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES) -> dict:
+def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None) -> dict:
     """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
-    answer for the recording; `names` think.type_names'. ViewError when the decision ticks alone pass `budget`."""
+    answer for the recording; `names` think.type_names'; `ground(found, names)` terrain's answer for sample's
+    third and the types the data names ({index: name}), None for a page with no ground. ViewError when the
+    decision ticks alone pass `budget`."""
     result = result or {}
     end = result.get("end_tick") or ex.end
     end = min(max(int(end), 1), ex.end) if ex.end else 0
@@ -487,11 +587,11 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
         raise ViewError("--step: at least one tick")
     regular = sorted(set(range(0, end + 1, step)) | {end})
     ticks = sorted(set(regular) | set(decisions))
-    dims, world = sampler(ticks)
+    dims, world, *found = sampler(ticks)
     used = set()
     seat_side = seat_frames(ex, lay, seat, ticks, used)
     lives = [life + [0, 0, 0, None] for life in unit_lives(ex)]     # + structure, x, z, the tick it is complete
-    at_slot, li, frames, helds = {}, 0, [], {}
+    at_slot, li, frames, helds, jrows, krows = {}, 0, [], {}, {}, {}
     seats = sorted({p["index"] for p in ex.players})
     counts = ex.alive(ticks=ticks)[1]
     for i, t in enumerate(ticks):
@@ -514,7 +614,7 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
                 life[7] = t
         side = seat_side[t]
         cells = tuple(side["held"])
-        frames.append({"t": t, "m": mobile, "j": side["j"], "k": side["k"],
+        frames.append({"t": t, "m": mobile, "j": interned(jrows, side["j"], 7), "k": interned(krows, side["k"], 6),
                        "h": helds.setdefault(cells, len(helds)),
                        "a": [counts.get(s, [0] * len(ticks))[i] for s in seats],
                        "i": [w["metal"].get(s, 0) for s in seats] if w["metal"] else []})
@@ -522,7 +622,9 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
         for key, tr in trk.items():
             if re.sub(r"\[\d+\]", "[*]", key) == path:
                 used.update(tr[1])
-    data = {"v": 1, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
+    under = ground(found[0] if found else None, {i: name_of[i] for i in sorted(used) if i in name_of}) if ground else {}
+    data = {"v": 2, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
+            "said": under.get("said") or [], "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
             "players": ex.players, "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
             "px": list(dims), "units": {"block": BLOCK_PX, "cell": CELL_PX, "held": HELD_PX,
                                         "held_row": lay.macros.get("IMPAI_GRID_MAX", 128)},
@@ -539,7 +641,8 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
                          for e in episodes],
             "lanes": lanes(episodes, end), "judgements": judgement_lanes(trk, enums, end, have),
             "events": evs, "decisions": decisions, "step": step,
-            "lives": lives, "helds": [list(c) for c in sorted(helds, key=helds.get)], "frames": frames}
+            "lives": lives, "helds": held_steps(sorted(helds, key=helds.get)), "jrows": [list(r) for r in jrows],
+            "krows": [list(r) for r in krows], "frames": frames}
     keep = set(decisions) | {0, end}
     while True:
         size = len(json.dumps(data, separators=(",", ":")))
@@ -581,7 +684,12 @@ def data_file(ident: str, data: dict) -> str:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("rec", type=Path, nargs="+")
-    p.add_argument("--seat", type=int, default=None, help="the seat (default: each recording's one ImpAI seat)")
+    p.add_argument("--seat", type=int, default=None, help="the seat (default: each of a recording's ImpAI seats)")
+    p.add_argument("--gamedir", action="append", default=[], metavar="DIR",
+                   help="a game directory the map file is looked for in (repeatable; default: the recording's own "
+                        "and the install)")
+    p.add_argument("--content", action="append", default=[], metavar="FILE",
+                   help="a content file that names a mod's unit types (repeatable; the first whose count fits)")
     p.add_argument("--tree", action="append", default=[], metavar="DIR",
                    help="a source tree whose layout a recording may be read by (repeatable)")
     p.add_argument("--out", type=Path, required=True, metavar="DIR")
@@ -591,30 +699,42 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     try:
         lays = think.layouts(a.tree)
-        manifest, files = [], {}
+        manifest, files, pictures, stems = [], {}, {}, set()
+        dirs = game_dirs(a.rec, a.gamedir)
         for rec in a.rec:
             ex = think.extract(rec)
             lay = think.fit(ex, lays)
-            seat = think.pick_seat(ex, a.seat)
-            names = think.type_names(ex)
-            data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
-                         a.step, a.max_bytes)
-            ident = stem = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
+            seats = [think.pick_seat(ex, a.seat)] if a.seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
+            names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in a.content] if n), [])
+            stem = base = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
             n = 1
-            while ident in files:
+            while stem in stems:
                 n += 1
-                ident = f"{stem}-{n}"
-            files[ident] = data_file(ident, data)
-            manifest.append({"id": ident, "file": f"{ident}.js", "name": ex.name, "map": ex.map,
-                             "seat": ex.seat_label(seat), "end": data["end"]})
-            print(f"thinkview: {ex.name}: {len(data['frames'])} samples every {data['step']} ticks and at "
-                  f"{len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, {len(data['events'])} "
-                  f"events, {len(files[ident])} bytes" + ("" if names else "; no name table fits: types by number")
-                  + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else ""))
+                stem = f"{base}-{n}"
+            stems.add(stem)
+            for seat in seats:
+                ident = stem if len(seats) == 1 else f"{stem}-seat{seat}"
+                data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
+                             a.step, a.max_bytes,
+                             lambda found, used: terrain(found, used, dirs, pictures))
+                files[ident] = data_file(ident, data)
+                manifest.append({"id": ident, "file": f"{ident}.js", "name": ex.name, "map": ex.map,
+                                 "seat": ex.seat_label(seat), "end": data["end"]})
+                m = data["picture"]
+                print(f"thinkview: {ex.name}, {ex.seat_label(seat)}: {len(data['frames'])} samples every {data['step']} "
+                      f"ticks and at {len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, "
+                      f"{len(data['events'])} events, {len(files[ident])} bytes"
+                      + (f"; map {m['w']} x {m['h']} px from {m['from']}, {m['bytes']} bytes" if m else "")
+                      + ("" if names else "; no name table fits: types by number")
+                      + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else "")
+                      + "".join(f"\n  {line}" for line in data["said"]))
         html = page(manifest, a.bare)
         a.out.mkdir(parents=True, exist_ok=True)
         for ident, text in files.items():
             (a.out / f"{ident}.js").write_text(text)
+        for raw, entry in pictures.values():
+            if raw:
+                (a.out / entry["file"]).write_bytes(raw)
         (a.out / "index.html").write_text(html)
         print(f"thinkview: {a.out / 'index.html'}, {len(html)} bytes")
         return 0

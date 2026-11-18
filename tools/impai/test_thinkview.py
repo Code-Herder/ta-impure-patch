@@ -8,9 +8,17 @@ anchor, a plant's way out, a job's site, a known row's block). THE GAME is one s
 at 100, ATTACK at 200 with another goal at 260, RETREAT on a lost prediction at 300, FREE at 350 -- read through
 test_think's fake of think.stream, and a fake of thinkview.sample stands for the unit images. The tests that
 need the DLL's compiler are skipped where it is not installed; the lanes', the runs' and the pressure's
-arithmetic need none."""
+arithmetic need none.
+
+THE GROUND's tests (thinkmap.py) read no file of the game: THE MAP is a TNT made here, 4 x 3 tiles of one colour
+each, loose in a game directory of the test's own beside a palette, a feature section and a unit's FBI, and THE
+GRID is a feature grid of 8 x 6 cells written cell by cell. The view's arithmetic is the page's own block
+(thinkview.html, between its VIEW marks), evaluated by node where node is installed."""
+import base64
 import json
 import shutil
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_think  # noqa: E402
 import think  # noqa: E402
 import thinklayout  # noqa: E402
+import thinkmap  # noqa: E402
 import thinkview  # noqa: E402
+
+try:
+    import numpy
+    from PIL import Image
+except ImportError:
+    numpy = Image = None
 
 HEADER = """#ifndef IMPAI_H
 #define IMPAI_H
@@ -197,10 +212,16 @@ class View(unittest.TestCase):
         for t in (100, 200, 260, 300, 350):                     # every decision tick is a sample
             self.assertIn(t, fr)
         f = fr[200]
-        self.assertEqual(f["j"], [12, 2, 0xFFFF, 0, 0, 1, 0xFFFF])              # the boat, in squad 1
-        self.assertEqual(f["k"], [21, 6, 0x0A, 2, 14, 36])                      # the tower, in sight and on radar
-        self.assertEqual(d["helds"][f["h"]], [8, 10])                           # held[1] = 0b101: cells 8 and 10
-        self.assertEqual(fr[300]["k"][2], 0x20)                                 # a ghost by then
+        jobs = lambda fr_: [d["jrows"][i] for i in fr_["j"]]                    # a row is written once, a sample names it
+        known = lambda fr_: [d["krows"][i] for i in fr_["k"]]
+        self.assertEqual(jobs(f), [[12, 2, 0xFFFF, 0, 0, 1, 0xFFFF]])           # the boat, in squad 1
+        self.assertEqual(known(f), [[21, 6, 0x0A, 2, 14, 36]])                  # the tower, in sight and on radar
+        self.assertEqual(fr[260]["k"], f["k"])                                  # the same row at the next sample
+        held = set()                                                            # held ground: steps from the one before
+        for add, rem in d["helds"][:f["h"] + 1]:
+            held = (held - set(rem)) | set(add)
+        self.assertEqual(sorted(held), [8, 10])                                 # held[1] = 0b101: cells 8 and 10
+        self.assertEqual(known(fr[300])[0][2], 0x20)                            # a ghost by then
         self.assertEqual(fr[90]["k"], [])                                       # not known yet: the truth alone
         lives = {life[0]: life for life in d["lives"]}
         self.assertEqual(lives[11][1:7], [7, 0, None, 1, 100, 200])             # a structure: one place for its life
@@ -280,6 +301,208 @@ class View(unittest.TestCase):
             self.assertEqual(thinkview.main([str(self.tmp / "nothing.imprec"), "--out", str(self.tmp / "p2")]), 2)
         self.assertIn("COULD NOT RUN", out.getvalue())
         self.assertFalse((self.tmp / "p2").exists())
+
+
+MW, MH = 4, 3                   # THE MAP, in 32-px tiles: wider than tall, so a swapped axis shows
+GW, GH = MW * 2, MH * 2         # ... and in 16-px cells
+PALETTE = [(i * 20 % 256, 255 - i * 20 % 256, i * 7 % 256) for i in range(256)]
+
+
+def tnt_bytes(heights=None, features=None, names=("Tree1", "Rock1"), sea=40) -> bytes:
+    """THE MAP as a TNT (tascene's layout): tile t is colour t + 1 all over and stands at map cell t, row-major;
+    `heights` a byte a 16-px cell, `features` {cell: index into `names`}."""
+    heights = heights or bytes(GW * GH)
+    attr = b"".join(struct.pack("<BHB", heights[c], (features or {}).get(c, 0xFFFF), 0) for c in range(GW * GH))
+    tiles = b"".join(bytes([t + 1]) * 1024 for t in range(MW * MH))
+    anims = b"".join(struct.pack("<i128s", i, n.encode()) for i, n in enumerate(names))
+    p_attr = 64 + MW * MH * 2
+    p_gfx = p_attr + len(attr)
+    p_anim = p_gfx + len(tiles)
+    head = struct.pack(thinkmap._tavfs().tascene.TNT_HDR, 0x2000, GW, GH, 64, p_attr, p_gfx, MW * MH, len(names), p_anim,
+                       sea, p_anim + len(anims), 0, 0, 0, 0, 0)
+    return head + struct.pack(f"<{MW * MH}H", *range(MW * MH)) + attr + tiles + anims + struct.pack("<2i", 1, 1) + b"\0"
+
+
+def grid(heights=None, metal=None, defs=None) -> bytes:
+    """THE GRID: tarec's World.grid, 13 bytes a cell (+4 the height, +7 the metal, +8 the def)."""
+    out = bytearray()
+    for c in range(GW * GH):
+        cell = bytearray(13)
+        cell[4], cell[7] = (heights or bytes(GW * GH))[c], (metal or bytes(GW * GH))[c]
+        struct.pack_into("<H", cell, 8, (defs or {}).get(c, 0xFFFF))
+        out += cell
+    return bytes(out)
+
+
+@unittest.skipUnless(numpy and Image, "numpy and Pillow, the picture's and the layers' need")
+class Ground(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_thinkmap."))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.dir = self.tmp / "gamedir"
+        for sub in ("maps", "palettes", "features", "units"):
+            (self.dir / sub).mkdir(parents=True)
+        self.heights = bytes(min(255, 10 * (c // GW) + c % GW) for c in range(GW * GH))
+        (self.dir / "maps" / "Test Map.tnt").write_bytes(tnt_bytes(self.heights, {5: 0, 20: 1}))
+        (self.dir / "palettes" / "PALETTE.PAL").write_bytes(b"".join(bytes(c) + b"\0" for c in PALETTE))
+        (self.dir / "features" / "all.tdf").write_text(
+            "[Tree1] { description=Tree; footprintx=1; footprintz=2; energy=250; reclaimable=1; blocking=1; }\n"
+            "[Rock1] { description=Rock; metal=40; energy=3; reclaimable=1; }\n")
+        (self.dir / "units" / "MEX.fbi").write_text("[UNITINFO] { UnitName=MEX; ExtractsMetal=0.001; }")
+        (self.dir / "units" / "BOAT.fbi").write_text("[UNITINFO] { UnitName=BOAT; Floater=1; }")
+        self.listed = [("impure-patch.ufo", 1, 0)]     # Impure's own archive: left out, so the loose files are all
+
+    def source(self, listed=None):
+        return thinkmap.Source(self.listed if listed is None else listed, [self.dir])
+
+    def tnt(self):
+        return thinkmap.tnt_of(self.source(), "Test Map")[0]
+
+    def test_the_picture_shows_each_tile_where_the_world_has_it(self):
+        for side in (4096, 100, 48):                    # whole; resized; each tile halved and then resized
+            img, n = thinkmap.render(self.tnt(), PALETTE, side)
+            info = {"w": img.width, "h": img.height, "px": [MW * 32, MH * 32]}
+            self.assertEqual((n, max(img.size)), {4096: (1, 128), 100: (1, 100), 48: (2, 48)}[side])
+            self.assertEqual(img.width * MH, img.height * MW)               # the map's shape, both axes
+            for t in range(MW * MH):
+                x, z = thinkmap.image_px(info, (t % MW) * 32 + 16, (t // MW) * 32 + 16)
+                for got, want in zip(img.getpixel((int(x), int(z))), PALETTE[t + 1]):
+                    self.assertAlmostEqual(got, want, delta=3, msg=f"tile {t} at side {side}")
+        self.assertEqual(thinkmap.image_px(info, MW * 32, MH * 32), (img.width, img.height))
+
+    def test_the_picture_is_held_to_its_bytes(self):
+        noise = Image.frombytes("RGB", (256, 256), bytes(numpy.random.default_rng(1).integers(0, 256, 256 * 256 * 3, numpy.uint8)))
+        raw, q, size = thinkmap.encode(noise, 30000)
+        self.assertLessEqual(len(raw), 30000)
+        self.assertEqual((raw[:4], raw[8:12]), (b"RIFF", b"WEBP"))
+        self.assertTrue(q < thinkmap.QUALITIES[0] or size != (256, 256))    # noise does not fit as it is
+
+    def test_a_file_opens_as_the_recordings_game_opened_it(self):
+        src = self.source()
+        self.assertEqual(src.where("maps\\TEST MAP.TNT"), ("loose", []))     # without case, as the engine
+        self.assertEqual(src.notes(), [])
+        gone = self.source([("first.hpi", 10, 0)])                          # a listed archive that is not found
+        self.assertEqual(gone.notes(), ["first.hpi: not found"])
+        self.assertEqual(gone.open("maps/Test Map.tnt")[1], "loose")        # loose stands before every archive
+        with self.assertRaisesRegex(thinkmap.MapError, "first.hpi"):
+            gone.open("maps/Other.tnt")
+        with self.assertRaisesRegex(thinkmap.MapError, "no game directory"):
+            thinkmap.Source(self.listed, [self.tmp / "nowhere"])
+
+    def test_the_grid_gives_the_heights_the_metal_and_the_features(self):
+        metal = bytearray([3] * (GW * GH))
+        metal[10:13] = b"\x1e\x1e\x28"
+        tr = thinkmap.Track(GW, GH)
+        tr.take(2, grid(self.heights, bytes(metal), {5: 0, 6: 0xFFFE, 20: 1}))     # 0xFFFE: a footprint's cell, no anchor
+        tr.take(30, grid(self.heights, bytes(metal), {5: 0, 6: 0xFFFE, 20: 1}))
+        tr.take(60, grid(self.heights, bytes(metal), {5: 0, 6: 0xFFFE, 33: 7}))    # the rock gone, a wreck made
+        g = tr.ground(sea=40)
+        self.assertEqual(g["lives"], [[5, 0, 0, None], [20, 1, 0, 60], [33, 7, 60, None]])
+        self.assertEqual((g["gw"], g["gh"], g["at"], g["sea"], g["hstep"]), (GW, GH, 2, 40, 1))
+        self.assertEqual(base64.b64decode(g["h"]), self.heights)
+        cells = [v for v, n in zip(g["metal"]["rle"][::2], g["metal"]["rle"][1::2]) for _ in range(n)]
+        self.assertEqual((bytes(cells), g["metal"]["base"], g["metal"]["max"]), (bytes(metal), 3, 40))
+        self.assertEqual(thinkmap.Track(GW, GH).ground(), {})               # no sample: no ground
+
+    def test_the_heights_are_handed_over_a_value_a_block_on_a_large_map(self):
+        with mock.patch.object(thinkmap, "HEIGHT_SIDE", 4):
+            tr = thinkmap.Track(GW, GH)
+            tr.take(1, grid(self.heights))
+            g = tr.ground()
+        self.assertEqual((g["hstep"], g["hw"], g["hh"]), (2, 4, 3))
+        h = base64.b64decode(g["h"])
+        self.assertEqual(h[0], round((0 + 1 + 10 + 11) / 4 + .01))          # a block's mean
+        self.assertEqual(len(h), 12)
+
+    def test_the_map_file_is_held_to_the_recordings_ground(self):
+        tr = thinkmap.Track(GW, GH)
+        tr.take(1, grid(self.heights))
+        self.assertEqual(thinkmap.checked(self.tnt(), tr), [])
+        other = thinkmap.Track(GW, GH)
+        other.take(1, grid(bytes(GW * GH)))
+        self.assertRegex(thinkmap.checked(self.tnt(), other)[0], r"^\d+ of its 48 cells' heights")
+        with self.assertRaisesRegex(thinkmap.MapError, "not the map this game played"):
+            thinkmap.checked(self.tnt(), thinkmap.Track(GW + 2, GH))
+
+    def test_a_feature_and_a_unit_type_are_told_by_their_own_files(self):
+        table, lost = thinkmap.feature_table(self.source(), ["Tree1", "Rock1", "Gone9"])
+        self.assertEqual(table["0"], ["Tree1", "energy", 1, 2, 0, 250, "Tree"])
+        self.assertEqual(table["1"], ["Rock1", "metal", 1, 1, 40, 3, "Rock"])
+        self.assertEqual(lost, ["Gone9"])
+        for body, kind in (({"geothermal": "1", "reclaimable": "1"}, "vent"), ({"blocking": "1"}, "block"), ({}, "decor")):
+            self.assertEqual(thinkmap.feature_kind(body), kind)
+        kinds = thinkmap.unit_kinds(self.source(), {1: "MEX", 2: "BOAT", 3: "NOFILE"})
+        self.assertEqual(kinds, {1: thinkmap.F_EXTRACTS, 2: thinkmap.F_FLOATS})
+
+    def test_the_ground_of_a_recording_and_what_could_not_be_read(self):
+        tr = thinkmap.Track(GW, GH)
+        tr.take(1, grid(self.heights, defs={5: 0, 20: 1, 33: 9}))
+        found = {"track": tr, "archives": self.listed, "map": "Test Map"}
+        pictures = {}
+        out = thinkview.terrain(found, {1: "MEX", 4: "BOAT"}, [self.dir], pictures)
+        again = thinkview.terrain(found, {}, [self.dir], pictures)
+        (raw, entry), = pictures.values()                                   # one picture a map file
+        self.assertEqual(Image.open(__import__("io").BytesIO(raw)).size, (entry["w"], entry["h"]))
+        self.assertEqual((entry["px"], entry["from"], entry["w"], entry["h"]), ([MW * 32, MH * 32], "loose", 128, 96))
+        self.assertRegex(entry["file"], r"^Test-Map\.[0-9a-f]{8}\.map\.webp$")
+        self.assertIs(again["map"], entry)
+        self.assertEqual(out["kinds"], {"1": thinkmap.F_EXTRACTS, "4": thinkmap.F_FLOATS})
+        self.assertEqual((out["ground"]["named"], out["ground"]["sea"], out["ground"]["defs"]["1"][1]), (2, 40, "metal"))
+        self.assertEqual(out["said"], [])
+        self.assertEqual(list(self.dir.rglob("*.webp")) + list(Path(thinkview.HERE).glob("*.webp")), [])   # nothing is written here
+        # a map the archives do not hold: the recording's own layers still stand, and the page is told
+        lost = thinkview.terrain(dict(found, map="No Such Map"), {}, [self.dir], pictures)
+        self.assertIsNone(lost["map"])
+        self.assertEqual(len(lost["ground"]["lives"]), 3)
+        self.assertRegex(lost["said"][0], "^the map's picture is not drawn: no maps/No Such Map.tnt")
+        self.assertRegex(thinkview.terrain({"track": None}, {}, [self.dir], pictures)["said"][0], "^no sample")
+
+
+def view(calls: str):
+    """The page's View block evaluated by node: `calls` is a JS expression over View, its value as JSON."""
+    text = thinkview.TEMPLATE.read_text()
+    block = text[text.index("/*VIEW*/"):text.index("/*END VIEW*/")]
+    got = subprocess.run(["node", "-e", block + f"\nconsole.log(JSON.stringify({calls}));"], capture_output=True, text=True, timeout=60)
+    if got.returncode:
+        raise AssertionError(got.stderr)
+    return json.loads(got.stdout)
+
+
+@unittest.skipUnless(shutil.which("node"), "node, which evaluates the page's own View block")
+class ViewMaths(unittest.TestCase):
+    PW, PH, W, H = 4000, 3000, 800, 600             # a map of 4000 x 3000 px on a canvas of its shape
+
+    def call(self, body: str):
+        return view(f"(() => {{ const [pw, ph, w, h] = [{self.PW}, {self.PH}, {self.W}, {self.H}]; {body} }})()")
+
+    def test_the_fit_shows_the_whole_map(self):
+        got = self.call("const v = View.fit(pw, ph); return [v, View.to(v, pw, w, h, 0, 0), View.to(v, pw, w, h, pw, ph), View.scale(v, pw, w)];")
+        self.assertEqual(got, [{"k": 1, "x": 2000, "z": 1500}, [0, 0], [800, 600], 0.2])
+
+    def test_a_zoom_keeps_the_point_under_the_cursor(self):
+        got = self.call("""const v = { k: 2, x: 1800, z: 1400 }, at = View.from(v, pw, w, h, 300, 250);
+            const z = View.zoomAt(v, 1.5, 300, 250, pw, ph, w, h); return [z.k, at, View.from(z, pw, w, h, 300, 250), View.to(z, pw, w, h, at[0], at[1])];""")
+        self.assertEqual(got[0], 3)
+        for a, b in zip(got[1], got[2]):
+            self.assertAlmostEqual(a, b, places=6)
+        for a, b in zip(got[3], (300, 250)):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_the_map_never_leaves_the_canvas(self):
+        got = self.call("""return [View.zoomAt(View.fit(pw, ph), .5, 10, 10, pw, ph, w, h), View.pan({ k: 2, x: 1000, z: 750 }, 5000, 5000, pw, ph, w),
+            View.pan({ k: 2, x: 2000, z: 1500 }, -40, 20, pw, ph, w), View.zoomAt(View.fit(pw, ph), 1e6, 400, 300, pw, ph, w, h).k, View.kmax(pw, w)];""")
+        self.assertEqual(got[0], {"k": 1, "x": 2000, "z": 1500})            # no zoom out past the fit
+        self.assertEqual(got[1], {"k": 2, "x": 1000, "z": 750})             # a drag past the edge stops at it
+        self.assertEqual(got[2], {"k": 2, "x": 2100, "z": 1450})            # 40 px at 0.4 px a world px: 100 world px
+        self.assertEqual((got[3], got[4]), (15, 15))                        # 3 canvas px a world px at the most
+
+    def test_the_ground_under_a_lifted_point(self):
+        got = self.call("""const height = (x, z) => 100 + z / 10;            // a slope: the fixed point of z - height / 2 = zl
+            const z = View.ground(0, 900, height); return [z, z - height(0, z) / 2, View.ground(0, 500, () => 0),
+            View.gridStep(.2, 32, 58), View.gridStep(3, 32, 58), View.gridStep(.001, 32, 58)];""")
+        self.assertAlmostEqual(got[0], 1000, places=2)
+        self.assertAlmostEqual(got[1], 900, places=2)
+        self.assertEqual(got[2:], [500, 16, 1, 128])
 
 
 if __name__ == "__main__":

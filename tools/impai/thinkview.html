@@ -14,6 +14,7 @@
   --j-build:#c9a46a; --j-assist:#d8cf73; --j-reclaim:#6cc48a; --j-none:#6c757d;
   --enemy:#ff6b5e; --radar:#f2d45c; --ghost:#9aa3ab; --held:#c9a46a;
   --good:#5bb071; --warn:#e3a63b; --bad:#e05a52; --info:#68b6cf;
+  --metal:#4fe0d0; --mex:#4fe0d0; --f-energy:#7bd36a; --f-metal:#8fa2d8; --f-block:#8b8f96; --f-vent:#ff9f43; --veil:.42;
   --font-display:"Saira Condensed","Arial Narrow",system-ui,sans-serif;
   --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --font-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
@@ -26,7 +27,8 @@
   --t-form:#6b7884; --t-defend:#2f8a49; --t-raid:#b77908; --t-attack:#c23a32; --t-retreat:#7a4fb6; --t-scout:#1f88b0;
   --j-build:#8a6424; --j-assist:#8f841a; --j-reclaim:#2f8a49; --j-none:#7b848c;
   --enemy:#d0362a; --radar:#a88a00; --ghost:#6b737a; --held:#8a6424;
-  --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896; color-scheme: light; } }
+  --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896;
+  --metal:#00796b; --mex:#00695c; --f-energy:#2e7d32; --f-metal:#455a78; --f-block:#6b6f76; --f-vent:#c45a00; --veil:.5; color-scheme: light; } }
 :root[data-theme="light"] {
   --bg:#eceef0; --panel:#ffffff; --panel2:#f3f4f6; --line:#cfd4d8; --fg:#1a1e22; --muted:#5b646c;
   --steel:#8a6424; --steel-ink:#fff8ea; --cyan:#1f7896;
@@ -34,7 +36,8 @@
   --t-form:#6b7884; --t-defend:#2f8a49; --t-raid:#b77908; --t-attack:#c23a32; --t-retreat:#7a4fb6; --t-scout:#1f88b0;
   --j-build:#8a6424; --j-assist:#8f841a; --j-reclaim:#2f8a49; --j-none:#7b848c;
   --enemy:#d0362a; --radar:#a88a00; --ghost:#6b737a; --held:#8a6424;
-  --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896; color-scheme: light; }
+  --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896;
+  --metal:#00796b; --mex:#00695c; --f-energy:#2e7d32; --f-metal:#455a78; --f-block:#6b6f76; --f-vent:#c45a00; --veil:.5; color-scheme: light; }
 * { box-sizing:border-box }
 [hidden] { display:none !important }
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--font-body);
@@ -81,7 +84,10 @@ canvas { display:block; max-width:100% }
 .bench { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr); gap:14px; align-items:start }
 @media (max-width:980px) { .bench { grid-template-columns:1fr } }
 .mapwrap { position:relative; display:grid; justify-items:center; background:var(--map); border-radius:4px; overflow:hidden }
-#map { cursor:pointer }
+#map { cursor:grab; touch-action:pan-y }
+.zoom { display:flex; gap:4px; align-items:center }
+.zoom .btn { padding:5px 9px }
+.zoom span { font:600 12px/1 var(--font-mono); min-width:3.4em; text-align:center; color:var(--muted) }
 .tip { position:absolute; z-index:3; pointer-events:none; max-width:min(300px,80%); background:var(--panel2); color:var(--fg);
   border:1px solid var(--line); border-radius:4px; padding:5px 7px; font:12px/1.4 var(--font-mono) }
 .ctl { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:13px }
@@ -150,11 +156,12 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
     <section class="pane" aria-label="War room">
       <div class="panehead">
         <h2>War room</h2>
-        <div class="ctl" id="layers"></div>
+        <div class="ctl" id="layers"><div class="zoom" role="group" aria-label="Zoom"><button class="btn" id="zout" title="Zoom out (-)">−</button><span id="zoomsays" class="tnum">fit</span><button class="btn" id="zin" title="Zoom in (+)">+</button><button class="btn" id="zfit" title="The whole map (0)">Fit</button></div></div>
       </div>
-      <div class="mapwrap" id="mapwrap"><canvas id="map" aria-label="The seat's picture of the map at the moment"></canvas><div class="tip" id="tip" hidden></div></div>
+      <div class="mapwrap" id="mapwrap"><canvas id="map" aria-label="The seat's picture of the map at the moment. The wheel zooms about the cursor, a drag pans."></canvas><div class="tip" id="tip" hidden></div></div>
       <div class="legend" id="maplegend"></div>
       <p class="foot" id="sampled"></p>
+      <p class="foot" id="groundnote"></p>
     </section>
     <aside class="pane side" id="side" aria-label="The seat's figures at the moment"></aside>
   </div>
@@ -165,14 +172,23 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
 <script>
 /* THE DATA is thinkview.py's (build): a recording's file calls thinkviewData(id, data). Exact at every tick:
    `tracks` {field: [[tick...], [value...]]}, `lanes`, `judgements`, `events`, `episodes`, `known`. Sampled:
-   `frames` [{t, m: [life, x, z, ...], j: [slot, kind, build, cx, cz, squad, target, ...], k: [slot, type, how,
-   owner, bx, bz, ...], h: index into helds, a: units alive a seat, i: metal income a seat}], with `lives`
-   [[slot, type, born, gone, structure, x, z, complete], ...]. Places: blocks x units.block px, cells x units.cell. */
+   `frames` [{t, m: [life, x, z, ...], j: indices into `jrows` [[slot, kind, build, cx, cz, squad, target], ...], k:
+   indices into `krows` [[slot, type, how, owner, bx, bz], ...], h: index into `helds`, held ground's cells, each
+   written as [cells added, cells removed] from the one before, a: units alive a seat, i: metal income a seat}],
+   with `lives`
+   [[slot, type, born, gone, structure, x, z, complete], ...]. Places: blocks x units.block px, cells x units.cell.
+   THE GROUND (thinkmap.py): `ground` {gw, gh: the feature grid's cells, hstep, hw, hh, h: the heights every hstep
+   cells, base64 of a byte each, sea, metal: {rle: [value, cells, ...] in row order, base, max}, defs: {def: [name,
+   kind, footprint x, z, metal, energy, description]} of the map file's table, lives: [[cell, def, first sample,
+   the sample it is gone at or null], ...], at: the sample the heights and the metal are read at}; `picture` {file,
+   w, h, px: the world px it covers, from, tile, archives}; `kinds` {type: 1 extracts | 2 floats | 4 flies};
+   `said`: what could not be read or rendered. */
 const MANIFEST = /*MANIFEST*/[];
 const $ = id => document.getElementById(id);
 const cache = {}, waiting = {};
 let D = null, T = 0, SEL = -1, playing = 0, HOVER = null;
-const LAYERS = { truth: true, held: true, jobs: true, trails: true, labels: true };
+const LAYERS = { map: true, grid: true, metal: true, features: true, truth: true, held: true, jobs: true, trails: true, labels: true };
+const DRAG_PX = 4;                // a pointer that moves less between down and up is a click
 const TASKVAR = { FORM: 't-form', DEFEND: 't-defend', RAID: 't-raid', ATTACK: 't-attack', RETREAT: 't-retreat', SCOUT: 't-scout' };
 const JOBVAR = { BUILD: 'j-build', ASSIST: 'j-assist', RECLAIM: 'j-reclaim', RECLAIM_GO: 'j-reclaim' };
 const EVENTS_SHOWN = { plant: ['steel', 'a plant sited'], wave: ['t-attack', 'an attack wave starts'], lost: ['t-retreat', 'a prediction lost'],
@@ -184,8 +200,9 @@ const MONO = '"IBM Plex Mono", ui-monospace, Menlo, monospace', DISPLAY = '"Sair
 function colors() {
   const cs = getComputedStyle(document.documentElement);
   for (const k of ['bg', 'panel', 'panel2', 'line', 'fg', 'muted', 'steel', 'steel-ink', 'cyan', 'map', 'grid', 'truth', 't-form', 't-defend', 't-raid',
-    't-attack', 't-retreat', 't-scout', 'j-build', 'j-assist', 'j-reclaim', 'j-none', 'enemy', 'radar', 'ghost', 'held', 'good', 'warn', 'bad', 'info'])
+    't-attack', 't-retreat', 't-scout', 'j-build', 'j-assist', 'j-reclaim', 'j-none', 'enemy', 'radar', 'ghost', 'held', 'good', 'warn', 'bad', 'info', 'metal', 'mex', 'f-energy', 'f-metal', 'f-block', 'f-vent'])
     C[k] = cs.getPropertyValue('--' + k).trim();
+  C.veil = parseFloat(cs.getPropertyValue('--veil')) || .4;
 }
 const fmt = n => Math.round(n).toLocaleString('en-US').replace(/,/g, ' ');
 const clock = t => `${Math.floor(t / 1800)}:${String(Math.floor(t / 30) % 60).padStart(2, '0')}`;
@@ -210,7 +227,10 @@ const layerName = v => ((D.enums['mil.sq.layer'] || {})[v] || String(v)).toLower
 const jobName = v => (D.enums['job.kind'] || {})[v] || String(v);
 
 function prepare(d) {
-  d.structs = []; d.bySlot = new Map();
+  d.structs = []; d.bySlot = new Map(); d.G = null; d.said = d.said || [];
+  if (!d._held) { const cur = new Set(); d.helds = d.helds.map(([add, rem]) => { for (const c of rem) cur.delete(c); for (const c of add) cur.add(c); return [...cur]; }); d._held = true; }
+  if (d.ground && d.ground.h) { const G = d.G = d.ground; G.hb = Uint8Array.from(atob(G.h), c => c.charCodeAt(0)); G.mb = new Uint8Array(G.gw * G.gh); G.defs = G.defs || {};
+    for (let r = 0, i = 0; r < G.metal.rle.length; r += 2) { G.mb.fill(G.metal.rle[r], i, i + G.metal.rle[r + 1]); i += G.metal.rle[r + 1]; } }
   d.lives.forEach((l, i) => { if (l[4]) d.structs.push(i); if (!d.bySlot.has(l[0])) d.bySlot.set(l[0], []); d.bySlot.get(l[0]).push(i); });
   d.lost = new Set((d.tracks['mil.lost_t'] || [[]])[0]);
   d.shown = d.events.filter(e => EVENTS_SHOWN[e[1]]);
@@ -237,16 +257,16 @@ function units(f) {
 function jobs(f) {
   if (f._j) return f._j;
   const out = [];
-  for (let i = 0; i < f.j.length; i += 7) out.push({ slot: f.j[i], kind: jobName(f.j[i + 1]), build: f.j[i + 2], cx: f.j[i + 3], cz: f.j[i + 4], squad: f.j[i + 5], target: f.j[i + 6] });
+  for (const r of f.j) { const j = D.jrows[r]; out.push({ slot: j[0], kind: jobName(j[1]), build: j[2], cx: j[3], cz: j[4], squad: j[5], target: j[6] }); }
   return (f._j = out);
 }
 function knownRows(f) {
   if (f._k) return f._k;
   const m = D.macros, out = [];
-  for (let i = 0; i < f.k.length; i += 6) {
-    const how = f.k[i + 2];
+  for (const r of f.k) {
+    const k = D.krows[r], how = k[2];
     const cls = how & ((m.IMPAI_LOS || 0) | (m.IMPAI_SHARED || 0)) ? 'now' : how & (m.IMPAI_GHOST || 0) ? 'ghost' : 'pass';
-    out.push({ slot: f.k[i], type: f.k[i + 1], how, cls, owner: f.k[i + 3], bx: f.k[i + 4], bz: f.k[i + 5] });
+    out.push({ slot: k[0], type: k[1], how, cls, owner: k[3], bx: k[4], bz: k[5] });
   }
   return (f._k = out);
 }
@@ -486,123 +506,233 @@ function under(x, y) {
 }
 
 /* ---------- the war room ---------- */
-const MAP = { s: 1, w: 0, h: 0, hits: [], rings: [] };
+/*VIEW*/
+/* THE VIEW: the war room's window on the map, {k, x, z}: the zoom, 1 the whole map fitted to the canvas, and
+   the world px at the canvas's centre. The canvas keeps the map's shape, so one scale serves both axes:
+   k * w / pw canvas px a world px. THE GAME'S VIEW: a point at (x, z) and height h is drawn at (x, z - h / 2),
+   as the map's picture shows the ground (thinkmap.py), so every marker is lifted by half the height it stands
+   at. These are pure: test_thinkview.py evaluates this block. */
+const View = {
+  fit: (pw, ph) => ({ k: 1, x: pw / 2, z: ph / 2 }),
+  /* the most zoom: 3 canvas px a world px, and never under 8 times the fit */
+  kmax: (pw, w) => Math.max(8, 3 * pw / w),
+  scale: (v, pw, w) => v.k * w / pw,
+  /* the map never leaves the canvas: the centre stays half a window from each edge */
+  clamp(v, pw, ph, w) {
+    const k = Math.max(1, Math.min(View.kmax(pw, w), v.k)), hx = pw / (2 * k), hz = ph / (2 * k);
+    return { k, x: Math.max(hx, Math.min(pw - hx, v.x)), z: Math.max(hz, Math.min(ph - hz, v.z)) };
+  },
+  /* world px (z already lifted) to canvas px, and back */
+  to: (v, pw, w, h, x, z) => { const s = View.scale(v, pw, w); return [(x - v.x) * s + w / 2, (z - v.z) * s + h / 2]; },
+  from: (v, pw, w, h, cx, cy) => { const s = View.scale(v, pw, w); return [v.x + (cx - w / 2) / s, v.z + (cy - h / 2) / s]; },
+  /* zoom by f about the canvas point (cx, cy): the world point under it stays under it, until the clamp */
+  zoomAt(v, f, cx, cy, pw, ph, w, h) {
+    const [x, z] = View.from(v, pw, w, h, cx, cy), k = Math.max(1, Math.min(View.kmax(pw, w), v.k * f)), s = k * w / pw;
+    return View.clamp({ k, x: x - (cx - w / 2) / s, z: z - (cy - h / 2) / s }, pw, ph, w);
+  },
+  /* drag by (dx, dy) canvas px: the map follows the pointer */
+  pan(v, dx, dy, pw, ph, w) { const s = View.scale(v, pw, w); return View.clamp({ k: v.k, x: v.x - dx / s, z: v.z - dy / s }, pw, ph, w); },
+  /* the ground's z a lifted z shows at column x: the z with z - height(x, z) / 2 = zl, by fixed point */
+  ground(x, zl, height) { let z = zl; for (let i = 0; i < 8; i++) z = zl + height(x, z) / 2; return z; },
+  /* the blocks between two grid lines so that they stand at least `gap` canvas px apart */
+  gridStep: (s, block, gap) => [1, 2, 4, 8, 16, 32, 64].find(n => n * block * s >= gap) || 128,
+};
+/*END VIEW*/
+const MAP = { w: 0, h: 0, hits: [], rings: [], feats: [] };
+let V = { k: 1, x: 0, z: 0 };
+const F_EXTRACTS = 1, F_FLOATS = 2, F_FLIES = 4;
+const kindOf = type => D.kinds ? D.kinds[type] : undefined;
+const isMex = type => (kindOf(type) & F_EXTRACTS) === F_EXTRACTS;
+/* the ground's height at world px (x, z), from the recording's heights; 0 with none */
+function heightAt(x, z) {
+  const G = D.G; if (!G) return 0;
+  const c = D.units.cell * G.hstep, i = Math.max(0, Math.min(G.hw - 1, Math.floor(x / c))), j = Math.max(0, Math.min(G.hh - 1, Math.floor(z / c)));
+  return G.hb[j * G.hw + i];
+}
+/* the height a unit of `type` stands at: the sea's level where the ground is under it, unless its type is
+   known to neither float nor fly (a type with no facts is taken to float) */
+function standAt(x, z, type) {
+  const hgt = heightAt(x, z), G = D.G;
+  if (!G || G.sea == null || hgt >= G.sea) return hgt;
+  const k = kindOf(type);
+  return k === undefined || k & (F_FLOATS | F_FLIES) ? G.sea : hgt;
+}
+const cellMetal = (x, z) => { const G = D.G; if (!G || !G.mb) return null; const cx = Math.floor(x / D.units.cell), cz = Math.floor(z / D.units.cell); return cx < 0 || cz < 0 || cx >= G.gw || cz >= G.gh ? null : G.mb[cz * G.gw + cx]; };
+const FEATSAYS = { energy: 'reclaims for energy', metal: 'reclaims for metal', block: 'blocks building, not reclaimable', vent: 'a geothermal vent', decor: 'neither blocks nor reclaims', play: 'made in play: a wreck, or a feature the game added (its def is not of the map file\'s table)' };
+function featOf(life) { const d = D.G.defs[life[1]]; return d ? { name: d[0], kind: d[1], fx: d[2], fz: d[3], metal: d[4], energy: d[5], says: d[6] } : { name: `def ${life[1]}`, kind: 'play', fx: 1, fz: 1, metal: 0, energy: 0, says: '' }; }
+/* the metal layer, a canvas px a cell, each cell lifted by its height: built once a recording and theme */
+function metalLayer() {
+  const G = D.G; if (!G || !G.mb) return null;
+  if (G._metal && G._metalCol === C.metal) return G._metal;
+  const cv = document.createElement('canvas'); cv.width = G.gw; cv.height = G.gh;
+  const g = cv.getContext('2d'), m = G.metal, whole = m.base >= m.max, span = Math.max(1, m.max - m.base);
+  g.fillStyle = C.metal;
+  if (whole) { if (m.max > 0) { g.globalAlpha = .16; g.fillRect(0, 0, G.gw, G.gh); } }
+  else for (let cz = 0, i = 0; cz < G.gh; cz++) for (let cx = 0; cx < G.gw; cx++, i++) { const v = G.mb[i]; if (v <= m.base) continue;
+    g.globalAlpha = .45 + .45 * (v - m.base) / span; g.fillRect(cx, Math.round(cz - heightAt((cx + .5) * D.units.cell, (cz + .5) * D.units.cell) / (2 * D.units.cell)), 1, 1); }
+  G._metal = cv; G._metalCol = C.metal; return cv;
+}
 function drawMap() {
-  const cv = $('map'), wrap = $('mapwrap'), [pw, ph] = D.px;
+  const cv = $('map'), wrap = $('mapwrap'), [pw, ph] = D.px, G = D.G;
   let w = wrap.clientWidth, h = w * ph / pw; const maxh = Math.max(360, Math.min(window.innerHeight * .78, 820));
   if (h > maxh) { h = maxh; w = h * pw / ph; }
   cv.style.width = w + 'px';
-  const g = sized(cv, w, h), s = w / pw, X = v => v * s, f = D.frames[frameIndex(T)], u = units(f), small = w < 460;
-  Object.assign(MAP, { s, w, h, hits: [], rings: [] });
+  V = View.clamp(V, pw, ph, w);
+  const g = sized(cv, w, h), s = View.scale(V, pw, w), f = D.frames[frameIndex(T)], u = units(f), small = w < 460;
+  const sx = x => (x - V.x) * s + w / 2, syl = zl => (zl - V.z) * s + h / 2;
+  const gy = (x, z) => syl(z - heightAt(x, z) / 2);                     // a point of the ground
+  const uy = (x, z, type) => syl(z - standAt(x, z, type) / 2);          // a unit standing there
+  const bxy = (bx, bz) => { const x = blockPx(bx), z = blockPx(bz); return [sx(x), gy(x, z)]; };
+  const [vx0, vz0] = View.from(V, pw, w, h, 0, 0), [vx1, vz1] = View.from(V, pw, w, h, w, h), slack = 160;
+  const seen = (x, z) => x >= vx0 - slack && x <= vx1 + slack && z >= vz0 - slack && z <= vz1 + 2 * slack;
+  Object.assign(MAP, { w, h, hits: [], rings: [], feats: [] });
+  cv.style.touchAction = V.k > 1.001 ? 'none' : 'pan-y';
+  $('zoomsays').textContent = V.k > 1.001 ? `×${V.k < 10 ? V.k.toFixed(1) : Math.round(V.k)}` : 'fit';
   const labels = [];
-  const label = (x, y, text, col, bold) => labels.push([x, y, text, col, bold]);
+  const label = (x, y, text, col, bold) => { if (x > -40 && x < w + 10 && y > -10 && y < h + 10) labels.push([x, y, text, col, bold]); };
   g.fillStyle = C.map; g.fillRect(0, 0, w, h);
-  // the block grid: every 16 blocks a line, numbered as think.py prints a place
-  const B = D.units.block, stepB = pw / B > 200 ? 32 : 16;
-  g.strokeStyle = C.grid; g.lineWidth = 1; g.font = `500 10px ${MONO}`; g.fillStyle = C.muted; g.textBaseline = 'top'; g.textAlign = 'left';
-  for (let b = 0; b * B <= pw; b += stepB) { const x = Math.round(X(b * B)) + .5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); if (b) g.fillText(b, x + 2, 2); }
-  for (let b = 0; b * B <= ph; b += stepB) { const y = Math.round(X(b * B)) + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); if (b) g.fillText(b, 2, y + 2); }
+  // the map's picture, under a veil of the map's ground so the markers read over bright terrain
+  const pic = LAYERS.map && D._img ? D.picture : null;
+  if (pic) { const k = s * pic.px[0] / pic.w;       // canvas px an image px: crisp when magnified, smooth when reduced
+    g.imageSmoothingEnabled = k < 1.5; g.imageSmoothingQuality = 'high';
+    g.drawImage(D._img, sx(0), syl(0), pic.px[0] * s, pic.px[1] * s);
+    g.fillStyle = C.map; g.globalAlpha = C.veil; g.fillRect(0, 0, w, h); g.globalAlpha = 1; }
+  if (LAYERS.metal) { const m = metalLayer(); if (m) { g.imageSmoothingEnabled = false; g.drawImage(m, sx(0), syl(0), G.gw * D.units.cell * s, G.gh * D.units.cell * s); } }
+  g.imageSmoothingEnabled = true;
+  // the block grid, numbered as think.py prints a place and laid on the ground: thinner as the zoom falls
+  const B = D.units.block;
+  if (LAYERS.grid) { const stepB = View.gridStep(s, B, 58), dx = Math.max(D.units.cell * (G ? G.hstep : 4), 6 / s);
+    g.strokeStyle = pic ? C.fg : C.grid; g.globalAlpha = pic ? .2 : 1; g.lineWidth = 1; g.font = `500 10px ${MONO}`; g.textBaseline = 'top'; g.textAlign = 'left';
+    const marks = [];
+    for (let b = Math.max(0, Math.floor(vx0 / B / stepB) * stepB); b * B <= Math.min(pw, vx1); b += stepB) { const x = Math.round(sx(b * B)) + .5; g.beginPath(); g.moveTo(x, gy(b * B, 0)); g.lineTo(x, gy(b * B, ph)); g.stroke(); if (b) marks.push([x + 2, 2, b]); }
+    for (let b = Math.max(0, Math.floor(vz0 / B / stepB) * stepB); b * B <= Math.min(ph, vz1 + 2 * slack); b += stepB) { const z = b * B; g.beginPath();
+      for (let x = Math.max(0, vx0), first = true; ; x = Math.min(x + dx, pw, vx1)) { const y = gy(x, z); if (first) { g.moveTo(sx(x), y); first = false; } else g.lineTo(sx(x), y); if (x >= Math.min(pw, vx1)) break; }
+      g.stroke(); if (b) marks.push([2, gy(Math.max(0, vx0), z) + 2, b]); }
+    g.globalAlpha = 1;
+    for (const [x, y, b] of marks) { if (pic) { g.fillStyle = C.map; g.globalAlpha = .6; g.fillRect(x - 1, y - 1, g.measureText(b).width + 2, 11); g.globalAlpha = 1; } g.fillStyle = C.muted; g.fillText(b, x, y); } }
   g.textBaseline = 'middle';
-  // held ground
-  if (LAYERS.held) { const cells = D.helds[f.h] || [], row = D.units.held_row, c = X(D.units.held); g.fillStyle = C.held; g.globalAlpha = .13;
-    for (const i of cells) g.fillRect(X((i % row) * D.units.held), X(Math.floor(i / row) * D.units.held), c, c); g.globalAlpha = 1; }
+  // held ground: each 256-px cell laid on the ground
+  if (LAYERS.held) { const cells = D.helds[f.h] || [], row = D.units.held_row, c = D.units.held; g.fillStyle = C.held; g.globalAlpha = pic ? .18 : .13;
+    for (const i of cells) { const x0 = (i % row) * c, z0 = Math.floor(i / row) * c; if (!seen(x0 + c / 2, z0 + c / 2) && V.k > 1.5) continue;
+      g.beginPath(); for (let n = 0; n <= 4; n++) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0)); } for (let n = 4; n >= 0; n--) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0 + c)); } g.fill(); }
+    g.globalAlpha = 1; }
+  // the features standing at the sample: what a reclaim gives, what blocks building
+  if (LAYERS.features && G && G.lives) { const cpx = D.units.cell;
+    for (const l of G.lives) { if (l[2] > f.t || (l[3] != null && l[3] <= f.t)) continue;
+      const ft = featOf(l); if (ft.kind === 'decor') continue;
+      const wx = (l[0] % G.gw) * cpx, wz = Math.floor(l[0] / G.gw) * cpx; if (!seen(wx, wz)) continue;
+      const fw = Math.max(2.4, ft.fx * cpx * s), fh = Math.max(2.4, ft.fz * cpx * s), x = sx(wx + ft.fx * cpx / 2), y = gy(wx + ft.fx * cpx / 2, wz + ft.fz * cpx / 2);
+      const col = C['f-' + (ft.kind === 'play' ? 'metal' : ft.kind)];
+      g.fillStyle = col; g.strokeStyle = col; g.lineWidth = 1.2;
+      if (ft.kind === 'vent') { g.beginPath(); g.arc(x, y, Math.max(4, fw / 2), 0, 7); g.stroke(); g.beginPath(); g.arc(x, y, 1.4, 0, 7); g.fill(); }
+      else if (ft.kind === 'energy') { const r = Math.min(4.5, Math.min(fw, fh) * .35); g.globalAlpha = r < 2 ? .6 : .8; g.beginPath(); g.arc(x, y, Math.max(1, r), 0, 7); g.fill(); }
+      else if (ft.kind === 'play') { g.globalAlpha = .95; const r = Math.max(2.6, Math.min(7, fw / 2)); g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke(); }
+      else { g.globalAlpha = ft.kind === 'block' ? .8 : .95; g.fillRect(x - fw / 2, y - fh / 2, fw, fh); }
+      g.globalAlpha = 1; MAP.feats.push([x, y, l, ft]); } }
   // the anchor and the base box
   const no = D.macros.IMPAI_NO_ANCHOR ?? -32768, ax = at(TR('brain.ax'), T, no), az = at(TR('brain.az'), T, no);
-  let anchor = null;
+  let anchor = null, ap = null;
   if (TR('brain.ax') && ax !== no) {
-    anchor = [ax * D.units.cell, az * D.units.cell];
+    anchor = [ax * D.units.cell, az * D.units.cell]; ap = [sx(anchor[0]), gy(anchor[0], anchor[1])];
     if (D.base_r) {
       let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
       for (const [, p] of u) if (p[2][4] && seatOf(p[2][0]) === D.seat && Math.hypot(p[0] - anchor[0], p[1] - anchor[1]) <= D.base_r) { x0 = Math.min(x0, p[0]); z0 = Math.min(z0, p[1]); x1 = Math.max(x1, p[0]); z1 = Math.max(z1, p[1]); }
-      g.strokeStyle = C.steel; g.lineWidth = 1; g.globalAlpha = .5; g.setLineDash([3, 4]); g.beginPath(); g.arc(X(anchor[0]), X(anchor[1]), X(D.base_r), 0, 7); g.stroke(); g.setLineDash([]);
-      if (x1 >= x0) { const pad = 40; g.globalAlpha = .9; g.lineWidth = 1.5; g.strokeRect(X(x0 - pad), X(z0 - pad), X(x1 - x0 + 2 * pad), X(z1 - z0 + 2 * pad)); }
+      g.strokeStyle = C.steel; g.lineWidth = 1; g.globalAlpha = .5; g.setLineDash([3, 4]); g.beginPath(); g.arc(ap[0], ap[1], D.base_r * s, 0, 7); g.stroke(); g.setLineDash([]);
+      if (x1 >= x0) { const pad = 40, lift = ap[1] - syl(anchor[1]); g.globalAlpha = .9; g.lineWidth = 1.5; g.strokeRect(sx(x0 - pad), syl(z0 - pad) + lift, (x1 - x0 + 2 * pad) * s, (z1 - z0 + 2 * pad) * s); }
       g.globalAlpha = 1;
     }
   }
+  /* an extractor's own mark: a square with its bore, so it is told from every other building */
+  const mex = (x, y, col, hollow) => { g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.6; g.strokeRect(x - 5, y - 5, 10, 10); g.beginPath(); g.arc(x, y, 2.2, 0, 7); if (hollow) g.stroke(); else g.fill(); };
   // the truth underneath: every other seat's unit as it stands, faint and hollow
-  if (LAYERS.truth) { g.strokeStyle = C.truth; g.lineWidth = 1.2; g.globalAlpha = .6; g.setLineDash([2, 2]);
-    for (const [slot, p] of u) { if (seatOf(slot) === D.seat) continue; const x = X(p[0]), y = X(p[1]), r = p[2][4] ? 4.5 : 3.5;
-      g.beginPath(); if (p[2][4]) g.rect(x - r, y - r, 2 * r, 2 * r); else g.arc(x, y, r, 0, 7); g.stroke();
+  if (LAYERS.truth) { g.strokeStyle = C.truth; g.lineWidth = 1.2; g.globalAlpha = pic ? .85 : .6;
+    for (const [slot, p] of u) { if (seatOf(slot) === D.seat || !seen(p[0], p[1])) continue; const x = sx(p[0]), y = uy(p[0], p[1], p[2][1]), r = p[2][4] ? 4.5 : 3.5;
+      if (p[2][4] && isMex(p[2][1])) mex(x, y, C.truth, true);
+      else { g.setLineDash([2, 2]); g.strokeStyle = C.truth; g.lineWidth = 1.2; g.beginPath(); if (p[2][4]) g.rect(x - r, y - r, 2 * r, 2 * r); else g.arc(x, y, r, 0, 7); g.stroke(); g.setLineDash([]); }
       MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatName(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : '; the seat does not know it')]); }
-    g.setLineDash([]); g.globalAlpha = 1; }
+    g.globalAlpha = 1; }
   // the seat's own units, by job
   const jb = new Map(jobs(f).map(j => [j.slot, j])), sq = squadsAt(T), taskOf = {}; sq.forEach(s => taskOf[s.k] = s.task);
+  const own = (x, z, type) => [sx(x), uy(x, z, type)];
   for (const [slot, p] of u) {
-    if (seatOf(slot) !== D.seat) continue;
-    const x = X(p[0]), y = X(p[1]), l = p[2], j = jb.get(slot), frame = l[7] == null || l[7] > f.t;
+    if (seatOf(slot) !== D.seat || !seen(p[0], p[1])) continue;
+    const l = p[2], [x, y] = own(p[0], p[1], l[1]), j = jb.get(slot), frame = l[7] == null || l[7] > f.t;
     let col = C['j-none'], what = j ? j.kind : 'no job';
     if (j && j.kind === 'SQUAD') { col = C[TASKVAR[taskOf[j.squad] || 'FORM']]; what = `sq[${j.squad}] ${taskOf[j.squad] || 'FREE'}`; }
     else if (j && JOBVAR[j.kind]) { col = C[JOBVAR[j.kind]]; if (j.kind === 'BUILD') what = `BUILD ${nm(j.build)}`; }
-    if (l[4]) { g.globalAlpha = frame ? .55 : .9; g.fillStyle = C.fg; g.strokeStyle = C.fg; g.lineWidth = 1; if (frame) g.strokeRect(x - 3, y - 3, 6, 6); else g.fillRect(x - 3, y - 3, 6, 6); g.globalAlpha = 1; }
-    else { const dimmed = SEL >= 0 && !(j && j.kind === 'SQUAD' && j.squad === SEL); g.globalAlpha = dimmed ? .45 : 1; g.fillStyle = col; g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 4, 0, 7); if (frame) g.stroke(); else g.fill(); g.globalAlpha = 1; }
-    MAP.hits.push([x, y, `${nm(l[1])}, slot ${slot}: ${what}${frame ? ' (a frame under construction)' : ''}`]);
+    if (l[4] && isMex(l[1])) { g.globalAlpha = frame ? .6 : 1; mex(x, y, C.mex, frame); g.globalAlpha = 1; }
+    else if (l[4]) { g.globalAlpha = frame ? .55 : .9; g.fillStyle = C.fg; g.strokeStyle = C.fg; g.lineWidth = 1; if (frame) g.strokeRect(x - 3, y - 3, 6, 6); else { g.fillRect(x - 3, y - 3, 6, 6); if (pic) { g.strokeStyle = C.map; g.strokeRect(x - 3.5, y - 3.5, 7, 7); } } g.globalAlpha = 1; }
+    else { const dimmed = SEL >= 0 && !(j && j.kind === 'SQUAD' && j.squad === SEL); g.globalAlpha = dimmed ? .45 : 1; g.fillStyle = col; g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 4, 0, 7); if (frame) g.stroke(); else { g.fill(); if (pic) { g.strokeStyle = C.map; g.lineWidth = 1; g.stroke(); } } g.globalAlpha = 1; }
+    MAP.hits.push([x, y, `${nm(l[1])}, slot ${slot}: ${l[4] && isMex(l[1]) ? `an extractor on metal ${cellMetal(p[0], p[1]) ?? '?'}; ` : ''}${what}${frame ? ' (a frame under construction)' : ''}`]);
     if (LAYERS.jobs && j && j.kind !== 'SQUAD' && (j.cx || j.cz) && !l[4]) {
-      const sx = X(j.cx * D.units.cell + D.units.cell), sy = X(j.cz * D.units.cell + D.units.cell);
-      g.strokeStyle = col; g.lineWidth = 1.2; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(x, y); g.lineTo(sx, sy); g.stroke(); g.setLineDash([]);
-      g.strokeRect(sx - 4, sy - 4, 8, 8);
-      if (j.kind === 'BUILD') label(sx + 7, sy, nm(j.build), col);
-      MAP.hits.push([sx, sy, `${j.kind}${j.kind === 'BUILD' ? ' ' + nm(j.build) : ''}: the site of ${nm(l[1])}, slot ${slot}`]);
+      const jx = j.cx * D.units.cell + D.units.cell, jz = j.cz * D.units.cell + D.units.cell, px = sx(jx), py = gy(jx, jz);
+      g.strokeStyle = col; g.lineWidth = 1.2; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(x, y); g.lineTo(px, py); g.stroke(); g.setLineDash([]);
+      g.strokeRect(px - 4, py - 4, 8, 8);
+      if (j.kind === 'BUILD') label(px + 7, py, nm(j.build), col);
+      MAP.hits.push([px, py, `${j.kind}${j.kind === 'BUILD' ? ' ' + nm(j.build) : ''}: the site of ${nm(l[1])}, slot ${slot}`]);
     }
   }
   // what the seat knows of the others: solid in sight, a ring on radar, a cross remembered
-  const rows = knownRows(f), few = rows.length <= 14;
+  const rows = knownRows(f), few = rows.filter(k => seen(blockPx(k.bx), blockPx(k.bz))).length <= 14;
   for (const k of rows) {
-    const x = X(blockPx(k.bx)), y = X(blockPx(k.bz)), l = lifeAt(k.slot, f.t), there = u.get(k.slot);
+    const [x, y] = bxy(k.bx, k.bz), l = lifeAt(k.slot, f.t), there = u.get(k.slot);
     if (k.cls === 'ghost') { g.strokeStyle = C.ghost; g.lineWidth = 2; g.beginPath(); g.moveTo(x - 5, y - 5); g.lineTo(x + 5, y + 5); g.moveTo(x + 5, y - 5); g.lineTo(x - 5, y + 5); g.stroke();
-      if (LAYERS.truth && there && Math.hypot(there[0] - blockPx(k.bx), there[1] - blockPx(k.bz)) > 2 * B) { g.lineWidth = 1; g.setLineDash([1, 3]); g.beginPath(); g.moveTo(x, y); g.lineTo(X(there[0]), X(there[1])); g.stroke(); g.setLineDash([]); } }
+      if (LAYERS.truth && there && Math.hypot(there[0] - blockPx(k.bx), there[1] - blockPx(k.bz)) > 2 * B) { g.lineWidth = 1; g.setLineDash([1, 3]); g.beginPath(); g.moveTo(x, y); g.lineTo(sx(there[0]), uy(there[0], there[1], there[2][1])); g.stroke(); g.setLineDash([]); } }
     else if (k.cls === 'now') { g.fillStyle = C.enemy; g.beginPath(); g.moveTo(x, y - 6.5); g.lineTo(x + 6.5, y); g.lineTo(x, y + 6.5); g.lineTo(x - 6.5, y); g.closePath(); g.fill(); }
     else { g.strokeStyle = C.radar; g.fillStyle = C.radar; g.lineWidth = 2; g.beginPath(); g.arc(x, y, 5.5, 0, 7); g.stroke(); g.beginPath(); g.arc(x, y, 1.5, 0, 7); g.fill(); }
     const col = k.cls === 'ghost' ? C.ghost : k.cls === 'now' ? C.enemy : C.radar;
+    if (isMex(k.type)) { g.strokeStyle = col; g.lineWidth = 1.4; g.strokeRect(x - 8.5, y - 8.5, 17, 17); }
     if (few && LAYERS.labels) label(x + 9, y, nm(k.type), col);
-    MAP.hits.push([x, y, `${nm(k.type)} of ${k.owner < 10 ? seatName(k.owner) : 'an unknown seat'}, slot ${k.slot}: ${HOWSAYS[k.cls]} at (${k.bx},${k.bz})` + (k.cls === 'ghost' && l && !alive(l, f.t) ? '; it is gone' : '')]);
+    MAP.hits.push([x, y, `${nm(k.type)} of ${k.owner < 10 ? seatName(k.owner) : 'an unknown seat'}, slot ${k.slot}: ${HOWSAYS[k.cls]} at (${k.bx},${k.bz})` + (isMex(k.type) ? ', an extractor' : '') + (k.cls === 'ghost' && l && !alive(l, f.t) ? '; it is gone' : '')]);
   }
   // goals the attack gave up
   for (const i of D.unreached) { const gt = at(TR(`mil.unreached[${i}].t`), T); if (!gt) continue;
-    const x = X(blockPx(at(TR(`mil.unreached[${i}].bx`), T))), y = X(blockPx(at(TR(`mil.unreached[${i}].bz`), T)));
+    const [x, y] = bxy(at(TR(`mil.unreached[${i}].bx`), T), at(TR(`mil.unreached[${i}].bz`), T));
     g.strokeStyle = C.bad; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 7, 0, 7); g.moveTo(x - 5, y + 5); g.lineTo(x + 5, y - 5); g.stroke(); MAP.hits.push([x, y, `a goal given up at GameTime ${fmt(gt)}`]); }
   // commanders as last seen
-  for (const i of D.foes) { const seen = at(TR(`mil.foe[${i}].t`), T); if (!seen) continue;
-    const x = X(blockPx(at(TR(`mil.foe[${i}].bx`), T))), y = X(blockPx(at(TR(`mil.foe[${i}].bz`), T)));
+  for (const i of D.foes) { const seenAt = at(TR(`mil.foe[${i}].t`), T); if (!seenAt) continue;
+    const [x, y] = bxy(at(TR(`mil.foe[${i}].bx`), T), at(TR(`mil.foe[${i}].bz`), T));
     g.strokeStyle = C.enemy; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 10, 0, 7); g.stroke();
-    if (LAYERS.labels) label(x + 13, y + 12, `commander seen @${fmt(seen)}`, C.enemy); MAP.hits.push([x, y, `seat ${i}'s commander as last seen, GameTime ${fmt(seen)}`]); }
+    if (LAYERS.labels) label(x + 13, y + 12, `commander seen @${fmt(seenAt)}`, C.enemy); MAP.hits.push([x, y, `seat ${i}'s commander as last seen, GameTime ${fmt(seenAt)}`]); }
   // the enemy base's estimate
   const est = estimateAt(T);
-  if (est) { const x = X(blockPx(est.bx)), y = X(blockPx(est.bz)), r = 13;
+  if (est) { const [x, y] = bxy(est.bx, est.bz), r = 13;
     g.strokeStyle = C.enemy; g.lineWidth = 2; if (est.kind !== 'STRUCT') g.setLineDash([4, 3]); g.beginPath(); g.moveTo(x, y - r); g.lineTo(x + r, y); g.lineTo(x, y + r); g.lineTo(x - r, y); g.closePath(); g.stroke(); g.setLineDash([]);
     if (LAYERS.labels) label(x + r + 4, y - 12, `enemy base? ${est.kind === 'START' ? 'a guess' : est.kind === 'KEPT' ? 'kept' : 'structures'}`, C.enemy, true);
     MAP.hits.push([x, y, `the enemy base's estimate at (${est.bx},${est.bz}): ${est.says}`]); }
   // pressure
   const until = at(TR('mil.press_until'), T);
-  if (until > T) { const x = X(blockPx(at(TR('mil.press_bx'), T))), y = X(blockPx(at(TR('mil.press_bz'), T)));
+  if (until > T) { const [x, y] = bxy(at(TR('mil.press_bx'), T), at(TR('mil.press_bz'), T));
     g.strokeStyle = C.bad; g.lineWidth = 3; g.setLineDash([8, 5]); g.beginPath(); g.arc(x, y, 22, 0, 7); g.stroke(); g.setLineDash([]); label(x + 26, y, `pressure ${fmt(at(TR('mil.press_v'), T))}`, C.bad, true); }
-  if (anchor) { const x = X(anchor[0]), y = X(anchor[1]); g.strokeStyle = C.steel; g.lineWidth = 2.5; g.beginPath(); g.arc(x, y, 9, 0, 7); g.moveTo(x - 13, y); g.lineTo(x + 13, y); g.moveTo(x, y - 13); g.lineTo(x, y + 13); g.stroke();
+  if (anchor) { const [x, y] = ap; g.strokeStyle = C.steel; g.lineWidth = 2.5; g.beginPath(); g.arc(x, y, 9, 0, 7); g.moveTo(x - 13, y); g.lineTo(x + 13, y); g.moveTo(x, y - 13); g.lineTo(x, y + 13); g.stroke();
     if (LAYERS.labels) label(x + 14, y + 13, 'anchor', C.steel, true); MAP.hits.push([x, y, `the base anchor, cell (${ax},${az})`]); }
   // the squads: where each has been in this task, its ring, its goals and its goal line
-  for (const s of sq) {
-    const col = C[TASKVAR[s.task]] || C.muted, picked = s.k === SEL, dimmed = SEL >= 0 && !picked, mem = members(f, s.k);
+  const mid = m => [sx(m.x), uy(m.x, m.z)];
+  for (const sq1 of sq) {
+    const col = C[TASKVAR[sq1.task]] || C.muted, picked = sq1.k === SEL, dimmed = SEL >= 0 && !picked, mem = members(f, sq1.k);
     g.globalAlpha = dimmed ? .4 : 1;
-    if (LAYERS.trails && s.ep) {
+    if (LAYERS.trails && sq1.ep) {
       g.strokeStyle = col; g.lineWidth = picked ? 2 : 1.2; g.globalAlpha *= picked ? .85 : .5; g.beginPath(); let pen = false;
-      for (let i = frameIndex(s.ep.from); i < D.frames.length && D.frames[i].t <= T; i++) { const m = members(D.frames[i], s.k); if (m.x == null) continue; if (pen) g.lineTo(X(m.x), X(m.z)); else { g.moveTo(X(m.x), X(m.z)); pen = true; } }
+      for (let i = frameIndex(sq1.ep.from); i < D.frames.length && D.frames[i].t <= T; i++) { const m = members(D.frames[i], sq1.k); if (m.x == null) continue; const [x, y] = mid(m); if (pen) g.lineTo(x, y); else { g.moveTo(x, y); pen = true; } }
       g.stroke(); g.globalAlpha = dimmed ? .4 : 1;
       // the goals this task has had: a scout's round shows as the points it keeps coming back to
-      const seen = new Set(), pts = [];
-      for (const l of s.ep.legs) { if (l[0] > T || !(l[1] || l[2])) continue; const key = l[1] + ',' + l[2]; if (!seen.has(key)) { seen.add(key); pts.push(l); } }
-      if (pts.length > 1) { g.setLineDash([2, 4]); g.lineWidth = 1; g.beginPath(); pts.forEach((l, i) => { const x = X(blockPx(l[1])), y = X(blockPx(l[2])); if (i) g.lineTo(x, y); else g.moveTo(x, y); }); if (s.task === 'SCOUT' && pts.length > 2) g.closePath(); g.stroke(); g.setLineDash([]);
-        for (const l of pts) { g.beginPath(); g.arc(X(blockPx(l[1])), X(blockPx(l[2])), 3, 0, 7); g.stroke(); } }
+      const had = new Set(), pts = [];
+      for (const l of sq1.ep.legs) { if (l[0] > T || !(l[1] || l[2])) continue; const key = l[1] + ',' + l[2]; if (!had.has(key)) { had.add(key); pts.push(bxy(l[1], l[2])); } }
+      if (pts.length > 1) { g.setLineDash([2, 4]); g.lineWidth = 1; g.beginPath(); pts.forEach(([x, y], i) => { if (i) g.lineTo(x, y); else g.moveTo(x, y); }); if (sq1.task === 'SCOUT' && pts.length > 2) g.closePath(); g.stroke(); g.setLineDash([]);
+        for (const [x, y] of pts) { g.beginPath(); g.arc(x, y, 3, 0, 7); g.stroke(); } }
     }
-    let cx = mem.x, cz = mem.z; if (cx == null) { if (!anchor) { g.globalAlpha = 1; continue; } [cx, cz] = anchor; }
-    const x = X(cx), y = X(cz), r = 9 + Math.sqrt(Math.max(1, s.n)) * 3;
+    let x, y; if (mem.x != null) [x, y] = mid(mem); else if (ap) [x, y] = ap; else { g.globalAlpha = 1; continue; }
+    const r = 9 + Math.sqrt(Math.max(1, sq1.n)) * 3;
     g.strokeStyle = col; g.fillStyle = col; g.lineWidth = picked ? 4 : 2.5; g.beginPath(); g.arc(x, y, r, 0, 7); g.stroke();
-    if (s.task !== 'FORM' && (s.tx || s.tz)) {
-      const gx = X(blockPx(s.tx)), gy = X(blockPx(s.tz)), a = Math.atan2(gy - y, gx - x), d = Math.hypot(gx - x, gy - y);
-      if (d > r + 6) { g.lineWidth = picked ? 3 : 2; g.beginPath(); g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r); g.lineTo(gx, gy); g.stroke();
-        g.beginPath(); g.moveTo(gx, gy); g.lineTo(gx - 10 * Math.cos(a - .4), gy - 10 * Math.sin(a - .4)); g.lineTo(gx - 10 * Math.cos(a + .4), gy - 10 * Math.sin(a + .4)); g.closePath(); g.fill(); }
-      if (s.target !== NONE()) { g.lineWidth = 1.5; g.beginPath(); g.arc(gx, gy, 9, 0, 7); g.moveTo(gx - 13, gy); g.lineTo(gx + 13, gy); g.moveTo(gx, gy - 13); g.lineTo(gx, gy + 13); g.stroke(); }
+    if (sq1.task !== 'FORM' && (sq1.tx || sq1.tz)) {
+      const [gx, gy2] = bxy(sq1.tx, sq1.tz), a = Math.atan2(gy2 - y, gx - x), d = Math.hypot(gx - x, gy2 - y);
+      if (d > r + 6) { g.lineWidth = picked ? 3 : 2; g.beginPath(); g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r); g.lineTo(gx, gy2); g.stroke();
+        g.beginPath(); g.moveTo(gx, gy2); g.lineTo(gx - 10 * Math.cos(a - .4), gy2 - 10 * Math.sin(a - .4)); g.lineTo(gx - 10 * Math.cos(a + .4), gy2 - 10 * Math.sin(a + .4)); g.closePath(); g.fill(); }
+      if (sq1.target !== NONE()) { g.lineWidth = 1.5; g.beginPath(); g.arc(gx, gy2, 9, 0, 7); g.moveTo(gx - 13, gy2); g.lineTo(gx + 13, gy2); g.moveTo(gx, gy2 - 13); g.lineTo(gx, gy2 + 13); g.stroke(); }
     }
     g.globalAlpha = 1;
-    label(x + r + 4, y - r, `sq[${s.k}] ${s.task} ${s.n}`, col, true);
-    MAP.rings.push([x, y, r + 6, s.k]);
+    label(x + r + 4, y - r, `sq[${sq1.k}] ${sq1.task} ${sq1.n}`, col, true);
+    MAP.rings.push([x, y, r + 6, sq1.k]);
   }
   // the labels last, each on a plate of the map's ground so it reads over the lines
   // the squads' first, so a lesser label is the one that steps down where two would meet
@@ -612,10 +742,17 @@ function drawMap() {
     const x = Math.max(2, Math.min(w - wd - 6, x0)); let y = Math.max(9, Math.min(h - 9, y0));
     for (let n = 0; n < 5 && placed.some(p => x < p[0] + p[2] + 6 && p[0] < x + wd + 6 && Math.abs(p[1] - y) < 16); n++) y = Math.min(h - 9, y + 16);
     placed.push([x, y, wd]);
-    g.fillStyle = C.map; g.globalAlpha = .82; g.fillRect(x - 3, y - 8, wd + 6, 16); g.globalAlpha = 1; g.fillStyle = col; g.textAlign = 'left'; g.fillText(text, x, y + .5);
+    g.fillStyle = C.map; g.globalAlpha = pic ? .9 : .82; g.fillRect(x - 3, y - 8, wd + 6, 16); g.globalAlpha = 1; g.fillStyle = col; g.textAlign = 'left'; g.fillText(text, x, y + .5);
   }
-  $('sampled').textContent = f.t === T ? `The units, jobs and known rows are those of tick ${fmt(T)}.`
-    : `The squads' tasks and goals are exact at tick ${fmt(T)}; the units, jobs and known rows are the sample of tick ${fmt(f.t)}, ${fmt(T - f.t)} ticks before.`;
+  $('sampled').textContent = (f.t === T ? `The units, jobs, known rows and features are those of tick ${fmt(T)}.`
+    : `The squads' tasks and goals are exact at tick ${fmt(T)}; the units, jobs, known rows and features are the sample of tick ${fmt(f.t)}, ${fmt(T - f.t)} ticks before.`);
+}
+/* what the ground holds under a canvas point: {x, z} in world px on the ground, and a line for the tip */
+function groundAt(cx, cy) {
+  const [pw] = D.px, [x, zl] = View.from(V, pw, MAP.w, MAP.h, cx, cy), z = View.ground(x, zl, heightAt), G = D.G;
+  let text = `block (${Math.floor(x / D.units.block)},${Math.floor(z / D.units.block)})`;
+  if (G) { const hgt = heightAt(x, z), m = cellMetal(x, z); text += `, height ${hgt}${G.sea != null && hgt < G.sea ? ', under the sea' : ''}`; if (m != null && (m > G.metal.base || G.metal.base >= G.metal.max)) text += `, metal ${m}`; }
+  return { x, z, text };
 }
 
 /* ---------- the figures beside the map ---------- */
@@ -689,10 +826,24 @@ function gist() {
   out.push(`Lost ${plural(dead(true), 'unit')}; the others lost <b>${dead(false)}</b>.`);
   return out.join(' ');
 }
+/* what the ground's layers are drawn from, and what could not be read: said under the map */
+function groundNote() {
+  const G = D.G, pic = D.picture, out = [];
+  if (pic) out.push(`The map is maps/${D.map}.tnt from ${pic.from === 'loose' ? 'the game directory' : pic.from}, as the recording's game opened it: one image of ${pic.w} × ${pic.h} px, ${(pic.px[0] / pic.w).toFixed(1)} world px an image px. It is the game's view: a point of the ground at height h stands h/2 px higher, and every marker, the grid and the held ground are lifted the same way, from the recording's heights${G && G.hstep > 1 ? ` (a value every ${G.hstep} cells)` : ''}. A unit over water stands at the sea's level unless its type neither floats nor flies; an aircraft is drawn at the ground under it.` + (pic.archives.length ? ` Archives not as the recording lists them: ${pic.archives.join('; ')}.` : ''));
+  if (G) { const m = G.metal, above = m.base >= m.max ? 0 : G.mb.reduce((a, v) => a + (v > m.base), 0);
+    out.push(`Metal is the engine's own value of each 16-px cell, exact, read from the recording's grid at its first sample (tick ${fmt(G.at)}): ` + (m.base >= m.max ? `every cell holds ${m.max}, a metal map.` : `the ground holds ${m.base}, and ${fmt(above)} cells stand above it, up to ${m.max}.`));
+    const made = G.lives.filter(l => !G.defs[l[1]]).length;
+    out.push(`Features are the recording's grid at each sample, so one made and gone between two samples is not seen: ${fmt(G.lives.length)} over the game, ${fmt(made)} of them of defs past the map file's table (made in play: a wreck, or one the game added), which have no name here. ` + (G.named ? `Names, footprints and what a reclaim gives are the map file's ${G.named} defs' sections in the recording's archives.` : 'No map file\'s table: no feature has a name, and each is drawn as one made in play.')); }
+  out.push(Object.keys(D.kinds || {}).length ? "An extractor is a type whose FBI in the recording's archives extracts metal." : 'Extractors are not told from other buildings here: the types have no facts.');
+  $('groundnote').textContent = out.concat(D.said.map(x => x[0].toUpperCase() + x.slice(1) + '.')).join(' ');
+}
 function redraw() { if (!D) return; colors(); R.still = null; setT(T); }
 
 function show(d) {
-  D = prepare(d); SEL = -1; play(false);
+  D = prepare(d); SEL = -1; play(false); V = View.fit(D.px[0], D.px[1]);
+  if (D.picture && !D._img) { const im = new Image(); im.onload = () => { d._img = im; if (D === d) drawMap(); };
+    im.onerror = () => { d.said.push(`the map's picture is not drawn: ${d.picture.file} did not load, it stands beside this page`); if (D === d) groundNote(); }; im.src = D.picture.file; }
+  groundNote();
   const seat = D.players.find(p => p.index === D.seat) || {}, res = D.result || {};
   const chips = [[D.map, ''], [`${seat.name || 'seat ' + D.seat}: ImpAI, seat ${D.seat}`, ''],
     ...D.players.filter(p => p.index !== D.seat && played(p.index)).map(p => [`${p.name}: ${p.ai === 1 ? 'ImpAI' : 'opponent'}, seat ${p.index}`, '']),
@@ -727,7 +878,7 @@ function openRec(id) {
 /* ---------- controls ---------- */
 (() => {
   const pick = $('pick');
-  for (const m of MANIFEST) { const o = document.createElement('option'); o.value = m.id; o.textContent = `${m.name} · ${m.map}`; pick.append(o); }
+  for (const m of MANIFEST) { const o = document.createElement('option'); o.value = m.id; o.textContent = `${m.name} · ${MANIFEST.filter(x => x.name === m.name).length > 1 ? m.seat : m.map}`; pick.append(o); }
   pick.onchange = () => openRec(pick.value);
   $('reclegend').innerHTML = Object.entries(TASKVAR).map(([t, v]) => `<span><i class="sw" style="background:var(--${v})"></i>${t}</span>`).join('')
     + '<span>a dark notch in a span: the task takes another goal</span>'
@@ -736,8 +887,11 @@ function openRec(id) {
       contact: '<circle r="5" fill="currentColor"/>', sight: '<circle r="2.6" fill="currentColor"/>', cmdr: '<path d="M0-6L6 0L0 6L-6 0z" fill="currentColor"/>', judge: '<circle r="3.2" stroke="currentColor" stroke-width="1.5" fill="none"/>' }[k]}</svg>${text}</span>`).join('');
   $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span>'
     + '<span><i class="sw hollow" style="border-color:var(--truth)"></i>the truth: an enemy unit as it stands</span><span><i class="sw ring" style="border-color:var(--t-attack)"></i>a squad, in its task\'s colour, with its goal line</span>'
-    + '<span><i class="sw" style="background:var(--fg)"></i>own structure</span><span><i class="sw" style="background:var(--j-build);border-radius:50%"></i>builder, with its site</span><span><i class="sw" style="background:var(--held);opacity:.4"></i>held ground</span>';
-  const names = { truth: 'the truth underneath', held: 'held ground', jobs: 'builders\' sites', trails: 'squads\' trails', labels: 'labels' };
+    + '<span><i class="sw" style="background:var(--fg)"></i>own structure</span><span><i class="sw" style="background:var(--j-build);border-radius:50%"></i>builder, with its site</span><span><i class="sw" style="background:var(--held);opacity:.4"></i>held ground</span>'
+    + '<span><i class="sw" style="background:transparent;border:1.6px solid var(--mex);box-shadow:inset 0 0 0 2px var(--panel), inset 0 0 0 5px var(--mex)"></i>extractor: own solid, the truth hollow, a known enemy\'s boxed</span>'
+    + '<span><i class="sw" style="background:var(--metal);opacity:.7"></i>metal: the recording\'s grid, exact</span>'
+    + '<span><i class="sw" style="background:var(--f-energy);border-radius:50%"></i>feature: reclaims for energy</span><span><i class="sw" style="background:var(--f-metal)"></i>reclaims for metal</span><span><i class="sw" style="background:var(--f-block)"></i>blocks building</span><span><i class="sw ring" style="border-color:var(--f-vent)"></i>vent</span><span style="color:var(--f-metal)">✕ made in play (a wreck)</span><span>features: the recording\'s grid, sampled; names from the map file</span>';
+  const names = { map: 'the map', grid: 'grid', metal: 'metal', features: 'features', truth: 'the truth underneath', held: 'held ground', jobs: 'builders\' sites', trails: 'squads\' trails', labels: 'labels' };
   for (const k of Object.keys(LAYERS)) { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" id="layer-${k}" ${LAYERS[k] ? 'checked' : ''}> ${names[k]}`; l.firstChild.onchange = e => { LAYERS[k] = e.target.checked; if (D) drawMap(); }; $('layers').append(l); }
   $('prev').onclick = () => { play(false); step(-1); }; $('next').onclick = () => { play(false); step(1); };
   $('play').onclick = () => play(!playing);
@@ -757,19 +911,49 @@ function openRec(id) {
     const hit = under(x, y); if (hit.squad != null && (hit.toggle || hit.squad !== SEL)) { SEL = hit.toggle && SEL === hit.squad ? -1 : hit.squad; R.still = null; }
     setT(hit.jump != null && !e.shiftKey ? hit.jump : x >= R.L ? tickAt(x) : T); });
   rec.addEventListener('pointerleave', () => { HOVER = null; if (D) { $('hover').textContent = REST; drawRecorder(); } });
-  // the map: a squad's ring picks its lane; anything else says what it is
+  // the map: the wheel zooms about the cursor, a drag pans, two fingers pinch; a click picks a squad's ring,
+  // and anything else under the pointer says what it is
   const map = $('map'), tip = $('tip');
   const mpos = e => { const b = map.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
   const ring = (x, y) => { let best = null; for (const r of MAP.rings) { const d = Math.hypot(r[0] - x, r[1] - y); if (d <= r[2] && (!best || d < best.d)) best = { k: r[3], d }; } return best; };
-  map.addEventListener('pointermove', e => { if (!D) return; const [x, y] = mpos(e); let best = null;
+  const dims = () => [D.px[0], D.px[1], MAP.w, MAP.h];
+  const zoomBy = (f, cx = MAP.w / 2, cy = MAP.h / 2) => { if (!D) return; const [pw, ph, w, h] = dims(); V = View.zoomAt(V, f, cx, cy, pw, ph, w, h); drawMap(); };
+  const fit = () => { if (!D) return; V = View.fit(D.px[0], D.px[1]); drawMap(); };
+  const hover = (x, y) => { let best = null;
     for (const h of MAP.hits) { const d = Math.hypot(h[0] - x, h[1] - y); if (d < 10 && (!best || d < best.d)) best = { h, d }; }
-    const r = ring(x, y), text = best ? best.h[2] : r ? `sq[${r.k}]: click to ${SEL === r.k ? 'let go of' : 'pick'} its lane` : `block (${Math.floor(x / MAP.s / D.units.block)},${Math.floor(y / MAP.s / D.units.block)})`;
-    tip.hidden = false; tip.textContent = text; const off = map.offsetLeft; tip.style.left = Math.min(off + x + 14, $('mapwrap').clientWidth - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(2, y - tip.offsetHeight - 8) + 'px'; });
+    let text = best ? best.h[2] : null; const r = best ? null : ring(x, y);
+    if (!best && r) text = `sq[${r.k}]: click to ${SEL === r.k ? 'let go of' : 'pick'} its lane`;
+    if (!text) { let ft = null; for (const m of MAP.feats) { const d = Math.hypot(m[0] - x, m[1] - y); if (d < 8 && (!ft || d < ft.d)) ft = { m, d }; }
+      const gr = groundAt(x, y).text;
+      if (ft) { const [, , l, k] = ft.m; text = `${k.name}${k.says ? ` (${k.says})` : ''}: ${FEATSAYS[k.kind]}${k.metal || k.energy ? `, metal ${k.metal}, energy ${k.energy}` : ''}; ${l[2] ? `first seen at the sample of tick ${fmt(l[2])}` : 'there at the first sample'}; ${gr}`; }
+      else text = gr; }
+    tip.hidden = false; tip.textContent = text; const off = map.offsetLeft; tip.style.left = Math.max(2, Math.min(off + x + 14, $('mapwrap').clientWidth - tip.offsetWidth - 4)) + 'px'; tip.style.top = Math.max(2, y - tip.offsetHeight - 8) + 'px'; };
+  const touches = new Map(); let drag = null, raf = 0;
+  const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (D) drawMap(); }); };
+  map.addEventListener('pointerdown', e => { if (!D) return; const [x, y] = mpos(e); touches.set(e.pointerId, [x, y]); try { map.setPointerCapture(e.pointerId); } catch (err) { /* a pointer already gone */ }
+    drag = touches.size === 1 ? { x, y, v: V, moved: false } : { pinch: true, moved: true }; });
+  map.addEventListener('pointermove', e => { if (!D) return; const [x, y] = mpos(e), [pw, ph, w, h] = dims();
+    if (touches.has(e.pointerId) && touches.size === 2) {     // a pinch: the spread zooms about the fingers' middle, which the map follows
+      const [a0, b0] = [...touches.values()]; touches.set(e.pointerId, [x, y]); const [a1, b1] = [...touches.values()];
+      const m0 = [(a0[0] + b0[0]) / 2, (a0[1] + b0[1]) / 2], m1 = [(a1[0] + b1[0]) / 2, (a1[1] + b1[1]) / 2];
+      V = View.pan(View.zoomAt(V, Math.hypot(a1[0] - b1[0], a1[1] - b1[1]) / Math.max(1, Math.hypot(a0[0] - b0[0], a0[1] - b0[1])), m0[0], m0[1], pw, ph, w, h), m1[0] - m0[0], m1[1] - m0[1], pw, ph, w);
+      tip.hidden = true; later(); return; }
+    if (drag && !drag.pinch && touches.has(e.pointerId)) { const dx = x - drag.x, dy = y - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) > DRAG_PX) drag.moved = true;
+      if (drag.moved) { V = View.pan(drag.v, dx, dy, pw, ph, w); map.style.cursor = 'grabbing'; tip.hidden = true; later(); return; } }
+    hover(x, y); });
+  const up = e => { if (!touches.has(e.pointerId)) return; touches.delete(e.pointerId); const was = drag; if (!touches.size) { drag = null; map.style.cursor = ''; }
+    if (!D || !was || was.moved || e.type !== 'pointerup') return; const [x, y] = mpos(e), r = ring(x, y); if (r) select(r.k); else if (SEL >= 0) select(SEL); };
+  map.addEventListener('pointerup', up); map.addEventListener('pointercancel', up);
   map.addEventListener('pointerleave', () => { tip.hidden = true; });
-  map.addEventListener('click', e => { if (!D) return; const [x, y] = mpos(e), r = ring(x, y); if (r) select(r.k); else if (SEL >= 0) select(SEL); });
+  // zooming out of the fitted map is the page's scroll, so the wheel is taken only while it has something to do here
+  map.addEventListener('wheel', e => { if (!D || (e.deltaY > 0 && V.k <= 1.0005)) return; e.preventDefault(); const [x, y] = mpos(e);
+    zoomBy(Math.exp(-e.deltaY * (e.deltaMode === 1 ? .05 : e.ctrlKey ? .01 : .0016)), x, y); hover(x, y); }, { passive: false });
+  $('zin').onclick = () => zoomBy(1.5); $('zout').onclick = () => zoomBy(1 / 1.5); $('zfit').onclick = fit;
   document.addEventListener('keydown', e => { if (!D || e.altKey || e.ctrlKey || e.metaKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); play(false); step(1); } else if (e.key === 'ArrowLeft') { e.preventDefault(); play(false); step(-1); }
-    else if (e.key === ' ' && e.target.tagName !== 'BUTTON') { e.preventDefault(); play(!playing); } });
+    else if (e.key === ' ' && e.target.tagName !== 'BUTTON') { e.preventDefault(); play(!playing); }
+    else if (e.key === '+' || e.key === '=') zoomBy(1.5); else if (e.key === '-' || e.key === '_') zoomBy(1 / 1.5); else if (e.key === '0') fit(); });
   let rs = 0; window.addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(redraw, 80); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redraw);
   new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -778,6 +962,6 @@ function openRec(id) {
   const want = decodeURIComponent(location.hash.slice(1));
   openRec(MANIFEST.some(m => m.id === want) ? want : MANIFEST[0].id);
 })();
-const REST = 'Drag across the recorder to set the moment. Click a span or an event to jump to its tick; click a squad on the map, or a lane\'s name, to pick it out.';
+const REST = 'Drag across the recorder to set the moment. Click a span or an event to jump to its tick; click a squad on the map, or a lane\'s name, to pick it out. On the map the wheel zooms about the cursor and a drag pans; +, - and 0 zoom and fit.';
 $('hover').textContent = REST;
 </script>
