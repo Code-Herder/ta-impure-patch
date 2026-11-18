@@ -12,7 +12,9 @@ bar-nota-lavamania-ca-2 prota-4.8
 # The unmapped openings (tools/impai/opening.py), `unmapped-<map>-<S>`: ImpAI at start S as a network game seats
 # it, the level not mapped, to GameTime 6 000. Every game above is mapped; these alone show a change to what an
 # unmapped seat does. Steel Jungle's start 2 and Trout Farm's are starts whose seat gives no order at 0a4ec04e;
-# Lava Alley's start 3 is a seat that plays there.
+# Lava Alley's start 3 is a seat that plays there. Luschaven's start 3 is a start with no room for the vehicle
+# plant in the commander's reach: the seat orders no plant by 6 000 (its first comes behind the ring's looks).
 unmapped-steeljungle-2
 unmapped-troutfarm-2
 unmapped-lavaalley-3
+unmapped-luschaven-3
