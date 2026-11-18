@@ -1851,6 +1851,15 @@ No reference fight of the calibration holds a paralysing type in either game set
 
 The army in ac-1 is two fewer at 12 000: with the energy the seat spends its metal -- the store, above 1 000 of 1 125 from 5 100 to 10 500 before, holds 0 at 10 500 and 8 at 12 000 -- and it orders the advanced lab at 8 197 (ca-1 at 10 927), which the tech-up's rule takes at this income; that rule is not this change's.
 
+**The same two games played whole** (to the commander's death or GameTime 81 000, against OTA AI on Escalation; MEASURED 2026-11-18, one game each): neither build wins one, and the rule does not change that.
+
+| | 789a3231 | the rule |
+|---|---|---|
+| ac-1 (Arm) | lost at 37 981: 22 army units built, metal income at most 20.9, no attack | lost at 72 698: 198 built, at most 59.3, 7 attacks from 29 835 |
+| ca-1 (Core) | at the cap, behind: value 34 415 against 107 240, 297 built, at most 68.9, 3 attacks from 30 105 | **lost at 70 041**: 212 built, at most 55.0, 3 attacks from 16 830 |
+
+In ca-1 the rule's seat is ahead of the other build's to 36 000 (metal income 41.7 against 28.2 at 24 000 and 49.8 against 41.5 at 36 000, energy 653 against 485 and 809 against 669) and behind it from 48 000 (39.7 against 53.9, then 18.3 against 66.8 at 60 000), while its opponent's energy income passes 2 400 and its own stays below 1 100 in both builds: by the session tier's categories that game is worse with the rule, at the cap behind for a loss. Why the later game turns is not read here.
+
 **The base game.** No type of the base game or of ProTA 4.8 changes its flag, so the rule cannot fire there: `session.py --neutral --state` against 789a3231 holds it, every game SAME in its decisions and its recorded brain state.
 
-**Gaps.** The floating radar towers (ARMFRAD, CORFRAD) change with the generators, in the sensor choice, and no game of the try reached a sensor want at a shore. Escalation's fusion reactors carry `Builder = 1` and build their own upgrade, so the classifier flags them factories on the live table (MEASURED 2026-11-18: ARMFUS, CORFUS, ARMSFUS, CORSFUS category factory, gains 1 200 and 6 250 a pass) and the energy rung never chooses one: not changed here.
+**Gaps.** No whole Escalation game is won, with the rule or without, and one of the two is lost that reached the cap; what decides them after 36 000 is not established. The floating radar towers (ARMFRAD, CORFRAD) change with the generators, in the sensor choice, and no game of the try reached a sensor want at a shore. Escalation's fusion reactors carry `Builder = 1` and build their own upgrade, so the classifier flags them factories on the live table (MEASURED 2026-11-18: ARMFUS, CORFUS, ARMSFUS, CORSFUS category factory, gains 1 200 and 6 250 a pass) and the energy rung never chooses one: not changed here.
