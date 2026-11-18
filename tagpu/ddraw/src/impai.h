@@ -217,8 +217,8 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_MOBILE 0x01u
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* placed on water only: minwaterdepth > 0, a tidal generator, or a
-                                           building whose yard has water cells and no land cell
-                                           (impai_tinfo.c, PLACED ON WATER ONLY)                                */
+                                           building of minwaterdepth 0 whose yard has water cells and no
+                                           land cell (impai_tinfo.c, PLACED ON WATER ONLY)                      */
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
 #define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
 /* what its weapons hit (impai_tinfo_attack): a regular weapon -- not CommandFire, stockpile or interceptor -- */
