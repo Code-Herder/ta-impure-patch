@@ -1960,8 +1960,15 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    search at AIR_REACH_REFUSALS without spending a site test, so a builder that reaches none of the sites -- an idle
    constructor on another landmass, asked first -- leaves every one of the decision's AIR_OUT_TESTS to the builders
    asked after it (the commander on its energy build). 1 ordered. BOUND: a builder asked walks AIR_OUT_RINGS + 1
-   place_ring rings of at most PLACE_MAX_SITES sites and runs at most AIR_REACH_REFUSALS + AIR_OUT_TESTS
-   builder_reaches; the decision runs at most AIR_OUT_TESTS site tests here.
+   place_ring rings of at most PLACE_MAX_SITES sites and runs at most AIR_REACH_REFUSALS + AIR_OUT_TESTS + 1
+   builder_reaches (the last finds the site tests spent); the decision runs at most AIR_OUT_TESTS site tests here.
+   THE DECISION'S REACH TESTS: the refusals are counted a builder (air_reach starts over at each call) and the
+   reaches that pass the decision (air_sites), so a decision whose air_take asks B builders runs at most
+   B x AIR_REACH_REFUSALS + AIR_OUT_TESTS + 1 builder_reaches. B is at most the census's lists, nidle + nhelpers +
+   njobbed <= 4 IMPAI_IDLE_CAP = 128 (impai_brain.h, IMPAI_DEC; impai_econ.c, air_take), which gives 4 129 calls of
+   at most 1 089 label reads each: CPU alone, and reached only when every listed builder offers the plant and
+   reaches none of its first AIR_REACH_REFUSALS sites. No cap spans the decision: one would end the search for the
+   builders asked last, and those are the ones the per-builder count exists to reach.
    RESIDUAL: the walk is the same each decision, so while its first AIR_OUT_TESTS sites fail the sites past them
    are not tested. */
 #define AIR_OUT_RINGS 8

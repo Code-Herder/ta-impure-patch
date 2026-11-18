@@ -2162,7 +2162,15 @@ static int unit_reaches(const MDEC* d, unsigned type, int32_t ux, int32_t uz, in
    block) and cached, found or not, so a squad sent to one point costs one spiral a class. BOUND: at most
    SUB_CACHE spirals a decision, each at most (2 SUB_BLOCKS + 1)^2 = 4225 label reads; with the cache full and the
    key not in it the answer is -1, UNDECIDED, never 0: a capacity says nothing about the map, and THE ARRIVAL
-   reads 0 as "no point to travel to, arrived". */
+   reads 0 as "no point to travel to, arrived".
+   RESIDUAL, no bound on who is left undecided: the cache fills in the decision's order -- the commander's moves
+   (commander, flee); every squad's task (tasks: form_attack's arrival, scout_step's arrival and its starts,
+   retreat_home's and release_arrived's homes); scouting (a new scout's starts, and THE BLIND SPOT up to half the
+   cache, sees_area); every squad's orders. tasks and orders each walk the squads round-robin from next_squad, so
+   within one of them the squad read first changes; but an ATTACK's points are first asked in orders, behind every
+   read of tasks and scouting in every decision, and neither the commander nor scouting walks the rotation. While
+   the reads ahead of a squad fill the cache each decision, its arrival stays undecided and its members that need a
+   substitute get no move, for as long as that lasts. */
 static int point_for(MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t* x, int32_t* z)
 {
     const IMPAI_REACH* r = d->in->reach;

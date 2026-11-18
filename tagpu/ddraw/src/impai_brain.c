@@ -1454,6 +1454,16 @@ int impai_why_text(const IMPAI_WHY* w, char* out, size_t cap)
     return (int)(p - out);
 }
 
+int impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w)
+{
+    if (!w->set) return 0;
+    if (now < seen->after) seen->why.set = 0;   /* not above the last decision's: no remembered trace equals `w` */
+    seen->after = now + 1;
+    if (!memcmp(w, &seen->why, sizeof *w)) return 0;
+    seen->why = *w;
+    return 1;
+}
+
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;

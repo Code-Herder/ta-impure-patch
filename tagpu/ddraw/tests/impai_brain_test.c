@@ -16254,6 +16254,26 @@ static void check_why(void)
           IMPAI_WHY_TEXT);
     memset(cut, 'x', sizeof cut);
     CHECK(impai_why_text(&w, cut, 8) == 7 && !memcmp(cut, "gates=H\0x", 9), "a short buffer is ended inside itself");
+    {
+        /* THE WHY LINE's rule (impai_why_due): a line at the first trace and at each change, none between; a line
+           whatever the trace at a GameTime not above the last decision's -- the first decision after a restore
+           behind it, and the same GameTime again --, the rule going on from there; a trace not set writes nothing
+           and moves nothing, so the decision after it at a lower GameTime than its own is still in order */
+        IMPAI_WHY_SEEN seen;
+        IMPAI_WHY a = NONE, b = NONE, unset = NONE;
+        b.gates = IMPAI_G_HOLD;
+        unset.set = 0;
+        memset(&seen, 0, sizeof seen);
+        CHECK(impai_why_due(&seen, 0, &a) == 1 && impai_why_due(&seen, 30, &a) == 0 &&
+                  impai_why_due(&seen, 60, &b) == 1 && impai_why_due(&seen, 90, &b) == 0,
+              "a `why` line at the first trace and at each change, none between");
+        CHECK(impai_why_due(&seen, 30, &b) == 1 && impai_why_due(&seen, 60, &b) == 0 &&
+                  impai_why_due(&seen, 60, &b) == 1 && impai_why_due(&seen, 90, &b) == 0,
+              "a decision at a GameTime not above the seat's last writes its line whatever its trace");
+        CHECK(impai_why_due(&seen, 300, &unset) == 0 && impai_why_due(&seen, 120, &b) == 0 &&
+                  !memcmp(&seen.why, &b, sizeof b) && seen.after == 121,
+              "a trace not set writes no line and moves nothing");
+    }
     /* the fixtures reach a veto of every want whose row names a gate but the sea plant's, which no decision of
        this test holds back; the anti-air's row names none */
     CHECK(s_why_veto[IMPAI_W_FACTORY] && s_why_veto[IMPAI_W_TECH] && s_why_veto[IMPAI_W_DEF] &&
