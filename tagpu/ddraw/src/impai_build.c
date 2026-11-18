@@ -1818,8 +1818,14 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    INVARIANT, an ordering:
    a base ring's walk that tests a site ends in an order, in a site that passed the site test (its way refused
    and recorded, its route or the resolver refusing it), in a site left for a cause that is no lack of room, or
-   in growth; so no ring is walked to the same refusals at two decisions running, and a plant type no site
-   takes is passed over within nine such walks (THE PLANT'S FALLBACK). It adds no want and no spending: an order
+   in exhaustion -- growth, and at the widest ring a plant type's pass-over (THE PLANT'S FALLBACK): refusals alone
+   never end a walk and leave the ring as it was below its widest, and a plant type no site takes is passed over
+   at the ninth such walk running. The growth gives the next walk other sites but in two cases, where the same
+   walk is cut on the same refusals at every decision: at the widest ring (ring_grow 8) under a type that is no
+   factory or under a waived plant, which keep the ring; and once ring_grow is back at 0 -- it is one counter for
+   every type's base ring, put back by a build on any of them and by a plant type's pass-over (A TYPE PASSED OVER
+   GIVES THE RING BACK) --, from where each type's walk meets again the rings it had exhausted and the nine walks
+   are counted anew. It adds no want and no spending: an order
    it lets through is one the ladder already asked for, the plant's among them under economy's own terms
    (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
    income, and its energy). What it gives up: the ring's sites past the cut, farther from the walk's key than

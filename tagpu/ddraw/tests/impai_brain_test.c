@@ -92,6 +92,7 @@ typedef struct FWORLD {
     int      refuse_box_type;           /* a type the site test refuses where its first cell lies in refuse_box  */
     struct { int16_t x0, z0, x1, z1; } refuse_box;
     int      refuse_queue_type;         /* a type every factory QUEUE of is refused, 0 none                   */
+    int      refuse_build_type;         /* a type every BUILD order of is refused by the resolver, 0 none     */
     int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
     int8_t   cfoot[3][2];               /* the content map's class footprints, folded as the engine's are; 0 a 1 */
     struct { int16_t ax, az, fx, fz; uint16_t def; uint8_t flags, live, playing, gated, owner; float metal, energy; } feat[FW_FEATS];
@@ -420,6 +421,7 @@ static int f_order_check(const WORLDQ* q, const WQ_CMD* c)
                        (!adds && u->n >= FW_LIST)
                    ? WQ_REFUSED : WQ_OK;
     }
+    if (w->refuse_build_type && c->action == A_MOBILEBUILD && c->type == w->refuse_build_type) return WQ_REFUSED;
     return c->verb == WQ_CMD_NEW && wq_cmd_formed(c, A_DEACTIVATE + 1, (unsigned)w->ndefs, w->mw ? w->mw : FW_W,
                                                   w->mh ? w->mh : FW_H)
                ? WQ_OK : WQ_REFUSED;
@@ -1879,6 +1881,15 @@ static void check_ring_cut(void)
               x, z, s_st.ring_grow);
     }
     s_w.refuse_box_type = 0;
+    reach_world(0);
+    s_w.refuse_build_type = T_WIND;
+    CHECK(decide(&out) == 0, "decide");
+    printf("ring cut, every site passes the site test and the resolver refuses the order: sites=%u ring_grow=%u orders=%d\n",
+           out.sites, s_st.ring_grow, s_w.nlog);
+    CHECK(out.sites == 4 && !s_w.nlog && s_st.ring_grow == 0,
+          "a cut walk with a site that passed the site test and was dropped after it grows nothing: %u tests, %u",
+          out.sites, s_st.ring_grow);
+    s_w.refuse_build_type = 0;
     s_plan = lv0;
 }
 
@@ -1966,6 +1977,21 @@ static void check_plantwalk(void)
         CHECK(!out.plant && w->set && w->type == T_FACTORY && w->exit == IMPAI_PW_LEFT && w->beyond > 0 && !w->tested &&
                   w->grow == 0 && s_st.ring_grow == 0,
               "with a constructor begun the ring past the commander's reach is left and does not grow, decision %d: %s, "
+              "ring_grow %u", k, t, s_st.ring_grow);
+    }
+    /* a factory standing makes the constructor to come: the further plant's site past the reach is left for it */
+    plantwalk_world();
+    unit_add(&s_w, 6, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 40;
+    s_w.econ[0].energy_in = 400;
+    for (k = 0; k < 3; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k) printf("plantwalk, a factory standing, the further plant past the commander's reach: %s\n", t);
+        CHECK(!out.plant && w->set && w->type == T_FACTORY && w->slot == 1 && w->exit == IMPAI_PW_LEFT && w->beyond > 0 &&
+                  !w->tested && s_st.ring_grow == 0,
+              "with a factory standing the ring past the commander's reach is left and does not grow, decision %d: %s, "
               "ring_grow %u", k, t, s_st.ring_grow);
     }
     s_plan = lv0;
@@ -8758,12 +8784,11 @@ static void def_world(uint16_t enemy_type, float press_v)
 }
 
 /* one decision with the view of the threat rows: the tower types ordered built, at most 4, into tw[] with their
-   centres; their count */
-static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
+   centres; their count; the decision's out in *bo */
+static int def_decide_out(int with_pred, uint16_t* tw, int32_t (*at)[2], IMPAI_BRAIN_OUT* bo)
 {
     static const IMPAI_PREDICTOR pred = { rate_def, impai_expf, NULL };
     IMPAI_BRAIN_IN in;
-    IMPAI_BRAIN_OUT bo;
     IMPAI_VIEW v;
     WORLDQ q = { &FAKE, &s_w, 0 };
     const int from = s_w.nlog;
@@ -8794,7 +8819,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.mil = &s_mil;
     in.view = &v;
     in.pred = with_pred ? &pred : NULL;
-    CHECK(decide_traced(&in, &bo) == 0, "decide");
+    CHECK(decide_traced(&in, bo) == 0, "decide");
     for (k = from; k < s_w.nlog; k++) {
         const WQ_CMD* c = &s_w.log[k].c;
         if (c->action != A_MOBILEBUILD || (c->type != D_LLT && c->type != D_RL && c->type != D_AA && c->type != D_HLT))
@@ -8807,6 +8832,12 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
         n++;
     }
     return n;
+}
+
+static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
+{
+    IMPAI_BRAIN_OUT bo;
+    return def_decide_out(with_pred, tw, at, &bo);
 }
 
 static const char* def_name(uint16_t t)
@@ -14219,13 +14250,15 @@ static void check_sea_finish(void)
        CHOICE's;
    (h) (a) with only an enemy on dry ground counted: none -- a yard's army hits nothing the seat knows;
    (i) (a) with the enemy on the water counted IMPAI_TG_HOLD + 1 ticks ago: none;
-   (j) (a) with an enemy under the water counted instead: one more shipyard. */
+   (j) (a) with an enemy under the water counted instead: one more shipyard;
+   (k) (a) with the seat asking all its energy income but 5 a pass, below the yard's 10: THE ENERGY TERM fails,
+       none. */
 static void check_finish_yards(void)
 {
-    static const char* const NAME[10] = { "(a) the yard busy in a surplus", "(b) the yard idle", "(c) the seat asking 28",
+    static const char* const NAME[11] = { "(a) the yard busy in a surplus", "(b) the yard idle", "(c) the seat asking 28",
                                           "(d) 700 stored", "(e) a second yard's frame", "(f) the yard asking no metal",
                                           "(g) not dry", "(h) a target on dry ground alone", "(i) the sea target stale",
-                                          "(j) a target under the water" };
+                                          "(j) a target under the water", "(k) the energy asked" };
     IMPAI_BRAIN_OUT out;
     int c, from, sy, land, x0 = -1, z0 = -1, fx0, fz0;
     far_world(1, 1, 1, 9);
@@ -14234,7 +14267,7 @@ static void check_finish_yards(void)
     CHECK(builds_of(from, E_SY, &x0, &z0) == 1, "the finish's first yard is ordered");
     fx0 = x0;
     fz0 = z0;
-    for (c = 0; c < 10; c++) {
+    for (c = 0; c < 11; c++) {
         if (c == 6) far_world_at(C_COAST, 1, 0, 1, 30);
         else far_world(1, 1, 1, 30);
         s_w.gametime = 20000;
@@ -14242,6 +14275,7 @@ static void check_finish_yards(void)
             (uint32_t)s_w.gametime - (c == 8 ? IMPAI_TG_HOLD + 1u : 0u);
         s_w.econ[0].metal_out = c == 2 ? 28.0f : 15.0f;
         if (c == 3) s_w.econ[0].metal = 700.0f;
+        if (c == 10) s_w.econ[0].energy_out = s_w.econ[0].energy_in - 5.0f;
         unit_add(&s_w, 5, E_SY, c == 6 ? 64 : fx0, c == 6 ? 60 : fz0, 1);
         if (c != 1) factory_busy(5, E_PT, c == 5 ? 0.0f : 5.0f, 10.0f);
         if (c == 4) unit_add(&s_w, 6, E_SY, fx0, fz0 + 24, 0);

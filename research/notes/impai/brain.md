@@ -1200,9 +1200,9 @@ land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
   surplus, a busy plant's measured price, and the steady income less the seat's request at least that price),
   every sea plant the census counts -- finished, a frame or a builder's order -- is a finished factory at work,
   the energy term holds, and the military counted an enemy on or under the water within `IMPAI_TG_HOLD` (the
-  targets known: FLOAT or UNDER). It is the surplus plant's metal term read over the plants the finish buys from:
-  the land plants are offered nothing in the dry hunt and stand idle by that rule, so "no idle factory" never
-  holds there. The bound: a further yard comes only on income nobody asks for, one at a time, below
+  targets known: FLOAT or UNDER). It is the surplus plant's metal term read over the sea plants: in the dry hunt
+  a land plant is offered only its types with a water weapon, and one whose menu holds none stands idle by that
+  rule, so "no idle factory" may never hold there. The bound: a further yard comes only on income nobody asks for, one at a time, below
   `IMPAI_IDLE_CAP` factories, under the sea plant's gates, and only while a yard's army has a known target
   ([decisions](decisions.html), *The finish's yards*);
 - the commander may build that one plant as far, and the leash allows it as far (`FAR_PATCH_K` x `comm_r` + 512)

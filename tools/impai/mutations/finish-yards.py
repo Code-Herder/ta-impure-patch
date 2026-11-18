@@ -10,6 +10,8 @@ M = [
      MORE, MORE.replace("sea_busy == (int)d->sea_plants", "sea_busy >= 1")),
     ("a further yard without the overflow", BRAIN,
      MORE, MORE.replace("d->pos.dry && d->over_m && ", "d->pos.dry && ")),
+    ("a further yard without its energy", BRAIN,
+     MORE, MORE.replace("d->over_m && d->plant_e && ", "d->over_m && ")),
     ("a further yard outside the dry hunt", BRAIN,
      MORE, MORE.replace("d->pos.dry && d->over_m && ", "d->over_m && ")),
     ("a further yard with no target on or under the water known", BRAIN,
