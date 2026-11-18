@@ -55,9 +55,11 @@ void     tagpu_worldq_seat_site_set(WqSiteFn thunk);
 /* The site test 0x47D2E0 given no player for a site of `type` at first cell (cx, cz): it then makes no mapped
    test and every unit on the footprint refuses (0x47D366; the flag [esp+0x10] stays 1 from 0x47D35C). 1 or 0, or
    -1 where the test given the seat's record refuses before its mapped read (the footprint off the map, the
-   centre's block off the record's grid, 0x47D3B0..0x47D3BE). ImpAI's self-check holds the thunk's answers to it:
-   the thunk's call differs from this one only in that flag, so it accepts wherever this accepts. */
-int      tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz);
+   centre's block off the record's grid, 0x47D3B0..0x47D3BE) or the seat has no sight to read. *lit is the flag the
+   test given the seat's record sets at the site's block, the seat's own sight there (tagpu_worldq.c). ImpAI's
+   self-check holds the thunk's answers to both: the thunk's call differs from this one only in that flag, so
+   with *lit 1 it answers as this does, and with *lit 0 it accepts wherever this accepts. */
+int      tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz, int* lit);
 
 /* the resource building a unit definition is, WQ_KIND_*: what WQ_DEF.kind answers, for a caller that holds
    the definition already (the build menu's log) */

@@ -878,8 +878,8 @@ static int sight_lit(const SIGHT* s, unsigned k)
     return s->truelos ? s->los[k] != 0 : (s->mapped[k] >> s->bit) & 1u;
 }
 
-/* THE SITE TEST GIVEN NO PLAYER, for ImpAI's self-check. With a player 0x47D2E0 first places the centre's block,
-   DISASSEMBLED 0x47D36C..0x47D3BE: the centre (2 cx + fx) << 19, (2 cz + fz) << 19 and the height byte of the
+/* THE SITE TEST GIVEN NO PLAYER, AND THE SIGHT FLAG, for ImpAI's self-check. With a player 0x47D2E0 first places
+   the centre's block, DISASSEMBLED 0x47D36C..0x47D3BE: the centre (2 cx + fx) << 19, (2 cz + fz) << 19 and the height byte of the
    first cell (0x485010, the feature grid's +4: 0 off the map) as the altitude; column x >> 5, row
    (z - altitude / 2) >> 5 on the high words, each below the passed record's grid +0x80 / +0x84 (0x47D3B0,
    0x47D3B8: under the shear fix, a sheared row off the grid is read at the point's own row, the rule sight_block
@@ -887,8 +887,16 @@ static int sight_lit(const SIGHT* s, unsigned k)
    own bounds (0x47D302..0x47D352), this answers -1. Elsewhere it is the test with a NULL player, which skips the
    block, the mapped test and the sight flag alike (`cmp edi,ebx; je 0x47D479` at 0x47D364, EBX zero): a copy of
    the view with no record and the stock target, so wq_site_ok saves the scratch words around it as for any
-   call. */
-int tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz)
+   call.
+   *lit is the sight flag [esp+0x10] the test given the seat's record sets at that block (DISASSEMBLED
+   0x47D400..0x47D471): under LosType bit 1 the record's line-of-sight counter of the block non-zero
+   (0x47D414..0x47D430), otherwise the block's explored word under the record's own bit (0x47D45A..0x47D46F, the
+   seat's thunk; stock tests the viewed player's) -- sight_lit on the block sight_block places, the two bounds at
+   0x47D446..0x47D454 being the ones 0x47D3B0 and 0x47D3B8 already passed. The flag's only readers are the two
+   unit refusals, 0x47D53B and 0x47D55B: a unit on the footprint refuses the site while the flag is set, and the
+   test given no player keeps the flag 1 (0x47D35C). So with *lit 1 the seat's test answers as this one does, and
+   with *lit 0 it refuses on no unit and accepts every site this one accepts. No sight (sight_of): -1. */
+int tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz, int* lit)
 {
     const WQ_ENGINE* c = ctx_of(q);
     const char* d = def_at(c, type);
@@ -898,14 +906,12 @@ int tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz)
     unsigned k;
     int fx, fz, alt;
     if (!d || !footprint(d, &fx, &fz) || cx < 1 || cz < 1 || cx + fx >= c->w || cz + fz >= c->h) return -1;
-    memset(&s, 0, sizeof s);
-    s.w = *(const unsigned*)(c->rec + PL_LOS_W);
-    s.h = *(const unsigned*)(c->rec + PL_LOS_H);
-    if (s.w != (unsigned)c->w / 2 || s.h != (unsigned)c->h / 2) return -1;
+    if (!sight_of(c, &s)) return -1;
     alt = (unsigned char)c->grid[((size_t)cz * c->w + cx) * FT_STRIDE + 4];
     if (!sight_block(&s, (int32_t)((uint32_t)(2 * cx + fx) << 19), (int32_t)((uint32_t)alt << 16),
                      (int32_t)((uint32_t)(2 * cz + fz) << 19), &k))
         return -1;
+    *lit = sight_lit(&s, k);
     fc = *c;
     fc.rec = NULL;
     fc.site = (WqSiteFn)0x0047D2E0u;
