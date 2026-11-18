@@ -120,7 +120,7 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      seat's own island made every land class reach, so Gods of War's seat opened on a vehicle plant whose army
      reached no enemy (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24: `reach=fffff83f chose=CORVP`,
      every other start empty but two, neither land-linked). With no such start, or fewer than two starts, the
-     estimate; with no estimate either, every bit is set. ON THE ISLAND (on_island) the targets are the estimate
+     estimate; with no estimate either, every bit is set. ON THE ISLAND (pos.island) the targets are the estimate
      and the foe's starts together, a start the level seated at random left out once enemy structures are known
      (the military's own reading, impai_mil.c, THE ISLAND), so the economy agrees with the verdict only when its
      land army reaches none of them. WHY: the verdict reads the rows, and an estimate taken from structures first
@@ -279,15 +279,11 @@ static int own_start(const IMPAI_DEC* d, const WQ_START* st, int ns)
     return own;
 }
 
-/* THE ISLAND (impai_mil.c, island): the last military decision found the seat's land army reaching nothing that
-   can hold an enemy on a naval map. Read as recorded data, compared with 0 only */
-static int on_island(const IMPAI_DEC* d) { return d->in->mil && d->in->mil->island != 0; }
-
 /* THE TARGETS' 32-px blocks into tx/tz, at most PLANT_STARTS + 1: 0 none */
 static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
 {
     const IMPAI_MIL* mil = d->in->mil;
-    const int known = impai_est_known(mil), isle = on_island(d);
+    const int known = impai_est_known(mil), isle = d->pos.island;
     WQ_START st[PLANT_STARTS];
     int ns = 0, own, k, n = 0;
     if ((isle || !known) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
@@ -661,7 +657,8 @@ static int air_for_blind(const IMPAI_DEC* d)
     const IMPAI_MIL* m = d->in->mil;
     float own = 0.0f;
     unsigned k;
-    if (!m || d->sea_plants < 1 || d->air_plants || !impai_blind(m, d->now)) return 0;
+    /* the posture is blind only with a military record (posture_read), so m is not NULL past this line */
+    if (!d->pos.blind || d->sea_plants < 1 || d->air_plants) return 0;
     if (!(m->sea_held >= 0.0f && m->sea_held < 1e30f) || m->sea_held_t > d->now) return 0;
     for (k = IMPAI_K_SRAIDER; k <= IMPAI_K_SSCOUT; k++) own += d->kspent[k];
     if (!(own > 0.0f) || own < WATER_HOLD_K * m->sea_held) return 0;
@@ -801,7 +798,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     const int armed = !wet && d->count[IMPAI_C_FACTORY] == 0;
     const unsigned T = choice_tech(d, up);
     const uint32_t mask = reach_mask_of(d);
-    const int island = on_island(d) && d->count[IMPAI_C_FACTORY] > 0;
+    const int island = d->pos.island && d->count[IMPAI_C_FACTORY] > 0;
     const unsigned want = targets_bought_for(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
     uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA], looked[PLANT_LOOK];
@@ -846,7 +843,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
         }
         /* THE ISLAND'S FIRST PLANT by THE ISLAND'S PLANT ORDER, and never an air plant while another is pickable */
         no_air = pickable && k == nc && ground;
-        d->plant_sea = pickable && k == nc && in->mil && in->mil->naval == 1 && isle_order(d) == ISLE_SEA;
+        d->plant_sea = pickable && k == nc && d->pos.naval == 1 && isle_order(d) == ISLE_SEA;
     }
     if (island) {
         int air = 0;
@@ -1386,7 +1383,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->pe_in += in->ti[t].egain;
             return 1;
         }
-        if (d->sea_far && !far && !d->hold && !d->m_stall && !d->e_stall && impai_build_sea_frame(d, b)) return 1;
+        if (d->pos.dry && !far && !d->hold && !d->m_stall && !d->e_stall && impai_build_sea_frame(d, b)) return 1;
         if (d->want_sea && !far && (t = choose_sea_plant(d, d->menu, n))) {
             const int y = impai_build_sea_plant(d, b, t);
             if (y > 0) {
@@ -1755,7 +1752,7 @@ static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int n = d->q->ops->build_options(d->q, (int)type, d->menu, WQ_TYPES_MAX);
-    const int dry = in->mil && in->mil->dry && finish_buys(d);
+    const int dry = d->pos.dry && finish_buys(d);
     const unsigned want = targets_bought_for(d);
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
@@ -2047,7 +2044,7 @@ static int island_agrees(IMPAI_DEC* d)
     return !reached;
 }
 
-/* THE ISLAND'S LAND BUDGET (owner's decision, 2026-11-17): on THE ISLAND (on_island) the land army classes
+/* THE ISLAND'S LAND BUDGET (owner's decision, 2026-11-17): on THE ISLAND (pos.island) the land army classes
    (IMPAI_K_LRAIDER..IMPAI_K_LSCOUT) may take an order only while their value -- built, building and queued,
    kspent -- is below ISLAND_LAND_SHARE of the whole army's, so the land factories build a base defence that
    grows with the army the seat can send, and nothing while it has none. Only while the economy's reach agrees
@@ -2067,7 +2064,7 @@ static uint32_t island_classes(IMPAI_DEC* d)
 {
     float land = 0.0f, all = 0.0f;
     unsigned k;
-    if (!on_island(d) || !island_agrees(d)) return 0xFFFFFFFFu;
+    if (!d->pos.island || !island_agrees(d)) return 0xFFFFFFFFu;
     for (k = 0; k < IMPAI_KS; k++) {
         if (k == IMPAI_K_ASCOUT) continue;      /* THE AIR SCOUT IS SCOUT ONLY (impai_mil.c): in no army sum */
         all += d->kspent[k];
@@ -2098,7 +2095,7 @@ static uint32_t island_classes(IMPAI_DEC* d)
 static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
 {
     static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT };
-    const int blind = d->in->mil && impai_blind(d->in->mil, d->now);
+    const int blind = d->pos.blind;
     unsigned i;
     for (i = 0; i < sizeof SK; i++) {
         const unsigned k = SK[i];
@@ -2172,7 +2169,7 @@ static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    if (!cons_room(d) || d->pressed) return 0;                               /* the caps; THE PRESSURE      */
+    if (!cons_room(d) || d->pos.pressed) return 0;                           /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
     return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }

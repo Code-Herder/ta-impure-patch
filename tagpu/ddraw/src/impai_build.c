@@ -1986,11 +1986,11 @@ int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
 #define SEA_LOOK       64       /* the candidates a decision tests against the fail ring                        */
 #define SEA_REACH_BLOCKS 16     /* THE BUILDER'S REACH reads the blocks this many rings round a site at most    */
 
-/* the sea plant's radius from the anchor: comm_r, and FAR_PATCH_K x comm_r in THE FINISH AT SEA (IMPAI_DEC.sea_far,
+/* the sea plant's radius from the anchor: comm_r, and FAR_PATCH_K x comm_r in THE FINISH AT SEA (the posture's dry,
    impai_brain.c, economy) -- the search's (sea_search) and THE COMMANDER'S REACH's for its order (build_at) */
 static uint32_t sea_radius(const IMPAI_DEC* d)
 {
-    return (d->sea_far ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
+    return (d->pos.dry ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
 }
 
 /* 1 when the 32-px square from (x0, z0) lies within lim of (px, pz): the corner of it farthest from the point does */
@@ -2114,7 +2114,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     if (!rc || !rc->labels || !rc->top || rc->sea_ref >= WQ_MCLASSES || !(rc->present >> rc->sea_ref & 1u)) return -1;
     if (!d->q->ops->def_econ(d->q, type, &e) || e.minwater <= 0 || (need = (int)d->m.sea - e.minwater) < 0) return -1;
     if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
-        st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far)
+        st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->pos.dry)
         return -1;
     if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
         d->now - st->sea_from >= in->plan->fail_t) {
@@ -2178,7 +2178,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     st->sea_none_az = st->az;
     st->sea_none_ex = (int16_t)ex;
     st->sea_none_ez = (int16_t)ez;
-    st->sea_none_far = d->sea_far;
+    st->sea_none_far = d->pos.dry;
     return -1;
 }
 
@@ -2187,7 +2187,7 @@ int impai_sea_none_now(const IMPAI_DEC* d)
     const IMPAI_BRAIN* st = d->in->st;
     const int ex = d->in->mil ? d->in->mil->ebx : IMPAI_NO_ANCHOR, ez = d->in->mil ? d->in->mil->ebz : IMPAI_NO_ANCHOR;
     return st->sea_none_type != WQ_NONE && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
-           st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far;
+           st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->pos.dry;
 }
 
 /* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
