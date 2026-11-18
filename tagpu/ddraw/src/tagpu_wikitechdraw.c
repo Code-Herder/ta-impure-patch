@@ -230,10 +230,11 @@ static void t_empty(WIKISTAGEOPS* o)
 static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art);
 
 void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
-                          HUDRECT stage, double u, WIKISTAGEOPS* o)
+                          HUDRECT stage, double u, WIKISTAGEOPS* o, WTSHIFT* shift)
 {
     TB c;
     t_empty(o);
+    shift->dx = shift->dy = 0;
     t_begin(&c, stage, u, o);
     /* techtree.js ground: the fill and a dot every WT_DOT units from the canvas's corner, one unit
        square, whole pixels -- fixed to the canvas, not to the tree */
@@ -247,7 +248,10 @@ void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* c
             p->rgba = ink(&c, I_DOT);
         }
     }
+    shift->tree0 = o->n;
     if (T) {
+        shift->dx = -(int)floor(cam->x * cam->z + 0.5);
+        shift->dy = -(int)floor(cam->y * cam->z + 0.5);
         draw_tree(&c, T, cam, sel, all, art);
         return;
     }
@@ -269,8 +273,9 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
     int h = -1, nl = 0, i, k;
     size_t ne = 1;
     uint32_t q;
-#define TX(v) floor(((v) - cam->x) * z + 0.5)
-#define TY(v) floor(((v) - cam->y) * z + 0.5)
+    /* at a pan of 0: the pan is WTSHIFT's (techtree.js X) */
+#define TX(v) floor((v) * z + 0.5)
+#define TY(v) floor((v) * z + 0.5)
     /* THE EDGES' BOUND: one a card to its parent card and one for each of its unit's other builders,
        so at most the cards plus their parents -- counted, since a mod's menus that build each other
        make that as many as the cards squared */
@@ -346,7 +351,7 @@ static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, 
         double lw, tx, tw, a, r;
         uint32_t rim;
         char s[600], t[600];
-        if (TX(x + w) < 0 || TY(y + hh) < 0 || TX(x) > c.W || TY(y) > c.H) continue;
+        /* every card, on the canvas or off it: the ops do not depend on the pan */
         a = h >= 0 && !lit ? T_DIM : 1;
         c.ga = 1;
         /* THE CARD (techtree.js): its shadow, the selected card's halo, the rim, the fill inside it and

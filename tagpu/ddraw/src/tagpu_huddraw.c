@@ -40,8 +40,11 @@
 
    The vertex stage puts a four-vertex strip on the instance's rect, in clip space as the CPU
    computed it with y DOWN, so the pass needs no viewport flip and gl_FragCoord is in device
-   pixels from the top left. The fragment stage clips to the instance's clip rect by pixel
-   centre, then draws by mode:
+   pixels from the top left -- moved by the draw's shift (tagpu_vk_hud.c KENTRY: zero for every
+   list but the tech tree kept on the device, whose pan it is), which moves the instance and the
+   points its px holds and never its clip rect. The fragment stage drops the glyphs, or the
+   parts, the draw's constants hide, clips to the instance's clip rect by pixel centre, then
+   draws by mode:
      PART   the part's premultiplied texel times its opacity;
      SOLID  the colour;
      SHADE  the colour under an inset shadow: CSS `box-shadow: inset 0 0 B rgba(0,0,0,.55)`, a
@@ -93,21 +96,26 @@ static const char* VS =
     "layout(location=3) in vec4 aCol;\n"
     "layout(location=4) in vec4 aClip;\n"
     "layout(location=5) in vec4 aPrm;\n"
-    "out vec2 vUV; flat out vec4 vPx; flat out vec4 vCol; flat out vec4 vClip; flat out vec4 vPrm;\n"
+    /* the draw's constants (tagpu_vk_hud.c KENTRY): the shift in clip space and in pixels, and the
+       glyphs and the pictures hidden */
+    "layout(location=6) in vec4 aK;\n"
+    "layout(location=7) in vec4 aH;\n"
+    "out vec2 vUV; flat out vec4 vPx; flat out vec4 vCol; flat out vec4 vClip; flat out vec4 vPrm; flat out vec2 vHide;\n"
     /* HOP_CURVE's cubic: its ends a and b, its handles at their middle x, level with each end */
     "vec2 bez(vec2 a, vec2 b, float t){\n"
     "  float u = 1.0 - t, m = 0.5 * (a.x + b.x);\n"
     "  return vec2(u * u * u * a.x + 3.0 * u * t * m + t * t * t * b.x, (u * u * u + 3.0 * u * u * t) * a.y + (3.0 * u * t * t + t * t * t) * b.y);\n"
     "}\n"
     "void main(){\n"
-    "  vPx = aPx; vCol = aCol; vClip = aClip; vPrm = aPrm;\n"
-    "  if (int(aPrm.x + 0.5) == 11) {\n"
+    "  int m = int(aPrm.x + 0.5);\n"
+    "  vPx = aPx; vCol = aCol; vClip = aClip; vPrm = aPrm; vHide = aH.xy;\n"
+    "  if (m == 11) {\n"
     /* aPx the ends in device pixels, aNdc.xy 2 / the attachment's size, aPrm.y the half width,
        aUv.x the dash */
     "    const int N = " HUD_STR(HUD_CURVE_SEG) ";\n"
     "    int j = gl_VertexID >> 1;\n"
     "    float sd = (gl_VertexID & 1) == 1 ? 1.0 : -1.0, s = 0.0, L = 0.0;\n"
-    "    vec2 a = aPx.xy, b = aPx.zw, q0 = a;\n"
+    "    vec2 a = aPx.xy + aK.zw, b = aPx.zw + aK.zw, q0 = a;\n"
     "    for (int i = 1; i <= N; i++) {\n"
     "      vec2 q1 = bez(a, b, float(i) / float(N));\n"
     "      float l = length(q1 - q0);\n"
@@ -128,13 +136,17 @@ static const char* VS =
     "    return;\n"
     "  }\n"
     "  vec2 k = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
-    "  gl_Position = vec4(mix(aNdc.xy, aNdc.zw, k), 0.0, 1.0);\n"
+    "  gl_Position = vec4(mix(aNdc.xy, aNdc.zw, k) + aK.xy, 0.0, 1.0);\n"
     "  vUV = mix(aUv.xy, aUv.zw, k);\n"
+    /* the shift moves every point px holds: the grid's corner alone (its zw is no point), a
+       chart band's nothing (its px are indices) */
+    "  if (m == 12) vPx.xy += aK.zw;\n"
+    "  else if (m != 6) vPx += aK.zwzw;\n"
     "}\n";
 
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec4 vPx; flat in vec4 vCol; flat in vec4 vClip; flat in vec4 vPrm;\n"
+    "in vec2 vUV; flat in vec4 vPx; flat in vec4 vCol; flat in vec4 vClip; flat in vec4 vPrm; flat in vec2 vHide;\n"
     "uniform sampler2D uTex;\n"
     "out vec4 oCol;\n"
     "float phi(float x){\n"
@@ -168,6 +180,7 @@ static const char* FS =
     "  if (vClip.z >= vClip.x && (p.x < vClip.x || p.x >= vClip.z || p.y < vClip.y || p.y >= vClip.w)) discard;\n"
     "  vec4 t = texture(uTex, vUV);\n"
     "  int m = int(vPrm.x + 0.5);\n"
+    "  if ((vHide.x > 0.5 && m == 4) || (vHide.y > 0.5 && m == 0)) discard;\n"
     "  vec4 c;\n"
     "  if (m == 0) c = t * vCol;\n"
     "  else if (m == 1) c = vCol;\n"

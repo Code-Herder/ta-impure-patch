@@ -2352,12 +2352,17 @@ edge is one `HOP_CURVE`, a strip the vertex stage lays along the cubic in `HUD_C
 pieces and the fragment stage strokes with butt ends and, for an "also built by" edge, dashes 2
 units on and 2 off from its start, as the canvas's `setLineDash` does, at any zoom; and the dot
 grid is one `HOP_GRID` over the canvas. So the tree's ops are bounded by its cards and edges,
-whatever the zoom or the window: `techcheck`'s budget case, each tree whole at the game's stage
-size with every link, is 1 080 ops at most (Escalation), of the stage's 16 384. A dimmed card
+whatever the zoom or the window: `techcheck`'s budget case, every card at the game's stage size
+and the most zoom (so every line of text is drawn) with every link, is 1 348 ops and 4 976 bytes
+of text at most (Escalation), of the stage's 16 384 ops. A dimmed card
 (opacity 0.28, the prototype's) has its frame drawn in opaque colours mixed with the stage, so its
 overlapping shapes fade as one layer; an edge under a dimmed card is hidden rather than seen
 through it, and its pictures and text are drawn at the opacity, so a picture over its black
-square is a little darker than the prototype's. The faces are the HUD's (the
+square is a little darker than the prototype's. The pan is a whole-pixel shift of the tree drawn at
+its zoom (a point rounded at the zoom, the camera's offset rounded on its own) and every card is
+drawn whatever the pan, so the tree's ops change only with the zoom, the pick, All links and the
+canvas; the game keeps their instances on the device and moves them by the pan
+([the plan](hud-on-device-plan.html), D2). The faces are the HUD's (the
 prototype's description and footer were the browser's system face), so those two lines read
 narrower than the prototype's.
 

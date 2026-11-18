@@ -41,6 +41,18 @@ change: zoom, selection, All links, the canvas, the glyph atlas's generation. Ea
 with the camera's translation as a push constant. A pan sends nothing. *Exit*: the lane pans and
 zooms, the log counts the uploads (none on a pan), the pixel check as D1.
 
+*Built.* The pan is a whole-pixel shift in both drawings (techtree.js X: a point rounded at the
+zoom, the camera's offset rounded on its own) and every card is drawn whatever the pan, so the
+tree's ops are a pure function of everything but the pan (`WTSHIFT`); techcheck moves them by the
+shift and pairs every setup, its budget case now the most zoom with every link: Escalation 1 348
+ops and 4 976 bytes of text, under `TREE_MAXINST` (16 384 quads, 1.5 MB). The constants are not
+push constants: the HUD's shaders are GL 3.3 text translated by `spirv-gen.py`, which carries no
+push-constant block, so they are a second vertex binding of stride 0 in a device-local buffer
+written by `vkCmdUpdateBuffer`. The lane's drag (tt3) sends the tree no time (the dump's
+`tech.sent`), which took the fit's zoom at the packet's float precision: a drag's camera comes back
+as a float, and a double fit made the first drag rebuild the tree once. treecheck as D1: 0.76 and
+0.80 apart, 0.4 % loud.
+
 **D3: the whitebox stage's ground.** The map's cells, grid and fog drawn per pixel from small
 images uploaded when they change, instead of an op a cell. *Exit*: stagecheck, the whitebox
 entries' lanes, the op counts before and after on the largest map.

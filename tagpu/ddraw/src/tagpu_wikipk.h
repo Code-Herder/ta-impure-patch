@@ -204,6 +204,9 @@ typedef struct TAGPU_CMD_WIKI {
     float    tech_lo;           /* the zoom's floor: the fitted zoom or a fifth of 1:1, the
                                    smaller                                                   */
     float    tech_cv[4];        /* the canvas: x0, y0, the uncovered width, the height        */
+    uint32_t tech_sent;         /* the times the HUD pass has sent the tree's instances to the
+                                   device: a pan sends none (tagpu_vk_hud.c, THE TECH TREE ON
+                                   THE DEVICE)                                               */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
     TAGPU_CMD_WIKIBAR bar[TAGPU_WIKI_NSCROLL];

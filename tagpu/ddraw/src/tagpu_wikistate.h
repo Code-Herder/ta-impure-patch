@@ -30,6 +30,13 @@ typedef struct {
                                                (tagpu_wikistate_uview): its top layer is drawn in
                                                two, [0, page_cut) under the picture and the rest
                                                over it; page.n when no view is drawn          */
+    /* THE TECH TREE, kept on the device (tagpu_vk_hud.c): its ops, drawn at a pan of 0 and moved by
+       (tree_dx, tree_dy) whole device pixels after the stage's (tagpu_wikitech.h WTSHIFT); `tree_gen`
+       moves exactly when the ops do -- the arguments of the pure tagpu_wikitech_stage but the pan.
+       n 0 when the stage is not the tree's. The wiki's kit, in the stage's unit and corner. */
+    HUDOPLIST     tree;
+    int           tree_dx, tree_dy;
+    unsigned      tree_gen;
     const HUDOPS* hud;                      /* the stage HUD, NULL none: the HUD's art (tagpu_hudart_get) */
     float         px;                       /* the wiki's unit and the game screen's corner        */
     int           ox, oy;
@@ -69,9 +76,11 @@ void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t
    (tagpu_wikistate.c, THE HIT ORDER) -- and the page's scrolls and scrollbars and the stage HUD's
    playhead run the command record's; `cursor` 1
    when the stage's cursor is among what it draws -- its op (the list's `watch`) was given
-   instances and none of them is hidden. 0: this frame draws no wiki, and the map is empty. After
-   tagpu_wikistate_frame answered 1 for the same frame, or with 0 on any frame. */
-void tagpu_wikistate_drawn(int drew, int cursor);
+   instances and none of them is hidden; `tree_sent` the times the pass has sent the tech tree's
+   instances to the device (tagpu_vk_hud.c), carried to the hit map's `tech_sent`. 0: this frame
+   draws no wiki, and the map is empty. After tagpu_wikistate_frame answered 1 for the same frame,
+   or with 0 on any frame. */
+void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent);
 
 /* The cursor goes back over the wiki layer this frame (tagpu_vk_gui_record_cursor): the layer drew,
    and either the window is closed -- the cursor is where the engine's own would be, which the

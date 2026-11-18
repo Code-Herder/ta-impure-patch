@@ -191,8 +191,12 @@ const WikiTech = (() => {
   function draw(g, M, L, o) {
     const { cam, s } = o, z = cam.z;
     /* EVERY EDGE ON A WHOLE PIXEL: a rectangle's corners are rounded to canvas pixels and its size is the difference,
-       so a card's rim and an icon's frame stay one crisp line at any zoom instead of smearing across two */
-    const X = u => Math.round((u - cam.x) * z), Y = u => Math.round((u - cam.y) * z);
+       so a card's rim and an icon's frame stay one crisp line at any zoom instead of smearing across two. THE PAN IS A
+       WHOLE-PIXEL SHIFT of the tree drawn at its zoom: a point is rounded at the zoom and the camera's offset rounded on
+       its own, so the tree's drawing is the same at every pan but for the shift -- the game keeps it on the device and
+       moves it (tagpu_wikitech.h WTSHIFT) */
+    const PX = Math.round(cam.x * z), PY = Math.round(cam.y * z);
+    const X = u => Math.round(u * z) - PX, Y = u => Math.round(u * z) - PY;
     const box = (x, y, w, h) => [X(x), Y(y), X(x + w) - X(x), Y(y + h) - Y(y)];
     const sel = o.sel && M.units[o.sel] ? o.sel : null, h = sel && home(M, sel);
     const onPath = new Set(h ? pathTo(M, h) : []), kids = new Set(h ? M.units[h].builds : []);
@@ -275,9 +279,9 @@ const WikiTech = (() => {
       g.restore();
     };
     g.textBaseline = 'alphabetic';
+    // every card, on the canvas or off it: the tree's drawing does not depend on the pan
     for (const k of M.spine) {
       const [x, y, w, hh] = L.pos[k], u = M.units[k];
-      if (X(x + w) < 0 || Y(y + hh) < 0 || X(x) > g.canvas.width || Y(y) > g.canvas.height) continue;
       const a = focus && !lit(k) ? DIM : 1;
       g.globalAlpha = 1;
       const [cx, cy, cw, ch] = box(x, y, w, hh);

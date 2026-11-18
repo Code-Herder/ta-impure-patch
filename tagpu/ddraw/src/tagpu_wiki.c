@@ -3043,9 +3043,10 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 tech_entry(), T ? T->side : -1, T ? T->n : 0, T ? T->nspine : 0, s_tfit, s_tall, s_tsel);
         if (T && s_tsel >= 0 && s_tsel < T->n) jstr(f, T->t->unit[T->unit[s_tsel]].name, WIKITECH_NAME);
         else fputs("\"\"", f);
-        fprintf(f, ",\"drawn\":%d,\"drawn_side\":%d,\"cam\":[%.6f,%.6f,%.6f],\"lo\":%.6f,\"cv\":[%.1f,%.1f,%.1f,%.1f]",
+        fprintf(f, ",\"drawn\":%d,\"drawn_side\":%d,\"cam\":[%.6f,%.6f,%.6f],\"lo\":%.6f,\"cv\":[%.1f,%.1f,%.1f,%.1f],"
+                   "\"sent\":%u",
                 s_hit.tech, s_hit.tech_side, s_hit.tech_cam[0], s_hit.tech_cam[1], s_hit.tech_cam[2], s_hit.tech_lo,
-                s_hit.tech_cv[0], s_hit.tech_cv[1], s_hit.tech_cv[2], s_hit.tech_cv[3]);
+                s_hit.tech_cv[0], s_hit.tech_cv[1], s_hit.tech_cv[2], s_hit.tech_cv[3], s_hit.tech_sent);
         /* each card's centre in client pixels through the drawn camera, so a check can click one */
         fputs(",\"cards_at\":[", f);
         if (T && tech_drawn(T)) {

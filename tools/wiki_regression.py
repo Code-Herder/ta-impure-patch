@@ -311,7 +311,8 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt1) the open lands on the tree's first entry, the Tech tree, its tree drawn fitted with nothing picked,
         its row drawing Fit, the zoom steps, All links and About and no demo control (DIR gets the frame);
   (tt2) a click on the second card's centre picks its unit;
-  (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
+  (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom, picks nothing and sends the tree's
+       instances to the device not once (the dump's tech.sent);
   (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer, and a
     click on the zoomed tree picks the card under it;
   (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, a click on its
@@ -4094,7 +4095,11 @@ def techtree(c, shots, res):
     if shots:
         grab(c, shots / f"techtree-{res}-picked.png")
 
-    # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing
+    # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing -- and sends the tree's
+    # instances to the device not once: a pan moves the copy the device holds (tagpu_vk_hud.c, THE TECH TREE ON THE DEVICE)
+    d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["drawn"] and d["tech"]["sent"] > 0,
+                  "(tt3) the pick's tree was not drawn from the device")
+    sent0 = d["tech"]["sent"]
     z, x0, y0 = d["tech"]["cam"]
     sx, sy = round(cv0[0] + cv0[2] / 2), round(cv0[1] + cv0[3] / 2)
     c.keys(f"ddown:{sx},{sy}", f"dmove:{sx + 60},{sy + 20}", f"dmove:{sx + 120},{sy + 40}", f"dup:{sx + 120},{sy + 40}")
@@ -4102,7 +4107,9 @@ def techtree(c, shots, res):
     d = wait_dump(c, lambda d: not d["tech"]["fit"] and abs(d["tech"]["cam"][1] - want[0]) < 1e-3 and
                   abs(d["tech"]["cam"][2] - want[1]) < 1e-3, f"(tt3) a drag of 120,40 did not move the camera to {want}")
     assert d["tech"]["sel"] == k, f"(tt3) the drag changed the pick: {d['tech']['sel']}"
-    print(f"wiki techtree: (tt3) a drag of 120,40 pixels moved the camera by {120 / z:.2f},{40 / z:.2f} tree units")
+    assert d["tech"]["sent"] == sent0, f"(tt3) the drag sent the tree to the device {d['tech']['sent'] - sent0} times"
+    print(f"wiki techtree: (tt3) a drag of 120,40 pixels moved the camera by {120 / z:.2f},{40 / z:.2f} tree units and "
+          f"sent the tree to the device no time (sent {sent0} times before)")
 
     # (tt4) a wheel notch up zooms about the pointer: the tree point under it stays, the zoom up by e^0.15 or to 4:1
     z, x0, y0 = d["tech"]["cam"]

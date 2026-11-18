@@ -121,8 +121,15 @@ typedef struct {
    NULL) the message `msg` centred at nine units, in the description's style. The canvas is `stage`
    in HUD units, snapped to device pixels by tagpu_wikistage_canvas, `u` device pixels a unit; every
    op clips to it, and a picture is a HOP_PIC of the unit's WIKITECH picture. */
+/* THE TREE'S OPS AND THE PAN: the tree is drawn at the camera's zoom with every point rounded to a
+   device pixel at that zoom and the camera's offset rounded on its own (techtree.js X), and every
+   card drawn, on the canvas or off it -- so ops [tree0, n) are the same at every pan of one zoom,
+   selection, All links, canvas and unit, and a pan moves them by (dx, dy) whole device pixels.
+   They are written at a pan of 0; the canvas they clip to is not moved. tree0 is n when there is
+   no tree (the message). */
+typedef struct { int tree0; int dx, dy; } WTSHIFT;
 void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* cam, int sel, int all, const WTART* art,
-                          HUDRECT stage, double u, WIKISTAGEOPS* o);
+                          HUDRECT stage, double u, WIKISTAGEOPS* o, WTSHIFT* shift);
 
 /* the unit view's toggled actions (TAGPU_PK_WIKI.tv_act, WIKIPAGE.tech_act), wiki.js unitview's
    buttons with `.on` */

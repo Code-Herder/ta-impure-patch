@@ -164,10 +164,12 @@ function recorder(em, asked, W, H, U) {
 /* ---- the C ops read back as the same shapes, in the canvas's device pixels ---- */
 const HOP = { SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, PIC: 10, CURVE: 11, GRID: 12 }, RING = 4, DROP = 8, BASE = 16, INK = 64;
 function shapes(fr, u, roleOf) {
-  const X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
-  for (const [kind, flags, part, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade] of fr.ops) {
-    if (Math.abs(X(cx)) > TOL || Math.abs(Y(cy)) > TOL || Math.abs(cw * u - fr.w) > TOL || Math.abs(ch * u - fr.h) > TOL)
-      out.push({ k: 'clip', clip: [X(cx), Y(cy), cw * u, ch * u] });
+  // the tree's ops [tree0, n) are drawn at a pan of 0 and moved by the shift (WTSHIFT); the canvas they clip to is not
+  const CX = v => v * u - fr.x0, CY = v => v * u - fr.y0, out = [];
+  fr.ops.forEach(([kind, flags, part, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade], i) => {
+    const X = v => CX(v) + (i >= fr.tree0 ? fr.dx : 0), Y = v => CY(v) + (i >= fr.tree0 ? fr.dy : 0);
+    if (Math.abs(CX(cx)) > TOL || Math.abs(CY(cy)) > TOL || Math.abs(cw * u - fr.w) > TOL || Math.abs(ch * u - fr.h) > TOL)
+      out.push({ k: 'clip', clip: [CX(cx), CY(cy), cw * u, ch * u] });
     else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, r: style / 256 * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.SOLID && flags === DROP)
@@ -180,7 +182,7 @@ function shapes(fr, u, roleOf) {
       out.push({ k: 'text', x: X(x), y: Y(y), size: size * u, role: roleOf[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });
     else if (kind === HOP.PIC && !flags) out.push({ k: 'pic', name: part, x: X(x), y: Y(y), w: w * u, h: h * u, smooth: centre, a: rgba & 255 });
     else out.push({ k: `op ${kind}/${flags}` });
-  }
+  });
   return out;
 }
 function differ(a, b) {
@@ -210,9 +212,11 @@ function cases(tree) {
     const [rx, ry] = L.pos[root];
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: 'fit', sel: null, all: false, hits });
     out.push({ side, u: 1.5, stage: [40, 30, 800, 400], cam: 'fit', sel: root, all: true });
-    // THE BUDGET: the stage at its size in the game (1404 x 842 pixels at 1080p, the dot grid's most), the whole tree
-    // with every link -- the most ops a frame of the entry makes, which must fit WIKI_MAXOP (a drop is a DIFFER)
-    out.push({ side, u: 1.5, stage: [40, 30, 936, 561], cam: 'fit', sel: root, all: true, budget: true });
+    /* THE BUDGET: the stage at its size in the game (1404 x 842 pixels at 1080p), every card drawn whatever the pan, at
+       the most zoom (four times 1:1, so every line of text is drawn) with every link -- the most ops and text a frame
+       of the entry makes, which must fit WIKI_MAXOP (a drop is a DIFFER) and the device's copy of the tree
+       (tagpu_vk_hud.c TREE_MAXINST: an op a quad or four, a text a quad a byte at most) */
+    out.push({ side, u: 1.5, stage: [40, 30, 936, 561], cam: { z: 6, x: rx - 20, y: ry - 20 }, sel: root, all: true, budget: true });
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: { z: 8, x: rx - 20, y: ry - 20 }, sel: up, all: false });
     out.push({ side, u: 2, stage: [40, 30, 600, 340], cam: { z: 2, x: L.w / 3, y: L.h / 3 }, sel: icon, all: true });
   });
@@ -288,7 +292,7 @@ try {
         strings.forEach((t, j) => em[r].set(t, v[j]));
       });
     }
-    let nops = 0, nd = 0, ntext = 0, npic = 0, nhit = 0, most = 0;
+    let nops = 0, nd = 0, ntext = 0, npic = 0, nhit = 0, most = 0, bytes = 0;
     cs.forEach((c, i) => {
       const fr = frames[i];
       if (fr.dropped) { code = 1; nd++; console.log(`DIFFER ${mod} case ${i}: the C side dropped ${fr.dropped} ops`); return; }
@@ -305,7 +309,10 @@ try {
       }
       const want = draw(tree, c, fr, em, null, pics), got = shapes(fr, c.u, roleOf);
       nops += got.length; ntext += got.filter(s => s.k === 'text').length; npic += got.filter(s => s.k === 'pic').length;
-      if (c.budget) most = Math.max(most, fr.ops.length);
+      if (c.budget) {
+        most = Math.max(most, fr.ops.length);
+        bytes = Math.max(bytes, got.filter(s => s.k === 'text').reduce((a, s) => a + Buffer.byteLength(s.t), 0));
+      }
       const n = Math.max(want.length, got.length);
       for (let j = 0; j < n; j++) {
         const f = differ(want[j], got[j]);
@@ -317,7 +324,7 @@ try {
       }
     });
     console.log(`techcheck: ${mod}: ${cs.length} cases over ${tree.sides.length} sides, ${nops} ops (${ntext} texts, ${npic} pictures), ${nhit} hits` +
-      `, the game's stage with every link ${most} ops of its ${WIKI_MAXOP}` + (nd ? `, ${nd} DIFFER` : ', every op paired'));
+      `, the game's stage at the most zoom with every link ${most} ops of its ${WIKI_MAXOP} and ${bytes} bytes of text` + (nd ? `, ${nd} DIFFER` : ', every op paired'));
   }
   console.log(`techcheck: ${code ? 'DIFFER' : 'all equal'} -- ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
