@@ -309,13 +309,10 @@ Both are the coordinator's; the first was moved by the bar's diagnosis, and the 
   the plant comes once the constructors have the income up. **What it costs**: an island-map seat with a poor start
   holds one land plant longer; a seat whose military refuses every decision keeps one factory (`refused=` on its
   mil line).
-- **Builders keep to their layer too.** The explore cell and an assist's target must be reachable on the
-  builder's class (`impai_build.c`, `impai_build_explore` and `builder_near`), which widens the rule beyond the
-  military. **Why**: a sea plant makes sea constructors; without the test one of them, made the seat's one
-  explorer, is sent at a land cell it never arrives at and holds the explorer until `job_timeout`, and a sea
-  constructor walks at a plant inland to help it. On Comet Catcher every block is one component for every class,
-  so neither test changes `impai-eco`'s choices; on the brain test's walled map the explorer now goes to a cell on
-  its own side of the wall.
+- **Builders keep to their layer too.** An assist's target must be reachable on the builder's class
+  (`impai_build.c`, `builder_near`), which widens the rule beyond the military. **Why**: a sea plant makes sea
+  constructors; without the test a sea constructor walks at a plant inland to help it. On Comet Catcher every
+  block is one component for every class, so the test does not change `impai-eco`'s choices.
 
 ## Finishing a won game: two changes to A2 §4.3 (b7, 2026-11-13)
 
@@ -494,11 +491,6 @@ The design calls, each with its evidence; the owner may reverse any of them:
   fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
   builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
   past the front waits until a push holds its ground; the commander keeps `comm_r`.
-- **The explorer keeps to held ground**, 2026-11-15: the explore cell is the nearest unexplored 256-px cell the
-  seat holds. **Why**: the explorer is asked for once no held patch is left, and mid-game, the seat's own half
-  explored, the nearest unexplored cell lay in the enemy's half -- the walk the held ground keeps the constructors
-  from. **What it costs**: the enemy's half stays unexplored by the builders; the army's sweep and scouts still go
-  there.
 - **The held ground's enemy side starts from each enemy's base**, 2026-11-15: every identified enemy structure that
   is not a tower, and while an enemy the seat identifies has none known, or none is identified, every start but the
   seat's own -- not the military's estimate. **Why**: the estimate is one value-weighted centre of every enemy's
@@ -1099,6 +1091,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   needs no estimate per enemy. **Why the hysteresis**: an army that sways a cell back and forth would otherwise
   claim and refuse the same patch in turn. **What it costs**: a straight step ignores water and cliffs, and a ghost
   holds ground for the enemy until the seat looks again.
+- **The held ground is judged once in every decision, at its start**, 2026-11-18 ([the brain](brain.html), *Task
+  allocation*). The judgement used to run in the first decision step that asked whether a patch was held, so a
+  decision in which nothing asked kept the old bits, and which rung ran decided when the hysteresis stepped: a
+  rung that ordered nothing still moved recorded state, and removing one changed three games' state. **Why an
+  ordering and not a call kept where it was**: a call kept for its side effect is that fault again; judged before
+  any reader, every reader of a decision reads that decision's judgement whoever asks. **What it changes**: the
+  hysteresis steps in decisions where it did not, so a cell is gained or let go sooner. MEASURED on the session
+  tier against the champion 275d56ca, the same category in every game: Red Triangle ac-1 won at 74 077 by both,
+  Plains and Passes ac-1 at 36 363 by both, Core Prime cc-1 at 48 285 by both; Trout Farm ca-1 won at 42 509 |
+  47 710, Lava Mania ca-2 on ProTA at 32 216 | 43 160, Metal Heck aa-2 at 37 236 | 40 771 -- three wins later
+  and none sooner; Steel Jungle ca-1 at the cap not ahead by both, value 0.85. **What it costs**: the two walks
+  and the maps in every decision, where a decision with no asker made neither.
 - **The harvest: an idle builder reclaims outside a surplus, the army looks for wrecks, and a reclaim reaches 2 048
   px** ([the brain](brain.html), *Task allocation*). Without them the fields were learned only by one builder's
   look a decision, the army's sightings never entered the memory, the choice reached 768 px, and the ladder

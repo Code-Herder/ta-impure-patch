@@ -192,7 +192,6 @@ typedef struct IMPAI_DEC {
     int           want_sensor;
     int32_t       sensor_x, sensor_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
-    int           explorer_live;
     float         pe_extra;                     /* the energy the seat's frames and build heads will add,
                                                    each building once (THE HEADS' COUNTS)                 */
     int           has_bbox;
@@ -264,7 +263,7 @@ typedef struct IMPAI_DEC {
     int           com_held;                     /* the commander is the military's (THE COMMANDER'S WINDOW)    */
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
-    int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
+    int           sites, snaps, roots, queued, assigned, stopped, reclaim_scans;
     int           roots_max, root_cap;
     int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
@@ -317,7 +316,7 @@ typedef struct IMPAI_DEC {
     IMPAI_MAPS    maps;
     int           maps_built;                   /* 0 not yet, 1 built, -1 none to build                  */
     /* THE HELD GROUND (impai_build.c): each 256-px cell's steps from the seat's strength and from the enemy's,
-       the walk's queue, IMPAI_GRID_MAX^2 each; held_built 0 not judged this decision, 1 judged, -1 no maps */
+       the walk's queue, IMPAI_GRID_MAX^2 each; held_built 1 judged at the decision's start, -1 no maps or no rows */
     uint8_t      *held_own, *held_foe;
     uint16_t*     held_q;
     int           held_built;
@@ -468,7 +467,6 @@ int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` covering the sensor want's point (d->sensor_x, d->sensor_z; impai_econ.c, THE SENSORS): 1 ordered, 0 not,
    -1 a site this builder never takes (impai_build.c) */
 int  impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
-int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
@@ -485,6 +483,9 @@ int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate);
 void impai_fmem_refresh(IMPAI_DEC* d);
 void impai_fmem_observe(IMPAI_DEC* d);
 int  impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az);
+/* THE HELD GROUND's judgement of this decision (impai_build.c): impai_brain_decide's call, once, before any
+   reader of a held bit */
+void impai_held_judge(IMPAI_DEC* d);
 void impai_fmem_drop(IMPAI_DEC* d, int k);
 /* THE FEATURE SHOWN (impai_build.c): 1 when the feature remembered as e is there and the game draws it for the
    seat, read into *f, and a reclaim can take it; 0 when the seat knows it is not -- the draw shows its place

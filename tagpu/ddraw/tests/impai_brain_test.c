@@ -1470,7 +1470,6 @@ static void check_ladder_rows(void)
         { "short-reclaim", M | H | HB, 0,                      0,       0, 0, 0 },
         { "energy",        M,          0,                      0,       0, 0, 0 },
         { "maker",         M,          0,                      0,       0, 0, 0 },
-        { "explore",       M | B,      0,                      0,       0, 0, 0 },
         { "harvest",       M | B,      0,                      0,       0, 0, 0 },
         { "assist",        M | B,      0,                      0,       0, 0, 0 },
     };
@@ -3132,7 +3131,7 @@ static int feat_add(int ax, int az, int fx, int fz, float metal)
 }
 
 /* A seat of a commander and a constructor that can reclaim, both moving a px a tick, a factory standing and
-   busy, no patch and another unit exploring: so no rule that builds has a site, and the builders reach the
+   busy, no patch: so no rule that builds has a site, and the builders reach the
    reclaim. `stall`: the seat's metal is short (m_stall: under a fifth of its storage, spending more than it
    makes). */
 static void reclaim_world(int stall)
@@ -3147,23 +3146,12 @@ static void reclaim_world(int stall)
     unit_add(&s_w, 1, T_COM, 20, 20, 1);
     unit_add(&s_w, 2, T_CONS, 22, 30, 1);
     unit_add(&s_w, 3, T_FACTORY, 6, 6, 1);
-    unit_add(&s_w, 9, T_CONS, 50, 50, 1);
     f = &s_w.unit[3];
     f->list[0].action = A_BUILDINGBUILD;
     f->list[0].type = T_CONS;
     f->list[0].target = (uint16_t)WQ_NONE;
     f->list[0].count = 1;
     f->n = 1;
-    f = &s_w.unit[9];
-    f->list[0].action = A_MOVE;
-    f->list[0].target = (uint16_t)WQ_NONE;
-    f->n = 1;
-    s_job[9].type = T_CONS;
-    s_job[9].build = s_job[9].target = (uint16_t)WQ_NONE;
-    s_job[9].kind = IMPAI_JOB_EXPLORE;
-    s_job[9].cx = s_job[9].cz = 120;
-    s_job[9].since = 890;
-    s_st.explorer = 9;
     s_st.ax = 20;
     s_st.az = 20;
     s_w.econ[0].metal = stall ? 50.0f : 900.0f;
@@ -3449,8 +3437,8 @@ static void check_reclaim_economy(void)
    (a) the seat not short of metal -- 30 a pass against the 8 a factory wants --, its store at half its storage and
        its energy paid: the commander takes the 60-metal rock beside it, the one reclaim of the decision;
    (b) the same with the store at 0.9 of its storage, a surplus: no reclaim;
-   (c) short of metal, the map explored, a 600-metal wreck at cell (100, 40) -- 1 258 px from the constructor and
-       816 from the explorer, past every builder's look -- and a mobile army unit at (98, 44): the army's look
+   (c) short of metal, the map explored, a 600-metal wreck at cell (100, 40) -- 1 258 px from the constructor,
+       past every builder's look -- and a mobile army unit at (98, 44): the army's look
        remembers it and the constructor, within IMPAI_HARVEST_R, takes it; the army unit's slot is the cursor;
    (d) as (c) without the army unit: nothing remembers the wreck and no builder reclaims.
    THE HELD GROUND of the harvest (check_harvest_held): short of metal, the map explored, a 600-metal rock at cell
@@ -3589,12 +3577,12 @@ static void check_stall_reclaimers(void)
 /* THE HARVEST'S COST (impai_brain.c, census: IMPAI_BRAIN_OUT.harvest_lost): reclaim_world, and jobs on slots the
    census meets -- slot 20 empty with a RECLAIM job and slot 3 (the factory) holding a constructor's RECLAIM job
    count 2; slot 21 empty with a RECLAIM_GO job and slot 2 (the constructor) holding a factory's RECLAIM_GO job,
-   walks that ordered no reclaim, an empty slot with a BUILD job and one with an EXPLORE count none; each job is
+   walks that ordered no reclaim, an empty slot with a BUILD job and one with an ASSIST count none; each job is
    cleared, so the next decision counts 0. */
 static void check_harvest_lost(void)
 {
     static const uint8_t KIND[6] = { IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_RECLAIM, IMPAI_JOB_BUILD,
-                                     IMPAI_JOB_EXPLORE, IMPAI_JOB_RECLAIM_GO };
+                                     IMPAI_JOB_ASSIST, IMPAI_JOB_RECLAIM_GO };
     static const uint16_t SLOT[6] = { 20, 21, 3, 22, 23, 2 };
     IMPAI_BRAIN_OUT out;
     int k;
@@ -3670,8 +3658,7 @@ static void check_feature_drawn(void)
    (c) THE PLACE IN A FULL MEMORY: 128 remembered rocks, each shown at every decision, of 10 + i metal, and a rock
        at (24, 24): of 500 metal it takes the place of the 10-metal entry; of 5 it is not remembered; of 500 with
        the commander reclaiming the 10-metal one, it takes the 11-metal entry's place and the reclaim holds;
-   (d) a rock remembered on unexplored ground at (70, 10): kept as a belief, and no unexplored cell read;
-   (e) the commander's reclaim job on a rock the memory no longer holds, gone since, its blocks dark, the head at
+   (d) the commander's reclaim job on a rock the memory no longer holds, gone since, its blocks dark, the head at
        the anchor's cell (the memory's footprint gone with its entry): the def is taken as one the seat must see,
        so the job holds until sight or the engine ends it. */
 static void check_feature_memory(void)
@@ -3731,17 +3718,6 @@ static void check_feature_memory(void)
         CHECK(k != 2 || (s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 34), "(c) the claimed reclaim holds");
     }
     reclaim_world(1);
-    s_st.fmem[0].ax = 70; s_st.fmem[0].az = 10;
-    s_st.fmem[0].def = 99;
-    s_st.fmem[0].fx = s_st.fmem[0].fz = 2;
-    s_st.fmem[0].owner = 10;
-    s_st.fmem[0].metal = 300.0f;
-    s_st.fmem[0].seen = 100;
-    s_st.nfmem = 1;
-    CHECK(decide(&out) == 0, "decide");
-    CHECK(impai_fmem_find(&s_st, 70, 10) >= 0 && !s_w.dark_reads, "(d) unexplored: kept, %d unexplored reads",
-          s_w.dark_reads);
-    reclaim_world(1);
     rock = feat_add(30, 30, 2, 2, 300);
     reclaim_job_set(rock, 800);
     reclaim_head(1, A_RECLAIM, rock);
@@ -3749,7 +3725,7 @@ static void check_feature_memory(void)
     s_w.feat[rock].live = 0;
     s_w.dark[15][15] = s_w.dark[16][16] = 1;
     CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(e) the job holds: kind %u", s_job[1].kind);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(d) the job holds: kind %u", s_job[1].kind);
     s_spots = PATCHES;
     s_nspots = NPATCH;
 }
@@ -4169,32 +4145,7 @@ static char route_patch(void)
    alone it still takes N, so a builder in threat is sent out of it. A feature in sight in cell (3, 1), its way
    across the row, is reclaimed by neither builder, and is with no row. With the commander no reclaimer, four
    300-metal features behind the row, each scoring above a 10-metal rock 224 px west of the constructor, the
-   constructor takes the rock: a threatened route uses none of the IMPAI_RECLAIM_TRIES. The explorer's cell (4, 1) behind the row:
-   no order, and the cell fails. */
-/* THE EXPLORE CELL keeps to held ground: route_world's constructor, no patch, the explored quarter cells (0..3,
-   0..3), an enemy's armed row in 256-px cell (6, 1): the nearest unexplored cell, (4, 1), is 3 steps from the anchor
-   and 2 from the row, not held; (1, 4), as near and after it in row-major order, is held: it is explored. With no
-   row (4, 1) is. */
-static void check_explore_held(void)
-{
-    IMPAI_BRAIN_OUT out;
-    int c;
-    for (c = 0; c < 2; c++) {
-        route_world();
-        s_spots = NULL;
-        s_nspots = 0;
-        route_row(c ? 0 : IMPAI_LOS, 6 * 8 + 2, 10, 100);
-        s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
-        CHECK(decide(&out) == 0, "decide");
-        s_viewp = NULL;
-        s_ti[T_TURRET].flags &= ~IMPAI_TF_MOBILE;
-        printf("explore, %s: job %u at %d,%d\n", c ? "no row" : "a row in cell (6, 1)", s_job[1].kind, s_job[1].cx,
-               s_job[1].cz);
-        CHECK(s_job[1].kind == IMPAI_JOB_EXPLORE && s_job[1].cx == (c ? 72 : 24) && s_job[1].cz == (c ? 24 : 72),
-              "the explorer takes the nearest held cell: %d,%d", s_job[1].cx, s_job[1].cz);
-    }
-}
-
+   constructor takes the rock: a threatened route uses none of the IMPAI_RECLAIM_TRIES. */
 static void check_route(void)
 {
     static const char* const NAME[4] = { "no row", "a turret seen", "a ghost turret", "the turret over the builder" };
@@ -4238,16 +4189,6 @@ static void check_route(void)
         CHECK(c ? reclaims == 0 : reclaims == 1 && (reclaimed_by(1) == k || reclaimed_by(2) == k),
               "route, the feature's way %s: %d reclaims", c ? "across the row" : "clear", reclaims);
     }
-    route_world();
-    s_spots = NULL;
-    s_nspots = 0;
-    route_row(IMPAI_LOS, ROW_CELL21);
-    CHECK(decide(&out) == 0, "decide");
-    s_viewp = NULL;
-    for (k = 0, i = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) i += s_st.fail[k].cx == 72 && s_st.fail[k].cz == 24;
-    printf("route, the explorer's cell behind the row: orders %d, failed %d\n", s_w.nlog, i);
-    CHECK(s_w.nlog == 0 && i == 1 && s_st.explorer == WQ_NONE, "the explorer is not sent across the row: %d orders",
-          s_w.nlog);
 }
 
 /* THE HELD GROUND (impai_build.c): a constructor at cell (66, 20), the anchor at (20, 20), the map explored and one
@@ -4448,11 +4389,48 @@ static void check_held_ground(void)
     s_nspots = NPATCH;
 }
 
+/* THE JUDGEMENT'S ORDERING (impai_build.c, impai_held_judge): the held ground is judged at the start of every
+   decision, whoever asks. The seat's one unit a solar collector -- no constructor, no plant: nothing in the
+   decision reads a held bit --, the anchor at (20, 20), cell (1, 1); E's cell is (5, 1):
+   (a) from no held ground, the seat's army row in cell (6, 1) and no enemy: (5, 1) is held after the decision;
+   (b) from (a)'s held ground, an enemy's row in (6, 1) and none of the seat's: (5, 1), 4 steps from the anchor and
+       1 from the enemy, is let go. */
+static void check_held_every_decision(void)
+{
+    static const char* const NAME[2] = { "the push", "the enemy in (6, 1)" };
+    const int k = 1 * IMPAI_GRID_MAX + 5;
+    uint8_t held_b[sizeof s_st.held];
+    IMPAI_BRAIN_OUT out;
+    unsigned i;
+    int c, x, z;
+    for (c = 0; c < 2; c++) {
+        int bit;
+        brain_world();
+        if (c) memcpy(s_st.held, held_b, sizeof held_b);
+        for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
+        for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+        unit_add(&s_w, 1, T_SOLAR, 66, 20, 1);
+        s_st.ax = 20;
+        s_st.az = 20;
+        s_w.gametime = 300;
+        impai_mil_reset(&s_hmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_hmil.ebx = s_hmil.ebz = IMPAI_NO_ANCHOR;
+        s_milp = &s_hmil;
+        held_rows(c ? -1 : 6, c ? 6 : -1, 1);
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        s_viewp = NULL;
+        memcpy(held_b, s_st.held, sizeof held_b);
+        bit = s_st.held[k >> 3] >> (k & 7) & 1;
+        printf("held ground with no asker, %s: cell (5, 1) held %d\n", NAME[c], bit);
+        CHECK(bit == !c, "held ground with no asker, %s: cell (5, 1) held %d", NAME[c], bit);
+    }
+}
+
 /* B3: a constructor at cell (20, 20) busy on an extractor's BUILD at N's site (first cell (52, 20)), ordered at
    GameTime 290. A row put on its way after the order: one move to the anchor, the job ended. With the extractor's
    frame at the site the way is no walk: nothing, unless the row's reach is over the site, which turns it back.
-   The commander on the same job: nothing. A busy EXPLORE of cell (72, 24) with the row ahead: moved back and the
-   cell failed. No row: nothing. */
+   The commander on the same job: nothing. No row: nothing. */
 static void walk_world(int unit, int kind)
 {
     route_world();
@@ -4480,7 +4458,6 @@ static void walk_world(int unit, int kind)
         s_job[1].build = (uint16_t)WQ_NONE;
         s_job[1].cx = 72;
         s_job[1].cz = 24;
-        s_st.explorer = 1;
         s_w.unit[1].list[0].action = A_MOVE;
         s_w.unit[1].list[0].pos[0] = (72 * 16 + 8) << 16;
         s_w.unit[1].list[0].pos[2] = (24 * 16 + 8) << 16;
@@ -4574,8 +4551,7 @@ static int walk_reclaim(int kind, int fcell, int bcell, int bx, int bz, int rang
 {
     IMPAI_BRAIN_OUT out;
     int k, from, moved = 0;
-    walk_world(2, IMPAI_JOB_EXPLORE);
-    s_st.explorer = (uint16_t)WQ_NONE;
+    walk_world(2, kind);
     s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
     k = feat_add(fcell, 24, 2, 2, 300);
     if (bcell >= 0) {
@@ -4615,7 +4591,6 @@ static void check_walk_reclaim(void)
 static void check_walk_back(void)
 {
     IMPAI_BRAIN_OUT out;
-    int k, failed;
     walk_world(2, IMPAI_JOB_BUILD);
     route_row(IMPAI_LOS, ROW_CELL21);
     CHECK(decide(&out) == 0, "decide");
@@ -4642,14 +4617,6 @@ static void check_walk_back(void)
     CHECK(decide(&out) == 0, "decide");
     s_viewp = NULL;
     CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "the commander's walk is the military's");
-
-    walk_world(2, IMPAI_JOB_EXPLORE);
-    route_row(IMPAI_LOS, ROW_CELL21);
-    CHECK(decide(&out) == 0, "decide");
-    s_viewp = NULL;
-    for (k = 0, failed = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) failed += s_st.fail[k].cx == 72 && s_st.fail[k].cz == 24;
-    printf("walk back, the explorer: moves home %d, failed %d\n", moved_home(0), failed);
-    CHECK(moved_home(0) == 1 && failed == 1 && s_job[1].kind == IMPAI_JOB_NONE, "the explorer turns back, its cell failed");
 
     walk_world(2, IMPAI_JOB_BUILD);
     CHECK(decide(&out) == 0, "decide");
@@ -5369,22 +5336,6 @@ static void check_mex_ground(void)
     CHECK(decide(&out) == 0, "decide");
     t = mex_ordered(0, &x0, &z0);
     CHECK(t == E_MEX, "the most metal per value: type %d", t);
-}
-
-/* F. THE EXPLORE RULE: a constructor whose only extractor suits no patch -- a water-only type on the dry patches
-   -- explores, where it would otherwise stand on patches it cannot build on */
-static void check_mex_explore(void)
-{
-    IMPAI_BRAIN_OUT out;
-    brain_world();
-    s_w.defs[T_MEX].e.minwater = 15;
-    s_ti[T_MEX].flags |= IMPAI_TF_WATER;
-    unit_add(&s_w, 2, T_CONS, 30, 30, 1);
-    s_w.gametime = 315;
-    CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[2].kind == IMPAI_JOB_EXPLORE && s_st.explorer == 2 && !mex_orders() && !out.snaps,
-          "the constructor explores: job %d, explorer %u, %d extractor orders, %u snaps", s_job[2].kind,
-          (unsigned)s_st.explorer, mex_orders(), out.snaps);
 }
 
 /* THE PLAN (impai_brain.c, IMPAI_PLAN_ROW): the economy game with a military, at Hard's persona, must be A1b's
@@ -11530,7 +11481,8 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* 
 
 /* SHORT OF METAL PAST THE TECH-UP (impai_brain.c, economy, SHORT OF METAL): the tech-up world at half its income's
    tech_m, half its store full, the constructor a reclaimer with a 20-metal rock beside it, no patch and no
-   extractor built, so only a seat short of metal takes the rock. Two labs: the tech-up is the next want and its tech_m is not met --
+   extractor built, its energy income below the target: a seat not short builds energy, the rung above the harvest, so
+   only a seat short of metal takes the rock. Two labs: the tech-up is the next want and its tech_m is not met --
    short, the rock reclaimed. Two labs and the advanced lab built: the tech-up done, no plant wanted, not short --
    no reclaim; with a quarter of the store full and more spent than comes in, a metal stall under stall_pm 300 and
    none under 200: the plan's threshold is the stall's. Two labs with the store at 900 of 1 000, a surplus: never
@@ -11547,6 +11499,8 @@ static void check_short_after_techup(void)
         s_w.econ[0].metal = done == 2 ? 900 : 500;
         s_w.econ[0].metal_in = tech_m / 2;
         s_w.econ[0].metal_out = 1;
+        s_w.econ[0].energy_in = 1;
+        s_w.econ[0].energy_out = 0;
         unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
         unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
         if (done == 1) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
@@ -11577,6 +11531,8 @@ static void check_short_after_techup(void)
             s_w.econ[0].metal = 250;
             s_w.econ[0].metal_in = tech_m / 2;
             s_w.econ[0].metal_out = tech_m;
+            s_w.econ[0].energy_in = 1;
+            s_w.econ[0].energy_out = 0;
             unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
             unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
             unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
@@ -13894,16 +13850,6 @@ static void check_sea_plant(void)
     s_w.gametime += 15;
     sea_decide("refused sixteen times, the next decision", &sy, &land);
     CHECK(!sy && land == 1, "the sea plant given up: the land factory");
-    /* unmapped: the water unexplored, no site is tested and the decision counts one refusal; with the near water
-       explored, the shipyard there */
-    coast_world(C_COAST, 1, 9);
-    for (z = 0; z < FW_H; z++) for (x = 64; x < FW_W; x++) s_w.explored[z][x] = 0;
-    sea_decide("unmapped", &sy, &land);
-    CHECK(!sy && !land && s_st.sea_refused == 1, "unexplored water: no site test, one refusal");
-    for (z = 0; z < FW_H; z++) for (x = 64; x < 80; x++) s_w.explored[z][x] = 1;
-    s_w.gametime += 15;
-    sea_decide("unmapped, the near water explored", &sy, &land);
-    CHECK(sy == 1, "the shipyard on the explored water");
     /* the nearest water held by standing underwater extractors, more candidates than SEA_LOOK: the shipyard
        beyond them */
     coast_world(C_COAST, 1, 9);
@@ -14433,11 +14379,10 @@ static void check_mil_retreat_home(void)
     }
 }
 
-/* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions, and the explorer */
+/* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions */
 static void check_layers(void)
 {
     IMPAI_MIL_OUT o;
-    IMPAI_BRAIN_OUT bo;
     int k, from, n, all, far;
     /* a RAID squad of four land raiders west of the strait, its point east: each moves to the west bank (a RAID
        keeps its point; an ATTACK's is chosen again at each decision) */
@@ -14569,54 +14514,6 @@ static void check_layers(void)
                count_action(from, A_ATTACK, 2), o.predictions);
         CHECK(count_action(from, A_ATTACK, 2) == 1 && count_action(from, A_ATTACK, 1) == k &&
               !count_action(from, A_MOVE, 1), "the raider attacks across only where it can travel");
-    }
-    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47. The scan
-       is under way in these two cases, so the opening waits and no plant comes before the explore rung (THE BLIND
-       START would ask one of a seat with no factory and none published) */
-    for (k = 0; k < 2; k++) {
-        int x, z, cx = -1;
-        coast_world(C_COAST, 0, 3);
-        s_scanned = 0;
-        s_milp = NULL;
-        s_w.unit[1].live = s_w.unit[2].live = 0;
-        if (k) unit_add(&s_w, 3, E_CK, 40, 70, 1);
-        else unit_add(&s_w, 3, E_CS, 80, 64, 1);
-        s_st.ax = 40;
-        s_st.az = 64;
-        s_w.gametime = 900;
-        for (z = 0; z < FW_H; z++) for (x = 48; x < FW_W; x++) s_w.explored[z][x] = 0;
-        from = s_w.nlog;
-        CHECK(decide(&bo) == 0, "the explorer's decision runs");
-        for (x = from; x < s_w.nlog; x++)
-            if (s_w.log[x].c.action == A_MOVE && s_w.log[x].c.unit == 3) cx = s_w.log[x].c.pos[0] >> 20;
-        printf("layer explore, %s constructor: cell x %d\n", k ? "land" : "sea", cx);
-        CHECK(k ? cx == 56 : cx == 72, "the explore cell keeps to the constructor's layer: %d", cx);
-    }
-    /* the land constructor again, a rock 140 high over cells 52..61 x 52..61 at that cell's centre: it explores
-       the cell at a block of its own inside it */
-    {
-        int x, z, cx = -1, cz = -1;
-        coast_world(C_COAST, 0, 3);
-        s_scanned = 0;
-        s_milp = NULL;
-        s_w.unit[1].live = s_w.unit[2].live = 0;
-        unit_add(&s_w, 3, E_CK, 40, 70, 1);
-        water_add(&s_w, 52, 52, 61, 61, -140);
-        fake_reach(&s_reach, E_N);
-        s_st.ax = 40;
-        s_st.az = 64;
-        s_w.gametime = 900;
-        for (z = 0; z < FW_H; z++) for (x = 48; x < FW_W; x++) s_w.explored[z][x] = 0;
-        from = s_w.nlog;
-        CHECK(decide(&bo) == 0, "the explorer's decision runs");
-        for (x = from; x < s_w.nlog; x++)
-            if (s_w.log[x].c.action == A_MOVE && s_w.log[x].c.unit == 3) {
-                cx = s_w.log[x].c.pos[0] >> 20;
-                cz = s_w.log[x].c.pos[2] >> 20;
-            }
-        printf("layer explore, a rock at the cell's centre: cell %d,%d\n", cx, cz);
-        CHECK(cx >= 48 && cx <= 63 && cz >= 48 && cz <= 63 && (cx < 52 || cx > 61 || cz < 52 || cz > 61),
-              "the cell is explored at a block of the constructor's beside the rock");
     }
 }
 
@@ -16526,6 +16423,9 @@ static void check_attention_eco(void)
         brain_world();
         unit_add(&s_w, 1, T_COM, 20, 20, 1);
         for (i = 0; i < 6; i++) unit_add(&s_w, 2 + i, T_CONS, 14 + 2 * i, 30, 1);
+        /* a rock a constructor: work for each of the six, so only the attention holds the orders back */
+        s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+        for (i = 0; i < 6; i++) feat_add(14 + 2 * i, 34, 1, 1, 50);
         unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
         unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
         s_w.gametime = 900;
@@ -16830,8 +16730,8 @@ int main(void)
     check_harvest();
     check_harvest_held();
     check_route();
-    check_explore_held();
     check_held_ground();
+    check_held_every_decision();
     check_route_rules();
     check_route_radar();
     check_walk_back();
@@ -16839,7 +16739,6 @@ int main(void)
     check_game();
     check_economy_game();
     check_mex_ground();
-    check_mex_explore();
     check_plan();
     check_attention_eco();
     check_sea_plant();

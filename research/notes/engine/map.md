@@ -2027,11 +2027,27 @@ player's record. The level load's `0x4816A0(1)` -- `0x497AE5`, after the seat lo
 `0x465E30` -- fills every word of the explored map with one byte, `0xFF` when the bit is clear and `0x00` when
 it is set (`0x4816BB..0x4816FB`: `al = LosType & 1`, `neg al; sbb eax,eax`, `and eax,0xFFFF0001`,
 `add eax,0xFFFF`, the low byte stored by `rep stos`): all sixteen bits of a word at once, every player's and
-those no record numbers. No routine gives one player the map: the stamp `0x481930` sets a bit where its record
-sees, the copier `0x485420` ORs one player's bit into another's, and the saved game's loader `0x484FA0` reads
-the whole map. A network peer is sent the map as one player's bit to OR into another's, the share's kind-3
-`0x16` message, received through the copier (`0x4558B8`) [no other sender was looked for]; the watcher switch refills it for every player on the watcher's own machine
-(`0x4656B5`, `0x4656C5`, then `0x4656CE`), so two peers' maps differ by design. **A player who is not the viewed
+those no record numbers. **Every other caller of the rebuild fills by the same rule, with `LosType` as the caller
+leaves it** (its nine callers, *The rebuild*, below; each read here): the typed `Mapping` toggles bit 0 and
+passes 1 (`0x416D93..0x416D98`, `0x416DA4`, `0x416DA6`), so it fills `0x00` in a level it un-maps and `0xFF` in
+one it maps; `NowISee` clears bits 0 and 1 and passes 1 (`0x417547`, `0x417555`, `0x41755E`), as does the
+watcher switch (`0x4656B5`, `0x4656C5`, `0x4656CE`): `0xFF`; `MakePoster` clears both and passes 1
+(`0x495B2B..0x495B36`, `0x495B58`, `0x495B61`), then writes both back as it found them and passes 1 again
+(`0x495E25..0x495E30`, `0x495E47..0x495E51`, `0x495E58`): `0xFF`, then `0x00` over every word in a level not
+Mapped; the Deathmatch respawn passes 1 with the bit as it stands (`0x4654ED`, `0x4654EF`; nothing from the
+players phase's entry `0x465031` to there writes `+0x14281`): `0x00` in a level not Mapped; `LOSType` and `LOS`
+toggle bits 2 and 1 and pass 0, which fills nothing (`0x4166A5..0x4166B1`, `0x416D63..0x416D76`; `je 0x4816FD`
+at `0x4816AD`). So in a level that starts Mapped every fill writes `0xFF` until `Mapping` is typed, and in one
+that does not, the poster and the Deathmatch respawn wipe every player's explored bits [the conditions the
+respawn's block runs under were not re-derived here: [sim](sim.html), *The Deathmatch respawn*].
+No routine gives one player the map: the stamp `0x481930` sets a bit where its record
+sees, the copier `0x485420(from, to)` ORs one player's bit into another's, and the saved game's loader `0x484FA0`
+reads the whole map. The copier has two callers, the share's two ends: the typed share command's `MAPINFO` word
+(the string at `0x5093CC`, compared at `0x49367E`) copies the local player's bit, `main+0x2A42`'s, into the
+named player's on the sender's machine (`0x49368D..0x493695`) and then calls `0x4571C0` with the same two
+[INFERRED: the kind-3 `0x16` message's send], and the receiver of that message copies through `0x4558B8`; the
+watcher switch above refills the map for every player on the watcher's own machine, so two peers' maps differ
+by design. **A player who is not the viewed
 one has its bit read by the simulation in one place**, the pathfinder's reader above: in an unmapped level a
 unit is routed over a block its owner has not explored as over free ground, whoever views the game (MEASURED
 2026-11-18: one opening played Mapped and unmapped by an ImpAI seat that reads no explored bit for its

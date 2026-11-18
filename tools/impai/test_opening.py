@@ -145,9 +145,9 @@ class TestOpening(unittest.TestCase):
         def ev(t, name, v, size):
             f = types.SimpleNamespace(name=name, value=lambda raw: int.from_bytes(raw, "little"))
             return (t, "job", 22, f, bytes(size), v.to_bytes(size, "little"))
-        # a job cleared, an explore at GameTime 44, a plant, a rocket truck whose name ends as no extractor's
+        # a job cleared, a walk to a feature at GameTime 44, a plant, a rocket truck whose name ends as no extractor's
         # does, an extractor
-        events = [ev(30, "kind", 0, 1), ev(45, "kind", 3, 1), ev(375, "build", 2, 2), ev(375, "kind", 1, 1),
+        events = [ev(30, "kind", 0, 1), ev(45, "kind", 5, 1), ev(375, "build", 2, 2), ev(375, "kind", 1, 1),
                   ev(600, "build", 0xFFFF, 2), ev(700, "build", 6, 2), ev(5280, "build", 5, 2)]
         self.assertEqual(self.recording(events), {"mexes": 1, "order": 44, "mex": 5279, "income": 2.5})
         self.assertEqual(self.recording(events[:1]), {"mexes": 1, "order": False, "mex": False, "income": 2.5})

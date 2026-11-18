@@ -373,8 +373,8 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
    remembered one to see whether it is still there (impai_build.c, THE RECLAIM). IMPAI_JOB_SWITCH: a maker the
    economy switched on or off, `since` the GameTime of the switch (impai_econ.c, THE MAKERS). */
-enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM,
-       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_SWITCH };
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO,
+       IMPAI_JOB_SWITCH };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
@@ -386,8 +386,7 @@ typedef struct IMPAI_JOB {
     uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
     uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
-    int16_t  cx, cz;            /* the site's first cell, the cell explored, or the reclaimed feature's
-                                   anchor cell                                                             */
+    int16_t  cx, cz;            /* the site's first cell, or the reclaimed feature's anchor cell         */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS          */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: 0                               */
     int16_t  far_cx, far_cz;    /* THE FAR RECORD (impai_brain.c): the last site or feature this builder could
@@ -467,7 +466,6 @@ typedef struct IMPAI_BRAIN {
     uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
     uint8_t    nfail;
     uint16_t   fail_next;
-    uint16_t   explorer;        /* the slot sent exploring; WQ_NONE                                        */
     uint8_t    sea_refused;     /* the sea plant's counted refusals this level -- a decision whose search
                                    placed none, a failed water-factory job -- at most one a decision and
                                    one a fail_t; at IMPAI_SEA_REFUSALS it is given up (impai_build.c, THE
@@ -478,7 +476,7 @@ typedef struct IMPAI_BRAIN {
     int16_t    sea_none_ax, sea_none_az, sea_none_ex, sea_none_ez;  /* anchor and estimate blocks it was
                                    searched for; WQ_NONE for none. The candidates are content, these and the
                                    radius (impai_build.c), so the answer holds while they do               */
-    IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
+    IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites, each until a GameTime                      */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
     uint8_t    nwfail, wfail_next;
@@ -508,7 +506,7 @@ typedef struct IMPAI_BRAIN {
     uint16_t   unlock_plant;
     uint8_t    held[IMPAI_GRID_MAX * IMPAI_GRID_MAX / 8];  /* THE HELD GROUND (impai_build.c): bit gx & 7 of byte
                                    (gz IMPAI_GRID_MAX + gx) >> 3 is 1 while 256-px cell (gx, gz) is held, as the
-                                   last decision that judged it left it; all 0 at the level's start          */
+                                   seat's last decision judged it; all 0 at the level's start                */
 } IMPAI_BRAIN;
 
 /* THE PLAN: every constant a decision decides by, what it limits beside it. One row, IMPAI_PLAN_ROW
@@ -1129,7 +1127,7 @@ int    impai_brain_due(unsigned gametime, unsigned seat, unsigned look);
    time, so a caller may hold it statically. */
 #define IMPAI_BRAIN_SCRATCH_MAX (768u * 1024u)
 size_t impai_brain_scratch_bytes(void);
-/* the decision's state at a level's start: no anchor, no failure, no explorer, every job none */
+/* the decision's state at a level's start: no anchor, no failure, every job none */
 void   impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob);
 /* One decision: the census, the job checks, the economy, the builders, the factories. 0, or -1 when the input
    is refused (a table short of the world, the scratch short), with nothing written. */

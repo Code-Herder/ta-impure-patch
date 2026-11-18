@@ -1152,7 +1152,7 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 /* ---- 4. the builders ---- */
 
 /* A METAL MAP (impai_metal_map): the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
-   it and the patch scan publishes no patch whatever the seat explores; the loader seeds every cell with the
+   it and the patch scan publishes no patch; the loader seeds every cell with the
    background (0x4839B3..0x4839E6, engine/map.md), and an extractor yields extractsmetal x its footprint's metal
    wherever it stands. Core Prime Industrial Area is one: SurfaceMetal 255, no metal feature, every cell 255.
    The stock AI places its extractors there by its general site search: it takes the spot search only when
@@ -1176,8 +1176,8 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    live takes neither rule (impai_brain.c, THE FAR RECORD), so the plant goes to one that can walk. An
    extractor's site is a patch, or on a metal map the ring, and its type is the one for the ground there -- the
    patch's centre, or on a metal map the anchor (impai_build.c, THE EXTRACTOR FOR THE PATCH). A constructor
-   explores only when no patch is left for it -- none free, reachable on its class, unthreatened and with an
-   extractor of its menu for its ground -- so a patch it can never reach or build on does not keep it home.
+   with no patch left for it -- none free, reachable on its class, unthreatened and with an extractor of its
+   menu for its ground -- is asked the rungs below, so a patch it can never reach or build on does not keep it home.
    THE RECLAIM (impai_build.c) is asked twice, each time for a feature worth more than what the builder would
    do instead, and never before the plants or the seat's first open_mex extractors:
    - BEFORE AN EXTRACTOR, once open_mex are finished: a feature wins over the extractor b has a site for when it
@@ -1188,7 +1188,7 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
      about half a tick a metal (engine/orders.md) -- so while the store has room a builder clears the features near it
      first; a full store makes every feature worth nothing, and the extractors come back.
    - BEFORE THE BUILDINGS THAT SPEND, while the seat is short of metal (impai_brain.c, economy: m_short): any
-     feature with worth, ahead of energy, makers, exploring and the assist (for a builder with no menu, the
+     feature with worth, ahead of energy, makers and the assist (for a builder with no menu, the
      assist alone). A helper's assist is a build's help, so a seat short of metal takes a helper to a feature as
      well.
    IN A SURPLUS THE METAL PRODUCERS WAIT, past the opening (surplus_waits): the extractor rule (its reclaim before
@@ -1198,9 +1198,8 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    THE PLANT'S PRICE's overflow, the seat making a busy plant's request a pass more than it asks (impai_brain.c,
    economy). While the store is at its maximum the economy pass adds every further unit of
    metal to MetalWasted, the double at player +0xD4, holding the store +0x98 to the storage +0xA8
-   (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
-   type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
-   ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
+   (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The
+   ladder reaches energy first, at its unchanged target, then the assist, which helps the factories'
    products and adds its worker time to the spending. ONE THRESHOLD, NO HYSTERESIS: below SURPLUS_FRAC the
    extractors come back by the same test. Its 80 % is a chosen margin below the full store, where nothing is
    wasted yet, so the producers wait before the waste begins rather than after.
@@ -1406,14 +1405,11 @@ static void plant_close(IMPAI_DEC* d)
     request_close(d, IMPAI_W_FACTORY, d->plant_up ? IMPAI_RQ_YIELDED : IMPAI_RQ_ANSWERED);
 }
 
-/* A builder at the ladder: its menu in d->menu (n types), its far record, the economy's energy keep, and the
-   extractor rung's pick, which the explore rung reads */
+/* A builder at the ladder: its menu in d->menu (n types), its far record and the economy's energy keep */
 typedef struct IMPAI_ASK {
     const IMPAI_UNITREF* b;
     int                  n, far;
     float                keep;
-    IMPAI_MEX            mx;
-    int                  have_mex;
 } IMPAI_ASK;
 
 static int rung_stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
@@ -1532,19 +1528,20 @@ static int rung_sensor(IMPAI_DEC* d, IMPAI_ASK* a)
 }
 
 /* the extractor, and THE RECLAIM before it: one rung, since the feature is weighed against the extractor this
-   builder has a site for. The pick is made whether or not the producers wait: the explore rung reads it */
+   builder has a site for */
 static int rung_mex(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     const IMPAI_BRAIN_IN* in = d->in;
+    IMPAI_MEX mx;
     int t;
-    if (!((a->have_mex = choose_mex(d, d->menu, a->n, &a->mx)) && !surplus_waits(d))) return 0;
+    if (!(choose_mex(d, d->menu, a->n, &mx) && !surplus_waits(d))) return 0;
     if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-        (impai_metal_map(d) || impai_spot_pick(d, a->b, &a->mx, NULL)) &&
+        (impai_metal_map(d) || impai_spot_pick(d, a->b, &mx, NULL)) &&
         impai_build_reclaim(d, a->b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
         return 1;
-    return impai_metal_map(d) ? ((t = impai_mex_at(d, &a->mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+    return impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
                                  impai_build_ring(d, a->b, t))
-                              : impai_build_spot(d, a->b, &a->mx);
+                              : impai_build_spot(d, a->b, &mx);
 }
 
 static int rung_short_reclaim(IMPAI_DEC* d, IMPAI_ASK* a) { return d->m_short && impai_build_reclaim(d, a->b, 0.0); }
@@ -1568,16 +1565,6 @@ static int rung_maker(IMPAI_DEC* d, IMPAI_ASK* a)
            impai_build_ring(d, a->b, t);
 }
 
-static int rung_explore(IMPAI_DEC* d, IMPAI_ASK* a)
-{
-    return d->in->ti[a->b->type].cat == IMPAI_C_CONS && !d->explorer_live &&
-           !impai_spot_pick(d, a->b, a->have_mex ? &a->mx : NULL, NULL) && impai_build_explore(d, a->b);
-}
-
-/* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
-   is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
-   reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
-   asked with min_rate 0 at the short reclaim's rung while the seat is short; this is its one other zero-rate ask */
 static int rung_harvest(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     return (a->n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, a->b, 0.0);
@@ -1595,9 +1582,8 @@ static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d
    - The plant waits for the sea plant: while that request stands a land plant is not asked, and a sea search with
      no site at all ends it, so the plant is asked of the same builder in the same decision.
    - The frame resumed is held by the sea plant's gates (impai_brain.c, THE VETOES): the hold and both stalls.
-   - An idle builder with no menu is asked the last three rungs; its reclaim while the seat is short is the
-     harvest's, after exploring.
-   THE EXPLORE ROW STAYS BELOW THE EXTRACTOR'S: it reads that rung's pick (IMPAI_ASK.mx), made once a builder.
+   - An idle builder with no menu is asked the last two rungs; its reclaim while the seat is short is the
+     harvest's.
    INVARIANT, what the gate columns rest on: IMPAI_DEC.gates is set once, after the last write of hold, e_stall
    and m_stall (impai_brain.c, economy), so a gate's bit and its flag agree throughout the assignment.
    impai_brain_test.c, check_ladder_rows, holds the rows and their order. */
@@ -1618,7 +1604,6 @@ const IMPAI_RUNG impai_ladder[] = {
     { "short-reclaim", ASK_MENUS | IMPAI_ASK_HELPER_BARE, 0,                      0,       0, 0,               0,       rung_short_reclaim },
     { "energy",        IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_energy },
     { "maker",         IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_maker },
-    { "explore",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_explore },
     { "harvest",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_harvest },
     { "assist",        ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_assist },
 };
@@ -1651,9 +1636,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 }
 
 /* Idle builders in slot order, then the helpers for the wants they answer
-   (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD,
-   reclaim or explore job this decision did not check waits for the check, which may record its feature as one it
-   could not reach, or its look's cell as failed (impai_brain.c, job_checks). A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
+   (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD
+   or reclaim job this decision did not check waits for the check, which may record its feature as one it
+   could not reach (impai_brain.c, job_checks). A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
    move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
    takes the ladder then.
@@ -1808,8 +1793,7 @@ void impai_econ_assign(IMPAI_DEC* d)
                 impai_econ_room(d);
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
-        if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO ||
-            j->kind == IMPAI_JOB_EXPLORE)
+        if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO)
             continue;
         if (assign(d, &d->idle[i], 0)) {
             d->assigned++;

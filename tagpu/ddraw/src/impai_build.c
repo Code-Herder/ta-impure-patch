@@ -1,5 +1,5 @@
 /* impai_build.c -- where ImpAI builds and how it orders it (impai.h, the brain): a metal patch for an
-   extractor, the base ring for everything else, a cell to explore, a building to help. Every site is tested
+   extractor, the base ring for everything else, a building to help. Every site is tested
    through the seat's own site test (WQ_SITE_SEAT) and every unit named by slot, the adapter re-deriving it
    before each command. Engine-free, no statics. */
 #include <string.h>
@@ -762,7 +762,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
 
 /* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
    commander at a point THE COMMANDER'S SAFE DISTANCE or THE BLAST'S APPROACH refuses (cmd_refused_to), a move --
-   mode 2, an explore or a walk to a feature believed there -- tested as a walk to the point itself, any other as
+   mode 2, a walk to a feature believed there -- tested as a walk to the point itself, any other as
    one to its builddistance of the point; a move of no job is not, and on a contested decision
    it may take the root the factories' turn reserves (impai_brain.c, THE FACTORIES' TURN). */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
@@ -910,8 +910,7 @@ int impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_
     return threatened(d, x_px, z_px) || route_threatened(d, b, x_px, z_px);
 }
 
-/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height, as the
-   explorer's order takes its point; while the anchor's own 256-px cell is threatened, or its block is not
+/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height; while the anchor's own 256-px cell is threatened, or its block is not
    reachable on b's class (reachable_block), to the centre of the unthreatened cell nearest b whose centre block
    is -- in ring order around b's cell (impai_ring_at), the first on the grid -- so a builder in a raid on the base
    is not sent into it, nor a constructor to a point in the sea or on a cliff it cannot stand on. The order ends
@@ -1386,9 +1385,9 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
 /* THE HELD GROUND: a constructor claims a patch, and a feature to reclaim (THE RECLAIM), only on a 256-px cell the
-   seat holds now -- one its strength reaches before any known enemy strength does. A judging decision (the first
-   that asks, patch_held) walks the maps' grid
-   twice in 8-neighbour steps, each from one side's sources:
+   seat holds now -- one its strength reaches before any known enemy strength does. Every decision of a seat with
+   a unit judges it once, at its start (impai_held_judge), and walks the maps' grid twice in 8-neighbour steps,
+   each from one side's sources:
    - THE SEAT'S STRENGTH: the cell of each of its rows, and each ally's, of an army type (held_kind: armed
      against the ground and moving on it; an aircraft holds no ground) -- held now or remembered --, and the base
      anchor's cell. A tower of its own is 0 steps at its own cell and is not walked from: it holds what it stands
@@ -1409,7 +1408,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
      which then held its anchor's cell and its army's and claimed no patch.
    THE HYSTERESIS, by construction: a cell not held becomes held when 4 own <= 3 foe, its steps from the seat's
    strength at most three quarters of those from the enemy's; a held cell is let go only when own > foe. Between
-   the two it keeps what the last judging decision left it (IMPAI_BRAIN.held), so a front that wavers by a cell
+   the two it keeps what the decision before left it (IMPAI_BRAIN.held), so a front that wavers by a cell
    flips no patch. The held ground so grows behind a won push -- the army standing where no known enemy is nearer
    -- and shrinks after a lost one. Before any enemy is identified the other starts stand for the enemy, so a cell
    is held up to three sevenths of the way to the nearest; with no other start and no enemy known every cell is
@@ -1420,7 +1419,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    between them, contested while the armies met there. WHY NOT A LINE BETWEEN THE BASES: the anchor and the
    estimate stay put, so such a line refuses for the rest of the game the ground a push wins; on the bar's Trout
    Farm games the seats ended with 7-9 extractors under it against 16-24 with no limit (MEASURED 2026-11-14).
-   BOUND, a judging decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
+   BOUND, a decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
    walks of at most IMPAI_GRID_MAX^2 cells, each queued once (held_source queues a cell only while it is not yet a
    source) and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
    blind to water and cliffs; a ghost holds its ground for the enemy until the seat sees it gone. */
@@ -1533,11 +1532,21 @@ static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
     return n;
 }
 
-static void held_judge(IMPAI_DEC* d)
+/* THE JUDGEMENT'S ORDERING, the invariant the hysteresis rests on: impai_brain_decide calls this once, after the
+   anchor is set and before anything that reads a held bit (patch_held's callers: the checks, the ladder, the
+   plants), and nothing else writes IMPAI_BRAIN.held. So every reader of a decision reads that decision's
+   judgement, and the hysteresis steps once a decision whoever asks: which rung runs, or whether any does, moves
+   no bit. Its inputs are the decision's own -- the view's rows, the maps, the starts, the anchor -- and none of
+   them changes inside a decision. held_built: 1 judged, -1 nothing to judge by (no maps or no rows: every cell
+   answers held and the bits keep). */
+void impai_held_judge(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const int gw = d->maps.gw, gh = d->maps.gh;
-    int n, gx, gz;
+    int gw, gh, n, gx, gz;
+    d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
+    if (d->held_built < 0) return;
+    gw = d->maps.gw;
+    gh = d->maps.gh;
     memset(d->held_own, HELD_FAR, (size_t)gw * gh);
     n = held_sources(d, d->held_own, 1, HELD_ARMY);
     if (st->ax != IMPAI_NO_ANCHOR)
@@ -1562,11 +1571,7 @@ static int patch_held(IMPAI_DEC* d, int px, int pz)
 {
     const int64_t gx = impai_cell_of_px(px), gz = impai_cell_of_px(pz);
     int k;
-    if (!d->held_built) {
-        d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
-        if (d->held_built > 0) held_judge(d);
-    }
-    if (d->held_built < 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
+    if (d->held_built <= 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
     k = (int)(gz * IMPAI_GRID_MAX + gx);
     return d->in->st->held[k >> 3] >> (k & 7) & 1;
 }
@@ -2178,21 +2183,18 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    minwaterdepth. Content candidates depend on the level's content and on the type, the anchor, the estimate's block and
    the radius only, so a search that finds none is remembered against those (IMPAI_BRAIN.sea_none_*) and not walked
    again while they hold. Each content candidate is then held against the claims -- the footprint grown by gap
-   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands -- and against
-   the seat's exploration: a footprint centre the seat has not explored, which its site test refuses
-   (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c, THE SEAT'S OWN SITE TEST; it tests the centre sheared by half
-   the altitude, this the centre itself, a filter the site test still decides), so an unmapped seat looks past the near
-   water it has not seen. Neither spends SEA_LOOK, so neither a field of standing extractors nor unseen water can hold
-   the search short of a free site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and
-   then the way out (THE WAY OUT) decide.
+   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands. That
+   spends no SEA_LOOK, so a field of standing extractors cannot hold the search short of a free site. The first
+   SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out (THE WAY OUT)
+   decide.
    THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
    way out or then the resolver refused it, or no builder took it (THE SITE NO BUILDER TAKES) -- is passed by the
    cursor (IMPAI_BRAIN.sea_*), and the next decision's
    walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
    fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
    holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
-   walk starts again at the first candidate. A candidate before the cursor that the claims or the exploration
-   passed over waits for that restart too. The walk still counts every content candidate, the cursor's skipped
+   walk starts again at the first candidate. A candidate before the cursor that the claims passed over waits for
+   that restart too. The walk still counts every content candidate, the cursor's skipped
    ones included, so a search with candidates never reads as one with none.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
@@ -2204,7 +2206,7 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
    BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024, 16 641 in
    THE FINISH AT SEA's 2 048 --, each one label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a
-   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests
+   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps); SEA_LOOK failure tests
    (IMPAI_FAILS each); site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
    (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
 static int sea_search(IMPAI_DEC* d, int type)
@@ -2257,7 +2259,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-            if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
+            if (impai_claimed(d, &wide)) continue;
             if (!site_within(d, type, cx, cz, in->plan->comm_r) && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))
                 continue;
             if (looked >= SEA_LOOK) return 0;
@@ -2304,10 +2306,10 @@ int impai_sea_none_now(const IMPAI_DEC* d)
    the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
    builder offering another type than the searched one waits for a later decision.
    TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
-   whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
+   whatever stopped it: the site test or the resolver refusing, the claims, the failures, its
    own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
    once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
-   site the seat has not yet explored, a refusal the cursor passed) costs one count, not
+   refusal the cursor passed) costs one count, not
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
@@ -2368,75 +2370,6 @@ void impai_sea_untaken(IMPAI_DEC* d)
     if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->roots < d->root_cap &&
         d->in->st->sea_i < 0xFFFFu)
         d->in->st->sea_i++;
-}
-
-/* ---- exploring ---- */
-
-/* THE EXPLORE CELL, once a decision: of the 256-px cells, the one nearest the anchor (integer distance, ties
-   in row-major order) whose centre cell the seat has not explored, that holds no failure, that the seat holds
-   (THE HELD GROUND, the extractors' rule) and that b can travel into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
-   (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
-   (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
-   cell it never arrives at). A cell whose straight way from b crosses known ground threat (THE ROUTE) fails for
-   fail_t and b is not sent: the next decision takes the next cell, one route test a decision. Else b moves there
-   (resolver mode 2), at the ground's height, and becomes the seat's one explorer; the job and its failure keep
-   the cell's centre. WHY THE HELD GROUND: the explorer is asked for once no held patch is left (impai_econ.c,
-   assign), and mid-game, the seat's own half explored, the nearest unexplored cell lies in the enemy's half --
-   the walk the held ground keeps the constructors from. BOUND: at most IMPAI_GRID_MAX^2 cells, each one held bit
-   and one label read, and for a cell nearer than the best so far whose centre block is not b's, at most
-   (2 EXPLORE_NEAR + 1)^2 = 81 more. */
-#define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
-int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
-{
-    const IMPAI_BRAIN_IN* in = d->in;
-    const int gw = (d->m.w * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX, gh = (d->m.h * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX;
-    const int per = IMPAI_CELL_PX / 16;
-    const int l = builder_label(d, b);
-    const unsigned cls = in->ti[b->type].mclass;
-    int gx, gz, bx = -1, bz = -1, tx = 0, tz = 0;
-    uint64_t best = 0;
-    int32_t pos[3];
-    if (d->explored_once || gw < 1 || gh < 1 || gw > IMPAI_GRID_MAX || gh > IMPAI_GRID_MAX) return 0;
-    d->explored_once = 1;
-    if (!l) return 0;
-    for (gz = 0; gz < gh; gz++)
-        for (gx = 0; gx < gw; gx++) {
-            int cx = gx * per + per / 2, cz = gz * per + per / 2, px, pz, ox, oz;
-            IMPAI_RECT r;
-            int64_t dx, dz;
-            uint64_t dd;
-            if (cx >= d->m.w) cx = d->m.w - 1;
-            if (cz >= d->m.h) cz = d->m.h - 1;
-            dx = (int64_t)cx - in->st->ax;
-            dz = (int64_t)cz - in->st->az;
-            dd = (uint64_t)(dx * dx + dz * dz);
-            if (bx >= 0 && dd >= best) continue;
-            r.x0 = r.x1 = (int16_t)cx;
-            r.z0 = r.z1 = (int16_t)cz;
-            if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r)) continue;
-            px = cx * 16 + 8;
-            pz = cz * 16 + 8;
-            if (!patch_held(d, px, pz)) continue;
-            if (l > 0 && impai_reach_at(in->reach, cls, cx >> 1, cz >> 1) != l) {
-                if (!impai_reach_near(in->reach, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) continue;
-                px = ox * 32 + 16;
-                pz = oz * 32 + 16;
-            }
-            best = dd; bx = cx; bz = cz; tx = px; tz = pz;
-        }
-    if (bx < 0) return 0;
-    if (route_threatened(d, b, tx, tz)) {
-        impai_fail_add(d, bx, bz);
-        return 0;
-    }
-    pos[0] = (int32_t)((uint32_t)tx << 16);
-    pos[1] = 0;
-    pos[2] = (int32_t)((uint32_t)tz << 16);
-    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
-    if (!order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_EXPLORE, bx, bz)) return 0;
-    in->st->explorer = b->slot;
-    d->explorer_live = 1;
-    return 1;
 }
 
 /* ---- assisting ---- */
@@ -2573,12 +2506,12 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    CONSTRUCTION: the seat knows a feature exactly when DrawGameScreen would draw it for the seat's player
    (tasim_feature_drawn, tasim_sweep.c: on explored ground every feature, live, greyed outside sight, except a
    nodrawundergray def, drawn only to its owner or in sight), so it knows what a human in its seat is shown and no
-   more. A feature on unexplored ground is never taken; a look (tasim_sweep_targets with seat_sight), the refresh and
-   the jobs' checks (impai_brain.c, reclaim_seen) all ask THE FEATURE SHOWN. What the memory holds where the draw
-   does not show it -- unexplored ground, a gated def out of sight -- is a belief, as old as its `seen`. On the
-   bar's setting, True line of sight with the map explored, the draw shows every feature on the map, so every
-   remembered one is a fact at every decision and the decay of a belief (THE CONFIDENCE) is left to an
-   unexplored map. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
+   more. A look (tasim_sweep_targets with seat_sight), the refresh and the jobs' checks (impai_brain.c,
+   reclaim_seen) all ask THE FEATURE SHOWN, whose explored test is the draw rule's own (tasim_feature_drawn).
+   The seat's view answers every cell of the map explored (the layout,
+   tagpu_worldq_open_layout), so what the memory holds where the draw does not show it is a gated def out of
+   sight -- a belief, as old as its `seen` (THE CONFIDENCE) -- and every other remembered feature is a fact at
+   every decision. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
    the threat at the feature and on THE ROUTE, THE HELD GROUND, the commander's comm_r and safe distance, and the
    walk checks -- are the same whatever told the seat of the feature.
    THE REFRESH, every decision: each remembered feature is asked THE FEATURE SHOWN -- there and shown, its amounts
@@ -2598,7 +2531,7 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    LOOKS: the wrecks lie where the army fought, which the builders, who keep out of known threat, rarely reach; in
    the owner's four-seat game on Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes
    (MEASURED 2026-11-14).
-   BOUND, a decision: the refresh's IMPAI_FEATS explored tests, cell reads and gates (at most four block tests
+   BOUND, a decision: the refresh's IMPAI_FEATS cell reads, each with the draw rule's explored test and gates (at most four block tests
    each); the held entries' walk of the census's claims, an IMPAI_FEATS find for each reclaim job's, and one walk a
    feature newly remembered; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16) / 16 + 1)^2 = 105^2 explored tests each, as many reads of
    the explored cells and a gate for each anchor; and IMPAI_RECLAIM_LOOK reads again and finds of IMPAI_FEATS
@@ -2607,7 +2540,6 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 int impai_feat_seen(const IMPAI_DEC* d, const IMPAI_FMEM* e, WQ_FEAT* f)
 {
     WQ_FEAT was;
-    if (!d->q->ops->explored(d->q, e->ax, e->az)) return -1;
     if (d->q->ops->feature(d->q, e->ax, e->az, f) && f->ax == e->ax && f->az == e->az && f->def == e->def) {
         if (!tasim_feature_drawn(d->q, f)) return -1;
         return impai_feat_takeable(f);

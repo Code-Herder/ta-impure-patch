@@ -308,6 +308,21 @@ class RadarStale(unittest.TestCase):
         self.assertTrue(any("no stale count" in f for f in fails), fails)
 
 
+class SiteCheck(unittest.TestCase):
+    """(a): the seat's site test's line, where a game logs one, says mismatch=0."""
+
+    def test_a_site_mismatch_fails(self):
+        ok = "impai: check site evaluated=14969 mismatch=0 lit=5120 accepted=11400 stock_differs=0"
+        fails, notes = impai_check.judge(checks() + [ok], "true")
+        self.assertEqual(fails, [])
+        self.assertIn(ok, notes)
+        bad = ["impai: check site mismatch seat=3 type=5 cell=10,12 gametime=300 lit=1 free=0 ok=1",
+               "impai: check site evaluated=14969 mismatch=7 lit=5120 accepted=11407 stock_differs=0"]
+        fails, notes = impai_check.judge(checks() + bad, "true")
+        self.assertEqual(fails, [f"(a) {bad[1]}"])
+        self.assertIn(bad[0], notes)
+
+
 class ContentPass(unittest.TestCase):
     """(a): the content map's check at the level init is there, evaluated entries and found no mismatch."""
 

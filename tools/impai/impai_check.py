@@ -58,7 +58,8 @@ PATCH_SIDE = 2 * PATCH_R + 1
 PATCH_CAP = PATCH_SIDE * PATCH_SIDE
 
 CHECK = re.compile(r"impai: check (los seat=(\d+)|los-local|radar passes=(\d+)) .*?evaluated=(\d+) mismatch=(\d+)")
-MISMATCH = re.compile(r"impai: check (los|radar|pass) mismatch .*")
+MISMATCH = re.compile(r"impai: check (los|radar|pass|site) mismatch .*")
+SITE = re.compile(r"impai: check site evaluated=(\d+) mismatch=(\d+)")
 STALE = re.compile(r"impai: check radar passes=\d+ .*? stale=(\d+)")
 PASS = re.compile(r"impai: check pass classes=(\d+) evaluated=(\d+) mismatch=(\d+)")
 WORK = re.compile(r"impai: work seat=(\d+) ticks=(\d+) refused=(\d+) slots_max=(\d+)/(\d+) "
@@ -108,6 +109,12 @@ def judge(lines, los):
                     fails.append(f"(a) the radar line has no stale count: {ln.strip()}")
                 elif int(stale.group(1)):
                     fails.append(f"(a) {stale.group(1)} radar bits published with a record older than their pass")
+            continue
+        m = SITE.search(ln)
+        if m:
+            if int(m.group(2)):
+                fails.append(f"(a) {ln.strip()}")
+            notes.append(ln.strip())
             continue
         m = MISMATCH.search(ln)
         if m:

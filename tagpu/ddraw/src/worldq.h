@@ -14,7 +14,8 @@
    NEVER STORED. A WORLDQ is opened for one call on the caller's stack and never outlives it: `self` is the
    implementation's context on that same stack and dies with the call. Nothing stores one.
 
-   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders -- but for
+   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map (or, for a layout view, every
+   cell of the map), its own orders -- but for
    the engine's site_ok (outside the seat's own site test, WQ_SITE_SEAT), can and mapped_point, which test the
    viewed player's mapped bit whatever seat asks (beside each, below). An ImpAI seat's view in the engine knows
    the map's LAYOUT (tagpu_worldq_open_layout): every cell of the map is explored to it, in an unmapped game as in

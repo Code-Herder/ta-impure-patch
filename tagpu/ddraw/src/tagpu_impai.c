@@ -241,7 +241,7 @@ static struct {
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
     unsigned radar_stale;               /* IMPAI_WORK.stale over every ImpAI seat's publishes: 0 */
-    unsigned site_eval, site_miss, site_ok, site_stock_diff, site_type, site_area;
+    unsigned site_eval, site_miss, site_lit, site_ok, site_stock_diff, site_type, site_area;
     unsigned char los_said, radar_said, site_said, econ_said[PLAYER_COUNT];
 } s_obs;
 SIM_VAR(s_obs, SIM_PRIVATE);
@@ -305,10 +305,14 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      a peek held at the end of any step from `t` to `pass` - 1 reads what the line read; the line names both.
    - THE SITE CHECK, under tagpu_impai_check.on: four sites of the level's smallest plain building type a turn,
      two near the seat's first unit and two anywhere, each tested through the thunk and held to the test given
-     no player (tagpu_worldq_site_free), which makes no mapped test and refuses on every unit: a site that one
-     accepts and the thunk refuses is a mismatch, since the thunk's test differs from it only by refusing on
-     fewer units. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
-     the two answers differ. The cells come from GameTime and the unit's position alone. */
+     no player (tagpu_worldq_site_free), which makes no mapped test and refuses on every unit, and to the sight
+     flag that call gives for the site's block: the thunk's test differs from the other only by that flag, so
+     where the seat's own sight lights the block the two answers are equal, and where it does not the thunk
+     accepts whatever the other accepts. Either broken is a mismatch -- a flag set where the seat does not see
+     refuses a free site, and one clear where it does see builds over a unit. `lit` counts the sites the first
+     rule judged. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
+     the two answers differ. The cells come from GameTime and the unit's position alone; nothing steps the
+     engine between the flag's read and the thunk's call. */
 static const IMPAI_PERSONA* seat_persona(int seat);
 
 static void impai_seat_view(int seat)
@@ -352,20 +356,21 @@ static void impai_seat_view(int seat)
         const unsigned h = (unsigned)t * 2654435761u + (unsigned)k * 40503u;
         const int cx = k < 2 ? ux + (int)(h % 61u) - 30 : (int)(h % (unsigned)c.w);
         const int cz = k < 2 ? uz + (int)((h >> 8) % 61u) - 30 : (int)((h >> 12) % (unsigned)c.h);
-        const int free_ = tagpu_worldq_site_free(&q, (int)s_obs.site_type, cx, cz);
-        int ok, stock;
+        int lit = 0, ok, stock;
+        const int free_ = tagpu_worldq_site_free(&q, (int)s_obs.site_type, cx, cz, &lit);
         if (free_ < 0) continue;
         ok = q.ops->site_ok(&q, (int)s_obs.site_type, cx, cz, 0, NULL);
         stock = eq.ops->site_ok(&eq, (int)s_obs.site_type, cx, cz, 0, NULL);
         s_obs.site_eval++;
         s_obs.site_ok += (unsigned)ok;
         s_obs.site_stock_diff += (unsigned)(ok != stock);
-        if (free_ && !ok) {
+        s_obs.site_lit += (unsigned)(lit != 0);
+        if (lit ? ok != free_ : free_ && !ok) {
             s_obs.site_miss++;
             if (!s_obs.site_said) {
                 s_obs.site_said = 1;
-                tagpu_logf("impai: check site mismatch seat=%d type=%u cell=%d,%d gametime=%d", seat,
-                           s_obs.site_type, cx, cz, t);
+                tagpu_logf("impai: check site mismatch seat=%d type=%u cell=%d,%d gametime=%d lit=%d free=%d ok=%d",
+                           seat, s_obs.site_type, cx, cz, t, lit, free_, ok);
             }
         }
     }
@@ -633,8 +638,8 @@ static void impai_observe_end(unsigned now)
     tagpu_logf("impai: check los-local evaluated=%u mismatch=%u", s_obs.local_eval, s_obs.local_miss);
     tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u stale=%u", s_obs.radar_passes,
                s_obs.radar_eval, s_obs.radar_miss, s_obs.radar_stale);
-    tagpu_logf("impai: check site evaluated=%u mismatch=%u accepted=%u stock_differs=%u", s_obs.site_eval,
-               s_obs.site_miss, s_obs.site_ok, s_obs.site_stock_diff);
+    tagpu_logf("impai: check site evaluated=%u mismatch=%u lit=%u accepted=%u stock_differs=%u", s_obs.site_eval,
+               s_obs.site_miss, s_obs.site_lit, s_obs.site_ok, s_obs.site_stock_diff);
 }
 
 /* The level init's half of observation, on every level, live or puppet: nothing of the previous level's
@@ -1440,7 +1445,6 @@ static IMPAI_BRAIN s_brain[PLAYER_COUNT];
    CENSUS'S BOUND) */
 _Static_assert(TAGPU_LIM_UNITS <= IMPAI_CENSUS_MAX, "a census walks a seat's whole block");
 static const SimField s_brain_layout[] = {
-    { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -2225,7 +2229,7 @@ static void impai_play_end(const char* ta, unsigned now)
     }
 }
 
-/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure, no explorer and
+/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure and
    no job survive a level, and a puppet's come from its recording. */
 static void impai_play_clear(void)
 {
