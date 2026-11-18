@@ -48,6 +48,21 @@ A win is ImpAI's opponent gone before the cap; a game at the cap is no win, and 
 
 The full bar (500-780 games), the handicap ladder (`ladder.py run`, 120 games in six looks) and the 16 games against the setups whose stock AI cheats run at milestones only: before the default flips and before every `v*` tag. Every batch of games registers one run in the runs viewer (`tools/tarun.py`), its games nested under it: `batch.py`'s run has a step a gate, the margin test's run nested under it; `ladder.py`'s has a step a look.
 
+## A brain writer's session
+
+The brain's sources have one writer at a time, and a writer works in sessions of **one queue item** each: a fresh writer a session, started from the hand-off (`.data/impai/brain-handoff.md` in the main checkout), which names the item, its scenario and the measure that says the item is closed.
+
+1. **Find it in one call.** `tools/impai/rules.py NAME...` answers for a rule's name (`"THE HOLD"`), a function or a decision field (`hold`, `plan.retreat_margin`): where the rule is stated, every function that names it, the fields each reads and writes, who calls whom. `--list [FILE]` names every rule with its first site; `--coupling` the fields the most functions read. It reads the sources as they are on disk, so there is no index to keep.
+2. **Play first.** The change is made, built as a scratch DLL (`diag.py build`) and played on the item's scenario against the champion (`diag.py run --dll CHAMPION --dll SCRATCH`). It must move the scenario's outcome, or the measure the item names. At most three tries; a change that moves nothing is dropped -- the sources restored, what was tried and what the games showed written into the hand-off -- and the session ends.
+3. **Harden what moved it**, and only that: the brain test's fixture, the mutations, [the brain](brain.html) in place. The game that showed the fault goes to [decisions](decisions.html), not into a comment: a comment keeps the rule's invariant, its engine facts and a pointer. A rule the item changes has its older measurements moved the same way.
+4. **Commit and hand off**: one item, the hand-off's queue brought up to date.
+
+**A session is about 100 turns.** Its cost grows with the square of its turns: every turn reads the whole context again, and the context grows by the turn (MEASURED 2026-11-17 on nine writer sessions: about 62 000 tokens at the first turn, 335 000 to 466 000 at the last, 126 to 312 turns, 27 to 80 million tokens read from cache a session; three sessions of 100 turns cost about half of one of 300). So:
+
+- **Look-ups are batched**: every read and search the next step needs goes in one turn; a function is read whole, once, not in windows.
+- **The brain test runs after a group of edits**, not after each.
+- **An item still open at about 100 turns is handed off**: what is proven is committed, the hand-off says where it stands, and a fresh session takes it.
+
 ## One-call diagnosis
 
 `tools/impai/diag.py` gives the brain writer's diagnosis loop in one call. It plays a few games, or reads games already played, and prints only the lines asked for, at most 60 by default:
