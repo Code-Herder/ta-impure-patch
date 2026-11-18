@@ -174,7 +174,7 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
       <button class="btn" id="play" aria-pressed="false" title="Play or pause (space)">Play</button>
       <button class="btn" id="next" title="The next decision (right arrow)">decision ▶</button>
       <select id="speed" aria-label="Playing speed">
-        <option value="300">10× game speed</option><option value="900" selected>30×</option><option value="2700">90×</option>
+        <option value="1">1× game speed</option><option value="2">2×</option><option value="4">4×</option><option value="8" selected>8×</option><option value="16">16×</option><option value="32">32×</option>
       </select>
     </div>
     <div class="when" title="The tick both halves show, and the game's time at it"><span id="nowtick" class="tnum">0</span><small id="nowclock"></small></div>
@@ -221,11 +221,20 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
    the colour index, rgb, colour: its word, allies: [seat], start: [x, z] px, start_t, start_exact, where: a
    compass word}], null for what could not be read; `colours` {from: the archive the colours are read from, null
    for the unmodded game's table, why}.
-   THE LIST is a row a GAME: {id, name, map, end, who, seats: [{seat, id, file} of each seat with a data file]}. */
+   THE DENSE TRACKS (thinkview.py, dense_chunks): every mobile unit's own position every K ticks, in files of a
+   stretch of the game each, loaded as the clock comes to them: a file calls thinkviewDense(game id, chunk, base64
+   of the deflated chunk). A game's row names them, `dense` {k, per: the samples a chunk starts every, n, files}.
+   THE LIST is a row a GAME: {id, name, map, end, who, seats: [{seat, id, file} of each seat with a data file],
+   dense: THE DENSE TRACKS' or null, base: what its files' names are relative to, "" the page's own folder}. */
 const MANIFEST = /*MANIFEST*/[];
 const $ = id => document.getElementById(id);
 const cache = {}, waiting = {};
 let D = null, T = 0, SEL = -1, playing = 0, HOVER = null;
+/* ONE CLOCK, TWO READINGS. TF is the clock, in ticks and fractions of one: play advances it by real time, 30
+   ticks a second times the speed. T, its whole tick, is what everything EXACT is read at -- tasks, goals,
+   judgements, events switch at their own tick and are never drawn between two. The units' places alone are read
+   at TF: a place between the two kept positions about it (unitsAt). */
+let TF = 0, U = new Map(), MOVES = { how: 'samples' };
 let GAME = null;                  // the game shown: another seat of it keeps the clock's tick and the map's view
 const LAYERS = { map: true, grid: true, metal: true, features: true, truth: true, held: true, jobs: true, trails: true, labels: true };
 const DRAG_PX = 4;                // a pointer that moves less between down and up is a click
@@ -306,6 +315,71 @@ function units(f) {
   for (const i of D.structs) { const l = D.lives[i]; if (alive(l, f.t)) u.set(l[0], [l[5], l[6], l]); }
   return (f._u = u);
 }
+/* THE DENSE TRACKS of the game shown: DN.info its row's `dense`, DN.chunks {chunk: {s0, runs: [{life, off, n, xs,
+   zs}]}} as far as they are loaded. A chunk's samples include the next chunk's first, so the two positions about
+   any moment lie in one chunk. */
+const DN = { id: null, info: null, base: '', chunks: new Map(), asked: new Set(), failed: '' };
+const chunkOf = tf => Math.max(0, Math.min(DN.info.n - 1, Math.floor(tf / DN.info.k / DN.info.per)));
+/*DENSE*/
+/* a chunk's bytes, inflated, as {s0: its first sample, runs}: thinkview.py's dense_chunks names the layout. Pure:
+   test_thinkview.py evaluates this block. */
+function denseParse(buf) {
+  const v = new DataView(buf), n = v.getUint32(16, true), runs = []; let o = 20;
+  if (String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3)) !== 'TVD1') throw new Error('not a chunk of dense tracks');
+  for (let r = 0; r < n; r++) {
+    const life = v.getUint32(o, true), off = v.getUint16(o + 4, true), m = v.getUint16(o + 6, true), xs = new Int16Array(m), zs = new Int16Array(m);
+    let x = v.getInt16(o + 8, true), z = v.getInt16(o + 10, true); o += 12; xs[0] = x; zs[0] = z;
+    for (let j = 1; j < m; j++) { const dx = v.getInt8(o), dz = v.getInt8(o + 1); o += 2;
+      if (dx === -128) { x = v.getInt16(o, true); z = v.getInt16(o + 2, true); o += 4; } else { x += dx; z += dz; }
+      xs[j] = x; zs[j] = z; }
+    runs.push({ life, off, n: m, xs, zs });
+  }
+  return { s0: v.getUint32(8, true), runs };
+}
+/*END DENSE*/
+window.thinkviewDense = (id, c, b64) => {
+  if (id !== DN.id) return;
+  const fail = why => { DN.failed = why; if (D && !playing) paint(true); };
+  if (typeof DecompressionStream === 'undefined') return fail('this browser cannot inflate them');
+  const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+  new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer()
+    .then(buf => { if (id !== DN.id) return; DN.chunks.set(c, denseParse(buf)); if (D && !playing) paint(true); })
+    .catch(e => fail(`chunk ${c} does not read (${e.message})`));
+};
+/* ask for the chunk the clock stands in, and while playing for the one it comes to next */
+function denseWant(tf) {
+  if (!DN.info) return;
+  const c = chunkOf(tf), ask = i => { if (i < 0 || i >= DN.info.n || DN.asked.has(i)) return; DN.asked.add(i);
+    const el = document.createElement('script'); el.src = DN.base + DN.info.files[i]; el.onerror = () => { DN.failed = `${DN.info.files[i]} did not load`; }; document.head.append(el); };
+  ask(c); if (playing) ask(c + 1);
+}
+/* THE UNITS AT A MOMENT, by slot: [x, z, life] in px. A structure stands where its life says. A mobile unit is
+   drawn between the two positions kept about the clock: THE DENSE TRACKS' where the game has them and the
+   stretch is loaded (its own position every K ticks, so the line between two is the path within a pixel or
+   two), else the two samples' about it (hundreds of ticks apart: a straight line that is not the path it
+   took). A life begins and ends at its own tick, exact, either way. MOVES says which was drawn. */
+function unitsAt(tf) {
+  const t = Math.floor(tf), u = new Map();
+  for (const i of D.structs) { const l = D.lives[i]; if (alive(l, t)) u.set(l[0], [l[5], l[6], l]); }
+  const ch = DN.info ? DN.chunks.get(chunkOf(tf)) : null;
+  if (ch) {
+    const js = tf / DN.info.k - ch.s0;
+    for (const r of ch.runs) { const l = D.lives[r.life]; if (!l || l[4] || !alive(l, t) || (js < r.off && u.has(l[0]))) continue;
+      const j = Math.max(0, Math.min(r.n - 1, js - r.off)), a = Math.floor(j), b = Math.min(r.n - 1, a + 1), w = j - a;
+      u.set(l[0], [r.xs[a] + (r.xs[b] - r.xs[a]) * w, r.zs[a] + (r.zs[b] - r.zs[a]) * w, l]); }
+    MOVES = { how: 'dense', k: DN.info.k };
+    return u;
+  }
+  const fi = frameIndex(t), f = D.frames[fi], g = D.frames[fi + 1], w = g ? Math.max(0, Math.min(1, (tf - f.t) / (g.t - f.t))) : 0;
+  const next = g ? (g._ix || (g._ix = (() => { const m = new Map(); for (let i = 0; i < g.m.length; i += 3) m.set(g.m[i], i); return m; })())) : null;
+  for (let i = 0; i < f.m.length; i += 3) { const l = D.lives[f.m[i]]; if (!alive(l, t)) continue;
+    const j = next ? next.get(f.m[i]) : undefined;
+    u.set(l[0], j === undefined ? [f.m[i + 1], f.m[i + 2], l] : [f.m[i + 1] + (g.m[j + 1] - f.m[i + 1]) * w, f.m[i + 2] + (g.m[j + 2] - f.m[i + 2]) * w, l]); }
+  // a unit made since the earlier sample stands where the later one first holds it
+  if (g) for (let i = 0; i < g.m.length; i += 3) { const l = D.lives[g.m[i]]; if (alive(l, t) && !u.has(l[0])) u.set(l[0], [g.m[i + 1], g.m[i + 2], l]); }
+  MOVES = { how: DN.info ? (DN.failed ? 'failed' : 'loading') : 'samples', from: f.t, to: g ? g.t : f.t };
+  return u;
+}
 function jobs(f) {
   if (f._j) return f._j;
   const out = [];
@@ -339,6 +413,12 @@ function members(f, k) {
   const u = units(f), list = []; let x = 0, z = 0;
   for (const j of jobs(f)) if (j.kind === 'SQUAD' && j.squad === k) { const p = u.get(j.slot); if (p) { list.push(p); x += p[0]; z += p[1]; } }
   return (f._m[k] = { list, x: list.length ? x / list.length : null, z: list.length ? z / list.length : null });
+}
+/* a squad's members at the moment: who they are is the sample's (its jobs), where they stand the clock's */
+function membersNow(f, k) {
+  const list = []; let x = 0, z = 0;
+  for (const j of jobs(f)) if (j.kind === 'SQUAD' && j.squad === k) { const p = U.get(j.slot); if (p) { list.push(p); x += p[0]; z += p[1]; } }
+  return { list, x: list.length ? x / list.length : null, z: list.length ? z / list.length : null };
 }
 function typesOf(list) {
   const n = {}; for (const p of list) { const t = nm(p[2][1]); n[t] = (n[t] || 0) + 1; }
@@ -400,9 +480,11 @@ function estimateAt(t) {
 /* ---------- the flight recorder ---------- */
 const R = { rows: [], L: 0, X: null, w: 0, h: 0, still: null };
 function sized(cv, w, h) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px';
-  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); return g;
+  // a canvas given the size it has keeps its store: a draw at the display's rate must not allocate one a frame.
+  // Every draw here paints the whole canvas, or clears it first.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; cv.style.height = h + 'px'; }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.globalAlpha = 1; g.setLineDash([]); return g;
 }
 function recorderRows(narrow) {
   const rows = []; let y = 0;
@@ -604,6 +686,10 @@ const View = {
 };
 /*END VIEW*/
 const MAP = { w: 0, h: 0, hits: [], rings: [], feats: [] };
+/* THE GROUND IS DRAWN ONCE A VIEW: the picture under its veil, the metal and the grid on one canvas, the features
+   on another, each kept until the view, the layers, the theme or (the features) the set standing changes. A frame
+   of play lays the two down and draws only what moves over them. */
+const GC = { base: null, key: '', feat: null, fkey: '', feats: [] };
 let V = { k: 1, x: 0, z: 0 };
 const F_EXTRACTS = 1, F_FLOATS = 2, F_FLIES = 4;
 const kindOf = type => D.kinds ? D.kinds[type] : undefined;
@@ -643,21 +729,24 @@ function drawMap() {
   if (h > maxh) { h = maxh; w = h * pw / ph; }
   cv.style.width = w + 'px';
   V = View.clamp(V, pw, ph, w);
-  const g = sized(cv, w, h), s = View.scale(V, pw, w), f = D.frames[frameIndex(T)], u = units(f), small = w < 460;
+  const g = sized(cv, w, h), s = View.scale(V, pw, w), f = D.frames[frameIndex(T)], u = U, small = w < 460;
   const sx = x => (x - V.x) * s + w / 2, syl = zl => (zl - V.z) * s + h / 2;
   const gy = (x, z) => syl(z - heightAt(x, z) / 2);                     // a point of the ground
   const uy = (x, z, type) => syl(z - standAt(x, z, type) / 2);          // a unit standing there
   const bxy = (bx, bz) => { const x = blockPx(bx), z = blockPx(bz); return [sx(x), gy(x, z)]; };
   const [vx0, vz0] = View.from(V, pw, w, h, 0, 0), [vx1, vz1] = View.from(V, pw, w, h, w, h), slack = 160;
   const seen = (x, z) => x >= vx0 - slack && x <= vx1 + slack && z >= vz0 - slack && z <= vz1 + 2 * slack;
-  Object.assign(MAP, { w, h, hits: [], rings: [], feats: [] });
+  Object.assign(MAP, { w, h, hits: [], rings: [] });
   cv.style.touchAction = V.k > 1.001 ? 'none' : 'pan-y';
   $('zoomsays').textContent = V.k > 1.001 ? `×${V.k < 10 ? V.k.toFixed(1) : Math.round(V.k)}` : 'fit';
   const labels = [];
   const label = (x, y, text, col, bold) => { if (x > -40 && x < w + 10 && y > -10 && y < h + 10) labels.push([x, y, text, col, bold]); };
+  const pic = LAYERS.map && D._img ? D.picture : null, B = D.units.block;
+  const view = [D.name, D.seat, w, h, window.devicePixelRatio, V.k, V.x, V.z, !!pic, C.map, C.fg, C.metal].join('|');
+  const gkey = [view, LAYERS.metal, LAYERS.grid].join('|');
+  if (GC.key !== gkey) { GC.key = gkey; GC.base = GC.base || document.createElement('canvas'); const g = sized(GC.base, w, h);
   g.fillStyle = C.map; g.fillRect(0, 0, w, h);
   // the map's picture, under a veil of the map's ground so the markers read over bright terrain
-  const pic = LAYERS.map && D._img ? D.picture : null;
   if (pic) { const k = s * pic.px[0] / pic.w;       // canvas px an image px: crisp when magnified, smooth when reduced
     g.imageSmoothingEnabled = k < 1.5; g.imageSmoothingQuality = 'high';
     g.drawImage(D._img, sx(0), syl(0), pic.px[0] * s, pic.px[1] * s);
@@ -665,7 +754,6 @@ function drawMap() {
   if (LAYERS.metal) { const m = metalLayer(); if (m) { g.imageSmoothingEnabled = false; g.drawImage(m, sx(0), syl(0), G.gw * D.units.cell * s, G.gh * D.units.cell * s); } }
   g.imageSmoothingEnabled = true;
   // the block grid, numbered as think.py prints a place and laid on the ground: thinner as the zoom falls
-  const B = D.units.block;
   if (LAYERS.grid) { const stepB = View.gridStep(s, B, 58), dx = Math.max(D.units.cell * (G ? G.hstep : 4), 6 / s);
     g.strokeStyle = pic ? C.fg : C.grid; g.globalAlpha = pic ? .2 : 1; g.lineWidth = 1; g.font = `500 10px ${MONO}`; g.textBaseline = 'top'; g.textAlign = 'left';
     const marks = [];
@@ -675,6 +763,8 @@ function drawMap() {
       g.stroke(); if (b) marks.push([2, gy(Math.max(0, vx0), z) + 2, b]); }
     g.globalAlpha = 1;
     for (const [x, y, b] of marks) { if (pic) { g.fillStyle = C.map; g.globalAlpha = .6; g.fillRect(x - 1, y - 1, g.measureText(b).width + 2, 11); g.globalAlpha = 1; } g.fillStyle = C.muted; g.fillText(b, x, y); } }
+  }
+  g.drawImage(GC.base, 0, 0, w, h);
   g.textBaseline = 'middle';
   // held ground: each 256-px cell laid on the ground
   if (LAYERS.held) { const cells = D.helds[f.h] || [], row = D.units.held_row, c = D.units.held; g.fillStyle = C.held; g.globalAlpha = pic ? .18 : .13;
@@ -682,7 +772,9 @@ function drawMap() {
       g.beginPath(); for (let n = 0; n <= 4; n++) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0)); } for (let n = 4; n >= 0; n--) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0 + c)); } g.fill(); }
     g.globalAlpha = 1; }
   // the features standing at the sample: what a reclaim gives, what blocks building
-  if (LAYERS.features && G && G.lives) { const cpx = D.units.cell;
+  const fkey = LAYERS.features && G && G.lives ? [view, featEpoch(f.t)].join('|') : '';
+  if (GC.fkey !== fkey) { GC.fkey = fkey; GC.feats = []; GC.feat = GC.feat || document.createElement('canvas'); const g = sized(GC.feat, w, h); g.clearRect(0, 0, w, h);
+  if (fkey) { const cpx = D.units.cell;
     for (const l of G.lives) { if (l[2] > f.t || (l[3] != null && l[3] <= f.t)) continue;
       const ft = featOf(l); if (ft.kind === 'decor') continue;
       const wx = (l[0] % G.gw) * cpx, wz = Math.floor(l[0] / G.gw) * cpx; if (!seen(wx, wz)) continue;
@@ -693,7 +785,10 @@ function drawMap() {
       else if (ft.kind === 'energy') { const r = Math.min(4.5, Math.min(fw, fh) * .35); g.globalAlpha = r < 2 ? .6 : .8; g.beginPath(); g.arc(x, y, Math.max(1, r), 0, 7); g.fill(); }
       else if (ft.kind === 'play') { g.globalAlpha = .95; const r = Math.max(2.6, Math.min(7, fw / 2)); g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke(); }
       else { g.globalAlpha = ft.kind === 'block' ? .8 : .95; g.fillRect(x - fw / 2, y - fh / 2, fw, fh); }
-      g.globalAlpha = 1; MAP.feats.push([x, y, l, ft]); } }
+      g.globalAlpha = 1; GC.feats.push([x, y, l, ft]); } }
+  }
+  if (fkey) g.drawImage(GC.feat, 0, 0, w, h);
+  MAP.feats = GC.feats;
   // the anchor and the base box
   const no = D.macros.IMPAI_NO_ANCHOR ?? -32768, ax = at(TR('brain.ax'), T, no), az = at(TR('brain.az'), T, no);
   let anchor = null, ap = null;
@@ -717,21 +812,21 @@ function drawMap() {
       // whose it is: a thin line round the mark in its owner's player colour, so two other seats are told apart
       const pc = rgbOf(whoOf(seatOf(slot))), ro = (p[2][4] && isMex(p[2][1]) ? 5 : r) + 2.6;
       if (pc) { g.strokeStyle = pc; g.lineWidth = 1.1; g.beginPath(); if (p[2][4]) g.rect(x - ro, y - ro, 2 * ro, 2 * ro); else g.arc(x, y, ro, 0, 7); g.stroke(); }
-      MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatSays(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : `; seat ${D.seat} does not know it`), seatOf(slot)]); }
+      MAP.hits.push([x, y, () => `${nm(p[2][1])} of ${seatSays(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : `; seat ${D.seat} does not know it`), seatOf(slot)]); }
     g.globalAlpha = 1; }
   // the seat's own units, by job
   const jb = new Map(jobs(f).map(j => [j.slot, j])), sq = squadsAt(T), taskOf = {}; sq.forEach(s => taskOf[s.k] = s.task);
   const own = (x, z, type) => [sx(x), uy(x, z, type)];
   for (const [slot, p] of u) {
     if (seatOf(slot) !== D.seat || !seen(p[0], p[1])) continue;
-    const l = p[2], [x, y] = own(p[0], p[1], l[1]), j = jb.get(slot), frame = l[7] == null || l[7] > f.t;
+    const l = p[2], [x, y] = own(p[0], p[1], l[1]), j = jb.get(slot), frame = l[7] == null || l[7] > T;
     let col = C['j-none'], what = j ? j.kind : 'no job';
     if (j && j.kind === 'SQUAD') { col = C[TASKVAR[taskOf[j.squad] || 'FORM']]; what = `sq[${j.squad}] ${taskOf[j.squad] || 'FREE'}`; }
     else if (j && JOBVAR[j.kind]) { col = C[JOBVAR[j.kind]]; if (j.kind === 'BUILD') what = `BUILD ${nm(j.build)}`; }
     if (l[4] && isMex(l[1])) { g.globalAlpha = frame ? .6 : 1; mex(x, y, C.mex, frame); g.globalAlpha = 1; }
     else if (l[4]) { g.globalAlpha = frame ? .55 : .9; g.fillStyle = C.fg; g.strokeStyle = C.fg; g.lineWidth = 1; if (frame) g.strokeRect(x - 3, y - 3, 6, 6); else { g.fillRect(x - 3, y - 3, 6, 6); if (pic) { g.strokeStyle = C.map; g.strokeRect(x - 3.5, y - 3.5, 7, 7); } } g.globalAlpha = 1; }
     else { const dimmed = SEL >= 0 && !(j && j.kind === 'SQUAD' && j.squad === SEL); g.globalAlpha = dimmed ? .45 : 1; g.fillStyle = col; g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 4, 0, 7); if (frame) g.stroke(); else { g.fill(); if (pic) { g.strokeStyle = C.map; g.lineWidth = 1; g.stroke(); } } g.globalAlpha = 1; }
-    MAP.hits.push([x, y, `${nm(l[1])}, slot ${slot}: ${l[4] && isMex(l[1]) ? `an extractor on metal ${cellMetal(p[0], p[1]) ?? '?'}; ` : ''}${what}${frame ? ' (a frame under construction)' : ''}`]);
+    MAP.hits.push([x, y, () => `${nm(l[1])}, slot ${slot}: ${l[4] && isMex(l[1]) ? `an extractor on metal ${cellMetal(p[0], p[1]) ?? '?'}; ` : ''}${what}${frame ? ' (a frame under construction)' : ''}`]);
     if (LAYERS.jobs && j && j.kind !== 'SQUAD' && (j.cx || j.cz) && !l[4]) {
       const jx = j.cx * D.units.cell + D.units.cell, jz = j.cz * D.units.cell + D.units.cell, px = sx(jx), py = gy(jx, jz);
       g.strokeStyle = col; g.lineWidth = 1.2; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(x, y); g.lineTo(px, py); g.stroke(); g.setLineDash([]);
@@ -781,11 +876,12 @@ function drawMap() {
   // the squads: where each has been in this task, its ring, its goals and its goal line
   const mid = m => [sx(m.x), uy(m.x, m.z)];
   for (const sq1 of sq) {
-    const col = C[TASKVAR[sq1.task]] || C.muted, picked = sq1.k === SEL, dimmed = SEL >= 0 && !picked, mem = members(f, sq1.k);
+    const col = C[TASKVAR[sq1.task]] || C.muted, picked = sq1.k === SEL, dimmed = SEL >= 0 && !picked, mem = membersNow(f, sq1.k);
     g.globalAlpha = dimmed ? .4 : 1;
     if (LAYERS.trails && sq1.ep) {
       g.strokeStyle = col; g.lineWidth = picked ? 2 : 1.2; g.globalAlpha *= picked ? .85 : .5; g.beginPath(); let pen = false;
       for (let i = frameIndex(sq1.ep.from); i < D.frames.length && D.frames[i].t <= T; i++) { const m = members(D.frames[i], sq1.k); if (m.x == null) continue; const [x, y] = mid(m); if (pen) g.lineTo(x, y); else { g.moveTo(x, y); pen = true; } }
+      if (pen && mem.x != null) g.lineTo(...mid(mem));         // ... and on to where the squad is at the clock
       g.stroke(); g.globalAlpha = dimmed ? .4 : 1;
       // the goals this task has had: a scout's round shows as the points it keeps coming back to
       const had = new Set(), pts = [];
@@ -824,8 +920,20 @@ function drawMap() {
     placed.push([x, y, wd]);
     g.fillStyle = C.map; g.globalAlpha = pic ? .9 : .82; g.fillRect(x - 3, y - 8, wd + 6, 16); g.globalAlpha = 1; g.fillStyle = col; g.textAlign = 'left'; g.fillText(text, x, y + .5);
   }
-  $('sampled').textContent = (f.t === T ? `The units, jobs, known rows and features are those of tick ${fmt(T)}.`
-    : `The squads' tasks and goals are exact at tick ${fmt(T)}; the units, jobs, known rows and features are the sample of tick ${fmt(f.t)}, ${fmt(T - f.t)} ticks before.`);
+  const said = movesSay(f);
+  if (said !== MAP.said) $('sampled').textContent = MAP.said = said;
+}
+/* which of the map's marks are exact, which dense and which sampled, at the moment */
+function movesSay(f) {
+  const exact = `Exact at tick ${fmt(T)}: the squads' tasks and goals, the estimate, the anchor, each unit's first and last tick.`;
+  const moves = MOVES.how === 'dense' ? ` Dense: a mobile unit stands between two of its own positions, kept every ${MOVES.k} ticks (${(MOVES.k / 30).toFixed(1)} s of play); a squad's ring is its members' centre there.`
+    : ` ${MOVES.how === 'loading' ? 'This stretch\'s dense positions are still loading' : MOVES.how === 'failed' ? `The dense positions are not drawn (${DN.failed})` : 'This page holds no dense positions'}: ` + (MOVES.to > MOVES.from ? `a mobile unit is drawn on a straight line between its places at the samples of ticks ${fmt(MOVES.from)} and ${fmt(MOVES.to)}, which is not the path it took.` : `a mobile unit stands where the sample of tick ${fmt(MOVES.from)} holds it.`);
+  return exact + moves + ` Sampled: who is in a squad, the builders' jobs, the known rows, the held ground and the features are ${f.t === T ? `those of tick ${fmt(T)}` : `the sample of tick ${fmt(f.t)}, ${fmt(T - f.t)} ticks before`}.`;
+}
+/* how many of the features' changes lie at or before a tick: the set standing changes only there */
+function featEpoch(t) {
+  const G = D.G; if (!G._ch) { const set = new Set(); for (const l of G.lives) { set.add(l[2]); if (l[3] != null) set.add(l[3]); } G._ch = [...set].sort((a, b) => a - b); }
+  let lo = 0, hi = G._ch.length; while (lo < hi) { const m = (lo + hi) >> 1; if (G._ch[m] <= t) lo = m + 1; else hi = m; } return lo;
 }
 /* what the ground holds under a canvas point: {x, z} in world px on the ground, and a line for the tip */
 function groundAt(cx, cy) {
@@ -837,7 +945,7 @@ function groundAt(cx, cy) {
 
 /* ---------- the figures beside the map ---------- */
 function drawSide() {
-  const f = D.frames[frameIndex(T)], sq = squadsAt(T), rows = enemyRows(f), friends = allyRows(f), u = units(f);
+  const f = D.frames[frameIndex(T)], sq = squadsAt(T), rows = enemyRows(f), friends = allyRows(f), u = U;
   const pill = (on, text, tone) => `<span class="pill${on ? ' on' : ''}"${on ? ` style="--tone:var(--${tone})"` : ''}>${esc(text)}</span>`;
   const jpills = D.judgements.filter(j => j.id !== 'estimate').map(j => { const s = j.spans.find(s => s[0] <= T && T < s[1]) || (T >= D.end ? j.spans.find(s => s[1] === D.end) : null); return pill(s && s[3] !== 'muted', j.label, s ? s[3] : 'warn'); }).join('');
   const opening = TR('brain.opened') ? pill(!at(TR('brain.opened'), T), 'opening', 'info') : '';
@@ -867,11 +975,14 @@ function drawSide() {
 }
 
 /* ---------- one clock ---------- */
-function setT(t) {
-  T = Math.max(0, Math.min(D.end, Math.round(t)));
-  $('scrub').value = T; $('nowtick').textContent = fmt(T); $('nowclock').textContent = `tick · ${clock(T)} of play`;
-  $('nowtext').textContent = nowText();
-  drawRecorder(); drawMap(); drawSide();
+function setT(t) { TF = T = Math.max(0, Math.min(D.end, Math.round(t))); paint(true); }
+/* draw the moment: the clock's face, the recorder's cursor and the map at the display's rate; the sentence and
+   the figures, which are text to read, when `all` asks (a pause, a step, and a few times a second of play) */
+function paint(all) {
+  denseWant(TF); U = unitsAt(TF);
+  if (paint.t !== T) { paint.t = T; $('scrub').value = T; $('nowtick').textContent = fmt(T); $('nowclock').textContent = `tick · ${clock(T)} of play`; }
+  drawRecorder(); drawMap();
+  if (all) { $('nowtext').textContent = nowText(); drawSide(); }
 }
 function select(k) { SEL = SEL === k ? -1 : k; R.still = null; setT(T); }
 function step(dir) {
@@ -880,14 +991,22 @@ function step(dir) {
   const t = dir > 0 ? d[lo] : d[lo - 1];
   if (t != null) setT(t);
 }
+const TICKS_A_SECOND = 30, TEXT_MS = 160, STALL_MS = 250;
+/* PLAY runs at the display's rate: each frame the clock advances by the real time since the last, 30 ticks a
+   second times the speed, and the map is drawn at it. A frame that comes late (a hidden tab, a stall) advances
+   the clock by STALL_MS at the most, so play never leaps. A pause stands on a whole tick. */
 function play(on) {
+  const was = playing;
   playing = on ? performance.now() : 0; $('play').textContent = on ? 'Pause' : 'Play'; $('play').setAttribute('aria-pressed', on ? 'true' : 'false');
-  if (!on) return;
+  if (!on) { if (was && D) setT(T); return; }
   if (T >= D.end) setT(0);
-  let from = T; const t0 = playing;
-  const tick = now => { if (playing !== t0) return; const t = from + (now - t0) / 1000 * +$('speed').value; if (t >= D.end) { setT(D.end); play(false); return; } setT(t); requestAnimationFrame(tick); };
-  $('speed').onchange = () => { if (playing) { play(false); play(true); } };
-  requestAnimationFrame(tick);
+  const t0 = playing; let last = t0, told = 0;
+  const frame = now => { if (playing !== t0) return;
+    TF += Math.min(now - last, STALL_MS) / 1000 * TICKS_A_SECOND * +$('speed').value; last = now;
+    if (TF >= D.end) { play(false); setT(D.end); return; }
+    T = Math.floor(TF); const all = now - told >= TEXT_MS; if (all) told = now;
+    paint(all); requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
 }
 /* a seat played when a unit of its own lived past the level's first ticks: the engine's placeholder units do not */
 const real = l => l[2] <= D.end && (l[3] == null ? D.end : Math.min(l[3], D.end)) - l[2] > 30;
@@ -935,10 +1054,13 @@ function whose() {
     + (allies ? allies.length ? `allied with ${list(allies.map(other))}` : 'allied with no one' : 'its alliances were not read')
     + `) was thinking — against ${foes.length ? list(foes.map(other)) : 'no one who played'}.`;
 }
-function show(d, keep) {
-  D = prepare(d); SEL = -1; play(false); if (!keep) V = View.fit(D.px[0], D.px[1]);
+function show(d, keep, game) {
+  play(false); D = prepare(d); SEL = -1; if (!keep) V = View.fit(D.px[0], D.px[1]);
+  const base = (game && game.base) || '';
+  if (!game || DN.id !== game.id) Object.assign(DN, { id: game ? game.id : null, info: (game && game.dense) || null, base, chunks: new Map(), asked: new Set(), failed: '' });
+  GC.key = GC.fkey = ''; paint.t = -1;
   if (D.picture && !D._img) { const im = new Image(); im.onload = () => { d._img = im; if (D === d) drawMap(); };
-    im.onerror = () => { d.said.push(`the map's picture is not drawn: ${d.picture.file} did not load, it stands beside this page`); if (D === d) groundNote(); }; im.src = D.picture.file; }
+    im.onerror = () => { d.said.push(`the map's picture is not drawn: ${d.picture.file} did not load, it stands beside this page`); if (D === d) groundNote(); }; im.src = base + D.picture.file; }
   groundNote();
   whose();
   for (const id of ['recseat', 'warseat']) $(id).innerHTML = sw(whoOf(D.seat)) + esc(seatTitle(D.seat));
@@ -951,7 +1073,9 @@ function show(d, keep) {
   $('chips').innerHTML = chips.map(([t, c]) => `<span class="chip ${c}">${esc(t)}</span>`).join('');
   $('scrub').max = D.end;
   $('gist').innerHTML = gist();
-  $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. The map's units, jobs and known rows are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
+  $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. `
+    + (DN.info ? `A mobile unit's place is its own position in the recording, kept every ${DN.info.k} ticks and drawn on a straight line between two. ` : 'This page holds no dense positions: a mobile unit is drawn on a straight line between two samples. ')
+    + `The jobs, the known rows, the held ground and the features are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
     + (D.layout && !D.layout.exact ? ` It is read by the layout of the source tree at ${D.layout.build || 'a commit git does not name'}, not at its own build ${D.build}: the rows' sizes fit, and what a member or an enum's number means is that tree's.` : '')
     + (D.colours ? D.colours.from ? ` A player's colour is the game's own: the middle pixel of its colour index's logo frame through the palette, read from ${D.colours.from} as the recording's game opened it.` : ` The players' colours are the unmodded game's for each colour index, not read from this recording's archives${D.colours.why ? ` (${D.colours.why})` : ''}.` : ' This data file names no player\'s colour, alliance or start: it was written before the page read them.')
     + (whoOf(D.seat).allies ? '' : ` Seat ${D.seat}'s alliances were not read: every other seat's row is drawn and counted as an enemy's, an ally's too.`)
@@ -979,16 +1103,16 @@ function load(id) {
   return new Promise((res, rej) => {
     if (cache[id]) return res(cache[id]);
     const e = entryOf(id); if (!e) return rej(new Error(`no recording ${id}`)); const m = e.s;
-    const lost = () => rej(new Error(`${m.file} did not load: it stands beside this page`));
-    waiting[id] = res; const s = document.createElement('script'); s.src = m.file; document.head.append(s);
+    const file = (e.g.base || '') + m.file, lost = () => rej(new Error(`${m.file} did not load: it stands beside this page`));
+    waiting[id] = res; const s = document.createElement('script'); s.src = file; document.head.append(s);
     // a host that refuses the file as a script may still serve it as data: the call's argument is JSON
-    s.onerror = () => fetch(m.file).then(r => r.ok ? r.text() : Promise.reject()).then(text => { delete waiting[id]; res(cache[id] = JSON.parse(text.slice(text.indexOf(',') + 1, text.lastIndexOf(')')))); }).catch(lost);
+    s.onerror = () => fetch(file).then(r => r.ok ? r.text() : Promise.reject()).then(text => { delete waiting[id]; res(cache[id] = JSON.parse(text.slice(text.indexOf(',') + 1, text.lastIndexOf(')')))); }).catch(lost);
   });
 }
 function openRec(id) {
   $('err').hidden = true;
   const e = entryOf(id); if (e) { $('pick').value = e.g.id; seatBar(e.g, id); }
-  load(id).then(d => { const keep = !!D && GAME === e.g.id; GAME = e.g.id; show(d, keep); try { history.replaceState(null, '', '#' + id); } catch (e) { /* a frame that keeps its address: the pick still stands */ } })
+  load(id).then(d => { const keep = !!D && GAME === e.g.id; GAME = e.g.id; show(d, keep, e.g); try { history.replaceState(null, '', '#' + id); } catch (e) { /* a frame that keeps its address: the pick still stands */ } })
     .catch(e => { $('err').hidden = false; $('err').textContent = e.message; });
 }
 
@@ -1011,6 +1135,7 @@ function openRec(id) {
     + '<span><i class="sw" style="background:var(--f-energy);border-radius:50%"></i>feature: reclaims for energy</span><span><i class="sw" style="background:var(--f-metal)"></i>reclaims for metal</span><span><i class="sw" style="background:var(--f-block)"></i>blocks building</span><span><i class="sw ring" style="border-color:var(--f-vent)"></i>vent</span><span style="color:var(--f-metal)">✕ made in play (a wreck)</span><span>features: the recording\'s grid, sampled; names from the map file</span>';
   const names = { map: 'the map', grid: 'grid', metal: 'metal', features: 'features', truth: 'the truth underneath', held: 'held ground', jobs: 'builders\' sites', trails: 'squads\' trails', labels: 'labels' };
   for (const k of Object.keys(LAYERS)) { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" id="layer-${k}" ${LAYERS[k] ? 'checked' : ''}> ${names[k]}`; l.firstChild.onchange = e => { LAYERS[k] = e.target.checked; if (D) drawMap(); }; $('layers').append(l); }
+  $('speed').onchange = e => e.target.blur();          // the space bar is play and pause again
   $('prev').onclick = () => { play(false); step(-1); }; $('next').onclick = () => { play(false); step(1); };
   $('play').onclick = () => play(!playing);
   $('scrub').oninput = e => { play(false); setT(+e.target.value); };
@@ -1039,7 +1164,7 @@ function openRec(id) {
   const fit = () => { if (!D) return; V = View.fit(D.px[0], D.px[1]); drawMap(); };
   const hover = (x, y) => { let best = null;
     for (const h of MAP.hits) { const d = Math.hypot(h[0] - x, h[1] - y); if (d < 10 && (!best || d < best.d)) best = { h, d }; }
-    let text = best ? best.h[2] : null; const r = best ? null : ring(x, y);
+    let text = best ? (typeof best.h[2] === 'function' ? best.h[2]() : best.h[2]) : null; const r = best ? null : ring(x, y);
     if (!best && r) text = `sq[${r.k}]: click to ${SEL === r.k ? 'let go of' : 'pick'} its lane`;
     if (!text) { let ft = null; for (const m of MAP.feats) { const d = Math.hypot(m[0] - x, m[1] - y); if (d < 8 && (!ft || d < ft.d)) ft = { m, d }; }
       const gr = groundAt(x, y).text;

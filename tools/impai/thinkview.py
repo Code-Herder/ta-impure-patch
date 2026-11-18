@@ -3,7 +3,7 @@
 flight recorder as one instrument.
 
     tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR]... [--gamedir DIR]... [--content FILE]...
-                             --out DIR [--step N] [--max-bytes B] [--bare]
+                             --out DIR [--step N] [--max-bytes B] [--dense K] [--bare]
 
 Writes DIR/index.html and, for each recording, DIR/<name>.js and DIR/<map>.<crc>.map.webp: the page (thinkview.html,
 beside this file), one data file a recording and seat, which the page loads when it is picked, and the map's
@@ -57,11 +57,17 @@ in the order given, and this tree last; the page says so when none is at the rec
 each seat's metal income -- is read from the same stream in one more pass (sample), through tarec.py's own
 accessors.
 
-EXACT AND SAMPLED. The lanes, the events, the squads' state and every scalar of the seat's are EXACT at every
-tick: they are the ticks at which a field changes (think.changes). The map's units, the builders' jobs, the rows
-of what the seat knows and the held ground are SAMPLED: at every DECISION TICK (a tick at which a squad's task or
-goal changes, or an event falls) and every --step ticks between (default: about 240 over the game). The page
-says which sample its map shows when the cursor stands between two.
+EXACT, DENSE AND SAMPLED. The lanes, the events, the squads' state and every scalar of the seat's are EXACT at
+every tick: they are the ticks at which a field changes (think.changes), and a unit's first and last tick are the
+stream's. The builders' jobs, who is in a squad, the rows of what the seat knows, the held ground and the
+features are SAMPLED: at every DECISION TICK (a tick at which a squad's task or goal changes, or an event falls)
+and every --step ticks between (default: about 240 over the game). A mobile unit's PLACE is its own position in
+the recording, exact at the tick it is read at; a sample holds it, and THE DENSE TRACKS (--dense K; sample,
+dense_chunks) hold it every K ticks for the whole game, in files of DENSE_CHUNK_TICKS ticks each that the page
+loads as its clock comes to them. The page plays at the display's rate and draws a unit on the straight line
+between the two kept positions about its clock: K ticks apart with the dense tracks, which is the unit's path
+within a pixel or two, and two samples apart without them, which is not -- and it says which it draws. Nothing
+exact is ever drawn between two ticks. The stream is read once a recording, whatever its seats (build_game).
 
 A TICK is think.py's: tick T holds what the step from GameTime T - 1 wrote.
 
@@ -75,6 +81,8 @@ IMPAI_GRID_MAX. The page draws in pixels and prints blocks, as think.py does.
 
 Exit 0, 2 (could not run)."""
 import argparse
+import array
+import base64
 import json
 import math
 import re
@@ -114,6 +122,9 @@ JUDGEMENTS = (("naval", "naval", "mil.naval", {1: ("the map is judged naval", "i
                                                         "KEPT": ("the enemy base is a centre kept from memory", "ghost")}))
 FOE_GAP = 900                   # ticks between two sightings of a commander that are two events
 START_TICKS = 60                # every unit's first place is kept exactly through these first ticks (sample, "first")
+DENSE_K = 6                     # THE DENSE TRACKS: ticks between two positions of a mobile unit, where they are kept
+DENSE_CHUNK_TICKS = 4096        # ... and the ticks one of their files covers
+DENSE_MAGIC = b"TVD1"
 PLACEHOLDER_TICKS = 30          # a unit gone within these ticks of its making is the engine's placeholder, no player's
 SIDES = {0: "Arm", 1: "Core"}   # the header's side byte, PlayerInfo +0x95
 # who played a seat, by the header's controller byte (player record +0x73): (the data's word, what the page says)
@@ -477,16 +488,25 @@ def unit_lives(ex) -> list:
     return lives
 
 
-def sample(path, ticks) -> tuple:
+def sample(path, ticks, dense=0, lives=None, progress=None) -> tuple:
     """((the map's width, height in px), {tick: {"units": [(slot, x, z, structure, frame), ...], "metal": {seat:
     income}}}, the ground: {"track": thinkmap.Track of the feature grid over the samples or None without numpy,
-    "archives": the header's, "map": its map's name, "first":
-    {slot: [(tick, x, z), ...]}, each unit's place at each of the first START_TICKS ticks, whatever `ticks` holds}) at
-    each of `ticks`, read from the recording's stream
-    through tarec.py: a unit's place is its
-    footprint's centre in px (tarec.rect), `structure` tarec.structure, `frame` 1 while its build fraction is not
-    0; a seat's income its player record's last pass (bar.py's PLAYER_METAL_IN), {} when bar.py cannot be
-    loaded. The world is taken as tick T's last record leaves it, which is what think.py's tick T holds."""
+    "archives": the header's, "map": its map's name, "first": {slot: [(tick, x, z), ...]}, each unit's place at
+    each of the first START_TICKS ticks, whatever `ticks` holds, "dense": THE DENSE TRACKS' {life: [[first
+    sample, xs, zs], ...]} or None}) at each of `ticks`, read from the recording's stream through tarec.py in ONE
+    pass, whatever the seats it serves.
+
+    A PLACE is in px. A structure's is its footprint's centre (tarec.rect: the cells it stands on); a mobile
+    unit's is its own position, the unit record's +0x6A (x) and +0x72 (z), 16.16 fixed point, which the recording
+    keeps exact at every tick (tarec.py refuses a hold on a byte of it, REC_HOLD_POS). `structure` is
+    tarec.structure, `frame` 1 while its build fraction is not 0; a seat's income its player record's last pass
+    (bar.py's PLAYER_METAL_IN), {} when bar.py cannot be loaded. The world is taken as tick T's last record
+    leaves it, which is what think.py's tick T holds.
+
+    THE DENSE TRACKS (`dense` K > 0, `lives` unit_lives' answer): every mobile unit's place at every tick that K
+    divides, sample j at tick j x K, kept a life: runs of consecutive samples as [the first's index, array of x,
+    array of z]. A unit the stream does not hold at a sample ends its run, and the next begins another.
+    `progress(fraction)` is called as the pass goes, with how far through `ticks` it is."""
     sys.path.insert(0, str(think.TREE / "tools" / "replay"))
     import tarec
     try:
@@ -495,10 +515,14 @@ def sample(path, ticks) -> tuple:
     except Exception:                                           # noqa: BLE001
         metal_at = None
     want, out, track, first = set(ticks), {}, None, {}
+    last = max(want, default=0) or 1
+    tracks = {} if dense and lives is not None else None
+    at_slot, born = {}, [0]                 # the life a slot holds, and how far into `lives` the pass has come
     try:
         h, bl, _stop = tarec.load(str(path))
         seats = [p["index"] for p in h["players"]]
         built = struct.Struct("<f")
+        where, state = struct.Struct("<i4xi"), struct.Struct("<I")
         gw, gh = h["features"][0], h["features"][1]
         try:
             track = thinkmap.Track(gw, gh)
@@ -511,9 +535,13 @@ def sample(path, ticks) -> tuple:
                 cells = tarec.rect(u)
                 if not cells:
                     continue
-                xs, zs = [c[0] for c in cells], [c[1] for c in cells]
-                units.append((slot, (min(xs) + max(xs) + 1) * CELL_PX // 2, (min(zs) + max(zs) + 1) * CELL_PX // 2,
-                              1 if tarec.structure(u) else 0, 1 if built.unpack_from(u, tarec.U_BUILT)[0] else 0))
+                if tarec.structure(u):
+                    xs, zs = [c[0] for c in cells], [c[1] for c in cells]
+                    x, z, fixed = (min(xs) + max(xs) + 1) * CELL_PX // 2, (min(zs) + max(zs) + 1) * CELL_PX // 2, 1
+                else:
+                    x, z = where.unpack_from(u, 0x6A)
+                    x, z, fixed = x >> 16, z >> 16, 0
+                units.append((slot, x, z, fixed, 1 if built.unpack_from(u, tarec.U_BUILT)[0] else 0))
             return units
 
         def take(w):
@@ -524,22 +552,86 @@ def sample(path, ticks) -> tuple:
             out[w.tick] = {"units": units, "metal": metal}
             if track is not None:
                 track.take(w.tick, w.grid)
+            if progress:
+                progress(min(1.0, w.tick / last))
 
-        def on_record(w, kind, _b):
-            if kind is not None:
+        def dense_at(w):
+            t, j = w.tick, w.tick // dense
+            while born[0] < len(lives) and lives[born[0]][2] <= t:
+                at_slot[lives[born[0]][0]] = born[0]
+                born[0] += 1
+            for slot, u in w.units.items():
+                k = at_slot.get(slot)
+                if k is None or (lives[k][3] is not None and lives[k][3] <= t) or state.unpack_from(u, tarec.U_STATE)[0] & tarec.STRUCTURE:
+                    continue
+                x, z = where.unpack_from(u, 0x6A)
+                runs_ = tracks.setdefault(k, [])
+                if not runs_ or runs_[-1][0] + len(runs_[-1][1]) != j:
+                    runs_.append([j, array.array("h"), array.array("h")])
+                runs_[-1][1].append(max(-32768, min(32767, x >> 16)))
+                runs_[-1][2].append(max(-32768, min(32767, z >> 16)))
+
+        def whole(w):
+            if w.tick is None:
                 return
-            if w.tick is not None and w.tick <= START_TICKS:
+            if w.tick <= START_TICKS:
                 for slot, x, z, _structure, _frame in places(w):
                     first.setdefault(slot, []).append((w.tick, x, z))
             if w.tick in want and w.tick not in out:
                 take(w)
+            if tracks is not None and w.tick % dense == 0 and w.tick // dense not in seen:
+                seen.add(w.tick // dense)
+                dense_at(w)
+        seen = set()
+
+        def on_record(w, kind, _b):
+            if kind is None:
+                whole(w)
         w = tarec.stream_to(h, bl, on_record=on_record)
-        if w.tick in want and w.tick not in out:
-            take(w)
+        whole(w)
     except Exception as e:                                      # noqa: BLE001
         raise ViewError(f"{path}: its stream could not be sampled ({type(e).__name__}: {e})") from None
     return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map"),
-                                               "first": first}
+                                               "first": first, "dense": tracks}
+
+
+def dense_chunks(tracks: dict, k: int, end: int, chunk_ticks=DENSE_CHUNK_TICKS) -> tuple:
+    """THE DENSE TRACKS as the page loads them: ({"k": K, "per": the samples a chunk starts every, "n": the
+    chunks}, [a chunk's bytes, ...]). Chunk c holds the samples c x per .. (c + 1) x per INCLUSIVE, so the two
+    positions about any moment lie in one chunk. A chunk is zlib-deflated:
+        "TVD1", u16 K, u16 0, u32 its first sample, u32 its samples, u32 its runs, then a run each:
+        u32 the life, u16 the run's first sample from the chunk's, u16 its samples, i16 x, i16 z of the first,
+        then a step each further sample: i8 dx, i8 dz -- or i8 -128, i8 0, i16 x, i16 z where a step passes 127 px.
+    Positions are whole px."""
+    per = max(16, chunk_ticks // k)
+    total = end // k + 1
+    n = max(1, -(-(total - 1) // per))
+    out = []
+    for c in range(n):
+        s0, s1 = c * per, min((c + 1) * per, total - 1)
+        body, count = bytearray(), 0
+        for life in sorted(tracks):
+            for j0, xs, zs in tracks[life]:
+                a, b = max(j0, s0), min(j0 + len(xs) - 1, s1)
+                if a > b:
+                    continue
+                count += 1
+                x, z = xs[a - j0], zs[a - j0]
+                body += struct.pack("<IHHhh", life, a - s0, b - a + 1, x, z)
+                for j in range(a + 1 - j0, b + 1 - j0):
+                    dx, dz = xs[j] - x, zs[j] - z
+                    x, z = xs[j], zs[j]
+                    if -127 <= dx <= 127 and -127 <= dz <= 127:
+                        body += struct.pack("<bb", dx, dz)
+                    else:
+                        body += struct.pack("<bbhh", -128, 0, x, z)
+        out.append(zlib.compress(DENSE_MAGIC + struct.pack("<HHIII", k, 0, s0, s1 - s0 + 1, count) + bytes(body), 9))
+    return {"k": k, "per": per, "n": n}, out
+
+
+def dense_file(ident: str, c: int, blob: bytes) -> str:
+    """A chunk of THE DENSE TRACKS as a file the page loads: one call its loader answers."""
+    return f"thinkviewDense({json.dumps(ident)},{c},\"{base64.b64encode(blob).decode()}\");\n"
 
 
 def tree_build(tree) -> str:
@@ -741,22 +833,23 @@ def enum_names(lay, seat) -> dict:
     return out
 
 
-def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None, layout=None,
-          rows=None) -> dict:
-    """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
-    answer for the recording; `names` think.type_names'; `ground(found, names)` terrain's answer for sample's
-    third and the types the data names ({index: name}), None for a page with no ground; `layout` layout_for's
-    second answer; `rows` header_rows' ({} or None: who plays beyond the extract's own is unread, and no seat is
-    an ally). ViewError when the decision ticks alone pass `budget`."""
-    result = result or {}
-    end = result.get("end_tick") or ex.end
-    end = min(max(int(end), 1), ex.end) if ex.end else 0
+def game_end(ex, result=None) -> int:
+    """The tick a game ends at: its result's end_tick when a harness wrote one (result_of), else the recording's
+    last."""
+    end = (result or {}).get("end_tick") or ex.end
+    return min(max(int(end), 1), ex.end) if ex.end else 0
+
+
+def plan(ex, lay, seat, names=(), result=None, step=None, rows=None) -> dict:
+    """The EXACT half of a seat's data, and the ticks its sampled half is read at: {"end", "trk", "missing",
+    "have", "enums", "episodes", "known", "events", "decisions", "step", "ticks"}. It reads the extract alone,
+    so every seat's is made before the stream's one pass (sample)."""
+    end = game_end(ex, result)
     name_of = {i: n for i, n in enumerate(names)}
     trk, missing, have = tracks(ex, lay, seat, PATHS)
     enums = enum_names(lay, seat)
     episodes = think.squad_episodes(ex, lay, seat)
-    rows = rows or {}
-    known = known_counts(ex, lay, seat, allies_of(rows, seat))
+    known = known_counts(ex, lay, seat, allies_of(rows or {}, seat))
     evs = events(ex, trk, episodes, known, enums, name_of, end)
     decisions = sorted({e[0] for e in evs})
     if step is None:
@@ -764,7 +857,25 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
     if step < 1:
         raise ViewError("--step: at least one tick")
     regular = sorted(set(range(0, end + 1, step)) | {end})
-    ticks = sorted(set(regular) | set(decisions))
+    return {"end": end, "trk": trk, "missing": missing, "have": have, "enums": enums, "episodes": episodes,
+            "known": known, "events": evs, "decisions": decisions, "step": step,
+            "ticks": sorted(set(regular) | set(decisions))}
+
+
+def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None, layout=None,
+          rows=None, planned=None) -> dict:
+    """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
+    answer for the recording at those ticks or more; `names` think.type_names'; `ground(found, names)` terrain's
+    answer for sample's third and the types the data names ({index: name}), None for a page with no ground;
+    `layout` layout_for's second answer; `rows` header_rows' ({} or None: who plays beyond the extract's own is
+    unread, and no seat is an ally); `planned` plan's answer for the seat when it is already made. ViewError when
+    the decision ticks alone pass `budget`."""
+    result = result or {}
+    rows = rows or {}
+    name_of = {i: n for i, n in enumerate(names)}
+    pl = planned or plan(ex, lay, seat, names, result, step, rows)
+    end, trk, missing, have, enums, episodes, known, evs, decisions, step, ticks = (pl[k] for k in (
+        "end", "trk", "missing", "have", "enums", "episodes", "known", "events", "decisions", "step", "ticks"))
     dims, world, *found = sampler(ticks)
     used = set()
     seat_side = seat_frames(ex, lay, seat, ticks, used)
@@ -804,7 +915,7 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
     shades = under.get("colours") or {"rgb": STOCK_RGB, "from": None, "why": "no game directory was read"}
     read = found[0] if found and found[0] else {}
     who = seat_facts(ex, rows, shades, world, read.get("first") or {}, dims)
-    data = {"v": 2, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
+    data = {"v": 3, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
             "said": under.get("said") or [], "layout": layout, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
             "players": ex.players, "who": who, "colours": {"from": shades["from"], "why": shades["why"]},
             "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
@@ -865,7 +976,78 @@ def data_file(ident: str, data: dict) -> str:
     return f"thinkviewData({json.dumps(ident)},{json.dumps(data, separators=(',', ':'))});\n"
 
 
-def main(argv=None) -> int:
+def build_game(rec, stem: str, lays: list, builds: dict, dirs: list, contents=(), seat=None, step=None,
+               budget=MAX_BYTES, dense=0, pictures=None, progress=None) -> tuple:
+    """One recording as the page's files: (THE LIST's row of the game, {file's name: its text or bytes} -- a data
+    file a seat, THE DENSE TRACKS' chunks when `dense` is a K, the map's picture when `pictures` did not hold it
+    yet --, the lines to print). `stem` names the files; `lays` are think.layouts' and `builds` the commit each
+    tree is at (layout_for); `dirs` the game directories; `contents` the content files a mod's types may be
+    named by; `pictures` terrain's, shared by the games of one page. The stream is read ONCE, for every seat's
+    samples and the dense tracks together. `progress(what, fraction or None)` says how far the build is."""
+    say = progress or (lambda _what, _frac=None: None)
+    rec, pictures = Path(rec), {} if pictures is None else pictures
+    before = set(pictures)
+    say("reading the recording's state")
+    ex = think.extract(rec)
+    lay, layout = layout_for(ex, lays, builds)
+    rows = header_rows(rec)
+    result = result_of(rec)
+    seats = [think.pick_seat(ex, seat)] if seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
+    names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in contents] if n), [])
+    plans = {}
+    for i, st in enumerate(seats):
+        say(f"seat {st}: its lanes, events and judgements", i / len(seats))
+        plans[st] = plan(ex, lay, st, names, result, step, rows)
+    lives = unit_lives(ex)
+    say("reading the stream: the units' places", 0.0)
+    read = sample(rec, sorted(set().union(*(pl["ticks"] for pl in plans.values()))), dense, lives,
+                  lambda frac: say("reading the stream: the units' places", frac))
+    game = {"id": stem, "name": ex.name, "map": ex.map, "build": ex.build, "seats": [], "dense": None}
+    files, lines = {}, []
+    for i, st in enumerate(seats):
+        say(f"seat {st}: its samples" + ("" if i or not dirs else " and the map's picture"), i / len(seats))
+        ident = stem if len(seats) == 1 else f"{stem}-seat{st}"
+        data = build(ex, lay, st, lambda _ticks: read, names, result, step, budget,
+                     lambda found, used: terrain(found, used, dirs, pictures), layout, rows, plans[st])
+        files[f"{ident}.js"] = data_file(ident, data)
+        game["seats"].append({"seat": st, "id": ident, "file": f"{ident}.js"})
+        game.update(end=data["end"], who=data["who"], result=data["result"])
+        m = data["picture"]
+        lines.append(f"{ex.name}, {ex.seat_label(st)}: {len(data['frames'])} samples every {data['step']} "
+                     f"ticks and at {len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, "
+                     f"{len(data['events'])} events, {len(files[f'{ident}.js'])} bytes"
+                     + (f"; map {m['w']} x {m['h']} px from {m['from']}, {m['bytes']} bytes" if m else "")
+                     + ("" if names else "; no name table fits: types by number")
+                     + ("" if layout["exact"] else f"; read by the layout of the tree at {layout['build'] or 'no commit'}, "
+                                                   f"not its build {ex.build}")
+                     + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else "")
+                     + "".join(f"\n  {line}" for line in data["said"]))
+    tracks_ = read[2].get("dense") if len(read) > 2 and read[2] else None
+    if dense and tracks_ is not None:
+        say("the dense tracks")
+        info, chunks = dense_chunks(tracks_, dense, game_end(ex, result))
+        game["dense"] = dict(info, files=[f"{stem}.dense-{c}.js" for c in range(len(chunks))])
+        for c, blob in enumerate(chunks):
+            files[game["dense"]["files"][c]] = dense_file(stem, c, blob)
+        lines.append(f"{ex.name}: dense tracks every {dense} ticks, {len(tracks_)} mobile units, {len(chunks)} files, "
+                     f"{sum(len(files[f]) for f in game['dense']['files'])} bytes")
+    for key in set(pictures) - before:
+        raw, entry = pictures[key]
+        if raw:
+            files[entry["file"]] = raw
+    return game, files, lines
+
+
+def write_files(out: Path, files: dict):
+    out.mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        if isinstance(body, bytes):
+            (out / name).write_bytes(body)
+        else:
+            (out / name).write_text(body)
+
+
+def export(argv) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("rec", type=Path, nargs="+")
     p.add_argument("--seat", type=int, default=None, help="the seat (default: each of a recording's ImpAI seats)")
@@ -879,51 +1061,31 @@ def main(argv=None) -> int:
     p.add_argument("--out", type=Path, required=True, metavar="DIR")
     p.add_argument("--step", type=int, default=None, metavar="N", help="ticks between two regular samples")
     p.add_argument("--max-bytes", type=int, default=MAX_BYTES, metavar="B", help="a data file's bound")
+    p.add_argument("--dense", type=int, default=0, metavar="K",
+                   help="also write every mobile unit's place every K ticks (THE DENSE TRACKS; default: none)")
     p.add_argument("--bare", action="store_true", help="the page without the document around it")
     a = p.parse_args(argv)
     try:
+        if a.dense < 0:
+            raise ViewError("--dense: a count of ticks")
         lays = think.layouts(a.tree)
         manifest, files, pictures, stems, builds = [], {}, {}, set(), {}
         dirs = game_dirs(a.rec, a.gamedir)
         for rec in a.rec:
-            ex = think.extract(rec)
-            lay, layout = layout_for(ex, lays, builds)
-            rows = header_rows(rec)
-            seats = [think.pick_seat(ex, a.seat)] if a.seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
-            names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in a.content] if n), [])
             stem = base = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
             n = 1
             while stem in stems:
                 n += 1
                 stem = f"{base}-{n}"
             stems.add(stem)
-            game = {"id": stem, "name": ex.name, "map": ex.map, "seats": []}
+            game, made, lines = build_game(rec, stem, lays, builds, dirs, a.content, a.seat, a.step, a.max_bytes,
+                                           a.dense, pictures)
             manifest.append(game)
-            for seat in seats:
-                ident = stem if len(seats) == 1 else f"{stem}-seat{seat}"
-                data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
-                             a.step, a.max_bytes,
-                             lambda found, used: terrain(found, used, dirs, pictures), layout, rows)
-                files[ident] = data_file(ident, data)
-                game["seats"].append({"seat": seat, "id": ident, "file": f"{ident}.js"})
-                game.update(end=data["end"], who=data["who"])
-                m = data["picture"]
-                print(f"thinkview: {ex.name}, {ex.seat_label(seat)}: {len(data['frames'])} samples every {data['step']} "
-                      f"ticks and at {len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, "
-                      f"{len(data['events'])} events, {len(files[ident])} bytes"
-                      + (f"; map {m['w']} x {m['h']} px from {m['from']}, {m['bytes']} bytes" if m else "")
-                      + ("" if names else "; no name table fits: types by number")
-                      + ("" if layout["exact"] else f"; read by the layout of the tree at {layout['build'] or 'no commit'}, "
-                                                    f"not its build {ex.build}")
-                      + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else "")
-                      + "".join(f"\n  {line}" for line in data["said"]))
+            files.update(made)
+            for line in lines:
+                print(f"thinkview: {line}")
         html = page(manifest, a.bare)
-        a.out.mkdir(parents=True, exist_ok=True)
-        for ident, text in files.items():
-            (a.out / f"{ident}.js").write_text(text)
-        for raw, entry in pictures.values():
-            if raw:
-                (a.out / entry["file"]).write_bytes(raw)
+        write_files(a.out, files)
         (a.out / "index.html").write_text(html)
         print(f"thinkview: {a.out / 'index.html'}, {len(html)} bytes")
         return 0
@@ -933,6 +1095,11 @@ def main(argv=None) -> int:
     except OSError as e:
         print(f"thinkview: COULD NOT RUN: {e.filename or ''}: {e.strerror or e}")
         return 2
+
+
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    return export(argv)
 
 
 if __name__ == "__main__":

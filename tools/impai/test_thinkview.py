@@ -14,6 +14,7 @@ THE GROUND's tests (thinkmap.py) read no file of the game: THE MAP is a TNT made
 each, loose in a game directory of the test's own beside a palette, a feature section and a unit's FBI, and THE
 GRID is a feature grid of 8 x 6 cells written cell by cell. The view's arithmetic is the page's own block
 (thinkview.html, between its VIEW marks), evaluated by node where node is installed."""
+import array
 import base64
 import json
 import shutil
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -167,7 +169,7 @@ class View(unittest.TestCase):
         for p in (mock.patch.object(think, "stream", test_think.fake_stream),
                   mock.patch.object(think, "TREE", self.tree), mock.patch.object(think, "CACHE", self.cache),
                   mock.patch.object(think, "CONTENT", self.tmp / "content.json"),
-                  mock.patch.object(thinkview, "sample", lambda _rec, ticks: fake_sample(ticks))):
+                  mock.patch.object(thinkview, "sample", lambda _rec, ticks, *_a, **_kw: fake_sample(ticks))):
             p.start()
             self.addCleanup(p.stop)
 
@@ -386,10 +388,92 @@ class View(unittest.TestCase):
         js = (self.tmp / "page" / "a.js").read_text()
         self.assertTrue(js.startswith('thinkviewData("a",{'))
         self.assertEqual(json.loads(js[len('thinkviewData("a",'):-3])["lanes"][0]["k"], 1)
+        self.assertIsNone(games[0]["dense"])                               # no --dense: the page says it has none
+        self.assertEqual(sorted(f.name for f in (self.tmp / "page").iterdir()), ["a.js", "b-c.js", "index.html"])
+        with mock.patch.object(thinkview, "sample", lambda _rec, ticks, *_a, **_kw: dense_sample(ticks)), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(thinkview.main([str(self.game()), "--out", str(self.tmp / "dense"), "--dense", "10"]), 0)
+        html = (self.tmp / "dense" / "index.html").read_text()
+        game = json.JSONDecoder().raw_decode(html[html.index(mark) + len(mark):])[0][0]
+        self.assertEqual(game["dense"], {"k": 10, "per": 409, "n": 1, "files": ["a.dense-0.js"]})
+        chunk = (self.tmp / "dense" / "a.dense-0.js").read_text()
+        self.assertTrue(chunk.startswith('thinkviewDense("a",0,"'))
+        k, s0, ns, runs = unchunk(base64.b64decode(chunk.split('"')[3]))
+        self.assertEqual((k, s0, ns, [r[0] for r in runs]), (10, 0, 41, [1, 2, 2]))
         with contextlib.redirect_stdout(out):
             self.assertEqual(thinkview.main([str(self.tmp / "nothing.imprec"), "--out", str(self.tmp / "p2")]), 2)
         self.assertIn("COULD NOT RUN", out.getvalue())
         self.assertFalse((self.tmp / "p2").exists())
+
+
+def dense_sample(ticks):
+    """fake_sample with THE DENSE TRACKS a pass at K = 10 would keep of THE GAME's 400 ticks: the boat (life 1)
+    a px a tick with one leap of 300 px at sample 20, and a unit (life 2) the stream holds over samples 3..5 and
+    again from 9."""
+    xs = [50 + 10 * j + (300 if j >= 20 else 0) for j in range(41)]
+    tracks = {1: [[0, array.array("h", xs), array.array("h", [60] * 41)]],
+              2: [[3, array.array("h", [7, 8, 9]), array.array("h", [1, 1, 1])],
+                  [9, array.array("h", [-5] * 32), array.array("h", [2] * 32)]]}
+    return fake_sample(ticks) + ({"track": None, "first": {}, "archives": None, "map": "Test Map", "dense": tracks},)
+
+
+def unchunk(blob: bytes) -> tuple:
+    """A chunk of THE DENSE TRACKS read back by its layout: (K, its first sample, its samples, [(life, the run's
+    first sample from the chunk's, [x, ...], [z, ...]), ...])."""
+    raw = zlib.decompress(blob)
+    magic, k, _zero, s0, ns, n = struct.unpack_from("<4sHHIII", raw)
+    assert magic == b"TVD1"
+    at, runs = 20, []
+    for _ in range(n):
+        life, off, m, x, z = struct.unpack_from("<IHHhh", raw, at)
+        at += 12
+        xs, zs = [x], [z]
+        for _j in range(m - 1):
+            dx, dz = struct.unpack_from("<bb", raw, at)
+            at += 2
+            if dx == -128:
+                x, z = struct.unpack_from("<hh", raw, at)
+                at += 4
+            else:
+                x, z = x + dx, z + dz
+            xs.append(x)
+            zs.append(z)
+        runs.append((life, off, xs, zs))
+    assert at == len(raw)
+    return k, s0, ns, runs
+
+
+class Dense(unittest.TestCase):
+    def setUp(self):
+        self.tracks = dense_sample([])[2]["dense"]
+
+    def test_a_chunk_holds_its_stretch_and_the_next_chunks_first_sample(self):
+        info, chunks = thinkview.dense_chunks(self.tracks, 10, 400, chunk_ticks=160)
+        self.assertEqual(info, {"k": 10, "per": 16, "n": 3})                # 41 samples, a chunk starts every 16
+        got = [unchunk(c) for c in chunks]
+        self.assertEqual([(k, s0, ns) for k, s0, ns, _r in got], [(10, 0, 17), (10, 16, 17), (10, 32, 9)])
+        boat = self.tracks[1][0][1]
+        for (_k, s0, ns, runs) in got:                                      # the boat: every sample of each chunk
+            life, off, xs, zs = runs[0]
+            self.assertEqual((life, off, xs, zs), (1, 0, list(boat[s0:s0 + ns]), [60] * ns))
+        self.assertEqual(got[1][3][0][2][4] - got[1][3][0][2][3], 310)      # the leap past 127 px is kept whole
+        # a unit the stream lost and held again is two runs, each where it begins in its chunk
+        self.assertEqual([(life, off, len(xs)) for life, off, xs, _z in got[0][3][1:]], [(2, 3, 3), (2, 9, 8)])
+        self.assertEqual([(life, off, xs[0]) for life, off, xs, _z in got[1][3][1:]], [(2, 0, -5)])
+        self.assertEqual(thinkview.dense_chunks({}, 10, 0)[0]["n"], 1)      # a game of no tick: one empty chunk
+
+    @unittest.skipUnless(shutil.which("node"), "node, which evaluates the page's own block")
+    def test_the_page_reads_a_chunk_as_it_was_written(self):
+        _info, chunks = thinkview.dense_chunks(self.tracks, 10, 400, chunk_ticks=160)
+        raw = base64.b64encode(zlib.decompress(chunks[0])).decode()
+        got = view(f"(() => {{ const b = Buffer.from('{raw}', 'base64'), c = denseParse(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));"
+                   " return [c.s0, c.runs.map(r => [r.life, r.off, r.n, Array.from(r.xs), Array.from(r.zs)])]; })()", "DENSE")
+        _k, s0, _ns, runs = unchunk(chunks[0])
+        self.assertEqual(got, [s0, [[life, off, len(xs), xs, zs] for life, off, xs, zs in runs]])
+
+    def test_a_chunks_file_is_one_call_of_the_pages(self):
+        text = thinkview.dense_file("a b", 3, b"\x00\x01\xff")
+        self.assertEqual(text, 'thinkviewDense("a b",3,"AAH/");\n')
 
 
 def gaf_bytes(name: str, frames: list) -> bytes:
@@ -578,10 +662,11 @@ class Ground(unittest.TestCase):
         self.assertRegex(thinkview.terrain({"track": None}, {}, [self.dir], pictures)["said"][0], "^no sample")
 
 
-def view(calls: str):
-    """The page's View block evaluated by node: `calls` is a JS expression over View, its value as JSON."""
+def view(calls: str, name="VIEW"):
+    """A marked block of the page (View's by default) evaluated by node: `calls` is a JS expression over it, its
+    value as JSON."""
     text = thinkview.TEMPLATE.read_text()
-    block = text[text.index("/*VIEW*/"):text.index("/*END VIEW*/")]
+    block = text[text.index(f"/*{name}*/"):text.index(f"/*END {name}*/")]
     got = subprocess.run(["node", "-e", block + f"\nconsole.log(JSON.stringify({calls}));"], capture_output=True, text=True, timeout=60)
     if got.returncode:
         raise AssertionError(got.stderr)
