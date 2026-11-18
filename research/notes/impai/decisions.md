@@ -1676,17 +1676,9 @@ The economy diagnosis of the mod games at d665a00a
 
 **Why neutral first.** A refactor that also changes play cannot be told from a regression, and the brain's games are exact: one build plays one id the same way every time, so a step that changes nothing shows no parting in any game, and a parting names the decision where the step went wrong.
 
-## A start with no room in sight: the ring's unseen sites and the look (2026-11-18)
+## A start with no room in sight (2026-11-18)
 
-**The fault.** In the champion gauntlet's code duels a network seat gave no order for a whole game: on Steel Jungle both seats (starts 2 and 3) of two duels to GameTime 5 000 and 6 000, on Trout Farm the seat at start 2 (`orders=0`, `com_idle` at every decision, `sites_max=32/32` on the closing lines). A network game is not mapped, and the seat's site test refuses a site whose centre the seat has not explored. The same game as a skirmish -- bar's template with `mapping` false and ImpAI's commander at the network game's start -- gave the same lines, exactly, with a recording: the first plant was wanted from GameTime 29 (the blind start) and never ordered.
-
-**The cause, MEASURED 2026-11-18 at 0a4ec04e with a diagnostic build** (Steel Jungle's start 2 and Trout Farm's start 2, the same figures but one): the vehicle plant's ring 0 had 4 sites, all explored and all refused; ring 1 had 14, 11 and 12 of them unexplored, every one refused; rings 2 and 3 had 22 and 32, all unexplored; ring 4 has 40, and the walk tests its nearest 32 -- all unexplored -- and stops at the decision's 32 site tests, so the ring is never exhausted and never grows: `ring_grow` went 0, 1, 2, 3, 4 in the decisions at 29 to 74 and stood at 4 to the end, the same 32 tests spent at every decision and none left for a rung below. Trout Farm's start 3 placed its plant on ring 1 at GameTime 44. The ring grew for a lack of room it had not measured: past ring 1 no site test read the ground at all.
-
-**What is taken.** A ring site whose centre the seat has not explored is not tested and is no lack of room, and the builder walks to see the nearest one when the ladder has nothing for it to build ([the brain](brain.html), *The base ring grows from the anchor*). The first build of it sent the commander to sites outside the site test's bounds, whose centres are never explored, at every decision (383 move orders on Trout Farm's start 2 and no plant), and left a builder idle at its look's point to be sent there again: so the rule holds to sites inside the bounds, and a look that stands idle with its cell unseen fails the cell.
-
-**The games after it**, the same unmapped skirmishes to GameTime 6 180: Steel Jungle's start 2 gave its first order at 45 and its plant at 1 949, 8 units at the end; start 3 at 45 and 2 339, 7 units; Trout Farm's start 2 at 45 and 374, 12 units; its start 3 as before (44, 14 units). A two-peer network game to 6 000 with the build in both seats: Steel Jungle 2 084 and 2 361, 8 and 9 units; Trout Farm 224 and 51, 12 and 13.
-
-**What it does not do.** The looks are one walk at a time, and Steel Jungle's starts spend 1 900 to 2 300 ticks on them before a site fits; a human would walk once towards open ground. The walk's cap is unchanged, and a plant's search that fails still spends the decision's site tests before the extractor and the energy are asked; a ring of more than 32 explored sites that all fail is *The ring the budget cut*'s, below.
+The seat reads the map's layout in every game ([the brain](brain.html), *The map's layout is known in every game*), so no site of a base ring lies on ground it has not seen: the ring gives every site its cheap tests leave to the site test, and the brain has no rule for an unseen site and no walk to look at one. A start hemmed in by ground no plant fits is answered by the ring's growth alone: *The ring the budget cut* and *The first plant past the commander's reach*, below.
 
 ## A unit seen gone leaves no row (2026-11-18)
 
@@ -1742,8 +1734,6 @@ The walk starts at the same site at every decision and ends at the decision's 32
 | mapped | 0, 1, 2 (3 321 to 3 966) | 8, 21 and 31 sites tested, none passed | grew |
 | | 4 (3 981) | 50 sites: 27 past the reach, 21 tested, 1 passed and its way out refused | left |
 | | 5 (3 996 to the cap) | 58 sites: 50 past the reach, 7 tested, none passed | left, at every decision |
-| unmapped | 0, 1 (3 321 to 8 421) | 12 and 23 tested as the looks uncover them, none passed | left for unseen ground, then grew |
-| | 2 (8 436 to 14 391) | 34 sites: 2 past the reach, 30 tested after 19 looks, none passed | left, at every decision from 14 391 |
 
 The vehicle plant fits nowhere near that start, and a ring that leaves one site for the commander's reach is not exhausted, so it never grows to its widest and the type is never passed over. A scratch build that asked, for each plant type on the commander's menu and each ring, the sites within the reach that the site test passes found room for other types at the base: mapped, ARMLAB 3 sites on ring 0 and 2 on ring 1, ARMAP 2 on ring 0, each with a way out, ARMVP one site on rings 3 and 4 and none elsewhere, ARMSY 15 on ring 3; unmapped at 18 006, ARMLAB 2 and 2, ARMAP 1 and 1, ARMVP none. So the seat's case is not "no plant type has a site in reach": the type the choice takes has none, and nothing passes it over.
 
@@ -1755,14 +1745,11 @@ The vehicle plant fits nowhere near that start, and a ring that leaves one site 
 |---|---|---|---|---|
 | mapped, the champion 5643b394 and the line's tip | none | 10 | 5 855 | 10, 0 |
 | mapped, the rule | 4 056 (ARMLAB; the tech-up's ARMALAB at 6 921) | 11 | 7 873 | 62, 20 |
-| unmapped, the champion and the tip | none | 12 | 5 855 | 12, 0 |
-| unmapped, the rule | 21 471 (ARMLAB) | 12 | 5 855 | 13, 0 |
 
 - Mapped, the ring reaches 8 at 4 041, three decisions after it stood at 5, ARMVP is passed over and ARMLAB is ordered on ring 0 at the next decision.
-- Unmapped, the plant comes 17 000 ticks later than mapped: rings 2 to 5 each hold sites within the reach that the seat has not seen, and the walk looks at each before it grows (THE RING'S UNSEEN SITES), 8 436 to 21 411. The rule ends the standstill; the time the looks take for a type that fits nowhere is the unmapped opening's cost and is not answered here.
 - The session tier against the champion 5643b394: no game in a worse category (4 the same, 1 better, 7 parted, each of the seven on the `plantwalk` line or on 7c73bf7b's change). Against the line's tip with the `plantwalk` line alone, every decision line of eleven games is equal and one game parts: `bar-hota-steeljungle-ca-1`, at 11 842, where CORAP is exhausted at the widest ring and the ring is given back -- won at 54 973, against the cap at value 0.48 for the champion and the tip.
 
-**What it does not do.** The unmapped seat still looks at every unseen site of a ring before the ring grows, for a type the base has no room for. A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The opening's tier game (`unmapped-luschaven-3`, to 6 000) shows no plant with or without the rule: the mapped game, the fixture (`impai_brain_test.c`, `check_plantwalk`) and `tools/impai/mutations/lone-plant.py` hold it.
+**What it does not do.** A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The opening's tier game (`unmapped-luschaven-3`, to 6 000) shows no plant with or without the rule: the mapped game, the fixture (`impai_brain_test.c`, `check_plantwalk`) and `tools/impai/mutations/lone-plant.py` hold it.
 
 ## The finish's yards (2026-11-18)
 

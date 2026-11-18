@@ -1006,13 +1006,12 @@ typedef struct IMPAI_PLANTWALK {
                                record, a way refused earlier (THE WAY REFUSALS), explored metal                 */
     uint16_t beyond;        /* past THE COMMANDER'S REACH                                                       */
     uint16_t threat;        /* ground threat at the site or on the route, THE COMMANDER'S SAFE DISTANCE         */
-    uint16_t unseen, nolook;        /* not explored: left for a look; no walk to see it, skipped as refused     */
     uint16_t tested, passed;        /* given to the site test; passed by it                                     */
     uint16_t way_refused, unbuilt;  /* of those passed: the way out refused now; the order refused (build_at)   */
 } IMPAI_PLANTWALK;
-_Static_assert(sizeof(IMPAI_PLANTWALK) == 6 + 2 * 17, "IMPAI_PLANTWALK has no padding: traces are compared by memcmp");
+_Static_assert(sizeof(IMPAI_PLANTWALK) == 6 + 2 * 15, "IMPAI_PLANTWALK has no padding: traces are compared by memcmp");
 /* `w` as the `plantwalk` line's fields from `builder=` on, NUL-ended in out[cap]: `builder=SLOT/TYPE waived= grow=
-   sites= claimed= failed= far= way_failed= coverage= beyond= threat= unseen= nolook= tested= passed= way_refused=
+   sites= claimed= failed= far= way_failed= coverage= beyond= threat= tested= passed= way_refused=
    unbuilt= cut= exit=NAME sea=-|wait|none`. The plant type's name is the seam's to give. Returns the bytes
    written, the NUL left out. */
 int   impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap);

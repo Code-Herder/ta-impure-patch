@@ -923,7 +923,7 @@ static void job_checks(IMPAI_DEC* d)
             reclaim_check(d, b, d->jobbed_idle[i], j, age);
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
-            /* an explorer or a look (impai_build.c, THE RING'S LOOK) that stands idle with its cell unseen has arrived
+            /* an explorer that stands idle with its cell unseen has arrived
                without seeing it, or lost its order: the cell fails as at the timeout, so it is not asked again
                for fail_t */
             if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
@@ -1499,8 +1499,6 @@ int impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap)
     pw_field(&p, end, " coverage=", w->coverage);
     pw_field(&p, end, " beyond=", w->beyond);
     pw_field(&p, end, " threat=", w->threat);
-    pw_field(&p, end, " unseen=", w->unseen);
-    pw_field(&p, end, " nolook=", w->nolook);
     pw_field(&p, end, " tested=", w->tested);
     pw_field(&p, end, " passed=", w->passed);
     pw_field(&p, end, " way_refused=", w->way_refused);
