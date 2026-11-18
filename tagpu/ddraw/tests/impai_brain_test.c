@@ -1886,8 +1886,10 @@ static void check_ring_cut(void)
    whose commander is asked for the opening plant. Ordered, the decision keeps no trace. With the plant refused by
    every site test the trace names the type, the builder, the ring's growth as the rung began and a walk that ends
    in growth, every site of the ring counted under one cause. With a comm_r of 32 px every site lies past THE
-   COMMANDER'S REACH: all are counted `beyond`, none is tested, the walk is left and the ring stays -- at every
-   decision, the taken want ordering nothing. The text of one trace by hand; the longest line fits IMPAI_PW_TEXT
+   COMMANDER'S REACH: all are counted `beyond` and none is tested. The commander alone (THE LONE COMMANDER'S
+   PLANT) has the ring grow a decision to its widest, where the type is passed over and the ring given back, and
+   the waived pass begins at the base; with a constructor's frame in the census the walk is left and the ring
+   stays, at every decision. The text of one trace by hand; the longest line fits IMPAI_PW_TEXT
    and a short buffer is ended inside itself; THE PLANTWALK LINE's rule is THE WHY LINE's. */
 static void plantwalk_world(void)
 {
@@ -1913,7 +1915,7 @@ static void check_plantwalk(void)
     IMPAI_BRAIN_OUT out;
     const IMPAI_PLANTWALK* w = &out.walk;
     char t[IMPAI_PW_TEXT], cut[12];
-    int k, n;
+    int k, n, all;
     plantwalk_world();
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.plant == T_FACTORY && !w->set, "a decision that orders its plant keeps no trace: plant %u set %u",
@@ -1932,19 +1934,39 @@ static void check_plantwalk(void)
     CHECK(w->sites > 0 && (w->cut || plantwalk_sum(w) == w->sites), "every site of a walk to its end has one cause: %u of %u",
           plantwalk_sum(w), w->sites);
 
+    /* THE LONE COMMANDER'S PLANT and A TYPE PASSED OVER GIVES THE RING BACK (impai_build.c) */
     lv.comm_r = 32;
     s_plan = &lv;
     plantwalk_world();
+    for (k = 0; k < 9; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k || k == 8) printf("plantwalk, the lone commander, every plant site past its reach, decision %d: %s\n", k, t);
+        CHECK(!out.plant && w->set && w->type == T_FACTORY && !w->waived && w->grow == k && w->beyond > 0 && !w->tested &&
+                  plantwalk_sum(w) == w->sites && w->exit == (k < 8 ? IMPAI_PW_GREW : IMPAI_PW_WIDEST),
+              "a lone commander's plant ring past its reach is exhausted, decision %d: %s", k, t);
+        builds_within(0, 1, 32, &all);
+        CHECK(all, "no build order to the commander past its reach, decision %d", k);
+    }
+    CHECK(s_pref[T_FACTORY].until > (uint32_t)s_w.gametime && s_st.ring_grow == 0,
+          "at the widest ring the type is passed over and the ring given back: until %u, ring_grow %u",
+          s_pref[T_FACTORY].until, s_st.ring_grow);
+    CHECK(decide(&out) == 0, "decide");
+    impai_plantwalk_text(w, t, sizeof t);
+    CHECK(w->set && w->type == T_FACTORY && w->waived && w->grow == 0 && w->exit == IMPAI_PW_GREW,
+          "the waived pass walks the ring from the base: %s", t);
+    /* a constructor's frame is a builder to come: the site past the commander's reach is left for it */
+    plantwalk_world();
+    unit_add(&s_w, 6, T_CONS, 30, 30, 0);
     for (k = 0; k < 3; k++) {
         CHECK(decide(&out) == 0, "decide");
         s_w.gametime += 15;
         impai_plantwalk_text(w, t, sizeof t);
-        if (!k) printf("plantwalk, every plant site past the commander's reach: %s\n", t);
-
         CHECK(!out.plant && w->set && w->type == T_FACTORY && w->exit == IMPAI_PW_LEFT && w->beyond > 0 && !w->tested &&
-                  !w->cut && plantwalk_sum(w) == w->sites && w->grow == 0 && s_st.ring_grow == 0,
-              "a ring past the commander's reach is left and does not grow, decision %d: %s, ring_grow %u", k, t,
-              s_st.ring_grow);
+                  w->grow == 0 && s_st.ring_grow == 0,
+              "with a constructor begun the ring past the commander's reach is left and does not grow, decision %d: %s, "
+              "ring_grow %u", k, t, s_st.ring_grow);
     }
     s_plan = lv0;
 

@@ -1804,7 +1804,7 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    a walk: MEASURED 2026-11-13, Comet Catcher, 4 of the 27 constructors a human's line killed died at work in
    the base during its raid, ring orders among them. A ring exhausted
    with tests left pushes the next decision's ring out (ring_grow, at most 8), and a plant type's ring exhausted at
-   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. GROWTH ANSWERS ONLY A LACK OF
+   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0, as that pass-over does. GROWTH ANSWERS ONLY A LACK OF
    ROOM: a ring that left a site for the commander's reach, for ground threat at the site or on the route, or
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
@@ -1824,6 +1824,23 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
    income, and its energy). What it gives up: the ring's sites past the cut, farther from the walk's key than
    every site tested, are not tested before the next ring's nearest are.
+   THE LONE COMMANDER'S PLANT: a site left for the commander's reach waits for another builder, and a seat whose
+   census counts no constructor and no factory, frames included, has none and can get none -- constructors come
+   from factories alone -- so until a plant stands the commander is its only builder. For that seat a plant site
+   past the reach is nobody's, and the plant's base ring is exhausted by such sites as by refused ones: it grows,
+   and at its widest the type is passed over, so a plant type that fits nowhere within the reach gives way to the
+   next one THE CHOICE takes instead of holding the first plant for good. INVARIANT, an ordering: with no
+   constructor and no factory, a walk of the plant's base ring that leaves no site for threat or for unseen ground
+   ends in an order, in a way refused and recorded, or in growth, so the type is ordered or passed over within
+   nine such walks. Energy and every other type keep the reach's rule, as does a seat with a constructor or a
+   factory; and the reach itself stands: every order to the commander lies within comm_r (build_at).
+   A TYPE PASSED OVER GIVES THE RING BACK: ring_grow is one growth for every type's base ring, so the growth that
+   exhausted one plant type says nothing of the next one's room; the pass-over at the widest ring puts ring_grow
+   back at 0, and the type THE CHOICE takes next is walked from the base outward, not at the widest ring alone.
+   TERMINATION: a pass-over lasts fail_t, each type is passed over within nine exhausted walks of its own, and the
+   choice's types are a finite list; with every type passed over the waived pass walks the rings to the widest
+   once more, where a waived type is not passed over and the ring stays (decisions.md, *The first plant past the
+   commander's reach*).
    THE RING'S UNSEEN SITES: a site inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz < H:
    0x47D302..0x47D352; one outside them is refused wherever the seat has looked, and is the site test's as
    before) whose footprint centre the seat has not explored is never tested -- the seat's
@@ -1859,6 +1876,10 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     int* const tests = out >= 0 ? &d->air_sites : &d->sites;
     const int cap = out >= 0 ? AIR_OUT_TESTS : (int)in->plan->site_tests;
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
+    /* THE LONE COMMANDER'S PLANT: the census counts frames, so a constructor or a factory begun is another
+       builder to come */
+    const int lone_plant = commander && t->cat == IMPAI_C_FACTORY && !at && out < 0 && !d->count[IMPAI_C_CONS] &&
+                           !d->count[IMPAI_C_FACTORY];
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0, unseen = 0;
     int tested = 0, passed = 0, cut = 0;    /* this walk's site tests, those of them the site test passed, and
@@ -1981,14 +2002,17 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         w->exit = IMPAI_PW_ROOTS;       /* the return below; a walk that goes on names its own */
         if (d->roots >= d->root_cap) return 0;
     }
+    if (lone_plant) beyond = 0;
     w->exit = IMPAI_PW_LEFT;
     if (at || out >= 0 || beyond || threat_skipped || unseen) return 0;
     w->exit = IMPAI_PW_CUT;
     if (cut && (!tested || passed)) return 0;
     w->exit = st->ring_grow < 8 ? IMPAI_PW_GREW : IMPAI_PW_WIDEST;
     if (st->ring_grow < 8) st->ring_grow++;
-    else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
+    else if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
         plant_pass_over(d, type);
+        st->ring_grow = 0;
+    }
     return 0;
 }
 
