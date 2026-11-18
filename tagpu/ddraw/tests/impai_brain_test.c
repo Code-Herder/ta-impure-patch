@@ -1773,6 +1773,23 @@ static void check_open_energy(void)
            type_orders(T_WIND), s_job[1].kind == IMPAI_JOB_BUILD ? s_job[1].build : 0,
            s_job[2].kind == IMPAI_JOB_BUILD ? s_job[2].build : 0);
     CHECK(type_orders(T_WIND) == 1, "the opening's energy: the order counts, %d energy orders", type_orders(T_WIND));
+    /* the order's gain counts in the decision's income: no patch, so the constructor asked after the commander comes
+       to the energy rung. With an income of 0 the commander's wind generator, 10 a pass, leaves the income under the
+       ladder's target and the constructor orders a second; with 5 it meets the target and the constructor orders none */
+    for (n = 0; n < 2; n++) {
+        open_energy_world(2, 0, 1, 0, 0);
+        unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+        s_spots = NULL;
+        s_nspots = 0;
+        s_w.econ[0].energy_in = n ? 5.0f : 0.0f;
+        CHECK(decide(&out) == 0, "decide");
+        printf("the opening's energy, two builders, no patch, income %d: %d energy orders\n", n ? 5 : 0, type_orders(T_WIND));
+        CHECK(type_orders(T_WIND) == (n ? 1 : 2) && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == T_WIND,
+              "the opening's energy: the order's gain counts in the decision's income, income %d: %d energy orders",
+              n ? 5 : 0, type_orders(T_WIND));
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
     /* THE FIRST WALK THAT ORDERS NOTHING ENDS THE RULE: every site refused, the commander takes its patch in the
        same decision; and with sites free again at the next it is asked no energy before the extractor */
     open_energy_world(2, 0, 0, 0, 0);
@@ -2126,6 +2143,11 @@ static void check_ring_reach(void)
     printf("ring reach, comm_r 64: commander builds=%d ring_grow=%u\n", n, s_st.ring_grow);
     CHECK(n == 0 && s_st.ring_grow == 0, "no ring site for the commander past its reach, the ring not grown: %d, %u",
           n, s_st.ring_grow);
+    reach_world(0);
+    s_st.ring_grow = 3;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(builds_within(0, 1, 64, &all) == 0 && s_st.ring_grow == 3,
+          "a ring of a type that is no plant left for the commander's reach keeps the shared growth: %u", s_st.ring_grow);
     reach_world(1);
     CHECK(decide(&out) == 0, "decide");
     n = builds_within(0, 2, 0xFFFFFFFFu, &all);
@@ -2460,7 +2482,14 @@ static void check_plantwalk(void)
    follows renews neither.
    (d) A factory standing, the commander's own growth at 2 and the constructors' at 5 by hand, every ring site
    past the commander's reach: the walk is left, the commander's own growth goes back to 0 and the constructors'
-   stays. */
+   stays.
+   (e) A factory standing, the plant refused everywhere and a reach of 520 px, which holds every site of the
+   plant's first ring and not every site of its second: at each decision the commander's walk exhausts the first
+   ring, leaves the second and starts over at the base. A pass-over standing in another row, 20 ticks from its
+   end, is renewed by none of those walks and ends at its own time.
+   (f) The commander gone and a constructor the seat's builder, four site tests a decision, the plant refused
+   everywhere: each cut walk raises the constructors' growth, the commander's stays, and renews the pass-over
+   standing in another row. */
 static void check_plant_ring(void)
 {
     const IMPAI_PLAN* lv0 = s_plan;
@@ -2562,6 +2591,57 @@ static void check_plant_ring(void)
               !s_pref[T_FACTORY].cgrow && s_pref[T_FACTORY].grow == 5,
           "(d) the commander's ring left for its reach starts over at the base, the constructors' growth as it was: %s, "
           "cgrow %u grow %u", t, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow);
+    /* (e) the commander beside a factory, a reach that holds the plant's whole first ring and not its second */
+    lv = *lv0;
+    lv.comm_r = 520;
+    s_plan = &lv;
+    plantwalk_world();
+    unit_add(&s_w, 6, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 40;
+    s_w.econ[0].energy_in = 400;
+    s_w.refuse_type = T_FACTORY;
+    until0 = (uint32_t)s_w.gametime + 20;
+    s_pref[T_TIDAL].until = until0;
+    for (k = 0; k < 3; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k) printf("plant ring (e): %s, cgrow %u\n", t, s_pref[T_FACTORY].cgrow);
+        CHECK(!out.plant && w->set && w->slot == 1 && w->grow == 0 && w->exit == IMPAI_PW_LEFT && w->tested > 0 &&
+                  !w->passed && w->beyond > 0 && !w->cut && w->sites > w->tested + w->beyond &&
+                  !s_pref[T_FACTORY].cgrow && !s_pref[T_FACTORY].until,
+              "(e) the walk exhausts the first ring, leaves the second for the commander's reach and starts over, "
+              "decision %d: %s, cgrow %u", k, t, s_pref[T_FACTORY].cgrow);
+        CHECK(s_pref[T_TIDAL].until == until0,
+              "(e) a climb the commander's reach puts back renews no pass-over, decision %d: until %u for %u", k,
+              s_pref[T_TIDAL].until, until0);
+        s_w.gametime += 15;
+    }
+    printf("plant ring (e): the other row's until %u at %d\n", s_pref[T_TIDAL].until, s_w.gametime);
+    CHECK(s_pref[T_TIDAL].until <= (uint32_t)s_w.gametime,
+          "(e) the pass-over standing beside such walks ends at its own time: until %u at %d", s_pref[T_TIDAL].until,
+          s_w.gametime);
+
+    /* (f) a constructor the seat's only builder, four site tests a decision */
+    lv = *lv0;
+    lv.site_tests = 4;
+    plantwalk_world();
+    s_w.unit[1].live = 0;
+    unit_add(&s_w, 6, T_CONS, 22, 22, 1);
+    s_w.refuse_type = T_FACTORY;
+    s_pref[T_TIDAL].until = (uint32_t)s_w.gametime + 20;
+    for (k = 0; k < 2; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k) printf("plant ring (f): %s, grow %u\n", t, s_pref[T_FACTORY].grow);
+        CHECK(w->set && w->slot == 6 && w->grow == k && w->cut && s_pref[T_FACTORY].grow == k + 1 && !s_pref[T_FACTORY].cgrow,
+              "(f) a constructor's cut walk raises the constructors' growth, decision %d: %s, grow %u cgrow %u", k, t,
+              s_pref[T_FACTORY].grow, s_pref[T_FACTORY].cgrow);
+        CHECK(s_pref[T_TIDAL].until == (uint32_t)s_w.gametime + lv.fail_t,
+              "(f) a constructor's exhausted ring renews a standing pass-over, decision %d: until %u at %d", k,
+              s_pref[T_TIDAL].until, s_w.gametime);
+        s_w.gametime += 15;
+    }
+    s_w.refuse_type = 0;
     s_plan = lv0;
 }
 
@@ -4108,6 +4188,65 @@ static void check_stall_reclaimers(void)
         CHECK((s_job[1].kind == IMPAI_JOB_BUILD) == (k == 0) && (s_job[2].kind == IMPAI_JOB_BUILD) == (k < 2),
               "%s: the jobs", NAME[k]);
     }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
+/* THE STALL TAKES THE RECLAIMERS in the opening (impai_econ.c): the yield is the ladder's, never a reclaimer's.
+   The opening's world with one extractor, open_energy wind generators, no patch and a metal store running short:
+   at 900, before open_t, the plant is not wanted and the commander goes to reclaim. At 1 900, past open_t, the
+   plant is wanted and the store is at 10 %: the stall's rung would pass an idle builder on to the plant, and the
+   commander at its reclaim is given the stall's energy in that decision -- with every plant site refused and with
+   the plant's sites free alike, no plant walked and the yield left standing --; with every energy site refused
+   it keeps its reclaim. Idle at the next decision, it is passed on: the plant where a site takes it, and where
+   none does the yield is over, the walk having spent the decision's site tests. */
+static void check_stall_yield_reclaimer(void)
+{
+    static const char* const NAME[3] = { "every plant site refused", "the plant's sites free", "every energy site refused" };
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int k, n, ordered;
+    for (k = 0; k < 3; k++) {
+        open_energy_world(1, 0, 2, 0, 0);
+        s_spots = NULL;
+        s_nspots = 0;
+        s_w.defs[T_COM].d.flags |= WQ_DF_RECLAIMER;
+        s_w.defs[T_COM].d.speed = 1 << 16;
+        s_w.econ[0].metal = 50.0f;
+        s_w.econ[0].metal_in = 1.0f;
+        s_w.econ[0].metal_out = 6.0f;
+        feat_add(22, 22, 2, 2, 20);
+        CHECK(decide(&out) == 0, "decide");
+        ordered = s_job[1].kind == IMPAI_JOB_RECLAIM;
+        CHECK(reclaim_orders(1) == 1 && (ordered || s_job[1].kind == IMPAI_JOB_RECLAIM_GO) && !type_orders(T_FACTORY),
+              "the stall's reclaimer in the opening, %s: the commander reclaims first, job %u", NAME[k], s_job[1].kind);
+        s_w.gametime = 1900;
+        open_stall();
+        s_w.refuse_type = k == 0 ? T_FACTORY : k == 2 ? T_WIND : 0;
+        n = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        c = open_energy_cmd(n);
+        printf("the stall's reclaimer in the opening, %s: %s, job %u, stall_taken %u, over %u, plant walk set %u\n", NAME[k],
+               open_energy_took(n), s_job[1].kind, out.stall_taken, s_st.open_stall_over, out.walk.set);
+        if (k < 2)
+            CHECK(c && c->c.type == T_WIND && s_job[1].kind == IMPAI_JOB_BUILD && out.stall_taken == (unsigned)ordered,
+                  "the stall's reclaimer in the opening, %s: given the stall's energy in the stall's first decision", NAME[k]);
+        else
+            CHECK(!c && (s_job[1].kind == IMPAI_JOB_RECLAIM || s_job[1].kind == IMPAI_JOB_RECLAIM_GO) && !out.stall_taken,
+                  "the stall's reclaimer in the opening, %s: it keeps its reclaim", NAME[k]);
+        CHECK(!s_st.open_stall_over && !out.walk.set && !type_orders(T_FACTORY),
+              "the stall's reclaimer in the opening, %s: no plant walked for it, the yield stands", NAME[k]);
+        if (k == 2) continue;
+        open_next();
+        n = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        c = open_energy_cmd(n);
+        printf("the stall's reclaimer in the opening, %s, idle at the next decision: %s, over %u\n", NAME[k],
+               open_energy_took(n), s_st.open_stall_over);
+        CHECK(k ? c && c->c.type == T_FACTORY && !s_st.open_stall_over : s_st.open_stall_over == 1 && !type_orders(T_FACTORY),
+              "the stall's reclaimer in the opening, %s: idle, it is passed on to the plant", NAME[k]);
+    }
+    s_w.refuse_type = 0;
     s_spots = PATCHES;
     s_nspots = NPATCH;
 }
@@ -5729,9 +5868,8 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
 static void check_economy_game(void)
 {
     EGAME_END e;
-    /* After the third extractor, at 1959, the plant comes before a fourth (open_t, 1800): CORVP from 1965, finished
-       by 3058 with a CORCV queued, then the solar collectors from 4055, each taking the energy the plant's
-       constructor leaves. */
+    /* The opening's order: two extractors (15, 540), two solar collectors (1335, 1770), CORVP from 2250, standing
+       by 3009 with a CORCV queued at 3015, then the further extractors. */
     e = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35);
     CHECK(e.n[E_MEX] >= 3, "three extractors by 5400: %d", e.n[E_MEX]);
     CHECK(e.n[E_SOLAR] + e.n[E_WIND] >= 1, "an energy building by 5400: %d", e.n[E_SOLAR] + e.n[E_WIND]);
@@ -5740,9 +5878,9 @@ static void check_economy_game(void)
     CHECK(!e.wet, "no water-only type ordered on the dry map: %d", e.wet);
     CHECK(e.bar_at && e.bar_at + EGAME_WALK_LAG <= EGAME_FLEA,
           "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
-    /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
-       standing by the decision of 840), then the energy that income asks for, CORVP from 3225 with a CORCV queued
-       when it stands. Each standing extractor pays the 2.295 its nine cells of 255 give a pass and each standing
+    /* On the metal map every ring site pays what a rich patch does, and the opening's order is the dry map's: two
+       extractors (15, 285), two solar collectors (555, 1185), CORVP from 1725 with a CORCV queued when it stands,
+       at 2490, then the energy that income asks for. Each standing extractor pays the 2.295 its nine cells of 255 give a pass and each standing
        constructor its metalmake, one finished inside the last pass the ticks it stood of it, the commander 1. */
     e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
     CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
@@ -11833,7 +11971,9 @@ static void check_island_hold(void)
        class does not cross (builder_reaches), so no lab, and the CS's shipyard;
    (ag) (ae) with an idle K-bot constructor offering the lab on an islet of its own at sea, asked before the
        commander (an idle builder): it reaches no site, so its search ends on its own reach refusals and spends none
-       of the decision's site tests -- the commander's lab outside the base ring, west of 52, as (ae). */
+       of the decision's site tests -- the commander's lab outside the base ring, west of 52, as (ae);
+   (ah) (ae) with ring_grow at 8 by hand: the search starts from the plant's own growth, 0, never the shared
+       ring's, so the lab stands at (ae)'s column. */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -11866,7 +12006,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[33] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[34] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -11891,13 +12031,14 @@ static void check_island_order(void)
                                          "(ad) blind, the commander idle, no lab site",
                                          "(ae) blind, the commander on a wind generator, no lab site in the base ring",
                                          "(af) blind, a K-bot on a wind generator, the outer sites across water",
-                                         "(ag) blind, an idle K-bot on an islet, the commander on a wind generator" };
+                                         "(ag) blind, an idle K-bot on an islet, the commander on a wind generator",
+                                         "(ah) (ae), the shared ring at its widest" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
-    int c, sy, land;
+    int c, sy, land, lx_ae = -1;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 33; c++) {
+    for (c = 0; c < 34; c++) {
         int from, vp, lab;
         const int blind = c >= 15;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
@@ -12022,6 +12163,7 @@ static void check_island_order(void)
                 s_smil.sea_held_t = (uint32_t)s_w.gametime;
             }
         }
+        if (c == 33) s_st.ring_grow = 8;
         from = s_w.nlog;
         sea_decide(NAME[c], &sy, &land);
         (void)out;
@@ -12039,11 +12181,14 @@ static void check_island_order(void)
             CHECK(!lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_WIND,
                   "%s: the commander kept at its wind generator", NAME[c]);
         if (c == 29) CHECK(sy == 1 && !lab, "%s: the air plant let go, the shipyard", NAME[c]);
-        if (c == 30 || c == 32) {
+        if (c == 30 || c == 32 || c == 33) {
             int lx = -1;
             builds_of(from, E_LAB, &lx, NULL);
             CHECK(!sy && lab == 1 && lx >= 0 && lx < 52 && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_LAB,
                   "%s: the commander's lab outside the base ring, column %d", NAME[c], lx);
+            if (c == 30) lx_ae = lx;
+            if (c == 33)
+                CHECK(lx == lx_ae, "%s: the search starts from the plant's own growth, column %d for %d", NAME[c], lx, lx_ae);
         }
         if (c == 31) CHECK(sy == 1 && !lab, "%s: no lab across the channel, the shipyard", NAME[c]);
         if (c == 27 || c == 28)
@@ -17421,6 +17566,7 @@ int main(void)
     check_afloat();
     check_open_energy();
     check_stall_yields();
+    check_stall_yield_reclaimer();
     check_opening_order();
     check_spot();
     check_spot_foreign();
