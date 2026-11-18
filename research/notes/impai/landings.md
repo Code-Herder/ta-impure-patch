@@ -62,6 +62,23 @@ The plan of record from 2026-11-15 on. Each item names what closes it; the [road
     - **Automatic tuning**: the tune lever's DLL side, then `tune.py spsa` and `levels-line`.
     - **Code against code** in the gauntlet: the owner's decision between two-process network games and a frozen brain ABI.
 
+## The method and the order, from 2026-11-17
+
+The owner's decisions of 2026-11-17, after a review of the method. What the review measured: the per-batch gates passed every batch while the scenario the batches aimed at stayed open; a writer session's cost grows with the square of its turns (about 62 000 tokens of context at its first turn, 335 000 to 466 000 at its last, over 126 to 312 turns); 55 % of the brain's source bytes were comment, most of it the measurements behind the rules; and the rules arbitrate through flags that name one another. This section is the order of work, ahead of item 7's list above: the items of that list wait behind B2 unless a row here names them.
+
+| Id | Decision | Closed when | State |
+|---|---|---|---|
+| **M1** | **Play first, harden after.** A brain change is played on its target scenario from a scratch build and must move the scenario's outcome, or the measure the queue item names, before its fixtures, mutations and notes are written. A change that moves nothing is dropped, not hardened | [testing](testing.html), *A brain writer's session*, states it and every writer's brief carries it | open |
+| **M2** | **One queue item a writer session, about 100 turns**, with the look-ups batched: several reads or searches in one turn, not one a turn | the same section; the hand-off names one item, not a batch | open |
+| **M3** | **The measurements leave the source.** A rule's comment keeps its invariant, its engine facts and a pointer; the game that showed the fault is in [decisions](decisions.html). A **rule index**, generated from the source, maps each named rule to its function, the decision flags it reads and the rules it names | the brain's objects are identical before and after the move; `tools/impai/rules.py` writes the index and its check fails on a rule with no entry | open |
+| **M4** | **The gate in tiers.** *The session tier*, minutes: the exploiter situations and the confirm set against the champion. *The promotion tier*: `batch.py`'s gates, run when a build is put up as champion, with a held-out game that ends worse than the champion's flagged. *The milestones* as before | `batch.py` plays the session tier and flags the held-out change; [testing](testing.html) states the tiers | open |
+| **B1** | **Code against code, now**, by two processes in a network game ([the bar](bar.html), *The champion gauntlet*: its recommendation; a frozen brain ABI is not taken, since B2 moves the interface). **The handicap ladder for every champion**: m* is the strength figure that still moves | two builds each play their own ImpAI seat to an end on a bar map, and the gauntlet judges a member by such games; every champion's `ladder.py` fit is in [the bar](bar.html) | open |
+| **B2** | **The posture and the arbiter.** What the seat has judged of its map and its enemy (island, blind, naval, dry hunt, pressed) is one object the rules read; what the economy wants is a list of requests one arbiter orders, with each rule's hard constraint apart from its preference. Each step is proved neutral: the same seeds give the same games | the session tier's games and the regression set play decision for decision as before each step; then the island rules go on, on it | open |
+
+**The order**: M1 and M2 (the method's text), M4, M3, B1 beside M3, then B2. The naval turtle's chain of island rules, the air rush's anti-air, the puzzles and the held-out maps wait behind B2.
+
+**Owed from the batch the review stopped** (the hand-off of 2026-11-17): the review of da2ccb2b (medium) and of 278fc3fe (high: it changes the recorded layout); 278fc3fe, built and tested but not played, is played on the naval turtle first (M1).
+
 ## Where it stands
 
 On the branch `worktree-Bar_game_AI` (not `main`, not published), 2026-11-14.
