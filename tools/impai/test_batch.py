@@ -176,6 +176,53 @@ class TestBatch(unittest.TestCase):
         self.assertEqual(self.run_(gate_held_out=True), 1)
         self.assertEqual(self.margins, [])
 
+    def test_a_held_out_game_worse_than_the_champions_is_flagged_and_judges_nothing(self):
+        champion = self.tmp / "champion"
+        (champion / "base").mkdir(parents=True)
+
+        def theirs(gid, outcome, end=bar.CAP, live=(900.0, 1000.0)):
+            r = {"id": gid, "outcome": outcome, "end_tick": end}
+            if outcome == "cap":
+                r["value"] = {"A": {"live": live[0], "t": bar.CAP}, "B": {"live": live[1], "t": bar.CAP}}
+            (champion / "base" / f"{gid}.json").write_text(json.dumps(r))
+        same, ahead, won, absent, lost = batch.HELD_OUT[:5]
+        theirs(same, "cap")
+        theirs(ahead, "cap", live=(1650.0, 1000.0))
+        theirs(won, "A", end=48742)
+        theirs(lost, "B", end=20000)
+        self.outcome = lambda gid, setup: "cap" if gid.startswith("bar-p:L5") else "A"
+        self.assertEqual(self.run_(base_batch=str(champion)), 0)         # the flag judges nothing
+        text = (self.tmp / "out" / "summary.txt").read_text()
+        cap = "reached the cap not ahead, value A/B 0.90"
+        for line in (f"    {same}: {cap}\n",                             # another game in the same category
+                     f"    {ahead}: {cap}  WORSE than the champion's (reached the cap ahead, value A/B 1.65)\n",
+                     f"    {won}: {cap}  WORSE than the champion's (won at 48742)\n",
+                     f"    {absent}: {cap}  (no game of the champion's to compare)\n",
+                     f"    {lost}: {cap}\n",                             # better than the champion's: no flag
+                     "    2 of 4 compared ended worse than the champion's (champion)\n"):
+            self.assertIn(line, text)
+        doc = json.loads((self.tmp / "out" / "summary.json").read_text())
+        self.assertEqual((doc["held_out_worse"], len(doc["held_out"]), doc["verdict"]), ([ahead, won], 8, "pass"))
+        # without the option the summary names no champion
+        self.setUp()
+        self.assertEqual(self.run_(), 0)
+        self.assertNotIn("champion", (self.tmp / "out" / "summary.txt").read_text())
+        self.assertNotIn("held_out_worse", json.loads((self.tmp / "out" / "summary.json").read_text()))
+        # a champion's directory that is not there
+        self.setUp()
+        self.assertEqual(self.run_(base_batch=str(self.tmp / "nowhere")), 2)
+        self.assertEqual(self.launched, [])
+
+    def test_a_bar_games_reading(self):
+        value = {"A": {"live": 1.0}, "B": {"live": 1.0}}
+        self.assertEqual([batch.reading(r)[0] for r in ({"outcome": "A"}, {"outcome": "cap", "value": value},
+                                                        {"outcome": "cap", "draw": True}, {"outcome": "cap"},
+                                                        {"outcome": "B"}, {"outcome": "could_not_run"}, None)],
+                         [batch.WON, batch.NOT_AHEAD, batch.NOT_AHEAD, batch.NOT_AHEAD, batch.LOST, None, None])
+        self.assertGreater(batch.WON, batch.AHEAD)
+        self.assertGreater(batch.AHEAD, batch.NOT_AHEAD)
+        self.assertGreater(batch.NOT_AHEAD, batch.LOST)
+
     def test_a_directory_of_other_dlls_is_refused(self):
         other = self.tmp / "y.dll"
         other.write_bytes(b"other")

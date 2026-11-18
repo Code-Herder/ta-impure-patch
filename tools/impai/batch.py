@@ -2,7 +2,7 @@
 """batch.py -- the per-batch loop: every gate a brain batch must pass, in one command.
 
     tools/impai/batch.py --test DLL --base DLL --tag TAG [--mode notworse|improve] [--margin-lanes L]
-                         [--gate-held-out] [--out DIR]
+                         [--gate-held-out] [--base-batch DIR] [--out DIR]
 
 THE GATES, in order; the first that fails fails the batch (research/notes/impai/testing.md, *Per brain batch
 and at milestones*):
@@ -16,7 +16,11 @@ and one check that reports and judges nothing, played whatever the gates do:
 
     held-out    HELD_OUT, the eight p:L5 games OTA AI won on Steel Jungle and Lava Alley at 57d39d71 (round 3):
                 each game's outcome and whether ImpAI reached the cap ahead in value. With --gate-held-out every
-                one must be a win and it gates, after the mods.
+                one must be a win and it gates, after the mods. With --base-batch DIR, the champion's own batch
+                directory, a game that ends in a worse category than the champion's same game is flagged WORSE in
+                its line, counted under the lines and listed in summary.json (`held_out_worse`). The categories,
+                best first: won, at the cap ahead in value, at the cap not ahead, lost (reading). The flag
+                judges nothing: another end inside one category is no flag, and the exit is as without it.
 
 A win is the outcome "A": ImpAI's opponent gone before the cap. A game at the cap is not a win, whatever its
 value; a game's stalls are reported, not judged.
@@ -75,6 +79,9 @@ DEADLINE = 600                  # seconds a piece may play after its admission
 POLL = 5
 LAUNCH_GAP = 2                  # seconds between two launches, so the run lock sees the pieces in their order
 PASS, FAIL, UNRUN = "pass", "fail", "unrun"
+# a bar game's category, best first: what a game is compared by against the champion's same game (the held-out
+# flag, session.py's verdict word)
+WON, AHEAD, NOT_AHEAD, LOST = 3, 2, 1, 0
 EXIT = {PASS: 0, FAIL: 1, UNRUN: 2}
 
 
@@ -127,23 +134,29 @@ def pieces(games: dict, out: Path) -> list:
 
 # ---- the play ----
 
-class Piece:
-    """A piece being played: its `bar.py play`, its log, and whether the run lock has admitted it."""
+def bar_play(piece: dict, dll: Path) -> list:
+    """The command that plays `piece` with `dll`: its `bar.py play`."""
+    cmd = [sys.executable, str(HERE / "bar.py"), "play", "--ids", ",".join(piece["ids"]),
+           "--lanes", str(piece["lanes"]), "--dll", str(dll), "--out", str(piece["out"])]
+    if piece["setup"]:
+        cmd += ["--setup", piece["setup"]]
+    # a tuning's arm (tune.py spsa): its seats' persona rows and tune lever items, the ids and seeds unchanged
+    for item in piece.get("persona") or ():
+        cmd += ["--persona", item]
+    for item in piece.get("tune") or ():
+        cmd += ["--tune", item]
+    return cmd
 
-    def __init__(self, piece: dict, dll: Path, logs: Path):
+
+class Piece:
+    """A piece being played: its command (`command(piece, dll)`: bar_play's `bar.py play`, or another that plays
+    through bar.play_games, whose lines `admitted` reads), its log, and whether the run lock has admitted it."""
+
+    def __init__(self, piece: dict, dll: Path, logs: Path, command=bar_play):
         logs.mkdir(parents=True, exist_ok=True)
         self.log = logs / f"{piece['name']}.log"
-        cmd = [sys.executable, str(HERE / "bar.py"), "play", "--ids", ",".join(piece["ids"]),
-               "--lanes", str(piece["lanes"]), "--dll", str(dll), "--out", str(piece["out"])]
-        if piece["setup"]:
-            cmd += ["--setup", piece["setup"]]
-        # a tuning's arm (tune.py spsa): its seats' persona rows and tune lever items, the ids and seeds unchanged
-        for item in piece.get("persona") or ():
-            cmd += ["--persona", item]
-        for item in piece.get("tune") or ():
-            cmd += ["--tune", item]
         with open(self.log, "a") as f:
-            self.proc = subprocess.Popen(cmd, cwd=str(TREE), stdout=f, stderr=subprocess.STDOUT)
+            self.proc = subprocess.Popen(command(piece, dll), cwd=str(TREE), stdout=f, stderr=subprocess.STDOUT)
 
     def admitted(self) -> bool:
         """The run lock has admitted it: it said so, or a lane of it started (the lock says nothing of an
@@ -196,26 +209,45 @@ def _name(g) -> str:
     return g[0] + (f" on {g[1]}" if g[1] else "")
 
 
-def held_out(games, out: Path) -> list:
-    """The held-out check's lines: each game's outcome, and at the cap A's value over B's and whether A reached
-    it ahead."""
-    lines = []
-    for (gid, _s), r in results(games, out).items():
-        if not r or r.get("outcome") in (None, "could_not_run"):
-            lines.append(f"{gid}: could not run")
-        elif r["outcome"] == "A":
-            lines.append(f"{gid}: won at {r.get('end_tick')}")
-        elif r["outcome"] == "B":
-            lines.append(f"{gid}: lost at {r.get('end_tick')}")
-        else:
-            v = r.get("value") or {}
-            a, b = ((v.get(s) or {}).get("live") for s in ("A", "B"))
-            if r.get("draw") or a is None or b is None:
-                lines.append(f"{gid}: at the cap, no value to compare")
+def reading(r) -> tuple:
+    """(category, what is said) of a bar game's result: WON; AHEAD, at the cap with A's value above B's; NOT_AHEAD,
+    at the cap otherwise (a draw or no value to compare included); LOST. (None, "could not run") for no result or
+    one that could not run."""
+    if not r or r.get("outcome") in (None, "could_not_run"):
+        return None, "could not run"
+    if r["outcome"] == "A":
+        return WON, f"won at {r.get('end_tick')}"
+    if r["outcome"] == "B":
+        return LOST, f"lost at {r.get('end_tick')}"
+    v = r.get("value") or {}
+    a, b = ((v.get(s) or {}).get("live") for s in ("A", "B"))
+    if r.get("draw") or a is None or b is None:
+        return NOT_AHEAD, "at the cap, no value to compare"
+    ratio = a / b if b else math.inf
+    return (AHEAD if a > b else NOT_AHEAD,
+            f"reached the cap {'ahead' if a > b else 'not ahead'}, value A/B {ratio:.2f}")
+
+
+def held_out(games, out: Path, champion: Path = None) -> tuple:
+    """(the held-out check's lines, the ids flagged, the games compared): each game's outcome, and at the cap A's
+    value over B's and whether A reached it ahead (reading). With `champion`, the champion's own batch directory,
+    a game in a worse category than the champion's same game is flagged in its line; a game the champion's
+    directory holds no played result of says so and is not compared."""
+    lines, worse, compared = [], [], 0
+    theirs = results(games, champion) if champion else {}
+    for g, r in results(games, out).items():
+        cat, text = reading(r)
+        if champion and cat is not None:
+            was, was_text = reading(theirs.get(g))
+            if was is None:
+                text += "  (no game of the champion's to compare)"
             else:
-                ratio = a / b if b else math.inf
-                lines.append(f"{gid}: reached the cap {'ahead' if a > b else 'not ahead'}, value A/B {ratio:.2f}")
-    return lines
+                compared += 1
+                if cat < was:
+                    worse.append(g[0])
+                    text += f"  WORSE than the champion's ({was_text})"
+        lines.append(f"{g[0]}: {text}")
+    return lines, worse, compared
 
 
 def play_stage(ps: list, launch, clock, sleep, failed_now) -> tuple:
@@ -265,7 +297,10 @@ MARGIN = {margin.ACCEPT: (PASS, "accepted"), margin.REJECT: (FAIL, "rejected"),
 def run(a, launch=None, play_margin=play_margin, clock=time.monotonic, sleep=time.sleep) -> int:
     import tarun
     out = Path(a.out)
+    champion = getattr(a, "base_batch", None)
     try:
+        if champion and not Path(champion).is_dir():
+            raise OSError(f"--base-batch {champion}: no such directory")
         games = gate_games(Path(getattr(a, "regress", None) or REGRESS))
         dlls = margin.fix_dlls(out, Path(a.base), Path(a.test))
     except (bar.BarError, margin.CouldNotJudge, OSError) as e:
@@ -306,7 +341,9 @@ def run(a, launch=None, play_margin=play_margin, clock=time.monotonic, sleep=tim
             states[gate] = (UNRUN, f"stopped: {failed} failed")
     for name in overran:
         print(f"batch: the piece {name} played past {DEADLINE} s and was stopped")
-    held = held_out(games[HELD], out)
+    held, worse, compared = held_out(games[HELD], out, Path(champion) if champion else None)
+    count = (f"{len(worse)} of {compared} compared ended worse than the champion's ({Path(champion).name})"
+             if champion else None)
     held_state = verdict(games[HELD], out) if gate_held else ("done", f"{len(held)} games, reported")
     for gate in ("regression", "hota", "mods"):
         jr.finish("batch", gate, states[gate][0], states[gate][1])
@@ -328,23 +365,25 @@ def run(a, launch=None, play_margin=play_margin, clock=time.monotonic, sleep=tim
     order = list(GATES) + ([HELD] if gate_held else [])
     worst = (FAIL if any(states[g][0] == FAIL for g in order) else
              UNRUN if any(states[g][0] not in (PASS,) for g in order) else PASS)
-    text = summary(a, out, states, held, overran, time.time() - t0, worst, gate_held)
+    text = summary(a, out, states, held, overran, time.time() - t0, worst, gate_held, count)
     print(text)
     (out / "summary.txt").write_text(text + "\n")
-    (out / "summary.json").write_text(json.dumps({"verdict": worst, "gates": states, "held_out": held,
-                                                  "overran": overran, "seconds": round(time.time() - t0)},
-                                                 indent=1) + "\n")
+    doc = {"verdict": worst, "gates": states, "held_out": held, "overran": overran,
+           "seconds": round(time.time() - t0)}
+    if champion:
+        doc["held_out_worse"] = worse
+    (out / "summary.json").write_text(json.dumps(doc, indent=1) + "\n")
     jr.end({PASS: "pass", FAIL: "fail"}.get(worst, "unrun"))
     return EXIT[worst]
 
 
-def summary(a, out, states, held, overran, seconds, worst, gate_held) -> str:
+def summary(a, out, states, held, overran, seconds, worst, gate_held, count=None) -> str:
     lines = [f"batch {out.name}: TEST {a.test}, BASE {a.base}, margin {a.mode}; {seconds / 60:.1f} min"]
     for g in GATES:
         st, detail = states[g]
         lines.append(f"  {g:<10} {st.upper():<7} {detail}")
     lines.append(f"  {HELD:<10} {states[HELD][0].upper():<7} {'gates' if gate_held else 'reports, judges nothing'}")
-    lines += [f"    {ln}" for ln in held]
+    lines += [f"    {ln}" for ln in held + ([count] if count else [])]
     lines += [f"  past {DEADLINE} s and stopped: {n}" for n in overran]
     lines.append(f"  results: {out}")
     lines.append(f"batch: {worst.upper()}")
@@ -370,6 +409,9 @@ def main(argv=None) -> int:
                    metavar=f"1..{margin.MAX_LANES}", help="the margin test's lanes an arm")
     p.add_argument("--gate-held-out", action="store_true",
                    help="the held-out games gate (every one a win) instead of reporting")
+    p.add_argument("--base-batch", default=None, metavar="DIR",
+                   help="the champion's own batch directory: a held-out game that ends in a worse category than "
+                        "the champion's same game is flagged")
     a = p.parse_args(argv)
     a.out = a.out or str(common_data() / "impai" / "runs" / "batch" / a.tag)
     return run(a)

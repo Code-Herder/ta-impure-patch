@@ -1,0 +1,10 @@
+# ImpAI's confirm set: the bar games a session plays beside the exploiter situations, the candidate's DLL against
+# the champion's, game by game (tools/impai/session.py).
+# One game a line, as regress.txt: its bar id, then the setup it plays on (tools/compat/setups.json), none for
+# the base game. A game replays exactly from its seed, so a game is listed once.
+
+bar-hota-redtriangle-ac-1
+bar-hota-troutfarm-ca-1
+bar-hota-plainspasses-ac-1
+bar-hota-steeljungle-ca-1
+bar-nota-lavamania-ca-2 prota-4.8
