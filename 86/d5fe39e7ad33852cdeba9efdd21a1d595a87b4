@@ -1,0 +1,6 @@
+landing-review: D2 (HUD on the device: the tech tree kept on the device, moved by the pan), 6c205faf reviewed at high effort by a fresh read-only ta-reviewer on d493a2aa..6c205faf; findings fixed in this commit.
+1 MEDIUM CONFIRMED: with no tree the message op lay past tree0 and its change moved no generation, so "loading..." could stay on the device copy -- FIXED (tree0 after the message).
+2 MEDIUM PLAUSIBLE: tt3 read sent0 off the game thread's pick, timing-dependent -- FIXED (tech_dsel/tech_dev from the frame drawn).
+3 LOW PLAUSIBLE: a halved staging smaller than the tree left it undrawn silently -- FIXED (logged once; comment states the bound).
+4 LOW CONFIRMED: TAGPU_CMD_WIKI size comment stale -- FIXED (19932, measured with i686-w64-mingw32-gcc).
+Sound per the review: recording order outside the render pass, stride-0 binding, single queue + barriers, slot fences on the constants, TREEKEY inputs, shader shifts, split condition, rounding parity.
