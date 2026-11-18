@@ -78,9 +78,21 @@ canvas { display:block; max-width:100% }
 /* a player's colour as the game drew it: outlined, since the game's white and black are both players */
 .sw.pl { width:12px; height:12px; border:1px solid currentColor; vertical-align:-1.5px }
 .sw.pl.none { background:repeating-linear-gradient(45deg, transparent 0 2px, currentColor 2px 3px) }
+/* THE DECK: the one bar between the two halves -- the transport, the clock and the seat shown. It keeps to the
+   window's top while the war room is read and to its bottom while the recorder is, so it is always at hand. */
+.deck { position:sticky; top:0; bottom:0; z-index:4; display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center;
+  background:var(--panel2); border:1px solid var(--line); border-left:4px solid var(--steel); border-radius:0 6px 6px 0; padding:8px 12px;
+  box-shadow:0 0 0 3px var(--bg), 0 6px 18px -8px #000a }
+.deck .transport { flex:0 0 auto }
+.deck .btn, .deck select { background:var(--panel) }
+.deck .btn[aria-pressed="true"] { background:var(--steel) }
+#play { min-width:5.6em; font-size:14px; padding:9px 14px }
+.when { font:700 28px/1 var(--font-display); letter-spacing:.02em; white-space:nowrap; display:flex; align-items:baseline; gap:10px; min-width:8.2em }
+.when small { font:500 12px/1.2 var(--font-mono); color:var(--muted); letter-spacing:0 }
 /* who is shown: a button a seat of the game, and the sentence that says it */
-.seats { display:flex; flex-wrap:wrap; gap:8px }
-.seat { display:inline-flex; flex-wrap:wrap; align-items:center; gap:3px 2px; padding:9px 12px; white-space:normal; text-align:left; font-weight:500; line-height:1.25 }
+.seats { display:flex; flex-wrap:wrap; gap:6px; margin-left:auto }
+@media (max-width:980px) { .seats { margin-left:0 } }
+.seat { display:inline-flex; flex-wrap:wrap; align-items:center; gap:3px 2px; padding:7px 10px; white-space:normal; text-align:left; font-weight:500; line-height:1.25 }
 .seat b { font-weight:700; margin-right:.5ch }
 .seat em { font-style:normal; font-weight:700; font-size:11px; letter-spacing:.08em; margin-left:1ch }
 .seat small { font-size:11px; margin-left:1ch }
@@ -93,11 +105,11 @@ canvas { display:block; max-width:100% }
 .tip .sw.pl { margin-right:6px }
 /* the sentence for the moment: the joint between the two halves */
 .now { border-left:4px solid var(--steel); background:var(--panel); border-radius:0 6px 6px 0; padding:10px 12px; display:grid;
-  grid-template-columns:auto minmax(0,1fr) auto; gap:6px 14px; align-items:start }
-.now .when { font:700 30px/1 var(--font-display); letter-spacing:.02em; white-space:nowrap }
-.now .when small { display:block; font:500 12px/1.3 var(--font-mono); color:var(--muted); letter-spacing:0 }
+  grid-template-columns:minmax(0,1fr) auto; gap:6px 14px; align-items:start }
 .now p { font:14px/1.5 var(--font-mono); overflow-wrap:anywhere; user-select:text }
-@media (max-width:640px) { .now { grid-template-columns:1fr auto } .now p { grid-column:1 / -1 } }
+/* a heading that names the seat it speaks of, with the player's colour */
+.of { font:600 12px/1 var(--font-mono); letter-spacing:.04em; color:var(--muted); margin-left:10px; white-space:nowrap }
+.of .sw.pl, h3 .sw.pl { margin-right:6px }
 .bench { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr); gap:14px; align-items:start }
 @media (max-width:980px) { .bench { grid-template-columns:1fr } }
 .mapwrap { position:relative; display:grid; justify-items:center; background:var(--map); border-radius:4px; overflow:hidden }
@@ -141,7 +153,6 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
       <select id="pick"></select>
     </div>
   </header>
-  <div class="seats" id="seats" role="group" aria-label="The seat whose thinking is shown"></div>
   <p class="whose" id="whose" hidden></p>
   <div class="chips" id="chips"></div>
   <p class="gist" id="gist"></p>
@@ -149,15 +160,7 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
 
   <section class="pane" aria-label="Flight recorder">
     <div class="panehead">
-      <h2>Flight recorder</h2>
-      <div class="transport">
-        <button class="btn" id="prev" title="The decision before (left arrow)">◀ decision</button>
-        <button class="btn" id="play" aria-pressed="false" title="Play or pause (space)">Play</button>
-        <button class="btn" id="next" title="The next decision (right arrow)">decision ▶</button>
-        <select id="speed" aria-label="Playing speed">
-          <option value="300">10× game speed</option><option value="900" selected>30×</option><option value="2700">90×</option>
-        </select>
-      </div>
+      <h2>Flight recorder<span class="of" id="recseat"></span></h2>
     </div>
     <canvas id="rec" tabindex="0" aria-label="The game on one time axis: events, judgements, a lane a squad, curves. Drag to set the moment."></canvas>
     <input type="range" id="scrub" min="0" max="1" value="0" step="1" aria-label="Game tick">
@@ -165,8 +168,20 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
     <div class="legend" id="reclegend"></div>
   </section>
 
+  <div class="deck" id="deck" role="group" aria-label="The clock both halves show, and the seat whose thinking is shown">
+    <div class="transport">
+      <button class="btn" id="prev" title="The decision before (left arrow)">◀ decision</button>
+      <button class="btn" id="play" aria-pressed="false" title="Play or pause (space)">Play</button>
+      <button class="btn" id="next" title="The next decision (right arrow)">decision ▶</button>
+      <select id="speed" aria-label="Playing speed">
+        <option value="300">10× game speed</option><option value="900" selected>30×</option><option value="2700">90×</option>
+      </select>
+    </div>
+    <div class="when" title="The tick both halves show, and the game's time at it"><span id="nowtick" class="tnum">0</span><small id="nowclock"></small></div>
+    <div class="seats" id="seats" role="group" aria-label="The seat whose thinking is shown"></div>
+  </div>
+
   <div class="now" aria-live="off">
-    <div class="when"><span id="nowtick" class="tnum">0</span><small id="nowclock"></small></div>
     <p id="nowtext"></p>
     <button class="btn" id="copy">Copy</button>
   </div>
@@ -174,15 +189,15 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
   <div class="bench">
     <section class="pane" aria-label="War room">
       <div class="panehead">
-        <h2>War room</h2>
+        <h2>War room<span class="of" id="warseat"></span></h2>
         <div class="ctl" id="layers"><div class="zoom" role="group" aria-label="Zoom"><button class="btn" id="zout" title="Zoom out (-)">−</button><span id="zoomsays" class="tnum">fit</span><button class="btn" id="zin" title="Zoom in (+)">+</button><button class="btn" id="zfit" title="The whole map (0)">Fit</button></div></div>
       </div>
-      <div class="mapwrap" id="mapwrap"><canvas id="map" aria-label="The seat's picture of the map at the moment. The wheel zooms about the cursor, a drag pans."></canvas><div class="tip" id="tip" hidden></div></div>
+      <div class="mapwrap" id="mapwrap"><canvas id="map" aria-label="The shown seat's picture of the map at the moment. The wheel zooms about the cursor, a drag pans."></canvas><div class="tip" id="tip" hidden></div></div>
       <div class="legend" id="maplegend"></div>
       <p class="foot" id="sampled"></p>
       <p class="foot" id="groundnote"></p>
     </section>
-    <aside class="pane side" id="side" aria-label="The seat's figures at the moment"></aside>
+    <aside class="pane side" id="side" aria-label="The shown seat's figures at the moment"></aside>
   </div>
 
   <p class="foot" id="foot"></p>
@@ -249,6 +264,8 @@ const seatOf = slot => slot >= 1 && D.each > 0 ? Math.floor((slot - 1) / D.each)
 const whoOf = s => D.who.find(w => w.seat === s) || { seat: s, name: '?' };
 const seatName = s => `seat ${s} (${whoOf(s).name})`;
 const seatSays = s => { const w = whoOf(s); return `seat ${s} (${w.name}${w.colour ? ', ' + w.colour : ''})`; };
+/* a heading's name for a seat: "Seat 2 (Arm, white)", its side and its colour's word as far as they were read */
+const seatTitle = s => { const w = whoOf(s), facts = [w.side || (w.name !== '?' ? w.name : null), w.colour].filter(Boolean); return `Seat ${s}${facts.length ? ` (${facts.join(', ')})` : ''}`; };
 const rgbOf = w => w && w.rgb ? `rgb(${w.rgb.join(',')})` : null;
 const sw = w => `<i class="sw pl${rgbOf(w) ? '' : ' none'}"${rgbOf(w) ? ` style="background:${rgbOf(w)}"` : ''} title="${rgbOf(w) ? `the player's colour in the game: ${esc(w.colour)}, colour ${w.logo}` : 'its colour could not be read'}"></i>`;
 const sideOf = w => w.name === w.side || !w.side ? w.name : `${w.name}, ${w.side}`;
@@ -700,7 +717,7 @@ function drawMap() {
       // whose it is: a thin line round the mark in its owner's player colour, so two other seats are told apart
       const pc = rgbOf(whoOf(seatOf(slot))), ro = (p[2][4] && isMex(p[2][1]) ? 5 : r) + 2.6;
       if (pc) { g.strokeStyle = pc; g.lineWidth = 1.1; g.beginPath(); if (p[2][4]) g.rect(x - ro, y - ro, 2 * ro, 2 * ro); else g.arc(x, y, ro, 0, 7); g.stroke(); }
-      MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatSays(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : '; the seat does not know it'), seatOf(slot)]); }
+      MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatSays(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : `; seat ${D.seat} does not know it`), seatOf(slot)]); }
     g.globalAlpha = 1; }
   // the seat's own units, by job
   const jb = new Map(jobs(f).map(j => [j.slot, j])), sq = squadsAt(T), taskOf = {}; sq.forEach(s => taskOf[s.k] = s.task);
@@ -727,7 +744,7 @@ function drawMap() {
   // an ally's unit the seat knows of: a small hollow mark in the ally's player colour, never the enemy's marks
   for (const k of allyRows(f)) { const [x, y] = bxy(k.bx, k.bz), wr = whoOf(k.of);
     g.strokeStyle = rgbOf(wr) || C.truth; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y - 4.5); g.lineTo(x + 4.5, y); g.lineTo(x, y + 4.5); g.lineTo(x - 4.5, y); g.closePath(); g.stroke();
-    MAP.hits.push([x, y, `${nm(k.type)} of ${seatSays(k.of)}, an ally: ${allySays(k)} at (${k.bx},${k.bz}), slot ${k.slot}` + (k.unnamed ? `; the seat's table does not name its owner (owner ${k.owner})` : ''), k.of]); }
+    MAP.hits.push([x, y, `${nm(k.type)} of ${seatSays(k.of)}, an ally: ${allySays(k)} at (${k.bx},${k.bz}), slot ${k.slot}` + (k.unnamed ? `; seat ${D.seat}'s table does not name its owner (owner ${k.owner})` : ''), k.of]); }
   const rows = enemyRows(f), few = rows.filter(k => seen(blockPx(k.bx), blockPx(k.bz))).length <= 14;
   for (const k of rows) {
     const [x, y] = bxy(k.bx, k.bz), l = lifeAt(k.slot, f.t), there = u.get(k.slot);
@@ -835,15 +852,16 @@ function drawSide() {
   const by = { now: 0, pass: 0, ghost: 0 }; rows.forEach(r => by[r.cls]++);
   const builds = jobs(f).filter(j => j.kind === 'BUILD');
   const level = (D.enums['mil.level'] || {})[at(TR('mil.level'), T)];
+  const me = whoOf(D.seat), mine_ = sw(me) + esc(seatTitle(D.seat));
   $('side').innerHTML = `
-    <section><h3>The seat's judgements</h3><div class="pills">${jpills}${opening}</div>
+    <section><h3>${mine_}: judgements</h3><div class="pills">${jpills}${opening}</div>
       <p>${est ? `Enemy base ${esc(est.says)}, block (${est.bx},${est.bz}).` : 'No estimate of the enemy base yet.'} Waves counted: land ${waves[0]}, sea ${waves[1]}, air ${waves[2]}. Enemy mobile value remembered: <span class="tnum">${fmt(at(TR('mil.mob_v'), T))}</span>.</p></section>
-    <section><h3>Squads</h3>${sq.length ? `<div class="scroll-x"><table class="mini"><tr><th>squad</th><th>task</th><th>members</th><th class="r">value</th><th>goal</th><th class="r">since</th></tr>
+    <section><h3>${mine_}: squads</h3>${sq.length ? `<div class="scroll-x"><table class="mini"><tr><th>squad</th><th>task</th><th>members</th><th class="r">value</th><th>goal</th><th class="r">since</th></tr>
       ${sq.map(s => { const mem = members(f, s.k).list; return `<tr class="pick${s.k === SEL ? ' sel' : ''}" data-k="${s.k}" tabindex="0"><td class="tnum">sq[${s.k}]</td><td><i class="sw" style="background:var(--${TASKVAR[s.task] || 'j-none'})"></i>${esc(s.task)} <span class="muted">${esc(s.layer)}</span></td><td>${esc(mem.length ? typesOf(mem) : plural(s.n, 'unit'))}</td><td class="r tnum">${fmt(s.value)}</td><td class="tnum">${s.task === 'FORM' || !(s.tx || s.tz) ? '—' : `(${s.tx},${s.tz})${s.target !== NONE() ? ` slot ${s.target}` : ''}`}</td><td class="r tnum">${s.since ? fmt(s.since) : '—'}</td></tr>`; }).join('')}</table></div>` : '<p class="muted">No squad holds a task at this tick.</p>'}</section>
-    <section><h3>The enemy, as the seat knows it</h3>
-      <p>${rows.length ? `${plural(rows.length, 'row')}: ${by.now} in sight, ${by.pass} on radar or sonar alone, ${by.ghost} remembered.` : 'It knows of no enemy.'} The enemy really has ${plural(enemyAlive, 'unit')} alive; the seat knows of ${knownAlive}.${esc(allied)}</p>
+    <section><h3>The enemy, as ${sw(me)}seat ${D.seat} knows it</h3>
+      <p>${rows.length ? `${plural(rows.length, 'row')}: ${by.now} in sight, ${by.pass} on radar or sonar alone, ${by.ghost} remembered.` : 'It knows of no enemy.'} The enemy really has ${plural(enemyAlive, 'unit')} alive; seat ${D.seat} knows of ${knownAlive}.${esc(allied)}</p>
       ${rows.length ? `<div class="scroll-x"><table class="mini"><tr><th>type</th><th>how</th><th>block</th><th>of</th></tr>${rows.slice(0, 10).map(r => `<tr><td>${esc(nm(r.type))}</td><td><i class="sw${r.cls === 'pass' ? ' ring' : ''}" style="${r.cls === 'pass' ? 'border-color' : 'background'}:var(--${r.cls === 'now' ? 'enemy' : r.cls === 'ghost' ? 'ghost' : 'radar'})"></i>${HOWSAYS[r.cls]}</td><td class="tnum">(${r.bx},${r.bz})</td><td>${r.owner < 10 ? sw(whoOf(r.owner)) + esc(seatName(r.owner)) : '?'}</td></tr>`).join('')}</table></div>${rows.length > 10 ? `<p class="muted">and ${rows.length - 10} more rows.</p>` : ''}` : ''}</section>
-    <section><h3>The seat's own</h3>
+    <section><h3>${sw(me)}Seat ${D.seat}'s own</h3>
       <p>${plural(mine, 'mobile unit')} and ${plural(mineS, 'structure')}${level ? `, playing ${esc(level)}` : ''}. ${builds.length ? 'Building: ' + esc(builds.slice(0, 6).map(j => { const p = u.get(j.slot); return `${nm(j.build)} by ${p ? nm(p[2][1]) : 'slot ' + j.slot}`; }).join(', ')) + (builds.length > 6 ? ` and ${builds.length - 6} more` : '') + '.' : 'No builder holds a build job.'}</p></section>`;
   $('side').querySelectorAll('tr.pick').forEach(tr => { const pick = () => select(+tr.dataset.k); tr.onclick = pick; tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }; });
 }
@@ -923,6 +941,9 @@ function show(d, keep) {
     im.onerror = () => { d.said.push(`the map's picture is not drawn: ${d.picture.file} did not load, it stands beside this page`); if (D === d) groundNote(); }; im.src = D.picture.file; }
   groundNote();
   whose();
+  for (const id of ['recseat', 'warseat']) $(id).innerHTML = sw(whoOf(D.seat)) + esc(seatTitle(D.seat));
+  $('map').setAttribute('aria-label', `${seatTitle(D.seat)}: its picture of the map at the moment. The wheel zooms about the cursor, a drag pans.`);
+  $('side').setAttribute('aria-label', `${seatTitle(D.seat)}: its figures at the moment`);
   const res = D.result || {};
   const chips = [[D.map, ''],
     [res.outcome === 'cap' ? `ended at the cap, tick ${fmt(D.end)}` : res.winner != null ? `${seatName(res.winner)} won at tick ${fmt(D.end)}` : `${fmt(D.end)} ticks`, res.winner === D.seat ? 'win' : ''],
@@ -933,7 +954,7 @@ function show(d, keep) {
   $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. The map's units, jobs and known rows are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
     + (D.layout && !D.layout.exact ? ` It is read by the layout of the source tree at ${D.layout.build || 'a commit git does not name'}, not at its own build ${D.build}: the rows' sizes fit, and what a member or an enum's number means is that tree's.` : '')
     + (D.colours ? D.colours.from ? ` A player's colour is the game's own: the middle pixel of its colour index's logo frame through the palette, read from ${D.colours.from} as the recording's game opened it.` : ` The players' colours are the unmodded game's for each colour index, not read from this recording's archives${D.colours.why ? ` (${D.colours.why})` : ''}.` : ' This data file names no player\'s colour, alliance or start: it was written before the page read them.')
-    + (whoOf(D.seat).allies ? '' : ' The seat\'s alliances were not read: every other seat\'s row is drawn and counted as an enemy\'s, an ally\'s too.')
+    + (whoOf(D.seat).allies ? '' : ` Seat ${D.seat}'s alliances were not read: every other seat's row is drawn and counted as an enemy's, an ally's too.`)
     + (D.who.some(w => w.start && !w.start_exact) ? ' A start marked on the map is its seat\'s first unit at the first sample that holds it, not at its first tick.' : '')
     + (D.named ? '' : ' No name table fits this recording: unit types are shown by number.') + (D.missing.length ? ` Not in this recording's layout: ${D.missing.join(', ')}.` : '');
   // open where the game first turns: the first task a squad takes, else the start; another seat of the same
@@ -948,8 +969,9 @@ const entryOf = id => { for (const g of MANIFEST) { const s = g.seats.find(s => 
 function seatBar(g, id) {
   const none = w => w.kind === 'impai' ? 'its thinking is not in this page: thinkview.py was given one --seat' : `no thinking recorded: ${w.kind === 'human' ? 'played by a human' : w.kind === 'ai' ? 'played by another AI' : w.kind === 'net' ? 'played on another machine' : 'who played it could not be read'}`;
   $('seats').innerHTML = (g.who || []).map(w => { const s = g.seats.find(s => s.seat === w.seat), on = !!s && s.id === id;
-    return `<button class="btn seat" ${s ? `data-id="${esc(s.id)}" aria-pressed="${on}"` : 'aria-disabled="true"'} title="${esc(s ? on ? 'the seat shown' : `show what seat ${w.seat} was thinking, at the same tick and the same view of the map` : none(w))}">`
-      + `${sw(w)}<b>Seat ${w.seat}</b>· ${esc(sideOf(w))} · ${esc(w.by || 'played by ?')} · ${esc(w.where || (w.start === null ? 'no start read' : '?'))}${on ? '<em>SHOWN</em>' : s ? '' : `<small>${w.kind === 'impai' ? 'not in this page' : 'no thinking recorded'}</small>`}</button>`; }).join('');
+    const where = w.where ? `started ${w.where}` : w.start === null ? 'no start read' : '';
+    return `<button class="btn seat" ${s ? `data-id="${esc(s.id)}" aria-pressed="${on}"` : 'aria-disabled="true"'} title="${esc((s ? on ? 'the seat shown' : `show what seat ${w.seat} was thinking, at the same tick and the same view of the map` : none(w)) + (where ? `; ${where}` : ''))}">`
+      + `${sw(w)}<b>Seat ${w.seat}</b>· ${esc(sideOf(w))} · ${esc(w.by || 'played by ?')}${on ? '<em>SHOWN</em>' : ''}</button>`; }).join('');
   $('seats').querySelectorAll('[data-id]').forEach(b => { b.onclick = () => { if (b.getAttribute('aria-pressed') !== 'true') openRec(b.dataset.id); }; });
 }
 window.thinkviewData = (id, data) => { cache[id] = data; if (waiting[id]) { waiting[id](data); delete waiting[id]; } };
@@ -981,7 +1003,7 @@ function openRec(id) {
     + Object.entries(EVENTS_SHOWN).map(([k, [v, text]]) => `<span><svg width="12" height="12" viewBox="-7 -7 14 14" style="vertical-align:-2px;margin-right:4px;color:var(--${v})">${{
       plant: '<path d="M0-6L6 5H-6z" fill="currentColor"/>', wave: '<path d="M-6-5H6L0 6z" fill="currentColor"/>', lost: '<path d="M-5-5L5 5M5-5L-5 5" stroke="currentColor" stroke-width="2.4" fill="none"/>',
       contact: '<circle r="5" fill="currentColor"/>', sight: '<circle r="2.6" fill="currentColor"/>', cmdr: '<path d="M0-6L6 0L0 6L-6 0z" fill="currentColor"/>', judge: '<circle r="3.2" stroke="currentColor" stroke-width="1.5" fill="none"/>' }[k]}</svg>${text}</span>`).join('');
-  $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span><span>◇ an ally\'s unit the seat knows of, in the ally\'s player colour</span>'
+  $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span><span>◇ an ally\'s unit the shown seat knows of, in the ally\'s player colour</span>'
     + '<span><i class="sw hollow" style="border-color:var(--truth)"></i>the truth: another seat\'s unit as it stands</span><span><i class="sw ring" style="border-color:var(--fg);border-width:1px"></i>a thin line round it: its owner\'s player colour</span><span>⚑ a seat\'s start, in its player colour</span><span><i class="sw ring" style="border-color:var(--t-attack)"></i>a squad, in its task\'s colour, with its goal line</span>'
     + '<span><i class="sw" style="background:var(--fg)"></i>own structure</span><span><i class="sw" style="background:var(--j-build);border-radius:50%"></i>builder, with its site</span><span><i class="sw" style="background:var(--held);opacity:.4"></i>held ground</span>'
     + '<span><i class="sw" style="background:transparent;border:1.6px solid var(--mex);box-shadow:inset 0 0 0 2px var(--panel), inset 0 0 0 5px var(--mex)"></i>extractor: own solid, the truth hollow, a known enemy\'s boxed</span>'

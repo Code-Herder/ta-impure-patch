@@ -120,6 +120,17 @@ class Arithmetic(unittest.TestCase):
         self.assertFalse(thinkview.page([], bare=True).startswith("<!doctype"))
         self.assertTrue(thinkview.data_file("a", {"v": 1}).startswith('thinkviewData("a",{"v":1});'))
 
+    def test_the_transport_and_the_seats_stand_between_the_two_halves(self):
+        html = thinkview.TEMPLATE.read_text()
+        at = lambda mark: html.index(mark)                                  # noqa: E731
+        deck, end = at('<div class="deck"'), at('<div class="now"')
+        self.assertLess(at('<canvas id="rec"'), deck)                       # under the flight recorder
+        self.assertLess(end, at('<canvas id="map"'))                        # above the war room
+        for ident in ("prev", "play", "next", "speed", "nowtick", "nowclock", "seats"):
+            self.assertTrue(deck < at(f'id="{ident}"') < end, ident)
+            self.assertEqual(html.count(f'id="{ident}"'), 1, ident)
+        self.assertNotIn("The seat's", html[at("function drawSide"):at("/* ---------- one clock")])   # a heading names its seat
+
     def test_a_place_is_a_compass_word_over_the_maps_thirds(self):
         w, h = 600, 300                                             # wider than tall: a swapped axis shows
         for (x, z), word in (((0, 0), "north-west"), ((300, 0), "north"), ((599, 99), "north-east"),
