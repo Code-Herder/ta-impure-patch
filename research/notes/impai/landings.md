@@ -75,6 +75,15 @@ The owner's decisions of 2026-11-17, after a review of the method. What the revi
 | **B1** | **Code against code, now**, by two processes in a network game ([the bar](bar.html), *The champion gauntlet*: its recommendation; a frozen brain ABI is not taken, since B2 moves the interface). **The handicap ladder for every champion**: m* is the strength figure that still moves | two builds each play their own ImpAI seat to an end on a bar map, and the gauntlet judges a member by such games; every champion's `ladder.py` fit is in [the bar](bar.html) | open |
 | **B2** | **The posture and the arbiter.** What the seat has judged of its map and its enemy (island, blind, naval, dry hunt, pressed) is one object the rules read; what the economy wants is a list of requests one arbiter orders, with each rule's hard constraint apart from its preference. Each step is proved neutral: the same seeds give the same games | the session tier's games and the regression set play decision for decision as before each step; then the island rules go on, on it | open |
 
+**The analysis tools** (the owner, 2026-11-17: build all four). MEASURED on the nine writer sessions of that day: 16 % of a writer's calls read game logs and results by hand and each session built about six DLLs, most of them to add a log line; the recordings already carry the brain's state (`s_mil`, `s_brain`, `s_job`, `s_known`).
+
+| Id | Tool | Closed when | State |
+|---|---|---|---|
+| **T1** | **`think.py`, a recording answered in one call**: a seat's brain state at a tick, a field's timeline, the squads' task history, and the first tick at which two recordings' brain state differs | it answers each of the four on a bar game's recording with no build and no replay; `session.py --neutral` can take its parting | open |
+| **T2** | **A number a situation**: each exploiter situation reports figures that move before its verdict does (the opponent's units over time, the first attack's tick) | `exploit.py` prints them and `session.py` shows them beside the verdict | open |
+| **T3** | **The reason trace**: which gate vetoed which want, each decision, kept beside the state | after B2a; one `think.py` call says why a want was not taken at a tick | open, behind B2a |
+| **T4** | **The viewer, for the owner**: one or two of the prototype's five views (war room, flight recorder, unit dossier, decision inspector, in-game X-ray) | the owner names the views; then built on T1's reader | waits on the owner's choice of views |
+
 **The order**: M1 and M2 (the method's text), M4, M3, B1 beside M3, then B2. The naval turtle's chain of island rules, the air rush's anti-air, the puzzles and the held-out maps wait behind B2.
 
 **B2's steps** ([decisions](decisions.html), *The posture and the arbiter*), a writer session each: B2a the gates as one table; B2b the posture as one object; B2c the wants as requests in a table's order -- each neutral; B2d, judged by its games, the priorities as numbers and one commitment rule for the squads' tasks.
