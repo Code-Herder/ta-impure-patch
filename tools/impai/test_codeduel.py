@@ -769,7 +769,10 @@ class SameBuild(unittest.TestCase):
     def test_what_the_fingerprint_cannot_tell_apart(self):
         one = b"\0impai: a line both builds hold\0"
         self.assertIn("one file", cd.told_apart(one, one))
-        self.assertIn("the same log line stems", cd.told_apart(one + b"\x01", one + b"\x02"))
+        self.assertIsNone(cd.told_apart(one + b"\x01", one + b"\x02"))      # THE INSTALLED FILE's case
+        self.assertTrue(cd.same_stems(one + b"\x01", one + b"\x02"))
+        self.assertFalse(cd.same_stems(one, one))
+        self.assertFalse(cd.same_stems(one, one + b"impai: a line of the second build\0"))
         self.assertIsNone(cd.told_apart(one, one + b"impai: a line of the second build\0"))
 
     def main(self, tmp, a, b, *argv):

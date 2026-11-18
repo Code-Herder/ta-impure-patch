@@ -187,8 +187,16 @@ line does (`module: text`, up to its first conversion), and `only_stems` the one
 does not. A line that begins with a stem only the other DLL holds cannot have come from this peer's DLL. The
 result carries, for each peer, how many of its lines begin with a stem only its own DLL holds (`own`) and only
 the other's (`other`, which must be 0); two DLLs no line tells apart fail the check. Two DLLs that are one
-file, or that hold the same stems, are refused before anything is launched (told_apart); --same-build plays
-them, the judge leaves the fingerprint out, and the result's `same_build` says so.
+file are refused before anything is launched (told_apart); --same-build plays them, the judge leaves the
+fingerprint out, and the result's `same_build` says so.
+
+THE INSTALLED FILE. Two builds whose logs no stem tells apart (a change that adds no log line) are played under
+the proof the harness holds without the logs: each peer's game folder is the run's own, its ddraw.dll is copied
+there before the launch, and after both peers have left the file in each folder is hashed again and must be its
+build's (`installed`: each peer's sha256 and whether it matched; a mismatch is a failed check). The log judged
+for a peer is the one its own folder holds. The fingerprint is left out, `fingerprint` in the result says
+"installed file", and what this proves less than the fingerprint is that the lines themselves came from that
+file -- it proves the file was the one in place, before and after.
 
 Exit 0 when the game has an outcome (A, B or cap), 1 for a desync, 2 when it could not be run or judged.
 """
@@ -229,6 +237,7 @@ SEATING = {0x13F: "team", 0x108: "allies", 0x147: "start",     # engine/units.md
            0x67: "first", 0x6B: "last"}                         # bytes (the first four), the start position,
                                                                 # the unit block's first and last unit
 SIZE = {0: 4, 4: 4, 0x73: 1, bar.ALIVE: 2, bar.LOST: 2, 0x13F: 1, 0x108: 4, 0x147: 1, 0x67: 4, 0x6B: 4}
+OWN = "its build's"                     # THE INSTALLED FILE: the result's word for a peer's file matching
 DUEL_LEVER = "tagpu_impai_duel.on"      # THE HUMANS GONE: tagpu_patches.c, patch_duel_lever
 DUEL_LINE = f"duel: TEST LEVER {DUEL_LEVER} -- installed"
 # THE VALUE AT THE CAP
@@ -855,9 +864,13 @@ def told_apart(a: bytes, b: bytes):
     if a == b:
         return "the two DLLs are one file, byte for byte"
     only = only_stems(a, b)
-    if not only["H"] and not only["J"]:
-        return "the two DLLs hold the same log line stems"
     return None
+
+
+def same_stems(a: bytes, b: bytes) -> bool:
+    """Two builds THE FINGERPRINT cannot tell apart though they are two files: THE INSTALLED FILE's case."""
+    only = only_stems(a, b)
+    return a != b and not only["H"] and not only["J"]
 
 
 def leave_all(tp, paused) -> dict:
@@ -927,13 +940,25 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, 
             (out / "cap-read.json").write_text(json.dumps(at_cap) + "\n")     # on the disk before the leave
         unleft = leave_all(tp, (at_cap or {}).get("paused"))
         texts = {p: tp.run_log(n) for p, n in zip(PEERS, peers)}
+        # THE INSTALLED FILE: read while the run's folders still stand, after both peers have left
+        held = {p: hashlib.sha256((tp.gamedir(n) / "ddraw.dll").read_bytes()).hexdigest()
+                for p, n in zip(PEERS, peers)}
         port = tp.port
     dlls = {"H": a, "J": b}
     data = {p: d.read_bytes() for p, d in dlls.items()}
+    by_file = not same_build and same_stems(data["H"], data["J"])
     # --same-build: nothing tells one build's log from itself, so THE FINGERPRINT is left out, by name
-    only = None if same_build else only_stems(data["H"], data["J"])
+    only = None if same_build or by_file else only_stems(data["H"], data["J"])
     res = judge(texts["H"], texts["J"], cap, only, at_cap, no_humans, unleft)
     res["cap_read"], res["same_build"] = at_cap, same_build
+    res["fingerprint"] = "left out" if same_build else "installed file" if by_file else "log stems"
+    res["installed"] = {p: {"sha256": held[p], OWN: held[p] == hashlib.sha256(data[p]).hexdigest()}
+                        for p in PEERS}
+    wrong = [f"{p}: the ddraw.dll in its game folder after the game is not its build's (THE INSTALLED FILE)"
+             for p in PEERS if not res["installed"][p][OWN]]
+    if wrong and res["outcome"] in ("A", "B", "cap"):
+        res["outcome"], res["reason"] = "could not run", wrong[0]
+    res["failed"] += wrong
     for s, p in SEAT_PEER.items():
         res["seats"].setdefault(s, {}).update(dll=dlls[p].name, sha256=hashlib.sha256(data[p]).hexdigest())
     if tp.refused:                      # the peers have stopped (TwoPeers.refused)
@@ -1008,6 +1033,9 @@ def main(argv=None) -> int:
     print(f"  the clocks at the last round of looks: {res['clock']}")
     if res["same_build"]:
         print("  --same-build: the fingerprint check was left out")
+    if res["fingerprint"] == "installed file":
+        print("  the two builds hold the same log line stems: each peer's installed ddraw.dll stands for the "
+              f"fingerprint ({', '.join(q + (' ok' if v[OWN] else ' NOT its build') for q, v in res['installed'].items())})")
     for f in res["failed"]:
         print(f"FAIL: {f}")
     for f in res["unverified"]:
