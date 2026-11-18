@@ -1122,6 +1122,8 @@ What the fix leaves:
 
 MEASURED 2026-11-17 (`tools/impai/codeduel.py`'s exploration games, two peers, each with one human and one ImpAI seat): with both humans as battle-room watchers the level ended at GameTime 35; with both commanders self-destructed, the game went on after the first death -- that peer's ImpAI seat kept playing, from 1 unit to 2, behind the watch notice `MSGBOX.GUI`, GameTime 1 006 to 1 287 -- and the level ended on both peers after the second (GameTime 1 945 on the host, 1 988 on the joiner).
 
+MEASURED 2026-11-18 (`tools/impai/codeduel.py`'s looks and four scripted games, two peers): the game-over word main `+0x3923B` reads 0 in play; `0x44` on both peers when both commanders self-destructed and the level ended (GameTime 341 and 325); `0x34` on the joiner once the host had left, the host's records freed there -- a peer left alone wins. The watch notice `MSGBOX.GUI` takes the Pause key while it is up, and any peer's Pause key lifts a pause another peer set.
+
 ### The other ends of a network level
 
 Everything else that sets the stop bit 2 of main `+0x3923B` in a network game, DISASSEMBLED 2026-11-18 (the sweep: every write of `+0x3923B` and `+0x39239` in `.text`, and every caller of `0x457CB0`, `0x457BC0`, `0x490230` and `0x490360`):
