@@ -2183,21 +2183,18 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    minwaterdepth. Content candidates depend on the level's content and on the type, the anchor, the estimate's block and
    the radius only, so a search that finds none is remembered against those (IMPAI_BRAIN.sea_none_*) and not walked
    again while they hold. Each content candidate is then held against the claims -- the footprint grown by gap
-   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands -- and against
-   the seat's exploration: a footprint centre the seat has not explored, which its site test refuses
-   (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c, THE SEAT'S OWN SITE TEST; it tests the centre sheared by half
-   the altitude, this the centre itself, a filter the site test still decides), so an unmapped seat looks past the near
-   water it has not seen. Neither spends SEA_LOOK, so neither a field of standing extractors nor unseen water can hold
-   the search short of a free site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and
-   then the way out (THE WAY OUT) decide.
+   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands. That
+   spends no SEA_LOOK, so a field of standing extractors cannot hold the search short of a free site. The first
+   SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out (THE WAY OUT)
+   decide.
    THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
    way out or then the resolver refused it, or no builder took it (THE SITE NO BUILDER TAKES) -- is passed by the
    cursor (IMPAI_BRAIN.sea_*), and the next decision's
    walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
    fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
    holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
-   walk starts again at the first candidate. A candidate before the cursor that the claims or the exploration
-   passed over waits for that restart too. The walk still counts every content candidate, the cursor's skipped
+   walk starts again at the first candidate. A candidate before the cursor that the claims passed over waits for
+   that restart too. The walk still counts every content candidate, the cursor's skipped
    ones included, so a search with candidates never reads as one with none.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
@@ -2209,7 +2206,7 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
    BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024, 16 641 in
    THE FINISH AT SEA's 2 048 --, each one label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a
-   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests
+   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps); SEA_LOOK failure tests
    (IMPAI_FAILS each); site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
    (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
 static int sea_search(IMPAI_DEC* d, int type)
@@ -2262,7 +2259,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-            if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
+            if (impai_claimed(d, &wide)) continue;
             if (!site_within(d, type, cx, cz, in->plan->comm_r) && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))
                 continue;
             if (looked >= SEA_LOOK) return 0;
@@ -2309,10 +2306,10 @@ int impai_sea_none_now(const IMPAI_DEC* d)
    the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
    builder offering another type than the searched one waits for a later decision.
    TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
-   whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
+   whatever stopped it: the site test or the resolver refusing, the claims, the failures, its
    own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
    once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
-   site the seat has not yet explored, a refusal the cursor passed) costs one count, not
+   refusal the cursor passed) costs one count, not
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
@@ -2509,12 +2506,12 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    CONSTRUCTION: the seat knows a feature exactly when DrawGameScreen would draw it for the seat's player
    (tasim_feature_drawn, tasim_sweep.c: on explored ground every feature, live, greyed outside sight, except a
    nodrawundergray def, drawn only to its owner or in sight), so it knows what a human in its seat is shown and no
-   more. A feature on unexplored ground is never taken; a look (tasim_sweep_targets with seat_sight), the refresh and
-   the jobs' checks (impai_brain.c, reclaim_seen) all ask THE FEATURE SHOWN. What the memory holds where the draw
-   does not show it -- unexplored ground, a gated def out of sight -- is a belief, as old as its `seen`. On the
-   bar's setting, True line of sight with the map explored, the draw shows every feature on the map, so every
-   remembered one is a fact at every decision and the decay of a belief (THE CONFIDENCE) is left to an
-   unexplored map. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
+   more. A look (tasim_sweep_targets with seat_sight), the refresh and the jobs' checks (impai_brain.c,
+   reclaim_seen) all ask THE FEATURE SHOWN, whose explored test is the draw rule's own (tasim_feature_drawn).
+   The seat's view answers every cell of the map explored (the layout,
+   tagpu_worldq_open_layout), so what the memory holds where the draw does not show it is a gated def out of
+   sight -- a belief, as old as its `seen` (THE CONFIDENCE) -- and every other remembered feature is a fact at
+   every decision. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
    the threat at the feature and on THE ROUTE, THE HELD GROUND, the commander's comm_r and safe distance, and the
    walk checks -- are the same whatever told the seat of the feature.
    THE REFRESH, every decision: each remembered feature is asked THE FEATURE SHOWN -- there and shown, its amounts
@@ -2534,7 +2531,7 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    LOOKS: the wrecks lie where the army fought, which the builders, who keep out of known threat, rarely reach; in
    the owner's four-seat game on Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes
    (MEASURED 2026-11-14).
-   BOUND, a decision: the refresh's IMPAI_FEATS explored tests, cell reads and gates (at most four block tests
+   BOUND, a decision: the refresh's IMPAI_FEATS cell reads, each with the draw rule's explored test and gates (at most four block tests
    each); the held entries' walk of the census's claims, an IMPAI_FEATS find for each reclaim job's, and one walk a
    feature newly remembered; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16) / 16 + 1)^2 = 105^2 explored tests each, as many reads of
    the explored cells and a gate for each anchor; and IMPAI_RECLAIM_LOOK reads again and finds of IMPAI_FEATS
@@ -2543,7 +2540,6 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 int impai_feat_seen(const IMPAI_DEC* d, const IMPAI_FMEM* e, WQ_FEAT* f)
 {
     WQ_FEAT was;
-    if (!d->q->ops->explored(d->q, e->ax, e->az)) return -1;
     if (d->q->ops->feature(d->q, e->ax, e->az, f) && f->ax == e->ax && f->az == e->az && f->def == e->def) {
         if (!tasim_feature_drawn(d->q, f)) return -1;
         return impai_feat_takeable(f);

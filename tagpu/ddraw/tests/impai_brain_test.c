@@ -3658,8 +3658,7 @@ static void check_feature_drawn(void)
    (c) THE PLACE IN A FULL MEMORY: 128 remembered rocks, each shown at every decision, of 10 + i metal, and a rock
        at (24, 24): of 500 metal it takes the place of the 10-metal entry; of 5 it is not remembered; of 500 with
        the commander reclaiming the 10-metal one, it takes the 11-metal entry's place and the reclaim holds;
-   (d) a rock remembered on unexplored ground at (70, 10): kept as a belief, and no unexplored cell read;
-   (e) the commander's reclaim job on a rock the memory no longer holds, gone since, its blocks dark, the head at
+   (d) the commander's reclaim job on a rock the memory no longer holds, gone since, its blocks dark, the head at
        the anchor's cell (the memory's footprint gone with its entry): the def is taken as one the seat must see,
        so the job holds until sight or the engine ends it. */
 static void check_feature_memory(void)
@@ -3719,17 +3718,6 @@ static void check_feature_memory(void)
         CHECK(k != 2 || (s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 34), "(c) the claimed reclaim holds");
     }
     reclaim_world(1);
-    s_st.fmem[0].ax = 70; s_st.fmem[0].az = 10;
-    s_st.fmem[0].def = 99;
-    s_st.fmem[0].fx = s_st.fmem[0].fz = 2;
-    s_st.fmem[0].owner = 10;
-    s_st.fmem[0].metal = 300.0f;
-    s_st.fmem[0].seen = 100;
-    s_st.nfmem = 1;
-    CHECK(decide(&out) == 0, "decide");
-    CHECK(impai_fmem_find(&s_st, 70, 10) >= 0 && !s_w.dark_reads, "(d) unexplored: kept, %d unexplored reads",
-          s_w.dark_reads);
-    reclaim_world(1);
     rock = feat_add(30, 30, 2, 2, 300);
     reclaim_job_set(rock, 800);
     reclaim_head(1, A_RECLAIM, rock);
@@ -3737,7 +3725,7 @@ static void check_feature_memory(void)
     s_w.feat[rock].live = 0;
     s_w.dark[15][15] = s_w.dark[16][16] = 1;
     CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(e) the job holds: kind %u", s_job[1].kind);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(d) the job holds: kind %u", s_job[1].kind);
     s_spots = PATCHES;
     s_nspots = NPATCH;
 }
@@ -13862,16 +13850,6 @@ static void check_sea_plant(void)
     s_w.gametime += 15;
     sea_decide("refused sixteen times, the next decision", &sy, &land);
     CHECK(!sy && land == 1, "the sea plant given up: the land factory");
-    /* unmapped: the water unexplored, no site is tested and the decision counts one refusal; with the near water
-       explored, the shipyard there */
-    coast_world(C_COAST, 1, 9);
-    for (z = 0; z < FW_H; z++) for (x = 64; x < FW_W; x++) s_w.explored[z][x] = 0;
-    sea_decide("unmapped", &sy, &land);
-    CHECK(!sy && !land && s_st.sea_refused == 1, "unexplored water: no site test, one refusal");
-    for (z = 0; z < FW_H; z++) for (x = 64; x < 80; x++) s_w.explored[z][x] = 1;
-    s_w.gametime += 15;
-    sea_decide("unmapped, the near water explored", &sy, &land);
-    CHECK(sy == 1, "the shipyard on the explored water");
     /* the nearest water held by standing underwater extractors, more candidates than SEA_LOOK: the shipyard
        beyond them */
     coast_world(C_COAST, 1, 9);
