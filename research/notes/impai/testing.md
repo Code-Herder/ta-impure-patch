@@ -71,15 +71,35 @@ The full bar (500-780 games), the handicap ladder (`ladder.py run`, 120 games in
 The brain's sources have one writer at a time, and a writer works in sessions of **one queue item** each: a fresh writer a session, started from the hand-off (`.data/impai/brain-handoff.md` in the main checkout), which names the item, its scenario and the measure that says the item is closed.
 
 1. **Find it in one call.** `tools/impai/rules.py NAME...` answers for a rule's name (`"THE HOLD"`), a function or a decision field (`hold`, `plan.retreat_margin`): where the rule is stated, every function that names it, the fields each reads and writes, who calls whom. `--list [FILE]` names every rule with its first site; `--coupling` the fields the most functions read. It reads the sources as they are on disk, so there is no index to keep.
-2. **Play first.** The change is made, built as a scratch DLL (`diag.py build`) and played on the item's scenario against the champion (`diag.py run --dll CHAMPION --dll SCRATCH`). It must move the scenario's outcome, or the measure the item names. At most three tries; a change that moves nothing is dropped -- the sources restored, what was tried and what the games showed written into the hand-off -- and the session ends.
-3. **Harden what moved it**, and only that: the brain test's fixture, the mutations, [the brain](brain.html) in place. The game that showed the fault goes to [decisions](decisions.html), not into a comment: a comment keeps the rule's invariant, its engine facts and a pointer. A rule the item changes has its older measurements moved the same way.
-4. **Commit and hand off**: one item, the hand-off's queue brought up to date.
+2. **Look before building.** What the seat did in a game already played is `think.py`'s to answer (*A recording answered in one call*): a diagnostic DLL is built only for what no recording holds.
+3. **Play first.** The change is made, built as a scratch DLL (`diag.py build`) and played on the item's scenario against the champion (`diag.py run --dll CHAMPION --dll SCRATCH`). It must move the scenario's outcome, or the measure the item names. At most three tries; a change that moves nothing is dropped -- the sources restored, what was tried and what the games showed written into the hand-off -- and the session ends.
+4. **Harden what moved it**, and only that: the brain test's fixture, the mutations, [the brain](brain.html) in place. The game that showed the fault goes to [decisions](decisions.html), not into a comment: a comment keeps the rule's invariant, its engine facts and a pointer. A rule the item changes has its older measurements moved the same way.
+5. **Commit and hand off**: one item, the hand-off's queue brought up to date.
 
 **A session is about 100 turns.** Its cost grows with the square of its turns: every turn reads the whole context again, and the context grows by the turn (MEASURED 2026-11-17 on nine writer sessions: about 62 000 tokens at the first turn, 335 000 to 466 000 at the last, 126 to 312 turns, 27 to 80 million tokens read from cache a session; three sessions of 100 turns cost about half of one of 300). So:
 
 - **Look-ups are batched**: every read and search the next step needs goes in one turn; a function is read whole, once, not in windows.
 - **The brain test runs after a group of edits**, not after each.
 - **An item still open at about 100 turns is handed off**: what is proven is committed, the hand-off says where it stands, and a fresh session takes it.
+
+## A recording answered in one call
+
+Every game the tools play keeps its recording, and a recording carries the brain's state at every tick: the military's (`IMPAI_MIL`), the economy's (`IMPAI_BRAIN`), each slot's job and what the seat knows. `tools/impai/think.py` reads it with no build and no replay, at most 60 lines a call:
+
+```
+tools/impai/think.py state    REC [--seat S] --at T [--part mil,brain,job,known] [--fields PATH,...]
+tools/impai/think.py timeline REC [--seat S] --field PATH[,PATH...] [--from T] [--to T]
+tools/impai/think.py squads   REC [--seat S] [--from T] [--to T]
+tools/impai/think.py units    REC [--every N]
+tools/impai/think.py diff     REC_A REC_B [--seat S] [--part ...]
+```
+
+- **A field is named as the C names it**: `mil.naval`, `mil.sq[3].task`, `mil.sq[*].task`, `job[1512].kind`; an enum prints by its name. `timeline` prints only the ticks at which a value changes; `squads` each squad's tasks with their ticks, size, value and goals; `units` the units alive a seat; `diff` the first tick at which two recordings' brain state differs and the fields that differ (exit 1).
+- **The layout is the compiler's**: `thinklayout.py` compiles a probe of `impai.h` with the DLL's compiler and flags and reads the members from its debug information, cached by the headers' hash. A recording whose rows are another size is refused by name; `--tree DIR` names the source tree that made it. A layout of the same size with members moved is not detected: every headline prints the recording's build.
+- **A recording's tick T holds what the step from GameTime T-1 wrote**, so the log's `t=6960` shows at tick 6961.
+- **`session.py --neutral --state`** asks more than equal decision lines: every game's brain state equal at every tick, else PARTED with the tick and the field. MEASURED 2026-11-17: the champion's naval turtle and 278fc3fe's part in state at the step from GameTime 6 172 (a builder's site), 788 ticks before their logs part.
+- **A situation's figures**: `exploit.py` prints, under each verdict, and `session.py` beside it for both DLLs, the opponent's units at four ticks, the tick of ImpAI's first attack and the attacks' count, and its army at its peak. They are reported, never judged.
+- MEASURED 2026-11-17 on the reference setup: a first call on a recording of 20 190 ticks 1.6 s, of 81 180 ticks 9.1 s; later calls 0.06 to 3 s, from the extract it keeps in `.data/impai/think-cache/`.
 
 ## One-call diagnosis
 
