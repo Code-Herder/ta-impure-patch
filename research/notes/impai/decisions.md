@@ -1729,6 +1729,39 @@ The walk starts at the same site at every decision and ends at the decision's 32
 
 **What it does not do.** The sites of a ring past the cut are not tested before the next ring's nearest: on Steel Jungle 7 of CORLAB's 64 sites past the cut at ring 8 pass the site test, and the type is passed over without them. A walk cut after few tests, the decision's others spent by the walks before it, grows the ring on those few (Red Triangle at 25 807, ten). A walk that resumes where it was cut would answer both, at the price of recorded state. A plant order that stands and ends with no frame (Lava Alley cc-1's eight) is untouched, as is a full store beside idle factories (Red Triangle from 38 047; Luschaven ca-1, 59 817 wasted of 143 652 at the cap).
 
+## The first plant past the commander's reach (2026-11-18)
+
+**The fault.** Arm at Luschaven's start 3 never builds a plant, in a mapped skirmish and an unmapped one alike: `think.py why` reads the factory want "needed, taken" at every decision to the cap, no `plant` line follows, the store stands full and the seat ends with its commander, its extractors and its solars ([landings](landings.html), *Two opening faults*).
+
+**The cause, MEASURED 2026-11-18 with the `plantwalk` line** ([the brain](brain.html), *The plant walk's trace*; the opening's game to GameTime 24 000, the commander the seat's only builder, the choice ARMVP throughout):
+
+| the game | `ring_grow` | the walk | its return |
+|---|---|---|---|
+| mapped | 0, 1, 2 (3 321 to 3 966) | 8, 21 and 31 sites tested, none passed | grew |
+| | 4 (3 981) | 50 sites: 27 past the reach, 21 tested, 1 passed and its way out refused | left |
+| | 5 (3 996 to the cap) | 58 sites: 50 past the reach, 7 tested, none passed | left, at every decision |
+| unmapped | 0, 1 (3 321 to 8 421) | 12 and 23 tested as the looks uncover them, none passed | left for unseen ground, then grew |
+| | 2 (8 436 to 14 391) | 34 sites: 2 past the reach, 30 tested after 19 looks, none passed | left, at every decision from 14 391 |
+
+The vehicle plant fits nowhere near that start, and a ring that leaves one site for the commander's reach is not exhausted, so it never grows to its widest and the type is never passed over. A scratch build that asked, for each plant type on the commander's menu and each ring, the sites within the reach that the site test passes found room for other types at the base: mapped, ARMLAB 3 sites on ring 0 and 2 on ring 1, ARMAP 2 on ring 0, each with a way out, ARMVP one site on rings 3 and 4 and none elsewhere, ARMSY 15 on ring 3; unmapped at 18 006, ARMLAB 2 and 2, ARMAP 1 and 1, ARMVP none. So the seat's case is not "no plant type has a site in reach": the type the choice takes has none, and nothing passes it over.
+
+**What is taken.** Two rules of the base ring (`impai_build.c`, THE LONE COMMANDER'S PLANT and A TYPE PASSED OVER GIVES THE RING BACK). A plant site past the commander's reach counts as a lack of room while the census holds no constructor and no factory, frames included: the reach leaves such a site for another builder, and that seat has none and can get none before a plant stands. And the pass-over at the widest ring puts `ring_grow` back at 0, so the next type the choice takes is walked from the base outward: `ring_grow` is one counter for every type, and without that the next type is asked at ring 8 alone, where on Luschaven every site is past the reach. No state is added and no want; the reach itself stands, every order to the commander within `comm_r`. With no plant type that has a site in reach, each type is passed over in turn within nine walks, the waived pass walks the rings once more and stays at the widest, and the seat orders no plant, as before; whether the commander may then go farther for a first plant, or the first plant be the sea plant, is not decided here.
+
+**The games after it** (the scratch build of the rule; `.data/impai/item10/`, `runs/session/item10-t1`), the figures named before the try -- the first plant's GameTime, the pulse's `built` at 6 000 and 24 000, metal made by 18 000:
+
+| Luschaven, arm at start 3 | first plant | built at 6 000 | metal by 18 000 | built at 24 000, army |
+|---|---|---|---|---|
+| mapped, the champion 5643b394 and the line's tip | none | 10 | 5 855 | 10, 0 |
+| mapped, the rule | 4 056 (ARMLAB; the tech-up's ARMALAB at 6 921) | 11 | 7 873 | 62, 20 |
+| unmapped, the champion and the tip | none | 12 | 5 855 | 12, 0 |
+| unmapped, the rule | 21 471 (ARMLAB) | 12 | 5 855 | 13, 0 |
+
+- Mapped, the ring reaches 8 at 4 041, three decisions after it stood at 5, ARMVP is passed over and ARMLAB is ordered on ring 0 at the next decision.
+- Unmapped, the plant comes 17 000 ticks later than mapped: rings 2 to 5 each hold sites within the reach that the seat has not seen, and the walk looks at each before it grows (THE RING'S UNSEEN SITES), 8 436 to 21 411. The rule ends the standstill; the time the looks take for a type that fits nowhere is the unmapped opening's cost and is not answered here.
+- The session tier against the champion 5643b394: no game in a worse category (4 the same, 1 better, 7 parted, each of the seven on the `plantwalk` line or on 7c73bf7b's change). Against the line's tip with the `plantwalk` line alone, every decision line of eleven games is equal and one game parts: `bar-hota-steeljungle-ca-1`, at 11 842, where CORAP is exhausted at the widest ring and the ring is given back -- won at 54 973, against the cap at value 0.48 for the champion and the tip.
+
+**What it does not do.** The unmapped seat still looks at every unseen site of a ring before the ring grows, for a type the base has no room for. A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The opening's tier game (`unmapped-luschaven-3`, to 6 000) shows no plant with or without the rule: the mapped game, the fixture (`impai_brain_test.c`, `check_plantwalk`) and `tools/impai/mutations/lone-plant.py` hold it.
+
 ## The finish's yards (2026-11-18)
 
 **The fault.** `bar-hota-troutfarm-ca-2` at 2c386510 reaches the cap with 273 units against 32: from GameTime 35 000 every enemy unit stands in the lake, the dry hunt holds from 40 657, and for 65 % of the 48 000 ticks to the cap the metal store is full (7 254 wasted at 39 000, 56 743 at the cap) while one shipyard builds eight ships.

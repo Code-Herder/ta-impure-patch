@@ -77,7 +77,9 @@ trace differs from the seat's last line, so the last line before a tick states e
 line. `why` reads the log beside the recording, `<name>.tagpu.log` for `<name>.imprec` as the tools' result
 folders keep the two, or --log FILE. Its ticks are the recording's: a line stamped `t=N` stands from tick N + 1.
 A log whose GameTimes go back for the seat (a second level, a rewind) is refused by name, and a log with no
-`why` line was written by a build before the trace.
+`why` line was written by a build before the trace. Under the wants `why --at T` quotes the seat's last
+`impai: plantwalk` line at or before the tick, when the log holds one: what the plant rung met when it last
+ordered no plant (THE PLANTWALK LINE).
 
 --seat is the recording's one ImpAI seat when it has exactly one. The print is held to --max lines (default
 60); its last line then says how many were cut. Exit 0, 1 (`diff`: the states differ), 2 (could not run)."""
@@ -1117,6 +1119,19 @@ def why_read(log: Path, seat: int, name: str) -> list:
     return ws
 
 
+PLANTWALK_LINE = re.compile(r"^impai: plantwalk seat=(\d+) t=(\d+) (.*)$")
+
+
+def plantwalk_at(log: Path, seat: int, at: int):
+    """(the tick it stands from, its fields) of the seat's last `plantwalk` line at or before tick `at` -- what the
+    plant rung last met when it ordered no plant (tagpu_impai.c, THE PLANTWALK LINE); None when there is none."""
+    last = None
+    for m in map(PLANTWALK_LINE.match, log.read_text(errors="replace").splitlines()):
+        if m and int(m.group(1)) == seat and int(m.group(2)) + 1 <= at:
+            last = (int(m.group(2)) + 1, m.group(3))
+    return last
+
+
 def why(ex, seat, log: Path, at, want, t0=None, t1=None) -> list:
     ws = why_read(log, seat, ex.name)
     ticks = [w.t + 1 for w in ws]           # a decision stamped t=N stands from tick N + 1
@@ -1158,6 +1173,9 @@ def why(ex, seat, log: Path, at, want, t0=None, t1=None) -> list:
             rows.append((f"want_{n}", stood(i, lambda x, n=n: x.of(n)), why_status(n, w.of(n))))
         width = max(len(r[1]) for r in rows)
         out += [f"  {a:<12} {b:<{width}}  {c}" for a, b, c in rows]
+        walk = plantwalk_at(log, seat, at) if want is None else None
+        if walk:
+            out.append(f"  the plant rung last ordered nothing at tick {walk[0]}: {walk[1]}")
     if want is None:
         if at is None:
             raise ThinkError("why: --at T (the trace at a tick), --want NAME (a want's history), or both")
