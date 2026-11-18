@@ -1110,3 +1110,12 @@ What the fix leaves:
   applied to the first type with it.
 - **Two types with one name and one key** cannot be told apart by the sync either; which of them
   keeps the key follows the def array's order.
+
+## The network game's end test
+
+| Address | What it is |
+|---|---|
+| `0x4655C0..0x4655E0` | In the players phase of the game's tick: when the call at `0x4655C0` answers 3 (a network game), main `+0x37EF6` is not 2, and `0x457CB0` answers 0, the code falls through to the level's end; any other answer jumps past it to `0x46563B`. DISASSEMBLED. |
+| `0x457CB0..0x457D25` | Counts the humans still in the game, over the ten player records from main `+0x1B63` (stride `0x14B`); no arguments, the count in EAX. A record counts when it is active (`+0x00` not 0), its controller `+0x73` is 1 (the local human), or 3 (a remote seat) with its PlayerInfo (`+0x27`) holding `+0x94` equal to 1 and bit `0x40` of `+0x9B` clear; its `+0x146` is not 10 (a watcher); and it holds units (`+0x144` not 0) or has created none yet (`+0x144` and `+0x140` both 0). **Controller 2, a computer seat, is never counted**, so a network game ends when its last human has no unit, whatever the computer seats hold. One caller, `0x4655D9`. DISASSEMBLED. |
+
+MEASURED 2026-11-17 (`tools/impai/codeduel.py`'s exploration games, two peers, each with one human and one ImpAI seat): with both humans as battle-room watchers the level ended at GameTime 35; with both commanders self-destructed, the game went on after the first death -- that peer's ImpAI seat kept playing, from 1 unit to 2, behind the watch notice `MSGBOX.GUI`, GameTime 1 006 to 1 287 -- and the level ended on both peers after the second (GameTime 1 945 on the host, 1 988 on the joiner).

@@ -566,7 +566,15 @@ holds it offline.
 - MEASURED 2026-11-16: `bar-g:L3.L0b-acidfoursome-ac-1` played to GameTime 3 600 (27.8 s at one lane) logged both
   seats' persona lines `from=lever`, seat 1 on L3's values and seat 2 on L0b's.
 
-**Code against code is designed, not built.** It would play two builds' brains in one game, and there are two
+**Code against code plays, by the network game** (`tools/impai/codeduel.py --a DLL_A --b DLL_B --out DIR [--map KEY] [--sides aa|ac|ca|cc] [--cap T]`; `test_codeduel.py` holds its judge offline): two peers in one network game, the host running DLL_A and the joiner DLL_B, each adding one ImpAI seat, judged from both peers' logs, the result in `bar.py`'s shape.
+
+- MEASURED 2026-11-17: 57d39d71 (A) against ed3e5634 (B) on Lava Mania played to an end, B the winner: seat A held no unit on both peers, at GameTime 60 409 on the host and 60 254 on the joiner. Each peer logged ImpAI's turns for the seat it added and no other (60 446 and 60 440 calls), and the two seats' tables differ. Games at a cap on Lava Mania (6 000), Acid Foursome (9 000) and Pincushion (12 000) ended with both peers agreeing on every seat's units.
+- **The humans stay, idle.** A network game ends when its last human has no unit, whatever the computer seats hold ([network](../engine/network.html), *The network game's end test*), and a peer whose human has died still runs its ImpAI seat (MEASURED, the same games). So each human is on a team with its own peer's ImpAI seat and gives no order; the judge checks the teams on both peers. A game is then not the two brains alone: in the game above B killed the host's idle commander near GameTime 59 700. Removing the humans needs the end test held off in the DLL, a harness lever: the owner's decision.
+- **The starts**: with fixed locations the humans take starts 0 and 1 and the ImpAI seats starts 2 and 3, so a map needs four starts and the seats do not play the bar's two.
+- **Its speed**: a network game starts at Normal speed whatever the store says; the harness presses `+` ten times on both peers for about 60 ticks a second (60.6 and 59.8 MEASURED; 30.1 without). The game to an end: 1 011 s of play and 50 s of launch and lobby on 4 slots, about 71 slot-minutes. Two games at once, on two leased ports, ran clean.
+- **Not there yet**: a game at the cap has no value both peers agree on, so it does not score; the DLL logs no line naming its build, so "each seat ran its own peer's brain" rests on the DLLs' hashes and the log lines only one of them writes; nothing else may `peek` a duel's instances while it plays; `gauntlet.py` does not yet play its members this way.
+
+**The design it came from.** It plays two builds' brains in one game, and there are two
 ways to do it.
 
 - **Two processes, a network game** (each peer's DLL runs the ImpAI seat its own peer added, and only that one:
