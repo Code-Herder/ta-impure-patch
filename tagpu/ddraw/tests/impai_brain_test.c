@@ -1829,6 +1829,59 @@ static void check_ring_reach(void)
     }
 }
 
+/* THE CUT RING GROWS (impai_build.c): reach_world's commander in an energy stall with four site tests a decision,
+   fewer than a ring's sites. With the wind generator refused everywhere, each decision's first walk -- the stall's
+   rung -- is cut after four refusals and counts as exhausted, so the ring grows by one a decision; the energy
+   rung's walk after it finds the tests spent, tests nothing and grows nothing. With no site test to spend no walk
+   tests a site and the ring stays. With the wind generator refused only where its first cell lies in the square
+   6..29 round the anchor, which holds every site of ring 0, the ring grows once and the wind generator is built
+   at the second decision on ring 1, outside the square: a seat whose nearest sites take nothing still builds. */
+static void check_ring_cut(void)
+{
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
+    IMPAI_BRAIN_OUT out;
+    int k, all, n = 0;
+    lv.site_tests = 4;
+    s_plan = &lv;
+    reach_world(0);
+    s_w.refuse_type = T_WIND;
+    for (k = 0; k < 3; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        printf("ring cut, every wind site refused, 4 site tests: decision %d ring_grow=%u\n", k, s_st.ring_grow);
+        CHECK(s_st.ring_grow == k + 1, "a walk cut on refusals alone grows the ring once a decision: %u at decision %d",
+              s_st.ring_grow, k);
+    }
+    lv.site_tests = 0;
+    reach_world(0);
+    s_w.refuse_type = T_WIND;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_st.ring_grow == 0, "a walk that tested no site grows nothing: %u", s_st.ring_grow);
+    lv.site_tests = 4;
+    reach_world(0);
+    s_w.refuse_box_type = T_WIND;
+    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 6;
+    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 29;
+    for (k = 0; k < 4 && !n; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        n = builds_within(0, 1, 0xFFFFFFFFu, &all);
+        printf("ring cut, the ground round the anchor refused: decision %d ring_grow=%u builds=%d\n", k, s_st.ring_grow, n);
+    }
+    CHECK(n == 1 && k == 2, "the wind generator is built once the ring has grown past the refused square: %d builds in %d decisions",
+          n, k);
+    if (n) {
+        const FCMD* c = last_cmd(0);
+        const int x = cmd_x0(&c->c), z = cmd_z0(&c->c);
+        printf("ring cut, the wind generator at (%d, %d), ring_grow=%u\n", x, z, s_st.ring_grow);
+        CHECK((x < 6 || x > 29 || z < 6 || z > 29) && s_st.ring_grow == 0, "outside the refused square, the ring back at 0: (%d, %d), %u",
+              x, z, s_st.ring_grow);
+    }
+    s_w.refuse_box_type = 0;
+    s_plan = lv0;
+}
+
 /* THE RING'S UNSEEN SITES and THE RING'S LOOK (impai_build.c): reach_world's commander at the anchor (20, 20) in
    an energy stall, the seat's map explored for x, z < 32 alone and the wind generator refused wherever its first cell lies
    there, as a start hemmed in by ground no plant fits. Rings 0 and 1 lie on explored ground and are refused -- in
@@ -16628,6 +16681,7 @@ int main(void)
     check_far_patch();
     check_factory();
     check_ring_reach();
+    check_ring_cut();
     check_ring_unseen();
     check_ring_cmd_safe();
     check_cmd_safe_orders();
