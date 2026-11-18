@@ -1,0 +1,5 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=419c291a..4466cf96 findings=5 acted=5 rejected=0 date=2026-11-18
+1 MEDIUM (both) DeltaTime stale while paused/menu (0x496920/0x496918 skip the scheduler, draw 0x4969CD still runs) -> fixed 06dbdf1b: GameTime latch at 0x420B00's entry; measured paused layer 9: stock 5061->20481 cap, fixed 478 flat.
+2-4 LOW docs (k ticks a frame; rt_pace_guard at 0x49692D; save load 0x4660A7 block copy) -> fixed 06dbdf1b.
+5 LOW wording: density per tick, not frame flicker; 57 emitter call sites swept, only 0x421583/0x4215AA per draw -> fixed 06dbdf1b/dc50c4c8.
+Delta 4466cf96..dc50c4c8 adds a new site (0x420B00 prologue latch): reviewed separately.
