@@ -2223,7 +2223,8 @@ static void impai_play_clear(void)
    both from the two logs, with no look that falls between a seat's last unit and the teardown.
    ENGINE FACTS: main+0x3923B is the game's end, a u16 of flags (bit 2 stop, bit 4 won, bit 6 lost:
    tagpu_recorder.c, OFF_GAME_END); a record is active when its dword +0 is not 0, +4 is its DirectPlay ID
-   (engine/network.md, 0 in a skirmish), +0x73 its controller (1 the local human, 2 a local AI, 3 a remote
+   (engine/network.md; in a skirmish the field holds the record's index, MEASURED 2026-11-18 on two skirmishes of
+   three records: 0, 1, 2), +0x73 its controller (1 the local human, 2 a local AI, 3 a remote
    player: engine/sim.md), and the words +0x144 and +0x106 its live-unit count and its commanders lost, which
    the unit's destructor lowers and raises (engine/memory.md, 0x486DFC and 0x486996).
    BOUND: the ten records, each at a fixed offset inside main's block, read and never written; the line holds
