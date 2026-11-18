@@ -27,11 +27,29 @@ The rung 2 speeds are the turbo measurements in [Sim step and clock](../engine/s
 
 ## Per brain batch and at milestones
 
-ImpAI wins every fair game against OTA AI, so a broad win count no longer tells whether a brain change helped. Each brain batch runs one command:
+ImpAI wins every fair game against OTA AI, so a broad win count no longer tells whether a brain change helped. The gate has three tiers: the session tier after every writer session, the promotion tier when a build is put up as champion, and the milestones.
+
+**The session tier**, minutes:
 
 ```
-tools/impai/batch.py --test CANDIDATE.dll --base CHAMPION.dll --tag TAG [--mode notworse|improve]
+tools/impai/session.py --test CANDIDATE.dll --base CHAMPION.dll --tag TAG [--only NAME[,NAME...]] [--neutral] [--lanes L]
 ```
+
+It plays the four exploiter situations and the confirm set (`tools/impai/confirm.txt`: Red Triangle, Trout Farm, Plains & Passes and Steel Jungle against OTA AI, and Lava Mania on ProTA 4.8) with each DLL and prints a line a game: the champion's result, the candidate's, and one word.
+
+- **SAME**: the two games' decision lines are equal -- every `impai:` line that carries a GameTime and no timing field -- and so are the results. **PARTED**: the same category, a different game; the first parting's GameTime is named and nothing is judged. **BETTER** and **WORSE**: the category changed (for a bar game, best first: won, at the cap ahead in value, at the cap not ahead, lost; for a situation: pass, FAIL). **UNRUN**: a game that could not run, or one whose log has no decision line.
+- Exit 1 when a game is WORSE, 2 when one could not run, else 0. **`--neutral`** is a refactor's proof: it fails on any game that is not SAME and prints both lines at each first parting.
+- **`--only`** narrows it to the situations or ids named: the item a session works on is one or two games.
+- The champion's games are played once a champion, kept by the DLL's hash (`.data/impai/runs/session/base-<hash>/` in the main checkout); the candidate's are under its tag, and a tag is one build. A second run of the same pair plays nothing.
+- MEASURED 2026-11-17 on the reference setup, the champion ed3e5634 against 278fc3fe, both DLLs' nine games played afresh: 8.6 min, 5.5 of them in the run lock's queue behind a ladder; 8 SAME and the naval turtle PARTED at GameTime 6 960, both at the cap. The same command again: 0.25 s.
+
+**The promotion tier**, when a build is put up as champion, is one command:
+
+```
+tools/impai/batch.py --test CANDIDATE.dll --base CHAMPION.dll --tag TAG [--mode notworse|improve] [--base-batch DIR]
+```
+
+With `--base-batch`, the champion's own batch directory, each held-out game that ends in a worse category than the champion's same game is flagged in its line and counted (`held_out_worse` in `summary.json`); it still judges nothing. On the batches of 82cab0f3 and ed3e5634 it flags one game of eight: Lava Alley ca-4, won at 48 742 by the first and at the cap not ahead by the second.
 
 It plays every gate with the candidate's DLL and stops at the first that fails, in this order:
 
