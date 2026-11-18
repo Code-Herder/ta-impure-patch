@@ -530,11 +530,15 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    above and attacks it only when it is in the member's own range from where it stands. No other order of the
    ATTACK's takes a member into that reach: its travel point and its fight's moves to the centroid are moved out,
    once, to the reach + 128 px from the commander's point for them on the line through them (`com_clear`, via
-   `squad_move`) -- with no clear point the member stops where it stands --, the arrival measures the member at the
-   moved point (`arrived`), and the fight attacks no target past the member's ground reach whose firing point, at
-   that reach from the target on the line to the member, lies inside it (`attack_clear`). The commanders weighed
-   are the squad's two nearest it outranges (`stand_lists`), for an ATTACK and for the FORM whose arrival decides
-   its wave. The stay-or-go reads it as not closing on an ATTACK squad only when every member of the squad stands
+   `squad_move`) -- with no clear point (a bay, a strait narrower than the reach and its pad) the member stops where
+   it stands when that spot is clear and otherwise keeps the order it has, and the arrival counts it arrived; with
+   the clearance undecided (the substitutes' cache full) it gets no order that decision and the arrival is
+   undecided, so a capacity never ends or starts a wave --, the arrival measures the member at the moved point
+   (`arrived`), and the fight attacks no target past the member's ground reach whose firing point, at that reach
+   from the target on the line to the member, lies inside it (`attack_clear`). The commanders weighed are the
+   squad's two nearest it outranges (`stand_lists`), for an ATTACK and for the FORM whose arrival decides its wave;
+   a FORM's fight reads them too, so its attacks and moves keep out of the reach as an ATTACK's do. The stand-off's
+   own attack on a defence is not tested against the commander's reach. The stay-or-go reads it as not closing on an ATTACK squad only when every member of the squad stands
    it off (`squad_stands_off`), and the contact's other members still close by their own test (`contact_closes`),
    so it is then no reason to retreat home. Stood members are passed over by the way home too (`travel_home`). Else it attacks the defence when it is seen now, from its own
    range; else it attacks the ground at the defence's remembered block -- a structure stands where it was seen, and

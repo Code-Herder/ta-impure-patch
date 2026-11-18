@@ -9029,7 +9029,17 @@ static int stand_progress(int tx, int decisions)
        reach of 400, but in the commander's contact: the commander does not close, its contact's submarine does
        (contact_closes reads the contact's other members), so the prediction is made with the contact closing and
        lost, and the squad retreats -- with the submarine read as not closing, the contact stands off and the
-       prediction holds. */
+       prediction holds;
+   (j) (h) with the commander's D-gun range 500, so its reach + STAND_PAD (564) spans the 512-px channel: no point of
+       the channel is clear of it (a strait narrower than the reach, decisions.md *What it does not reach*), the
+       moved-out point's substitute on the west edge 512 px from the bank -- the destroyer is given no attack, never
+       shelling the commander, and the arrival counts it arrived (no clear point), so the ATTACK moves on, back to
+       FORM, and travels home;
+   (k) (j) with a RAID squad, squad 0, of forty raiders each on an islet of its own in the channel's north, sent to
+       the water among them, served before squad 1 so that its substitutes fill the decision's cache (SUB_CACHE):
+       the clearance of the destroyer's point is undecided (com_clear, -1), so the arrival is undecided and the
+       ATTACK keeps its goal, and the destroyer gets no order this decision, counted unreached -- read as no clear
+       point, the full cache sent the squad back to FORM, as in (j). */
 static void ashore_world(int ship_cx, int com_cx, int dgun)
 {
     stand_world(300);
@@ -9050,19 +9060,27 @@ static void ashore_world(int ship_cx, int com_cx, int dgun)
 
 static void check_mil_shore_commander(void)
 {
-    static const char* const NAME[9] = { "(a) 112 px off the bank", "(b) off the bank, the commander far",
-                                         "(c) off the bank, the commander at the edge",
-                                         "(d) 112 px off the bank, no D-gun", "(e) a goal down the channel",
-                                         "(f) a goal at the bank's edge", "(g) a PT boat beside the destroyer",
-                                         "(h) at the moved-out point", "(i) an enemy submarine in the commander's contact" };
-    static const int SHIP[9] = { 266, 249, 249, 266, 249, 249, 266, 250, 266 },
-                     COM[9] = { 290, 300, 274, 290, 330, 330, 290, 330, 290 };
+    static const char* const NAME[11] = { "(a) 112 px off the bank", "(b) off the bank, the commander far",
+                                          "(c) off the bank, the commander at the edge",
+                                          "(d) 112 px off the bank, no D-gun", "(e) a goal down the channel",
+                                          "(f) a goal at the bank's edge", "(g) a PT boat beside the destroyer",
+                                          "(h) at the moved-out point", "(i) an enemy submarine in the commander's contact",
+                                          "(j) a strait narrower than the reach", "(k) (j), the substitutes' cache full" };
+    static const int SHIP[11] = { 266, 249, 249, 266, 249, 249, 266, 250, 266, 250, 250 },
+                     COM[11] = { 290, 300, 274, 290, 330, 330, 290, 330, 290, 330, 330 };
     IMPAI_MIL_OUT o;
-    int c, from, att, gnd, mv, mx, mz;
-    for (c = 0; c < 9; c++) {
-        ashore_world(SHIP[c], COM[c], c == 3 ? 0 : 240);
-        if (c == 4 || c == 5 || c == 7) enemy(1301, T_FACTORY, c == 4 ? 245 : 266, 240, IMPAI_GHOST, 1);
-        if (c == 7) s_w.unit[20].pos[2] = (233 * 16 + 8) << 16;
+    int c, k, from, att, gnd, mv, mx, mz;
+    for (c = 0; c < 11; c++) {
+        ashore_world(SHIP[c], COM[c], c == 3 ? 0 : c >= 9 ? 500 : 240);
+        if (c == 4 || c == 5 || c == 7 || c >= 9) enemy(1301, T_FACTORY, c == 4 ? 245 : 266, 240, IMPAI_GHOST, 1);
+        if (c == 7 || c >= 9) s_w.unit[20].pos[2] = (233 * 16 + 8) << 16;
+        if (c == 10) {
+            for (k = 0; k < 40; k++)
+                water_add(&s_w, 244 + 4 * (k % 6), 4 + 4 * (k / 6), 244 + 4 * (k % 6), 4 + 4 * (k / 6), -10);
+            fake_reach(&s_mreach, M_N);
+            squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 126, 8);
+            for (k = 0; k < 40; k++) member(30 + k, M_RAIDER, 244 + 4 * (k % 6), 4 + 4 * (k / 6), 0);
+        }
         if (c == 8) enemy(1302, M_SUB, 268, 145, IMPAI_LOS, 1);
         if (c == 6) {
             s_ft[M_SUB].flags &= ~IMPAI_FT_SUBMERGED;
@@ -9099,6 +9117,16 @@ static void check_mil_shore_commander(void)
         if (c == 4)
             CHECK(mv == 1 && !att && mz >= 3700 && mx <= 4368 - 304, "%s: travels south, (%d, %d)", NAME[c], mx, mz);
         if (c == 7) CHECK(task_of_slot(20) == IMPAI_SQ_FORM, "%s: arrived, back to FORM", NAME[c]);
+        if (c == 9)
+            CHECK(task_of_slot(20) == IMPAI_SQ_FORM && !att && !gnd,
+                  "%s: no clear point -- no attack, arrived, back to FORM", NAME[c]);
+        if (c == 10) {
+            int raid = 0;
+            for (k = from; k < s_w.nlog; k++) raid += s_w.log[k].c.action == A_MOVE && s_w.log[k].c.unit >= 30;
+            printf("the shore commander, %s: raid moves %d, unreached %u\n", NAME[c], raid, o.unreached);
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && !att && !gnd && !mv,
+                  "%s: the clearance undecided -- the ATTACK kept, no order", NAME[c]);
+        }
         if (c == 5) {
             const int dx = 4368 - mx;
             CHECK(mv == 1 && !att && mz >= 3700 && dx >= 368 - 24 && dx <= 368 + 24,
@@ -10674,7 +10702,10 @@ static void check_island_hold(void)
        which holds every land site of the base ring at its first size: the commander's lab outside it, west of 52;
    (af) (ae) with the commander offering no lab and a K-bot constructor, east of a channel 40 deep over columns
        54..55, on a wind generator's build: the sites outside the base ring lie across the channel, which the K-bot's
-       class does not cross (builder_reaches), so no lab, and the CS's shipyard. */
+       class does not cross (builder_reaches), so no lab, and the CS's shipyard;
+   (ag) (ae) with an idle K-bot constructor offering the lab on an islet of its own at sea, asked before the
+       commander (an idle builder): it reaches no site, so its search ends on its own reach refusals and spends none
+       of the decision's site tests -- the commander's lab outside the base ring, west of 52, as (ae). */
 static const SNAP_PATCH ISLE_SMALL_F[] = {
     { 26, 50, 26, 50, 28, 52, 9 }, { 34, 50, 34, 50, 36, 52, 9 }, { 46, 50, 46, 50, 48, 52, 9 },
     { 52, 58, 52, 58, 54, 60, 9 }, { 26, 70, 26, 70, 28, 72, 9 }, { 34, 76, 34, 76, 36, 78, 9 },
@@ -10707,7 +10738,7 @@ static void isle_patches(int land, int wet)
 static void check_island_order(void)
 {
     static const uint16_t AIRVP[] = { E_CV, E_UWMEX }, AIRLAB[] = { E_CK, E_UWMEX };
-    static const char* const NAME[32] = { "(a) eight land patches", "(b) the sea's metal more",
+    static const char* const NAME[33] = { "(a) eight land patches", "(b) the sea's metal more",
                                          "(c) an enemy ship known", "(d) three land patches",
                                          "(e) no shipyard site, the vehicle plant of air",
                                          "(f) one shipyard", "(g) two shipyards", "(h) two shipyards and an air plant",
@@ -10731,13 +10762,14 @@ static void check_island_order(void)
                                          "(ac) blind, the commander on a wind generator, no lab site",
                                          "(ad) blind, the commander idle, no lab site",
                                          "(ae) blind, the commander on a wind generator, no lab site in the base ring",
-                                         "(af) blind, a K-bot on a wind generator, the outer sites across water" };
+                                         "(af) blind, a K-bot on a wind generator, the outer sites across water",
+                                         "(ag) blind, an idle K-bot on an islet, the commander on a wind generator" };
     static IMPAI_PLAN plan;
     IMPAI_BRAIN_OUT out;
     int c, sy, land;
     plan = IMPAI_PLAN_ROW;
     plan.factory_max = 8;
-    for (c = 0; c < 32; c++) {
+    for (c = 0; c < 33; c++) {
         int from, vp, lab;
         const int blind = c >= 15;
         coast_world(c == 4 ? C_SHALLOW : C_COAST, 1, c == 7 || c == 9 ? 30.0f : c == 19 ? 7.0f : 9.0f);
@@ -10823,6 +10855,13 @@ static void check_island_order(void)
                     s_w.refuse_box.z0 = 0;
                     s_w.refuse_box.z1 = 127;
                 }
+                if (c == 32) {
+                    static const uint16_t CKLAB[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB };
+                    menu_set(&s_w, E_CK, CKLAB, 5);
+                    water_add(&s_w, 200, 60, 203, 63, -10);
+                    fake_reach(&s_reach, E_N);
+                    unit_add(&s_w, 4, E_CK, 200, 60, 1);
+                }
                 if (c == 31) {
                     static const uint16_t COMNOLAB[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_VP, E_UWMEX };
                     static const uint16_t CKLAB[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB };
@@ -10872,7 +10911,7 @@ static void check_island_order(void)
             CHECK(!lab && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_WIND,
                   "%s: the commander kept at its wind generator", NAME[c]);
         if (c == 29) CHECK(sy == 1 && !lab, "%s: the air plant let go, the shipyard", NAME[c]);
-        if (c == 30) {
+        if (c == 30 || c == 32) {
             int lx = -1;
             builds_of(from, E_LAB, &lx, NULL);
             CHECK(!sy && lab == 1 && lx >= 0 && lx < 52 && s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == E_LAB,

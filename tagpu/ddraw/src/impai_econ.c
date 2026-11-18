@@ -1400,9 +1400,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
                menu2 and menu3 only, so this builder's menu is still d->menu */
             if (!d->plant_done) plant_choice(d);
-            /* the air plant for the blind is air_take's alone (NEVER NEITHER): one still held here -- air_take placed
-               it nowhere, or the choice was made after air_take returned, its want_sea since spent -- is let go, so
-               the ladder asks the sea plant first */
+            /* the air plant AHEAD OF THE SEA PLANT is air_take's alone (NEVER NEITHER): one still held here --
+               air_take placed it nowhere, or the choice was made after air_take returned, its want_sea since spent --
+               is let go, so the ladder asks the sea plant first; the choice's plant (plant_t, which may still be
+               that air plant) comes below only where the sea plant cannot be had, as before the rule */
             if (d->plant_air_blind) air_let_go(d);
             /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
                THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
@@ -1575,8 +1576,10 @@ static int release(IMPAI_DEC* d, const IMPAI_UNITREF* h)
    (impai_build_air: the base ring, then outside it), and the first that does is given it, its job the plant's, so
    the loops after this pass it over (the idle loop and the stall's skip a BUILD job, the helpers' an assist that is
    no longer one); a leaver's energy frame stays where it was ordered, for the assist or a later energy want.
-   NEVER NEITHER, an ordering: no other path orders the air plant for the blind -- the ladder's plant rung lets a
-   plant_air_blind still set go (air_let_go) before it asks anything (assign) --, so when no builder here places it
+   NEVER NEITHER, an ordering: no other path orders the air plant ahead of the sea plant -- the ladder's plant rung
+   lets a plant_air_blind still set go (air_let_go) before it asks anything (assign), and orders the choice's plant,
+   the air plant among them, only where the sea plant cannot be had (no site at all, no builder offering one), as
+   before the rule; one plant at most either way --, so when no builder here places it
    -- none can take it, the budget is spent, or no site takes it -- the first builder the ladder asks for a plant
    is asked the sea plant's question, as before the rule: in every decision in which the air plant holds the want,
    it is either ordered here or the sea plant is the ladder's. THE SHIPYARD IS NOT HELD UP: the search spends its

@@ -236,6 +236,7 @@ typedef struct IMPAI_DEC {
     int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
     int           air_sites;                    /* THE AIR PLANT'S OWN SEARCH's site tests (impai_build.c) */
+    int           air_reach;                    /* its reach refusals for the builder asked (impai_build.c) */
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX + 1
        of the anchor, at their blocks' centres, px; listed at the decision's first test of a point within comm_r
        (0 not yet, 1 listed, -1 more than IMPAI_CMD_FOES, which refuses every such point) */

@@ -2322,12 +2322,13 @@ static int point_home(MDEC* d, const MUNIT* u, int n, int32_t* px, int32_t* pz)
 }
 
 /* THE ARRIVAL of squad s sent to (x, z). A member has arrived when it stands within `r` px of the point travel
-   gives it -- its spread point, or the point or the substitute move_to gives it (point_for) -- or when travel
-   gives it none, no substitute. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
+   gives it -- its spread point, or the point or the substitute move_to gives it (point_for), cleared of a shore
+   commander's reach (com_clear) -- or when travel gives it none, no substitute or no clear point. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
    off the point (a sea squad at a coast target) has arrived where they stop. The members are counted in travel's
    order, so the spread points are travel's. Into *at the arrived members' value and *total the squad's, each
    summed in the members' order; returns 1 when every member has arrived, 0 when one has not, and -1, UNDECIDED,
-   when point_for could not answer for a member (its cache full): that member counts as not arrived. INVARIANT,
+   when point_for could not answer for a member, for its point or for its clearance's (its cache full): that member
+   counts as not arrived. INVARIANT,
    an ordering: a capacity never decides an arrival, so a squad whose substitutes a full cache hides neither ends
    nor starts a wave on it. On Red Triangle a sea squad flipped FORM to ATTACK and back 52 times without moving,
    each flip a wave, while its members stood 1 000 px and more off their goal (MEASURED 2026-11-14, the closing
@@ -2348,7 +2349,7 @@ static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, float* at, 
         *total += u->value;
         travel_point(d, u, n++, x, z, &px, &pz);
         int p = point_for(d, u->type, u->x, u->z, &px, &pz);
-        if (p > 0 && nc && !com_clear(d, u, com, nc, &px, &pz)) p = 0;
+        if (p > 0 && nc) p = com_clear(d, u, com, nc, &px, &pz);
         if (p < 0) {
             undecided = 1;
             all = 0;
@@ -4113,7 +4114,10 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
    tower (MEASURED 2026-11-17, exploit-naval-turtle at 75236135's code, GameTime 11 960..12 560). THE SHORE
    COMMANDER (com_point) is the one mobile stood off: here, past its reach of where it can walk to, shelled only
    from where the member stands; and in the squad's travel, its fight's moves and its arrival (com_clear) and its
-   fight's attacks (attack_clear), so no order of an ATTACK's sends a member into that reach. RESIDUALS: a defence not yet seen is met at the member's
+   fight's attacks (attack_clear), so neither an ATTACK's travel nor its fight -- nor a FORM's fight, whose arrival
+   reads the same commanders (squad_coms) -- sends a member into that reach. RESIDUALS: the stand-off's own attack on
+   a defence, seen or remembered, is not tested against a commander's reach, and the engine closes the member to its
+   range of the defence; a defence not yet seen is met at the member's
    sight, which can be inside its reach; other mobile units are not stood off; a seen defence out of reach whose block is not given up is a candidate of the squad's fight (target_of) for
    a member the stand-off did not order, and the fight's attack counts as progress. BOUND: the enemy rows once, STAND_MAX defences kept nearest the squad's centroid, and each
    member against them twice (its nearest, and its move out's point), one substitute (point_for, cached) a member at most for each of the move out and in_reach.
@@ -4295,14 +4299,15 @@ static void stand_lists(const MDEC* d, int s, int16_t* def, int* nd, int16_t* co
    off from (com_near) is moved out, once, to reach + STAND_PAD + STAND_HYST from that commander's point for it
    (com_point), on the line from that point through it -- through u where the two meet --, held to the map and to
    its own substitute. 1 with the point clear of every such commander, moved or not; 0 when the moved point is not
-   (a bay, a strait narrower than two reaches) or has no substitute. So no move of an ATTACK's travel or its fight
-   sends a member inside the reach of a commander it stands off, wherever on its landmass that commander stands, and
-   the arrival measures the member against the same point (arrived). BOUND: at most 2 nc com_point and one
-   point_for */
+   (a bay, a strait narrower than two reaches) or has no substitute; -1, UNDECIDED, when the moved point's
+   substitute could not be answered (point_for, its cache full) -- never 0, which THE ARRIVAL reads as "no point to
+   travel to, arrived" and squad_move as a stop. So no move of an ATTACK's travel or its fight sends a member inside
+   the reach of a commander it stands off, wherever on its landmass that commander stands, and the arrival measures
+   the member against the same point (arrived). BOUND: at most 2 nc com_point and one point_for */
 static int com_clear(MDEC* d, const MUNIT* u, const int16_t* com, int nc, int32_t* x, int32_t* z)
 {
     const int32_t own = ground_reach(d, u->type);
-    int i;
+    int i, p;
     for (i = 0; i < nc; i++) {
         const MENEMY* e = &d->en[com[i]];
         const int32_t rc = com_reach(d, e->type);
@@ -4320,7 +4325,7 @@ static int com_clear(MDEC* d, const MUNIT* u, const int16_t* com, int nc, int32_
         pz = cz + (int32_t)(dz * (rc + STAND_PAD + STAND_HYST) / (int64_t)len);
         px = px < 0 ? 0 : px >= d->mw ? d->mw - 1 : px;
         pz = pz < 0 ? 0 : pz >= d->mh ? d->mh - 1 : pz;
-        if (point_for(d, u->type, u->x, u->z, &px, &pz) <= 0) return 0;
+        if ((p = point_for(d, u->type, u->x, u->z, &px, &pz)) <= 0) return p;
         *x = px;
         *z = pz;
         break;
@@ -4330,7 +4335,9 @@ static int com_clear(MDEC* d, const MUNIT* u, const int16_t* com, int nc, int32_
 
 /* the commanders squad s stands off, into com[STAND_COMS]: those of its stand-off lists (stand_lists) for an
    ATTACK, and for a FORM, whose arrival at a goal decides whether it forms an ATTACK wave there (form_attack), so
-   that FORM and the ATTACK it forms read one arrival; none for any other task */
+   that FORM and the ATTACK it forms read one arrival; none for any other task. Every reader takes them: the
+   arrival, travel (an ATTACK's; a FORM travels home, travel_home) and the fight's attacks and moves, so a FORM in
+   a fight closes on no target inside such a commander's reach either; the stand-off itself is an ATTACK's alone */
 static int squad_coms(const MDEC* d, int s, int16_t* com)
 {
     const uint8_t t = d->st->sq[s].task;
@@ -4343,15 +4350,18 @@ static int halt(MDEC* d, uint16_t slot, int32_t x, int32_t z);
 
 /* member u's move to (x, z), as move_to, for squad s's travel and its fight: with the commanders s stands off
    (com[0..nc)), the substitute cleared of them (com_clear), and with no clear point a stop where u stands when that
-   is clear (halt), so a member travel would send inside such a reach holds outside it. As order. */
+   is clear (halt), so a member travel would send inside such a reach holds outside it. A member whose clearance
+   is undecided (com_clear, -1) gets no order this decision and is counted (IMPAI_MIL_OUT.unreached), as one with
+   no substitute is: a capacity never stops a unit. As order. */
 static int squad_move(MDEC* d, const MUNIT* u, const int16_t* com, int nc, int32_t x, int32_t z)
 {
+    int c;
     if (!nc) return move_to(d, u->slot, u->type, u->x, u->z, x, z);
-    if (point_for(d, u->type, u->x, u->z, &x, &z) <= 0) {
+    if (point_for(d, u->type, u->x, u->z, &x, &z) <= 0 || (c = com_clear(d, u, com, nc, &x, &z)) < 0) {
         d->out->unreached++;
         return 0;
     }
-    if (com_clear(d, u, com, nc, &x, &z)) return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z);
+    if (c) return order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z);
     return com_near(d, u, com, nc, u->x, u->z) ? 0 : halt(d, u->slot, u->x, u->z);
 }
 

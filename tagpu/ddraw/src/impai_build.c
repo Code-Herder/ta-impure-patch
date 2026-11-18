@@ -1814,11 +1814,13 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    rectangle `at` instead of the base box, grown by gap alone, each site on held ground (THE HELD GROUND), and
    neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's.
    OUT (out >= 0): a ring of THE AIR PLANT'S OWN SEARCH (impai_build_air), the base box grown by gap + out x (fx + gap)
-   cells; each site the builder reaches (builder_reaches), its site tests counted against AIR_OUT_TESTS in
-   IMPAI_DEC.air_sites rather than the decision's site_tests, and neither its success nor its exhaustion touches
-   ring_grow or a plant type. */
+   cells; each site the builder reaches (builder_reaches), tested before the site test so that a site it does not
+   reach costs no site test -- its refusals counted against AIR_REACH_REFUSALS in IMPAI_DEC.air_reach, the
+   builder's own --, its site tests counted against AIR_OUT_TESTS in IMPAI_DEC.air_sites rather than the decision's
+   site_tests, and neither its success nor its exhaustion touches ring_grow or a plant type. */
 static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
 #define AIR_OUT_TESTS 32        /* THE AIR PLANT'S OWN SEARCH's site tests a decision, beside site_tests         */
+#define AIR_REACH_REFUSALS 32   /* THE AIR PLANT'S OWN SEARCH's sites one builder may find out of its reach     */
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
                       uint32_t cover, int out)
 {
@@ -1872,10 +1874,13 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             threat_skipped++;
             continue;
         }
+        if (out >= 0 && !builder_reaches(d, b, type, cx, cz)) {
+            if (++d->air_reach >= AIR_REACH_REFUSALS) return 0;
+            continue;
+        }
         if (*tests >= cap) return 0;
         (*tests)++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
-        if (out >= 0 && !builder_reaches(d, b, type, cx, cz)) continue;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
             threat_skipped++;
             continue;
@@ -1951,8 +1956,12 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    tests a decision of its own, never the decision's site_tests, so a decision whose air plant finds no site still
    has every site test the sea plant's search spends after it (impai_econ.c, air_take); neither its success nor its
    exhaustion touches ring_grow or a plant type's pass-over, which are the base ring's (a way it refuses counts, as
-   THE WAY REFUSALS do anywhere). 1 ordered. BOUND: AIR_OUT_RINGS + 1 place_ring
-   walks of at most PLACE_MAX_SITES sites, AIR_OUT_TESTS site tests a decision, each with one builder_reaches.
+   THE WAY REFUSALS do anywhere). The builder's reach is tested before the site test, and its refusals end its own
+   search at AIR_REACH_REFUSALS without spending a site test, so a builder that reaches none of the sites -- an idle
+   constructor on another landmass, asked first -- leaves every one of the decision's AIR_OUT_TESTS to the builders
+   asked after it (the commander on its energy build). 1 ordered. BOUND: a builder asked walks AIR_OUT_RINGS + 1
+   place_ring rings of at most PLACE_MAX_SITES sites and runs at most AIR_REACH_REFUSALS + AIR_OUT_TESTS
+   builder_reaches; the decision runs at most AIR_OUT_TESTS site tests here.
    RESIDUAL: the walk is the same each decision, so while its first AIR_OUT_TESTS sites fail the sites past them
    are not tested. */
 #define AIR_OUT_RINGS 8
@@ -1961,7 +1970,10 @@ int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
     const int g0 = d->in->st->ring_grow;
     int ok = 0, g;
     d->way_waive = waived;
-    for (g = g0; !ok && g <= g0 + AIR_OUT_RINGS && d->air_sites < AIR_OUT_TESTS && d->roots < d->root_cap; g++)
+    d->air_reach = 0;
+    for (g = g0; !ok && g <= g0 + AIR_OUT_RINGS && d->air_sites < AIR_OUT_TESTS &&
+                 d->air_reach < AIR_REACH_REFUSALS && d->roots < d->root_cap;
+         g++)
         ok = ring_build(d, b, type, NULL, NULL, 0, g);
     d->way_waive = 0;
     return ok;

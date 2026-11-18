@@ -619,7 +619,9 @@ The owner's answers to the spec's questions:
   (MEASURED 2026-11-17 at 38efc351, a diagnostic build). The owner: give the air plant for the blind its own
   site search outside the base ring -- a safe, unthreatened site the builder can reach -- and do not hold the
   shipyard up for it. **As built**: the rings from the base ring's present size out to eight more round the base
-  box, nearest first, each site one the builder reaches and every safety test of the base ring's held (no ground
+  box, nearest first, each site one the builder reaches -- tested before the site test, so a builder that reaches
+  none of them (an idle constructor on another landmass, asked first) spends none of the search's site tests and
+  ends its own walk after 32 such sites -- and every safety test of the base ring's held (no ground
   threat at the site or on a constructor's route, the commander's reach and safe distance, the way out); the
   search spends 32 site tests a decision of its own, never the decision's, so the sea plant's search after it
   keeps all of them, and it never grows the base ring. When no builder places the air plant, the first builder
@@ -646,8 +648,14 @@ The owner's answers to the spec's questions:
   (owner's answer, 2026-11-17): as built, for any ATTACK squad that cannot reach the commander -- ships ashore,
   and a land squad facing it across water. **What it does not reach**: a commander that can walk to the ships
   (amphibious into their water) is left to the fight as before; only ATTACK squads stand off; a commander farther
-  inland than the ships' range is not shelled, and the squad moves on from the stand-off line; the engine's own
-  path to a firing point is not checked.
+  inland than the ships' range is not shelled, and the squad moves on from the stand-off line -- a ship stands at
+  least the commander's reach + 64 px from every shore block the commander can walk to, so it hits only what lies
+  within its own range less that of the shore (a destroyer of 660 px against a D-gun of 240: about 356 px inland);
+  a commander in a bay, or behind a strait narrower than its reach + 64 px, leaves no clear point at all: a ship
+  sent there stops where it stands when that is clear and otherwise keeps its order, its arrival counts as made
+  and the squad moves on, so that commander is never shelled (the brain test's shore-commander case (j)); the
+  stand-off's own attack on a defence is not held out of the commander's reach; the engine's own path to a firing
+  point is not checked.
 - **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
   decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
   reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
