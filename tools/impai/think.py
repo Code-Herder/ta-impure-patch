@@ -976,7 +976,8 @@ def units(ex, every) -> list:
 
 def first_difference(ea, la, eb, lb, seat, parts):
     """(tick, [(field's name, a's value, b's value), ...]) at the first tick `seat`'s state differs between two
-    recordings in the fields both layouts name, None when it never does; and {part: [names]} only one names."""
+    recordings in the fields both layouts name, None when it never does; and {part: [names]} only one names. A
+    field whose values the two layouts name apart (an enum one of them numbers differently) is compared by name."""
     best, only = None, {}
     for part in parts:
         fa, fb = la.seat_fields(part, seat), lb.seat_fields(part, seat)
@@ -1002,8 +1003,12 @@ def first_difference(ea, la, eb, lb, seat, parts):
             for row, name in sorted(hit):
                 x, y = na[name], nb[name]
                 ra, rb = ia.raw(row, x), ib.raw(row, y)
-                same = ra == rb if x.size == y.size and x.kind == y.kind else (
-                    ra is not None and rb is not None and x.value(ra) == y.value(rb))
+                if x.names is not None and y.names is not None and x.names != y.names:
+                    # two layouts that number an enum apart: a value is the same when its name is
+                    same = ra is not None and rb is not None and x.show(ra) == y.show(rb)
+                else:
+                    same = ra == rb if x.size == y.size and x.kind == y.kind else (
+                        ra is not None and rb is not None and x.value(ra) == y.value(rb))
                 if not same:
                     found.append((label(part, row, x), x.show(ra) if ra is not None else "(no row)",
                                   y.show(rb) if rb is not None else "(no row)"))
@@ -1039,10 +1044,12 @@ def diff(ea, la, eb, lb, seat, parts) -> tuple:
 def state_parting(rec_a, rec_b, trees=None, cache=None) -> tuple:
     """For a neutrality proof (session.py --state): (None, "equal to T") when every ImpAI seat's state is equal
     at every tick of two recordings of one game; else ((tick, field, a, b), what is said) of the first
-    difference. ThinkError when either cannot be read."""
+    difference. ThinkError when either cannot be read. `trees` name the tree that made rec_a, the proof's base: its
+    layout is tried first for rec_a and this tree's first for rec_b, so a base whose rows are this tree's size with
+    members moved or gone is still read by its own layout."""
     ea, eb = extract(rec_a, cache), extract(rec_b, cache)
     lays = layouts(trees, cache)
-    la, lb = fit(ea, lays), fit(eb, lays)
+    la, lb = fit(ea, lays[1:] + lays[:1]), fit(eb, lays)
     seats = ea.impai_seats()
     if seats != eb.impai_seats() or not seats:
         raise ThinkError(f"{ea.name}: ImpAI's seats are {seats or 'none'} in one recording, "

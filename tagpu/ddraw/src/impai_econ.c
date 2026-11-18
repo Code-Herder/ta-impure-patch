@@ -1220,7 +1220,7 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    recordings' player images). The makers already built are switched by THE MAKERS. */
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
    open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
-   own terms (impai_brain.c, economy) less THE BLIND START, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
+   own terms (impai_brain.c, economy) less NO PATCH ON THE MAP, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
    each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
    replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
    is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
@@ -1568,9 +1568,6 @@ static int rung_maker(IMPAI_DEC* d, IMPAI_ASK* a)
            impai_build_ring(d, a->b, t);
 }
 
-/* THE RING'S LOOK (impai_build.c): the builder a base ring left a site it has not seen walks to see it */
-static int rung_look(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_look(d, a->b); }
-
 static int rung_explore(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     return d->in->ti[a->b->type].cat == IMPAI_C_CONS && !d->explorer_live &&
@@ -1600,8 +1597,6 @@ static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d
    - The frame resumed is held by the sea plant's gates (impai_brain.c, THE VETOES): the hold and both stalls.
    - An idle builder with no menu is asked the last three rungs; its reclaim while the seat is short is the
      harvest's, after exploring.
-   - The look stands below every rung that builds: a builder with a site to build on builds, and one a base ring
-     left only unseen sites walks to see the nearest (impai_build.c, THE RING'S UNSEEN SITES).
    THE EXPLORE ROW STAYS BELOW THE EXTRACTOR'S: it reads that rung's pick (IMPAI_ASK.mx), made once a builder.
    INVARIANT, what the gate columns rest on: IMPAI_DEC.gates is set once, after the last write of hold, e_stall
    and m_stall (impai_brain.c, economy), so a gate's bit and its flag agree throughout the assignment.
@@ -1623,7 +1618,6 @@ const IMPAI_RUNG impai_ladder[] = {
     { "short-reclaim", ASK_MENUS | IMPAI_ASK_HELPER_BARE, 0,                      0,       0, 0,               0,       rung_short_reclaim },
     { "energy",        IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_energy },
     { "maker",         IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_maker },
-    { "look",          IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_look },
     { "explore",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_explore },
     { "harvest",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_harvest },
     { "assist",        ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_assist },

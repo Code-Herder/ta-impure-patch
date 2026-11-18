@@ -5,12 +5,12 @@
                            [--tree DIR]...] [--lanes L] [--out DIR]
 
 THE GAMES. Every exploiter situation (exploit.SITUATIONS) and the confirm set, the games of confirm.txt
-(regress.txt's format: an id, then its setup): bar games, and unmapped openings (opening.py: `unmapped-<map>-<S>`,
-ImpAI's first CAP ticks at a network seat's start on a level it has not seen, the base game's). Every bar game and
-situation is MAPPED, as the skirmish screen's default is, and every network game is not: the openings are the
-tier's games a change to what an unmapped seat does can show in. Each game is played once with each DLL from its
+(regress.txt's format: an id, then its setup): bar games, and openings (opening.py: `mapped-<map>-<S>` and
+`unmapped-<map>-<S>`, ImpAI's first CAP ticks at a network seat's start, the base game's). Every bar game and
+situation is MAPPED, as the skirmish screen's default is, and every network game is not: the unmapped opening is
+the tier's game that shows an unmapped seat taking its mapped twin's decisions. Each game is played once with each DLL from its
 own seed. --only narrows them to the situations and ids it names (`air-rush` or `exploit-air-rush`,
-`bar-hota-troutfarm-ca-1`, `unmapped-steeljungle-2`), so the item a writer works on costs one or two games.
+`bar-hota-troutfarm-ca-1`, `mapped-steeljungle-2`), so the item a writer works on costs one or two games.
 
 THE CHAMPION'S GAMES ARE PLAYED ONCE. BASE's games go to a folder named by BASE's content --
 .data/impai/runs/session/base-<the first 12 hex of its SHA-256>/ in the main checkout, whatever --out -- beside a
@@ -121,13 +121,13 @@ def fixed(src: Path, dst: Path) -> Path:
 
 
 def confirm_id(gid: str):
-    """A confirm-set id held to its kind's form: an unmapped opening's, else a bar game's (BarError)."""
+    """A confirm-set id held to its kind's form: an opening's, else a bar game's (BarError)."""
     return opening.parse_id(gid) if opening.is_id(gid) else bar.parse_id(gid)
 
 
 def items(only: list, confirm: Path, scenarios: Path) -> list:
     """The session's games, in the order they are reported: each situation, then each game of the confirm set, as
-    {name, id, setup, situation (its name, None for another game), opening (an unmapped opening), game (the spec
+    {name, id, setup, situation (its name, None for another game), opening (an opening, mapped or not), game (the spec
     bar.py plays; an opening's less its scenario, which its piece writes from the install's map)}; `only` keeps
     those it names. The situations' scenarios are written under `scenarios`."""
     its = []
@@ -137,7 +137,7 @@ def items(only: list, confirm: Path, scenarios: Path) -> list:
     for gid, setup in batch.regress(confirm, confirm_id):
         if opening.is_id(gid):
             if setup:
-                raise SessionError(f"{confirm}: {gid} on {setup}: an unmapped opening is a game of the base game")
+                raise SessionError(f"{confirm}: {gid} on {setup}: an opening is a game of the base game")
             its.append({"name": gid, "id": gid, "setup": None, "situation": None, "opening": True,
                         "game": opening.spec(gid)})
             continue

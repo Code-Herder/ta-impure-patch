@@ -1470,7 +1470,6 @@ static void check_ladder_rows(void)
         { "short-reclaim", M | H | HB, 0,                      0,       0, 0, 0 },
         { "energy",        M,          0,                      0,       0, 0, 0 },
         { "maker",         M,          0,                      0,       0, 0, 0 },
-        { "look",          M,          0,                      0,       0, 0, 0 },
         { "explore",       M | B,      0,                      0,       0, 0, 0 },
         { "harvest",       M | B,      0,                      0,       0, 0, 0 },
         { "assist",        M | B,      0,                      0,       0, 0, 0 },
@@ -1915,8 +1914,7 @@ static void plantwalk_world(void)
 
 static unsigned plantwalk_sum(const IMPAI_PLANTWALK* w)
 {
-    return (unsigned)w->claimed + w->failed + w->far_rec + w->way_failed + w->coverage + w->beyond + w->threat + w->unseen +
-           w->nolook + w->tested;
+    return (unsigned)w->claimed + w->failed + w->far_rec + w->way_failed + w->coverage + w->beyond + w->threat + w->tested;
 }
 
 static void check_plantwalk(void)
@@ -1940,7 +1938,7 @@ static void check_plantwalk(void)
     CHECK(!out.plant && w->set && w->type == T_FACTORY && w->slot == 1 && w->btype == T_COM && !w->waived &&
               w->grow == 0 && w->sea == IMPAI_PW_SEA_UNASKED,
           "the trace names the type, the builder and the ring as the rung began: %s", t);
-    CHECK(w->exit == IMPAI_PW_GREW && s_st.ring_grow == 1 && w->tested > 0 && !w->passed && !w->beyond && !w->unseen,
+    CHECK(w->exit == IMPAI_PW_GREW && s_st.ring_grow == 1 && w->tested > 0 && !w->passed && !w->beyond,
           "a ring the site test refuses ends in growth: %s, ring_grow %u", t, s_st.ring_grow);
     CHECK(w->sites > 0 && (w->cut || plantwalk_sum(w) == w->sites), "every site of a walk to its end has one cause: %u of %u",
           plantwalk_sum(w), w->sites);
@@ -1997,13 +1995,13 @@ static void check_plantwalk(void)
     s_plan = lv0;
 
     {
-        const IMPAI_PLANTWALK hand = { 1, IMPAI_PW_CUT, 3, 1, 1, -1, 7, 12, 2, 40, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+        const IMPAI_PLANTWALK hand = { 1, IMPAI_PW_CUT, 3, 1, 1, -1, 7, 12, 2, 40, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
         IMPAI_PLANTWALK all;
         IMPAI_PLANTWALK_SEEN seen;
         IMPAI_PLANTWALK a = hand, b = hand, unset = hand;
         impai_plantwalk_text(&hand, t, sizeof t);
         CHECK(!strcmp(t, "builder=12/2 waived=1 grow=3 sites=40 claimed=1 failed=2 far=3 way_failed=4 coverage=5 beyond=6 "
-                         "threat=7 unseen=8 nolook=9 tested=10 passed=11 way_refused=12 unbuilt=13 cut=1 exit=cut sea=none"),
+                         "threat=7 tested=8 passed=9 way_refused=10 unbuilt=11 cut=1 exit=cut sea=none"),
               "a trace's text: %s", t);
         memset(&all, 0xFF, sizeof all);
         all.exit = IMPAI_PW_WIDEST;
@@ -2028,105 +2026,6 @@ static void check_plantwalk(void)
         CHECK(impai_plantwalk_due(&seen, 300, &unset) == 0 && impai_plantwalk_due(&seen, 120, &b) == 0,
               "a trace not set writes nothing and moves nothing");
     }
-}
-
-/* THE RING'S UNSEEN SITES and THE RING'S LOOK (impai_build.c): reach_world's commander at the anchor (20, 20) in
-   an energy stall, the seat's map explored for x, z < 32 alone and the wind generator refused wherever its first cell lies
-   there, as a start hemmed in by ground no plant fits. Rings 0 and 1 lie on explored ground and are refused -- in
-   the first decision, the stall's rung and the energy rung each asking the ring --, so the ring grows to 2,
-   whose east and south sides stand at cell 34, their centres unexplored: from the second decision the commander is
-   sent to see the nearest (a move, its job an explore of that centre's cell, within comm_r) and the ring stays at
-   2 with no site test spent on unseen ground, at every decision until the seat has seen. With the ground seen
-   the wind generator is built there, on the first site outside the refused box. A commander that stands idle with
-   its look's cell unseen -- its order list emptied, as on arrival -- has that cell failed by the job's check and
-   looks at another. A builder that walks nowhere (no label under it) is sent nowhere: the unseen sites are refused
-   ones, and the ring grows as it does on a refusal. */
-static void check_ring_unseen(void)
-{
-    IMPAI_BRAIN_OUT out;
-    const FCMD* c;
-    int k, x, z, n, built = 0;
-    unsigned i;
-    reach_world(0);
-    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
-    s_w.refuse_box_type = T_WIND;
-    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
-    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
-    for (k = 0; k < 40; k++) {
-        const int32_t apos[3] = { (s_st.ax * 16 + 8) << 16, 0, (s_st.az * 16 + 8) << 16 };
-        s_w.gametime += 15;
-        n = s_w.nlog;
-        CHECK(decide(&out) == 0, "decide");
-        CHECK(out.sites < s_plan->site_tests, "unseen ground costs no site test: %u at decision %d", out.sites, k);
-        if (!k) {
-            CHECK(s_job[1].kind == IMPAI_JOB_NONE && s_st.ring_grow == 2 && s_w.nlog == n,
-                  "the rings refused on explored ground grow: %u", s_st.ring_grow);
-            continue;
-        }
-        c = last_cmd(n);
-        if (k == 1 && c)
-            printf("ring unseen: ring_grow=%u, the commander looks at cell %d,%d\n", s_st.ring_grow, s_job[1].cx,
-                   s_job[1].cz);
-        CHECK(s_st.ring_grow == 2, "the ring does not grow past unseen ground: %u at decision %d", s_st.ring_grow, k);
-        CHECK(c && c->c.verb == WQ_CMD_NEW && c->c.unit == 1 && c->c.action == A_MOVE &&
-                  s_job[1].kind == IMPAI_JOB_EXPLORE, "the commander is sent to look at decision %d", k);
-        CHECK(!s_w.explored[s_job[1].cz][s_job[1].cx] && (s_job[1].cx >= 32 || s_job[1].cz >= 32) &&
-                  impai_dist_px(apos, s_job[1].cx * 16 + 8, s_job[1].cz * 16 + 8) <= s_plan->comm_r,
-              "at an unexplored centre within comm_r: %d,%d", s_job[1].cx, s_job[1].cz);
-        impai_job_end(&s_job[1]);       /* the walk cut short, the site still unseen: the next decision looks again */
-    }
-    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
-    for (k = 0; k < 3 && !built; k++) {
-        s_w.gametime += 15;
-        n = s_w.nlog;
-        CHECK(decide(&out) == 0, "decide");
-        c = last_cmd(n);
-        built = c && c->c.action == A_MOBILEBUILD && c->c.type == T_WIND;
-    }
-    c = last_cmd(0);
-    printf("ring unseen, the ground seen: built=%d ring_grow=%u\n", built, s_st.ring_grow);
-    CHECK(built && (cmd_x0(&c->c) >= 32 || cmd_z0(&c->c) >= 32) && s_st.ring_grow == 0,
-          "the wind generator on the ground the look showed: %d", built);
-
-    reach_world(0);
-    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
-    s_w.refuse_box_type = T_WIND;
-    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
-    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
-    for (k = 0; k < 2; k++) {
-        s_w.gametime += 15;
-        CHECK(decide(&out) == 0, "decide");
-    }
-    x = s_job[1].cx;
-    z = s_job[1].cz;
-    s_w.gametime += 15;
-    CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[1].kind == IMPAI_JOB_EXPLORE && s_job[1].cx == x && s_job[1].cz == z && !s_st.nfail,
-          "a look on its way is left at it");
-    s_w.unit[1].n = 0;
-    s_w.gametime += 15;
-    CHECK(decide(&out) == 0, "decide");
-    for (k = 0, n = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) n += s_st.fail[k].cx == x && s_st.fail[k].cz == z;
-    printf("ring unseen, the look idle at %d,%d: failed %d, the next look at %d,%d, ring_grow=%u\n", x, z, n,
-           s_job[1].cx, s_job[1].cz, s_st.ring_grow);
-    CHECK(n == 1 && s_job[1].kind == IMPAI_JOB_EXPLORE && (s_job[1].cx != x || s_job[1].cz != z) &&
-              !s_w.explored[s_job[1].cz][s_job[1].cx] && s_st.ring_grow == 2,
-          "an idle look's cell fails and the commander looks at another: %d,%d", s_job[1].cx, s_job[1].cz);
-
-    reach_world(0);
-    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = x < 32 && z < 32;
-    s_w.refuse_box_type = T_WIND;
-    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 0;
-    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 31;
-    for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 0;
-    for (k = 0; k < 6; k++) {
-        s_w.gametime += 15;
-        CHECK(decide(&out) == 0, "decide");
-    }
-    printf("ring unseen, a builder that walks nowhere: orders=%d ring_grow=%u\n", s_w.nlog, s_st.ring_grow);
-    CHECK(!s_w.nlog && s_job[1].kind == IMPAI_JOB_NONE && s_st.ring_grow > 2,
-          "sites it cannot walk to see are refused ones, and the ring grows: %u", s_st.ring_grow);
-    s_w.refuse_box_type = 0;
 }
 
 /* one enemy row of seat 0 at block (bx, bz), slot 40: type `type` (WQ_NONE: a contact never identified, owner
@@ -13475,23 +13374,23 @@ static void check_plant_choice(void)
     s_w.gametime = 2000;
     plant_decide("the opening, no land army anywhere", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
-    /* THE BLIND START (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the first
-       plant at once */
+    /* NO PATCH ON THE MAP (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the
+       first plant at once */
     plant_world();
     s_w.gametime = 300;
     s_spots = NULL;
     s_nspots = 0;
     s_scanned = 1;
-    plant_decide("a blind start", &out, n);
-    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a blind start: the first plant before open_t");
-    /* the scan still under way: none published yet is no evidence, and the opening waits as before */
+    plant_decide("a map with no patch", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a map with no patch: the first plant before open_t");
+    /* the scan still under way: none published yet is no evidence, and the opening waits */
     plant_world();
     s_w.gametime = 300;
     s_spots = NULL;
     s_nspots = 0;
     plant_decide("a scan under way", &out, n);
     CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "before a whole scan: no plant before open_t");
-    /* a patch in sight: the opening's extractors first, as before */
+    /* a patch published: the opening's extractors first */
     plant_world();
     s_w.gametime = 300;
     s_scanned = 1;
@@ -16907,7 +16806,6 @@ int main(void)
     check_ring_reach();
     check_ring_cut();
     check_plantwalk();
-    check_ring_unseen();
     check_ring_cmd_safe();
     check_cmd_safe_orders();
     check_ring_raid();

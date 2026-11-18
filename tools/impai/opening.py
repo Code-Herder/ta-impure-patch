@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""opening.py -- the unmapped opening: ImpAI's first minutes on a level it has not seen, as a network game's
-computer seat starts them. A kind of game the session tier plays (tools/impai/session.py); no command of its own.
+"""opening.py -- the opening: ImpAI's first minutes at a network game's start, on a level not mapped as a network
+game's is or on its mapped twin. A kind of game the session tier plays (tools/impai/session.py); no command of its own.
 
 THE GAME, `unmapped-<map>-<S>`: the bar's own scenario template with `mapping` false -- a network game is not
 mapped, and the template's skirmish is -- and ImpAI Hard in seat S, its commander at the seat's own start, start S
@@ -17,10 +17,8 @@ engine itself does by a player's explored map: its pathfinder takes a block the 
 passable (0x40D7B0), so a walk over unexplored ground can take another way in the unmapped game.
 MEASURED 2026-11-18 (GDI, no draw, the reference setup): a game plays in about 22 s; the level's own
 `impai: starts` line seats ImpAI's seat at the start the id names (`2:272,4912@3` on Steel Jungle's start 2,
-`3:128,8672@4` in the four-seat game of Lava Alley's start 3: start, position, seat + 1); and on the three
-openings of confirm.txt the build that first answers an unmapped seat's base ring (08ddffe6) reads BETTER on
-Steel Jungle and Trout Farm against the one before it (0a4ec04e: no order, 1 unit at the cap against 10 and
-12) and SAME on Lava Alley.
+`3:128,8672@4` in the four-seat game of Lava Alley's start 3: start, position, seat + 1); and Luschaven's start 3
+plays its 32 decision lines alike unmapped and mapped, the plant ARMLAB at 4 056 in both.
 
 THE FIGURES of one game, reported beside its verdict word:
     order      the GameTime of the first order ImpAI gave a unit: its first job row written in the recording

@@ -923,7 +923,7 @@ static void job_checks(IMPAI_DEC* d)
             reclaim_check(d, b, d->jobbed_idle[i], j, age);
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
-            /* an explorer or a look (impai_build.c, THE RING'S LOOK) that stands idle with its cell unseen has arrived
+            /* an explorer that stands idle with its cell unseen has arrived
                without seeing it, or lost its order: the cell fails as at the timeout, so it is not asked again
                for fail_t */
             if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
@@ -1499,8 +1499,6 @@ int impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap)
     pw_field(&p, end, " coverage=", w->coverage);
     pw_field(&p, end, " beyond=", w->beyond);
     pw_field(&p, end, " threat=", w->threat);
-    pw_field(&p, end, " unseen=", w->unseen);
-    pw_field(&p, end, " nolook=", w->nolook);
     pw_field(&p, end, " tested=", w->tested);
     pw_field(&p, end, " passed=", w->passed);
     pw_field(&p, end, " way_refused=", w->way_refused);
@@ -1531,7 +1529,7 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = d->pos.naval >= 0;
-    int plant_pace, plant_metal, plant_reach = 0, reach_need = 0, tech_metal = 0, blind, first;
+    int plant_pace, plant_metal, plant_reach = 0, reach_need = 0, tech_metal = 0, no_patch, first;
     unsigned need = 0;              /* THE REASON TRACE: bit k, want k with every gate down (why_read)       */
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
@@ -1669,21 +1667,17 @@ static void economy(IMPAI_DEC* d)
         reach_need = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP;
         plant_reach = reach_need && !(d->gates & impai_veto[IMPAI_W_FACTORY].gates);
     }
-    /* THE BLIND START: the first plant is also wanted at once when the seat's patch scan has read the whole map
-       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The opening's extractors stand on patches,
-       and with none in sight the commander has nothing to place them on: it would stand idle to open_t, and only
-       the plant's constructors explore for metal (impai_econ.c, the ladder's explore rung). The opening's own terms
-       are unchanged. INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c),
-       so before the first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map,
-       whose extractors take the base ring and never a patch (impai_metal_map), never takes it. WHY: the seat at
-       Two Continents' start 3, whose nearest patch lies just past the commander's sight, gave no order to GameTime
-       1 806 in an unmapped game, a network game's joining peer and a skirmish alike, and in a mapped skirmish
-       gave its first order at 81 (MEASURED 2026-11-16 with a diagnostic build: nspots 0 at every decision,
-       the commander listed idle with 19 options on its menu). */
-    blind = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
+    /* NO PATCH ON THE MAP: the first plant is also wanted at once when the seat's patch scan has read the whole map
+       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The scan reads the map's layout, so the map
+       holds no closed metal patch at all: the opening's extractors have nothing to stand on, the commander would
+       stand idle to open_t, and the plant is what the opening can start. The opening's own terms are unchanged.
+       INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c), so before the
+       first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map, whose extractors
+       take the base ring and never a patch (impai_metal_map), never takes it. */
+    no_patch = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
     first = d->count[IMPAI_C_FACTORY] == 0 &&
             ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
-             d->now >= plan->open_t || blind);
+             d->now >= plan->open_t || no_patch);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] && (first || ((plant_metal || plant_reach) && d->plant_e));
     if (!d->pending[IMPAI_C_FACTORY] && (first || ((plant_pace || reach_need) && d->plant_e)))
         need |= 1u << IMPAI_W_FACTORY;

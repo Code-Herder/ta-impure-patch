@@ -8,6 +8,7 @@ refused, and a piece's command. No game runs.
     python3 tools/impai/test_session.py"""
 import argparse
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -31,7 +32,7 @@ LOG = "\n".join([
 ])
 PLANT = "impai: plant seat={seat} gametime={t} want=first T=1 reach=ffffc86f chose=ARMVP s=0.521 next=none s=none"
 WIN, CAP_AHEAD, CAP_BEHIND, LOSS = ("A", 30000), ("cap", (1200.0, 1000.0)), ("cap", (900.0, 1000.0)), ("B", 20000)
-OPENINGS = ("unmapped-steeljungle-2", "unmapped-troutfarm-2", "unmapped-lavaalley-3", "unmapped-luschaven-3")
+OPENINGS = ("mapped-steeljungle-2", "mapped-troutfarm-2", "mapped-luschaven-3", "unmapped-luschaven-3")
 
 
 class Fake:
@@ -121,7 +122,8 @@ class TestSession(unittest.TestCase):
                           ("bar-hota-metalheck-aa-2", None)] + [(g, None) for g in OPENINGS])
         self.assertEqual(its[8]["name"], "bar-nota-lavamania-ca-2 on prota-4.8")
         self.assertEqual(its[8]["game"]["setup"], "prota-4.8")
-        self.assertTrue(all(i["game"]["seed"] == bar.game_seed(i["id"]) for i in its))
+        # a mapped opening is its unmapped twin's game, seed included (opening.py, THE MAPPED TWIN)
+        self.assertTrue(all(i["game"]["seed"] == bar.game_seed(re.sub(r"^mapped-", "unmapped-", i["id"])) for i in its))
         self.assertEqual([i["id"] for i in its if i["opening"]], list(OPENINGS))
         self.assertEqual([(i["game"]["cap"], bar.seat_of(i["game"])["A"]) for i in its[11:]],
                          [(opening.CAP, 2), (opening.CAP, 2), (opening.CAP, 3), (opening.CAP, 3)])
@@ -130,8 +132,8 @@ class TestSession(unittest.TestCase):
         self.assertTrue(all(i["game"]["doc"]["setup"]["mapping"] for i in its if i["situation"]))
 
     def test_an_opening_on_a_setup_or_of_no_map_is_refused(self):
-        for line, why in (("unmapped-steeljungle-2 prota-4.8", "an unmapped opening is a game of the base game"),
-                          ("unmapped-nowhere-2", "not an unmapped opening's id"),
+        for line, why in (("unmapped-steeljungle-2 prota-4.8", "an opening is a game of the base game"),
+                          ("unmapped-nowhere-2", "not an opening's id"),
                           ("bar-hota-nowhere-ca-1", "not a bar game id")):
             (self.tmp / "c.txt").write_text(line + "\n")
             self.assertEqual(self.run_(confirm=str(self.tmp / "c.txt")), 2)
@@ -156,7 +158,7 @@ class TestSession(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--situations") + 1].split(",")[0], "commander-rush")
         self.assertEqual(cmd[cmd.index("--openings") + 1], ",".join(OPENINGS))
         self.assertEqual(cmd[cmd.index("--ids") + 1].count("bar-"), 6)
-        self.assertNotIn("unmapped", cmd[cmd.index("--ids") + 1])
+        self.assertNotIn("mapped", cmd[cmd.index("--ids") + 1])
         self.assertNotIn("--setup", cmd)
 
     def test_a_piece_plays_its_games_as_diag_plays(self):
@@ -214,7 +216,7 @@ class TestSession(unittest.TestCase):
     def test_a_champions_folder_that_lacks_a_game_plays_that_game_alone(self):
         nine = self.tmp / "nine.txt"
         nine.write_text("".join(ln + "\n" for ln in session.CONFIRM.read_text().splitlines()
-                                if not ln.startswith("unmapped-")))
+                                if not opening.is_id(ln.split(" ")[0])))
         self.assertEqual(self.run_(confirm=str(nine)), 0)
         self.assertIn("session: PASS: 11 SAME", self.said)
         self.launched, self.played = [], []
