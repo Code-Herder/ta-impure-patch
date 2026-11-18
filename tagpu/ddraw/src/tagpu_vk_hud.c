@@ -13,10 +13,13 @@
    range of one device-local buffer, in its own command buffer behind barriers, before anything
    of the frame draws; the seam's fence wait at the top of its present proves the slot's range
    free (tagpu_vk_pass.h). The instances take their bytes of the staging first, so no upload can
-   leave the frame without them; a staging that cannot be mapped that large draws no HUD that
-   frame and says so once. The slot's staging is mapped only while the pass has something to send
-   -- the instances while it draws -- at most TAGPU_VK_STAGE_CAP, and a frame with no upload due
-   maps it at the instances' size rounded up to SHRINK, giving a larger one back.
+   leave the frame without them. A staging that cannot be mapped even that large -- an address
+   space with no run of the frame's instances' size left -- refuses the pass, as a build the
+   device refused does: a screen that is modal while it is open must close itself rather than
+   stay open and undrawn (tagpu_hudstate_refuse). The slot's staging is mapped only while the pass
+   has something to send -- the instances while it draws -- at most TAGPU_VK_STAGE_CAP; after
+   IDLE_FRAMES of the slot's frames with no upload due it is mapped again at the instances' size
+   rounded up to SHRINK, when it is more than twice that.
 
    THE PARTS ARE UPLOADED ONCE PER BUILD, whole and all in one frame, through
    tagpu_vk_stage_copy_banded: a pass's first upload after it is built is one of the events the
@@ -96,8 +99,15 @@
 #define HUD_MAXBATCH  1024
 #define IBYTES        ((VkDeviceSize)HUD_MAXINST * sizeof(HUDINST))
 typedef char hud_instances_fit_staging[IBYTES <= TAGPU_VK_STAGE_CAP ? 1 : -1];
-/* a frame with no upload due maps the staging at its instances' size rounded up to this */
+/* a slot with no upload due for IDLE_FRAMES of its frames maps its staging at the instances' size
+   rounded up to SHRINK */
 #define SHRINK        ((VkDeviceSize)256 << 10)
+#define IDLE_FRAMES   30
+/* a whole image goes in one frame's staging beside a frame of instances at the cap: the largest,
+   the bars' and the sprite sheet's, 512 KiB each */
+typedef char hud_bars_fit_staging[IBYTES + (VkDeviceSize)HUD_BAR_W * HUD_BAR_H * 4 <= TAGPU_VK_STAGE_CAP ? 1 : -1];
+typedef char hud_sprites_fit_staging[IBYTES + (VkDeviceSize)HUD_SPRITE_CELL * HUD_SPRITE_CELLS * HUD_SPRITE_CELL * 4
+                                     <= TAGPU_VK_STAGE_CAP ? 1 : -1];
 #define MAXPART       160           /* the HUD's kit, at most 128, then the wiki's */
 
 #define IFNS(X) \
@@ -173,7 +183,7 @@ static int                   s_saidDrop, s_saidMiss, s_saidChart[HUD_CHART_SLOTS
 /* the most instances and batches one frame of the wiki's has used, logged against the pass's caps
    (HUD_MAXINST, HUD_MAXBATCH, which the replay HUD and the wiki share) when the wiki stops drawing */
 static int                   s_wpeakInst, s_wpeakBatch, s_wdrawn;
-static int                   s_saidStage;       /* the instances' staging refused, said     */
+static int                   s_idle[TAGPU_VK_SLOTS];   /* each slot's frames with no upload due */
 static VkDeviceSize          s_ihead;           /* the bytes this frame's instances took at the
                                                    head of the slot's staging: what an upload
                                                    that asks for the buffer to itself (the atlas's
@@ -1635,22 +1645,26 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            || (dgen && dgen != s_dgen) || (bgen && bgen != s_bgen) || (tgen && tgen != s_tgen) || s_trdue
            || (mgen && mgen != s_mgen);
     }
-    /* THE SLOT'S STAGING: the instances' bytes first, then what is due. With nothing due it is
-       mapped at the instances' size rounded up to SHRINK, a larger one given back first; with
-       nothing to send at all, not mapped. */
+    /* THE SLOT'S STAGING: the instances' bytes first, then what is due. After IDLE_FRAMES with
+       nothing due it is mapped at the instances' size rounded up to SHRINK, one more than twice
+       that given back first; with nothing to send at all, not mapped. */
     {
         const VkDeviceSize ib = (VkDeviceSize)s_ninst * sizeof(HUDINST);
         const VkDeviceSize want = due ? TAGPU_VK_STAGE_CAP : (ib + SHRINK - 1) / SHRINK * SHRINK;
         s_ihead = 0;
+        s_idle[slot] = due ? 0 : s_idle[slot] < IDLE_FRAMES ? s_idle[slot] + 1 : IDLE_FRAMES;
         if (!due && !ib) {
             if (sg->buf) tagpu_vk_stage_drop(d, sg);
         } else {
-            if (!due && sg->buf && sg->cap > 2 * want) tagpu_vk_stage_drop(d, sg);
+            if (!due && s_idle[slot] >= IDLE_FRAMES && sg->buf && sg->cap > 2 * want) tagpu_vk_stage_drop(d, sg);
             if (!tagpu_vk_stage_begin(d, sg, want, ib > (VkDeviceSize)4096 * 4 ? ib : (VkDeviceSize)4096 * 4)) {
-                if (ib && !s_saidStage) {
-                    s_saidStage = 1;
+                if (ib) {
                     plog(d, "hud: the slot's staging could not be mapped for the frame's %u bytes of instances - "
-                            "the frame draws no HUD (said once)", (unsigned)ib);
+                            "the pass stops drawing", (unsigned)ib);
+                    s_state = ST_REFUSED;
+                    tagpu_hudstate_refuse("its instances' staging could not be mapped");
+                    s_ninst = 0;
+                    return 0;
                 }
                 due = 0;
             } else if (ib)

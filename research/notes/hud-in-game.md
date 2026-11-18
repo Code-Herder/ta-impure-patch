@@ -317,10 +317,11 @@ The owner's decisions:
   cannot draw yet, points the groups' composites into the layer, and copies them through the
   slot's staging into the slot's range of a device-local buffer, behind barriers, before
   anything of the frame draws. They take their bytes of the staging first, so no upload can
-  leave a frame without them; a staging that cannot be mapped that large draws no HUD that frame
-  (said once). The staging is mapped only while the pass has something to send -- while the HUD
-  or the wiki draws, at least the instances -- at most 2 MiB a slot, and a frame with no upload
-  due maps it at the instances' size rounded up to 256 KB, giving a larger one back. The log
+  leave a frame without them; a staging that cannot be mapped even that large draws nothing
+  and refuses the pass, as a refused build does. The staging is mapped only while the pass has
+  something to send -- while the HUD or the wiki draws, at least the instances -- at most 2 MiB a
+  slot; after 30 of a slot's frames with no upload due it is mapped at the instances' size rounded
+  up to 256 KB, when it was more than twice that. The log
   tells the most the slots held mapped at once, with the wiki's peaks and when the pass comes
   down. The tech tree's instances live on the device across frames (*the in-game wiki*).
 - **The glyph atlas** is one 2048 × 2048 R8 image. It goes whole once after a build, as the

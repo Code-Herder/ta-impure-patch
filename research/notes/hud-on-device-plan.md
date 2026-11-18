@@ -84,8 +84,11 @@ lanes used is 6 512), hidden there, and copied into the slot's range of a device
 behind barriers before the frame draws -- the groups' layer included, whose composites' uv are
 set in the scratch first (`layer_prep`, then `layer_record`). They take the head of the slot's
 staging before any upload; the glyph atlas's first, whole upload, which asked for an empty
-buffer, now bands through what they leave. With no upload due the staging is mapped at the
-instances' size rounded up to 256 KB. MEASURED 2026-11-17, 1920 x 1080 on the wiki's lanes:
+buffer, now bands through what they leave. A staging that cannot be mapped as large as the
+instances refuses the pass, as a refused build does, so a modal screen (the Mods screen) closes
+itself instead of staying open undrawn. After 30 of a slot's frames with no upload due the staging
+is mapped at the instances' size rounded up to 256 KB, so a chart or bar that changes every few
+frames does not remap it each time. MEASURED 2026-11-17, 1920 x 1080 on the wiki's lanes:
 the slots' staging at most 6 144 KB mapped at once (three slots at 2 MB, while uploads are due)
 and 768 KB while the wiki draws with nothing due, against 9 MB mapped as one block for the
 session before, plus the same staging on frames with uploads. The tree, page, demos and watch
