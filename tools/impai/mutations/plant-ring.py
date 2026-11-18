@@ -30,9 +30,9 @@ M = [
      "        if (r->until > d->now) r->until = d->now + d->in->plan->fail_t;",
      "        if (r->until) r->until = d->now + d->in->plan->fail_t;"),
     ("the widest ring keeps a plant's growth", BUILD,
-     "    if (!plant) return 0;\n    *grown = 0;",
-     "    if (!plant) return 0;"),
+     "    *grown = 0;     /* THE WIDEST RING STARTS OVER */",
+     "    if (!plant) *grown = 0;     /* THE WIDEST RING STARTS OVER */"),
     ("a waived plant is passed over at the widest ring", BUILD,
-     "    if (!d->way_waive) plant_pass_over(d, type);\n    return 0;",
-     "    plant_pass_over(d, type);\n    return 0;"),
+     "    if (plant && !d->way_waive) plant_pass_over(d, type);\n    return 0;",
+     "    if (plant) plant_pass_over(d, type);\n    return 0;"),
 ]

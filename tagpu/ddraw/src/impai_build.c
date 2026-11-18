@@ -1824,7 +1824,8 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    the base during its raid, ring orders among them. A ring exhausted
    with tests left pushes the walk's next ring out (its growth, at most IMPAI_RING_WIDEST) -- the next decision's,
    and for a plant the same decision's (THE PLANT'S WALK CLIMBS) --, and a plant type's ring exhausted at the widest
-   passes the type over (THE PLANT'S FALLBACK); a build brings the growth it walked back to 0. GROWTH ANSWERS ONLY A LACK OF
+   passes the type over (THE PLANT'S FALLBACK); a build brings the growth it walked back to 0, and so does the
+   widest ring exhausted (THE WIDEST RING STARTS OVER). GROWTH ANSWERS ONLY A LACK OF
    ROOM: a ring that left a site for the commander's reach, for ground threat at the site or on the route, or
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
@@ -1840,11 +1841,10 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    and recorded, its route or the resolver refusing it), in a site left for a cause that is no lack of room, or
    in exhaustion -- growth, and at the widest ring a plant type's pass-over (THE PLANT'S FALLBACK): refusals alone
    never end a walk and leave the ring as it was below its widest, and a plant type no site takes is passed over
-   at the ninth such walk running. The growth gives the next walk other sites but in two cases, where the same
-   walk is cut on the same refusals at every decision: at the widest ring (ring_grow 8) under a type that is no
-   factory, which keeps the ring; and once ring_grow is back at 0 -- it is one counter for the base ring of every
-   type that is no plant, put back by a build of any of them --, from where each such type's walk meets again the
-   rings it had exhausted. A plant type's growth is its own and is put back by its own walks alone (THE PLANT'S
+   at the ninth such walk running. The growth gives the next walk other sites, but once ring_grow is back at 0 -- it
+   is one counter for the base ring of every type that is no plant, put back by a build of any of them and by the
+   widest ring's exhaustion (THE WIDEST RING STARTS OVER) -- each such type's walk meets again the rings it had
+   exhausted. A plant type's growth is its own and is put back by its own walks alone (THE PLANT'S
    RING IS ITS OWN). It adds no want and no spending: an order
    it lets through is one the ladder already asked for, the plant's among them under economy's own terms
    (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
@@ -1896,6 +1896,29 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    its reach within IMPAI_RING_WIDEST + 1 exhausted rings; the constructors' is not touched by it. BOUND: two
    bytes of a type's eight-byte row, each 0..IMPAI_RING_WIDEST. RESIDUAL: a ring left for ground threat keeps its
    growth, as ring_grow does, until the threat leaves it or a walk orders on it.
+   THE WIDEST RING STARTS OVER: ring_grow, like a plant type's growth, goes back to 0 at a base ring exhausted at
+   the widest. WHY: an order alone would put it back, and no walk orders at a ring whose every site lies past the
+   builder's far record or whose nearest sites the site test refuses, so the growth would stand at the widest
+   ring with the rings inside it nobody's to walk. MEASURED 2026-11-18 without the rule, bar-hota-metalheck-aa-2:
+   the wind generator's walks of two constructors under their far record, every site of every ring past their
+   reach, climb ring_grow from 0 to 8 in five decisions (11 684 to 11 759). At ring 8 a builder under a record
+   meets every site past its reach (1 386 of the 2 545 walks from 12 000 to 24 000), a builder with none is
+   cut at its 32 nearest sites, each refused by the site test (336; 46 to 50 of the ring's 126 to 134 sites
+   pass it, past the cut), the walks after it in the decision test nothing (508) and the commander leaves
+   the ring for its reach (257). ring_grow is 8 for 11 715 of those 12 000 ticks, rings 0 to 2 holding 38
+   to 64 sites each that pass the site test unclaimed, and the seat finishes no extractor and no wind generator
+   in them; with the rule it is 8 for 750 and eleven wind generators are finished.
+   INVARIANT, an ordering: ring_grow is written by a base-ring walk of a type that is no plant alone -- one more
+   at an exhausted ring below the widest, 0 at the walk's order, 0 at an exhausted widest ring --, so no
+   exhaustion leaves it at the ring the walk met: exhausted walks running take the rings in turn, the widest then
+   the base, each ring once in any IMPAI_RING_WIDEST + 1 of them, and a site that is free on any ring for the
+   builders asked is walked within nine exhausted walks whatever exhausted the others -- a far record, a cut or
+   refusals. BOUND: the walk's cost is one ring (one place_ring) a walk of a type that is no plant and the
+   decision's site tests, with the rule as without. RESIDUAL: a walk that leaves its ring writes nothing (GROWTH
+   ANSWERS ONLY A LACK OF ROOM), so a seat whose commander is the only builder asked keeps ring_grow at a ring
+   wholly past comm_r until another builder's walk exhausts or orders on it; and a builder under its far record
+   that reaches no ring site moves ring_grow one ring a walk for as long as the record lives, so the other
+   builders' walks meet the ring it left, not the base's nearest (decisions.md, *The widest ring starts over*).
    THE PLANT'S WALK CLIMBS (ring_build): a plant's base-ring walk that exhausts a ring below the widest walks the
    next ring in the same decision -- to an order, a site that is left, a way out deferred, the decision's site
    tests, or the widest ring's exhaustion. WHY: a plant walk that orders nothing hands its builder to the rungs
@@ -2100,9 +2123,8 @@ static int ring_walk(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32
         if (plant && !d->way_waive) plants_keep_off(d);
         return plant && !cut ? -1 : 0;
     }
-    if (!plant) return 0;
-    *grown = 0;
-    if (!d->way_waive) plant_pass_over(d, type);
+    *grown = 0;     /* THE WIDEST RING STARTS OVER */
+    if (plant && !d->way_waive) plant_pass_over(d, type);
     return 0;
 }
 

@@ -2237,6 +2237,74 @@ static void check_ring_cut(void)
     s_plan = lv0;
 }
 
+/* THE WIDEST RING STARTS OVER (impai_build.c): reach_world's commander and constructor in an energy stall, the
+   commander's reach 64 px so that it leaves every ring site and tests none. (a) The shared ring at its widest and
+   the constructor under its far record, which every site of ring 8 lies past: the stall rung's walk exhausts the
+   widest ring with no site tested and the growth goes back to 0, so the energy rung's walk after it in the same
+   decision is ring 0's, where a site lies within the constructor's reach and takes the wind generator at the
+   first site test. (b) No record, four site tests a decision and the wind generator refused everywhere: the cut
+   walk exhausts the widest ring and orders nothing; with the refusal lifted the next decision's walk builds at
+   ring 0. (c) Refused everywhere from the base, nine exhausted walks visit each ring once and end where they
+   began. */
+static void check_ring_widest(void)
+{
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
+    IMPAI_BRAIN_OUT out;
+    int k, all, n, c;
+    lv.comm_r = 64;
+    s_plan = &lv;
+    for (c = 0; c < 2; c++) {
+        const char* const what = c ? "every site refused, 4 site tests" : "the constructor's far record";
+        int from = 0;
+        lv.site_tests = c ? 4 : lv0->site_tests;
+        reach_world(1);
+        s_st.ring_grow = 8;
+        if (c) s_w.refuse_type = T_WIND;
+        else {
+            s_job[2].far_type = T_CONS;
+            s_job[2].far_cx = 100;
+            s_job[2].far_cz = 100;
+            s_job[2].far_until = (uint32_t)s_w.gametime + s_plan->fail_t;
+        }
+        CHECK(decide(&out) == 0, "decide");
+        n = builds_within(0, 2, 0xFFFFFFFFu, &all);
+        printf("widest ring, %s: ring_grow=%u builds=%d site tests=%u\n", what, s_st.ring_grow, n, out.sites);
+        CHECK(s_st.ring_grow == 0 && n == !c && out.sites == (c ? 4u : 1u),
+              "the widest ring exhausted puts the shared growth back to 0: %u, %d builds, %u tests", s_st.ring_grow, n,
+              out.sites);
+        if (c) {
+            s_w.refuse_type = 0;
+            s_w.gametime += 15;
+            from = s_w.nlog;
+            CHECK(decide(&out) == 0, "decide");
+            n = builds_within(from, 2, 0xFFFFFFFFu, &all);
+        }
+        CHECK(n == 1 && !builds_within(0, 1, 0xFFFFFFFFu, &all),
+              "the walk after it gives the constructor one build and the commander none: %d", n);
+        if (n) {
+            const FCMD* cmd = last_cmd(from);
+            const int x = cmd_x0(&cmd->c), z = cmd_z0(&cmd->c);
+            printf("widest ring, %s: the walk after it builds type %u at (%d, %d), ring_grow=%u\n", what, cmd->c.type, x,
+                   z, s_st.ring_grow);
+            CHECK(cmd->c.type == T_WIND && x >= 6 && x <= 29 && z >= 6 && z <= 29 && s_st.ring_grow == 0,
+                  "the wind generator on ring 0, inside the square round the anchor: (%d, %d), %u", x, z, s_st.ring_grow);
+        }
+    }
+    lv.site_tests = 4;
+    reach_world(1);
+    s_w.refuse_type = T_WIND;
+    for (k = 0; k < 9; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        printf("widest ring, every site refused from the base: decision %d ring_grow=%u\n", k, s_st.ring_grow);
+        CHECK(s_st.ring_grow == (k + 1) % 9, "nine exhausted walks visit each ring once: %u at decision %d",
+              s_st.ring_grow, k);
+    }
+    s_w.refuse_type = 0;
+    s_plan = lv0;
+}
+
 /* THE PLANT WALK'S TRACE (impai.h; impai_econ.c, rung_plant; impai_build.c, ring_build) in check_factory's world,
    whose commander is asked for the opening plant. Ordered, the decision keeps no trace. With the plant refused by
    every site test the trace names the type, the builder, the ring's growth as the rung began and a walk that ends
@@ -17360,6 +17428,7 @@ int main(void)
     check_factory();
     check_ring_reach();
     check_ring_cut();
+    check_ring_widest();
     check_plantwalk();
     check_plant_ring();
     check_ring_cmd_safe();
