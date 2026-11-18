@@ -6733,6 +6733,51 @@ static void check_gov_pressure(void)
     s_milp = NULL;
 }
 
+/* THE POSTURE (impai_brain.c, posture_read): each flag follows its own field of the military's record and no
+   other. A flag's bound is the record's: a press_until that has run out or lies past now + press_hold presses
+   nothing, at the base or not; a blind stamp past now is no blind spot; dry and island are flags whatever non-zero
+   byte the record holds; naval is the record's value. */
+static void check_posture(void)
+{
+    /* blind: 0 no stamp, 1 a stamp at now, 2 one past now; press: 0 no stamp, 1 one 100 ticks ahead, 2 one past
+       now + press_hold */
+    static const struct { int8_t naval; uint8_t dry, island, base; int blind, press; IMPAI_POSTURE want; } C[] = {
+        { -1, 0, 0, 0, 0, 0, { -1, 0, 0, 0, 0, 0 } },
+        {  1, 0, 0, 0, 0, 0, {  1, 0, 0, 0, 0, 0 } },
+        {  0, 2, 0, 0, 0, 0, {  0, 1, 0, 0, 0, 0 } },
+        {  0, 0, 2, 0, 0, 0, {  0, 0, 1, 0, 0, 0 } },
+        {  0, 0, 0, 0, 1, 0, {  0, 0, 0, 1, 0, 0 } },
+        {  0, 0, 0, 0, 2, 0, {  0, 0, 0, 0, 0, 0 } },
+        {  0, 0, 0, 0, 0, 1, {  0, 0, 0, 0, 1, 0 } },
+        {  0, 0, 0, 1, 0, 1, {  0, 0, 0, 0, 1, 1 } },
+        {  0, 0, 0, 1, 0, 0, {  0, 0, 0, 0, 0, 0 } },
+        {  0, 0, 0, 1, 0, 2, {  0, 0, 0, 0, 0, 0 } },
+    };
+    const IMPAI_DEC* dd = (const IMPAI_DEC*)s_scratch;
+    IMPAI_BRAIN_OUT bo;
+    unsigned k;
+    int c, a;
+    for (k = 0; k < sizeof C / sizeof C[0]; k++) {
+        const IMPAI_POSTURE* w = &C[k].want;
+        uint32_t now;
+        gov_world(1);
+        now = (uint32_t)s_w.gametime;
+        s_mil.naval = C[k].naval;
+        s_mil.dry = C[k].dry;
+        s_mil.island = C[k].island;
+        s_mil.press_base = C[k].base;
+        s_mil.blind_t = C[k].blind == 1 ? now : C[k].blind == 2 ? now + 1u : 0u;
+        s_mil.press_until = C[k].press == 1 ? now + 100u : C[k].press == 2 ? now + s_glv.press_hold + 1u : 0u;
+        CHECK(now > 0 && gov_decide(&bo, &c, &a) == 0, "decide");
+        CHECK(dd->pos.naval == w->naval && dd->pos.dry == w->dry && dd->pos.island == w->island &&
+              dd->pos.blind == w->blind && dd->pos.pressed == w->pressed && dd->pos.at_base == w->at_base &&
+              bo.pressed == w->pressed,
+              "the posture, case %u: naval %d, dry %u, island %u, blind %u, pressed %u, at the base %u", k,
+              dd->pos.naval, dd->pos.dry, dd->pos.island, dd->pos.blind, dd->pos.pressed, dd->pos.at_base);
+    }
+    s_milp = NULL;
+}
+
 /* A REFUSED CONSTRUCTOR ORDER leaves the factory to the army in the same decision */
 static void check_gov_refused(void)
 {
@@ -16123,6 +16168,7 @@ static void check_military(void)
     check_production();
     check_gov_opening();
     check_gov_pressure();
+    check_posture();
     check_gov_refused();
     check_gov_surplus();
     check_gov_scout_surplus();

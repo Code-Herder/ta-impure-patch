@@ -28,6 +28,13 @@ static void governor(IMPAI_DEC* d,
     d->busy[n] = 1;
     hold_read(d);
 }
+
+/* THE POSTURE, filled once a decision. */
+static void posture_read(IMPAI_DEC* d)
+{
+    d->pos.pressed = d->in->mil != 0;
+    d->pos.at_base = d->pos.pressed && d->queued;
+}
 """
 
 
@@ -44,7 +51,7 @@ class Rules(unittest.TestCase):
         return next(f for f in self.fns if f.name == name)
 
     def test_functions(self):
-        self.assertEqual([f.name for f in self.fns], ["hold_read", "short_one", "governor"])
+        self.assertEqual([f.name for f in self.fns], ["hold_read", "short_one", "governor", "posture_read"])
         self.assertEqual((self.by("short_one").start, self.by("short_one").end), (10, 10))
         self.assertEqual(self.by("governor").end, 19)
 
@@ -52,6 +59,13 @@ class Rules(unittest.TestCase):
         self.assertEqual(self.by("hold_read").writes, {"hold"})
         self.assertEqual(self.by("hold_read").reads, {"e", "pressed"})
         self.assertEqual(self.by("governor").writes, {"queued", "busy"})
+
+    def test_posture_flags(self):
+        f = self.by("posture_read")
+        self.assertEqual(f.writes, {"pos", "pos.pressed", "pos.at_base"})
+        self.assertEqual(f.reads, {"pos", "pos.pressed", "in", "queued"})
+        text = "\n".join(rules.show_field(self.fns, "pos.pressed"))
+        self.assertIn("written by 1, read by 0 others", text)
 
     def test_rules_and_where_they_open(self):
         self.assertEqual(self.by("hold_read").rules, {"THE HOLD": True, "THE PRESSURE": False})

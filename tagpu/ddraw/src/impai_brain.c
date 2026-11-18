@@ -1288,18 +1288,34 @@ static void sensor_want(IMPAI_DEC* d, const IMPAI_MIL* m)
    anything below 1 read 0 */
 static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
 
-/* the surplus, the pressure and THE HOLD, read from the seat's record and its military alone, before the census's
-   roots are cut (root_cap_of) */
+/* THE POSTURE, filled once a decision and before anything else reads the decision (impai_brain_decide): what the
+   military's record says of the seat's map and its enemy, each flag of IMPAI_POSTURE (impai_brain.h) read from the
+   record here and nowhere else in the economy. With no military record every flag stays 0 (carve clears the
+   decision). INVARIANT, a bound on recorded data: every flag is a compare against the record, never an index.
+   - THE PRESSURE (impai_mil.c): a press_until past now + press_hold holds nothing, so a byte restored from a
+     recording can hold the constructors for at most press_hold;
+   - THE BLIND SPOT is read through impai_blind, which bounds its stamp the same way;
+   - dry, island and press_base are compared with 0 only; naval is copied, and its readers compare it with 1 and
+     with 0. */
+static void posture_read(IMPAI_DEC* d)
+{
+    const IMPAI_MIL* mil = d->in->mil;
+    if (!mil) return;
+    d->pos.naval = mil->naval;
+    d->pos.dry = mil->dry != 0;
+    d->pos.island = mil->island != 0;
+    d->pos.blind = (uint8_t)impai_blind(mil, d->now);
+    d->pos.pressed = mil->press_until > d->now && mil->press_until - d->now <= d->in->plan->press_hold;
+    d->pos.at_base = d->pos.pressed && mil->press_base != 0;
+}
+
+/* the surplus and THE HOLD, read from the seat's record and the posture alone, before the census's roots are cut
+   (root_cap_of) */
 static void hold_read(IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
-    const IMPAI_MIL* mil = d->in->mil;
     const WQ_ECON* e = &d->e;
     d->surplus = e->metal_max > 0.0f && e->metal >= SURPLUS_FRAC * e->metal_max;
-    /* THE PRESSURE as the economy reads it (impai_mil.c): a recorded press_until is data, and one past now +
-       press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
-       press_hold */
-    d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
     /* THE HOLD. While the stored metal is below stall_pm thousandths of the storage, outside a surplus and outside
        THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
        THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
@@ -1321,11 +1337,11 @@ static void hold_read(IMPAI_DEC* d)
        whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
        cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
        factory beside a store at SURPLUS_FRAC or more is never held -- stall_pm < SURPLUS_FRAC x 1000
-       (impai_brain_test.c, check_plan) keeps the band between the two non-empty. `pressed` is the seat's own
-       stamp, bounded above. */
+       (impai_brain_test.c, check_plan) keeps the band between the two non-empty. The posture's `pressed` is
+       bounded where it is read (posture_read). */
     {
         const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
-        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pressed;
+        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pos.pressed;
     }
 }
 
@@ -1361,7 +1377,7 @@ static void economy(IMPAI_DEC* d)
     const WQ_ECON* e = &d->e;
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
-    const int judged = !mil || mil->naval >= 0;
+    const int judged = d->pos.naval >= 0;
     int plant_pace, plant_metal, plant_reach = 0, tech_metal = 0, blind;
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
@@ -1418,8 +1434,8 @@ static void economy(IMPAI_DEC* d)
     }
     /* THE GATES, once a decision: every want below reads them through its row of impai_veto */
     d->gates = (d->hold ? IMPAI_G_HOLD : 0u) | (d->e_stall ? IMPAI_G_E_STALL : 0u) | (d->m_stall ? IMPAI_G_M_STALL : 0u) |
-               (d->pressed ? IMPAI_G_PRESSED : 0u) | (d->surplus ? IMPAI_G_SURPLUS : 0u) | (judged ? 0u : IMPAI_G_UNJUDGED);
-    d->out->pressed = (uint8_t)d->pressed;
+               (d->pos.pressed ? IMPAI_G_PRESSED : 0u) | (d->surplus ? IMPAI_G_SURPLUS : 0u) | (judged ? 0u : IMPAI_G_UNJUDGED);
+    d->out->pressed = d->pos.pressed;
     d->out->hold = (uint8_t)d->hold;
     d->out->e_empty = (uint8_t)(e->energy_max > 0.0f && e->energy < IMPAI_E_EMPTY * e->energy_max);
     d->out->f_idle = (uint16_t)d->nfidle;
@@ -1528,15 +1544,14 @@ static void economy(IMPAI_DEC* d)
        constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
        one plant, the stalls, the hold, the refusals and a builder that offers one. A further sea plant on an
        island is THE CHOICE's (impai_econ.c, THE ISLAND'S PLANTS). */
-    d->sea_far = (uint8_t)(mil && mil->dry);
-    d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
+    d->sea_able = (uint8_t)(d->pos.dry && impai_econ_sea_able(d));
     {
         /* the need but for a builder that offers one: the menus are read last, for a want nothing else refuses */
-        const int sea_need = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                             (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_pace) &&
+        const int sea_need = (d->pos.naval == 1 || d->pos.dry) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
+                             (d->pos.dry ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_pace) &&
                              !d->pending[IMPAI_C_FACTORY] && d->in->st->sea_refused < IMPAI_SEA_REFUSALS;
         d->want_sea = sea_need && !(d->gates & impai_veto[IMPAI_W_SEA].gates) &&
-                      (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
+                      (d->pos.dry ? d->sea_able : impai_econ_sea_able(d));
     }
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a steady metal income (THE STEADY INCOME) of the table's tech_m a
@@ -1557,7 +1572,7 @@ static void economy(IMPAI_DEC* d)
            is for never came. An energy stall still holds it back: the economy pass pays each resource at one
            fraction (0x401A4D..0x401AB1, engine/weapons.md, The settle), so in an energy stall a frame grows at the
            energy's fraction, and the stall's energy is the ladder's first rule. */
-        d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
+        d->want_def = d->pos.at_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
                       (float)d->def_n < 1.0f + m->press_v / plan->def_v && !(d->gates & impai_veto[IMPAI_W_DEF].gates);
         if (d->want_def) def_point(d, m);
         /* THE SENSORS (impai_econ.c): with factory_max plants finished, outside the stalls and the hold, below
@@ -1674,6 +1689,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->out = out;
     d->q = q;
     d->now = (uint32_t)q->ops->gametime(q);
+    posture_read(d);
     d->sea_type = out->sea_type = (uint16_t)WQ_NONE;
     q->ops->map(q, &d->m);
     if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);

@@ -13,8 +13,9 @@ whose comment or body names it, the sites where the name opens a sentence first 
 stated), each with the decision fields that function reads and writes.
 A FUNCTION's answer is its file and lines, the rules it names, the fields it reads and writes, and the brain
 functions it calls and is called by.
-A FIELD is a member reached through the decision's pointer (`d->hold`), or a plan constant as plan.NAME
-(`plan.retreat_margin`): its answer is who writes it and who reads it. A field many functions read is where two
+A FIELD is a member reached through the decision's pointer (`d->hold`), a flag of the posture as pos.NAME
+(`pos.pressed`; `pos` is all of them), or a plan constant as plan.NAME (`plan.retreat_margin`): its answer is who
+writes it and who reads it. A field many functions read is where two
 rules meet.
 
 The parse is by the sources' own layout, not a C parser: a function's definition starts in column 0 and its
@@ -32,6 +33,8 @@ DEFN = re.compile(r"^(?:static\s+)?[A-Za-z_][\w\s\*]*?\b([a-z_]\w*)\s*\(")
 FIELD = re.compile(r"\bd->([a-z_]\w*)((?:\[[^\]]*\])*)\s*(\+\+|--|[-+|&^]?=(?!=))?")
 CALL = re.compile(r"(?<![>.\w])([a-z_]\w*)\s*\(")   # a call by name; a member's (ops->economy) is the world's
 PLAN = re.compile(r"\bplan->([a-z_]\w*)")          # a plan constant, listed as plan.NAME
+# a flag of the posture, listed as pos.NAME; a write of one is a write of `pos` as well
+POS = re.compile(r"\bd->pos\.([a-z_]\w*)\s*(\+\+|--|[-+|&^]?=(?!=))?")
 COMMENT = re.compile(r"/\*.*?\*/", re.S)
 
 
@@ -50,6 +53,10 @@ class Fn:
         self.reads, self.writes = set(), set()
         for m in FIELD.finditer(code):
             (self.writes if m.group(3) else self.reads).add(m.group(1))
+        for m in POS.finditer(code):
+            (self.writes if m.group(2) else self.reads).add("pos." + m.group(1))
+            if m.group(2):
+                self.writes.add("pos")
         self.reads |= {"plan." + m.group(1) for m in PLAN.finditer(code)}
         self.calls = {m.group(1) for m in CALL.finditer(code)} - {name}
 

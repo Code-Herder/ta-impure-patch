@@ -37,12 +37,28 @@ typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_
    THE WAY OFF) */
 typedef struct IMPAI_WAYTO { int32_t x, z, h; uint16_t slot, pad; } IMPAI_WAYTO;
 
+/* THE POSTURE (impai_brain.c, posture_read): what the seat has judged of its map and its enemy, filled once a
+   decision from the military's record (IMPAI_MIL), before anything else reads the decision. Every economy rule
+   that asks one of these questions reads it here: none reads the military's record for it or derives it again. Each
+   member is a flag; a rule that needs a value, a table or a point of the record reads the record. With no military
+   record every member is 0: a map judged, and not naval. Derived each decision, never recorded.               */
+typedef struct IMPAI_POSTURE {
+    int8_t  naval;      /* IMPAI_MIL.naval: 1 the map is naval, 0 not, below 0 not judged yet                    */
+    uint8_t dry;        /* the dry hunt holds (impai_mil.c, dry_hunt): THE FINISH AT SEA (impai_brain.c, economy),
+                           whose search reaches FAR_PATCH_K x comm_r, the commander as far                       */
+    uint8_t island;     /* THE ISLAND (impai_mil.c, island): the seat's land army reaches nothing that can hold an
+                           enemy on a naval map                                                                  */
+    uint8_t blind;      /* THE BLIND SPOT (impai_mil.c, blind_spot) stands at the decision's GameTime             */
+    uint8_t pressed;    /* THE PRESSURE (impai_mil.c) stands at the decision's GameTime                           */
+    uint8_t at_base;    /* pressed, and the pressing member threatens the base (THE BASE'S THREATS)              */
+} IMPAI_POSTURE;
+
 /* THE GATES (impai_brain.c, economy): what the seat's state refuses a spend for, each one bit of IMPAI_DEC.gates,
    set once a decision. THE VETOES (impai_brain.c, impai_veto): one row a want, the gates that hold it.          */
 #define IMPAI_G_HOLD     0x01u       /* THE HOLD (hold_read)                                                    */
 #define IMPAI_G_E_STALL  0x02u       /* the energy stall: the energy store below stall_pm of the storage        */
 #define IMPAI_G_M_STALL  0x04u       /* the metal stall: the store below it and the steady income below the ask */
-#define IMPAI_G_PRESSED  0x08u       /* THE PRESSURE as the economy reads it (hold_read)                        */
+#define IMPAI_G_PRESSED  0x08u       /* THE PRESSURE as the posture reads it (posture_read)                     */
 #define IMPAI_G_SURPLUS  0x10u       /* the metal store at SURPLUS_FRAC of its maximum or more (hold_read)      */
 #define IMPAI_G_UNJUDGED 0x20u       /* the military has not judged the map naval or not (IMPAI_MIL.naval < 0)  */
 #define IMPAI_G_ALL      0x3Fu
@@ -147,13 +163,14 @@ typedef struct IMPAI_DEC {
        WQ_ORDER.count, +0x3A), so a frame is counted there and never again by the census. A frame whose factory is
        gone is not counted, which errs toward the army. BOUND: a census lists at most IMPAI_CENSUS_MAX units, each
        factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each, so gov_c and gov_a stay below
-       1 500 x 2 041 < 2^31. pressed, surplus and hold (THE HOLD): impai_brain.c, economy. */
+       1 500 x 2 041 < 2^31. surplus and hold (THE HOLD): impai_brain.c, hold_read. */
     int32_t       gov_c, gov_a;
     float         surplus_m;    /* the metal committed past the unit each factory makes: the busy factories'
                                    queued units at the census (impai_brain.c, THE QUEUED METAL) and this
                                    decision's surplus orders past their first (impai_econ.c, THE FIVE,
                                    bounded)                                                                  */
-    int           pressed, surplus, hold;
+    int           surplus, hold;
+    IMPAI_POSTURE pos;          /* THE POSTURE, filled before anything reads it (impai_brain.c, posture_read)  */
     uint32_t      gates;        /* THE GATES: this decision's IMPAI_G_* bits (impai_brain.c, economy)          */
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
@@ -228,8 +245,6 @@ typedef struct IMPAI_DEC {
        the seat has reads as lacking however many types it holds */
     uint32_t      cons_done[WQ_TYPES_MAX / 32], cons_frame[WQ_TYPES_MAX / 32];
     int           want_sea;
-    uint8_t       sea_far;      /* THE FINISH AT SEA (impai_brain.c, economy): the military's dry hunt holds, so
-                                   the search reaches FAR_PATCH_K x comm_r, the commander as far           */
     uint8_t       sea_able;     /* in THE FINISH AT SEA, a builder offers a sea plant (impai_econ_sea_able)  */
     uint16_t      sea_type;
     /* THE METAL'S REACH (impai_econ.c), judged at first use in a decision (mr_done): more patches lie open than the
