@@ -86,6 +86,8 @@ The owner's decisions of 2026-11-17, after a review of the method. What the revi
 
 **The order**: M1 and M2 (the method's text), M4, M3, B1 beside M3, then B2. The naval turtle's chain of island rules, the air rush's anti-air, the puzzles and the held-out maps wait behind B2.
 
+**B2a is built** (0586838a): the six wants read one table, `impai_veto`, over six gate bits; the brain test's transcript is byte for byte the one before, and `session.py --neutral` plays its nine games SAME. MEASURED 2026-11-17: the session took 29 turns and read 3.8 million tokens from cache, where the nine sessions of the day before took 126 to 312 turns and 27 to 80 million. The disagreements the table shows, none changed, are in the hand-off (the defence not held by the metal stall, anti-air held by nothing, the sea plant never waiting on the energy term, six more).
+
 **B2's steps** ([decisions](decisions.html), *The posture and the arbiter*), a writer session each: B2a the gates as one table; B2b the posture as one object; B2c the wants as requests in a table's order -- each neutral; B2d, judged by its games, the priorities as numbers and one commitment rule for the squads' tasks.
 
 **Owed from the batch the review stopped** (the hand-off of 2026-11-17): the review of da2ccb2b (medium) and of 278fc3fe (high: it changes the recorded layout). 278fc3fe, built and tested but not played, was played first (M1): MEASURED 2026-11-17, `exploit.py run`, the naval turtle ends at the cap of 20 000 on it as on the champion, the opponent holding 2 units against 3 on ed3e5634 and 2 on cc27da06 that morning; the other three situations pass on both, to the same figures. The island chain of that day (cc27da06 to 278fc3fe) has not moved the scenario.
