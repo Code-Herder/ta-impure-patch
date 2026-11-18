@@ -217,9 +217,31 @@ class View(unittest.TestCase):
         self.assertEqual([(w["seat"], w["name"], w["kind"], w["logo"], w["rgb"], w["allies"], w["start"]) for w in bare],
                          [(0, "Player", None, None, None, None, None), (1, "Core", "impai", None, None, None, None),
                           (2, "Arm", None, None, None, None, None)])
+        self.assertEqual((thinkview.allies_of(rows, 2), thinkview.allies_of({}, 2)), ([], None))
         data = self.build()
         self.assertEqual([w["start"] for w in data["who"]], [None, [100, 200], [300, 300]])
         self.assertEqual(data["colours"]["from"], None)             # no ground: the unmodded game's table, and said so
+
+    def test_an_allys_row_is_no_enemys(self):
+        """THE GAME's one known row is seat 2's unit, slot 21: in sight from tick 200, a ghost from tick 300."""
+        row = lambda allies: {"controller": 2, "logo": 0, "alliances": bytes(allies)}     # noqa: E731
+        contact = lambda d: [e[0] for e in d["events"] if e[1] == "contact"]              # noqa: E731
+        foes = self.build(rows={1: row([0, 1, 0]), 2: row([0, 0, 1])})
+        self.assertEqual((foes["known"]["now"], foes["known"]["ghost"]), ([[200, 300], [1, 0]], [[300], [1]]))
+        self.assertEqual((contact(foes), 200 in foes["decisions"]), ([200], True))
+        # allied, each holding the other's byte: the row is in no count, and no contact falls
+        friends = self.build(rows={1: row([0, 1, 1]), 2: row([0, 1, 1])})
+        self.assertEqual(friends["known"], {"now": [[], []], "pass": [[], []], "ghost": [[], []]})
+        self.assertEqual(contact(friends), [])
+        self.assertEqual(len(friends["krows"]), len(foes["krows"]))     # the row itself is still the page's to draw
+        self.assertEqual(friends["who"][1]["allies"], [2])
+        # an alliance one seat alone holds is none, and alliances unread count every other seat's row
+        self.assertEqual(self.build(rows={1: row([0, 1, 1]), 2: row([0, 0, 1])})["known"], foes["known"])
+        # WHOSE A ROW IS: an ally's unit the table holds under an owner it does not name is the ally's by its slot
+        with mock.patch.object(think.Extract, "seat_of", lambda _ex, slot: 0 if slot == 21 else 1):
+            self.assertEqual(self.build(rows={0: row([1, 1, 0]), 1: row([1, 1, 0])})["known"], friends["known"])
+        unread = self.build()
+        self.assertEqual((unread["known"], contact(unread), unread["who"][1]["allies"]), (foes["known"], [200], None))
 
     def test_the_lanes_are_the_task_history(self):
         d = self.build()

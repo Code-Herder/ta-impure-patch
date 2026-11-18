@@ -271,6 +271,8 @@ function prepare(d) {
   d.foes = rowsOf('foe'); d.unreached = rowsOf('unreached');
   // a data file written before WHO PLAYS: the seats by name alone, every other fact unread
   d.who = d.who || d.players.map(p => ({ seat: p.index, name: p.name, side: null, kind: p.ai === 1 ? 'impai' : null, by: p.ai === 1 ? 'ImpAI' : null, logo: null, rgb: null, colour: null, allies: null, start: null, where: null }));
+  d.allied = !!(d.who.find(w => w.seat === d.seat) || {}).allies;      // its alliances were read
+  d.allies = new Set((d.who.find(w => w.seat === d.seat) || {}).allies || []);
   d.seatCol = {}; let other = 1;
   for (const s of d.seats) d.seatCol[s] = s === d.seat ? SEATVAR[0] : SEATVAR[1 + (other++ - 1) % (SEATVAR.length - 1)];
   return d;
@@ -299,11 +301,20 @@ function knownRows(f) {
   for (const r of f.k) {
     const k = D.krows[r], how = k[2];
     const cls = how & ((m.IMPAI_LOS || 0) | (m.IMPAI_SHARED || 0)) ? 'now' : how & (m.IMPAI_GHOST || 0) ? 'ghost' : 'pass';
-    out.push({ slot: k[0], type: k[1], how, cls, owner: k[3], bx: k[4], bz: k[5] });
+    // whose the row is: its owner field's seat, or the seat its slot is a unit of (thinkview.py, WHOSE A ROW IS)
+    const of = D.allies.has(k[3]) ? k[3] : D.allies.has(seatOf(k[0])) ? seatOf(k[0]) : -1;
+    out.push({ slot: k[0], type: k[1], how, cls, owner: k[3], bx: k[4], bz: k[5], ally: of >= 0, of, unnamed: of >= 0 && of !== k[3],
+      own: D.allied && (k[3] === D.seat || seatOf(k[0]) === D.seat) });
   }
   return (f._k = out);
 }
+/* AN ALLY'S ROW IS NO ENEMY'S: the seat's table holds its allies' units too, and the brain's rules read "a row
+   whose owner is neither the seat nor an ally". With the alliances unread no row is an ally's, and the foot says so */
+const enemyRows = f => f._ke || (f._ke = knownRows(f).filter(r => !r.ally && !r.own));
+const ownRows = f => f._ko || (f._ko = knownRows(f).filter(r => r.own));
+const allyRows = f => f._ka || (f._ka = knownRows(f).filter(r => r.ally));
 const HOWSAYS = { now: 'in sight', pass: 'a radar contact', ghost: 'remembered' };
+const allySays = r => r.how & (D.macros.IMPAI_LOS || 0) ? 'in sight' : r.how & (D.macros.IMPAI_SHARED || 0) ? 'shared' : r.cls === 'ghost' ? 'remembered' : 'a radar contact';
 /* a squad's members in a sample, and their centre */
 function members(f, k) {
   f._m = f._m || {};
@@ -344,7 +355,7 @@ function nowText() {
     if (s.task === 'RETREAT' && s.ep && D.lost.has(s.ep.from)) line += ', on a lost prediction';
     parts.push(line);
   }
-  const rows = knownRows(f);
+  const rows = enemyRows(f);
   let enemy;
   if (!rows.length) enemy = 'no enemy known';
   else {
@@ -713,7 +724,11 @@ function drawMap() {
     }
   }
   // what the seat knows of the others: solid in sight, a ring on radar, a cross remembered
-  const rows = knownRows(f), few = rows.filter(k => seen(blockPx(k.bx), blockPx(k.bz))).length <= 14;
+  // an ally's unit the seat knows of: a small hollow mark in the ally's player colour, never the enemy's marks
+  for (const k of allyRows(f)) { const [x, y] = bxy(k.bx, k.bz), wr = whoOf(k.of);
+    g.strokeStyle = rgbOf(wr) || C.truth; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y - 4.5); g.lineTo(x + 4.5, y); g.lineTo(x, y + 4.5); g.lineTo(x - 4.5, y); g.closePath(); g.stroke();
+    MAP.hits.push([x, y, `${nm(k.type)} of ${seatSays(k.of)}, an ally: ${allySays(k)} at (${k.bx},${k.bz}), slot ${k.slot}` + (k.unnamed ? `; the seat's table does not name its owner (owner ${k.owner})` : ''), k.of]); }
+  const rows = enemyRows(f), few = rows.filter(k => seen(blockPx(k.bx), blockPx(k.bz))).length <= 14;
   for (const k of rows) {
     const [x, y] = bxy(k.bx, k.bz), l = lifeAt(k.slot, f.t), there = u.get(k.slot);
     if (k.cls === 'ghost') { g.strokeStyle = C.ghost; g.lineWidth = 2; g.beginPath(); g.moveTo(x - 5, y - 5); g.lineTo(x + 5, y + 5); g.moveTo(x + 5, y - 5); g.lineTo(x - 5, y + 5); g.stroke();
@@ -805,7 +820,7 @@ function groundAt(cx, cy) {
 
 /* ---------- the figures beside the map ---------- */
 function drawSide() {
-  const f = D.frames[frameIndex(T)], sq = squadsAt(T), rows = knownRows(f), u = units(f);
+  const f = D.frames[frameIndex(T)], sq = squadsAt(T), rows = enemyRows(f), friends = allyRows(f), u = units(f);
   const pill = (on, text, tone) => `<span class="pill${on ? ' on' : ''}"${on ? ` style="--tone:var(--${tone})"` : ''}>${esc(text)}</span>`;
   const jpills = D.judgements.filter(j => j.id !== 'estimate').map(j => { const s = j.spans.find(s => s[0] <= T && T < s[1]) || (T >= D.end ? j.spans.find(s => s[1] === D.end) : null); return pill(s && s[3] !== 'muted', j.label, s ? s[3] : 'warn'); }).join('');
   const opening = TR('brain.opened') ? pill(!at(TR('brain.opened'), T), 'opening', 'info') : '';
@@ -813,7 +828,10 @@ function drawSide() {
   const est = estimateAt(T);
   let mine = 0, mineS = 0; const theirs = {};
   for (const [slot, p] of u) { const s = seatOf(slot); if (s === D.seat) { if (p[2][4]) mineS++; else mine++; } else theirs[s] = (theirs[s] || 0) + 1; }
-  const enemyAlive = Object.values(theirs).reduce((a, b) => a + b, 0), knownAlive = rows.filter(r => u.has(r.slot)).length;
+  const enemyAlive = Object.entries(theirs).reduce((a, [s, n]) => a + (D.allies.has(+s) ? 0 : n), 0), knownAlive = rows.filter(r => u.has(r.slot)).length;
+  const unnamed = friends.filter(r => r.unnamed).length, lostOwn = ownRows(f).length;
+  const allied = (friends.length ? ` ${plural(friends.length, 'row')} of its allies' units (${[...new Set(friends.map(r => r.of))].sort().map(seatName).join(', ')}) ${friends.length === 1 ? 'is' : 'are'} not counted here` + (unnamed ? `, ${unnamed} of them under an owner its table does not name` : '') + '.' : '')
+    + (lostOwn ? ` Nor ${lostOwn === 1 ? 'is 1 row' : `are ${lostOwn} rows`} it keeps of its own units.` : '');
   const by = { now: 0, pass: 0, ghost: 0 }; rows.forEach(r => by[r.cls]++);
   const builds = jobs(f).filter(j => j.kind === 'BUILD');
   const level = (D.enums['mil.level'] || {})[at(TR('mil.level'), T)];
@@ -823,7 +841,7 @@ function drawSide() {
     <section><h3>Squads</h3>${sq.length ? `<div class="scroll-x"><table class="mini"><tr><th>squad</th><th>task</th><th>members</th><th class="r">value</th><th>goal</th><th class="r">since</th></tr>
       ${sq.map(s => { const mem = members(f, s.k).list; return `<tr class="pick${s.k === SEL ? ' sel' : ''}" data-k="${s.k}" tabindex="0"><td class="tnum">sq[${s.k}]</td><td><i class="sw" style="background:var(--${TASKVAR[s.task] || 'j-none'})"></i>${esc(s.task)} <span class="muted">${esc(s.layer)}</span></td><td>${esc(mem.length ? typesOf(mem) : plural(s.n, 'unit'))}</td><td class="r tnum">${fmt(s.value)}</td><td class="tnum">${s.task === 'FORM' || !(s.tx || s.tz) ? '—' : `(${s.tx},${s.tz})${s.target !== NONE() ? ` slot ${s.target}` : ''}`}</td><td class="r tnum">${s.since ? fmt(s.since) : '—'}</td></tr>`; }).join('')}</table></div>` : '<p class="muted">No squad holds a task at this tick.</p>'}</section>
     <section><h3>The enemy, as the seat knows it</h3>
-      <p>${rows.length ? `${plural(rows.length, 'row')}: ${by.now} in sight, ${by.pass} on radar or sonar alone, ${by.ghost} remembered.` : 'It knows of no enemy.'} The enemy really has ${plural(enemyAlive, 'unit')} alive; the seat knows of ${knownAlive}.</p>
+      <p>${rows.length ? `${plural(rows.length, 'row')}: ${by.now} in sight, ${by.pass} on radar or sonar alone, ${by.ghost} remembered.` : 'It knows of no enemy.'} The enemy really has ${plural(enemyAlive, 'unit')} alive; the seat knows of ${knownAlive}.${esc(allied)}</p>
       ${rows.length ? `<div class="scroll-x"><table class="mini"><tr><th>type</th><th>how</th><th>block</th><th>of</th></tr>${rows.slice(0, 10).map(r => `<tr><td>${esc(nm(r.type))}</td><td><i class="sw${r.cls === 'pass' ? ' ring' : ''}" style="${r.cls === 'pass' ? 'border-color' : 'background'}:var(--${r.cls === 'now' ? 'enemy' : r.cls === 'ghost' ? 'ghost' : 'radar'})"></i>${HOWSAYS[r.cls]}</td><td class="tnum">(${r.bx},${r.bz})</td><td>${r.owner < 10 ? sw(whoOf(r.owner)) + esc(seatName(r.owner)) : '?'}</td></tr>`).join('')}</table></div>${rows.length > 10 ? `<p class="muted">and ${rows.length - 10} more rows.</p>` : ''}` : ''}</section>
     <section><h3>The seat's own</h3>
       <p>${plural(mine, 'mobile unit')} and ${plural(mineS, 'structure')}${level ? `, playing ${esc(level)}` : ''}. ${builds.length ? 'Building: ' + esc(builds.slice(0, 6).map(j => { const p = u.get(j.slot); return `${nm(j.build)} by ${p ? nm(p[2][1]) : 'slot ' + j.slot}`; }).join(', ')) + (builds.length > 6 ? ` and ${builds.length - 6} more` : '') + '.' : 'No builder holds a build job.'}</p></section>`;
@@ -915,6 +933,7 @@ function show(d, keep) {
   $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. The map's units, jobs and known rows are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
     + (D.layout && !D.layout.exact ? ` It is read by the layout of the source tree at ${D.layout.build || 'a commit git does not name'}, not at its own build ${D.build}: the rows' sizes fit, and what a member or an enum's number means is that tree's.` : '')
     + (D.colours ? D.colours.from ? ` A player's colour is the game's own: the middle pixel of its colour index's logo frame through the palette, read from ${D.colours.from} as the recording's game opened it.` : ` The players' colours are the unmodded game's for each colour index, not read from this recording's archives${D.colours.why ? ` (${D.colours.why})` : ''}.` : ' This data file names no player\'s colour, alliance or start: it was written before the page read them.')
+    + (whoOf(D.seat).allies ? '' : ' The seat\'s alliances were not read: every other seat\'s row is drawn and counted as an enemy\'s, an ally\'s too.')
     + (D.who.some(w => w.start && !w.start_exact) ? ' A start marked on the map is its seat\'s first unit at the first sample that holds it, not at its first tick.' : '')
     + (D.named ? '' : ' No name table fits this recording: unit types are shown by number.') + (D.missing.length ? ` Not in this recording's layout: ${D.missing.join(', ')}.` : '');
   // open where the game first turns: the first task a squad takes, else the start; another seat of the same
@@ -962,7 +981,7 @@ function openRec(id) {
     + Object.entries(EVENTS_SHOWN).map(([k, [v, text]]) => `<span><svg width="12" height="12" viewBox="-7 -7 14 14" style="vertical-align:-2px;margin-right:4px;color:var(--${v})">${{
       plant: '<path d="M0-6L6 5H-6z" fill="currentColor"/>', wave: '<path d="M-6-5H6L0 6z" fill="currentColor"/>', lost: '<path d="M-5-5L5 5M5-5L-5 5" stroke="currentColor" stroke-width="2.4" fill="none"/>',
       contact: '<circle r="5" fill="currentColor"/>', sight: '<circle r="2.6" fill="currentColor"/>', cmdr: '<path d="M0-6L6 0L0 6L-6 0z" fill="currentColor"/>', judge: '<circle r="3.2" stroke="currentColor" stroke-width="1.5" fill="none"/>' }[k]}</svg>${text}</span>`).join('');
-  $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span>'
+  $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span><span>◇ an ally\'s unit the seat knows of, in the ally\'s player colour</span>'
     + '<span><i class="sw hollow" style="border-color:var(--truth)"></i>the truth: another seat\'s unit as it stands</span><span><i class="sw ring" style="border-color:var(--fg);border-width:1px"></i>a thin line round it: its owner\'s player colour</span><span>⚑ a seat\'s start, in its player colour</span><span><i class="sw ring" style="border-color:var(--t-attack)"></i>a squad, in its task\'s colour, with its goal line</span>'
     + '<span><i class="sw" style="background:var(--fg)"></i>own structure</span><span><i class="sw" style="background:var(--j-build);border-radius:50%"></i>builder, with its site</span><span><i class="sw" style="background:var(--held);opacity:.4"></i>held ground</span>'
     + '<span><i class="sw" style="background:transparent;border:1.6px solid var(--mex);box-shadow:inset 0 0 0 2px var(--panel), inset 0 0 0 5px var(--mex)"></i>extractor: own solid, the truth hollow, a known enemy\'s boxed</span>'

@@ -36,8 +36,17 @@ thinkmap.team_colours; STOCK_RGB, the unmodded game's, when the archives could n
 which), its ALLIES (the seats whose alliance byte it holds, player record `+0x108`, and that hold its own: the
 alliances the game starts with) and its START: where its first unit that outlives the level's first ticks -- its
 commander in a skirmish -- first stands, as a compass word over the map's thirds. The header's rows are tarec.py's
-(think.py's extract keeps a seat's name, side and ImpAI byte alone), read in the same pass as the samples. A fact
-that could not be read is None in the row and a line of the page, never a guess.
+(think.py's extract keeps a seat's name, side and ImpAI byte alone), read from the file's first block before
+anything is counted (header_rows). A fact that could not be read is None in the row and a line of the page, never
+a guess.
+
+AN ALLY'S ROW IS NO ENEMY'S. The seat's table of what it knows holds its allies' units beside its enemies', and
+the brain's rules read "a row whose owner is neither the seat nor an ally"; so do the counts here (known_counts:
+the `known` curve, the first contact, an enemy coming into sight) and the page, which draws an ally's row in the
+ally's colour. WHOSE A ROW IS is the truth's as well as the table's: a row is a seat's when its owner field names
+the seat or when its slot lies in the seat's block of units, since the table holds an ally's radar contact under
+an owner not yet identified, which the page marks as such. A seat whose alliances could not be read counts every
+other seat's row, and the page says so.
 
 EVERYTHING ELSE IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
 (thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
@@ -152,12 +161,32 @@ def colour_word(rgb) -> str:
     return ("dark " if hi < .45 else "pale " if sat < .3 else "light " if sat < .45 and hi > .7 else "") + name
 
 
+def header_rows(path) -> dict:
+    """{seat: the header's row of it, tarec.py's} of the recording at `path`, read from its first block alone;
+    {} when it cannot be read, and every fact of WHO PLAYS that rests on it is then unread."""
+    sys.path.insert(0, str(think.TREE / "tools" / "replay"))
+    try:
+        import tarec
+        return {p["index"]: p for p in tarec.header_only(str(path))["players"]}
+    except Exception:                                           # noqa: BLE001
+        return {}
+
+
+def allies_of(rows: dict, seat: int):
+    """The seats `seat` starts allied with, by the header's rows: each holds the other's alliance byte. None
+    when the seat's row was not read."""
+    if (rows.get(seat) or {}).get("alliances") is None:
+        return None
+    holds = lambda a, b: b < len(rows[a].get("alliances") or b"") and rows[a]["alliances"][b] != 0     # noqa: E731
+    return [o for o in sorted(rows) if o != seat and holds(seat, o) and holds(o, seat)]
+
+
 def seat_facts(ex, rows, colours, world: dict, first: dict, dims) -> list:
     """WHO PLAYS: a row a seat of the recording, [{"seat", "name", "side": its side's name, "kind": "impai" |
     "human" | "ai" | "net" | None, "by": the same as the page says it, "logo": its colour index, "rgb": [r, g, b],
     "colour": the colour's word, "allies": [seat, ...], "start": [x, z] in px, "start_t": the tick it is read at,
     "start_exact": that tick is the unit's first, "where": the compass word}, ...]; None for what could not be
-    read. `rows` are the header's players as tarec.py reads them ({index: row}; {} when the stream was not read),
+    read. `rows` are header_rows' ({} when the header was not read),
     `colours` {"rgb": [a colour an index]} or None, `world` sample's samples and `first` its {slot: [(tick, x, z), ...]}
     of the first ticks."""
     lives = [l for l in unit_lives(ex) if l[3] is None or l[3] - l[2] > PLACEHOLDER_TICKS]
@@ -168,10 +197,7 @@ def seat_facts(ex, rows, colours, world: dict, first: dict, dims) -> list:
         kind, by = ("impai", "ImpAI") if p.get("ai") == 1 else CONTROLLERS.get(row.get("controller"), (None, None))
         logo = row.get("logo")
         rgb = table[logo] if logo is not None and logo < len(table) and table[logo] else None
-        allies = None
-        if row.get("alliances") is not None:
-            holds = lambda a, b: b < len(rows[a]["alliances"]) and rows[a]["alliances"][b] != 0     # noqa: E731
-            allies = [o for o in sorted(rows) if o != seat and holds(seat, o) and holds(o, seat)]
+        allies = allies_of(rows, seat)
         start = start_t = exact = None
         life = min((l for l in lives if ex.seat_of(l[0]) == seat), key=lambda l: (l[2], l[0]), default=None)
         if life is not None:
@@ -297,33 +323,44 @@ def pressure_spans(track, end: int) -> list:
     return out
 
 
-def known_counts(ex, lay, seat) -> dict:
-    """What the seat knows of the others, exact: {"now", "pass", "ghost": [[ticks], [rows]]} -- the rows it
+def known_counts(ex, lay, seat, allies=None) -> dict:
+    """What the seat knows of its enemies, exact: {"now", "pass", "ghost": [[ticks], [rows]]} -- the rows it
     holds in sight (its own or an ally's), as a radar or sonar contact alone, and as a ghost -- and "first", the
-    first tick it knows any, None never. Its own rows are not counted."""
+    first tick it knows any, None never. Its own rows are not counted, nor a row of the seat's or of one of
+    `allies` (AN ALLY'S ROW IS NO ENEMY'S; None, the alliances unread: every row not flagged its own is counted,
+    whoever owns it). A row is a seat's when the table's own owner field names it at that tick, or when the row's
+    slot lies in that seat's block of units: the table holds an ally's radar contact under an owner not yet
+    identified (255), and a ghost of the seat's own lost unit with the own flag gone."""
     try:
-        how = next(f for f in lay.seat_fields("known", seat) if f.name == "how")
-        sel = think.Selection(ex, lay, "known", seat, [how])
+        fields = {f.name: f for f in lay.seat_fields("known", seat) if f.name in ("how", "owner")}
+        sel = think.Selection(ex, lay, "known", seat, [fields["how"]] + ([fields["owner"]] if "owner" in fields else []))
         _start, events = think.changes(ex, [sel])
-    except (think.ThinkError, StopIteration):
+    except (think.ThinkError, KeyError):
         return {}
     m = lay.macros
     own, ghost = m.get("IMPAI_OWN", 0), m.get("IMPAI_GHOST", 0)
     now = m.get("IMPAI_LOS", 0) | m.get("IMPAI_SHARED", 0)
+    friends = set() if allies is None else set(allies) | {seat}
 
-    def klass(v):
-        if not v or v & own:
+    def klass(v, owner, row):
+        if not v or v & own or owner in friends or ex.seat_of(row) in friends:
             return None
         return "now" if v & now else "ghost" if v & ghost else "pass"
     count = {"now": 0, "pass": 0, "ghost": 0}
     out = {k: [[], []] for k in count}
     first = None
-    by_tick = {}
+    by_tick, held = {}, {}                  # held: {row: [how, owner]} as the last change leaves each; never written, zeros
     for t, _part, row, f, old, raw in events:
-        by_tick.setdefault(t, []).append((klass(f.value(old)), klass(f.value(raw))))
+        by_tick.setdefault(t, []).append((row, f.name, f.value(old), f.value(raw)))
     for t in sorted(by_tick):
-        before = dict(count)
-        for a, b in by_tick[t]:
+        before, was = dict(count), {}
+        for row, name, old, new in by_tick[t]:
+            cur = held.setdefault(row, [0, 0])
+            if row not in was:
+                was[row] = klass(*cur, row)
+            cur[0 if name == "how" else 1] = new
+        for row, a in was.items():
+            b = klass(*held[row], row)
             if a:
                 count[a] -= 1
             if b:
@@ -443,7 +480,7 @@ def unit_lives(ex) -> list:
 def sample(path, ticks) -> tuple:
     """((the map's width, height in px), {tick: {"units": [(slot, x, z, structure, frame), ...], "metal": {seat:
     income}}}, the ground: {"track": thinkmap.Track of the feature grid over the samples or None without numpy,
-    "archives": the header's, "map": its map's name, "players": {seat: the header's row, tarec.py's}, "first":
+    "archives": the header's, "map": its map's name, "first":
     {slot: [(tick, x, z), ...]}, each unit's place at each of the first START_TICKS ticks, whatever `ticks` holds}) at
     each of `ticks`, read from the recording's stream
     through tarec.py: a unit's place is its
@@ -502,7 +539,7 @@ def sample(path, ticks) -> tuple:
     except Exception as e:                                      # noqa: BLE001
         raise ViewError(f"{path}: its stream could not be sampled ({type(e).__name__}: {e})") from None
     return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map"),
-                                               "players": {p["index"]: p for p in h["players"]}, "first": first}
+                                               "first": first}
 
 
 def tree_build(tree) -> str:
@@ -704,11 +741,13 @@ def enum_names(lay, seat) -> dict:
     return out
 
 
-def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None, layout=None) -> dict:
+def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None, layout=None,
+          rows=None) -> dict:
     """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
     answer for the recording; `names` think.type_names'; `ground(found, names)` terrain's answer for sample's
     third and the types the data names ({index: name}), None for a page with no ground; `layout` layout_for's
-    second answer. ViewError when the decision ticks alone pass `budget`."""
+    second answer; `rows` header_rows' ({} or None: who plays beyond the extract's own is unread, and no seat is
+    an ally). ViewError when the decision ticks alone pass `budget`."""
     result = result or {}
     end = result.get("end_tick") or ex.end
     end = min(max(int(end), 1), ex.end) if ex.end else 0
@@ -716,7 +755,8 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
     trk, missing, have = tracks(ex, lay, seat, PATHS)
     enums = enum_names(lay, seat)
     episodes = think.squad_episodes(ex, lay, seat)
-    known = known_counts(ex, lay, seat)
+    rows = rows or {}
+    known = known_counts(ex, lay, seat, allies_of(rows, seat))
     evs = events(ex, trk, episodes, known, enums, name_of, end)
     decisions = sorted({e[0] for e in evs})
     if step is None:
@@ -763,7 +803,7 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
     under = ground(found[0] if found else None, {i: name_of[i] for i in sorted(used) if i in name_of}) if ground else {}
     shades = under.get("colours") or {"rgb": STOCK_RGB, "from": None, "why": "no game directory was read"}
     read = found[0] if found and found[0] else {}
-    who = seat_facts(ex, read.get("players") or {}, shades, world, read.get("first") or {}, dims)
+    who = seat_facts(ex, rows, shades, world, read.get("first") or {}, dims)
     data = {"v": 2, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
             "said": under.get("said") or [], "layout": layout, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
             "players": ex.players, "who": who, "colours": {"from": shades["from"], "why": shades["why"]},
@@ -848,6 +888,7 @@ def main(argv=None) -> int:
         for rec in a.rec:
             ex = think.extract(rec)
             lay, layout = layout_for(ex, lays, builds)
+            rows = header_rows(rec)
             seats = [think.pick_seat(ex, a.seat)] if a.seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
             names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in a.content] if n), [])
             stem = base = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
@@ -862,7 +903,7 @@ def main(argv=None) -> int:
                 ident = stem if len(seats) == 1 else f"{stem}-seat{seat}"
                 data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
                              a.step, a.max_bytes,
-                             lambda found, used: terrain(found, used, dirs, pictures), layout)
+                             lambda found, used: terrain(found, used, dirs, pictures), layout, rows)
                 files[ident] = data_file(ident, data)
                 game["seats"].append({"seat": seat, "id": ident, "file": f"{ident}.js"})
                 game.update(end=data["end"], who=data["who"])
