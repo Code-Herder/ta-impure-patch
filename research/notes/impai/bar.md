@@ -529,6 +529,14 @@ the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\*
   | 6 | 2.253 | 0.300 |
 
   The looks waited on the run lock beside other runs; the six took 2 h 10 min from the first admission.
+- **Every champion's fit** (the strength figure that still moves once every fair game is won; one `ladder.py run` a champion, 120 games):
+
+  | champion | measured | m\* | 90 % | slope |
+  |---|---|---|---|---|
+  | 57d39d71 | 2026-11-16 | ×1.95 | ×1.78..×2.14 | 0.298 |
+  | ed3e5634 | 2026-11-17 | ×2.07 | ×1.92..×2.23 | 0.344 |
+
+  The two intervals overlap over most of their width: the forty-odd brain commits between the two builds show no gain the ladder can tell from none. ed3e5634's looks: ×2.828 0.275, ×1.682 0.750, ×2.181 0.300, ×1.915 0.600, ×2.044 0.450, ×1.978 0.625 (`.data/impai/runs/ladder/ed3e5634/`).
 
 ## The champion gauntlet
 
