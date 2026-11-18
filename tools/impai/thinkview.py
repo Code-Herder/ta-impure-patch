@@ -1,0 +1,630 @@
+#!/usr/bin/env python3
+"""thinkview.py -- one page that shows what ImpAI was thinking through recorded games: the war room and the
+flight recorder as one instrument.
+
+    tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR]... --out DIR [--step N] [--max-bytes B] [--bare]
+
+Writes DIR/index.html and, for each recording, DIR/<name>.js: the page (thinkview.html, beside this file) and one
+data file a recording, which the page loads when the recording is picked. The page needs no server and no
+network but its fonts: open index.html. --bare writes the page without the document around it (doctype, head,
+body), for a host that wraps what it is given in its own.
+
+THE VIEW is two halves of one clock. THE FLIGHT RECORDER is the whole game on one time axis: a lane a squad
+with its tasks as spans, a lane a judgement of the seat's (naval, island, dry hunt, lead, pressure, base threat,
+what the enemy base's estimate rests on), a row of events, and curves. THE WAR ROOM is the map at the moment the
+recorder's cursor stands on: the seat's anchor and base box, its units by job, each squad with its task and goal
+line, the enemy base's estimate, and the enemy as the seat knows it (in sight, a radar or sonar contact, a
+remembered ghost) over the enemy as it is, which the page draws faintly and can hide.
+
+EVERYTHING IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
+(thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
+(--tree DIR names the tree that made it). What think.py's extract does not keep -- where each unit stands, and
+each seat's metal income -- is read from the same stream in one more pass (sample), through tarec.py's own
+accessors.
+
+EXACT AND SAMPLED. The lanes, the events, the squads' state and every scalar of the seat's are EXACT at every
+tick: they are the ticks at which a field changes (think.changes). The map's units, the builders' jobs, the rows
+of what the seat knows and the held ground are SAMPLED: at every DECISION TICK (a tick at which a squad's task or
+goal changes, or an event falls) and every --step ticks between (default: about 240 over the game). The page
+says which sample its map shows when the cursor stands between two.
+
+A TICK is think.py's: tick T holds what the step from GameTime T - 1 wrote.
+
+THE SIZE BOUND. A data file is held to --max-bytes (default 3 000 000): when it is larger, every second sample
+that is no decision tick is dropped until it fits, the lanes untouched; a game whose decision ticks alone pass
+the bound is a message and exit 2.
+
+UNITS OF PLACE (impai.h): a squad's point, the estimate and a known row are 32-px blocks; an anchor, a job's
+site and a unit image's footprint are 16-px cells; held ground is 256-px cells, a bit a cell in rows of
+IMPAI_GRID_MAX. The page draws in pixels and prints blocks, as think.py does.
+
+Exit 0, 2 (could not run)."""
+import argparse
+import json
+import math
+import re
+import struct
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import think  # noqa: E402
+
+TEMPLATE = HERE / "thinkview.html"
+MAX_BYTES = 3_000_000
+SAMPLES = 240                   # regular samples over a game, before the decision ticks
+BLOCK_PX, CELL_PX, HELD_PX = 32, 16, 256        # UNITS OF PLACE
+# the seat's scalars the page reads, exact at every tick (think.py's paths)
+PATHS = ("mil.level", "mil.ebx", "mil.ebz", "mil.wave_t", "mil.scout_t", "mil.waves", "mil.naval", "mil.est_seen",
+         "mil.sq[*].task", "mil.sq[*].layer", "mil.sq[*].n", "mil.sq[*].flags", "mil.sq[*].tx", "mil.sq[*].tz",
+         "mil.sq[*].target", "mil.sq[*].since", "mil.sq[*].value", "mil.foe", "mil.press_until", "mil.press_v",
+         "mil.press_bx", "mil.press_bz", "mil.press_base", "mil.threat_seen", "mil.radar_as", "mil.dry", "mil.lead",
+         "mil.island", "mil.unreached", "mil.lost_t", "mil.mob_v", "mil.safe_until", "brain.ax", "brain.az",
+         "brain.ring_grow", "brain.nway", "brain.opened", "brain.sea_refused", "brain.explorer", "brain.way[*].type",
+         "brain.way[*].cx", "brain.way[*].cz")
+# the judgements' lanes: (id, label, the field, {value or enumerator: (what it says, tone)}); a value not named
+# draws nothing. "*" names every value but 0
+JUDGEMENTS = (("naval", "naval", "mil.naval", {1: ("the map is judged naval", "info"),
+                                                -1: ("naval not judged yet", "muted")}),
+              ("island", "island", "mil.island", {1: ("the land army reaches no enemy ground", "info")}),
+              ("dry", "dry hunt", "mil.dry", {1: ("no land enemy known for a long while", "warn")}),
+              ("lead", "lead", "mil.lead", {1: ("far ahead on what it knows", "good")}),
+              ("threat", "base threat", "mil.threat_seen", {"*": ("a threat stands at the base", "bad")}),
+              ("estimate", "estimate", "mil.est_seen", {"START": ("the enemy base is a start position, a guess", "muted"),
+                                                        "STRUCT": ("the enemy base is where structures were seen", "enemy"),
+                                                        "KEPT": ("the enemy base is a centre kept from memory", "ghost")}))
+FOE_GAP = 900                   # ticks between two sightings of a commander that are two events
+
+
+class ViewError(think.ThinkError):
+    pass
+
+
+def num(v):
+    """A value as the data files keep it: a float to one decimal, one not finite as 0."""
+    if isinstance(v, float):
+        return round(v, 1) if math.isfinite(v) else 0
+    return v
+
+
+def at(track, t, default=0):
+    """A track's value at tick `t`: its last change at or before it; `default` before the first (a field
+    never written reads as zeros)."""
+    if not track:
+        return default
+    lo, hi = 0, len(track[0])
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if track[0][mid] <= t:
+            lo = mid + 1
+        else:
+            hi = mid
+    return track[1][lo - 1] if lo else default
+
+
+def tracks(ex, lay, seat, paths) -> tuple:
+    """({field's name: [[tick, ...], [value, ...]]} of every scalar `paths` name, at each tick it changes; the
+    paths this layout or this recording does not have; the names of the scalars it has, changed or not)."""
+    fields, missing = {}, []
+    for path in paths:
+        try:
+            for sel in think.select(ex, lay, seat, [path]):
+                fields.setdefault(sel.part, {}).update({f.name: f for f in sel.fields})
+        except think.ThinkError:
+            missing.append(path)
+    sels = [think.Selection(ex, lay, part, seat, list(fs.values())) for part, fs in fields.items()]
+    _start, events = think.changes(ex, sels)
+    out = {}
+    for t, part, row, f, _old, raw in events:
+        tr = out.setdefault(think.label(part, row, f), [[], []])
+        tr[0].append(t)
+        tr[1].append(num(f.value(raw)))
+    have = {think.label(sel.part, sel.rows.start, f) for sel in sels for f in sel.fields}
+    return out, missing, have
+
+
+def runs(track, end: int) -> list:
+    """[[from, to, value], ...]: the stretches of ticks 0..end a track holds one value over."""
+    out, t0, v0 = [], 0, 0
+    for t, v in zip(*(track or [[], []])):
+        if t > end:
+            break
+        if v != v0:
+            if t > t0:
+                out.append([t0, t, v0])
+            t0, v0 = t, v
+    if end > t0:
+        out.append([t0, end, v0])
+    return out
+
+
+def lanes(episodes: list, end: int) -> list:
+    """The squads' lanes: [{"k": squad, "spans": [[from, to, task, index of the episode], ...]}, ...], a squad
+    that ever left FREE a lane, each task it held one span (think.squad_episodes), a task still held at the end
+    ending there."""
+    by = {}
+    for i, e in enumerate(episodes):
+        if e["from"] < end:
+            to = end if e["to"] is None else min(e["to"], end)
+            by.setdefault(e["squad"], []).append([e["from"], to, e["task"], i])
+    return [{"k": k, "spans": by[k]} for k in sorted(by)]
+
+
+def judgement_lanes(trk: dict, enums: dict, end: int, have=None) -> list:
+    """The judgements' lanes: [{"id", "label", "spans": [[from, to, what it says, tone], ...]}, ...] of JUDGEMENTS'
+    fields this recording has (`have`: tracks' third answer; by default those that changed), and the pressure's
+    (pressure_spans). A judgement that never stood is a lane with no span."""
+    out = []
+    have = set(trk) | set(enums) if have is None else have
+    for ident, label, path, says in JUDGEMENTS:
+        if path not in have:
+            continue
+        names = enums.get(path, {})
+        spans = []
+        for t0, t1, v in runs(trk.get(path), end):
+            said = says.get(v) or says.get(names.get(str(v))) or (says.get("*") if v else None)
+            if said:
+                if spans and spans[-1][1] == t0 and spans[-1][2:] == list(said):
+                    spans[-1][1] = t1
+                else:
+                    spans.append([t0, t1, *said])
+        out.append({"id": ident, "label": label, "spans": spans})
+    if "mil.press_until" in trk:
+        out.insert(min(4, len(out)), {"id": "pressure", "label": "pressure",
+                                      "spans": [[a, b, "outmatched near the base: constructors held", "bad"]
+                                                for a, b in pressure_spans(trk["mil.press_until"], end)]})
+    return out
+
+
+def pressure_spans(track, end: int) -> list:
+    """[[from, to], ...]: the ticks the pressure holds over. A stamp written at tick t holds to the GameTime it
+    names (press_until); stamps that meet are one span."""
+    out = []
+    for t, until in zip(*track):
+        if t >= end or until <= t:
+            continue
+        to = min(until + 1, end)
+        if out and t <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], to)
+        else:
+            out.append([t, to])
+    return out
+
+
+def known_counts(ex, lay, seat) -> dict:
+    """What the seat knows of the others, exact: {"now", "pass", "ghost": [[ticks], [rows]]} -- the rows it
+    holds in sight (its own or an ally's), as a radar or sonar contact alone, and as a ghost -- and "first", the
+    first tick it knows any, None never. Its own rows are not counted."""
+    try:
+        how = next(f for f in lay.seat_fields("known", seat) if f.name == "how")
+        sel = think.Selection(ex, lay, "known", seat, [how])
+        _start, events = think.changes(ex, [sel])
+    except (think.ThinkError, StopIteration):
+        return {}
+    m = lay.macros
+    own, ghost = m.get("IMPAI_OWN", 0), m.get("IMPAI_GHOST", 0)
+    now = m.get("IMPAI_LOS", 0) | m.get("IMPAI_SHARED", 0)
+
+    def klass(v):
+        if not v or v & own:
+            return None
+        return "now" if v & now else "ghost" if v & ghost else "pass"
+    count = {"now": 0, "pass": 0, "ghost": 0}
+    out = {k: [[], []] for k in count}
+    first = None
+    by_tick = {}
+    for t, _part, row, f, old, raw in events:
+        by_tick.setdefault(t, []).append((klass(f.value(old)), klass(f.value(raw))))
+    for t in sorted(by_tick):
+        before = dict(count)
+        for a, b in by_tick[t]:
+            if a:
+                count[a] -= 1
+            if b:
+                count[b] += 1
+        if first is None and any(count.values()):
+            first = t
+        for k in count:
+            if count[k] != before[k]:
+                out[k][0].append(t)
+                out[k][1].append(count[k])
+    return dict(out, first=first)
+
+
+def place(bx, bz) -> str:
+    return f"({bx},{bz})"
+
+
+def events(ex, trk: dict, episodes: list, known: dict, enums: dict, names: dict, end: int) -> list:
+    """The recorder's events, [[tick, kind, text, squad or -1], ...] in tick order. Kinds: `task` a squad takes
+    a task, `leg` it takes another goal, `wave` an attack wave starts, `lost` a prediction is lost (a squad's
+    retreat or the home's), `plant` a plant's way out is kept (the plant is sited), `contact` the first enemy
+    row, `sight` an enemy comes into sight when none was, `cmdr` an enemy commander seen, `judge` a judgement or
+    the estimate's ground changes, `free` a squad lets its task go and takes none."""
+    out = []
+    lost = set(trk.get("mil.lost_t", [[]])[0])
+    wave = set(trk.get("mil.wave_t", [[]])[0])
+    for e in episodes:
+        t0 = e["from"]
+        goal = next(((g, s) for _t, g, s in e["legs"] if any(g) or s is not None), None)
+        n = e["n"][1]
+        text = f"sq[{e['squad']}] {e['task']} {e['layer'].lower()}, {n} unit{'s' if n != 1 else ''}"
+        if goal:
+            owner = ex.seat_of(goal[1]) if goal[1] is not None else None
+            text += f", goal {place(*goal[0])}" + (f" slot {goal[1]}" if goal[1] is not None else "") \
+                + (f" of seat {owner}" if owner is not None else "")
+        if e["task"] == "RETREAT" and t0 in lost:
+            text += ", on a lost prediction"
+        out.append([t0, "task", text, e["squad"]])
+        for t, g, s in e["legs"]:
+            if t != t0 and (any(g) or s is not None):
+                out.append([t, "leg", f"sq[{e['squad']}] {e['task']} goes for {place(*g)}"
+                            + (f" slot {s}" if s is not None else ""), e["squad"]])
+    by_start = {}
+    for e in episodes:
+        by_start.setdefault(e["from"], []).append(e)
+    for e in episodes:
+        if e["to"] is not None and not any(n["squad"] == e["squad"] for n in by_start.get(e["to"], [])):
+            out.append([e["to"], "free", f"sq[{e['squad']}] lets its {e['task']} go: FREE", e["squad"]])
+    for t in sorted(wave):
+        went = [f"sq[{e['squad']}], {e['n'][1]} unit{'s' if e['n'][1] != 1 else ''}"
+                for e in by_start.get(t, []) if e["task"] == "ATTACK"]
+        out.append([t, "wave", "an attack wave starts" + (": " + "; ".join(went) if went else ""), -1])
+    for t in sorted(lost):
+        back = [f"sq[{e['squad']}]" for e in by_start.get(t, []) if e["task"] == "RETREAT"]
+        out.append([t, "lost", ("a prediction is lost: " + ", ".join(back) + " retreat" + ("s" if len(back) == 1 else ""))
+                    if back else "a prediction is lost at home", -1])
+    prev = 0
+    for t, v in zip(*trk.get("brain.nway", [[], []])):
+        for i in range(prev, v):
+            typ = at(trk.get(f"brain.way[{i}].type"), t, None)
+            cx, cz = at(trk.get(f"brain.way[{i}].cx"), t), at(trk.get(f"brain.way[{i}].cz"), t)
+            what = names.get(typ, f"type {typ}") if typ is not None else "a plant"
+            out.append([t, "plant", f"{what} sited at block {place(cx * CELL_PX // BLOCK_PX, cz * CELL_PX // BLOCK_PX)}"
+                                    ": its way out is kept", -1])
+        prev = max(prev, v)
+    if known.get("first") is not None:
+        out.append([known["first"], "contact", "the first enemy row: the seat knows of an enemy", -1])
+    before = 0
+    for t, n in zip(*known.get("now", [[], []])):
+        if n and not before and t != known.get("first"):
+            out.append([t, "sight", "an enemy comes into sight: none was", -1])
+        before = n
+    for key in sorted(trk):
+        m = re.match(r"^mil\.foe\[(\d+)\]\.t$", key)
+        if not m:
+            continue
+        i, last = m.group(1), None
+        for t, seen in zip(*trk[key]):
+            if seen and (last is None or t - last > FOE_GAP):
+                bx, bz = at(trk.get(f"mil.foe[{i}].bx"), t), at(trk.get(f"mil.foe[{i}].bz"), t)
+                out.append([t, "cmdr", f"seat {i}'s commander seen at {place(bx, bz)}", -1])
+            if seen:
+                last = t
+    for ident, _label, path, says in JUDGEMENTS:
+        if ident == "threat":
+            continue
+        cnames = enums.get(path, {})
+        first = True
+        for t0, _t1, v in runs(trk.get(path), end):
+            said = says.get(v) or says.get(cnames.get(str(v)))
+            if t0 > 1 and (said or not first):
+                out.append([t0, "judge", said[0] if said else f"{_label}: no longer", -1])
+            first = False
+    for t, v in zip(*trk.get("brain.opened", [[], []])):
+        if v:
+            out.append([t, "judge", "the first factory is counted: the opening is over", -1])
+    order = {"wave": 0, "lost": 1, "task": 2, "leg": 3, "free": 5}
+    out = [e for e in out if 0 <= e[0] <= end]
+    out.sort(key=lambda e: (e[0], order.get(e[1], 4), e[3]))
+    return out
+
+
+def unit_lives(ex) -> list:
+    """Every unit's life, exact: [[slot, type index in ImpAI's tables, the tick it appears, the tick it is gone
+    or None], ...] in the order they appear. A slot whose type changes is a new life."""
+    lives, cur = [], {}
+    for i in range(len(ex.uticks)):
+        slot, t = ex.uslots[i], ex.uticks[i]
+        if slot in cur:
+            lives[cur.pop(slot)][3] = t
+        if ex.uborn[i]:
+            cur[slot] = len(lives)
+            lives.append([slot, ex.utypes[i] - 1, t, None])
+    return lives
+
+
+def sample(path, ticks) -> tuple:
+    """((the map's width, height in px), {tick: {"units": [(slot, x, z, structure, frame), ...], "metal": {seat:
+    income}}}) at each of `ticks`, read from the recording's stream through tarec.py: a unit's place is its
+    footprint's centre in px (tarec.rect), `structure` tarec.structure, `frame` 1 while its build fraction is not
+    0; a seat's income its player record's last pass (bar.py's PLAYER_METAL_IN), {} when bar.py cannot be
+    loaded. The world is taken as tick T's last record leaves it, which is what think.py's tick T holds."""
+    sys.path.insert(0, str(think.TREE / "tools" / "replay"))
+    import tarec
+    try:
+        import bar
+        metal_at = bar.PLAYER_METAL_IN
+    except Exception:                                           # noqa: BLE001
+        metal_at = None
+    want, out = set(ticks), {}
+    try:
+        h, bl, _stop = tarec.load(str(path))
+        seats = [p["index"] for p in h["players"]]
+        built = struct.Struct("<f")
+
+        def take(w):
+            units = []
+            for slot, u in w.units.items():
+                cells = tarec.rect(u)
+                if not cells:
+                    continue
+                xs, zs = [c[0] for c in cells], [c[1] for c in cells]
+                units.append((slot, (min(xs) + max(xs) + 1) * CELL_PX // 2, (min(zs) + max(zs) + 1) * CELL_PX // 2,
+                              1 if tarec.structure(u) else 0, 1 if built.unpack_from(u, tarec.U_BUILT)[0] else 0))
+            metal = {}
+            if metal_at is not None:
+                metal = {s: num(struct.unpack_from("<f", w.players[s], metal_at)[0]) for s in seats}
+            out[w.tick] = {"units": units, "metal": metal}
+
+        def on_record(w, kind, _b):
+            if kind is None and w.tick in want and w.tick not in out:
+                take(w)
+        w = tarec.stream_to(h, bl, on_record=on_record)
+        if w.tick in want and w.tick not in out:
+            take(w)
+        gw, gh = h["features"][0], h["features"][1]
+    except Exception as e:                                      # noqa: BLE001
+        raise ViewError(f"{path}: its stream could not be sampled ({type(e).__name__}: {e})") from None
+    return (gw * CELL_PX, gh * CELL_PX), out
+
+
+def seat_frames(ex, lay, seat, ticks, used: set) -> dict:
+    """{tick: {"j": the seat's jobs, flat [slot, kind, build, cx, cz, squad, target, ...] of each row that
+    holds one, "k": what it knows of the others, flat [slot, type, how, owner, bx, bz, ...], "held": the held
+    256-px cells [gz x IMPAI_GRID_MAX + gx, ...]}} at each of `ticks`, the type indices it names added to `used`."""
+    none = lay.macros.get("WQ_NONE", 0xFFFF)
+    own = lay.macros.get("IMPAI_OWN", 1)
+    out = {t: {"j": [], "k": [], "held": []} for t in ticks}
+
+    def reader(part, want):
+        if part not in ex.stride:
+            return None, None
+        fs = {f.name: f for f in lay.seat_fields(part, seat)}
+        return think.Image(ex, part), [fs.get(n) for n in want]
+
+    def val(img, row, f, default=0):
+        raw = img.raw(row, f) if f is not None else None
+        return f.value(raw) if raw is not None else default
+    jimg, jf = reader("job", ("kind", "build", "cx", "cz", "squad", "target"))
+    kimg, kf = reader("known", ("type", "how", "owner", "bx", "bz"))
+    bimg = think.Image(ex, "brain") if "brain" in ex.stride else None
+    held = sorted((f for f in lay.fields("brain") if re.match(r"^held\[\d+\]$", f.name)), key=lambda f: f.off)
+    for t in sorted(ticks):
+        fr = out[t]
+        if jimg is not None and jf[0] is not None:
+            jimg.to(t)
+            for row in think.seat_rows(ex, "job", seat):
+                kind = val(jimg, row, jf[0])
+                if kind:
+                    build = val(jimg, row, jf[1], none)
+                    used.add(build)
+                    fr["j"] += [row, kind, build, val(jimg, row, jf[2]), val(jimg, row, jf[3]), val(jimg, row, jf[4]),
+                                val(jimg, row, jf[5], none)]
+        if kimg is not None and kf[1] is not None:
+            kimg.to(t)
+            st, hoff = kimg.stride, kf[1].off
+            for row in range(min(kimg.rows(), max(ex.slots, 0))):
+                how = kimg.img[row * st + hoff]
+                if how and not how & own:
+                    typ = val(kimg, row, kf[0], none)
+                    used.add(typ)
+                    fr["k"] += [row, typ, how, val(kimg, row, kf[2], 255), val(kimg, row, kf[3]), val(kimg, row, kf[4])]
+        if bimg is not None and held:
+            bimg.to(t)
+            for i, f in enumerate(held):
+                raw = bimg.raw(seat, f)
+                if raw and raw[0]:
+                    fr["held"] += [i * 8 + b for b in range(8) if raw[0] >> b & 1]
+    return out
+
+
+def plan_value(tree, name: str):
+    """A number the plan's defaults give `name` in impai_brain.c's text (`.base_r = 1536`), None when the tree
+    names none: the plan is no recorded state, so its text is the one place the figure stands."""
+    try:
+        text = (Path(tree) / "tagpu" / "ddraw" / "src" / "impai_brain.c").read_text(errors="replace")
+    except OSError:
+        return None
+    m = re.search(rf"\.{re.escape(name)}\s*=\s*(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
+def result_of(rec: Path) -> dict:
+    """What the harness wrote beside a recording (bar.py's <name>.json): {"end_tick", "outcome", "winner"
+    (a seat, None), "cap"}; {} with none. A harness ends a game by a scenario and clears the level in the last
+    ticks, so a game's end is its result's end_tick, not the recording's last."""
+    try:
+        doc = json.loads(rec.with_suffix(".json").read_text())
+        seat = (doc.get("seats") or {}).get(doc.get("outcome")) or {}
+        return {"end_tick": int(doc["end_tick"]), "outcome": str(doc.get("outcome")), "winner": seat.get("seat"),
+                "cap": doc.get("cap")}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def enum_names(lay, seat) -> dict:
+    """{field's name: {value: name}} of the enums the page prints, squads' members under `mil.sq.<member>`."""
+    out = {}
+    for part in ("mil", "brain", "job"):
+        try:
+            fields = lay.seat_fields(part, seat)
+        except (think.ThinkError, KeyError):
+            continue
+        for f in fields:
+            if f.names is not None and f.names is not lay.unit_names:
+                out.setdefault(part + "." + re.sub(r"\[\d+\]", "", f.name), {str(v): n for v, n in f.names.items()})
+    return out
+
+
+def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES) -> dict:
+    """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
+    answer for the recording; `names` think.type_names'. ViewError when the decision ticks alone pass `budget`."""
+    result = result or {}
+    end = result.get("end_tick") or ex.end
+    end = min(max(int(end), 1), ex.end) if ex.end else 0
+    name_of = {i: n for i, n in enumerate(names)}
+    trk, missing, have = tracks(ex, lay, seat, PATHS)
+    enums = enum_names(lay, seat)
+    episodes = think.squad_episodes(ex, lay, seat)
+    known = known_counts(ex, lay, seat)
+    evs = events(ex, trk, episodes, known, enums, name_of, end)
+    decisions = sorted({e[0] for e in evs})
+    if step is None:
+        step = max(30, -(-end // SAMPLES // 30) * 30)
+    if step < 1:
+        raise ViewError("--step: at least one tick")
+    regular = sorted(set(range(0, end + 1, step)) | {end})
+    ticks = sorted(set(regular) | set(decisions))
+    dims, world = sampler(ticks)
+    used = set()
+    seat_side = seat_frames(ex, lay, seat, ticks, used)
+    lives = [life + [0, 0, 0, None] for life in unit_lives(ex)]     # + structure, x, z, the tick it is complete
+    at_slot, li, frames, helds = {}, 0, [], {}
+    seats = sorted({p["index"] for p in ex.players})
+    counts = ex.alive(ticks=ticks)[1]
+    for i, t in enumerate(ticks):
+        while li < len(lives) and lives[li][2] <= t:
+            at_slot[lives[li][0]] = li
+            li += 1
+        w = world.get(t) or {"units": [], "metal": {}}
+        mobile = []
+        for slot, x, z, structure, frame in w["units"]:
+            k = at_slot.get(slot)
+            if k is None or (lives[k][3] is not None and lives[k][3] <= t):
+                continue
+            life = lives[k]
+            used.add(life[1])
+            if structure:
+                life[4], life[5], life[6] = 1, x, z
+            else:
+                mobile += [k, x, z]
+            if not frame and life[7] is None:
+                life[7] = t
+        side = seat_side[t]
+        cells = tuple(side["held"])
+        frames.append({"t": t, "m": mobile, "j": side["j"], "k": side["k"],
+                       "h": helds.setdefault(cells, len(helds)),
+                       "a": [counts.get(s, [0] * len(ticks))[i] for s in seats],
+                       "i": [w["metal"].get(s, 0) for s in seats] if w["metal"] else []})
+    for path in ("brain.way[*].type", "mil.radar_as"):
+        for key, tr in trk.items():
+            if re.sub(r"\[\d+\]", "[*]", key) == path:
+                used.update(tr[1])
+    data = {"v": 1, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
+            "players": ex.players, "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
+            "px": list(dims), "units": {"block": BLOCK_PX, "cell": CELL_PX, "held": HELD_PX,
+                                        "held_row": lay.macros.get("IMPAI_GRID_MAX", 128)},
+            "base_r": plan_value(lay.tree, "base_r"),
+            "macros": {k: lay.macros[k] for k in ("WQ_NONE", "IMPAI_OWN", "IMPAI_LOS", "IMPAI_SHARED", "IMPAI_RADAR",
+                                                  "IMPAI_SONAR", "IMPAI_GHOST", "IMPAI_NO_ANCHOR", "IMPAI_SQUADS",
+                                                  "IMPAI_FOE_FRESH") if k in lay.macros},
+            "enums": enums, "names": {str(i): name_of[i] for i in sorted(used) if i in name_of},
+            "named": bool(name_of), "tracks": trk, "known": {k: v for k, v in known.items() if k != "first"},
+            "missing": missing,
+            "episodes": [{"k": e["squad"], "task": e["task"], "layer": e["layer"], "from": e["from"], "to": e["to"],
+                          "n": list(e["n"]), "value": num(float(e["value"])),
+                          "legs": [[t, g[0], g[1], -1 if s is None else s] for t, g, s in e["legs"]]}
+                         for e in episodes],
+            "lanes": lanes(episodes, end), "judgements": judgement_lanes(trk, enums, end, have),
+            "events": evs, "decisions": decisions, "step": step,
+            "lives": lives, "helds": [list(c) for c in sorted(helds, key=helds.get)], "frames": frames}
+    keep = set(decisions) | {0, end}
+    while True:
+        size = len(json.dumps(data, separators=(",", ":")))
+        if size <= budget:
+            data["bytes"] = size
+            return data
+        loose = [f for f in data["frames"] if f["t"] not in keep]
+        if not loose:
+            raise ViewError(f"{ex.name}: its data is {size} bytes at its {len(data['frames'])} decision ticks "
+                            f"alone, past --max-bytes {budget}")
+        drop = {f["t"] for f in loose[1::2]} or {loose[0]["t"]}
+        data["frames"] = [f for f in data["frames"] if f["t"] not in drop]
+        data["step"] *= 2
+
+
+SKELETON = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n</head>\n<body>\n'
+            "{}\n</body>\n</html>\n")
+
+
+def page(manifest: list, bare=False) -> str:
+    """index.html: the template with the recordings' list in it, in a document of its own unless `bare`."""
+    try:
+        text = TEMPLATE.read_text()
+    except OSError as e:
+        raise ViewError(f"no {TEMPLATE.name} beside thinkview.py: {e.strerror}") from None
+    mark = "/*MANIFEST*/[]"
+    if text.count(mark) != 1:
+        raise ViewError(f"{TEMPLATE.name} has no one {mark}")
+    text = text.replace(mark, json.dumps(manifest, separators=(",", ":")).replace("</", "<\\/"))
+    return text if bare else SKELETON.format(text)
+
+
+def data_file(ident: str, data: dict) -> str:
+    """A recording's data file: one call the page's loader answers."""
+    return f"thinkviewData({json.dumps(ident)},{json.dumps(data, separators=(',', ':'))});\n"
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("rec", type=Path, nargs="+")
+    p.add_argument("--seat", type=int, default=None, help="the seat (default: each recording's one ImpAI seat)")
+    p.add_argument("--tree", action="append", default=[], metavar="DIR",
+                   help="a source tree whose layout a recording may be read by (repeatable)")
+    p.add_argument("--out", type=Path, required=True, metavar="DIR")
+    p.add_argument("--step", type=int, default=None, metavar="N", help="ticks between two regular samples")
+    p.add_argument("--max-bytes", type=int, default=MAX_BYTES, metavar="B", help="a data file's bound")
+    p.add_argument("--bare", action="store_true", help="the page without the document around it")
+    a = p.parse_args(argv)
+    try:
+        lays = think.layouts(a.tree)
+        manifest, files = [], {}
+        for rec in a.rec:
+            ex = think.extract(rec)
+            lay = think.fit(ex, lays)
+            seat = think.pick_seat(ex, a.seat)
+            names = think.type_names(ex)
+            data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
+                         a.step, a.max_bytes)
+            ident = stem = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
+            n = 1
+            while ident in files:
+                n += 1
+                ident = f"{stem}-{n}"
+            files[ident] = data_file(ident, data)
+            manifest.append({"id": ident, "file": f"{ident}.js", "name": ex.name, "map": ex.map,
+                             "seat": ex.seat_label(seat), "end": data["end"]})
+            print(f"thinkview: {ex.name}: {len(data['frames'])} samples every {data['step']} ticks and at "
+                  f"{len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, {len(data['events'])} "
+                  f"events, {len(files[ident])} bytes" + ("" if names else "; no name table fits: types by number")
+                  + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else ""))
+        html = page(manifest, a.bare)
+        a.out.mkdir(parents=True, exist_ok=True)
+        for ident, text in files.items():
+            (a.out / f"{ident}.js").write_text(text)
+        (a.out / "index.html").write_text(html)
+        print(f"thinkview: {a.out / 'index.html'}, {len(html)} bytes")
+        return 0
+    except think.ThinkError as e:
+        print(f"thinkview: COULD NOT RUN: {e}")
+        return 2
+    except OSError as e:
+        print(f"thinkview: COULD NOT RUN: {e.filename or ''}: {e.strerror or e}")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

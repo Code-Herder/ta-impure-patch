@@ -46,6 +46,12 @@ scalar under it (`mil.sq[3]`, `brain.fmem`), `[*]` every element (`mil.sq[*].tas
 `job[*].kind` every row of the seat's. A value the header names is printed by that name: an enum's enumerators
 less their common prefix (ENUM_OF), a flag byte's macros (BITS_OF).
 
+A UNIT TYPE IS PRINTED BY ITS NAME with its number, `CORCOM(167)`, in the members that hold one (TYPE_OF), when
+the content file predfit.py writes (CONTENT, .data/impai/fight-content.json) lists as many types as the
+recording's header counts unit definitions: the count is all that ties the file to the recording, so a file of
+another mod with the same count names wrongly, and the number printed beside the name is what to check by. No
+file, or another count: the number alone.
+
 THE LAYOUT IS THE COMPILER'S (thinklayout.py), made from the headers of a source tree and kept by their hash;
 no offset is written here. A recording whose regions' row sizes are not that tree's structs' was made by
 another layout and is REFUSED by name, never misread: --tree DIR names the source tree that made it (a worktree
@@ -111,6 +117,12 @@ ENUM_OF = {("IMPAI_SQUAD", "task"): "IMPAI_SQ_FREE", ("IMPAI_SQUAD", "layer"): "
 # ... or the macros of its bits
 BITS_OF = {("IMPAI_SEEN", "how"): ("IMPAI_OWN", "IMPAI_LOS", "IMPAI_SHARED", "IMPAI_RADAR", "IMPAI_SONAR",
                                    "IMPAI_GHOST")}
+# ... or a unit type's index in ImpAI's tables (A UNIT TYPE IS PRINTED BY ITS NAME)
+TYPE_OF = {("IMPAI_SEEN", "type"), ("IMPAI_JOB", "type"), ("IMPAI_JOB", "build"), ("IMPAI_JOB", "far_type"),
+           ("IMPAI_JOB", "help_type"), ("IMPAI_ENEMY", "type"), ("IMPAI_MIL", "radar_as"), ("IMPAI_PEND", "type"),
+           ("IMPAI_WAYREC", "type"), ("IMPAI_WAYFAIL", "type"), ("IMPAI_BRAIN", "sea_none_type"),
+           ("IMPAI_BRAIN", "sea_cur_type"), ("IMPAI_BRAIN", "unlock"), ("IMPAI_BRAIN", "unlock_plant")}
+CONTENT = diag.DATA / "impai" / "fight-content.json"
 FMT = {("u", 1): "<B", ("u", 2): "<H", ("u", 4): "<I", ("u", 8): "<Q", ("i", 1): "<b", ("i", 2): "<h",
        ("i", 4): "<i", ("i", 8): "<q", ("f", 4): "<f", ("f", 8): "<d", ("b", 1): "<B", ("p", 4): "<I"}
 PATH = re.compile(r"^(\w+)(?:\[(\d+|\*)\])?(?:\.(.+))?$")
@@ -172,6 +184,13 @@ class Layout:
         self.size = {p: self.types[lay["roots"][p]]["size"] for p in PARTS}
         self.ctype = lay.get("ctypes", {})
         self.macros = lay.get("macros", {})
+        self.unit_names = {}
+        self._fields = {}
+
+    def name_types(self, names: list):
+        """Print the members of TYPE_OF by `names` (type_names), index by index; [] prints numbers. Index 0,
+        the engine's reserved `None`, stays 0: it is what an unused member holds."""
+        self.unit_names = {i: f"{n}({i})" for i, n in enumerate(names) if i}
         self._fields = {}
 
     def naming(self, owner, node):
@@ -189,6 +208,8 @@ class Layout:
             prefix = os.path.commonprefix(have) if len(have) > 1 else ""
             prefix = prefix[:prefix.rfind("_") + 1]
             return None, [(self.macros[n], n[len(prefix):]) for n in have]
+        if owner in TYPE_OF and self.unit_names:
+            return self.unit_names, None
         return None, None
 
     def fields(self, part: str) -> list:
@@ -262,6 +283,7 @@ class Extract:
         self.name = name
         self.build, self.map = str(head.get("build", "?")), str(head.get("map", "?"))
         self.slots, self.each = int(head.get("slots") or 0), int(head.get("units_each") or 0)
+        self.defs = int((head.get("unitdefs") or [0])[0] or 0)     # the unit definitions the header counts
         self.players = [{k: p.get(k) for k in ("index", "name", "ai", "side")} for p in head.get("players", [])]
         self.stride = {p: int(s) for p, s in (head.get("stride") or {}).items() if p in PARTS and int(s) > 0}
         self.stop = head.get("stop")
@@ -361,7 +383,7 @@ class Extract:
             arrays += [(f"{p}.ticks", s.ticks), (f"{p}.offs", s.offs), (f"{p}.lens", s.lens)]
             blobs.append((f"{p}.blob", s.blob))
         head = {"byteorder": sys.byteorder, "build": self.build, "map": self.map, "slots": self.slots,
-                "units_each": self.each, "players": self.players, "stride": self.stride, "stop": self.stop,
+                "units_each": self.each, "unitdefs": [self.defs], "players": self.players, "stride": self.stride, "stop": self.stop,
                 "end": self.end, "arrays": [[n, a.typecode, a.itemsize, len(a)] for n, a in arrays],
                 "blobs": [[n, len(b)] for n, b in blobs]}
         js = json.dumps(head).encode()
@@ -482,6 +504,19 @@ def extract(path, cache=None) -> Extract:
     except OSError:
         pass                    # an extract that cannot be kept costs the next call the reading again
     return ex
+
+
+def type_names(ex: Extract, content=None) -> list:
+    """The unit types' names by their index in ImpAI's tables (index 0 the engine's reserved `None`), from the
+    content file when it lists as many as `ex`'s header counts unit definitions (A UNIT TYPE IS PRINTED BY ITS
+    NAME); [] otherwise. A unit image's type ID is this index + 1."""
+    try:
+        names = json.loads(Path(CONTENT if content is None else content).read_text())["names"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(names, list) or not ex.defs or len(names) != ex.defs:
+        return []
+    return [str(n) for n in names]
 
 
 class Image:
@@ -1208,6 +1243,8 @@ def main(argv=None) -> int:
             return 0
         lays = layouts(a.tree)
         lay = fit(ex, lays)
+        for each in lays:
+            each.name_types(type_names(ex))
         seat = pick_seat(ex, a.seat)
         parts = [x for x in getattr(a, "part", "").split(",") if x]
         bad = [x for x in parts if x not in PARTS]
