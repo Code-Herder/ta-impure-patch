@@ -4097,7 +4097,8 @@ def techtree(c, shots, res):
 
     # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing -- and sends the tree's
     # instances to the device not once: a pan moves the copy the device holds (tagpu_vk_hud.c, THE TECH TREE ON THE DEVICE)
-    d = wait_dump(c, lambda d: d["tech"]["sel"] == k and d["tech"]["drawn"] and d["tech"]["sent"] > 0,
+    # the frame drawn with the pick, from the device's copy: what the render thread drew, not what the game thread asked
+    d = wait_dump(c, lambda d: d["tech"]["dsel"] == k and d["tech"]["dev"] and d["tech"]["sel"] == k,
                   "(tt3) the pick's tree was not drawn from the device")
     sent0 = d["tech"]["sent"]
     z, x0, y0 = d["tech"]["cam"]

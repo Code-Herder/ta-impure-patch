@@ -1288,7 +1288,7 @@ static void page_hits(int top, int* cut)
     }
 }
 
-void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent)
+void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent, int tree_dev)
 {
     int i, top, cut = 0;
     memset(&s_map, 0, offsetof(TAGPU_CMD_WIKI, hit));
@@ -1366,6 +1366,8 @@ void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent)
         s_map.tech_lo = s_tlo;
         memcpy(s_map.tech_cv, s_tcv, sizeof s_map.tech_cv);
         s_map.tech_sent = tree_sent;
+        s_map.tech_dsel = (int16_t)s_tkey.sel;
+        s_map.tech_dev = (uint8_t)(tree_dev != 0);
     }
     /* a game frame: its world takes a click only on a live frame in Try it, through the frame's fit
        (tagpu_wiki.c live_world), and the stage HUD's playhead run as drawn turns a pointer into a

@@ -77,10 +77,11 @@ void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t
    playhead run the command record's; `cursor` 1
    when the stage's cursor is among what it draws -- its op (the list's `watch`) was given
    instances and none of them is hidden; `tree_sent` the times the pass has sent the tech tree's
-   instances to the device (tagpu_vk_hud.c), carried to the hit map's `tech_sent`. 0: this frame
+   instances to the device (tagpu_vk_hud.c), carried to the hit map's `tech_sent`, and `tree_dev` 1
+   when this frame drew the tree from the device's copy (`tech_dev`). 0: this frame
    draws no wiki, and the map is empty. After tagpu_wikistate_frame answered 1 for the same frame,
    or with 0 on any frame. */
-void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent);
+void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent, int tree_dev);
 
 /* The cursor goes back over the wiki layer this frame (tagpu_vk_gui_record_cursor): the layer drew,
    and either the window is closed -- the cursor is where the engine's own would be, which the

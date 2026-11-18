@@ -248,8 +248,8 @@ void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* c
             p->rgba = ink(&c, I_DOT);
         }
     }
-    shift->tree0 = o->n;
     if (T) {
+        shift->tree0 = o->n;
         shift->dx = -(int)floor(cam->x * cam->z + 0.5);
         shift->dy = -(int)floor(cam->y * cam->z + 0.5);
         draw_tree(&c, T, cam, sel, all, art);
@@ -260,6 +260,9 @@ void tagpu_wikitech_stage(const WIKITECHTREE* T, const char* msg, const WTCAM* c
         t_text(&c, art, WT_ROLE_BODY, msg, c.W / 2, c.H / 2, 9 * u, ink(&c, I_SAY));
         if (c.o->n && (p = &c.o->op[c.o->n - 1])->kind == HOP_TEXT) p->centre = 1;
     }
+    /* the message is the stage's, never the tree's: it changes with no generation the tree has */
+    shift->tree0 = o->n;
+    shift->dx = shift->dy = 0;
 }
 
 static void draw_tree(TB* cp, const WIKITECHTREE* T, const WTCAM* cam, int sel, int all, const WTART* art)

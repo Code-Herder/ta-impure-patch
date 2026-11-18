@@ -177,10 +177,12 @@ static VkRect2D              s_top;             /* the top layer's device pixels
    the frame's own command buffer behind barriers whose first scope holds every frame submitted
    before it (the order the atlas's in-frame copies rest on). Each frame draws them moved by the
    pan, whole device pixels, through the per-draw constants below. A frame whose staging cannot
-   take them keeps them due and does not draw the tree: never an older tree at another zoom.
-   TREE_MAXINST bounds the copy: techcheck's budget case, every card at the most zoom with every
-   link, is at most 1 348 ops and 4 976 bytes of text (Escalation), some 10 600 quads at the most;
-   a quad past it is dropped and said. Its 1.5 MB is a whole frame's staging and less. */
+   take them keeps them due and does not draw the tree: never an older tree at another zoom; a
+   staging mapped smaller than they are (tagpu_vk_stage_begin halves a refused mapping) never can,
+   and says so once. TREE_MAXINST bounds the copy: techcheck's budget case, every card at the most
+   zoom with every link, is at most 1 348 ops and 4 976 bytes of text (Escalation), some 10 600
+   quads at the most; a quad past it is dropped and said. At most 1.5 MB, inside a full staging's
+   2 MB (TAGPU_VK_STAGE_CAP). */
 #define TREE_MAXINST  16384
 #define TREE_MAXBATCH 1024
 #define TBYTES        ((VkDeviceSize)TREE_MAXINST * sizeof(HUDINST))
@@ -1334,7 +1336,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_trdraw = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
-    tagpu_wikistate_drawn(0, 0, 0);
+    tagpu_wikistate_drawn(0, 0, 0, 0);
     if (s_state == ST_REFUSED) return 0;
     hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
     wiki = tagpu_wikistate_frame(d->frame, &wl) && wl.px > 0;
@@ -1626,6 +1628,10 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 s_trsends++;
                 s_trsent++;
                 s_trbytes += (long)bytes;
+            } else if (bytes > sg->cap && !(s_trsaid & 8)) {
+                s_trsaid |= 8;
+                plog(d, "wiki: the tech tree's %u bytes do not fit the slot's staging (%u mapped) - the tree is not "
+                        "drawn while it does not (said once)", (unsigned)bytes, (unsigned)sg->cap);
             }
         }
     }
@@ -1704,7 +1710,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (hud) tagpu_hudstate_drawn(&s_ops);
         /* the stage's cursor is drawn when its op was given instances and they were not hidden:
            the player's is shown instead in a frame where it is not (tagpu_wikistate_cursor) */
-        if (wiki) tagpu_wikistate_drawn(1, wcur > 0, s_trsent);
+        if (wiki) tagpu_wikistate_drawn(1, wcur > 0, s_trsent, s_trdraw);
     }
     return s_ninst > 0;
 lost:
