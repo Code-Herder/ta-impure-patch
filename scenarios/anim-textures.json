@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "Animated face textures: the pieces a script marks dont-cache are redrawn live every frame and show the anim state's current frame (ARMESTOR's glow, CORESTOR's windows, CORLAB's and ARMAP's lights); a cached piece shows frame 0. A mobile unit draws its pieces directly and animates while it moves (ARMCOM's torso glow).",
+  "description": "Animated face textures: the pieces a script marks dont-cache are redrawn live every frame and show the anim state's current frame (ARMESTOR's glow, CORESTOR's windows, CORLAB's and ARMAP's lights); a cached piece shows frame 0. A walking unit keeps its composite, so its cached pieces hold frame 0 too (ARMCOM's torso glow).",
   "on_error": "abort",
 
   "setup": {

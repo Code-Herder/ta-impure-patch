@@ -447,15 +447,26 @@ piece gets is the unit draw `0x458810`'s choice:
   over `+0x10E` (`0x45884C..0x45885C`); for anything else, its move object's speed is 0 —
   `cmp [[unit]+0x20],0; sete` (`0x458862..0x45886C`). It passes `still` on (`[esp+0x2C]`, stored over
   its own first argument).
-- **No composite**: every visible piece is drawn directly by `0x4584D0` (`0x458972..0x458997`) with
-  `still` as the mode, which its copy of the face rule tests at `0x458635..0x458656`
-  (`[esp+0x3F84]`, its seventh argument). A tank's treads and a commander's torso glow cycle while it moves.
-- **A composite**: the builder `0x4586A0` bakes the cached pieces with mode 1 (every call pushes
-  `1` or `-1`: `0x4588FE`, `0x459367`, `0x4595F5`, `0x459669`), so they hold frame 0. Then the blit
-  `0x459200` draws the visible dont-cache pieces (bit 0 set, bit 1 clear) live: with a depth plane
-  through `0x459830` with mode **0** (`0x45962F..0x459641`), skipped for a structure whose build
-  fraction is not 0.0 (`0x45960D..0x45962D`); without one through `0x4584D0` with `still`
-  (`0x4593D4..0x4593FF`). A finished energy storage's glow, a lab's blinking lights, cycle.
+- **A composite**, which every unit has from its first draw on — `Object3do+4` is 0 then
+  (`0x458870..0x458875`) and the builder runs (`0x4588FE..0x45890C`), mobile units included. The
+  builder `0x4586A0` bakes the cached pieces with mode 1 (`0x4588FE`, `0x459367`, `0x4595F5`; its
+  piece filter at `0x459963` takes a piece whose bit 1 equals the mode), so they hold frame 0. Then
+  the blit `0x459200` draws the visible dont-cache pieces (bit 0 set, bit 1 clear) live: with a
+  depth plane through `0x459830` with mode **0** (`0x45962F..0x459641`), skipped for a structure
+  whose build fraction is not 0.0 (`0x45960D..0x45962D`); without one through `0x4584D0` with
+  `still` (`0x4593D4..0x4593FF`). A finished energy storage's glow and a lab's blinking lights
+  cycle; a walking unit cycles only its dont-cache pieces, always with a depth plane and only while
+  it moves without one, and a commander's cached torso glow holds frame 0 [MEASURED 2026-11-18: an
+  ARMCOM walking at speed `0x9999` keeps `Object3do+0x10` non-NULL].
+- **No composite** — the builder failed: every visible piece is drawn directly by `0x4584D0`
+  (`0x458972..0x458997`) with `still` as the mode, which its copy of the face rule tests at
+  `0x458635..0x458656` (`[esp+0x3F84]`, its seventh argument).
+- **A carried unit** (`+0x86` set) is not drawn by its own call: `DrawUnit` returns at `0x45AC29`.
+  Its carrier's blit draws each member of its `+0x8A` chain that lacks `+0x110` bit 17
+  (`0x459657`, `0x459423`): with a depth plane through `0x4586A0(cargo, 1, -1)`
+  (`0x459669..0x459670`), whose mode −1 takes every piece and draws every animated face at frame 0
+  (`0x459B67`); without one, its visible pieces through `0x4584D0` with the **carrier's** `still`
+  (`0x459423..0x459476`).
 
 Measured on GDI, 24 consecutive window captures of the scenario `anim-textures` at zoom 1.0: ARMESTOR's glow
 showed 9 distinct pictures, CORESTOR's windows 5, CORLAB's blink 4; Vulkan before the fix, 1 each.

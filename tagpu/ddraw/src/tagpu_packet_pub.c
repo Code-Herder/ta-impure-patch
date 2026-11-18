@@ -641,13 +641,13 @@ static int wiki_iface(const char* ta)
    which an animated face shows its anim state's current frame rather than
    frame 0 (tagpu_packet.h, TAGPU_PK_U_ANIMDC). Read after DrawGameScreen
    returned, so the composite is the one this frame's draw left. The draw
-   0x458810 takes one argument for every piece it draws directly, `still`:
-   for a structure the unit is NOT activated (`not al; and 1` over unit+0x10E,
-   0x45884C..0x45885C), for anything else its move object's speed is 0
-   (`cmp [mover+0x20],0; sete`, 0x458862..0x45886C). Then:
+   0x458810 computes `still` first: for a structure the unit is NOT activated
+   (`not al; and 1` over unit+0x10E, 0x45884C..0x45885C), for anything else
+   its move object's speed is 0 (`cmp [mover+0x20],0; sete`, 0x458862..
+   0x45886C). It bakes a composite at a unit's first draw (0x458870..0x458875,
+   0x4588FE..0x45890C), mobile units included, so a unit has one from then on
+   unless that bake failed:
 
-     no composite        every visible piece, directly (0x4584D0 from
-                         0x458997), with `still` as the mode
      composite, a depth  the composite holds the cached pieces, baked with
      plane               mode 1 (0x4586A0's calls), and the blit 0x459200
                          redraws the visible dont-cache ones with mode 0
@@ -655,11 +655,26 @@ static int wiki_iface(const char* ta)
                          build fraction left (0x45960D..0x45962D)
      composite, no       the blit draws the visible dont-cache pieces itself
      depth plane         (0x4593D4..0x4593FF) with `still` as the mode
+     no composite        every visible piece, directly (0x4584D0 from
+                         0x458997), with `still` as the mode
+
+   A CARRIED UNIT is not drawn by its own call: DrawUnit returns at 0x45AC29
+   when unit+0x86 is set, and its carrier's blit draws it -- with a depth
+   plane through 0x4586A0(cargo, 1, -1) (0x459669..0x459670), whose mode -1
+   takes every piece (0x459963) at frame 0 (0x459B67); without one, its
+   visible pieces through 0x4584D0 with the CARRIER's `still`
+   (0x459423..0x459476). So it is 0 here, and `*cargo` is the class this unit's
+   blit gives each member of its cargo chain (fill_world sets them).
 
    So a finished energy storage's dont-cache glow cycles while its cached
-   body holds frame 0, and a commander's torso glow cycles while it walks.
+   body holds frame 0, and a walking unit cycles only its dont-cache pieces.
    DISASSEMBLED 2026-11-18. */
-static unsigned anim_class(const char* u, const char* o3)
+/* the class the unit fill_unit last filled gives its cargo (anim_class), and
+   each packet unit's, for fill_world's cargo pass */
+static unsigned      s_fillCargoCls;
+static unsigned char s_uCargoCls[TAGPU_PK_MAX_UNITS];
+
+static unsigned anim_class(const char* u, const char* o3, unsigned* cargo)
 {
     const unsigned st = RDU32(u, U_STATE);
     const char* comp = ptr_ok(o3) ? *(const char* const*)(o3 + O3_COMPOSITE) : NULL;
@@ -670,7 +685,11 @@ static unsigned anim_class(const char* u, const char* o3)
         const char* mv = *(const char* const*)(u + U_MOVER);
         still = !ptr_ok(mv) || RD32(mv, MV_SPEED) == 0;
     }
-    if (!ptr_ok(comp)) return still ? 0u : TAGPU_PK_U_ANIMALL;
+    *cargo = 0u;
+    if (!ptr_ok(comp)) return *(const char* const*)(u + U_CARRIER) ? 0u
+                            : still ? 0u : TAGPU_PK_U_ANIMALL;
+    if (!RDU32(comp, GF_PTRDEPTH)) *cargo = still ? 0u : TAGPU_PK_U_ANIMALL;
+    if (*(const char* const*)(u + U_CARRIER)) return 0u;
     if (RDU32(comp, GF_PTRDEPTH)) {
         /* the engine's `fcomp 0.0; test ah,0x40`: equal, and a NaN alike, redraws */
         const float nano = *(const float*)(u + U_NANO);
@@ -811,7 +830,7 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
             if (RDU32(fr, GF_PTRDEPTH)) e->flags |= TAGPU_PK_U_DEPTHPLANE;
         }
     }
-    e->flags |= (unsigned char)anim_class(u, o3);
+    e->flags |= (unsigned char)anim_class(u, o3, &s_fillCargoCls);
     /* THE OWNERSHIP ANSWER IS TAKEN HERE, ON THIS THREAD, WITH THE DEF IN
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
        build fraction, so the unit pass takes the answer from the packet rather
@@ -1734,6 +1753,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
             ue = &s_uScratch[nu];
             fill_unit(ue, ta, u, i, udefCount, udefs);
+            s_uCargoCls[nu] = (unsigned char)s_fillCargoCls;
             /* what the engine's draw list would leave out for the viewed player:
                the unit pass draws none of it (tagpu_native.c, the refusals) */
             if (!tagpu_packet_pub_unit_seen(ta, u)) ue->flags |= TAGPU_PK_U_UNSEEN;
@@ -1831,6 +1851,21 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                                         ? (short)s_slotIdx[s1] : (short)-1;
             s_uScratch[i].cargo_next  = (s2 >= 0 && (unsigned)s2 < walk && s_slotIdx[s2] != 0xFFFFu)
                                         ? (short)s_slotIdx[s2] : (short)-1;
+        }
+        /* THE CARGO'S ANIM CLASS IS ITS CARRIER'S BLIT'S (anim_class): each member
+           of a chain the blit walks, every one but a ST_NOCARGO member, which
+           both of its loops skip (0x459657, 0x459423). A chain is followed at
+           most `nu` links, so a cycle in the engine's links ends. */
+        for (i = 0; i < nu; i++) {
+            int c = s_uScratch[i].cargo_first;
+            unsigned hop = 0;
+            while (c >= 0 && (unsigned)c < nu && hop++ < nu) {
+                TAGPU_PK_UNIT* m = &s_uScratch[c];
+                if (!(m->state & ST_NOCARGO))
+                    m->flags = (unsigned char)((m->flags & ~(TAGPU_PK_U_ANIMDC | TAGPU_PK_U_ANIMALL)) |
+                                               s_uCargoCls[i]);
+                c = m->cargo_next;
+            }
         }
         /* the oracle's bitmap, cleared only where it was set */
         for (i = 0; i < nu; i++) s_idSeen[s_idUsed[i] >> 3] = 0;

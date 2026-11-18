@@ -161,6 +161,8 @@
 #define U_XFIX             0x6A        /* i32 16.16 world x                     */
 #define U_ZFIX             0x6E        /* i32 16.16 altitude                    */
 #define U_YFIX             0x72        /* i32 16.16 map depth                   */
+#define U_CARRIER          0x86        /* UnitStruct* that carries it, 0 = none:
+                                          DrawUnit skips such a unit (0x45AC29) */
 #define U_CARGO            0x8A        /* UnitStruct* first unit carried/built  */
 #define U_CARGONEXT        0x8E        /* UnitStruct* next in that chain        */
 #define U_TYPE             0x92        /* UnitDef*                              */
