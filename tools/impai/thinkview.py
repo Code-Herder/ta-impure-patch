@@ -30,7 +30,10 @@ ORIGINAL GAME: it is written into --out and nowhere else.
 
 EVERYTHING ELSE IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
 (thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
-(--tree DIR names the tree that made it). What think.py's extract does not keep -- where each unit stands, and
+(--tree DIR names the tree that made it). THE TREE AT THE RECORDING'S BUILD READS IT: sizes are all think.py
+compares, and two builds of the same sizes may number an enum's members otherwise (a job's kinds have), so of
+the trees that fit, one checked out at the commit the recording's header names is taken first, then each --tree
+in the order given, and this tree last; the page says so when none is at the recording's build. What think.py's extract does not keep -- where each unit stands, and
 each seat's metal income -- is read from the same stream in one more pass (sample), through tarec.py's own
 accessors.
 
@@ -56,6 +59,7 @@ import json
 import math
 import re
 import struct
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -402,6 +406,31 @@ def sample(path, ticks) -> tuple:
     return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map")}
 
 
+def tree_build(tree) -> str:
+    """The commit a source tree is checked out at, as a recording's header names a build (8 hex digits); "" when
+    git names none."""
+    try:
+        return subprocess.run(["git", "-C", str(tree), "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True,
+                              timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def layout_for(ex, lays: list, builds=None) -> tuple:
+    """(the layout `ex` is read by, {"build": its tree's commit, "exact": the tree is at the recording's build}):
+    THE TREE AT THE RECORDING'S BUILD READS IT; with none, the first --tree that fits, in the order given, and
+    this tree (`lays`' first, think.layouts) last: a --tree is named because this tree reads a recording wrongly.
+    A build named `-dirty` was made from edits no commit holds, so no tree is exactly its."""
+    builds = {} if builds is None else builds
+    for lay in lays:
+        if lay.tree not in builds:
+            builds[lay.tree] = tree_build(lay.tree)
+    made = ex.build.split("-")[0]
+    own = [lay for lay in lays if builds[lay.tree] and builds[lay.tree] == made]
+    lay = think.fit(ex, own + [x for x in lays[1:] + lays[:1] if x not in own])
+    return lay, {"build": builds[lay.tree], "exact": lay in own and made == ex.build}
+
+
 def game_dirs(recs: list, given: list) -> list:
     """The game directories a map file is looked for in: --gamedir's, else each recording's own (it lies in
     `<gamedir>/replays/`) and the install tavfs.py finds."""
@@ -566,11 +595,11 @@ def enum_names(lay, seat) -> dict:
     return out
 
 
-def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None) -> dict:
+def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_BYTES, ground=None, layout=None) -> dict:
     """One recording's data, as the page reads it (thinkview.html, THE DATA). `sampler(ticks)` is sample's
     answer for the recording; `names` think.type_names'; `ground(found, names)` terrain's answer for sample's
-    third and the types the data names ({index: name}), None for a page with no ground. ViewError when the
-    decision ticks alone pass `budget`."""
+    third and the types the data names ({index: name}), None for a page with no ground; `layout` layout_for's
+    second answer. ViewError when the decision ticks alone pass `budget`."""
     result = result or {}
     end = result.get("end_tick") or ex.end
     end = min(max(int(end), 1), ex.end) if ex.end else 0
@@ -624,7 +653,7 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
                 used.update(tr[1])
     under = ground(found[0] if found else None, {i: name_of[i] for i in sorted(used) if i in name_of}) if ground else {}
     data = {"v": 2, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
-            "said": under.get("said") or [], "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
+            "said": under.get("said") or [], "layout": layout, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
             "players": ex.players, "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
             "px": list(dims), "units": {"block": BLOCK_PX, "cell": CELL_PX, "held": HELD_PX,
                                         "held_row": lay.macros.get("IMPAI_GRID_MAX", 128)},
@@ -699,11 +728,11 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     try:
         lays = think.layouts(a.tree)
-        manifest, files, pictures, stems = [], {}, {}, set()
+        manifest, files, pictures, stems, builds = [], {}, {}, set(), {}
         dirs = game_dirs(a.rec, a.gamedir)
         for rec in a.rec:
             ex = think.extract(rec)
-            lay = think.fit(ex, lays)
+            lay, layout = layout_for(ex, lays, builds)
             seats = [think.pick_seat(ex, a.seat)] if a.seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
             names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in a.content] if n), [])
             stem = base = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
@@ -716,7 +745,7 @@ def main(argv=None) -> int:
                 ident = stem if len(seats) == 1 else f"{stem}-seat{seat}"
                 data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
                              a.step, a.max_bytes,
-                             lambda found, used: terrain(found, used, dirs, pictures))
+                             lambda found, used: terrain(found, used, dirs, pictures), layout)
                 files[ident] = data_file(ident, data)
                 manifest.append({"id": ident, "file": f"{ident}.js", "name": ex.name, "map": ex.map,
                                  "seat": ex.seat_label(seat), "end": data["end"]})
@@ -726,6 +755,8 @@ def main(argv=None) -> int:
                       f"{len(data['events'])} events, {len(files[ident])} bytes"
                       + (f"; map {m['w']} x {m['h']} px from {m['from']}, {m['bytes']} bytes" if m else "")
                       + ("" if names else "; no name table fits: types by number")
+                      + ("" if layout["exact"] else f"; read by the layout of the tree at {layout['build'] or 'no commit'}, "
+                                                    f"not its build {ex.build}")
                       + (f"; not in this layout: {', '.join(data['missing'])}" if data["missing"] else "")
                       + "".join(f"\n  {line}" for line in data["said"]))
         html = page(manifest, a.bare)

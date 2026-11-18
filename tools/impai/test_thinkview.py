@@ -284,6 +284,19 @@ class View(unittest.TestCase):
         self.assertEqual((f["type"].show(b"\x08\0"), f["type"].show(b"\0\0"), f["type"].show(b"\xff\xff")),
                          ("BOAT(8)", "0", "65535"))
 
+    def test_the_tree_at_the_recordings_build_reads_it(self):
+        import copy
+        ex = think.extract(self.game())                                     # build abc1234
+        here, one, two = (copy.copy(self.lay) for _ in range(3))            # this tree and two --tree, all of sizes that fit
+        here.tree, one.tree, two.tree = "here", "one", "two"
+        ids = {"here": "0000aaaa", "one": "1111bbbb", "two": "abc1234"}
+        self.assertEqual(thinkview.layout_for(ex, [here, one, two], dict(ids)), (two, {"build": "abc1234", "exact": True}))
+        self.assertEqual(thinkview.layout_for(ex, [here, one, two], dict(ids, two="")),
+                         (one, {"build": "1111bbbb", "exact": False}))      # none at its build: the first --tree
+        self.assertEqual(thinkview.layout_for(ex, [here], dict(ids))[0], here)      # no --tree: this tree
+        ex.build = "abc1234-dirty"                                          # edits no commit holds: never exact
+        self.assertEqual(thinkview.layout_for(ex, [here, one, two], dict(ids)), (two, {"build": "abc1234", "exact": False}))
+
     def test_the_command_writes_the_page_and_a_file_a_recording(self):
         import contextlib
         import io

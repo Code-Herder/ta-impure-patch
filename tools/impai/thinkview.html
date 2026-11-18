@@ -853,6 +853,7 @@ function show(d) {
   $('scrub').max = D.end;
   $('gist').innerHTML = gist();
   $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. The map's units, jobs and known rows are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
+    + (D.layout && !D.layout.exact ? ` It is read by the layout of the source tree at ${D.layout.build || 'a commit git does not name'}, not at its own build ${D.build}: the rows' sizes fit, and what a member or an enum's number means is that tree's.` : '')
     + (D.named ? '' : ' No name table fits this recording: unit types are shown by number.') + (D.missing.length ? ` Not in this recording's layout: ${D.missing.join(', ')}.` : '');
   // open where the game first turns: the first task a squad takes, else the start
   const first = D.events.find(e => e[1] === 'task');
