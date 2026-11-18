@@ -52,7 +52,9 @@ unless --cap names another.
 THE MAPS default to DUEL_MAPS, four of the development pool's five, the pool the settings gauntlet plays. A duel
 seats its two idle humans on a map's first two starts and the computer seats on the next two (codeduel.py, THE
 MAP), so a map needs four, which every map of the bar's two pools has (ten each), and both seats must play from
-those two. MEASURED 2026-11-17, a duel a map to GameTime 5 000 or 6 000 between two champions' builds: both seats
+those two. With --no-humans every duel is codeduel.py's --no-humans (its THE HUMANS GONE): the humans watch,
+the computer seats play the map's first two starts, and a game plays at Normal speed; a directory holds the
+duels of one of the two kinds. MEASURED 2026-11-17, a duel a map to GameTime 5 000 or 6 000 between two champions' builds: both seats
 gave orders on Acid Foursome, Luschaven, Gasplant Plain and Lava Alley, and on the bar's Lava Mania, Pincushion,
 Red Triangle and Plains and Passes; on Steel Jungle neither build gave one (two duels), and on Trout Farm the
 seat on start 2 gave none. Those two maps are left out of the default; --maps takes any of bar.py's.

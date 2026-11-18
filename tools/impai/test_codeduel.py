@@ -13,6 +13,7 @@ way round, so a seat is found by its DirectPlay ID and not by its row. The fake 
 import json
 import struct
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -537,6 +538,43 @@ class NoHumans(unittest.TestCase):
         r = cd.judge(gone_log("H", played), gone_log("J", played), 6000, no_humans=True)
         self.assertEqual(r["outcome"], "could not run")
         self.assertTrue(r["reason"].endswith("its level ended with both AI seats holding units"))
+
+
+class FakeRoom:
+    """The battle-room calls a seating makes, in order."""
+
+    host, join = "x-H", "x-J"
+
+    def __init__(self):
+        self.calls = []
+
+    def add_ais(self):
+        self.calls.append(("add_ais",))
+
+    def tacli(self, *args, timeout=None):
+        self.calls.append(args)
+        return ""
+
+    def click(self, name, gadget, timeout=None):
+        self.calls.append(("click", name, gadget))
+
+
+class WatchRoom(unittest.TestCase):
+    def test_the_host_allows_watchers_and_both_humans_watch(self):
+        tp = FakeRoom()
+        cd.watch_room(tp, "ac")
+        self.assertEqual(tp.calls, [("add_ais",), ("ui", "x-H", "set", "WATCHING", "1"),
+                                    ("ui", "x-H", "set", "SIDE0", "2"), ("ui", "x-J", "set", "SIDE0", "2"),
+                                    ("click", "x-J", "SIDE3")])
+        self.assertFalse([c for c in tp.calls if any("TEAMICONS" in str(a) for a in c)])
+
+    def test_the_flag_reaches_the_game_and_the_default_does_not_set_it(self):
+        for argv, want in ((["--no-humans"], True), ([], False)):
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.object(cd, "run", side_effect=ValueError("x")) \
+                    as run, mock.patch("runlock.hold"), mock.patch("runlock.together", return_value=None), \
+                    mock.patch("builtins.print"):
+                rc = cd.main(["--a", "a.dll", "--b", "b.dll", "--out", str(Path(tmp) / "o"), *argv])
+            self.assertEqual((rc, run.call_args.args[-1]), (2, want))
 
 
 class Maps(unittest.TestCase):

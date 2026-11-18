@@ -49,6 +49,15 @@ Everything but the end test, as stock ([network](../engine/network.html), *The o
 - **A battle-room watcher runs neither test**: the phase passes over its record. With every human watching, nothing in the phase ends the level.
 - **A peer that leaves** by its menu ends its own level; its seats are removed on the other peers, whose levels go on. That is how the harness ends a duel.
 
+## Measured
+
+MEASURED 2026-11-18, the reference setup, one build on both peers (`tools/impai/codeduel.py`):
+
+- **The bytes.** Two instances of one DLL at their main menus, the first with the lever file: `tacli peek 0x4655C5:x1D` read `83 F8 03 75 71 8B 0D E8 1D 51 00 83 B9 F6 7E 03 00 02 74 62 E8 D2 26 FF FF 85 C0 EB 59` on it and `... 85 C0 75 59`, the retail bytes, on the other, whose log has no `duel:` line.
+- **Both humans watching** (`--no-humans`, Lava Mania, a cap of 6 000). Without the lever that game ended at GameTime 35; with it the level played to the cap. Each peer logged ImpAI's turns for its own seat and no other (6 176 and 6 502 calls). Seat A's commander stood at 2000,96 and seat B's at 1952,3632 in both peers' rosters: the map's starts 0 and 1, where a game with the humans seated gives the computer seats starts 2 and 3. At the cap the host's Pause key stood both clocks and both peers read 10 and 8 units, valued 31 416.92 and 31 294.15 on both.
+- **The speed stays Normal**: 30.4 ticks a second over that game. Ten `+` keys on both peers left it at 29.9 (the engine refuses a watcher's speed keys, `0x496550`, `0x4965AA`), and the in-game Options screen's Game Speed slider taken to its end on the host left it at 30.0 [the cause not read].
+- **Unarmed**, the same DLL with no lever file: `netai_check.py` and a duel with the humans seated ran as before.
+
 ## State and replay
 
 None of its own. The lever (`SIM_INSTALL`, the registry's lever list) is read once, at attach, and the site is engine code written before any level, as every byte patch of `tagpu_patches.c` is. The feature is `duel_lever`, `SIM_PUPPET_RUNS`: a level played under the lever runs the patched test on a puppet as on its owner. A network game keeps no recording today, so no replay test group plays an armed level; the function is reached at attach by every group.

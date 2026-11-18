@@ -3,6 +3,7 @@
 own ddraw.dll and playing the one computer seat it added.
 
     tools/impai/codeduel.py --a DLL_A --b DLL_B --out DIR [--map NAME] [--sides aa|ac|ca|cc] [--cap T] [--port N]
+                            [--no-humans]
 
 One game of two instances (twopeers.py: a private display, a DirectPlay port leased for the game), under the run
 lock for two game lanes on GDI, no GPU memory (tools/runlock.py). The host H runs DLL_A and the joiner J DLL_B,
@@ -14,7 +15,8 @@ at the cap's by THE VALUE AT THE CAP.
 
 THE MAP is one of bar.py's (a key of bar.MAPS, or a map's own name); the battle room loads it by name. With
 fixed locations the humans take the map's first two start positions and the AI seats the next two, in row
-order, so the map needs four; the result names each seat's start.
+order, so the map needs four; the result names each seat's start, its own peer's +0x147 (a peer's copy of
+another peer's record holds another figure there, MEASURED: the record's index).
 
 THE HUMANS STAY, ALLIED AND IDLE. A network game seats each peer's human beside the AIs, and the engine ends a
 network game once no human still playing holds a unit, whatever the AI seats hold (0x4655C0..0x4655E0: mode 3,
@@ -29,6 +31,25 @@ allies only by its team, engine/network.md), its commander never ordered. A's te
 (seat_room). The other side's AI treats that commander as an enemy unit, so a game is not the two AI seats
 alone: the judge reads the AI seats' records only, and a game the engine ends because both commanders died
 with both AI seats alive is `ended`, not an outcome.
+
+THE HUMANS GONE (--no-humans). Both peers' game folders hold the duel lever tagpu_impai_duel.on, under which
+the DLL holds that end test off (tagpu_patches.c, patch_duel_lever; research/notes/modules/duel-lever.md), and
+both humans watch: the host sets the battle room's WATCHING to Allowed and each human its side gadget SIDE0 to
+its third stage (watch_room). A watcher has no commander and takes no start, so the two AI seats play the
+map's first two starts, the ones a skirmish plays, and no seat takes a team. The engine runs neither its out
+test nor its victory test for a watcher's record (engine/network.md, *The other ends of a network level*), so
+nothing ends the level but a peer leaving: the harness, at the first look with a seat gone or at the cap.
+MEASURED 2026-11-18 on Lava Mania to a cap of 6 000, one build on both peers: the level played on past
+GameTime 35 to the cap; each peer logged ImpAI's turns for its own seat alone (6 176 and 6 502); A's commander
+stood on start 0 and B's on start 1 in both peers' rosters; the host's Pause key stood both clocks, and both
+peers read 10 and 8 units, 31 416.92 and 31 294.15, equal to the cent.
+  - The judge (humans_gone) checks, in place of the teams: each peer's log holds the lever's installed line;
+    no record but the two AI seats' holds a unit from some look on to the last (the result's `humans_out`,
+    each peer's GameTime of that look); neither AI seat's alliance bytes ally the other.
+  - THE SPEED is Normal, 30 ticks a second: the engine refuses a watcher's speed keys (0x496550, 0x4965AA;
+    MEASURED 29.9 after ten `+` on both peers), and the in-game Options screen's Game Speed slider, taken to
+    its end on the host, left it at 30.0 (MEASURED; why is not read). So no `+` is pressed, and a game takes
+    twice the wall time of one with the humans idle.
 
 THE SPEED. A network game starts at Normal speed whatever the registry's `gamespeed` says: 30.1 ticks a second
 (MEASURED on three games), and 45.0 once the host alone had pressed `+` five times. So both peers press it
@@ -86,7 +107,7 @@ THE JUDGE (`judge`), from the two logs:
     other peer by its DirectPlay ID (a row index differs between peers), where it is controller 3 and among
     the other peers' ImpAI seats;
   - the teams: on each peer A's team is its own human's and not B's, and each AI seat allies its human and
-    not the other seat;
+    not the other seat; with --no-humans, THE HUMANS GONE's checks instead;
   - each peer's view: the first look at which an AI seat that held a unit holds none names the loser (both at
     one look: a draw, written as bar.py writes it, `cap` with `draw`); for the host, neither at its first look
     at or past the cap: `cap`, and no later look of its is read; the joiner, with no seat gone at any look, is
@@ -679,7 +700,8 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, 
         tp.battle_room(name)
         (watch_room if no_humans else seat_room)(tp, sides)
         tp.start()
-        full_speed(tp)
+        if not no_humans:
+            full_speed(tp)              # THE HUMANS GONE: a watcher's speed keys are refused
         t1 = time.monotonic()
         peers = (tp.host, tp.join)
         first = {n: look(tp, n, range(RECORDS), seating=True) for n in peers}
