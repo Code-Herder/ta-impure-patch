@@ -44,7 +44,7 @@ One byte: `0x4655E0`'s opcode `75` becomes `EB`. The `jmp 0x46563B` is always ta
 
 Everything but the end test, as stock ([network](../engine/network.html), *The other ends of a network level*):
 
-- **A human whose record holds no unit goes out** on its own 30-tick pass: with a computer seat of its own peer still in the game it becomes a watcher of the level, which goes on; with none, the level ends on that peer, lost.
+- **A human whose record holds no unit goes out** on its own 30-tick pass: with a computer seat of its own peer still in the game it becomes a watcher of the level, which goes on; with none, the level ends on that peer, lost when its record's `+0x22` is 0.
 - **A human who is out wins with its allies**: once every seat that still holds units is its ally, allied to all the others, the level ends on that peer, won. Two computer seats that are not allied never satisfy it.
 - **A battle-room watcher runs neither test**: the phase passes over its record. With every human watching, nothing in the phase ends the level.
 - **A peer that leaves** by its menu ends its own level; its seats are removed on the other peers, whose levels go on. That is how the harness ends a duel.
@@ -61,10 +61,11 @@ MEASURED 2026-11-18, the reference setup, one build on both peers (`tools/impai/
 
 ## State and replay
 
-None of its own. The lever (`SIM_INSTALL`, the registry's lever list) is read once, at attach, and the site is engine code written before any level, as every byte patch of `tagpu_patches.c` is. The feature is `duel_lever`, `SIM_PUPPET_RUNS`: a level played under the lever runs the patched test on a puppet as on its owner. A network game keeps no recording today, so no replay test group plays an armed level; the function is reached at attach by every group.
+None of its own. The lever (`SIM_INSTALL`, the registry's lever list) is read once, at attach, and the site is engine code written before any level, as every byte patch of `tagpu_patches.c` is. The feature is `duel_lever`, `SIM_PUPPET_RUNS`: a level played under the lever runs the patched test on a puppet as on its owner. A network game writes no skirmish recording (`recorder: recording` is in neither peer's log); it begins the multiplayer capture (`recmp: contributions begin`), and no multiplayer recording is played back by the engine today, so no replay test group plays an armed level; the function is reached at attach by every group.
 
 ## Gaps
 
+- **A multiplayer recording made under the lever carries it only in the header's lever list** (`RT_LEVER`), which no playing compares. The day the engine plays a multiplayer recording back, a playing of an armed one runs the stock end test unless the playing arms the lever from the header or refuses the recording by name, as the sight-cap's entry does; on a puppet the stock test could set the stop bit at the first tick with no human holding a unit, and `replay-globals.tsv` holds the end flags on a puppet on the premise that nothing sets them there.
 - No replay test group arms the lever: what an armed level does is measured by `codeduel.py --no-humans` alone.
 - No armed game has been played to a seat's loss, and none between two builds: the three games above had one build on both peers, which `codeduel.py`'s fingerprint check refuses by design, every other check of its judge passing.
 - An armed game with the humans watching plays at Normal speed (*Measured*).

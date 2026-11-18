@@ -533,6 +533,15 @@ class NoHumans(unittest.TestCase):
         self.assertEqual(r["outcome"], "could not run")
         self.assertIn("H: seat A's alliance bytes", r["reason"])
 
+    def test_a_seat_past_the_alliance_bytes_read_fails_by_name(self):
+        def rec(dpid, alive, allies=0):
+            return {"active": 1, "dpid": dpid, "alive": alive, "allies": allies}
+        lk = {"t": 100, "recs": {0: rec(11, 1), 5: rec(22, 1), 1: rec(33, 0)}}
+        texts = dict.fromkeys(cd.PEERS, cd.DUEL_LINE)
+        _out, bad = cd.humans_gone(texts, dict.fromkeys(cd.PEERS, [lk]), dict.fromkeys(cd.PEERS, lk),
+                                   {"A": 11, "B": 22})
+        self.assertEqual(bad, [f"{p}: seat B is record 5, past the 4 alliance bytes a look reads" for p in cd.PEERS])
+
     def test_a_level_that_ended_under_the_lever(self):
         played = self.WON[:2]
         r = cd.judge(gone_log("H", played), gone_log("J", played), 6000, no_humans=True)

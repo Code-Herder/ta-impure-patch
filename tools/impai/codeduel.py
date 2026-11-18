@@ -76,7 +76,7 @@ host at about 57 ticks a second where the joiner played about 60). So:
 
 THE VALUE AT THE CAP is bar.py's value at the limit, read from the game's memory on both peers: the value of
 each AI seat's finished units alive, a unit's type's metal + energy / 60 by the peer's own type table (`tacli
-units`), summed by bar.value_at. A network game keeps no recording (`recorder: recording` is in neither
+units`), summed by bar.value_at. A network game writes no skirmish recording (`recorder: recording` is in neither
 peer's log) and refuses the pacing's `pause at T` (`pause: at 6000 refused: a network game`, MEASURED on both
 peers), so the harness stops the game with its own Pause key and reads the units themselves:
   - once the host's look is at or past the cap, the Pause key on the host (the joiner if the host's does
@@ -478,7 +478,9 @@ def humans_gone(texts: dict, lks: dict, first: dict, dpid: dict) -> tuple:
             continue
         for s, o in (("A", "B"), ("B", "A")):
             allies = first[p]["recs"][idx[s]]["allies"]
-            if allies >> (8 * idx[o]) & 1:
+            if idx[o] >= SIZE[0x108]:   # the look holds the first SIZE[0x108] alliance bytes: no bit to test
+                bad.append(f"{p}: seat {o} is record {idx[o]}, past the {SIZE[0x108]} alliance bytes a look reads")
+            elif allies >> (8 * idx[o]) & 1:
                 bad.append(f"{p}: seat {s}'s alliance bytes {allies:#010x} ally seat {o} (record {idx[o]})")
     return out, bad
 
