@@ -195,7 +195,7 @@ void tagpu_wikiview_frame(const TAGPU_FRAME* f)
         pc[i].node = (uint32_t)(size_t)node[i];
     }
     /* the template walk's key (`ghost` 1), as the stage bakes a type; owner 0's team faces */
-    if (!tagpu_posebake_unit(pc, np, 0, 1, &bg, &bm) || bg->nparts != np || bg->count[TAGPU_PB_BODY] <= 0)
+    if (!tagpu_posebake_unit(pc, np, 0, 1, NULL, &bg, &bm) || bg->nparts != np || bg->count[TAGPU_PB_BODY] <= 0)
         return;
     g = tagpu_posebake_geom_mirror(bg, bg->serial, &ng);
     m = tagpu_posebake_mat_mirror(bm, bm->serial, &nm);

@@ -637,6 +637,93 @@ static int wiki_iface(const char* ta)
     return RD32(ta, OFF_IFACE) == 1;
 }
 
+/* WHICH OF A UNIT'S PIECES THE ENGINE JUST DREW WITH MODE 0 -- the mode in
+   which an animated face shows its anim state's current frame rather than
+   frame 0 (tagpu_packet.h, TAGPU_PK_U_ANIMDC). Read after DrawGameScreen
+   returned, so the composite is the one this frame's draw left. The draw
+   0x458810 takes one argument for every piece it draws directly, `still`:
+   for a structure the unit is NOT activated (`not al; and 1` over unit+0x10E,
+   0x45884C..0x45885C), for anything else its move object's speed is 0
+   (`cmp [mover+0x20],0; sete`, 0x458862..0x45886C). Then:
+
+     no composite        every visible piece, directly (0x4584D0 from
+                         0x458997), with `still` as the mode
+     composite, a depth  the composite holds the cached pieces, baked with
+     plane               mode 1 (0x4586A0's calls), and the blit 0x459200
+                         redraws the visible dont-cache ones with mode 0
+                         (0x459641), unless the unit is a structure with any
+                         build fraction left (0x45960D..0x45962D)
+     composite, no       the blit draws the visible dont-cache pieces itself
+     depth plane         (0x4593D4..0x4593FF) with `still` as the mode
+
+   So a finished energy storage's dont-cache glow cycles while its cached
+   body holds frame 0, and a commander's torso glow cycles while it walks.
+   DISASSEMBLED 2026-11-18. */
+static unsigned anim_class(const char* u, const char* o3)
+{
+    const unsigned st = RDU32(u, U_STATE);
+    const char* comp = ptr_ok(o3) ? *(const char* const*)(o3 + O3_COMPOSITE) : NULL;
+    int still;
+    if (st & ST_STRUCTURE) {
+        still = !(RDU8(u, U_CLOAKF) & UA_ACTIVE);
+    } else {
+        const char* mv = *(const char* const*)(u + U_MOVER);
+        still = !ptr_ok(mv) || RD32(mv, MV_SPEED) == 0;
+    }
+    if (!ptr_ok(comp)) return still ? 0u : TAGPU_PK_U_ANIMALL;
+    if (RDU32(comp, GF_PTRDEPTH)) {
+        /* the engine's `fcomp 0.0; test ah,0x40`: equal, and a NaN alike, redraws */
+        const float nano = *(const float*)(u + U_NANO);
+        if ((st & ST_STRUCTURE) && nano != 0.0f && nano == nano) return 0u;
+        return TAGPU_PK_U_ANIMDC;
+    }
+    return still ? 0u : TAGPU_PK_U_ANIMDC;
+}
+
+/* THE ANIMATED-FACE TABLE (tagpu_packet.h, TAGPU_PK_ANIM): the engine's list
+   copied as values. The list is built while the level's models load, on the
+   loader thread, and freed by the level's teardown; the in-play fill runs on
+   the game thread between the two, after the load (the publish point's gate
+   excludes every loading-screen draw). Each frame is bounded below its own
+   sequence's count here, where the sequence is the game thread's to read. */
+static TAGPU_PK_ANIM s_animScratch[TAGPU_PK_MAX_ANIM];
+
+static int anim_cmp(const void* a, const void* b)
+{
+    const uint32_t x = ((const TAGPU_PK_ANIM*)a)->state, y = ((const TAGPU_PK_ANIM*)b)->state;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static unsigned fill_anims(const char* ta, int* over)
+{
+    const int n = RD32(ta, OFF_ANIMLIST_N);
+    const unsigned* list = *(const unsigned* const*)(ta + OFF_ANIMLIST);
+    unsigned k = 0, w, i;
+    *over = 0;
+    if (n <= 0 || !ptr_ok(list)) return 0;
+    if ((unsigned)n > TAGPU_PK_MAX_ANIM) { *over = 1; return 0; }
+    for (i = 0; i < (unsigned)n; i++) {
+        const char* s = (const char*)(size_t)list[i];
+        const char* seq;
+        unsigned fr, cnt;
+        if (!ptr_ok(s)) continue;
+        fr  = RDU16(s, AS_FRAME);
+        seq = *(const char* const*)(s + AS_SEQ);
+        cnt = ptr_ok(seq) ? RDU16(seq, 0) : 0u;
+        s_animScratch[k].state = (uint32_t)(size_t)s;
+        s_animScratch[k].frame = (uint16_t)(fr < cnt ? fr : TAGPU_PK_ANIM_NONE);
+        s_animScratch[k].pad = 0;
+        k++;
+    }
+    qsort(s_animScratch, k, sizeof s_animScratch[0], anim_cmp);
+    /* one entry a state: the binder registers each face once, and a repeat
+       would break the strict order the acquire checks */
+    for (w = 0, i = 0; i < k; i++)
+        if (!w || s_animScratch[i].state != s_animScratch[w - 1].state)
+            s_animScratch[w++] = s_animScratch[i];
+    return w;
+}
+
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value
    that leaves here is either a copy of a field or an index this function has
    already bounded. */
@@ -724,6 +811,7 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
             if (RDU32(fr, GF_PTRDEPTH)) e->flags |= TAGPU_PK_U_DEPTHPLANE;
         }
     }
+    e->flags |= (unsigned char)anim_class(u, o3);
     /* THE OWNERSHIP ANSWER IS TAKEN HERE, ON THIS THREAD, WITH THE DEF IN
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
        build fraction, so the unit pass takes the answer from the packet rather
@@ -1921,6 +2009,14 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     e = append_table(p, cursor, s_utype, s_utypeN, (unsigned)sizeof(TAGPU_PK_UTYPE),
                      &p->utype_off, &p->utype_n, TAGPU_PK_TRUNC_UTYPE);
     if (e > need) need = e;
+    {
+        int over;
+        const unsigned nanim = fill_anims(ta, &over);
+        if (over) p->truncated |= TAGPU_PK_TRUNC_ANIM;
+        e = append_table(p, cursor, s_animScratch, nanim, (unsigned)sizeof(TAGPU_PK_ANIM),
+                         &p->anim_off, &p->anim_n, TAGPU_PK_TRUNC_ANIM);
+        if (e > need) need = e;
+    }
     e = append_table(p, cursor, s_wScratch, nw, (unsigned)sizeof(TAGPU_PK_WRECK),
                      &p->off_wrecks, &p->n_wrecks, TAGPU_PK_TRUNC_WRECKS);
     if (e > need) need = e;

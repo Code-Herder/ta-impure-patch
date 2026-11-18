@@ -52,7 +52,11 @@ typedef struct TAGPU_R3DTEX {
 int tagpu_r3d_atlas_texels(const char* gafframe, TAGPU_R3DTEX* t);
 int tagpu_r3d_ready(void);
 int tagpu_r3d_ensure(void);
-const char* tagpu_r3d_face_texframe(const char* fa, int owner);
+/* a face's texture frame (tagpu_render3do.c `face_texframe`): `anim` is the
+   frame a non-team animated face shows, 0 when the engine draws the piece with
+   a nonzero mode, TAGPU_R3D_ANIM_NONE when the anim state names no frame */
+#define TAGPU_R3D_ANIM_NONE (-1)
+const char* tagpu_r3d_face_texframe(const char* fa, int owner, int anim);
 int tagpu_r3d_face_colour(const char* fa);
 /* build-state (nanoframe) staging for one unit — the engine's own formulas,
    shared so every pass that stages a nanoframe uses the same ones. Takes

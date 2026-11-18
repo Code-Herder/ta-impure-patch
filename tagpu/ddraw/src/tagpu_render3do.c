@@ -325,36 +325,50 @@ static int face_colour(const char* fa)
 }
 
 /* Resolve a face's texture GAFFrame for rendering, by the face's flags as
-   the unit rasteriser reads them (0x459B0F..0x459B86): plain textures live at
-   +0x10; a face with FF_ANIM takes its frame from the GAF sequence at +0x18,
-   whose frame k is the pointer at `seq + 0x28 + 8k` (0x4B7F30's read,
-   tagpu_gaf_seq_entry). With FF_TEAM the frame is the team colour `owner` --
-   one separately painted frame per colour -- and without it frame 0 (the
-   engine takes the animation state's current frame when its caller says so;
-   nothing animates on a unit model that has been seen). A colour at or past
-   the sequence's count makes the engine paint nothing; this clamps to the
-   last frame, so a sequence of fewer than ten frames shows its last colour
-   where the engine leaves a hole. Returns NULL for untextured faces. */
-static const char* face_texframe(const char* fa, int owner)
+   the unit rasteriser reads them (0x459B0F..0x459B86). FLAG BIT 1 (FF_ANIM)
+   DECIDES WHERE THE TEXTURE IS, and it is tested first, as the engine tests
+   it: set, the face's +0x10 is an anim state {u16 frame, u16 countdown}, not
+   a frame, and the texture comes from the GAF sequence at +0x18, whose frame
+   k is the pointer at `seq + 0x28 + 8k` (0x4B7F30's read,
+   tagpu_gaf_seq_entry); clear, +0x10 is the GAFFrame itself.
+
+   Which frame of the sequence: with FF_TEAM the team colour `owner` -- one
+   separately painted frame per colour -- and a colour at or past the
+   sequence's count makes the engine paint nothing; this clamps to the last
+   frame, so a sequence of fewer than ten frames shows its last colour where
+   the engine leaves a hole. Without FF_TEAM, `anim`: frame 0 for a piece the
+   engine draws with a nonzero mode, the anim state's current frame for one it
+   draws with mode 0 (tagpu_packet.h, TAGPU_PK_U_ANIMDC), which the caller has
+   from the frame packet; TAGPU_R3D_ANIM_NONE when that state names no frame,
+   for which the engine paints nothing. Returns NULL for untextured faces and
+   for every face the engine paints nothing for. */
+static const char* face_texframe(const char* fa, int owner, int anim)
 {
-    unsigned tp = *(const unsigned*)(fa + 0x10);
-    if (ptr_ok((void*)(size_t)tp) && !IsBadReadPtr((void*)(size_t)tp, 0x18)) {
-        const char* g = (const char*)(size_t)tp;
-        int w = *(const unsigned short*)(g + 0x00);
-        int h = *(const unsigned short*)(g + 0x02);
-        if (w > 0 && h > 0 && w <= 512 && h <= 512 &&
-            *(const unsigned char*)(g + 0x09) == 0) return g;
+    const unsigned fl = *(const unsigned*)(fa + F_FLAGS);
+    if (fl & FF_ANIM) {
+        unsigned ap = *(const unsigned*)(fa + 0x18);
+        if (ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
+            const char* an = (const char*)(size_t)ap;
+            const int nfr = tagpu_gaf_seq_nframes(an);
+            if (nfr > 0 && nfr <= 64) {
+                int k;
+                const void* fr;
+                if (fl & FF_TEAM) k = owner < 0 ? 0 : (owner >= nfr ? nfr - 1 : owner);
+                else if (anim < 0 || anim >= nfr) return NULL;
+                else k = anim;
+                if (tagpu_gaf_seq_entry(an, k, &fr) == 1 && ptr_ok(fr)) return (const char*)fr;
+            }
+        }
+        return NULL;
     }
-    unsigned ap = *(const unsigned*)(fa + 0x18);
-    if ((*(const unsigned*)(fa + F_FLAGS) & FF_ANIM) &&
-        ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
-        const char* an = (const char*)(size_t)ap;
-        const int nfr = tagpu_gaf_seq_nframes(an);
-        if (nfr > 0 && nfr <= 64) {
-            const int team = (*(const unsigned*)(fa + F_FLAGS) & FF_TEAM) ? owner : 0;
-            const int k = team < 0 ? 0 : (team >= nfr ? nfr - 1 : team);
-            const void* fr;
-            if (tagpu_gaf_seq_entry(an, k, &fr) == 1 && ptr_ok(fr)) return (const char*)fr;
+    {
+        unsigned tp = *(const unsigned*)(fa + 0x10);
+        if (ptr_ok((void*)(size_t)tp) && !IsBadReadPtr((void*)(size_t)tp, 0x18)) {
+            const char* g = (const char*)(size_t)tp;
+            int w = *(const unsigned short*)(g + 0x00);
+            int h = *(const unsigned short*)(g + 0x02);
+            if (w > 0 && h > 0 && w <= 512 && h <= 512 &&
+                *(const unsigned char*)(g + 0x09) == 0) return g;
         }
     }
     return NULL;
@@ -555,6 +569,6 @@ int tagpu_r3d_ensure(void)             /* init on demand */
     if (s_state == 0) r3d_init();
     return s_state == 1;
 }
-const char* tagpu_r3d_face_texframe(const char* fa, int owner) { return face_texframe(fa, owner); }
+const char* tagpu_r3d_face_texframe(const char* fa, int owner, int anim) { return face_texframe(fa, owner, anim); }
 int tagpu_r3d_face_colour(const char* fa) { return face_colour(fa); }
 

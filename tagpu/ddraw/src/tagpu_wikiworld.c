@@ -645,7 +645,7 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
        run: every run this bake is handed is the readers' walk of a model, so the units and the
        ghosts of a type share one geometry entry. The owner keys the material: its team faces'
        logo frame. */
-    if (!tagpu_posebake_unit(s_pc, r->np, m->owner, 1, &bg, &bm) || bg->nparts != r->np ||
+    if (!tagpu_posebake_unit(s_pc, r->np, m->owner, 1, NULL, &bg, &bm) || bg->nparts != r->np ||
         bg->count[TAGPU_PB_BODY] <= 0)
         return 0;
     /* THE REST POSE TURNED ONTO THE FACING: ghost_one's arithmetic with the record's yaw (cs, sn)

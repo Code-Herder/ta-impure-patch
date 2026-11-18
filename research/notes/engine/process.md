@@ -755,7 +755,10 @@ fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), nev
   holding the name (`0x4B8D40`, `_stricmp`, the first sequence of that name); else `logos.GAF`,
   setting FF_TEAM only for exactly 10 frames (`0x42A1F2`); else writes `+0x00 = 0xD1` and FF_FLAT
   and stops (`0x42A204..0x42A20F`: the store of `0xD1` is `0x42A207`, FF_FLAT bit 0 is OR-ed into `+0x1C`). A sequence of more than one frame gets the anim state `0x4B8B30` writes (u16 `+0x10`
-  = 0, u16 `+0x12` = `[seq+0x2C]`, byte `+0x14` = `[seq+2]`, `+0x18` = the sequence) and FF_ANIM;
+  = 0, u16 `+0x12` = `[seq+0x2C]`, byte `+0x14` = `[seq+2]`, `+0x18` = the sequence) and FF_ANIM,
+  and a face without FF_TEAM has that state's address appended to the animated-face list `main+0x148EB`
+  (`0x42A232..0x42A282`), which `0x415B30` steps from the game loop ([render](render.html), *Which
+  pieces animate*);
   otherwise `+0x10` = `[seq+0x28]` and FF_ANIM cleared. A face with no texture name is not touched.
   A sequence of 0 frames reads past its table (the loader takes such a sequence as a miss).
 

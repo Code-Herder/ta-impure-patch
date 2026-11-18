@@ -1600,7 +1600,7 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        placed building's parts with the wrong pieces' matrices. */
     if (!tagpu_posebake_unit(s_pc, np,
                              pk->local_logo != TAGPU_PK_LOGO_NONE ? pk->local_logo : pk->local_player,
-                             1, &bg, &bm) ||
+                             1, NULL, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return 0; }
     /* THE HEADING THE BUILDING WILL ACTUALLY STAND AT, NOT THE MODEL'S REST
        ONE. A ghost posed at rest is half a turn away from every structure the
@@ -3049,7 +3049,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if ((unsigned)npd >= pduCap) continue;
             const TAGPU_PBGEOM* bg; const TAGPU_PBMAT* bm;
             if (!pdReady) continue;
-            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].team, 0, &bg, &bm) ||
+            /* which of its animated faces show their current frame: the unit's
+               class out of the packet, against the packet's frame table. A wreck
+               (no `pu`) takes frame 0 on every face */
+            TAGPU_PBANIM an;
+            an.flags = units[i].pu ? units[i].pu->flags : 0u;
+            an.tab = tagpu_pk_anims(pk); an.n = pk->anim_n;
+            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].team, 0, &an, &bg, &bm) ||
                 bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) {
                 continue;
             }

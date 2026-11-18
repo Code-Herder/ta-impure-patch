@@ -165,6 +165,34 @@ typedef struct TAGPU_PK_UNIT {
                                         not the viewed player's, and
                                         UnitInPlayerLOS 0x465AC0 refuses it
                                         (tagpu_packet_pub_unit_seen)              */
+/* WHICH PIECES SHOW AN ANIMATED FACE'S CURRENT FRAME. A face whose texture is a
+   sequence of more than one frame and not a team colour (FF_ANIM set, FF_TEAM
+   clear) draws `0x4B7EE0(&face+0x10)`, the anim state's current frame, when the
+   piece is drawn with mode 0, and frame 0 (`0x4B7F30(face+0x18, 0)`) otherwise
+   (0x459B08..0x459B86, 0x458635..0x458656). The draw the engine took for the
+   unit this frame decides the mode; the publisher reads it after that draw
+   (tagpu_packet_pub.c, `anim_class`). At most one of the two is set; neither =
+   every piece frame 0. */
+#define TAGPU_PK_U_ANIMDC     0x20u  /* the dont-cache pieces (P_FLAGS bit1 clear) */
+#define TAGPU_PK_U_ANIMALL    0x40u  /* every piece                               */
+
+/* 8 B, one per entry of the engine's animated-face list (main+0x148EB, count
+   main+0x148E7): the anim state the binder 0x42A140 registers for each face
+   that takes a sequence of more than one frame and no team colour (0x42A21D..
+   0x42A282: `face+0x10`), which 0x415B30 advances one step a game-loop pass
+   through 0x4B8B90. Sorted by `state`, strictly increasing (the acquire checks
+   it), so the bake finds a face's frame by binary search. `state` is a KEY
+   compared against a template face's address + 0x10 and never dereferenced;
+   `frame` is the state's u16 frame, already bounded on the game thread below the
+   sequence's own count, or TAGPU_PK_ANIM_NONE when the state names no sequence
+   or a frame past it (the engine then paints nothing for the face). */
+typedef struct TAGPU_PK_ANIM {
+    uint32_t state;
+    uint16_t frame;
+    uint16_t pad;
+} TAGPU_PK_ANIM;
+#define TAGPU_PK_ANIM_NONE    0xFFFFu
+#define TAGPU_PK_MAX_ANIM     16384u
 
 /* 8 B, one per UnitDef row, indexed by PK_UNIT.type_row: what the strategic icons
    need to know of a unit's TYPE (tagpu_icontype.h). Built once a level on the
@@ -931,6 +959,10 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_OVERLAY 0x200000u  /* the replay's overlay items did not
                                              fit this packet                */
 
+#define TAGPU_PK_TRUNC_ANIM    (1u << 22) /* the animated-face table did not
+                                             fit, or the engine's list was past
+                                             its cap: every animated face shows
+                                             frame 0 this frame              */
 #define TAGPU_PK_TRUNC_HUD     0x800000u  /* the replay HUD's record          */
 #define TAGPU_PK_TRUNC_WIKI    0x1000000u /* the in-game wiki's record        */
 #define TAGPU_PK_TRUNC_SWEEP   0x2000000u /* the sweep's items did not fit this
@@ -1245,6 +1277,8 @@ typedef struct TAGPU_PACKET {
                                          packet: the collision oracle, and a gate */
     uint32_t utype_off, utype_n;      /* PK_UTYPE, one per UnitDef row; 0 = no
                                          icons this frame                        */
+    uint32_t anim_off, anim_n;        /* PK_ANIM, sorted by state; 0 = every
+                                         animated face shows frame 0             */
     /* THE PER-MAP ARRAY BASES ARE NOT HERE, AND THAT IS DELIBERATE. FeatureDef
        `main+0x1426F`, the wreck records `+0x1420B` and `MODEL_PTRS` `+0x14377`
        are POINTERS the level teardown frees AND THEN NULLS — `0x4221F8` then
@@ -1567,6 +1601,9 @@ static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
 /* the unit-type table, `utype_n` entries indexed by PK_UNIT.type_row, or NULL */
 static __inline const TAGPU_PK_UTYPE* tagpu_pk_utypes(const TAGPU_PACKET* p)
 { return p->utype_n ? (const TAGPU_PK_UTYPE*)(const void*)((const unsigned char*)p + p->utype_off) : (const TAGPU_PK_UTYPE*)0; }
+/* the animated-face table, `anim_n` entries sorted by state, or NULL */
+static __inline const TAGPU_PK_ANIM* tagpu_pk_anims(const TAGPU_PACKET* p)
+{ return p->anim_n ? (const TAGPU_PK_ANIM*)(const void*)((const unsigned char*)p + p->anim_off) : (const TAGPU_PK_ANIM*)0; }
 /* One unit's or wreck's piece run, or NULL when the entry carries none: it sat
    outside the tables' reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
    more than TAGPU_PK_MAXPIECE, or the arena was full. `piece_off` was

@@ -1,0 +1,21 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Animated face textures: the pieces a script marks dont-cache are redrawn live every frame and show the anim state's current frame (ARMESTOR's glow, CORESTOR's windows, CORLAB's and ARMAP's lights); a cached piece shows frame 0. A mobile unit draws its pieces directly and animates while it moves (ARMCOM's torso glow).",
+  "on_error": "abort",
+
+  "setup": {
+    "clear_existing": true,
+    "switches": {"shootall": false, "noshake": true}
+  },
+
+  "units": [
+    { "id": "estor",  "type": "ARMESTOR", "owner": 0, "pos": [1500, 1500] },
+    { "id": "cstor",  "type": "CORESTOR", "owner": 0, "pos": [1620, 1500] },
+    { "id": "clab",   "type": "CORLAB",   "owner": 0, "pos": [1560, 1640] },
+    { "id": "aap",    "type": "ARMAP",    "owner": 0, "pos": [1400, 1640] },
+    { "id": "hero",   "type": "ARMCOM",   "owner": 0, "pos": [1700, 1640], "facing": 90 },
+    { "id": "foe",    "type": "CORCOM",   "owner": 1, "pos": [3000, 3000] }
+  ],
+
+  "camera": { "center_on": "estor" }
+}
