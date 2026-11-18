@@ -1175,9 +1175,18 @@ unit counts as not reaching; a ship on the water that the seat's sonar alone hol
 land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 
 - the economy wants its sea plant whatever its pacing, and whatever its factory count below `IMPAI_IDLE_CAP` (32,
-  the census's factory lists, past which a factory would be in neither) -- one plant, the stalls, the hold and the
-  refusals as below --, and its search reaches `FAR_PATCH_K` x `comm_r` (2 048 px) of the anchor, a site past
-  `comm_r` only on held ground;
+  the census's factory lists, past which a factory would be in neither) -- the stalls, the hold and the refusals
+  as below --, and its search reaches `FAR_PATCH_K` x `comm_r` (2 048 px) of the anchor, a site past `comm_r` only
+  on held ground;
+- **the finish's yards**: past the first sea plant the want stands for one more while the overflow stands (the
+  surplus, a busy plant's measured price, and the steady income less the seat's request at least that price),
+  every sea plant the census counts -- finished, a frame or a builder's order -- is a finished factory at work,
+  the energy term holds, and the military counted an enemy on or under the water within `IMPAI_TG_HOLD` (the
+  targets known: FLOAT or UNDER). It is the surplus plant's metal term read over the plants the finish buys from:
+  the land plants are offered nothing in the dry hunt and stand idle by that rule, so "no idle factory" never
+  holds there. The bound: a further yard comes only on income nobody asks for, one at a time, below
+  `IMPAI_IDLE_CAP` factories, under the sea plant's gates, and only while a yard's army has a known target
+  ([decisions](decisions.html), *The finish's yards*);
 - the commander may build that one plant as far, and the leash allows it as far (`FAR_PATCH_K` x `comm_r` + 512)
   while the hunt lasts, as before the first factory; every builder is reach-tested (*Built*, below), so the plant
   off a shallow shore is the commander's, whose class walks the sea floor; **a site no builder of the decision takes**

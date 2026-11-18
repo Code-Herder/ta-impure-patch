@@ -1642,14 +1642,32 @@ static void economy(IMPAI_DEC* d)
        base's own shore can be too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r
        (MEASURED at 198899ef, bar-nota-troutfarm-aa-2: `sea_site=none`) and its nearest lies off a shore no land
        constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
-       one plant, the stalls, the hold, the refusals and a builder that offers one. A further sea plant on an
-       island is THE CHOICE's (impai_econ.c, THE ISLAND'S PLANTS). */
+       one plant but for THE FINISH'S YARDS below, the stalls, the hold, the refusals and a builder that offers
+       one. A further sea plant on an island is THE CHOICE's (impai_econ.c, THE ISLAND'S PLANTS).
+       THE FINISH'S YARDS: past its first sea plant the finish wants one more while THE OVERFLOW stands (over_m:
+       the surplus, a busy plant's price measured, and the steady income less the seat's request at least that
+       price), every sea plant the census counts -- finished, a frame or a builder's order (sea_plants) -- is a
+       finished factory at work, THE ENERGY TERM holds (plant_e), and the seat knows a target on or under the
+       water (THE TARGETS KNOWN, impai_tg_known: FLOAT or UNDER), which is what a yard's army hits: the dry hunt
+       also holds over an enemy on land the land army does not reach, where a further yard buys nothing that
+       reaches it. It is THE METAL TERM (plant_m) read over the plants the finish buys from: in the dry hunt the
+       land plants are offered nothing (THE FINISH'S BUY) and stand idle by that rule, so plant_m's "no idle
+       factory" never holds there and the finish's one yard is all that spends (decisions.md, *The finish's
+       yards*). INVARIANT, a bound: a further yard is wanted only while no yard is idle, unfinished or on
+       order, a busy plant asks metal, and the income nobody asks for pays the mean busy plant's request -- so
+       each yard past the first comes on metal the full store is wasting, one at a time, below IMPAI_IDLE_CAP
+       factories --, and under the sea plant's own gates: the stalls and the hold refuse it. Every value is the
+       census's of this decision; the busy list is cut at IMPAI_IDLE_CAP, which only refuses. */
     d->sea_able = (uint8_t)(d->pos.dry && impai_econ_sea_able(d));
     {
+        int sea_busy = 0, more, sea_need, k;
+        for (k = 0; k < d->nfbusy; k++) sea_busy += impai_water_plant(d->in, d->fbusy[k].type);
+        more = d->pos.dry && d->over_m && d->plant_e && sea_busy == (int)d->sea_plants && mil &&
+               (impai_tg_known(mil, d->now) & ((1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER)));
         /* the need but for a builder that offers one: the menus are read last, for a want nothing else refuses */
-        const int sea_need = (d->pos.naval == 1 || d->pos.dry) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                             (d->pos.dry ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_pace) &&
-                             !d->pending[IMPAI_C_FACTORY] && d->in->st->sea_refused < IMPAI_SEA_REFUSALS;
+        sea_need = (d->pos.naval == 1 || d->pos.dry) && (!d->sea_plants || more) && d->count[IMPAI_C_FACTORY] >= 1 &&
+                   (d->pos.dry ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_pace) &&
+                   !d->pending[IMPAI_C_FACTORY] && d->in->st->sea_refused < IMPAI_SEA_REFUSALS;
         d->want_sea = sea_need && !(d->gates & impai_veto[IMPAI_W_SEA].gates) &&
                       (d->pos.dry ? d->sea_able : impai_econ_sea_able(d));
         if (sea_need) need |= 1u << IMPAI_W_SEA;

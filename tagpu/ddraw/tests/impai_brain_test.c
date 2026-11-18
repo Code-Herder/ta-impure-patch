@@ -14083,6 +14083,60 @@ static void check_sea_finish(void)
     s_milp = NULL;
 }
 
+/* THE FINISH'S YARDS (impai_brain.c, economy) on the FAR coast in the dry hunt, a finished shipyard of the seat's at
+   the finish's own site, the store full, an income of 30 a pass, the seat asking 15, an enemy on the water counted
+   by the military at this GameTime (IMPAI_MIL.tg_t, THE TARGETS KNOWN):
+   (a) the yard at its BuildingBuild asking 5 metal a pass: one more shipyard, at another site;
+   (b) the yard idle: none -- the governor has an order for it first;
+   (c) the seat asking 28 of the 30: the 2 unasked do not pay the price of 5, none;
+   (d) the store at 700 of 1 000, below the surplus: none;
+   (e) a second shipyard's frame standing beside the busy yard: none, one at a time;
+   (f) the yard waiting at its yard, asking no metal: no price, none;
+   (g) naval and not dry on the near coast, where a shipyard has a site within comm_r, the yard and the lab both
+       busy, so THE METAL TERM holds: no further shipyard -- outside the dry hunt the overflow's plant is THE
+       CHOICE's;
+   (h) (a) with only an enemy on dry ground counted: none -- a yard's army hits nothing the seat knows;
+   (i) (a) with the enemy on the water counted IMPAI_TG_HOLD + 1 ticks ago: none;
+   (j) (a) with an enemy under the water counted instead: one more shipyard. */
+static void check_finish_yards(void)
+{
+    static const char* const NAME[10] = { "(a) the yard busy in a surplus", "(b) the yard idle", "(c) the seat asking 28",
+                                          "(d) 700 stored", "(e) a second yard's frame", "(f) the yard asking no metal",
+                                          "(g) not dry", "(h) a target on dry ground alone", "(i) the sea target stale",
+                                          "(j) a target under the water" };
+    IMPAI_BRAIN_OUT out;
+    int c, from, sy, land, x0 = -1, z0 = -1, fx0, fz0;
+    far_world(1, 1, 1, 9);
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide: the finish's first yard");
+    CHECK(builds_of(from, E_SY, &x0, &z0) == 1, "the finish's first yard is ordered");
+    fx0 = x0;
+    fz0 = z0;
+    for (c = 0; c < 10; c++) {
+        if (c == 6) far_world_at(C_COAST, 1, 0, 1, 30);
+        else far_world(1, 1, 1, 30);
+        s_w.gametime = 20000;
+        s_smil.tg_t[c == 7 ? IMPAI_TG_DRY : c == 9 ? IMPAI_TG_UNDER : IMPAI_TG_FLOAT] =
+            (uint32_t)s_w.gametime - (c == 8 ? IMPAI_TG_HOLD + 1u : 0u);
+        s_w.econ[0].metal_out = c == 2 ? 28.0f : 15.0f;
+        if (c == 3) s_w.econ[0].metal = 700.0f;
+        unit_add(&s_w, 5, E_SY, c == 6 ? 64 : fx0, c == 6 ? 60 : fz0, 1);
+        if (c != 1) factory_busy(5, E_PT, c == 5 ? 0.0f : 5.0f, 10.0f);
+        if (c == 4) unit_add(&s_w, 6, E_SY, fx0, fz0 + 24, 0);
+        if (c == 6) factory_busy(2, E_CK, 5.0f, 10.0f);
+        from = s_w.nlog;
+        sea_decide(NAME[c], &sy, &land);
+        x0 = z0 = -1;
+        builds_of(from, E_SY, &x0, &z0);
+        if (c == 0 || c == 9)
+            CHECK(sy == 1 && (x0 != fx0 || z0 != fz0), "%s: one more shipyard, at %d,%d beside %d,%d", NAME[c], x0, z0,
+                  fx0, fz0);
+        else
+            CHECK(!sy, "%s: no further shipyard", NAME[c]);
+    }
+    s_milp = NULL;
+}
+
 /* an army unit of seat 0 in squad s */
 static void member(int slot, int type, int cx, int cz, int s)
 {
@@ -16725,6 +16779,7 @@ int main(void)
     check_island_hold();
     check_island_order();
     check_sea_finish();
+    check_finish_yards();
     check_sea_cmd_safe();
     check_techup();
     check_short_after_techup();
