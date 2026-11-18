@@ -55,8 +55,11 @@ static int choose_energy(IMPAI_DEC* d, const uint16_t* menu, int n)
    as energy is ranked (owner's decision, 2026-11-14), ties to the lower type. 1 when either is set. The two kinds
    are never ranked against each other: the patch's ground picks between them (impai_build.c, THE EXTRACTOR FOR THE
    PATCH), so no tie between a land and a water extractor arises, and retail's land one no longer rests on its type
-   number being the lower. A water type whose minwaterdepth cannot be read or is not above 0 is dropped: no ground
-   would tell it from the land one. */
+   number being the lower. A water type whose minwaterdepth cannot be read or is not above 0 -- an extractor
+   flagged by its yard alone (impai_tinfo.c, PLACED ON WATER ONLY) -- is passed over before the ranking, so it
+   never takes the wet slot from one that states a depth: with a depth of 0 no ground would tell its patches
+   from the land one's, a patch at the sea's own level being both. BOUND: one def read a water extractor of the
+   menu. */
 static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n, IMPAI_MEX* out)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -67,17 +70,18 @@ static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n, IMPAI_MEX* out)
         const int t = menu[k];
         const IMPAI_TINFO* ti;
         uint16_t* best;
+        int wet;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_MEX || in->ti[t].value <= 0) continue;
         ti = &in->ti[t];
-        best = (ti->flags & IMPAI_TF_WATER) ? &out->wet : &out->dry;
+        wet = (ti->flags & IMPAI_TF_WATER) != 0;
+        if (wet && !(d->q->ops->def_econ(d->q, t, &e) && e.minwater > 0)) continue;
+        best = wet ? &out->wet : &out->dry;
         if (!*best || ti->mgain * in->ti[*best].value > in->ti[*best].mgain * ti->value ||
-            (ti->mgain * in->ti[*best].value == in->ti[*best].mgain * ti->value && t < *best))
+            (ti->mgain * in->ti[*best].value == in->ti[*best].mgain * ti->value && t < *best)) {
             *best = (uint16_t)t;
+            if (wet) out->wet_min = e.minwater;
+        }
     }
-    if (out->wet && d->q->ops->def_econ(d->q, out->wet, &e) && e.minwater > 0)
-        out->wet_min = e.minwater;
-    else
-        out->wet = 0;
     return out->dry || out->wet;
 }
 

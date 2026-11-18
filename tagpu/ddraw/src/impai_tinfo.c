@@ -44,15 +44,23 @@ static int category(const WQ_DEF* d, const WQ_DEF_ECON* e, const TASIM_ROLE_OUT*
    key (engine/orders.md, the 0x47D2E0 row, *The height tail*, DISASSEMBLED):
    - minwaterdepth above 0: the footprint's highest cell must lie that far under the sea;
    - a tidal generator, which earns nothing off the water;
-   - A YARD OF WATER CELLS AND NO LAND CELL, whatever its depth keys say: with no land cell the test takes its
-     water path, whose altitude is the sea less the type's waterline, and refuses a footprint whose water cells
-     reach above it. Escalation's floating wind generator is this type: minwaterdepth 0, a yard of `w`.
-   yard_afloat answers the third for a building: a mobile type is placed by its factory, never by the site test,
-   and keeps the keys' answer. INVARIANT, a bound on what the flag claims: a type flagged here is refused by the
-   site test wherever one of its water cells lies above sea - waterline, and it has a water cell, so on ground
-   that far above the sea it has no site at all. The waterline is not read: [INFERRED: no def's is negative] one
-   below 0 would let such a type stand on a shore that little above the sea, and the flag then costs the seat
-   that type off a wet anchor -- the next type of the menu is taken -- and never orders a site the test refuses.
+   - A YARD OF WATER CELLS AND NO LAND CELL WITH MINWATERDEPTH 0. The test's last compare refuses a footprint
+     whose highest cell -- the larger of the land maximum, 0 with no land cell, and the water maximum -- lies
+     above sea - minwaterdepth (0x47D7D7..0x47D7F0: the two byte maxima, `movsx` of def +0x1C0, a signed 32-bit
+     `jg`), so with minwaterdepth 0 every water cell lies at or below the sea, whatever the type's waterline.
+     Escalation's floating wind generator is this type: minwaterdepth 0, a yard of `w`.
+   yard_afloat answers the yard's half for a building: a mobile type is placed by its factory, never by the site
+   test, and keeps the keys' answer. INVARIANT, a bound on what the flag claims: a type flagged by its yard has
+   a water cell, and the site test refuses it wherever one of its water cells lies above the sea, so on ground
+   above the sea it has no site at all.
+   NOT FLAGGED: such a yard with minwaterdepth below 0. The last compare then binds nowhere a map reaches, and
+   what holds the type to the water is the water path's altitude alone: the sea less the waterline byte def
+   +0x22C in an 8-bit subtract (0x47D77B..0x47D787), which the water maximum may not pass
+   (0x47D7AE..0x47D7B8), and which wraps where the waterline is above the sea level. The seam gives no
+   waterline, so no bound is at hand and the keys decide: the type is no water type here, and the site test
+   refuses the sites it cannot take. Escalation's and TA Twilight's floating radar towers are these: their def's
+   word +0x1C0 is -10000 (MEASURED 2026-11-18, the native loader's def image of Escalation's ARMFRAD and
+   CORFRAD).
    A yard that cannot be read whole (no yard map, a footprint past WQ_FOOT_MAX) answers 0: the keys decide. */
 static int yard_afloat(const WORLDQ* q, int type, const WQ_DEF* d)
 {
@@ -89,7 +97,8 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
         o->tech = (uint8_t)(r && r->tech > 0 ? (r->tech < 255 ? r->tech : 255) : 0);
         o->flags = (uint8_t)(((r ? (r->flags & TASIM_RF_MOBILE) != 0 : (d.flags & WQ_DF_MOVER) != 0) ? IMPAI_TF_MOBILE : 0) |
                              ((d.flags & WQ_DF_VTOL) ? IMPAI_TF_VTOL : 0) |
-                             (e.minwater > 0 || e.tidal > 0 || (e.building && yard_afloat(q, t, &d))
+                             (e.minwater > 0 || e.tidal > 0 ||
+                              (e.building && e.minwater == 0 && yard_afloat(q, t, &d))
                                   ? IMPAI_TF_WATER : 0) |
                              ((d.flags & WQ_DF_ONOFF) ? IMPAI_TF_ONOFF : 0) |
                              ((d.flags & WQ_DF_RECLAIMER) ? IMPAI_TF_RECLAIM : 0));

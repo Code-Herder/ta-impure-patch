@@ -1482,8 +1482,11 @@ SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 /* THE JOB KINDS ARE PART OF THE RECORDED ROW: IMPAI_JOB.kind is stored as its number, and the layout's hash covers
    the declared fields only, so a renumbering of IMPAI_JOB_* alone would leave the hash as it is and a recording
    of the old numbering would be taken and misread. A change to the kinds must change the declaration above with
-   it (a field added, or the rows' declaration), and then this count. */
-_Static_assert(IMPAI_JOB_SWITCH == 6, "the job kinds are recorded by number: change s_job's declaration with them");
+   it (a field added, or the rows' declaration), and then these numbers: each kind's, since a reorder among them
+   keeps the last one's. */
+_Static_assert(IMPAI_JOB_NONE == 0 && IMPAI_JOB_BUILD == 1 && IMPAI_JOB_ASSIST == 2 && IMPAI_JOB_SQUAD == 3 &&
+                   IMPAI_JOB_RECLAIM == 4 && IMPAI_JOB_RECLAIM_GO == 5 && IMPAI_JOB_SWITCH == 6,
+               "the job kinds are recorded by number: change s_job's declaration with them");
 
 /* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its persona and its table, set at a live
    level's init or for a takeover's fresh seat (seat_fresh), its squads, its picture and its hunt's memory (each

@@ -1152,37 +1152,47 @@ static void cmd_print(const FCMD* c)
 static int cmd_x0(const WQ_CMD* c) { return (int)((c->pos[0] >> 19) - s_w.defs[c->type].d.fx) / 2; }
 static int cmd_z0(const WQ_CMD* c) { return (int)((c->pos[2] >> 19) - s_w.defs[c->type].d.fz) / 2; }
 
-/* PLACED ON WATER ONLY (impai_tinfo.c): the wind generator with minwaterdepth 0 and a yard of `cell` bytes, at 60 a
-   pass the menu's best gain per value -- Escalation's floating wind generator when the cells are `w` */
-static void afloat_world(uint8_t cell, int land_at)
+/* PLACED ON WATER ONLY (impai_tinfo.c): the wind generator with minwaterdepth `minwater` and a yard of `cell`
+   bytes, the cell `odd_at` (-1 none) the byte `odd`, at 60 a pass the menu's best gain per value -- Escalation's
+   floating wind generator when the cells are `w` and the depth 0; `refuse` has the world give no yard for it */
+static void afloat_world(uint8_t cell, int odd_at, uint8_t odd, int minwater, int refuse)
 {
     TASIM_ROLE_OUT roles[T_N];
     brain_world();
     s_w.defs[T_WIND].e.wind = 240;
+    s_w.defs[T_WIND].e.minwater = (int16_t)minwater;
     s_w.defs[T_WIND].yarded = 1;
     memset(s_w.defs[T_WIND].yard, cell, 9);
-    if (land_at >= 0) s_w.defs[T_WIND].yard[land_at] = 0x2F;
+    if (odd_at >= 0) s_w.defs[T_WIND].yard[odd_at] = odd;
+    s_w.yard_refuse = refuse ? T_WIND : 0;
     roles_set(roles);
     CHECK(content_set(&s_w, T_N, roles) == T_N, "afloat_world: the content");
 }
 
-/* (a) the flag is the yard's: water cells and no land cell, `w` or `C`; one land cell, or a yard of `.`, is no
-   water type; a mobile type keeps its keys' answer whatever its yard. (b) on a dry anchor a stall's energy is the
+/* (a) the flag is the yard's at minwaterdepth 0: water cells and no land cell, `w` or `C`, a `.` among them
+   notwithstanding; one land cell, or a yard of `.`, is no water type; neither is a yard of `w` whose
+   minwaterdepth is below 0, the def's -10000, where the site test's last compare binds nowhere, nor one the
+   world gives no yard for; a mobile type keeps its keys' answer whatever its yard. (b) on a dry anchor a stall's energy is the
    solar collector: the floating wind generator, the best gain per value, has no site on land and is passed over
    -- unflagged, the rung walks its ring, the site test refuses every site, and the stall orders no energy at
    all. (c) on a wet anchor the stall's energy is the floating wind generator, on the water. */
 static void check_afloat(void)
 {
-    static const struct { uint8_t cell; int land_at, water; const char* what; } YARD[] = {
-        { 0x37, -1, 1, "a yard of w" },     { 0x35, -1, 1, "a yard of C" },
-        { 0x37, 4, 0, "one land cell" },    { 0x00, -1, 0, "a yard of ." },
-        { 0x2F, -1, 0, "a yard of o" },
+    static const struct { uint8_t cell; int odd_at; uint8_t odd; int minwater, refuse, water; const char* what; } YARD[] = {
+        { 0x37, -1, 0, 0, 0, 1, "a yard of w" },
+        { 0x35, -1, 0, 0, 0, 1, "a yard of C" },
+        { 0x37, 4, 0x2F, 0, 0, 0, "one land cell" },
+        { 0x00, -1, 0, 0, 0, 0, "a yard of ." },
+        { 0x2F, -1, 0, 0, 0, 0, "a yard of o" },
+        { 0x37, 4, 0x00, 0, 0, 1, "w and one ." },
+        { 0x37, -1, 0, -10000, 0, 0, "a yard of w, minwaterdepth -10000" },
+        { 0x37, -1, 0, 0, 1, 0, "a yard of w the world does not give" },
     };
     IMPAI_BRAIN_OUT out;
     const FCMD* c;
     unsigned k;
     for (k = 0; k < sizeof YARD / sizeof YARD[0]; k++) {
-        afloat_world(YARD[k].cell, YARD[k].land_at);
+        afloat_world(YARD[k].cell, YARD[k].odd_at, YARD[k].odd, YARD[k].minwater, YARD[k].refuse);
         CHECK(s_ti[T_WIND].cat == IMPAI_C_ENERGY && s_ti[T_WIND].egain == 60.0f, "afloat: the wind's gain %g",
               (double)s_ti[T_WIND].egain);
         CHECK(!(s_ti[T_WIND].flags & IMPAI_TF_WATER) == !YARD[k].water, "afloat, %s: placed on water only %d",
@@ -1198,7 +1208,7 @@ static void check_afloat(void)
         CHECK(!(s_ti[T_CONS].flags & IMPAI_TF_WATER), "afloat: a mobile type's yard says nothing of where it is placed");
     }
     for (k = 0; k < 2; k++) {
-        afloat_world(0x37, -1);
+        afloat_world(0x37, -1, 0, 0, 0);
         if (k) {
             s_w.sea = 50;
             water_add(&s_w, 1, 1, 62, 62, 5);
@@ -5387,6 +5397,18 @@ static void check_mex_ground(void)
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.snaps == 1 && out.failed == 1 && !mex_ordered(0, &x0, &z0),
           "the land extractor tried at the wet patch and refused: %u snaps, %u refused", out.snaps, out.failed);
+    /* E. An extractor flagged by its yard alone, minwaterdepth 0, richer than the type that states its depth: it
+       is passed over before the ranking, and the wet patch still takes the stated type */
+    mex_ground_world(30, NULL, 0);
+    s_w.defs[E_WIND].e.minwater = 0;
+    s_ti[E_WIND].cat = IMPAI_C_MEX;
+    s_ti[E_WIND].flags |= IMPAI_TF_WATER;
+    s_ti[E_WIND].mgain = 0.002f;
+    CHECK(decide(&out) == 0, "decide");
+    t = mex_ordered(0, &x0, &z0);
+    CHECK(t == E_UWMEX && x0 >= MEXG_X0 && x0 + 2 <= MEXG_X1 && !out.failed,
+          "a yard-flagged extractor of depth 0 leaves the wet patch to the stated one: type %d at %d,%d, %u refused",
+          t, x0, z0, out.failed);
     /* D. A patch 5 deep, short of the water type's 15: the land type, refused below the sea; the patch then waits
        fail_t and the commander takes a dry one */
     mex_ground_world(5, NULL, 0);
@@ -8069,13 +8091,16 @@ static void check_army_damage(void)
    predictor's damage. A raider whose one regular weapon paralyses (ARMSPID's shape, 900 at a 36-tick reload)
    beside its twin whose same weapon does not; a tank beside its twin that carries a long paralyser in its first
    slot; a standing type whose one weapon paralyses beside its twin tower; a tank beside its twin with a
-   CommandFire paralyser of damage 0. The predictor's content holds the same weapons, the paralyser with a
-   [DAMAGE] row on the target besides its default. */
+   CommandFire paralyser, long and of damage 400; a type whose one weapon is that CommandFire paralyser; a type
+   whose one paralyser sits in an anti-air slot; and a ground paralyser in front of an anti-air missile. The
+   predictor's content holds the same weapons, the paralyser with a [DAMAGE] row on the tank besides its default,
+   and no row on the twin. */
 static void check_paralyser(void)
 {
-    enum { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD, COM, N };
-    static const char* const NAME[N] = { "TANK", "STUN", "TWIN", "MIX", "WARD", "TOWER", "CMD", "COMMANDER" };
-    static const uint16_t BUILDS[] = { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD };
+    enum { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD, DGUN, AASTUN, STUNAA, COM, N };
+    static const char* const NAME[N] = { "TANK", "STUN", "TWIN", "MIX", "WARD", "TOWER", "CMD", "DGUN", "AASTUN",
+                                         "STUNAA", "COMMANDER" };
+    static const uint16_t BUILDS[] = { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD, DGUN, AASTUN, STUNAA };
     enum { W_NONE, W_GUN, W_STUN, W_SHOT, NW };
     static IMPAI_FTYPE ft[N];
     static IMPAI_FWEAPON fw[NW];
@@ -8123,10 +8148,20 @@ static void check_paralyser(void)
     in[WARD].w[0].damage_default = 900;
     in[WARD].w[0].flags = TASIM_WF_PARALYZER;
     in[CMD].nweapons = 2;
-    in[CMD].w[1].range = 100;
+    in[CMD].w[1].range = 1050;
     in[CMD].w[1].reload_ticks = 30.0f;
     in[CMD].w[1].burst = 1;
+    in[CMD].w[1].damage_default = 400;
     in[CMD].w[1].flags = TASIM_WF_COMMANDFIRE | TASIM_WF_PARALYZER;
+    in[DGUN].w[0] = in[CMD].w[1];
+    in[AASTUN].w[0].flags = TASIM_WF_PARALYZER;
+    in[AASTUN].w[0].damage_air = 900;
+    in[AASTUN].slot_notair[0] = 1;
+    in[STUNAA].nweapons = 2;
+    in[STUNAA].w[1] = in[TANK].w[0];
+    in[STUNAA].w[1].damage_air = 60;
+    in[STUNAA].slot_notair[1] = 1;
+    in[STUNAA].w[0] = in[MIX].w[0];
     in[COM].flags245 |= TASIM_F245_COMMANDER;
     in[COM].flags241 = TASIM_F241_BUILDER;
     in[COM].cost_metal = 2500.0f;
@@ -8167,6 +8202,16 @@ static void check_paralyser(void)
     CHECK(k[CMD] == k[TANK] && out[CMD].dps_ground == out[TANK].dps_ground && out[CMD].role == out[TANK].role &&
               th[CMD].hit_ground == th[TANK].hit_ground && th[CMD].hit_range == th[TANK].hit_range,
           "a CommandFire paralyser changes nothing: %s %g", impai_class_name(k[CMD]), out[CMD].dps_ground);
+    CHECK(out[DGUN].role == TASIM_ROLE_OTHER && k[DGUN] == IMPAI_K_NONE && !th[DGUN].hit_ground,
+          "a CommandFire paralyser alone is no regular weapon, so its type is unarmed: role %s class %s",
+          tasim_roles_name(out[DGUN].role), impai_class_name(k[DGUN]));
+    CHECK(out[AASTUN].dps_air == 0.0 && out[AASTUN].role != TASIM_ROLE_ANTIAIR && k[AASTUN] == IMPAI_K_NONE,
+          "a paralyser in an anti-air slot hurts no aircraft: %g, role %s class %s", out[AASTUN].dps_air,
+          tasim_roles_name(out[AASTUN].role), impai_class_name(k[AASTUN]));
+    CHECK(out[STUNAA].role == TASIM_ROLE_ANTIAIR && out[STUNAA].dps_air > 0.0 && out[STUNAA].dps_ground == 0.0 &&
+              k[STUNAA] < IMPAI_KS && th[STUNAA].hit_range == 300,
+          "a ground paralyser in front of an anti-air missile leaves the missile primary: role %s air %g class %s",
+          tasim_roles_name(out[STUNAA].role), out[STUNAA].dps_air, impai_class_name(k[STUNAA]));
     free(work);
 
     memset(ft, 0, sizeof ft);
@@ -8196,6 +8241,14 @@ static void check_paralyser(void)
     CHECK(rate[MIX] == rate[TANK] && rate[TANK] > 0.0f && range[MIX] == 300,
           "the predictor: a mixed type hurts with its other weapon: %g over %d against %g", (double)rate[MIX],
           (int)range[MIX], (double)rate[TANK]);
+    for (i = 0; i < N; i++)
+        CHECK(impai_fight_rate(&fc, &impai_fitparams, (unsigned)i, TWIN, &rate[i], &range[i]) == 0,
+              "the rate of %s on the twin", NAME[i]);
+    printf("paralyser: the predictor's rate on the twin, which has no row: STUN %g over %d, MIX %g, TANK %g\n",
+           (double)rate[STUN], (int)range[STUN], (double)rate[MIX], (double)rate[TANK]);
+    CHECK(rate[STUN] == 0.0f && range[STUN] == 0 && rate[MIX] == rate[TANK] && rate[TANK] > 0.0f,
+          "the predictor: a paralyser's default hurts a target with no row no more than its row does: %g over %d",
+          (double)rate[STUN], (int)range[STUN]);
 }
 
 /* THE SUBSTITUTE IS AN ARMY TYPE (impai_mil.c, substitute): a radar contact never identified beside identified

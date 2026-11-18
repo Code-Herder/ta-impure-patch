@@ -121,13 +121,18 @@ static TASIM_LAYER layer_of(const TASIM_ROLE_IN* u)
     return TASIM_LAYER_LAND;
 }
 
+/* has_regular: a regular slot, a paralyser included, which arms the type for its role; has_damaging: a regular
+   slot that deals damage; first_regular_aa: the first of those is an anti-air slot. THE PRIMARY WEAPON is the
+   first regular slot that deals damage: a paralyser deals none (A PARALYSER DEALS NO DAMAGE), so a ground
+   paralyser in front of an anti-air missile leaves the missile primary and the type anti-air, and an anti-air
+   paralyser in front of a ground gun leaves the type its ground role. */
 typedef struct {
-    int has_regular, has_any, first_regular_aa, ground_arty;
+    int has_regular, has_damaging, has_any, first_regular_aa, ground_arty;
 } Arms;
 
 static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
 {
-    Arms a = { 0, 0, 0, 0 };
+    Arms a = { 0, 0, 0, 0, 0 };
     int k, n = u->nweapons < TASIM_ROLE_WEAPONS ? u->nweapons : TASIM_ROLE_WEAPONS;
     o->layer = layer_of(u);
     o->value = (double)u->cost_metal + (double)u->cost_energy / TASIM_ROLES_R;
@@ -149,9 +154,10 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
         const TASIM_ROLE_WEAPON* w = &u->w[k];
         a.has_any = 1;
         if (!regular(w)) continue;
-        if (!a.has_regular) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
         a.has_regular = 1;
         if (paralyses(w)) continue;
+        if (!a.has_damaging) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
+        a.has_damaging = 1;
         if (tasim_roles_slot_antiair(u, k)) {
             o->dps_air += dps((double)w->damage_air, w);
             continue;
@@ -201,9 +207,9 @@ static TASIM_ROLE role_of(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o, Arms a, con
     if (!mobile || (u->transportcapacity && !a.has_regular) ||
         (u->flags241 & TASIM_F241_KAMIKAZE) || (a.has_any && !a.has_regular))
         return TASIM_ROLE_OTHER;
-    /* anti-air: the primary regular weapon is an anti-air slot and it hurts aircraft; a unit
-       whose first weapon is for the ground and which carries a missile besides stays a ground
-       role */
+    /* anti-air: the primary weapon (Arms) is an anti-air slot and it hurts aircraft; a unit
+       whose first damaging weapon is for the ground and which carries a missile besides stays a
+       ground role */
     if (a.first_regular_aa && o->dps_air > 0.0) return TASIM_ROLE_ANTIAIR;
     if (!a.has_regular) return TASIM_ROLE_SCOUT;
     if (a.ground_arty && (double)o->range_ground >= q->range75[L]) return TASIM_ROLE_ARTILLERY;

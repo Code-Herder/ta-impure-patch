@@ -134,7 +134,9 @@ static float size_px(const IMPAI_FTYPE* t)
    its default; 0 for a paralysing weapon, whatever its rows say. The caller has bounded the span to the pool.
    A PARALYSER DEALS NO DAMAGE (tasim_roles.c): the engine's damage apply leaves a paralyser's hit without
    touching hit points, so its [DAMAGE] figures take none, and every caller passes over a weapon whose
-   damage is 0 -- no rate, no weapon entry, no stand-off from it. The bit is the record's own +0x111 bit 7,
+   damage is 0 -- no rate, no weapon entry, and it sets no stand-off of its own. Its slot still sets the
+   chase's reach when it is the first armed slot (chase_reach, as the engine's chase takes the first slot
+   that holds a weapon, whatever it deals). The bit is the record's own +0x111 bit 7,
    which the content's filler stores whole in IMPAI_FWEAPON.flags (tagpu_worldq_fight_in). */
 static int32_t damage_on(const IMPAI_FCONTENT* c, const IMPAI_FWEAPON* w, unsigned j)
 {

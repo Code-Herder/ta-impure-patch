@@ -349,7 +349,9 @@ static inline int impai_def_struct(const IMPAI_BRAIN_IN* in, unsigned type)
 
 /* 1 when `type` is a sensor structure (impai_econ.c, THE SENSORS): a building of category OTHER with a radar or
    sonar distance and no reach of its own -- no ground reach and no anti-air rate --, so a tower carrying a radar
-   beside its gun is a defence, and a plant or an extractor with a radar is its category; 0 with no threat table */
+   beside its gun is a defence, and a plant or an extractor with a radar is its category; 0 with no threat table.
+   A standing type whose weapons all paralyse has no reach either (tasim_roles.c, A PARALYSER DEALS NO DAMAGE),
+   so with a radar or a sonar it is a sensor structure, chosen for what it sees. */
 static inline int impai_sensor_struct(const IMPAI_BRAIN_IN* in, unsigned type)
 {
     const IMPAI_TINFO* t;
