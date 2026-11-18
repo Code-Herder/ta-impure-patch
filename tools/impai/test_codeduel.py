@@ -44,7 +44,8 @@ def look(peer: str, t: int, alive: dict, lost=(), seating=False, gone=(), team=T
         vals = {0: 0 if free else 1, 4: 0xFFFFFFFF if free else DPID[who], 0x73: control,
                 bar.ALIVE: alive.get(who, 1), bar.LOST: 1 if who in lost else 0}
         if seating:
-            allies = sum(1 << (8 * j) for j, other in enumerate(rows) if team[other] == team[who])
+            allies = sum(1 << (8 * j) for j, other in enumerate(rows)
+                         if other == who or team[other] == team[who] != cd.NO_TEAM)
             vals.update({0x13F: team[who], 0x108: allies, 0x147: START[who]})
         out += "".join(peek(base + off, v) for off, v in vals.items())
     return out
@@ -477,6 +478,65 @@ class Fingerprint(unittest.TestCase):
         r = cd.judge(log("H", won), log("J", won), 6000, cd.only_stems(self.A, self.A))
         self.assertEqual(r["outcome"], "could not run")
         self.assertIn("nothing tells the builds apart", r["reason"])
+
+
+NONE = dict.fromkeys(TEAM, cd.NO_TEAM)
+ARMED = cd.DUEL_LINE + ": a network game no longer ends for want of a human (0x4655E0 jne -> jmp)\n"
+OUT = {"human H": 0, "human J": 0}
+
+
+def gone_log(peer: str, looks_: list, extra=ARMED, team=NONE) -> str:
+    return log(peer, looks_, extra=extra, team=team)
+
+
+class NoHumans(unittest.TestCase):
+    """THE HUMANS GONE: the judge of a duel played with --no-humans."""
+
+    WON = [(100, {"A": 1, "B": 1, **OUT}, {}), (2000, {"A": 9, "B": 14, **OUT}, {}),
+           (3900, {"A": 0, "B": 30, **OUT}, {})]
+
+    def test_the_seats_alone_play_and_b_wins(self):
+        r = cd.judge(gone_log("H", self.WON), gone_log("J", self.WON), 6000, no_humans=True)
+        self.assertEqual((r["outcome"], r["end_tick"], r["failed"]), ("B", 3900, []))
+        self.assertEqual((r["humans"], r["humans_out"]), ("none", {"H": 100, "J": 100}))
+
+    def test_the_default_judges_the_humans_idle(self):
+        won = PLAYED + [(3900, {"A": 0, "B": 30}, {})]
+        r = cd.judge(log("H", won), log("J", won), 6000)
+        self.assertEqual((r["outcome"], r["humans"]), ("B", "idle"))
+        self.assertNotIn("humans_out", r)
+        # and a seating with no team is not its seating
+        r = cd.judge(gone_log("H", self.WON), gone_log("J", self.WON), 6000)
+        self.assertIn("H: the teams are", r["reason"])
+
+    def test_a_peer_whose_lever_is_not_installed_fails(self):
+        r = cd.judge(gone_log("H", self.WON), gone_log("J", self.WON, extra=""), 6000, no_humans=True)
+        self.assertEqual(r["outcome"], "could not run")
+        self.assertIn("J: its log has no `duel: TEST LEVER tagpu_impai_duel.on -- installed`", r["reason"])
+
+    def test_a_human_holding_a_unit_at_the_last_look_fails(self):
+        held = [(t, dict(alive, **{"human J": 1}), kw) for t, alive, kw in self.WON]
+        r = cd.judge(gone_log("H", held), gone_log("J", self.WON), 6000, no_humans=True)
+        self.assertEqual(r["outcome"], "could not run")
+        self.assertIn("H: a record that is no AI seat's holds a unit at its last look", r["reason"])
+        self.assertEqual(r["humans_out"], {"H": None, "J": 100})
+
+    def test_the_humans_are_out_from_the_first_look_none_holds_a_unit(self):
+        late = [(100, {"A": 1, "B": 1}, {})] + self.WON[1:]
+        r = cd.judge(gone_log("H", late), gone_log("J", self.WON), 6000, no_humans=True)
+        self.assertEqual((r["outcome"], r["humans_out"]), ("B", {"H": 2000, "J": 100}))
+
+    def test_the_seats_must_not_be_allied(self):
+        one = dict.fromkeys(TEAM, 0)
+        r = cd.judge(gone_log("H", self.WON, team=one), gone_log("J", self.WON), 6000, no_humans=True)
+        self.assertEqual(r["outcome"], "could not run")
+        self.assertIn("H: seat A's alliance bytes", r["reason"])
+
+    def test_a_level_that_ended_under_the_lever(self):
+        played = self.WON[:2]
+        r = cd.judge(gone_log("H", played), gone_log("J", played), 6000, no_humans=True)
+        self.assertEqual(r["outcome"], "could not run")
+        self.assertTrue(r["reason"].endswith("its level ended with both AI seats holding units"))
 
 
 class Maps(unittest.TestCase):

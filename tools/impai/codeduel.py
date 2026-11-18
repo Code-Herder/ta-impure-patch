@@ -151,6 +151,8 @@ SEATING = {0x13F: "team", 0x108: "allies", 0x147: "start",     # engine/units.md
            0x67: "first", 0x6B: "last"}                         # bytes (the first four), the start position,
                                                                 # the unit block's first and last unit
 SIZE = {0: 4, 4: 4, 0x73: 1, bar.ALIVE: 2, bar.LOST: 2, 0x13F: 1, 0x108: 4, 0x147: 1, 0x67: 4, 0x6B: 4}
+DUEL_LEVER = "tagpu_impai_duel.on"      # THE HUMANS GONE: tagpu_patches.c, patch_duel_lever
+DUEL_LINE = f"duel: TEST LEVER {DUEL_LEVER} -- installed"
 # THE VALUE AT THE CAP
 UNIT = 0x118                            # a unit's bytes (engine/units.md)
 U_FROM, U_SPAN = bar.UNIT_TYPE, 0x6E    # the bytes of a unit a peek reads: +0xA6 .. +0x113
@@ -426,16 +428,51 @@ def teams(first: dict, dpid: dict) -> list:
     return bad
 
 
-def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None) -> dict:
+def humans_out(lks: list, dpid: dict):
+    """The GameTime of the first look from which no record but the two AI seats' holds a unit; None when one
+    does at the last look."""
+    ai, out = set(dpid.values()), None
+    for lk in lks:
+        if any(r["active"] and r["dpid"] not in ai and r["alive"] for r in lk["recs"].values()):
+            out = None
+        elif out is None:
+            out = lk["t"]
+    return out
+
+
+def humans_gone(texts: dict, lks: dict, first: dict, dpid: dict) -> tuple:
+    """({peer: humans_out}, the failures of THE HUMANS GONE): each peer's DLL installed the duel lever, no
+    human holds a unit at its last look, and neither AI seat allies the other."""
+    bad, out = [], {}
+    for p in PEERS:
+        if DUEL_LINE not in texts[p]:
+            bad.append(f"{p}: its log has no `{DUEL_LINE}`: the end test was not held off")
+        out[p] = humans_out(lks[p], dpid)
+        if out[p] is None:
+            bad.append(f"{p}: a record that is no AI seat's holds a unit at its last look")
+        idx = {s: record_of(first[p], dpid[s]) for s in ("A", "B")}
+        if None in idx.values() or any("allies" not in first[p]["recs"][i] for i in idx.values()):
+            bad.append(f"{p}: its first look does not hold the two seats' alliances {idx}")
+            continue
+        for s, o in (("A", "B"), ("B", "A")):
+            allies = first[p]["recs"][idx[s]]["allies"]
+            if allies >> (8 * idx[o]) & 1:
+                bad.append(f"{p}: seat {s}'s alliance bytes {allies:#010x} ally seat {o} (record {idx[o]})")
+    return out, bad
+
+
+def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None, no_humans: bool = False) -> dict:
     """The game's result from the two peers' logs (THE JUDGE) and, for a game at the cap, their reads of the
     units there (`at_cap`, cap_value's). `only` is only_stems of the two DLLs, None to leave the fingerprint
-    out. Keys: outcome (A, B, cap, desync, could not run), draw, reason, end_tick, cap, value, pulse, lead,
-    clock, seats, peers, failed."""
+    out; `no_humans` judges THE HUMANS GONE's seating in place of THE HUMANS STAY's. Keys: outcome (A, B, cap,
+    desync, could not run), draw, reason, end_tick, cap, value, pulse, lead, clock, seats, peers, humans,
+    humans_out, failed."""
     texts = {"H": host, "J": join}
     plays = {p: play_text(texts[p]) for p in PEERS}
     lks = {p: looks(plays[p]) for p in PEERS}
     res = {"outcome": "could not run", "draw": False, "reason": "", "end_tick": None, "cap": cap, "value": {},
-           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": []}
+           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": [],
+           "humans": "none" if no_humans else "idle"}
     short = [p for p in PEERS if not lks[p]]
     if short:
         res["reason"] = f"no look in the log of {', '.join(short)}"
@@ -445,7 +482,11 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
     ahead = res["clock"]["J"] - res["clock"]["H"]
     marks, dpid, bad = seats(texts, first)
     if len(dpid) == 2:
-        bad += teams(first, dpid)
+        if no_humans:
+            res["humans_out"], out = humans_gone(texts, lks, first, dpid)
+            bad += out
+        else:
+            bad += teams(first, dpid)
         res["peers"] = {"H": view(lks["H"], dpid, cap), "J": view(lks["J"], dpid, None)}
         if res["peers"]["H"]["outcome"] == "cap" and res["peers"]["J"]["outcome"] == "unfinished":
             res["peers"]["J"]["outcome"] = "cap"
@@ -498,8 +539,9 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
         return res
     o = vh["outcome"]
     if o in ("ended", "unfinished"):
-        why = {"ended": "its level ended with both AI seats holding units (THE HUMANS STAY: the engine ends a "
-                        "network game once no human holds a unit)",
+        why = {"ended": "its level ended with both AI seats holding units" + (
+                   "" if no_humans else " (THE HUMANS STAY: the engine ends a network game once no human holds "
+                                        "a unit)"),
                "unfinished": "its looks stop before an outcome and before the cap"}[o]
         res["reason"] = f"both peers: {said['H']} and {said['J']}: {why}"
         return res
@@ -616,14 +658,26 @@ def seat_room(tp, sides: str):
             tp.click(name, f"SIDE{row}", 20)
 
 
-def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port) -> dict:
+def watch_room(tp, sides: str):
+    """THE HUMANS GONE: the host allows watchers (WATCHING, Disallowed then Allowed), each human takes its
+    side gadget to its third stage, Watch, and each AI seat its side; no seat takes a team."""
+    tp.add_ais()
+    tp.tacli("ui", tp.host, "set", "WATCHING", "1")
+    for name, row, side in ((tp.host, 2, sides[0]), (tp.join, 3, sides[1])):
+        tp.tacli("ui", name, "set", "SIDE0", "2")
+        if side == "c":
+            tp.click(name, f"SIDE{row}", 20)
+
+
+def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, no_humans: bool = False) -> dict:
     from twopeers import STALL_S, CouldNotRun, TwoPeers
     key, name = map_of(map_name)
     t0 = time.monotonic()
     with TwoPeers(out, a, port, "cd", join_dll=b) as tp:
-        tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "impai"])
+        tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "impai"],
+                  levers=(DUEL_LEVER,) if no_humans else ())
         tp.battle_room(name)
-        seat_room(tp, sides)
+        (watch_room if no_humans else seat_room)(tp, sides)
         tp.start()
         full_speed(tp)
         t1 = time.monotonic()
@@ -668,7 +722,7 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port) 
         port = tp.port
     dlls = {"H": a, "J": b}
     data = {p: d.read_bytes() for p, d in dlls.items()}
-    res = judge(texts["H"], texts["J"], cap, only_stems(data["H"], data["J"]), at_cap)
+    res = judge(texts["H"], texts["J"], cap, only_stems(data["H"], data["J"]), at_cap, no_humans)
     res["cap_read"] = at_cap
     for s, p in SEAT_PEER.items():
         res["seats"].setdefault(s, {}).update(dll=dlls[p].name, sha256=hashlib.sha256(data[p]).hexdigest())
@@ -691,6 +745,7 @@ def main(argv=None) -> int:
     p.add_argument("--sides", default="aa", choices=bar.BLOCK_SIDES, help="A's side and B's: a Arm, c Core")
     p.add_argument("--cap", type=int, default=CAP, help=f"the host's GameTime the game plays to (default {CAP})")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
+    p.add_argument("--no-humans", action="store_true", help="THE HUMANS GONE: both humans watch, under the duel lever")
     a = p.parse_args(argv)
     try:
         map_of(a.map)
@@ -711,7 +766,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port)
+        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port, a.no_humans)
     except (OSError, ValueError, subprocess.SubprocessError, tareplay.CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2
