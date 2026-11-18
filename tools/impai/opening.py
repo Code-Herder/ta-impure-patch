@@ -13,8 +13,11 @@ game's; the game is played to CAP ticks, exact from its id's seed (bar.game_seed
 situation is, and judged a pass while ImpAI's seat holds a unit at the cap (exploit.py's `survives`).
 THE MAPPED TWIN, `mapped-<map>-<S>`: the same game, seed included, with `mapping` true. An ImpAI seat knows the
 map's layout in an unmapped game (tagpu_worldq_open_layout), so the two play the opening alike but for what the
-engine itself does by a player's explored map: its pathfinder takes a block the unit's owner has not explored as
-passable (0x40D7B0), so a walk over unexplored ground can take another way in the unmapped game.
+engine itself does by a player's explored map. Under True line of sight, this game's setting (the bar's template),
+that is its pathfinder, which takes a block the unit's owner has not explored as passable (0x40D7B0), so a walk
+over unexplored ground can take another way in the unmapped game. With True line of sight off the seat's explored
+bit is its sight as well (tagpu_worldq.c, sight_lit: the units and gated features it sees, the occupied sites its
+test refuses), and the twins would differ by that too; no opening plays it.
 MEASURED 2026-11-18 (GDI, no draw, the reference setup): a game plays in about 22 s; the level's own
 `impai: starts` line seats ImpAI's seat at the start the id names (`2:272,4912@3` on Steel Jungle's start 2,
 `3:128,8672@4` in the four-seat game of Lava Alley's start 3: start, position, seat + 1); and Luschaven's start 3

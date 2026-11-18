@@ -166,9 +166,11 @@ static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
    equivalence, which must read 0. The resolver is not asked here: each call reaches 0x438760's name search,
    and a forest is thousands of anchors a frame. With seat_sight the caller orders RECLAIM by name, which the
    handler takes for any reclaimable feature at the position; the test is what the feature draw shows the seat
-   (tasim_feature_drawn), and the explored test comes before the cell is read, so a cell on ground the seat
-   has not explored is not taken (the read of an explored cell can follow its hop to an anchor the seat has not
-   explored, whose answer the draw's own explored test then refuses). */
+   (tasim_feature_drawn), and the view's explored test comes before the cell is read, so a cell the view does
+   not answer explored is not taken (the read of an explored cell can follow its hop to an anchor that is not,
+   whose answer the draw's own explored test then refuses). Which cells that is, is the view's: a human's view
+   answers by the player's explored bit, an ImpAI seat's layout view answers every cell of the map
+   (tagpu_worldq_open_layout). */
 unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* out, unsigned cap, unsigned* more)
 {
     WQ_MAP m;
