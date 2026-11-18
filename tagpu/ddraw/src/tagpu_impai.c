@@ -2217,6 +2217,38 @@ static void impai_play_clear(void)
     memset(&s_payout, 0, sizeof s_payout);
 }
 
+/* THE LEVEL'S LAST WORD, one line at the level end: the game-over word and, for each active record, its
+   DirectPlay ID, its controller, its units alive and its commanders lost, as the engine holds them before the
+   teardown clears them. Each peer of a network game writes its own, so a judge reads how the level ended on
+   both from the two logs, with no look that falls between a seat's last unit and the teardown.
+   ENGINE FACTS: main+0x3923B is the game's end, a u16 of flags (bit 2 stop, bit 4 won, bit 6 lost:
+   tagpu_recorder.c, OFF_GAME_END); a record is active when its dword +0 is not 0, +4 is its DirectPlay ID
+   (engine/network.md, 0 in a skirmish), +0x73 its controller (1 the local human, 2 a local AI, 3 a remote
+   player: engine/sim.md), and the words +0x144 and +0x106 its live-unit count and its commanders lost, which
+   the unit's destructor lowers and raises (engine/memory.md, 0x486DFC and 0x486996).
+   BOUND: the ten records, each at a fixed offset inside main's block, read and never written; the line holds
+   at most ten fields of at most 27 characters. */
+#define OFF_GAME_OVER 0x3923B
+#define PL_DPID       0x04
+#define PL_COM_LOST   0x106
+#define PL_ALIVE      0x144
+static void impai_end_line(const char* ta, unsigned now)
+{
+    char line[PLAYER_COUNT * 40];
+    unsigned i;
+    int at = 0;
+    line[0] = 0;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        const char* r = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+        if (!*(const uint32_t*)(r + PL_ACTIVE)) continue;
+        at += snprintf(line + at, sizeof line - (size_t)at, " %u:%08x:%u:%u:%u", i, *(const uint32_t*)(r + PL_DPID),
+                       (unsigned)(uint8_t)r[PL_CONTROL], (unsigned)*(const uint16_t*)(r + PL_ALIVE),
+                       (unsigned)*(const uint16_t*)(r + PL_COM_LOST));
+    }
+    tagpu_logf("impai: end tick=%u over=0x%04x seat:dpid:control:alive:com_lost=%s", now,
+               (unsigned)*(const uint16_t*)(ta + OFF_GAME_OVER), line);
+}
+
 /* THE LEVEL END, on the game thread in the teardown 0x491B60's entry, after the recorder has
    closed the level's recording (tagpu_reclaim.c, reclaim_teardown_pre). It writes the level's
    counts and clears the seat table, so nothing the engine runs between this level and the next
@@ -2238,6 +2270,7 @@ void tagpu_impai_level_end(void)
         tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
         impai_observe_end(now);
         impai_play_end(ta, now);
+        impai_end_line(ta, now);
     }
     memset(s_seat, 0, sizeof s_seat);
 }
