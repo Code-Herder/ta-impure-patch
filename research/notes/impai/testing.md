@@ -104,6 +104,17 @@ tools/impai/think.py why      REC [--seat S] (--at T | --want NAME | both) [--fr
 - **A situation's figures**: `exploit.py` prints, under each verdict, and `session.py` beside it for both DLLs, the opponent's units at four ticks, the tick of ImpAI's first attack and the attacks' count, and its army at its peak. They are reported, never judged.
 - MEASURED 2026-11-17 on the reference setup: a first call on a recording of 20 190 ticks 1.6 s, of 81 180 ticks 9.1 s; later calls 0.06 to 3 s, from the extract it keeps in `.data/impai/think-cache/`.
 
+## The thought viewer
+
+`tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR] --out DIR` writes a page from recordings, through `think.py`'s reader: `index.html` and one data file a recording. It is the owner's instrument, one view on one clock:
+
+- **The flight recorder**, the whole game: an events row (a plant sited, a wave, a prediction lost, first contact, the commander seen, a judgement changed), a lane a judgement (naval, island, the dry hunt, the lead, the pressure, the base's threat, the estimate), a lane a squad with its tasks as spans, and four curves (units alive a seat and the army in squads, the army's value against the enemy's remembered, metal income, the enemy rows known and how).
+- **The war room**, one moment: the block grid as `think.py` numbers it, the anchor and the base box, own units by job, the builders' sites, each squad as a ring with its goal line and trail, the estimate, and the enemy as the seat holds it -- solid in sight, a ring on radar, a cross remembered -- over the truth drawn faint, switchable.
+- Dragging on the recorder sets the war room's moment; a span or an event jumps to it; a squad picked on the map is picked in its lane; a sentence between the two says what is happening at the moment, to copy into a queue item.
+- **Exact and sampled**: the lanes, the events, the squads' state and the seat's scalars are exact at every tick; units' places, jobs, known rows and income are samples at every decision tick and a regular step, and the page says which sample it shows.
+- **What it cannot show**, the recording not holding it: the terrain and the water, a squad's own rally point (its ring is its members' centroid), a plant's completion (only its siting), and the reasons (`think.py why` reads those from the log; the page does not merge them yet).
+- Unit types print by name there and in `think.py`, from the fight content's names when their count is the recording's.
+
 ## One-call diagnosis
 
 `tools/impai/diag.py` gives the brain writer's diagnosis loop in one call. It plays a few games, or reads games already played, and prints only the lines asked for, at most 60 by default:
