@@ -1,0 +1,4 @@
+landing-review: model=claude-opus-5-5 effort=high range=4466cf96..dc50c4c8 findings=2 acted=2 rejected=0 date=2026-11-18
+Focused delta review of the GameTime latch at 0x420B00 (prologue relocation, free eax/ecx/edx, all-or-none byte checks, != handles rewind/seek/load, SIM_PRIVATE as presentation gate): no code defect.
+1 LOW docs: movie recorder DrawGameScreen(0,1) 0x4962C2 skips effects at 0x469B09; screenshot 0x495E66 was missing -> fixed c0b73e1e (verified by disassembly).
+2 LOW docs: '57 calls' not reproducible; claim restated as a direct-call sweep from 0x468CF0 over effects.md's emitter set -> fixed c0b73e1e.
