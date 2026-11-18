@@ -171,7 +171,7 @@ Watching's costs (MEASURED 2026-10-31 on the reference setup, the DLL's i686 bui
 `watch` lane at 1920 × 1080 for the page, the HUD and the pass; `tagpu_wiki.check` under every
 setup of the compatibility suite for the ticks): Watching's page cost the game thread at most 0.462 ms in a frame over 174 frames; the
 stage HUD's two builds at most 0.159 ms on the render thread, the bars 0.301 ms in a frame that
-composes them and nothing in one that keeps them; the wiki's layer peaked at 1 309 of 32 768
+composes them and nothing in one that keeps them; the wiki's layer peaked at 1 309
 instances and 87 batches of 1024; a replay tick costs 1.5 to 3.8 µs on every setup of the
 compatibility suite but Escalation (11.6 to 15.3 µs), whose dearest 64-tick step is 3.57 ms
 against 0.41 ms or less elsewhere ([the replay plan](../ingame-wiki-replay-plan.html), *The

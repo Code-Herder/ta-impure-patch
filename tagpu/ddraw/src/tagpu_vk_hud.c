@@ -7,9 +7,16 @@
    against the groups' layer's -- and a draw per run of instances that share a texture.
 
    ONE INSTANCE PER QUAD, a four-vertex strip each, so a frame's buffer is the instances alone:
-   96 bytes a quad, HUD_MAXINST of them per frame slot. Each slot has its own range of one
-   persistently mapped, coherent buffer, and the seam's fence wait at the top of its present is
-   what proves the slot's range free (tagpu_vk_pass.h).
+   96 bytes a quad, HUD_MAXINST of them per frame slot. THEY ARE NEVER IN MAPPED MEMORY BETWEEN
+   FRAMES. A frame builds them into this thread's scratch (s_in), hides there what the device
+   cannot draw yet, and copies them through the slot's staging (tagpu_vk_stage.h) into the slot's
+   range of one device-local buffer, in its own command buffer behind barriers, before anything
+   of the frame draws; the seam's fence wait at the top of its present proves the slot's range
+   free (tagpu_vk_pass.h). The instances take their bytes of the staging first, so no upload can
+   leave the frame without them; a staging that cannot be mapped that large draws no HUD that
+   frame and says so once. The slot's staging is mapped only while the pass has something to send
+   -- the instances while it draws -- at most TAGPU_VK_STAGE_CAP, and a frame with no upload due
+   maps it at the instances' size rounded up to SHRINK, giving a larger one back.
 
    THE PARTS ARE UPLOADED ONCE PER BUILD, whole and all in one frame, through
    tagpu_vk_stage_copy_banded: a pass's first upload after it is built is one of the events the
@@ -81,10 +88,16 @@
 #include "spirv/tagpu_huddraw.spv.h"
 
 /* a slot's quads: the HUD's two layers (a few thousand), and the wiki's page and stage, whose own
-   op budget is WIKI_MAXOP; a quad past the range is dropped by the build, never written past it */
-#define HUD_MAXINST   32768
+   op budget is WIKI_MAXOP; a quad past the range is dropped by the build, never written past it.
+   A frame's quads go through the slot's staging, so they are bounded by it: 16 384 quads are
+   1.5 MB of its 2 MB, the rest left to the same frame's uploads. The most a frame of the wiki's has
+   used is 6 512, MEASURED 2026-11-17 over the wiki's lanes (the log's peak line). */
+#define HUD_MAXINST   16384
 #define HUD_MAXBATCH  1024
 #define IBYTES        ((VkDeviceSize)HUD_MAXINST * sizeof(HUDINST))
+typedef char hud_instances_fit_staging[IBYTES <= TAGPU_VK_STAGE_CAP ? 1 : -1];
+/* a frame with no upload due maps the staging at its instances' size rounded up to this */
+#define SHRINK        ((VkDeviceSize)256 << 10)
 #define MAXPART       160           /* the HUD's kit, at most 128, then the wiki's */
 
 #define IFNS(X) \
@@ -149,9 +162,9 @@ static int                   s_nwparts;         /* the wiki's, after them; 0 whe
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
 static int                   s_sent;            /* all of them                                 */
 static unsigned              s_agen;            /* the atlas generation the device holds; 0 none */
-static VkBuffer              s_ibuf;
+static VkBuffer              s_ibuf;            /* device-local: each slot's IBYTES */
 static VkDeviceMemory        s_imem;
-static unsigned char*        s_imap;
+static HUDINST               s_in[HUD_MAXINST]; /* this frame's, before they are sent: 1.5 MB */
 static TAGPU_VKSTAGE         s_stage[TAGPU_VK_SLOTS];
 static HUDOPS                s_ops;             /* render thread's; 400 KB, never on a stack  */
 static HUDBATCH              s_batch[HUD_MAXBATCH];
@@ -160,6 +173,15 @@ static int                   s_saidDrop, s_saidMiss, s_saidChart[HUD_CHART_SLOTS
 /* the most instances and batches one frame of the wiki's has used, logged against the pass's caps
    (HUD_MAXINST, HUD_MAXBATCH, which the replay HUD and the wiki share) when the wiki stops drawing */
 static int                   s_wpeakInst, s_wpeakBatch, s_wdrawn;
+static int                   s_saidStage;       /* the instances' staging refused, said     */
+static VkDeviceSize          s_ihead;           /* the bytes this frame's instances took at the
+                                                   head of the slot's staging: what an upload
+                                                   that asks for the buffer to itself (the atlas's
+                                                   first, a whole image's refusal) finds ahead of
+                                                   it, which it writes after                    */
+/* the most bytes the slots' staging held mapped at once: while the wiki's window was open (told
+   with its peaks), and since the pass was built (told when it comes down) */
+static VkDeviceSize          s_wpeakMap, s_peakMap;
 static int                   s_nbase;           /* the base layer's batches: s_batch[0, s_nbase) */
 static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb0, s_tb1); the
                                                    groups' batches lie outside both          */
@@ -178,12 +200,13 @@ static VkRect2D              s_top;             /* the top layer's device pixels
    the frame's own command buffer behind barriers whose first scope holds every frame submitted
    before it (the order the atlas's in-frame copies rest on). Each frame draws them moved by the
    pan, whole device pixels, through the per-draw constants below. A frame whose staging cannot
-   take them keeps them due and does not draw the tree: never an older tree at another zoom; a
-   staging mapped smaller than they are (tagpu_vk_stage_begin halves a refused mapping) never can,
-   and says so once. TREE_MAXINST bounds the copy: techcheck's budget case, every card at the most
-   zoom with every link, is at most 1 348 ops and 4 976 bytes of text (Escalation), some 10 600
-   quads at the most; a quad past it is dropped and said. At most 1.5 MB, inside a full staging's
-   2 MB (TAGPU_VK_STAGE_CAP). */
+   take them keeps them due and does not draw the tree: never an older tree at another zoom. They
+   come after the frame's own instances in the staging, so a staging smaller than the two
+   (tagpu_vk_stage_begin halves a refused mapping) never can, and says so once. TREE_MAXINST bounds
+   the copy: techcheck's budget case, every card at the most zoom with every link, is at most
+   1 348 ops and 4 976 bytes of text (Escalation), some 10 600 quads, 1.0 MB, at the most; a quad
+   past it is dropped and said. The tree's entry draws a page of a few thousand quads beside it,
+   inside a full staging's 2 MB (TAGPU_VK_STAGE_CAP). */
 #define TREE_MAXINST  16384
 #define TREE_MAXBATCH 1024
 #define TBYTES        ((VkDeviceSize)TREE_MAXINST * sizeof(HUDINST))
@@ -587,18 +610,13 @@ static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h, int cw, int
     return 1;
 }
 
-/* This frame's groups drawn into the slot's layer, before the render pass: each region cleared and
-   its instances drawn with the attachment's viewport, scissored to it; then the composites' uv,
-   in layer pixels, divided by the image's size. 0 when the layer could not be made. */
-static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, uint32_t w, uint32_t h)
+/* The slot's layer made for this frame's groups, and the composites' uv, in layer pixels, divided
+   by the image's size, in the frame's instances before they are sent. 0 when the layer could not
+   be made. */
+static int layer_prep(const TAGPU_VKPASS* d, uint32_t slot, uint32_t w, uint32_t h)
 {
     LAYER* L = &s_layer[slot];
-    HUDINST* in = (HUDINST*)(s_imap + (size_t)slot * IBYTES);
-    VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    VkClearValue clear;
-    VkViewport vp;
-    VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
-    int i, j, k;
+    int i, j;
     if (!layer_size(d, L, s_layW > 0 ? s_layW : 1, s_layH > 0 ? s_layH : 1, (int)w, (int)h)) return 0;
     /* the composites stand in the three layers' own batches, never in the groups' */
     for (i = 0; i < s_nbatch; i++) {
@@ -606,10 +624,24 @@ static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         if (b->tex != HUD_TEX_LAYER || !(i < s_nbase || (i >= s_tb0 && i < s_tb1) || (i >= s_wb0 && i < s_wb1)))
             continue;
         for (j = b->first; j < b->first + b->count; j++) {
-            in[j].uv[0] /= (float)L->w; in[j].uv[2] /= (float)L->w;
-            in[j].uv[1] /= (float)L->h; in[j].uv[3] /= (float)L->h;
+            s_in[j].uv[0] /= (float)L->w; s_in[j].uv[2] /= (float)L->w;
+            s_in[j].uv[1] /= (float)L->h; s_in[j].uv[3] /= (float)L->h;
         }
     }
+    return 1;
+}
+
+/* This frame's groups drawn into the slot's layer (layer_prep made it), before the render pass:
+   each region cleared and its instances drawn with the attachment's viewport, scissored to it.
+   After the instances are on the device. */
+static void layer_record(VkCommandBuffer cb, uint32_t slot, uint32_t w, uint32_t h)
+{
+    LAYER* L = &s_layer[slot];
+    VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    VkClearValue clear;
+    VkViewport vp;
+    VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
+    int i, k;
     memset(&clear, 0, sizeof clear);
     rbi.renderPass = s_lrp;
     rbi.framebuffer = L->fb;
@@ -638,7 +670,6 @@ static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         for (i = g->b0; i < g->b0 + g->nb; i++) draw_batch(cb, &s_batch[i], slot);
     }
     vkCmdEndRenderPass(cb);
-    return 1;
 }
 
 /* ---- the build ------------------------------------------------------------------------------- */
@@ -773,18 +804,25 @@ static int dev_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFla
     return vkBindBufferMemory(d->dev, *b, *m, 0) == VK_SUCCESS;
 }
 
-/* a barrier on all of buffer `b` */
-static void buf_barrier(VkCommandBuffer cb, VkBuffer b, VkPipelineStageFlags s0, VkAccessFlags a0, VkPipelineStageFlags s1,
-                        VkAccessFlags a1)
+/* a barrier on `size` bytes of buffer `b` from `off` */
+static void buf_barrier_at(VkCommandBuffer cb, VkBuffer b, VkDeviceSize off, VkDeviceSize size, VkPipelineStageFlags s0,
+                           VkAccessFlags a0, VkPipelineStageFlags s1, VkAccessFlags a1)
 {
     VkBufferMemoryBarrier bb = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
     bb.srcAccessMask = a0;
     bb.dstAccessMask = a1;
     bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bb.buffer = b;
-    bb.offset = 0;
-    bb.size = VK_WHOLE_SIZE;
+    bb.offset = off;
+    bb.size = size;
     vkCmdPipelineBarrier(cb, s0, s1, 0, 0, NULL, 1, &bb, 0, NULL);
+}
+
+/* a barrier on all of buffer `b` */
+static void buf_barrier(VkCommandBuffer cb, VkBuffer b, VkPipelineStageFlags s0, VkAccessFlags a0, VkPipelineStageFlags s1,
+                        VkAccessFlags a1)
+{
+    buf_barrier_at(cb, b, 0, VK_WHOLE_SIZE, s0, a0, s1, a1);
 }
 
 static int format_ok(const TAGPU_VKPASS* d, VkFormat f, VkFormatFeatureFlags need)
@@ -796,13 +834,9 @@ static int format_ok(const TAGPU_VKPASS* d, VkFormat f, VkFormatFeatureFlags nee
 
 static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
 {
-    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     VkDescriptorPoolSize ps;
     VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkMemoryRequirements req;
-    void* p = NULL;
-    int i, type;
+    int i;
 
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
         plog(d, "hud: %u frame slots is outside what this pass carries (%d)", (unsigned)d->slots, TAGPU_VK_SLOTS);
@@ -907,28 +941,13 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
         vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
     }
 
-    bci.size = IBYTES * d->slots;
-    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(d->dev, &bci, NULL, &s_ibuf) != VK_SUCCESS) return 0;
-    vkGetBufferMemoryRequirements(d->dev, s_ibuf, &req);
-    type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (type < 0) return 0;
-    mai.allocationSize = req.size;
-    mai.memoryTypeIndex = (uint32_t)type;
-    if (vkAllocateMemory(d->dev, &mai, NULL, &s_imem) != VK_SUCCESS) return 0;
-    if (vkBindBufferMemory(d->dev, s_ibuf, s_imem, 0) != VK_SUCCESS) return 0;
-    if (vkMapMemory(d->dev, s_imem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
-    /* A SUCCESS IS NOT A POINTER. MEASURED on Wine 9 on llvmpipe, whose 3D code and allocations take most of the process's 2 GB:
-       with no free run of this size left, the call returned VK_SUCCESS and (void*)-1, and the first instance written faulted. */
-    if (!p || p == (void*)-1) {
-        plog(d, "hud: the instances could not be mapped: the address space has no %u bytes in a row", (unsigned)(IBYTES * d->slots));
+    /* each slot's instances, the tree's and the per-draw constants: device-local, never mapped,
+       filled by copies in the frames' command buffers */
+    if (!dev_buffer(d, IBYTES * d->slots, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_ibuf,
+                    &s_imem)) {
+        plog(d, "hud: the device refused the instances' buffer (%u bytes)", (unsigned)(IBYTES * d->slots));
         return 0;
     }
-    s_imap = (unsigned char*)p;
-
-    /* the tree's instances and the per-draw constants: device-local, never mapped, filled by
-       copies in the frames' command buffers */
     if (!dev_buffer(d, TBYTES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_trbuf, &s_trmem) ||
         !dev_buffer(d, (VkDeviceSize)KSLOT * d->slots, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     &s_kbuf, &s_kmem)) {
@@ -987,11 +1006,11 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkBufferImageCopy rg;
 
-    /* THE FIRST UPLOAD AFTER A BUILD goes whole, the frame's first copy as a part's is: the image
-       has no contents and no layout yet, and 4 MiB is banded -- the post-build event the banded
-       path is for (tagpu_vk_stage.h) */
+    /* THE FIRST UPLOAD AFTER A BUILD goes whole, the frame's first copy after its instances as a
+       part's is: the image has no contents and no layout yet, and 4 MiB is banded -- the post-build
+       event the banded path is for (tagpu_vk_stage.h) -- through what the instances leave */
     if (!s_agen) {
-        if (st->used) return 0;
+        if (st->used > s_ihead) return 0;
         r = tagpu_vk_stage_copy(d, cb, st, s_atlas.img, 0, a, HUD_ATLAS, HUD_ATLAS, HUD_ATLAS, 1);
         if (r > 0) { s_agen = gen; tagpu_huddraw_atlas_sent(HUD_ATLAS); }
         return r;
@@ -1044,7 +1063,7 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
 /* An image whole, `bytes` of `a`, in this frame's command buffer when it fits what the slot mapped.
    Every texel is written, so the image's old contents go: the barrier leaves UNDEFINED, and its
    first scope still holds the reads of every frame already submitted. 1 sent, 0 not this frame;
-   `*said` is set when a buffer with nothing else in it cannot hold the image. */
+   `*said` is set when a buffer with nothing but the frame's instances in it cannot hold the image. */
 static int send_whole(VkCommandBuffer cb, TAGPU_VKSTAGE* st, const TEX* t, const void* a, VkDeviceSize bytes, int* said)
 {
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -1052,7 +1071,7 @@ static int send_whole(VkCommandBuffer cb, TAGPU_VKSTAGE* st, const TEX* t, const
     VkDeviceSize off = (st->used + 15) & ~(VkDeviceSize)15;
 
     if (!st->map || off + bytes > st->cap) {
-        if (st->map && !st->used) *said = 1;
+        if (st->map && st->used <= s_ihead) *said = 1;
         return 0;
     }
     memcpy(st->map + off, a, (size_t)bytes);
@@ -1357,6 +1376,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     float px = 0;
     int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, hud, wiki;
     int wcur = 0, wcurSprite = 0;   /* the stage's cursor's instances, and whether they are sprites */
+    unsigned char* ip = NULL;       /* the instances' bytes of the slot's staging, taken first      */
+    VkDeviceSize ioff = 0;
 
     s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wbv = s_wb1 = s_ngroup = 0;
     s_trdraw = 0;
@@ -1411,7 +1432,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        one glyph atlas, and one shelf carried through all of them packs every layer's groups on one
        layer image (tagpu_huddraw.h). */
     {
-        HUDINST* in = (HUDINST*)(s_imap + (size_t)slot * IBYTES);
+        HUDINST* in = s_in;
         HUDSHELF sh;
         int n0 = 0, n1 = 0, nb0 = 0, nb1 = 0, m1 = 0, mi0 = 0, mi1 = 0, g0, d1 = 0, u1 = 0, i;
         memset(&sh, 0, sizeof sh);
@@ -1564,9 +1585,11 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             s_wdrawn = 1;
         } else if (s_wdrawn) {
             plog(d, "wiki: its frames peaked at %d instances of %d and %d batches of %d (%ux%u); the tech tree's device "
-                    "copy at %d instances of %d, sent %d times, %ld KB", s_wpeakInst, HUD_MAXINST, s_wpeakBatch, HUD_MAXBATCH,
-                 (unsigned)w, (unsigned)h, s_trpeak, TREE_MAXINST, s_trsends, s_trbytes / 1024);
+                    "copy at %d instances of %d, sent %d times, %ld KB; the slots' staging at %u KB mapped at once",
+                 s_wpeakInst, HUD_MAXINST, s_wpeakBatch, HUD_MAXBATCH, (unsigned)w, (unsigned)h, s_trpeak, TREE_MAXINST,
+                 s_trsends, s_trbytes / 1024, (unsigned)(s_wpeakMap >> 10));
             s_wpeakInst = s_wpeakBatch = s_wdrawn = 0;
+            s_wpeakMap = 0;
             s_trpeak = s_trsends = 0;
             s_trbytes = 0;
         }
@@ -1612,9 +1635,38 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            || (dgen && dgen != s_dgen) || (bgen && bgen != s_bgen) || (tgen && tgen != s_tgen) || s_trdue
            || (mgen && mgen != s_mgen);
     }
-    if (!due) {
-        if (sg->buf) tagpu_vk_stage_drop(d, sg);
-    } else if (tagpu_vk_stage_begin(d, sg, TAGPU_VK_STAGE_CAP, (VkDeviceSize)4096 * 4)) {
+    /* THE SLOT'S STAGING: the instances' bytes first, then what is due. With nothing due it is
+       mapped at the instances' size rounded up to SHRINK, a larger one given back first; with
+       nothing to send at all, not mapped. */
+    {
+        const VkDeviceSize ib = (VkDeviceSize)s_ninst * sizeof(HUDINST);
+        const VkDeviceSize want = due ? TAGPU_VK_STAGE_CAP : (ib + SHRINK - 1) / SHRINK * SHRINK;
+        s_ihead = 0;
+        if (!due && !ib) {
+            if (sg->buf) tagpu_vk_stage_drop(d, sg);
+        } else {
+            if (!due && sg->buf && sg->cap > 2 * want) tagpu_vk_stage_drop(d, sg);
+            if (!tagpu_vk_stage_begin(d, sg, want, ib > (VkDeviceSize)4096 * 4 ? ib : (VkDeviceSize)4096 * 4)) {
+                if (ib && !s_saidStage) {
+                    s_saidStage = 1;
+                    plog(d, "hud: the slot's staging could not be mapped for the frame's %u bytes of instances - "
+                            "the frame draws no HUD (said once)", (unsigned)ib);
+                }
+                due = 0;
+            } else if (ib)
+                ip = tagpu_vk_stage_take(sg, ib, 16, &ioff);
+            s_ihead = ip ? sg->used : 0;
+        }
+    }
+    {
+        VkDeviceSize m = 0;
+        uint32_t i;
+        for (i = 0; i < d->slots; i++)
+            if (s_stage[i].buf) m += s_stage[i].cap;
+        if (m > s_peakMap) s_peakMap = m;
+        if (wiki && wl.open && m > s_wpeakMap) s_wpeakMap = m;
+    }
+    if (due) {
         if (!s_sent) {
             DWORD t0 = GetTickCount();
             if ((r = send_parts(d, cb, sg, art, wart)) < 0) goto lost;
@@ -1658,10 +1710,11 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 s_trsends++;
                 s_trsent++;
                 s_trbytes += (long)bytes;
-            } else if (bytes > sg->cap && !(s_trsaid & 8)) {
+            } else if (bytes + (VkDeviceSize)s_ninst * sizeof(HUDINST) > sg->cap && !(s_trsaid & 8)) {
                 s_trsaid |= 8;
-                plog(d, "wiki: the tech tree's %u bytes do not fit the slot's staging (%u mapped) - the tree is not "
-                        "drawn while it does not (said once)", (unsigned)bytes, (unsigned)sg->cap);
+                plog(d, "wiki: the tech tree's %u bytes and the frame's %u of instances do not fit the slot's staging "
+                        "(%u mapped) - the tree is not drawn while they do not (said once)", (unsigned)bytes,
+                     (unsigned)(s_ninst * sizeof(HUDINST)), (unsigned)sg->cap);
             }
         }
     }
@@ -1672,38 +1725,63 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         unsigned gen;
         int y0, y1;
         tagpu_huddraw_atlas(&gen, &y0, &y1);
-        if (gen != s_agen || y1 > y0) hide_mode((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst, HUDM_GLYPH);
+        if (gen != s_agen || y1 > y0) hide_mode(s_in, s_ninst, HUDM_GLYPH);
         /* and each chart slot's lines only from the generation this build wrote */
         tagpu_huddraw_chart(0, &gen);
         if (gen != s_cgen[0])
-            hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_CHART, HUDM_CHART);
+            hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_CHART, HUDM_CHART);
         tagpu_huddraw_chart(1, &gen);
         if (gen != s_cgen[1])
-            hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_CHART_WIKI, HUDM_CHART);
+            hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_CHART_WIKI, HUDM_CHART);
         /* and the stage's cursor only from the sheet this frame's ops were built against */
         tagpu_wikistate_sprites(&gen);
         if (gen != s_sgen) {
-            hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_SPRITE, HUDM_PART);
+            hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_SPRITE, HUDM_PART);
             if (wcurSprite) wcur = 0;
         }
         /* and the sidebar column only from the one this frame composed */
         tagpu_wikistate_side(&gen);
-        if (gen != s_dgen) hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_SIDE, HUDM_PART);
+        if (gen != s_dgen) hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_SIDE, HUDM_PART);
         /* and the map cells only from the image this frame made */
         tagpu_wikistate_cells(&gen);
-        if (gen != s_mgen) hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_CELLS, HUDM_CELLS);
+        if (gen != s_mgen) hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_CELLS, HUDM_CELLS);
         /* and the frame's bars only from the ones this frame composed */
         tagpu_wikistate_bar(&gen);
-        if (gen != s_bgen) hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_BAR, HUDM_PART);
+        if (gen != s_bgen) hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_BAR, HUDM_PART);
         /* and the tech tree's pictures only from the sheet this frame's ops name, whole */
         {
             int trows;
             tagpu_wikistate_tech(&gen, &trows);
             if (gen != s_tgen) {
-                hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_TECH, HUDM_PART);
-                hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_TECH_SMOOTH, HUDM_PART);
+                hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_TECH, HUDM_PART);
+                hide_tex(s_in, s_batch, s_nbatch, HUD_TEX_TECH_SMOOTH, HUDM_PART);
             }
         }
+    }
+    /* THE FRAME'S INSTANCES, hidden where they must be and the groups' composites pointed into the
+       layer, go to the slot's range of the device's buffer before anything of the frame draws: the
+       barrier's first scope holds every vertex read submitted before it, the slot's last frame's
+       among them */
+    if (s_ngroup > 0 && !layer_prep(d, slot, w, h)) {
+        plog(d, "hud: the groups' layer (%dx%d) could not be made - the pass stops drawing", s_layW, s_layH);
+        s_state = ST_REFUSED;
+        tagpu_hudstate_refuse("its groups' layer could not be made");
+        s_ninst = 0;
+        return 0;
+    }
+    if (s_ninst > 0 && !ip) s_ninst = s_nbatch = s_ngroup = 0;
+    if (s_ninst > 0) {
+        const VkDeviceSize ib = (VkDeviceSize)s_ninst * sizeof(HUDINST), at = (VkDeviceSize)slot * IBYTES;
+        VkBufferCopy rg;
+        memcpy(ip, s_in, (size_t)ib);
+        buf_barrier_at(cb, s_ibuf, at, ib, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        rg.srcOffset = ioff;
+        rg.dstOffset = at;
+        rg.size = ib;
+        vkCmdCopyBuffer(cb, sg->buf, s_ibuf, 1, &rg);
+        buf_barrier_at(cb, s_ibuf, at, ib, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT);
     }
     /* THE TREE IS DRAWN when the device holds the instances of the ops this frame drew; and THE
        PER-DRAW CONSTANTS of the slot: every list's zero, the tree's its pan and what it must hide
@@ -1731,13 +1809,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     /* a frame with a group has its composites, which bind the layer: it is made whenever there is
        one, even if every region is empty */
-    if (s_ngroup > 0 && !layer_record(d, cb, slot, w, h)) {
-        plog(d, "hud: the groups' layer (%dx%d) could not be made - the pass stops drawing", s_layW, s_layH);
-        s_state = ST_REFUSED;
-        tagpu_hudstate_refuse("its groups' layer could not be made");
-        s_ninst = 0;
-        return 0;
-    }
+    if (s_ngroup > 0) layer_record(cb, slot, w, h);
     /* what this frame draws is what a click is tested against */
     if (s_ninst > 0) {
         if (hud) tagpu_hudstate_drawn(&s_ops);
@@ -1869,6 +1941,10 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     VkDevice dev = d->dev;
     int i;
     tagpu_hudstate_forgive();
+    if (s_peakMap) {
+        plog(d, "hud: the slots' staging peaked at %u KB mapped at once since the pass was built", (unsigned)(s_peakMap >> 10));
+        s_peakMap = s_wpeakMap = 0;
+    }
     if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
     for (i = 0; i < TAGPU_VK_SLOTS; i++)
         if (s_stage[i].buf) tagpu_vk_stage_drop(d, &s_stage[i]);
@@ -1896,7 +1972,6 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     if (s_repeat) { vkDestroySampler(dev, s_repeat, NULL); s_repeat = VK_NULL_HANDLE; }
     if (s_glyph)  { vkDestroySampler(dev, s_glyph, NULL); s_glyph = VK_NULL_HANDLE; }
     if (s_near)   { vkDestroySampler(dev, s_near, NULL); s_near = VK_NULL_HANDLE; }
-    if (s_imap)  { vkUnmapMemory(dev, s_imem); s_imap = NULL; }
     if (s_ibuf)  { vkDestroyBuffer(dev, s_ibuf, NULL); s_ibuf = VK_NULL_HANDLE; }
     if (s_imem)  { vkFreeMemory(dev, s_imem, NULL); s_imem = VK_NULL_HANDLE; }
     if (s_trbuf) { vkDestroyBuffer(dev, s_trbuf, NULL); s_trbuf = VK_NULL_HANDLE; }

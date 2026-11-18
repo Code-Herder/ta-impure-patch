@@ -78,4 +78,19 @@ the slot before the pass draws; the persistent mapping is removed. A frame takes
 what its instances need and no more. *Exit*: the HUD's and the wiki's lanes, a replay with its
 HUD, the log's peaks, the address space mapped before and after.
 
+*Built.* The instances are built into a 1.5 MB scratch on the render thread (`HUD_MAXINST` now
+16 384: one frame's staging is 2 MB, so 32 768 could never have been sent; the most the wiki's
+lanes used is 6 512), hidden there, and copied into the slot's range of a device-local buffer
+behind barriers before the frame draws -- the groups' layer included, whose composites' uv are
+set in the scratch first (`layer_prep`, then `layer_record`). They take the head of the slot's
+staging before any upload; the glyph atlas's first, whole upload, which asked for an empty
+buffer, now bands through what they leave. With no upload due the staging is mapped at the
+instances' size rounded up to 256 KB. MEASURED 2026-11-17, 1920 x 1080 on the wiki's lanes:
+the slots' staging at most 6 144 KB mapped at once (three slots at 2 MB, while uploads are due)
+and 768 KB while the wiki draws with nothing due, against 9 MB mapped as one block for the
+session before, plus the same staging on frames with uploads. The tree, page, demos and watch
+lanes pass, and `tareplay.py forks battle`, a replay driven through its HUD.
+
 Each is a local landing on `worktree-wiki_tech_tree`; the feature lands on main once, after D4.
+Open: the whitebox minimap is an op a cell (D3), and no check renders the cells' shader rule
+against the mockup's pixels.

@@ -312,6 +312,17 @@ The owner's decisions:
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
   buffer. The parts are premultiplied, so a linear average is the right one.
 - **The HUD draws once every part is on the device** and the atlas has a generation there.
+- **The instances are never in mapped memory between frames.** A frame builds them into the
+  render thread's scratch (`HUD_MAXINST`, 16 384 quads, 1.5 MB), hides there what the device
+  cannot draw yet, points the groups' composites into the layer, and copies them through the
+  slot's staging into the slot's range of a device-local buffer, behind barriers, before
+  anything of the frame draws. They take their bytes of the staging first, so no upload can
+  leave a frame without them; a staging that cannot be mapped that large draws no HUD that frame
+  (said once). The staging is mapped only while the pass has something to send -- while the HUD
+  or the wiki draws, at least the instances -- at most 2 MiB a slot, and a frame with no upload
+  due maps it at the instances' size rounded up to 256 KB, giving a larger one back. The log
+  tells the most the slots held mapped at once, with the wiki's peaks and when the pass comes
+  down. The tech tree's instances live on the device across frames (*the in-game wiki*).
 - **The glyph atlas** is one 2048 × 2048 R8 image. It goes whole once after a build, as the
   frame's first copy, 4 MiB, banded. After that only the rows that changed go, in the frame's own
   command buffer, as many as the slot's buffer has room for, the rest on the next frames; nothing
