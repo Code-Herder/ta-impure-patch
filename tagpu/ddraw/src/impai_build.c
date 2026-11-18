@@ -1863,6 +1863,8 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     unsigned n, k, beyond = 0, threat_skipped = 0, unseen = 0;
     int tested = 0, passed = 0, cut = 0;    /* this walk's site tests, those of them the site test passed, and
                                                whether the budget ended it (THE CUT RING GROWS) */
+    IMPAI_PLANTWALK unread = { 0 }, *const w = d->walk ? d->walk : &unread;     /* THE PLANT WALK'S TRACE: counts
+                                               and the return taken, read by nothing here */
     if (at) box = *at;
     else if (d->has_bbox) box = d->bbox;
     else {
@@ -1874,6 +1876,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     }
     n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
                    box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
+    w->sites = (uint16_t)n;
     if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
     else if (commander) ring_order(d, d->ring, n, fx, fz, gap, b->pos[0] >> 16, b->pos[2] >> 16);
     else ring_order(d, d->ring, n, fx, fz, gap, st->ax * 16 + 8, st->az * 16 + 8);
@@ -1890,17 +1893,36 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         }
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
-            (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
-            d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
+        if (impai_claimed(d, &wide)) {
+            w->claimed++;
+            continue;
+        }
+        if (impai_failed_in(d, &r)) {
+            w->failed++;
+            continue;
+        }
+        if (impai_far_at(d, b, type, cx, cz)) {
+            w->far_rec++;
+            continue;
+        }
+        if (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) {
+            w->way_failed++;
+            continue;
+        }
+        if (d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) {
+            w->coverage++;
+            continue;
+        }
         if (commander && !site_within(d, type, cx, cz, in->plan->comm_r)) {
             beyond++;
+            w->beyond++;
             continue;
         }
         if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8) ||
             (commander && cmd_refused(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) ||
             (at && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
             threat_skipped++;
+            w->threat++;
             continue;
         }
         if (out >= 0 && !builder_reaches(d, b, type, cx, cz)) {
@@ -1910,7 +1932,10 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         if (cx >= 1 && cz >= 1 && cx + fx < d->m.w && cz + fz < d->m.h &&
             !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) {
             int32_t px, pz;
+            w->nolook++;                    /* until the builder is found a walk to see it */
             if (!unseen && !look_point(d, b, cx + fx / 2, cz + fz / 2, &px, &pz)) continue;
+            w->nolook--;
+            w->unseen++;
             if (!unseen++ && !at && out < 0 && d->unseen_slot != b->slot) {
                 d->unseen_slot = b->slot;
                 d->unseen_cx = (int16_t)(cx + fx / 2);
@@ -1922,21 +1947,29 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         }
         if (*tests >= cap) {
             cut = 1;
+            w->cut = 1;
             break;
         }
         (*tests)++;
         tested++;
+        w->tested++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
         passed++;
+        w->passed++;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
             threat_skipped++;
+            w->threat++;
             continue;
         }
         if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
-            const int w = way_prove(d, type, cx, cz);
-            if (w < 0) return 0;
-            if (!w) {
+            const int way = way_prove(d, type, cx, cz);
+            if (way < 0) {
+                w->exit = IMPAI_PW_WAY;
+                return 0;
+            }
+            if (!way) {
                 way_refused(d, type, cx, cz);
+                w->way_refused++;
                 continue;
             }
         }
@@ -1944,10 +1977,15 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             if (!at && out < 0) st->ring_grow = 0;
             return 1;
         }
+        w->unbuilt++;
+        w->exit = IMPAI_PW_ROOTS;       /* the return below; a walk that goes on names its own */
         if (d->roots >= d->root_cap) return 0;
     }
+    w->exit = IMPAI_PW_LEFT;
     if (at || out >= 0 || beyond || threat_skipped || unseen) return 0;
+    w->exit = IMPAI_PW_CUT;
     if (cut && (!tested || passed)) return 0;
+    w->exit = st->ring_grow < 8 ? IMPAI_PW_GREW : IMPAI_PW_WIDEST;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);

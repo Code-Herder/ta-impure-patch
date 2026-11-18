@@ -1531,7 +1531,8 @@ static const IMPAI_PERSONA* seat_persona(int seat)
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
    clears every unit before the level-end lines are written (scenarios/replay-end.json); the GameTime + 1 of
    the seat's second-factory line (THE SECOND FACTORY), 0 before it; and the trace of the seat's last `why` line
-   with the GameTime of its last traced decision (THE WHY LINE; impai.h, IMPAI_WHY_SEEN), zero before them.
+   with the GameTime of its last traced decision (THE WHY LINE; impai.h, IMPAI_WHY_SEEN), zero before them, and
+   of its last `plantwalk` line the same way (THE PLANTWALK LINE; IMPAI_PLANTWALK_SEEN).
    Diagnostics the simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
@@ -1553,6 +1554,7 @@ static struct {
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
     IMPAI_WHY_SEEN why[PLAYER_COUNT];
+    IMPAI_PLANTWALK_SEEN walk[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
 
@@ -1764,6 +1766,25 @@ static void why_line(int seat, unsigned now, const IMPAI_WHY* w)
     tagpu_logf("impai: why seat=%d t=%u %s", seat, now, text);
 }
 
+/* THE PLANTWALK LINE, at each economy decision whose plant rung answered a builder, ordered no plant, and met
+   something other than the seat's last such line states (impai.h, THE PLANT WALK'S TRACE): `impai: plantwalk seat=
+   t= type= builder= waived= grow= sites= ... exit= sea=` -- the plant type THE CHOICE took by its name (`-` for
+   none), the builder asked as slot/type, the ring's growth, its sites and how many each test skipped or refused,
+   the return the rung took and its sea search's answer (impai_plantwalk_text). So a plant want that the `why`
+   line shows taken while no `plant` line follows has its cause in the last `plantwalk` line at or before that
+   GameTime. What the seam remembers of the seat's last line is THE WHY LINE's kind of diagnostic (s_play), under
+   the same rule (impai_plantwalk_due). Logging alone: nothing reads it back. */
+static void plantwalk_line(int seat, const WORLDQ* q, const IMPAI_PLANTWALK* w)
+{
+    const unsigned now = (unsigned)q->ops->gametime(q);
+    char text[IMPAI_PW_TEXT];
+    WQ_DEF type;
+    if (!impai_plantwalk_due(&s_play.walk[seat], now, w)) return;
+    impai_plantwalk_text(w, text, sizeof text);
+    tagpu_logf("impai: plantwalk seat=%d t=%u type=%s %s", seat, now,
+               w->type && q->ops->def(q, w->type, &type) ? type.name : "-", text);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1822,6 +1843,7 @@ static void impai_decide(int seat)
             play_max(&s_react.busy_max[seat], out.busy);
         }
         if (rc >= 0) why_line(seat, (unsigned)q.ops->gametime(&q), &out.why);
+        if (rc >= 0) plantwalk_line(seat, &q, &out.walk);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && !s_play.second[seat] && out.count[IMPAI_C_FACTORY] == 1 &&
             (out.sea_plants || (out.plant && out.plant_want == 2)))

@@ -968,6 +968,23 @@ its trace. The log of a game with such a restore therefore has `why` lines whose
 `tools/impai/think.py why` reads it ([testing](testing.html),
 *A recording answered in one call*). It traces the six wants of the table alone: why an idle factory was given no
 order is the governor's, and not in it.
+**The plant walk's trace.** A plant want the reason trace shows taken says nothing of why no plant was ordered, so
+a decision whose plant rung answered a builder and that ordered no plant hands out what the rung met (`impai.h`,
+`IMPAI_PLANTWALK`; `impai_econ.c`, `rung_plant`; `impai_build.c`, `ring_build`): the type THE CHOICE took and whether
+it is the waived pass's, the builder asked, `ring_grow` as the rung began, the ring's sites and how many each test
+took -- a claim, a failure, the builder's far record, a way refused earlier, explored metal, the commander's reach
+(`beyond`), ground threat or the commander's safe distance, unseen ground left for a look or with no walk to see
+it, the site test (`tested`, `passed`), the way out refused now, the order refused -- whether the decision's site
+tests cut the walk, the rung's sea search (`-` none, `wait`, `none` for no site at all) and the return it took:
+`notype` (the choice took no type), `menu` (the builder's menu lacks it), `sea` (the sea plant's search holds the
+plant), `left` (walked to its end with a site left for a cause that is no lack of room: no growth), `cut` (the site
+tests ended it and it is not exhausted), `grew`, `widest` (exhausted at `ring_grow` 8: the type passed over), `way`
+(a way out deferred), `roots` (the decision's roots spent). The decision keeps the first builder's walk, or with no
+walk the first builder's answer. It is scratch like the reason trace, and the seam writes it under the same rule
+(`impai_plantwalk_due`) -- `impai: plantwalk seat=3 t=4147 type=ARMVP builder=1/41 waived=0 grow=2 sites=30 ...
+beyond=30 ... exit=left sea=-` -- so the last such line at or before a GameTime is the cause of a taken plant want
+that orders nothing, and `think.py why --at T` quotes it under the wants. The counts are the plant rung's walk
+alone: the energy rung's and every other ring walk count nothing.
 
 Each plant ordered is logged with the runner-up: `impai: plant seat= gametime= want=first|factory|tech T= reach=
 chose= s= next= s=`. The decision that orders the second factory, sea or land, is logged once more, with

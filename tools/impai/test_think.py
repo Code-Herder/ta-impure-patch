@@ -282,6 +282,20 @@ class Think(unittest.TestCase):
         self.assertEqual(self.run_("why", rec, "--at", 300, "--seat", 2), 0)     # another seat's lines alone
         self.assertIn("want_factory 10..end  needed, taken", self.said)
 
+    def test_why_at_a_tick_quotes_the_last_plantwalk_line(self):
+        walk = ("impai: plantwalk seat=2 t=9 type=CORVP builder=3/1 exit=grew sea=-\n"
+                "impai: plantwalk seat=1 t=120 type=CORVP builder=1/41 grow=2 beyond=30 exit=left sea=-\n"
+                "impai: plantwalk seat=1 t=180 type=CORVP builder=1/41 grow=2 beyond=31 exit=left sea=-\n")
+        rec = self.traced(self.WHY + walk)
+        self.assertEqual(self.run_("why", rec, "--at", 150), 0)
+        self.assertEqual(self.said.splitlines()[-1],
+                         "  the plant rung last ordered nothing at tick 121: type=CORVP builder=1/41 grow=2 beyond=30 "
+                         "exit=left sea=-")
+        self.assertEqual(self.run_("why", rec, "--at", 120), 0)             # stamped t=120: it stands from tick 121
+        self.assertNotIn("plant rung", self.said)
+        self.assertEqual(self.run_("why", rec, "--want", "factory", "--at", 150), 0)
+        self.assertNotIn("plant rung", self.said)
+
     def test_why_a_wants_history_change_by_change(self):
         rec = self.traced()
         self.assertEqual(self.run_("why", rec, "--want", "want_factory"), 0)

@@ -955,6 +955,14 @@ static void plant_ordered(IMPAI_DEC* d, int type)
     o->plant_reach = reach_mask_of(d);
 }
 
+/* THE PLANT WALK'S TRACE (impai.h): the decision keeps the first builder's walk of the base ring, and with no
+   walk the first builder's answer */
+static void plantwalk_keep(IMPAI_DEC* d, const IMPAI_PLANTWALK* w)
+{
+    IMPAI_PLANTWALK* o = &d->out->walk;
+    if (!o->set || (o->exit < IMPAI_PW_LEFT && w->exit >= IMPAI_PW_LEFT)) *o = *w;
+}
+
 /* THE SEA PLANT's type: the least value among the menu's water factories (impai_water_plant) whose own menu
    offers a sea army type (klass IMPAI_K_SRAIDER..IMPAI_K_SAA, a value above 0), ties to the lower type; at most
    FACTORY_LOOK candidates examined, each a menu read of at most PLANT_MENU types. Writes neither d->menu nor
@@ -1440,7 +1448,8 @@ static int rung_sea_plant(IMPAI_DEC* d, IMPAI_ASK* a)
 static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int t, y = 1;
+    IMPAI_PLANTWALK w;
+    int t, y = 1, got;
     /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
        take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
        menu2 and menu3 only, so this builder's menu is still d->menu */
@@ -1450,6 +1459,15 @@ static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
        is let go, so the ladder asks the sea plant first; the choice's plant (plant_t, which may still be
        that air plant) comes below only where the sea plant cannot be had, as before the rule */
     if (d->plant_air_blind) air_let_go(d);
+    memset(&w, 0, sizeof w);
+    w.set = 1;
+    w.sea = IMPAI_PW_SEA_UNASKED;
+    w.grow = in->st->ring_grow;
+    w.waived = !d->plant_t && d->plant_tw;
+    w.type = (uint16_t)(d->plant_t ? d->plant_t : d->plant_tw);
+    w.slot = a->b->slot;
+    w.btype = a->b->type;
+    w.exit = !w.type ? IMPAI_PW_NOTYPE : IMPAI_PW_MENU;
     /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
        THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
        took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
@@ -1465,15 +1483,21 @@ static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
             plant_close(d);
             return 1;
         }
+        w.sea = (int8_t)(y < 0 ? -1 : 0);
         y = !d->count[IMPAI_C_FACTORY] || y < 0 || !d->plant_sea_menu;
+        if (!y) w.exit = IMPAI_PW_SEA;
     }
-    if (y && ((d->plant_t && on_menu(d->menu, a->n, d->plant_t) && impai_build_ring(d, a->b, (t = d->plant_t))) ||
-              (!d->plant_t && d->plant_tw && on_menu(d->menu, a->n, d->plant_tw) &&
-               impai_build_plant_waived(d, a->b, (t = d->plant_tw))))) {
+    d->walk = &w;
+    got = y && ((d->plant_t && on_menu(d->menu, a->n, d->plant_t) && impai_build_ring(d, a->b, (t = d->plant_t))) ||
+                (!d->plant_t && d->plant_tw && on_menu(d->menu, a->n, d->plant_tw) &&
+                 impai_build_plant_waived(d, a->b, (t = d->plant_tw))));
+    d->walk = NULL;
+    if (got) {
         plant_ordered(d, t);
         plant_close(d);
         return 1;
     }
+    plantwalk_keep(d, &w);
     return 0;
 }
 

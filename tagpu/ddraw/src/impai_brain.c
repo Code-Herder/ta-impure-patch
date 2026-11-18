@@ -1467,6 +1467,62 @@ int impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w)
     return 1;
 }
 
+/* the names the `plantwalk` line gives the rung's returns (IMPAI_PW_*) */
+static const char* const PW_EXIT[] = { "notype", "menu", "sea", "left", "cut", "grew", "widest", "way", "roots" };
+_Static_assert(sizeof PW_EXIT / sizeof PW_EXIT[0] == IMPAI_PW_EXITS, "a name a return");
+
+/* `name` and then v in decimal. BOUND: a uint32 is at most ten digits, and why_put's: every write below `end` */
+static void pw_field(char** p, const char* end, const char* name, unsigned v)
+{
+    char digits[10];
+    int n = 0;
+    do digits[n++] = (char)('0' + v % 10u); while ((v /= 10u) && n < (int)sizeof digits);
+    why_put(p, end, name);
+    while (n && *p < end) *(*p)++ = digits[--n];
+}
+
+int impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap)
+{
+    char* p = out;
+    const char* end;
+    if (!cap) return 0;
+    end = out + cap - 1;
+    pw_field(&p, end, "builder=", w->slot);
+    pw_field(&p, end, "/", w->btype);
+    pw_field(&p, end, " waived=", w->waived);
+    pw_field(&p, end, " grow=", w->grow);
+    pw_field(&p, end, " sites=", w->sites);
+    pw_field(&p, end, " claimed=", w->claimed);
+    pw_field(&p, end, " failed=", w->failed);
+    pw_field(&p, end, " far=", w->far_rec);
+    pw_field(&p, end, " way_failed=", w->way_failed);
+    pw_field(&p, end, " coverage=", w->coverage);
+    pw_field(&p, end, " beyond=", w->beyond);
+    pw_field(&p, end, " threat=", w->threat);
+    pw_field(&p, end, " unseen=", w->unseen);
+    pw_field(&p, end, " nolook=", w->nolook);
+    pw_field(&p, end, " tested=", w->tested);
+    pw_field(&p, end, " passed=", w->passed);
+    pw_field(&p, end, " way_refused=", w->way_refused);
+    pw_field(&p, end, " unbuilt=", w->unbuilt);
+    pw_field(&p, end, " cut=", w->cut);
+    why_put(&p, end, " exit=");
+    why_put(&p, end, w->exit < IMPAI_PW_EXITS ? PW_EXIT[w->exit] : "?");
+    why_put(&p, end, w->sea == IMPAI_PW_SEA_UNASKED ? " sea=-" : w->sea < 0 ? " sea=none" : " sea=wait");
+    *p = 0;
+    return (int)(p - out);
+}
+
+int impai_plantwalk_due(IMPAI_PLANTWALK_SEEN* seen, uint32_t now, const IMPAI_PLANTWALK* w)
+{
+    if (!w->set) return 0;
+    if (now < seen->after) seen->walk.set = 0;  /* not above the last decision's: no remembered trace equals `w` */
+    seen->after = now + 1;
+    if (!memcmp(w, &seen->walk, sizeof *w)) return 0;
+    seen->walk = *w;
+    return 1;
+}
+
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
@@ -1884,5 +1940,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     out->queued = (uint16_t)d->queued;
     out->sea_type = d->sea_type;
     out->sea_answer = (int8_t)d->sea_answer;
+    /* THE PLANT WALK'S TRACE is of a decision that ordered no plant */
+    if (out->plant || out->sea_plants) memset(&out->walk, 0, sizeof out->walk);
     return 0;
 }

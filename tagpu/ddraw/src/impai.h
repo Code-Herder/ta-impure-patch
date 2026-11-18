@@ -970,6 +970,62 @@ typedef struct IMPAI_WHY_SEEN {
 } IMPAI_WHY_SEEN;
 int   impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w);
 
+/* THE PLANT WALK'S TRACE (impai_econ.c, rung_plant; impai_build.c, ring_build): what a decision's plant rung met
+   when it asked a builder for the plant THE CHOICE took and ordered none -- for the seam's `plantwalk` line
+   (tagpu_impai.c), which names the cause of a plant want that stands taken and never becomes an order. `exit` is
+   the return the rung took; from IMPAI_PW_LEFT up the base ring was walked, and the counts are that walk's: its
+   sites, those each cheap test skipped, those the site test was given and passed, and those refused after it. The
+   decision keeps the first builder's walk, or with no walk the first builder's answer, and a decision that orders
+   a plant keeps none (set 0). Every member is one or two bytes with no padding, so two traces are compared whole.
+   Scratch of the decision: no recorded struct holds it, and nothing reads it back. */
+enum {
+    IMPAI_PW_NOTYPE,        /* THE CHOICE took no plant type                                                    */
+    IMPAI_PW_MENU,          /* the builder's menu lacks the type                                                */
+    IMPAI_PW_SEA,           /* the sea plant's search holds the plant (THE ISLAND'S PLANTS)                     */
+    IMPAI_PW_LEFT,          /* walked to its end, a site left for a cause that is no lack of room: no growth    */
+    IMPAI_PW_CUT,           /* the decision's site tests ended it and it is not exhausted (THE CUT RING GROWS)  */
+    IMPAI_PW_GREW,          /* exhausted: ring_grow rose                                                        */
+    IMPAI_PW_WIDEST,        /* exhausted at the widest ring: the type is passed over, a waived one is not       */
+    IMPAI_PW_WAY,           /* a way out deferred (THE WORK BUDGET) ended the ring for the decision             */
+    IMPAI_PW_ROOTS,         /* a site's order was refused and the decision's roots are spent                    */
+    IMPAI_PW_EXITS
+};
+#define IMPAI_PW_SEA_UNASKED 1  /* IMPAI_PLANTWALK.sea when the rung ran no sea search                          */
+#define IMPAI_PW_TEXT 320       /* above impai_plantwalk_text's longest line and its NUL (impai_brain_test.c,
+                                   check_plantwalk)                                                             */
+typedef struct IMPAI_PLANTWALK {
+    uint8_t  set;           /* 1: a plant rung answered a builder and the decision ordered no plant             */
+    uint8_t  exit;          /* IMPAI_PW_*                                                                       */
+    uint8_t  grow;          /* ring_grow as the rung began                                                      */
+    uint8_t  waived;        /* 1: the type is the waived pass's (THE PLANT'S FALLBACK)                          */
+    uint8_t  cut;           /* 1: the decision's site tests ended the walk                                      */
+    int8_t   sea;           /* the rung's sea search: IMPAI_PW_SEA_UNASKED, 0 no order now, below 0 no site     */
+    uint16_t type, slot, btype;     /* the plant type (0 none), the builder asked and its type                  */
+    uint16_t sites;         /* the ring's sites                                                                 */
+    uint16_t claimed, failed, far_rec, way_failed, coverage;   /* skipped: a claim, a failure, the builder's far
+                               record, a way refused earlier (THE WAY REFUSALS), explored metal                 */
+    uint16_t beyond;        /* past THE COMMANDER'S REACH                                                       */
+    uint16_t threat;        /* ground threat at the site or on the route, THE COMMANDER'S SAFE DISTANCE         */
+    uint16_t unseen, nolook;        /* not explored: left for a look; no walk to see it, skipped as refused     */
+    uint16_t tested, passed;        /* given to the site test; passed by it                                     */
+    uint16_t way_refused, unbuilt;  /* of those passed: the way out refused now; the order refused (build_at)   */
+} IMPAI_PLANTWALK;
+_Static_assert(sizeof(IMPAI_PLANTWALK) == 6 + 2 * 17, "IMPAI_PLANTWALK has no padding: traces are compared by memcmp");
+/* `w` as the `plantwalk` line's fields from `builder=` on, NUL-ended in out[cap]: `builder=SLOT/TYPE waived= grow=
+   sites= claimed= failed= far= way_failed= coverage= beyond= threat= unseen= nolook= tested= passed= way_refused=
+   unbuilt= cut= exit=NAME sea=-|wait|none`. The plant type's name is the seam's to give. Returns the bytes
+   written, the NUL left out. */
+int   impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap);
+/* THE PLANTWALK LINE's rule (tagpu_impai.c, plantwalk_line), THE WHY LINE's: 1 when the decision at GameTime `now`
+   with trace `w` writes its line -- `w` differs from the trace of the seat's last line, or `now` is not above the
+   GameTime of the seat's last traced decision (impai_why_due's ordering: the first decision after a state restored
+   behind the last one writes its line whatever its trace). A trace not set writes nothing and moves nothing. */
+typedef struct IMPAI_PLANTWALK_SEEN {
+    IMPAI_PLANTWALK walk;           /* the trace of the seat's last line, `set` 0 before one                    */
+    uint32_t        after;          /* the GameTime + 1 of its last traced decision, 0 before one               */
+} IMPAI_PLANTWALK_SEEN;
+int   impai_plantwalk_due(IMPAI_PLANTWALK_SEEN* seen, uint32_t now, const IMPAI_PLANTWALK* w);
+
 /* THE REQUESTS: a want is a request, and this is how one decision leaves each of the six, by the want's index in
    THE VETOES. Economy says whether it is needed and what holds it (impai_brain.c, why_read); the assignment, which
    asks each builder the rungs of THE LADDER'S ORDER (impai_econ.c), says how one that stood ended. What a request
@@ -1059,6 +1115,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint8_t  sensors;                   /* sensor structures ordered (impai_econ.c, THE SENSORS)                */
     IMPAI_WHY why;                      /* THE REASON TRACE                                                    */
     uint8_t  req[IMPAI_WHY_WANTS];      /* THE REQUESTS: IMPAI_RQ_*, a want                                    */
+    IMPAI_PLANTWALK walk;               /* THE PLANT WALK'S TRACE                                              */
 } IMPAI_BRAIN_OUT;
 
 #define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs

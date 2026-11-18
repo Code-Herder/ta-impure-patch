@@ -150,6 +150,8 @@ typedef struct IMPAI_DEC {
                                                    THE WORK BUDGET)                                       */
     int           way_waive;                    /* 1: the plant ordered now goes without a way (THE PLANT'S
                                                    FALLBACK)                                              */
+    IMPAI_PLANTWALK* walk;                      /* THE PLANT WALK'S TRACE of the base ring walked now: the
+                                                   plant rung's (impai_econ.c, rung_plant), NULL outside it */
     IMPAI_WAYREC way;
     uint8_t*      way_pass;                     /* IMPAI_WAY_PASS_BYTES                                  */
     int32_t*      way_block;                    /* IMPAI_WAY_BLOCK_CELLS                                 */

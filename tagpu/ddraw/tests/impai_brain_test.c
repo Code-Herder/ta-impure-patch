@@ -1882,6 +1882,106 @@ static void check_ring_cut(void)
     s_plan = lv0;
 }
 
+/* THE PLANT WALK'S TRACE (impai.h; impai_econ.c, rung_plant; impai_build.c, ring_build) in check_factory's world,
+   whose commander is asked for the opening plant. Ordered, the decision keeps no trace. With the plant refused by
+   every site test the trace names the type, the builder, the ring's growth as the rung began and a walk that ends
+   in growth, every site of the ring counted under one cause. With a comm_r of 32 px every site lies past THE
+   COMMANDER'S REACH: all are counted `beyond`, none is tested, the walk is left and the ring stays -- at every
+   decision, the taken want ordering nothing. The text of one trace by hand; the longest line fits IMPAI_PW_TEXT
+   and a short buffer is ended inside itself; THE PLANTWALK LINE's rule is THE WHY LINE's. */
+static void plantwalk_world(void)
+{
+    brain_world();
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 2, T_MEX, 40, 20, 1);
+    unit_add(&s_w, 3, T_MEX, 10, 45, 1);
+    unit_add(&s_w, 4, T_SOLAR, 24, 20, 1);
+    unit_add(&s_w, 5, T_SOLAR, 24, 25, 1);
+    s_w.gametime = 600;
+}
+
+static unsigned plantwalk_sum(const IMPAI_PLANTWALK* w)
+{
+    return (unsigned)w->claimed + w->failed + w->far_rec + w->way_failed + w->coverage + w->beyond + w->threat + w->unseen +
+           w->nolook + w->tested;
+}
+
+static void check_plantwalk(void)
+{
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
+    IMPAI_BRAIN_OUT out;
+    const IMPAI_PLANTWALK* w = &out.walk;
+    char t[IMPAI_PW_TEXT], cut[12];
+    int k, n;
+    plantwalk_world();
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.plant == T_FACTORY && !w->set, "a decision that orders its plant keeps no trace: plant %u set %u",
+          out.plant, w->set);
+
+    plantwalk_world();
+    s_w.refuse_type = T_FACTORY;
+    CHECK(decide(&out) == 0, "decide");
+    impai_plantwalk_text(w, t, sizeof t);
+    printf("plantwalk, every plant site refused: %s\n", t);
+    CHECK(!out.plant && w->set && w->type == T_FACTORY && w->slot == 1 && w->btype == T_COM && !w->waived &&
+              w->grow == 0 && w->sea == IMPAI_PW_SEA_UNASKED,
+          "the trace names the type, the builder and the ring as the rung began: %s", t);
+    CHECK(w->exit == IMPAI_PW_GREW && s_st.ring_grow == 1 && w->tested > 0 && !w->passed && !w->beyond && !w->unseen,
+          "a ring the site test refuses ends in growth: %s, ring_grow %u", t, s_st.ring_grow);
+    CHECK(w->sites > 0 && (w->cut || plantwalk_sum(w) == w->sites), "every site of a walk to its end has one cause: %u of %u",
+          plantwalk_sum(w), w->sites);
+
+    lv.comm_r = 32;
+    s_plan = &lv;
+    plantwalk_world();
+    for (k = 0; k < 3; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        s_w.gametime += 15;
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k) printf("plantwalk, every plant site past the commander's reach: %s\n", t);
+
+        CHECK(!out.plant && w->set && w->type == T_FACTORY && w->exit == IMPAI_PW_LEFT && w->beyond > 0 && !w->tested &&
+                  !w->cut && plantwalk_sum(w) == w->sites && w->grow == 0 && s_st.ring_grow == 0,
+              "a ring past the commander's reach is left and does not grow, decision %d: %s, ring_grow %u", k, t,
+              s_st.ring_grow);
+    }
+    s_plan = lv0;
+
+    {
+        const IMPAI_PLANTWALK hand = { 1, IMPAI_PW_CUT, 3, 1, 1, -1, 7, 12, 2, 40, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+        IMPAI_PLANTWALK all;
+        IMPAI_PLANTWALK_SEEN seen;
+        IMPAI_PLANTWALK a = hand, b = hand, unset = hand;
+        impai_plantwalk_text(&hand, t, sizeof t);
+        CHECK(!strcmp(t, "builder=12/2 waived=1 grow=3 sites=40 claimed=1 failed=2 far=3 way_failed=4 coverage=5 beyond=6 "
+                         "threat=7 unseen=8 nolook=9 tested=10 passed=11 way_refused=12 unbuilt=13 cut=1 exit=cut sea=none"),
+              "a trace's text: %s", t);
+        memset(&all, 0xFF, sizeof all);
+        all.exit = IMPAI_PW_WIDEST;
+        all.sea = 0;
+        n = impai_plantwalk_text(&all, t, sizeof t);
+        CHECK(n < IMPAI_PW_TEXT - 1 && n == (int)strlen(t), "the longest trace fits its buffer: %d of %d", n, IMPAI_PW_TEXT);
+        for (k = 0; k < IMPAI_PW_EXITS; k++) {
+            all.exit = (uint8_t)k;
+            impai_plantwalk_text(&all, t, sizeof t);
+            CHECK(strstr(t, " exit=") && !strstr(t, " exit=?"), "return %d has a name", k);
+        }
+        memset(cut, 'x', sizeof cut);
+        CHECK(impai_plantwalk_text(&hand, cut, 11) == 10 && !memcmp(cut, "builder=12\0x", 12), "a short buffer is ended inside itself");
+        b.beyond++;
+        unset.set = 0;
+        memset(&seen, 0, sizeof seen);
+        CHECK(impai_plantwalk_due(&seen, 0, &a) == 1 && impai_plantwalk_due(&seen, 30, &a) == 0 &&
+                  impai_plantwalk_due(&seen, 60, &b) == 1 && impai_plantwalk_due(&seen, 90, &b) == 0,
+              "a line at the first trace and at each change, none between");
+        CHECK(impai_plantwalk_due(&seen, 30, &b) == 1 && impai_plantwalk_due(&seen, 60, &b) == 0,
+              "a decision whose GameTime does not rise writes its line whatever its trace");
+        CHECK(impai_plantwalk_due(&seen, 300, &unset) == 0 && impai_plantwalk_due(&seen, 120, &b) == 0,
+              "a trace not set writes nothing and moves nothing");
+    }
+}
+
 /* THE RING'S UNSEEN SITES and THE RING'S LOOK (impai_build.c): reach_world's commander at the anchor (20, 20) in
    an energy stall, the seat's map explored for x, z < 32 alone and the wind generator refused wherever its first cell lies
    there, as a start hemmed in by ground no plant fits. Rings 0 and 1 lie on explored ground and are refused -- in
@@ -16736,6 +16836,7 @@ int main(void)
     check_factory();
     check_ring_reach();
     check_ring_cut();
+    check_plantwalk();
     check_ring_unseen();
     check_ring_cmd_safe();
     check_cmd_safe_orders();
