@@ -1295,6 +1295,21 @@ static void check_due(void)
     for (t = 0; t < 15; t++) CHECK(hits[t] <= 1, "two seats decide at phase %d", t);
 }
 
+/* THE VETOES' rows (impai_brain.c, impai_veto): one row for each of the economy's six wants, at the want's own
+   index, naming no gate the decision does not set. A row left out of the table reads as no want's. */
+static void check_veto_rows(void)
+{
+    static const char* const WANT[] = { "want_factory", "want_sea", "want_tech", "want_def", "want_aa", "want_sensor" };
+    const int wants = (int)(sizeof WANT / sizeof WANT[0]);
+    int k;
+    CHECK(IMPAI_WANTS == wants, "the table has %d rows for %d wants", (int)IMPAI_WANTS, wants);
+    for (k = 0; k < IMPAI_WANTS && k < wants; k++) {
+        CHECK(impai_veto[k].want && !strcmp(impai_veto[k].want, WANT[k]), "row %d is not %s's", k, WANT[k]);
+        CHECK(!(impai_veto[k].gates & ~IMPAI_G_ALL), "row %d names a gate outside the decision's (0x%X)", k,
+              (unsigned)impai_veto[k].gates);
+    }
+}
+
 /* an energy stall: the idle commander builds the best energy per value its menu offers, on the ring */
 static void check_stall(void)
 {
@@ -16197,6 +16212,7 @@ int main(void)
     check_threat_reach();
     check_tech_levels();
     check_due();
+    check_veto_rows();
     check_stall();
     check_spot();
     check_spot_foreign();
