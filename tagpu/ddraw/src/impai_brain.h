@@ -439,6 +439,11 @@ int  impai_econ_air_plant(IMPAI_DEC* d, unsigned type);
    more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
    one; judges mr_open, mr_units and mr_make on the way */
 int  impai_econ_metal_short(IMPAI_DEC* d);
+/* THE OPENING'S TERMS, the plan's for the first factory, each read here and nowhere else: open_mex extractors
+   finished; open_energy energy buildings counted, frames included -- with `ordered`, the orders no frame answers
+   yet as well */
+int  impai_econ_open_mex(const IMPAI_DEC* d);
+int  impai_econ_open_energy(const IMPAI_DEC* d, int ordered);
 /* 1 on A METAL MAP (impai_econ.c): the threshold 255, so no patch is ever published and the extractors stand on the
    base ring */
 int  impai_metal_map(const IMPAI_DEC* d);

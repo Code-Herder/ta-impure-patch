@@ -489,6 +489,11 @@ typedef struct IMPAI_BRAIN {
     uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
                                    opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH),
                                    whose commander may walk FAR_PATCH_K x comm_r from the anchor           */
+    uint8_t    open_e_refused;  /* 1 once a walk of THE OPENING'S ENERGY (impai_econ.c) ordered nothing: the
+                                   rule is over for the level                                              */
+    uint8_t    open_stall_over; /* 1 once the first plant, asked ahead of the stall's energy, ordered nothing
+                                   (impai_econ.c, THE STALL YIELDS TO THE FIRST PLANT): the stall rung
+                                   stands first again for the level                                        */
     uint8_t    root_turn;       /* THE FACTORIES' TURN (impai_brain.c, root_cap_of): 1 when the next decision
                                    of one command whose idle factories want a root gives it to them        */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`

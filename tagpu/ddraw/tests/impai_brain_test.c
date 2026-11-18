@@ -1552,9 +1552,11 @@ static void check_ladder_rows(void)
     enum { M = IMPAI_ASK_MENU, B = IMPAI_ASK_BARE, H = IMPAI_ASK_HELPER, HB = IMPAI_ASK_HELPER_BARE };
     static const struct { const char* name; unsigned who, serves, waits, near, on, veto; } ROW[] = {
         { "stall-energy",  M | H,      0,                      0,       0, IMPAI_G_E_STALL, 0 },
+        { "open-energy",   M,          0,                      0,       0, 0, 0 },
         { "sea-frame",     M | H,      0,                      0,       1, 0, IMPAI_G_HOLD | IMPAI_G_M_STALL | IMPAI_G_E_STALL },
         { "sea-plant",     M | H,      RQ(SEA),                0,       1, 0, 0 },
         { "plant",         M | H,      RQ(FACTORY) | RQ(TECH), RQ(SEA), 1, 0, 0 },
+        { "stall-yielded", M | H,      0,                      0,       0, IMPAI_G_E_STALL, 0 },
         { "defence",       M | H,      RQ(DEF),                0,       0, 0, 0 },
         { "anti-air",      M | H,      RQ(AA),                 0,       0, 0, 0 },
         { "sensor",        M | H,      RQ(SENSOR),             0,       0, 0, 0 },
@@ -1680,6 +1682,258 @@ static int count_unit(int unit, int action)
     int i, n = 0;
     for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.unit == unit && (action < 0 || s_w.log[i].c.action == action);
     return n;
+}
+
+/* THE OPENING'S ENERGY (impai_econ.c): the commander at cell (20, 20), patch A free within its reach, the store
+   full; `mex` extractors (the last a frame when `mex_frame`), `wind` wind generators (the last a frame when
+   `wind_frame`), a factory when `factory` */
+static void open_energy_world(int mex, int mex_frame, int wind, int wind_frame, int factory)
+{
+    int k;
+    brain_world();
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    for (k = 0; k < mex; k++) unit_add(&s_w, 3 + k, T_MEX, 10 + 4 * k, 10, !(mex_frame && k == mex - 1));
+    for (k = 0; k < wind; k++) unit_add(&s_w, 8 + k, T_WIND, 10 + 4 * k, 30, !(wind_frame && k == wind - 1));
+    if (factory) unit_add(&s_w, 12, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].energy = 1000;
+    s_w.gametime = 900;
+}
+
+/* the commander's last order since log entry `from` */
+static const FCMD* open_energy_cmd(int from)
+{
+    int i;
+    for (i = s_w.nlog - 1; i >= from; i--)
+        if (s_w.log[i].c.unit == 1 && s_w.log[i].c.verb == WQ_CMD_NEW) return &s_w.log[i];
+    return NULL;
+}
+
+static const char* open_energy_took(int from)
+{
+    const FCMD* c = open_energy_cmd(from);
+    return !c ? "nothing" : c->c.type == T_WIND ? "energy" : c->c.type == T_MEX ? "the extractor"
+           : c->c.type == T_FACTORY ? "the plant" : "other";
+}
+
+static void check_open_energy(void)
+{
+    static const struct { int mex, mex_frame, wind, wind_frame, factory, type; const char* what; } CASE[] = {
+        { 2, 0, 0, 0, 0, T_WIND, "open_mex extractors finished, no energy: energy before the third extractor" },
+        { 2, 0, 1, 0, 0, T_WIND, "one energy building standing: the second" },
+        { 1, 0, 0, 0, 0, T_MEX, "one extractor finished: the extractor" },
+        { 2, 1, 0, 0, 0, T_MEX, "the second extractor a frame: the extractor" },
+        { 2, 0, 2, 1, 0, T_FACTORY, "open_energy counted, a frame among them: the plant, on the opening's terms" },
+        { 2, 0, 0, 0, 1, T_MEX, "a factory standing: the extractor, as past the opening" },
+    };
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    unsigned k;
+    int n;
+    for (k = 0; k < sizeof CASE / sizeof CASE[0]; k++) {
+        open_energy_world(CASE[k].mex, CASE[k].mex_frame, CASE[k].wind, CASE[k].wind_frame, CASE[k].factory);
+        CHECK(decide(&out) == 0, "decide");
+        c = open_energy_cmd(0);
+        printf("the opening's energy, %s: %s\n", CASE[k].what, open_energy_took(0));
+        CHECK(c && c->c.type == CASE[k].type, "the opening's energy, %s",
+              CASE[k].what);
+        CHECK(!s_st.open_e_refused, "the opening's energy, %s: no walk refused", CASE[k].what);
+    }
+    /* the seat lost its only factory: the opening is over for the level */
+    open_energy_world(2, 0, 0, 0, 1);
+    CHECK(decide(&out) == 0, "decide");
+    s_w.unit[12].live = 0;
+    s_w.unit[1].n = 0;
+    impai_job_end(&s_job[1]);
+    s_w.gametime += 15;
+    n = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the opening's energy, the factory lost: %s\n", open_energy_took(n));
+    CHECK(s_st.opened && !type_orders(T_WIND), "the opening's energy: not after the seat lost its factory");
+    /* the rule waits while a plant is ordered: the commander's, on open_t with one extractor; the second
+       extractor then finished, an idle constructor takes the patch */
+    open_energy_world(1, 0, 0, 0, 0);
+    s_w.gametime = 1900;
+    CHECK(decide(&out) == 0, "decide");
+    c = open_energy_cmd(0);
+    unit_add(&s_w, 4, T_MEX, 14, 10, 1);
+    unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the opening's energy, a plant ordered: the commander took %s, then %d energy orders, the constructor's job %d\n",
+           open_energy_took(0), type_orders(T_WIND), s_job[2].kind == IMPAI_JOB_BUILD ? s_job[2].build : 0);
+    CHECK(c && c->c.type == T_FACTORY && !type_orders(T_WIND) && s_job[2].kind == IMPAI_JOB_BUILD &&
+          s_job[2].build == T_MEX, "the opening's energy: not beside an ordered plant");
+    /* an order counts: with one energy building standing and the commander's second ordered, an idle constructor
+       is not asked for a third by this rung */
+    open_energy_world(2, 0, 1, 0, 0);
+    unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+    CHECK(decide(&out) == 0, "decide");
+    printf("the opening's energy, two builders: %d energy orders, the commander's job %d, the constructor's %d\n",
+           type_orders(T_WIND), s_job[1].kind == IMPAI_JOB_BUILD ? s_job[1].build : 0,
+           s_job[2].kind == IMPAI_JOB_BUILD ? s_job[2].build : 0);
+    CHECK(type_orders(T_WIND) == 1, "the opening's energy: the order counts, %d energy orders", type_orders(T_WIND));
+    /* THE FIRST WALK THAT ORDERS NOTHING ENDS THE RULE: every site refused, the commander takes its patch in the
+       same decision; and with sites free again at the next it is asked no energy before the extractor */
+    open_energy_world(2, 0, 0, 0, 0);
+    s_w.refuse_type = T_WIND;
+    CHECK(decide(&out) == 0, "decide");
+    c = open_energy_cmd(0);
+    printf("the opening's energy, every site refused: %s, refused %u, site tests %u\n", open_energy_took(0),
+           s_st.open_e_refused, (unsigned)out.sites);
+    CHECK(s_st.open_e_refused == 1 && !type_orders(T_WIND) && c && c->c.type == T_MEX,
+          "the opening's energy: a walk that orders nothing ends the rule, and the extractor is ordered");
+    s_w.refuse_type = 0;
+    s_w.unit[1].n = 0;
+    impai_job_end(&s_job[1]);
+    s_w.gametime += 15;
+    n = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the opening's energy, the sites free again: %s\n", open_energy_took(n));
+    CHECK(s_st.open_e_refused == 1 && !type_orders(T_WIND), "the opening's energy: over for the level");
+}
+
+/* THE STALL YIELDS TO THE FIRST PLANT (impai_econ.c): the store of the opening's world at 10 % of its 1 000 */
+static void open_stall(void)
+{
+    s_w.econ[0].energy = 100;
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+}
+
+/* the commander's job ended and a decision's time gone by */
+static void open_next(void)
+{
+    s_w.unit[1].n = 0;
+    impai_job_end(&s_job[1]);
+    s_w.gametime += 15;
+}
+
+static void check_stall_yields(void)
+{
+    static const struct { int mex, wind, wind_frame, factory, t, type; const char* what; } CASE[] = {
+        { 2, 2, 0, 0, 900, T_FACTORY, "open_energy energy buildings standing, no factory: the plant before the stall's energy" },
+        { 2, 2, 1, 0, 900, T_FACTORY, "a frame among them: the plant" },
+        { 2, 1, 0, 0, 900, T_WIND, "one energy building: the stall's energy" },
+        { 2, 2, 0, 1, 900, T_WIND, "a factory standing: the stall's energy" },
+        { 1, 2, 0, 0, 900, T_WIND, "one extractor before open_t, the plant not wanted: the stall's energy" },
+        { 1, 2, 0, 0, 1900, T_FACTORY, "one extractor past open_t: the plant" },
+        { 1, 1, 0, 0, 1900, T_WIND, "one extractor and one energy building past open_t, the plant wanted: the stall's energy" },
+    };
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    unsigned k;
+    int n;
+    for (k = 0; k < sizeof CASE / sizeof CASE[0]; k++) {
+        open_energy_world(CASE[k].mex, 0, CASE[k].wind, CASE[k].wind_frame, CASE[k].factory);
+        open_stall();
+        s_w.gametime = (uint32_t)CASE[k].t;
+        CHECK(decide(&out) == 0, "decide");
+        c = open_energy_cmd(0);
+        printf("the stall yields, %s: %s\n", CASE[k].what, open_energy_took(0));
+        CHECK(c && c->c.type == CASE[k].type, "the stall yields, %s", CASE[k].what);
+        CHECK(!s_st.open_stall_over, "the stall yields, %s: the yield stands", CASE[k].what);
+    }
+    /* past the opening the stall's rung is first: the seat lost its only factory, so the first factory's terms
+       want a plant again, and the stalled commander is asked energy */
+    open_energy_world(2, 0, 2, 0, 1);
+    CHECK(decide(&out) == 0, "decide");
+    s_w.unit[12].live = 0;
+    open_next();
+    open_stall();
+    n = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    c = open_energy_cmd(n);
+    printf("the stall yields, the factory lost: %s\n", open_energy_took(n));
+    CHECK(s_st.opened && c && c->c.type == T_WIND, "the stall yields: not after the seat lost its factory");
+    /* the plant ordered: a second builder idle in the same decision is asked the stall's energy, and a plant's
+       rung not asked of it ends nothing */
+    open_energy_world(2, 0, 2, 0, 0);
+    open_stall();
+    unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+    CHECK(decide(&out) == 0, "decide");
+    printf("the stall yields, two builders: %d plant orders, %d energy orders, over %u\n", type_orders(T_FACTORY),
+           type_orders(T_WIND), s_st.open_stall_over);
+    CHECK(type_orders(T_FACTORY) == 1 && type_orders(T_WIND) == 1 && !s_st.open_stall_over,
+          "the stall yields: one plant, and the second builder the stall's energy");
+    /* an order counts: past open_t, one energy building standing and the commander ordered the second in this
+       decision, the constructor asked after it takes the plant */
+    open_energy_world(2, 0, 1, 0, 0);
+    open_stall();
+    s_w.gametime = 1900;
+    unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+    CHECK(decide(&out) == 0, "decide");
+    printf("the stall yields, the second energy building ordered: %d energy orders, %d plant orders, the constructor's job %d\n",
+           type_orders(T_WIND), type_orders(T_FACTORY), s_job[2].kind == IMPAI_JOB_BUILD ? s_job[2].build : 0);
+    CHECK(type_orders(T_WIND) == 1 && s_job[2].kind == IMPAI_JOB_BUILD && s_job[2].build == T_FACTORY,
+          "the stall yields: an energy building ordered counts");
+    /* THE PLANT'S WALK THAT ORDERS NOTHING ENDS THE YIELD: every plant site refused, the walk takes the decision's
+       site tests; from the next decision the stall's rung is first, and stays so with the sites free again */
+    open_energy_world(2, 0, 2, 0, 0);
+    open_stall();
+    s_w.refuse_type = T_FACTORY;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the stall yields, every plant site refused: %s, over %u, site tests %u\n", open_energy_took(0),
+           s_st.open_stall_over, (unsigned)out.sites);
+    CHECK(s_st.open_stall_over == 1 && !type_orders(T_FACTORY), "the stall yields: a plant walk that orders nothing "
+          "ends the yield");
+    if (open_energy_cmd(0)) open_next(); else s_w.gametime += 15;
+    n = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    c = open_energy_cmd(n);
+    printf("the stall yields, the next decision: %s\n", open_energy_took(n));
+    CHECK(c && c->c.type == T_WIND, "the stall yields: over, the stall's energy is first at the next decision");
+    s_w.refuse_type = 0;
+    open_next();
+    n = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    c = open_energy_cmd(n);
+    printf("the stall yields, the plant sites free again: %s\n", open_energy_took(n));
+    CHECK(c && c->c.type == T_WIND && s_st.open_stall_over == 1, "the stall yields: over for the level");
+}
+
+/* THE OPENING'S ORDER: a commander with four patches within its reach, each order built where it was placed
+   and finished before the next decision; with `stall`, the store at 10 % from the first energy building on */
+static const SNAP_PATCH OPEN_PATCHES[] = {
+    { 22, 22, 22, 22, 24, 24, 9 }, { 38, 22, 38, 22, 40, 24, 9 }, { 22, 38, 22, 38, 24, 40, 9 }, { 38, 38, 38, 38, 40, 40, 9 },
+};
+
+static void check_opening_order(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int stall, k, n, x, z;
+    unsigned i;
+    for (stall = 0; stall < 2; stall++) {
+        const int WANT[6] = { T_MEX, T_MEX, T_WIND, T_WIND, T_FACTORY, stall ? T_WIND : T_MEX };
+        brain_world();
+        memset(s_w.metal, 0, sizeof s_w.metal);
+        s_spots = OPEN_PATCHES;
+        s_nspots = sizeof OPEN_PATCHES / sizeof OPEN_PATCHES[0];
+        for (i = 0; i < s_nspots; i++)
+            for (z = OPEN_PATCHES[i].z0; z <= OPEN_PATCHES[i].z1; z++)
+                for (x = OPEN_PATCHES[i].x0; x <= OPEN_PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
+        unit_add(&s_w, 1, T_COM, 30, 30, 1);
+        s_w.econ[0].energy_max = 1000;
+        s_w.econ[0].energy = 1000;
+        s_w.gametime = 15;
+        for (k = 0; k < 6; k++) {
+            const FCMD* c;
+            n = s_w.nlog;
+            CHECK(decide(&out) == 0, "decide");
+            c = open_energy_cmd(n);
+            printf("the opening's order%s, building %d at %u: %s\n", stall ? ", stalled from the first energy" : "", k + 1,
+                   (unsigned)s_w.gametime, open_energy_took(n));
+            CHECK(c && c->c.type == WANT[k], "the opening's order%s: building %d", stall ? ", stalled" : "", k + 1);
+            if (!c) break;
+            unit_add(&s_w, 3 + k, c->c.type, cmd_x0(&c->c), cmd_z0(&c->c), 1);
+            if (stall && c->c.type == T_WIND) open_stall();
+            open_next();
+            s_w.gametime += 135;
+        }
+        CHECK(!s_st.open_e_refused && !s_st.open_stall_over, "the opening's order: no walk refused");
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
 }
 
 static void check_far_patch(void)
@@ -5420,18 +5674,21 @@ static void check_economy_game(void)
           "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
        standing by the decision of 840), then the energy that income asks for, CORVP from 3225 with a CORCV queued
-       when it stands, at 4080. Each standing extractor pays the 2.295 its nine cells of 255 give a pass, one finished
-       inside the last pass the ticks it stood of it, the commander 1. */
+       when it stands. Each standing extractor pays the 2.295 its nine cells of 255 give a pass and each standing
+       constructor its metalmake, one finished inside the last pass the ticks it stood of it, the commander 1. */
     e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
     CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
     {
         float want = 1.0f;
         int s;
-        for (s = 1; s < 32; s++)
-            if (s_w.unit[s].live && s_w.unit[s].finished && s_w.unit[s].type == E_MEX && s_eg.done_at[s] <= s_eg.pass_t) {
+        for (s = 1; s < 32; s++) {
+            const int type = s_w.unit[s].type;
+            const float pays = type == E_MEX ? 2.295f : type == E_CK || type == E_CV ? s_w.defs[type].e.metalmake : 0.0f;
+            if (s_w.unit[s].live && s_w.unit[s].finished && pays > 0 && s_eg.done_at[s] <= s_eg.pass_t) {
                 const int from = s_eg.done_at[s] > s_eg.pass_t - 29 ? s_eg.done_at[s] : s_eg.pass_t - 29;
-                want += 2.295f * (float)(s_eg.pass_t - from + 1) / 30.0f;
+                want += pays * (float)(s_eg.pass_t - from + 1) / 30.0f;
             }
+        }
         CHECK(fabsf(s_eg.m_in - want) < 0.01f, "each extractor on the metal map pays 0.001 x 9 x 255 a pass: metal_in %.3f, "
               "%.3f from %d", s_eg.m_in, want, e.n[E_MEX]);
     }
@@ -17094,6 +17351,9 @@ int main(void)
     check_ladder_rows();
     check_stall();
     check_afloat();
+    check_open_energy();
+    check_stall_yields();
+    check_opening_order();
     check_spot();
     check_spot_foreign();
     check_far_patch();
