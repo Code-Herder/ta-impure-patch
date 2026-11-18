@@ -8927,6 +8927,20 @@ static void check_def_want(void)
     n = def_decide(1, tw, at);
     printf("defence want, a metal stall: %d, %s\n", n, n ? def_name(tw[0]) : "none");
     CHECK(n == 1 && tw[0] == D_LLT, "defence want, a metal stall: the tower");
+    /* A KEYED WALK IS NOT EXHAUSTED BY A CUT (impai_build.c): the tower's walk, ordered from the pressing member's
+       side and cut after four refusals, leaves the base ring as it is */
+    {
+        IMPAI_BRAIN_OUT bo;
+        def_world(M_RAIDER, 100.0f);
+        s_glv.site_tests = 4;
+        s_w.refuse_type = D_LLT;
+        n = def_decide_out(1, tw, at, &bo);
+        printf("defence want, the tower refused everywhere, 4 site tests: %d, sites=%u ring_grow=%u\n", n, bo.sites,
+               s_st.ring_grow);
+        CHECK(n == 0 && bo.sites == 4 && s_st.ring_grow == 0, "a keyed walk the site tests cut grows nothing: %u tests, %u",
+              bo.sites, s_st.ring_grow);
+        s_w.refuse_type = 0;
+    }
     s_milp = NULL;
 }
 
