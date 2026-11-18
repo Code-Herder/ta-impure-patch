@@ -1821,3 +1821,36 @@ No reference fight of the calibration holds a paralysing type in either game set
 - **An enemy's paralysers count for nothing**: an enemy Spider stamps no threat, is not armed in the picture, presses nothing, and the predictor takes it as a target that returns no damage. A stunned unit neither moves nor fires, and nothing in the brain models that. Whether an enemy's stun must count as a threat is not decided.
 - **Trout Farm's naval judgement turned on the Spider.** The land link asks whether at least half of the land army types can walk from the anchor to the enemy's estimate; there 28 can, of 57 with ARMSPID and of 56 without, so the seat judged the map naval before and judges it land now. The games' orders are the same (no sea site was ever found there); the judgement stands on one type's count.
 - A mixed type (Escalation's ARMHSTUN, ARMASPID) is bought on its other weapons; its stun is neither valued nor used.
+
+## A floating building is a water type (2026-11-18)
+
+**The owner's report**, from an Escalation game: "the AI never builds energy producers. It does a couple of metal extractors and then jumps to a kbot lab."
+
+**The fault, MEASURED 2026-11-18** with a scratch trace of the two energy rungs' answers (the builder, the type chosen, the ring walk's counts and return) on `bar-nota-pincushion-ac-1` and `-ca-1`, `--setup escalation`, to GameTime 12 000:
+
+- The map's mean wind ratio is 0.3499. On the commander's menu the Floating Wind Generator (ARMFWIN: 36 of wind, value 68.5, a gain of 12.60 a pass) outranks the Solar Collector (25 over 157.7) and the Wind Generator (10.50 over 68.5): 0.184 a value against 0.159 and 0.153. It does so on every map whose ratio is above 0.302. The constructor kbot's menu has no floating generator, and its choice was the solar collector.
+- ARMFWIN has `minwaterdepth = 0` and a yard of `w`. The type information flagged a type as placed on water only by `minwaterdepth > 0` or a tidal generator, so the commander's energy choice was ARMFWIN on a dry anchor, and the site test refused every site: in ac-1 the stall's energy rung asked the commander at 203 decisions from GameTime 3 127 to 11 647 and the energy rung at 7 where it wanted energy, every one ARMFWIN, not one site passed (ca-1: 263 and 10).
+- Those walks spent the decision's site tests (32 a decision): 20 of the stall's walks exhausted the base ring and grew it, until its sites passed the commander's reach, and the 183 after them tested what the decision had and left the ring as it was. So a builder asked after the commander in the same decision tested nothing: the constructor's solar collector was cut with no site tested at 21 of its 25 asks (ca-1: 25 of 30), and the commander ended 130 decisions with no order (ca-1: 175) [INFERRED: its other rungs' walks were cut the same way].
+
+**What is taken.** The flag is read from what the site test reads ([the brain](brain.html), *Placed on water only*): a building whose yard map has water cells and no land cell is placed on water only, whatever its depth keys say. Considered and not taken: a second choice when the best type finds no site -- it would have ended the commander's fault too, at the cost of the 32 site tests a decision the refused type's walk spends before the second is tried, and it leaves the type in every other choice that reads the flag; the flag is the cause, and with it right the first choice is one the ground takes.
+
+**The figures named before the try**, both games to GameTime 12 000, the tip 789a3231 and then the rule:
+
+| | ac-1 (Arm) | | ca-1 (Core) | |
+|---|---|---|---|---|
+| | before | after | before | after |
+| the commander's first energy BUILD job | none | 3 150 | none | 3 240 |
+| the first energy building begun | 5 949 | 3 173 | 6 369 | 3 479 |
+| energy buildings begun | 3 | 7 | 4 | 5 |
+| energy income at 6 000 / 12 000 | 64 / 130 | 164 / 255 | 64 / 125 | 139 / 185 |
+| energy made by 12 000 | 29 322 | 54 192 | 29 396 | 48 636 |
+| samples with the store below 20 % (30, every 300 ticks from 3 300) | 23 | 7 | 29 | 8 |
+| decisions with the store empty (`e_empty`, of 406) | 134 | 38 | 194 | 37 |
+| the second plant ordered | 10 447 | 5 527 | none | 5 587 |
+| army units ordered | 6 | 4 | 7 | 8 |
+
+The army in ac-1 is two fewer at 12 000: with the energy the seat spends its metal -- the store, above 1 000 of 1 125 from 5 100 to 10 500 before, holds 0 at 10 500 and 8 at 12 000 -- and it orders the advanced lab at 8 197 (ca-1 at 10 927), which the tech-up's rule takes at this income; that rule is not this change's.
+
+**The base game.** No type of the base game or of ProTA 4.8 changes its flag, so the rule cannot fire there: `session.py --neutral --state` against 789a3231 holds it, every game SAME in its decisions and its recorded brain state.
+
+**Gaps.** The floating radar towers (ARMFRAD, CORFRAD) change with the generators, in the sensor choice, and no game of the try reached a sensor want at a shore. Escalation's fusion reactors carry `Builder = 1` and build their own upgrade, so the classifier flags them factories on the live table (MEASURED 2026-11-18: ARMFUS, CORFUS, ARMSFUS, CORSFUS category factory, gains 1 200 and 6 250 a pass) and the energy rung never chooses one: not changed here.
