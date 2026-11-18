@@ -954,10 +954,16 @@ taken, the gates of its row that are up. A want needed, not taken and under no g
 reads last, which is read only for a want nothing else refuses: the sea plant's builder that offers one, the
 sensor's kind and point. The first plant, which no gate holds, names none. The trace is scratch of the decision:
 no recorded struct holds it and nothing reads it back. The seam writes it to the log at each decision whose trace
-differs from the seat's last line, the level's first included -- `impai: why seat= t= gates=HOLD+M_STALL naval=1
-pos=island need=factory+sea veto=factory:HOLD+M_STALL take=sea`, names joined by `+`, `-` for none -- and remembers
-the last trace written in its diagnostics (`s_play`, cleared at a level's start), so the last line before a
-GameTime states every decision up to the next line. `tools/impai/think.py why` reads it ([testing](testing.html),
+differs from the seat's last line, the level's first included -- `impai: why seat=1 t=13627 gates=M_STALL+PRESSED
+naval=0 pos=pressed+at_base need=def+sensor veto=sensor:M_STALL take=def`, names joined by `+`, a veto
+`want:GATE+GATE` and the vetoes by `,`, `-` for none -- and remembers the last trace written and the GameTime of
+the seat's last traced decision in its diagnostics (`s_play`, cleared at a level's start), so the last line before
+a GameTime states every decision up to the next line. A restore leaves those diagnostics alone, so the rule that
+leaves a line out (`impai_why_due`) rests on an ordering: in play a seat's decisions come at rising GameTimes, and
+a decision at a GameTime not above the seat's last -- the first after a rewind's fork -- writes its line whatever
+its trace. The log of a game with such a restore therefore has `why` lines whose GameTimes go back, and
+`think.py why` refuses it by name instead of answering with the trace of the timeline left.
+`tools/impai/think.py why` reads it ([testing](testing.html),
 *A recording answered in one call*). It traces the six wants of the table alone: why an idle factory was given no
 order is the governor's, and not in it.
 

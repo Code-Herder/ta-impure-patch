@@ -1531,7 +1531,8 @@ static const IMPAI_PERSONA* seat_persona(int seat)
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
    clears every unit before the level-end lines are written (scenarios/replay-end.json); the GameTime + 1 of
    the seat's second-factory line (THE SECOND FACTORY), 0 before it; and the trace of the seat's last `why` line
-   (THE WHY LINE), `set` 0 before it. Diagnostics the simulation never reads. */
+   with the GameTime of its last traced decision (THE WHY LINE; impai.h, IMPAI_WHY_SEEN), zero before them.
+   Diagnostics the simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
@@ -1551,7 +1552,7 @@ static struct {
     unsigned com_idle[PLAYER_COUNT], sensors[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
-    IMPAI_WHY why[PLAYER_COUNT];
+    IMPAI_WHY_SEEN why[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
 
@@ -1750,14 +1751,15 @@ static void second_line(int seat, unsigned now, const IMPAI_BRAIN_OUT* o)
    needed; for each want needed and not taken the gates of its row that hold it, `want:GATE+GATE`; the wants taken
    (impai_why_text). So the last `why` line at or before a GameTime states the trace of every decision up to the
    next line, and tools/impai/think.py's `why` answers "why was this want not taken at tick T" from the log alone.
-   A want needed, not taken and under no veto waits on the term its rule reads last (impai.h). The remembered trace
-   is a diagnostic (s_play): a level's start clears it, and a state restored under it costs at most a line said
-   again. Logging alone: nothing reads it back. */
+   A want needed, not taken and under no veto waits on the term its rule reads last (impai.h). What the seam
+   remembers of the seat's last line is a diagnostic (s_play): a level's start clears it and no restore touches it,
+   so the rule that leaves a line out is impai_why_due's, which a restore cannot make leave out a line the log
+   needs: the first decision after a state restored behind the seat's last one writes its line whatever its trace.
+   Logging alone: nothing reads it back. */
 static void why_line(int seat, unsigned now, const IMPAI_WHY* w)
 {
     char text[IMPAI_WHY_TEXT];
-    if (!w->set || !memcmp(w, &s_play.why[seat], sizeof *w)) return;
-    s_play.why[seat] = *w;
+    if (!impai_why_due(&s_play.why[seat], now, w)) return;
     impai_why_text(w, text, sizeof text);
     tagpu_logf("impai: why seat=%d t=%u %s", seat, now, text);
 }

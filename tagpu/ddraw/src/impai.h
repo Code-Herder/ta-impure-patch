@@ -954,6 +954,21 @@ _Static_assert(sizeof(IMPAI_WHY) == 6 + IMPAI_WHY_WANTS, "IMPAI_WHY has no paddi
 /* `w` as the `why` line's fields, `gates= naval= pos= need= veto= take=`, NUL-ended in out[cap]; names joined by
    `+`, a veto `want:GATE+GATE` and the vetoes by `,`, `-` for none. Returns the bytes written, the NUL left out. */
 int   impai_why_text(const IMPAI_WHY* w, char* out, size_t cap);
+/* THE WHY LINE's rule (tagpu_impai.c, why_line): 1 when the decision at GameTime `now` with trace `w` writes its
+   line -- `w` differs from the trace of the seat's last line, or `now` is not above the GameTime of the seat's last
+   traced decision. INVARIANT, an ordering: in play a seat's decisions come at rising GameTimes (impai_brain_due is a
+   function of the GameTime, and a seat has one turn a step), so a decision that does not rise is the first after a
+   state restored into the level behind the last one -- a rewind's fork --, and the lines written since belong to
+   the timeline left. It writes its line whatever its trace, so the log's GameTimes go back there and
+   tools/impai/think.py refuses the log by name; left out, the log would read as one game's and answer with the
+   other timeline's trace. A restore that does not go back leaves `seen` the trace of the log's last line, which
+   is all the comparison reads. `seen` is the caller's, zeroed at a level's start; a trace not set writes nothing
+   and moves nothing. */
+typedef struct IMPAI_WHY_SEEN {
+    IMPAI_WHY why;                  /* the trace of the seat's last line, `set` 0 before one                    */
+    uint32_t  after;                /* the GameTime + 1 of its last traced decision, 0 before one               */
+} IMPAI_WHY_SEEN;
+int   impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w);
 
 /* THE REQUESTS: a want is a request, and this is how one decision leaves each of the six, by the want's index in
    THE VETOES. Economy says whether it is needed and what holds it (impai_brain.c, why_read); the assignment, which
