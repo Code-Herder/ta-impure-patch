@@ -51,6 +51,8 @@ MAX_LINES = 60
 PER_PATTERN = 10
 NEAR = 300
 TIME = re.compile(r"\b(?:t|gametime)=(\d+)")
+# a field that measures the machine, not the game: microseconds or milliseconds of wall clock (`us=`, `worst_us=`)
+CLOCK = re.compile(r"\b(?:\w+_)?(?:us|ms)=")
 # what the scratch copy of tagpu/ddraw leaves out: build products, which the scratch build makes for itself
 SKIP = re.compile(r"\.(o|d|dll|map|exe|log)$")
 LINKED = ("tools", "art", "mods", "unditherer")
@@ -84,6 +86,16 @@ def matched(log: str, greps: list, at=None, w=NEAR) -> dict:
     matches)."""
     lines = selected(log, greps, at, w)
     return {g: [ln for ln in lines if re.search(g, ln)] for g in greps}
+
+
+def decisions(log: str) -> list:
+    """`log`'s impai lines that two plays of one game by one brain share, whatever the machine's load: those with
+    a GameTime and no wall-clock field. The lines of the load carry no GameTime (addresses, load times), and
+    `impai: tail` carries its slowest passes in microseconds. MEASURED 2026-11-17 on the five held-out games at
+    the cap whose logs two batches kept (82cab0f3 and ed3e5634, 94 to 136 such lines a game): every such line
+    equal in the two, and the one line the rule leaves out of each, `tail`, different in all five."""
+    return [ln for ln in log.splitlines()
+            if ln.startswith("impai:") and gametime(ln) is not None and not CLOCK.search(ln)]
 
 
 def parting(la: list, lb: list):
@@ -171,6 +183,21 @@ def csv_ints(s):
     return [int(x) for x in s.split(",") if x] if s else None
 
 
+def bar_game(gid: str, cap=None, setup=None) -> dict:
+    """The game of bar id `gid` as RUN plays it: to `cap` (the bar's own when none) on `setup`."""
+    import bar
+    return dict(bar.parse_id(gid), cap=cap or bar.CAP, setup=setup, values=[])
+
+
+def play(games: list, dll, folder: Path, lanes: int, setup=None, verb="diag") -> int:
+    """`games` played with `dll` into `folder` as RUN plays them: bar.play_games under the run lock (`verb` names
+    the run there), on GDI with no draw, every game's log kept, a win's included; bar's exit."""
+    import bar
+    pa = argparse.Namespace(verb=verb, dll=dll, lanes=lanes, setup=setup, gpu=False, draw=False, keep_all=True,
+                            no_curtail=True)
+    return bar.play_games(games, pa, folder)
+
+
 def run_games(a) -> int:
     import bar
     out = Path(a.out) if a.out else DIAG / f"run-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -182,7 +209,7 @@ def run_games(a) -> int:
         if a.cap:
             games = [dict(g, cap=a.cap) for g in games]
     else:
-        games = [dict(bar.parse_id(g), cap=a.cap or bar.CAP, setup=a.setup, values=[]) for g in bar.read_ids(a.ids)]
+        games = [bar_game(g, a.cap, a.setup) for g in bar.read_ids(a.ids)]
     folders = []
     rc = 0
     missing = [d for d in a.dll if not Path(d).is_file()]
@@ -190,9 +217,7 @@ def run_games(a) -> int:
         raise DiagError(f"no DLL {missing[0]}")
     for k, dll in enumerate(a.dll):
         f = out / f"dll{k + 1}"
-        pa = argparse.Namespace(verb="diag", dll=dll, lanes=a.lanes, setup=a.setup, gpu=False, draw=False,
-                                keep_all=True, no_curtail=True)
-        rc = max(rc, bar.play_games(games, pa, f))
+        rc = max(rc, play(games, dll, f, a.lanes, a.setup))
         folders.append(f)
     print(f"diag: {len(games)} game(s) on {len(a.dll)} DLL(s) in {out}")
     print("\n".join(report(folders, a.grep, a.lines, csv_ints(a.at), a.near, a.max)))

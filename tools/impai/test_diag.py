@@ -97,6 +97,16 @@ class Extraction(unittest.TestCase):
         out = diag.report([self.tmp / "a" / "games", self.tmp / "b" / "games"], ["mil"], per=1)
         self.assertIn("   the two agree in every matched line", out)
 
+    def test_the_decisions_are_the_timed_lines_with_no_wall_clock_field(self):
+        log = LOG + "\n" + "\n".join([
+            "impai: tail seat=1 over_us=1000 decide=3072/8118:4527:757.5 worst_us={us} gametime=3700 slots=2048",
+            "impai: reach classes=15 blocks=320x320 us={us}",
+            "impai: eco seat=1 decisions=40 reclaims=0 makers=0 gametime=4000"])
+        a, b = diag.decisions(log.format(us=4527)), diag.decisions(log.format(us=5343))
+        self.assertEqual(a, b)                                           # two plays of a game on a loaded machine
+        self.assertEqual([ln.split()[1] for ln in a], ["pulse", "mil", "pulse", "plant", "mil", "pulse", "eco"])
+        self.assertIsNone(diag.parting(a, b))
+
     def test_a_failed_build_prints_the_compiler_s_lines_alone(self):
         text = "\n".join(["i686-w64-mingw32-gcc -Iinc -O2 -c src/impai_mil.c",
                           "src/impai_mil.c:12:5: error: 'x' undeclared",
