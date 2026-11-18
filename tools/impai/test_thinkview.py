@@ -114,11 +114,24 @@ class Arithmetic(unittest.TestCase):
         self.assertNotIn("lead", got)                           # a field the recording does not have: no lane
 
     def test_the_page_carries_its_recordings(self):
-        html = thinkview.page([{"id": "a", "file": "a.js", "name": "</script>"}])
-        self.assertIn('[{"id":"a","file":"a.js","name":"<\\/script>"}]', html)
+        html = thinkview.page([{"id": "a", "name": "</script>", "seats": [{"seat": 1, "id": "a", "file": "a.js"}]}])
+        self.assertIn('[{"id":"a","name":"<\\/script>","seats":[{"seat":1,"id":"a","file":"a.js"}]}]', html)
         self.assertTrue(html.startswith("<!doctype html>"))
         self.assertFalse(thinkview.page([], bare=True).startswith("<!doctype"))
         self.assertTrue(thinkview.data_file("a", {"v": 1}).startswith('thinkviewData("a",{"v":1});'))
+
+    def test_a_place_is_a_compass_word_over_the_maps_thirds(self):
+        w, h = 600, 300                                             # wider than tall: a swapped axis shows
+        for (x, z), word in (((0, 0), "north-west"), ((300, 0), "north"), ((599, 99), "north-east"),
+                             ((199, 150), "west"), ((200, 100), "centre"), ((400, 199), "east"),
+                             ((100, 200), "south-west"), ((399, 299), "south"), ((599, 299), "south-east")):
+            self.assertEqual(thinkview.compass(x, z, w, h), word, (x, z))
+
+    def test_a_colour_has_a_word(self):
+        words = [thinkview.colour_word(c) for c in thinkview.STOCK_RGB]
+        self.assertEqual(words, ["blue", "red", "white", "green", "dark blue", "purple", "yellow", "black",
+                                 "light blue", "pale yellow"])
+        self.assertEqual(len(thinkview.STOCK_RGB), 10)              # a colour an index the game's seats may hold
 
 
 @unittest.skipUnless(test_think.HAVE_CC, "the DLL's compiler is not installed")
@@ -182,6 +195,31 @@ class View(unittest.TestCase):
     def build(self, **kw):
         ex = think.extract(self.game())
         return thinkview.build(ex, self.lay, 1, fake_sample, think.type_names(ex), **kw)
+
+    def test_who_plays_is_the_headers_rows_and_the_first_places(self):
+        ex = think.extract(self.game())
+        row = lambda ctl, logo, allies: {"controller": ctl, "logo": logo, "alliances": bytes(allies)}     # noqa: E731
+        rows = {0: row(1, 4, [1, 1, 0]), 1: row(2, 7, [1, 1, 1]), 2: row(2, 12, [0, 0, 1])}
+        dims, world = fake_sample([0, 100, 200])
+        colours = {"rgb": [(i, 0, 255 - i) for i in range(10)]}
+        # seat 1's first unit, slot 11, is read at its first tick; seat 2's, slot 21, only at a sample
+        who = thinkview.seat_facts(ex, rows, colours, world, {11: [(0, 620, 20), (1, 630, 20)]}, dims)
+        self.assertEqual([(w["seat"], w["kind"], w["by"], w["side"]) for w in who],
+                         [(0, "human", "human", "Arm"), (1, "impai", "ImpAI", "Core"), (2, "ai", "another AI", "Arm")])
+        self.assertEqual([(w["logo"], w["rgb"]) for w in who], [(4, [4, 0, 251]), (7, [7, 0, 248]), (12, None)])
+        self.assertEqual(who[2]["colour"], None)                    # a colour index past the game's colours: not guessed
+        # an alliance is the byte each holds of the other: seat 1 holds seat 2's, seat 2 does not hold seat 1's
+        self.assertEqual([w["allies"] for w in who], [[1], [0], []])
+        self.assertEqual([(w["start"], w["start_t"], w["start_exact"], w["where"]) for w in who],
+                         [(None, None, None, None), ([620, 20], 0, True, "north-east"), ([300, 300], 0, False, "centre")])
+        # the stream not read: every seat is still a row, and what was not read is None
+        bare = thinkview.seat_facts(ex, {}, None, {}, {}, dims)
+        self.assertEqual([(w["seat"], w["name"], w["kind"], w["logo"], w["rgb"], w["allies"], w["start"]) for w in bare],
+                         [(0, "Player", None, None, None, None, None), (1, "Core", "impai", None, None, None, None),
+                          (2, "Arm", None, None, None, None, None)])
+        data = self.build()
+        self.assertEqual([w["start"] for w in data["who"]], [None, [100, 200], [300, 300]])
+        self.assertEqual(data["colours"]["from"], None)             # no ground: the unmodded game's table, and said so
 
     def test_the_lanes_are_the_task_history(self):
         d = self.build()
@@ -305,8 +343,13 @@ class View(unittest.TestCase):
             rc = thinkview.main([str(self.game()), str(self.game("b c.imprec")), "--out", str(self.tmp / "page")])
         self.assertEqual(rc, 0, out.getvalue())
         html = (self.tmp / "page" / "index.html").read_text()
-        self.assertIn('"id":"a","file":"a.js"', html)
-        self.assertIn('"id":"b-c","file":"b-c.js"', html)
+        mark = "const MANIFEST = "
+        games = json.JSONDecoder().raw_decode(html[html.index(mark) + len(mark):])[0]
+        self.assertEqual([(g["id"], g["name"], g["map"], g["end"], g["seats"]) for g in games],
+                         [("a", "a.imprec", "Test Map", 400, [{"seat": 1, "id": "a", "file": "a.js"}]),
+                          ("b-c", "b c.imprec", "Test Map", 400, [{"seat": 1, "id": "b-c", "file": "b-c.js"}])])
+        self.assertEqual([(w["seat"], w["name"], w["kind"]) for w in games[0]["who"]],     # every seat, played by ImpAI or not
+                         [(0, "Player", None), (1, "Core", "impai"), (2, "Arm", None)])
         js = (self.tmp / "page" / "a.js").read_text()
         self.assertTrue(js.startswith('thinkviewData("a",{'))
         self.assertEqual(json.loads(js[len('thinkviewData("a",'):-3])["lanes"][0]["k"], 1)
@@ -314,6 +357,22 @@ class View(unittest.TestCase):
             self.assertEqual(thinkview.main([str(self.tmp / "nothing.imprec"), "--out", str(self.tmp / "p2")]), 2)
         self.assertIn("COULD NOT RUN", out.getvalue())
         self.assertFalse((self.tmp / "p2").exists())
+
+
+def gaf_bytes(name: str, frames: list) -> bytes:
+    """A GAF of one sequence `name`: each frame (width, height, the palette index of its middle pixel), plain
+    rows, every other pixel index 1."""
+    head = 12 + 4
+    table = head + 40 + 8 * len(frames)
+    out = struct.pack("<IIII", 0x00010100, 1, 0, head) + struct.pack("<HHI32s", len(frames), 1, 0, name.encode())
+    bodies, at = b"", table
+    for w, h, mid in frames:
+        out += struct.pack("<II", at, 0)
+        px = bytearray(b"\x01" * (w * h))
+        px[(h // 2) * w + w // 2] = mid
+        bodies += struct.pack("<HHhhBBHII", w, h, 0, 0, 0, 0, 0, 0, at + 24) + struct.pack("<I", 0) + bytes(px)
+        at += 24 + w * h
+    return out + bodies
 
 
 MW, MH = 4, 3                   # THE MAP, in 32-px tiles: wider than tall, so a swapped axis shows
@@ -363,6 +422,8 @@ class Ground(unittest.TestCase):
             "[Rock1] { description=Rock; metal=40; energy=3; reclaimable=1; }\n")
         (self.dir / "units" / "MEX.fbi").write_text("[UNITINFO] { UnitName=MEX; ExtractsMetal=0.001; }")
         (self.dir / "units" / "BOAT.fbi").write_text("[UNITINFO] { UnitName=BOAT; Floater=1; }")
+        (self.dir / "textures").mkdir()
+        (self.dir / "textures" / "logos.gaf").write_bytes(gaf_bytes("32xLogos", [(3, 3, 7), (5, 4, 9), (65, 2, 11)]))
         self.listed = [("impure-patch.ufo", 1, 0)]     # Impure's own archive: left out, so the loose files are all
 
     def source(self, listed=None):
@@ -446,6 +507,19 @@ class Ground(unittest.TestCase):
             self.assertEqual(thinkmap.feature_kind(body), kind)
         kinds = thinkmap.unit_kinds(self.source(), {1: "MEX", 2: "BOAT", 3: "NOFILE"})
         self.assertEqual(kinds, {1: thinkmap.F_EXTRACTS, 2: thinkmap.F_FLOATS})
+
+    def test_a_players_colour_is_its_logo_frames_middle_pixel(self):
+        rgb, where = thinkmap.team_colours(self.source())
+        self.assertEqual((rgb, where), ([PALETTE[7], PALETTE[9], None], "loose"))      # a frame past 64 px gives none
+        (self.dir / "textures" / "logos.gaf").write_bytes(gaf_bytes("other", [(3, 3, 7)]))
+        with self.assertRaisesRegex(thinkmap.MapError, "no sequence 32xlogos"):
+            thinkmap.team_colours(self.source())
+        # the recording's own colours when its archives hold them, else the unmodded game's and why
+        self.assertEqual(thinkview.terrain({"track": None, "archives": self.listed}, {}, [self.dir], {})["colours"],
+                         {"rgb": thinkview.STOCK_RGB, "from": None, "why": "textures/logos.gaf in loose holds no sequence 32xlogos"})
+        (self.dir / "textures" / "logos.gaf").write_bytes(gaf_bytes("32xlogos", [(3, 3, 7)]))
+        self.assertEqual(thinkview.terrain({"track": None, "archives": self.listed}, {}, [self.dir], {})["colours"],
+                         {"rgb": [PALETTE[7]], "from": "loose", "why": ""})
 
     def test_the_ground_of_a_recording_and_what_could_not_be_read(self):
         tr = thinkmap.Track(GW, GH)

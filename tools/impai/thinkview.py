@@ -8,7 +8,7 @@ flight recorder as one instrument.
 Writes DIR/index.html and, for each recording, DIR/<name>.js and DIR/<map>.<crc>.map.webp: the page (thinkview.html,
 beside this file), one data file a recording and seat, which the page loads when it is picked, and the map's
 picture, one a map file. A recording several ImpAI seats played is a data file a seat (`<name>-seat<S>.js`) unless --seat names
-one. The page needs no server and no network but its fonts: open index.html. --bare writes the page without the
+one: the page lists a recording once, as a GAME, and a button a seat beside it. The page needs no server and no network but its fonts: open index.html. --bare writes the page without the
 document around it (doctype, head, body), for a host that wraps what it is given in its own.
 
 THE VIEW is two halves of one clock. THE FLIGHT RECORDER is the whole game on one time axis: a lane a squad
@@ -27,6 +27,17 @@ metal, it floats, it flies -- are its FBI's in the same archives, by the name th
 (--content FILE names a content file of predfit.py's for a mod; the first whose count is the recording's names
 the types). What could not be read is a line of the page, never a guess. THE PICTURE IS DERIVED FROM THE
 ORIGINAL GAME: it is written into --out and nowhere else.
+
+WHO PLAYS (seat_facts). Every seat of the recording's header is a row of the data's `who` and of the page's
+list: its side, who played it (the header's controller byte, player record `+0x73`: 1 a human at the recording
+machine, 2 a computer there, 3 a player on another machine; and the header's own byte for ImpAI), its COLOUR
+(the colour index, PlayerInfo `+0x96`, and that index's colour as the recording's archives draw it,
+thinkmap.team_colours; STOCK_RGB, the unmodded game's, when the archives could not be read, and the page says
+which), its ALLIES (the seats whose alliance byte it holds, player record `+0x108`, and that hold its own: the
+alliances the game starts with) and its START: where its first unit that outlives the level's first ticks -- its
+commander in a skirmish -- first stands, as a compass word over the map's thirds. The header's rows are tarec.py's
+(think.py's extract keeps a seat's name, side and ImpAI byte alone), read in the same pass as the samples. A fact
+that could not be read is None in the row and a line of the page, never a guess.
 
 EVERYTHING ELSE IS READ THROUGH think.py: the brain's state by field name through the compiler's layout
 (thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
@@ -93,6 +104,17 @@ JUDGEMENTS = (("naval", "naval", "mil.naval", {1: ("the map is judged naval", "i
                                                         "STRUCT": ("the enemy base is where structures were seen", "enemy"),
                                                         "KEPT": ("the enemy base is a centre kept from memory", "ghost")}))
 FOE_GAP = 900                   # ticks between two sightings of a commander that are two events
+START_TICKS = 60                # every unit's first place is kept exactly through these first ticks (sample, "first")
+PLACEHOLDER_TICKS = 30          # a unit gone within these ticks of its making is the engine's placeholder, no player's
+SIDES = {0: "Arm", 1: "Core"}   # the header's side byte, PlayerInfo +0x95
+# who played a seat, by the header's controller byte (player record +0x73): (the data's word, what the page says)
+CONTROLLERS = {1: ("human", "human"), 2: ("ai", "another AI"), 3: ("net", "a player on another machine")}
+# THE UNMODDED GAME'S PLAYER COLOURS, a colour index: the middle pixel of each frame of `32xlogos` in
+# textures/logos.gaf through palettes/palette.pal. MEASURED 2026-11-18 with thinkmap.team_colours on the retail
+# archives (palette indices 105, 212, 80, 167, 109, 219, 208, 93, 131, 67). The stand-in when a recording's own
+# archives cannot be read; a mod may draw others (Escalation does).
+STOCK_RGB = ((35, 59, 203), (211, 43, 0), (251, 251, 251), (47, 119, 27), (7, 23, 99),
+             (127, 87, 159), (255, 255, 0), (43, 43, 43), (131, 183, 207), (171, 171, 131))
 
 
 class ViewError(think.ThinkError):
@@ -104,6 +126,71 @@ def num(v):
     if isinstance(v, float):
         return round(v, 1) if math.isfinite(v) else 0
     return v
+
+
+def compass(x: float, z: float, w: float, h: float) -> str:
+    """Where (x, z) lies on a map of w x h, as a compass word over the map's thirds: north is z = 0, as the game
+    draws it, and the middle third of both is the centre."""
+    ew = "west" if x * 3 < w else "east" if x * 3 >= 2 * w else ""
+    ns = "north" if z * 3 < h else "south" if z * 3 >= 2 * h else ""
+    return f"{ns}-{ew}" if ns and ew else ns or ew or "centre"
+
+
+def colour_word(rgb) -> str:
+    """A colour's everyday name, for a sentence beside its swatch: by hue, with black, white and grey apart."""
+    r, g, b = (c / 255 for c in rgb)
+    hi, lo = max(r, g, b), min(r, g, b)
+    sat = 0 if hi == 0 else (hi - lo) / hi
+    if hi < .22:
+        return "black"
+    if sat < .12:
+        return "white" if hi > .8 else "grey"
+    d = hi - lo
+    hue = (60 * ((g - b) / d % 6) if hi == r else 60 * ((b - r) / d + 2) if hi == g else 60 * ((r - g) / d + 4)) % 360
+    name = next(n for top, n in ((15, "red"), (45, "orange"), (70, "yellow"), (165, "green"), (190, "cyan"),
+                                 (262, "blue"), (300, "purple"), (345, "pink"), (361, "red")) if hue < top)
+    return ("dark " if hi < .45 else "pale " if sat < .3 else "light " if sat < .45 and hi > .7 else "") + name
+
+
+def seat_facts(ex, rows, colours, world: dict, first: dict, dims) -> list:
+    """WHO PLAYS: a row a seat of the recording, [{"seat", "name", "side": its side's name, "kind": "impai" |
+    "human" | "ai" | "net" | None, "by": the same as the page says it, "logo": its colour index, "rgb": [r, g, b],
+    "colour": the colour's word, "allies": [seat, ...], "start": [x, z] in px, "start_t": the tick it is read at,
+    "start_exact": that tick is the unit's first, "where": the compass word}, ...]; None for what could not be
+    read. `rows` are the header's players as tarec.py reads them ({index: row}; {} when the stream was not read),
+    `colours` {"rgb": [a colour an index]} or None, `world` sample's samples and `first` its {slot: [(tick, x, z), ...]}
+    of the first ticks."""
+    lives = [l for l in unit_lives(ex) if l[3] is None or l[3] - l[2] > PLACEHOLDER_TICKS]
+    table = (colours or {}).get("rgb") or []
+    out = []
+    for p in ex.players:
+        seat, row = p["index"], rows.get(p["index"]) or {}
+        kind, by = ("impai", "ImpAI") if p.get("ai") == 1 else CONTROLLERS.get(row.get("controller"), (None, None))
+        logo = row.get("logo")
+        rgb = table[logo] if logo is not None and logo < len(table) and table[logo] else None
+        allies = None
+        if row.get("alliances") is not None:
+            holds = lambda a, b: b < len(rows[a]["alliances"]) and rows[a]["alliances"][b] != 0     # noqa: E731
+            allies = [o for o in sorted(rows) if o != seat and holds(seat, o) and holds(o, seat)]
+        start = start_t = exact = None
+        life = min((l for l in lives if ex.seat_of(l[0]) == seat), key=lambda l: (l[2], l[0]), default=None)
+        if life is not None:
+            early = next((e for e in first.get(life[0], ()) if e[0] >= life[2]), None)
+            if early:
+                start_t, exact, start = early[0], True, [early[1], early[2]]
+            else:                                               # made after the first ticks: its first sample
+                for t in sorted(t for t in world if t >= life[2] and (life[3] is None or t < life[3])):
+                    at_t = next((u for u in world[t]["units"] if u[0] == life[0]), None)
+                    if at_t:
+                        start_t, exact, start = t, False, [at_t[1], at_t[2]]
+                        break
+        side = p.get("side")
+        out.append({"seat": seat, "name": p.get("name") or f"seat {seat}",
+                    "side": None if side is None else SIDES.get(side, f"side {side}"), "kind": kind, "by": by,
+                    "logo": logo, "rgb": list(rgb) if rgb else None, "colour": colour_word(rgb) if rgb else None,
+                    "allies": allies, "start": start, "start_t": start_t, "start_exact": exact,
+                    "where": compass(start[0], start[1], dims[0], dims[1]) if start else None})
+    return out
 
 
 def at(track, t, default=0):
@@ -356,7 +443,9 @@ def unit_lives(ex) -> list:
 def sample(path, ticks) -> tuple:
     """((the map's width, height in px), {tick: {"units": [(slot, x, z, structure, frame), ...], "metal": {seat:
     income}}}, the ground: {"track": thinkmap.Track of the feature grid over the samples or None without numpy,
-    "archives": the header's, "map": its map's name}) at each of `ticks`, read from the recording's stream
+    "archives": the header's, "map": its map's name, "players": {seat: the header's row, tarec.py's}, "first":
+    {slot: [(tick, x, z), ...]}, each unit's place at each of the first START_TICKS ticks, whatever `ticks` holds}) at
+    each of `ticks`, read from the recording's stream
     through tarec.py: a unit's place is its
     footprint's centre in px (tarec.rect), `structure` tarec.structure, `frame` 1 while its build fraction is not
     0; a seat's income its player record's last pass (bar.py's PLAYER_METAL_IN), {} when bar.py cannot be
@@ -368,7 +457,7 @@ def sample(path, ticks) -> tuple:
         metal_at = bar.PLAYER_METAL_IN
     except Exception:                                           # noqa: BLE001
         metal_at = None
-    want, out, track = set(ticks), {}, None
+    want, out, track, first = set(ticks), {}, None, {}
     try:
         h, bl, _stop = tarec.load(str(path))
         seats = [p["index"] for p in h["players"]]
@@ -379,7 +468,7 @@ def sample(path, ticks) -> tuple:
         except ImportError:
             track = None
 
-        def take(w):
+        def places(w):
             units = []
             for slot, u in w.units.items():
                 cells = tarec.rect(u)
@@ -388,6 +477,10 @@ def sample(path, ticks) -> tuple:
                 xs, zs = [c[0] for c in cells], [c[1] for c in cells]
                 units.append((slot, (min(xs) + max(xs) + 1) * CELL_PX // 2, (min(zs) + max(zs) + 1) * CELL_PX // 2,
                               1 if tarec.structure(u) else 0, 1 if built.unpack_from(u, tarec.U_BUILT)[0] else 0))
+            return units
+
+        def take(w):
+            units = places(w)
             metal = {}
             if metal_at is not None:
                 metal = {s: num(struct.unpack_from("<f", w.players[s], metal_at)[0]) for s in seats}
@@ -396,14 +489,20 @@ def sample(path, ticks) -> tuple:
                 track.take(w.tick, w.grid)
 
         def on_record(w, kind, _b):
-            if kind is None and w.tick in want and w.tick not in out:
+            if kind is not None:
+                return
+            if w.tick is not None and w.tick <= START_TICKS:
+                for slot, x, z, _structure, _frame in places(w):
+                    first.setdefault(slot, []).append((w.tick, x, z))
+            if w.tick in want and w.tick not in out:
                 take(w)
         w = tarec.stream_to(h, bl, on_record=on_record)
         if w.tick in want and w.tick not in out:
             take(w)
     except Exception as e:                                      # noqa: BLE001
         raise ViewError(f"{path}: its stream could not be sampled ({type(e).__name__}: {e})") from None
-    return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map")}
+    return (gw * CELL_PX, gh * CELL_PX), out, {"track": track, "archives": h.get("archives"), "map": h.get("map"),
+                                               "players": {p["index"]: p for p in h["players"]}, "first": first}
 
 
 def tree_build(tree) -> str:
@@ -447,16 +546,26 @@ def game_dirs(recs: list, given: list) -> list:
 def terrain(found: dict, names: dict, dirs: list, pictures: dict) -> dict:
     """The ground's part of a recording's data (thinkview.html, THE GROUND): {"ground": the recording's heights,
     metal and features with the defs' names, "map": the picture's entry or None, "kinds": {type: its facts},
-    "said": what could not be read or rendered}. `found` is sample's third answer, `names` {type index: name} of
+    "colours": {"rgb": the players' colours a colour index, "from": the archive they are read from, None for
+    STOCK_RGB, "why": what kept the recording's own from being read}, "said": what could not be read or
+    rendered}. `found` is sample's third answer, `names` {type index: name} of
     the types the data names; the picture, rendered once a map file, is kept in `pictures` by the file's CRC as
     (bytes, entry) for the command to write under the entry's name, `<map>.<crc>.map.webp`."""
-    out = {"ground": {}, "map": None, "kinds": {}, "said": []}
+    out = {"ground": {}, "map": None, "kinds": {}, "said": [], "colours": {"rgb": STOCK_RGB, "from": None, "why": ""}}
+    src = None
+    try:
+        src = thinkmap.Source((found or {}).get("archives"), dirs)
+        rgb, where = thinkmap.team_colours(src)
+        out["colours"] = {"rgb": rgb, "from": where, "why": ""}
+    except thinkmap.MapError as e:
+        out["colours"]["why"] = str(e)
     track = (found or {}).get("track")
     if track is None or track.defs is None:
         out["said"].append("no sample of the recording's feature grid (numpy is needed): no heights, metal or features")
         return out
     try:
-        src = thinkmap.Source(found.get("archives"), dirs)
+        if src is None:
+            src = thinkmap.Source(found.get("archives"), dirs)
         tnt, where = thinkmap.tnt_of(src, found.get("map") or "")
         out["said"] += thinkmap.checked(tnt, track)
     except thinkmap.MapError as e:
@@ -652,9 +761,13 @@ def build(ex, lay, seat, sampler, names=(), result=None, step=None, budget=MAX_B
             if re.sub(r"\[\d+\]", "[*]", key) == path:
                 used.update(tr[1])
     under = ground(found[0] if found else None, {i: name_of[i] for i in sorted(used) if i in name_of}) if ground else {}
+    shades = under.get("colours") or {"rgb": STOCK_RGB, "from": None, "why": "no game directory was read"}
+    read = found[0] if found and found[0] else {}
+    who = seat_facts(ex, read.get("players") or {}, shades, world, read.get("first") or {}, dims)
     data = {"v": 2, "ground": under.get("ground") or {}, "picture": under.get("map"), "kinds": under.get("kinds") or {},
             "said": under.get("said") or [], "layout": layout, "name": ex.name, "build": ex.build, "map": ex.map, "seat": seat, "each": ex.each,
-            "players": ex.players, "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
+            "players": ex.players, "who": who, "colours": {"from": shades["from"], "why": shades["why"]},
+            "seats": seats, "end": end, "last": ex.end, "result": result, "stop": ex.stop,
             "px": list(dims), "units": {"block": BLOCK_PX, "cell": CELL_PX, "held": HELD_PX,
                                         "held_row": lay.macros.get("IMPAI_GRID_MAX", 128)},
             "base_r": plan_value(lay.tree, "base_r"),
@@ -693,7 +806,9 @@ SKELETON = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n
 
 
 def page(manifest: list, bare=False) -> str:
-    """index.html: the template with the recordings' list in it, in a document of its own unless `bare`."""
+    """index.html: the template with the recordings' list in it, in a document of its own unless `bare`. The
+    list is a row a GAME: [{"id", "name", "map", "end", "who": seat_facts' rows, "seats": [{"seat", "id", "file"}
+    of each seat a data file was written for]}, ...]."""
     try:
         text = TEMPLATE.read_text()
     except OSError as e:
@@ -741,14 +856,16 @@ def main(argv=None) -> int:
                 n += 1
                 stem = f"{base}-{n}"
             stems.add(stem)
+            game = {"id": stem, "name": ex.name, "map": ex.map, "seats": []}
+            manifest.append(game)
             for seat in seats:
                 ident = stem if len(seats) == 1 else f"{stem}-seat{seat}"
                 data = build(ex, lay, seat, lambda ticks, rec=rec: sample(rec, ticks), names, result_of(rec),
                              a.step, a.max_bytes,
                              lambda found, used: terrain(found, used, dirs, pictures), layout)
                 files[ident] = data_file(ident, data)
-                manifest.append({"id": ident, "file": f"{ident}.js", "name": ex.name, "map": ex.map,
-                                 "seat": ex.seat_label(seat), "end": data["end"]})
+                game["seats"].append({"seat": seat, "id": ident, "file": f"{ident}.js"})
+                game.update(end=data["end"], who=data["who"])
                 m = data["picture"]
                 print(f"thinkview: {ex.name}, {ex.seat_label(seat)}: {len(data['frames'])} samples every {data['step']} "
                       f"ticks and at {len(data['decisions'])} decision ticks, {len(data['lanes'])} squads' lanes, "

@@ -23,7 +23,12 @@ named, and a file is REFUSED when an archive that was not found stands before th
 archive may have held another copy. A recording that lists none is read by tavfs.py's mount order of the first
 game directory. IMPURE'S OWN ARCHIVE, impure-patch.ufo, is left out: the DLL writes it at every start, each build
 its own size, and it holds Impure's menu screens alone (`impure/`, `anims/`, `bitmaps/`; tagpu_menu.c, UFO_FILE),
-none of the folders read here (`maps/`, `palettes/`, `features/`, `units/`).
+none of the folders read here (`maps/`, `palettes/`, `features/`, `units/`, `textures/`).
+
+THE PLAYERS' COLOURS (team_colours) are the game's own: colour index k is the middle pixel of frame k of the
+sequence the engine loads its player colours from (`32xlogos` of `textures/logos.gaf`, loaded at 0x431911;
+research/notes/engine/recorder.md, `main+0x148DB`), through `palettes/palette.pal`, as the replay HUD takes a
+seat's colour (tagpu_replay.c, `tagpu_replay_logo_colour`). A mod's archives give the mod's colours.
 
 THE PICTURE is the whole map as one image: every 32-px tile reduced by a power of two, then the image resized so
 its long side is at most IMAGE_SIDE, and written as WebP at the best quality that keeps it under IMAGE_BYTES. It
@@ -36,6 +41,7 @@ recording's heights, which `ground` hands it a value every HSTEP cells.
 Pillow and numpy are needed for the picture and the layers; without them the page is the plain grid, and says so."""
 import base64
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -286,6 +292,41 @@ def unit_kinds(src: Source, names: dict) -> dict:
             | (F_FLOATS if atoi(keys.get("floater")) == 1 or atoi(keys.get("canhover")) == 1 else 0) \
             | (F_FLIES if atoi(keys.get("canfly")) == 1 else 0)
     return out
+
+
+LOGOS = ("textures/logos.gaf", "32xlogos")        # the file and the sequence the engine's player colours are frames of
+LOGO_SIDE = 64                                    # a frame larger than this gives no colour (tagpu_replay_logo_colour)
+
+
+def team_colours(src: Source) -> tuple:
+    """([(r, g, b) or None, ...] a colour index, the archive they are read from): THE PLAYERS' COLOURS. None
+    for a frame that is empty, larger than LOGO_SIDE a side or unreadable; MapError when the archives hold no
+    such sequence or no palette."""
+    pal = palette(src.open("palettes/palette.pal")[0])
+    blob, where = src.open(LOGOS[0])
+    ta3do = src.tavfs.ta3do
+    try:
+        sig, count = struct.unpack_from("<II", blob, 0)
+        if sig != 0x00010100:
+            raise ValueError
+        frames = None
+        for off in struct.unpack_from(f"<{count}I", blob, 12):
+            if blob[off + 8:off + 40].split(b"\0")[0].decode("latin-1").lower() == LOGOS[1]:
+                frames = [struct.unpack_from("<I", blob, off + 40 + 8 * i)[0] for i in range(struct.unpack_from("<H", blob, off)[0])]
+                break
+    except (struct.error, ValueError):
+        raise MapError(f"{LOGOS[0]} in {where} is no GAF") from None
+    if frames is None:
+        raise MapError(f"{LOGOS[0]} in {where} holds no sequence {LOGOS[1]}")
+    out = []
+    for off in frames:
+        try:
+            fr = ta3do.gaf_frame(blob, off)
+            ok = 0 < fr.width <= LOGO_SIDE and 0 < fr.height <= LOGO_SIDE
+            out.append(tuple(pal[fr.pixels[(fr.height // 2) * fr.width + fr.width // 2]]) if ok else None)
+        except Exception:                                               # noqa: BLE001
+            out.append(None)
+    return out, where
 
 
 class Track:

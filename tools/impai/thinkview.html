@@ -71,9 +71,26 @@ canvas { display:block; max-width:100% }
 .readout { font:12.5px/1.45 var(--font-mono); color:var(--muted); min-height:2.9em; overflow-wrap:anywhere }
 .legend { display:flex; flex-wrap:wrap; gap:5px 14px; font-size:12px; color:var(--muted) }
 .legend span { white-space:nowrap }
+@media (max-width:640px) { .legend span { white-space:normal } }
 .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin-right:5px }
 .sw.ring { background:transparent; border:2px solid; border-radius:50% }
 .sw.hollow { background:transparent; border:1.5px dashed }
+/* a player's colour as the game drew it: outlined, since the game's white and black are both players */
+.sw.pl { width:12px; height:12px; border:1px solid currentColor; vertical-align:-1.5px }
+.sw.pl.none { background:repeating-linear-gradient(45deg, transparent 0 2px, currentColor 2px 3px) }
+/* who is shown: a button a seat of the game, and the sentence that says it */
+.seats { display:flex; flex-wrap:wrap; gap:8px }
+.seat { display:inline-flex; flex-wrap:wrap; align-items:center; gap:3px 2px; padding:9px 12px; white-space:normal; text-align:left; font-weight:500; line-height:1.25 }
+.seat b { font-weight:700; margin-right:.5ch }
+.seat em { font-style:normal; font-weight:700; font-size:11px; letter-spacing:.08em; margin-left:1ch }
+.seat small { font-size:11px; margin-left:1ch }
+.seat[aria-disabled="true"] { cursor:not-allowed; color:var(--muted); background:transparent; border-style:dashed }
+.seat[aria-disabled="true"]:hover { border-color:var(--line) }
+.whose { font:16px/1.55 var(--font-body); background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--steel);
+  border-radius:0 6px 6px 0; padding:10px 14px; overflow-wrap:anywhere }
+.whose strong { font:700 20px/1 var(--font-display); letter-spacing:.04em }
+.whose b { font-weight:600 }
+.tip .sw.pl { margin-right:6px }
 /* the sentence for the moment: the joint between the two halves */
 .now { border-left:4px solid var(--steel); background:var(--panel); border-radius:0 6px 6px 0; padding:10px 12px; display:grid;
   grid-template-columns:auto minmax(0,1fr) auto; gap:6px 14px; align-items:start }
@@ -120,10 +137,12 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
       <p class="muted">What the seat held in mind through one recorded game: the whole game in time above, that moment on the map below.</p>
     </div>
     <div>
-      <label class="muted" for="pick" style="font-size:12px">Recording</label>
+      <label class="muted" for="pick" style="font-size:12px">Game</label>
       <select id="pick"></select>
     </div>
   </header>
+  <div class="seats" id="seats" role="group" aria-label="The seat whose thinking is shown"></div>
+  <p class="whose" id="whose" hidden></p>
   <div class="chips" id="chips"></div>
   <p class="gist" id="gist"></p>
   <div class="err" id="err" hidden></div>
@@ -182,11 +201,17 @@ table.mini tr.sel td { background:color-mix(in srgb, var(--steel) 20%, transpare
    kind, footprint x, z, metal, energy, description]} of the map file's table, lives: [[cell, def, first sample,
    the sample it is gone at or null], ...], at: the sample the heights and the metal are read at}; `picture` {file,
    w, h, px: the world px it covers, from, tile, archives}; `kinds` {type: 1 extracts | 2 floats | 4 flies};
-   `said`: what could not be read or rendered. */
+   `said`: what could not be read or rendered.
+   WHO PLAYS (thinkview.py, seat_facts): `who` [{seat, name, side, kind: impai | human | ai | net | null, by, logo:
+   the colour index, rgb, colour: its word, allies: [seat], start: [x, z] px, start_t, start_exact, where: a
+   compass word}], null for what could not be read; `colours` {from: the archive the colours are read from, null
+   for the unmodded game's table, why}.
+   THE LIST is a row a GAME: {id, name, map, end, who, seats: [{seat, id, file} of each seat with a data file]}. */
 const MANIFEST = /*MANIFEST*/[];
 const $ = id => document.getElementById(id);
 const cache = {}, waiting = {};
 let D = null, T = 0, SEL = -1, playing = 0, HOVER = null;
+let GAME = null;                  // the game shown: another seat of it keeps the clock's tick and the map's view
 const LAYERS = { map: true, grid: true, metal: true, features: true, truth: true, held: true, jobs: true, trails: true, labels: true };
 const DRAG_PX = 4;                // a pointer that moves less between down and up is a click
 const TASKVAR = { FORM: 't-form', DEFEND: 't-defend', RAID: 't-raid', ATTACK: 't-attack', RETREAT: 't-retreat', SCOUT: 't-scout' };
@@ -220,7 +245,13 @@ const TR = name => D.tracks[name];
 const NONE = () => D.macros.WQ_NONE ?? 65535;
 const nm = t => (t === NONE() || t == null) ? 'unidentified' : (D.names[t] || `type ${t}`);
 const seatOf = slot => slot >= 1 && D.each > 0 ? Math.floor((slot - 1) / D.each) : -1;
-const seatName = s => { const p = D.players.find(p => p.index === s); return p ? p.name : `seat ${s}`; };
+/* a seat's row of WHO PLAYS, and how the page names it: by number first, two seats may bear one name */
+const whoOf = s => D.who.find(w => w.seat === s) || { seat: s, name: '?' };
+const seatName = s => `seat ${s} (${whoOf(s).name})`;
+const seatSays = s => { const w = whoOf(s); return `seat ${s} (${w.name}${w.colour ? ', ' + w.colour : ''})`; };
+const rgbOf = w => w && w.rgb ? `rgb(${w.rgb.join(',')})` : null;
+const sw = w => `<i class="sw pl${rgbOf(w) ? '' : ' none'}"${rgbOf(w) ? ` style="background:${rgbOf(w)}"` : ''} title="${rgbOf(w) ? `the player's colour in the game: ${esc(w.colour)}, colour ${w.logo}` : 'its colour could not be read'}"></i>`;
+const sideOf = w => w.name === w.side || !w.side ? w.name : `${w.name}, ${w.side}`;
 const blockPx = b => b * D.units.block + D.units.block / 2;
 const taskName = v => (D.enums['mil.sq.task'] || {})[v] || String(v);
 const layerName = v => ((D.enums['mil.sq.layer'] || {})[v] || String(v)).toLowerCase();
@@ -238,6 +269,8 @@ function prepare(d) {
   // the rows of the commanders' memory and of the given-up goals that were ever written
   const rowsOf = name => Object.keys(d.tracks).map(k => k.match(new RegExp(`^mil\\.${name}\\[(\\d+)\\]\\.t$`))).filter(Boolean).map(m => +m[1]);
   d.foes = rowsOf('foe'); d.unreached = rowsOf('unreached');
+  // a data file written before WHO PLAYS: the seats by name alone, every other fact unread
+  d.who = d.who || d.players.map(p => ({ seat: p.index, name: p.name, side: null, kind: p.ai === 1 ? 'impai' : null, by: p.ai === 1 ? 'ImpAI' : null, logo: null, rgb: null, colour: null, allies: null, start: null, where: null }));
   d.seatCol = {}; let other = 1;
   for (const s of d.seats) d.seatCol[s] = s === d.seat ? SEATVAR[0] : SEATVAR[1 + (other++ - 1) % (SEATVAR.length - 1)];
   return d;
@@ -425,7 +458,7 @@ function curveSeries(id) {
   const fr = D.frames, out = [];
   if (id === 'alive' || id === 'metal') {
     D.seats.forEach((s, i) => { const pts = fr.filter(f => f.t <= D.end && (id === 'alive' || f.i.length)).map(f => [f.t, id === 'alive' ? f.a[i] : f.i[i]]);
-      if (pts.some(p => p[1] > (id === 'metal' ? 1.01 : 0))) out.push({ name: seatName(s), color: C[D.seatCol[s]], pts }); });
+      if (pts.some(p => p[1] > (id === 'metal' ? 1.01 : 0))) out.push({ name: seatName(s), color: C[D.seatCol[s]], pts, seat: s }); });
     if (id === 'alive') { const ts = [...new Set(D.lanes.flatMap(l => (TR(`mil.sq[${l.k}].n`) || [[]])[0].concat((TR(`mil.sq[${l.k}].task`) || [[]])[0])))].sort((a, b) => a - b);
       out.push({ name: `${seatName(D.seat)}'s army, in squads`, color: C['t-attack'], step: true, pts: ts.map(t => [t, armyAt(t)]) }); }
   } else if (id === 'army') {
@@ -463,9 +496,13 @@ function drawCurve(g, r) {
   g.font = `500 10.5px ${MONO}`; g.textAlign = 'right'; g.fillStyle = C.muted;
   g.fillText(max ? `max ${fmt(max)}` : 'nothing', R.L - 8, r.y + 23);
   if (top < max) g.fillText(`cut at ${fmt(top)}`, R.L - 8, r.y + 36);
-  // the lines' names, written in their colours inside the panel
+  // the lines' names, written in their colours inside the panel; a seat's line bears its player colour as a swatch,
+  // the line's own colour being the page's, the shown seat's steel
   g.textAlign = 'left'; let x = R.L + 5;
-  for (const s of series) { const wd = g.measureText(s.name).width; if (x + wd > R.Rr - 4) break; g.fillStyle = C.panel2; g.globalAlpha = .8; g.fillRect(x - 2, r.y + 2, wd + 4, 13); g.globalAlpha = 1; g.fillStyle = s.color; g.fillText(s.name, x, r.y + 9); x += wd + 14; }
+  for (const s of series) { const pc = s.seat == null ? null : rgbOf(whoOf(s.seat)), lead = pc ? 12 : 0, wd = g.measureText(s.name).width + lead; if (x + wd > R.Rr - 4) break;
+    g.fillStyle = C.panel2; g.globalAlpha = .8; g.fillRect(x - 2, r.y + 2, wd + 4, 13); g.globalAlpha = 1;
+    if (pc) { g.fillStyle = pc; g.fillRect(x, r.y + 4.5, 8, 8); g.strokeStyle = C.fg; g.lineWidth = 1; g.strokeRect(x + .5, r.y + 5, 7, 7); }
+    g.fillStyle = s.color; g.fillText(s.name, x + lead, r.y + 9); x += wd + 14; }
 }
 function drawRecorder() {
   if (!R.still || R.w !== ($('rec').clientWidth || R.w)) drawRecorderStill();
@@ -649,7 +686,10 @@ function drawMap() {
     for (const [slot, p] of u) { if (seatOf(slot) === D.seat || !seen(p[0], p[1])) continue; const x = sx(p[0]), y = uy(p[0], p[1], p[2][1]), r = p[2][4] ? 4.5 : 3.5;
       if (p[2][4] && isMex(p[2][1])) mex(x, y, C.truth, true);
       else { g.setLineDash([2, 2]); g.strokeStyle = C.truth; g.lineWidth = 1.2; g.beginPath(); if (p[2][4]) g.rect(x - r, y - r, 2 * r, 2 * r); else g.arc(x, y, r, 0, 7); g.stroke(); g.setLineDash([]); }
-      MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatName(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : '; the seat does not know it')]); }
+      // whose it is: a thin line round the mark in its owner's player colour, so two other seats are told apart
+      const pc = rgbOf(whoOf(seatOf(slot))), ro = (p[2][4] && isMex(p[2][1]) ? 5 : r) + 2.6;
+      if (pc) { g.strokeStyle = pc; g.lineWidth = 1.1; g.beginPath(); if (p[2][4]) g.rect(x - ro, y - ro, 2 * ro, 2 * ro); else g.arc(x, y, ro, 0, 7); g.stroke(); }
+      MAP.hits.push([x, y, `${nm(p[2][1])} of ${seatSays(seatOf(slot))}, slot ${slot}: as it stands` + (knownRows(f).some(k => k.slot === slot) ? '' : '; the seat does not know it'), seatOf(slot)]); }
     g.globalAlpha = 1; }
   // the seat's own units, by job
   const jb = new Map(jobs(f).map(j => [j.slot, j])), sq = squadsAt(T), taskOf = {}; sq.forEach(s => taskOf[s.k] = s.task);
@@ -683,7 +723,7 @@ function drawMap() {
     const col = k.cls === 'ghost' ? C.ghost : k.cls === 'now' ? C.enemy : C.radar;
     if (isMex(k.type)) { g.strokeStyle = col; g.lineWidth = 1.4; g.strokeRect(x - 8.5, y - 8.5, 17, 17); }
     if (few && LAYERS.labels) label(x + 9, y, nm(k.type), col);
-    MAP.hits.push([x, y, `${nm(k.type)} of ${k.owner < 10 ? seatName(k.owner) : 'an unknown seat'}, slot ${k.slot}: ${HOWSAYS[k.cls]} at (${k.bx},${k.bz})` + (isMex(k.type) ? ', an extractor' : '') + (k.cls === 'ghost' && l && !alive(l, f.t) ? '; it is gone' : '')]);
+    MAP.hits.push([x, y, `${nm(k.type)} of ${k.owner < 10 ? seatSays(k.owner) : 'an unknown seat'}, slot ${k.slot}: ${HOWSAYS[k.cls]} at (${k.bx},${k.bz})` + (isMex(k.type) ? ', an extractor' : '') + (k.cls === 'ghost' && l && !alive(l, f.t) ? '; it is gone' : ''), k.owner < 10 ? k.owner : null]);
   }
   // goals the attack gave up
   for (const i of D.unreached) { const gt = at(TR(`mil.unreached[${i}].t`), T); if (!gt) continue;
@@ -693,7 +733,7 @@ function drawMap() {
   for (const i of D.foes) { const seenAt = at(TR(`mil.foe[${i}].t`), T); if (!seenAt) continue;
     const [x, y] = bxy(at(TR(`mil.foe[${i}].bx`), T), at(TR(`mil.foe[${i}].bz`), T));
     g.strokeStyle = C.enemy; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 10, 0, 7); g.stroke();
-    if (LAYERS.labels) label(x + 13, y + 12, `commander seen @${fmt(seenAt)}`, C.enemy); MAP.hits.push([x, y, `seat ${i}'s commander as last seen, GameTime ${fmt(seenAt)}`]); }
+    if (LAYERS.labels) label(x + 13, y + 12, `commander seen @${fmt(seenAt)}`, C.enemy); MAP.hits.push([x, y, `the commander of ${seatSays(i)} as last seen, GameTime ${fmt(seenAt)}`, i]); }
   // the enemy base's estimate
   const est = estimateAt(T);
   if (est) { const [x, y] = bxy(est.bx, est.bz), r = 13;
@@ -734,6 +774,14 @@ function drawMap() {
     label(x + r + 4, y - r, `sq[${sq1.k}] ${sq1.task} ${sq1.n}`, col, true);
     MAP.rings.push([x, y, r + 6, sq1.k]);
   }
+  // where each seat started: a flag in its player colour with its number and name, so "the one in the top left" is a seat
+  if (LAYERS.labels) for (const wr of D.who) { if (!wr.start || !seen(wr.start[0], wr.start[1])) continue;
+    const x = sx(wr.start[0]), y = gy(wr.start[0], wr.start[1]), me = wr.seat === D.seat;
+    g.strokeStyle = C.fg; g.lineWidth = 1.6; g.beginPath(); g.moveTo(x, y); g.lineTo(x, y - 22); g.stroke();
+    g.beginPath(); g.moveTo(x, y - 22); g.lineTo(x + 15, y - 16.5); g.lineTo(x, y - 11); g.closePath(); g.fillStyle = rgbOf(wr) || C.map; g.fill(); g.lineWidth = 1.1; g.stroke();
+    g.beginPath(); g.arc(x, y, 2.6, 0, 7); g.fillStyle = C.fg; g.fill();
+    label(x + 19, y - 17, `${wr.seat} ${wr.name}${me ? ' · shown' : ''}`, me ? C.steel : C.fg, true);
+    MAP.hits.push([x, y - 12, `the start of ${seatSays(wr.seat)}${wr.by ? ', ' + wr.by : ''}: its first unit at tick ${fmt(wr.start_t)}` + (wr.start_exact ? '' : ', the first sample that holds it'), wr.seat]); }
   // the labels last, each on a plate of the map's ground so it reads over the lines
   // the squads' first, so a lesser label is the one that steps down where two would meet
   const placed = [];
@@ -776,7 +824,7 @@ function drawSide() {
       ${sq.map(s => { const mem = members(f, s.k).list; return `<tr class="pick${s.k === SEL ? ' sel' : ''}" data-k="${s.k}" tabindex="0"><td class="tnum">sq[${s.k}]</td><td><i class="sw" style="background:var(--${TASKVAR[s.task] || 'j-none'})"></i>${esc(s.task)} <span class="muted">${esc(s.layer)}</span></td><td>${esc(mem.length ? typesOf(mem) : plural(s.n, 'unit'))}</td><td class="r tnum">${fmt(s.value)}</td><td class="tnum">${s.task === 'FORM' || !(s.tx || s.tz) ? '—' : `(${s.tx},${s.tz})${s.target !== NONE() ? ` slot ${s.target}` : ''}`}</td><td class="r tnum">${s.since ? fmt(s.since) : '—'}</td></tr>`; }).join('')}</table></div>` : '<p class="muted">No squad holds a task at this tick.</p>'}</section>
     <section><h3>The enemy, as the seat knows it</h3>
       <p>${rows.length ? `${plural(rows.length, 'row')}: ${by.now} in sight, ${by.pass} on radar or sonar alone, ${by.ghost} remembered.` : 'It knows of no enemy.'} The enemy really has ${plural(enemyAlive, 'unit')} alive; the seat knows of ${knownAlive}.</p>
-      ${rows.length ? `<div class="scroll-x"><table class="mini"><tr><th>type</th><th>how</th><th>block</th><th>of</th></tr>${rows.slice(0, 10).map(r => `<tr><td>${esc(nm(r.type))}</td><td><i class="sw${r.cls === 'pass' ? ' ring' : ''}" style="${r.cls === 'pass' ? 'border-color' : 'background'}:var(--${r.cls === 'now' ? 'enemy' : r.cls === 'ghost' ? 'ghost' : 'radar'})"></i>${HOWSAYS[r.cls]}</td><td class="tnum">(${r.bx},${r.bz})</td><td>${r.owner < 10 ? esc(seatName(r.owner)) : '?'}</td></tr>`).join('')}</table></div>${rows.length > 10 ? `<p class="muted">and ${rows.length - 10} more rows.</p>` : ''}` : ''}</section>
+      ${rows.length ? `<div class="scroll-x"><table class="mini"><tr><th>type</th><th>how</th><th>block</th><th>of</th></tr>${rows.slice(0, 10).map(r => `<tr><td>${esc(nm(r.type))}</td><td><i class="sw${r.cls === 'pass' ? ' ring' : ''}" style="${r.cls === 'pass' ? 'border-color' : 'background'}:var(--${r.cls === 'now' ? 'enemy' : r.cls === 'ghost' ? 'ghost' : 'radar'})"></i>${HOWSAYS[r.cls]}</td><td class="tnum">(${r.bx},${r.bz})</td><td>${r.owner < 10 ? sw(whoOf(r.owner)) + esc(seatName(r.owner)) : '?'}</td></tr>`).join('')}</table></div>${rows.length > 10 ? `<p class="muted">and ${rows.length - 10} more rows.</p>` : ''}` : ''}</section>
     <section><h3>The seat's own</h3>
       <p>${plural(mine, 'mobile unit')} and ${plural(mineS, 'structure')}${level ? `, playing ${esc(level)}` : ''}. ${builds.length ? 'Building: ' + esc(builds.slice(0, 6).map(j => { const p = u.get(j.slot); return `${nm(j.build)} by ${p ? nm(p[2][1]) : 'slot ' + j.slot}`; }).join(', ')) + (builds.length > 6 ? ` and ${builds.length - 6} more` : '') + '.' : 'No builder holds a build job.'}</p></section>`;
   $('side').querySelectorAll('tr.pick').forEach(tr => { const pick = () => select(+tr.dataset.k); tr.onclick = pick; tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }; });
@@ -839,14 +887,26 @@ function groundNote() {
 }
 function redraw() { if (!D) return; colors(); R.still = null; setT(T); }
 
-function show(d) {
-  D = prepare(d); SEL = -1; play(false); V = View.fit(D.px[0], D.px[1]);
+/* the sentence that says whose thinking this is, and against whom */
+function whose() {
+  const me = whoOf(D.seat), el = $('whose'), list = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  const facts = w => `${w.by || 'who played it was not read'}, ${w.where ? `started ${w.where}` : played(w.seat) ? 'its start was not read' : 'it never had a unit'}`;
+  const other = w => `${sw(w)}<b>seat ${w.seat}</b> ${esc(w.name)} (${esc(facts(w))})`;
+  const allies = me.allies ? D.who.filter(w => me.allies.includes(w.seat)) : null;
+  const foes = D.who.filter(w => w.seat !== D.seat && !(me.allies || []).includes(w.seat) && played(w.seat));
+  el.hidden = false;
+  el.innerHTML = `Showing what ${sw(me)}<strong>SEAT ${me.seat}</strong> (${esc(sideOf(me))}, ${esc(facts(me))}, `
+    + (allies ? allies.length ? `allied with ${list(allies.map(other))}` : 'allied with no one' : 'its alliances were not read')
+    + `) was thinking — against ${foes.length ? list(foes.map(other)) : 'no one who played'}.`;
+}
+function show(d, keep) {
+  D = prepare(d); SEL = -1; play(false); if (!keep) V = View.fit(D.px[0], D.px[1]);
   if (D.picture && !D._img) { const im = new Image(); im.onload = () => { d._img = im; if (D === d) drawMap(); };
     im.onerror = () => { d.said.push(`the map's picture is not drawn: ${d.picture.file} did not load, it stands beside this page`); if (D === d) groundNote(); }; im.src = D.picture.file; }
   groundNote();
-  const seat = D.players.find(p => p.index === D.seat) || {}, res = D.result || {};
-  const chips = [[D.map, ''], [`${seat.name || 'seat ' + D.seat}: ImpAI, seat ${D.seat}`, ''],
-    ...D.players.filter(p => p.index !== D.seat && played(p.index)).map(p => [`${p.name}: ${p.ai === 1 ? 'ImpAI' : 'opponent'}, seat ${p.index}`, '']),
+  whose();
+  const res = D.result || {};
+  const chips = [[D.map, ''],
     [res.outcome === 'cap' ? `ended at the cap, tick ${fmt(D.end)}` : res.winner != null ? `${seatName(res.winner)} won at tick ${fmt(D.end)}` : `${fmt(D.end)} ticks`, res.winner === D.seat ? 'win' : ''],
     [`build ${D.build}`, '']];
   $('chips').innerHTML = chips.map(([t, c]) => `<span class="chip ${c}">${esc(t)}</span>`).join('');
@@ -854,16 +914,30 @@ function show(d) {
   $('gist').innerHTML = gist();
   $('foot').textContent = `${D.name}. The lanes, the events and the squads' state are exact at every tick, read from the recording's s_mil and s_brain. The map's units, jobs and known rows are ${D.frames.length} samples: one at each of the ${D.decisions.length} decision ticks and one every ${D.step} ticks between.`
     + (D.layout && !D.layout.exact ? ` It is read by the layout of the source tree at ${D.layout.build || 'a commit git does not name'}, not at its own build ${D.build}: the rows' sizes fit, and what a member or an enum's number means is that tree's.` : '')
+    + (D.colours ? D.colours.from ? ` A player's colour is the game's own: the middle pixel of its colour index's logo frame through the palette, read from ${D.colours.from} as the recording's game opened it.` : ` The players' colours are the unmodded game's for each colour index, not read from this recording's archives${D.colours.why ? ` (${D.colours.why})` : ''}.` : ' This data file names no player\'s colour, alliance or start: it was written before the page read them.')
+    + (D.who.some(w => w.start && !w.start_exact) ? ' A start marked on the map is its seat\'s first unit at the first sample that holds it, not at its first tick.' : '')
     + (D.named ? '' : ' No name table fits this recording: unit types are shown by number.') + (D.missing.length ? ` Not in this recording's layout: ${D.missing.join(', ')}.` : '');
-  // open where the game first turns: the first task a squad takes, else the start
+  // open where the game first turns: the first task a squad takes, else the start; another seat of the same
+  // game opens at the tick the clock stands on
   const first = D.events.find(e => e[1] === 'task');
-  colors(); R.still = null; setT(first ? first[0] : 0);
+  colors(); R.still = null; setT(keep ? T : first ? first[0] : 0);
+}
+/* THE LIST's entry of a data file's id: {g: its game, s: its seat's row} */
+const entryOf = id => { for (const g of MANIFEST) { const s = g.seats.find(s => s.id === id); if (s) return { g, s }; } return null; };
+/* a button a seat of the game: its player colour, who played it and where it started; a seat with no data file
+   is shown and cannot be picked */
+function seatBar(g, id) {
+  const none = w => w.kind === 'impai' ? 'its thinking is not in this page: thinkview.py was given one --seat' : `no thinking recorded: ${w.kind === 'human' ? 'played by a human' : w.kind === 'ai' ? 'played by another AI' : w.kind === 'net' ? 'played on another machine' : 'who played it could not be read'}`;
+  $('seats').innerHTML = (g.who || []).map(w => { const s = g.seats.find(s => s.seat === w.seat), on = !!s && s.id === id;
+    return `<button class="btn seat" ${s ? `data-id="${esc(s.id)}" aria-pressed="${on}"` : 'aria-disabled="true"'} title="${esc(s ? on ? 'the seat shown' : `show what seat ${w.seat} was thinking, at the same tick and the same view of the map` : none(w))}">`
+      + `${sw(w)}<b>Seat ${w.seat}</b>· ${esc(sideOf(w))} · ${esc(w.by || 'played by ?')} · ${esc(w.where || (w.start === null ? 'no start read' : '?'))}${on ? '<em>SHOWN</em>' : s ? '' : `<small>${w.kind === 'impai' ? 'not in this page' : 'no thinking recorded'}</small>`}</button>`; }).join('');
+  $('seats').querySelectorAll('[data-id]').forEach(b => { b.onclick = () => { if (b.getAttribute('aria-pressed') !== 'true') openRec(b.dataset.id); }; });
 }
 window.thinkviewData = (id, data) => { cache[id] = data; if (waiting[id]) { waiting[id](data); delete waiting[id]; } };
 function load(id) {
   return new Promise((res, rej) => {
     if (cache[id]) return res(cache[id]);
-    const m = MANIFEST.find(x => x.id === id); if (!m) return rej(new Error(`no recording ${id}`));
+    const e = entryOf(id); if (!e) return rej(new Error(`no recording ${id}`)); const m = e.s;
     const lost = () => rej(new Error(`${m.file} did not load: it stands beside this page`));
     waiting[id] = res; const s = document.createElement('script'); s.src = m.file; document.head.append(s);
     // a host that refuses the file as a script may still serve it as data: the call's argument is JSON
@@ -872,22 +946,24 @@ function load(id) {
 }
 function openRec(id) {
   $('err').hidden = true;
-  load(id).then(d => { $('pick').value = id; show(d); try { history.replaceState(null, '', '#' + id); } catch (e) { /* a frame that keeps its address: the pick still stands */ } })
+  const e = entryOf(id); if (e) { $('pick').value = e.g.id; seatBar(e.g, id); }
+  load(id).then(d => { const keep = !!D && GAME === e.g.id; GAME = e.g.id; show(d, keep); try { history.replaceState(null, '', '#' + id); } catch (e) { /* a frame that keeps its address: the pick still stands */ } })
     .catch(e => { $('err').hidden = false; $('err').textContent = e.message; });
 }
 
 /* ---------- controls ---------- */
 (() => {
   const pick = $('pick');
-  for (const m of MANIFEST) { const o = document.createElement('option'); o.value = m.id; o.textContent = `${m.name} · ${MANIFEST.filter(x => x.name === m.name).length > 1 ? m.seat : m.map}`; pick.append(o); }
-  pick.onchange = () => openRec(pick.value);
+  for (const m of MANIFEST) { const o = document.createElement('option'), n = (m.who || []).filter(w => w.kind === 'impai').length; o.value = m.id;
+    o.textContent = `${m.name} · ${m.map}${n > 1 ? ` · ${n} ImpAI seats` : ''}`; pick.append(o); }
+  pick.onchange = () => { const g = MANIFEST.find(g => g.id === pick.value); if (g && g.seats.length) openRec(g.seats[0].id); };
   $('reclegend').innerHTML = Object.entries(TASKVAR).map(([t, v]) => `<span><i class="sw" style="background:var(--${v})"></i>${t}</span>`).join('')
     + '<span>a dark notch in a span: the task takes another goal</span>'
     + Object.entries(EVENTS_SHOWN).map(([k, [v, text]]) => `<span><svg width="12" height="12" viewBox="-7 -7 14 14" style="vertical-align:-2px;margin-right:4px;color:var(--${v})">${{
       plant: '<path d="M0-6L6 5H-6z" fill="currentColor"/>', wave: '<path d="M-6-5H6L0 6z" fill="currentColor"/>', lost: '<path d="M-5-5L5 5M5-5L-5 5" stroke="currentColor" stroke-width="2.4" fill="none"/>',
       contact: '<circle r="5" fill="currentColor"/>', sight: '<circle r="2.6" fill="currentColor"/>', cmdr: '<path d="M0-6L6 0L0 6L-6 0z" fill="currentColor"/>', judge: '<circle r="3.2" stroke="currentColor" stroke-width="1.5" fill="none"/>' }[k]}</svg>${text}</span>`).join('');
   $('maplegend').innerHTML = '<span><i class="sw" style="background:var(--enemy);transform:rotate(45deg)"></i>enemy in sight</span><span><i class="sw ring" style="border-color:var(--radar)"></i>radar or sonar contact</span><span style="color:var(--ghost)">✕ remembered (a ghost)</span>'
-    + '<span><i class="sw hollow" style="border-color:var(--truth)"></i>the truth: an enemy unit as it stands</span><span><i class="sw ring" style="border-color:var(--t-attack)"></i>a squad, in its task\'s colour, with its goal line</span>'
+    + '<span><i class="sw hollow" style="border-color:var(--truth)"></i>the truth: another seat\'s unit as it stands</span><span><i class="sw ring" style="border-color:var(--fg);border-width:1px"></i>a thin line round it: its owner\'s player colour</span><span>⚑ a seat\'s start, in its player colour</span><span><i class="sw ring" style="border-color:var(--t-attack)"></i>a squad, in its task\'s colour, with its goal line</span>'
     + '<span><i class="sw" style="background:var(--fg)"></i>own structure</span><span><i class="sw" style="background:var(--j-build);border-radius:50%"></i>builder, with its site</span><span><i class="sw" style="background:var(--held);opacity:.4"></i>held ground</span>'
     + '<span><i class="sw" style="background:transparent;border:1.6px solid var(--mex);box-shadow:inset 0 0 0 2px var(--panel), inset 0 0 0 5px var(--mex)"></i>extractor: own solid, the truth hollow, a known enemy\'s boxed</span>'
     + '<span><i class="sw" style="background:var(--metal);opacity:.7"></i>metal: the recording\'s grid, exact</span>'
@@ -928,7 +1004,8 @@ function openRec(id) {
       const gr = groundAt(x, y).text;
       if (ft) { const [, , l, k] = ft.m; text = `${k.name}${k.says ? ` (${k.says})` : ''}: ${FEATSAYS[k.kind]}${k.metal || k.energy ? `, metal ${k.metal}, energy ${k.energy}` : ''}; ${l[2] ? `first seen at the sample of tick ${fmt(l[2])}` : 'there at the first sample'}; ${gr}`; }
       else text = gr; }
-    tip.hidden = false; tip.textContent = text; const off = map.offsetLeft; tip.style.left = Math.max(2, Math.min(off + x + 14, $('mapwrap').clientWidth - tip.offsetWidth - 4)) + 'px'; tip.style.top = Math.max(2, y - tip.offsetHeight - 8) + 'px'; };
+    const whose = best && best.h[3] != null && best.h[3] >= 0 ? sw(whoOf(best.h[3])) : '';
+    tip.hidden = false; tip.innerHTML = whose + esc(text); const off = map.offsetLeft; tip.style.left = Math.max(2, Math.min(off + x + 14, $('mapwrap').clientWidth - tip.offsetWidth - 4)) + 'px'; tip.style.top = Math.max(2, y - tip.offsetHeight - 8) + 'px'; };
   const touches = new Map(); let drag = null, raf = 0;
   const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (D) drawMap(); }); };
   map.addEventListener('pointerdown', e => { if (!D) return; const [x, y] = mpos(e); touches.set(e.pointerId, [x, y]); try { map.setPointerCapture(e.pointerId); } catch (err) { /* a pointer already gone */ }
@@ -961,7 +1038,7 @@ function openRec(id) {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(redraw);
   if (!MANIFEST.length) { $('err').hidden = false; $('err').textContent = 'This page lists no recording: thinkview.py writes the list in.'; return; }
   const want = decodeURIComponent(location.hash.slice(1));
-  openRec(MANIFEST.some(m => m.id === want) ? want : MANIFEST[0].id);
+  openRec(entryOf(want) ? want : (MANIFEST.find(g => g.id === want) || MANIFEST[0]).seats[0].id);
 })();
 const REST = 'Drag across the recorder to set the moment. Click a span or an event to jump to its tick; click a squad on the map, or a lane\'s name, to pick it out. On the map the wheel zooms about the cursor and a drag pans; +, - and 0 zoom and fit.';
 $('hover').textContent = REST;
