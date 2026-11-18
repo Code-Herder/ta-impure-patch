@@ -521,7 +521,9 @@ not `0x470EB0`. Their callers, classified:
 - **The explosion draw.** `0x421550` is called from the explosion draw `0x420B00` (`0x420B18`; the
   draw from DrawGameScreen at `0x469B2C`) and from `0x4211A0` (`0x4211B3`), which has no caller; it
   emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`
-  (`0x472AB0`'s only call). So those two follow the frame rate, not the tick.
+  (`0x472AB0`'s only call). So those two follow the frame rate, not the tick, in stock; Impure emits them only in a
+  frame that ran a tick (DeltaTime, below, not zero), once a piece a tick at any draw rate and none while paused
+  ([engine patches](../modules/engine-patches.html), the flying pieces' emission).
 - **The simulation.** `0x472630` (a flare) from the explosion add `0x420A30` (`0x420AE1`) and the
   corpse `0x486360` (`0x48644B`). The add emits it when its 4th argument is 0 and the point's y
   word `+6` is above the sea level byte `main+0x1427F` (`0x420ABE..0x420AD8`); the recorder keys it
@@ -997,7 +999,8 @@ and the setter are in *The speeds* above, the step's iteration in
   elapsed = clock − the base `main+0x38A37`, kept at `+0x38A3F`; due = elapsed × the live speed
   `+0x38A4D` × 0.1 (`0x4FDA28`), × the lag scale when it applies, + the fraction `+0x38A43`; the
   floor goes to **DeltaTime** `main+0x38A3B` and the rest back to the fraction
-  (`0x495236..0x4953B9`). DeltaTime is 0 while the pause bit `+0x38A51` bit 0 is set
+  (`0x495236..0x4953B9`; its stores `0x4953AE`, `0x4953CE`, `0x4953E2` and `0x4953FE` are its only writers in play,
+  by a `.text` scan for the displacement, the load wait's `0x498175` aside). DeltaTime is 0 while the pause bit `+0x38A51` bit 0 is set
   (`0x4953D9..0x4953E2`). **The clamp `0x4953F5`**: a due above 5 becomes 5, the excess dropped,
   and the throttle counter `+0x38A4F` takes one (past 10 the live speed drops by one); an unclamped
   frame gives one back (past −100 the live speed rises by one, up to the ceiling `+0x38A4B`)

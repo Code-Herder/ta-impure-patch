@@ -399,11 +399,11 @@ particle. The engine map's *The nano particle* has the addresses.
 
 | Emitter | Class | Callers (xrefs) |
 |---|---|---|
-| `EmitSfx_GraySmoke 0x472810(pos, layer)` | Smoke2, grey | `WEAPONS_ProjectileDamage 0x49A007` (impact puffs), `0x421550` (debris pieces), `0x4243CF`, `0x49BC80/0x49BDC1`, `0x4810B9` (damaged-unit smoke) |
+| `EmitSfx_GraySmoke 0x472810(pos, layer)` | Smoke2, grey | `WEAPONS_ProjectileDamage 0x49A007` (impact puffs), `0x421550` (debris pieces: once a draw in stock, once a tick under Impure — [engine patches](modules/engine-patches.html)), `0x4243CF`, `0x49BC80/0x49BDC1`, `0x4810B9` (damaged-unit smoke) |
 | `EmitSfx_BlackSmoke 0x4728F0(pos, layer)` | Smoke2, dark | `0x481118` |
 | `EmitSfx_SmokeInfinite 0x472C50(pos)` | Smoke1 | `SpawnFeatureOnMap 0x423FE3` (smoking map features) |
 | `0x4729D0(pos)` | Smoke2 | `UNITS_FireProjectile 0x49CC07/0x49CDC3/0x49CFE6` (rocket and missile trails) |
-| `EmitSfx_Unk5 0x472AB0(pos, layer)` = **fire** | fire | `0x421550` only (debris on fire: `sys+0x28` bit 0) |
+| `EmitSfx_Unk5 0x472AB0(pos, layer)` = **fire** | fire | `0x421550` only (debris on fire: `sys+0x28` bit 0; once a tick under Impure, as the smoke) |
 | `0x472330(…, layer)` | fire | `0x481010/0x48102F` |
 | `EmitSfx_Bubbles 0x472530(…, layer)`, `0x472430(…, layer)` | wake / bubbles | `0x481102`; `0x48104C/69/86/A3` (the ship movement code) |
 | `EmitSfx_NanoParticles 0x4720D0(point3, box6, layer)` / `…Reverse 0x472200(box6, point3, layer)` | nanolathe | ten sites in `0x4025AE..0x4151EC` (build, help, the repairs, SelfRepair, resurrect; the spray runs point → box) / seven in `0x404676..0x414C43` (capture, reclaim unit, reclaim feature; box → point), every one in an order handler and passing layer 6 (*The nano spray* in the engine map) |

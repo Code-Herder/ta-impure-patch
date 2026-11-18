@@ -2083,9 +2083,11 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    because only the tick writes it. These four are not: **the engine's own
    explosion DRAW emits particles** — 0x420B00's debris loop calls 0x421550
    (0x420B18), which calls the grey-smoke emitter 0x472810 (0x421583) and the
-   fire emitter 0x472AB0 (0x4215AA), and both append to a layer. So a second
-   draw of one tick can find a layer the first did not
-   produce.
+   fire emitter 0x472AB0 (0x4215AA), and both append to a layer. Those two
+   emit only in a frame that ran a tick (tagpu_patches.c, fix_debris_emission),
+   so they land in the tick's first draw, before the gather of the tick's
+   first publish. The cache does not rest on that: the argument below holds
+   for any append after the gather.
 
    What actually licenses the cache is weaker and is enough:
 
@@ -2097,11 +2099,11 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        and debris piece once per tick, so what a reused table gets WRONG is
        confined to objects created between two publishes of one tick — never a
        stale position for an object that was already there.
-     * WHAT THAT COSTS is that the newest smoke or fire of a tick can land one
-       publish late: under 4 ms of wall time at the publish rates the reference
-       setup reaches, on a sprite that is one frame old. It is a quality trade, taken
-       deliberately, and the alternative is the whole gather at the DRAW rate —
-       measured at 6 to 7 % of the game thread.
+     * WHAT THAT COSTS is that an object made by a later draw of the tick can
+       land one publish late: under 4 ms of wall time at the publish rates the
+       reference setup reaches, on a sprite that is one frame old. It is a quality
+       trade, taken deliberately, and the alternative is the whole gather at the
+       DRAW rate — measured at 6 to 7 % of the game thread.
 
    At the 250-odd publishes a second the reference setup reaches against a
    60 Hz sim, four publishes in five reuse.
