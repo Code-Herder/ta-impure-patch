@@ -1393,6 +1393,9 @@ static void why_read(IMPAI_DEC* d, unsigned need)
         if (need & bit) w->need |= (uint8_t)bit;
         if (want[k]) w->take |= (uint8_t)bit;
         if ((need & bit) && !want[k]) w->veto[k] = (uint8_t)(d->gates & impai_veto[k].gates);
+        /* THE REQUESTS (impai.h), before the assignment: one that stands is open until a rung ends it */
+        d->out->req[k] = (uint8_t)(want[k] ? IMPAI_RQ_OPEN : !(need & bit) ? IMPAI_RQ_NONE :
+                                   w->veto[k] ? IMPAI_RQ_VETOED : IMPAI_RQ_HELD);
     }
 }
 

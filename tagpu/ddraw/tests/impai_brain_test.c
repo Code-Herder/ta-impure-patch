@@ -949,6 +949,12 @@ static IMPAI_REACT_COUNTS s_rc;
    want needed and not taken; and a want with no term read last (every want but the sea plant and the sensor)
    that is needed and not taken names a gate. The tally is check_why's. */
 static unsigned s_why_n, s_why_need[IMPAI_WANTS], s_why_veto[IMPAI_WANTS], s_why_take[IMPAI_WANTS], s_why_last;
+/* THE REQUESTS (impai.h, IMPAI_RQ_*), held on the same decisions: a request not needed, vetoed or held is the
+   trace's; one that stood ends open, answered, yielded or refused; only a plant's request yields, and only the
+   sea plant's and the sensor's are refused; a plant's request is answered exactly when the decision ordered a
+   plant by THE CHOICE (the plant line's), and then no plant's request stays open; the sensor's exactly when a
+   sensor was ordered. The tally is check_requests's. */
+static unsigned s_req[IMPAI_WANTS][IMPAI_RQ_STATES];
 
 static int decide_traced(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
 {
@@ -983,6 +989,33 @@ static int decide_traced(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
             CHECK(k == IMPAI_W_SEA || k == IMPAI_W_SENSOR, "%s, needed and not taken, names its gate: gates %02X",
                   impai_veto[k].want, w->gates);
         }
+        {
+            const unsigned rq = out->req[k];
+            const unsigned eco = !need ? IMPAI_RQ_NONE : take ? IMPAI_RQ_OPEN : w->veto[k] ? IMPAI_RQ_VETOED : IMPAI_RQ_HELD;
+            const int plant = k == IMPAI_W_FACTORY || k == IMPAI_W_TECH;
+            CHECK(rq < IMPAI_RQ_STATES && (take ? rq >= IMPAI_RQ_OPEN : rq == eco),
+                  "%s's request is the trace's until a rung ends it: %u, need %d take %d veto %02X", impai_veto[k].want,
+                  rq, need, take, w->veto[k]);
+            CHECK(rq != IMPAI_RQ_YIELDED || plant, "%s's request yields to no other", impai_veto[k].want);
+            CHECK(rq != IMPAI_RQ_REFUSED || k == IMPAI_W_SEA || k == IMPAI_W_SENSOR, "%s's request is never refused",
+                  impai_veto[k].want);
+            if (rq < IMPAI_RQ_STATES) s_req[k][rq]++;
+        }
+    }
+    {
+        const uint8_t* q = out->req;
+        const int chosen = (q[IMPAI_W_FACTORY] == IMPAI_RQ_ANSWERED) + (q[IMPAI_W_TECH] == IMPAI_RQ_ANSWERED);
+        const int ordered = chosen + (q[IMPAI_W_SEA] == IMPAI_RQ_ANSWERED);
+        CHECK(chosen == (out->plant != 0) && ordered <= 1, "one plant a decision, THE CHOICE's with the plant line: "
+              "factory %u sea %u tech %u plant %u", q[IMPAI_W_FACTORY], q[IMPAI_W_SEA], q[IMPAI_W_TECH], out->plant);
+        CHECK(!ordered || (q[IMPAI_W_FACTORY] != IMPAI_RQ_OPEN && q[IMPAI_W_SEA] != IMPAI_RQ_OPEN &&
+                           q[IMPAI_W_TECH] != IMPAI_RQ_OPEN),
+              "a plant ordered leaves no plant's request open: factory %u sea %u tech %u", q[IMPAI_W_FACTORY],
+              q[IMPAI_W_SEA], q[IMPAI_W_TECH]);
+        CHECK((q[IMPAI_W_FACTORY] == IMPAI_RQ_YIELDED || q[IMPAI_W_TECH] == IMPAI_RQ_YIELDED) ? ordered == 1 : 1,
+              "a plant's request yields only to a plant ordered");
+        CHECK((q[IMPAI_W_SENSOR] == IMPAI_RQ_ANSWERED) == (out->sensors != 0), "the sensor's request and the sensors "
+              "ordered: %u, %u", q[IMPAI_W_SENSOR], out->sensors);
     }
     return rc;
 }
@@ -1352,6 +1385,47 @@ static void check_veto_rows(void)
         CHECK(!(impai_veto[k].gates & ~IMPAI_G_ALL), "row %d names a gate outside the decision's (0x%X)", k,
               (unsigned)impai_veto[k].gates);
     }
+}
+
+/* THE LADDER'S ORDER (impai_econ.c, impai_ladder): the rungs in their order, each with the builders it is asked
+   of, the requests it serves and waits for, its far-record rule and its gates. A change of the order, or of who is
+   asked a rung, is a change of this list. */
+static void check_ladder_rows(void)
+{
+#define RQ(k) (1u << IMPAI_W_##k)
+    enum { M = IMPAI_ASK_MENU, B = IMPAI_ASK_BARE, H = IMPAI_ASK_HELPER, HB = IMPAI_ASK_HELPER_BARE };
+    static const struct { const char* name; unsigned who, serves, waits, near, on, veto; } ROW[] = {
+        { "stall-energy",  M | H,      0,                      0,       0, IMPAI_G_E_STALL, 0 },
+        { "sea-frame",     M | H,      0,                      0,       1, 0, IMPAI_G_HOLD | IMPAI_G_M_STALL | IMPAI_G_E_STALL },
+        { "sea-plant",     M | H,      RQ(SEA),                0,       1, 0, 0 },
+        { "plant",         M | H,      RQ(FACTORY) | RQ(TECH), RQ(SEA), 1, 0, 0 },
+        { "defence",       M | H,      RQ(DEF),                0,       0, 0, 0 },
+        { "anti-air",      M | H,      RQ(AA),                 0,       0, 0, 0 },
+        { "sensor",        M | H,      RQ(SENSOR),             0,       0, 0, 0 },
+        { "extractor",     M,          0,                      0,       0, 0, 0 },
+        { "short-reclaim", M | H | HB, 0,                      0,       0, 0, 0 },
+        { "energy",        M,          0,                      0,       0, 0, 0 },
+        { "maker",         M,          0,                      0,       0, 0, 0 },
+        { "explore",       M | B,      0,                      0,       0, 0, 0 },
+        { "harvest",       M | B,      0,                      0,       0, 0, 0 },
+        { "assist",        M | B,      0,                      0,       0, 0, 0 },
+    };
+#undef RQ
+    const int rows = (int)(sizeof ROW / sizeof ROW[0]);
+    unsigned served = 0;
+    int k;
+    CHECK(impai_ladder_n == rows, "the ladder has %d rungs, not %d", impai_ladder_n, rows);
+    for (k = 0; k < impai_ladder_n && k < rows; k++) {
+        const IMPAI_RUNG* r = &impai_ladder[k];
+        CHECK(r->name && !strcmp(r->name, ROW[k].name) && r->serve, "rung %d is %s", k, ROW[k].name);
+        CHECK(r->who == ROW[k].who && r->serves == ROW[k].serves && r->waits == ROW[k].waits && r->near == ROW[k].near &&
+                  r->on == ROW[k].on && r->veto == ROW[k].veto,
+              "rung %s: who %X serves %02X waits %02X near %u on %02X veto %02X", ROW[k].name, r->who, r->serves,
+              r->waits, r->near, r->on, r->veto);
+        CHECK(!(r->serves & served), "rung %s serves a request a rung above serves", ROW[k].name);
+        served |= r->serves;
+    }
+    CHECK(served == (1u << IMPAI_WANTS) - 1u, "every request has its rung: %02X", served);
 }
 
 /* an energy stall: the idle commander builds the best energy per value its menu offers, on the ring */
@@ -16192,6 +16266,28 @@ static void check_why(void)
     printf("; needed and held by the term read last: %u; the longest line %d bytes\n", s_why_last, n);
 }
 
+/* THE REQUESTS' tally over every economy decision the test made (decide_traced) */
+static void check_requests(void)
+{
+    static const char* const STATE[IMPAI_RQ_STATES] = { "none", "vetoed", "held", "open", "answered", "yielded", "refused" };
+    int k, st;
+    /* the fixtures reach every end a rung gives a request but the sensor's refusal: no decision of this test asks
+       a builder that offers a sensor and places none */
+    CHECK(s_req[IMPAI_W_FACTORY][IMPAI_RQ_ANSWERED] && s_req[IMPAI_W_FACTORY][IMPAI_RQ_YIELDED] &&
+              s_req[IMPAI_W_SEA][IMPAI_RQ_ANSWERED] && s_req[IMPAI_W_SEA][IMPAI_RQ_REFUSED] &&
+              s_req[IMPAI_W_TECH][IMPAI_RQ_ANSWERED] && s_req[IMPAI_W_TECH][IMPAI_RQ_YIELDED] &&
+              s_req[IMPAI_W_DEF][IMPAI_RQ_ANSWERED] && s_req[IMPAI_W_AA][IMPAI_RQ_ANSWERED] &&
+              s_req[IMPAI_W_SENSOR][IMPAI_RQ_ANSWERED] && !s_req[IMPAI_W_SENSOR][IMPAI_RQ_REFUSED],
+          "the test's decisions see each request answered, the plants' yield and the sea plant's refused");
+    printf("the requests, as the decisions left them:");
+    for (k = 0; k < IMPAI_WANTS; k++) {
+        printf(" %s", impai_veto[k].want + 5);
+        for (st = 0; st < IMPAI_RQ_STATES; st++)
+            if (s_req[k][st]) printf(" %s %u", STATE[st], s_req[k][st]);
+        printf("%s", k + 1 < IMPAI_WANTS ? ";" : "\n");
+    }
+}
+
 /* THE DECISION'S READS, over every decision this test made at Hard: no decision reads the head or the order list
    of a unit it has already ordered, so a decision whose orders wait in the reaction's queue plans exactly as one
    whose orders reached the world at once; and no unit but a commander is ordered by both managers. */
@@ -16342,6 +16438,7 @@ int main(void)
     check_tech_levels();
     check_due();
     check_veto_rows();
+    check_ladder_rows();
     check_stall();
     check_spot();
     check_spot_foreign();
@@ -16416,6 +16513,7 @@ int main(void)
     check_plant_gate();
     check_military();
     check_why();
+    check_requests();
     check_reads_before_orders();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");
