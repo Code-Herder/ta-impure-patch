@@ -65,6 +65,8 @@ typedef struct IMPAI_POSTURE {
 enum { IMPAI_W_FACTORY, IMPAI_W_SEA, IMPAI_W_TECH, IMPAI_W_DEF, IMPAI_W_AA, IMPAI_W_SENSOR, IMPAI_WANTS };
 typedef struct IMPAI_VETO { const char* want; uint32_t gates; } IMPAI_VETO;   /* the want's field; IMPAI_G_* */
 extern const IMPAI_VETO impai_veto[IMPAI_WANTS];
+_Static_assert(IMPAI_WANTS == IMPAI_WHY_WANTS && IMPAI_G_ALL <= 0xFFu,
+               "THE REASON TRACE (impai.h, IMPAI_WHY) holds a row a want and the gates in a byte");
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */

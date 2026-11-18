@@ -1529,8 +1529,9 @@ static const IMPAI_PERSONA* seat_persona(int seat)
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
    largest use of each budget against the plan's bound, and the most units of each category any census
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
-   clears every unit before the level-end lines are written (scenarios/replay-end.json); and the GameTime + 1 of
-   the seat's second-factory line (THE SECOND FACTORY), 0 before it. Diagnostics the simulation never reads. */
+   clears every unit before the level-end lines are written (scenarios/replay-end.json); the GameTime + 1 of
+   the seat's second-factory line (THE SECOND FACTORY), 0 before it; and the trace of the seat's last `why` line
+   (THE WHY LINE), `set` 0 before it. Diagnostics the simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
@@ -1550,6 +1551,7 @@ static struct {
     unsigned com_idle[PLAYER_COUNT], sensors[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
+    IMPAI_WHY why[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
 
@@ -1742,6 +1744,24 @@ static void second_line(int seat, unsigned now, const IMPAI_BRAIN_OUT* o)
                o->sea_plants ? "sea" : "land", site);
 }
 
+/* THE WHY LINE, at each economy decision whose reason trace (impai.h, IMPAI_WHY) differs from the trace of the
+   seat's last such line, the level's first traced decision included: `impai: why seat= t= gates= naval= pos= need=
+   veto= take=` -- the decision's GameTime; THE GATES up; the posture's naval judgement and its flags; the wants
+   needed; for each want needed and not taken the gates of its row that hold it, `want:GATE+GATE`; the wants taken
+   (impai_why_text). So the last `why` line at or before a GameTime states the trace of every decision up to the
+   next line, and tools/impai/think.py's `why` answers "why was this want not taken at tick T" from the log alone.
+   A want needed, not taken and under no veto waits on the term its rule reads last (impai.h). The remembered trace
+   is a diagnostic (s_play): a level's start clears it, and a state restored under it costs at most a line said
+   again. Logging alone: nothing reads it back. */
+static void why_line(int seat, unsigned now, const IMPAI_WHY* w)
+{
+    char text[IMPAI_WHY_TEXT];
+    if (!w->set || !memcmp(w, &s_play.why[seat], sizeof *w)) return;
+    s_play.why[seat] = *w;
+    impai_why_text(w, text, sizeof text);
+    tagpu_logf("impai: why seat=%d t=%u %s", seat, now, text);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1799,6 +1819,7 @@ static void impai_decide(int seat)
             s_react.acts_eco[seat] += out.roots;
             play_max(&s_react.busy_max[seat], out.busy);
         }
+        if (rc >= 0) why_line(seat, (unsigned)q.ops->gametime(&q), &out.why);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && !s_play.second[seat] && out.count[IMPAI_C_FACTORY] == 1 &&
             (out.sea_plants || (out.plant && out.plant_want == 2)))

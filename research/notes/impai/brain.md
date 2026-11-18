@@ -946,6 +946,20 @@ CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats teched up to CORAVP
 the plant choice's bar runs r1 and r3). A tech-up whose best candidate scores below 0 still goes ahead (owner's
 decision, [decisions](decisions.html)): the score ranks the plants' armies, while the tech-up also brings the
 tech-2 constructors and economy, and the army orders keep a poor plant to constructors.
+**The reason trace.** Each economy decision hands out, beside its counts, what it held of each of the six wants
+(`impai.h`, `IMPAI_WHY`; `impai_brain.c`, `why_read`): the gates up, the posture, and for each want whether it is
+needed -- the want as it would stand with every gate down --, whether it is taken, and, while it is needed and not
+taken, the gates of its row that are up. A want needed, not taken and under no gate waits on the term its rule
+reads last, which is read only for a want nothing else refuses: the sea plant's builder that offers one, the
+sensor's kind and point. The first plant, which no gate holds, names none. The trace is scratch of the decision:
+no recorded struct holds it and nothing reads it back. The seam writes it to the log at each decision whose trace
+differs from the seat's last line, the level's first included -- `impai: why seat= t= gates=HOLD+M_STALL naval=1
+pos=island need=factory+sea veto=factory:HOLD+M_STALL take=sea`, names joined by `+`, `-` for none -- and remembers
+the last trace written in its diagnostics (`s_play`, cleared at a level's start), so the last line before a
+GameTime states every decision up to the next line. `tools/impai/think.py why` reads it ([testing](testing.html),
+*A recording answered in one call*). It traces the six wants of the table alone: why an idle factory was given no
+order is the governor's, and not in it.
+
 Each plant ordered is logged with the runner-up: `impai: plant seat= gametime= want=first|factory|tech T= reach=
 chose= s= next= s=`. The decision that orders the second factory, sea or land, is logged once more, with
 the naval judgement it read and its sea search: `impai: second seat= gametime= naval= chose=sea|land

@@ -926,6 +926,35 @@ static inline int impai_blind(const IMPAI_MIL* m, uint32_t now)
 void  impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona, const IMPAI_TABLE* table,
                       int from_lever);
 
+/* THE REASON TRACE (impai_brain.c, why_read): what one decision's economy held of each of its six wants, the rows
+   of THE VETOES (impai_brain.h, impai_veto) by their index -- for the seam's `why` line (tagpu_impai.c) and
+   tools/impai/think.py's `why`, which answers "why was this want not taken at tick T" from it. A want is its need
+   and no gate of its row: `need` is the want as it would stand with every gate down, `take` the want as it stands,
+   and veto[k] the gates of row k that are up while want k is needed and not taken. NEEDED, NOT TAKEN AND NO GATE
+   NAMED is the term the want's rule reads last, for a want nothing else refuses: the sea plant's builder that
+   offers one (impai_econ_sea_able), the sensor's kind and point (sensor_want). Every member is one byte, so two
+   traces are compared whole. Scratch of the decision: no recorded struct holds it, and nothing reads it back. */
+#define IMPAI_WHY_WANTS   6
+#define IMPAI_WHY_DRY     0x01u     /* IMPAI_WHY.pos: the posture's flags (impai_brain.h, IMPAI_POSTURE)        */
+#define IMPAI_WHY_ISLAND  0x02u
+#define IMPAI_WHY_BLIND   0x04u
+#define IMPAI_WHY_PRESSED 0x08u
+#define IMPAI_WHY_AT_BASE 0x10u
+#define IMPAI_WHY_TEXT    512       /* above impai_why_text's longest line and its NUL: 481 bytes for a trace
+                                       of any bytes, every name of every list (impai_brain_test.c, check_why)   */
+typedef struct IMPAI_WHY {
+    uint8_t set;                    /* 1: the decision reached its economy, which filled the rest               */
+    uint8_t gates;                  /* THE GATES up (IMPAI_G_*)                                                 */
+    int8_t  naval;                  /* the posture's naval judgement: 1 naval, 0 not, below 0 not judged        */
+    uint8_t pos;                    /* IMPAI_WHY_* bits                                                         */
+    uint8_t need, take;             /* bit k: want k is needed; want k stands                                   */
+    uint8_t veto[IMPAI_WHY_WANTS];
+} IMPAI_WHY;
+_Static_assert(sizeof(IMPAI_WHY) == 6 + IMPAI_WHY_WANTS, "IMPAI_WHY has no padding: traces are compared by memcmp");
+/* `w` as the `why` line's fields, `gates= naval= pos= need= veto= take=`, NUL-ended in out[cap]; names joined by
+   `+`, a veto `want:GATE+GATE` and the vetoes by `,`, `-` for none. Returns the bytes written, the NUL left out. */
+int   impai_why_text(const IMPAI_WHY* w, char* out, size_t cap);
+
 /* What one decision did, against the plan's bounds, and the census's counts. */
 typedef struct IMPAI_BRAIN_OUT {
     uint16_t census, sites, snaps, roots, queued, failed, orders;
@@ -995,6 +1024,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
     uint8_t  sensors;                   /* sensor structures ordered (impai_econ.c, THE SENSORS)                */
+    IMPAI_WHY why;                      /* THE REASON TRACE                                                    */
 } IMPAI_BRAIN_OUT;
 
 #define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs

@@ -7,6 +7,7 @@
     tools/impai/think.py units    REC [--every N]
     tools/impai/think.py diff     REC_A REC_B [--seat S] [--part ...]
         each: [--tree DIR]... [--max M]
+    tools/impai/think.py why      REC [--seat S] (--at T | --want NAME | both) [--from T] [--to T] [--log FILE]
 
 A game's recording (`.imprec`) carries, exact at every tick, the four regions ImpAI's brain keeps its state in
 (tagpu_impai.c): s_mil and s_brain, a row a seat (IMPAI_MIL, IMPAI_BRAIN), and s_job and s_known, a row a unit slot
@@ -25,6 +26,14 @@ log line and no rebuilt DLL: one call here answers it from a game already played
                in the last ticks: a game's end is its result's end_tick, and the row there
     diff       the first tick at which the seat's state differs between two recordings of one game, and the
                fields that differ there with both values: equal at every tick before it. Exit 1 when they differ
+
+    why        why a want of the economy's was or was not taken, from THE REASON TRACE (below), which the
+               game's log holds and its recording does not. --at T: the gates up at tick T, the posture, and each
+               of the six wants -- not needed; needed and taken; needed and VETOED, by which gates; needed, held
+               by no gate and not taken (the term its rule reads last) -- each with the ticks it stands,
+               from..until. --want NAME (`want_factory` or `factory`): that want's history through the
+               game, change by change, under a line of its totals in ticks; with --at as well, the want's line
+               at T first
 
 A TICK is the recording's: tick T is the world as GameTime T finds it, so it holds what the step from GameTime
 T - 1 wrote. A decision the log stamps `t=6960` therefore first shows at tick 6961 (MEASURED 2026-11-17 on the
@@ -54,6 +63,15 @@ first call on a recording keeps what this tool reads -- every write to the four 
 each unit's birth and death -- under .data/impai/think-cache/ in the main checkout, by the SHA-256 of the
 recording's bytes and of the reader's sources; later calls replay that. An entry that does not check out is
 made again.
+
+THE REASON TRACE (tagpu_impai.c, THE WHY LINE; impai.h, IMPAI_WHY). A decision's gates, its posture and what
+it held of each want are scratch of the decision: no recorded struct holds them. The DLL writes them to the
+game's log instead, `impai: why seat= t= gates= naval= pos= need= veto= take=`, at each economy decision whose
+trace differs from the seat's last line, so the last line before a tick states every decision up to the next
+line. `why` reads the log beside the recording, `<name>.tagpu.log` for `<name>.imprec` as the tools' result
+folders keep the two, or --log FILE. Its ticks are the recording's: a line stamped `t=N` stands from tick N + 1.
+A log whose GameTimes go back for the seat (a second level, a rewind) is refused by name, and a log with no
+`why` line was written by a build before the trace.
 
 --seat is the recording's one ImpAI seat when it has exactly one. The print is held to --max lines (default
 60); its last line then says how many were cut. Exit 0, 1 (`diff`: the states differ), 2 (could not run)."""
@@ -1007,6 +1025,130 @@ def state_parting(rec_a, rec_b, trees=None, cache=None) -> tuple:
                              + (f" (+{n - 1} fields)" if n > 1 else ""))
 
 
+# ---- why: THE REASON TRACE, read from the game's log ----
+WHY_LINE = re.compile(r"^impai: why seat=(\d+) t=(\d+) gates=(\S+) naval=(-?\d+) pos=(\S+) need=(\S+) veto=(\S+) "
+                      r"take=(\S+)\s*$")
+WANTS = ("factory", "sea", "tech", "def", "aa", "sensor")       # impai_veto's rows, in its order
+# the term a want's rule reads last, for a want nothing else refuses (impai.h, IMPAI_WHY)
+LAST_TERM = {"sea": "no builder of the seat's offers a sea plant", "sensor": "the sensor rule names no kind or point"}
+NAVAL = {1: "a naval map", 0: "not a naval map", -1: "not judged"}
+
+
+class Why:
+    """One `why` line: its GameTime, the gates up, the posture, and each want named as (needed, gates that veto
+    it, taken)."""
+
+    def __init__(self, m):
+        def names(x):
+            return () if x == "-" else tuple(x.split("+"))
+        self.t = int(m.group(2))
+        self.gates, self.naval, self.pos = names(m.group(3)), int(m.group(4)), names(m.group(5))
+        need, take = names(m.group(6)), names(m.group(8))
+        veto = dict((v.partition(":")[0], names(v.partition(":")[2])) for v in m.group(7).split(",")) \
+            if m.group(7) != "-" else {}
+        self.want = {w: (w in need, veto.get(w, ()), w in take)
+                     for w in dict.fromkeys(WANTS + need + take + tuple(veto))}
+
+    def of(self, want: str) -> tuple:
+        return self.want.get(want, (False, (), False))
+
+
+def why_status(want: str, st: tuple) -> str:
+    need, veto, take = st
+    if take:
+        return "needed, taken" if need else "taken (not needed: the trace disagrees with itself)"
+    if not need:
+        return "not needed"
+    if veto:
+        return f"needed, VETOED by {'+'.join(veto)}"
+    return f"needed, held by no gate, not taken: {LAST_TERM.get(want, 'the term its rule reads last')}"
+
+
+def why_read(log: Path, seat: int, name: str) -> list:
+    """The seat's `why` lines of `log`, in its order; refused when there is none or its GameTimes go back."""
+    try:
+        text = log.read_text(errors="replace")
+    except OSError as e:
+        raise ThinkError(f"{name}: no log to read the reason trace from ({log}: {e.strerror or e}); --log FILE "
+                         f"names it")
+    ws = [Why(m) for m in map(WHY_LINE.match, text.splitlines()) if m and int(m.group(1)) == seat]
+    if not ws:
+        raise ThinkError(f"{log.name}: no `impai: why` line for seat {seat}: the DLL that played the game writes no "
+                         f"reason trace (a build before it), or the seat made no economy decision")
+    for a, b in zip(ws, ws[1:]):
+        if b.t <= a.t:
+            raise ThinkError(f"{log.name}: seat {seat}'s `why` lines go back from GameTime {a.t} to {b.t} (a second "
+                             f"level or a rewind in one log): not one game's trace")
+    return ws
+
+
+def why(ex, seat, log: Path, at, want, t0=None, t1=None) -> list:
+    ws = why_read(log, seat, ex.name)
+    ticks = [w.t + 1 for w in ws]           # a decision stamped t=N stands from tick N + 1
+    if want is not None:
+        want = want[5:] if want.startswith("want_") else want
+        if not any(want in w.want for w in ws):
+            raise ThinkError(f"--want {want}: the trace's wants are {', '.join(dict.fromkeys(x for w in ws for x in w.want))}")
+    out = [headline("why", ex, seat)]
+
+    def span(i, key):
+        """(the tick ws[i]'s `key` has stood since, the tick it ends or None)"""
+        a, b = i, i + 1
+        while a > 0 and key(ws[a - 1]) == key(ws[i]):
+            a -= 1
+        while b < len(ws) and key(ws[b]) == key(ws[i]):
+            b += 1
+        return ticks[a], ticks[b] if b < len(ws) else None
+
+    def stood(i, key):
+        a, b = span(i, key)
+        return f"{a}..{b if b is not None else 'end'}"
+
+    if at is not None:
+        if not 0 <= at <= ex.end:
+            raise ThinkError(f"--at {at}: {ex.name}'s ticks are 0 to {ex.end}")
+        i = bisect.bisect_right(ticks, at) - 1
+        if i < 0:
+            return out + [f"  tick {at}: no economy decision traced yet (the seat's first `why` line stands from tick "
+                          f"{ticks[0]})"]
+        w = ws[i]
+        out.append(f"  tick {at}: the trace last changed at tick {ticks[i]} (the log's t={w.t}); {len(ws)} `why` lines "
+                   f"in {log.name}; each row: the ticks it stands, from..until")
+        rows = []
+        if want is None:
+            rows.append(("gates up", stood(i, lambda x: x.gates), ", ".join(w.gates) or "none"))
+            rows.append(("posture", stood(i, lambda x: (x.naval, x.pos)),
+                         f"naval {w.naval} ({NAVAL.get(w.naval, '?')}); {', '.join(w.pos) or 'no flag'}"))
+        for n in ([want] if want is not None else list(w.want)):
+            rows.append((f"want_{n}", stood(i, lambda x, n=n: x.of(n)), why_status(n, w.of(n))))
+        width = max(len(r[1]) for r in rows)
+        out += [f"  {a:<12} {b:<{width}}  {c}" for a, b, c in rows]
+    if want is None:
+        if at is None:
+            raise ThinkError("why: --at T (the trace at a tick), --want NAME (a want's history), or both")
+        return out
+    # the want's history: its runs, each from the tick its line changed it to the next
+    runs = [i for i in range(len(ws)) if i == 0 or ws[i].of(want) != ws[i - 1].of(want)]
+    ends = [ticks[i] for i in runs[1:]] + [max(ex.end, ticks[-1])]
+    tot = {"taken": 0, "vetoed": 0, "last": 0, "not": 0}
+    by = {}
+    for i, e in zip(runs, ends):
+        need, veto, take = ws[i].of(want)
+        d = e - ticks[i]
+        tot["taken" if take else "not" if not need else "vetoed" if veto else "last"] += d
+        for g in veto if not take else ():
+            by[g] = by.get(g, 0) + d
+    gates = f" ({', '.join(f'{g} {n}' for g, n in sorted(by.items(), key=lambda x: -x[1]))})" if by else ""
+    out.append(f"  want_{want} over ticks {ticks[0]}..{ends[-1]}, {len(runs) - 1} changes: taken {tot['taken']} ticks, "
+               f"vetoed {tot['vetoed']}{gates}, held by its last term {tot['last']}, not needed {tot['not']}")
+    lo, hi = t0 if t0 is not None else ticks[0], t1 if t1 is not None else ends[-1]
+    before = [i for i in runs if ticks[i] < lo]
+    if before and t0 is not None:
+        out.append(f"  at {lo}: {why_status(want, ws[before[-1]].of(want))} (from tick {ticks[before[-1]]})")
+    out += [f"{ticks[i]:>8}  {why_status(want, ws[i].of(want))}" for i in runs if lo <= ticks[i] <= hi]
+    return out
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="verb", required=True)
@@ -1043,11 +1185,26 @@ def main(argv=None) -> int:
     d.add_argument("rec_b", type=Path)
     d.add_argument("--part", default=",".join(PARTS))
     common(d)
+    w = sub.add_parser("why", help="why a want was or was not taken: the reason trace in the game's log")
+    w.add_argument("rec", type=Path)
+    w.add_argument("--at", type=int, default=None, metavar="T", help="the trace at this tick")
+    w.add_argument("--want", default=None, metavar="NAME", help="this want's history (want_factory, or factory)")
+    w.add_argument("--from", dest="t0", type=int, default=None, metavar="T")
+    w.add_argument("--to", dest="t1", type=int, default=None, metavar="T")
+    w.add_argument("--log", type=Path, default=None, metavar="FILE",
+                   help="the game's log (default: <name>.tagpu.log beside <name>.imprec)")
+    w.add_argument("--seat", type=int, default=None, help="the seat (default: the one ImpAI seat)")
+    w.add_argument("--max", type=int, default=MAX_LINES, help="lines printed in all")
     a = p.parse_args(argv)
     try:
         ex = extract(a.rec)
         if a.verb == "units":
             print("\n".join(capped(units(ex, a.every), a.max, "--every")))
+            return 0
+        if a.verb == "why":
+            log = a.log or a.rec.with_suffix(".tagpu.log")
+            print("\n".join(capped(why(ex, pick_seat(ex, a.seat), log, a.at, a.want, a.t0, a.t1), a.max,
+                                   "--want, --from/--to")))
             return 0
         lays = layouts(a.tree)
         lay = fit(ex, lays)

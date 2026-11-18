@@ -943,6 +943,50 @@ static void brain_world(void)
 static IMPAI_EXEC*        s_xp;
 static IMPAI_REACT_COUNTS s_rc;
 
+/* THE REASON TRACE (impai.h, IMPAI_WHY), held on every economy decision this test makes: a decision that stops
+   before its economy traces nothing; the gates and the posture's pressure are the ones the decision hands out;
+   a want taken was needed; a gate is named only from the want's own row, only while it is up, and only for a
+   want needed and not taken; and a want with no term read last (every want but the sea plant and the sensor)
+   that is needed and not taken names a gate. The tally is check_why's. */
+static unsigned s_why_n, s_why_need[IMPAI_WANTS], s_why_veto[IMPAI_WANTS], s_why_take[IMPAI_WANTS], s_why_last;
+
+static int decide_traced(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
+{
+    static const IMPAI_WHY NONE;
+    const int rc = impai_brain_decide(in, out);
+    const IMPAI_WHY* w = &out->why;
+    int k;
+    if (rc != 0) return rc;
+    if (!w->set) {
+        CHECK(!memcmp(w, &NONE, sizeof *w), "a decision that stops before its economy traces nothing");
+        return rc;
+    }
+    s_why_n++;
+    CHECK(w->set == 1 && !(w->gates & ~IMPAI_G_ALL) && !(w->need >> IMPAI_WANTS), "the trace's bits: gates %02X need %02X",
+          w->gates, w->need);
+    CHECK(!(w->gates & IMPAI_G_HOLD) == !out->hold && !(w->pos & IMPAI_WHY_PRESSED) == !out->pressed &&
+              !(w->gates & IMPAI_G_PRESSED) == !out->pressed && !(w->gates & IMPAI_G_UNJUDGED) == !(w->naval < 0) &&
+              (!(w->pos & IMPAI_WHY_AT_BASE) || (w->pos & IMPAI_WHY_PRESSED)),
+          "the trace's gates and posture are the decision's: gates %02X pos %02X naval %d hold %u pressed %u", w->gates,
+          w->pos, w->naval, out->hold, out->pressed);
+    CHECK(!(w->take & ~w->need), "a want taken was needed: need %02X take %02X", w->need, w->take);
+    for (k = 0; k < IMPAI_WANTS; k++) {
+        const int need = w->need >> k & 1, take = w->take >> k & 1;
+        s_why_need[k] += (unsigned)need;
+        s_why_take[k] += (unsigned)take;
+        s_why_veto[k] += w->veto[k] != 0;
+        CHECK(!(w->veto[k] & ~(w->gates & impai_veto[k].gates)), "%s is vetoed by its row's gates that are up: %02X of %02X",
+              impai_veto[k].want, w->veto[k], w->gates);
+        CHECK(!w->veto[k] || (need && !take), "%s names a gate only needed and not taken", impai_veto[k].want);
+        if (need && !take && !w->veto[k]) {
+            s_why_last++;
+            CHECK(k == IMPAI_W_SEA || k == IMPAI_W_SENSOR, "%s, needed and not taken, names its gate: gates %02X",
+                  impai_veto[k].want, w->gates);
+        }
+    }
+    return rc;
+}
+
 static int s_dec_acts = -1;        /* decide's action budget, -1 none */
 /* the content's price of metal decide passes (IMPAI_BRAIN_IN.e_per_m): 0, the plan's, unless a case sets it */
 static float s_dec_epm;
@@ -976,7 +1020,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
         in.q = impai_exec_view(&xv, &q, s_xp, s_persona, (uint32_t)s_w.gametime, IMPAI_SRC_ECO, &s_rc);
         in.acts = impai_exec_acts(s_xp, IMPAI_SRC_ECO, s_persona, (uint32_t)s_w.gametime);
     }
-    rc = impai_brain_decide(&in, out);
+    rc = decide_traced(&in, out);
     if (rc == 0 && s_xp) {
         CHECK(in.acts < 0 || out->roots <= in.acts, "the economy's commands %u within its actions %d", out->roots,
               in.acts);
@@ -6399,7 +6443,7 @@ static void check_production(void)
         in.mil = &s_mil;
         in.pred = &pred;
         from = s_w.nlog;
-        CHECK(impai_brain_decide(&in, &bo) == 0, "a production decision runs");
+        CHECK(decide_traced(&in, &bo) == 0, "a production decision runs");
         for (k = from; k < s_w.nlog; k++)
             if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type < M_N) {
                 if (first < 0) first = s_w.log[k].c.type;
@@ -6424,7 +6468,7 @@ static void check_production(void)
     s_milp = &s_mil;
     in.ti = s_ti;
     from = s_w.nlog;
-    CHECK(impai_brain_decide(&in, &bo) == 0, "the no-scout-share decision runs");
+    CHECK(decide_traced(&in, &bo) == 0, "the no-scout-share decision runs");
     s_milp = NULL;
     for (again = -1, k = from; k < s_w.nlog; k++)
         if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE) again = s_w.log[k].c.type;
@@ -6517,7 +6561,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.mil = &s_mil;
     in.pred = &pred;
     in.view = s_viewp;
-    rc = impai_brain_decide(&in, bo);
+    rc = decide_traced(&in, bo);
     *cons = *army = 0;
     for (k = from; k < s_w.nlog; k++) {
         const WQ_CMD* c = &s_w.log[k].c;
@@ -8339,7 +8383,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.mil = &s_mil;
     in.view = &v;
     in.pred = with_pred ? &pred : NULL;
-    CHECK(impai_brain_decide(&in, &bo) == 0, "decide");
+    CHECK(decide_traced(&in, &bo) == 0, "decide");
     for (k = from; k < s_w.nlog; k++) {
         const WQ_CMD* c = &s_w.log[k].c;
         if (c->action != A_MOBILEBUILD || (c->type != D_LLT && c->type != D_RL && c->type != D_AA && c->type != D_HLT))
@@ -8528,7 +8572,7 @@ static int sensor_decide(uint16_t* type, int32_t* x, int32_t* z)
     in.snap = &s_snap;
     in.mil = &s_mil;
     in.view = &v;
-    CHECK(impai_brain_decide(&in, &bo) == 0, "decide");
+    CHECK(decide_traced(&in, &bo) == 0, "decide");
     *type = 0;
     *x = *z = -1;
     s_sensor_unit = -1;
@@ -13222,7 +13266,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.mil = &s_mil;
         in.pred = &pred;
         in.tv = s_gtv;
-        CHECK(impai_brain_decide(&in, &bo) == 0, "the gate's decision %d", i);
+        CHECK(decide_traced(&in, &bo) == 0, "the gate's decision %d", i);
         poor += bo.poor;
         for (k = from; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
@@ -16109,6 +16153,45 @@ static void check_attention_eco(void)
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
 }
 
+/* THE REASON TRACE's text (impai_brain.c, impai_why_text), and the tally of decide_traced over every economy
+   decision of this test: each want was seen needed, vetoed and taken where the fixtures reach it. The text of
+   one trace by hand -- the first want held by two gates of its row, the fifth taken, the sea plant needed under
+   no gate --; the longest line, a trace of every bit set, fits IMPAI_WHY_TEXT, and a buffer too short is ended
+   inside itself. */
+static void check_why(void)
+{
+    IMPAI_WHY w = { 1, IMPAI_G_HOLD | IMPAI_G_M_STALL | IMPAI_G_SURPLUS, 1, IMPAI_WHY_DRY | IMPAI_WHY_ISLAND,
+                    1u << IMPAI_W_FACTORY | 1u << IMPAI_W_SEA | 1u << IMPAI_W_AA, 1u << IMPAI_W_AA,
+                    { [IMPAI_W_FACTORY] = IMPAI_G_HOLD | IMPAI_G_M_STALL } };
+    static const IMPAI_WHY NONE = { 1, 0, -1, 0, 0, 0, { 0 } };
+    char t[IMPAI_WHY_TEXT], cut[9];
+    int k, n;
+    n = impai_why_text(&w, t, sizeof t);
+    CHECK(!strcmp(t, "gates=HOLD+M_STALL+SURPLUS naval=1 pos=dry+island need=factory+sea+aa veto=factory:HOLD+M_STALL "
+                     "take=aa") && n == (int)strlen(t), "the trace's text: `%s`", t);
+    impai_why_text(&NONE, t, sizeof t);
+    CHECK(!strcmp(t, "gates=- naval=-1 pos=- need=- veto=- take=-"), "the empty trace's text: `%s`", t);
+    memset(&w, 0xFF, sizeof w);
+    w.gates = IMPAI_G_ALL;
+    w.naval = -1;
+    for (k = 0; k < IMPAI_WANTS; k++) w.veto[k] = IMPAI_G_ALL;
+    n = impai_why_text(&w, t, sizeof t);
+    CHECK(n == 481 && n < IMPAI_WHY_TEXT - 1 && n == (int)strlen(t), "the longest trace fits its buffer: %d of %d", n,
+          IMPAI_WHY_TEXT);
+    memset(cut, 'x', sizeof cut);
+    CHECK(impai_why_text(&w, cut, 8) == 7 && !memcmp(cut, "gates=H\0x", 9), "a short buffer is ended inside itself");
+    /* the fixtures reach a veto of every want whose row names a gate but the sea plant's, which no decision of
+       this test holds back; the anti-air's row names none */
+    CHECK(s_why_veto[IMPAI_W_FACTORY] && s_why_veto[IMPAI_W_TECH] && s_why_veto[IMPAI_W_DEF] &&
+              s_why_veto[IMPAI_W_SENSOR] && !s_why_veto[IMPAI_W_AA] && s_why_last,
+          "the test's decisions see each want vetoed, and one held by its last term");
+    printf("the reason trace: %u decisions; needed, vetoed, taken:", s_why_n);
+    for (k = 0; k < IMPAI_WANTS; k++)
+        printf(" %s %u, %u, %u%s", impai_veto[k].want + 5, s_why_need[k], s_why_veto[k], s_why_take[k],
+               k + 1 < IMPAI_WANTS ? ";" : "");
+    printf("; needed and held by the term read last: %u; the longest line %d bytes\n", s_why_last, n);
+}
+
 /* THE DECISION'S READS, over every decision this test made at Hard: no decision reads the head or the order list
    of a unit it has already ordered, so a decision whose orders wait in the reaction's queue plans exactly as one
    whose orders reached the world at once; and no unit but a commander is ordered by both managers. */
@@ -16332,6 +16415,7 @@ int main(void)
     check_metal_reach();
     check_plant_gate();
     check_military();
+    check_why();
     check_reads_before_orders();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");

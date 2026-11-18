@@ -242,6 +242,93 @@ class Think(unittest.TestCase):
         self.assertEqual(self.run_("timeline", rec, "--field", "mil.dry"), 0)
         self.assertIn("no change of these fields", self.said)
 
+    # ---- why: THE REASON TRACE, from the log beside the recording ----
+    WHY = ("impai: pulse seat=1 t=7 built=0\n"
+           "impai: why seat=1 t=7 gates=UNJUDGED naval=-1 pos=- need=- veto=- take=-\n"
+           "impai: why seat=2 t=9 gates=- naval=0 pos=- need=factory veto=- take=factory\n"
+           "impai: why seat=1 t=99 gates=HOLD+M_STALL naval=1 pos=island need=factory+sea+aa "
+           "veto=factory:HOLD+M_STALL take=aa\n"
+           "impai: why seat=1 t=199 gates=HOLD naval=1 pos=island+pressed need=factory+sea veto=factory:HOLD,sea:HOLD "
+           "take=-\n"
+           "impai: why seat=1 t=299 gates=- naval=1 pos=island need=factory+sensor veto=- take=factory\n")
+
+    def traced(self, text=None, **kw):
+        rec = self.game(**kw)
+        rec.with_suffix(".tagpu.log").write_text(self.WHY if text is None else text)
+        return rec
+
+    def test_why_at_a_tick_names_each_wants_gates_and_since_when(self):
+        rec = self.traced()
+        self.assertEqual(self.run_("why", rec, "--at", 150), 0)
+        self.assertEqual(self.said.splitlines(), [
+            "why: a.imprec (build abc1234, Test Map, ticks to 400), seat 1 (Core, ImpAI)",
+            "  tick 150: the trace last changed at tick 100 (the log's t=99); 4 `why` lines in a.tagpu.log; each row: "
+            "the ticks it stands, from..until",
+            "  gates up     100..200  HOLD, M_STALL",
+            "  posture      100..200  naval 1 (a naval map); island",
+            "  want_factory 100..200  needed, VETOED by HOLD+M_STALL",
+            "  want_sea     100..200  needed, held by no gate, not taken: no builder of the seat's offers a sea plant",
+            "  want_tech    8..end    not needed",
+            "  want_def     8..end    not needed",
+            "  want_aa      100..200  needed, taken",
+            "  want_sensor  8..300    not needed"])
+        # a line stamped t=99 stands from tick 100, not at 99; before the first line nothing is traced
+        self.assertEqual(self.run_("why", rec, "--at", 99), 0)
+        self.assertIn("the trace last changed at tick 8 (the log's t=7)", self.said)
+        self.assertIn("gates up     8..100  UNJUDGED", self.said)
+        self.assertIn("naval -1 (not judged); no flag", self.said)
+        self.assertEqual(self.run_("why", rec, "--at", 7), 0)
+        self.assertIn("no economy decision traced yet (the seat's first `why` line stands from tick 8)", self.said)
+        self.assertEqual(self.run_("why", rec, "--at", 300, "--seat", 2), 0)     # another seat's lines alone
+        self.assertIn("want_factory 10..end  needed, taken", self.said)
+
+    def test_why_a_wants_history_change_by_change(self):
+        rec = self.traced()
+        self.assertEqual(self.run_("why", rec, "--want", "want_factory"), 0)
+        self.assertEqual(self.said.splitlines()[1:], [
+            "  want_factory over ticks 8..400, 3 changes: taken 100 ticks, vetoed 200 (HOLD 200, M_STALL 100), held by "
+            "its last term 0, not needed 92",
+            "       8  not needed",
+            "     100  needed, VETOED by HOLD+M_STALL",
+            "     200  needed, VETOED by HOLD",
+            "     300  needed, taken"])
+        self.assertEqual(self.run_("why", rec, "--want", "sea", "--at", 250, "--from", 150), 0)
+        self.assertEqual(self.said.splitlines()[1:], [
+            "  tick 250: the trace last changed at tick 200 (the log's t=199); 4 `why` lines in a.tagpu.log; each row: "
+            "the ticks it stands, from..until",
+            "  want_sea     200..300  needed, VETOED by HOLD",
+            "  want_sea over ticks 8..400, 3 changes: taken 0 ticks, vetoed 100 (HOLD 100), held by its last term 100, "
+            "not needed 192",
+            "  at 150: needed, held by no gate, not taken: no builder of the seat's offers a sea plant (from tick 100)",
+            "     200  needed, VETOED by HOLD",
+            "     300  not needed"])
+        self.assertEqual(self.run_("why", rec, "--want", "factory", "--max", 3), 0)
+        self.assertEqual(len(self.said.splitlines()), 3)
+        self.assertIn("more lines cut at --max 3", self.said)
+
+    def test_why_says_what_it_cannot_read(self):
+        rec = self.game()
+        self.assertEqual(self.run_("why", rec, "--at", 100), 2)                  # no log beside the recording
+        self.assertIn("no log to read the reason trace from", self.said)
+        rec = self.traced("impai: pulse seat=1 t=7 built=0\n")
+        self.assertEqual(self.run_("why", rec, "--at", 100), 2)
+        self.assertIn("no `impai: why` line for seat 1", self.said)
+        rec = self.traced(self.WHY + "impai: why seat=1 t=50 gates=- naval=1 pos=- need=- veto=- take=-\n")
+        self.assertEqual(self.run_("why", rec, "--at", 100), 2)
+        self.assertIn("go back from GameTime 299 to 50", self.said)
+        rec = self.traced()
+        self.assertEqual(self.run_("why", rec), 2)
+        self.assertIn("--at T (the trace at a tick), --want NAME", self.said)
+        self.assertEqual(self.run_("why", rec, "--want", "want_navy"), 2)
+        self.assertIn("the trace's wants are factory, sea, tech, def, aa, sensor", self.said)
+        self.assertEqual(self.run_("why", rec, "--at", 401), 2)
+        self.assertIn("ticks are 0 to 400", self.said)
+        other = self.tmp / "elsewhere.log"
+        other.write_text(self.WHY)
+        rec.with_suffix(".tagpu.log").unlink()
+        self.assertEqual(self.run_("why", rec, "--at", 150, "--log", other), 0)  # --log names it
+        self.assertIn("4 `why` lines in elsewhere.log", self.said)
+
     def test_squads(self):
         self.assertEqual(self.run_("squads", self.game()), 0)
         lines = self.said.splitlines()
