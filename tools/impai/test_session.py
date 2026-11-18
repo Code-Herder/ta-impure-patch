@@ -199,6 +199,57 @@ class TestSession(unittest.TestCase):
         self.assertIn("session: FAIL: 3 SAME, 2 BETTER, 2 PARTED, 2 WORSE", text)
         self.assertNotIn("impai: mil", text)                              # the lines are --neutral's
 
+    def test_a_situations_line_carries_both_dlls_figures(self):
+        self.assertEqual(self.run_(only="naval-turtle,bar-hota-troutfarm-ca-1"), 0)
+        turtle = next(ln for ln in self.said.splitlines() if " exploit-naval-turtle " in ln)
+        self.assertTrue(turtle.endswith("; figures base opp ?; attack ?; army ? | test opp ?; attack ?; army ?"))
+        self.assertNotIn("figures", next(ln for ln in self.said.splitlines() if " bar-hota-troutfarm-ca-1 " in ln))
+        # the figures are the result's, the log's and the recording's, each DLL's own, and the word is not theirs
+        item = session.items(["naval-turtle"], session.CONFIRM, self.tmp / "scenarios")[0]
+        roots = {"base": self.tmp / "fb", "test": self.tmp / "ft"}
+        for role, (first, attacks, army) in (("base", (6960, 3, 4)), ("test", (7260, 5, 6))):
+            (roots[role] / "base").mkdir(parents=True)
+            r = {"id": item["id"], "outcome": "cap", "end_tick": 20000, "cap": 20000,
+                 "seats": {"A": {"seat": 1}, "B": {"seat": 2}}, "first": {"A": {"attack": first}},
+                 "end": {"A": {"attacks": attacks}}, "looks": [{"at": 20000, "seats": {"A": {"lost": 0}}}]}
+            (roots[role] / "base" / f"{item['id']}.json").write_text(json.dumps(r))
+            (roots[role] / "base" / f"{item['id']}.tagpu.log").write_text(
+                f"impai: mil seat=1 t=2400 attack=1 raid=0\nimpai: mil seat=1 level=2 attacks=3 army_max={army}/512\n")
+        row = session.compare(item, roots["base"], roots["test"])
+        self.assertEqual(row["word"], "SAME")                              # other figures, and no word reads them
+        self.assertTrue(session.line(row, 0).endswith(
+            "; figures base opp ?; attack 6960 x3; army 4 | test opp ?; attack 7260 x5; army 6"))
+
+    def test_state_makes_neutral_a_proof_of_the_brains_whole_state(self):
+        parted = {"exploit-air-rush": ((4321, "mil.naval", "0", "1"),
+                                       "state parts in the step from GameTime 4320: mil.naval 0 | 1"),
+                  "bar-hota-troutfarm-ca-1": (False, "state not compared: x.imprec: no such file")}
+        asked = []
+
+        def fake(rec_base, rec_test, trees):
+            asked.append((rec_base.parent.parent.name, rec_test.parent.parent.name, rec_base.name, trees))
+            return parted.get(rec_base.name[:-len(".imprec")], (None, "state equal at every tick to 100"))
+        with mock.patch.object(session, "state_parting", fake):
+            self.assertEqual(self.run_(neutral=True, state=True, tree=["/src/other"]), 1)
+        self.assertEqual(len(asked), 9)                                   # every game, the bar's too
+        self.assertTrue(asked[0][0].startswith("base-") and asked[0][1] == "t1" and asked[0][3] == ["/src/other"])
+        # equal logs and results, and the state parts: not SAME; a state that cannot be compared proves nothing
+        self.assertEqual(self.word("exploit-air-rush"), "PARTED")
+        self.assertIn("; state parts in the step from GameTime 4320: mil.naval 0 | 1", self.said)
+        self.assertEqual(self.word("bar-hota-troutfarm-ca-1"), "UNRUN")
+        self.assertEqual(self.word("exploit-naval-turtle"), "SAME")
+        self.assertIn("; state equal at every tick to 100", self.said)
+        self.assertIn("session: FAIL: 7 SAME, 1 PARTED, 1 UNRUN", self.said)
+        doc = json.loads((self.tmp / "out" / "t1" / "summary.json").read_text())
+        self.assertEqual(doc["games"][0]["state"], parted["exploit-air-rush"][1])
+        # without --state no recording is read
+        asked.clear()
+        with mock.patch.object(session, "state_parting", fake):
+            self.assertEqual(self.run_(tag="t2", test="other", neutral=True), 0)
+        self.assertEqual(asked, [])
+        # the recordings that cannot be read are said, not raised
+        self.assertEqual(session.state_parting(self.tmp / "no-a.imprec", self.tmp / "no-b.imprec", [])[0], False)
+
     def test_better_and_parted_pass_and_wall_clock_lines_part_nothing(self):
         self.result = lambda role, gid: CAP_AHEAD if (role, gid) == ("base", "bar-hota-troutfarm-ca-1") else WIN
         self.attack = lambda role, gid: 2 if (role, gid) == ("test", "exploit-air-rush") else 1

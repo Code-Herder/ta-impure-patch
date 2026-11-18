@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """session.py -- the session tier of ImpAI's gate: a candidate DLL against the champion's, game by game, in minutes.
 
-    tools/impai/session.py --test DLL --base DLL --tag TAG [--only NAME[,NAME...]] [--neutral] [--lanes L]
-                           [--out DIR]
+    tools/impai/session.py --test DLL --base DLL --tag TAG [--only NAME[,NAME...]] [--neutral [--state]
+                           [--tree DIR]...] [--lanes L] [--out DIR]
 
 THE GAMES. Every exploiter situation (exploit.SITUATIONS) and the confirm set, the bar games of confirm.txt
 (regress.txt's format: an id, then its setup), each played once with each DLL from its own seed. --only narrows
@@ -30,7 +30,15 @@ GameTime and no wall-clock field (diag.decisions).
     UNRUN    a game of the two could not run, or kept no decision to compare
 
 With --neutral, a refactor's proof that the same seeds give the same games, every game must be SAME, and the two
-lines at the first parting of each game that is not are printed under it.
+lines at the first parting of each game that is not are printed under it. With --state as well, the proof is
+the brain's whole state, not the lines it happened to log: the two games' recordings must hold every ImpAI seat's
+state equal at every tick (think.py's diff over s_mil, s_brain, s_job and s_known), a game whose state parts is
+PARTED with the first tick and field named, and one whose recordings cannot be compared is UNRUN. A refactor
+that changes a recorded struct names the tree that built the other DLL with --tree, as think.py takes it.
+
+A situation's line ends with its FIGURES for both DLLs (exploit.py, THE FIGURES: the opponent's units through
+the game, ImpAI's first attack and attacks, its army at its largest), so a change that moves a failing
+situation without passing it shows. They are reported, never judged.
 
 HOW IT RUNS. Each DLL's games not yet in its folder are played in pieces, one a setup, each piece a process of
 its own (`session.py piece`, this tool's alone) that plays as diag.py plays: bar.play_games under the run lock,
@@ -179,14 +187,31 @@ def judged(item: dict, r: dict) -> tuple:
     return cat, text if cat is not None else f"could not run: {r.get('reason', '')}"
 
 
-def compare(item: dict, base: Path, test: Path) -> dict:
+def state_parting(rec_base: Path, rec_test: Path, trees: list) -> tuple:
+    """think.state_parting of two recordings, with what cannot be compared as (False, why)."""
+    import think
+    try:
+        return think.state_parting(rec_base, rec_test, trees)
+    except think.ThinkError as e:
+        return False, f"state not compared: {e}"
+
+
+def compare(item: dict, base: Path, test: Path, state=None) -> dict:
     """One game's row: {name, word, base, test (what is said of each game), parting (diag.parting's, None when the
-    decisions agree or were not compared)}."""
-    row = {"name": item["name"], "id": item["id"], "setup": item["setup"], "parting": None}
+    decisions agree or were not compared), figures ({role: exploit.figures}, a situation's alone), state (what
+    `state` said of the two recordings' brain state: --state's)}. `state` is state_parting with its trees given,
+    None when the brain state is not asked for."""
+    row = {"name": item["name"], "id": item["id"], "setup": item["setup"], "parting": None, "figures": None,
+           "state": None}
     cats, logs, results = {}, {}, {}
     for role, root in (("base", base), ("test", test)):
-        results[role], log = diag.read_game(batch.where(root, item["setup"]), item["id"])
+        folder = batch.where(root, item["setup"])
+        results[role], log = diag.read_game(folder, item["id"])
         cats[role], row[role] = judged(item, results[role])
+        if item["situation"] and cats[role] is not None:
+            row["figures"] = dict(row["figures"] or {}, **{role: exploit.figures(
+                results[role], log, folder / f"{item['id']}.imprec"
+                if (folder / f"{item['id']}.imprec").is_file() else None)})
         logs[role] = diag.decisions(log)
         if cats[role] is not None and not logs[role]:
             # two logs with no decision in them agree in every line: no game is SAME on that
@@ -202,6 +227,13 @@ def compare(item: dict, base: Path, test: Path) -> dict:
         row["word"] = SAME
     else:
         row["word"] = PARTED
+    if state is not None:
+        parted, row["state"] = state(*(batch.where(root, item["setup"]) / f"{item['id']}.imprec"
+                                       for root in (base, test)))
+        if parted is False:
+            row["word"] = UNRUN
+        elif parted is not None and row["word"] == SAME:
+            row["word"] = PARTED
     return row
 
 
@@ -210,6 +242,10 @@ def line(row: dict, width: int) -> str:
     if row["word"] in (BETTER, WORSE, PARTED):
         s += (f"; first parting at GameTime {row['parting'][0]}" if row["parting"] else
               "; no decision line differs")
+    if row.get("state"):
+        s += f"; {row['state']}"
+    if row.get("figures"):
+        s += "; figures " + " | ".join(f"{role} {exploit.figures_text(f)}" for role, f in row["figures"].items())
     return s
 
 
@@ -301,7 +337,9 @@ def run(a, launch=None, cache=None, clock=time.monotonic, sleep=time.sleep) -> i
             h.signal(signal.SIGINT)
         jr.end("stopped")
         return 2
-    rows = [compare(i, roots["base"], roots["test"]) for i in its]
+    trees = getattr(a, "tree", None) or []
+    state = (lambda x, y: state_parting(x, y, trees)) if getattr(a, "state", False) else None
+    rows = [compare(i, roots["base"], roots["test"], state) for i in its]
     rc = exit_of(rows, a.neutral)
     for r in rows:
         bad = r["word"] == WORSE or a.neutral and r["word"] in (BETTER, PARTED)
@@ -312,7 +350,7 @@ def run(a, launch=None, cache=None, clock=time.monotonic, sleep=time.sleep) -> i
     (roots["test"] / "summary.txt").write_text(text + "\n")
     doc = {"verdict": ("pass", "fail", "unrun")[rc], "neutral": bool(a.neutral), "base": str(roots["base"]),
            "overran": overran, "seconds": round(time.time() - t0),
-           "games": [dict({k: r[k] for k in ("name", "id", "setup", "word", "base", "test")},
+           "games": [dict({k: r[k] for k in ("name", "id", "setup", "word", "base", "test", "figures", "state")},
                           parting=r["parting"][0] if r["parting"] else None) for r in rows]}
     (roots["test"] / "summary.json").write_text(json.dumps(doc, indent=1) + "\n")
     jr.end(("pass", "fail", "unrun")[rc])
@@ -339,11 +377,17 @@ def main(argv=None) -> int:
     p.add_argument("--only", default=None, metavar="NAME,NAME",
                    help=f"only these games: a comma list of {', '.join(exploit.SITUATIONS)} and the confirm set's ids")
     p.add_argument("--neutral", action="store_true", help="every game must be SAME: a refactor's proof")
+    p.add_argument("--state", action="store_true",
+                   help="with --neutral: every game's recorded brain state must be equal at every tick as well")
+    p.add_argument("--tree", action="append", default=[], metavar="DIR",
+                   help="with --state: a source tree whose layout a recording may be read by (think.py's --tree)")
     p.add_argument("--lanes", type=int, default=LANES, help=f"lanes a piece (default {LANES})")
     p.add_argument("--out", default=None, help="the candidate's folder (default .data/impai/runs/session/<tag>)")
     a = p.parse_args(argv)
     if a.lanes < 1:
         p.error("--lanes: at least one")
+    if a.state and not a.neutral:
+        p.error("--state: with --neutral, whose proof it strengthens")
     return run(a)
 
 
