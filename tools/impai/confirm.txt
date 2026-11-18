@@ -1,6 +1,6 @@
-# ImpAI's confirm set: the bar games a session plays beside the exploiter situations, the candidate's DLL against
+# ImpAI's confirm set: the games a session plays beside the exploiter situations, the candidate's DLL against
 # the champion's, game by game (tools/impai/session.py).
-# One game a line, as regress.txt: its bar id, then the setup it plays on (tools/compat/setups.json), none for
+# One game a line, as regress.txt: its id, then the setup it plays on (tools/compat/setups.json), none for
 # the base game. A game replays exactly from its seed, so a game is listed once.
 
 bar-hota-redtriangle-ac-1
@@ -8,3 +8,11 @@ bar-hota-troutfarm-ca-1
 bar-hota-plainspasses-ac-1
 bar-hota-steeljungle-ca-1
 bar-nota-lavamania-ca-2 prota-4.8
+
+# The unmapped openings (tools/impai/opening.py), `unmapped-<map>-<S>`: ImpAI at start S as a network game seats
+# it, the level not mapped, to GameTime 6 000. Every game above is mapped; these alone show a change to what an
+# unmapped seat does. Steel Jungle's start 2 and Trout Farm's are starts whose seat gives no order at 0a4ec04e;
+# Lava Alley's start 3 is a seat that plays there.
+unmapped-steeljungle-2
+unmapped-troutfarm-2
+unmapped-lavaalley-3

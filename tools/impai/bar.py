@@ -625,7 +625,10 @@ def map_name(m: str) -> str:
 
 
 def seat_of(game: dict) -> dict:
-    """{"A": seat, "B": seat}: A sits in seat 1 when it plays the first start, else in seat 2."""
+    """{"A": seat, "B": seat}: A sits in seat 1 when it plays the first start, else in seat 2. A game that brings
+    its own scenario with other seats than the bar's two names them itself, as `seat` (tools/impai/opening.py)."""
+    if game.get("seat"):
+        return dict(game["seat"])
     return {"A": 1, "B": 2} if game["start"] == 0 else {"A": 2, "B": 1}
 
 
