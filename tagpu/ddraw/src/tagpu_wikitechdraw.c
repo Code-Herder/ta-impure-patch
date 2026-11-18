@@ -105,8 +105,9 @@ static void t_rrect(TB* c, double x, double y, double w, double h, double r, uin
     }
 }
 
-/* techtree.js shadow: CSS's box-shadow 0 `dy` `blur` round the box rounded by `r`, painted outside
-   it (HOPF_DROP, the radius in `style`) */
+/* techtree.js shadow: CSS's box-shadow 0 `dy` `blur` round the box, painted outside the box rounded
+   by `r` (HOPF_DROP, the radius in `style`): the shader blurs the sharp box and keeps it out of the
+   rounded one, a little heavier at the corners than a canvas's blur of the rounded shape */
 static void t_shadow(TB* c, double x, double y, double w, double h, double r, double dy, double blur, double a)
 {
     HUDOP* p;

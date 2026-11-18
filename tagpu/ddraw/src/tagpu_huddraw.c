@@ -74,9 +74,9 @@
             normal by the half width and a pixel, the two end pairs a pixel past the ends along the
             tangent; it hands on (arc length, signed distance across) as vUV, the arc length summed
             over the pieces. The fragment stage covers |across| by the pixel-wide box filter as
-            LINE does, the ends as butt ends, and a dash pattern of vPx.z on and vPx.z off from the
-            start by the same filter along the arc;
-     GRID   the colour on each whole-pixel square vPx.w wide at round(k vPx.z) from vPx.xy in x
+            LINE does, and along the arc the pixel's share of the stroke between its butt ends, and
+            of that the share a dash pattern of vPx.z on and vPx.z off from the start covers;
+     GRID   the colour on each whole-pixel square vUV.y wide at round(k vUV.x) from vPx.xy in x
             and in y: the pixel's square found by arithmetic, so the grid is one instance.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
@@ -145,6 +145,8 @@ static const char* FS =
     "}\n"
     /* a pixel's share of a band hw either side of a line d away: a pixel-wide box filter */
     "float cover(float d, float hw){ return clamp(min(d + 0.5, hw) - max(d - 0.5, -hw), 0.0, 1.0); }\n"
+    /* the length a dash pattern of dl on and dl off, on first, covers from 0 to x >= 0 */
+    "float on(float x, float dl){ return floor(x / (2.0 * dl)) * dl + min(mod(x, 2.0 * dl), dl); }\n"
     /* a segment's stroke: round at an end that joins another, butt at an end b0 / b1 */
     "float seg(vec2 p, vec2 a, vec2 b, float hw, bool b0, bool b1){\n"
     "  vec2 d = b - a;\n"
@@ -220,18 +222,17 @@ static const char* FS =
     "    float dd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - vPrm.y;\n"
     "    c = vCol * clamp(0.5 - dd, 0.0, 1.0);\n"
     "  } else if (m == 11) {\n"
-    "    float s = vUV.x, L = vPx.y, dl = vPx.z;\n"
-    "    float k = cover(abs(vUV.y), vPx.x) * clamp(0.5 + s, 0.0, 1.0) * clamp(0.5 + L - s, 0.0, 1.0);\n"
-    "    if (dl > 0.0) {\n"
-    "      float ph = mod(s, 2.0 * dl);\n"
-    "      k *= clamp(min(ph + 0.5, dl) - max(ph - 0.5, 0.0), 0.0, 1.0) + clamp(ph + 0.5 - 2.0 * dl, 0.0, 1.0);\n"
-    "    }\n"
-    "    c = vCol * k;\n"
+    /* along the stroke: the pixel's interval [s - .5, s + .5] cut to the stroke [0, L], and of
+       that, when dashed, the share the dashes cover -- on(x) the dash length from the start to x,
+       so the ends and the dashes are counted once */
+    "    float dl = vPx.z, lo = clamp(vUV.x - 0.5, 0.0, vPx.y), hi = clamp(vUV.x + 0.5, 0.0, vPx.y), al = hi - lo;\n"
+    "    if (dl > 0.0) al = on(hi, dl) - on(lo, dl);\n"
+    "    c = vCol * (cover(abs(vUV.y), vPx.x) * clamp(al, 0.0, 1.0));\n"
     "  } else if (m == 12) {\n"
     "    vec2 q = floor(p - vPx.xy);\n"
-    "    vec2 st = floor(floor((q + 0.5) / vPx.z) * vPx.z + 0.5);\n"
-    "    vec2 on = step(st, q) * step(q, st + vPx.w - 0.5);\n"
-    "    c = vCol * (on.x * on.y);\n"
+    "    vec2 st = floor(floor((q + 0.5) / vUV.x) * vUV.x + 0.5);\n"
+    "    vec2 in2 = step(st, q) * step(q, st + vUV.y - 0.5);\n"
+    "    c = vCol * (in2.x * in2.y);\n"
     "  } else if (m == 9) {\n"
     "    vec2 a = vPx.xy, b = vPx.zw, q = vPx.xy + vUV;\n"
     "    float s = sign((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x));\n"
@@ -821,14 +822,14 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         break;
     }
     case HOP_GRID: {
-        /* the box whole, its squares by arithmetic in the GRID mode: px holds the box's top left in
-           whole device pixels, the pitch and the square's side */
+        /* the box whole, its squares by arithmetic in the GRID mode: px holds the box, uv the pitch
+           and the square's side -- uv, which a group's move leaves alone */
         const float pitch = op->size * px, side = floorf(op->shade * px + 0.5f);
         if (!(pitch >= 1) || !(side >= 1) || side > pitch) break;
         if (!(in = emit(c, -1, HUDM_GRID, snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
                         (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
-        in->px[2] = pitch;
-        in->px[3] = side;
+        in->uv[0] = in->uv[2] = pitch;
+        in->uv[1] = in->uv[3] = side;
         colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
         break;
     }

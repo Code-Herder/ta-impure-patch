@@ -28,6 +28,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -149,6 +150,7 @@ def main():
     finally:
         run("close")
         srv.terminate()
+        shutil.rmtree(tmp, ignore_errors=True)
     print(f"treecheck: {len(rows)} shot(s): " + ("the game and the mockup agree" if not bad else f"{bad} differ"))
     return 1 if bad else 0
 

@@ -2346,7 +2346,8 @@ right edge to the child's left at the headers' middles, its handles at the midpo
 S-curve), an "also built by" edge dashed; the stage a dot grid every 16 window units, fixed to the
 canvas while the tree pans and zooms over it. Each shape is one op the HUD shader draws per pixel:
 a rounded rectangle is a `HOP_SOLID` with its corner radius (`HOP_RADIUS`; the `RRECT` mode), the
-shadow a `HOPF_DROP` box with the same radius, so its corners are shaded as the rounded box's; an
+shadow a `HOPF_DROP` box with the same radius -- the sharp box blurred and kept outside the
+rounded one, a little heavier at the corners than the canvas's blur of the rounded shape; an
 edge is one `HOP_CURVE`, a strip the vertex stage lays along the cubic in `HUD_CURVE_SEG` (24)
 pieces and the fragment stage strokes with butt ends and, for an "also built by" edge, dashes 2
 units on and 2 off from its start, as the canvas's `setLineDash` does, at any zoom; and the dot
