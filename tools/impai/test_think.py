@@ -6,7 +6,8 @@ layout, and a fake of the recording reader for the games. No recording is read a
 
 THE TREE is the shape thinklayout reads -- a Makefile naming the compiler and its flags, impai.h, and
 tagpu_impai.c defining the four regions -- with structs a dozen members long; THE WIDE TREE is the same with one
-member more in IMPAI_BRAIN, another build's layout. THE GAME is a script of the events a recording's stream gives
+member more in IMPAI_BRAIN, another build's layout; THE MOVED TREE has two of IMPAI_BRAIN's members in the other
+order and THE FEWER TREE one job kind less, two layouts of this tree's sizes. THE GAME is a script of the events a recording's stream gives
 (think.stream's sink calls), written as JSON where a recording would be and read by a fake of think.stream, its
 bytes packed through the layout the tree gives, as the DLL's writes are. The tests that need the compiler are
 skipped where it is not installed; the one over this tree's own headers holds the layout to the header's own
@@ -55,11 +56,19 @@ REAL_STREAM = think.stream
 HAVE_CC = shutil.which("i686-w64-mingw32-gcc") and shutil.which("i686-w64-mingw32-objdump")
 
 
-def make_tree(root: Path, wide=False) -> Path:
+MOVED = ("uint8_t sea_refused, nfmem;", "uint8_t nfmem, sea_refused;")
+FEWER = ("enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_SQUAD };", "enum { IMPAI_JOB_NONE, IMPAI_JOB_SQUAD };")
+
+
+def make_tree(root: Path, wide=False, edit=None) -> Path:
     src = root / "tagpu" / "ddraw" / "src"
     src.mkdir(parents=True)
     (root / "tagpu" / "ddraw" / "Makefile").write_text(MAKEFILE)
-    (src / "impai.h").write_text(HEADER.replace("WIDE", "uint32_t room;" if wide else ""))
+    header = HEADER.replace("WIDE", "uint32_t room;" if wide else "")
+    if edit:
+        assert header.count(edit[0]) == 1
+        header = header.replace(*edit)
+    (src / "impai.h").write_text(header)
     (src / "worldq.h").write_text(WORLDQ)
     (src / "tagpu_impai.c").write_text(SOURCE)
     return root
@@ -87,6 +96,9 @@ class Think(unittest.TestCase):
         cls.cache = cls.root / "cache"
         cls.lay = think.Layout(thinklayout.load(cls.tree, cls.cache), cls.tree)
         cls.wlay = think.Layout(thinklayout.load(cls.wide, cls.cache), cls.wide)
+        cls.moved, cls.fewer = make_tree(cls.root / "moved", edit=MOVED), make_tree(cls.root / "fewer", edit=FEWER)
+        cls.mlay = think.Layout(thinklayout.load(cls.moved, cls.cache), cls.moved)
+        cls.flay = think.Layout(thinklayout.load(cls.fewer, cls.cache), cls.fewer)
 
     @classmethod
     def tearDownClass(cls):
@@ -412,6 +424,36 @@ class Think(unittest.TestCase):
         w2 = self.game("wide2.imprec", lay=self.wlay, extra=[self.put("brain", 1, "held[0][3]", 1, self.wlay)])
         self.assertEqual(self.run_("diff", a, w2, "--tree", self.wide), 1)
         self.assertIn("    brain.held[0][3]  A 0  |  B 1", self.said)
+
+    def test_a_proofs_base_of_this_trees_sizes_is_read_by_its_own_layout(self):
+        """state_parting tries the base's --tree layout first for the base: a base whose rows are this tree's size
+        with members moved fits this tree's layout too, and read by it the two games part where they are equal."""
+        self.assertEqual(self.mlay.size, self.lay.size)
+        base, test = self.game("moved.imprec", lay=self.mlay), self.game()
+        self.assertEqual(think.state_parting(base, test, trees=[self.moved], cache=self.cache),
+                         (None, "state equal at every tick to 400"))
+        # read by this tree's layout the base's sea_refused is its nfmem
+        parted, said = think.state_parting(base, test, cache=self.cache)
+        self.assertEqual(parted, (31, "brain.nfmem", "2", "0"))
+        self.assertEqual(said, "state parts in the step from GameTime 30: brain.nfmem 2 | 0 (+1 fields)")
+        # a difference the two layouts both name is still the first parting
+        b = self.game("moved-b.imprec", lay=self.mlay, change={12: self.put("brain", 1, "sea_refused", 3, self.mlay)})
+        self.assertEqual(think.state_parting(b, test, trees=[self.moved], cache=self.cache)[0],
+                         (31, "brain.sea_refused", "3", "2"))
+
+    def test_an_enum_two_layouts_number_apart_is_compared_by_name(self):
+        """THE FEWER TREE numbers IMPAI_JOB_SQUAD 1 where this tree numbers it 2: a job of that kind is the same
+        job in both recordings, and the same number under two names is not."""
+        kind = {lay: next(f for f in lay.fields("job") if f.name == "kind") for lay in (self.lay, self.flay)}
+        self.assertEqual((kind[self.lay].show(bytes([2])), kind[self.flay].show(bytes([1]))), ("SQUAD", "SQUAD"))
+        base = self.game("fewer.imprec", lay=self.flay, change={19: self.put("job", 12, "kind", 1, self.flay)})
+        test = self.game()
+        self.assertEqual(think.state_parting(base, test, trees=[self.fewer], cache=self.cache),
+                         (None, "state equal at every tick to 400"))
+        # the number 1 in both: SQUAD by the base's layout, BUILD by this tree's
+        build = self.game("build.imprec", change={19: self.put("job", 12, "kind", 1)})
+        parted, _said = think.state_parting(base, build, trees=[self.fewer], cache=self.cache)
+        self.assertEqual(parted, (100, "job[12].kind", "SQUAD", "BUILD"))
 
     # ---- recorded data is data ----
     def test_a_malformed_recording_is_a_message(self):
