@@ -436,18 +436,20 @@ drops the back ones.
 no team colour (bit 1 set, bit 2 clear) shows its anim state's current frame only when its piece is
 drawn with **mode 0**; any other mode draws frame 0. The anim state is the face's own `+0x10`, in
 the type's template, so every unit of a type shows the same frame. The binder `0x42A140` registers
-each such state in **the animated-face list** — `main+0x148EB` (a `u32*`, grown by `0x4D84A0` at
-`0x42A236..0x42A282`), count `main+0x148E7`, freed and zeroed with the level at
+each such state in **the animated-face list** — `main+0x148EB` (a `u32*`, the state initialised at
+`0x42A21D..0x42A221`, a team face leaving at `0x42A22F..0x42A234`, the list grown by `0x4D84A0` and
+appended to at `0x42A236..0x42A282`), count `main+0x148E7`, freed and zeroed with the level at
 `0x42A5DA..0x42A603` — and `0x415B30`, called once a game-loop pass at `0x49558A`, steps every
 entry through `0x4B8B90`. Team faces (`0x42A232`) are not registered and never step. Which mode a
 piece gets is the unit draw `0x458810`'s choice:
 
-- It computes `still` first: for a structure (`+0x110` bit 29), **not activated** — `not al; and 1`
+- It computes `still` first: for a structure (`+0x110` bit 29, tested at `0x458845`), **not activated** — `not al; and 1`
   over `+0x10E` (`0x45884C..0x45885C`); for anything else, its move object's speed is 0 —
   `cmp [[unit]+0x20],0; sete` (`0x458862..0x45886C`). It passes `still` on (`[esp+0x2C]`, stored over
   its own first argument).
 - **No composite**: every visible piece is drawn directly by `0x4584D0` (`0x458972..0x458997`) with
-  `still` as the mode. A tank's treads and a commander's torso glow cycle while it moves.
+  `still` as the mode, which its copy of the face rule tests at `0x458635..0x458656`
+  (`[esp+0x3F84]`, its seventh argument). A tank's treads and a commander's torso glow cycle while it moves.
 - **A composite**: the builder `0x4586A0` bakes the cached pieces with mode 1 (every call pushes
   `1` or `-1`: `0x4588FE`, `0x459367`, `0x4595F5`, `0x459669`), so they hold frame 0. Then the blit
   `0x459200` draws the visible dont-cache pieces (bit 0 set, bit 1 clear) live: with a depth plane
@@ -2756,8 +2758,6 @@ design and the measurements). Nothing here is patched; `fxown`'s detours on `0x4
 | `0x4210A3` | the explosion tick `0x420F30` frees a body by writing `0xFF` over its first byte (after re-adding an explosion through `0x420A30`), then zeroes the explosion's `+0x00`. DISASSEMBLED |
 | `0x420C53..0x420C68` | the explosion pass's body draw, after the anchor passed `0x4B6720(main+0x37E27, …)`: `+0x00` non-zero → `0x46BAE0(ctx, pos, body, +0x4C)`. DISASSEMBLED |
 | `0x49C0FA..0x49C11A` | rendertype 1's triple: the projectile's `+0x34` words with `0x8000` added to the second and third; `0x49C127` draws the weapon's `+0x74` node. `0x49C12C..0x49C185`: the thrust flame, the node's `+0x30` child, while `+0x46` (death) is after the tick, with `+0x64` as its first word when the weapon's `+0x111` has bit 21. `0x49C477`: rendertype 6 passes the words as they are. `0x49C252`: rendertype 3 passes `[esp+0x38]`, a local nothing in `0x49BE60` writes. DISASSEMBLED |
-| `0x4B8B90` | **one step of an anim state**, `stdcall (state)`, `ret 4`: nothing with no sequence (`state+8`); a countdown `+0x02` of 2 or more is decremented; otherwise the frame `+0x00` advances, wraps to 0 at the sequence's `u16` count when the loop byte `+0x04` is set and **nulls the sequence** when it is not (`0x4B8BD2`), and the countdown reloads from the new frame's `u16` at `seq+0x2C+8·frame`. Returns 1 when the frame moved. Callers: `0x415B30` (the animated-face list), the explosions `0x4210BB`/`0x4210CB`, the features `0x42407F`..`0x42447D`, `0x478BFD`. DISASSEMBLED |
-| `0x4B8BF0` | **n steps of an anim state**, `stdcall (state, n)`, `ret 8`: for a sequence of more than one frame, subtracts `n` from the countdown and advances frames, with `0x4B8B90`'s wrap and null, until it is positive. One caller, the cursor `0x4AB5F0`. DISASSEMBLED |
 | `0x415B30` | **the animated-face tick**: walks `main+0x148EB[main+0x148E7 - 1 .. 0]` and steps each state through `0x4B8B90`; called once from the game loop at `0x49558A`, between the features `0x424050` and `0x490C40`. DISASSEMBLED |
 | `0x4B7EE0` | the anim-state frame: `state+8` is the sequence, tested first — a NULL sequence returns 0 (`0x4B7EE6..0x4B7EEB`), which `0x4C7580` then draws nothing for; otherwise `*(seq + 0x28 + 8·frame)` with the `u16` at `state+0` **unbounded**. `ret 4`. DISASSEMBLED |
 | `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0; the frame is **`*(u32*)(seq + idx*8 + 0x28)`** — the table at `seq+0x28` is `{GAFFrame*, u32}` pairs, stride 8, and each `GAFFrame` header is followed by its own pixel plane (a frame's `+0x10` points at `frame+0x18` for an uncompressed frame). It reads the count **before** its NULL test on `seq`. DISASSEMBLED; the layout MEASURED 2026-09-29 (TA Zero, `ArmT1Solar` team sequence: frame 0 16x16 uncompressed at `f`, pixels at `f+0x18`) |
