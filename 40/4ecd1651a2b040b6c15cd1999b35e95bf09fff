@@ -1,0 +1,4 @@
+landing-review: model=claude-opus-5-5 effort=medium range=e2ff4c94..404ecd16 findings=3 acted=2 rejected=0 date=2026-11-18
+1 MEDIUM carried units classed by their own composite (engine draws cargo through the carrier's blit, 0x459669 mode -1 / 0x459423 parent still) -> fixed 8ce483d4, measured ARMATLAS+ARMPW cargo class 0.
+2 LOW docs: every unit bakes a composite at first draw (0x458870, 0x4588FE); walking examples reworded in 4 places -> fixed 8ce483d4.
+3 PLAUSIBLE atlas fill by animated frames -> measured, no change: 38 animated stock types x4 owners at zoom 0.25 = 349/2048 entries, 840/2048 rows, no recycle.
