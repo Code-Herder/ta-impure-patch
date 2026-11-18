@@ -6,7 +6,7 @@ or its code, a build of its own played in a network game.
     tools/impai/gauntlet.py run --dll DLL --cand ROW --pool ROW[,ROW...] --tag TAG [--blocks N] [--lanes L]
                                 [--out DIR]
     tools/impai/gauntlet.py run --code --cand DLL --pool NAME=DLL[,NAME=DLL...] --tag TAG [--games N]
-                                [--maps KEY,KEY...] [--cap T] [--at-once K] [--out DIR]
+                                [--maps KEY,KEY...] [--cap T] [--at-once K] [--no-humans] [--out DIR]
     tools/impai/gauntlet.py judge DIR
 
 WHY. A candidate that beats the last champion can still lose to an older one: strength among settings need not be
@@ -52,7 +52,9 @@ unless --cap names another.
 THE MAPS default to DUEL_MAPS, four of the development pool's five, the pool the settings gauntlet plays. A duel
 seats its two idle humans on a map's first two starts and the computer seats on the next two (codeduel.py, THE
 MAP), so a map needs four, which every map of the bar's two pools has (ten each), and both seats must play from
-those two. MEASURED 2026-11-17, a duel a map to GameTime 5 000 or 6 000 between two champions' builds: both seats
+those two. With --no-humans every duel is codeduel.py's --no-humans (its THE HUMANS GONE): the humans watch,
+the computer seats play the map's first two starts, and a game plays at Normal speed; a directory holds the
+duels of one of the two kinds. MEASURED 2026-11-17, a duel a map to GameTime 5 000 or 6 000 between two champions' builds: both seats
 gave orders on Acid Foursome, Luschaven, Gasplant Plain and Lava Alley, and on the bar's Lava Mania, Pincushion,
 Red Triangle and Plains and Passes; on Steel Jungle neither build gave one (two duels), and on Trout Farm the
 seat on start 2 gave none. Those two maps are left out of the default; --maps takes any of bar.py's.
@@ -221,9 +223,9 @@ def fix_dlls(out: Path, dlls: dict) -> dict:
     return kept
 
 
-def duel_games(member: str, n: int, maps: list, cap: int) -> list:
-    """A member's duels, in order (THE CODE GAUNTLET): [{id, member, map, sides, role, cap}], `sides` the
-    candidate's side then the member's, `role` h for the candidate the host and j the joiner."""
+def duel_games(member: str, n: int, maps: list, cap: int, no_humans: bool = False) -> list:
+    """A member's duels, in order (THE CODE GAUNTLET): [{id, member, map, sides, role, cap, no_humans}], `sides`
+    the candidate's side then the member's, `role` h for the candidate the host and j the joiner."""
     if n < 2 or n % 2:
         raise CouldNotJudge(f"--games {n}: an even number, the candidate the host in half and the joiner in half")
     games = []
@@ -232,7 +234,7 @@ def duel_games(member: str, n: int, maps: list, cap: int) -> list:
         at, rnd = j % len(maps), j // len(maps)
         m, sides, role = maps[at], bar.BLOCK_SIDES[(at + rnd) % len(bar.BLOCK_SIDES)], "hj"[k % 2]
         games.append({"id": f"{member}-{j + 1:02d}{role}-{m}-{sides}", "member": member, "map": m, "sides": sides,
-                      "role": role, "cap": cap})
+                      "role": role, "cap": cap, "no_humans": no_humans})
     return games
 
 
@@ -241,7 +243,8 @@ def duel_command(game: dict, dlls: dict, cand: str) -> list:
     host, join = (cand, game["member"]) if game["role"] == "h" else (game["member"], cand)
     sides = game["sides"] if game["role"] == "h" else game["sides"][::-1]
     return [sys.executable, str(HERE / "codeduel.py"), "--a", str(dlls[host]), "--b", str(dlls[join]),
-            "--out", str(game["dir"]), "--map", game["map"], "--sides", sides, "--cap", str(game["cap"])]
+            "--out", str(game["dir"]), "--map", game["map"], "--sides", sides, "--cap", str(game["cap"]),
+            *(["--no-humans"] if game["no_humans"] else [])]
 
 
 def duel_deadline(cap: int) -> float:
@@ -391,10 +394,14 @@ def run_code(a, launch=None, play=play_duels) -> int:
         maps = [codeduel.map_of(m)[0] for m in a.maps.split(",") if m]
         if not maps:
             raise CouldNotJudge("--maps: one map or more")
-        plan = {p: duel_games(p, a.games, maps, a.cap) for p in pool}
+        plan = {p: duel_games(p, a.games, maps, a.cap, a.no_humans) for p in pool}
         dlls = fix_dlls(out, {cand: cand_dll, **pool})
+        # a state with no `no_humans` is a gauntlet of duels with the humans idle
         st = load_code_state(out, {"code": True, "cand": cand, "pool": list(pool), "games": a.games, "maps": maps,
-                                   "cap": a.cap, "dlls": {n: ladder.md5(d) for n, d in dlls.items()}})
+                                   "cap": a.cap, "dlls": {n: ladder.md5(d) for n, d in dlls.items()},
+                                   **({"no_humans": True} if a.no_humans else {})})
+        if st.get("no_humans") and not a.no_humans:
+            raise CouldNotJudge(f"{out / STATE} is another gauntlet (no_humans True): one directory is one gauntlet")
     except (CouldNotJudge, ValueError, OSError) as e:
         print(f"gauntlet: COULD NOT RUN: {e}")
         return COULD_NOT
@@ -565,6 +572,7 @@ def main(argv=None) -> int:
                                                                f"{','.join(DUEL_MAPS)})")
     r.add_argument("--cap", type=int, default=bar.CAP, help=f"--code: the GameTime a duel plays to (default {bar.CAP})")
     r.add_argument("--at-once", type=int, default=AT_ONCE, help=f"--code: duels at once (default {AT_ONCE})")
+    r.add_argument("--no-humans", action="store_true", help="--code: every duel is codeduel.py's --no-humans")
     r.add_argument("--tag", required=True, help="the run's name under .data/impai/gauntlet/ (unless --out)")
     r.add_argument("--blocks", type=int, default=bar.GAUNTLET_BLOCKS, help="blocks a pool member (10 games each)")
     r.add_argument("--lanes", type=int, default=LANES)

@@ -11562,6 +11562,62 @@ static void patch_sight_cap(void)
                    "(0x481505 0x483D88 0x48292C) %s", s_sightCap, fix_state(r));
 }
 
+SIM_FEATURE(duel_lever, SIM_PUPPET_RUNS, "battle");
+
+/* THE DUEL LEVER, A TEST LEVER: `tagpu_impai_duel.on`, in a test launch only (tagpu_regstore_active),
+   holds off the network game's end for want of a human, so that two builds of ImpAI play a network
+   game with no human on the map and the harness ends it (tools/impai/codeduel.py --no-humans;
+   research/notes/modules/duel-lever.md). The players' game never runs it: with no lever, or outside
+   a test launch, nothing is written at the site.
+   THE SITE (DISASSEMBLED; engine/network.md, *The network game's end test*). After its loop over the
+   ten records the players phase 0x464F80 tests, on every call:
+       004655C0  call 0x435100                   GameingState's mode
+       004655C5  cmp eax,3 / jne 0x46563B        a network game
+       004655CA  mov ecx,[0x511DE8]
+       004655D0  cmp dword [ecx+0x37EF6],2       ActiveCommanderDeath
+       004655D7  je  0x46563B                    not Deathmatch
+       004655D9  call 0x457CB0                   the humans still in the game
+       004655DE  test eax,eax
+       004655E0  jne 0x46563B                    75 59: some, so return
+       004655E2  ...                             none: the countdown main+0x39239, then stop and lost
+   0x457CB0 never counts a computer seat, so stock ends the level once no human holds a unit. The
+   lever writes the jne's opcode, 75 -> EB: the branch to the phase's return is always taken, and
+   0x4655E2..0x46563A, which no jump from outside enters, never runs. The count's other call,
+   0x4657E8 (whether a player who is out sees the watch notice), keeps its answer.
+   WHY IT CANNOT RUN HALF-WRITTEN: one byte is written, the opcode of a two-byte instruction whose
+   displacement stays, so at every moment the site holds a whole `jne 0x46563B` or a whole
+   `jmp 0x46563B`; and it is written from DllMain, before TotalA.exe's entry point (THE FAIL-CLOSED
+   SITE TABLE, above), when no thread runs the players phase.
+   The whole test, 0x4655C5..0x4655E1, is byte-matched first: on any other bytes nothing is written,
+   the line says so, and the game plays as that exe ships it. */
+#define VA_DUEL_TEST 0x004655C5u
+#define VA_DUEL_JNE  0x004655E0u
+
+static void patch_duel_lever(void)
+{
+    static const unsigned char test[29] = {
+        0x83, 0xF8, 0x03, 0x75, 0x71, 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00, 0x83, 0xB9, 0xF6, 0x7E,
+        0x03, 0x00, 0x02, 0x74, 0x62, 0xE8, 0xD2, 0x26, 0xFF, 0xFF, 0x85, 0xC0, 0x75, 0x59 };
+    static const unsigned char jmp = 0xEB;
+
+    if (!tagpu_sim_lever("tagpu_impai_duel.on")) return;
+    if (!tagpu_regstore_active()) {
+        plog("duel: tagpu_impai_duel.on refused: not a test launch (tagpu_regstore.h)");
+        return;
+    }
+    if (memcmp((const void*)(size_t)VA_DUEL_TEST, test, sizeof test) != 0) {
+        plog("duel: tagpu_impai_duel.on NOT installed: 0x4655C5..0x4655E1 does not hold the retail "
+             "exe's network end test; the game ends as this exe ends it");
+        return;
+    }
+    if (!tagpu_detour_write(VA_DUEL_JNE, &jmp, 1)) {
+        plog("duel: tagpu_impai_duel.on NOT installed: 0x4655E0 could not be written");
+        return;
+    }
+    plog("duel: TEST LEVER tagpu_impai_duel.on -- installed: a network game no longer ends for want "
+         "of a human (0x4655E0 jne -> jmp)");
+}
+
 SIM_FEATURE(apply_patches, SIM_PUPPET_RUNS, "battle");
 
 void tagpu_apply_patches(void)
@@ -11705,6 +11761,7 @@ void tagpu_apply_patches(void)
     patch_engine_defects();
     patch_loader_defects();
     patch_sight_cap();
+    patch_duel_lever();
 }
 
 SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");

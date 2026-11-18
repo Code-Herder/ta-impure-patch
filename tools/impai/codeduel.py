@@ -3,6 +3,7 @@
 own ddraw.dll and playing the one computer seat it added.
 
     tools/impai/codeduel.py --a DLL_A --b DLL_B --out DIR [--map NAME] [--sides aa|ac|ca|cc] [--cap T] [--port N]
+                            [--no-humans]
 
 One game of two instances (twopeers.py: a private display, a DirectPlay port leased for the game), under the run
 lock for two game lanes on GDI, no GPU memory (tools/runlock.py). The host H runs DLL_A and the joiner J DLL_B,
@@ -14,7 +15,8 @@ at the cap's by THE VALUE AT THE CAP.
 
 THE MAP is one of bar.py's (a key of bar.MAPS, or a map's own name); the battle room loads it by name. With
 fixed locations the humans take the map's first two start positions and the AI seats the next two, in row
-order, so the map needs four; the result names each seat's start.
+order, so the map needs four; the result names each seat's start, its own peer's +0x147 (a peer's copy of
+another peer's record holds another figure there, MEASURED: the record's index).
 
 THE HUMANS STAY, ALLIED AND IDLE. A network game seats each peer's human beside the AIs, and the engine ends a
 network game once no human still playing holds a unit, whatever the AI seats hold (0x4655C0..0x4655E0: mode 3,
@@ -29,6 +31,26 @@ allies only by its team, engine/network.md), its commander never ordered. A's te
 (seat_room). The other side's AI treats that commander as an enemy unit, so a game is not the two AI seats
 alone: the judge reads the AI seats' records only, and a game the engine ends because both commanders died
 with both AI seats alive is `ended`, not an outcome.
+
+THE HUMANS GONE (--no-humans). Both peers' game folders hold the duel lever tagpu_impai_duel.on, under which
+the DLL holds that end test off (tagpu_patches.c, patch_duel_lever; research/notes/modules/duel-lever.md), and
+both humans watch: the host sets the battle room's WATCHING to Allowed and each human its side gadget SIDE0 to
+its third stage (watch_room). A watcher has no commander and takes no start, so the two AI seats play the
+map's first two starts, the ones a skirmish plays, and no seat takes a team. The engine runs neither its out
+test nor its victory test for a watcher's record (engine/network.md, *The other ends of a network level*), so
+nothing ends the level but a peer leaving: the harness, at the first look with a seat gone or at the cap.
+MEASURED 2026-11-18 on Lava Mania to a cap of 6 000, one build on both peers: the level played on past
+GameTime 35 to the cap; each peer logged ImpAI's turns for its own seat alone (6 176 and 6 502); A's commander
+stood on start 0 and B's on start 1 in both peers' rosters; the host's Pause key stood both clocks, and both
+peers read 10 and 8 units, 31 416.92 and 31 294.15, equal to the cent; and to a cap of 70 000, 210 and 174
+units, 79 779.72 and 70 311.23 on both. No such game has yet ended by a seat's loss.
+  - The judge (humans_gone) checks, in place of the teams: each peer's log holds the lever's installed line;
+    no record but the two AI seats' holds a unit from some look on to the last (the result's `humans_out`,
+    each peer's GameTime of that look); neither AI seat's alliance bytes ally the other.
+  - THE SPEED is Normal, 30 ticks a second: the engine refuses a watcher's speed keys (0x496550, 0x4965AA;
+    MEASURED 29.9 after ten `+` on both peers), and the in-game Options screen's Game Speed slider, taken to
+    its end on the host, left it at 30.0 (MEASURED; why is not read). So no `+` is pressed, and a game takes
+    twice the wall time of one with the humans idle.
 
 THE SPEED. A network game starts at Normal speed whatever the registry's `gamespeed` says: 30.1 ticks a second
 (MEASURED on three games), and 45.0 once the host alone had pressed `+` five times. So both peers press it
@@ -54,7 +76,7 @@ host at about 57 ticks a second where the joiner played about 60). So:
 
 THE VALUE AT THE CAP is bar.py's value at the limit, read from the game's memory on both peers: the value of
 each AI seat's finished units alive, a unit's type's metal + energy / 60 by the peer's own type table (`tacli
-units`), summed by bar.value_at. A network game keeps no recording (`recorder: recording` is in neither
+units`), summed by bar.value_at. A network game writes no skirmish recording (`recorder: recording` is in neither
 peer's log) and refuses the pacing's `pause at T` (`pause: at 6000 refused: a network game`, MEASURED on both
 peers), so the harness stops the game with its own Pause key and reads the units themselves:
   - once the host's look is at or past the cap, the Pause key on the host (the joiner if the host's does
@@ -86,7 +108,7 @@ THE JUDGE (`judge`), from the two logs:
     other peer by its DirectPlay ID (a row index differs between peers), where it is controller 3 and among
     the other peers' ImpAI seats;
   - the teams: on each peer A's team is its own human's and not B's, and each AI seat allies its human and
-    not the other seat;
+    not the other seat; with --no-humans, THE HUMANS GONE's checks instead;
   - each peer's view: the first look at which an AI seat that held a unit holds none names the loser (both at
     one look: a draw, written as bar.py writes it, `cap` with `draw`); for the host, neither at its first look
     at or past the cap: `cap`, and no later look of its is read; the joiner, with no seat gone at any look, is
@@ -151,6 +173,8 @@ SEATING = {0x13F: "team", 0x108: "allies", 0x147: "start",     # engine/units.md
            0x67: "first", 0x6B: "last"}                         # bytes (the first four), the start position,
                                                                 # the unit block's first and last unit
 SIZE = {0: 4, 4: 4, 0x73: 1, bar.ALIVE: 2, bar.LOST: 2, 0x13F: 1, 0x108: 4, 0x147: 1, 0x67: 4, 0x6B: 4}
+DUEL_LEVER = "tagpu_impai_duel.on"      # THE HUMANS GONE: tagpu_patches.c, patch_duel_lever
+DUEL_LINE = f"duel: TEST LEVER {DUEL_LEVER} -- installed"
 # THE VALUE AT THE CAP
 UNIT = 0x118                            # a unit's bytes (engine/units.md)
 U_FROM, U_SPAN = bar.UNIT_TYPE, 0x6E    # the bytes of a unit a peek reads: +0xA6 .. +0x113
@@ -426,16 +450,53 @@ def teams(first: dict, dpid: dict) -> list:
     return bad
 
 
-def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None) -> dict:
+def humans_out(lks: list, dpid: dict):
+    """The GameTime of the first look from which no record but the two AI seats' holds a unit; None when one
+    does at the last look."""
+    ai, out = set(dpid.values()), None
+    for lk in lks:
+        if any(r["active"] and r["dpid"] not in ai and r["alive"] for r in lk["recs"].values()):
+            out = None
+        elif out is None:
+            out = lk["t"]
+    return out
+
+
+def humans_gone(texts: dict, lks: dict, first: dict, dpid: dict) -> tuple:
+    """({peer: humans_out}, the failures of THE HUMANS GONE): each peer's DLL installed the duel lever, no
+    human holds a unit at its last look, and neither AI seat allies the other."""
+    bad, out = [], {}
+    for p in PEERS:
+        if DUEL_LINE not in texts[p]:
+            bad.append(f"{p}: its log has no `{DUEL_LINE}`: the end test was not held off")
+        out[p] = humans_out(lks[p], dpid)
+        if out[p] is None:
+            bad.append(f"{p}: a record that is no AI seat's holds a unit at its last look")
+        idx = {s: record_of(first[p], dpid[s]) for s in ("A", "B")}
+        if None in idx.values() or any("allies" not in first[p]["recs"][i] for i in idx.values()):
+            bad.append(f"{p}: its first look does not hold the two seats' alliances {idx}")
+            continue
+        for s, o in (("A", "B"), ("B", "A")):
+            allies = first[p]["recs"][idx[s]]["allies"]
+            if idx[o] >= SIZE[0x108]:   # the look holds the first SIZE[0x108] alliance bytes: no bit to test
+                bad.append(f"{p}: seat {o} is record {idx[o]}, past the {SIZE[0x108]} alliance bytes a look reads")
+            elif allies >> (8 * idx[o]) & 1:
+                bad.append(f"{p}: seat {s}'s alliance bytes {allies:#010x} ally seat {o} (record {idx[o]})")
+    return out, bad
+
+
+def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None, no_humans: bool = False) -> dict:
     """The game's result from the two peers' logs (THE JUDGE) and, for a game at the cap, their reads of the
     units there (`at_cap`, cap_value's). `only` is only_stems of the two DLLs, None to leave the fingerprint
-    out. Keys: outcome (A, B, cap, desync, could not run), draw, reason, end_tick, cap, value, pulse, lead,
-    clock, seats, peers, failed."""
+    out; `no_humans` judges THE HUMANS GONE's seating in place of THE HUMANS STAY's. Keys: outcome (A, B, cap,
+    desync, could not run), draw, reason, end_tick, cap, value, pulse, lead, clock, seats, peers, humans,
+    humans_out, failed."""
     texts = {"H": host, "J": join}
     plays = {p: play_text(texts[p]) for p in PEERS}
     lks = {p: looks(plays[p]) for p in PEERS}
     res = {"outcome": "could not run", "draw": False, "reason": "", "end_tick": None, "cap": cap, "value": {},
-           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": []}
+           "pulse": {}, "lead": None, "clock": {}, "seats": {}, "peers": {}, "failed": [],
+           "humans": "none" if no_humans else "idle"}
     short = [p for p in PEERS if not lks[p]]
     if short:
         res["reason"] = f"no look in the log of {', '.join(short)}"
@@ -445,7 +506,11 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
     ahead = res["clock"]["J"] - res["clock"]["H"]
     marks, dpid, bad = seats(texts, first)
     if len(dpid) == 2:
-        bad += teams(first, dpid)
+        if no_humans:
+            res["humans_out"], out = humans_gone(texts, lks, first, dpid)
+            bad += out
+        else:
+            bad += teams(first, dpid)
         res["peers"] = {"H": view(lks["H"], dpid, cap), "J": view(lks["J"], dpid, None)}
         if res["peers"]["H"]["outcome"] == "cap" and res["peers"]["J"]["outcome"] == "unfinished":
             res["peers"]["J"]["outcome"] = "cap"
@@ -498,8 +563,9 @@ def judge(host: str, join: str, cap: int, only: dict = None, at_cap: dict = None
         return res
     o = vh["outcome"]
     if o in ("ended", "unfinished"):
-        why = {"ended": "its level ended with both AI seats holding units (THE HUMANS STAY: the engine ends a "
-                        "network game once no human holds a unit)",
+        why = {"ended": "its level ended with both AI seats holding units" + (
+                   "" if no_humans else " (THE HUMANS STAY: the engine ends a network game once no human holds "
+                                        "a unit)"),
                "unfinished": "its looks stop before an outcome and before the cap"}[o]
         res["reason"] = f"both peers: {said['H']} and {said['J']}: {why}"
         return res
@@ -616,16 +682,29 @@ def seat_room(tp, sides: str):
             tp.click(name, f"SIDE{row}", 20)
 
 
-def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port) -> dict:
+def watch_room(tp, sides: str):
+    """THE HUMANS GONE: the host allows watchers (WATCHING, Disallowed then Allowed), each human takes its
+    side gadget to its third stage, Watch, and each AI seat its side; no seat takes a team."""
+    tp.add_ais()
+    tp.tacli("ui", tp.host, "set", "WATCHING", "1")
+    for name, row, side in ((tp.host, 2, sides[0]), (tp.join, 3, sides[1])):
+        tp.tacli("ui", name, "set", "SIDE0", "2")
+        if side == "c":
+            tp.click(name, f"SIDE{row}", 20)
+
+
+def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port, no_humans: bool = False) -> dict:
     from twopeers import STALL_S, CouldNotRun, TwoPeers
     key, name = map_of(map_name)
     t0 = time.monotonic()
     with TwoPeers(out, a, port, "cd", join_dll=b) as tp:
-        tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "impai"])
+        tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "impai"],
+                  levers=(DUEL_LEVER,) if no_humans else ())
         tp.battle_room(name)
-        seat_room(tp, sides)
+        (watch_room if no_humans else seat_room)(tp, sides)
         tp.start()
-        full_speed(tp)
+        if not no_humans:
+            full_speed(tp)              # THE HUMANS GONE: a watcher's speed keys are refused
         t1 = time.monotonic()
         peers = (tp.host, tp.join)
         first = {n: look(tp, n, range(RECORDS), seating=True) for n in peers}
@@ -668,7 +747,7 @@ def run(out: Path, a: Path, b: Path, map_name: str, sides: str, cap: int, port) 
         port = tp.port
     dlls = {"H": a, "J": b}
     data = {p: d.read_bytes() for p, d in dlls.items()}
-    res = judge(texts["H"], texts["J"], cap, only_stems(data["H"], data["J"]), at_cap)
+    res = judge(texts["H"], texts["J"], cap, only_stems(data["H"], data["J"]), at_cap, no_humans)
     res["cap_read"] = at_cap
     for s, p in SEAT_PEER.items():
         res["seats"].setdefault(s, {}).update(dll=dlls[p].name, sha256=hashlib.sha256(data[p]).hexdigest())
@@ -691,6 +770,7 @@ def main(argv=None) -> int:
     p.add_argument("--sides", default="aa", choices=bar.BLOCK_SIDES, help="A's side and B's: a Arm, c Core")
     p.add_argument("--cap", type=int, default=CAP, help=f"the host's GameTime the game plays to (default {CAP})")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
+    p.add_argument("--no-humans", action="store_true", help="THE HUMANS GONE: both humans watch, under the duel lever")
     a = p.parse_args(argv)
     try:
         map_of(a.map)
@@ -711,7 +791,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port)
+        res = run(out, a.a.resolve(), a.b.resolve(), a.map, a.sides, a.cap, a.port, a.no_humans)
     except (OSError, ValueError, subprocess.SubprocessError, tareplay.CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2

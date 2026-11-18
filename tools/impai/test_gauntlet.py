@@ -170,9 +170,11 @@ class Code(unittest.TestCase):
             self.dlls[name] = self.tmp / f"{name}.dll"
             self.dlls[name].write_bytes(name.encode())
 
-    def run_(self, player, cand="new", pool=("old1", "old2"), games=4, maps="acidfoursome,luschaven", cap=600):
+    def run_(self, player, cand="new", pool=("old1", "old2"), games=4, maps="acidfoursome,luschaven", cap=600,
+             no_humans=False):
         a = argparse.Namespace(out=str(self.tmp / "out"), code=True, cand=str(self.dlls[cand]),
-                               pool=",".join(f"{n}={self.dlls[n]}" for n in pool), games=games, maps=maps, cap=cap)
+                               pool=",".join(f"{n}={self.dlls[n]}" for n in pool), games=games, maps=maps, cap=cap,
+                               no_humans=no_humans)
         with mock.patch.dict("os.environ", {"TARUN_DIR": str(self.tmp / "runs")}), \
                 mock.patch("builtins.print") as said:
             rc = gauntlet.run_code(a, launch=lambda g: None, play=player)
@@ -209,6 +211,20 @@ class Code(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--a") + 1:cmd.index("--a") + 4], ["o.dll", "--b", "n.dll"])
         self.assertEqual(cmd[cmd.index("--sides") + 1], "ca")       # the candidate is Arm on either peer
         self.assertEqual(cmd[cmd.index("--cap") + 1], "600")
+        self.assertNotIn("--no-humans", cmd)
+        gone = dict(gauntlet.duel_games("old1", 4, ["lavamania"], 600, no_humans=True)[2], dir=Path("d"))
+        self.assertEqual(gauntlet.duel_command(gone, dlls, "new")[-1], "--no-humans")
+
+    def test_a_directory_is_a_gauntlet_with_the_humans_or_without(self):
+        self.assertEqual(self.run_(FakeDuels(cand_wins), pool=("old1",)), gauntlet.PASS)
+        self.assertNotIn("no_humans", self.state())
+        self.assertEqual(self.run_(FakeDuels(cand_wins), pool=("old1",), no_humans=True), gauntlet.COULD_NOT)
+        self.assertIn("is another gauntlet (no_humans None)", self.said)
+        __import__("shutil").rmtree(self.tmp / "out")
+        self.assertEqual(self.run_(FakeDuels(cand_wins), pool=("old1",), no_humans=True), gauntlet.PASS)
+        self.assertIs(self.state()["no_humans"], True)
+        self.assertEqual(self.run_(FakeDuels(cand_wins), pool=("old1",)), gauntlet.COULD_NOT)
+        self.assertIn("is another gauntlet (no_humans True)", self.said)
 
     def test_the_points_are_the_candidates_on_either_peer(self):
         self.assertEqual(self.run_(FakeDuels(cand_wins)), gauntlet.PASS)
