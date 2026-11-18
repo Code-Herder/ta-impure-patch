@@ -13374,23 +13374,23 @@ static void check_plant_choice(void)
     s_w.gametime = 2000;
     plant_decide("the opening, no land army anywhere", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
-    /* THE BLIND START (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the first
-       plant at once */
+    /* NO PATCH ON THE MAP (impai_brain.c): before open_t, no factory, the scan whole and no patch published: the
+       first plant at once */
     plant_world();
     s_w.gametime = 300;
     s_spots = NULL;
     s_nspots = 0;
     s_scanned = 1;
-    plant_decide("a blind start", &out, n);
-    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a blind start: the first plant before open_t");
-    /* the scan still under way: none published yet is no evidence, and the opening waits as before */
+    plant_decide("a map with no patch", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "a map with no patch: the first plant before open_t");
+    /* the scan still under way: none published yet is no evidence, and the opening waits */
     plant_world();
     s_w.gametime = 300;
     s_spots = NULL;
     s_nspots = 0;
     plant_decide("a scan under way", &out, n);
     CHECK(!n[C_VP] && !n[T_FACTORY] && !n[C_SY] && !out.plant, "before a whole scan: no plant before open_t");
-    /* a patch in sight: the opening's extractors first, as before */
+    /* a patch published: the opening's extractors first */
     plant_world();
     s_w.gametime = 300;
     s_scanned = 1;

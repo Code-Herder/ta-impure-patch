@@ -675,7 +675,7 @@ typedef struct IMPAI_BRAIN_IN {
     const IMPAI_TINFO* ti;   unsigned nti;      /* type-indexed, nti == ndefs                                */
     const SNAP_PATCH*  spots; unsigned nspots;  /* the seat's published metal patches                       */
     unsigned           scanned;         /* IMPAI_SEAT.scanned: nspots is a whole scan's count; 0, it may not be
-                                           (THE BLIND START, impai_brain.c)                                  */
+                                           (NO PATCH ON THE MAP, impai_brain.c)                              */
     const IMPAI_REACH* reach;           /* NULL: no reach test                                                */
     const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
     const IMPAI_PLAN*  plan;

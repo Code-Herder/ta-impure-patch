@@ -1220,7 +1220,7 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    recordings' player images). The makers already built are switched by THE MAKERS. */
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
    open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
-   own terms (impai_brain.c, economy) less THE BLIND START, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
+   own terms (impai_brain.c, economy) less NO PATCH ON THE MAP, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
    each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
    replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
    is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
