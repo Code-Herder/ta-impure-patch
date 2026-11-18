@@ -85,13 +85,14 @@ WON, AHEAD, NOT_AHEAD, LOST = 3, 2, 1, 0
 EXIT = {PASS: 0, FAIL: 1, UNRUN: 2}
 
 
-def regress(path: Path = REGRESS) -> list:
-    """[(id, setup)] of the regression set: a line is an id and its setup (none for the base game); # comments."""
+def regress(path: Path = REGRESS, parse=bar.parse_id) -> list:
+    """[(id, setup)] of the regression set: a line is an id and its setup (none for the base game); # comments.
+    `parse` refuses an id that names no game of the set's kind (BarError)."""
     out = []
     for ln in Path(path).read_text().splitlines():
         words = ln.split("#", 1)[0].split()
         if words:
-            bar.parse_id(words[0])
+            parse(words[0])
             out.append((words[0], words[1] if len(words) > 1 else None))
     if len(set(out)) != len(out):
         raise bar.BarError(f"{path}: a game listed twice")
