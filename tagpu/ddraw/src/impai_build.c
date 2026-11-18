@@ -1809,6 +1809,21 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
    and switch the seat's plant type, for a raid that lasts a few decisions.
+   THE CUT RING GROWS: a walk the decision's site tests end, which tested at least one site and had every site it
+   tested refused by the site test, is exhausted like a ring walked to its end; one that tested none (the budget
+   was spent before it) or had a site pass the site test is not. WHY: the walk begins at the same site at every
+   decision, so without the rule a ring whose nearest sites the site test refuses, more of them than the tests
+   the decision has left, is tested at the same sites for good: it never reaches its end, never grows, and takes
+   the decision's site tests from every builder asked after it (decisions.md, *The ring the budget cut*).
+   INVARIANT, an ordering:
+   a base ring's walk that tests a site ends in an order, in a site that passed the site test (its way refused
+   and recorded, its route or the resolver refusing it), in a site left for a cause that is no lack of room, or
+   in growth; so no ring is walked to the same refusals at two decisions running, and a plant type no site
+   takes is passed over within nine such walks (THE PLANT'S FALLBACK). It adds no want and no spending: an order
+   it lets through is one the ladder already asked for, the plant's among them under economy's own terms
+   (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
+   income, and its energy). What it gives up: the ring's sites past the cut, farther from the walk's key than
+   every site tested, are not tested before the next ring's nearest are.
    THE RING'S UNSEEN SITES: a site inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz < H:
    0x47D302..0x47D352; one outside them is refused wherever the seat has looked, and is the site test's as
    before) whose footprint centre the seat has not explored is never tested -- the seat's
@@ -1846,6 +1861,8 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0, unseen = 0;
+    int tested = 0, passed = 0, cut = 0;    /* this walk's site tests, those of them the site test passed, and
+                                               whether the budget ended it (THE CUT RING GROWS) */
     if (at) box = *at;
     else if (d->has_bbox) box = d->bbox;
     else {
@@ -1903,9 +1920,14 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             }
             continue;
         }
-        if (*tests >= cap) return 0;
+        if (*tests >= cap) {
+            cut = 1;
+            break;
+        }
         (*tests)++;
+        tested++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
+        passed++;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
             threat_skipped++;
             continue;
@@ -1925,6 +1947,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         if (d->roots >= d->root_cap) return 0;
     }
     if (at || out >= 0 || beyond || threat_skipped || unseen) return 0;
+    if (cut && (!tested || passed)) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
