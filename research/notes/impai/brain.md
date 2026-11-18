@@ -663,7 +663,10 @@ the storage, outside a surplus and outside the pressure, the seat holds every sp
 reach the floor (`held=` on the `eco` line), in its usual order -- a factory a budgeted seat gave five in a surplus
 before the hold finishes them first --, and the floor's factory takes whatever the governor gives it, a constructor included -- the hold refuses no constructor, which would recreate the loop above. No plant
 past the first is started (the second factory, the sea plant and the tech-up wait); a plant already begun is
-finished by its builder. The assist helps only an extractor's, a geothermal's, an energy building's or a maker's
+finished by its builder. Which gate holds which want is one table (`impai_brain.c`, THE VETOES, `impai_veto`): the
+decision sets its gates once -- the hold, the energy stall, the metal stall, the pressure, the surplus, the map not
+yet judged naval or not -- and each of the economy's six wants (the next plant, the sea plant, the tech-up, a
+ground defence, an anti-air structure, a sensor) is its need and no gate its row names. The assist helps only an extractor's, a geothermal's, an energy building's or a maker's
 frame and helps no product; a helper on anything else is given the ladder an idle builder gets,
 or stopped when the ladder has nothing for it (`released=`), and its job ends only with the order that replaced its
 head. Each is an economy order, through the funnel and the bucket; under a persona's bucket the yard moves, the maker switches and the idle builders

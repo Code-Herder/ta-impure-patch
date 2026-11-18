@@ -37,6 +37,19 @@ typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; uint16_
    THE WAY OFF) */
 typedef struct IMPAI_WAYTO { int32_t x, z, h; uint16_t slot, pad; } IMPAI_WAYTO;
 
+/* THE GATES (impai_brain.c, economy): what the seat's state refuses a spend for, each one bit of IMPAI_DEC.gates,
+   set once a decision. THE VETOES (impai_brain.c, impai_veto): one row a want, the gates that hold it.          */
+#define IMPAI_G_HOLD     0x01u       /* THE HOLD (hold_read)                                                    */
+#define IMPAI_G_E_STALL  0x02u       /* the energy stall: the energy store below stall_pm of the storage        */
+#define IMPAI_G_M_STALL  0x04u       /* the metal stall: the store below it and the steady income below the ask */
+#define IMPAI_G_PRESSED  0x08u       /* THE PRESSURE as the economy reads it (hold_read)                        */
+#define IMPAI_G_SURPLUS  0x10u       /* the metal store at SURPLUS_FRAC of its maximum or more (hold_read)      */
+#define IMPAI_G_UNJUDGED 0x20u       /* the military has not judged the map naval or not (IMPAI_MIL.naval < 0)  */
+#define IMPAI_G_ALL      0x3Fu
+enum { IMPAI_W_FACTORY, IMPAI_W_SEA, IMPAI_W_TECH, IMPAI_W_DEF, IMPAI_W_AA, IMPAI_W_SENSOR, IMPAI_WANTS };
+typedef struct IMPAI_VETO { const char* want; uint32_t gates; } IMPAI_VETO;   /* the want's field; IMPAI_G_* */
+extern const IMPAI_VETO impai_veto[IMPAI_WANTS];
+
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
 #define IMPAI_MR_MEMO      16        /* constructor types THE METAL'S REACH remembers its answer for, a decision */
@@ -141,6 +154,7 @@ typedef struct IMPAI_DEC {
                                    decision's surplus orders past their first (impai_econ.c, THE FIVE,
                                    bounded)                                                                  */
     int           pressed, surplus, hold;
+    uint32_t      gates;        /* THE GATES: this decision's IMPAI_G_* bits (impai_brain.c, economy)          */
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
        every structure impai_def_struct takes, wherever it stands, an anti-air tower with a ground reach included
