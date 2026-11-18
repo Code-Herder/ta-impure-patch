@@ -364,9 +364,8 @@ copied rather than re-run; gravity 0, which shortens no gated type's weapon at r
 offline). The predictor's work is a `tagpu_sim_scratch` block freed in the same call. They are not part of the
 content's all or none: a level whose values cannot be built keeps its content and plays with every plant score
 and every class gate off, the choice the least value as before. The level init logs `impai: values types=
-fields=<T1>,<T2>,<T3>,<T4> runs= refused= ms=`, or `impai: values none: …`; retail's is `types=47
-fields=12,32,32,32 runs=3572 refused=0` (the same build offline over the retail fight content, MEASURED
-2026-11-14; its `ms` is the first bar game's to report).
+fields=<T1>,<T2>,<T3>,<T4> runs= refused= ms=`, or `impai: values none: …`; retail's is `types=46
+fields=12,32,32,32 runs=3496 refused=0` (MEASURED 2026-11-18, a base-game bar game's level init).
 
 **The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)),
 the calibration references of `duelgen.py`'s duels, groups, defence and naval fights ([tasim

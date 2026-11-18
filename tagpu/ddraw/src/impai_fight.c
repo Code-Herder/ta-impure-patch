@@ -131,10 +131,15 @@ static float size_px(const IMPAI_FTYPE* t)
 }
 
 /* weapon w's damage on type j: its [DAMAGE] row for j by binary search over its rows, sorted by type, else
-   its default. The caller has bounded the span to the pool. */
+   its default; 0 for a paralysing weapon, whatever its rows say. The caller has bounded the span to the pool.
+   A PARALYSER DEALS NO DAMAGE (tasim_roles.c): the engine's damage apply leaves a paralyser's hit without
+   touching hit points, so its [DAMAGE] figures take none, and every caller passes over a weapon whose
+   damage is 0 -- no rate, no weapon entry, no stand-off from it. The bit is the record's own +0x111 bit 7,
+   which the content's filler stores whole in IMPAI_FWEAPON.flags (tagpu_worldq_fight_in). */
 static int32_t damage_on(const IMPAI_FCONTENT* c, const IMPAI_FWEAPON* w, unsigned j)
 {
     unsigned lo = w->d0, hi = w->d0 + w->nd;
+    if (w->flags & TASIM_WF_PARALYZER) return 0;
     while (lo < hi) {
         const unsigned mid = lo + (hi - lo) / 2;
         if (c->d[mid].type < j) lo = mid + 1;

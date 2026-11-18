@@ -1777,3 +1777,47 @@ The yard itself runs without a pause: on the Trout Farm recording a CORSUB is fi
 
 **What it does not do.** Red Triangle ac-1 is won at 74 077 with the rule, 16 026 ticks later than without. From 42 000 the enemy commander stands on the west island at blocks (32..63, 43..85) and rebuilds there on dry ground -- 6 units at 42 000, 43 at 68 000 --, where no land unit of the seat stands and the seat's nearest unit is 23 to 62 blocks from every enemy unit until 72 000 (sampled every 1 500 ticks); the seat holds one ghost row and then none, and an enemy on the water is counted until 48 690 [INFERRED: the floating metal maker, alive to about 48 000], so one is known until 54 090. The seven yards the rule orders in that time buy ships that reach nothing there; the game ends in both builds when the enemy comes back within reach (without the rule the commander is at block (80,68) at 57 000 and dead at 58 051 [INFERRED: it walked out]; with the rule a land enemy is seen at 67 350, the dry hunt ends and the land plants finish it). Without the target term the same game reaches the cap, ten yards and 335 units against 61. An enemy on land that neither the land army nor the ships reach is not answered by any rule here: the dry hunt reads it as off the land and buys water weapons, and no scout is sent to look -- the blind spot's areas are the estimate and the starts.
 
+
+## A paralysing weapon deals no damage (the owner, 2026-11-18)
+
+**The owner's decision.** After a base-game game of three Hard seats in which the Arm seats "loved" tier-2 Spiders: the seat builds no unit whose weapons only stun until it has a use for them.
+
+**The fault, MEASURED 2026-11-18** on that game's recording and with `tasim_run roles`: ARMSPID's one weapon, ARM_PARALYZER, carries `paralyzer` and `damage=900` at a 36-tick reload. The engine applies a paralyser's hit as damage kind 2, which takes no hit points ([weapons](../engine/weapons.html), [network](../engine/network.html)): the 900 takes none [INFERRED: it is the paralysis' length]. The classifier summed it as damage -- 25 a tick against ARMBULL's 3.5 and ARMFLASH's 2.0 -- and the fight predictor returned it as damage, so the Spider's value at tech 2 was +0.502, the best of the Arm tech-2 menus by far, and it alone made the advanced vehicle plant Arm's tech-up plant (`plant ... want=tech T=2 chose=ARMAVP s=0.502 next=ARMALAB s=0.068`). One seat of the owner's game spent a third of its army's value on Spiders, the other a ninth; in the session tier's three Arm games that reach tech 2 the champion 398a3664 begins 14, 10 and 8.
+
+**What is taken.** One meaning of a paralyser's damage everywhere the brain reads a weapon's damage: none ([the brain](brain.html), *A paralyser deals no damage*; [the calibration runner](../modules/tasim-calibration.html), *Roles*). The classifier adds a regular paralyser to no damage figure and no range, the ground reach leaves it out, and the predictor's damage on any target is 0. Nothing names a unit: the bit is the weapon record's own, already copied by both role fillers and stored in the fight content.
+
+**What each type becomes** (`tasim_run roles` before and after; no other row and no percentile moves in either game set):
+
+| | type | before | after |
+|---|---|---|---|
+| base game | ARMSPID (tech 2) | raider, 25.0 a tick over 220, land raider | raider, 0 over 0, **no class** |
+| | ARMEMP (stockpile) | other, 0 | the same |
+| Escalation 10.2 | ARMSPID (tech 2) | raider, 1.67 over 270, land raider | raider, 0, **no class** |
+| | ARMCBT (tech 3) | assault, 0.74 over 1 050, land assault | assault, 0, **no class** |
+| | MSCORP (on no menu) | raider, 1.67 over 270, land raider | raider, 0, **no class** |
+| | ARMSTUN (tech 3 building) | defence, 3.75 over 1 050 | defence, 0 over 0: no ground reach, so never the defence rung's type |
+| | ARMHSTUN (two paralysers and a gauss gun) | raider, 10.2 over 288, land raider | raider, 6.9 over 288, land raider |
+| | ARMASPID (a paralyser beside its guns) | artillery, 302.6 over 750 | artillery, 300.6 over 750 |
+| | the 26 plants with the CommandFire `LAB_DIR` | builder, 0 | the same |
+
+No reference fight of the calibration holds a paralysing type in either game set, so no reference and no fitted figure moves; the fight content is the same file, the rule reading its flag.
+
+**The values after it.** ARMSPID leaves the field, so every tech-2 value moves in its second decimal: ARMAVP scores -0.037, ARMALAB +0.074 (0.068 before), CORALAB +0.484 (0.463), CORAVP -0.042 (-0.028) (the games' plant lines; by an offline approximation over the whole field the best types are ARMBULL and ARMZEUS); retail scores 46 types in 3 496 runs. Arm's tech-up plant is the advanced K-bot lab wherever a constructor of the seat's can reach both.
+
+**The games** (the session tier against the champion 398a3664, `.data/impai/runs/session/item14-a` against `session/base-f9b5b32a4c70`): 6 SAME, 9 PARTED, none in a worse category, and no ARMSPID begun in any game.
+
+| game | 398a3664 | with the rule | what changed |
+|---|---|---|---|
+| Red Triangle ac-1 | won at 74 077; ARMAVP; 14 ARMSPID, 7 ARMBULL, 3 ARMMERL | won at 40 210; ARMAVP (the one tech plant in reach, s=-0.037); 10 ARMMERL, 6 ARMBULL | 33 867 ticks sooner |
+| Plains & Passes ac-1 | won at 36 363; ARMAVP at 11 542; 10 ARMSPID, 4 ARMMERL | won at 43 017; ARMALAB at 11 767; 29 ARMZEUS | 6 654 later; the army at 36 000 is 102 against 58, the metal made within 3 % |
+| Metal Heck aa-2 | won at 40 771; ARMAVP at 11 189; 8 ARMSPID, 11 ARMMERL | won at 53 343; ARMALAB at 14 039, after an ARMCK is built to unlock it (11 909); 38 ARMZEUS, 30 ARMSH | 12 572 later; 2 850 ticks to the tech plant's order, the army at 36 000 42 against 71 |
+| Core Prime cc-1, Lava Mania ca-2 (ProTA) | won at 48 285, 43 160 | the same ticks | only the plant line's two scores differ |
+| Trout Farm ca-1 | won at 47 710 | the same tick | `naval` 1 -> 0, below |
+| the air rush, the artillery creep | pass | pass | the tech plant is ARMALAB |
+
+**What it does not do.**
+
+- **The two later wins are the advanced K-bot lab's**, not a paralyser's: with the Spider gone the values rank the lab's best type above the vehicle plant's, and the two games that could choose took the lab and won later, while the game that could only take the vehicle plant won far sooner without Spiders. Eight more Arm games of the champion's batch played with the rule (`.data/impai/item14/wide`, every one won): the six that take the lab end at +2 333 (Lava Mania ac-1), +4 771 and +168 (Plains & Passes aa-1, ac-2), +3 660 and -6 507 (Trout Farm ac-1, aa-2) and -14 821 (Pin Cushion ac-2) ticks from the champion's; the two on Red Triangle, the vehicle plant alone in reach, at +3 606 (aa-2) and -6 556 (ac-2). Over the eleven Arm games six are won later and five sooner, the median +2 333; of the eight that take the lab six are later, their mean +1 104. One game an id cannot tell a slower plant from another game's dice: the paired margin test judges the time to win, and no reference fight checks ARMZEUS, ARMFIDO or ARMFAST ([calibration](calibration.html)).
+- **An enemy's paralysers count for nothing**: an enemy Spider stamps no threat, is not armed in the picture, presses nothing, and the predictor takes it as a target that returns no damage. A stunned unit neither moves nor fires, and nothing in the brain models that. Whether an enemy's stun must count as a threat is not decided.
+- **Trout Farm's naval judgement turned on the Spider.** The land link asks whether at least half of the land army types can walk from the anchor to the enemy's estimate; there 28 can, of 57 with ARMSPID and of 56 without, so the seat judged the map naval before and judges it land now. The games' orders are the same (no sea site was ever found there); the judgement stands on one type's count.
+- A mixed type (Escalation's ARMHSTUN, ARMASPID) is bought on its other weapons; its stun is neither valued nor used.

@@ -25,7 +25,7 @@ What exists, engine-free in `impai_maps.c` over a seat's knowledge ([ImpAI in th
 | reach labels | 32-px block, per movement class the level has | u16: the 4-connected component of the block's first passable cell | ≤ 32 classes × (W/2)(H/2) × 2 B; 15 classes × 321 × 324 on Core Prime Industrial Area, 3.1 MB | `SIM_CONTENT`, built at every level init |
 | metal patches | a closed, explored metal patch | `SNAP_PATCH`, 14 B | 256 published and 256 in the scan, a seat | `SIM_STATE` |
 
-**The ground reach is the engine's rule, not the role's.** A type's role figures (`tasim_roles`: what a type is *for*) leave out a weapon whose category says NOTAIR, so a missile tower or a Samson is anti-air there; the target finder `0x40B7B0` takes NOTAIR only as a preference and falls back to the best ground target in reach when no aircraft is a candidate ([orders](../engine/orders.html)), so a Samson kills constructors. The ground layer therefore stamps `hit_ground` over `hit_range`: every regular weapon slot without `toairweapon`, whatever its category, damage × burst over reload. The role figures, the classifier and the calibration read the role's; only the threat maps read the reach (the level init logs `reach_over_role=`, the types whose two differ). MEASURED 2026-11-13 on Comet Catcher: a human's line of 29 Samsons killed 26 of ImpAI's 27 constructors.
+**The ground reach is the engine's rule, not the role's.** A type's role figures (`tasim_roles`: what a type is *for*) leave out a weapon whose category says NOTAIR, so a missile tower or a Samson is anti-air there; the target finder `0x40B7B0` takes NOTAIR only as a preference and falls back to the best ground target in reach when no aircraft is a candidate ([orders](../engine/orders.html)), so a Samson kills constructors. The ground layer therefore stamps `hit_ground` over `hit_range`: every regular weapon slot without `toairweapon`, whatever its category, damage × burst over reload -- but a paralysing weapon's, which takes no hit points (*A paralyser deals no damage*, under *The values*). The role figures, the classifier and the calibration read the role's; only the threat maps read the reach (the level init logs `reach_over_role=`, the types whose two differ). MEASURED 2026-11-13 on Comet Catcher: a human's line of 29 Samsons killed 26 of ImpAI's 27 constructors.
 
 Not built yet: the decay of a remembered threat (a ghost row keeps its type's threat until its block is seen again), threat-weighted routes (a builder's walk is tested as one straight segment, *Task allocation*), and a stored copy of the maps (A1 decides whether a decision tick derives them or keeps them).
 
@@ -138,8 +138,8 @@ artillery; hover and amphibious types are land classes) with a value above 0, an
   side --, both closing at full health from the gap max(t's reach on e, e's on t, 1), with no gravity;
 - **the value** q_T(t): the mean of m(t, e) over F_T; 0 for an empty field, a refused run counting 0.
 
-A field equal to the one before is copied, not re-run. Retail: 47 types, fields of 12, 32, 32 and 32, 3 572 runs
-(MEASURED 2026-11-14, the C build over the retail fight content offline). The field is every side's and the seat's
+A field equal to the one before is copied, not re-run. Retail: 46 types, fields of 12, 32, 32 and 32, 3 496 runs
+(MEASURED 2026-11-18, the level init's line of a base-game bar game). The field is every side's and the seat's
 table, picture and reach do not enter it, so the values are the same for every seat and every tournament table.
 **Why a mean of pair fights**: one mixed fight against the whole field moved with its scale and gap (CORLAB −0.31
 to +0.44 across V 3 000..12 000 and gap 300..1 000), the pair mean by at most 0.03 at a gap past both ranges, and
@@ -148,11 +148,32 @@ the pair's own reach as the gap removes the rest; the pair rates' square law agr
 **Gaps**: the enemy is assumed at the seat's own tech; artillery's siege purpose, the D-gun, transports and
 anti-air are not valued, and an air plant is never scored for its army; a plant's own cost does not enter its score.
 **Calibration**: the values rest on the predictor where no reference fight checks it -- CORAH, ARMAH, CORSNAP,
-ARMANAC, CORMH, CORAK, CORGATOR, ARMSPID, ARMFIDO, ARMFAST and CORREAP have none, and the homing coefficients are
+ARMANAC, CORMH, CORAK, CORGATOR, ARMFIDO, ARMFAST and CORREAP have none, and the homing coefficients are
 held until a homing-at-a-mover set exists ([calibration](calibration.html)). Offline on Total Mayhem's content
 (MEASURED 2026-11-14, the C build) four jammers (ARMJAM, ARMASER, CORSPEC, CORETER) score +1.000 at tech 1 through one long-range vertical-launch
 weapon (range 1 120 px, 720 damage a shot every 270 ticks): unchecked by any reference, and the reason Mayhem's
 advanced plants score +1.
+
+**A paralyser deals no damage** (`tasim_roles.c`, A PARALYSER DEALS NO DAMAGE; the owner's decision,
+[decisions](decisions.html), *A paralysing weapon deals no damage*). A weapon with `paralyzer` (`+0x111` bit 7) hits
+with damage kind 2, and the engine's damage apply leaves such a hit without touching hit points
+([weapons](../engine/weapons.html), [network](../engine/network.html)): its `damage` goes to the paralysis alone
+[INFERRED: its length]. The brain reads a weapon's damage in three places and the rule stands in each: the classifier's damage per
+second and range (`derive`), the ground reach (`impai_maps.c`, `reach_slot`) and the fight predictor's damage
+(`impai_fight.c`, `damage_on`, 0 whatever the weapon's [DAMAGE] rows say). The bit is the weapon record's own, which
+both role fillers copy (`TASIM_ROLE_WF`) and the fight content stores whole. What follows from it, with no rule of
+its own:
+
+- a mobile type whose regular weapons all paralyse has no army class, so no factory buys it, no plant is scored for
+  it, it is in no field of the values, and it is no land army type of the reach summary;
+- a standing one keeps role DEFENCE with no ground reach, so the defence rung never takes it (`impai_def_struct`),
+  and against every enemy type its pair rate is 0;
+- a type with another weapon keeps its class and is valued, fought and stamped on that weapon alone;
+- a CommandFire or stockpile paralyser was never counted and changes nothing (Escalation's plants carry a CommandFire
+  one of damage 0; ARMEMP's is a stockpile);
+- **an enemy's paralysers are harmless to the brain too**: an enemy type whose weapons all paralyse stamps no threat,
+  is not armed in the picture, presses nothing and predicts as a target that returns no damage. The stun itself --
+  a stunned unit neither moves nor fires -- is modelled nowhere.
 
 ## What it has to beat
 
@@ -173,7 +194,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    512. **A type that deals no damage has no class** (`impai_class_of`): the classifier's damage per second, ground
    or air, must be above 0, so a jammer or a radar unit, which takes role SCOUT for having no regular weapon, is
    neither bought nor counted as army -- 11 retail types, the scouts' jammers, spies and radar units ([decisions](decisions.html),
-   *No army class without damage*). **The air scout is the one exception** (owner's decision, 2026-11-17): an
+   *No army class without damage*). A type whose regular weapons all paralyse is one of them, since a paralyser
+   deals no damage: retail ARMSPID (*The values*, *A paralyser deals no damage*). **The air scout is the one exception** (owner's decision, 2026-11-17): an
    aircraft of role SCOUT that deals nothing -- CORFINK, ARMPEEP, the AWACs and the seaplane scouts -- takes `ascout`,
    so a seat can buy its one air scout (*The scout first*, *The air scout's trip*); an enemy one presses nothing, since
    the pressure and the base's threats take armed members only. **Gap**: a weapon the engine never fires

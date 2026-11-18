@@ -56,7 +56,9 @@ unsigned impai_class_of(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out)
        and over `tasim_run roles`' damage per second):
        ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC, CORSPY, CORTRUCK, CORVOYR and CORVRAD, which
        were land scouts, and ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK and CORHUNT, the air scouts, which THE AIR
-       SCOUT below classes again. The negated compares class a NaN as none. NOT CAUGHT HERE: a slot whose weapon deals damage but the engine
+       SCOUT below classes again. A type whose regular weapons all paralyse deals 0 by the same figures (tasim_roles.c,
+       A PARALYSER DEALS NO DAMAGE) and is left out with them: retail ARMSPID; a type that carries another weapon
+       besides keeps its class on that weapon's damage. The negated compares class a NaN as none. NOT CAUGHT HERE: a slot whose weapon deals damage but the engine
        never fires -- Total Mayhem's jammers carry a vertical-launch rocket their scripts have no aim script for
        (research/notes/impai/decisions.md, No army class without damage).
        THE AIR SCOUT, the owner's one exception (decisions.md, *One air scout a seat*): an aircraft of role SCOUT
