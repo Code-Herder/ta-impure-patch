@@ -1369,116 +1369,261 @@ static float energy_target(const IMPAI_DEC* d, float keep)
     return t;
 }
 
-static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
+/* THE REQUESTS, ended by the assignment (impai.h, IMPAI_RQ_*): want k, standing, is cleared for this decision and
+   its request says how; one that does not stand keeps what economy said of it. Every clear of a want the
+   assignment makes is one of these calls, so an order and a search with no site are told apart. */
+static void request_close(IMPAI_DEC* d, int k, int how)
+{
+    int* const want[IMPAI_WANTS] = { [IMPAI_W_FACTORY] = &d->want_factory, [IMPAI_W_SEA] = &d->want_sea,
+                                     [IMPAI_W_TECH] = &d->want_tech,       [IMPAI_W_DEF] = &d->want_def,
+                                     [IMPAI_W_AA] = &d->want_aa,           [IMPAI_W_SENSOR] = &d->want_sensor };
+    if (!*want[k]) return;
+    *want[k] = 0;
+    d->out->req[k] = (uint8_t)how;
+}
+
+/* bit k: request k stands */
+static unsigned requests_open(const IMPAI_DEC* d)
+{
+    return (d->want_factory ? 1u << IMPAI_W_FACTORY : 0u) | (d->want_sea ? 1u << IMPAI_W_SEA : 0u) |
+           (d->want_tech ? 1u << IMPAI_W_TECH : 0u) | (d->want_def ? 1u << IMPAI_W_DEF : 0u) |
+           (d->want_aa ? 1u << IMPAI_W_AA : 0u) | (d->want_sensor ? 1u << IMPAI_W_SENSOR : 0u);
+}
+
+/* THE CHOICE's plant ordered: the request its pass was for is answered (plant_up: the tech-up's), and the other
+   yields -- one plant a decision. Called after plant_ordered, which reads plant_up for the plant line the same way */
+static void plant_close(IMPAI_DEC* d)
+{
+    request_close(d, IMPAI_W_TECH, d->plant_up ? IMPAI_RQ_ANSWERED : IMPAI_RQ_YIELDED);
+    request_close(d, IMPAI_W_FACTORY, d->plant_up ? IMPAI_RQ_YIELDED : IMPAI_RQ_ANSWERED);
+}
+
+/* A builder at the ladder: its menu in d->menu (n types), its far record, the economy's energy keep, and the
+   extractor rung's pick, which the explore rung reads */
+typedef struct IMPAI_ASK {
+    const IMPAI_UNITREF* b;
+    int                  n, far;
+    float                keep;
+    IMPAI_MEX            mx;
+    int                  have_mex;
+} IMPAI_ASK;
+
+static int rung_stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_energy(d, d->menu, a->n)) && impai_build_ring(d, a->b, t))) return 0;
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+/* THE FRAME RESUMED (impai_build.c), in THE FINISH AT SEA */
+static int rung_sea_frame(IMPAI_DEC* d, IMPAI_ASK* a) { return d->pos.dry && impai_build_sea_frame(d, a->b); }
+
+/* the sea plant's request: ordered, it is the decision's plant and the plant's two requests yield; a search with
+   no site at all ends it, so the plant rung below is asked of the same builder in the same decision */
+static int rung_sea_plant(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const int t = choose_sea_plant(d, d->menu, a->n);
+    int y;
+    if (!t) return 0;
+    y = impai_build_sea_plant(d, a->b, t);
+    if (y > 0) {
+        request_close(d, IMPAI_W_SEA, IMPAI_RQ_ANSWERED);
+        request_close(d, IMPAI_W_FACTORY, IMPAI_RQ_YIELDED);
+        request_close(d, IMPAI_W_TECH, IMPAI_RQ_YIELDED);
+        return 1;
+    }
+    if (y < 0) request_close(d, IMPAI_W_SEA, IMPAI_RQ_REFUSED);
+    return 0;
+}
+
+static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_TINFO* bt = &in->ti[b->type];
-    const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-    const float keep = d->e_per_m * d->pm_in;
-    const int far = impai_far(d, b);
-    IMPAI_MEX mx = { 0, 0, 0 };
-    int t, have_mex = 0;
-    if (n > 0) {
-        if (d->e_stall && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
+    int t, y = 1;
+    /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
+       take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
+       menu2 and menu3 only, so this builder's menu is still d->menu */
+    if (!d->plant_done) plant_choice(d);
+    /* the air plant AHEAD OF THE SEA PLANT is air_take's alone (NEVER NEITHER): one still held here --
+       air_take placed it nowhere, or the choice was made after air_take returned, its want_sea since spent --
+       is let go, so the ladder asks the sea plant first; the choice's plant (plant_t, which may still be
+       that air plant) comes below only where the sea plant cannot be had, as before the rule */
+    if (d->plant_air_blind) air_let_go(d);
+    /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
+       THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
+       took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
+       offers a sea plant: a builder that cannot place it now -- not its turn in this decision, a site past
+       its reach, another sea type on its menu, its far record live, none on its menu -- leaves it to the
+       decision's other builders and to later decisions, so a plant held for the rest of the game is never
+       taken for one builder's answer */
+    if (d->plant_sea &&
+        (d->count[IMPAI_C_FACTORY] ? in->st->sea_refused < IMPAI_SEA_REFUSALS : !in->st->sea_refused)) {
+        y = (t = choose_sea_plant(d, d->menu, a->n)) ? impai_build_sea_plant(d, a->b, t) : 0;
+        if (y > 0) {
+            plant_ordered(d, t);
+            plant_close(d);
             return 1;
         }
-        if (d->pos.dry && !far && !d->hold && !d->m_stall && !d->e_stall && impai_build_sea_frame(d, b)) return 1;
-        if (d->want_sea && !far && (t = choose_sea_plant(d, d->menu, n))) {
-            const int y = impai_build_sea_plant(d, b, t);
-            if (y > 0) {
-                d->want_sea = d->want_factory = d->want_tech = 0;
-                return 1;
-            }
-            if (y < 0) d->want_sea = 0;
-        }
-        if ((d->want_factory || d->want_tech) && !d->want_sea && !far) {
-            /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
-               take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
-               menu2 and menu3 only, so this builder's menu is still d->menu */
-            if (!d->plant_done) plant_choice(d);
-            /* the air plant AHEAD OF THE SEA PLANT is air_take's alone (NEVER NEITHER): one still held here --
-               air_take placed it nowhere, or the choice was made after air_take returned, its want_sea since spent --
-               is let go, so the ladder asks the sea plant first; the choice's plant (plant_t, which may still be
-               that air plant) comes below only where the sea plant cannot be had, as before the rule */
-            if (d->plant_air_blind) air_let_go(d);
-            /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
-               THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
-               took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
-               offers a sea plant: a builder that cannot place it now -- not its turn in this decision, a site past
-               its reach, another sea type on its menu, its far record live, none on its menu -- leaves it to the
-               decision's other builders and to later decisions, so a plant held for the rest of the game is never
-               taken for one builder's answer */
-            int y = 1;
-            if (d->plant_sea &&
-                (d->count[IMPAI_C_FACTORY] ? in->st->sea_refused < IMPAI_SEA_REFUSALS : !in->st->sea_refused)) {
-                y = (t = choose_sea_plant(d, d->menu, n)) ? impai_build_sea_plant(d, b, t) : 0;
-                if (y > 0) {
-                    plant_ordered(d, t);
-                    d->want_factory = d->want_tech = 0;
-                    return 1;
-                }
-                y = !d->count[IMPAI_C_FACTORY] || y < 0 || !d->plant_sea_menu;
-            }
-            if (y && ((d->plant_t && on_menu(d->menu, n, d->plant_t) && impai_build_ring(d, b, (t = d->plant_t))) ||
-                      (!d->plant_t && d->plant_tw && on_menu(d->menu, n, d->plant_tw) &&
-                       impai_build_plant_waived(d, b, (t = d->plant_tw))))) {
-                plant_ordered(d, t);
-                d->want_factory = d->want_tech = 0;
-                return 1;
-            }
-        }
+        y = !d->count[IMPAI_C_FACTORY] || y < 0 || !d->plant_sea_menu;
     }
-    if (n > 0) {
-        if (d->want_def && (t = choose_def(d, d->menu, n)) && impai_build_def(d, b, t)) {
-            d->want_def = 0;
-            return 1;
-        }
-        if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->want_aa = 0;
-            return 1;
-        }
-        if (d->want_sensor && (t = choose_sensor(d, d->menu, n))) {
-            const int y = impai_build_sensor(d, b, t);
-            if (y >= 0) d->want_sensor = 0;
-            if (y > 0) {
-                d->out->sensors++;
-                return 1;
-            }
-        }
-    }
-    if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
-    if (n > 0) {
-        if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
-            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-                (impai_metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
-                impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
-                return 1;
-            if (impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
-                                impai_build_ring(d, b, t))
-                             : impai_build_spot(d, b, &mx))
-                return 1;
-        }
-        if (d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
-        if (d->pe_in < energy_target(d, keep) && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
-            return 1;
-        }
-        if (!surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
-            (t = choose_maker(d, d->menu, n)) &&
-            d->e.energy_in - d->e.energy_out - d->mk_lag_e - d->mk_new_e > in->ti[t].egain &&
-            impai_build_ring(d, b, t))
-            return 1;
-    }
-    if (bt->cat == IMPAI_C_CONS && !d->explorer_live &&
-        !impai_spot_pick(d, b, have_mex ? &mx : NULL, NULL) && impai_build_explore(d, b))
+    if (y && ((d->plant_t && on_menu(d->menu, a->n, d->plant_t) && impai_build_ring(d, a->b, (t = d->plant_t))) ||
+              (!d->plant_t && d->plant_tw && on_menu(d->menu, a->n, d->plant_tw) &&
+               impai_build_plant_waived(d, a->b, (t = d->plant_tw))))) {
+        plant_ordered(d, t);
+        plant_close(d);
         return 1;
-    /* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
-       is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
-       reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
-       asked with min_rate 0 above while the seat is short; this is its one other zero-rate ask */
-    if ((n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, b, 0.0)) return 1;
-    return impai_build_assist(d, b);
+    }
+    return 0;
+}
+
+static int rung_def(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_def(d, d->menu, a->n)) && impai_build_def(d, a->b, t))) return 0;
+    request_close(d, IMPAI_W_DEF, IMPAI_RQ_ANSWERED);
+    return 1;
+}
+
+static int rung_aa(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_aa(d, d->menu, a->n)) && impai_build_ring(d, a->b, t))) return 0;
+    request_close(d, IMPAI_W_AA, IMPAI_RQ_ANSWERED);
+    return 1;
+}
+
+/* the sensor's request ends with the first builder whose menu holds one, placed or not; the commander with no
+   site on the base ring (-1) leaves it standing for a constructor (impai_build.c, THE SENSORS' SITE) */
+static int rung_sensor(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const int t = choose_sensor(d, d->menu, a->n);
+    int y;
+    if (!t) return 0;
+    y = impai_build_sensor(d, a->b, t);
+    if (y >= 0) request_close(d, IMPAI_W_SENSOR, y > 0 ? IMPAI_RQ_ANSWERED : IMPAI_RQ_REFUSED);
+    if (y <= 0) return 0;
+    d->out->sensors++;
+    return 1;
+}
+
+/* the extractor, and THE RECLAIM before it: one rung, since the feature is weighed against the extractor this
+   builder has a site for. The pick is made whether or not the producers wait: the explore rung reads it */
+static int rung_mex(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int t;
+    if (!((a->have_mex = choose_mex(d, d->menu, a->n, &a->mx)) && !surplus_waits(d))) return 0;
+    if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
+        (impai_metal_map(d) || impai_spot_pick(d, a->b, &a->mx, NULL)) &&
+        impai_build_reclaim(d, a->b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
+        return 1;
+    return impai_metal_map(d) ? ((t = impai_mex_at(d, &a->mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+                                 impai_build_ring(d, a->b, t))
+                              : impai_build_spot(d, a->b, &a->mx);
+}
+
+static int rung_short_reclaim(IMPAI_DEC* d, IMPAI_ASK* a) { return d->m_short && impai_build_reclaim(d, a->b, 0.0); }
+
+static int rung_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!(d->pe_in < energy_target(d, a->keep) && (t = choose_energy(d, d->menu, a->n)) &&
+          impai_build_ring(d, a->b, t)))
+        return 0;
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+static int rung_maker(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    return !surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
+           (t = choose_maker(d, d->menu, a->n)) &&
+           d->e.energy_in - d->e.energy_out - d->mk_lag_e - d->mk_new_e > d->in->ti[t].egain &&
+           impai_build_ring(d, a->b, t);
+}
+
+static int rung_explore(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    return d->in->ti[a->b->type].cat == IMPAI_C_CONS && !d->explorer_live &&
+           !impai_spot_pick(d, a->b, a->have_mex ? &a->mx : NULL, NULL) && impai_build_explore(d, a->b);
+}
+
+/* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
+   is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
+   reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
+   asked with min_rate 0 at the short reclaim's rung while the seat is short; this is its one other zero-rate ask */
+static int rung_harvest(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    return (a->n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, a->b, 0.0);
+}
+
+static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d, a->b); }
+
+/* THE LADDER'S ORDER: the rungs of THE LADDER, one row each, asked top to bottom; a builder takes the first that
+   gives it an order. A row is asked of the builders its `who` names, while a request it serves stands and none it
+   waits for does, with its gates as its `on` and `veto` say, and not of a builder held by its far record where it
+   is `near`; what else a rung asks -- the posture, the income, the builder's menu, a site -- is its function's.
+   The order is this table and nowhere else.
+   - A HELPER is asked the rungs down to the short reclaim and keeps its assist for the rest (THE LADDER). One with
+     no menu is asked the short reclaim alone.
+   - The plant waits for the sea plant: while that request stands a land plant is not asked, and a sea search with
+     no site at all ends it, so the plant is asked of the same builder in the same decision.
+   - The frame resumed is held by the sea plant's gates (impai_brain.c, THE VETOES): the hold and both stalls.
+   - An idle builder with no menu is asked the last three rungs; its reclaim while the seat is short is the
+     harvest's, after exploring.
+   THE EXPLORE ROW STAYS BELOW THE EXTRACTOR'S: it reads that rung's pick (IMPAI_ASK.mx), made once a builder.
+   INVARIANT, what the gate columns rest on: IMPAI_DEC.gates is set once, after the last write of hold, e_stall
+   and m_stall (impai_brain.c, economy), so a gate's bit and its flag agree throughout the assignment.
+   impai_brain_test.c, check_ladder_rows, holds the rows and their order. */
+#define RQ(k)       (1u << IMPAI_W_##k)
+#define ASK_MENUS   (IMPAI_ASK_MENU | IMPAI_ASK_HELPER)
+#define ASK_IDLE    (IMPAI_ASK_MENU | IMPAI_ASK_BARE)
+#define G_SPEND     (IMPAI_G_HOLD | IMPAI_G_M_STALL | IMPAI_G_E_STALL)
+const IMPAI_RUNG impai_ladder[] = {
+    /* name             who                                serves                  waits    near on               veto */
+    { "stall-energy",  ASK_MENUS,                         0,                      0,       0, IMPAI_G_E_STALL, 0,       rung_stall_energy },
+    { "sea-frame",     ASK_MENUS,                         0,                      0,       1, 0,               G_SPEND, rung_sea_frame },
+    { "sea-plant",     ASK_MENUS,                         RQ(SEA),                0,       1, 0,               0,       rung_sea_plant },
+    { "plant",         ASK_MENUS,                         RQ(FACTORY) | RQ(TECH), RQ(SEA), 1, 0,               0,       rung_plant },
+    { "defence",       ASK_MENUS,                         RQ(DEF),                0,       0, 0,               0,       rung_def },
+    { "anti-air",      ASK_MENUS,                         RQ(AA),                 0,       0, 0,               0,       rung_aa },
+    { "sensor",        ASK_MENUS,                         RQ(SENSOR),             0,       0, 0,               0,       rung_sensor },
+    { "extractor",     IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_mex },
+    { "short-reclaim", ASK_MENUS | IMPAI_ASK_HELPER_BARE, 0,                      0,       0, 0,               0,       rung_short_reclaim },
+    { "energy",        IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_energy },
+    { "maker",         IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_maker },
+    { "explore",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_explore },
+    { "harvest",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_harvest },
+    { "assist",        ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_assist },
+};
+const int impai_ladder_n = (int)(sizeof impai_ladder / sizeof impai_ladder[0]);
+#undef RQ
+#undef ASK_MENUS
+#undef ASK_IDLE
+#undef G_SPEND
+
+static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
+{
+    IMPAI_ASK a;
+    unsigned who;
+    int k;
+    memset(&a, 0, sizeof a);
+    a.b = b;
+    a.n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+    a.keep = d->e_per_m * d->pm_in;
+    a.far = impai_far(d, b);
+    who = helper ? (a.n > 0 ? IMPAI_ASK_HELPER : IMPAI_ASK_HELPER_BARE) : (a.n > 0 ? IMPAI_ASK_MENU : IMPAI_ASK_BARE);
+    for (k = 0; k < impai_ladder_n; k++) {
+        const IMPAI_RUNG* r = &impai_ladder[k];
+        const unsigned open = requests_open(d);     /* read at each rung: the one above may have ended a request */
+        if (!(r->who & who) || (d->gates & r->on) != r->on || (d->gates & r->veto) || (r->near && a.far) ||
+            (r->serves && !(open & r->serves)) || (open & r->waits))
+            continue;
+        if (r->serve(d, &a)) return 1;
+    }
+    return 0;
 }
 
 /* Idle builders in slot order, then the helpers for the wants they answer
@@ -1594,7 +1739,7 @@ static int air_place(IMPAI_DEC* d, const IMPAI_UNITREF* b, unsigned t)
         !impai_build_air(d, b, (int)t, !d->plant_t))
         return 0;
     plant_ordered(d, (int)t);
-    d->want_factory = d->want_tech = 0;
+    plant_close(d);
     d->assigned++;
     return 1;
 }
@@ -1657,14 +1802,16 @@ void impai_econ_assign(IMPAI_DEC* d)
          i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         const IMPAI_JOB* j = &in->job[b->slot];
-        int t, n, ordered;
+        IMPAI_ASK a;
+        int ordered;
         if (d->jobbed_idle[i] || (j->kind != IMPAI_JOB_RECLAIM && j->kind != IMPAI_JOB_RECLAIM_GO) || j->since == d->now)
             continue;
         /* read before the build replaces the job: stall_taken counts the ordered reclaims, not the walks to one */
         ordered = j->kind == IMPAI_JOB_RECLAIM;
-        n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-        if (n > 0 && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
+        memset(&a, 0, sizeof a);
+        a.b = b;
+        a.n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+        if (a.n > 0 && rung_stall_energy(d, &a)) {
             d->assigned++;
             if (ordered) d->out->stall_taken++;
         }

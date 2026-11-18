@@ -955,6 +955,24 @@ _Static_assert(sizeof(IMPAI_WHY) == 6 + IMPAI_WHY_WANTS, "IMPAI_WHY has no paddi
    `+`, a veto `want:GATE+GATE` and the vetoes by `,`, `-` for none. Returns the bytes written, the NUL left out. */
 int   impai_why_text(const IMPAI_WHY* w, char* out, size_t cap);
 
+/* THE REQUESTS: a want is a request, and this is how one decision leaves each of the six, by the want's index in
+   THE VETOES. Economy says whether it is needed and what holds it (impai_brain.c, why_read); the assignment, which
+   asks each builder the rungs of THE LADDER'S ORDER (impai_econ.c), says how one that stood ended. What a request
+   asks for stays where its rule writes it: the plant's type is THE CHOICE's, the defence's point def_point's, the
+   sensor's kind and point sensor_want's, and the rest is the asked builder's menu. Scratch of the decision, like
+   the trace: no recorded struct holds it, and no rule reads it back. */
+enum {
+    IMPAI_RQ_NONE,          /* not needed                                                                       */
+    IMPAI_RQ_VETOED,        /* needed, a gate of its row up (IMPAI_WHY.veto names them)                         */
+    IMPAI_RQ_HELD,          /* needed, no gate up: refused by the term its rule reads last (IMPAI_WHY)          */
+    IMPAI_RQ_OPEN,          /* stands: no builder the assignment asked served it in this decision               */
+    IMPAI_RQ_ANSWERED,      /* ordered                                                                          */
+    IMPAI_RQ_YIELDED,       /* ended by another request's order: one plant a decision                           */
+    IMPAI_RQ_REFUSED,       /* ended with no order: the sea plant's search has no site at all, the sensor's
+                               builder placed none (impai_build.c)                                              */
+    IMPAI_RQ_STATES
+};
+
 /* What one decision did, against the plan's bounds, and the census's counts. */
 typedef struct IMPAI_BRAIN_OUT {
     uint16_t census, sites, snaps, roots, queued, failed, orders;
@@ -1025,6 +1043,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
     uint8_t  sensors;                   /* sensor structures ordered (impai_econ.c, THE SENSORS)                */
     IMPAI_WHY why;                      /* THE REASON TRACE                                                    */
+    uint8_t  req[IMPAI_WHY_WANTS];      /* THE REQUESTS: IMPAI_RQ_*, a want                                    */
 } IMPAI_BRAIN_OUT;
 
 #define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs

@@ -407,6 +407,24 @@ uint32_t impai_isqrt(uint64_t v);
 uint32_t impai_dist_px(const int32_t a[3], int32_t bx_px, int32_t bz_px);
 
 /* impai_econ.c */
+/* THE LADDER'S ORDER (impai_econ.c, impai_ladder): one row a rung, asked in the table's order. `who` is the
+   builders a rung is asked of, by what they are when the assignment reaches them. */
+#define IMPAI_ASK_MENU        0x1u      /* an idle builder with a menu                                           */
+#define IMPAI_ASK_BARE        0x2u      /* an idle builder with none                                             */
+#define IMPAI_ASK_HELPER      0x4u      /* a helper, a builder at its assist, with a menu                        */
+#define IMPAI_ASK_HELPER_BARE 0x8u      /* a helper with none                                                    */
+struct IMPAI_ASK;
+typedef struct IMPAI_RUNG {
+    const char* name;
+    uint8_t     who;                    /* IMPAI_ASK_*                                                           */
+    uint8_t     serves;                 /* bit k: asked only while one of these requests stands; 0, no request's */
+    uint8_t     waits;                  /* bit k: not asked while request k stands                               */
+    uint8_t     near;                   /* 1: not asked of a builder its far record holds from plants            */
+    uint8_t     on, veto;               /* IMPAI_G_*: asked only with every gate of `on` up and none of `veto`   */
+    int       (*serve)(IMPAI_DEC* d, struct IMPAI_ASK* a);     /* 1 when the builder was given an order          */
+} IMPAI_RUNG;
+extern const IMPAI_RUNG impai_ladder[];
+extern const int        impai_ladder_n;
 void impai_econ_makers(IMPAI_DEC* d);
 void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
