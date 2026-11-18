@@ -95,6 +95,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import bar  # noqa: E402
 import batch  # noqa: E402
 import ladder  # noqa: E402
+import thinklib  # noqa: E402
 
 Z = 1.6449                      # one-sided 95 %
 SD = 0.5                        # the largest spread of a game's points: THE VERDICT's width
@@ -585,6 +586,7 @@ def main(argv=None) -> int:
     r.add_argument("--blocks", type=int, default=bar.GAUNTLET_BLOCKS, help="blocks a pool member (10 games each)")
     r.add_argument("--lanes", type=int, default=LANES)
     r.add_argument("--out", default=None)
+    thinklib.label_argument(r)
     j = sub.add_parser("judge", help="the verdicts of a run's directory, from its games")
     j.add_argument("dir", type=Path)
     a = p.parse_args(argv)
@@ -597,7 +599,10 @@ def main(argv=None) -> int:
         return run_code(a, play=lambda games, launch: play_duels(games, launch, at_once=a.at_once))
     if not a.dll:
         p.error("--dll: a settings gauntlet plays one build")
-    return run(a)
+    rc = run(a)
+    if a.label:                 # a code gauntlet's games are network games, which write no skirmish recording
+        thinklib.add_kept([a.out], a.label, tool="gauntlet.py run", run=a.tag)
+    return rc
 
 
 if __name__ == "__main__":

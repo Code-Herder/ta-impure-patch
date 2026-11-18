@@ -84,6 +84,7 @@ import batch  # noqa: E402
 import diag  # noqa: E402
 import exploit  # noqa: E402
 import opening  # noqa: E402
+import thinklib  # noqa: E402
 
 CONFIRM = HERE / "confirm.txt"
 LANES = 6                       # a piece's lanes: two DLLs' base pieces and their setup pieces fill the lock's 28 slots
@@ -429,12 +430,17 @@ def main(argv=None) -> int:
                         "proof and an opening's figures")
     p.add_argument("--lanes", type=int, default=LANES, help=f"lanes a piece (default {LANES})")
     p.add_argument("--out", default=None, help="the candidate's folder (default .data/impai/runs/session/<tag>)")
+    thinklib.label_argument(p)
     a = p.parse_args(argv)
     if a.lanes < 1:
         p.error("--lanes: at least one")
     if a.state and not a.neutral:
         p.error("--state: with --neutral, whose proof it strengthens")
-    return run(a)
+    rc = run(a)
+    if a.label:                 # the candidate's games; the champion's are its own folder's, kept from its own run
+        thinklib.add_kept([Path(a.out) if a.out else batch.common_data() / "impai" / "runs" / "session" / a.tag], a.label,
+                          tool="session.py", run=a.tag)
+    return rc
 
 
 if __name__ == "__main__":

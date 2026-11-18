@@ -60,6 +60,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools"))
 import bar  # noqa: E402
 import margin  # noqa: E402
+import thinklib  # noqa: E402
 
 REGRESS = HERE / "regress.txt"
 HOTA = [g for g in bar.ids("hota") if g.rsplit("-", 1)[1] in ("1", "2")]
@@ -417,9 +418,13 @@ def main(argv=None) -> int:
     p.add_argument("--base-batch", default=None, metavar="DIR",
                    help="the champion's own batch directory: a held-out game that ends in a worse category than "
                         "the champion's same game is flagged")
+    thinklib.label_argument(p)
     a = p.parse_args(argv)
     a.out = a.out or str(common_data() / "impai" / "runs" / "batch" / a.tag)
-    return run(a)
+    rc = run(a)
+    if a.label:
+        thinklib.add_kept([a.out], a.label, tool="batch.py", run=a.tag)
+    return rc
 
 
 if __name__ == "__main__":

@@ -580,6 +580,22 @@ class Library(unittest.TestCase):
         self.assertEqual(thinklib.add_kept([self.runs], "x", library=self.tmp / "file", say=self.said.append), [])
         self.assertIn("WARNING", self.said[-1])
 
+    def test_a_run_tool_adds_under_its_label_at_the_end_and_nothing_without_one(self):
+        import batch
+        import gauntlet
+        import session
+        out = str(self.runs)
+        calls = (("batch.py", batch, ["--test", "t.dll", "--base", "b.dll", "--tag", "T", "--out", out]),
+                 ("session.py", session, ["--test", "t.dll", "--base", "b.dll", "--tag", "T", "--out", out]),
+                 ("gauntlet.py run", gauntlet, ["run", "--cand", "1", "--pool", "2", "--dll", "t.dll", "--tag", "T", "--out", out]))
+        for tool, module, argv in calls:
+            with mock.patch.object(module, "run", lambda _a: 7), mock.patch.object(thinklib, "add_kept") as kept:
+                self.assertEqual(module.main(argv), 7, tool)                # the run's verdict, with no label
+                kept.assert_not_called()
+                self.assertEqual(module.main(argv + ["--label", "exp one"]), 7, tool)       # ... and with one
+                (folders, label), kw = kept.call_args
+                self.assertEqual(([str(f) for f in folders], label, kw["tool"]), ([out], "exp one", tool))
+
     def test_a_recording_is_being_recorded_while_a_process_holds_it_or_it_changes(self):
         rec = self.rec()
         Path(str(rec) + ".lock").write_bytes(b"")                           # THE PATH LOCK stays by design: no sign

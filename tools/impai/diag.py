@@ -314,6 +314,9 @@ def main(argv=None) -> int:
     r.add_argument("--setup", default=None,
                    help="the setup the games play on (tools/compat/setups.json), none the base game")
     r.add_argument("--out", default=None)
+    r.add_argument("--label", default=None, metavar="L",
+                   help="add the recordings this run keeps to the thought viewer's library under the label L "
+                        "(thinklib.py); without it nothing is added")
     extraction(r)
     lg = sub.add_parser("logs", help="print the lines of finished games")
     lg.add_argument("dirs", nargs="+", type=Path, help="bar's results folder; two to compare")
@@ -328,7 +331,12 @@ def main(argv=None) -> int:
         if a.verb == "run":
             if len(a.dll) > 2:
                 raise DiagError("--dll at most twice")
-            return run_games(a)
+            a.out = a.out or str(DIAG / f"run-{time.strftime('%Y%m%d-%H%M%S')}")
+            rc = run_games(a)
+            if a.label:
+                import thinklib
+                thinklib.add_kept([a.out], a.label, tool="diag.py run")
+            return rc
         if a.verb == "logs":
             if len(a.dirs) > 2:
                 raise DiagError("one folder, or two to compare")

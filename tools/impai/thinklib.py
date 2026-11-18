@@ -286,6 +286,13 @@ def add_kept(folders, label, tool=None, command=None, run=None, library=None, sa
         return []
 
 
+def label_argument(parser) -> None:
+    """THE RUN TOOLS' --label, the one flag each of them takes."""
+    parser.add_argument("--label", default=None, metavar="L",
+                        help="add the recordings this run keeps to the thought viewer's library under the label L "
+                             "(tools/impai/thinkview.py serve shows them); without it nothing is added")
+
+
 def size_says(n: int) -> str:
     return f"{n / 1e6:.1f} MB" if n >= 1e6 else f"{n / 1e3:.0f} kB"
 

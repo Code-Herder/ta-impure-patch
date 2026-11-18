@@ -669,6 +669,11 @@ function drawCurve(g, r) {
 }
 function drawRecorder() {
   if (!R.still || R.w !== ($('rec').clientWidth || R.w)) drawRecorderStill();
+  // while it plays the recorder is laid again only when its cursor comes to another pixel: the whole game is a
+  // thousand or two of them wide, and the clock's own face shows every tick
+  const at = Math.round(R.X(T));
+  if (playing && R.drawn && R.drawn[0] === R.still && R.drawn[1] === at && R.drawn[2] === HOVER) return;
+  R.drawn = [R.still, at, HOVER];
   const g = sized($('rec'), R.w, R.h);
   g.drawImage(R.still, 0, 0, R.w, R.h);
   if (HOVER != null) { const x = Math.round(R.X(HOVER)) + .5; g.strokeStyle = C.muted; g.globalAlpha = .7; g.lineWidth = 1; g.beginPath(); g.moveTo(x, 14); g.lineTo(x, R.h); g.stroke(); g.globalAlpha = 1; }
@@ -740,9 +745,10 @@ const View = {
 /*END VIEW*/
 const MAP = { w: 0, h: 0, hits: [], rings: [], feats: [] };
 /* THE GROUND IS DRAWN ONCE A VIEW: the picture under its veil, the metal and the grid on one canvas, the features
-   on another, each kept until the view, the layers, the theme or (the features) the set standing changes. A frame
-   of play lays the two down and draws only what moves over them. */
-const GC = { base: null, key: '', feat: null, fkey: '', feats: [] };
+   on another, each kept until the view, the layers, the theme or (the features) the set standing changes, and the
+   two with the held ground between them on a third. A frame of play lays that one down and draws only what moves
+   over it. */
+const GC = { base: null, key: '', feat: null, fkey: '', feats: [], ground: null, okey: '' };
 let V = { k: 1, x: 0, z: 0 };
 const F_EXTRACTS = 1, F_FLOATS = 2, F_FLIES = 4;
 const kindOf = type => D.kinds ? D.kinds[type] : undefined;
@@ -797,7 +803,7 @@ function drawMap() {
   const pic = LAYERS.map && D._img ? D.picture : null, B = D.units.block;
   const view = [D.name, D.seat, w, h, window.devicePixelRatio, V.k, V.x, V.z, !!pic, C.map, C.fg, C.metal].join('|');
   const gkey = [view, LAYERS.metal, LAYERS.grid].join('|');
-  if (GC.key !== gkey) { GC.key = gkey; GC.base = GC.base || document.createElement('canvas'); const g = sized(GC.base, w, h);
+  if (GC.key !== gkey) { GC.key = gkey; GC.okey = ''; GC.base = GC.base || document.createElement('canvas'); const g = sized(GC.base, w, h);
   g.fillStyle = C.map; g.fillRect(0, 0, w, h);
   // the map's picture, under a veil of the map's ground so the markers read over bright terrain
   if (pic) { const k = s * pic.px[0] / pic.w;       // canvas px an image px: crisp when magnified, smooth when reduced
@@ -817,16 +823,9 @@ function drawMap() {
     g.globalAlpha = 1;
     for (const [x, y, b] of marks) { if (pic) { g.fillStyle = C.map; g.globalAlpha = .6; g.fillRect(x - 1, y - 1, g.measureText(b).width + 2, 11); g.globalAlpha = 1; } g.fillStyle = C.muted; g.fillText(b, x, y); } }
   }
-  g.drawImage(GC.base, 0, 0, w, h);
-  g.textBaseline = 'middle';
-  // held ground: each 256-px cell laid on the ground
-  if (LAYERS.held) { const cells = D.helds[f.h] || [], row = D.units.held_row, c = D.units.held; g.fillStyle = C.held; g.globalAlpha = pic ? .18 : .13;
-    for (const i of cells) { const x0 = (i % row) * c, z0 = Math.floor(i / row) * c; if (!seen(x0 + c / 2, z0 + c / 2) && V.k > 1.5) continue;
-      g.beginPath(); for (let n = 0; n <= 4; n++) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0)); } for (let n = 4; n >= 0; n--) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0 + c)); } g.fill(); }
-    g.globalAlpha = 1; }
   // the features standing at the sample: what a reclaim gives, what blocks building
   const fkey = LAYERS.features && G && G.lives ? [view, featEpoch(f.t)].join('|') : '';
-  if (GC.fkey !== fkey) { GC.fkey = fkey; GC.feats = []; GC.feat = GC.feat || document.createElement('canvas'); const g = sized(GC.feat, w, h); g.clearRect(0, 0, w, h);
+  if (GC.fkey !== fkey) { GC.fkey = fkey; GC.okey = ''; GC.feats = []; GC.feat = GC.feat || document.createElement('canvas'); const g = sized(GC.feat, w, h); g.clearRect(0, 0, w, h);
   if (fkey) { const cpx = D.units.cell;
     for (const l of G.lives) { if (l[2] > f.t || (l[3] != null && l[3] <= f.t)) continue;
       const ft = featOf(l); if (ft.kind === 'decor') continue;
@@ -840,8 +839,21 @@ function drawMap() {
       else { g.globalAlpha = ft.kind === 'block' ? .8 : .95; g.fillRect(x - fw / 2, y - fh / 2, fw, fh); }
       g.globalAlpha = 1; GC.feats.push([x, y, l, ft]); } }
   }
-  if (fkey) g.drawImage(GC.feat, 0, 0, w, h);
   MAP.feats = GC.feats;
+  // the ground whole -- the held ground over the base, the features over both -- is one canvas too, laid again
+  // only when one of the three changes: a frame of play lays the ground down once
+  const okey = [gkey, fkey, LAYERS.held ? `${f.h}|${C.held}` : ''].join('#');
+  if (GC.okey !== okey) { GC.okey = okey; GC.ground = GC.ground || document.createElement('canvas'); const g = sized(GC.ground, w, h);
+  g.drawImage(GC.base, 0, 0, w, h);
+  // held ground: each 256-px cell laid on the ground
+  if (LAYERS.held) { const cells = D.helds[f.h] || [], row = D.units.held_row, c = D.units.held; g.fillStyle = C.held; g.globalAlpha = pic ? .18 : .13;
+    for (const i of cells) { const x0 = (i % row) * c, z0 = Math.floor(i / row) * c; if (!seen(x0 + c / 2, z0 + c / 2) && V.k > 1.5) continue;
+      g.beginPath(); for (let n = 0; n <= 4; n++) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0)); } for (let n = 4; n >= 0; n--) { const x = x0 + c * n / 4; g.lineTo(sx(x), gy(x, z0 + c)); } g.fill(); }
+    g.globalAlpha = 1; }
+  if (fkey) g.drawImage(GC.feat, 0, 0, w, h);
+  }
+  g.drawImage(GC.ground, 0, 0, w, h);
+  g.textBaseline = 'middle';
   // the anchor and the base box
   const no = D.macros.IMPAI_NO_ANCHOR ?? -32768, ax = at(TR('brain.ax'), T, no), az = at(TR('brain.az'), T, no);
   let anchor = null, ap = null;
