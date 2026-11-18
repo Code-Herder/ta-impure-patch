@@ -303,8 +303,8 @@ float impai_tinfo_e_per_m(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, 
    term, and a homing shot's hit coefficients are held at their prior (tools/impai/predfit.py), so the hovers'
    values are the model's mechanics extrapolated (research/notes/impai/calibration.md).
    THE COST: each field is chosen by rank, n^2 comparisons for its n candidates, and a field equal to the one below
-   it is copied, not run again; at most (nti - 1) x IMPAI_QTECH x IMPAI_QFIELD runs. Retail (MEASURED offline): 47
-   scored types, fields of 12, 32, 32 and 32 (T4 = T3, copied), 3 572 runs. The level init's line states the
+   it is copied, not run again; at most (nti - 1) x IMPAI_QTECH x IMPAI_QFIELD runs. Retail (MEASURED 2026-11-18,
+   the level init's line): 46 scored types, fields of 12, 32, 32 and 32 (T4 = T3, copied), 3 496 runs. The level init's line states the
    build's own count and time. Engine-free and deterministic: every float is rounded once on SSE2 (the Makefile's
    rule for impai_*.c), each sum taken in the field's order. */
 static int value_gated(const IMPAI_TINFO* t)

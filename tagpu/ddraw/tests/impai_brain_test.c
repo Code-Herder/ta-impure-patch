@@ -7982,6 +7982,140 @@ static void check_army_damage(void)
     free(work);
 }
 
+/* A PARALYSER DEALS NO DAMAGE (tasim_roles.c), in the three places the brain takes a weapon's damage: the
+   classifier's damage a second and with it the army class, THE GROUND REACH's threat row, and the fight
+   predictor's damage. A raider whose one regular weapon paralyses (ARMSPID's shape, 900 at a 36-tick reload)
+   beside its twin whose same weapon does not; a tank beside its twin that carries a long paralyser in its first
+   slot; a standing type whose one weapon paralyses beside its twin tower; a tank beside its twin with a
+   CommandFire paralyser of damage 0. The predictor's content holds the same weapons, the paralyser with a
+   [DAMAGE] row on the target besides its default. */
+static void check_paralyser(void)
+{
+    enum { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD, COM, N };
+    static const char* const NAME[N] = { "TANK", "STUN", "TWIN", "MIX", "WARD", "TOWER", "CMD", "COMMANDER" };
+    static const uint16_t BUILDS[] = { TANK, STUN, TWIN, MIX, WARD, TOWER, CMD };
+    enum { W_NONE, W_GUN, W_STUN, W_SHOT, NW };
+    static IMPAI_FTYPE ft[N];
+    static IMPAI_FWEAPON fw[NW];
+    static const IMPAI_FDMG fd[1] = { { TANK, 0, 700 } };
+    const IMPAI_FCONTENT fc = { ft, N, fw, NW, fd, 1, 0 };
+    TASIM_ROLE_IN in[N];
+    TASIM_ROLE_OUT out[N];
+    TASIM_ROLE_Q q;
+    IMPAI_THREAT th[N];
+    IMPAI_TINFO ti[N];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_IN bin;
+    void* work = malloc(tasim_roles_work(N));
+    unsigned k[N];
+    float rate[N];
+    int32_t range[N];
+    int i;
+    memset(in, 0, sizeof in);
+    for (i = 0; i < N; i++) {
+        in[i].flags245 = TASIM_F245_CANMOVE;
+        in[i].bmcode = 1;
+        in[i].maxdamage = 1000;
+        in[i].cost_metal = 300.0f;
+        in[i].maxvelocity_fx = 65536;
+        in[i].nweapons = 1;
+        in[i].w[0].range = 300;
+        in[i].w[0].reload_ticks = 30.0f;
+        in[i].w[0].burst = 1;
+        in[i].w[0].damage_default = 50;
+    }
+    in[STUN].maxvelocity_fx = in[TWIN].maxvelocity_fx = 3 * 65536;
+    in[STUN].w[0].range = in[TWIN].w[0].range = 220;
+    in[STUN].w[0].reload_ticks = in[TWIN].w[0].reload_ticks = 36.0f;
+    in[STUN].w[0].damage_default = in[TWIN].w[0].damage_default = 900;
+    in[STUN].w[0].flags = TASIM_WF_PARALYZER;
+    in[MIX].nweapons = 2;
+    in[MIX].w[1] = in[TANK].w[0];
+    in[MIX].w[0].range = 1050;
+    in[MIX].w[0].damage_default = 400;
+    in[MIX].w[0].flags = TASIM_WF_PARALYZER;
+    in[WARD].flags245 = in[TOWER].flags245 = 0;
+    in[WARD].bmcode = in[TOWER].bmcode = 0;
+    in[WARD].maxvelocity_fx = in[TOWER].maxvelocity_fx = 0;
+    in[WARD].w[0].range = 1050;
+    in[WARD].w[0].damage_default = 900;
+    in[WARD].w[0].flags = TASIM_WF_PARALYZER;
+    in[CMD].nweapons = 2;
+    in[CMD].w[1].range = 100;
+    in[CMD].w[1].reload_ticks = 30.0f;
+    in[CMD].w[1].burst = 1;
+    in[CMD].w[1].flags = TASIM_WF_COMMANDFIRE | TASIM_WF_PARALYZER;
+    in[COM].flags245 |= TASIM_F245_COMMANDER;
+    in[COM].flags241 = TASIM_F241_BUILDER;
+    in[COM].cost_metal = 2500.0f;
+    in[COM].nbuild = (uint16_t)(sizeof BUILDS / sizeof BUILDS[0]);
+    in[COM].build = BUILDS;
+    CHECK(work && tasim_roles_classify(in, N, out, &q, work) == 0, "the classifier takes the paralysers");
+    impai_threat_from_roles(in, out, N, th);
+    memset(ti, 0, sizeof ti);
+    for (i = 0; i < N; i++) ti[i].cat = IMPAI_C_OTHER;
+    memset(&v, 0, sizeof v);
+    v.threat = th;
+    v.ntypes = N;
+    memset(&bin, 0, sizeof bin);
+    bin.ti = ti;
+    bin.nti = N;
+    bin.view = &v;
+    for (i = 0; i < N; i++) {
+        k[i] = impai_class_of(&in[i], &out[i]);
+        printf("paralyser: %-9s role %-9s dps_ground=%.3f range=%d class %-8s hit_ground=%u over %u\n", NAME[i],
+               tasim_roles_name(out[i].role), out[i].dps_ground, (int)out[i].range_ground, impai_class_name(k[i]),
+               th[i].hit_ground, th[i].hit_range);
+    }
+    CHECK(k[TWIN] < IMPAI_KS && k[STUN] == IMPAI_K_NONE && out[STUN].role == out[TWIN].role,
+          "a mobile whose weapons all paralyse is no class, its twin is: %s against %s", impai_class_name(k[STUN]),
+          impai_class_name(k[TWIN]));
+    CHECK(!th[STUN].dps_ground && !th[STUN].range && !th[STUN].hit_ground && !th[STUN].hit_range &&
+              th[TWIN].dps_ground && th[TWIN].hit_ground == th[TWIN].dps_ground,
+          "its threat row is empty: %u over %u, reach %u over %u", th[STUN].dps_ground, th[STUN].range,
+          th[STUN].hit_ground, th[STUN].hit_range);
+    CHECK(k[MIX] == k[TANK] && k[TANK] < IMPAI_KS && out[MIX].dps_ground == out[TANK].dps_ground &&
+              out[MIX].range_ground == out[TANK].range_ground && th[MIX].hit_ground == th[TANK].hit_ground &&
+              th[MIX].hit_range == th[TANK].hit_range && th[TANK].hit_range == 300,
+          "a mixed type is valued on its other weapon: %g over %d, reach %u over %u", out[MIX].dps_ground,
+          (int)out[MIX].range_ground, th[MIX].hit_ground, th[MIX].hit_range);
+    CHECK(out[WARD].role == TASIM_ROLE_DEFENCE && impai_def_struct(&bin, TOWER) && !impai_def_struct(&bin, WARD),
+          "a standing paralyser is no ground defence, its twin is: role %s reach %u",
+          tasim_roles_name(out[WARD].role), th[WARD].hit_ground);
+    CHECK(k[CMD] == k[TANK] && out[CMD].dps_ground == out[TANK].dps_ground && out[CMD].role == out[TANK].role &&
+              th[CMD].hit_ground == th[TANK].hit_ground && th[CMD].hit_range == th[TANK].hit_range,
+          "a CommandFire paralyser changes nothing: %s %g", impai_class_name(k[CMD]), out[CMD].dps_ground);
+    free(work);
+
+    memset(ft, 0, sizeof ft);
+    memset(fw, 0, sizeof fw);
+    fw[W_GUN].range = 300; fw[W_GUN].reload = 30; fw[W_GUN].burst = 1; fw[W_GUN].dmg = 50;
+    fw[W_GUN].kind = IMPAI_FK_STRAIGHT;
+    fw[W_STUN] = fw[W_GUN];
+    fw[W_STUN].range = 1050; fw[W_STUN].dmg = 900; fw[W_STUN].flags = TASIM_WF_PARALYZER; fw[W_STUN].nd = 1;
+    fw[W_SHOT] = fw[W_STUN];
+    fw[W_SHOT].flags = 0;
+    for (i = 0; i < N; i++) {
+        ft[i].hp = 2000; ft[i].value = 300.0f; ft[i].fx = ft[i].fz = 2; ft[i].w[0] = W_GUN;
+    }
+    ft[STUN].w[0] = W_STUN;
+    ft[TWIN].w[0] = W_SHOT;
+    ft[MIX].w[0] = W_STUN;
+    ft[MIX].w[1] = W_GUN;
+    for (i = 0; i < N; i++)
+        CHECK(impai_fight_rate(&fc, &impai_fitparams, (unsigned)i, TANK, &rate[i], &range[i]) == 0, "the rate of %s",
+              NAME[i]);
+    printf("paralyser: the predictor's rate on the tank: STUN %g over %d, TWIN %g over %d, MIX %g over %d, TANK %g\n",
+           (double)rate[STUN], (int)range[STUN], (double)rate[TWIN], (int)range[TWIN], (double)rate[MIX],
+           (int)range[MIX], (double)rate[TANK]);
+    CHECK(rate[STUN] == 0.0f && range[STUN] == 0 && rate[TWIN] > 0.0f && range[TWIN] == 1050,
+          "the predictor: a paralyser hurts nothing, its [DAMAGE] row notwithstanding: %g over %d, the twin %g",
+          (double)rate[STUN], (int)range[STUN], (double)rate[TWIN]);
+    CHECK(rate[MIX] == rate[TANK] && rate[TANK] > 0.0f && range[MIX] == 300,
+          "the predictor: a mixed type hurts with its other weapon: %g over %d against %g", (double)rate[MIX],
+          (int)range[MIX], (double)rate[TANK]);
+}
+
 /* THE SUBSTITUTE IS AN ARMY TYPE (impai_mil.c, substitute): a radar contact never identified beside identified
    enemies seen now, the seat's own army three tanks. (a) The enemy commander, a constructor and a raider: the
    raider, though the constructor is the median of the three by value. (b) The enemy commander alone: the seat's
@@ -16693,6 +16827,7 @@ int main(void)
     check_tinfo_attack();
     check_tinfo_hits();
     check_army_damage();
+    check_paralyser();
     check_threat_reach();
     check_tech_levels();
     check_due();

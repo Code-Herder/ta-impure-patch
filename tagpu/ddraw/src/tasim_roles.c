@@ -11,7 +11,7 @@ _Static_assert(((TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | 
 _Static_assert(((TASIM_F245_CANMOVE | TASIM_F245_COMMANDER) & ~TASIM_ROLE_F245) == 0,
                "the classifier tests only +0x245 bits the role fillers copy");
 _Static_assert(((TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR | TASIM_WF_WATER |
-                 TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH) & ~TASIM_ROLE_WF) == 0,
+                 TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER) & ~TASIM_ROLE_WF) == 0,
                "the classifier tests only +0x111 bits the role fillers copy");
 
 /* The thresholds, in one table: each is a percentile over the mobile non-builder units of the
@@ -81,6 +81,20 @@ static int regular(const TASIM_ROLE_WEAPON* w)
     return !(w->flags & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR));
 }
 
+/* A PARALYSER DEALS NO DAMAGE. A weapon with `paralyzer` (+0x111 bit 7, parsed at 0x42EBBB) hits with damage
+   kind 2 (0x499E20..0x499E32), and the damage apply 0x489CE0 leaves a kind-2 hit by 0x489DF5 without touching
+   hit points (engine/weapons.md, engine/network.md; DISASSEMBLED): its `damage` goes to the paralysis alone
+   [INFERRED: its length]. So its [DAMAGE] figures are no damage per second, and its range is no reach of one: a regular
+   paralyser makes its type armed for the role (a standing type stays a defence) and adds nothing to dps_ground,
+   dps_air, dps_water, range_ground or the artillery test. A type whose regular weapons all paralyse has damage
+   0 everywhere the brain reads it -- no army class (impai_table.c, NO ARMY CLASS WITHOUT DAMAGE), no threat
+   row -- and a mixed type is its other weapons'. The same rule stands in THE GROUND REACH (impai_maps.c) and
+   in the fight predictor's damage (impai_fight.c, damage_on). */
+static int paralyses(const TASIM_ROLE_WEAPON* w)
+{
+    return (w->flags & TASIM_WF_PARALYZER) != 0;
+}
+
 static double dps(double damage, const TASIM_ROLE_WEAPON* w)
 {
     int burst = w->burst > 1 ? w->burst : 1;
@@ -137,6 +151,7 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
         if (!regular(w)) continue;
         if (!a.has_regular) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
         a.has_regular = 1;
+        if (paralyses(w)) continue;
         if (tasim_roles_slot_antiair(u, k)) {
             o->dps_air += dps((double)w->damage_air, w);
             continue;
