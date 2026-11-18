@@ -17,12 +17,16 @@ GRID is a feature grid of 8 x 6 cells written cell by cell. The view's arithmeti
 import array
 import base64
 import json
+import os
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.request
 import zlib
 from pathlib import Path
 from unittest import mock
@@ -31,7 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_think  # noqa: E402
 import think  # noqa: E402
 import thinklayout  # noqa: E402
+import thinklib  # noqa: E402
 import thinkmap  # noqa: E402
+import thinkserve  # noqa: E402
 import thinkview  # noqa: E402
 
 try:
@@ -148,7 +154,9 @@ class Arithmetic(unittest.TestCase):
 
 
 @unittest.skipUnless(test_think.HAVE_CC, "the DLL's compiler is not installed")
-class View(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """THE TREE and THE GAME, for the classes that read them."""
+
     @classmethod
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
@@ -209,6 +217,8 @@ class View(unittest.TestCase):
         ex = think.extract(self.game())
         return thinkview.build(ex, self.lay, 1, fake_sample, think.type_names(ex), **kw)
 
+
+class View(Fixture):
     def test_who_plays_is_the_headers_rows_and_the_first_places(self):
         ex = think.extract(self.game())
         row = lambda ctl, logo, allies: {"controller": ctl, "logo": logo, "alliances": bytes(allies)}     # noqa: E731
@@ -474,6 +484,312 @@ class Dense(unittest.TestCase):
     def test_a_chunks_file_is_one_call_of_the_pages(self):
         text = thinkview.dense_file("a b", 3, b"\x00\x01\xff")
         self.assertEqual(text, 'thinkviewDense("a b",3,"AAH/");\n')
+
+
+class Library(unittest.TestCase):
+    """thinklib.py: a folder a label, a hard link a recording, no index."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_thinklib."))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.lib, self.runs = self.tmp / "library", self.tmp / "runs"
+        self.runs.mkdir()
+        self.said = []
+
+    def rec(self, name="g1.imprec", body=b"recording one", result=None, log=False) -> Path:
+        f = self.runs / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(body)
+        if result is not None:
+            f.with_suffix(".json").write_text(json.dumps(result))
+        if log:
+            f.with_suffix(".tagpu.log").write_text("impai: why\n")
+        return f
+
+    def add(self, recs, label, **kw):
+        return thinklib.add(recs, label, library=self.lib, say=self.said.append, **kw)
+
+    def test_a_label_is_one_path_component(self):
+        self.assertEqual(thinklib.label_name("  item19 \n try1 "), "item19 try1")
+        self.assertEqual(thinklib.label_name("tier @39562add"), "tier @39562add")
+        self.assertEqual(thinklib.label_name("a/../b\\c\x00d"), "a-..-b-c-d")
+        for bad in ("", "  ", ".", "..", ".cache", ".hidden/", "../../outside"):
+            with self.assertRaises(thinklib.LibraryError, msg=bad):
+                thinklib.label_name(bad)
+        got = self.add([self.rec()], "exp/../../outside")
+        self.assertEqual(got[0].parent.parent, self.lib)                    # in the library, whatever the label
+        self.assertEqual([p.name for p in self.lib.iterdir()], ["exp-..-..-outside"])
+
+    def test_a_recording_is_added_as_a_hard_link_with_its_sidecar(self):
+        src = self.rec(result={"id": "g1", "end_tick": 320, "outcome": "A", "seats": {"A": {"seat": 1}}, "setup": None}, log=True)
+        dest, = self.add([src], "exp one", note="why it was kept", tool="session.py", command="session.py --label x", run="r7")
+        self.assertTrue(dest.samefile(src))
+        self.assertEqual(os.stat(src).st_nlink, 2)
+        self.assertTrue(dest.with_suffix(".tagpu.log").samefile(src.with_suffix(".tagpu.log")))
+        side = thinklib.sidecar(dest)
+        self.assertEqual({k: side[k] for k in ("label", "how", "tool", "command", "run", "game", "note", "source")},
+                         {"label": "exp one", "how": "link", "tool": "session.py", "command": "session.py --label x",
+                          "run": "r7", "game": "g1", "note": "why it was kept", "source": str(src.resolve())})
+        self.assertEqual(thinkview.result_of(dest), {"end_tick": 320, "outcome": "A", "winner": 1, "cap": None})
+        self.assertEqual(thinklib.sidecar(src), {})                         # a harness's own result is no sidecar
+        # the same recording again is left as it is; another of its name gets the next free one
+        self.assertEqual(self.add([src], "exp one"), [dest])
+        other = self.rec("sub/g1.imprec", b"another recording, longer")
+        self.assertEqual([p.name for p in self.add([other], "exp one")], ["g1-2.imprec"])
+        rows = thinklib.labels(self.lib)
+        self.assertEqual([(r["label"], r["n"], r["bytes"]) for r in rows], [("exp one", 2, len(b"recording one") + len(b"another recording, longer"))])
+        with self.assertRaises(thinklib.LibraryError):
+            self.add([self.runs / "nothing.imprec"], "exp one")
+
+    def test_where_no_link_can_be_made_it_is_a_copy_and_said(self):
+        src = self.rec()
+        with mock.patch.object(os, "link", side_effect=OSError(18, "Invalid cross-device link")):
+            dest, = self.add([src], "far")
+        self.assertFalse(dest.samefile(src))
+        self.assertEqual((dest.read_bytes(), thinklib.sidecar(dest)["how"]), (src.read_bytes(), "copy"))
+        self.assertTrue(any("copied" in line for line in self.said))
+
+    def test_drop_removes_names_and_never_the_last_one(self):
+        linked, moved = self.rec("a.imprec", b"aaa"), self.rec("b.imprec", b"bbbb")
+        with mock.patch.object(os, "link", side_effect=OSError(18, "x")):
+            copied, = self.add([self.rec("c.imprec", b"ccccc")], "exp")
+        self.add([linked], "exp")
+        self.add([moved], "exp", move=True)
+        self.assertFalse(moved.exists())                                    # moved in: the label holds the only copy
+        gone, kept = thinklib.drop("exp", self.lib, self.said.append)
+        self.assertEqual((sorted(gone), kept), (["a.imprec", "c.imprec"], ["b.imprec"]))
+        self.assertEqual(linked.read_bytes(), b"aaa")                       # a source is never touched
+        self.assertEqual(sorted(p.name for p in (self.lib / "exp").iterdir()), ["b.imprec", "b.json"])
+        self.assertTrue(any("only copy" in line for line in self.said))
+        with self.assertRaises(thinklib.LibraryError):
+            thinklib.drop("no such label", self.lib)
+        # a link whose source is gone since is the only copy too
+        self.add([linked], "exp2")
+        linked.unlink()
+        self.assertEqual(thinklib.drop("exp2", self.lib, self.said.append), ([], ["a.imprec"]))
+
+    def test_the_run_tools_label_adds_what_a_run_kept_and_never_fails_it(self):
+        self.rec("base/g1.imprec")
+        self.rec("mod/g2.imprec", b"two")
+        got = thinklib.add_kept([self.runs], "tier @abc", tool="batch.py", command="batch.py --label", library=self.lib,
+                                say=self.said.append)
+        self.assertEqual(sorted(p.name for p in got), ["g1.imprec", "g2.imprec"])
+        self.assertEqual(thinklib.sidecar(got[0])["tool"], "batch.py")
+        self.assertEqual(thinklib.add_kept([self.tmp / "empty"], "x", library=self.lib, say=self.said.append), [])
+        (self.tmp / "file").write_text("no folder")
+        self.assertEqual(thinklib.add_kept([self.runs], "x", library=self.tmp / "file", say=self.said.append), [])
+        self.assertIn("WARNING", self.said[-1])
+
+    def test_a_recording_is_being_recorded_while_a_process_holds_it_or_it_changes(self):
+        rec = self.rec()
+        Path(str(rec) + ".lock").write_bytes(b"")                           # THE PATH LOCK stays by design: no sign
+        seen = {}
+        self.assertFalse(thinklib.being_recorded(rec, thinklib.open_files(self.tmp), seen))
+        holder = subprocess.Popen([sys.executable, "-c", "import sys; f = open(sys.argv[1], 'rb'); print('held', flush=True); sys.stdin.read()",
+                                   str(rec)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            held = thinklib.open_files(self.tmp)
+            if Path("/proc").is_dir():
+                self.assertEqual(held, {str(rec.resolve())})
+                self.assertTrue(thinklib.being_recorded(rec, held, seen))
+        finally:
+            holder.communicate("")
+        self.assertFalse(thinklib.being_recorded(rec, thinklib.open_files(self.tmp), seen))
+        with open(rec, "ab") as f:                                          # it grew since the last look
+            f.write(b"more")
+        self.assertTrue(thinklib.being_recorded(rec, set(), seen))
+        self.assertFalse(thinklib.being_recorded(rec, set(), seen))        # and stands still at the next
+
+    def test_the_game_directory_is_the_one_that_holds_the_headers_archives(self):
+        listed = [("mod.hpi", 5, 0), ("base.ccx", 3, 0), ("impure-patch.ufo", 9, 0)]
+        for name, files in (("none", {}), ("one", {"BASE.CCX": 3, "mod.hpi": 7}), ("both", {"base.ccx": 3, "mods/x/Mod.hpi": 5})):
+            for f, size in files.items():
+                (self.tmp / name / f).parent.mkdir(parents=True, exist_ok=True)
+                (self.tmp / name / f).write_bytes(b"x" * size)
+        (self.tmp / "none").mkdir(exist_ok=True)
+        with mock.patch.object(thinkmap, "_tavfs", side_effect=OSError):
+            pick = lambda names: thinkview.archive_dirs(listed, [self.tmp / n for n in names])      # noqa: E731
+            self.assertEqual(pick(["none", "one", "both"]), [self.tmp / "both"])
+            self.assertEqual(pick(["one", "none"]), [self.tmp / "one"])     # an archive of another size is not it
+            self.assertEqual(pick(["none", "nowhere"]), [])
+
+    @unittest.skipUnless(shutil.which("git"), "git, which holds the tree at a build")
+    def test_the_tree_at_a_build_is_extracted_from_the_repository(self):
+        repo = test_think.make_tree(self.tmp / "repo")
+        (repo / "tagpu" / "ddraw" / "src" / "impai_brain.c").write_text("static PLAN p = { .base_r = 96, };\n")
+        (repo / "tagpu" / "ddraw" / "src" / "unrelated.c").write_text("int x;\n")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t", *a],     # noqa: E731
+                                        capture_output=True, text=True, check=True).stdout.strip()
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "a build")
+        sha = git("rev-parse", "HEAD")
+        (repo / "tagpu" / "ddraw" / "src" / "impai.h").write_text("/* edited since */\n")
+        tree = thinkview.tree_at(sha[:8] + "-dirty", self.tmp / "cache", repo)
+        self.assertEqual(tree, self.tmp / "cache" / f"tree-{sha[:12]}")
+        got = sorted(p.relative_to(tree).as_posix() for p in tree.rglob("*") if p.is_file())
+        self.assertEqual(got, [".thinkview-build", "tagpu/ddraw/Makefile", "tagpu/ddraw/src/impai.h",
+                               "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/worldq.h"])
+        self.assertEqual((tree / "tagpu" / "ddraw" / "src" / "impai.h").read_text(), test_think.HEADER.replace("WIDE", ""))
+        self.assertEqual((thinkview.tree_build(tree), thinkview.plan_value(tree, "base_r")), (sha[:8], 96))
+        self.assertEqual(thinkview.tree_at(sha[:8], self.tmp / "cache", repo), tree)       # made once
+        for unknown in ("0123abcd", "not-a-build", ""):
+            self.assertIsNone(thinkview.tree_at(unknown, self.tmp / "cache", repo))
+
+
+def facts_of(rec) -> dict:
+    """thinkview.rec_facts' answer for THE GAME, which no tarec.py reads."""
+    return {"map": "Test Map", "build": "abc1234", "version": "t", "played": 1000.0, "end": 400, "ended": "complete: the level ended",
+            "archives": None, "who": [{"seat": 1, "name": "Core", "kind": "impai", "by": "ImpAI", "side": "Core", "logo": 1, "result": "won"}]}
+
+
+class Server(Fixture):
+    """thinkserve.py on a port of its own, a library and a main checkout of the test's."""
+
+    def setUp(self):
+        super().setUp()
+        self.main, self.lib = self.tmp / "main", self.tmp / "main" / ".data" / "impai" / "library"
+        replays = self.main / "tagpu" / "instances" / "inst one" / "gamedir" / "replays"
+        replays.mkdir(parents=True)
+        self.played = replays / "played game.imprec"
+        self.played.write_bytes(self.game("p.imprec").read_bytes())
+        Path(str(self.played) + ".lock").write_bytes(b"")
+        self.built = []
+        real = thinkview.build_game
+        for p in (mock.patch.object(thinklib, "main_checkout", lambda: self.main),
+                  mock.patch.object(thinkview, "rec_facts", facts_of),
+                  mock.patch.object(thinkview, "sample", lambda _rec, ticks, *_a, **_kw: dense_sample(ticks)),
+                  mock.patch.object(thinkview, "build_game", lambda rec, *a, **kw: self.built.append(rec.name) or real(rec, *a, **kw))):
+            p.start()
+            self.addCleanup(p.stop)
+        thinklib.add([self.game()], "exp one", note="kept for the test", library=self.lib, say=lambda _l: None)
+        self.serve()
+
+    def serve(self):
+        self.said = []
+        self.httpd, self.app = thinkserve.start(0, self.lib, self.main, self.said.append)
+        thread = __import__("threading").Thread(target=self.httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(lambda httpd=self.httpd: (httpd.shutdown(), httpd.server_close()))
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def get(self, path, host=None):
+        req = urllib.request.Request(self.url + path, headers={"Host": host} if host else {})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, r.read(), r.headers.get("Content-Type")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), e.headers.get("Content-Type")
+
+    def api(self, path):
+        code, body, _ctype = self.get(path)
+        return code, json.loads(body)
+
+    def open(self, query, most=60.0):
+        """A recording's build asked for until it is ready or failed: (the states seen, the last answer)."""
+        seen, until = [], time.monotonic() + most
+        while True:
+            _code, st = self.api("/api/open?" + query)
+            if st["state"] not in seen:
+                seen.append(st["state"])
+            if st["state"] in ("ready", "failed") or time.monotonic() > until:
+                return seen, st
+            time.sleep(.02)
+
+    def test_the_first_screen_is_the_library_as_the_folders_hold_it(self):
+        self.assertEqual(self.httpd.server_address[0], "127.0.0.1")
+        code, body, ctype = self.get("/")
+        self.assertEqual((code, ctype), (200, "text/html; charset=utf-8"))
+        self.assertIn(b"const MANIFEST = null;", body)                      # the one page, in its app mode
+        _code, doc = self.api("/api/library")
+        groups = {(g["kind"], g["name"]): g for g in doc["groups"]}
+        self.assertEqual(sorted(groups), [("label", "exp one"), ("played", "inst one")])
+        self.assertEqual(groups[("played", "inst one")]["title"], "played · inst one")
+        row, = groups[("label", "exp one")]["recs"]
+        self.assertEqual({k: row[k] for k in ("name", "state", "map", "build", "end", "outcome", "note")},
+                         {"name": "a", "state": "ready", "map": "Test Map", "build": "abc1234", "end": 400,
+                          "outcome": "seat 1 won", "note": "kept for the test"})
+        self.assertEqual([(w["seat"], w["side"], w["by"], w["rgb"]) for w in row["who"]],
+                         [(1, "Core", "ImpAI", list(thinkview.STOCK_RGB[1]))])
+        self.assertEqual(groups[("played", "inst one")]["recs"][0]["state"], "ready")      # its .lock says nothing
+        # no index: a label added and one dropped while it serves are there and gone at the next asking
+        thinklib.add([self.game("late.imprec")], "exp two", library=self.lib, say=lambda _l: None)
+        thinklib.drop("exp one", self.lib, lambda _l: None)
+        _code, doc = self.api("/api/library")
+        self.assertEqual(sorted((g["kind"], g["name"]) for g in doc["groups"]), [("label", "exp two"), ("played", "inst one")])
+
+    def test_a_recording_is_built_when_it_is_opened_and_kept(self):
+        seen, st = self.open("k=label&g=exp+one&r=a")
+        self.assertEqual((st["state"], self.built), ("ready", ["a.imprec"]), st)
+        self.assertTrue(set(seen) <= {"queued", "building", "ready"} and seen[-1] == "ready", seen)
+        game = st["game"]
+        self.assertRegex(game["base"], rf"^cache/{self.app.builder.tool}/[0-9a-f]{{24}}/$")
+        self.assertEqual((game["map"], game["end"], game["seats"]), ("Test Map", 400, [{"seat": 1, "id": "a", "file": "a.js"}]))
+        self.assertEqual(game["dense"]["k"], thinkview.DENSE_K)
+        code, body, ctype = self.get("/" + game["base"] + "a.js")
+        self.assertEqual((code, ctype, body[:19]), (200, "text/javascript; charset=utf-8", b'thinkviewData("a",{'))
+        code, body, _c = self.get("/" + game["base"] + game["dense"]["files"][0])
+        self.assertEqual((code, body[:22]), (200, b'thinkviewDense("a",0,"'))
+        # the second opening reads the cache: nothing is built, and a server started anew finds it too
+        self.assertEqual(self.open("k=label&g=exp+one&r=a")[0], ["ready"])
+        self.serve()
+        self.assertEqual((self.open("k=label&g=exp+one&r=a")[0], self.built), (["ready"], ["a.imprec"]))
+        # a played game is built where it lies, and nothing is written beside it
+        before = sorted(p.name for p in self.played.parent.iterdir())
+        self.assertEqual(self.open("k=played&g=inst+one&r=played+game")[1]["state"], "ready")
+        self.assertEqual(sorted(p.name for p in self.played.parent.iterdir()), before)
+        # another version of the tools trusts none of it: its own folder, and the old one removed at its start
+        with mock.patch.object(thinkserve, "tool_digest", lambda: "0123456789ab"):
+            self.serve()
+            self.assertTrue(any("another version" in line for line in self.said), self.said)
+            self.assertEqual([p.name for p in (self.lib / ".cache").iterdir()], [])
+            self.assertEqual((self.open("k=label&g=exp+one&r=a")[1]["state"], self.built.count("a.imprec")), ("ready", 2))
+
+    def test_a_build_that_fails_says_why_and_is_made_again_when_asked(self):
+        with mock.patch.object(thinkview, "sample", side_effect=thinkview.ViewError("its stream could not be sampled")):
+            _seen, st = self.open("k=label&g=exp+one&r=a")
+            self.assertEqual((st["state"], st["error"]), ("failed", "its stream could not be sampled"))
+            self.assertEqual(self.open("k=label&g=exp+one&r=a")[1]["state"], "failed")      # not made again unasked
+        self.assertEqual(self.open("k=label&g=exp+one&r=a&again=1")[1]["state"], "ready")
+
+    def test_what_a_request_names_is_looked_up_never_joined_into_a_path(self):
+        self.open("k=label&g=exp+one&r=a")
+        outside = self.tmp / "secret.js"
+        outside.write_text("no")
+        tool = self.app.builder.tool
+        key = next(p.name for p in (self.lib / ".cache" / tool).iterdir())
+        for path in ("/cache/../../secret.js", f"/cache/{tool}/../../../../secret.js", f"/cache/{tool}/{key}/..%2f..%2f..%2fsecret.js",
+                     f"/cache/{tool}/{key}/game.json", f"/cache/{tool}/{key}/", f"/cache/{tool}/{key}/.hidden.js",
+                     "/api/nothing", "/thinkview.py", "//etc/passwd"):
+            self.assertEqual(self.get(path)[0], 404, path)
+        for query in ("k=label&g=..%2F..&r=secret", "k=label&g=exp+one&r=..%2Fa", "k=played&g=exp+one&r=a", "k=label&g=.cache&r=a", ""):
+            code, st = self.api("/api/open?" + query)
+            self.assertEqual((code, st["state"]), (404, "failed"), query)
+        self.assertEqual(self.get("/api/library", host="elsewhere.example")[0], 403)       # its own address alone
+        (self.lib / ".cache" / tool / key / "link.js").symlink_to(outside)                 # a link out of the cache
+        self.assertEqual(self.get(f"/cache/{tool}/{key}/link.js")[0], 404)
+
+    def test_a_recording_being_recorded_is_shown_and_not_opened(self):
+        with open(self.played, "ab") as f:
+            self.api("/api/library")
+            f.write(b" ")                                                   # it grows between two listings
+            f.flush()
+            _code, doc = self.api("/api/library")
+            row, = next(g for g in doc["groups"] if g["kind"] == "played")["recs"]
+            self.assertEqual(row["state"], "recording")
+            self.assertNotIn("map", row)                                    # nothing of it is read
+        holder = subprocess.Popen([sys.executable, "-c", "import sys; f = open(sys.argv[1], 'ab'); print('held', flush=True); sys.stdin.read()",
+                                   str(self.played)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            if Path("/proc").is_dir():
+                code, st = self.api("/api/open?k=played&g=inst+one&r=played+game")
+                self.assertEqual((code, st["state"]), (409, "failed"))
+                self.assertIn("being recorded", st["error"])
+        finally:
+            holder.communicate("")
+        self.assertEqual(self.built, [])
 
 
 def gaf_bytes(name: str, frames: list) -> bytes:

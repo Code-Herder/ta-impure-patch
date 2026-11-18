@@ -4,8 +4,16 @@ flight recorder as one instrument.
 
     tools/impai/thinkview.py REC [REC...] [--seat S] [--tree DIR]... [--gamedir DIR]... [--content FILE]...
                              --out DIR [--step N] [--max-bytes B] [--dense K] [--bare]
+    tools/impai/thinkview.py serve [--port P] [--library DIR]           the same page as a local app (thinkserve.py)
+    tools/impai/thinkview.py add REC... --label L [--note TEXT] [--move]
+    tools/impai/thinkview.py labels | drop --label L                    its library of recordings (thinklib.py)
 
-Writes DIR/index.html and, for each recording, DIR/<name>.js and DIR/<map>.<crc>.map.webp: the page (thinkview.html,
+ONE PAGE, TWO SOURCES. The first form, THE EXPORT, writes a folder of files that needs no server: the page with
+its games' list in it. `serve` is THE APP: the same page with no list, whose first screen is the library and
+which asks the server for a game when its recording is opened; the server builds it then, with what the export
+would write, and keeps it. Both make a game through build_game, and the page loads its files the same way.
+
+THE EXPORT writes DIR/index.html and, for each recording, DIR/<name>.js and DIR/<map>.<crc>.map.webp: the page (thinkview.html,
 beside this file), one data file a recording and seat, which the page loads when it is picked, and the map's
 picture, one a map file. A recording several ImpAI seats played is a data file a seat (`<name>-seat<S>.js`) unless --seat names
 one: the page lists a recording once, as a GAME, and a button a seat beside it. The page needs no server and no network but its fonts: open index.html. --bare writes the page without the
@@ -20,12 +28,15 @@ remembered ghost) over the enemy as it is, which the page draws faintly and can 
 
 THE GROUND UNDER THE WAR ROOM (thinkmap.py). The map's picture is rendered from the game's own map file, found
 in the archives the recording's header lists (--gamedir DIR names a game directory to look in; by default the
-one the recording lies in, `<gamedir>/replays/`, then the install tavfs.py finds). The heights, the metal and the
+one that holds the most of the header's archives at their listed sizes, of the recording's own `<gamedir>/replays/`,
+the one a library sidecar says it was added from and every instance's of the main checkout -- where_played,
+archive_dirs --, then the install tavfs.py finds). The heights, the metal and the
 features are the recording's own feature grid: the metal and the heights as the first sample holds them, a
 feature from the sample it is first seen at to the sample it is gone at. A unit type's facts -- it extracts
 metal, it floats, it flies -- are its FBI's in the same archives, by the name the content file gives its number
-(--content FILE names a content file of predfit.py's for a mod; the first whose count is the recording's names
-the types). What could not be read is a line of the page, never a guess. THE PICTURE IS DERIVED FROM THE
+(--content FILE names a content file of predfit.py's for a mod; after this tree's and those, the setup's a
+harness's result names and every setup's under `.data/calib-mods/` are tried, and the first whose count is the
+recording's names the types). What could not be read is a line of the page, never a guess. THE PICTURE IS DERIVED FROM THE
 ORIGINAL GAME: it is written into --out and nowhere else.
 
 WHO PLAYS (seat_facts). Every seat of the recording's header is a row of the data's `who` and of the page's
@@ -52,8 +63,12 @@ EVERYTHING ELSE IS READ THROUGH think.py: the brain's state by field name throug
 (thinklayout.py), so no offset of ImpAI's is written here, and a recording of another layout is refused by name
 (--tree DIR names the tree that made it). THE TREE AT THE RECORDING'S BUILD READS IT: sizes are all think.py
 compares, and two builds of the same sizes may number an enum's members otherwise (a job's kinds have), so of
-the trees that fit, one checked out at the commit the recording's header names is taken first, then each --tree
-in the order given, and this tree last; the page says so when none is at the recording's build. What think.py's extract does not keep -- where each unit stands, and
+the trees that fit, one at the commit the recording's header names is taken first, then each --tree in the order
+given, and this tree last; the page says so when none is at the recording's build. No one has to check that tree
+out: when the repository knows the commit, the handful of files a layout is read from are taken out of it
+(tree_at: `git show <commit>:<path>` of the Makefile, tagpu_impai.c, impai_brain.c, impai.h and what it includes)
+into think.py's cache, once. A build made from uncommitted edits (`-dirty`) is read by its commit's tree and said
+not to be exact. What think.py's extract does not keep -- where each unit stands, and
 each seat's metal income -- is read from the same stream in one more pass (sample), through tarec.py's own
 accessors.
 
@@ -85,7 +100,9 @@ import array
 import base64
 import json
 import math
+import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -95,6 +112,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import think  # noqa: E402
+import thinklayout  # noqa: E402
+import thinklib  # noqa: E402
 import thinkmap  # noqa: E402
 
 TEMPLATE = HERE / "thinkview.html"
@@ -634,9 +653,86 @@ def dense_file(ident: str, c: int, blob: bytes) -> str:
     return f"thinkviewDense({json.dumps(ident)},{c},\"{base64.b64encode(blob).decode()}\");\n"
 
 
+BUILD_MARK = ".thinkview-build"         # in a tree tree_at made: the commit it is the files of
+# what a layout is a function of besides impai.h and what it includes (thinklayout.py), and the plan's defaults
+TREE_FILES = (thinklayout.MAKEFILE, thinklayout.SOURCE, thinklayout.DDRAW / "src" / "impai_brain.c")
+
+
+def tree_at(build: str, cache=None, repo=None):
+    """THE TREE AT A RECORDING'S BUILD, without a worktree: the files a layout is read from -- the DLL's
+    Makefile, tagpu_impai.c, impai_brain.c, impai.h and every header it includes, each as commit `build` holds it
+    (`git show <commit>:<path>`) -- in `<cache>/tree-<commit>/`, made once. None when the repository does not
+    know the commit (a build of another clone, or one never committed) or holds no impai.h at it."""
+    sha = str(build).split("-")[0]
+    repo = Path(repo or think.TREE)
+    if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+        return None
+
+    def git(*args, text=True):
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=text, timeout=60)
+    try:
+        full = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}").stdout.strip()
+        if not full:
+            return None
+        dest = Path(think.CACHE if cache is None else cache) / f"tree-{full[:12]}"
+        if (dest / BUILD_MARK).is_file():
+            return dest
+        ddraw = thinklayout.DDRAW.as_posix()
+        have = set(git("ls-tree", "-r", "--name-only", full, "--", f"{ddraw}/src", f"{ddraw}/inc", f"{ddraw}/Makefile").stdout.split("\n"))
+        todo, files = [thinklayout.HEADER.as_posix()] + [f.as_posix() for f in TREE_FILES], {}
+        while todo:
+            path = todo.pop()
+            if path in files or path not in have:
+                continue
+            files[path] = git("show", f"{full}:{path}", text=False).stdout
+            if path.endswith(".h"):
+                for name in re.findall(rb'^\s*#\s*include\s+"([^"]+)"', files[path], re.M):
+                    name = name.decode(errors="replace")
+                    todo += [(Path(path).parent / name).as_posix(), f"{ddraw}/inc/{name}"]
+        if thinklayout.HEADER.as_posix() not in files:
+            return None
+        part = dest.with_name(f"{dest.name}.{os.getpid()}.part")
+        shutil.rmtree(part, ignore_errors=True)
+        for path, blob in files.items():
+            (part / path).parent.mkdir(parents=True, exist_ok=True)
+            (part / path).write_bytes(blob)
+        (part / BUILD_MARK).write_text(full[:8] + "\n")
+        try:
+            os.replace(part, dest)
+        except OSError:                                         # another call made it meanwhile
+            shutil.rmtree(part, ignore_errors=True)
+        return dest if (dest / BUILD_MARK).is_file() else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def with_tree_at(build: str, lays: list, builds: dict, cache=None) -> None:
+    """`lays` and `builds` (layout_for's) with the tree at `build` added, when the repository knows the commit
+    and no tree of `lays` is at it yet. A tree whose layout cannot be made is left out: layout_for then takes
+    another that fits, and the page says the layout is not the recording's own."""
+    sha = str(build).split("-")[0]
+    for lay in lays:
+        if lay.tree not in builds:
+            builds[lay.tree] = tree_build(lay.tree)
+    if not sha or any(b and (b.startswith(sha) or sha.startswith(b)) for b in builds.values()):
+        return
+    tree = tree_at(build, cache)
+    if tree is None:
+        return
+    try:
+        lays.append(think.Layout(thinklayout.load(tree, think.CACHE if cache is None else cache), tree))
+        builds[tree] = tree_build(tree)
+    except thinklayout.LayoutError:
+        pass
+
+
 def tree_build(tree) -> str:
-    """The commit a source tree is checked out at, as a recording's header names a build (8 hex digits); "" when
-    git names none."""
+    """The commit a source tree is at, as a recording's header names a build (8 hex digits): tree_at's mark in a
+    tree it made, else what the tree is checked out at; "" when git names none."""
+    try:
+        return (Path(tree) / BUILD_MARK).read_text().strip()
+    except OSError:
+        pass
     try:
         return subprocess.run(["git", "-C", str(tree), "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True,
                               timeout=30).stdout.strip()
@@ -670,6 +766,83 @@ def game_dirs(recs: list, given: list) -> list:
     except (Exception, SystemExit):                             # noqa: BLE001
         pass
     return list(dict.fromkeys(d for d in out if d.is_dir()))
+
+
+def archive_dirs(listed, candidates: list) -> list:
+    """The game directories a recording's archives are read from when no one names them: of `candidates`, the
+    one that holds the most of the archives the header lists (`listed`: [(name, size, ...)]) at their listed
+    sizes -- the first such, and none when no candidate holds any --, then the install tavfs.py finds."""
+    want = {name.lower(): size for name, size, *_ in listed or [] if name.lower() != thinkmap.OWN_ARCHIVE}
+    best, most = None, 0
+    for d in dict.fromkeys(Path(c) for c in candidates):
+        n = 0
+        try:
+            folders = [d] + [p for p in (d / "mods").glob("*") if p.is_dir()]
+            for folder in folders:
+                for f in folder.iterdir():
+                    if want.get(f.name.lower()) is not None and f.stat().st_size == want[f.name.lower()]:
+                        n += 1
+        except OSError:
+            continue
+        if n > most:
+            best, most = d, n
+    out = [best] if best else []
+    try:
+        out.append(Path(thinkmap._tavfs().find_install(None)))
+    except (Exception, SystemExit):                             # noqa: BLE001
+        pass
+    return list(dict.fromkeys(d for d in out if d.is_dir()))
+
+
+def where_played(rec: Path) -> tuple:
+    """(the game directories that may hold a recording's archives, the content files that may name its types),
+    each in the order they are tried, from where the recording lies and what stands beside it: its own game
+    directory (`<gamedir>/replays/`), the one a library SIDECAR's source lay in, then every instance's of the
+    main checkout; this tree's content file, the content file of the setup a harness's result names, then every
+    setup's."""
+    rec = Path(rec).resolve()
+    main = thinklib.main_checkout()
+    side = thinklib.sidecar(rec)
+    dirs = [p.parent.parent for p in [rec] + ([Path(side["source"])] if side.get("source") else [])
+            if p.parent.name.lower() == "replays"]
+    try:
+        dirs += sorted(p for p in (main / "tagpu" / "instances").glob("*/gamedir") if p.is_dir())
+    except OSError:
+        pass
+    mods = main / ".data" / "calib-mods"
+    setup = (side.get("result") or result_doc(rec) or {}).get("setup")
+    contents = ([mods / str(setup) / "fight-content.json"] if setup else []) + sorted(mods.glob("*/fight-content.json"))
+    return dirs, list(dict.fromkeys(c for c in contents if c.is_file()))
+
+
+def rec_facts(rec) -> dict:
+    """What a list shows of a recording without building it, from its header block and its end block alone
+    (tarec.py; no stream is decoded): {"map", "build", "version", "played": the time its game began (epoch
+    seconds), "end": its last tick, "ended": why it ended (tarec.END_REASONS; None with no end block), "who":
+    [{"seat", "name", "side", "kind", "by", "logo", "result": "won" | "lost" | None}]}; {"error": why} for a
+    file that does not read."""
+    sys.path.insert(0, str(think.TREE / "tools" / "replay"))
+    try:
+        import tarec
+        h = tarec.header_only(str(rec))
+        bl, _stop = tarec.blocks(str(rec), decode=False)
+        last = max((b[2] for b in bl if b[0] == tarec.RB_STREAM), default=0)
+        ends = tarec.end(bl[-1][3]) if bl and bl[-1][0] == tarec.RB_END else None
+        results = {s[0]: tarec.RESULTS.get(s[1]) for s in (ends or {}).get("seats", [])}
+        who = []
+        for q in h["players"]:
+            kind, by = ("impai", "ImpAI") if q.get("ai") == 1 else CONTROLLERS.get(q.get("controller"), (None, None))
+            won = results.get(q["index"])
+            who.append({"seat": q["index"], "name": q.get("name") or f"seat {q['index']}", "kind": kind, "by": by,
+                        "side": SIDES.get(q.get("side"), None if q.get("side") is None else f"side {q['side']}"),
+                        "logo": q.get("logo"), "result": won if won in ("won", "lost") else None})
+        wall = h.get("wallclock")
+        return {"map": h.get("map"), "build": h.get("build"), "version": h.get("version"),
+                "played": wall / 1e7 - 11644473600 if wall else None, "end": last,
+                "ended": None if ends is None else tarec.END_REASONS.get(ends.get(tarec.RT_END_REASON), "ended"),
+                "who": who, "archives": h.get("archives")}
+    except Exception as e:                                      # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def terrain(found: dict, names: dict, dirs: list, pictures: dict) -> dict:
@@ -811,12 +984,24 @@ def result_of(rec: Path) -> dict:
     (a seat, None), "cap"}; {} with none. A harness ends a game by a scenario and clears the level in the last
     ticks, so a game's end is its result's end_tick, not the recording's last."""
     try:
-        doc = json.loads(rec.with_suffix(".json").read_text())
+        doc = result_doc(rec)
         seat = (doc.get("seats") or {}).get(doc.get("outcome")) or {}
         return {"end_tick": int(doc["end_tick"]), "outcome": str(doc.get("outcome")), "winner": seat.get("seat"),
                 "cap": doc.get("cap")}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {}
+
+
+def result_doc(rec: Path):
+    """The harness's result of a recording's game, whole: the `<name>.json` beside it, or the one a library
+    SIDECAR there holds (thinklib.py); None with neither."""
+    try:
+        doc = json.loads(Path(rec).with_suffix(".json").read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(doc, dict) and doc.get("library") == thinklib.SIDECAR:
+        doc = doc.get("result")
+    return doc if isinstance(doc, dict) else None
 
 
 def enum_names(lay, seat) -> dict:
@@ -981,19 +1166,27 @@ def build_game(rec, stem: str, lays: list, builds: dict, dirs: list, contents=()
     """One recording as the page's files: (THE LIST's row of the game, {file's name: its text or bytes} -- a data
     file a seat, THE DENSE TRACKS' chunks when `dense` is a K, the map's picture when `pictures` did not hold it
     yet --, the lines to print). `stem` names the files; `lays` are think.layouts' and `builds` the commit each
-    tree is at (layout_for); `dirs` the game directories; `contents` the content files a mod's types may be
-    named by; `pictures` terrain's, shared by the games of one page. The stream is read ONCE, for every seat's
+    tree is at (layout_for), each grown by the tree at the recording's build when the repository knows it
+    (with_tree_at); `dirs` the game directories, None for those the recording's own header and place name
+    (where_played, archive_dirs); `contents` the content files a mod's types may be named by, tried before every
+    setup's own; `pictures` terrain's, shared by the games of one page. The stream is read ONCE, for every seat's
     samples and the dense tracks together. `progress(what, fraction or None)` says how far the build is."""
     say = progress or (lambda _what, _frac=None: None)
     rec, pictures = Path(rec), {} if pictures is None else pictures
     before = set(pictures)
     say("reading the recording's state")
     ex = think.extract(rec)
+    say(f"the layout of the source tree at its build {ex.build}")
+    with_tree_at(ex.build, lays, builds)
     lay, layout = layout_for(ex, lays, builds)
     rows = header_rows(rec)
     result = result_of(rec)
     seats = [think.pick_seat(ex, seat)] if seat is not None or len(ex.impai_seats()) < 2 else ex.impai_seats()
-    names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in contents] if n), [])
+    found_dirs, found_contents = where_played(rec) if dirs is None or not contents else ([], [])
+    if dirs is None:
+        listed = next((r.get("archives") for r in [rec_facts(rec)] if r.get("archives")), None)
+        dirs = archive_dirs(listed, found_dirs)
+    names = next((n for n in [think.type_names(ex)] + [think.type_names(ex, c) for c in list(contents) + found_contents] if n), [])
     plans = {}
     for i, st in enumerate(seats):
         say(f"seat {st}: its lanes, events and judgements", i / len(seats))
@@ -1070,7 +1263,7 @@ def export(argv) -> int:
             raise ViewError("--dense: a count of ticks")
         lays = think.layouts(a.tree)
         manifest, files, pictures, stems, builds = [], {}, {}, set(), {}
-        dirs = game_dirs(a.rec, a.gamedir)
+        dirs = game_dirs(a.rec, a.gamedir) if a.gamedir else None
         for rec in a.rec:
             stem = base = re.sub(r"[^A-Za-z0-9._-]", "-", rec.stem)
             n = 1
@@ -1099,6 +1292,11 @@ def export(argv) -> int:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["serve"]:
+        import thinkserve
+        return thinkserve.main(argv[1:])
+    if argv[:1] and argv[0] in ("add", "labels", "drop"):
+        return thinklib.main(argv)
     return export(argv)
 
 
