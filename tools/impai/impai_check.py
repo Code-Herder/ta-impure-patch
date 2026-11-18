@@ -12,7 +12,8 @@ names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
       least LOS_MIN units and the `check radar` line counts at least RADAR_PASSES passes; under
       Permanent (`--los permanent`) the `check los-local` line evaluated at least LOS_MIN, and
       the radar line at least RADAR_PASSES passes as well. The radar line's `stale` is 0: every
-      bit an ImpAI seat's published pass held had its record written by that pass. Every level's
+      bit an ImpAI seat's published pass held had its record written by that pass. The `check site`
+      line evaluated at least one site: a rule that ran on nothing agrees with nothing. Every level's
       `check pass` line evaluated entries and found none of the content map ImpAI's way out reads
       unlike the engine's own map, at the level init where no unit stands. A missing line fails:
       the lever tagpu_impai_check.on was not in place, or the level never ended;
@@ -82,7 +83,7 @@ METAL_ROW = re.compile(r"impai: metal z=(\d+) x=(\d+)((?: [0-9A-F]+\*\d+)+)")
 
 def judge(lines, los):
     fails, notes = [], []
-    los_seats, local, radar, content = {}, None, None, 0
+    los_seats, local, radar, content, site = {}, None, None, 0, None
     for ln in lines:
         m = PASS.search(ln)
         if m:
@@ -112,6 +113,7 @@ def judge(lines, los):
             continue
         m = SITE.search(ln)
         if m:
+            site = (site or 0) + int(m.group(1))
             if int(m.group(2)):
                 fails.append(f"(a) {ln.strip()}")
             notes.append(ln.strip())
@@ -147,6 +149,10 @@ def judge(lines, los):
         fails.append("(a) no `impai: check radar` line: the check lever was not in place")
     elif radar < RADAR_PASSES:
         fails.append(f"(a) {radar} radar passes checked, under {RADAR_PASSES}")
+    if site is None:
+        fails.append("(a) no `impai: check site` line: the site rule did not report")
+    elif not site:
+        fails.append("(a) the site check evaluated no site: its rule never ran")
     if los == "true":
         if not los_seats:
             fails.append("(a) no `impai: check los seat=` line")
