@@ -33,12 +33,24 @@ static void row_fresh(IMPAI_SEEN* n)
    observation (OWN, LOS) names the type and owner, an unidentified one (SHARED) keeps what the row last
    identified. Nothing shown: the classes of now are lost and the radar's kept -- the publish owns those --
    and a row left with neither is a GHOST at its block. A ghost whose block the seat sees now is emptied: the
-   seat can see that nothing it knows of is there. */
+   seat can see that nothing it knows of is there.
+   A UNIT SEEN GONE: the slice visits every slot once a round (THE ROW'S AGE, impai.h), so a row that holds LOS
+   says the seat saw the unit at most a round ago, and a slot that holds no unit now lost it within that round,
+   under the seat's eyes: the row is emptied whole, the radar's classes with it (the next publish finds no unit
+   there either). Such a row asks observe as for a contact, which then answers for any live unit; only that it
+   answers is read -- WQ_SEEN_CONTACT is nothing shown -- and never what it says of the unit, and the tick's
+   work stays one observe a slot. The engine sees a unit by four points of its box (tagpu_worldq.c, unit_los)
+   and the row keeps its centre's block, so a wide structure dies in sight with that block dark, and the block
+   test alone would keep it a ghost. THE BOUND: a death in the ticks of the round after the seat's sight left
+   the unit is taken as seen, IMPAI_ROW_AGE_MAX ticks at most. A slot another unit took within the round
+   answers as a live unit, and the row is a ghost. */
 static void slice_slot(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_SEEN* r, int slot)
 {
     IMPAI_SEEN n = *r;
     WQ_OBS o;
-    if (q->ops->observe(q, slot, 0, &o)) {
+    const int by_sight = (n.how & IMPAI_LOS) != 0;
+    const int seen = q->ops->observe(q, slot, by_sight, &o);
+    if (seen && seen != WQ_SEEN_CONTACT) {
         row_fresh(&n);
         n.how = (uint8_t)((n.how & IMPAI_PASS) |
                           (o.seen == WQ_SEEN_OWN ? IMPAI_OWN : o.seen == WQ_SEEN_LOS ? IMPAI_LOS : IMPAI_SHARED));
@@ -48,6 +60,8 @@ static void slice_slot(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_SEEN* r, int slot)
         }
         n.bx = o.bx;
         n.bz = o.bz;
+    } else if (by_sight && !seen) {
+        memset(&n, 0, sizeof n);
     } else if (n.how) {
         n.how &= (uint8_t)~IMPAI_NOW;
         if (!(n.how & IMPAI_PASS)) n.how = IMPAI_GHOST;

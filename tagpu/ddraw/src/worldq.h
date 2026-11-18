@@ -366,7 +366,9 @@ typedef struct WORLDQ_OPS {
     int (*gametime)(const WORLDQ*);
     /* What the seat may know of the unit at `slot`, the first class that holds: WQ_SEEN_OWN, _LOS, _SHARED,
        or, when `contact` says the seat's own radar pass found the slot (radar_step's bits), _CONTACT; 0 for
-       none, out zeroed. Another player's unit reaches a rule through here alone */
+       none, out zeroed. With `contact` it so answers for any live unit: the knowledge slice asks it of a row
+       it holds by sight and reads only whether a unit is there (impai_know.c, A UNIT SEEN GONE). Another
+       player's unit reaches a rule through here alone */
     int (*observe)(const WORLDQ*, int slot, int contact, WQ_OBS* out);
     /* the seat sees 32-px block (bx, bz) now; 0 off the map */
     int (*block_lit)(const WORLDQ*, int bx, int bz);
