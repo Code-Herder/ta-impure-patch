@@ -61,6 +61,10 @@ seat on start 2 gave none. Those two maps are left out of the default; --maps ta
   - A game's points are the candidate's, as above: a game at the cap is scored by codeduel.py's value at the
     cap, which both peers must agree on (its THE VALUE AT THE CAP), through bar.outcome_of; as the joiner the
     candidate is seat B and its points are one less A's.
+  - A game whose result names a check its evidence could not make (codeduel.py's `unverified`: a peer whose
+    leave failed, a loss only one peer's log shows) counts: its outcome is the one both peers' looks or the
+    engine's end showed, and nothing it has contradicts it. The report names each such game and its check, and
+    the tally how many there are, so a verdict that rests on them says so.
   - A game that could not run, or whose peers disagreed (a desync), is played once more; a member with a game
     still unscored is could not judge, and the run stops there.
   - A network game is not deterministic, so no game is paired with another: THE VERDICT is the same one-sided
@@ -335,7 +339,8 @@ def duel_rows(games: list, out: Path) -> list:
         clock = r.get("clock") or {}
         rows.append(dict(row, points=pts, **{"try": t}, outcome=r["outcome"], end_tick=r.get("end_tick"),
                          value={s: v["live"] for s, v in r["value"].items()} if at_cap else None,
-                         ahead=clock["J"] - clock["H"] if len(clock) == 2 else None))
+                         ahead=clock["J"] - clock["H"] if len(clock) == 2 else None,
+                         unverified=r.get("unverified") or []))
     return rows
 
 
@@ -346,8 +351,10 @@ def tally(rows: list) -> str:
     caps = sum(1 for r in rows if r.get("value"))
     role = {x: [r["points"] for r in rows if r["role"] == x] for x in "hj"}
     mean = {x: f"{sum(v) / len(v):.3f}" if v else "none" for x, v in role.items()}
+    loose = sum(1 for r in rows if r.get("unverified"))
     return (f"{w} won, {d} drawn, {l_} lost; {caps} at the cap, scored by value; "
-            f"as host {mean['h']}, as joiner {mean['j']}")
+            f"as host {mean['h']}, as joiner {mean['j']}"
+            + (f"; {loose} counted with a check its evidence could not make, named below" if loose else ""))
 
 
 def load_code_state(out: Path, want: dict) -> dict:
@@ -378,6 +385,7 @@ def code_report(st: dict) -> str:
             val = f", value A {r['value']['A']:.0f}, B {r['value']['B']:.0f}" if r.get("value") else ""
             clock = f", the joiner's clock {r['ahead']:+d}" if r.get("ahead") is not None else ""
             rows.append(f"    {r['id']} ({r['try']}): {r['outcome']} at {r['end_tick']}{val}{clock}: {r['points']}")
+            rows += [f"      unverified: {u}" for u in r.get("unverified") or []]
     return "\n".join(rows)
 
 
