@@ -260,9 +260,10 @@ static void way_raster(IMPAI_DEC* d, const WAY* w)
     const int W = BLOCK_SIDE(w->bw), H = BLOCK_SIDE(w->bh);
     int32_t* P = d->way_block;
     int i, j;
+    const int air = d->in->st->room.type != WQ_NONE && impai_econ_air_plant(d, d->way.type);
     memset(P, 0, (size_t)W * (size_t)H * sizeof *P);
     for (i = 0; i < d->nclaims; i++)
-        if (!d->claims[i].way) block_add(P, w, &d->claims[i].r);
+        if (!d->claims[i].way && !(air && d->claims[i].room)) block_add(P, w, &d->claims[i].r);
     for (i = 0; i < d->nstructs; i++) block_add(P, w, &d->structs[i].r);
     if (v && v->rows && v->seat >= 0 && v->seat < WQ_SEATS)
         for (i = 1; i < v->nrows; i++) {
@@ -1817,12 +1818,17 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    cells; each site the builder reaches (builder_reaches), tested before the site test so that a site it does not
    reach costs no site test -- its refusals counted against AIR_REACH_REFUSALS in IMPAI_DEC.air_reach, the
    builder's own --, its site tests counted against AIR_OUT_TESTS in IMPAI_DEC.air_sites rather than the decision's
-   site_tests, and neither its success nor its exhaustion touches ring_grow or a plant type. */
+   site_tests, and neither its success nor its exhaustion touches ring_grow or a plant type.
+   HOW: RING_BUILD orders the first site that passes; RING_PROBE orders nothing and keeps that site as THE AIR
+   PLANT'S ROOM (room_take); RING_ROOM tests the room's site alone, as an OUT ring's. THE AIR PLANT'S ROOM's claims
+   hold against every building but an air plant (impai_claimed_for), for which the room is kept. */
+enum { RING_BUILD, RING_PROBE, RING_ROOM };
 static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
+static int room_take(IMPAI_DEC* d, int type, int cx, int cz);
 #define AIR_OUT_TESTS 32        /* THE AIR PLANT'S OWN SEARCH's site tests a decision, beside site_tests         */
 #define AIR_REACH_REFUSALS 32   /* THE AIR PLANT'S OWN SEARCH's sites one builder may find out of its reach     */
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
-                      uint32_t cover, int out)
+                      uint32_t cover, int out, int how)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
@@ -1832,6 +1838,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     int* const tests = out >= 0 ? &d->air_sites : &d->sites;
     const int cap = out >= 0 ? AIR_OUT_TESTS : (int)in->plan->site_tests;
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
+    const int air = st->room.type != WQ_NONE && impai_econ_air_plant(d, (unsigned)type);
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0;
     if (at) box = *at;
@@ -1843,11 +1850,17 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         box.x1 = (int16_t)(st->ax + (ct && ct->fx > 0 ? ct->fx : 1) - 1);
         box.z1 = (int16_t)(st->az + (ct && ct->fz > 0 ? ct->fz : 1) - 1);
     }
-    n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
-                   box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
-    if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
-    else if (commander) ring_order(d, d->ring, n, fx, fz, gap, b->pos[0] >> 16, b->pos[2] >> 16);
-    else ring_order(d, d->ring, n, fx, fz, gap, st->ax * 16 + 8, st->az * 16 + 8);
+    if (how == RING_ROOM) {
+        n = 1;
+        d->ring[0].cx = (int16_t)(st->room.cx - gap / 2);
+        d->ring[0].cz = (int16_t)(st->room.cz - gap / 2);
+    } else {
+        n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
+                       box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
+        if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
+        else if (commander) ring_order(d, d->ring, n, fx, fz, gap, b->pos[0] >> 16, b->pos[2] >> 16);
+        else ring_order(d, d->ring, n, fx, fz, gap, st->ax * 16 + 8, st->az * 16 + 8);
+    }
     for (k = 0; k < n; k++) {
         const int cx = d->ring[k].cx + gap / 2, cz = d->ring[k].cz + gap / 2;
         IMPAI_RECT r = impai_rect_at(d, type, cx, cz), wide = r;
@@ -1861,7 +1874,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         }
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
+        if (impai_claimed_for(d, &wide, air) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
             (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
         if (commander && !site_within(d, type, cx, cz, in->plan->comm_r)) {
@@ -1893,7 +1906,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
                 continue;
             }
         }
-        if (build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
+        if (how == RING_PROBE ? room_take(d, type, cx, cz) : build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
             if (!at && out < 0) st->ring_grow = 0;
             return 1;
         }
@@ -1908,13 +1921,13 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
 
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
-    return ring_build(d, b, type, NULL, NULL, 0, -1);
+    return ring_build(d, b, type, NULL, NULL, 0, -1, RING_BUILD);
 }
 
 int impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const int32_t key[2] = { d->def_x, d->def_z };
-    return ring_build(d, b, type, key, NULL, 0, -1);
+    return ring_build(d, b, type, key, NULL, 0, -1, RING_BUILD);
 }
 
 /* THE SENSORS' SITE (impai_econ.c, THE SENSORS): a site within three quarters of the type's distance of the want's
@@ -1930,12 +1943,12 @@ int impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     const uint32_t cover = (uint32_t)(d->want_sensor == IMPAI_SENSE_SONAR ? t->sonar : t->radar) * 3u / 4u;
     IMPAI_RECT at;
     if (!cover) return 0;
-    if (ring_build(d, b, type, key, NULL, cover, -1)) return 1;
+    if (ring_build(d, b, type, key, NULL, cover, -1, RING_BUILD)) return 1;
     if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER) return -1;
     if (t->flags & IMPAI_TF_WATER) return 0;
     at.x0 = at.x1 = (int16_t)(d->sensor_x >> 4);
     at.z0 = at.z1 = (int16_t)(d->sensor_z >> 4);
-    return ring_build(d, b, type, key, &at, cover, -1);
+    return ring_build(d, b, type, key, &at, cover, -1, RING_BUILD);
 }
 
 int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
@@ -1962,21 +1975,55 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    asked after it (the commander on its energy build). 1 ordered. BOUND: a builder asked walks AIR_OUT_RINGS + 1
    place_ring rings of at most PLACE_MAX_SITES sites and runs at most AIR_REACH_REFUSALS + AIR_OUT_TESTS
    builder_reaches; the decision runs at most AIR_OUT_TESTS site tests here.
+   THE AIR PLANT'S ROOM (impai_econ.c) is tested first, alone, when it is kept for this type (RING_ROOM): the walk
+   past it reaches it only while the sites nearer the builder do not spend the decision's site tests, and on a
+   crowded island they do -- which is what the room is kept for. The room's search is this walk with no order
+   (RING_PROBE, impai_build_air_room), so the room is a site this search would take.
    RESIDUAL: the walk is the same each decision, so while its first AIR_OUT_TESTS sites fail the sites past them
    are not tested. */
 #define AIR_OUT_RINGS 8
-int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
+static int air_search(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived, int how)
 {
-    const int g0 = d->in->st->ring_grow;
+    const IMPAI_BRAIN* st = d->in->st;
+    const int g0 = st->ring_grow;
     int ok = 0, g;
     d->way_waive = waived;
     d->air_reach = 0;
+    if (how == RING_BUILD && st->room.type == (unsigned)type && d->air_sites < AIR_OUT_TESTS && d->roots < d->root_cap)
+        ok = ring_build(d, b, type, NULL, NULL, 0, g0, RING_ROOM);
     for (g = g0; !ok && g <= g0 + AIR_OUT_RINGS && d->air_sites < AIR_OUT_TESTS &&
                  d->air_reach < AIR_REACH_REFUSALS && d->roots < d->root_cap;
          g++)
-        ok = ring_build(d, b, type, NULL, NULL, 0, g);
+        ok = ring_build(d, b, type, NULL, NULL, 0, g, how);
     d->way_waive = 0;
     return ok;
+}
+
+int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
+{
+    return air_search(d, b, type, waived, RING_BUILD);
+}
+
+int impai_build_air_room(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    return air_search(d, b, type, 0, RING_PROBE);
+}
+
+/* THE AIR PLANT'S ROOM taken (RING_PROBE): the air plant of `type` at first cell (cx, cz) and, unless the plant
+   goes without one (way_waive), the way out way_prove proved there, kept as the seat's room and claimed for the
+   rest of the decision (impai_econ_room_claim); 1 */
+static int room_take(IMPAI_DEC* d, int type, int cx, int cz)
+{
+    IMPAI_WAYREC* w = &d->in->st->room;
+    if (!d->way_waive && d->way_ok && d->way.type == type && d->way.cx == cx && d->way.cz == cz) *w = d->way;
+    else {
+        memset(w, 0, sizeof *w);
+        w->cx = (int16_t)cx;
+        w->cz = (int16_t)cz;
+    }
+    w->type = (uint16_t)type;
+    impai_econ_room_claim(d);
+    return 1;
 }
 
 /* ---- the sea plant ---- */

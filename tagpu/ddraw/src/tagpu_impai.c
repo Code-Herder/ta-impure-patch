@@ -1448,6 +1448,7 @@ static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, ascan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, unlock), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, unlock_plant), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, room.type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);

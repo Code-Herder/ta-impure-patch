@@ -427,9 +427,10 @@ typedef struct IMPAI_WAYFAIL { int16_t cx, cz; uint16_t type, pad; uint32_t unti
 #define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
 /* THE CLAIM TABLE'S BOUND, so a full table is unreachable: a census unit adds at most one claim -- an extractor's
    or geothermal's site, or the build order at a builder's head, and a unit is one or the other --, the kept ways
-   add at most IMPAI_WAYS x IMPAI_WAY_RECTS (a way joins them only while fewer than IMPAI_WAYS are kept), and each
-   of the decision's commands at most one build order's site (impai_brain.c asserts it). */
-#define IMPAI_CLAIM_MAX (IMPAI_CENSUS_MAX + IMPAI_WAYS * IMPAI_WAY_RECTS + IMPAI_ROOTS_MAX)
+   add at most IMPAI_WAYS x IMPAI_WAY_RECTS (a way joins them only while fewer than IMPAI_WAYS are kept), THE AIR
+   PLANT'S ROOM its footprint and its way's IMPAI_WAY_RECTS (claimed once a decision, impai_econ.c), and each of the
+   decision's commands at most one build order's site (impai_brain.c asserts it). */
+#define IMPAI_CLAIM_MAX (IMPAI_CENSUS_MAX + (IMPAI_WAYS + 1) * IMPAI_WAY_RECTS + 1 + IMPAI_ROOTS_MAX)
 /* A plant's proven way out, kept for as long as the plant stands or is ordered: the plant's type and first
    cell, and the cells of the path near it, inflated by its largest product's footprint, as `n` rectangles
    (x0, z0, x1, z1, cells inclusive). Type WQ_NONE: an unused entry. */
@@ -506,6 +507,9 @@ typedef struct IMPAI_BRAIN {
     uint16_t   unlock;          /* THE KEPT UNLOCK (impai_econ.c): the constructor type the plant choice last
                                    waited for, 0 none, and unlock_plant the plant it waited to build       */
     uint16_t   unlock_plant;
+    /* THE AIR PLANT'S ROOM (impai_econ.c): one air plant's footprint at first cell (cx, cz) and its proven way out,
+       kept free of the seat's other buildings while the seat on an island is blind; type WQ_NONE: none */
+    IMPAI_WAYREC room;
     uint8_t    held[IMPAI_GRID_MAX * IMPAI_GRID_MAX / 8];  /* THE HELD GROUND (impai_build.c): bit gx & 7 of byte
                                    (gz IMPAI_GRID_MAX + gx) >> 3 is 1 while 256-px cell (gx, gz) is held, as the
                                    last decision that judged it left it; all 0 at the level's start          */
