@@ -9,6 +9,12 @@ bar-hota-plainspasses-ac-1
 bar-hota-steeljungle-ca-1
 bar-nota-lavamania-ca-2 prota-4.8
 
+# The metal maps (bar.py, THE METAL MAPS): no pool holds one, so these alone show what a change does where every
+# cell yields metal and the extractors stand on the base ring. Core Prime is the flat one, won at 5643b394 with a
+# third of its metal wasted by 20 000; Metal Heck's close starts are lost there (bar-hota-metalheck-aa-2).
+bar-hota-coreprime-cc-1
+bar-hota-metalheck-aa-2
+
 # The unmapped openings (tools/impai/opening.py), `unmapped-<map>-<S>`: ImpAI at start S as a network game seats
 # it, the level not mapped, to GameTime 6 000. Every game above is mapped; these alone show a change to what an
 # unmapped seat does. Steel Jungle's start 2 and Trout Farm's are starts whose seat gives no order at 0a4ec04e;

@@ -132,6 +132,7 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   pairs of 42 (MEASURED 2026-11-14, b7 round 2, whose 242 logs carry `test seeds` and no `run seeds`), so a pair's
   five games a map and pairing were two distinct games.
 - **The maps**, one of each kind by the rule the specification states (at least three starts, no uniform metal;
+- **The metal maps** stand outside both pools (`bar.METAL_MAPS`: `coreprime`, `metalheck`, `metalgridlock`): an id names one as it names any map (`bar-hota-coreprime-cc-1`), no level, table or margin is chosen or judged on them, and they stand after the pools' maps in `MAPS` so no pool map's sides in a block change. The session tier plays two ([testing](testing.html)).
   land, sea and mixed from the middle third of the 90 such retail maps by area, small from the smallest third,
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
   under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large). These five

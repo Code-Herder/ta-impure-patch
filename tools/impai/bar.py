@@ -286,7 +286,12 @@ BAR_MAPS = {"pincushion": "Pincushion", "redtriangle": "Red Triangle", "troutfar
             "lavamania": "Lava Mania", "plainspasses": "Plains and Passes"}
 DEV_MAPS = {"acidfoursome": "Acid Foursome", "steeljungle": "Steel Jungle", "luschaven": "Luschaven",
             "gasplantplain": "Gasplant Plain", "lavaalley": "Lava Alley"}
-MAPS = {**BAR_MAPS, **DEV_MAPS}
+# THE METAL MAPS: maps whose every cell yields metal (SurfaceMetal 255, the brain's own test: impai_metal_map). They are
+# in neither pool -- the pools hold no uniform metal by the specification's rule, so no level, table or margin is
+# chosen or judged on them -- and an id names one as it names any map, for the session tier and a look. They stand
+# after the pools' maps so that no pool map's index, and with it its sides in a block, changes.
+METAL_MAPS = {"coreprime": "Core Prime Industrial Area", "metalheck": "Metal Heck", "metalgridlock": "Metal Gridlock"}
+MAPS = {**BAR_MAPS, **DEV_MAPS, **METAL_MAPS}
 SIDE = {"a": "arm", "c": "core"}
 COMMANDER = {"arm": "ARMCOM", "core": "CORCOM"}     # the base game's; a setup's are its sidedata's (THE SETUP)
 SIDE_INDEX = {"arm": 0, "core": 1}                  # a scenario's side by its sidedata index (tacli SCN_SIDES)

@@ -117,12 +117,13 @@ class TestSession(unittest.TestCase):
         self.assertEqual([(i["id"], i["setup"]) for i in its][4:],
                          [("bar-hota-redtriangle-ac-1", None), ("bar-hota-troutfarm-ca-1", None),
                           ("bar-hota-plainspasses-ac-1", None), ("bar-hota-steeljungle-ca-1", None),
-                          ("bar-nota-lavamania-ca-2", "prota-4.8")] + [(g, None) for g in OPENINGS])
+                          ("bar-nota-lavamania-ca-2", "prota-4.8"), ("bar-hota-coreprime-cc-1", None),
+                          ("bar-hota-metalheck-aa-2", None)] + [(g, None) for g in OPENINGS])
         self.assertEqual(its[8]["name"], "bar-nota-lavamania-ca-2 on prota-4.8")
         self.assertEqual(its[8]["game"]["setup"], "prota-4.8")
         self.assertTrue(all(i["game"]["seed"] == bar.game_seed(i["id"]) for i in its))
         self.assertEqual([i["id"] for i in its if i["opening"]], list(OPENINGS))
-        self.assertEqual([(i["game"]["cap"], bar.seat_of(i["game"])["A"]) for i in its[9:]],
+        self.assertEqual([(i["game"]["cap"], bar.seat_of(i["game"])["A"]) for i in its[11:]],
                          [(opening.CAP, 2), (opening.CAP, 2), (opening.CAP, 3), (opening.CAP, 3)])
         # every other game of the tier is mapped, as the bar's template is; an opening is not (test_opening)
         self.assertIs(json.loads(bar.TEMPLATE.read_text())["setup"]["mapping"], True)
@@ -141,10 +142,10 @@ class TestSession(unittest.TestCase):
         its = session.items([], session.CONFIRM, self.tmp / "s")
         ps = session.pieces("test", self.tmp / "t", self.dlls["candidate"], its, 6)
         self.assertEqual([(p["name"], p["setup"], p["lanes"], len(p["ids"])) for p in ps],
-                         [("test-base", None, 6, 12), ("test-prota-4.8", "prota-4.8", 1, 1)])
+                         [("test-base", None, 6, 14), ("test-prota-4.8", "prota-4.8", 1, 1)])
         order = [i["id"] for i in ps[0]["items"]]
-        self.assertTrue(all(g.startswith("bar-") for g in order[:4]))
-        self.assertEqual(order[4:9], ["exploit-commander-rush", *OPENINGS])    # the shortest caps
+        self.assertTrue(all(g.startswith("bar-") for g in order[:6]))
+        self.assertEqual(order[6:11], ["exploit-commander-rush", *OPENINGS])    # the shortest caps
         self.assertEqual(ps[0]["out"], self.tmp / "t" / "base")
         self.assertEqual(ps[1]["out"], self.tmp / "t" / "prota-4.8")
         cmd = session.piece_command(ps[1], self.dlls["candidate"])
@@ -154,7 +155,7 @@ class TestSession(unittest.TestCase):
         cmd = session.piece_command(ps[0], self.dlls["candidate"])
         self.assertEqual(cmd[cmd.index("--situations") + 1].split(",")[0], "commander-rush")
         self.assertEqual(cmd[cmd.index("--openings") + 1], ",".join(OPENINGS))
-        self.assertEqual(cmd[cmd.index("--ids") + 1].count("bar-"), 4)
+        self.assertEqual(cmd[cmd.index("--ids") + 1].count("bar-"), 6)
         self.assertNotIn("unmapped", cmd[cmd.index("--ids") + 1])
         self.assertNotIn("--setup", cmd)
 
@@ -183,10 +184,10 @@ class TestSession(unittest.TestCase):
     def test_every_game_same_and_the_champions_games_played_once(self):
         self.assertEqual(self.run_(), 0)
         self.assertEqual(sorted(self.launched), ["base-base", "base-prota-4.8", "test-base", "test-prota-4.8"])
-        self.assertEqual(len(self.played), 26)
-        self.assertIn("session: PASS: 13 SAME", self.said)
+        self.assertEqual(len(self.played), 30)
+        self.assertIn("session: PASS: 15 SAME", self.said)
         self.assertIn("the champion's games", self.said)
-        self.assertIn("0 of 13 already played, 13 to play", self.said)
+        self.assertIn("0 of 15 already played, 15 to play", self.said)
         base = [d for d in (self.tmp / "cache").iterdir()]
         self.assertEqual([d.name for d in base], [f"base-{session.digest(self.dlls['champion'])[:12]}"])
         self.assertEqual((base[0] / "dll" / "base.dll").read_bytes(), b"champion")
@@ -194,13 +195,13 @@ class TestSession(unittest.TestCase):
         self.assertTrue((base[0] / "prota-4.8" / "bar-nota-lavamania-ca-2.json").exists())
         self.assertTrue((self.tmp / "out" / "t1" / "base" / "bar-hota-troutfarm-ca-1.json").exists())
         doc = json.loads((self.tmp / "out" / "t1" / "summary.json").read_text())
-        self.assertEqual((doc["verdict"], len(doc["games"]), doc["games"][0]["word"]), ("pass", 13, "SAME"))
+        self.assertEqual((doc["verdict"], len(doc["games"]), doc["games"][0]["word"]), ("pass", 15, "SAME"))
         # the same session again plays nothing
         self.launched, self.played = [], []
         self.assertEqual(self.run_(), 0)
         self.assertEqual(self.launched, [])
-        self.assertIn("the champion's games (" + base[0].name + "): 13 of 13 already played, 0 to play", self.said)
-        self.assertIn("the candidate's games (t1): 13 of 13 already played, 0 to play", self.said)
+        self.assertIn("the champion's games (" + base[0].name + "): 15 of 15 already played, 0 to play", self.said)
+        self.assertIn("the candidate's games (t1): 15 of 15 already played, 0 to play", self.said)
         # another candidate against the same champion plays its own games alone
         self.assertEqual(self.run_(tag="t2", test="other"), 0)
         self.assertEqual(sorted(self.launched), ["test-base", "test-prota-4.8"])
@@ -215,15 +216,15 @@ class TestSession(unittest.TestCase):
         nine.write_text("".join(ln + "\n" for ln in session.CONFIRM.read_text().splitlines()
                                 if not ln.startswith("unmapped-")))
         self.assertEqual(self.run_(confirm=str(nine)), 0)
-        self.assertIn("session: PASS: 9 SAME", self.said)
+        self.assertIn("session: PASS: 11 SAME", self.said)
         self.launched, self.played = [], []
         # the confirm set has gained the openings since: each folder plays those, and the nine are read
         self.assertEqual(self.run_(), 0)
         self.assertEqual(sorted(self.launched), ["base-base", "test-base"])
         self.assertEqual(sorted(self.played), sorted((r, g) for r in ("base", "test") for g in OPENINGS))
         self.assertIn("the champion's games (base-" + session.digest(self.dlls["champion"])[:12]
-                      + "): 9 of 13 already played, 4 to play", self.said)
-        self.assertIn("session: PASS: 13 SAME", self.said)
+                      + "): 11 of 15 already played, 4 to play", self.said)
+        self.assertIn("session: PASS: 15 SAME", self.said)
 
     def test_an_openings_word_is_its_figures(self):
         sj, tf, la = three = OPENINGS[:3]
@@ -277,7 +278,7 @@ class TestSession(unittest.TestCase):
                                rf"first parting at GameTime 2400\n")
         # another end tick in one category is reported, not judged
         self.assertRegex(text, rf"PARTED +{ends} +base won at 30000 \| test won at 31000; no decision line differs")
-        self.assertIn("session: FAIL: 7 SAME, 2 BETTER, 2 PARTED, 2 WORSE", text)
+        self.assertIn("session: FAIL: 9 SAME, 2 BETTER, 2 PARTED, 2 WORSE", text)
         self.assertNotIn("impai: mil", text)                              # the lines are --neutral's
 
     def test_a_situations_line_carries_both_dlls_figures(self):
@@ -312,7 +313,7 @@ class TestSession(unittest.TestCase):
             return parted.get(rec_base.name[:-len(".imprec")], (None, "state equal at every tick to 100"))
         with mock.patch.object(session, "state_parting", fake):
             self.assertEqual(self.run_(neutral=True, state=True, tree=["/src/other"]), 1)
-        self.assertEqual(len(asked), 13)                                  # every game, the bar's too
+        self.assertEqual(len(asked), 15)                                  # every game, the bar's too
         self.assertTrue(asked[0][0].startswith("base-") and asked[0][1] == "t1" and asked[0][3] == ["/src/other"])
         # equal logs and results, and the state parts: not SAME; a state that cannot be compared proves nothing
         self.assertEqual(self.word("exploit-air-rush"), "PARTED")
@@ -320,7 +321,7 @@ class TestSession(unittest.TestCase):
         self.assertEqual(self.word("bar-hota-troutfarm-ca-1"), "UNRUN")
         self.assertEqual(self.word("exploit-naval-turtle"), "SAME")
         self.assertIn("; state equal at every tick to 100", self.said)
-        self.assertIn("session: FAIL: 11 SAME, 1 PARTED, 1 UNRUN", self.said)
+        self.assertIn("session: FAIL: 13 SAME, 1 PARTED, 1 UNRUN", self.said)
         doc = json.loads((self.tmp / "out" / "t1" / "summary.json").read_text())
         self.assertEqual(doc["games"][0]["state"], parted["exploit-air-rush"][1])
         # without --state no recording is read
@@ -335,7 +336,7 @@ class TestSession(unittest.TestCase):
         self.result = lambda role, gid: CAP_AHEAD if (role, gid) == ("base", "bar-hota-troutfarm-ca-1") else WIN
         self.attack = lambda role, gid: 2 if (role, gid) == ("test", "exploit-air-rush") else 1
         self.assertEqual(self.run_(), 0)
-        self.assertIn("session: PASS: 11 SAME, 1 BETTER, 1 PARTED", self.said)
+        self.assertIn("session: PASS: 13 SAME, 1 BETTER, 1 PARTED", self.said)
 
     def test_neutral_fails_on_a_game_not_same_and_names_its_first_parting(self):
         self.assertEqual(self.run_(neutral=True), 0)
@@ -347,7 +348,7 @@ class TestSession(unittest.TestCase):
         self.assertEqual(lines[k + 1], "      base: impai: mil seat=1 t=2400 attack=1 raid=0")
         self.assertEqual(lines[k + 2], "      test: impai: mil seat=1 t=2400 attack=0 raid=0")
         self.assertTrue(lines[k + 3].startswith("  SAME "))                # the lines are under that game alone
-        self.assertIn("session: FAIL: 12 SAME, 1 PARTED", self.said)
+        self.assertIn("session: FAIL: 14 SAME, 1 PARTED", self.said)
         self.assertIn(", neutral;", lines[2])
 
     def test_only_narrows_to_the_named_games(self):
@@ -372,7 +373,7 @@ class TestSession(unittest.TestCase):
         self.assertEqual(self.run_(tag="t2", test="other"), 2)
         self.assertRegex(self.said, r"UNRUN +exploit-air-rush +base pass: .* \| test could not run: the game did "
                                     r"not launch")
-        self.assertIn("session: COULD NOT RUN: 12 SAME, 1 UNRUN", self.said)
+        self.assertIn("session: COULD NOT RUN: 14 SAME, 1 UNRUN", self.said)
         # a game WORSE fails the session whatever could not run
         self.result = lambda role, gid: {("test", "exploit-air-rush"): ("cnr", None),
                                          ("test", "bar-hota-troutfarm-ca-1"): LOSS}.get((role, gid), WIN)

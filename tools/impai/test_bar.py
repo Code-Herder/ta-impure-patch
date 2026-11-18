@@ -138,7 +138,9 @@ class TestBar(unittest.TestCase):
             self.assertEqual(len(set(g)), len(g))
             for gid in g:
                 self.assertEqual(bar.parse_id(gid)["id"], gid)
-        self.assertEqual(len(bar.MAPS), 10)
+        self.assertEqual(len(bar.MAPS), 13)
+        self.assertEqual(list(bar.MAPS)[:10], list(bar.BAR_MAPS) + list(bar.DEV_MAPS))    # THE METAL MAPS stand last
+        self.assertFalse(set(bar.METAL_MAPS) & (set(bar.BAR_MAPS) | set(bar.DEV_MAPS)))
         self.assertEqual({bar.parse_id(g)["map"] for g in bar.ids("hota") + bar.ids("eoh") + bar.ids("hn")},
                          set(bar.BAR_MAPS))                             # the held-out pool judges
         self.assertEqual({bar.parse_id(g)["map"] for g in bar.ids("p:L3")}, set(bar.DEV_MAPS))
