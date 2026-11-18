@@ -10932,122 +10932,6 @@ static void check_island_order(void)
     s_w.refuse_box_type = 0;
 }
 
-/* THE AIR PLANT'S ROOM (impai_econ.c; the owner's decision, 2026-11-17): (f)'s island world of THE ISLAND'S PLANT
-   ORDER -- one shipyard, the lab an air plant, an enemy area in need of the air scout, a PT boat, the commander the
-   one builder at cell (40, 64) --, on the income `metal_in` (7: the air plant not due; 9: due, as (p)) */
-static void room_world(float metal_in)
-{
-    static const uint16_t AIRLAB[] = { E_CK, E_UWMEX };
-    coast_world(C_COAST, 1, metal_in);
-    s_w.unit[2].live = 0;
-    isle_patches(3, 0);
-    s_ti[E_UWMEX].klass = IMPAI_K_BOMBER;
-    menu_set(&s_w, E_LAB, AIRLAB, 2);
-    s_smil.island = 1;
-    unit_add(&s_w, 3, E_SY, 66, 100, 1);
-    s_w.econ[0].energy_in = 1000;
-    s_smil.blind_t = (uint32_t)s_w.gametime;
-    unit_add(&s_w, 8, E_PT, 130, 100, 1);
-}
-
-/* one decision; the room after it, and the decision's build orders of `type` (the last at *x0, *z0) */
-static int room_decide(const char* name, int type, int* x0, int* z0)
-{
-    IMPAI_BRAIN_OUT out;
-    const int from = s_w.nlog;
-    int n;
-    CHECK(decide(&out) == 0, "decide: %s", name);
-    n = builds_of(from, type, x0, z0);
-    printf("the air plant's room, %s: room type %d at (%d, %d) n %d; %d builds of type %d, the last at (%d, %d)\n",
-           name, s_st.room.type == WQ_NONE ? -1 : (int)s_st.room.type, s_st.room.cx, s_st.room.cz, s_st.room.n, n,
-           type, x0 ? *x0 : -1, z0 ? *z0 : -1);
-    return n;
-}
-
-/* THE AIR PLANT'S ROOM: on room_world,
-   (a) not due: no lab, and the room kept for it -- the lab's footprint at (57, 95), the site THE AIR PLANT'S OWN
-       SEARCH would order, its centre within comm_r of the anchor --, and kept, the same, at the next decision;
-   (b) (a)'s room kept, the energy short (income 10, store empty): the solar collector, which goes to (58, 97) with no
-       room (the same world not blind), goes clear of the room's footprint, and the room stays;
-   (c) (a), then no longer blind: the room let go;
-   (d) (a), then a lab standing (a frame of the seat's): the room let go;
-   (e) no shipyard yet: no room while the first sea plant is to come -- the shipyard, by its search;
-   (f) due, the room kept at (49, 87) -- the site the room's search takes when a solar collector stands at
-       (58, 97) --: the lab at the room, not at (57, 95), where the walk alone orders it; and the room let go at the
-       next census, the lab ordered;
-   (g) the recorded room as data: a type past the content's, a cell off the map's range, more rectangles than
-       IMPAI_WAY_RECTS -- each let go at the census and the room found again, at (57, 95) with no rectangle. */
-static void check_air_room(void)
-{
-    static const char* const BAD[3] = { "(g) a type past the content's", "(g) a cell off the range",
-                                        "(g) more rectangles than kept" };
-    int x0 = -1, z0 = -1, n, c;
-    room_world(7.0f);
-    n = room_decide("(a) blind, not due", E_LAB, NULL, NULL);
-    {
-        const int64_t dx = (2 * s_st.room.cx + 6) * 8 - (2 * 40 + 2) * 8;
-        const int64_t dz = (2 * s_st.room.cz + 6) * 8 - (2 * 64 + 2) * 8;
-        CHECK(!n && s_st.room.type == E_LAB && s_st.room.cx == 57 && s_st.room.cz == 95 &&
-                  dx * dx + dz * dz <= (int64_t)s_plan->comm_r * s_plan->comm_r,
-              "(a) no lab, the room kept at (57, 95) within comm_r");
-    }
-    room_decide("(a) the next decision", E_LAB, NULL, NULL);
-    CHECK(s_st.room.type == E_LAB && s_st.room.cx == 57 && s_st.room.cz == 95, "(a) the room kept the next decision");
-    for (c = 0; c < 2; c++) {
-        room_world(7.0f);
-        if (c) {
-            s_st.room.type = E_LAB;
-            s_st.room.cx = 57;
-            s_st.room.cz = 95;
-            s_st.room.n = 0;
-        } else
-            s_smil.blind_t = 0;
-        s_w.econ[0].energy_in = 10;
-        s_w.econ[0].energy = 0;
-        n = room_decide(c ? "(b) the energy short" : "(b) the energy short, not blind", E_SOLAR, &x0, &z0);
-        if (!c) CHECK(n == 1 && x0 == 58 && z0 == 97, "(b) not blind: the solar collector at (58, 97)");
-        else
-            CHECK(n == 1 && (x0 + 5 <= 57 || x0 >= 57 + 6 || z0 + 5 <= 95 || z0 >= 95 + 6) &&
-                      s_st.room.type == E_LAB && s_st.room.cx == 57 && s_st.room.cz == 95,
-                  "(b) the solar collector clear of the room, at (%d, %d), the room kept", x0, z0);
-    }
-    room_world(7.0f);
-    room_decide("(c) blind, not due", E_LAB, NULL, NULL);
-    s_smil.blind_t = 0;
-    room_decide("(c) no longer blind", E_LAB, NULL, NULL);
-    CHECK(s_st.room.type == WQ_NONE, "(c) no longer blind: the room let go");
-    room_world(7.0f);
-    room_decide("(d) blind, not due", E_LAB, NULL, NULL);
-    unit_add(&s_w, 5, E_LAB, 20, 20, 0);
-    room_decide("(d) a lab framed", E_LAB, NULL, NULL);
-    CHECK(s_st.room.type == WQ_NONE, "(d) a lab framed: the room let go");
-    room_world(7.0f);
-    s_w.unit[3].live = 0;
-    n = room_decide("(e) no shipyard yet", E_SY, NULL, NULL);
-    CHECK(s_st.room.type == WQ_NONE && n == 1, "(e) no room before the first shipyard, the shipyard");
-    room_world(9.0f);
-    s_st.room.type = E_LAB;
-    s_st.room.cx = 49;
-    s_st.room.cz = 87;
-    s_st.room.n = 0;
-    n = room_decide("(f) due, the room at (49, 87)", E_LAB, &x0, &z0);
-    CHECK(n == 1 && x0 == 49 && z0 == 87, "(f) the lab at the room, (%d, %d)", x0, z0);
-    room_decide("(f) the next decision", E_LAB, NULL, NULL);
-    CHECK(s_st.room.type == WQ_NONE, "(f) the lab ordered: the room let go");
-    for (c = 0; c < 3; c++) {
-        room_world(7.0f);
-        room_decide("(g) blind, not due", E_LAB, NULL, NULL);
-        if (c == 0) s_st.room.type = (uint16_t)E_N;
-        if (c == 1) s_st.room.cx = -40;
-        if (c == 2) s_st.room.n = 200;
-        room_decide(BAD[c], E_LAB, NULL, NULL);
-        CHECK(s_st.room.type == E_LAB && s_st.room.cx == 57 && s_st.room.cz == 95 && s_st.room.n == 0,
-              "%s: let go, the room found again", BAD[c]);
-    }
-    s_plan = &IMPAI_PLAN_ROW;
-    s_milp = NULL;
-}
-
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
    commander is the one builder and the search's site is the shipyard at (64, 60), centre (1088, 1024). An enemy PT
    boat, armed against the air by its threat row, seen 1 092 px from the site: the shipyard is ordered there. Seen
@@ -16360,7 +16244,6 @@ int main(void)
     check_island_plants();
     check_island_hold();
     check_island_order();
-    check_air_room();
     check_sea_finish();
     check_sea_cmd_safe();
     check_techup();

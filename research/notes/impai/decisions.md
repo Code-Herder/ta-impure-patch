@@ -633,22 +633,6 @@ The owner's answers to the spec's questions:
   wholly past the leash (MEASURED 2026-11-17 at d9d34dcb's tree); a CORAP set down 160 px from the commander at
   the game's start stands and works, so the island's room is gone by the time the plant is due. Only the commander
   offers CORAP there, so a site past its leash, or the air plant earlier, is the owner's call.
-  **The air plant's room** (owner's answer, 2026-11-17): "reserve room early" -- once a seat on an island looks
-  blind, one air plant's footprint stays free in the base ring so the energy builds cannot fill it; never past the
-  leash, never earlier at the economy's expense, released once the air plant is placed or no longer wanted, and
-  never starving the first shipyard. **As built**: while the seat is on THE ISLAND, an enemy area needs the air
-  scout, it holds a sea plant (built, framed or ordered) and no air plant (built, framed or ordered), the lowest-tech
-  air plant its builder types offer has a room: the site THE AIR PLANT'S OWN SEARCH would order for the first builder
-  offering it -- the commander first -- found with no order, at the end of the decision's assignment so it spends
-  only what the builds left, and kept in the seat's state with its proven way out. Every census claims it, so no
-  building but an air plant is placed on its footprint or its way; the air plant's search tests the room first,
-  alone, before its walk. It is let go at the census once any condition fails, a failure lies in it, or its
-  recorded row is not one. **The bounds**: one room at most; no room before the first sea plant, so the first
-  shipyard is never held up; the room is a site the commander's search would take, so within its leash, and keeping
-  it orders nothing, so the air plant is due when it was before. **What it does not reach**: a room the site test
-  refuses when the plant is due -- a wreck on it, a unit standing there -- stays kept, and the walk is tried as
-  before; a different air plant chosen later passes the room's claims but is not tested there first; a ring that
-  holds no site for the air plant when the seat turns blind keeps no room.
 - **A commander at the shore** (owner's decision, 2026-11-17): ships treat an enemy commander they cannot reach --
   one confined to land, whose class has no way to the ships' water -- like a defence: they stand off past its D-gun
   reach plus a pad and shell it from range; they do not retreat home for it. **As built**: its reach is the longer of

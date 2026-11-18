@@ -1632,128 +1632,6 @@ static void air_take(IMPAI_DEC* d, int keep)
     }
 }
 
-/* THE AIR PLANT'S ROOM (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *The air plant for the
-   blind*): once a seat on THE ISLAND looks blind -- an enemy area needs the air scout (impai_blind) -- and holds a
-   sea plant and no air plant, each built, a frame or ordered, one air plant's footprint and its way out are kept
-   free: found by THE AIR PLANT'S OWN SEARCH with no order (impai_build_air_room), recorded (IMPAI_BRAIN.room) and
-   claimed at every census (impai_econ_room_keep), so no energy build, nor any other building but an air plant, is
-   placed on it (impai_claimed_for), and the air plant's search tests it first (impai_build.c, RING_ROOM). WHY: on
-   the naval turtle the commander's 136 sites within its leash were all refused by the engine when the air plant
-   came due at 8 587, the island filled by then, while a CORAP set down at the start stood (MEASURED 2026-11-17 at
-   d9d34dcb's tree); the owner: "reserve room early" -- not past the leash, and never earlier at the economy's
-   expense. BOUNDS, by construction:
-   - at most one room: it is searched only while none is kept, and taking it ends the search;
-   - THE FIRST SHIPYARD IS NEVER STARVED: no room is kept until the seat holds a sea plant;
-   - never past the leash, never earlier: the room is a site the air plant's own search would order -- every
-     safety test held, the commander's within comm_r of the anchor -- and keeping it orders nothing, so the air
-     plant comes when it is due as before;
-   - the search runs last in the decision's assignment and spends THE AIR PLANT'S OWN SEARCH's AIR_OUT_TESTS, never
-     the decision's site tests, and only the way out's work the builds left (room_find);
-   - LET GO at every census once it is no longer wanted -- an air plant stands, is framed or ordered; the seat is
-     not blind, not on an island or holds no sea plant; no builder type of the seat offers its type --, once a
-     failure lies in it (impai_failed_in), and when the recorded row is not one: a type past the content's or not
-     an air plant, a cell outside 0..ROOM_CELL_MAX, more rectangles than IMPAI_WAY_RECTS (recorded data, bounded
-     before use).
-   RESIDUALS: a room the site test refuses when the plant is due (a wreck, a unit standing on it) stays kept, and the
-   walk past it is tried as before; the room's search may refuse ways out, which THE WAY REFUSALS count as the
-   plant's own search would; the type is the lowest-tech air plant the seat's builder types offer, so a different
-   air plant chosen later is not tested at the room first, though it passes the room's claims as every air plant
-   does. */
-#define ROOM_CELL_MAX 4096      /* a recorded room cell is used only within 0..ROOM_CELL_MAX                      */
-
-/* 1 when an air plant is ordered: a claim of an air plant's type other than the room's own -- a builder's head, or
-   an order of this decision (build_at). BOUND: the claims, one plant menu read each of a factory type */
-static int air_ordered(IMPAI_DEC* d)
-{
-    int i;
-    for (i = 0; i < d->nclaims; i++) {
-        const IMPAI_CLAIM* c = &d->claims[i];
-        if (!c->room && c->type < d->in->nti && d->in->ti[c->type].cat == IMPAI_C_FACTORY &&
-            impai_econ_air_plant(d, c->type))
-            return 1;
-    }
-    return 0;
-}
-
-static int room_wanted(IMPAI_DEC* d)
-{
-    return on_island(d) && impai_blind(d->in->mil, d->now) && d->sea_plants >= 1 && !d->air_plants && !air_ordered(d);
-}
-
-/* the lowest-tech air plant some builder type of the census offers, not passed over (impai_plant_off); 0 none.
-   BOUND: nbtype menu reads, and one plant menu read an offered factory (impai_econ_air_plant) */
-static unsigned room_type(IMPAI_DEC* d)
-{
-    const IMPAI_BRAIN_IN* in = d->in;
-    unsigned best = 0;
-    int b, k, n;
-    for (b = 0; b < d->nbtype; b++) {
-        n = d->q->ops->build_options(d->q, d->btype[b], d->menu3, WQ_TYPES_MAX);
-        for (k = 0; k < n; k++) {
-            const unsigned t = d->menu3[k];
-            if (t >= in->nti || in->ti[t].cat != IMPAI_C_FACTORY || (best && in->ti[t].ctech >= in->ti[best].ctech) ||
-                impai_plant_off(d, (int)t) || !impai_econ_air_plant(d, t))
-                continue;
-            best = t;
-        }
-    }
-    return best;
-}
-
-void impai_econ_room_claim(IMPAI_DEC* d)
-{
-    const IMPAI_WAYREC* w = &d->in->st->room;
-    const IMPAI_RECT r = impai_rect_at(d, w->type, w->cx, w->cz);
-    int k;
-    impai_claim_add(d, w->type, &r);
-    if (!d->claims_full) d->claims[d->nclaims - 1].room = 1;
-    for (k = 0; k < w->n && k < IMPAI_WAY_RECTS; k++) {
-        IMPAI_RECT q;
-        q.x0 = w->r[k][0]; q.z0 = w->r[k][1]; q.x1 = w->r[k][2]; q.z1 = w->r[k][3];
-        impai_claim_add(d, w->type, &q);
-        if (!d->claims_full) d->claims[d->nclaims - 1].way = d->claims[d->nclaims - 1].room = 1;
-    }
-}
-
-void impai_econ_room_keep(IMPAI_DEC* d)
-{
-    IMPAI_WAYREC* w = &d->in->st->room;
-    if (w->type == WQ_NONE) return;
-    if (w->type < d->in->nti && impai_econ_air_plant(d, w->type) && w->cx >= 0 && w->cx < ROOM_CELL_MAX &&
-        w->cz >= 0 && w->cz < ROOM_CELL_MAX && w->n <= IMPAI_WAY_RECTS && room_wanted(d) && room_type(d) == w->type) {
-        const IMPAI_RECT r = impai_rect_at(d, w->type, w->cx, w->cz);
-        if (!impai_failed_in(d, &r)) {
-            impai_econ_room_claim(d);
-            return;
-        }
-    }
-    memset(w, 0, sizeof *w);
-    w->type = (uint16_t)WQ_NONE;
-}
-
-/* the room's search, while none is kept and one is wanted: the first builder offering the room's type -- the
-   commander, then the idle builders, the helpers and the busy ones, each not held by its far record -- is asked
-   THE AIR PLANT'S OWN SEARCH's question with no order (impai_build_air_room). Last in the decision's assignment,
-   so the search spends only what the decision's builds left of the way out's work (THE WAY OUT's WAY_WORK) and of
-   THE AIR PLANT'S OWN SEARCH's site tests: it never holds up a build. BOUND: one search a decision */
-static void room_find(IMPAI_DEC* d)
-{
-    unsigned t;
-    int i, n;
-    if (d->in->st->room.type != WQ_NONE || !room_wanted(d) || !(t = room_type(d))) return;
-    for (i = -1; i < d->nidle + d->nhelpers + d->njobbed; i++) {
-        const IMPAI_UNITREF* b = i < 0                           ? &d->commander
-                                 : i < d->nidle                  ? &d->idle[i]
-                                 : i < d->nidle + d->nhelpers    ? &d->helpers[i - d->nidle]
-                                                                 : &d->jobbed[i - d->nidle - d->nhelpers];
-        if (!b->slot || impai_far(d, b)) continue;
-        n = d->q->ops->build_options(d->q, b->type, d->menu3, WQ_TYPES_MAX);
-        if (!on_menu(d->menu3, n, t)) continue;
-        impai_build_air_room(d, b, (int)t);
-        return;
-    }
-}
-
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1809,7 +1687,6 @@ void impai_econ_assign(IMPAI_DEC* d)
             assign(d, h, 1))
             d->assigned++;
     }
-    room_find(d);
 }
 
 /* ---- 5. the factories ---- */

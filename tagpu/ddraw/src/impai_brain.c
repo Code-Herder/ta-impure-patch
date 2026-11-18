@@ -89,7 +89,6 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->fscan = st->ascan = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAY_FAILS; i++) st->wfail[i].type = (uint16_t)WQ_NONE;
-    st->room.type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
         job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;
@@ -187,18 +186,13 @@ int impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r)
 /* A CLAIM IS NEVER DROPPED. The table holds IMPAI_CLAIM_MAX, its bound (impai.h), so it is never full; were one
    ever without room, it marks the decision full, and a full decision answers every test claimed, so it places
    nothing rather than place over a site or a plant's way out it could not hold. */
-_Static_assert(IMPAI_CLAIM_MAX >= IMPAI_CENSUS_MAX + (IMPAI_WAYS + 1) * IMPAI_WAY_RECTS + 1 + IMPAI_ROOTS_MAX,
-               "the claim table holds a census's claims, the kept ways' and the room's, and one a command");
-int impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r) { return impai_claimed_for(d, r, 0); }
-
-/* as impai_claimed, for a building that passes THE AIR PLANT'S ROOM's claims when `air` (an air plant: the room is
-   kept for it, impai_econ.c) */
-int impai_claimed_for(const IMPAI_DEC* d, const IMPAI_RECT* r, int air)
+_Static_assert(IMPAI_CLAIM_MAX >= IMPAI_CENSUS_MAX + IMPAI_WAYS * IMPAI_WAY_RECTS + IMPAI_ROOTS_MAX,
+               "the claim table holds a census's claims, the kept ways' and one a command");
+int impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r)
 {
     int i;
     if (d->claims_full) return 1;
-    for (i = 0; i < d->nclaims; i++)
-        if (!(air && d->claims[i].room) && overlap(&d->claims[i].r, r)) return 1;
+    for (i = 0; i < d->nclaims; i++) if (overlap(&d->claims[i].r, r)) return 1;
     return 0;
 }
 
@@ -213,7 +207,6 @@ void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
     d->claims[d->nclaims].way = 0;
     d->claims[d->nclaims].head = 0;
     d->claims[d->nclaims].feat = 0;
-    d->claims[d->nclaims].room = 0;
     d->nclaims++;
 }
 
@@ -1671,7 +1664,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->root_cap = root_cap_of(d, &d->contested);
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
-    impai_econ_room_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];
     if (!d->lowest.slot) return 0;
     if (st->ax == IMPAI_NO_ANCHOR) {

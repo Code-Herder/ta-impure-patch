@@ -21,9 +21,8 @@
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
 /* way: a plant's way out; head: a builder's build head (impai_brain.c, THE HEADS' COUNTS) */
 /* a claim on a rectangle: `way` a kept way out's, `head` a build order's at a builder's head, `feat` a reclaim job's
-   feature, its rectangle anchored at the feature's anchor (impai_brain.c, census), `room` THE AIR PLANT'S ROOM's
-   (impai_econ.c), which an air plant passes (impai_claimed_for) */
-typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head, feat, room; } IMPAI_CLAIM;
+   feature, its rectangle anchored at the feature's anchor (impai_brain.c, census) */
+typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head, feat; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 /* one of the seat's buildings with a radar or sonar distance (impai_econ.c, THE SENSORS): its footprint's centre,
    px, and its distances */
@@ -371,7 +370,6 @@ static inline void impai_job_end(IMPAI_JOB* j)
 void impai_fail_add(IMPAI_DEC* d, int cx, int cz);
 int  impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r);
 int  impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r);
-int  impai_claimed_for(const IMPAI_DEC* d, const IMPAI_RECT* r, int air);
 void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r);
 IMPAI_RECT impai_rect_at(const IMPAI_DEC* d, int type, int cx, int cz);
 uint32_t impai_isqrt(uint64_t v);
@@ -385,10 +383,6 @@ void impai_econ_factories(IMPAI_DEC* d);
 int  impai_econ_sea_able(IMPAI_DEC* d);
 /* 1 when `type` is an air plant: a factory not placed on water only whose menu offers an air army type */
 int  impai_econ_air_plant(IMPAI_DEC* d, unsigned type);
-/* THE AIR PLANT'S ROOM (impai_econ.c): after the census, the kept room checked and claimed, or let go */
-void impai_econ_room_keep(IMPAI_DEC* d);
-/* the room's footprint and way claimed, each claim marked `room` */
-void impai_econ_room_claim(IMPAI_DEC* d);
 /* THE METAL'S REACH (impai_econ.c): 1 past the seat's first finished factory, with no plant frame standing, when
    more patches lie open than it has extractors and no constructor it has or its finished factories make reaches
    one; judges mr_open, mr_units and mr_make on the way */
@@ -431,9 +425,6 @@ int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* the air plant for the blind of `type`: the base ring's site, else a site outside it (impai_build.c, THE AIR PLANT'S
    OWN SEARCH), without a way out when `waived`; 1 ordered */
 int  impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived);
-/* THE AIR PLANT'S ROOM's search: the site impai_build_air would order for builder b, kept as the room instead;
-   1 kept */
-int  impai_build_air_room(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
 int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 when b is sent to a feature paying more than `min_rate` metal a tick (THE RECLAIM) */

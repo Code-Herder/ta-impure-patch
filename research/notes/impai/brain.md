@@ -827,31 +827,18 @@ job the plant's; a leaver's energy frame stays. The take is for the air plant fo
 2026-11-17). On the naval turtle only the commander offers CORAP and it stood on wind generators whenever the
 plant was due. **Its own site search** (owner's answer, 2026-11-17; `impai_build_air`): the rings from the base
 ring's present size out to eight more round the base box, nearest first, each site one the builder reaches
-(`builder_reaches`, tested before the site test, so a builder that reaches none of them spends no site test and
-ends its own walk after 32 refusals) and every test of the base ring's held -- no claim or failure, off ground
-threat, a constructor's route clear, the commander's reach and safe distance, the way out unless the waived pass
-chose it --, on 32 site tests a decision of its own (`AIR_OUT_TESTS`), never the decision's, and never growing the
-base ring. On the turtle the commander's base ring at its first size had 24 sites and none took CORAP (MEASURED
-2026-11-17 at 38efc351). **The air plant's room** (owner's answer, 2026-11-17, "reserve room early"; `room_find`,
-`impai_econ_room_keep`): while the seat is on the island, an enemy area needs the air scout, it holds a sea plant and
-no air plant (built, framed or ordered), the lowest-tech air plant its builder types offer has a room -- the site
-the air plant's own search would order for the first builder offering it, the commander first, found with no order
-at the end of the decision's assignment and kept in the seat's state (`IMPAI_BRAIN.room`) with its way out. Each
-census claims it (claims marked `room`), so no building but an air plant is placed on it (`impai_claimed_for`), and
-the air plant's search tests it first, alone (`RING_ROOM`). It is let go at the census once any of those conditions
-fails, a failure lies in it, or its recorded row is not one (a type past the content's or not an air plant, a cell
-outside 0..4 095, more than 8 rectangles). One room at most; none before the first sea plant, so the first shipyard
-is never held up; within the leash, since the commander's search found it; and keeping it orders nothing, so the
-air plant is due when it was before. **The air plant waits for no builder and no site**: no other path orders it
-ahead of the sea plant -- the ladder's plant rung lets a `plant_air_blind` still set go before it asks (`air_let_go`
-in `assign`), and orders the choice's plant only where the sea plant cannot be had --, so when the take places it
+(`builder_reaches`) and every test of the base ring's held -- no claim or failure, off ground threat, a
+constructor's route clear, the commander's reach and safe distance, the way out unless the waived pass chose it --,
+on 32 site tests a decision of its own (`AIR_OUT_TESTS`), never the decision's, and never growing the base ring. On
+the turtle the commander's base ring at its first size had 24 sites and none took CORAP (MEASURED 2026-11-17 at
+38efc351). **The air plant waits for no builder and no site**: no other path orders it -- the ladder's plant rung
+lets a `plant_air_blind` still set go before it asks (`air_let_go` in `assign`) --, so when the take places it
 nowhere the first builder asked for a plant is asked the sea plant's question in the same decision, with every site
 test of the decision left. So a want the air plant holds is in every decision the air plant's order or the sea
 plant's question, never neither. RESIDUAL: the search walks the same sites each decision, so where its first 32
-tested sites fail the ones past them are never tried; a room the site test refuses when the plant is due (a wreck, a
-unit on it) stays kept. On the naval turtle without the room no site within the commander's leash took CORAP at
-8 587 (136 refused by the engine's site test, MEASURED 2026-11-17 at d9d34dcb's tree). The air plant comes in place
-of the sea plant only once a search finds no site at all or no
+tested sites fail the ones past them are never tried. On the naval turtle no site within the commander's leash
+takes CORAP at 8 587 (136 refused by the engine's site test, MEASURED 2026-11-17), so the turtle still gets no air
+plant. The air plant comes in place of the sea plant only once a search finds no site at all or no
 builder of the seat offers a sea plant: a builder that cannot place it now (not its turn, a site past its reach,
 another sea type on its menu, its far record live, none on its menu) leaves it to the decision's other builders and
 to later decisions, so a plant held for the rest of the game is never taken for one builder's answer. The default
