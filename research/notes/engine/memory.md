@@ -978,8 +978,14 @@ walk `0x485980` and the map free `0x483DD0` ([the call list](#0x491b60-the-level
 **Both frees are ours since 2026-09-09.** `0x42DC01` and `0x42DCB6` are redirected to
 `tagpu_reclaim`'s ring (the byte check is `E8` with a rel32 that resolves to `0x4D85A0`), so a
 template outlives any render pass still walking it; the body itself is untouched and still nulls
-every slot and the table pointer. `0x42DC23`, `0x42DC52` and `0x42DCCB` are left alone. The
-first two are unit-def fields no pass of ours reads; **`0x42DCCB` frees the UnitDef array we
+every slot and the table pointer. `0x42DC23`, `0x42DC52` and `0x42DCCB` are left alone.
+`0x42DC23` frees def `+0x14E`, the **yard map**, and nulls it (`0x42DC18..0x42DC2B`), which our
+passes read: `tagpu_worldq.c` (`kind()`, the yard and the way-out reads, ImpAI's type
+information at the level's init on the loader thread), `tasim_snap` through it,
+`tagpu_packet_pub.c` and `tagpu_replay.c` -- every one on the game thread, as this cascade is,
+but that init's, which runs inside the level's load (`thread-split.allow`, the `tagpu_worldq.c`
+row). `0x42DC52` frees def `+0x156`, the build list,
+and nulls `+0x152` (`0x42DC47..0x42DC5A`) `[DISASSEMBLED 2026-11-18]`. **`0x42DCCB` frees the UnitDef array we
 read all over** (`tagpu_order`, `tagpu_cat`, `tagpu_weapons`, `tagpu_scenario`) and is safe
 only because every one of those readers, and this cascade, is on the **game thread**. [Thread-safe destruction](../thread-safe-destruction.html) §6c.
 
