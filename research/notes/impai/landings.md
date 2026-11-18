@@ -101,6 +101,8 @@ The owner's decisions of 2026-11-17, after a review of the method. What the revi
 
 **The champion is 0a4ec04e** (2026-11-18): `batch.py` against ed3e5634 passed every gate -- the regression set 19 of 19, the win check 40 of 40, the margin test accepted not worse, the fair mods 12 of 12 -- and no held-out game of eight ended worse than the champion's. The session tier against ed3e5634 shows every result and every figure equal; the lines part only by the `why` line the older build does not write. It holds da2ccb2b's fixes, B2a to B2c, the reason trace and the review's answers; it is not landed.
 
+**The brain's queue resumes** (the owner, 2026-11-18), a session an item, each played first, in this order: (1) the network seat that gives no order; (2) the naval turtle's island seat starved of metal; (3) the squads' commitment rule (B2d's second half). Behind them, unplaced: the substitute cache's bound, the priorities as numbers, T3b, the air rush's anti-air, the puzzles, the held-outs, the twenty-three disagreements.
+
 **Found by the duels, the brain's to answer**: a network seat that gives no order -- on Steel Jungle neither build's seat by GameTime 6 000, on Trout Farm ed3e5634's at start 2 ([the bar](bar.html), *The champion gauntlet*). A network game seats the computer players at starts 2 and 3, which no skirmish of the bar plays. A queue item: read from a duel's logs first (the blind start's terms, the patch scan, the reach).
 
 **B2's steps** ([decisions](decisions.html), *The posture and the arbiter*), a writer session each: B2a the gates as one table; B2b the posture as one object; B2c the wants as requests in a table's order -- each neutral; B2d, judged by its games, the priorities as numbers and one commitment rule for the squads' tasks.
