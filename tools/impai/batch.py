@@ -156,14 +156,18 @@ class Piece:
     def __init__(self, piece: dict, dll: Path, logs: Path, command=bar_play):
         logs.mkdir(parents=True, exist_ok=True)
         self.log = logs / f"{piece['name']}.log"
+        # The log is appended to, so a piece played again under its name -- a game that could not run, a later
+        # run of the same tag -- finds an earlier play's lines in it. `admitted` reads from here on: an earlier
+        # admission read as this play's would start its DEADLINE while it still waits for the lock.
+        self.start = self.log.stat().st_size if self.log.exists() else 0
         with open(self.log, "a") as f:
             self.proc = subprocess.Popen(command(piece, dll), cwd=str(TREE), stdout=f, stderr=subprocess.STDOUT)
 
     def admitted(self) -> bool:
-        """The run lock has admitted it: it said so, or a lane of it started (the lock says nothing of an
-        admission that did not wait)."""
+        """The run lock has admitted it: this play said so, or a lane of it started (the lock says nothing of
+        an admission that did not wait)."""
         try:
-            text = self.log.read_text(errors="replace")
+            text = self.log.read_bytes()[self.start:].decode(errors="replace")
         except OSError:
             return False
         return "took the run lock" in text or " on Xvfb " in text

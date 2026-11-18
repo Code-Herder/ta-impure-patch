@@ -2,7 +2,8 @@
 """test_batch -- the per-batch loop offline, on a fake player: the regression list as tracked, the gates' games
 and their pieces (a game of two gates played once, the setups' pieces beside the base game's), every gate passed,
 fail fast (a game lost stops every gating piece still playing, never the held-out one, and the margin test is not
-played), a piece with a game that could not run played once more, a piece past its deadline stopped, the margin
+played), a piece with a game that could not run played once more, a piece past its deadline stopped, a piece
+admitted by its own play's lines in a log an earlier play wrote to, the margin
 test's verdicts, the held-out check reported or, with --gate-held-out, gating, and a directory of other DLLs
 refused. No game runs.
 
@@ -222,6 +223,23 @@ class TestBatch(unittest.TestCase):
         self.assertGreater(batch.WON, batch.AHEAD)
         self.assertGreater(batch.AHEAD, batch.NOT_AHEAD)
         self.assertGreater(batch.NOT_AHEAD, batch.LOST)
+
+    def test_a_piece_is_admitted_by_its_own_plays_lines(self):
+        logs = self.tmp / "logs"
+        logs.mkdir()
+        (logs / "base-1.log").write_text("runlock: took the run lock (6 slots) after 1.3 min\n"
+                                         "03:04:08 tareplay-1 on Xvfb :318 (pid 1)\n")
+
+        def says(line):
+            h = batch.Piece({"name": "base-1"}, None, logs, lambda p, dll: [sys.executable, "-c", f"print({line!r})"])
+            h.proc.wait()
+            return h.admitted()
+        # an earlier play's admission in the appended log is not this play's
+        self.assertFalse(says("runlock: waiting for the run lock: 0 of the 12 slots wanted taken"))
+        self.assertTrue(says("runlock: took the run lock (12 slots) after 8.3 min"))
+        self.assertFalse(says("runlock: waiting for the run lock"))
+        self.assertTrue(says("03:15:02 tareplay-1 on Xvfb :315 (pid 2)"))
+        self.assertEqual((logs / "base-1.log").read_text().count("\n"), 6)
 
     def test_a_directory_of_other_dlls_is_refused(self):
         other = self.tmp / "y.dll"
