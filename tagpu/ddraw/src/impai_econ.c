@@ -1221,6 +1221,14 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
    recordings' player images). The makers already built are switched by THE MAKERS. */
+/* THE OPENING'S TERMS (impai_brain.h) */
+int impai_econ_open_mex(const IMPAI_DEC* d) { return d->done[IMPAI_C_MEX] >= d->in->plan->open_mex; }
+
+int impai_econ_open_energy(const IMPAI_DEC* d, int ordered)
+{
+    return d->count[IMPAI_C_ENERGY] + (ordered ? d->pending[IMPAI_C_ENERGY] : 0) >= d->in->plan->open_energy;
+}
+
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
    open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
    own terms (impai_brain.c, economy) less NO PATCH ON THE MAP, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
@@ -1231,8 +1239,7 @@ static int surplus_waits(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int nf = d->count[IMPAI_C_FACTORY] > 1 ? d->count[IMPAI_C_FACTORY] : 1;
-    return d->surplus && ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
-                          d->now >= plan->open_t) &&
+    return d->surplus && ((impai_econ_open_mex(d) && impai_econ_open_energy(d, 0)) || d->now >= plan->open_t) &&
            ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * (float)nf) ||
             d->over_m);
 }
@@ -1414,12 +1421,93 @@ typedef struct IMPAI_ASK {
     const IMPAI_UNITREF* b;
     int                  n, far;
     float                keep;
+    uint8_t              yielded;       /* THE STALL YIELDS TO THE FIRST PLANT: the stall's rung passed this builder on */
+    uint8_t              plant_asked;   /* the plant's rung was asked of it                                             */
 } IMPAI_ASK;
 
-static int rung_stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+static int stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     int t;
     if (!((t = choose_energy(d, d->menu, a->n)) && impai_build_ring(d, a->b, t))) return 0;
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+/* THE STALL YIELDS TO THE FIRST PLANT. The stall's energy is the ladder's top rung, and in the opening it would
+   stand above the first plant for as long as the stall lasts: the opening's own energy buildings cost energy, so
+   they bring the first stall forward, and each idle decision of it takes the commander for one more energy
+   building before the plant is asked. MEASURED 2026-11-18 with THE OPENING'S ENERGY alone, GameTime of the first
+   stall and energy buildings begun before the first plant: Red Triangle 937, 4; Metal Heck 734, 5; Luschaven's
+   start 3, 5 and no plant by 6 000. So while the seat has never had a factory and none is ordered, once
+   open_energy energy buildings are counted or ordered (THE OPENING'S TERMS, the first factory's own) the stall's
+   rung passes a builder on to the plant's rungs, and the row below them asks it the stall's energy in the same
+   decision when they gave it no order.
+   INVARIANT, an ordering, so that no seat is left stalled behind a plant it cannot place: a builder passed on is
+   asked the stall's energy by the row under the plant in the same assignment -- both rows have the stall's gate
+   and the same builders, and nothing between them but the plants' rows can take it --, and the first time the
+   plant's rung was asked of such a builder and gave it no order the yield is over for the level
+   (IMPAI_BRAIN.open_stall_over), whatever ended the walk. So the yield costs a stalled seat the site tests of
+   one decision at most, once, and from the next decision the stall's rung is the top rung as it is past the
+   opening. A plant's row not asked -- no request standing, the builder held by its far record -- is no walk and
+   ends nothing: the stall's energy is asked at once.
+   BOUNDS. It ends with the first factory ordered (the census's pending count) or counted (IMPAI_BRAIN.opened,
+   set by the census before the ladder is asked), so it puts at most one plant ahead of the stall's energy; one
+   state byte. */
+static int stall_yields(const IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    return !st->opened && !st->open_stall_over && !d->pending[IMPAI_C_FACTORY] && impai_econ_open_energy(d, 1);
+}
+
+static int rung_stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    if (stall_yields(d)) {
+        a->yielded = 1;
+        return 0;
+    }
+    return stall_energy(d, a);
+}
+
+static int rung_stall_yielded(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    if (!a->yielded) return 0;
+    if (a->plant_asked) d->in->st->open_stall_over = 1;
+    return stall_energy(d, a);
+}
+
+/* THE OPENING'S ENERGY: the plan's terms for the first factory are open_mex extractors and open_energy energy
+   buildings (THE OPENING'S TERMS), and the builder of the opening meets them in that order: once open_mex
+   extractors are finished, and until open_energy energy buildings are counted or ordered, its next building is
+   energy -- before a further extractor and before the plant, whose rungs stand below this one. Without it a
+   commander with more than open_mex patches within comm_r walks patch to patch, the energy term is met by open_t
+   alone, and the first factory is ordered with no energy standing: MEASURED 2026-11-18, Escalation on Pin Cushion,
+   four extractors, the K-bot lab ordered at GameTime 2 160 and the first energy building at 3 150, on the first
+   stall. The type is the stall rung's, the most energy a value on the builder's menu, on the base ring.
+   BOUNDS. It is the opening's: it ends for the level with the first factory counted (IMPAI_BRAIN.opened, set by
+   the census before the ladder is asked) and waits while one is ordered, so it holds for open_energy buildings
+   at most and never beside a plant. It asks nothing
+   of a builder whose menu holds no energy type for the anchor's ground, at no site test.
+   INVARIANT, an ordering, for a seat no site takes energy for: the FIRST walk of this rung that orders nothing
+   ends the rule for the level (IMPAI_BRAIN.open_e_refused), whatever ended the walk -- no room, the builder's
+   reach, a threat, the decision's site tests. So the rule costs such a seat one walk, at most the site tests of
+   one decision, once; from the next decision on the extractor and the plant are asked as they are without the
+   rule, with the decision's whole budget. What it gives up: a walk refused for a cause that passes -- a raid at
+   the base -- ends the rule too, and that seat opens as one without it. */
+static int open_energy_owed(const IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    return !st->opened && !st->open_e_refused && !d->pending[IMPAI_C_FACTORY] && impai_econ_open_mex(d) &&
+           !impai_econ_open_energy(d, 1);
+}
+
+static int rung_open_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!(open_energy_owed(d) && (t = choose_energy(d, d->menu, a->n)))) return 0;
+    if (!impai_build_ring(d, a->b, t)) {
+        d->in->st->open_e_refused = 1;
+        return 0;
+    }
     d->pe_in += d->in->ti[t].egain;
     return 1;
 }
@@ -1453,6 +1541,7 @@ static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
     /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
        take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
        menu2 and menu3 only, so this builder's menu is still d->menu */
+    a->plant_asked = 1;
     if (!d->plant_done) plant_choice(d);
     /* the air plant AHEAD OF THE SEA PLANT is air_take's alone (NEVER NEITHER): one still held here --
        air_take placed it nowhere, or the choice was made after air_take returned, its want_sea since spent --
@@ -1592,6 +1681,10 @@ static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d
    - The frame resumed is held by the sea plant's gates (impai_brain.c, THE VETOES): the hold and both stalls.
    - An idle builder with no menu is asked the last two rungs; its reclaim while the seat is short is the
      harvest's.
+   - The opening's energy stands above every plant and the extractor (THE OPENING'S ENERGY); a helper keeps its
+     assist, as at the energy rung.
+   - In the opening the stall's energy is asked under the first plant: its top row passes the builder on and
+     the row under the plant asks it (THE STALL YIELDS TO THE FIRST PLANT).
    INVARIANT, what the gate columns rest on: IMPAI_DEC.gates is set once, after the last write of hold, e_stall
    and m_stall (impai_brain.c, economy), so a gate's bit and its flag agree throughout the assignment.
    impai_brain_test.c, check_ladder_rows, holds the rows and their order. */
@@ -1602,9 +1695,11 @@ static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d
 const IMPAI_RUNG impai_ladder[] = {
     /* name             who                                serves                  waits    near on               veto */
     { "stall-energy",  ASK_MENUS,                         0,                      0,       0, IMPAI_G_E_STALL, 0,       rung_stall_energy },
+    { "open-energy",   IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_open_energy },
     { "sea-frame",     ASK_MENUS,                         0,                      0,       1, 0,               G_SPEND, rung_sea_frame },
     { "sea-plant",     ASK_MENUS,                         RQ(SEA),                0,       1, 0,               0,       rung_sea_plant },
     { "plant",         ASK_MENUS,                         RQ(FACTORY) | RQ(TECH), RQ(SEA), 1, 0,               0,       rung_plant },
+    { "stall-yielded", ASK_MENUS,                         0,                      0,       0, IMPAI_G_E_STALL, 0,       rung_stall_yielded },
     { "defence",       ASK_MENUS,                         RQ(DEF),                0,       0, 0,               0,       rung_def },
     { "anti-air",      ASK_MENUS,                         RQ(AA),                 0,       0, 0,               0,       rung_aa },
     { "sensor",        ASK_MENUS,                         RQ(SENSOR),             0,       0, 0,               0,       rung_sensor },
@@ -1815,7 +1910,9 @@ void impai_econ_assign(IMPAI_DEC* d)
        checks list only an idle builder idle, so a reclaimer never answered the stall -- on Escalation the
        commander reclaimed into a full metal store while the energy stood at 0 (MEASURED 2026-11-15, the economy
        diagnosis at d665a00a). A builder on a BUILD is left at it: its frame stands where it was ordered, and THE
-       STALLS keep the plants that frame would be from being ordered in a stall. */
+       STALLS keep the plants that frame would be from being ordered in a stall. The rung's yield is the
+       reclaimers' too: while THE STALL YIELDS TO THE FIRST PLANT the rung gives nothing, the reclaimer keeps its
+       job, and its next idle decision asks it the plant and then the stall's energy. */
     for (i = 0; d->e_stall && i < d->njobbed && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap;
          i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];

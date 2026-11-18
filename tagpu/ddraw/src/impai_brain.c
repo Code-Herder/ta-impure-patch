@@ -1658,8 +1658,7 @@ static void economy(IMPAI_DEC* d)
        take the base ring and never a patch (impai_metal_map), never takes it. */
     no_patch = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
     first = d->count[IMPAI_C_FACTORY] == 0 &&
-            ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
-             d->now >= plan->open_t || no_patch);
+            ((impai_econ_open_mex(d) && impai_econ_open_energy(d, 0)) || d->now >= plan->open_t || no_patch);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] && (first || ((plant_metal || plant_reach) && d->plant_e));
     if (!d->pending[IMPAI_C_FACTORY] && (first || ((plant_pace || reach_need) && d->plant_e)))
         need |= 1u << IMPAI_W_FACTORY;
