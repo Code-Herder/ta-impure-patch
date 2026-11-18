@@ -1,13 +1,16 @@
 """twopeers -- two tacli instances in one network game, for ImpAI's network checks (netai_check.py,
-netprobe.py): the run's two instances on a private display and a DirectPlay port leased for the game
-(tools/dpport.py), walked into one battle room on Two Continents by tools/mp_lobby.sh, as
-tools/replay/recmp_create_begin_test.py's game is. The caller holds the run lock for two game lanes
+netprobe.py, codeduel.py): the run's two instances on a private display and a DirectPlay port leased for the
+game (tools/dpport.py), walked into one battle room by tools/mp_lobby.sh, on Two Continents unless the caller
+names a map, as tools/replay/recmp_create_begin_test.py's game is. The caller holds the run lock for two game lanes
 (tools/runlock.py); the instances carry the run's tag, so one left by a dead run of the tag is replaced.
 
 THE RENDERER. Both peers render with GDI (tareplay.GDI_LEVER in each game folder, which is the
 instance's own: launch makes it afresh) and the caller holds no GPU token for them; `gpu` renders
 them on the default renderer, for a debugging run, and the caller then holds a token for each.
 DIR/renderer.txt names the renderer, and a reading is compared only with readings of its own.
+
+A DLL A PEER. `join_dll` gives the joiner a ddraw.dll of its own; each peer's is copied into its game folder
+before its launch, and DIR/build-sha.txt then holds a line a peer, `H <sha256>` and `J <sha256>`.
 
     with TwoPeers(out, dll, port, "na") as tp:
         tp.launch(host_args=[...], join_args=[...], registry={"H": [...], "J": [...]})
@@ -54,8 +57,9 @@ class TwoPeers:
     `refused` then names each peer whose GPU memory cap refused it an allocation (talog.cap_failure, read
     from its whole log once it has stopped), which fails the check that played them."""
 
-    def __init__(self, out: Path, dll: Path, port, token: str, gpu: bool = False):
+    def __init__(self, out: Path, dll: Path, port, token: str, gpu: bool = False, join_dll: Path = None):
         self.out, self.dll, self.want_port, self.token, self.gpu = out, dll, port, token, gpu
+        self.dlls = {"H": dll, "J": join_dll or dll}
         self.root = tareplay.main_checkout()
         self.instances, self.cli = self.root / "tagpu/instances", TREE / "tools/tacli"
         self.owned, self.display, self.lease = [], None, None
@@ -68,7 +72,9 @@ class TwoPeers:
         print(f"DirectPlay port {self.port}", flush=True)
         try:
             self.display = tareplay.start_xvfb()
-            (self.out / "build-sha.txt").write_text(hashlib.sha256(self.dll.read_bytes()).hexdigest() + "\n")
+            sha = {k: hashlib.sha256(d.read_bytes()).hexdigest() for k, d in self.dlls.items()}
+            (self.out / "build-sha.txt").write_text(
+                sha["H"] + "\n" if self.dlls["H"] == self.dlls["J"] else f"H {sha['H']}\nJ {sha['J']}\n")
             (self.out / "renderer.txt").write_text(renderer(self.gpu) + "\n")
             tag = f"{self.token}-{runlock.tag()}-"     # an instance of the run's tag is a dead run's
             self.host, self.join = tag + "H", tag + "J"
@@ -134,7 +140,7 @@ class TwoPeers:
                            stderr=subprocess.STDOUT, check=False, timeout=120)
             self.owned.append(name)
             self.tacli("create", name, "--private-registry", "--display", self.display.display, "--res", "1024x768")
-            shutil.copyfile(self.dll, self.gamedir(name) / "ddraw.dll")
+            shutil.copyfile(self.dlls[suffix], self.gamedir(name) / "ddraw.dll")
             gdi = self.gamedir(name) / tareplay.GDI_LEVER
             gdi.unlink(missing_ok=True)     # unlinked first: a link is never written through
             if not self.gpu:
@@ -143,9 +149,9 @@ class TwoPeers:
             self.tacli("launch", name, "--keep-dll", "--dplay", "--dplay-port", self.port, *extra)
             self.tacli("ui", name, "wait", "--gui", "MAINMENU", "--timeout", "45")
 
-    def battle_room(self):
-        """Both peers in one battle room on MAP, nobody ready."""
-        subprocess.run(["bash", str(TREE / "tools/mp_lobby.sh"), "--map", MAP, *self.owned], stdout=self.log,
+    def battle_room(self, map_name: str = MAP):
+        """Both peers in one battle room on `map_name`, nobody ready."""
+        subprocess.run(["bash", str(TREE / "tools/mp_lobby.sh"), "--map", map_name, *self.owned], stdout=self.log,
                        stderr=subprocess.STDOUT, check=True, timeout=900, env=dict(os.environ, MP_NO_START="1"))
 
     def click(self, name, gadget, timeout=None):
