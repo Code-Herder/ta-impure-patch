@@ -55,8 +55,9 @@ MEASURED 2026-11-18, the reference setup, one build on both peers (`tools/impai/
 
 - **The bytes.** Two instances of one DLL at their main menus, the first with the lever file: `tacli peek 0x4655C5:x1D` read `83 F8 03 75 71 8B 0D E8 1D 51 00 83 B9 F6 7E 03 00 02 74 62 E8 D2 26 FF FF 85 C0 EB 59` on it and `... 85 C0 75 59`, the retail bytes, on the other, whose log has no `duel:` line.
 - **Both humans watching** (`--no-humans`, Lava Mania, a cap of 6 000). Without the lever that game ended at GameTime 35; with it the level played to the cap. Each peer logged ImpAI's turns for its own seat and no other (6 176 and 6 502 calls). Seat A's commander stood at 2000,96 and seat B's at 1952,3632 in both peers' rosters: the map's starts 0 and 1, where a game with the humans seated gives the computer seats starts 2 and 3. At the cap the host's Pause key stood both clocks and both peers read 10 and 8 units, valued 31 416.92 and 31 294.15 on both.
+- **A long game** (the same, a cap of 70 000): 2 304 s of play, no seat gone; ImpAI's turns 70 121 and 69 500; at the cap both peers read 210 and 174 units, valued 79 779.72 and 70 311.23 on both. The host's clock was 997 ticks ahead of the joiner's at the first round of looks and 885 at the last.
 - **The speed stays Normal**: 30.4 ticks a second over that game. Ten `+` keys on both peers left it at 29.9 (the engine refuses a watcher's speed keys, `0x496550`, `0x4965AA`), and the in-game Options screen's Game Speed slider taken to its end on the host left it at 30.0 [the cause not read].
-- **Unarmed**, the same DLL with no lever file: `netai_check.py` and a duel with the humans seated ran as before.
+- **Unarmed**, the same DLL with no lever file: `netai_check.py` passed, and a duel with the humans seated played to its cap of 6 000 at 60.9 ticks a second with the seats on starts 2 and 3, its teams as the judge wants them; neither log has a `duel:` line, and the registry's attach line names no lever set.
 
 ## State and replay
 
@@ -65,3 +66,5 @@ None of its own. The lever (`SIM_INSTALL`, the registry's lever list) is read on
 ## Gaps
 
 - No replay test group arms the lever: what an armed level does is measured by `codeduel.py --no-humans` alone.
+- No armed game has been played to a seat's loss, and none between two builds: the three games above had one build on both peers, which `codeduel.py`'s fingerprint check refuses by design, every other check of its judge passing.
+- An armed game with the humans watching plays at Normal speed (*Measured*).

@@ -42,7 +42,8 @@ nothing ends the level but a peer leaving: the harness, at the first look with a
 MEASURED 2026-11-18 on Lava Mania to a cap of 6 000, one build on both peers: the level played on past
 GameTime 35 to the cap; each peer logged ImpAI's turns for its own seat alone (6 176 and 6 502); A's commander
 stood on start 0 and B's on start 1 in both peers' rosters; the host's Pause key stood both clocks, and both
-peers read 10 and 8 units, 31 416.92 and 31 294.15, equal to the cent.
+peers read 10 and 8 units, 31 416.92 and 31 294.15, equal to the cent; and to a cap of 70 000, 210 and 174
+units, 79 779.72 and 70 311.23 on both. No such game has yet ended by a seat's loss.
   - The judge (humans_gone) checks, in place of the teams: each peer's log holds the lever's installed line;
     no record but the two AI seats' holds a unit from some look on to the last (the result's `humans_out`,
     each peer's GameTime of that look); neither AI seat's alliance bytes ally the other.
