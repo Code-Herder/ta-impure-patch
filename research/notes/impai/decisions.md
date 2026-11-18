@@ -1749,7 +1749,7 @@ The vehicle plant fits nowhere near that start, and a ring that leaves one site 
 - Mapped, the ring reaches 8 at 4 041, three decisions after it stood at 5, ARMVP is passed over and ARMLAB is ordered on ring 0 at the next decision.
 - The session tier against the champion 5643b394: no game in a worse category (4 the same, 1 better, 7 parted, each of the seven on the `plantwalk` line or on 7c73bf7b's change). Against the line's tip with the `plantwalk` line alone, every decision line of eleven games is equal and one game parts: `bar-hota-steeljungle-ca-1`, at 11 842, where CORAP is exhausted at the widest ring and the ring is given back -- won at 54 973, against the cap at value 0.48 for the champion and the tip.
 
-**What it does not do.** A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The opening's tier game (`unmapped-luschaven-3`, to 6 000) shows no plant with or without the rule: the mapped game, the fixture (`impai_brain_test.c`, `check_plantwalk`) and `tools/impai/mutations/lone-plant.py` hold it.
+**What it does not do.** A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The fixture (`impai_brain_test.c`, `check_plantwalk`), `tools/impai/mutations/lone-plant.py` and the tier's opening `mapped-luschaven-3` hold it.
 
 ## The finish's yards (2026-11-18)
 
