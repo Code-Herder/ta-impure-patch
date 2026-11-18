@@ -17,8 +17,8 @@ bar-hota-metalheck-aa-2
 
 # The openings (tools/impai/opening.py): ImpAI at start S as a network game seats it, to GameTime 6 000.
 # `mapped-<map>-<S>` is a mapped opening at a start no bar game plays: Steel Jungle's start 2 and Trout Farm's are
-# slow ones (the first plant at 5 324 and 4 499, 4 and 5 units at 6 000), Luschaven's start 3 has no room for the
-# vehicle plant in the commander's reach and plants ARMLAB at 4 056.
+# slow ones (the first plant at 4 814 and 4 499, 4 and 5 units at 6 000), Luschaven's start 3 has no site for the
+# vehicle plant on its first three rings and plants ARMVP at 3 336.
 mapped-steeljungle-2
 mapped-troutfarm-2
 mapped-luschaven-3

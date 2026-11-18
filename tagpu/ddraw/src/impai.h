@@ -415,10 +415,13 @@ _Static_assert(sizeof(IMPAI_JOB) == 40, "IMPAI_JOB is 40 bytes with no padding")
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
 /* THE PLANT REFUSALS (impai_build.c, THE PLANT'S FALLBACK), one a unit type for each seat: the type's refused ways
-   in a row, and the GameTime until which the factory choice passes it over. The plant types a seat's menus can
-   offer are at most the world's types, so with an entry for every type none is ever evicted; the caller keeps
-   them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN, whose rows a recording carries whole. */
-typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, pad[3]; } IMPAI_PLANTREF;
+   in a row, the GameTime until which the factory choice passes it over, and how far the type's base ring has been
+   pushed out, 0..8 -- `cgrow` for the commander's walks, `grow` for every other builder's (impai_build.c, THE
+   PLANT'S RING IS ITS OWN). The plant types a seat's menus can offer are at most the world's types, so with an
+   entry for every type none is ever evicted; the caller keeps them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN,
+   whose rows a recording carries whole. Eight bytes a row: a recording images the rows by that size. */
+typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, grow, cgrow, pad; } IMPAI_PLANTREF;
+_Static_assert(sizeof(IMPAI_PLANTREF) == 8, "a plant refusal row is eight bytes");
 
 /* A plant site the way out refused (impai_build.c, THE WAY OUT), for plants of `type`, until a GameTime. */
 #define IMPAI_WAY_FAILS 32
@@ -465,7 +468,8 @@ typedef struct IMPAI_FMEM {
 
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
-    uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
+    uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8, for every type but a
+                                   plant, whose growth is its own (IMPAI_PLANTREF)                        */
     uint8_t    nfail;
     uint16_t   fail_next;
     uint8_t    sea_refused;     /* the sea plant's counted refusals this level -- a decision whose search
@@ -984,7 +988,7 @@ enum {
     IMPAI_PW_SEA,           /* the sea plant's search holds the plant (THE ISLAND'S PLANTS)                     */
     IMPAI_PW_LEFT,          /* walked to its end, a site left for a cause that is no lack of room: no growth    */
     IMPAI_PW_CUT,           /* the decision's site tests ended it and it is not exhausted (THE CUT RING GROWS)  */
-    IMPAI_PW_GREW,          /* exhausted: ring_grow rose                                                        */
+    IMPAI_PW_GREW,          /* exhausted below the widest ring: its growth rose, and the tests ended the climb  */
     IMPAI_PW_WIDEST,        /* exhausted at the widest ring: the type is passed over, a waived one is not       */
     IMPAI_PW_WAY,           /* a way out deferred (THE WORK BUDGET) ended the ring for the decision             */
     IMPAI_PW_ROOTS,         /* a site's order was refused and the decision's roots are spent                    */
@@ -996,12 +1000,12 @@ enum {
 typedef struct IMPAI_PLANTWALK {
     uint8_t  set;           /* 1: a plant rung answered a builder and the decision ordered no plant             */
     uint8_t  exit;          /* IMPAI_PW_*                                                                       */
-    uint8_t  grow;          /* ring_grow as the rung began                                                      */
+    uint8_t  grow;          /* the type's growth for the builder as the rung began                              */
     uint8_t  waived;        /* 1: the type is the waived pass's (THE PLANT'S FALLBACK)                          */
     uint8_t  cut;           /* 1: the decision's site tests ended the walk                                      */
     int8_t   sea;           /* the rung's sea search: IMPAI_PW_SEA_UNASKED, 0 no order now, below 0 no site     */
     uint16_t type, slot, btype;     /* the plant type (0 none), the builder asked and its type                  */
-    uint16_t sites;         /* the ring's sites                                                                 */
+    uint16_t sites;         /* the sites of every ring the walk took (THE PLANT'S WALK CLIMBS)                  */
     uint16_t claimed, failed, far_rec, way_failed, coverage;   /* skipped: a claim, a failure, the builder's far
                                record, a way refused earlier (THE WAY REFUSALS), explored metal                 */
     uint16_t beyond;        /* past THE COMMANDER'S REACH                                                       */

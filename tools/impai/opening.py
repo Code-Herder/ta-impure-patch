@@ -21,7 +21,7 @@ test refuses), and the twins would differ by that too; no opening plays it.
 MEASURED 2026-11-18 (GDI, no draw, the reference setup): a game plays in about 22 s; the level's own
 `impai: starts` line seats ImpAI's seat at the start the id names (`2:272,4912@3` on Steel Jungle's start 2,
 `3:128,8672@4` in the four-seat game of Lava Alley's start 3: start, position, seat + 1); and Luschaven's start 3
-plays its 32 decision lines alike unmapped and mapped, the plant ARMLAB at 4 056 in both.
+plays its 31 decision lines alike unmapped and mapped, the plant ARMVP at 3 336 in both.
 
 THE FIGURES of one game, reported beside its verdict word:
     order      the GameTime of the first order ImpAI gave a unit: its first job row written in the recording

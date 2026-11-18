@@ -1462,9 +1462,9 @@ static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
     memset(&w, 0, sizeof w);
     w.set = 1;
     w.sea = IMPAI_PW_SEA_UNASKED;
-    w.grow = in->st->ring_grow;
     w.waived = !d->plant_t && d->plant_tw;
     w.type = (uint16_t)(d->plant_t ? d->plant_t : d->plant_tw);
+    w.grow = (uint8_t)impai_ring_grown(d, a->b, w.type);
     w.slot = a->b->slot;
     w.btype = a->b->type;
     w.exit = !w.type ? IMPAI_PW_NOTYPE : IMPAI_PW_MENU;

@@ -476,6 +476,9 @@ int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* the air plant for the blind of `type`: the base ring's site, else a site outside it (impai_build.c, THE AIR PLANT'S
    OWN SEARCH), without a way out when `waived`; 1 ordered */
 int  impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived);
+/* how far the base ring of plant type `type` has been pushed out for builder b's walks, of any other type the
+   base ring's growth (impai_build.c, THE PLANT'S RING IS ITS OWN); 0 for no type */
+int  impai_ring_grown(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
 int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 when b is sent to a feature paying more than `min_rate` metal a tick (THE RECLAIM) */

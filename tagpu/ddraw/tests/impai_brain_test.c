@@ -1988,9 +1988,9 @@ static void check_ring_cut(void)
    every site test the trace names the type, the builder, the ring's growth as the rung began and a walk that ends
    in growth, every site of the ring counted under one cause. With a comm_r of 32 px every site lies past THE
    COMMANDER'S REACH: all are counted `beyond` and none is tested. The commander alone (THE LONE COMMANDER'S
-   PLANT) has the ring grow a decision to its widest, where the type is passed over and the ring given back, and
-   the waived pass begins at the base; with a constructor's frame in the census the walk is left and the ring
-   stays, at every decision. The text of one trace by hand; the longest line fits IMPAI_PW_TEXT
+   PLANT) has the walk climb to the widest ring in the one decision (THE PLANT'S WALK CLIMBS), where the type is
+   passed over and its growth is back at the base, and the waived pass begins there; with a constructor's frame in
+   the census the walk is left and the ring stays, at every decision. The text of one trace by hand; the longest line fits IMPAI_PW_TEXT
    and a short buffer is ended inside itself; THE PLANTWALK LINE's rule is THE WHY LINE's. */
 static void plantwalk_world(void)
 {
@@ -2015,6 +2015,7 @@ static void check_plantwalk(void)
     IMPAI_BRAIN_OUT out;
     const IMPAI_PLANTWALK* w = &out.walk;
     char t[IMPAI_PW_TEXT], cut[12];
+    uint32_t until;
     int k, n, all;
     plantwalk_world();
     CHECK(decide(&out) == 0, "decide");
@@ -2029,33 +2030,37 @@ static void check_plantwalk(void)
     CHECK(!out.plant && w->set && w->type == T_FACTORY && w->slot == 1 && w->btype == T_COM && !w->waived &&
               w->grow == 0 && w->sea == IMPAI_PW_SEA_UNASKED,
           "the trace names the type, the builder and the ring as the rung began: %s", t);
-    CHECK(w->exit == IMPAI_PW_GREW && s_st.ring_grow == 1 && w->tested > 0 && !w->passed && !w->beyond,
-          "a ring the site test refuses ends in growth: %s, ring_grow %u", t, s_st.ring_grow);
+    CHECK(w->exit == IMPAI_PW_GREW && s_pref[T_FACTORY].cgrow >= 1 && !s_pref[T_FACTORY].grow && !s_st.ring_grow &&
+              w->tested > 0 && !w->passed && !w->beyond,
+          "a ring the site test refuses ends in growth of the commander's own: %s, cgrow %u grow %u ring_grow %u", t,
+          s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow, s_st.ring_grow);
     CHECK(w->sites > 0 && (w->cut || plantwalk_sum(w) == w->sites), "every site of a walk to its end has one cause: %u of %u",
           plantwalk_sum(w), w->sites);
 
-    /* THE LONE COMMANDER'S PLANT and A TYPE PASSED OVER GIVES THE RING BACK (impai_build.c) */
+    /* THE LONE COMMANDER'S PLANT on THE PLANT'S WALK CLIMBS (impai_build.c): every ring in the one decision */
     lv.comm_r = 32;
     s_plan = &lv;
     plantwalk_world();
-    for (k = 0; k < 9; k++) {
-        CHECK(decide(&out) == 0, "decide");
-        s_w.gametime += 15;
-        impai_plantwalk_text(w, t, sizeof t);
-        if (!k || k == 8) printf("plantwalk, the lone commander, every plant site past its reach, decision %d: %s\n", k, t);
-        CHECK(!out.plant && w->set && w->type == T_FACTORY && !w->waived && w->grow == k && w->beyond > 0 && !w->tested &&
-                  plantwalk_sum(w) == w->sites && w->exit == (k < 8 ? IMPAI_PW_GREW : IMPAI_PW_WIDEST),
-              "a lone commander's plant ring past its reach is exhausted, decision %d: %s", k, t);
-        builds_within(0, 1, 32, &all);
-        CHECK(all, "no build order to the commander past its reach, decision %d", k);
-    }
-    CHECK(s_pref[T_FACTORY].until > (uint32_t)s_w.gametime && s_st.ring_grow == 0,
-          "at the widest ring the type is passed over and the ring given back: until %u, ring_grow %u",
-          s_pref[T_FACTORY].until, s_st.ring_grow);
+    CHECK(decide(&out) == 0, "decide");
+    s_w.gametime += 15;
+    impai_plantwalk_text(w, t, sizeof t);
+    printf("plantwalk, the lone commander, every plant site past its reach: %s\n", t);
+    CHECK(!out.plant && w->set && w->type == T_FACTORY && !w->waived && w->grow == 0 && w->beyond > 0 && !w->tested &&
+              plantwalk_sum(w) == w->sites && w->exit == IMPAI_PW_WIDEST,
+          "a lone commander's plant rings past its reach are exhausted to the widest in one decision: %s", t);
+    builds_within(0, 1, 32, &all);
+    CHECK(all, "no build order to the commander past its reach");
+    CHECK(s_pref[T_FACTORY].until > (uint32_t)s_w.gametime && !s_pref[T_FACTORY].cgrow && !s_pref[T_FACTORY].grow &&
+              !s_st.ring_grow,
+          "at the widest ring the type is passed over and its growth is back at the base: until %u, cgrow %u grow %u "
+          "ring_grow %u", s_pref[T_FACTORY].until, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow, s_st.ring_grow);
+    until = s_pref[T_FACTORY].until;
     CHECK(decide(&out) == 0, "decide");
     impai_plantwalk_text(w, t, sizeof t);
-    CHECK(w->set && w->type == T_FACTORY && w->waived && w->grow == 0 && w->exit == IMPAI_PW_GREW,
-          "the waived pass walks the ring from the base: %s", t);
+    CHECK(w->set && w->type == T_FACTORY && w->waived && w->grow == 0 && w->exit == IMPAI_PW_WIDEST &&
+              !s_pref[T_FACTORY].cgrow && s_pref[T_FACTORY].until == until,
+          "the waived pass walks the rings from the base, ends there and passes nothing over: %s, cgrow %u, until %u for %u",
+          t, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].until, until);
     /* a constructor's frame is a builder to come: the site past the commander's reach is left for it */
     plantwalk_world();
     unit_add(&s_w, 6, T_CONS, 30, 30, 0);
@@ -2064,7 +2069,7 @@ static void check_plantwalk(void)
         s_w.gametime += 15;
         impai_plantwalk_text(w, t, sizeof t);
         CHECK(!out.plant && w->set && w->type == T_FACTORY && w->exit == IMPAI_PW_LEFT && w->beyond > 0 && !w->tested &&
-                  w->grow == 0 && s_st.ring_grow == 0,
+                  w->grow == 0 && s_st.ring_grow == 0 && !s_pref[T_FACTORY].cgrow && !s_pref[T_FACTORY].grow,
               "with a constructor begun the ring past the commander's reach is left and does not grow, decision %d: %s, "
               "ring_grow %u", k, t, s_st.ring_grow);
     }
@@ -2117,6 +2122,125 @@ static void check_plantwalk(void)
         CHECK(impai_plantwalk_due(&seen, 300, &unset) == 0 && impai_plantwalk_due(&seen, 120, &b) == 0,
               "a trace not set writes nothing and moves nothing");
     }
+}
+
+/* THE PLANT'S RING IS ITS OWN, THE PLANT'S WALK CLIMBS and THE PASS-OVERS OVERLAP (impai_build.c), in
+   check_plantwalk's world.
+   (a) The plant refused in a square round the anchor, the shared ring at 2 by hand: the plant's walk climbs its
+   own rings in the one decision and orders outside the square; its growth is back at 0 and the shared ring is
+   as it was.
+   (b) Every wind site refused in check_ring_reach's world, the plant type's two growths at 3 and 5 by hand: the
+   energy walk grows the shared ring and neither of the plant's.
+   (c) Four site tests a decision and the plant refused everywhere: the commander's own growth rises at each cut
+   walk, the shared ring and the constructors' growth stay, and within nine decisions the type is passed over
+   with its growth back at 0. A pass-over standing in another row, 20 ticks from its end, is renewed by each
+   exhausted ring and ends with the type's own; a row whose pass-over has ended is left. The waived pass that
+   follows renews neither.
+   (d) A factory standing, the commander's own growth at 2 and the constructors' at 5 by hand, every ring site
+   past the commander's reach: the walk is left, the commander's own growth goes back to 0 and the constructors'
+   stays. */
+static void check_plant_ring(void)
+{
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
+    IMPAI_BRAIN_OUT out;
+    const IMPAI_PLANTWALK* w = &out.walk;
+    const FCMD* c;
+    char t[IMPAI_PW_TEXT];
+    uint32_t until0, ended;
+    int k, x, z, last = 0;
+
+    plantwalk_world();
+    s_w.refuse_box_type = T_FACTORY;
+    s_w.refuse_box.x0 = s_w.refuse_box.z0 = 6;
+    s_w.refuse_box.x1 = s_w.refuse_box.z1 = 29;
+    s_st.ring_grow = 2;
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    x = c ? cmd_x0(&c->c) : 0;
+    z = c ? cmd_z0(&c->c) : 0;
+    printf("plant ring (a): plant %u at (%d, %d), cgrow %u grow %u ring_grow %u\n", out.plant, x, z,
+           s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow, s_st.ring_grow);
+    CHECK(out.plant == T_FACTORY && c && c->c.type == T_FACTORY && (x < 6 || x > 29 || z < 6 || z > 29),
+          "(a) the plant's walk climbs past the refused square in one decision: plant %u at (%d, %d)", out.plant, x, z);
+    CHECK(!s_pref[T_FACTORY].cgrow && !s_pref[T_FACTORY].grow && s_st.ring_grow == 2,
+          "(a) the plant's order puts its own growth back and leaves the shared ring: cgrow %u grow %u ring_grow %u",
+          s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow, s_st.ring_grow);
+    s_w.refuse_box_type = 0;
+
+    reach_world(0);
+    s_w.refuse_type = T_WIND;
+    s_pref[T_FACTORY].cgrow = 3;
+    s_pref[T_FACTORY].grow = 5;
+    CHECK(decide(&out) == 0, "decide");
+    printf("plant ring (b): ring_grow %u, cgrow %u grow %u\n", s_st.ring_grow, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow);
+    CHECK(s_st.ring_grow > 0 && s_pref[T_FACTORY].cgrow == 3 && s_pref[T_FACTORY].grow == 5,
+          "(b) an energy walk's growth is the shared ring's alone: ring_grow %u, cgrow %u grow %u", s_st.ring_grow,
+          s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow);
+    s_w.refuse_type = 0;
+
+    lv.site_tests = 4;
+    s_plan = &lv;
+    plantwalk_world();
+    s_w.refuse_type = T_FACTORY;
+    s_pref[T_FACTORY].grow = 5;
+    until0 = (uint32_t)s_w.gametime + 20;
+    ended = (uint32_t)s_w.gametime - 1;
+    s_pref[T_TIDAL].until = until0;
+    s_pref[T_TURRET].until = ended;
+    for (k = 0; k < 9 && s_pref[T_FACTORY].until <= (uint32_t)s_w.gametime; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        impai_plantwalk_text(w, t, sizeof t);
+        if (!k) printf("plant ring (c), decision 0: %s\n", t);
+        if (s_pref[T_FACTORY].until <= (uint32_t)s_w.gametime) {
+            CHECK(w->set && !w->waived && w->grow == last && s_pref[T_FACTORY].cgrow > last && w->cut && w->tested == 4,
+                  "(c) a cut walk goes on from the growth the last one reached, decision %d: %s, cgrow %u", k, t,
+                  s_pref[T_FACTORY].cgrow);
+            CHECK(s_pref[T_TIDAL].until == (uint32_t)s_w.gametime + lv.fail_t,
+                  "(c) an exhausted ring renews a standing pass-over, decision %d: until %u at %d", k,
+                  s_pref[T_TIDAL].until, s_w.gametime);
+            last = s_pref[T_FACTORY].cgrow;
+            s_w.gametime += 15;
+        }
+        CHECK(!s_st.ring_grow && s_pref[T_FACTORY].grow == 5,
+              "(c) the plant's climb writes neither the shared ring nor the constructors' growth, decision %d: %u, %u", k,
+              s_st.ring_grow, s_pref[T_FACTORY].grow);
+    }
+    printf("plant ring (c): passed over after %d decisions, until %u, cgrow %u; the other rows' until %u and %u\n", k,
+           s_pref[T_FACTORY].until, s_pref[T_FACTORY].cgrow, s_pref[T_TIDAL].until, s_pref[T_TURRET].until);
+    CHECK(k > 2 && s_pref[T_FACTORY].until == (uint32_t)s_w.gametime + lv.fail_t && !s_pref[T_FACTORY].cgrow,
+          "(c) the type is passed over within nine cut walks, its growth back at the base: %d decisions, until %u, cgrow %u",
+          k, s_pref[T_FACTORY].until, s_pref[T_FACTORY].cgrow);
+    CHECK(s_pref[T_TIDAL].until == s_pref[T_FACTORY].until && s_pref[T_TURRET].until == ended,
+          "(c) the pass-over renews the standing one and leaves the ended one: %u and %u", s_pref[T_TIDAL].until,
+          s_pref[T_TURRET].until);
+    until0 = s_pref[T_TIDAL].until;
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    impai_plantwalk_text(w, t, sizeof t);
+    printf("plant ring (c), the waived pass: %s\n", t);
+    CHECK(w->set && w->waived && w->grow == 0 && w->tested == 4 && s_pref[T_FACTORY].cgrow > 0 &&
+              s_pref[T_TIDAL].until == until0 && s_pref[T_FACTORY].until == until0,
+          "(c) the waived pass climbs from the base and renews no pass-over: %s, until %u and %u", t,
+          s_pref[T_TIDAL].until, s_pref[T_FACTORY].until);
+    s_w.refuse_type = 0;
+
+    lv = *lv0;
+    lv.comm_r = 32;
+    plantwalk_world();
+    unit_add(&s_w, 6, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 40;
+    s_w.econ[0].energy_in = 400;
+    s_pref[T_FACTORY].cgrow = 2;
+    s_pref[T_FACTORY].grow = 5;
+    CHECK(decide(&out) == 0, "decide");
+    impai_plantwalk_text(w, t, sizeof t);
+    printf("plant ring (d): %s, cgrow %u grow %u\n", t, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow);
+    CHECK(!out.plant && w->set && w->slot == 1 && w->grow == 2 && w->exit == IMPAI_PW_LEFT && w->beyond > 0 &&
+              !s_pref[T_FACTORY].cgrow && s_pref[T_FACTORY].grow == 5,
+          "(d) the commander's ring left for its reach starts over at the base, the constructors' growth as it was: %s, "
+          "cgrow %u grow %u", t, s_pref[T_FACTORY].cgrow, s_pref[T_FACTORY].grow);
+    s_plan = lv0;
 }
 
 /* one enemy row of seat 0 at block (bx, bz), slot 40: type `type` (WQ_NONE: a contact never identified, owner
@@ -16977,6 +17101,7 @@ int main(void)
     check_ring_reach();
     check_ring_cut();
     check_plantwalk();
+    check_plant_ring();
     check_ring_cmd_safe();
     check_cmd_safe_orders();
     check_ring_raid();
