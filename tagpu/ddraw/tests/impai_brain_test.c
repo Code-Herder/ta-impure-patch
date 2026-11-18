@@ -4448,6 +4448,44 @@ static void check_held_ground(void)
     s_nspots = NPATCH;
 }
 
+/* THE JUDGEMENT'S ORDERING (impai_build.c, impai_held_judge): the held ground is judged at the start of every
+   decision, whoever asks. The seat's one unit a solar collector -- no constructor, no plant: nothing in the
+   decision reads a held bit --, the anchor at (20, 20), cell (1, 1); E's cell is (5, 1):
+   (a) from no held ground, the seat's army row in cell (6, 1) and no enemy: (5, 1) is held after the decision;
+   (b) from (a)'s held ground, an enemy's row in (6, 1) and none of the seat's: (5, 1), 4 steps from the anchor and
+       1 from the enemy, is let go. */
+static void check_held_every_decision(void)
+{
+    static const char* const NAME[2] = { "the push", "the enemy in (6, 1)" };
+    const int k = 1 * IMPAI_GRID_MAX + 5;
+    uint8_t held_b[sizeof s_st.held];
+    IMPAI_BRAIN_OUT out;
+    unsigned i;
+    int c, x, z;
+    for (c = 0; c < 2; c++) {
+        int bit;
+        brain_world();
+        if (c) memcpy(s_st.held, held_b, sizeof held_b);
+        for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
+        for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+        unit_add(&s_w, 1, T_SOLAR, 66, 20, 1);
+        s_st.ax = 20;
+        s_st.az = 20;
+        s_w.gametime = 300;
+        impai_mil_reset(&s_hmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_hmil.ebx = s_hmil.ebz = IMPAI_NO_ANCHOR;
+        s_milp = &s_hmil;
+        held_rows(c ? -1 : 6, c ? 6 : -1, 1);
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        s_viewp = NULL;
+        memcpy(held_b, s_st.held, sizeof held_b);
+        bit = s_st.held[k >> 3] >> (k & 7) & 1;
+        printf("held ground with no asker, %s: cell (5, 1) held %d\n", NAME[c], bit);
+        CHECK(bit == !c, "held ground with no asker, %s: cell (5, 1) held %d", NAME[c], bit);
+    }
+}
+
 /* B3: a constructor at cell (20, 20) busy on an extractor's BUILD at N's site (first cell (52, 20)), ordered at
    GameTime 290. A row put on its way after the order: one move to the anchor, the job ended. With the extractor's
    frame at the site the way is no walk: nothing, unless the row's reach is over the site, which turns it back.
@@ -16832,6 +16870,7 @@ int main(void)
     check_route();
     check_explore_held();
     check_held_ground();
+    check_held_every_decision();
     check_route_rules();
     check_route_radar();
     check_walk_back();

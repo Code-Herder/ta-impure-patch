@@ -1386,9 +1386,9 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
 /* THE HELD GROUND: a constructor claims a patch, and a feature to reclaim (THE RECLAIM), only on a 256-px cell the
-   seat holds now -- one its strength reaches before any known enemy strength does. A judging decision (the first
-   that asks, patch_held) walks the maps' grid
-   twice in 8-neighbour steps, each from one side's sources:
+   seat holds now -- one its strength reaches before any known enemy strength does. Every decision of a seat with
+   a unit judges it once, at its start (impai_held_judge), and walks the maps' grid twice in 8-neighbour steps,
+   each from one side's sources:
    - THE SEAT'S STRENGTH: the cell of each of its rows, and each ally's, of an army type (held_kind: armed
      against the ground and moving on it; an aircraft holds no ground) -- held now or remembered --, and the base
      anchor's cell. A tower of its own is 0 steps at its own cell and is not walked from: it holds what it stands
@@ -1409,7 +1409,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
      which then held its anchor's cell and its army's and claimed no patch.
    THE HYSTERESIS, by construction: a cell not held becomes held when 4 own <= 3 foe, its steps from the seat's
    strength at most three quarters of those from the enemy's; a held cell is let go only when own > foe. Between
-   the two it keeps what the last judging decision left it (IMPAI_BRAIN.held), so a front that wavers by a cell
+   the two it keeps what the decision before left it (IMPAI_BRAIN.held), so a front that wavers by a cell
    flips no patch. The held ground so grows behind a won push -- the army standing where no known enemy is nearer
    -- and shrinks after a lost one. Before any enemy is identified the other starts stand for the enemy, so a cell
    is held up to three sevenths of the way to the nearest; with no other start and no enemy known every cell is
@@ -1420,7 +1420,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    between them, contested while the armies met there. WHY NOT A LINE BETWEEN THE BASES: the anchor and the
    estimate stay put, so such a line refuses for the rest of the game the ground a push wins; on the bar's Trout
    Farm games the seats ended with 7-9 extractors under it against 16-24 with no limit (MEASURED 2026-11-14).
-   BOUND, a judging decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
+   BOUND, a decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
    walks of at most IMPAI_GRID_MAX^2 cells, each queued once (held_source queues a cell only while it is not yet a
    source) and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
    blind to water and cliffs; a ghost holds its ground for the enemy until the seat sees it gone. */
@@ -1533,11 +1533,21 @@ static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
     return n;
 }
 
-static void held_judge(IMPAI_DEC* d)
+/* THE JUDGEMENT'S ORDERING, the invariant the hysteresis rests on: impai_brain_decide calls this once, after the
+   anchor is set and before anything that reads a held bit (patch_held's callers: the checks, the ladder, the
+   plants), and nothing else writes IMPAI_BRAIN.held. So every reader of a decision reads that decision's
+   judgement, and the hysteresis steps once a decision whoever asks: which rung runs, or whether any does, moves
+   no bit. Its inputs are the decision's own -- the view's rows, the maps, the starts, the anchor -- and none of
+   them changes inside a decision. held_built: 1 judged, -1 nothing to judge by (no maps or no rows: every cell
+   answers held and the bits keep). */
+void impai_held_judge(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const int gw = d->maps.gw, gh = d->maps.gh;
-    int n, gx, gz;
+    int gw, gh, n, gx, gz;
+    d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
+    if (d->held_built < 0) return;
+    gw = d->maps.gw;
+    gh = d->maps.gh;
     memset(d->held_own, HELD_FAR, (size_t)gw * gh);
     n = held_sources(d, d->held_own, 1, HELD_ARMY);
     if (st->ax != IMPAI_NO_ANCHOR)
@@ -1562,11 +1572,7 @@ static int patch_held(IMPAI_DEC* d, int px, int pz)
 {
     const int64_t gx = impai_cell_of_px(px), gz = impai_cell_of_px(pz);
     int k;
-    if (!d->held_built) {
-        d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
-        if (d->held_built > 0) held_judge(d);
-    }
-    if (d->held_built < 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
+    if (d->held_built <= 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
     k = (int)(gz * IMPAI_GRID_MAX + gx);
     return d->in->st->held[k >> 3] >> (k & 7) & 1;
 }

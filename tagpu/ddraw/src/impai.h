@@ -508,7 +508,7 @@ typedef struct IMPAI_BRAIN {
     uint16_t   unlock_plant;
     uint8_t    held[IMPAI_GRID_MAX * IMPAI_GRID_MAX / 8];  /* THE HELD GROUND (impai_build.c): bit gx & 7 of byte
                                    (gz IMPAI_GRID_MAX + gx) >> 3 is 1 while 256-px cell (gx, gz) is held, as the
-                                   last decision that judged it left it; all 0 at the level's start          */
+                                   seat's last decision judged it; all 0 at the level's start                */
 } IMPAI_BRAIN;
 
 /* THE PLAN: every constant a decision decides by, what it limits beside it. One row, IMPAI_PLAN_ROW

@@ -1099,6 +1099,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   needs no estimate per enemy. **Why the hysteresis**: an army that sways a cell back and forth would otherwise
   claim and refuse the same patch in turn. **What it costs**: a straight step ignores water and cliffs, and a ghost
   holds ground for the enemy until the seat looks again.
+- **The held ground is judged once in every decision, at its start**, 2026-11-18 ([the brain](brain.html), *Task
+  allocation*). The judgement used to run in the first decision step that asked whether a patch was held, so a
+  decision in which nothing asked kept the old bits, and which rung ran decided when the hysteresis stepped: a
+  rung that ordered nothing still moved recorded state, and removing one changed three games' state. **Why an
+  ordering and not a call kept where it was**: a call kept for its side effect is that fault again; judged before
+  any reader, every reader of a decision reads that decision's judgement whoever asks. **What it changes**: the
+  hysteresis steps in decisions where it did not, so a cell is gained or let go sooner. MEASURED on the session
+  tier against the champion 275d56ca, the same category in every game: Red Triangle ac-1 won at 74 077 by both,
+  Plains and Passes ac-1 at 36 363 by both, Core Prime cc-1 at 48 285 by both; Trout Farm ca-1 won at 42 509 |
+  47 710, Lava Mania ca-2 on ProTA at 32 216 | 43 160, Metal Heck aa-2 at 37 236 | 40 771 -- three wins later
+  and none sooner; Steel Jungle ca-1 at the cap not ahead by both, value 0.85. **What it costs**: the two walks
+  and the maps in every decision, where a decision with no asker made neither.
 - **The harvest: an idle builder reclaims outside a surplus, the army looks for wrecks, and a reclaim reaches 2 048
   px** ([the brain](brain.html), *Task allocation*). Without them the fields were learned only by one builder's
   look a decision, the army's sightings never entered the memory, the choice reached 768 px, and the ladder

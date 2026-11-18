@@ -1897,6 +1897,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
         st->az = (int16_t)(a->pos[2] >> 20);
     }
     if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
+    impai_held_judge(d);
     base_box(d);
     impai_fmem_refresh(d);
     impai_fmem_observe(d);
