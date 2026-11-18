@@ -84,7 +84,6 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     unsigned i;
     memset(st, 0, sizeof *st);
     st->ax = st->az = IMPAI_NO_ANCHOR;
-    st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = st->sea_cur_type = (uint16_t)WQ_NONE;
     st->fscan = st->ascan = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
@@ -374,7 +373,6 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             d->mk_active[d->nmk++] = (uint8_t)(u->active != 0);
         }
     }
-    if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
     if ((cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) && u->finished && d->nbtype < IMPAI_SEA_BUILDERS) {
         int k;
         for (k = 0; k < d->nbtype && d->btype[k] != type; k++) {}
@@ -829,8 +827,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
    covers the site; else the builder could not reach the site (THE REACH ABANDON), which holds it back (THE FAR
    RECORD), or the site failed. A busy one older than job_timeout with no frame of it at the site is stopped
-   (job_stop) and the site failed. An EXPLORE ends when its cell is explored, or after job_timeout with the cell
-   failed. A reclaim (reclaim_check) ends the moment the seat is shown its feature gone. */
+   (job_stop) and the site failed. A reclaim (reclaim_check) ends the moment the seat is shown its feature gone. */
 /* THE HELP REFUSED, an ORDERING: a builder whose help ended while its frame stood unfinished is given no help on
    a frame at that frame's cell for fail_t (IMPAI_JOB.help_cx, help_cz, help_until).
    - THE ENGINE. HelpBuild 0x403F70, its state table at 0x40425C: state 0 (0x403FD9) walks through 0x438A00
@@ -921,16 +918,6 @@ static void job_checks(IMPAI_DEC* d)
         } else if (reclaim_job(j)) {
             checks++;
             reclaim_check(d, b, d->jobbed_idle[i], j, age);
-        } else if (j->kind == IMPAI_JOB_EXPLORE) {
-            checks++;
-            /* an explorer that stands idle with its cell unseen has arrived
-               without seeing it, or lost its order: the cell fails as at the timeout, so it is not asked again
-               for fail_t */
-            if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
-            else if (d->jobbed_idle[i] || age > in->plan->job_timeout) {
-                impai_fail_add(d, j->cx, j->cz);
-                impai_job_end(j);
-            }
         }
     }
 }
@@ -938,15 +925,13 @@ static void job_checks(IMPAI_DEC* d)
 /* THE WALK CHECK, an ORDERING: a constructor's job the seat learns is threatened ends within one decision. For
    every busy constructor of the census's jobbed list -- never the commander, whose safety is the military's
    (impai_mil.c), so two managers never order it in one decision --, at its job's point: a BUILD's footprint
-   centre, an EXPLORE's cell centre, an ASSIST's target where the census found it, a RECLAIM_GO's or a RECLAIM's
-   feature anchor cell centre. A BUILD with no building of its type at the site yet, an EXPLORE, a RECLAIM_GO and a
+   centre, an ASSIST's target where the census found it, a RECLAIM_GO's or a RECLAIM's
+   feature anchor cell centre. A BUILD with no building of its type at the site yet, a RECLAIM_GO and a
    RECLAIM whose builder stands farther from its feature than its build reach (TASIM's sweep builder, the reach the
    reclaim's own score walks to) are walks, turned back when the point or the straight way there holds known ground
    threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat goes on); a
    BUILD whose frame stands, an ASSIST and a RECLAIM within reach are work, turned back when the point's cell or the
-   builder's own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an
-   EXPLORE's
-   cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
+   builder's own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job. The builder, holding the move and no job, is listed idle from the next decision on
    (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
    is no exception: one sent to a site at the edge of the threat it answers is turned back by this work test once
    the threat's reach covers its own cell or the frame's; only the commander is exempt. Outside job_checks, which
@@ -997,9 +982,6 @@ static void walk_checks(IMPAI_DEC* d)
             if (t && (impai_threatened(d, t->pos[0] >> 16, t->pos[2] >> 16) ||
                       impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16)))
                 impai_turn_back(d, b);
-        } else if (j->kind == IMPAI_JOB_EXPLORE) {
-            const int cx = j->cx, cz = j->cz;
-            if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
         } else if (reclaim_job(j)) {
             SweepBuilder sb;
             x = j->cx * 16 + 8;
@@ -1877,7 +1859,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_off = q->ops->action(q, WQ_ACT_DEACTIVATE);
     d->e_per_m = in->e_per_m > 0.0f && in->e_per_m < 1e6f ? in->e_per_m : in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
-    if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     /* THE MEMORY'S COUNT IS DATA, as every recorded field is: a restored nfmem past IMPAI_FEATS is held to it before
        anything walks the memory or its marks (the census's claims, the refresh, the place, the reclaim's scores),
        so no walk passes the arrays */
@@ -1896,7 +1877,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
         st->ax = (int16_t)(a->pos[0] >> 20);
         st->az = (int16_t)(a->pos[2] >> 20);
     }
-    if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
     impai_held_judge(d);
     base_box(d);
     impai_fmem_refresh(d);

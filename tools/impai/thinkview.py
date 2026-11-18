@@ -61,7 +61,7 @@ PATHS = ("mil.level", "mil.ebx", "mil.ebz", "mil.wave_t", "mil.scout_t", "mil.wa
          "mil.sq[*].target", "mil.sq[*].since", "mil.sq[*].value", "mil.foe", "mil.press_until", "mil.press_v",
          "mil.press_bx", "mil.press_bz", "mil.press_base", "mil.threat_seen", "mil.radar_as", "mil.dry", "mil.lead",
          "mil.island", "mil.unreached", "mil.lost_t", "mil.mob_v", "mil.safe_until", "brain.ax", "brain.az",
-         "brain.ring_grow", "brain.nway", "brain.opened", "brain.sea_refused", "brain.explorer", "brain.way[*].type",
+         "brain.ring_grow", "brain.nway", "brain.opened", "brain.sea_refused", "brain.way[*].type",
          "brain.way[*].cx", "brain.way[*].cz")
 # the judgements' lanes: (id, label, the field, {value or enumerator: (what it says, tone)}); a value not named
 # draws nothing. "*" names every value but 0

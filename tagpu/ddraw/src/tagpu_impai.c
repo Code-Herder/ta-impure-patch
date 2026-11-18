@@ -1440,7 +1440,6 @@ static IMPAI_BRAIN s_brain[PLAYER_COUNT];
    CENSUS'S BOUND) */
 _Static_assert(TAGPU_LIM_UNITS <= IMPAI_CENSUS_MAX, "a census walks a seat's whole block");
 static const SimField s_brain_layout[] = {
-    { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -2225,7 +2224,7 @@ static void impai_play_end(const char* ta, unsigned now)
     }
 }
 
-/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure, no explorer and
+/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure and
    no job survive a level, and a puppet's come from its recording. */
 static void impai_play_clear(void)
 {

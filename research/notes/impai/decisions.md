@@ -309,13 +309,10 @@ Both are the coordinator's; the first was moved by the bar's diagnosis, and the 
   the plant comes once the constructors have the income up. **What it costs**: an island-map seat with a poor start
   holds one land plant longer; a seat whose military refuses every decision keeps one factory (`refused=` on its
   mil line).
-- **Builders keep to their layer too.** The explore cell and an assist's target must be reachable on the
-  builder's class (`impai_build.c`, `impai_build_explore` and `builder_near`), which widens the rule beyond the
-  military. **Why**: a sea plant makes sea constructors; without the test one of them, made the seat's one
-  explorer, is sent at a land cell it never arrives at and holds the explorer until `job_timeout`, and a sea
-  constructor walks at a plant inland to help it. On Comet Catcher every block is one component for every class,
-  so neither test changes `impai-eco`'s choices; on the brain test's walled map the explorer now goes to a cell on
-  its own side of the wall.
+- **Builders keep to their layer too.** An assist's target must be reachable on the builder's class
+  (`impai_build.c`, `builder_near`), which widens the rule beyond the military. **Why**: a sea plant makes sea
+  constructors; without the test a sea constructor walks at a plant inland to help it. On Comet Catcher every
+  block is one component for every class, so the test does not change `impai-eco`'s choices.
 
 ## Finishing a won game: two changes to A2 §4.3 (b7, 2026-11-13)
 
@@ -494,11 +491,6 @@ The design calls, each with its evidence; the owner may reverse any of them:
   fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
   builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
   past the front waits until a push holds its ground; the commander keeps `comm_r`.
-- **The explorer keeps to held ground**, 2026-11-15: the explore cell is the nearest unexplored 256-px cell the
-  seat holds. **Why**: the explorer is asked for once no held patch is left, and mid-game, the seat's own half
-  explored, the nearest unexplored cell lay in the enemy's half -- the walk the held ground keeps the constructors
-  from. **What it costs**: the enemy's half stays unexplored by the builders; the army's sweep and scouts still go
-  there.
 - **The held ground's enemy side starts from each enemy's base**, 2026-11-15: every identified enemy structure that
   is not a tower, and while an enemy the seat identifies has none known, or none is identified, every start but the
   seat's own -- not the military's estimate. **Why**: the estimate is one value-weighted centre of every enemy's

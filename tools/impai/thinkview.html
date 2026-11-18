@@ -11,7 +11,7 @@
   --steel:#c9a46a; --steel-ink:#1b1608; --cyan:#68b6cf;
   --map:#0d1012; --grid:#232a30; --truth:#aeb7bf;
   --t-form:#8794a0; --t-defend:#5bb071; --t-raid:#e3a63b; --t-attack:#e05a52; --t-retreat:#a77ddb; --t-scout:#4fb8dd;
-  --j-build:#c9a46a; --j-assist:#d8cf73; --j-explore:#4fb8dd; --j-reclaim:#6cc48a; --j-none:#6c757d;
+  --j-build:#c9a46a; --j-assist:#d8cf73; --j-reclaim:#6cc48a; --j-none:#6c757d;
   --enemy:#ff6b5e; --radar:#f2d45c; --ghost:#9aa3ab; --held:#c9a46a;
   --good:#5bb071; --warn:#e3a63b; --bad:#e05a52; --info:#68b6cf;
   --font-display:"Saira Condensed","Arial Narrow",system-ui,sans-serif;
@@ -24,7 +24,7 @@
   --steel:#8a6424; --steel-ink:#fff8ea; --cyan:#1f7896;
   --map:#f7f8f9; --grid:#dfe3e6; --truth:#59626a;
   --t-form:#6b7884; --t-defend:#2f8a49; --t-raid:#b77908; --t-attack:#c23a32; --t-retreat:#7a4fb6; --t-scout:#1f88b0;
-  --j-build:#8a6424; --j-assist:#8f841a; --j-explore:#1f88b0; --j-reclaim:#2f8a49; --j-none:#7b848c;
+  --j-build:#8a6424; --j-assist:#8f841a; --j-reclaim:#2f8a49; --j-none:#7b848c;
   --enemy:#d0362a; --radar:#a88a00; --ghost:#6b737a; --held:#8a6424;
   --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896; color-scheme: light; } }
 :root[data-theme="light"] {
@@ -32,7 +32,7 @@
   --steel:#8a6424; --steel-ink:#fff8ea; --cyan:#1f7896;
   --map:#f7f8f9; --grid:#dfe3e6; --truth:#59626a;
   --t-form:#6b7884; --t-defend:#2f8a49; --t-raid:#b77908; --t-attack:#c23a32; --t-retreat:#7a4fb6; --t-scout:#1f88b0;
-  --j-build:#8a6424; --j-assist:#8f841a; --j-explore:#1f88b0; --j-reclaim:#2f8a49; --j-none:#7b848c;
+  --j-build:#8a6424; --j-assist:#8f841a; --j-reclaim:#2f8a49; --j-none:#7b848c;
   --enemy:#d0362a; --radar:#a88a00; --ghost:#6b737a; --held:#8a6424;
   --good:#2f8a49; --warn:#b77908; --bad:#c23a32; --info:#1f7896; color-scheme: light; }
 * { box-sizing:border-box }
@@ -174,7 +174,7 @@ const cache = {}, waiting = {};
 let D = null, T = 0, SEL = -1, playing = 0, HOVER = null;
 const LAYERS = { truth: true, held: true, jobs: true, trails: true, labels: true };
 const TASKVAR = { FORM: 't-form', DEFEND: 't-defend', RAID: 't-raid', ATTACK: 't-attack', RETREAT: 't-retreat', SCOUT: 't-scout' };
-const JOBVAR = { BUILD: 'j-build', ASSIST: 'j-assist', EXPLORE: 'j-explore', RECLAIM: 'j-reclaim', RECLAIM_GO: 'j-reclaim' };
+const JOBVAR = { BUILD: 'j-build', ASSIST: 'j-assist', RECLAIM: 'j-reclaim', RECLAIM_GO: 'j-reclaim' };
 const EVENTS_SHOWN = { plant: ['steel', 'a plant sited'], wave: ['t-attack', 'an attack wave starts'], lost: ['t-retreat', 'a prediction lost'],
   contact: ['enemy', 'first enemy known'], sight: ['enemy', 'an enemy comes into sight'], cmdr: ['enemy', 'a commander seen'], judge: ['muted', 'a judgement changes'] };
 const SEATVAR = ['steel', 'enemy', 'cyan', 't-defend', 't-retreat', 'radar'];
@@ -184,7 +184,7 @@ const MONO = '"IBM Plex Mono", ui-monospace, Menlo, monospace', DISPLAY = '"Sair
 function colors() {
   const cs = getComputedStyle(document.documentElement);
   for (const k of ['bg', 'panel', 'panel2', 'line', 'fg', 'muted', 'steel', 'steel-ink', 'cyan', 'map', 'grid', 'truth', 't-form', 't-defend', 't-raid',
-    't-attack', 't-retreat', 't-scout', 'j-build', 'j-assist', 'j-explore', 'j-reclaim', 'j-none', 'enemy', 'radar', 'ghost', 'held', 'good', 'warn', 'bad', 'info'])
+    't-attack', 't-retreat', 't-scout', 'j-build', 'j-assist', 'j-reclaim', 'j-none', 'enemy', 'radar', 'ghost', 'held', 'good', 'warn', 'bad', 'info'])
     C[k] = cs.getPropertyValue('--' + k).trim();
 }
 const fmt = n => Math.round(n).toLocaleString('en-US').replace(/,/g, ' ');

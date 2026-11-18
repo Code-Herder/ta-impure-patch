@@ -1,5 +1,5 @@
 /* impai_build.c -- where ImpAI builds and how it orders it (impai.h, the brain): a metal patch for an
-   extractor, the base ring for everything else, a cell to explore, a building to help. Every site is tested
+   extractor, the base ring for everything else, a building to help. Every site is tested
    through the seat's own site test (WQ_SITE_SEAT) and every unit named by slot, the adapter re-deriving it
    before each command. Engine-free, no statics. */
 #include <string.h>
@@ -762,7 +762,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
 
 /* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
    commander at a point THE COMMANDER'S SAFE DISTANCE or THE BLAST'S APPROACH refuses (cmd_refused_to), a move --
-   mode 2, an explore or a walk to a feature believed there -- tested as a walk to the point itself, any other as
+   mode 2, a walk to a feature believed there -- tested as a walk to the point itself, any other as
    one to its builddistance of the point; a move of no job is not, and on a contested decision
    it may take the root the factories' turn reserves (impai_brain.c, THE FACTORIES' TURN). */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
@@ -910,8 +910,7 @@ int impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_
     return threatened(d, x_px, z_px) || route_threatened(d, b, x_px, z_px);
 }
 
-/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height, as the
-   explorer's order takes its point; while the anchor's own 256-px cell is threatened, or its block is not
+/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height; while the anchor's own 256-px cell is threatened, or its block is not
    reachable on b's class (reachable_block), to the centre of the unthreatened cell nearest b whose centre block
    is -- in ring order around b's cell (impai_ring_at), the first on the grid -- so a builder in a raid on the base
    is not sent into it, nor a constructor to a point in the sea or on a cliff it cannot stand on. The order ends
@@ -2374,75 +2373,6 @@ void impai_sea_untaken(IMPAI_DEC* d)
     if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->roots < d->root_cap &&
         d->in->st->sea_i < 0xFFFFu)
         d->in->st->sea_i++;
-}
-
-/* ---- exploring ---- */
-
-/* THE EXPLORE CELL, once a decision: of the 256-px cells, the one nearest the anchor (integer distance, ties
-   in row-major order) whose centre cell the seat has not explored, that holds no failure, that the seat holds
-   (THE HELD GROUND, the extractors' rule) and that b can travel into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
-   (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
-   (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
-   cell it never arrives at). A cell whose straight way from b crosses known ground threat (THE ROUTE) fails for
-   fail_t and b is not sent: the next decision takes the next cell, one route test a decision. Else b moves there
-   (resolver mode 2), at the ground's height, and becomes the seat's one explorer; the job and its failure keep
-   the cell's centre. WHY THE HELD GROUND: the explorer is asked for once no held patch is left (impai_econ.c,
-   assign), and mid-game, the seat's own half explored, the nearest unexplored cell lies in the enemy's half --
-   the walk the held ground keeps the constructors from. BOUND: at most IMPAI_GRID_MAX^2 cells, each one held bit
-   and one label read, and for a cell nearer than the best so far whose centre block is not b's, at most
-   (2 EXPLORE_NEAR + 1)^2 = 81 more. */
-#define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
-int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
-{
-    const IMPAI_BRAIN_IN* in = d->in;
-    const int gw = (d->m.w * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX, gh = (d->m.h * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX;
-    const int per = IMPAI_CELL_PX / 16;
-    const int l = builder_label(d, b);
-    const unsigned cls = in->ti[b->type].mclass;
-    int gx, gz, bx = -1, bz = -1, tx = 0, tz = 0;
-    uint64_t best = 0;
-    int32_t pos[3];
-    if (d->explored_once || gw < 1 || gh < 1 || gw > IMPAI_GRID_MAX || gh > IMPAI_GRID_MAX) return 0;
-    d->explored_once = 1;
-    if (!l) return 0;
-    for (gz = 0; gz < gh; gz++)
-        for (gx = 0; gx < gw; gx++) {
-            int cx = gx * per + per / 2, cz = gz * per + per / 2, px, pz, ox, oz;
-            IMPAI_RECT r;
-            int64_t dx, dz;
-            uint64_t dd;
-            if (cx >= d->m.w) cx = d->m.w - 1;
-            if (cz >= d->m.h) cz = d->m.h - 1;
-            dx = (int64_t)cx - in->st->ax;
-            dz = (int64_t)cz - in->st->az;
-            dd = (uint64_t)(dx * dx + dz * dz);
-            if (bx >= 0 && dd >= best) continue;
-            r.x0 = r.x1 = (int16_t)cx;
-            r.z0 = r.z1 = (int16_t)cz;
-            if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r)) continue;
-            px = cx * 16 + 8;
-            pz = cz * 16 + 8;
-            if (!patch_held(d, px, pz)) continue;
-            if (l > 0 && impai_reach_at(in->reach, cls, cx >> 1, cz >> 1) != l) {
-                if (!impai_reach_near(in->reach, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) continue;
-                px = ox * 32 + 16;
-                pz = oz * 32 + 16;
-            }
-            best = dd; bx = cx; bz = cz; tx = px; tz = pz;
-        }
-    if (bx < 0) return 0;
-    if (route_threatened(d, b, tx, tz)) {
-        impai_fail_add(d, bx, bz);
-        return 0;
-    }
-    pos[0] = (int32_t)((uint32_t)tx << 16);
-    pos[1] = 0;
-    pos[2] = (int32_t)((uint32_t)tz << 16);
-    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
-    if (!order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_EXPLORE, bx, bz)) return 0;
-    in->st->explorer = b->slot;
-    d->explorer_live = 1;
-    return 1;
 }
 
 /* ---- assisting ---- */

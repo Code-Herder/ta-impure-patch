@@ -501,7 +501,7 @@ class RealTree(unittest.TestCase):
         self.assertIn("ATTACK", mil["sq[0].task"].names.values())
         self.assertIn("sea_refused", {f.name for f in lay.fields("brain")})
         kind = next(f for f in lay.fields("job") if f.name == "kind")
-        self.assertEqual((kind.names[0], kind.show(bytes([4]))), ("NONE", "SQUAD"))
+        self.assertEqual((kind.names[0], kind.show(bytes([3]))), ("NONE", "SQUAD"))
         self.assertEqual(lay.fields("known")[0].name, "seat[0].type")
         # every name ENUM_OF and BITS_OF give is one the header has
         enumerators = {n for g in lay.lay["enums"] for n in g}

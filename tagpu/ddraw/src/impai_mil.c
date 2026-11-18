@@ -4822,7 +4822,7 @@ static uint32_t blast_keep(const IMPAI_TINFO* ti, unsigned type, int32_t sp_own,
    last IMPAI_BLAST_SEEN_T ticks, to within that commander's keep (blast_keep, the flight's own). THE WALK, not the site:
    a task the commander works at works within its builddistance (WQ_DEF.reach) of the point, so a point within that
    of it walks it nowhere and is never refused, and otherwise it walks straight towards the point until it is that
-   far from it, where the walk ends; a move (`to_point`: an explore walk, a walk to a feature believed there)
+   far from it, where the walk ends; a move (`to_point`: a walk to a feature believed there)
    walks to the point itself, so its end is the point. The end is what is tested. Moving away or across is never
    refused, and a move with no job -- the turn back, THE YARD's move off a yard -- is not tested (impai_build.c,
    order_mode): it leaves a threat or a factory's way. So no economy task

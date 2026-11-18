@@ -192,7 +192,6 @@ typedef struct IMPAI_DEC {
     int           want_sensor;
     int32_t       sensor_x, sensor_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
-    int           explorer_live;
     float         pe_extra;                     /* the energy the seat's frames and build heads will add,
                                                    each building once (THE HEADS' COUNTS)                 */
     int           has_bbox;
@@ -264,7 +263,7 @@ typedef struct IMPAI_DEC {
     int           com_held;                     /* the commander is the military's (THE COMMANDER'S WINDOW)    */
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
-    int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
+    int           sites, snaps, roots, queued, assigned, stopped, reclaim_scans;
     int           roots_max, root_cap;
     int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
@@ -468,7 +467,6 @@ int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` covering the sensor want's point (d->sensor_x, d->sensor_z; impai_econ.c, THE SENSORS): 1 ordered, 0 not,
    -1 a site this builder never takes (impai_build.c) */
 int  impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
-int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
