@@ -175,9 +175,17 @@ static __inline int hud_draws_rewind(const HUDSTATE* st)
                 is; never in a group (tagpu_huddraw.c);
      HOP_GRID   the tech tree's ground: a square of `shade` units at every `size` units from r's
                 top left, across r, each at whole device pixels as a canvas's
-                fillRect(Math.round(k size), Math.round(j size), d, d) puts it. One instance. */
+                fillRect(Math.round(k size), Math.round(j size), d, d) puts it. One instance;
+     HOP_CELLS  the wiki stage's map cells (tagpu_wikistage.c cells): `size` x `shade` cells of
+                HUD_TEX_CELLS from cell (part % HUD_CELLS, part / HUD_CELLS), spread over r, which
+                is unsnapped. Cell k covers the device pixels from round(r.x + k pitch) to the next
+                cell's, the last one pixel past r's right and bottom edges. `centre` is the layer:
+                0 the ground's shades, 1 the same with the grid -- one pixel black at 12 % on each
+                cell's first column and row and on the pixel past the last -- and 2 the fog. One
+                instance. */
 enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI, HOP_PIC,
-       HOP_CURVE, HOP_GRID };
+       HOP_CURVE, HOP_GRID, HOP_CELLS };
+#define HUD_CELLS   128     /* HOP_CELLS: the cells image's side, in cells (tagpu_huddraw.h)      */
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as

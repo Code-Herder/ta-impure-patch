@@ -349,6 +349,31 @@ const unsigned char* tagpu_wikistate_side(unsigned* gen)
     return s_colRgba;
 }
 
+/* THE MAP'S CELLS (HUD_TEX_CELLS), the image the stage's HOP_CELLS ops draw: made from the view the
+   stage was built from, into the one of two buffers that does not hold the image drawn last, and
+   compared with that one byte for byte, so a new generation, which tagpu_vk_hud.c sends whole,
+   moves exactly when a texel differs -- a fog that clears, another map. 64 KB each; this thread's
+   alone. */
+static unsigned char  s_cells[2][HUD_CELLS * HUD_CELLS * 4];
+static int            s_cellsCur;
+static unsigned       s_cellsGen;       /* bumped at every new image; 0: none yet              */
+
+static void cells_bind(const WIKISTAGEVIEW* v)
+{
+    unsigned char* t = s_cells[s_cellsCur ^ 1];
+    tagpu_wikistage_cells(v, t);
+    if (!s_cellsGen || memcmp(t, s_cells[s_cellsCur], sizeof s_cells[0])) {
+        s_cellsCur ^= 1;
+        if (++s_cellsGen == 0) s_cellsGen = 1;
+    }
+}
+
+const unsigned char* tagpu_wikistate_cells(unsigned* gen)
+{
+    *gen = s_cellsGen;
+    return s_cells[s_cellsCur];
+}
+
 /* ---- the tech tree entry (tagpu_wikitech.h; wiki.js drawTech) ------------------------------------
    THE TREE THIS THREAD DRAWS IS ITS OWN, made by tagpu_wikitech_tree from the published block --
    immutable and never freed, read through tagpu_wikitech_get, whose interlocked read pairs with the
@@ -1090,9 +1115,11 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
             frame_hud(sv, side, u, w, &sf);
         }
         if (s_tentry) tech_stage(w, u);
-        else
+        else {
             tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, s_frameOn ? &sf : NULL,
                                   &s_sart, &s_stage);
+            cells_bind(sv);
+        }
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
         if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {

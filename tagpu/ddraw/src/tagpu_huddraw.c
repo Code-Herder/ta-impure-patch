@@ -80,7 +80,12 @@
             LINE does, and along the arc the pixel's share of the stroke between its butt ends, and
             of that the share a dash pattern of vPx.z on and vPx.z off from the start covers;
      GRID   the colour on each whole-pixel square vUV.y wide at round(k vUV.x) from vPx.xy in x
-            and in y: the pixel's square found by arithmetic, so the grid is one instance.
+            and in y: the pixel's square found by arithmetic, so the grid is one instance;
+     CELLS  HOP_CELLS: the pixel's cell found by arithmetic -- the last whose first pixel,
+            round(vPx.x + k pitch), is at or before it, held to the cells -- read texel for texel
+            from the cells image: its shade, opaque, darkened 12 % on a grid pixel when vPrm.y
+            is 1; or with vPrm.y 2 its fog, grey at 50 % or black at 90 %, or nothing. Times the
+            colour's alpha, which hiding the image's instances zeroes.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
    whole row. Its matrix is the Filter Effects spec's saturate. */
@@ -246,6 +251,22 @@ static const char* FS =
     "    vec2 st = floor(floor((q + 0.5) / vUV.x) * vUV.x + 0.5);\n"
     "    vec2 in2 = step(st, q) * step(q, st + vUV.y - 0.5);\n"
     "    c = vCol * (in2.x * in2.y);\n"
+    "  } else if (m == 13) {\n"
+    "    vec2 e = floor(vUV + 0.5), n = floor(e / 256.0), o = e - 256.0 * n;\n"
+    "    vec2 k = clamp(ceil((p - vPx.xy) / ((vPx.zw - vPx.xy) / n)) - 1.0, vec2(0.0), n);\n"
+    "    vec4 t = texelFetch(uTex, ivec2(o + min(k, n - 1.0)), 0);\n"
+    "    int L = int(vPrm.y + 0.5);\n"
+    "    if (L == 2) {\n"
+    "      int f = int(t.a * 255.0 + 0.5);\n"
+    "      if (f == 0) discard;\n"
+    /* stage.js fogColour: rgba(128,128,128,.5), rgba(0,0,0,.9), premultiplied */
+    "      c = f == 2 ? vec4(0.0, 0.0, 0.0, 0.9) : vec4(vec3(0.5 * 128.0 / 255.0), 0.5);\n"
+    "    } else {\n"
+    "      c = vec4(t.rgb, 1.0);\n"
+    "      vec2 st = floor(vPx.xy + k * ((vPx.zw - vPx.xy) / n) + 0.5);\n"
+    "      if (L == 1 && any(equal(st, floor(p)))) c.rgb *= 0.88;\n"
+    "    }\n"
+    "    c *= vCol.a;\n"
     "  } else if (m == 9) {\n"
     "    vec2 a = vPx.xy, b = vPx.zw, q = vPx.xy + vUV;\n"
     "    float s = sign((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x));\n"
@@ -844,6 +865,27 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         in->uv[0] = in->uv[2] = pitch;
         in->uv[1] = in->uv[3] = side;
         colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
+    case HOP_CELLS: {
+        /* the cells' box to the pixel past their last, the cells themselves by arithmetic in the
+           CELLS mode: px holds the unsnapped box, uv the first cell and the count (DATA: bounded to
+           the image) */
+        const int c0 = op->part % HUD_CELLS, r0 = op->part / HUD_CELLS, n = (int)op->size, m = (int)op->shade;
+        const float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+        if (op->part < 0 || n < 1 || m < 1 || c0 + n > HUD_CELLS || r0 + m > HUD_CELLS || !(x1 > x0) || !(y1 > y0) ||
+            op->centre > 2)
+            break;
+        if (!(in = emit(c, HUD_TEX_CELLS, HUDM_CELLS, floorf(x0 + 0.5f), floorf(y0 + 0.5f), floorf(x1 + 0.5f) + 1,
+                        floorf(y1 + 0.5f) + 1, op)))
+            break;
+        in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy;
+        in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+        /* the first cell and the count across in u, down in v, as c + 256 n: the fragment stage
+           has u and v alone */
+        in->uv[0] = in->uv[2] = (float)(c0 + 256 * n);
+        in->uv[1] = in->uv[3] = (float)(r0 + 256 * m);
+        in->prm[1] = (float)op->centre;
         break;
     }
     case HOP_TEXT:

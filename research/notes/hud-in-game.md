@@ -572,7 +572,11 @@ the recorder writes nothing for it.
   solid's corner radius (`HOP_RADIUS`, a canvas `roundRect`, the drop shadow's too), `HOP_CURVE`
   (the tree's S-curve, dashed per pixel; its instance is a strip of `2 (HUD_CURVE_SEG + 1)`
   vertices the vertex stage lays along the cubic, so its batch carries that count, `HUDBATCH.nv`)
-  and `HOP_GRID` (the tree's dot grid) -- [the in-game wiki](ingame-wiki.html), *The look*.
+  and `HOP_GRID` (the tree's dot grid) -- [the in-game wiki](ingame-wiki.html), *The look*. The
+  wiki stage's map adds `HOP_CELLS`: its cells' ground, grid or fog, one instance, each pixel's
+  cell found by arithmetic and read texel for texel from `HUD_TEX_CELLS` (128 × 128 RGBA8, the
+  shade in rgb and the fog in alpha), which the pass sends whole when its generation moves and
+  hides the instances of until it holds it.
 - **The chart's lines are data**, one RGBA32F image a chart slot (`tagpu_huddraw_chart(slot, …)`,
   `HUD_CHART_SLOTS` 2: slot 0 this HUD's, `HUD_TEX_CHART`, slot 1 the in-game wiki's stage HUD's,
   `HUD_TEX_CHART_WIKI`; a list's `chart_slot` picks the image its `HOP_CHART` reads, so two stats

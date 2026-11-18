@@ -154,6 +154,16 @@ function colour(s) {
   throw new Error(`a colour the check does not read: ${s}`);
 }
 
+/* FNV-1a over `n` cells' red, green, blue and fog bytes, cell(i) giving [rgb, fog]: wikistagetest.c's "cells" */
+function cellsHash(n, cell) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < n; i++) {
+    const [rgb, f] = cell(i);
+    for (const b of [(rgb >>> 16) & 255, (rgb >>> 8) & 255, rgb & 255, f]) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
 /* ---- the recording context ---- */
 function recorder(em, asked, W, H) {
   const out = [], tags = [], saved = [];
@@ -233,6 +243,13 @@ function recorder(em, asked, W, H) {
       out.push({ k: 'text', x, y, align: { left: 0, start: 0, center: 1, right: 2, end: 2 }[g.textAlign], size: f.size,
         face: `${f.family} ${f.weight}`, c: colour(g.fillStyle), t: String(t) });
     },
+    // stage.js cells: the map's cells, one layer, and a hash of every cell's shade and fog (cellsHash)
+    cells(layer, x0, y0, x1, y1, c0, r0, c1, r1, n, texel) {
+      out.push({ k: 'cells', layer, x0, y0, x1, y1, c0, r0, n: c1 - c0, m: r1 - r0, t: cellsHash(n, i => {
+        const [sh, f] = texel(i);
+        return [colour(sh) >>> 8, f === 2 || f === 'black' ? 2 : f ? 1 : 0];
+      }) });
+    },
     drawImage(img, ...a) {
       if (a.length === 4) { const [x, y, w, h] = a; out.push({ k: 'icon', name: img.name, x, y, w, h }); return; }
       // a cell of the cursors' sheet, or the sidebar's composed column, drawn whole, unsmoothed
@@ -278,7 +295,7 @@ function recorder(em, asked, W, H) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8, TRI: 9 }, RING = 4, SPRITE = 128;
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8, TRI: 9, CELLS: 13 }, RING = 4, SPRITE = 128;
 function shapes(fr, sz, face, part, icons, cell, kit) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
   // each shape's group and the group's opacity, as the recording gives them
@@ -305,6 +322,10 @@ function shapes(fr, sz, face, part, icons, cell, kit) {
     else if (kind === HOP.SIDE && !flags)
       // HOP_SIDE: the composed column's top-left size x shade texels into the op's box
       out.push({ k: 'side', sx: 0, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.CELLS && !flags)
+      // HOP_CELLS: `size` x `shade` cells from cell part % 128, part / 128 over the op's box; the image's hash the frame's
+      out.push({ k: 'cells', layer: centre, x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, c0: pi % 128,
+        r0: Math.floor(pi / 128), n: size, m: shade, t: fr.cells });
     else if (kind === HOP.BAR && !flags)
       // HOP_BAR: the bars' picture's rows 32 part.., its top-left size x 32 texels into the op's box
       out.push({ k: 'bar', sx: 0, sy: 32 * pi, sw: size, sh: 32, x: X(x), y: Y(y), w: w * u, h: h * u });

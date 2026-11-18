@@ -14,23 +14,26 @@ typedef struct {
     float ndc[4];       /* x0, y0, x1, y1 in clip space (y down: no viewport flip); a CURVE's
                            2 / the attachment's width and height in x0, y0                    */
     float px[4];        /* the same, in device pixels: the dot's circle, the shade's box, a
-                           rounded box, the grid's box; a line's or a curve's two ends; a
+                           rounded box, the grid's box, the cells' unsnapped box; a line's or a
+                           curve's two ends; a
                            triangle's first two points; a drop shadow's box; a ring's circle,
                            unsnapped; a chart band's segments j0, j1 and its column           */
     float uv[4];        /* u0, v0, u1, v1; a drop shadow's offset down in u0 and u1 and its
                            corner radius in v0 and v1; a curve's dash in u0 and u1; the grid's
-                           pitch in u0 and u1 and its square's side in v0 and v1; a triangle's
+                           pitch in u0 and u1 and its square's side in v0 and v1; the cells'
+                           first cell plus 256 times their count, across in u0 and u1, down in
+                           v0 and v1; a triangle's
                            third point less its first, in (u0, v0) and (u1, v1) -- an offset,
                            so a group's move of px moves the whole triangle                   */
     float rgba[4];      /* premultiplied; a part's opacity in all four                        */
     float clip[4];      /* x0, y0, x1, y1 in device pixels; x1 < x0: none                     */
     float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma, a line's or a
                            curve's half width, a ring's depth or a rounded box's radius in
-                           pixels, dim brightness, saturate                                   */
+                           pixels, the cells' layer; dim brightness, saturate                 */
 } HUDINST;
 
 enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING, HUDM_TRI,
-       HUDM_RRECT, HUDM_CURVE, HUDM_GRID };
+       HUDM_RRECT, HUDM_CURVE, HUDM_GRID, HUDM_CELLS };
 
 /* A HOP_CURVE's pieces: the vertex stage builds its stroke as a strip of HUD_CURVE_SEG + 1 pairs of
    vertices, one pair at each end of a piece (tagpu_huddraw.c) */
@@ -62,6 +65,10 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_TECH_SMOOTH (-10)
 #define HUD_TECH_W 2048
 #define HUD_TECH_H 2048
+/* the wiki stage's map cells (tagpu_wikistate.h tagpu_wikistate_cells), HUD_CELLS x HUD_CELLS RGBA8:
+   a cell's ground shade in rgb and its fog in alpha (0 clear, 1 seen before, 2 unexplored), read
+   texel for texel */
+#define HUD_TEX_CELLS (-11)
 /* `nv` the vertices each of its instances is drawn with: 4, a quad, for every mode but CURVE's,
    2 (HUD_CURVE_SEG + 1); a batch holds instances of one count */
 typedef struct { int tex, first, count, nv; } HUDBATCH;

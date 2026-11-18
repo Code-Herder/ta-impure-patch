@@ -57,6 +57,17 @@ as a float, and a double fit made the first drag rebuild the tree once. treechec
 images uploaded when they change, instead of an op a cell. *Exit*: stagecheck, the whitebox
 entries' lanes, the op counts before and after on the largest map.
 
+*Built.* One image, `HUD_TEX_CELLS` (128 × 128 RGBA8: the ground's shade in rgb, the fog in
+alpha), made on the render thread from the view the stage was built from and sent whole when a
+byte differs, as the sidebar column is; `HOP_CELLS` draws it per pixel, the ground with or
+without its grid, then after the features the fog. The rule changed in the mockup too: cell k
+covers the pixels from `round(X(k))` to the next cell's, the last one pixel past the map, where
+each cell used to be a rect `ceil(cp) + 1` wide overlapping its neighbour -- which laid the fog
+twice on every seam, and the grid's ends were antialiased. stagecheck pairs each layer and the
+image's hash with the mockup's. On the largest map the demos show (4 608 cells) the ground, grid
+and fog took up to some 14 000 ops (4 608 cells, about 4 750 grid pieces, up to 4 608 fog cells);
+they take 2. The whitebox minimap is still an op a cell and is what now bounds the map's size.
+
 **D4: no mapped instance buffer.** Every other list -- the replay HUD, the page, the stage HUD,
 the whitebox's units -- is built into the frame's staging and copied into a device-local buffer of
 the slot before the pass draws; the persistent mapping is removed. A frame takes from the staging

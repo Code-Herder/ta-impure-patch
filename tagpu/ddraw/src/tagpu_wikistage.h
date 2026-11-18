@@ -255,10 +255,10 @@ uint32_t tagpu_wikistage_pose(WIKISTAGEVIEW* out, const WIKISIM* s);
 
 /* ---- the picture ---------------------------------------------------------------------------- */
 
-/* The wiki's own op budget, apart from the replay HUD's HUD_MAXOP: a 40 x 30 map's cells, grid
-   and fog come to about 3750, the whitebox minimap's cells, fog and dots to at most
-   2 x 1200 + 128 more and the sidebar's buttons to about 200; a 128 x 128 map's cells and fog
-   alone would take every op. */
+/* The wiki's own op budget, apart from the replay HUD's HUD_MAXOP: the map's cells, grid and fog
+   are two ops whatever the map (HOP_CELLS); the whitebox minimap's cells, fog and dots are one op
+   each, at most 2 x 1200 + 128 for a 40 x 30 map, and the sidebar's buttons about 200. A map past
+   about 80 x 80 cells, fogged everywhere, has a whitebox minimap that takes every op. */
 #define WIKI_MAXOP   16384
 #define WIKI_MAXRUN  1024
 #define WIKI_TEXTMAX 16384
@@ -459,5 +459,11 @@ void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int
    out->n. */
 int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
                           const WIKISTAGEFRAME* frame, const WIKISTAGEART* art, WIKISTAGEOPS* out);
+
+/* THE MAP'S CELLS the build's HOP_CELLS ops draw (HUD_TEX_CELLS), for view `v` into `rgba`, HUD_CELLS
+   x HUD_CELLS RGBA8 texels, row-major: cell (x, z) at texel (x, z), its ground's shade -- plain cells
+   light, metal darker by how far it stands above surfaceMetal (stage.js grounds) -- in rgb and its
+   fog, 0, 1 or 2, in alpha; zero outside the map. */
+void tagpu_wikistage_cells(const WIKISTAGEVIEW* v, unsigned char* rgba);
 
 #endif

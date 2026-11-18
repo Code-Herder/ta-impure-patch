@@ -117,6 +117,12 @@ const unsigned char* tagpu_wikistate_sprites(unsigned* gen);
    next `present`: RENDER THREAD ONLY, as the composition is. */
 const unsigned char* tagpu_wikistate_side(unsigned* gen);
 
+/* THE STAGE'S MAP CELLS the stage's HOP_CELLS ops draw from (tagpu_wikistage_cells): HUD_CELLS x
+   HUD_CELLS texels, R8G8B8A8, a cell's shade in rgb and its fog in alpha, and in `*gen` its
+   generation, which moves whenever its texels do; 0 while none has been made (the stage then has
+   no HOP_CELLS op). The texels hold until the next `present`: RENDER THREAD ONLY. */
+const unsigned char* tagpu_wikistate_cells(unsigned* gen);
+
 /* THE FRAME'S BARS the stage's HOP_BAR ops draw from (tagpu_wikibar.h): HUD_BAR_W x HUD_BAR_H texels,
    R8G8B8A8, the top bar's rows then the bottom bar's, and in `*gen` its generation, which moves
    whenever its texels do; 0 while none has been composed (the stage then draws the whitebox

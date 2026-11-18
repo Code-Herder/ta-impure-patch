@@ -3598,12 +3598,15 @@ of the function it imitates; the code cites each address where it applies it.
 - **The wheel's step and a track's page are the DLL's.** The mockup leaves both to the browser: the
   game scrolls 48 units a notch (three of the tree's rows) and a press on a track off its thumb
   pages by seven eighths of the panel, as Chrome does.
-- **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
-  as the canvas calls them. By `tagpu_wikistage.h`'s count, a 40 × 30 map's cells, grid and fog
-  come to about 3750 ops, the whitebox minimap's to at most 2 × 1200 + 128 more and the sidebar's
-  buttons to about 200, against `WIKI_MAXOP` 16384; a 40 × 48 map has 1.6 times the cells, about
-  6000 and 3970 by the same counts [INFERRED: scaled, not measured]. A square map past about 70 cells a side, fogged everywhere, drops ops and
-  edges the stage in red.
+- **The stage's budget holds the data's map, not the largest.** The map's cells, grid and fog are
+  two ops whatever the map: `HOP_CELLS`, drawn per pixel from an image of the cells' shades and
+  fog (`tagpu_wikistage_cells`, sent when a texel changes), cell k from the device pixel
+  `round(X(k))` to the next cell's, the last one pixel past the map, in the mockup as in the game
+  ([the plan](hud-on-device-plan.html), D3). The whitebox minimap is still one op a cell, its fog
+  and its dots: at most 2 × 1200 + 128 for a 40 × 30 map, and the sidebar's buttons about 200,
+  against `WIKI_MAXOP` 16384. stagecheck's busiest frame over a third of its passes is 8 439 ops
+  (MEASURED 2026-11-17). A square map past about 80 cells a side, fogged everywhere, has a
+  whitebox minimap that drops ops and edges the stage in red.
 - **The controls' glyphs and the tree's marks are kit icons, pending the owner.** No HUD face has
   play, pause, replay, the folds' triangles or the entry's dot, so both the mockup and the game
   draw them as icons rasterised from `glyphs.js`, in the kit icons' pale fill and black edge; the
