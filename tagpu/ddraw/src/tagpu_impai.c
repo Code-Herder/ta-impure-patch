@@ -304,9 +304,10 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      engine/recorder.md). So with +0xF0 past GameTime nothing of the pass runs after the line in this step, and
      a peek held at the end of any step from `t` to `pass` - 1 reads what the line read; the line names both.
    - THE SITE CHECK, under tagpu_impai_check.on: four sites of the level's smallest plain building type a turn,
-     two near the seat's first unit and two anywhere, each tested through the thunk and held to the seat's own
-     mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
-     is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
+     two near the seat's first unit and two anywhere, each tested through the thunk and held to the test given
+     no player (tagpu_worldq_site_free), which makes no mapped test and refuses on every unit: a site that one
+     accepts and the thunk refuses is a mismatch, since the thunk's test differs from it only by refusing on
+     fewer units. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
      the two answers differ. The cells come from GameTime and the unit's position alone. */
 static const IMPAI_PERSONA* seat_persona(int seat);
 
@@ -318,7 +319,7 @@ static void impai_seat_view(int seat)
     WQ_UNIT u;
     WQ_DEF d;
     int t, k, first, last, slot, ux = 0, uz = 0;
-    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
+    if (!tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
     t = q.ops->gametime(&q);
     if (!s_obs.econ_said[seat] && t >= 590 &&
         impai_brain_due((unsigned)t, (unsigned)seat, seat_persona(seat)->look_eco) &&
@@ -351,15 +352,15 @@ static void impai_seat_view(int seat)
         const unsigned h = (unsigned)t * 2654435761u + (unsigned)k * 40503u;
         const int cx = k < 2 ? ux + (int)(h % 61u) - 30 : (int)(h % (unsigned)c.w);
         const int cz = k < 2 ? uz + (int)((h >> 8) % 61u) - 30 : (int)((h >> 12) % (unsigned)c.h);
-        const int bit = tagpu_worldq_site_mapped(&q, (int)s_obs.site_type, cx, cz);
+        const int free_ = tagpu_worldq_site_free(&q, (int)s_obs.site_type, cx, cz);
         int ok, stock;
-        if (bit < 0) continue;
+        if (free_ < 0) continue;
         ok = q.ops->site_ok(&q, (int)s_obs.site_type, cx, cz, 0, NULL);
         stock = eq.ops->site_ok(&eq, (int)s_obs.site_type, cx, cz, 0, NULL);
         s_obs.site_eval++;
         s_obs.site_ok += (unsigned)ok;
         s_obs.site_stock_diff += (unsigned)(ok != stock);
-        if (ok && !bit) {
+        if (free_ && !ok) {
             s_obs.site_miss++;
             if (!s_obs.site_said) {
                 s_obs.site_said = 1;
@@ -418,7 +419,7 @@ static int impai_observe(int seat, SNAP_SCRATCH* scr, IMPAI_WORK* w)
     WQ_ENGINE c;
     WORLDQ q;
     memset(w, 0, sizeof *w);
-    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
+    if (!tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
         impai_know_tick(&q, &s_seatst[seat], &arrays, &s_budget, scr, w) < 0) {
         s_obs.refused[seat]++;
         return -1;
@@ -1802,7 +1803,7 @@ static void impai_decide(int seat)
     IMPAI_EXEC_VIEW xv;
     int rc = -1, first = 0, last = -1, k;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
-        tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
+        tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_brain[seat];
@@ -1956,7 +1957,7 @@ static void impai_pulse(int seat, const char* ta, unsigned now)
     WQ_ENGINE c;
     WORLDQ q;
     int k, n = 0;
-    if (s_tinfo_n && tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) value_walk(seat, &q);
+    if (s_tinfo_n && tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) value_walk(seat, &q);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (s_mil[seat].sq[k].task != IMPAI_SQ_FREE) sq[n++] = impai_mil_letter(s_mil[seat].sq[k].task);
     if (!n) sq[n++] = '-';
@@ -2009,7 +2010,7 @@ static void impai_react_apply(int seat, unsigned now)
     WQ_ENGINE c;
     WORLDQ q;
     if (!x->npend) return;
-    impai_exec_apply(x, tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
+    impai_exec_apply(x, tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
                      seat_persona(seat), now, &s_react.n[seat]);
 }
 
@@ -2425,7 +2426,7 @@ static void impai_mil_turn(int seat)
     uint8_t dry;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
-        tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
+        tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.reach = reach_view(&r) ? &r : NULL;
@@ -2695,7 +2696,8 @@ static void seat_fresh(const char* ta, unsigned seat)
     memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
     impai_brain_reset(&s_brain[seat], s_job, 0);
     for (k = 0; k < TAGPU_LIM_TYPES; k++) memset(&s_pref[k].seat[seat], 0, sizeof s_pref[k].seat[seat]);
-    if (tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) && q.ops->seat_units(&q, &first, &last)) {
+    if (tagpu_worldq_open_layout(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) &&
+        q.ops->seat_units(&q, &first, &last)) {
         if (first < 0) first = 0;
         if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;
         for (slot = first; slot <= last; slot++) {
@@ -3125,9 +3127,10 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
 }
 
 /* THE SEAT'S OWN SITE TEST. 0x47D2E0(def, cell, ignore, player) refuses a site whose centre the VIEWED player
-   has not mapped, `mov cl,[ebx+0x2A43]` at 0x47D3D1 loading the bit index whatever record it is passed
-   (DISASSEMBLED 0x47D3C4..0x47D3FA; tagpu_worldq.c, wq_site_ok). ImpAI calls it only through a thunk, and the
-   instruction at 0x47D3D1 tells that caller apart by its return address:
+   has not mapped, `mov cl,[ebx+0x2A43]` at 0x47D3D1 loading the bit index whatever record it is passed and the
+   `je` at 0x47D3FA refusing (DISASSEMBLED 0x47D3C4..0x47D3FA; tagpu_worldq.c, wq_site_ok). An ImpAI seat knows
+   the map's layout in every game, so its test makes no such refusal. ImpAI calls the function only through a
+   thunk, and the instruction at 0x47D3D1 tells that caller apart by its return address:
 
      thunk:  push dword [esp+0x10]  x4     player, ignore, cell, def, re-pushed in order
              call 0x47D2E0
@@ -3137,9 +3140,23 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
      stub:   cmp dword [esp+0x3C], ret_va
              jne stock
              mov cl,[edi+0x146]            the passed record's own mapped bit
-             jmp 0x47D3D7
+             shl esi,cl                    0x47D3D7
+             mov ecx,[ebx+0x14273]         0x47D3D9
+             mov [esp+0x4C],esi            0x47D3DF
+             mov ebx,esi                   what 0x47D3F4 loads
+             mov esi,[edi+0x80]            0x47D3E3
+             jmp 0x47D400                  past the word's read, the test and the `je`
      stock:  mov cl,[ebx+0x2A43]           the stock instruction
              jmp 0x47D3D7
+
+   THE THUNK'S ARM is the stock block 0x47D3D7..0x47D3F9 less the explored word's read and its test. What
+   0x47D400 on reads of that block (DISASSEMBLED 0x47D400..0x47D479): ESI the record's grid width (0x47D414,
+   0x47D45A), ECX the explored map and [esp+0x4C] the bit's mask (0x47D461, 0x47D465, taken only with LosType bit
+   1 clear), EDX and EAX the block's column and row, which the arm leaves alone, and EDI; EBP and BL are loaded
+   again at 0x47D400 and 0x47D406, and the `cmp` at 0x47D40F writes the flags before the `jne` at 0x47D412. So
+   the flag [esp+0x10] a unit on the footprint refuses on is the passed record's own sight in both modes: its
+   line-of-sight counters under LosType bit 1, its own bit of the explored map otherwise (in a level that starts
+   Mapped that bit is set in every word, so there the arm answers as the test's own read of it did).
 
    THE INVARIANT is an identity, not a state. At 0x47D3D1 [esp+0x3C] is the function's return address: it
    opens with `sub esp,0x2C` and four pushes (0x47D2E0..0x47D306), and its one call before the site, 0x485010
@@ -3150,15 +3167,15 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
    record the caller passed from 0x47D358 on, the seat's own (ctx->rec), whose +0x146 is its mapped bit
    (the activation 0x464290; the stamp 0x481930 writes 1 << rec+0x146); the LOS-shear fix's row at
    0x47D3B8..0x47D3C3 (tagpu_patches.c, fix_los_local) ends before 0x47D3C4 and leaves EDI alone, so the two do
-   not overlap. ECX is the loaded register in both arms; the flags the `cmp` leaves are written again by the
-   `add` at 0x47D3EE before the first read, the `je` at 0x47D3FA (the `shl` at 0x47D3D7 writes none when CL
-   is 0). The occupancy flag that follows reads the passed record's sight counters under True line of sight
-   (0x47D40C..0x47D43A), which is what a human in the seat gets. */
+   not overlap. In the stock arm ECX is the loaded register and the flags the `cmp` leaves are written again by
+   the `add` at 0x47D3EE before the first read, the `je` at 0x47D3FA (the `shl` at 0x47D3D7 writes none when CL
+   is 0). */
 #define VA_SITE_TEST  0x0047D2E0u
 #define VA_SITE_BIT   0x0047D3D1u   /* `mov cl,[ebx+0x2A43]`, 8A 8B 43 2A 00 00 */
 #define VA_SITE_AFTER 0x0047D3D7u
+#define VA_SITE_FLAG  0x0047D400u   /* past the `je` at 0x47D3FA: the sight flag's block */
 static const uint8_t SITE_BIT_WAS[6] = { 0x8A, 0x8B, 0x43, 0x2A, 0x00, 0x00 };
-#define SEAT_SITE_ROOM 64u          /* the thunk and the stub: 24 and 32 bytes */
+#define SEAT_SITE_ROOM 96u          /* the thunk and the stub: 24 and 52 bytes */
 _Static_assert(18 * STUB_ROOM + SEAT_SITE_ROOM <= 0x1000, "the thunk and its stub fit after the handicap stubs");
 
 /* the thunk at `p`, the stub after it; returns the stub */
@@ -3172,9 +3189,14 @@ static unsigned char* seat_site_emit(unsigned char* p)
     *p++ = 0xC2; *p++ = 0x10; *p++ = 0x00;
     stub = p;
     *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x3C; p = put32(p, (uint32_t)(uintptr_t)ret_va);
-    *p++ = 0x75; *p++ = 0x0B;
+    *p++ = 0x75; *p++ = 0x1F;
     *p++ = 0x8A; *p++ = 0x8F; p = put32(p, 0x146);
-    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER); p += 4;
+    *p++ = 0xD3; *p++ = 0xE6;
+    *p++ = 0x8B; *p++ = 0x8B; p = put32(p, 0x14273);
+    *p++ = 0x89; *p++ = 0x74; *p++ = 0x24; *p++ = 0x4C;
+    *p++ = 0x8B; *p++ = 0xDE;
+    *p++ = 0x8B; *p++ = 0xB7; p = put32(p, 0x80);
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_FLAG); p += 4;
     memcpy(p, SITE_BIT_WAS, sizeof SITE_BIT_WAS); p += sizeof SITE_BIT_WAS;
     *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER);
     return stub;

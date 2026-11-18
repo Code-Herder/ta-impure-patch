@@ -28,6 +28,7 @@ typedef struct WQ_ENGINE {
     WqSiteFn  site;               /* 0x47D2E0, the build cursor's call target at 0x4198C6, or the
                                      seat's own thunk (WQ_SITE_SEAT)                               */
     WqMenuFn  menu;               /* the build menu (tagpu_resource.c), or NULL for none          */
+    int       layout;             /* the view knows the map's layout (tagpu_worldq_open_layout)    */
     uint8_t   act[WQ_ACTS];       /* the action bytes, looked up on first use (`got`)             */
     uint8_t   got[WQ_ACTS];
 } WQ_ENGINE;
@@ -37,8 +38,9 @@ typedef struct WQ_ENGINE {
    fix's build_site_test when tagpu_patches.c armed it, or a foreign patch's -- so a placement's site is
    judged exactly as a single click there would be.
    WQ_SITE_SEAT: 0x47D2E0 through ImpAI's thunk, whose return address the patch at 0x47D3D1 recognises, so the
-   site's centre is tested against the SEAT'S OWN mapped bit instead of the viewed player's (tagpu_impai.c, THE
-   SEAT'S OWN SITE TEST); the open refuses it while the thunk is not in. */
+   site is not refused for a centre the viewed player has not mapped, and the flag a unit on the footprint refuses
+   on is the SEAT'S OWN sight (tagpu_impai.c, THE SEAT'S OWN SITE TEST); the open refuses it while the thunk is
+   not in. */
 enum { WQ_SITE_ENGINE, WQ_SITE_CURSOR, WQ_SITE_SEAT };
 
 /* DLL attach, after tagpu_patches.c has written its sites and before tagpu_place_init: decodes the call at
@@ -50,10 +52,12 @@ WqSiteFn tagpu_worldq_cursor_site(void);
    target from then on. Nothing else writes it. */
 void     tagpu_worldq_seat_site_set(WqSiteFn thunk);
 
-/* The bit 0x47D2E0 tests at 0x47D3D1..0x47D3FA for a site of `type` at first cell (cx, cz), read in C with the
-   view's seat's own bit: 1 mapped, 0 not, -1 where the engine refuses before the read (the footprint off the
-   map, the block off the record's grid). ImpAI's self-check holds the thunk's answers to it. */
-int      tagpu_worldq_site_mapped(const WORLDQ* q, int type, int cx, int cz);
+/* The site test 0x47D2E0 given no player for a site of `type` at first cell (cx, cz): it then makes no mapped
+   test and every unit on the footprint refuses (0x47D366; the flag [esp+0x10] stays 1 from 0x47D35C). 1 or 0, or
+   -1 where the test given the seat's record refuses before its mapped read (the footprint off the map, the
+   centre's block off the record's grid, 0x47D3B0..0x47D3BE). ImpAI's self-check holds the thunk's answers to it:
+   the thunk's call differs from this one only in that flag, so it accepts wherever this accepts. */
+int      tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz);
 
 /* the resource building a unit definition is, WQ_KIND_*: what WQ_DEF.kind answers, for a caller that holds
    the definition already (the build menu's log) */
@@ -63,6 +67,12 @@ int      tagpu_worldq_def_kind(const void* def);
    any bound fails (in play, the map, the defs, the unit array and the seat's block; the seat below 10 and
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target or WQ_SITE_SEAT with no thunk. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
+/* tagpu_worldq_open for a seat that KNOWS THE MAP'S LAYOUT, an ImpAI seat's: `explored` answers 1 for every cell
+   of the map, so `metal` and `coverage` read the map itself, whatever the seat's bit of the explored map
+   main+0x14273 holds. In a level that starts Mapped the bit is set in every word and never cleared in play
+   (0x4816A0's fill; engine/map.md), so there the two opens answer alike. Nothing the seat SEES follows from it:
+   unit_los, the radar pass and the site test's occupancy flag read the seat's sight as in any view. */
+int tagpu_worldq_open_layout(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
 /* Opens the level's content view: ndefs, def, def_econ and map answer as a seat's view does; no unit is live
    in it (its slot count is 0), so every unit op answers nothing and site_ok, can, order and queue refuse.
    It needs the map and the defs only, so the level init opens it on the LOADER thread inside 0x4919C8,
