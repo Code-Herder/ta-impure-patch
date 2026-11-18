@@ -75,7 +75,7 @@ int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn 
    (0x4816A0's fill; engine/map.md), so there the two opens answer alike. Nothing the seat SEES follows from it:
    unit_los, the radar pass and the site test's occupancy flag read the seat's sight as in any view. */
 int tagpu_worldq_open_layout(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
-/* Opens the level's content view: ndefs, def, def_econ and map answer as a seat's view does; no unit is live
+/* Opens the level's content view: ndefs, def, def_econ, yard and map answer as a seat's view does; no unit is live
    in it (its slot count is 0), so every unit op answers nothing and site_ok, can, order and queue refuse.
    It needs the map and the defs only, so the level init opens it on the LOADER thread inside 0x4919C8,
    live or puppet (tagpu_impai.c, the type information). 0 when a bound fails. */

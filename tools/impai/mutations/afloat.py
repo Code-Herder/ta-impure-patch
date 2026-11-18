@@ -1,0 +1,21 @@
+"""PLACED ON WATER ONLY (tools/impai/mutate.py): impai_brain_test.c, check_afloat."""
+M = [
+    ("a yard of water cells says nothing of where a building stands", "impai_tinfo.c",
+     "(e.minwater > 0 || e.tidal > 0 || (e.building && yard_afloat(q, t, &d))",
+     "(e.minwater > 0 || e.tidal > 0 || (e.building && yard_afloat(q, t, &d) && 0)"),
+    ("a mobile type is flagged by its yard", "impai_tinfo.c",
+     "(e.minwater > 0 || e.tidal > 0 || (e.building && yard_afloat(q, t, &d))",
+     "(e.minwater > 0 || e.tidal > 0 || (yard_afloat(q, t, &d))"),
+    ("a land cell among the water cells is passed over", "impai_tinfo.c",
+     "        if (yard[k] & WQ_YARD_LAND) return 0;",
+     "        if ((yard[k] & WQ_YARD_LAND) && 0) return 0;"),
+    ("a yard with no water cell is afloat", "impai_tinfo.c",
+     "    return water != 0;\n}\n\nint impai_tinfo_build",
+     "    return 1;\n}\n\nint impai_tinfo_build"),
+    ("every building with a yard is afloat", "impai_tinfo.c",
+     "        if (yard[k] & WQ_YARD_LAND) return 0;\n        water |= yard[k] & WQ_YARD_WATER;",
+     "        water |= 1;"),
+    ("a water type is chosen off a wet anchor", "impai_econ.c",
+     "        if ((ti->flags & IMPAI_TF_WATER) && !wet) continue;\n        if (!best || ti->egain",
+     "        if ((ti->flags & IMPAI_TF_WATER) && !wet && 0) continue;\n        if (!best || ti->egain"),
+]

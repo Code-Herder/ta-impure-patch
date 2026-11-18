@@ -232,8 +232,21 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
     *z1 = *z0 + fz - 1;
 }
 
+/* the engine's water path (0x47D2E0, the height tail): a yard map with a water cell and no land cell */
+static int f_afloat(const FDEF* d)
+{
+    int k, water = 0;
+    if (!d->yarded) return 0;
+    for (k = 0; k < d->d.fx * d->d.fz; k++) {
+        if (d->yard[k] & WQ_YARD_LAND) return 0;
+        water |= d->yard[k] & WQ_YARD_WATER;
+    }
+    return water != 0;
+}
+
 /* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
-   fits where the footprint's highest corner lies at least its minwaterdepth under the sea, any other where its
+   fits where the footprint's highest corner lies at least its minwaterdepth under the sea -- a type on the water
+   path, at or under it --, any other where its
    lowest lies on or above the sea -- with no water every ground is 10 above a sea at 0, so a water type fits
    nowhere -- and refuse_type nowhere, nor refuse_box_type where its
    first cell lies in refuse_box */
@@ -254,7 +267,7 @@ static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int*
             if (v > hi) hi = v;
             if (v < lo) lo = v;
         }
-    if (d->e.minwater > 0 ? hi > w->sea - d->e.minwater : lo < w->sea) return 0;
+    if (d->e.minwater > 0 ? hi > w->sea - d->e.minwater : f_afloat(d) ? hi > w->sea : lo < w->sea) return 0;
     for (s = 1; s < w->top; s++) {
         const FUNIT* u = &w->unit[s];
         int x0, z0, x1, z1;
@@ -1138,6 +1151,75 @@ static void cmd_print(const FCMD* c)
 /* the first cell of a command's footprint, from its centre position */
 static int cmd_x0(const WQ_CMD* c) { return (int)((c->pos[0] >> 19) - s_w.defs[c->type].d.fx) / 2; }
 static int cmd_z0(const WQ_CMD* c) { return (int)((c->pos[2] >> 19) - s_w.defs[c->type].d.fz) / 2; }
+
+/* PLACED ON WATER ONLY (impai_tinfo.c): the wind generator with minwaterdepth 0 and a yard of `cell` bytes, at 60 a
+   pass the menu's best gain per value -- Escalation's floating wind generator when the cells are `w` */
+static void afloat_world(uint8_t cell, int land_at)
+{
+    TASIM_ROLE_OUT roles[T_N];
+    brain_world();
+    s_w.defs[T_WIND].e.wind = 240;
+    s_w.defs[T_WIND].yarded = 1;
+    memset(s_w.defs[T_WIND].yard, cell, 9);
+    if (land_at >= 0) s_w.defs[T_WIND].yard[land_at] = 0x2F;
+    roles_set(roles);
+    CHECK(content_set(&s_w, T_N, roles) == T_N, "afloat_world: the content");
+}
+
+/* (a) the flag is the yard's: water cells and no land cell, `w` or `C`; one land cell, or a yard of `.`, is no
+   water type; a mobile type keeps its keys' answer whatever its yard. (b) on a dry anchor a stall's energy is the
+   solar collector: the floating wind generator, the best gain per value, has no site on land and is passed over
+   -- unflagged, the rung walks its ring, the site test refuses every site, and the stall orders no energy at
+   all. (c) on a wet anchor the stall's energy is the floating wind generator, on the water. */
+static void check_afloat(void)
+{
+    static const struct { uint8_t cell; int land_at, water; const char* what; } YARD[] = {
+        { 0x37, -1, 1, "a yard of w" },     { 0x35, -1, 1, "a yard of C" },
+        { 0x37, 4, 0, "one land cell" },    { 0x00, -1, 0, "a yard of ." },
+        { 0x2F, -1, 0, "a yard of o" },
+    };
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    unsigned k;
+    for (k = 0; k < sizeof YARD / sizeof YARD[0]; k++) {
+        afloat_world(YARD[k].cell, YARD[k].land_at);
+        CHECK(s_ti[T_WIND].cat == IMPAI_C_ENERGY && s_ti[T_WIND].egain == 60.0f, "afloat: the wind's gain %g",
+              (double)s_ti[T_WIND].egain);
+        CHECK(!(s_ti[T_WIND].flags & IMPAI_TF_WATER) == !YARD[k].water, "afloat, %s: placed on water only %d",
+              YARD[k].what, YARD[k].water);
+    }
+    {
+        TASIM_ROLE_OUT roles[T_N];
+        brain_world();
+        s_w.defs[T_CONS].yarded = 1;
+        memset(s_w.defs[T_CONS].yard, 0x37, 4);
+        roles_set(roles);
+        CHECK(content_set(&s_w, T_N, roles) == T_N, "afloat: the content");
+        CHECK(!(s_ti[T_CONS].flags & IMPAI_TF_WATER), "afloat: a mobile type's yard says nothing of where it is placed");
+    }
+    for (k = 0; k < 2; k++) {
+        afloat_world(0x37, -1);
+        if (k) {
+            s_w.sea = 50;
+            water_add(&s_w, 1, 1, 62, 62, 5);
+        }
+        unit_add(&s_w, 1, T_COM, 20, 20, 1);
+        s_w.econ[0].energy = 100;
+        s_w.econ[0].energy_in = 10;
+        s_w.econ[0].energy_out = 30;
+        s_w.gametime = 300;
+        CHECK(decide(&out) == 0, "decide");
+        c = last_cmd(0);
+        printf("afloat, a stall on a %s anchor: %s\n", k ? "wet" : "dry",
+               !c ? "nothing" : c->c.type == T_WIND ? "the floating wind generator"
+               : c->c.type == T_SOLAR ? "the solar collector" : "other");
+        CHECK(c && c->c.verb == WQ_CMD_NEW && c->c.action == A_MOBILEBUILD && c->c.type == (k ? T_WIND : T_SOLAR),
+              "afloat: a stall on a %s anchor builds %s", k ? "wet" : "dry",
+              k ? "the floating wind generator" : "the solar collector, the best type the anchor's ground takes");
+        if (c && k)
+            CHECK(cell_h(&s_w, cmd_x0(&c->c), cmd_z0(&c->c)) < s_w.sea, "afloat: the site ordered lies under the sea");
+    }
+}
 
 /* the type information: the categories and the gains as impai.h defines them */
 static void check_tinfo(void)
@@ -16834,6 +16916,7 @@ int main(void)
     check_veto_rows();
     check_ladder_rows();
     check_stall();
+    check_afloat();
     check_spot();
     check_spot_foreign();
     check_far_patch();

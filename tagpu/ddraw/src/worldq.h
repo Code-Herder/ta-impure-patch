@@ -207,6 +207,12 @@ typedef struct WQ_ECON {
     float metal_out, energy_out;/* requested over the last pass, refused requests included                 */
 } WQ_ECON;
 
+/* A yard map's cell, the two bits the site test's height tail reads (engine/orders.md, the 0x47D2E0 row;
+   engine/units.md, *A yardmap parsed past its string*, DISASSEMBLED): a LAND cell gives the footprint's land
+   extremes (`c o O f y G`), a WATER cell its water maximum (`C w Y`); `.` is neither. */
+#define WQ_YARD_LAND  0x08u
+#define WQ_YARD_WATER 0x10u
+
 /* A unit type's economy keys, each float finite or 0. */
 typedef struct WQ_DEF_ECON {
     float    cost_m, cost_e;
@@ -328,7 +334,7 @@ typedef struct WORLDQ_OPS {
     int (*def)(const WORLDQ*, int type, WQ_DEF* out);
     /* the type's economy keys; 1, or 0 with out zeroed for a type that is none */
     int (*def_econ)(const WORLDQ*, int type, WQ_DEF_ECON* out);
-    /* the type's yard map, fx * fz bytes row-major; 0 when it has none or cap is short */
+    /* the type's yard map, fx * fz bytes row-major (WQ_YARD_*); 0 when it has none or cap is short */
     int (*yard)(const WORLDQ*, int type, uint8_t* out, int cap);
     /* the types a builder type's build menu offers, ascending; their count, -1 when cap is short */
     int (*build_options)(const WORLDQ*, int builder_type, uint16_t* out, int cap);

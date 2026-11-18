@@ -1533,8 +1533,8 @@ static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
 }
 
 /* THE JUDGEMENT'S ORDERING, the invariant the hysteresis rests on: impai_brain_decide calls this once, after the
-   anchor is set and before anything that reads a held bit (patch_held's callers: the checks, the ladder, the
-   plants), and nothing else writes IMPAI_BRAIN.held. So every reader of a decision reads that decision's
+   anchor is set and before anything that reads a held bit (patch_held's callers: the economy's metal judgement, the
+   ladder, the plants), and nothing else writes IMPAI_BRAIN.held. So every reader of a decision reads that decision's
    judgement, and the hysteresis steps once a decision whoever asks: which rung runs, or whether any does, moves
    no bit. Its inputs are the decision's own -- the view's rows, the maps, the starts, the anchor -- and none of
    them changes inside a decision. held_built: 1 judged, -1 nothing to judge by (no maps or no rows: every cell
