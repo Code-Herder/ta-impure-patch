@@ -1706,10 +1706,10 @@ static void economy(IMPAI_DEC* d)
        finished factory at work, THE ENERGY TERM holds (plant_e), and the seat knows a target on or under the
        water (THE TARGETS KNOWN, impai_tg_known: FLOAT or UNDER), which is what a yard's army hits: the dry hunt
        also holds over an enemy on land the land army does not reach, where a further yard buys nothing that
-       reaches it. It is THE METAL TERM (plant_m) read over the plants the finish buys from: in the dry hunt the
-       land plants are offered nothing (THE FINISH'S BUY) and stand idle by that rule, so plant_m's "no idle
-       factory" never holds there and the finish's one yard is all that spends (decisions.md, *The finish's
-       yards*). INVARIANT, a bound: a further yard is wanted only while no yard is idle, unfinished or on
+       reaches it. It is THE METAL TERM (plant_m) read over the sea plants: in the dry hunt a land plant is
+       offered only its types with a water weapon (impai_econ.c, army_menu), and one whose menu holds none stands
+       idle by that rule, so plant_m's "no idle factory" may never hold there while the sea plants are what
+       spends (decisions.md, *The finish's yards*). INVARIANT, a bound: a further yard is wanted only while no yard is idle, unfinished or on
        order, a busy plant asks metal, and the income nobody asks for pays the mean busy plant's request -- so
        each yard past the first comes on metal the full store is wasting, one at a time, below IMPAI_IDLE_CAP
        factories --, and under the sea plant's own gates: the stalls and the hold refuse it. Every value is the

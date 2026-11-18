@@ -1809,21 +1809,41 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
    and switch the seat's plant type, for a raid that lasts a few decisions.
-   THE CUT RING GROWS: a walk the decision's site tests end, which tested at least one site and had every site it
-   tested refused by the site test, is exhausted like a ring walked to its end; one that tested none (the budget
-   was spent before it) or had a site pass the site test is not. WHY: the walk begins at the same site at every
+   THE CUT RING GROWS: a walk from the base -- no key -- that the decision's site tests end, which tested at least
+   one site and had every site it tested refused by the site test, is exhausted like a ring walked to its end; one
+   that tested none (the budget was spent before it) or had a site pass the site test is not. WHY: the walk begins at the same site at every
    decision, so without the rule a ring whose nearest sites the site test refuses, more of them than the tests
    the decision has left, is tested at the same sites for good: it never reaches its end, never grows, and takes
    the decision's site tests from every builder asked after it (decisions.md, *The ring the budget cut*).
    INVARIANT, an ordering:
    a base ring's walk that tests a site ends in an order, in a site that passed the site test (its way refused
    and recorded, its route or the resolver refusing it), in a site left for a cause that is no lack of room, or
-   in growth; so no ring is walked to the same refusals at two decisions running, and a plant type no site
-   takes is passed over within nine such walks (THE PLANT'S FALLBACK). It adds no want and no spending: an order
+   in exhaustion -- growth, and at the widest ring a plant type's pass-over (THE PLANT'S FALLBACK): refusals alone
+   never end a walk and leave the ring as it was below its widest, and a plant type no site takes is passed over
+   at the ninth such walk running. The growth gives the next walk other sites but in two cases, where the same
+   walk is cut on the same refusals at every decision: at the widest ring (ring_grow 8) under a type that is no
+   factory or under a waived plant, which keep the ring; and once ring_grow is back at 0 -- it is one counter for
+   every type's base ring, put back by a build on any of them and by a plant type's pass-over (A TYPE PASSED OVER
+   GIVES THE RING BACK) --, from where each type's walk meets again the rings it had exhausted and the nine walks
+   are counted anew. It adds no want and no spending: an order
    it lets through is one the ladder already asked for, the plant's among them under economy's own terms
    (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
    income, and its energy). What it gives up: the ring's sites past the cut, farther from the walk's key than
-   every site tested, are not tested before the next ring's nearest are.
+   every site tested, are not tested before the next ring's nearest are -- nor looked at at all: a site past the
+   cut that a walk to its end would have left for the commander's reach or for ground threat does not hold the
+   ring, so a cut walk grows it where the whole walk would not.
+   A KEYED WALK IS NOT EXHAUSTED BY A CUT: the defence's walk and the sensors' are ordered from their key, so the
+   sites a cut one tested are the key's nearest, whose refusals say nothing of the base's room, and the sites past
+   the cut are the farthest from the key -- for the sensors those past the cover, which hold a whole walk and
+   which a cut one never reaches. Such a walk leaves ring_grow as it is; walked to its end it exhausts the ring
+   as any other. RESIDUAL: a keyed walk whose nearest sites the site test refuses, more of them than the tests
+   the decision has left, is cut at the same sites at every decision for as long as its want stands, and the
+   walks asked after it in those decisions test nothing. No bound ends that but the want's own end, or a walk
+   from the base asked before it that grows the ring. MEASURED 2026-11-18 against the keyed cuts growing the
+   ring, fifteen games: eleven equal in every decision line; the naval turtle's attacks 3 for 2, at its cap
+   either way; bar-hota-lavaalley-cc-1 won at 45 468 for the cap and -aa-1 at 50 773 for 68 374, a tier-2 plant
+   in each; bar-hota-steeljungle-ca-1 at the cap not ahead, value 0.85, for a win at 54 973 (decisions.md, *The
+   ring the budget cut*).
    THE LONE COMMANDER'S PLANT: a site left for the commander's reach waits for another builder, and a seat whose
    census counts no constructor and no factory, frames included, has none and can get none -- constructors come
    from factories alone -- so until a plant stands the commander is its only builder. For that seat a plant site
@@ -2006,7 +2026,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     w->exit = IMPAI_PW_LEFT;
     if (at || out >= 0 || beyond || threat_skipped || unseen) return 0;
     w->exit = IMPAI_PW_CUT;
-    if (cut && (!tested || passed)) return 0;
+    if (cut && (key || !tested || passed)) return 0;
     w->exit = st->ring_grow < 8 ? IMPAI_PW_GREW : IMPAI_PW_WIDEST;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
