@@ -753,6 +753,68 @@ static void check_radar_reuse(void)
     }
 }
 
+/* A UNIT SEEN GONE (impai_know.c, slice_slot): an enemy plant the seat sees by sight, its block dark, as the
+   centre of a wide structure is when a corner of its box is what the seat sees. The unit dies -- the row is
+   emptied, a radar class with it -- or it lives on out of sight, itself or another unit in its slot -- the row
+   is a ghost at the block, and stays one when the unit then dies unseen. */
+static void check_seen_gone(void)
+{
+    static FWORLD w;
+    static IMPAI_ROW rows[FW_SLOTS];
+    static uint8_t bits[WQ_RADAR_BYTES(FW_SLOTS)];
+    static IMPAI_HITROW hits[FW_SLOTS];
+    static SNAP_PATCH clusters[IMPAI_CLUSTERS];
+    static const char* const NAME[] = { "dies in sight", "dies in sight, a radar contact too", "leaves sight",
+                                        "leaves sight, its slot another unit's" };
+    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits,
+                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0], 0 }, clusters };
+    const IMPAI_BUDGET b = { FW_SLOTS, 100, 0, 0 };
+    const IMPAI_SEEN* r = &rows[40].seat[0];
+    WORLDQ q = { &FAKE, &w, 0 };
+    IMPAI_SEAT st;
+    IMPAI_WORK wk;
+    int c, k;
+    for (c = 0; c < 4; c++) {
+        const unsigned held = c == 1 ? IMPAI_LOS | IMPAI_RADAR : IMPAI_LOS;
+        world_init(&w);
+        memset(rows, 0, sizeof rows);
+        memset(hits, 0, sizeof hits);
+        memset(&st, 0, sizeof st);
+        unit_add(&w, 40, T_FACTORY, 10, 10, 1);
+        w.unit[40].owner = 1;
+        w.unit[40].seen = 1;
+        w.birth[40] = 7;
+        w.radar_slot = c == 1 ? 40 : 0;
+        w.gametime = impai_radar_phase(0);
+        for (k = 0; k < 2; k++, w.gametime++) CHECK(impai_know_tick(&q, &st, &a, &b, NULL, &wk) == 0, "tick");
+        CHECK(r->how == held && r->type == T_FACTORY, "%s: the seat holds the plant first: how %02x", NAME[c], r->how);
+        w.dark[r->bz][r->bx] = 1;
+        if (c < 2) {
+            w.unit[40].live = 0;
+        } else {
+            w.unit[40].seen = 0;
+            if (c == 3) w.birth[40] = 8;
+        }
+        {
+            const unsigned bx = r->bx, bz = r->bz;
+            CHECK(impai_know_tick(&q, &st, &a, &b, NULL, &wk) == 0, "tick");
+            if (c < 2)
+                CHECK(!r->how && !r->type && !r->bx && !r->bz, "%s: a unit seen gone leaves no row: how %02x",
+                      NAME[c], r->how);
+            else
+                CHECK(r->how == IMPAI_GHOST && r->type == T_FACTORY && r->bx == bx && r->bz == bz,
+                      "%s: a live unit out of sight is a ghost at its block: how %02x", NAME[c], r->how);
+            if (c == 2) {
+                w.unit[40].live = 0;
+                w.gametime++;
+                CHECK(impai_know_tick(&q, &st, &a, &b, NULL, &wk) == 0 && r->how == IMPAI_GHOST && r->bx == bx,
+                      "a unit that dies out of sight stays a ghost: how %02x", r->how);
+            }
+        }
+        printf("seen gone: %s how=%02x block=%u,%u\n", NAME[c], r->how, r->bx, r->bz);
+    }
+}
+
 /* THE SCAN'S END (IMPAI_SEAT.scanned): the patch scan sets the fact at the tick that reads the map's last row, with a
    patch found or none, and not before; the published count is then that scan's */
 static void check_scan_done(void)
@@ -16549,6 +16611,7 @@ int main(void)
     check_world();
     s_reads_after = s_shared_other = s_orders_taken = 0;   /* check_world drives the ops by hand, outside a decision */
     check_radar_reuse();
+    check_seen_gone();
     check_scan_done();
     check_tinfo();
     check_tinfo_attack();

@@ -372,8 +372,10 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    counts its own waves and takes its own median** (`IMPAI_MIL.waves`, one count a layer), so each new wave of a
    layer is one median unit of that layer bigger, and **a wave that destroys its target starts its layer over**:
    an ATTACK whose structure target the seat no longer holds a row for, while it stands within its range and 256 px
-   of the target's point, resets its layer's count to 0, once. A structure's row stays, a ghost, until the seat
-   sees it gone, so its absence proves it destroyed; a mobile target's row (a commander seen now) goes when it
+   of the target's point, resets its layer's count to 0, once. A structure's row goes only when the seat
+   sees the unit die or sees its block empty ([impai](../modules/impai.html), the information rule: a row held by
+   sight whose slot is empty at the slice's next visit is emptied, whatever its centre block shows), so its
+   absence proves it destroyed; a mobile target's row (a commander seen now) goes when it
    leaves sight and radar, and a full enemy list proves no absence, so neither resets anything ([the
    decisions](decisions.html), 2026-11-14). Why: with one count and one median, on Red Triangle 52 sea waves raised the land
    threshold to 67 median units, a median the submarines pulled up, and a land FORM squad of 24 sat at home while
