@@ -525,7 +525,7 @@ not `0x470EB0`. Their callers, classified:
   an explosion draw whose GameTime `main+0x38A47` differs from the one the previous explosion draw saw, latched once a draw at `0x420B00`'s entry: once a piece per frame that ran ticks -- a frame of k ticks emits once, as stock
   did at 1997 draw rates -- and none in a paused or menu frame, which still draws (below)
   ([engine patches](../modules/engine-patches.html), the flying pieces' emission). No other emitter call is
-  reached from DrawGameScreen: of the 57 calls into the emitters, a call-graph sweep finds only these two.
+  reached from DrawGameScreen: a direct-call sweep from DrawGameScreen `0x468CF0` over the emitter set of [effects](../modules/effects.html) finds only these two.
 - **The simulation.** `0x472630` (a flare) from the explosion add `0x420A30` (`0x420AE1`) and the
   corpse `0x486360` (`0x48644B`). The add emits it when its 4th argument is 0 and the point's y
   word `+6` is above the sea level byte `main+0x1427F` (`0x420ABE..0x420AD8`); the recorder keys it

@@ -1987,8 +1987,9 @@ SIM_FEATURE(debris_emission, SIM_PUPPET_INDEPENDENT, "battle");
    at 0x4211B3, has none) emits a grey smoke puff `call 0x472810` at 0x421583 when sys+0x28 bit 1
    is set and a fire `call 0x472AB0` at 0x4215AA when bit 0 is, both at the piece's position
    piece+0x16 and on layer 9 (`push 9` at 0x42156A, 0x421591), on EVERY DRAW [DISASSEMBLED]. The
-   piece itself moves only in the tick 0x4213B0. Of the engine's 57 calls to its emitters these
-   two are the only ones DrawGameScreen reaches (a call-graph sweep of all 57). So the engine
+   piece itself moves only in the tick 0x4213B0. Of the direct calls into the effects.md emitter
+   set these two are the only ones DrawGameScreen reaches (a direct-call sweep from 0x468CF0).
+   So the engine
    emits one puff per piece per draw, all of a tick's puffs on one point, and the draw rate is not the tick rate: Impure presents
    from its own thread, so the engine's frame loop turns over as fast as the scene allows -- 236
    to 482 draws a second in a battle at 1024x768 under Xvfb, 4 to 29 draws in one tick of
@@ -2001,7 +2002,9 @@ SIM_FEATURE(debris_emission, SIM_PUPPET_INDEPENDENT, "battle");
    THE RULE: a piece emits only in an explosion draw whose GameTime main+0x38A47 differs from the
    one the previous explosion draw saw. The latch is taken once per draw at 0x420B00's own entry,
    which every draw of the effects passes through -- the frame's 0x469B2C, tagpu_fxown.c's stub
-   in its place, MakePoster 0x495C76 and the movie recorder 0x4962C2 through DrawGameScreen -- so
+   in its place, and the screenshot function 0x495A30's DrawGameScreen(1,1) at 0x495C76 and
+   0x495E66; the movie recorder's DrawGameScreen(0,1) at 0x4962C2 skips the effects
+   (0x469B09: test ebx,ebx; je 0x469BD0) and neither latches nor emits -- so
    it holds whatever wrote GameTime and whatever skipped the scheduler: a paused or menu frame
    (0x496920 -> 0x496969, 0x496918 -> 0x49697B) still draws but advances nothing, and emits
    nothing; a frame that ran k ticks emits once, as it did in stock; a load or a replay seek that
