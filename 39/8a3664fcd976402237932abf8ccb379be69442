@@ -1,0 +1,1 @@
+landing-review: model=ta-reviewer effort=medium range=40c09459..398a3664 findings=4 (L4) acted=4 fixed-in=0982b607; report .data/impai/runs/reviews/review-398a3664.md date=2026-11-18
