@@ -51,7 +51,7 @@ int gg_overlaps(const GgRect* r, int x, int z, int fx, int fz);
    centre: with G the place the helper would have were it centred on the frame, the helper at place P is in
    range iff (rin/16)^2 <= |P - G|^2 <= (rout/16)^2, the divisions truncating, where rin = trunc((int)(16
    sqrt(fx^2 + 2 fz)) / 2) of the FRAME's footprint and rout = builddistance + rin (0x403FF9..0x404045,
-   0x44D3BF..0x44D434, 0x44D800). A seat must be in range for every product the plant makes. */
+   0x44D3BF..0x44D434, 0x44D800). The guard seats use it with the PLANT as the target (tagpu_guard.c, help_goal). */
 int  gg_rin(int fx, int fz);
 /* G for a helper of footprint (bfx, bfz) and a frame centre (cx, cz), 16.16 world px: ((c - (bf << 19) +
    0x80000) >> 20), the shift arithmetic as the engine's `sar` */

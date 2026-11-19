@@ -36,6 +36,12 @@ of the room around the plant or of the arm.
     obstacles where they stand.
 11. **One hard switch per mod, on by default.** A mod's catalog entry can turn the whole feature off
     (seats, lane, arm), with a reason; a player cannot turn it back on, and there is no player switch.
+13. **A seated guard helps from the plant's edge** (decided after landing 1's first game showed the
+    stock band leaves one seat): a guard the coordinator has seated, helping its own plant's product, is
+    in range when its builddistance reaches the plant's footprint, not the frame's centre. Its
+    builddistance is unchanged; its reach to the frame grows by the frame's distance to the footprint's
+    edge (3 cells on a 6 x 6 plant), and to nothing else: every other build, repair, reclaim, capture
+    and the player's own help keeps stock's band. Seats may touch the footprint; no gap is kept.
 12. **One way-out geometry for the coordinator and ImpAI.** The yard's exits, the product classes and
     the lane search live in one engine-free module; ImpAI moves onto it once its own branch has landed
     on main (its `impai_build.c` is 193 commits ahead on `worktree-Bar_game_AI` as this plan is written,
@@ -45,7 +51,7 @@ of the room around the plant or of the arm.
 
 | # | Landing | Proof |
 |---|---|---|
-| 1 | The seats and the lane: the engine-free geometry (`tagpu_guardgeo.c`), the coordinator (`tagpu_guard.c`), the home-move hook at `0x4066AC` and the assist skip for a waiting builder | a unit test of the geometry; a scenario: six ARMCK guarding an ARMVP stay put through a queue of ten, the products leave by the lane, nothing stands on the yard |
+| 1 | The seats and the lane: the engine-free geometry (`tagpu_guardgeo.c`), the coordinator (`tagpu_guard.c`), the hook at the guard's assist `0x40654B` (seat, wait spot, assist skip) and the help from the plant's edge at `0x40404E` | a unit test of the geometry; a scenario: six ARMCK and two ARMCV guarding an ARMVP sit still through a queue of six, no builder in the lane |
 | 2 | The Park goal past the lane | the same scenario with no rally: no product stands in the lane |
 | 3 | The arm kept open | the scenario's builders run StartBuilding once for the queue; a fold within the grace of the queue's end; a move order folds at once |
 | 4 | The mod switch | a catalog entry with the switch off plays as stock |
@@ -82,5 +88,18 @@ All DISASSEMBLED 2026-11-18 in the pristine image unless marked; the entries are
 ## Landing 1, as built
 
 `tagpu_guardgeo.c` (engine-free: the yard's exits, the lane search, the seat search with its way out,
-the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the hook, the rows, the level's plant
+the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the two hooks, the rows, the level's plant
 types). The module as it stands is [the module note](modules/factory-guard.html).
+
+**MEASURED 2026-11-18** (`guard-seats` on Two Continents, the ARMVP at (1100, 7400), six ARMCK and two ARMCV
+in a line south of it across the yard's mouth, six Flashes queued, gamespeed 10, 25 rosters 5 s apart):
+seven builders seated round the plant's north, west and east sides, 4-6 cells from its centre, each on its
+seat from the 20 s sample to the end; the eighth (an ARMCV) waited where it stood; 50 helps were given the
+plant's band; all six Flashes were made within about 60 s, against five in two minutes with the one seat the
+stock band allows. The first games found the band's limit (decision 13) and two faults since fixed: a seat
+given up after four visits rather than 180 ticks, and a seated builder that took the assist on its way to its
+seat and walked into the yard for the frame's band.
+
+**Park, MEASURED in the same games**: with no rally the Flashes stop one to two cells outside the yard's mouth
+and the later ones queue behind them, so by the sixth the newest waits inside the yard. Stock behaviour, with
+no builder in the lane; landing 2's subject.

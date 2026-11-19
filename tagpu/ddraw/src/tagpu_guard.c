@@ -12,20 +12,24 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
    move 0x4066AC, a point goal at the plant's position plus the node's offset +0x22/+0x26/+0x2A, of radius
    (+0x36) / 2, then 30 ticks of sleep (0x4066E0..0x4066F6). Every path to the home move passes 0x40654B: the
    branches reach it from 0x406500 and 0x406549, and no branch from outside lands in 0x40654C..0x4066AB. HelpBuild
-   0x403F70 walks a helper only when it is outside the band round the frame's centre (tagpu_guardgeo.h, THE BAND);
-   inside it the goal is reached in the class step, before any physics, and the build starts the next tick. So a
-   builder standing on a seat in every product's band helps every unit without a step.
+   0x403F70 walks a helper only when it is outside the annulus its state 0 builds round the frame's centre
+   (tagpu_guardgeo.h, THE BAND); inside it the goal is reached in the class step, before any physics, and the
+   build starts the next tick. The frame stands in the plant's yard, so for a stock builddistance that band
+   barely leaves the plant's footprint (ARMCK on a Flash in an ARMVP: one cell outside it).
 
-   THE HOOK. A stub at 0x40654B runs the stolen `mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]` and calls guard_visit
+   THE HOOKS. A stub at 0x40654B runs the stolen `mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]` and calls guard_visit
    with the registers: ebx the guard node, edi the guarder, eax the plant. The visit rewrites the node's offset
    and radius so that the home move goes to the builder's seat, or to its wait spot, and answers whether to skip
    the assist: a builder with no seat goes home instead of walking in to help. It then runs the stolen `cmp
    ecx,ebp` and goes on at 0x406553, or, skipped, at 0x4066AC with eax the plant, which is what the home move
-   reads. The visit is stock -- it writes nothing and answers 0 -- for a guarder that is not a ground builder,
-   for a guarded unit that is not a finished plant whose build menu makes a mobile unit, and for every guard
-   once a table is full.
+   reads. The assist is taken only by a builder standing on its seat. A seat lies in the plant's own band -- centred on the plant, rin from the plant's footprint, rout =
+   the builder's builddistance + rin -- and a stub at 0x40404E gives a seated builder's HelpBuild on the plant's
+   frame that band in place of the frame's (help_goal), so it builds from the seat: in range when its
+   builddistance reaches the plant. The visit is stock -- it writes nothing and answers 0 -- for a guarder that
+   is not a ground builder, for a guarded unit that is not a finished plant whose build menu makes a mobile
+   unit, and for every guard once a table is full.
 
-   STATE, all SIM_STATE: the plant rows s_plant (its identity, its frame's centre, its box, its lanes and the
+   STATE, all SIM_STATE: the plant rows s_plant (its identity, its box, its lanes and the
    signature of the structures in its box) and the builder rows s_seat (its identity, its plant, its seat or
    wait spot, and the cell it last stood on and since when). The level's plant types s_type are SIM_CONTENT: the build menus of the level's
    data. Rows name units by slot and birth (tagpu_unit_birth): a slot recycled for another unit never matches a
@@ -58,6 +62,10 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define VA_SITE        0x0040654Bu   /* Follow_Ground state 1: the assist's first instruction               */
 #define VA_ASSIST_JE   0x00406553u   /* the `je 0x4066AC` after the stolen cmp                              */
 #define VA_HOME        0x004066ACu   /* the home move                                                       */
+#define VA_HELP_GOAL   0x0040404Eu   /* HelpBuild state 0: `call 0x438A00`, its walk's annulus               */
+#define VA_ANNULUS     0x00438A00u   /* thiscall (node, const i32 pos[3], rout, rin): the annulus goal      */
+#define VA_HELP_NEXT   0x00404053u   /* after the call                                                      */
+#define N_UNIT         0x0E          /* the node's unit (0x438930 at 0x438934 reads it so)                  */
 #define VA_ACTION_OF   0x00438760u   /* thiscall (u8* out, const char* name): an order name's action byte   */
 #define S_HELPBUILD    0x005013F0u   /* "HelpBuild"                                                         */
 #define S_FOLLOW       0x005014D8u   /* "Follow_Ground"                                                     */
@@ -102,7 +110,6 @@ typedef struct GuardType {
     uint16_t type;
     uint8_t  side, nclass;
     uint8_t  mclass[GUARD_CLASSES], csize[GUARD_CLASSES], cfx[GUARD_CLASSES], cfz[GUARD_CLASSES];
-    int16_t  rin_min, rin_max;        /* over every mobile product: the band's terms (tagpu_guardgeo.h)     */
 } GuardType;
 static GuardType s_type[GUARD_TYPES];
 static unsigned  s_ntype;
@@ -118,9 +125,8 @@ SIM_VAR(s_reach, SIM_CONTENT);
 typedef struct GuardPlant {
     uint16_t slot, type;              /* the plant's unit slot and def index                                */
     uint32_t birth;
-    uint8_t  used, spot_known, planned, nlane;
+    uint8_t  used, planned, nlane, pad;
     int16_t  cx, cz;                  /* the plant's first cell                                             */
-    int32_t  spot_x, spot_z;          /* the frame's centre, 16.16 world px                                 */
     int16_t  bx0, bz0, bw, bh;        /* the box                                                            */
     uint32_t sig;                     /* the structures in the box                                          */
     int32_t  sig_tick;                /* GameTime the signature was taken; -1 none                          */
@@ -154,11 +160,13 @@ SIM_ROWS(s_seat, SIM_STATE, SIM_ID_NONE, SEAT_LAYOUT);
 
 static unsigned char* s_stub;
 SIM_CODE(s_stub);
-static struct { uint8_t installed; } s_install;
+static unsigned char* s_help_stub;
+SIM_CODE(s_help_stub);
+static struct { uint8_t installed, help; } s_install;
 SIM_VAR(s_install, SIM_INSTALL);
 
 /* diagnostics the simulation never reads */
-static struct { uint32_t visits, seated, waiting, full, lanes, nolane; } s_diag;
+static struct { uint32_t visits, seated, waiting, full, lanes, nolane, edge; } s_diag;
 SIM_VAR(s_diag, SIM_PRIVATE);
 
 typedef unsigned char* (__attribute__((thiscall))* ActionOf)(void*, const char*);
@@ -266,15 +274,11 @@ static void type_add(const Eng* e, unsigned t, unsigned side, const uint16_t* me
     memset(&g, 0, sizeof g);
     g.type = (uint16_t)t;
     g.side = (uint8_t)side;
-    g.rin_min = 0x7FFF;
     for (k = 0; k < n; k++) {
         WQ_DEF d;
-        int c, rin;
+        int c;
         if (!e->q.ops->def(&e->q, menu[k], &d) || !(d.flags & WQ_DF_MOVER)) continue;
         if (d.fx < 1 || d.fz < 1 || d.fx > WQ_FOOT_MAX || d.fz > WQ_FOOT_MAX) return;
-        rin = gg_rin(d.fx, d.fz);
-        if (rin < g.rin_min) g.rin_min = (int16_t)rin;
-        if (rin > g.rin_max) g.rin_max = (int16_t)rin;
         products++;
         if ((d.flags & WQ_DF_VTOL) || d.mclass >= WQ_MCLASSES) continue;
         for (c = 0; c < g.nclass && g.mclass[c] != d.mclass; c++) {}
@@ -328,7 +332,7 @@ static void plant_box(const Eng* e, GuardPlant* r, const GuardType* g, int fx, i
 {
     int smax = 0, c, grow, x0, z0, x1, z1;
     for (c = 0; c < g->nclass; c++) if (g->csize[c] > smax) smax = g->csize[c];
-    grow = (s_reach + g->rin_max) / 16 + 4 + smax + LANE_MARGIN;
+    grow = (s_reach + gg_rin(fx, fz)) / 16 + 4 + smax + LANE_MARGIN;
     if (2 * grow + (fx > fz ? fx : fz) > GUARD_BOX) grow = (GUARD_BOX - (fx > fz ? fx : fz)) / 2;
     x0 = r->cx - grow; z0 = r->cz - grow; x1 = r->cx + fx - 1 + grow; z1 = r->cz + fz - 1 + grow;
     if (x0 < 0) x0 = 0;
@@ -458,7 +462,7 @@ static void plan_lanes(Eng* e, const char* p, GuardPlant* r, const GuardType* g,
     GgBox box = { r->bx0, r->bz0, r->bw, r->bh };
     GgRect plant;
     const int fx = *(const int16_t*)(p + U_FX), fz = *(const int16_t*)(p + U_FZ);
-    const int open = (s_reach + g->rin_max) / 16 + 2;
+    const int open = (s_reach + gg_rin(fx, fz)) / 16 + 2;
     int c, start, n = 0;
     r->nlane = 0;
     r->planned = 1;
@@ -588,29 +592,6 @@ static void aim(char* node, const char* p, int x, int z, int fx, int fz, int32_t
     memcpy(node + N_OFFSET + 4, &zero, 4);
     memcpy(node + N_OFFSET + 8, &oz, 4);
     memcpy(node + N_RADIUS, &radius, 4);
-}
-
-/* the frame's centre, from the plant's head when it is building one, else the stored one, else the plant's own */
-static int update_spot(const Eng* e, const char* p, GuardPlant* r, unsigned char bbuild)
-{
-    const char* head = *(const char* const*)(p + U_ORDERS);
-    const char* frame = head && *(const uint8_t*)(head + N_ACTION) == bbuild ? *(const char* const*)(head + N_TARGET)
-                                                                            : NULL;
-    int32_t x, z;
-    if (frame && slot_of(e, frame) >= 0) {
-        memcpy(&x, frame + U_XFIX, 4);
-        memcpy(&z, frame + U_YFIX, 4);
-        if (!r->spot_known || x != r->spot_x || z != r->spot_z) {
-            r->spot_x = x; r->spot_z = z; r->spot_known = 1;
-            return 1;
-        }
-        return 0;
-    }
-    if (!r->spot_known) {
-        memcpy(&r->spot_x, p + U_XFIX, 4);
-        memcpy(&r->spot_z, p + U_YFIX, 4);
-    }
-    return 0;
 }
 
 /* a seat row's place still holds: in the box, not on a lane or a structure, in its builder's band */
@@ -743,7 +724,8 @@ static int __cdecl guard_visit(unsigned* regs)
     GuardPlant* r;
     GuardSeat* t;
     unsigned mc;
-    int bslot, pslot, ptype, prow, pfx, pfz, bfx, bfz, gx, gz, r2min, r2max, replan, skip, i, cur_x, cur_z;
+    int bslot, pslot, ptype, prow, pfx, pfz, bfx, bfz, gx, gz, r2min, r2max, replan, skip, i, cur_x, cur_z, rin;
+    int32_t px, pz;
     unsigned char follow;
     WQ_DEF bd;
     float nano;
@@ -772,7 +754,7 @@ static int __cdecl guard_visit(unsigned* regs)
         t->avoidx = t->avoidz = INT16_MIN;
     }
 
-    replan = update_spot(&e, p, r, action_of(S_BUILDINGBLD));
+    replan = 0;
     if (!r->bw) { plant_box(&e, r, g, pfx, pfz); replan = 1; }
     if (r->sig_tick != e.now) {
         const uint32_t sig = box_sig(&e, r);
@@ -782,10 +764,13 @@ static int __cdecl guard_visit(unsigned* regs)
     }
 
     builder_foot(&e, b, &bfx, &bfz, &mc);
-    gx = gg_goal_place(r->spot_x, bfx);
-    gz = gg_goal_place(r->spot_z, bfz);
-    r2min = (g->rin_max / 16) * (g->rin_max / 16);
-    r2max = ((bd.reach + g->rin_min) / 16) * ((bd.reach + g->rin_min) / 16);
+    memcpy(&px, p + U_XFIX, 4);
+    memcpy(&pz, p + U_YFIX, 4);
+    rin = gg_rin(pfx, pfz);
+    gx = gg_goal_place(px, bfx);
+    gz = gg_goal_place(pz, bfz);
+    r2min = (rin / 16) * (rin / 16);
+    r2max = ((bd.reach + rin) / 16) * ((bd.reach + rin) / 16);
     cur_x = *(const int16_t*)(b + U_CELLX);
     cur_z = *(const int16_t*)(b + U_CELLZ);
 
@@ -826,10 +811,10 @@ static int __cdecl guard_visit(unsigned* regs)
                 if (o->state != GS_SEATED || o->plant != prow || !(ob = unit_at(&e, o->builder))) continue;
                 builder_foot(&e, ob, &ofx, &ofz, &omc);
                 if (!e.q.ops->def(&e.q, (int)type_of(&e, ob), &od)) { o->state = GS_WAITING; continue; }
-                lo = g->rin_max / 16;
-                hi = (od.reach + g->rin_min) / 16;
-                if (!seat_holds(r, o, ofx, ofz, s.blocked, gg_goal_place(r->spot_x, ofx),
-                                gg_goal_place(r->spot_z, ofz), lo * lo, hi * hi))
+                lo = rin / 16;
+                hi = (od.reach + rin) / 16;
+                if (!seat_holds(r, o, ofx, ofz, s.blocked, gg_goal_place(px, ofx), gg_goal_place(pz, ofz), lo * lo,
+                                hi * hi))
                     o->state = GS_WAITING;
             }
         }
@@ -837,14 +822,99 @@ static int __cdecl guard_visit(unsigned* regs)
             seat_or_wait(&e, &s, r, t, (unsigned)bslot, bfx, bfz, mc, gx, gz, r2min, r2max, cur_x, cur_z);
         tagpu_sim_scratch_free(s.block);
     }
-    skip = t->state != GS_SEATED;
-    aim(node, p, t->x, t->z, bfx, bfz, skip ? 64 : 16);
+    /* the assist only from the seat itself: its help then gets the plant's band (help_goal). A builder still on
+       its way would take the frame's band and walk into the yard for it */
+    skip = t->state != GS_SEATED || cur_x != t->x || cur_z != t->z;
+    aim(node, p, t->x, t->z, bfx, bfz, t->state == GS_SEATED ? 16 : 64);
     return skip;
+}
+
+/* THE HELP FROM THE PLANT'S EDGE. HelpBuild's state 0 builds its walk's annulus once per node: `call 0x438A00`
+   at 0x40404E with (node, &frame+0x6A, builddistance + rin, rin), rin from the frame's footprint, and nothing
+   after it tests the range again [DISASSEMBLED 2026-11-18: state 1 starts the build on any of 0x08, 0x20, 0x80;
+   state 3's work 0x41BA60, the nano piece 0x43E400 and the emitter 0x4720D0 read no distance; a reached goal is
+   cleared by the class step 0x44F1A0, so a bump cannot make it walk again]. For a builder standing on its seat
+   that still guards the plant and helps the plant's own frame, the annulus is the plant's: centred on the plant,
+   rin from the plant's footprint, rout = builddistance + rin -- the engine's rule for building a structure the
+   plant's size, so the builder is in range when its builddistance reaches the plant, which is what its seat
+   was chosen in. Every other HelpBuild keeps the frame's annulus. regs is the pushad frame: regs[0] edi the node,
+   regs[1] esi &frame+0x6A, regs[3] the esp of the call, whose three arguments this rewrites. */
+static void __cdecl help_goal(unsigned* regs)
+{
+    const char* node = (const char*)(uintptr_t)regs[0];
+    const char* frame = (const char*)(uintptr_t)regs[1] - U_XFIX;
+    uint32_t* arg = (uint32_t*)(uintptr_t)regs[3];
+    const char* b;
+    const char* p;
+    const char* head;
+    const GuardSeat* t;
+    const GuardPlant* r;
+    Eng e;
+    WQ_DEF bd;
+    int bslot, pfx, pfz, rin;
+    if (tagpu_puppet_on() || !eng_open(&e)) return;
+    b = *(const char* const*)(node + N_UNIT);
+    if ((bslot = slot_of(&e, b)) < 0 || !alive(b)) return;
+    if (!(t = seat_row((unsigned)bslot, birth_of((unsigned)bslot), 0)) || t->state != GS_SEATED ||
+        t->plant >= GUARD_PLANTS)
+        return;
+    if (*(const int16_t*)(b + U_CELLX) != t->x || *(const int16_t*)(b + U_CELLZ) != t->z) return;
+    r = &s_plant[t->plant];
+    if (!r->used || !(p = unit_at(&e, r->slot)) || !alive(p) || birth_of(r->slot) != r->birth) return;
+    head = *(const char* const*)(p + U_ORDERS);
+    if (!head || *(const uint8_t*)(head + N_ACTION) != action_of(S_BUILDINGBLD) ||
+        *(const char* const*)(head + N_TARGET) != frame)
+        return;
+    if (!still_guards(&e, t, p, action_of(S_FOLLOW))) return;
+    if (!e.q.ops->def(&e.q, (int)type_of(&e, b), &bd)) return;
+    pfx = *(const int16_t*)(p + U_FX); pfz = *(const int16_t*)(p + U_FZ);
+    if (pfx < 1 || pfz < 1 || pfx > WQ_FOOT_MAX || pfz > WQ_FOOT_MAX) return;
+    rin = gg_rin(pfx, pfz);
+    arg[0] = (uint32_t)(uintptr_t)(p + U_XFIX);
+    arg[1] = (uint32_t)(bd.reach + rin);
+    arg[2] = (uint32_t)rin;
+    s_diag.edge++;
+    tagpu_logf("guard: help from the edge builder=%d plant=%u rin=%d rout=%d", bslot, (unsigned)r->slot, rin,
+               bd.reach + rin);
 }
 
 /* ---- install and level ---- */
 
 static const unsigned char STOLEN[8] = { 0x8B, 0x43, 0x16, 0x8B, 0x48, 0x5C, 0x3B, 0xCD };
+
+static const unsigned char HELP_STOLEN[5] = { 0xE8, 0xAD, 0x49, 0x03, 0x00 };
+
+/* pushad; push esp; call help_goal; add esp,4; popad; call 0x438A00; jmp 0x404053. Installed only with the
+   assist's hook: a seat exists only through it. Without it the guard's seats are never made and every
+   HelpBuild keeps the frame's annulus. */
+static void help_install(void)
+{
+    unsigned char* q;
+    if (!tagpu_detour_bytes_ok(VA_HELP_GOAL, HELP_STOLEN, (int)sizeof HELP_STOLEN)) {
+        tagpu_log("guard: help from the plant's edge NOT installed: 0x40404E does not hold `call 0x438A00`");
+        return;
+    }
+    if (!(s_help_stub = tagpu_detour_stub())) {
+        tagpu_log("guard: help from the plant's edge NOT installed: no stub memory");
+        return;
+    }
+    q = s_help_stub;
+    *q++ = 0x60;
+    *q++ = 0x54;
+    *q++ = 0xE8; tagpu_detour_rel(q, (unsigned)(uintptr_t)help_goal); q += 4;
+    *q++ = 0x83; *q++ = 0xC4; *q++ = 0x04;
+    *q++ = 0x61;
+    *q++ = 0xE8; tagpu_detour_rel(q, VA_ANNULUS); q += 4;
+    *q++ = 0xE9; tagpu_detour_rel(q, VA_HELP_NEXT); q += 4;
+    if (!tagpu_detour_land(VA_HELP_GOAL, s_help_stub, (int)sizeof HELP_STOLEN)) {
+        tagpu_detour_stub_free(s_help_stub);
+        s_help_stub = NULL;
+        tagpu_log("guard: help from the plant's edge NOT installed: 0x40404E could not be written");
+        return;
+    }
+    s_install.help = 1;
+    tagpu_log("guard: installed: help from the plant's edge 0x40404E");
+}
 
 /* mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]; pushad; push esp; call guard_visit; add esp,4; test eax,eax; popad
    (popad leaves the flags); jnz 0x4066AC; cmp ecx,ebp; jmp 0x406553 -- the je there reads the cmp */
@@ -878,6 +948,7 @@ void tagpu_guard_init(void)
     }
     s_install.installed = 1;
     tagpu_log("guard: installed: the guard's assist 0x40654B");
+    help_install();
 }
 
 void tagpu_guard_level_init(void)

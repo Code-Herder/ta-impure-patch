@@ -1075,6 +1075,23 @@ stopped short -- with "I can't get there" (`0x5015BC`, `0x404072..0x40407A`) and
 (`0x404069..0x40408B`); a target already finished returns 5 (`0x40408E..0x4040AD`;
 [cob](cob.html), *The scripts a unit's work starts*). State 4 is the completion, "Building complete" and 5 (`0x404223..0x404248`).
 
+**Range is tested once, by the walk's goal** [DISASSEMBLED 2026-11-18]. The state table at `0x40425C` (file
+offset `0x365C`) holds `0x403FD9`, `0x404069`, `0x4040EE`, `0x404105`, `0x404223`. Otherwise state 1 starts the
+build on any wake in its mask `0xE8` but `0x40` -- `0x08` and `0x80` as well as `0x20` -- with `0x4898B0(unit, 3)`,
+the heading `0x48A980` and StartBuilding `0x438590`. State 2 waits for INBUILDSTANCE (`0x438700(unit, node, 0xA)`,
+unit `+0x10F` bit 0). State 3 is the work, every tick: `0x41BA60(unit, frame, WorkerTime def +0x1FE / 30)` at
+`0x404139`, then, when it worked, the nano piece `0x43E400` and the emitter `0x4720D0` aimed at the frame; its
+one comparison is the frame's `+0x104` against 0.0 (`0x4041E7`). None of them, nor `0x41BA60`, `0x41B8D0` or the
+frame's own GetBuilt `0x402DA0`, reads the distance between the helper and the frame. The emitter has no
+maximum: the particle's flight time is about distance / 4 px (`0x473EAF..`), and under about 4 px nothing is
+emitted (`0x473EE1`). The goal cannot come back after a bump: the class step `0x44F1A0` tests the goal only while
+the mover has one, and on reaching it calls set-goal(0) through `0x44F2A0` (posting `0x80`); the physics and the
+movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild never returns 0 or 9, so state 0,
+and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
+node: the annulus built there is the whole range rule. Not established: who posts the event `0x02` that ends a
+help in states 2 and 3. Impure's guard seats replace that annulus for a seated guard
+([factory guard](../modules/factory-guard.html)).
+
 **What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
 30 000-40 000): an ARMLAB made all 15 of its products at one 16.16 point, its cell (168, 414); three ARMCVs north
 and west of the plant, given the help on each product, held **Standby** (41) at their head two ticks after every
