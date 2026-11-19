@@ -1180,7 +1180,7 @@ static const unsigned char DISP_STOLEN[6] = { 0x8B, 0x0D, 0x44, 0x23, 0x51, 0x00
    push edi; mov edi,[esp+0x10]; jmp 0x438597.
    0x43A21E: pushad; push esp; call arm_dtor; add esp,4; popad; test [esi+0x42],0x400000; jmp 0x43A225.
    0x43B865: pushad; push esp; call arm_dispatch; add esp,4; popad; mov ecx,[0x512344]; jmp 0x43B86B (no branch
-   lands in 0x43B866..0x43B86A; the recorder's observer is at 0x43B878, after it) */
+   lands inside the six bytes past their first; the recorder's observer is at 0x43B878, after it) */
 static void arm_install(void)
 {
     unsigned char* p;

@@ -476,7 +476,7 @@ at `0x48AF98`, after the unit's `DoScriptsNow(1)` at `0x48ADEB` and before the m
   something" [other writers of bit 2 not enumerated].
 
 **The stance wait `0x438700(unit, node, mask)`** (`ret 0xC`, `0x438700..0x438724`): returns **1**
-when `unit+0x10F` bit 0 (INBUILDSTANCE) is set; otherwise stores `node+0x06 = mask | 4` and
+when `unit+0x10F` bit 0 (INBUILDSTANCE) is set (the test at `0x438709`); otherwise stores `node+0x06 = mask | 4` and
 returns **2**. Its nine callers, with the mask and the handler's StartBuilding, all read:
 
 | handler | StartBuilding `0x438590` | stance wait (mask) | its own StopBuilding `0x4385F0` |

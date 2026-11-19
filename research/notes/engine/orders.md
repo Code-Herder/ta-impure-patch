@@ -1365,7 +1365,8 @@ What that rests on:
   `0x5013FC`, `0x5011F0` through `0x438760`) with a frame `+0x16` gets a **HelpBuild on the frame**
   (`0x5013F0`, `0x406636..0x406646`); any other head carrying `0x400`, or `0x200` with a target,
   gets a copy of its own action (`0x406612..0x40661B`); a build head with no frame yet goes home
-  (`0x406629..0x40662C`). The node is `0x43A0C0(action, head+0x16, &head+0x22, 0, 0, 0)` put first
+  (`0x406629..0x40662C`). The node is `0x43A0C0(action, head+0x16, &head+0x22, 0, 0, 0)` -- the head's
+  target read at `0x406668`, the frame or, as its last help ends, the unit just finished -- put first
   by `0x43ACB0` (`0x40667A`), the guard's `+6` zeroed and 3 returned. **Every path to the home
   move passes `0x40654B`**: the attack reaction's refusal falls into the repair branch, which
   reaches it at `0x406549` or from `0x406500`; the one branch from outside into `0x40654C..0x4066AB`,
@@ -1395,7 +1396,8 @@ What that rests on:
   `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
   and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
   the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`; the descriptor array
-  is loaded just before it at `0x43B865`, where Impure's guard folds a held arm).
+  is loaded just before it by the 6-byte `mov ecx,[0x512344]` at `0x43B865..0x43B86A`, which no branch
+  enters past its first byte, where Impure's guard folds a held arm; the code goes on at `0x43B86B`).
   Result 3 is no stop: its random wait sets the node's timer (`0x43B890` → `0x43B951..0x43B970`)
   and goes on at `0x43B99F` to the head again, so a node a handler linked in front of itself and
   then answered 3 for -- Follow_Ground's attack reaction (`0x4063F5`, returning 3 at `0x406405`),
