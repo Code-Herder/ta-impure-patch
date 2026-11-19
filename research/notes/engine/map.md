@@ -2345,7 +2345,7 @@ for each, the disc dx² + dz² ≤ i² of blocks lies inside the loaded union, a
 **The index.** The stamp takes `idx = trunc(SightDistance / 32)` from the record's sight word, sign
 extended (`movsx` at `0x48230D`; the FBI loader stores `sightdistance` unclamped as def `+0x202`'s
 word at `0x42C3B3`), floored at 0 (`sets`, `dec`, `and`), clamped to `count − 1` with
-`count = 0x433520(table)` = (end − begin) >> 4, 0 for an empty container (`0x48232E..0x482366`: the call at `0x48232E`, the `dec edx` at `0x48233A` making `count − 1`, the signed `cmp eax,edx; jge` at `0x48233B`),
+`count = 0x433520(table)` = (end − begin) >> 4, 0 for an empty container (`0x48232E..0x482366`: the call at `0x48232E`, the `dec edx` at `0x48233A` making `count − 1`, the signed `cmp eax,edx` at `0x48233B` and its `jge` at `0x48233D`),
 and asks **`0x433500(idx)`** for the element: `begin + (idx − 1)·16` (`dec eax; movsx; shl 4;
 add`, `0x433500..0x433510`), so the element is `[TABLE<idx>]`. The mapped stamp `0x481930`
 (`0x4819C9..0x481A22`) and the removal `0x481D50` (`0x481E09..0x481E4D`) compute the same index

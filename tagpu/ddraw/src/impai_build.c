@@ -1916,14 +1916,16 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    INVARIANT, an ordering: ring_grow is written by a base-ring walk of a type that is no plant alone -- one more
    at an exhausted ring below the widest, 0 at the walk's order, 0 at an exhausted widest ring --, so no
    exhaustion leaves it at the ring the walk met: exhausted walks running take the rings in turn, the widest then
-   the base, each ring once in any IMPAI_RING_WIDEST + 1 of them, and a site that is free on any ring for the
-   builders asked is walked within nine exhausted walks whatever exhausted the others -- a far record, a cut or
-   refusals. BOUND: the walk's cost is one ring (one place_ring) a walk of a type that is no plant and the
+   the base, each ring met by some walk once in any IMPAI_RING_WIDEST + 1 of them, whatever exhausted the others
+   -- a far record, a cut or refusals. BOUND: the walk's cost is one ring (one place_ring) a walk of a type that is no plant and the
    decision's site tests, with the rule as without. RESIDUAL: a walk that leaves its ring writes nothing (GROWTH
    ANSWERS ONLY A LACK OF ROOM), so a seat whose commander is the only builder asked keeps ring_grow at a ring
    wholly past comm_r until another builder's walk exhausts or orders on it; and a builder under its far record
    that reaches no ring site moves ring_grow one ring a walk for as long as the record lives, so the other
-   builders' walks meet the ring it left, not the base's nearest (decisions.md, *The widest ring starts over*).
+   builders' walks meet the ring it left, not the base's nearest; and the ring a walk meets is the count of
+   exhausted walks before it, so a builder asked at a fixed place among k exhausted walks a decision meets only
+   the rings of its own phase where k and IMPAI_RING_WIDEST + 1 share a factor (three walks a decision: every
+   third ring), for as long as the others' walks stay exhausted (decisions.md, *The widest ring starts over*).
    THE PLANT'S WALK CLIMBS (ring_build): a plant's base-ring walk that exhausts a ring below the widest walks the
    next ring in the same decision -- to an order, a site that is left, a way out deferred, the decision's site
    tests, or the widest ring's exhaustion. WHY: a plant walk that orders nothing hands its builder to the rungs
@@ -1944,8 +1946,8 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    commander's while the seat has no other builder (lone_plant: no ring is left for its reach). The commander's
    growth beside another builder is put back by every ring it leaves for its reach, so its walk can exhaust the
    same inner rings at every decision for good; those rings renew nothing, as the waived pass's do not.
-   TERMINATION, an ordering: between two orders of a plant the renewals are at most one pass-over a type of the
-   choice and IMPAI_RING_WIDEST rings a growth of each, a finite count, so either the choice reaches the waived
+   TERMINATION, an ordering: while the pass-overs stand unbroken the renewals are at most one pass-over a type of
+   the choice and IMPAI_RING_WIDEST rings a growth of each, a finite count, so either the choice reaches the waived
    pass with every type still passed over, however short fail_t is against a type's climb, or the renewals stop
    and every pass-over ends fail_t after the last of them. RESIDUAL: a census that gains and loses the seat's only
    other builder between the commander's walks puts the commander's growth back each time (the walk beside the
