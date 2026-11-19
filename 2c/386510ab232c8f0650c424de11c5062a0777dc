@@ -1,0 +1,1 @@
+landing-review: model=ta-reviewer effort=medium range=0a4ec04e..2c386510 (tagpu/ddraw less tagpu_patches.c; the duel lever's patch is c7ee174d's note); report .data/impai/runs/reviews/fix-review-2c386510.md date=2026-11-18
