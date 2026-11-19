@@ -286,7 +286,12 @@ BAR_MAPS = {"pincushion": "Pincushion", "redtriangle": "Red Triangle", "troutfar
             "lavamania": "Lava Mania", "plainspasses": "Plains and Passes"}
 DEV_MAPS = {"acidfoursome": "Acid Foursome", "steeljungle": "Steel Jungle", "luschaven": "Luschaven",
             "gasplantplain": "Gasplant Plain", "lavaalley": "Lava Alley"}
-MAPS = {**BAR_MAPS, **DEV_MAPS}
+# THE METAL MAPS: maps whose every cell yields metal (SurfaceMetal 255, the brain's own test: impai_metal_map). They are
+# in neither pool -- the pools hold no uniform metal by the specification's rule, so no level, table or margin is
+# chosen or judged on them -- and an id names one as it names any map, for the session tier and a look. They stand
+# after the pools' maps so that no pool map's index, and with it its sides in a block, changes.
+METAL_MAPS = {"coreprime": "Core Prime Industrial Area", "metalheck": "Metal Heck", "metalgridlock": "Metal Gridlock"}
+MAPS = {**BAR_MAPS, **DEV_MAPS, **METAL_MAPS}
 SIDE = {"a": "arm", "c": "core"}
 COMMANDER = {"arm": "ARMCOM", "core": "CORCOM"}     # the base game's; a setup's are its sidedata's (THE SETUP)
 SIDE_INDEX = {"arm": 0, "core": 1}                  # a scenario's side by its sidedata index (tacli SCN_SIDES)
@@ -625,7 +630,10 @@ def map_name(m: str) -> str:
 
 
 def seat_of(game: dict) -> dict:
-    """{"A": seat, "B": seat}: A sits in seat 1 when it plays the first start, else in seat 2."""
+    """{"A": seat, "B": seat}: A sits in seat 1 when it plays the first start, else in seat 2. A game that brings
+    its own scenario with other seats than the bar's two names them itself, as `seat` (tools/impai/opening.py)."""
+    if game.get("seat"):
+        return dict(game["seat"])
     return {"A": 1, "B": 2} if game["start"] == 0 else {"A": 2, "B": 1}
 
 
@@ -2170,8 +2178,13 @@ def with_settings(game: dict, override: dict, tune: dict = None) -> dict:
 def cmd_play(a) -> int:
     values = [int(t) for t in a.values.split(",") if t] if a.values else []
     override, tune = settings_override(a.persona), tune_override(a.tune)
-    return play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override, tune)
-                       for g in read_ids(a.ids)], a, default_out(a))
+    out = default_out(a)
+    rc = play_games([with_settings(dict(parse_id(g), cap=a.cap, setup=a.setup, values=values), override, tune)
+                     for g in read_ids(a.ids)], a, out)
+    if getattr(a, "label", None):
+        import thinklib
+        thinklib.add_kept([out], a.label, tool="bar.py play")
+    return rc
 
 
 def cmd_row(a) -> int:
@@ -2240,6 +2253,9 @@ def main(argv=None) -> int:
                    help="a block pair's blocks (THE BLOCKS); by default its run set's: eoh and noh 12, ne and hn "
                         "10, a calibration row 4, a mirror pair 10")
     pl = sub.add_parser("play", help="play a list of games on L lanes")
+    pl.add_argument("--label", default=None, metavar="L",
+                    help="add the recordings this run keeps to the thought viewer's library under the label L "
+                         "(thinklib.py; tools/impai/thinkview.py serve shows them); without it nothing is added")
     pl.add_argument("--ids", required=True, help="a file of ids, a comma list, or a pair's name")
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "

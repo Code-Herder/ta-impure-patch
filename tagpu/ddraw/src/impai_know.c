@@ -33,12 +33,24 @@ static void row_fresh(IMPAI_SEEN* n)
    observation (OWN, LOS) names the type and owner, an unidentified one (SHARED) keeps what the row last
    identified. Nothing shown: the classes of now are lost and the radar's kept -- the publish owns those --
    and a row left with neither is a GHOST at its block. A ghost whose block the seat sees now is emptied: the
-   seat can see that nothing it knows of is there. */
+   seat can see that nothing it knows of is there.
+   A UNIT SEEN GONE: the slice visits every slot once a round (THE ROW'S AGE, impai.h), so a row that holds LOS
+   says the seat saw the unit at most a round ago, and a slot that holds no unit now lost it within that round,
+   under the seat's eyes: the row is emptied whole, the radar's classes with it (the next publish finds no unit
+   there either). Such a row asks observe as for a contact, which then answers for any live unit; only that it
+   answers is read -- WQ_SEEN_CONTACT is nothing shown -- and never what it says of the unit, and the tick's
+   work stays one observe a slot. The engine sees a unit by four points of its box (tagpu_worldq.c, unit_los)
+   and the row keeps its centre's block, so a wide structure dies in sight with that block dark, and the block
+   test alone would keep it a ghost. THE BOUND: a death in the ticks of the round after the seat's sight left
+   the unit is taken as seen, IMPAI_ROW_AGE_MAX ticks at most. A slot another unit took within the round
+   answers as a live unit, and the row is a ghost. */
 static void slice_slot(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_SEEN* r, int slot)
 {
     IMPAI_SEEN n = *r;
     WQ_OBS o;
-    if (q->ops->observe(q, slot, 0, &o)) {
+    const int by_sight = (n.how & IMPAI_LOS) != 0;
+    const int seen = q->ops->observe(q, slot, by_sight, &o);
+    if (seen && seen != WQ_SEEN_CONTACT) {
         row_fresh(&n);
         n.how = (uint8_t)((n.how & IMPAI_PASS) |
                           (o.seen == WQ_SEEN_OWN ? IMPAI_OWN : o.seen == WQ_SEEN_LOS ? IMPAI_LOS : IMPAI_SHARED));
@@ -48,6 +60,8 @@ static void slice_slot(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_SEEN* r, int slot)
         }
         n.bx = o.bx;
         n.bz = o.bz;
+    } else if (by_sight && !seen) {
+        memset(&n, 0, sizeof n);
     } else if (n.how) {
         n.how &= (uint8_t)~IMPAI_NOW;
         if (!(n.how & IMPAI_PASS)) n.how = IMPAI_GHOST;
@@ -106,8 +120,8 @@ static void publish(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, int 
 
 /* The patch scan: clu_rows map rows a tick through the game's own patch rule (tasim_snap_patches, which floods
    only explored metal), into the pending half; at the last row the pending half becomes the published one and
-   the seat is `scanned`: from then on its published count is a whole scan's, so none published means no
-   explored patch, not a scan still under way (THE BLIND START, impai_brain.c). A row whose floods need more
+   the seat is `scanned`: from then on its published count is a whole scan's, so none published means a map
+   with no patch, not a scan still under way (NO PATCH ON THE MAP, impai_brain.c). A row whose floods need more
    than one tick's budget makes no progress, and is passed over with its patches unreported, so the scan always
    advances; a full pending half ends the scan at once. */
 static void patch_scan(const WORLDQ* q, IMPAI_SEAT* st, SNAP_PATCH* clusters, const IMPAI_BUDGET* b,

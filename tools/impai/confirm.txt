@@ -1,0 +1,27 @@
+# ImpAI's confirm set: the games a session plays beside the exploiter situations, the candidate's DLL against
+# the champion's, game by game (tools/impai/session.py).
+# One game a line, as regress.txt: its id, then the setup it plays on (tools/compat/setups.json), none for
+# the base game. A game replays exactly from its seed, so a game is listed once.
+
+bar-hota-redtriangle-ac-1
+bar-hota-troutfarm-ca-1
+bar-hota-plainspasses-ac-1
+bar-hota-steeljungle-ca-1
+bar-nota-lavamania-ca-2 prota-4.8
+
+# The metal maps (bar.py, THE METAL MAPS): no pool holds one, so these alone show what a change does where every
+# cell yields metal and the extractors stand on the base ring. Core Prime is the flat one, won at 5643b394 with a
+# third of its metal wasted by 20 000; Metal Heck's close starts are lost there (bar-hota-metalheck-aa-2).
+bar-hota-coreprime-cc-1
+bar-hota-metalheck-aa-2
+
+# The openings (tools/impai/opening.py): ImpAI at start S as a network game seats it, to GameTime 6 000.
+# `mapped-<map>-<S>` is a mapped opening at a start no bar game plays: Steel Jungle's start 2 and Trout Farm's are
+# slow ones (the first plant at 4 814 and 4 499, 4 and 5 units at 6 000), Luschaven's start 3 has no site for the
+# vehicle plant on its first three rings and plants ARMVP at 3 336.
+mapped-steeljungle-2
+mapped-troutfarm-2
+mapped-luschaven-3
+# `unmapped-<map>-<S>` is the same game on a level not mapped. An ImpAI seat reads the map's layout there too, so
+# this one game shows an unmapped seat taking its mapped twin's decisions (mapped-luschaven-3, above).
+unmapped-luschaven-3

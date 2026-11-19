@@ -92,7 +92,7 @@ static void test_classes(void)
         { TASIM_ROLE_ASSAULT,   TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SASSAULT, "sea assault" },
         { TASIM_ROLE_ARTILLERY, TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SARTY,    "sea artillery" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_SEA,  TASIM_RF_MOBILE, TASIM_WF_TOAIR, IMPAI_K_SAA, "sea anti-air" },
-        { TASIM_ROLE_SCOUT,     TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE, "a sea scout is no class" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SSCOUT,   "sea scout" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_TOAIR, IMPAI_K_FIGHTER, "fighter" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_TOAIR | TASIM_WF_DROPPED, IMPAI_K_FIGHTER,
           "anti-air is tested before the drop" },
@@ -100,8 +100,12 @@ static void test_classes(void)
         { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED, IMPAI_K_BOMBER,
           "the drop is tested before the scout" },
         { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0, IMPAI_K_ASCOUT, "air scout" },
-        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE,
-          "an air scout with no weapon is no class" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_ASCOUT,
+          "an air scout with no weapon is the air scout" },
+        { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE,
+          "an air raider with no weapon is no class" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE | TASIM_RF_TRANSPORT, 0xFFFFFFFFu, IMPAI_K_NONE,
+          "an unarmed air transport is no class" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0, IMPAI_K_GUNSHIP, "gunship" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED | TASIM_WF_BEAM,
           IMPAI_K_GUNSHIP, "a dropped beam is a beam" },
@@ -150,7 +154,7 @@ static void test_classes(void)
 
 /* The classifier and the classes end to end on a tiny mod: a commander, its factory and an army on each layer;
    a land and an air scout with a weapon, and a jammer and a radar plane with none, which take the classifier's
-   role SCOUT and no class. */
+   role SCOUT: the jammer no class, the radar plane the air scout's (THE AIR SCOUT, the owner's exception). */
 static void test_classes_from_the_classifier(void)
 {
     enum { COM, FAC, RAID, TANK, ARTY, MISS, SCOUT, FIGHT, BOMB, PEEP, GUN, JAM, AWAC, N };
@@ -158,7 +162,7 @@ static void test_classes_from_the_classifier(void)
                                                                    PEEP, GUN, JAM, AWAC };
     static const unsigned want[N] = { IMPAI_K_NONE, IMPAI_K_NONE, IMPAI_K_LRAIDER, IMPAI_K_LASSAULT, IMPAI_K_LARTY,
                                       IMPAI_K_LAA, IMPAI_K_LSCOUT, IMPAI_K_FIGHTER, IMPAI_K_BOMBER, IMPAI_K_ASCOUT,
-                                      IMPAI_K_GUNSHIP, IMPAI_K_NONE, IMPAI_K_NONE };
+                                      IMPAI_K_GUNSHIP, IMPAI_K_NONE, IMPAI_K_ASCOUT };
     TASIM_ROLE_IN in[N];
     TASIM_ROLE_OUT out[N];
     TASIM_ROLE_Q q;

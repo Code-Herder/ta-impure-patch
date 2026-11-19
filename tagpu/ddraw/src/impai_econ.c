@@ -55,8 +55,11 @@ static int choose_energy(IMPAI_DEC* d, const uint16_t* menu, int n)
    as energy is ranked (owner's decision, 2026-11-14), ties to the lower type. 1 when either is set. The two kinds
    are never ranked against each other: the patch's ground picks between them (impai_build.c, THE EXTRACTOR FOR THE
    PATCH), so no tie between a land and a water extractor arises, and retail's land one no longer rests on its type
-   number being the lower. A water type whose minwaterdepth cannot be read or is not above 0 is dropped: no ground
-   would tell it from the land one. */
+   number being the lower. A water type whose minwaterdepth cannot be read or is not above 0 -- an extractor
+   flagged by its yard alone (impai_tinfo.c, PLACED ON WATER ONLY) -- is passed over before the ranking, so it
+   never takes the wet slot from one that states a depth: with a depth of 0 no ground would tell its patches
+   from the land one's, a patch at the sea's own level being both. BOUND: one def read a water extractor of the
+   menu. */
 static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n, IMPAI_MEX* out)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -67,17 +70,18 @@ static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n, IMPAI_MEX* out)
         const int t = menu[k];
         const IMPAI_TINFO* ti;
         uint16_t* best;
+        int wet;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_MEX || in->ti[t].value <= 0) continue;
         ti = &in->ti[t];
-        best = (ti->flags & IMPAI_TF_WATER) ? &out->wet : &out->dry;
+        wet = (ti->flags & IMPAI_TF_WATER) != 0;
+        if (wet && !(d->q->ops->def_econ(d->q, t, &e) && e.minwater > 0)) continue;
+        best = wet ? &out->wet : &out->dry;
         if (!*best || ti->mgain * in->ti[*best].value > in->ti[*best].mgain * ti->value ||
-            (ti->mgain * in->ti[*best].value == in->ti[*best].mgain * ti->value && t < *best))
+            (ti->mgain * in->ti[*best].value == in->ti[*best].mgain * ti->value && t < *best)) {
             *best = (uint16_t)t;
+            if (wet) out->wet_min = e.minwater;
+        }
     }
-    if (out->wet && d->q->ops->def_econ(d->q, out->wet, &e) && e.minwater > 0)
-        out->wet_min = e.minwater;
-    else
-        out->wet = 0;
     return out->dry || out->wet;
 }
 
@@ -104,22 +108,30 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
 /* ---- THE CHOICE: which plant the seat builds next ----
 
    THE REACH (reach_mask_of): bit c is set when movement class c reaches a plausible enemy base from the base.
-   - THE BASE'S COMPONENT: the label most of the blocks within REACH_RINGS rings of the anchor's 32-px block carry
-     (base_label). The anchor is where the commander stood, and the content map can hold a larger class's block
+   - THE BASE'S COMPONENT: the label most of the blocks within IMPAI_REACH_RINGS rings of the anchor's 32-px block
+     carry (base_label). The anchor is where the commander stood, and the content map can hold a larger class's block
      there impassable (a feature, a slope) where the plants' yards around it are not, or a pocket beside it that
      the yards' ground does not join; a class with no label within the rings has no ground at the base, and does
      not reach. RESIDUAL: past BASE_LABELS distinct labels in the rings the later ones are not counted.
    - THE TARGETS: once enemy structures have been seen (impai_est_known), the military's estimate, their
-     value-weighted centroid or the last one kept; before that, every start position but the seat's own (the one
-     nearest the anchor):
-     the military's estimate is then only the nearest other start, which on Trout Farm is cut off by water from
+     value-weighted centroid or the last one kept; before that, every start position that can hold an enemy's
+     base (THE FOE'S STARTS, impai_start_foe: not the seat's own -- the one nearest the anchor -- and, where the
+     level seated its starts, neither left empty nor an ally's), the military's and the held ground's own rule:
+     the military's estimate is then only the nearest such start, which on Trout Farm is cut off by water from
      the anchor while the enemy, at another start, was land-linked (MEASURED 2026-11-14, plantchoice r1 and r3's
-     Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them.
-     An empty start stays plausible: which starts the players hold is not on that screen. RESIDUAL: an ally's
-     start is a target too -- the lobby shows the teams, but the WORLDQ has no read of a player's start index
-     and alliance yet, which excluding them needs. With fewer than two starts, the estimate; with no estimate
-     either, every bit is set.
-   - A class reaches when one target has a block of the base's component within REACH_RINGS rings (a start's own
+     Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them,
+     and at fixed starts the battle room shows who stands at each. WHY THE FOE'S STARTS: an empty start on the
+     seat's own island made every land class reach, so Gods of War's seat opened on a vehicle plant whose army
+     reached no enemy (MEASURED 2026-11-17, exploit-naval-turtle at 5e4e9c24: `reach=fffff83f chose=CORVP`,
+     every other start empty but two, neither land-linked). With no such start, or fewer than two starts, the
+     estimate; with no estimate either, every bit is set. ON THE ISLAND (pos.island) the targets are the estimate
+     and the foe's starts together, a start the level seated at random left out once enemy structures are known
+     (the military's own reading, impai_mil.c, THE ISLAND), so the economy agrees with the verdict only when its
+     land army reaches none of them. WHY: the verdict reads the rows, and an estimate taken from structures first
+     seen on water -- a lake's tidal generators or shipyard -- stands where no land class reaches on a map whose
+     enemy base the land army does reach; aimed at that one estimate the agreement would have held the seat to
+     sea and air plants and a capped land army for good.
+   - A class reaches when one target has a block of the base's component within IMPAI_REACH_RINGS rings (a start's own
      block may be impassable to a large class as the anchor's may). Any, not all: the extra mobility of a class
      counts only where the map needs it, and before the enemy is known the map needs it only when no plausible
      enemy is reached otherwise -- "a hover only where the route to the enemy needs water" (owner, 2026-11-14).
@@ -130,7 +142,8 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    only filters: a hover's mobility adds nothing where the land classes reach, and is what makes its plant score
    where they do not. A route much shorter over water is not counted (owner's decision,
    research/notes/impai/decisions.md). BOUND: once a decision, for each class with labels, one spiral at the
-   anchor and one at each target, each at most (2 REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
+   anchor and one at each target, each at most (2 IMPAI_REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS + 1
+   targets.
 
    THE SCORE of plant P at the tech level T (choice_tech), at most IMPAI_QTECH: max(ftop, 1), the enemy taken at the
    seat's own tech, and for a tech-up the level above it, the tech its candidates are built for (owner's decision,
@@ -148,6 +161,18 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    - its menu holds a constructor whose own menu holds an extractor;
    - it is placed on dry ground, or the anchor is wet (a water-only plant fits no site of the ring otherwise);
    - its way out has not been refused too often (impai_build.c, THE PLANT'S FALLBACK), unless `waived`;
+   - THE ISLAND'S PLANTS (the owner's decision, 2026-11-17): past the seat's first plant, when the military judges the
+     seat on an island (impai_mil.c, island) and no candidate the pass may take has a land army -- the choice's own
+     reach agrees --, only a sea or an air plant (island_plant), by THE ISLAND'S PLANT ORDER: a land plant instead while
+     the seat has none on an island big enough for one, else the sea plant, placed by the sea plant's own search
+     (assign, IMPAI_DEC.plant_sea) while the sea refusals are not spent, until the seat holds ISLE_SEA_BEFORE_AIR sea
+     plants and none of air, and the air plant then. WHY THE AGREEMENT: the military's verdict reads the seat's land
+     army and the rows, and a row on a block the land army does not stand on reads as off the land, so the verdict came
+     and went on a linked map: on Trout Farm it held at GameTime 12 517, the seat's second plant was an air plant beside
+     a lab whose land army reached (s 0.388), and the win came at 54 559 against 45 445 (MEASURED 2026-11-17,
+     bar-hota-troutfarm-ca-1 at 31ada7aa; with the agreement the lab again, and 45 445). A plant is for the rest of the
+     game, so it waits for both readings. RESIDUAL: the default table buys no aircraft (impai_table.c,
+     IMPAI_TABLE_HAND_INIT), so such an air plant makes constructors alone;
    - THE BUILD TECH (IMPAI_TINFO.ctech) fits the want: a tech-up takes only a plant above the seat's highest
      (IMPAI_DEC.ftop); a first or further plant only one at or below max(ftop, lo), lo the least among the
      candidates, so the economy's income gate stays the only way up and a mod whose cheapest plant already
@@ -191,6 +216,22 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    least value. The runner-up is kept for the plant line. A tech-up whose best candidate scores below 0 still goes
    ahead (owner's decision, 2026-11-14): it brings the tech-2 constructors and economy, and THE ARMY ORDERS keep a
    plant whose army is poor here to constructors.
+   THE ISLAND'S FIRST PLANT (IMPAI_DEC.plant_sea): on a dry anchor, when no candidate the first plant's pick may
+   take (a build tech no higher than the seat's top factory's or the lowest candidate's, plant_pick) has a land
+   army, at least one does, and the military judges the map naval (IMPAI_MIL.naval), the first plant is never an
+   air plant while another is pickable, and is the sea plant when THE ISLAND'S PLANT ORDER says sea, built where
+   the sea plant is (assign: choose_sea_plant, impai_build_sea_plant), while the level has
+   counted no sea refusal (IMPAI_BRAIN.sea_refused); the least value of all stays the choice for a builder that
+   offers no sea plant, and for every decision once one refusal is counted -- a search that orders none counts one
+   in its own decision, a sea plant's job that fails counts one before the next decision's assignment
+   (impai_brain.c, job_checks) --, so the first plant tries the sea once and then builds on land: a seat whose sea
+   plant cannot be finished waits one failed job for its first plant, not the sixteen fail_t windows the sea
+   plant's own want may spend. A water plant is no candidate on a dry anchor, since the ring holds no water site,
+   so "the least value of all" reads the dry plants alone, and on an island none of them has an army that reaches.
+   WHY: the owner's rule is the opening's constructors and the army it can make next, and on an island the sea
+   army is the one the seat can send: on Gods of War the seat opened on a vehicle plant at GameTime 2 974, its
+   shipyard came on the pacing at 9 552, and it ended at the cap with two ships and nothing attacked (MEASURED
+   2026-11-17, exploit-naval-turtle at 5e4e9c24).
 
    WHY, MEASURED 2026-11-14 over 377 bar seat-games: the least value with the offer -- the highest classifier tech
    of a plant's units, a graph distance -- took CORE's hover plant as the tech-up in 167 of 170 seats (CORHP 1 883
@@ -201,20 +242,19 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
 #define PLANT_VIA    8          /* THE UNLOCKS: constructor types a pass looks through                       */
 #define PLANT_LOOK   (2 * IMPAI_PLANT_CANDS)  /* plant menus a pass of THE CHOICE reads               */
 
-#define REACH_RINGS  8          /* 256 px round the anchor or a target                                       */
 #define PLANT_STARTS 16
 
 #define BASE_LABELS  8          /* distinct labels base_label counts; a ninth and later one is not counted    */
 
-/* class c's base component: the label most blocks within REACH_RINGS rings of block (bx, bz) carry, ties to the
-   one met first in ring order -- the yards stand round the anchor, and one passable pocket next to it must not
-   speak for the ground they stand on; 0 none; -1 the level has no labels for c. BOUND: (2 REACH_RINGS + 1)^2
+/* class c's base component: the label most blocks within IMPAI_REACH_RINGS rings of block (bx, bz) carry, ties to
+   the one met first in ring order -- the yards stand round the anchor, and one passable pocket next to it must not
+   speak for the ground they stand on; 0 none; -1 the level has no labels for c. BOUND: (2 IMPAI_REACH_RINGS + 1)^2
    label reads and BASE_LABELS counters */
 static int base_label(const IMPAI_REACH* r, unsigned c, int bx, int bz)
 {
     int lab[BASE_LABELS], cnt[BASE_LABELS], n = 0, ring, i, k, dx, dz, best = -1;
     if (impai_reach_at(r, c, bx, bz) < 0) return -1;
-    for (ring = 0; ring <= REACH_RINGS; ring++)
+    for (ring = 0; ring <= IMPAI_REACH_RINGS; ring++)
         for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
             const int l = impai_reach_at(r, c, bx + dx, bz + dz);
             if (l <= 0) continue;
@@ -231,35 +271,44 @@ static int base_label(const IMPAI_REACH* r, unsigned c, int bx, int bz)
     return best < 0 ? 0 : lab[best];
 }
 
-/* THE TARGETS' 32-px blocks into tx/tz: 0 none */
+/* the seat's own start of st[0..ns): the one nearest the anchor, ties to the lower index */
+static int own_start(const IMPAI_DEC* d, const WQ_START* st, int ns)
+{
+    const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
+    int own = 0, k;
+    for (k = 1; k < ns; k++)
+        if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
+            (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
+            own = k;
+    return own;
+}
+
+/* THE TARGETS' 32-px blocks into tx/tz, at most PLANT_STARTS + 1: 0 none */
 static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
 {
     const IMPAI_MIL* mil = d->in->mil;
+    const int known = impai_est_known(mil), isle = d->pos.island;
     WQ_START st[PLANT_STARTS];
-    const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
-    int ns = 0, own = 0, k, n = 0;
-    if (!impai_est_known(mil) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
-        for (k = 1; k < ns; k++)
-            if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
-                (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
-                own = k;
+    int ns = 0, own, k, n = 0;
+    if ((isle || !known) && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+        own = own_start(d, st, ns);
         for (k = 0; k < ns; k++)
-            if (k != own) {
+            if (k != own && impai_start_foe(d->in->view, st[k].seated) && !(isle && known && st[k].seated == 0)) {
                 tx[n] = st[k].x >> 5;
                 tz[n++] = st[k].z >> 5;
             }
-        return n;
+        if (n && !isle) return n;
     }
-    if (mil->ebx == IMPAI_NO_ANCHOR) return 0;
-    tx[0] = mil->ebx;
-    tz[0] = mil->ebz;
-    return 1;
+    if (mil->ebx == IMPAI_NO_ANCHOR) return n;
+    tx[n] = mil->ebx;
+    tz[n] = mil->ebz;
+    return n + 1;
 }
 
 static uint32_t reach_mask_of(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int tx[PLANT_STARTS], tz[PLANT_STARTS], nt, k, ox, oz;
+    int tx[PLANT_STARTS + 1], tz[PLANT_STARTS + 1], nt, k, ox, oz;
     unsigned c;
     if (d->reach_done) return d->reach_mask;
     d->reach_done = 1;
@@ -271,7 +320,7 @@ static uint32_t reach_mask_of(IMPAI_DEC* d)
         int any = 0;
         if (a < 0) continue;
         for (k = 0; k < nt && a > 0 && !any; k++)
-            any = impai_reach_near(in->reach, c, (uint16_t)a, tx[k], tz[k], REACH_RINGS, &ox, &oz);
+            any = impai_reach_near(in->reach, c, (uint16_t)a, tx[k], tz[k], IMPAI_REACH_RINGS, &ox, &oz);
         if (!any) d->reach_mask &= ~(1u << c);
     }
     return d->reach_mask;
@@ -319,7 +368,7 @@ static int reaches(const IMPAI_DEC* d, uint32_t mask, unsigned type)
    BOUND, a decision: the judgement once -- the published patches, IMPAI_CLUSTERS_HALF at most, and each finished
    factory's menu, one read -- and each constructor type judged at most once (IMPAI_MR_MEMO kept; a type past them
    is judged again when asked), each judgement one menu read of at most WQ_TYPES_MAX types, one base label of
-   (2 REACH_RINGS + 1)^2 reads and the published patches, one claim, held, label and ground test each; THE
+   (2 IMPAI_REACH_RINGS + 1)^2 reads and the published patches, one claim, held, label and ground test each; THE
    REACHING PLANT at most PLANT_LOOK plant menus. RESIDUAL: a water-only plant (a shipyard) is no candidate on a
    dry anchor, as in THE CHOICE, so a seat whose only reaching constructor comes from a shipyard waits on the sea
    plant's own rules. */
@@ -432,21 +481,26 @@ static unsigned choice_tech(const IMPAI_DEC* d, int up)
 }
 
 /* S(P) over P's menu (THE SCORE); *army 1 when the menu holds a land army, a gated type that reaches, whatever the
-   values */
-static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask, uint8_t* army)
+   values. A type counts only when its weapons hit a target class the seat buys for (`want`, THE TARGETS BOUGHT
+   FOR), the filter the army orders read the menus through (army_menu), so the choice never takes a plant for a
+   type its factory would not buy -- a mod's land unit with waterweapons alone, against an enemy on land */
+static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask, unsigned want,
+                         uint8_t* army)
 {
     float s = IMPAI_Q_NONE;
     int k;
     *army = 0;
     for (k = 0; k < n; k++) {
-        if (!gated_reaching(d, mask, menu[k])) continue;
+        if (!gated_reaching(d, mask, menu[k]) || !(impai_type_hits(&d->in->ti[menu[k]]) & want)) continue;
         *army = 1;
         if (d->in->tv && d->in->tv[menu[k]].q[T - 1] > s) s = d->in->tv[menu[k]].q[T - 1];
     }
     return s;
 }
 
-typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army; float s; } PLANT_CAND;
+typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army, isle, air; float s; } PLANT_CAND;
+
+static unsigned targets_bought_for(IMPAI_DEC* d);
 
 /* a before b in THE BEST's order; `scored` 0 ranks by the rest alone, and `armed` (the opening on dry ground) puts
    a plant with a land army first. A plant the seat's own builders build goes before one that waits for an unlock
@@ -519,6 +573,222 @@ static unsigned unlock_kept(IMPAI_DEC* d)
     return type_bit(d->cons_frame, st->unlock) ? 0 : st->unlock;
 }
 
+/* a menu menu[0..n) that offers an air army type (a class of IMPAI_K_AIRMASK, a value above 0). BOUND: n reads */
+static int menu_air(const IMPAI_DEC* d, const uint16_t* menu, int n)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int k;
+    for (k = 0; k < n; k++)
+        if (menu[k] < in->nti && in->ti[menu[k]].klass < IMPAI_KS && (IMPAI_K_AIRMASK >> in->ti[menu[k]].klass & 1u) &&
+            in->ti[menu[k]].value > 0.0f)
+            return 1;
+    return 0;
+}
+
+int impai_econ_air_plant(IMPAI_DEC* d, unsigned type)
+{
+    uint16_t plant[PLANT_MENU];
+    int n;
+    if (type >= d->in->nti || d->in->ti[type].cat != IMPAI_C_FACTORY || (d->in->ti[type].flags & IMPAI_TF_WATER))
+        return 0;
+    n = d->q->ops->build_options(d->q, (int)type, plant, PLANT_MENU);
+    return n > 0 && menu_air(d, plant, n);
+}
+
+/* THE ISLAND'S PLANTS: 1 when plant type t, its menu menu[0..n), may be a plant past the seat's first on THE
+   ISLAND: a plant placed on water only (IMPAI_TF_WATER), or an air plant (menu_air). A water plant is a candidate
+   only on a wet anchor (THE CANDIDATES). BOUND: n menu reads */
+static int island_plant(const IMPAI_DEC* d, unsigned t, const uint16_t* menu, int n)
+{
+    return (d->in->ti[t].flags & IMPAI_TF_WATER) || menu_air(d, menu, n);
+}
+
+/* THE ISLAND'S PLANT ORDER (the owner's decision, 2026-11-17): on an island the order of the plants is a
+   calculation, not a fixed "sea, then air":
+   - THE SEA FIRST when sea defences are needed -- an enemy on or under the water known (THE TARGETS KNOWN,
+     impai_tg_known: FLOAT or UNDER) -- or the metal lies at sea: the water patches a sea plant's constructor
+     reaches (cons_patches) are at least the island's;
+   - A LAND PLANT FIRST when the island is big enough that its constructors pay: at least ISLE_PATCHES open
+     patches of THE ISLAND a land plant's constructor's extractor fits, more than the sea's, and at least
+     ISLE_BLOCKS blocks of THE ISLAND within ISLE_RINGS rings of the anchor. THE ISLAND is the base component
+     (base_label) of THE ISLAND'S CLASS (isle_class), the class most of the content's land army types travel by,
+     not the constructor's own: a hover or amphibious constructor's component spans the sea, and measured by it
+     the sea's blocks and patches read as the island's. With no such class -- no labels, or no land army type on
+     a labelled class -- the constructor's own class measures it. RESIDUAL: a sea plant whose constructor walks
+     the land too (a floating hover plant's) counts the island's patches as the sea's, which only leans to the
+     sea;
+   - NEVER AN AIR PLANT FIRST (THE CANDIDATES' first plant), and aircraft eventually: on the island the plants past
+     the first are the sea plant's while the seat holds fewer than ISLE_SEA_BEFORE_AIR sea plants or already has an
+     air plant, and an air plant then -- or sooner, past one sea plant, under THE AIR PLANT FOR THE BLIND.
+   Only the plants it can make count: a plant on a builder's menu of the seat's, its constructor one that builds
+   an extractor; each plant type read once (looked[]), whatever builders offer it.
+   WHY: "Air first is often a bad idea and extremely hard to pull off even for a human. Whether you
+   have a land plant first really depends on the size of the island to know if it's worth it" (the owner,
+   2026-11-17): on Gods of War, an island of four patches, the seat's land plant cost the metal of 1.4 destroyers
+   (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06), and an air plant makes constructors alone under the
+   default table (IMPAI_TABLE_HAND_INIT buys no aircraft). A tie of the two counts is the sea's. Once a decision
+   (IMPAI_DEC.isle_order). BOUND: the seat's builder types' menus, at most PLANT_LOOK distinct plants and a plant
+   menu read each, each constructor counted once a side (ISLE_CONS kept; one past them is counted again) -- a menu
+   read, a base label, at most (2 ISLE_SEA_RINGS + 1)^2 label reads and the published patches --, WQ_MCLASSES
+   counts and one base label for THE ISLAND, and (2 ISLE_RINGS + 1)^2 label reads for the area. */
+#define ISLE_SEA       1
+#define ISLE_LAND      2
+#define ISLE_SEA_RINGS 32       /* a constructor's water searched within 1 024 px of the anchor                */
+#define ISLE_RINGS     48       /* the island measured within 1 536 px of the anchor                           */
+#define ISLE_PATCHES   6        /* [hand-written: the bar's to move] more than the commander's opening takes   */
+#define ISLE_BLOCKS    1024     /* [hand-written: the bar's to move] a 1 024 px square, a ninth of the window */
+#define ISLE_SEA_BEFORE_AIR 2   /* [hand-written: the bar's to move]                                           */
+
+/* THE AIR PLANT FOR THE BLIND (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *The air plant
+   for the blind*): on the island, with one sea plant or more and no air plant, the air plant comes ahead of the next
+   sea plant while all three hold:
+   - an enemy area needs the air scout (impai_blind: THE BLIND SPOT, impai_mil.c);
+   - THE WATER HELD: the seat's sea army value -- its sea classes' kspent, built, building and queued -- is above 0
+     and at least WATER_HOLD_K times the most enemy sea army value seen lately (IMPAI_MIL.sea_held). A lost
+     prediction does not count against it: the retreats an island seat meets are from what stands ashore -- the
+     commander at its shore, the towers --, which is what the air scout is for, not the water war (MEASURED
+     2026-11-17, exploit-naval-turtle at b54d27f3: a retreat at GameTime 8 460 from the shore, the second plant due
+     at 8 587, no enemy ship seen);
+   - the economy pays for it: no metal or energy stall, not in THE HOLD, and a steady metal income (m_steady) of
+     factory_per_m a pass or more, the plan's own pace for one more plant.
+   WHY: "When blind AND you safely control the water. Not much upside to seeing the island if you're losing the
+   water war ... a heuristic that is not too safe but also a bit cautious, so that an air plant won't hobble your
+   naval forces in the early game" (the owner, 2026-11-17). A recorded sea_held that is not a finite non-negative
+   number, or a stamp past now, reads as the water not held. The figures are the writer's. */
+#define WATER_HOLD_K  1.5f      /* [hand-written: the bar's to move] the sea army over the enemy's seen         */
+static int air_for_blind(const IMPAI_DEC* d)
+{
+    const IMPAI_MIL* m = d->in->mil;
+    float own = 0.0f;
+    unsigned k;
+    /* the posture is blind only with a military record (posture_read), so m is not NULL past this line */
+    if (!d->pos.blind || d->sea_plants < 1 || d->air_plants) return 0;
+    if (!(m->sea_held >= 0.0f && m->sea_held < 1e30f) || m->sea_held_t > d->now) return 0;
+    for (k = IMPAI_K_SRAIDER; k <= IMPAI_K_SSCOUT; k++) own += d->kspent[k];
+    if (!(own > 0.0f) || own < WATER_HOLD_K * m->sea_held) return 0;
+    return !d->m_stall && !d->e_stall && !d->hold && d->m_steady >= d->in->plan->factory_per_m;
+}
+#define ISLE_CONS      16
+
+/* the open patches constructor type `type` reaches (THE METAL'S REACH, counted): on its class's component at the
+   base (base_label) -- for a class with no block in the base's rings, a ship's at a dry anchor, the first
+   labelled block within ISLE_SEA_RINGS rings --, those an extractor of its own menu fits; its class and label
+   into *cls, *lab (-1: a VTOL or a class with no labels, every patch). With isle_c >= 0 the component is THE
+   ISLAND instead, class isle_c's label isle_l (0: the anchor on none of its ground, no patch). Reads d->menu2. */
+static int cons_patches(IMPAI_DEC* d, unsigned type, unsigned* cls, int* lab, int isle_c, int isle_l)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_TINFO* t = &in->ti[type];
+    const int n = d->q->ops->build_options(d->q, (int)type, d->menu2, WQ_TYPES_MAX);
+    IMPAI_MEX mx;
+    int l = -1, ring, i, dx, dz;
+    *cls = t->mclass;
+    *lab = -1;
+    if (n <= 0 || !choose_mex(d, d->menu2, n, &mx)) return 0;
+    if (isle_c >= 0) {
+        *cls = (unsigned)isle_c;
+        *lab = isle_l;
+        return isle_l > 0 ? impai_patch_open_to(d, (unsigned)isle_c, isle_l, &mx) : 0;
+    }
+    if (in->reach && !(t->flags & IMPAI_TF_VTOL) && t->mclass < WQ_MCLASSES) {
+        const int bx = in->st->ax >> 1, bz = in->st->az >> 1;
+        l = base_label(in->reach, t->mclass, bx, bz);
+        for (ring = IMPAI_REACH_RINGS + 1; l == 0 && ring <= ISLE_SEA_RINGS; ring++)
+            for (i = 0; l == 0 && impai_ring_at(ring, i, &dx, &dz); i++) {
+                const int v = impai_reach_at(in->reach, t->mclass, bx + dx, bz + dz);
+                if (v > 0) l = v;
+            }
+        if (l == 0) return 0;
+    }
+    *lab = l;
+    return impai_patch_open_to(d, t->mclass, l, &mx);
+}
+
+/* the blocks of class c's component `lab` within ISLE_RINGS rings of the anchor; a component of no labels (-1)
+   reads as the whole window */
+static int isle_blocks(const IMPAI_DEC* d, unsigned c, int lab)
+{
+    const int bx = d->in->st->ax >> 1, bz = d->in->st->az >> 1;
+    int ring, i, dx, dz, n = 0;
+    if (lab < 0 || !d->in->reach) return (2 * ISLE_RINGS + 1) * (2 * ISLE_RINGS + 1);
+    for (ring = 0; ring <= ISLE_RINGS; ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++)
+            n += impai_reach_at(d->in->reach, c, bx + dx, bz + dz) == lab;
+    return n;
+}
+
+/* THE ISLAND'S CLASS: the labelled class with the most of the content's land army types (IMPAI_REACH.land_w),
+   ties to the lower; -1 none */
+static int isle_class(const IMPAI_REACH* r)
+{
+    int c, best = -1;
+    if (!r) return -1;
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if ((r->present >> c & 1u) && r->land_w[c] && (best < 0 || r->land_w[c] > r->land_w[best])) best = c;
+    return best;
+}
+
+static int isle_order(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int ic, il;
+    uint16_t plant[PLANT_MENU], ctype[ISLE_CONS], looked[PLANT_LOOK];
+    int cnum[ISLE_CONS], clab[ISLE_CONS], cwet[ISLE_CONS];
+    unsigned ccls[ISLE_CONS], land_cls = 0;
+    int b, k, j, m, nm = 0, nl = 0, wet = 0, land = 0, land_lab = -1;
+    if (d->isle_order) return d->isle_order;
+    if (in->mil && (impai_tg_known(in->mil, d->now) & ((1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER))))
+        return d->isle_order = ISLE_SEA;
+    ic = isle_class(in->reach);
+    il = ic >= 0 ? base_label(in->reach, (unsigned)ic, in->st->ax >> 1, in->st->az >> 1) : -1;
+    for (b = 0; b < d->nbtype; b++) {
+        const int n = d->q->ops->build_options(d->q, d->btype[b], d->menu3, WQ_TYPES_MAX);
+        for (k = 0; k < n && nl < PLANT_LOOK; k++) {
+            const unsigned t = d->menu3[k];
+            int np, water, seen = 0;
+            if (t >= in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
+            for (j = 0; j < nl; j++) seen |= looked[j] == t;
+            if (seen) continue;
+            looked[nl++] = (uint16_t)t;
+            np = d->q->ops->build_options(d->q, (int)t, plant, PLANT_MENU);
+            water = impai_water_plant(in, t);
+            if (!water && menu_air(d, plant, np)) continue;
+            for (j = 0; j < np; j++) {
+                unsigned c = 0;
+                int l = -1, p = 0;
+                if (plant[j] >= in->nti || in->ti[plant[j]].cat != IMPAI_C_CONS) continue;
+                for (m = 0; m < nm && (ctype[m] != plant[j] || cwet[m] != water); m++) {}
+                if (m < nm) {
+                    p = cnum[m];
+                    c = ccls[m];
+                    l = clab[m];
+                } else {
+                    if (builds_mex(d, plant[j]))
+                        p = cons_patches(d, plant[j], &c, &l, water ? -1 : ic, il);
+                    if (nm < ISLE_CONS) {
+                        ctype[nm] = plant[j];
+                        cwet[nm] = water;
+                        cnum[nm] = p;
+                        ccls[nm] = c;
+                        clab[nm++] = l;
+                    }
+                }
+                if (water) {
+                    if (p > wet) wet = p;
+                } else if (p > land) {
+                    land = p;
+                    land_cls = c;
+                    land_lab = l;
+                }
+            }
+        }
+    }
+    return d->isle_order = land >= ISLE_PATCHES && land > wet && isle_blocks(d, land_cls, land_lab) >= ISLE_BLOCKS
+                               ? ISLE_LAND : ISLE_SEA;
+}
+
+static int choose_sea_plant(IMPAI_DEC* d, const uint16_t* menu, int n);
+
 /* One pass of THE CHOICE, a tech-up's when `up`: its plant, 0 none, the constructor it needs first (THE UNLOCKS)
    into *via, 0 none, and its runner-up and their scores. A plant is read once (looked[]) and takes a candidate's
    place only when it passes the filters a single plant can fail -- its constructor, and a tech-up's build tech --
@@ -532,14 +802,18 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     const int armed = !wet && d->count[IMPAI_C_FACTORY] == 0;
     const unsigned T = choice_tech(d, up);
     const uint32_t mask = reach_mask_of(d);
+    const int island = d->pos.island && d->count[IMPAI_C_FACTORY] > 0;
+    const unsigned want = targets_bought_for(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
     uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA], looked[PLANT_LOOK];
-    int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
+    int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype, isle_only = 0, no_air = 0;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
     if (d->count[IMPAI_C_FACTORY] > 0 && cons_room(d)) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
+        if (island && b < nown && !d->plant_sea_menu && n > 0)
+            d->plant_sea_menu = choose_sea_plant(d, d->menu3, n) != 0;
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
             const unsigned t = d->menu3[k];
             int seen = 0, np, ok = 0;
@@ -556,13 +830,55 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
             c[nc].type = (uint16_t)t;
             c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
-            c[nc].s = plant_score(d, plant, np, T, mask, &c[nc].army);
+            c[nc].s = plant_score(d, plant, np, T, mask, want, &c[nc].army);
+            c[nc].air = (uint8_t)(!(in->ti[t].flags & IMPAI_TF_WATER) && menu_air(d, plant, np));
+            c[nc].isle = (uint8_t)(island && island_plant(d, t, plant, np));
             if (c[nc].ctech < lo) lo = c[nc].ctech;
             nc++;
         }
     }
+    if (armed && !up) {
+        int pickable = 0, ground = 0;
+        for (k = 0; k < nc; k++) {
+            if (c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
+            if (c[k].army) break;
+            pickable = 1;
+            ground |= !c[k].air;
+        }
+        /* THE ISLAND'S FIRST PLANT by THE ISLAND'S PLANT ORDER, and never an air plant while another is pickable */
+        no_air = pickable && k == nc && ground;
+        d->plant_sea = pickable && k == nc && d->pos.naval == 1 && isle_order(d) == ISLE_SEA;
+    }
+    if (island) {
+        int air = 0;
+        for (k = 0; k < nc; k++)
+            if ((up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo)) && c[k].army) break;
+        isle_only = k == nc;
+        /* THE ISLAND'S PLANT ORDER past the first plant: a land plant while the seat has none on an island big
+           enough for one; else the sea plant, then an air plant once the seat holds ISLE_SEA_BEFORE_AIR sea
+           plants and none of air */
+        if (isle_only && isle_order(d) == ISLE_LAND &&
+            (int)d->count[IMPAI_C_FACTORY] - (int)d->sea_plants - (int)d->air_plants <= 0) {
+            isle_only = 0;
+            no_air = 1;
+        }
+        for (k = 0; k < nc && isle_only; k++)
+            air |= c[k].isle && c[k].air && (up || c[k].ctech <= (d->ftop > lo ? d->ftop : lo));
+        if (!up) {
+            const int sea = isle_only && (d->sea_plants < ISLE_SEA_BEFORE_AIR || d->air_plants || !air);
+            d->plant_air_blind = sea && air && air_for_blind(d);
+            d->plant_sea = sea && !d->plant_air_blind;
+        }
+    }
+    /* THE AIR PLANT FOR THE BLIND picks among the air plants alone: the sea plant is placed by its own search
+       (assign's plant_sea branch), never by the ring, so a shipyard that out-ranks the air plant is no candidate
+       here. BOUND: plant_air_blind is set only when `air` found an island air candidate under the same ctech
+       bound, so the pass always has one */
+    const int air_only = !up && d->plant_air_blind;
     for (k = 0; k < nc; k++) {
-        if (!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
+        if ((!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) || (isle_only && !c[k].isle) || (no_air && c[k].air) ||
+            (air_only && !c[k].air))
+            continue;
         if (best < 0 || plant_before(d, &c[k], &c[best], scored, armed)) {
             second = best;
             best = k;
@@ -576,9 +892,32 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     return best >= 0 ? c[best].type : 0;
 }
 
+static int on_menu(const uint16_t* menu, int n, unsigned type);
+
+/* THE AIR PLANT TAKES THE ENERGY BUILDER (the owner's decision, 2026-11-17; decisions.md, *The air plant for the
+   blind*): 1 when jobbed builder i may be taken off its job for the air plant for the blind -- its job a BUILD of an
+   energy type (wind, solar, any IMPAI_C_ENERGY) not given in this decision, no energy stall, and its far record not
+   holding it from plants. In a stall the energy build stands (the owner's exception); air_for_blind holds in no
+   stall either, so the clause here is the rule stated where it applies, not its only guard */
+static int energy_leaver(const IMPAI_DEC* d, int i)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_JOB* j = &in->job[d->jobbed[i].slot];
+    return !d->e_stall && j->kind == IMPAI_JOB_BUILD && j->build < in->nti && in->ti[j->build].cat == IMPAI_C_ENERGY &&
+           j->since != d->now && !impai_far(d, &d->jobbed[i]);
+}
+
+/* the air plant for the blind let go: the decision's plant is the sea plant, as before the rule */
+static void air_let_go(IMPAI_DEC* d)
+{
+    d->plant_air_blind = 0;
+    d->plant_sea = 1;
+}
+
 /* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK); the
    tech-up's two passes first when it is due, then the further plant's when that is wanted too (THE TECH-UP
-   FIRST). At most four passes. */
+   FIRST). At most four passes.
+   The air plant for the blind is let go for the sea plant, when air_take placed it nowhere, by the ladder (assign). */
 static void plant_choice(IMPAI_DEC* d)
 {
     uint16_t next, via;
@@ -618,6 +957,14 @@ static void plant_ordered(IMPAI_DEC* d, int type)
     o->plant_want = (uint8_t)(d->count[IMPAI_C_FACTORY] == 0 ? 1 : d->plant_up ? 3 : 2);
     o->plant_T = (uint8_t)choice_tech(d, d->plant_up);
     o->plant_reach = reach_mask_of(d);
+}
+
+/* THE PLANT WALK'S TRACE (impai.h): the decision keeps the first builder's walk of the base ring, and with no
+   walk the first builder's answer */
+static void plantwalk_keep(IMPAI_DEC* d, const IMPAI_PLANTWALK* w)
+{
+    IMPAI_PLANTWALK* o = &d->out->walk;
+    if (!o->set || (o->exit < IMPAI_PW_LEFT && w->exit >= IMPAI_PW_LEFT)) *o = *w;
 }
 
 /* THE SEA PLANT's type: the least value among the menu's water factories (impai_water_plant) whose own menu
@@ -809,7 +1156,7 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 /* ---- 4. the builders ---- */
 
 /* A METAL MAP (impai_metal_map): the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
-   it and the patch scan publishes no patch whatever the seat explores; the loader seeds every cell with the
+   it and the patch scan publishes no patch; the loader seeds every cell with the
    background (0x4839B3..0x4839E6, engine/map.md), and an extractor yields extractsmetal x its footprint's metal
    wherever it stands. Core Prime Industrial Area is one: SurfaceMetal 255, no metal feature, every cell 255.
    The stock AI places its extractors there by its general site search: it takes the spot search only when
@@ -833,8 +1180,8 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    live takes neither rule (impai_brain.c, THE FAR RECORD), so the plant goes to one that can walk. An
    extractor's site is a patch, or on a metal map the ring, and its type is the one for the ground there -- the
    patch's centre, or on a metal map the anchor (impai_build.c, THE EXTRACTOR FOR THE PATCH). A constructor
-   explores only when no patch is left for it -- none free, reachable on its class, unthreatened and with an
-   extractor of its menu for its ground -- so a patch it can never reach or build on does not keep it home.
+   with no patch left for it -- none free, reachable on its class, unthreatened and with an extractor of its
+   menu for its ground -- is asked the rungs below, so a patch it can never reach or build on does not keep it home.
    THE RECLAIM (impai_build.c) is asked twice, each time for a feature worth more than what the builder would
    do instead, and never before the plants or the seat's first open_mex extractors:
    - BEFORE AN EXTRACTOR, once open_mex are finished: a feature wins over the extractor b has a site for when it
@@ -845,7 +1192,7 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
      about half a tick a metal (engine/orders.md) -- so while the store has room a builder clears the features near it
      first; a full store makes every feature worth nothing, and the extractors come back.
    - BEFORE THE BUILDINGS THAT SPEND, while the seat is short of metal (impai_brain.c, economy: m_short): any
-     feature with worth, ahead of energy, makers, exploring and the assist (for a builder with no menu, the
+     feature with worth, ahead of energy, makers and the assist (for a builder with no menu, the
      assist alone). A helper's assist is a build's help, so a seat short of metal takes a helper to a feature as
      well.
    IN A SURPLUS THE METAL PRODUCERS WAIT, past the opening (surplus_waits): the extractor rule (its reclaim before
@@ -855,9 +1202,8 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    THE PLANT'S PRICE's overflow, the seat making a busy plant's request a pass more than it asks (impai_brain.c,
    economy). While the store is at its maximum the economy pass adds every further unit of
    metal to MetalWasted, the double at player +0xD4, holding the store +0x98 to the storage +0xA8
-   (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
-   type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
-   ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
+   (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The
+   ladder reaches energy first, at its unchanged target, then the assist, which helps the factories'
    products and adds its worker time to the spending. ONE THRESHOLD, NO HYSTERESIS: below SURPLUS_FRAC the
    extractors come back by the same test. Its 80 % is a chosen margin below the full store, where nothing is
    wasted yet, so the producers wait before the waste begins rather than after.
@@ -875,9 +1221,17 @@ int impai_metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
    recordings' player images). The makers already built are switched by THE MAKERS. */
+/* THE OPENING'S TERMS (impai_brain.h) */
+int impai_econ_open_mex(const IMPAI_DEC* d) { return d->done[IMPAI_C_MEX] >= d->in->plan->open_mex; }
+
+int impai_econ_open_energy(const IMPAI_DEC* d, int ordered)
+{
+    return d->count[IMPAI_C_ENERGY] + (ordered ? d->pending[IMPAI_C_ENERGY] : 0) >= d->in->plan->open_energy;
+}
+
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening -- the seat's
    open_mex extractors finished and open_energy energy buildings standing, or open_t reached, the first factory's
-   own terms (impai_brain.c, economy) less THE BLIND START, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
+   own terms (impai_brain.c, economy) less NO PATCH ON THE MAP, which wants the plant without ending the opening --, with the steady income at factory_per_m a pass for
    each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
    replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
    is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
@@ -885,8 +1239,7 @@ static int surplus_waits(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int nf = d->count[IMPAI_C_FACTORY] > 1 ? d->count[IMPAI_C_FACTORY] : 1;
-    return d->surplus && ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
-                          d->now >= plan->open_t) &&
+    return d->surplus && ((impai_econ_open_mex(d) && impai_econ_open_energy(d, 0)) || d->now >= plan->open_t) &&
            ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * (float)nf) ||
             d->over_m);
 }
@@ -1034,99 +1387,360 @@ static float energy_target(const IMPAI_DEC* d, float keep)
     return t;
 }
 
-static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
+/* THE REQUESTS, ended by the assignment (impai.h, IMPAI_RQ_*): want k, standing, is cleared for this decision and
+   its request says how; one that does not stand keeps what economy said of it. Every clear of a want the
+   assignment makes is one of these calls, so an order and a search with no site are told apart. */
+static void request_close(IMPAI_DEC* d, int k, int how)
+{
+    int* const want[IMPAI_WANTS] = { [IMPAI_W_FACTORY] = &d->want_factory, [IMPAI_W_SEA] = &d->want_sea,
+                                     [IMPAI_W_TECH] = &d->want_tech,       [IMPAI_W_DEF] = &d->want_def,
+                                     [IMPAI_W_AA] = &d->want_aa,           [IMPAI_W_SENSOR] = &d->want_sensor };
+    if (!*want[k]) return;
+    *want[k] = 0;
+    d->out->req[k] = (uint8_t)how;
+}
+
+/* bit k: request k stands */
+static unsigned requests_open(const IMPAI_DEC* d)
+{
+    return (d->want_factory ? 1u << IMPAI_W_FACTORY : 0u) | (d->want_sea ? 1u << IMPAI_W_SEA : 0u) |
+           (d->want_tech ? 1u << IMPAI_W_TECH : 0u) | (d->want_def ? 1u << IMPAI_W_DEF : 0u) |
+           (d->want_aa ? 1u << IMPAI_W_AA : 0u) | (d->want_sensor ? 1u << IMPAI_W_SENSOR : 0u);
+}
+
+/* THE CHOICE's plant ordered: the request its pass was for is answered (plant_up: the tech-up's), and the other
+   yields -- one plant a decision. Called after plant_ordered, which reads plant_up for the plant line the same way */
+static void plant_close(IMPAI_DEC* d)
+{
+    request_close(d, IMPAI_W_TECH, d->plant_up ? IMPAI_RQ_ANSWERED : IMPAI_RQ_YIELDED);
+    request_close(d, IMPAI_W_FACTORY, d->plant_up ? IMPAI_RQ_YIELDED : IMPAI_RQ_ANSWERED);
+}
+
+/* A builder at the ladder: its menu in d->menu (n types), its far record and the economy's energy keep */
+typedef struct IMPAI_ASK {
+    const IMPAI_UNITREF* b;
+    int                  n, far;
+    float                keep;
+    uint8_t              yielded;       /* THE STALL YIELDS TO THE FIRST PLANT: the stall's rung passed this builder on */
+    uint8_t              plant_asked;   /* the plant's rung was asked of it                                             */
+} IMPAI_ASK;
+
+static int stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_energy(d, d->menu, a->n)) && impai_build_ring(d, a->b, t))) return 0;
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+/* THE STALL YIELDS TO THE FIRST PLANT. The stall's energy is the ladder's top rung, and in the opening it would
+   stand above the first plant for as long as the stall lasts: the opening's own energy buildings cost energy, so
+   they bring the first stall forward, and each idle decision of it takes the commander for one more energy
+   building before the plant is asked (decisions.md, *The opening's order*, has the games). So while the seat has never had a factory and none is ordered, once
+   open_energy energy buildings are counted or ordered (THE OPENING'S TERMS, the first factory's own) the stall's
+   rung passes a builder on to the plant's rungs, and the row below them asks it the stall's energy in the same
+   decision when they gave it no order.
+   INVARIANT, an ordering, so that no seat is left stalled behind a plant it cannot place: a builder passed on is
+   asked the stall's energy by the row under the plant in the same assignment -- both rows have the stall's gate
+   and the same builders, and nothing between them but the plants' rows can take it --, and the first time the
+   plant's rung was asked of such a builder and gave it no order the yield is over for the level
+   (IMPAI_BRAIN.open_stall_over), whatever ended the walk. So the yield costs a stalled seat the site tests of
+   one decision at most, once, and from the next decision the stall's rung is the top rung as it is past the
+   opening. Only the ladder passes a builder on: the reclaimers' pass (impai_econ_assign), which asks no row
+   under the stall's, asks the stall's energy itself. A plant's row not asked -- no request standing, the builder held by its far record -- is no walk and
+   ends nothing: the stall's energy is asked at once.
+   BOUNDS. It ends with the first factory ordered (the census's pending count) or counted (IMPAI_BRAIN.opened,
+   set by the census before the ladder is asked), so it puts at most one plant ahead of the stall's energy; one
+   state byte. */
+static int stall_yields(const IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    return !st->opened && !st->open_stall_over && !d->pending[IMPAI_C_FACTORY] && impai_econ_open_energy(d, 1);
+}
+
+static int rung_stall_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    if (stall_yields(d)) {
+        a->yielded = 1;
+        return 0;
+    }
+    return stall_energy(d, a);
+}
+
+static int rung_stall_yielded(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    if (!a->yielded) return 0;
+    if (a->plant_asked) d->in->st->open_stall_over = 1;
+    return stall_energy(d, a);
+}
+
+/* THE OPENING'S ENERGY: the plan's terms for the first factory are open_mex extractors and open_energy energy
+   buildings (THE OPENING'S TERMS), and the builder of the opening meets them in that order: once open_mex
+   extractors are finished, and until open_energy energy buildings are counted or ordered, its next building is
+   energy -- before a further extractor and before the plant, whose rungs stand below this one. Without it a
+   commander with more than open_mex patches within comm_r walks patch to patch, the energy term is met by open_t
+   alone, and the first factory is ordered with no energy standing: MEASURED 2026-11-18, Escalation on Pin Cushion,
+   four extractors, the K-bot lab ordered at GameTime 2 160 and the first energy building at 3 150, on the first
+   stall. The type is the stall rung's, the most energy a value on the builder's menu, on the base ring.
+   BOUNDS. It is the opening's: it ends for the level with the first factory counted (IMPAI_BRAIN.opened, set by
+   the census before the ladder is asked) and waits while one is ordered, so it holds for open_energy buildings
+   at most and never beside a plant. It asks nothing
+   of a builder whose menu holds no energy type for the anchor's ground, at no site test.
+   INVARIANT, an ordering, for a seat no site takes energy for: the FIRST walk of this rung that orders nothing
+   ends the rule for the level (IMPAI_BRAIN.open_e_refused), whatever ended the walk -- no room, the builder's
+   reach, a threat, the decision's site tests. So the rule costs such a seat one walk, at most the site tests of
+   one decision, once; from the next decision on the extractor and the plant are asked as they are without the
+   rule, with the decision's whole budget. What it gives up: a walk refused for a cause that passes -- a raid at
+   the base -- ends the rule too, and that seat opens as one without it. */
+static int open_energy_owed(const IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    return !st->opened && !st->open_e_refused && !d->pending[IMPAI_C_FACTORY] && impai_econ_open_mex(d) &&
+           !impai_econ_open_energy(d, 1);
+}
+
+static int rung_open_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!(open_energy_owed(d) && (t = choose_energy(d, d->menu, a->n)))) return 0;
+    if (!impai_build_ring(d, a->b, t)) {
+        d->in->st->open_e_refused = 1;
+        return 0;
+    }
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+/* THE FRAME RESUMED (impai_build.c), in THE FINISH AT SEA */
+static int rung_sea_frame(IMPAI_DEC* d, IMPAI_ASK* a) { return d->pos.dry && impai_build_sea_frame(d, a->b); }
+
+/* the sea plant's request: ordered, it is the decision's plant and the plant's two requests yield; a search with
+   no site at all ends it, so the plant rung below is asked of the same builder in the same decision */
+static int rung_sea_plant(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const int t = choose_sea_plant(d, d->menu, a->n);
+    int y;
+    if (!t) return 0;
+    y = impai_build_sea_plant(d, a->b, t);
+    if (y > 0) {
+        request_close(d, IMPAI_W_SEA, IMPAI_RQ_ANSWERED);
+        request_close(d, IMPAI_W_FACTORY, IMPAI_RQ_YIELDED);
+        request_close(d, IMPAI_W_TECH, IMPAI_RQ_YIELDED);
+        return 1;
+    }
+    if (y < 0) request_close(d, IMPAI_W_SEA, IMPAI_RQ_REFUSED);
+    return 0;
+}
+
+static int rung_plant(IMPAI_DEC* d, IMPAI_ASK* a)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_TINFO* bt = &in->ti[b->type];
-    const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-    const float keep = d->e_per_m * d->pm_in;
-    const int far = impai_far(d, b);
-    IMPAI_MEX mx = { 0, 0, 0 };
-    int t, have_mex = 0;
-    if (n > 0) {
-        if (d->e_stall && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
+    IMPAI_PLANTWALK w;
+    int t, y = 1, got;
+    /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
+       take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
+       menu2 and menu3 only, so this builder's menu is still d->menu */
+    a->plant_asked = 1;
+    if (!d->plant_done) plant_choice(d);
+    /* the air plant AHEAD OF THE SEA PLANT is air_take's alone (NEVER NEITHER): one still held here --
+       air_take placed it nowhere, or the choice was made after air_take returned, its want_sea since spent --
+       is let go, so the ladder asks the sea plant first; the choice's plant (plant_t, which may still be
+       that air plant) comes below only where the sea plant cannot be had, as before the rule */
+    if (d->plant_air_blind) air_let_go(d);
+    memset(&w, 0, sizeof w);
+    w.set = 1;
+    w.sea = IMPAI_PW_SEA_UNASKED;
+    w.waived = !d->plant_t && d->plant_tw;
+    w.type = (uint16_t)(d->plant_t ? d->plant_t : d->plant_tw);
+    w.grow = (uint8_t)impai_ring_grown(d, a->b, w.type);
+    w.slot = a->b->slot;
+    w.btype = a->b->type;
+    w.exit = !w.type ? IMPAI_PW_NOTYPE : IMPAI_PW_MENU;
+    /* THE ISLAND'S FIRST PLANT, by the sea plant's own search while the level has counted no sea refusal;
+       THE ISLAND'S PLANTS past it the same way while the refusals are not spent, and the plant the choice
+       took instead (an air plant) only once a search finds no site at all (-1) or no builder of the seat
+       offers a sea plant: a builder that cannot place it now -- not its turn in this decision, a site past
+       its reach, another sea type on its menu, its far record live, none on its menu -- leaves it to the
+       decision's other builders and to later decisions, so a plant held for the rest of the game is never
+       taken for one builder's answer */
+    if (d->plant_sea &&
+        (d->count[IMPAI_C_FACTORY] ? in->st->sea_refused < IMPAI_SEA_REFUSALS : !in->st->sea_refused)) {
+        y = (t = choose_sea_plant(d, d->menu, a->n)) ? impai_build_sea_plant(d, a->b, t) : 0;
+        if (y > 0) {
+            plant_ordered(d, t);
+            plant_close(d);
             return 1;
         }
-        if (d->sea_far && !far && !d->hold && !d->m_stall && !d->e_stall && impai_build_sea_frame(d, b)) return 1;
-        if (d->want_sea && !far && (t = choose_sea_plant(d, d->menu, n))) {
-            const int y = impai_build_sea_plant(d, b, t);
-            if (y > 0) {
-                d->want_sea = d->want_factory = d->want_tech = 0;
-                return 1;
-            }
-            if (y < 0) d->want_sea = 0;
-        }
-        if ((d->want_factory || d->want_tech) && !d->want_sea && !far) {
-            /* THE CHOICE is the seat's, built by a builder whose menu holds it; with every plant type it would
-               take passed over (THE PLANT'S FALLBACK), the waived pass's, the cramped exit. plant_choice reads
-               menu2 and menu3 only, so this builder's menu is still d->menu */
-            if (!d->plant_done) plant_choice(d);
-            if ((d->plant_t && on_menu(d->menu, n, d->plant_t) && impai_build_ring(d, b, (t = d->plant_t))) ||
-                (!d->plant_t && d->plant_tw && on_menu(d->menu, n, d->plant_tw) &&
-                 impai_build_plant_waived(d, b, (t = d->plant_tw)))) {
-                plant_ordered(d, t);
-                d->want_factory = d->want_tech = 0;
-                return 1;
-            }
-        }
+        w.sea = (int8_t)(y < 0 ? -1 : 0);
+        y = !d->count[IMPAI_C_FACTORY] || y < 0 || !d->plant_sea_menu;
+        if (!y) w.exit = IMPAI_PW_SEA;
     }
-    if (n > 0) {
-        if (d->want_def && (t = choose_def(d, d->menu, n)) && impai_build_def(d, b, t)) {
-            d->want_def = 0;
-            return 1;
-        }
-        if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->want_aa = 0;
-            return 1;
-        }
-        if (d->want_sensor && (t = choose_sensor(d, d->menu, n))) {
-            const int y = impai_build_sensor(d, b, t);
-            if (y >= 0) d->want_sensor = 0;
-            if (y > 0) {
-                d->out->sensors++;
-                return 1;
-            }
-        }
-    }
-    if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
-    if (n > 0) {
-        if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
-            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-                (impai_metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
-                impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
-                return 1;
-            if (impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
-                                impai_build_ring(d, b, t))
-                             : impai_build_spot(d, b, &mx))
-                return 1;
-        }
-        if (d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
-        if (d->pe_in < energy_target(d, keep) && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
-            return 1;
-        }
-        if (!surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
-            (t = choose_maker(d, d->menu, n)) &&
-            d->e.energy_in - d->e.energy_out - d->mk_lag_e - d->mk_new_e > in->ti[t].egain &&
-            impai_build_ring(d, b, t))
-            return 1;
-    }
-    if (bt->cat == IMPAI_C_CONS && !d->explorer_live &&
-        !impai_spot_pick(d, b, have_mex ? &mx : NULL, NULL) && impai_build_explore(d, b))
+    d->walk = &w;
+    got = y && ((d->plant_t && on_menu(d->menu, a->n, d->plant_t) && impai_build_ring(d, a->b, (t = d->plant_t))) ||
+                (!d->plant_t && d->plant_tw && on_menu(d->menu, a->n, d->plant_tw) &&
+                 impai_build_plant_waived(d, a->b, (t = d->plant_tw))));
+    d->walk = NULL;
+    if (got) {
+        plant_ordered(d, t);
+        plant_close(d);
         return 1;
-    /* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
-       is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
-       reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
-       asked with min_rate 0 above while the seat is short; this is its one other zero-rate ask */
-    if ((n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, b, 0.0)) return 1;
-    return impai_build_assist(d, b);
+    }
+    plantwalk_keep(d, &w);
+    return 0;
+}
+
+static int rung_def(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_def(d, d->menu, a->n)) && impai_build_def(d, a->b, t))) return 0;
+    request_close(d, IMPAI_W_DEF, IMPAI_RQ_ANSWERED);
+    return 1;
+}
+
+static int rung_aa(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!((t = choose_aa(d, d->menu, a->n)) && impai_build_ring(d, a->b, t))) return 0;
+    request_close(d, IMPAI_W_AA, IMPAI_RQ_ANSWERED);
+    return 1;
+}
+
+/* the sensor's request ends with the first builder whose menu holds one, placed or not; the commander with no
+   site on the base ring (-1) leaves it standing for a constructor (impai_build.c, THE SENSORS' SITE) */
+static int rung_sensor(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const int t = choose_sensor(d, d->menu, a->n);
+    int y;
+    if (!t) return 0;
+    y = impai_build_sensor(d, a->b, t);
+    if (y >= 0) request_close(d, IMPAI_W_SENSOR, y > 0 ? IMPAI_RQ_ANSWERED : IMPAI_RQ_REFUSED);
+    if (y <= 0) return 0;
+    d->out->sensors++;
+    return 1;
+}
+
+/* the extractor, and THE RECLAIM before it: one rung, since the feature is weighed against the extractor this
+   builder has a site for */
+static int rung_mex(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    IMPAI_MEX mx;
+    int t;
+    if (!(choose_mex(d, d->menu, a->n, &mx) && !surplus_waits(d))) return 0;
+    if (d->done[IMPAI_C_MEX] > 0 && impai_econ_open_mex(d) &&
+        (impai_metal_map(d) || impai_spot_pick(d, a->b, &mx, NULL)) &&
+        impai_build_reclaim(d, a->b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
+        return 1;
+    return impai_metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+                                 impai_build_ring(d, a->b, t))
+                              : impai_build_spot(d, a->b, &mx);
+}
+
+static int rung_short_reclaim(IMPAI_DEC* d, IMPAI_ASK* a) { return d->m_short && impai_build_reclaim(d, a->b, 0.0); }
+
+static int rung_energy(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    if (!(d->pe_in < energy_target(d, a->keep) && (t = choose_energy(d, d->menu, a->n)) &&
+          impai_build_ring(d, a->b, t)))
+        return 0;
+    d->pe_in += d->in->ti[t].egain;
+    return 1;
+}
+
+static int rung_maker(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    int t;
+    return !surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
+           (t = choose_maker(d, d->menu, a->n)) &&
+           d->e.energy_in - d->e.energy_out - d->mk_lag_e - d->mk_new_e > d->in->ti[t].egain &&
+           impai_build_ring(d, a->b, t);
+}
+
+/* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
+   is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
+   reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
+   asked with min_rate 0 at the short reclaim's rung while the seat is short; this is its one other zero-rate ask */
+static int rung_harvest(IMPAI_DEC* d, IMPAI_ASK* a)
+{
+    return (a->n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, a->b, 0.0);
+}
+
+static int rung_assist(IMPAI_DEC* d, IMPAI_ASK* a) { return impai_build_assist(d, a->b); }
+
+/* THE LADDER'S ORDER: the rungs of THE LADDER, one row each, asked top to bottom; a builder takes the first that
+   gives it an order. A row is asked of the builders its `who` names, while a request it serves stands and none it
+   waits for does, with its gates as its `on` and `veto` say, and not of a builder held by its far record where it
+   is `near`; what else a rung asks -- the posture, the income, the builder's menu, a site -- is its function's.
+   The order is this table and nowhere else.
+   - A HELPER is asked the rungs down to the short reclaim and keeps its assist for the rest (THE LADDER). One with
+     no menu is asked the short reclaim alone.
+   - The plant waits for the sea plant: while that request stands a land plant is not asked, and a sea search with
+     no site at all ends it, so the plant is asked of the same builder in the same decision.
+   - The frame resumed is held by the sea plant's gates (impai_brain.c, THE VETOES): the hold and both stalls.
+   - An idle builder with no menu is asked the last two rungs; its reclaim while the seat is short is the
+     harvest's.
+   - The opening's energy stands above every plant and the extractor (THE OPENING'S ENERGY); a helper keeps its
+     assist, as at the energy rung.
+   - In the opening the stall's energy is asked under the first plant: its top row passes the builder on and
+     the row under the plant asks it (THE STALL YIELDS TO THE FIRST PLANT).
+   INVARIANT, what the gate columns rest on: IMPAI_DEC.gates is set once, after the last write of hold, e_stall
+   and m_stall (impai_brain.c, economy), so a gate's bit and its flag agree throughout the assignment.
+   impai_brain_test.c, check_ladder_rows, holds the rows and their order. */
+#define RQ(k)       (1u << IMPAI_W_##k)
+#define ASK_MENUS   (IMPAI_ASK_MENU | IMPAI_ASK_HELPER)
+#define ASK_IDLE    (IMPAI_ASK_MENU | IMPAI_ASK_BARE)
+#define G_SPEND     (IMPAI_G_HOLD | IMPAI_G_M_STALL | IMPAI_G_E_STALL)
+const IMPAI_RUNG impai_ladder[] = {
+    /* name             who                                serves                  waits    near on               veto */
+    { "stall-energy",  ASK_MENUS,                         0,                      0,       0, IMPAI_G_E_STALL, 0,       rung_stall_energy },
+    { "open-energy",   IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_open_energy },
+    { "sea-frame",     ASK_MENUS,                         0,                      0,       1, 0,               G_SPEND, rung_sea_frame },
+    { "sea-plant",     ASK_MENUS,                         RQ(SEA),                0,       1, 0,               0,       rung_sea_plant },
+    { "plant",         ASK_MENUS,                         RQ(FACTORY) | RQ(TECH), RQ(SEA), 1, 0,               0,       rung_plant },
+    { "stall-yielded", ASK_MENUS,                         0,                      0,       0, IMPAI_G_E_STALL, 0,       rung_stall_yielded },
+    { "defence",       ASK_MENUS,                         RQ(DEF),                0,       0, 0,               0,       rung_def },
+    { "anti-air",      ASK_MENUS,                         RQ(AA),                 0,       0, 0,               0,       rung_aa },
+    { "sensor",        ASK_MENUS,                         RQ(SENSOR),             0,       0, 0,               0,       rung_sensor },
+    { "extractor",     IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_mex },
+    { "short-reclaim", ASK_MENUS | IMPAI_ASK_HELPER_BARE, 0,                      0,       0, 0,               0,       rung_short_reclaim },
+    { "energy",        IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_energy },
+    { "maker",         IMPAI_ASK_MENU,                    0,                      0,       0, 0,               0,       rung_maker },
+    { "harvest",       ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_harvest },
+    { "assist",        ASK_IDLE,                          0,                      0,       0, 0,               0,       rung_assist },
+};
+const int impai_ladder_n = (int)(sizeof impai_ladder / sizeof impai_ladder[0]);
+#undef RQ
+#undef ASK_MENUS
+#undef ASK_IDLE
+#undef G_SPEND
+
+static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
+{
+    IMPAI_ASK a;
+    unsigned who;
+    int k;
+    memset(&a, 0, sizeof a);
+    a.b = b;
+    a.n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+    a.keep = d->e_per_m * d->pm_in;
+    a.far = impai_far(d, b);
+    who = helper ? (a.n > 0 ? IMPAI_ASK_HELPER : IMPAI_ASK_HELPER_BARE) : (a.n > 0 ? IMPAI_ASK_MENU : IMPAI_ASK_BARE);
+    for (k = 0; k < impai_ladder_n; k++) {
+        const IMPAI_RUNG* r = &impai_ladder[k];
+        const unsigned open = requests_open(d);     /* read at each rung: the one above may have ended a request */
+        if (!(r->who & who) || (d->gates & r->on) != r->on || (d->gates & r->veto) || (r->near && a.far) ||
+            (r->serves && !(open & r->serves)) || (open & r->waits))
+            continue;
+        if (r->serve(d, &a)) return 1;
+    }
+    return 0;
 }
 
 /* Idle builders in slot order, then the helpers for the wants they answer
-   (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
-   reclaim job this decision did not check waits for the check, which may record its feature as one it could not
-   reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
+   (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD
+   or reclaim job this decision did not check waits for the check, which may record its feature as one it
+   could not reach (impai_brain.c, job_checks). A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
    move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
    takes the ladder then.
@@ -1207,16 +1821,82 @@ static int release(IMPAI_DEC* d, const IMPAI_UNITREF* h)
     return 0;
 }
 
+/* THE AIR PLANT FOR THE BLIND'S BUILDER, before the idle builders: the choice's plant the air plant for the blind
+   (plant_choice), each builder that can take it is asked in turn -- the idle builders the idle loop would ask (no
+   BUILD or reclaim job, THE ATTENTION's room), then the helpers on an assist, each not held from plants by its far
+   record, then THE AIR PLANT TAKES THE ENERGY BUILDER (the owner's decision, 2026-11-17): the builders on an energy
+   build (energy_leaver) -- whose menu holds the plant; each places it by THE AIR PLANT'S OWN SEARCH
+   (impai_build_air: the base ring, then outside it), and the first that does is given it, its job the plant's, so
+   the loops after this pass it over (the idle loop and the stall's skip a BUILD job, the helpers' an assist that is
+   no longer one); a leaver's energy frame stays where it was ordered, for the assist or a later energy want.
+   NEVER NEITHER, an ordering: no other path orders the air plant ahead of the sea plant -- the ladder's plant rung
+   lets a plant_air_blind still set go (air_let_go) before it asks anything (assign), and orders the choice's plant,
+   the air plant among them, only where the sea plant cannot be had (no site at all, no builder offering one), as
+   before the rule; one plant at most either way --, so when no builder here places it
+   -- none can take it, the budget is spent, or no site takes it -- the first builder the ladder asks for a plant
+   is asked the sea plant's question, as before the rule: in every decision in which the air plant holds the want,
+   it is either ordered here or the sea plant is the ladder's. THE SHIPYARD IS NOT HELD UP: the search spends its
+   own site tests (AIR_OUT_TESTS), never the decision's, so the sea plant's search after it has all of them.
+   WHY THE ORDER: on the naval turtle only the commander offers CORAP and it stood on wind generators each time the
+   plant was due; the shipyard's CORCS could build neither, and the seat got no second plant to the cap (MEASURED
+   2026-11-17, exploit-naval-turtle at 73593317 and 4487c188 with diagnostic builds: the commander's job BUILD CORWIN
+   from 8 407, the plant due from 8 587). WHY THE OWN SEARCH: there the commander's base ring at its first size held
+   24 sites and none took CORAP (MEASURED 2026-11-17 at 82cab0f3's tree, a diagnostic build); the owner's answer is a
+   search outside the base ring, the shipyard not held up for it. */
+static int air_place(IMPAI_DEC* d, const IMPAI_UNITREF* b, unsigned t)
+{
+    if (impai_far(d, b) ||
+        !on_menu(d->menu, d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX), t) ||
+        !impai_build_air(d, b, (int)t, !d->plant_t))
+        return 0;
+    plant_ordered(d, (int)t);
+    plant_close(d);
+    d->assigned++;
+    return 1;
+}
+
+static void air_take(IMPAI_DEC* d, int keep)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    unsigned t;
+    int i;
+    if (!(d->want_factory || d->want_tech) || d->want_sea) return;
+    if (!d->plant_done) plant_choice(d);
+    t = d->plant_t ? d->plant_t : d->plant_tw;
+    if (!t || !d->plant_air_blind) return;
+    for (i = 0; i < d->nidle + d->nhelpers + d->njobbed && d->assigned + keep < in->plan->assign_max &&
+                d->roots + keep < d->root_cap;
+         i++) {
+        if (i < d->nidle) {
+            const IMPAI_JOB* j = &in->job[d->idle[i].slot];
+            if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO ||
+                !impai_econ_room(d) || !air_place(d, &d->idle[i], t))
+                continue;
+            d->busied++;
+            return;
+        }
+        if (i < d->nidle + d->nhelpers) {
+            const IMPAI_UNITREF* h = &d->helpers[i - d->nidle];
+            if (in->job[h->slot].kind == IMPAI_JOB_ASSIST && air_place(d, h, t)) return;
+            continue;
+        }
+        if (energy_leaver(d, i - d->nidle - d->nhelpers) && air_place(d, &d->jobbed[i - d->nidle - d->nhelpers], t))
+            return;
+    }
+}
+
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int keep = impai_release_keep(d);
     int i;
+    air_take(d, keep);
     for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
                 impai_econ_room(d);
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
-        if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
+        if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO)
+            continue;
         if (assign(d, &d->idle[i], 0)) {
             d->assigned++;
             d->busied++;
@@ -1229,19 +1909,27 @@ void impai_econ_assign(IMPAI_DEC* d)
        checks list only an idle builder idle, so a reclaimer never answered the stall -- on Escalation the
        commander reclaimed into a full metal store while the energy stood at 0 (MEASURED 2026-11-15, the economy
        diagnosis at d665a00a). A builder on a BUILD is left at it: its frame stands where it was ordered, and THE
-       STALLS keep the plants that frame would be from being ordered in a stall. */
+       STALLS keep the plants that frame would be from being ordered in a stall. THE YIELD IS THE LADDER'S
+       ALONE: the stall's energy is asked here directly, whether or not THE STALL YIELDS TO THE FIRST PLANT holds.
+       A reclaimer is asked no row under the stall's, so one passed on would be asked neither the plant nor the
+       energy and would keep its job through the stall, to job_timeout at the longest; the yield's invariant
+       rests on the row under the plant asking the same builder in the same assignment. What it gives up: a seat
+       whose builder is at a reclaim when the opening's stall begins takes one energy building before its first
+       plant, and is passed on to the plant at its next idle decision. */
     for (i = 0; d->e_stall && i < d->njobbed && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap;
          i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         const IMPAI_JOB* j = &in->job[b->slot];
-        int t, n, ordered;
+        IMPAI_ASK a;
+        int ordered;
         if (d->jobbed_idle[i] || (j->kind != IMPAI_JOB_RECLAIM && j->kind != IMPAI_JOB_RECLAIM_GO) || j->since == d->now)
             continue;
         /* read before the build replaces the job: stall_taken counts the ordered reclaims, not the walks to one */
         ordered = j->kind == IMPAI_JOB_RECLAIM;
-        n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-        if (n > 0 && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
-            d->pe_in += in->ti[t].egain;
+        memset(&a, 0, sizeof a);
+        a.b = b;
+        a.n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+        if (a.n > 0 && stall_energy(d, &a)) {
             d->assigned++;
             if (ordered) d->out->stall_taken++;
         }
@@ -1274,24 +1962,70 @@ static int finish_buys(const IMPAI_DEC* d)
     return d->sea_plants || (d->sea_able && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !impai_sea_none_now(d));
 }
 
+/* THE TARGETS BOUGHT FOR: the target classes (impai.h, THE TARGET CLASSES) the seat knows -- an enemy of the class
+   counted by a military decision within IMPAI_TG_HOLD (impai_tg_known, THE TARGETS KNOWN in impai_mil.c) -- or
+   expects: the ground of each start that can hold an enemy's base (impai_start_foe, THE FOE'S STARTS; the seat's
+   own, the nearest its anchor, left out), where an enemy's commander began -- DRY where it lies at or above the
+   sea, FLOAT and UNDER below it, where the commander walks the sea floor and its first structures stand on the
+   water. With nothing known and no such start, every class: no evidence narrows nothing. With something known and
+   no such start -- fewer than two starts, or none that can hold an enemy's base --, DRY beside it: nothing says
+   where the enemy's base stands, so the land is never narrowed away by an aircraft or a ship alone; with only an
+   aircraft known every land plant whose army has no anti-air would buy nothing. Where a start is expected DRY
+   would add nothing, since every type that hits DRY hits FLOAT too (impai_type_hits). Once a decision. BOUND:
+   PLANT_STARTS starts, one ground read each */
+static unsigned targets_bought_for(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    WQ_START st[PLANT_STARTS];
+    unsigned m;
+    int ns, own, k, foes = 0;
+    if (d->tg_done) return d->tg_mask;
+    d->tg_done = 1;
+    m = in->mil ? impai_tg_known(in->mil, d->now) : 0u;
+    if ((ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+        own = own_start(d, st, ns);
+        for (k = 0; k < ns; k++) {
+            int32_t pos[3];
+            if (k == own || !impai_start_foe(in->view, st[k].seated)) continue;
+            foes = 1;
+            pos[0] = (int32_t)((uint32_t)st[k].x << 16);
+            pos[1] = 0;
+            pos[2] = (int32_t)((uint32_t)st[k].z << 16);
+            m |= d->q->ops->ground(d->q, pos) < (int)d->m.sea ? (1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER)
+                                                               : 1u << IMPAI_TG_DRY;
+        }
+    }
+    if (m && !foes) m |= 1u << IMPAI_TG_DRY;
+    d->tg_mask = m ? m : IMPAI_TG_ALL;
+    return d->tg_mask;
+}
+
 /* factory type `type`'s army types into mt (at most IMPAI_MENU_MAX): its menu's types with an army class and a
-   value; reads into d->menu. THE FINISH AT SEA (impai_brain.c, economy): while the military's dry hunt holds and
-   the finish has a plant (finish_buys), only types with a water weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the
-   weapons that hit a unit under the sea (can_attack, impai_mil.c) -- so a land plant offers none and stands idle,
+   value that can hit a target class the seat buys for (THE TARGETS BOUGHT FOR, impai_type_hits) -- so a class
+   none of whose types can is not bought, and a class is bought in the types that can: a submarine, whose
+   waterweapons hit nothing above the sea, waits for a target on or under the water; reads into d->menu. WHY: on
+   Gods of War the seat's shipyard made two submarines of 1 199 metal each while every enemy it knew stood on land
+   (MEASURED 2026-11-17, exploit-naval-turtle at d8799688, the seated variant). THE FINISH AT SEA (impai_brain.c,
+   economy): while the military's dry hunt holds and the finish has a plant (finish_buys), only types with a water
+   weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the weapons that hit a unit under the sea (can_attack, impai_mil.c)
+   -- so a land plant offers none and stands idle,
    and the army's rows (THE ARMY'S ROWS) are left to the units that can finish. With no plant to make them the
    factories buy as usual: a dry hunt with no water it can reach would otherwise build no army at all.
    RESIDUAL: a water-weapon type with no sonar of its own sees nothing under the sea, and the finish then waits for
-   a sonar elsewhere. */
+   a sonar elsewhere. THE AIR SCOUT passes both filters: it is bought to see, not to hit (THE SCOUT FIRST). */
 static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int n = d->q->ops->build_options(d->q, (int)type, d->menu, WQ_TYPES_MAX);
-    const int dry = in->mil && in->mil->dry && finish_buys(d);
+    const int dry = d->pos.dry && finish_buys(d);
+    const unsigned want = targets_bought_for(d);
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
         const unsigned t = d->menu[k];
         if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f)) continue;
-        if (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2))) continue;
+        if (in->ti[t].klass != IMPAI_K_ASCOUT && (!(impai_type_hits(&in->ti[t]) & want) ||
+                                                  (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2)))))
+            continue;
         mt[m].type = (uint16_t)t;
         mt[m].klass = in->ti[t].klass;
         mt[m].pad = 0;
@@ -1346,6 +2080,8 @@ static int queue_units(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type, int count
      value). Per class and not per seat: one amphibious unit that reaches on the seat's advanced plant made every
      other plant poor, and Trout Farm's two vehicle plants sat without an order for 726 factory-decisions
      (MEASURED 2026-11-14, plantchoice r3, bar-eota-troutfarm-cc-1). The plant choice keeps the reach either way.
+     On THE ISLAND the land classes are held to THE ISLAND'S LAND BUDGET (island_classes); every linked map
+     keeps the fallback whole (owner's decision, 2026-11-17).
    - A SURPLUS: a poor plant beside a store in surplus buys its cheapest army type of any class of its menu, as an
      ungated factory's surplus buy: the store is full, so the metal buys nothing else (THE GOVERNOR, A SURPLUS).
    - With no values, or a factory type past IMPAI_GATE_TYPES, the factory is ungated: every class of its menu is
@@ -1358,7 +2094,7 @@ static int queue_units(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type, int count
    of the census's lists, at most IMPAI_GATE_TYPES, and one for each idle factory of a type past them. */
 /* type `type`'s army classes and its best value in each gated class by `mask` and without the reach, into
    *classes, best[] and all[]. BOUND: a menu type's class indexes best[] and all[] only once tested below
-   IMPAI_GATE_K -- an army class runs to IMPAI_KS (13), and the rows sit inside IMPAI_DEC, where an overrun
+   IMPAI_GATE_K -- an army class runs to IMPAI_KS (14), and the rows sit inside IMPAI_DEC, where an overrun
    would write the memo's next fields unseen by any sanitizer */
 static void gate_read(IMPAI_DEC* d, unsigned type, unsigned T, uint32_t mask, uint32_t* classes,
                       float best[IMPAI_GATE_K], float all[IMPAI_GATE_K])
@@ -1548,6 +2284,92 @@ static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
     return rows < c ? (rows > 1 ? (int)rows : 1) : c;
 }
 
+/* THE ISLAND'S AGREEMENT: 1 when the economy's own reach agrees with THE ISLAND -- no army type of a gated class on
+   the menu of one of the seat's factories, as the army buy offers it (army_menu), reaches THE TARGETS (THE REACH,
+   gated_reaching), which on the island are the estimate and the foe's starts together. Read from the menus, not
+   the values, so a level with no values reads it the same. Once a decision. BOUND: the factories, at most
+   IMPAI_GATE_TYPES distinct types read, one menu read each */
+static int island_agrees(IMPAI_DEC* d)
+{
+    IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
+    uint16_t seen[IMPAI_GATE_TYPES];
+    const uint32_t mask = reach_mask_of(d);
+    int i, j, ns = 0, reached = 0;
+    uint32_t k, n;
+    if (d->isle_agree) return d->isle_agree == 1;
+    for (i = 0; i < d->nfidle + d->nfbusy && !reached && ns < IMPAI_GATE_TYPES; i++) {
+        const unsigned type = i < d->nfidle ? d->fidle[i].type : d->fbusy[i - d->nfidle].type;
+        for (j = 0; j < ns && seen[j] != type; j++) {}
+        if (j < ns) continue;
+        seen[ns++] = (uint16_t)type;
+        n = army_menu(d, type, mt);
+        for (k = 0; k < n && !reached; k++) reached = gated_reaching(d, mask, mt[k].type);
+    }
+    d->isle_agree = reached ? 2 : 1;
+    return !reached;
+}
+
+/* THE ISLAND'S LAND BUDGET (owner's decision, 2026-11-17): on THE ISLAND (pos.island) the land army classes
+   (IMPAI_K_LRAIDER..IMPAI_K_LSCOUT) may take an order only while their value -- built, building and queued,
+   kspent -- is below ISLAND_LAND_SHARE of the whole army's, so the land factories build a base defence that
+   grows with the army the seat can send, and nothing while it has none. Only while the economy's reach agrees
+   (THE ISLAND'S AGREEMENT), as THE ISLAND'S PLANTS wait for the choice's reach (WHY THE AGREEMENT there). Read
+   before each order, with this decision's earlier orders in kspent. INVARIANT, a bound: on the island the land
+   army's value passes the share by at most the one order the last test let through -- its type's value times its
+   count, at most WQ_QUEUE_MAX units. A value not finite fails the test and refuses the land classes. WHY: on an
+   island the land army reaches nothing, and the metal it takes is the sea's and the air's: on Gods of War the
+   seat's vehicle plant, its two constructors and its one Leveler cost 1 242 metal by the cap, 1.4 of the
+   destroyers (887 each) it had three of (MEASURED 2026-11-17, exploit-naval-turtle at cc27da06). A quarter: the
+   base faces only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet
+   first [hand-written: the bar's to move]. */
+#define ISLAND_LAND_SHARE 0.25f
+#define IMPAI_K_LANDMASK  ((1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) | (1u << IMPAI_K_LARTY) | \
+                           (1u << IMPAI_K_LAA) | (1u << IMPAI_K_LSCOUT))
+static uint32_t island_classes(IMPAI_DEC* d)
+{
+    float land = 0.0f, all = 0.0f;
+    unsigned k;
+    if (!d->pos.island || !island_agrees(d)) return 0xFFFFFFFFu;
+    for (k = 0; k < IMPAI_KS; k++) {
+        if (k == IMPAI_K_ASCOUT) continue;      /* THE AIR SCOUT IS SCOUT ONLY (impai_mil.c): in no army sum */
+        all += d->kspent[k];
+        if (IMPAI_K_LANDMASK >> k & 1u) land += d->kspent[k];
+    }
+    return land < ISLAND_LAND_SHARE * all ? 0xFFFFFFFFu : ~IMPAI_K_LANDMASK;
+}
+
+/* THE SCOUT FIRST (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *Scouts are cheap, fast,
+   bought first and expendable*): a layer's scout class -- IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT, a mobile
+   armed type of the classifier's role SCOUT -- is the class of the order whenever the seat holds none of it, built,
+   building or queued (kspent, this decision's earlier orders included), the factory's menu offers a type of it and
+   the table gives it a share; -1 otherwise. So a layer's plant makes its scout first and a scout that died is
+   replaced by the next order: scouts are expendable (impai_mil.c, SCOUTING sends them as deep as their legs go).
+   THE SCOUT IS ONE: no other buy takes a scout class (IMPAI_K_SCOUTMASK) -- not the table's share, which is only
+   the switch, nor the surplus's cheapest -- and its order is one unit, never a surplus's five. INVARIANT, a bound:
+   the seat orders a layer's scout only while it holds none, so at most one is built, building or queued at a time.
+   WHY: a share is a share of what the layer can build, so the table's 0.05 grew to a sixth of a navy of destroyers
+   and skeeters alone, and the cheapest type of a plant is often its scout: on Gods of War the seat built five CORPT
+   and two destroyers by the cap (MEASURED 2026-11-17, exploit-naval-turtle at bf92df19 and 949ed052: classes
+   sraider:2, sscout:5).
+   ONE AIR SCOUT A SEAT (the owner's decision, 2026-11-17; decisions.md, *One air scout a seat*): the air's scout class
+   is wanted, whatever the table's share, while the military finds an enemy area out of sight of every land and sea
+   army unit of the seat (impai_blind, THE BLIND SPOT in impai_mil.c) -- an unarmed aircraft of role SCOUT takes the
+   class (impai_table.c, THE AIR SCOUT) --, and only then. The air plant it needs comes by the plant rules alone, never
+   first (THE ISLAND'S PLANT ORDER). */
+#define IMPAI_K_SCOUTMASK ((1u << IMPAI_K_LSCOUT) | (1u << IMPAI_K_SSCOUT) | (1u << IMPAI_K_ASCOUT))
+static int scout_due(const IMPAI_DEC* d, const float* share, const int32_t* type, uint32_t eligible)
+{
+    static const uint8_t SK[] = { IMPAI_K_LSCOUT, IMPAI_K_SSCOUT, IMPAI_K_ASCOUT };
+    const int blind = d->pos.blind;
+    unsigned i;
+    for (i = 0; i < sizeof SK; i++) {
+        const unsigned k = SK[i];
+        const int wanted = k == IMPAI_K_ASCOUT ? blind : share[k] > 0.0f;
+        if ((eligible >> k & 1u) && wanted && !(d->kspent[k] > 0.0f) && type[k] > 0) return (int)k;
+    }
+    return -1;
+}
+
 static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, uint32_t eligible, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1558,14 +2380,15 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
     float cost_m = 0.0f;
-    int k, t = -1, count;
+    int k, t = -1, count, scout = 0;
     if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
+    eligible &= island_classes(d);
     m.t = mt;
     m.n = army_menu(d, f->type, mt);
     if (cheapest) {
         uint32_t i;
         for (i = 0; i < m.n; i++)
-            if ((eligible >> mt[i].klass & 1u) &&
+            if ((eligible >> mt[i].klass & 1u) && !(IMPAI_K_SCOUTMASK >> mt[i].klass & 1u) &&
                 (t < 0 || mt[i].value < in->ti[t].value || (mt[i].value == in->ti[t].value && mt[i].type < t)))
                 t = mt[i].type;
         if (t < 0) return 0;
@@ -1579,10 +2402,19 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
             if (type[k] < 0) type[k] = impai_class_type(&mil->table, &mil->pic, &m, (unsigned)k, in->pred);
             if (type[k] > 0 && (unsigned)type[k] < in->nti) cost[k] = in->ti[type[k]].value;
         }
-        if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) return 0;
+        if ((k = scout_due(d, share, type, eligible)) >= 0) {
+            scout = 1;
+        } else {
+            /* THE AIR SCOUT IS SCOUT ONLY (impai_mil.c): its value is in no army sum, the shares' total included */
+            float spent[IMPAI_KS];
+            memcpy(spent, d->kspent, sizeof spent);
+            spent[IMPAI_K_ASCOUT] = 0.0f;
+            if ((k = impai_buy_next(share, spent, cost, eligible & ~IMPAI_K_SCOUTMASK, FLT_MAX)) < 0) return 0;
+        }
+        if (type[k] <= 0) return 0;
         t = type[k];
     }
-    count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;
+    count = d->surplus && in->acts >= 0 && !scout ? surplus_count(d, t, &cost_m) : 1;
     if ((int64_t)d->gov_a + count > army_rows(d, t)) {
         if ((int64_t)d->gov_a + count <= IMPAI_ARMY_MAX && d->out->finish_rows < 0xFFFF) d->out->finish_rows++;
         return 0;
@@ -1602,7 +2434,7 @@ static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    if (!cons_room(d) || d->pressed) return 0;                               /* the caps; THE PRESSURE      */
+    if (!cons_room(d) || d->pos.pressed) return 0;                           /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
     return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }

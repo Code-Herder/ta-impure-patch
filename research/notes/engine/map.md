@@ -1575,6 +1575,12 @@ mask `+0x10F` bit 2 selects (`0x47C804..0x47C817`: 2 open, 4 closed): a cell its
 or contested, and a cell it does not set is let go only if it names the structure
 (`0x47C8AE..0x47C8B7`). So a unit that lost a yard cell to the closed structure keeps bit 27 and
 gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it.
+A unit stamped there later finds the cell empty and takes it with no mark on either side. MEASURED
+2026-11-17 in a slice-walkers recording's exact stream: lab 1025, holding yard cells against four
+walkers with bit 27, opened its yard at GameTime 3125 and let go of their shared cells (the lab
+took bit 27 beside its bit 26); nanoframe 1054 took two of them at 3126 unmarked, and the walkers
+kept bit 27 and no cell there to 3391. The replay's occupancy check accepts that state
+(`tools/replay/tarec.py`, THE OCCUPANCY RULE).
 
 **A lab can open its yard and make the nanoframe in it in the same tick** [DISASSEMBLED 2026-10-12].
 YARD_OPEN's one caller is the COB setter (`0x480BAE`), so the yard opens in the lab's script slice:
@@ -2014,7 +2020,47 @@ and 0 while it is set (`0x4816BB..0x4816FB`) [DISASSEMBLED 2026-11-13]. So once 
 Mapped, every bit stays set, and the pathfinder's map reader `0x40D7B0` never takes its "unexplored is
 passable" answer (`0x40D817..0x40D83B`: the word's bit numbered by the byte `+0x78` of the pathfinder object,
 `this` (`ecx`, kept at `[esp+0x10]` from `0x40D7BC`) [INFERRED: the searching player], is tested at `0x40D82D`, and with it clear the reader returns
-2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+2 at `0x40D831`, `ret 8`; *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid.
+
+**What Mapped gives a player** [DISASSEMBLED 2026-11-18]. Mapped is `LosType` bit 0 clear and nothing in a
+player's record. The level load's `0x4816A0(1)` -- `0x497AE5`, after the seat loop `0x497A7F..0x497ADC` and
+`0x465E30` -- fills every word of the explored map with one byte, `0xFF` when the bit is clear and `0x00` when
+it is set (`0x4816BB..0x4816FB`: `al = LosType & 1`, `neg al; sbb eax,eax`, `and eax,0xFFFF0001`,
+`add eax,0xFFFF`, the low byte stored by `rep stos`): all sixteen bits of a word at once, every player's and
+those no record numbers. **Every other caller of the rebuild fills by the same rule, with `LosType` as the caller
+leaves it** (its nine callers, *The rebuild*, below; each read here): the typed `Mapping` toggles bit 0 and
+passes 1 (`0x416D93..0x416D98`, `0x416DA4`, `0x416DA6`), so it fills `0x00` in a level it un-maps and `0xFF` in
+one it maps; `NowISee` clears bits 0 and 1 and passes 1 (`0x417547`, `0x417555`, `0x41755E`), as does the
+watcher switch (`0x4656B5`, `0x4656C5`, `0x4656CE`): `0xFF`; `MakePoster` clears both and passes 1
+(`0x495B2B..0x495B36`, `0x495B58`, `0x495B61`), then writes both back as it found them and passes 1 again
+(`0x495E25..0x495E30`, `0x495E47..0x495E51`, `0x495E58`): `0xFF`, then `0x00` over every word in a level not
+Mapped; the Deathmatch respawn passes 1 with the bit as it stands (`0x4654ED`, `0x4654EF`; nothing from the
+players phase's entry `0x465031` to there writes `+0x14281`): `0x00` in a level not Mapped; `LOSType` and `LOS`
+toggle bits 2 and 1 and pass 0, which fills nothing (`0x4166A5..0x4166B1`, `0x416D63..0x416D76`; `je 0x4816FD`
+at `0x4816AD`). So in a level that starts Mapped every fill writes `0xFF` until `Mapping` is typed, and in one
+that does not, the poster and the Deathmatch respawn wipe every player's explored bits [the conditions the
+respawn's block runs under were not re-derived here: [sim](sim.html), *The Deathmatch respawn*].
+No routine gives one player the map: the stamp `0x481930` sets a bit where its record
+sees, the copier `0x485420(from, to)` ORs one player's bit into another's, and the saved game's loader `0x484FA0`
+reads the whole map. The copier has two callers, the share's two ends: the typed share command's `MAPINFO` word
+(the string at `0x5093CC`, compared at `0x49367E`) copies the local player's bit, `main+0x2A42`'s, into the
+named player's on the sender's machine (`0x49368D..0x493695`) and then calls `0x4571C0` with the same two
+[INFERRED: the kind-3 `0x16` message's send], and the receiver of that message copies through `0x4558B8`; the
+watcher switch above refills the map for every player on the watcher's own machine, so two peers' maps differ
+by design. **A player who is not the viewed
+one has its bit read by the simulation in one place**, the pathfinder's reader above: in an unmapped level a
+unit is routed over a block its owner has not explored as over free ground, whoever views the game (MEASURED
+2026-11-18: one opening played Mapped and unmapped by an ImpAI seat that reads no explored bit for its
+decisions gives the same orders on the same ticks and then parts in a field made from a unit's position, on
+three maps of four by GameTime 589 -- [testing](../impai/testing.html), the unmapped openings; the unit's
+paths themselves were not compared). The stamp's
+own test and the copier are the bit's other engine readers; the census's rows above serve the viewed player's
+display, cursor and orders, each by its row [the rows not re-derived here for which player's bit each takes].
+Impure's readers of a seat's own bit are `tagpu_worldq.c`'s (`discovered`, `sight_lit`) and allied sharing's
+backfill, which hands an owner's bit to every receiver it gains through the copier
+([allied sharing](../modules/allied-sharing.html)). So a write that set one seat's bit in every word would reach
+each human the seat shares with, and whoever views the seat; ImpAI writes none, and its seat's view does not
+read the bit for the map's layout ([ImpAI in the engine](../modules/impai.html), *What a seat knows*). **The site test's
 accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
 the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
 (`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they
@@ -2290,12 +2336,16 @@ j's two words (`0x4339E8..0x4339FE`). **The stock file** (MEASURED over the inst
 closed first quadrant, so each image covers one quadrant; the lines are swap-symmetric, so a table's
 loaded union is eight-fold, (±a, ±b) and (±b, ±a); TABLE i reaches Chebyshev radius i, point j of a
 ray at distance j + 1, no ray on the unit's own block; TABLE8 48 rays, 332 point visits, 212 offsets;
-TABLE9 is never reached at `numtables` 9 ([line-of-sight](../line-of-sight.md) §3).
+TABLE9 is never reached at `numtables` 9 ([line-of-sight](../line-of-sight.md) §3). The file carries TABLE1..12;
+for each, the disc dx² + dz² ≤ i² of blocks lies inside the loaded union, and so it does in Escalation's
+`gamedatE\LOS.tdf` (`numtables` 90) for TABLE1..12 (MEASURED 2026-11-17, the four images above; unions of 9 / 21 /
+37 / 61 / 101 / 137 / 177 / 213 offsets for stock's TABLE1..8 with the own block, 5 / 17 / 33 / 57 / 89 / 121 / 169 /
+213 for Escalation's). ImpAI's sight test rests on it (`impai_mil.c`, THE EYES' DISC).
 
 **The index.** The stamp takes `idx = trunc(SightDistance / 32)` from the record's sight word, sign
 extended (`movsx` at `0x48230D`; the FBI loader stores `sightdistance` unclamped as def `+0x202`'s
 word at `0x42C3B3`), floored at 0 (`sets`, `dec`, `and`), clamped to `count − 1` with
-`count = 0x433520(table)` = (end − begin) >> 4, 0 for an empty container (`0x48232E..0x482366`),
+`count = 0x433520(table)` = (end − begin) >> 4, 0 for an empty container (`0x48232E..0x482366`: the call at `0x48232E`, the `dec edx` at `0x48233A` making `count − 1`, the signed `cmp eax,edx` at `0x48233B` and its `jge` at `0x48233D`),
 and asks **`0x433500(idx)`** for the element: `begin + (idx − 1)·16` (`dec eax; movsx; shl 4;
 add`, `0x433500..0x433510`), so the element is `[TABLE<idx>]`. The mapped stamp `0x481930`
 (`0x4819C9..0x481A22`) and the removal `0x481D50` (`0x481E09..0x481E4D`) compute the same index

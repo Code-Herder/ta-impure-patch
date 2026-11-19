@@ -1,5 +1,5 @@
 /* impai_build.c -- where ImpAI builds and how it orders it (impai.h, the brain): a metal patch for an
-   extractor, the base ring for everything else, a cell to explore, a building to help. Every site is tested
+   extractor, the base ring for everything else, a building to help. Every site is tested
    through the seat's own site test (WQ_SITE_SEAT) and every unit named by slot, the adapter re-deriving it
    before each command. Engine-free, no statics. */
 #include <string.h>
@@ -487,7 +487,7 @@ static int way_failed(const IMPAI_DEC* d, int type, int cx, int cz)
 }
 
 /* THE PLANT'S FALLBACK. A plant type whose way out is refused WAY_REFUSALS times in a row, or whose base ring is
-   exhausted at its widest (ring_grow 8), is passed over by the factory choice for fail_t, which tries the next
+   exhausted at its widest (IMPAI_RING_WIDEST), is passed over by the factory choice for fail_t, which tries the next
    type (impai_econ.c, THE CHOICE). When every type the choice would take is passed over, the plant goes to the
    first ring site the site test passes, without a way out (impai_build_plant_waived): a base with no factory is worse
    than one with a cramped exit, and the opening factory must not wait the game out. TERMINATION: each refusal is a
@@ -508,10 +508,24 @@ int impai_plant_off(const IMPAI_DEC* d, int type)
     return r && r->until > d->now;
 }
 
+/* THE PASS-OVERS OVERLAP: every pass-over still standing is given fail_t from now. Called at each pass-over and at
+   each exhausted ring of a plant's walk whose growth only its type's order or pass-over puts back (ring_walk,
+   which states the walks that renew and why the others do not), so a type passed over stays so while THE
+   CHOICE's other types are walked to their own pass-overs. One pass over the seat's nti rows. */
+static void plants_keep_off(IMPAI_DEC* d)
+{
+    unsigned t;
+    for (t = 1; t < d->in->nti; t++) {
+        IMPAI_PLANTREF* r = &d->in->pref[(size_t)t * d->in->pref_stride];
+        if (r->until > d->now) r->until = d->now + d->in->plan->fail_t;
+    }
+}
+
 static void plant_pass_over(IMPAI_DEC* d, int type)
 {
     IMPAI_PLANTREF* r = plant_ref(d, type);
     if (!r) return;
+    plants_keep_off(d);
     r->n = 0;
     r->until = d->now + d->in->plan->fail_t;
 }
@@ -762,7 +776,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
 
 /* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
    commander at a point THE COMMANDER'S SAFE DISTANCE or THE BLAST'S APPROACH refuses (cmd_refused_to), a move --
-   mode 2, an explore or a walk to a feature believed there -- tested as a walk to the point itself, any other as
+   mode 2, a walk to a feature believed there -- tested as a walk to the point itself, any other as
    one to its builddistance of the point; a move of no job is not, and on a contested decision
    it may take the root the factories' turn reserves (impai_brain.c, THE FACTORIES' TURN). */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
@@ -910,8 +924,7 @@ int impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_
     return threatened(d, x_px, z_px) || route_threatened(d, b, x_px, z_px);
 }
 
-/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height, as the
-   explorer's order takes its point; while the anchor's own 256-px cell is threatened, or its block is not
+/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height; while the anchor's own 256-px cell is threatened, or its block is not
    reachable on b's class (reachable_block), to the centre of the unthreatened cell nearest b whose centre block
    is -- in ring order around b's cell (impai_ring_at), the first on the grid -- so a builder in a raid on the base
    is not sent into it, nor a constructor to a point in the sea or on a cliff it cannot stand on. The order ends
@@ -1151,7 +1164,7 @@ static int way_off_crowded(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int64_t h
     for (k = 0; k < d->nway_to; k++)
         if (d->way_to[k].slot != b->slot && touch(x, z, hb, d->way_to[k].x, d->way_to[k].z, d->way_to[k].h)) return 1;
     for (k = 0; k < d->nidle; k++)
-        if ((!still || !way_held(d, d->idle[k].slot)) && touch_ref(d, b, &d->idle[k], hb, x, z)) return 1;
+        if (touch_ref(d, b, &d->idle[k], hb, x, z) && (!still || !way_held(d, d->idle[k].slot))) return 1;
     if (still) return 0;
     for (k = 0; k < d->nhelpers; k++)
         if (touch_ref(d, b, &d->helpers[k], hb, x, z)) return 1;
@@ -1386,9 +1399,9 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
 /* THE HELD GROUND: a constructor claims a patch, and a feature to reclaim (THE RECLAIM), only on a 256-px cell the
-   seat holds now -- one its strength reaches before any known enemy strength does. A judging decision (the first
-   that asks, patch_held) walks the maps' grid
-   twice in 8-neighbour steps, each from one side's sources:
+   seat holds now -- one its strength reaches before any known enemy strength does. Every decision of a seat with
+   a unit judges it once, at its start (impai_held_judge), and walks the maps' grid twice in 8-neighbour steps,
+   each from one side's sources:
    - THE SEAT'S STRENGTH: the cell of each of its rows, and each ally's, of an army type (held_kind: armed
      against the ground and moving on it; an aircraft holds no ground) -- held now or remembered --, and the base
      anchor's cell. A tower of its own is 0 steps at its own cell and is not walked from: it holds what it stands
@@ -1409,7 +1422,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
      which then held its anchor's cell and its army's and claimed no patch.
    THE HYSTERESIS, by construction: a cell not held becomes held when 4 own <= 3 foe, its steps from the seat's
    strength at most three quarters of those from the enemy's; a held cell is let go only when own > foe. Between
-   the two it keeps what the last judging decision left it (IMPAI_BRAIN.held), so a front that wavers by a cell
+   the two it keeps what the decision before left it (IMPAI_BRAIN.held), so a front that wavers by a cell
    flips no patch. The held ground so grows behind a won push -- the army standing where no known enemy is nearer
    -- and shrinks after a lost one. Before any enemy is identified the other starts stand for the enemy, so a cell
    is held up to three sevenths of the way to the nearest; with no other start and no enemy known every cell is
@@ -1420,7 +1433,7 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    between them, contested while the armies met there. WHY NOT A LINE BETWEEN THE BASES: the anchor and the
    estimate stay put, so such a line refuses for the rest of the game the ground a push wins; on the bar's Trout
    Farm games the seats ended with 7-9 extractors under it against 16-24 with no limit (MEASURED 2026-11-14).
-   BOUND, a judging decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
+   BOUND, a decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
    walks of at most IMPAI_GRID_MAX^2 cells, each queued once (held_source queues a cell only while it is not yet a
    source) and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
    blind to water and cliffs; a ghost holds its ground for the enemy until the seat sees it gone. */
@@ -1533,11 +1546,21 @@ static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
     return n;
 }
 
-static void held_judge(IMPAI_DEC* d)
+/* THE JUDGEMENT'S ORDERING, the invariant the hysteresis rests on: impai_brain_decide calls this once, after the
+   anchor is set and before anything that reads a held bit (patch_held's callers: the economy's metal judgement, the
+   ladder, the plants), and nothing else writes IMPAI_BRAIN.held. So every reader of a decision reads that decision's
+   judgement, and the hysteresis steps once a decision whoever asks: which rung runs, or whether any does, moves
+   no bit. Its inputs are the decision's own -- the view's rows, the maps, the starts, the anchor -- and none of
+   them changes inside a decision. held_built: 1 judged, -1 nothing to judge by (no maps or no rows: every cell
+   answers held and the bits keep). */
+void impai_held_judge(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const int gw = d->maps.gw, gh = d->maps.gh;
-    int n, gx, gz;
+    int gw, gh, n, gx, gz;
+    d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
+    if (d->held_built < 0) return;
+    gw = d->maps.gw;
+    gh = d->maps.gh;
     memset(d->held_own, HELD_FAR, (size_t)gw * gh);
     n = held_sources(d, d->held_own, 1, HELD_ARMY);
     if (st->ax != IMPAI_NO_ANCHOR)
@@ -1562,11 +1585,7 @@ static int patch_held(IMPAI_DEC* d, int px, int pz)
 {
     const int64_t gx = impai_cell_of_px(px), gz = impai_cell_of_px(pz);
     int k;
-    if (!d->held_built) {
-        d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
-        if (d->held_built > 0) held_judge(d);
-    }
-    if (d->held_built < 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
+    if (d->held_built <= 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
     k = (int)(gz * IMPAI_GRID_MAX + gx);
     return d->in->st->held[k >> 3] >> (k & 7) & 1;
 }
@@ -1787,7 +1806,8 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
 }
 
 /* THE RING for energy, factories, makers, and extractors on a metal map (impai_econ.c, metal_map): the base box
-   (or the commander's footprint at the anchor) grown on every side by gap + ring_grow x (fx + gap) cells, and
+   (or the commander's footprint at the anchor) grown on every side by gap + the walk's growth x (fx + gap) cells
+   (ring_grow; a plant type's is its own, THE PLANT'S RING IS ITS OWN), and
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
    keep gap cells between them, walked in THE RING'S ORDER. A site is skipped when it overlaps a claim grown by
    gap, covers explored metal above the threshold (the patches are the extractors'; a metal map has none), or
@@ -1803,27 +1823,205 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    BUDGET) ends the ring for the decision. A constructor keeps out of known ground threat at a base site as on
    a walk: MEASURED 2026-11-13, Comet Catcher, 4 of the 27 constructors a human's line killed died at work in
    the base during its raid, ring orders among them. A ring exhausted
-   with tests left pushes the next decision's ring out (ring_grow, at most 8), and a plant type's ring exhausted at
-   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. GROWTH ANSWERS ONLY A LACK OF
+   with tests left pushes the walk's next ring out (its growth, at most IMPAI_RING_WIDEST) -- the next decision's,
+   and for a plant the same decision's (THE PLANT'S WALK CLIMBS) --, and a plant type's ring exhausted at the widest
+   passes the type over (THE PLANT'S FALLBACK); a build brings the growth it walked back to 0, and so does the
+   widest ring exhausted (THE WIDEST RING STARTS OVER). GROWTH ANSWERS ONLY A LACK OF
    ROOM: a ring that left a site for the commander's reach, for ground threat at the site or on the route, or
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
    and switch the seat's plant type, for a raid that lasts a few decisions.
+   THE CUT RING GROWS: a walk from the base -- no key -- that the decision's site tests end, which tested at least
+   one site and had every site it tested refused by the site test, is exhausted like a ring walked to its end; one
+   that tested none (the budget was spent before it) or had a site pass the site test is not. WHY: the walk begins at the same site at every
+   decision, so without the rule a ring whose nearest sites the site test refuses, more of them than the tests
+   the decision has left, is tested at the same sites for good: it never reaches its end, never grows, and takes
+   the decision's site tests from every builder asked after it (decisions.md, *The ring the budget cut*).
+   INVARIANT, an ordering:
+   a base ring's walk that tests a site ends in an order, in a site that passed the site test (its way refused
+   and recorded, its route or the resolver refusing it), in a site left for a cause that is no lack of room, or
+   in exhaustion -- growth, and at the widest ring a plant type's pass-over (THE PLANT'S FALLBACK): refusals alone
+   never end a walk and leave the ring as it was below its widest, and a plant type no site takes is passed over
+   at the ninth such walk running of one growth -- but the commander's beside another builder, which a ring left
+   for its reach puts back at the base (THE PLANT'S RING IS ITS OWN). The growth gives the next walk other sites, but once ring_grow is back at 0 -- it
+   is one counter for the base ring of every type that is no plant, put back by a build of any of them and by the
+   widest ring's exhaustion (THE WIDEST RING STARTS OVER) -- each such type's walk meets again the rings it had
+   exhausted. A plant type's growth is its own and is put back by its own walks alone (THE PLANT'S
+   RING IS ITS OWN). It adds no want and no spending: an order
+   it lets through is one the ladder already asked for, the plant's among them under economy's own terms
+   (impai_brain.c: one plant pending at a time, on the pacing, the surplus's measured price or the tech-up's
+   income, and its energy). What it gives up: the ring's sites past the cut, farther from the walk's key than
+   every site tested, are not tested before the next ring's nearest are -- nor looked at at all: a site past the
+   cut that a walk to its end would have left for the commander's reach or for ground threat does not hold the
+   ring, so a cut walk grows it where the whole walk would not.
+   A KEYED WALK IS NOT EXHAUSTED BY A CUT: the defence's walk and the sensors' are ordered from their key, so the
+   sites a cut one tested are the key's nearest, whose refusals say nothing of the base's room, and the sites past
+   the cut are the farthest from the key -- for the sensors those past the cover, which hold a whole walk and
+   which a cut one never reaches. Such a walk leaves ring_grow as it is; walked to its end it exhausts the ring
+   as any other. RESIDUAL: a keyed walk whose nearest sites the site test refuses, more of them than the tests
+   the decision has left, is cut at the same sites at every decision for as long as its want stands, and the
+   walks asked after it in those decisions test nothing. No bound ends that but the want's own end, or a walk
+   from the base asked before it that grows the ring. MEASURED 2026-11-18 against the keyed cuts growing the
+   ring, fifteen games: eleven equal in every decision line; the naval turtle's attacks 3 for 2, at its cap
+   either way; bar-hota-lavaalley-cc-1 won at 45 468 for the cap and -aa-1 at 50 773 for 68 374, a tier-2 plant
+   in each; bar-hota-steeljungle-ca-1 at the cap not ahead, value 0.85, for a win at 54 973 (decisions.md, *The
+   ring the budget cut*).
+   THE LONE COMMANDER'S PLANT: a site left for the commander's reach waits for another builder, and a seat whose
+   census counts no constructor and no factory, frames included, has none and can get none -- constructors come
+   from factories alone -- so until a plant stands the commander is its only builder. For that seat a plant site
+   past the reach is nobody's, and the plant's base ring is exhausted by such sites as by refused ones: it grows,
+   and at its widest the type is passed over, so a plant type that fits nowhere within the reach gives way to the
+   next one THE CHOICE takes instead of holding the first plant for good. INVARIANT, an ordering: with no
+   constructor and no factory, a walk of the plant's base ring that leaves no site for threat
+   ends in an order, in a way refused and recorded, or in growth of the type's own ring, which no other walk
+   writes, so the type is ordered or passed over within nine exhausted rings whatever the commander is ordered
+   between them. Energy and every other type keep the reach's rule, as does a seat with a constructor or a
+   factory; and the reach itself stands: every order to the commander lies within comm_r (build_at).
+   THE PLANT'S RING IS ITS OWN (ring_growth): a plant type's base ring has its own growth, kept with the type's
+   refusals -- IMPAI_PLANTREF.cgrow for the commander's walks, .grow for every other builder's --; every other
+   type's walk keeps ring_grow, which no plant's walk reads or writes. WHY: one growth for every walk gave a plant
+   type's first walk the ring other types had climbed, and let any ring build between two walks of a plant's
+   climb put the climb back to the base. MEASURED 2026-11-18, bar-hota-metalheck-ac-1: under the commander's far
+   record the wind generator's and the extractor's walks climbed ring_grow to 8 from 2 227, and at 5 932 the
+   vehicle plant's first walk met ring 8, each of its 76 sites past the reach, and was passed over with no site
+   tested; on its own growth it is ordered in that decision. INVARIANT, an ordering: a plant growth is written by
+   its own walks alone -- one more at an exhausted ring below the widest, 0 at the walk's order, 0 at its
+   exhaustion at the widest (the type then passed over unless waived), and the commander's 0 at a ring left for
+   its reach. So no order, exhaustion or pass-over of another type moves it; no growth stands at the widest ring
+   for a later walk to meet, whether the walks that climbed it were refused by the site test or left their sites
+   for the builder's far record, which counts as a refusal. A type's two growths are 0 until its first walk, so a
+   type THE CHOICE first takes after another's pass-over is walked from the base outward. A PASS-OVER PUTS BACK
+   ONE GROWTH AT MOST: the growth of the walk that exhausted the widest ring; the type's other growth stands
+   where its own walks left it, and a pass-over by way refusals (way_refused) writes neither, so a type back from
+   its pass-over is walked on from the growths it kept. WHY TWO: the commander leaves a site
+   past its reach for another builder. One growth for both would stand at the ring the commander leaves, with the
+   rings inside it never walked again until a constructor asks for the type, or go back to the base under the
+   constructor whose site lies past that ring. The commander's own goes back to 0 at a ring it leaves for its
+   reach, so its walks visit each ring from the base to that one in turn and test a site that comes free inside
+   its reach within IMPAI_RING_WIDEST + 1 exhausted rings; the constructors' is not touched by it. BOUND: two
+   bytes of a type's eight-byte row, each 0..IMPAI_RING_WIDEST. RESIDUAL: a ring left for ground threat keeps its
+   growth, as ring_grow does, until the threat leaves it or a walk orders on it.
+   THE WIDEST RING STARTS OVER: ring_grow, like a plant type's growth, goes back to 0 at a base ring exhausted at
+   the widest. WHY: an order alone would put it back, and no walk orders at a ring whose every site lies past the
+   builder's far record or whose nearest sites the site test refuses, so the growth would stand at the widest
+   ring with the rings inside it nobody's to walk. MEASURED 2026-11-18 without the rule, bar-hota-metalheck-aa-2:
+   the wind generator's walks of two constructors under their far record, every site of every ring past their
+   reach, climb ring_grow from 0 to 8 in five decisions (11 684 to 11 759). At ring 8 a builder under a record
+   meets every site past its reach (1 386 of the 2 545 walks from 12 000 to 24 000), a builder with none is
+   cut at its 32 nearest sites, each refused by the site test (336; 46 to 50 of the ring's 126 to 134 sites
+   pass it, past the cut), the walks after it in the decision test nothing (508) and the commander leaves
+   the ring for its reach (257). ring_grow is 8 for 11 715 of those 12 000 ticks, rings 0 to 2 holding 38
+   to 64 sites each that pass the site test unclaimed, and the seat finishes no extractor and no wind generator
+   in them; with the rule it is 8 for 750 and eleven wind generators are finished.
+   INVARIANT, an ordering: ring_grow is written by a base-ring walk of a type that is no plant alone -- one more
+   at an exhausted ring below the widest, 0 at the walk's order, 0 at an exhausted widest ring --, so no
+   exhaustion leaves it at the ring the walk met: exhausted walks running take the rings in turn, the widest then
+   the base, each ring met by some walk once in any IMPAI_RING_WIDEST + 1 of them, whatever exhausted the others
+   -- a far record, a cut or refusals. BOUND: the walk's cost is one ring (one place_ring) a walk of a type that is no plant and the
+   decision's site tests, with the rule as without. RESIDUAL: a walk that leaves its ring writes nothing (GROWTH
+   ANSWERS ONLY A LACK OF ROOM), so a seat whose commander is the only builder asked keeps ring_grow at a ring
+   wholly past comm_r until another builder's walk exhausts or orders on it; and a builder under its far record
+   that reaches no ring site moves ring_grow one ring a walk for as long as the record lives, so the other
+   builders' walks meet the ring it left, not the base's nearest; and the ring a walk meets is the count of
+   exhausted walks before it, so a builder asked at a fixed place among k exhausted walks a decision meets only
+   the rings of its own phase where k and IMPAI_RING_WIDEST + 1 share a factor (three walks a decision: every
+   third ring), for as long as the others' walks stay exhausted (decisions.md, *The widest ring starts over*).
+   THE PLANT'S WALK CLIMBS (ring_build): a plant's base-ring walk that exhausts a ring below the widest walks the
+   next ring in the same decision -- to an order, a site that is left, a way out deferred, the decision's site
+   tests, or the widest ring's exhaustion. WHY: a plant walk that orders nothing hands its builder to the rungs
+   below it for a whole job, so a climb of one ring a decision costs a job a ring (decisions.md, *The plant's
+   ring is its own*, has the games). BOUND:
+   IMPAI_RING_WIDEST + 1 rings a walk, each one place_ring; the site tests are the decision's, and a walk they
+   cut is exhausted or not by THE CUT RING GROWS, the next decision's walk going on from the growth it reached.
+   INVARIANT, an ordering: a plant's walk that tests a site or meets no site ends the decision in an order, in a
+   site left for a cause that is no lack of room, in a way refused and recorded or deferred, in the budget's cut,
+   or with the type passed over (the waived pass at the base again), so a type no ring takes is passed over in
+   the decision that asks it when the tests reach, and in at most nine cut walks when they do not.
+   THE PASS-OVERS OVERLAP (plants_keep_off): each pass-over gives every pass-over still standing fail_t from
+   then, and so does each exhausted ring of a plant's walk by a constructor or by the lone commander, the waived
+   pass's excepted. Every renewal sets the standing pass-overs to one GameTime, so they end together. WHICH WALKS
+   RENEW, AND WHY NOT THE OTHERS: a renewal must be a step that cannot come again without a plant's order or a
+   pass-over between. A pass-over is one: its type is then off THE CHOICE. An exhausted ring is one where the
+   growth it raises is put back by its type's order or pass-over alone -- the constructors' growth, and the
+   commander's while the seat has no other builder (lone_plant: no ring is left for its reach). The commander's
+   growth beside another builder is put back by every ring it leaves for its reach, so its walk can exhaust the
+   same inner rings at every decision for good; those rings renew nothing, as the waived pass's do not.
+   TERMINATION, an ordering: while the pass-overs stand unbroken the renewals are at most one pass-over a type of
+   the choice and IMPAI_RING_WIDEST rings a growth of each, a finite count, so either the choice reaches the waived
+   pass with every type still passed over, however short fail_t is against a type's climb, or the renewals stop
+   and every pass-over ends fail_t after the last of them. RESIDUAL: a census that gains and loses the seat's only
+   other builder between the commander's walks puts the commander's growth back each time (the walk beside the
+   builder, at a ring left for its reach) and lets the lone walks climb and renew again, one unit begun and lost a
+   climb (decisions.md, *The first plant past the commander's reach* and *The plant's ring is its own*).
    COVER (impai_build_sensor): with cover above 0, a site whose footprint centre lies past cover px of the key is
    skipped and is no lack of room, as the commander's reach is not. AT A POINT (`at`): the ring around the
    rectangle `at` instead of the base box, grown by gap alone, each site on held ground (THE HELD GROUND), and
-   neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's. */
+   neither its success nor its exhaustion touches ring_grow or a plant type, which are the base ring's.
+   OUT (out >= 0): a ring of THE AIR PLANT'S OWN SEARCH (impai_build_air), the base box grown by gap + out x (fx + gap)
+   cells; each site the builder reaches (builder_reaches), tested before the site test so that a site it does not
+   reach costs no site test -- its refusals counted against AIR_REACH_REFUSALS in IMPAI_DEC.air_reach, the
+   builder's own --, its site tests counted against AIR_OUT_TESTS in IMPAI_DEC.air_sites rather than the decision's
+   site_tests, and neither its success nor its exhaustion touches ring_grow or a plant type. */
+static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
+#define IMPAI_RING_WIDEST 8     /* the widest ring a growth reaches */
+/* THE PLANT'S RING IS ITS OWN: where the growth of b's base-ring walk for `type` is kept. The type information
+   holds `type` (ring_walk indexes it), so a plant type has its row. */
+static uint8_t* ring_growth(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    IMPAI_PLANTREF* r = d->in->ti[type].cat == IMPAI_C_FACTORY ? plant_ref(d, type) : NULL;
+    if (!r) return &d->in->st->ring_grow;
+    return d->in->ti[b->type].cat == IMPAI_C_COMMANDER ? &r->cgrow : &r->grow;
+}
+
+int impai_ring_grown(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    return type > 0 && type < (int)d->in->nti ? *ring_growth(d, b, type) : 0;
+}
+#define AIR_OUT_TESTS 32        /* THE AIR PLANT'S OWN SEARCH's site tests a decision, beside site_tests         */
+#define AIR_REACH_REFUSALS 32   /* THE AIR PLANT'S OWN SEARCH's sites one builder may find out of its reach     */
+static int ring_walk(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
+                     uint32_t cover, int out);
+/* THE PLANT'S WALK CLIMBS: ring_walk answers below 0 for a plant's exhausted ring with a wider one to walk and
+   site tests left; the trace then counts the sites of every ring taken. */
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
-                      uint32_t cover)
+                      uint32_t cover, int out)
+{
+    unsigned sites = 0;
+    int r;
+    do {
+        r = ring_walk(d, b, type, key, at, cover, out);
+        if (d->walk) {
+            sites += d->walk->sites;
+            d->walk->sites = (uint16_t)sites;
+        }
+    } while (r < 0);
+    return r;
+}
+
+/* one ring of THE RING: 1 ordered, 0 the walk is over, below 0 a plant's ring exhausted and grown with tests left */
+static int ring_walk(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key, const IMPAI_RECT* at,
+                     uint32_t cover, int out)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int gap = in->plan->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
-    const int grow = gap + (at ? 0 : st->ring_grow * (fx + gap));
+    uint8_t* const grown = ring_growth(d, b, type);
+    const int grow = gap + (at ? 0 : (out >= 0 ? out : *grown) * (fx + gap));
+    int* const tests = out >= 0 ? &d->air_sites : &d->sites;
+    const int cap = out >= 0 ? AIR_OUT_TESTS : (int)in->plan->site_tests;
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
+    /* THE LONE COMMANDER'S PLANT: the census counts frames, so a constructor or a factory begun is another
+       builder to come */
+    const int plant = t->cat == IMPAI_C_FACTORY && plant_ref(d, type);
+    const int lone_plant = commander && plant && !at && out < 0 && !d->count[IMPAI_C_CONS] &&
+                           !d->count[IMPAI_C_FACTORY];
     IMPAI_RECT box;
     unsigned n, k, beyond = 0, threat_skipped = 0;
+    int tested = 0, passed = 0, cut = 0;    /* this walk's site tests, those of them the site test passed, and
+                                               whether the budget ended it (THE CUT RING GROWS) */
+    IMPAI_PLANTWALK unread = { 0 }, *const w = d->walk ? d->walk : &unread;     /* THE PLANT WALK'S TRACE: counts
+                                               and the return taken, read by nothing here */
     if (at) box = *at;
     else if (d->has_bbox) box = d->bbox;
     else {
@@ -1835,6 +2033,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     }
     n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
                    box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
+    w->sites = (uint16_t)n;
     if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
     else if (commander) ring_order(d, d->ring, n, fx, fz, gap, b->pos[0] >> 16, b->pos[2] >> 16);
     else ring_order(d, d->ring, n, fx, fz, gap, st->ax * 16 + 8, st->az * 16 + 8);
@@ -1851,56 +2050,107 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         }
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
-            (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
-            d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
+        if (impai_claimed(d, &wide)) {
+            w->claimed++;
+            continue;
+        }
+        if (impai_failed_in(d, &r)) {
+            w->failed++;
+            continue;
+        }
+        if (impai_far_at(d, b, type, cx, cz)) {
+            w->far_rec++;
+            continue;
+        }
+        if (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) {
+            w->way_failed++;
+            continue;
+        }
+        if (d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) {
+            w->coverage++;
+            continue;
+        }
         if (commander && !site_within(d, type, cx, cz, in->plan->comm_r)) {
             beyond++;
+            w->beyond++;
             continue;
         }
         if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8) ||
             (commander && cmd_refused(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) ||
             (at && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
             threat_skipped++;
+            w->threat++;
             continue;
         }
-        if (d->sites >= in->plan->site_tests) return 0;
-        d->sites++;
+        if (out >= 0 && !builder_reaches(d, b, type, cx, cz)) {
+            if (++d->air_reach >= AIR_REACH_REFUSALS) return 0;
+            continue;
+        }
+        if (*tests >= cap) {
+            cut = 1;
+            w->cut = 1;
+            break;
+        }
+        (*tests)++;
+        tested++;
+        w->tested++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
+        passed++;
+        w->passed++;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
             threat_skipped++;
+            w->threat++;
             continue;
         }
         if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
-            const int w = way_prove(d, type, cx, cz);
-            if (w < 0) return 0;
-            if (!w) {
+            const int way = way_prove(d, type, cx, cz);
+            if (way < 0) {
+                w->exit = IMPAI_PW_WAY;
+                return 0;
+            }
+            if (!way) {
                 way_refused(d, type, cx, cz);
+                w->way_refused++;
                 continue;
             }
         }
         if (build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
-            if (!at) st->ring_grow = 0;
+            if (!at && out < 0) *grown = 0;
             return 1;
         }
+        w->unbuilt++;
+        w->exit = IMPAI_PW_ROOTS;       /* the return below; a walk that goes on names its own */
         if (d->roots >= d->root_cap) return 0;
     }
-    if (at || beyond || threat_skipped) return 0;
-    if (st->ring_grow < 8) st->ring_grow++;
-    else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
-        plant_pass_over(d, type);
+    if (lone_plant) beyond = 0;
+    w->exit = IMPAI_PW_LEFT;
+    if (at || out >= 0 || beyond || threat_skipped) {
+        /* THE PLANT'S RING IS ITS OWN: the commander's ring that passes its reach starts over at the base */
+        if (commander && plant && !at && out < 0 && beyond) *grown = 0;
+        return 0;
+    }
+    w->exit = IMPAI_PW_CUT;
+    if (cut && (key || !tested || passed)) return 0;
+    w->exit = *grown < IMPAI_RING_WIDEST ? IMPAI_PW_GREW : IMPAI_PW_WIDEST;
+    if (*grown < IMPAI_RING_WIDEST) {
+        (*grown)++;
+        if (plant && !d->way_waive && (!commander || lone_plant)) plants_keep_off(d);
+        return plant && !cut ? -1 : 0;
+    }
+    *grown = 0;     /* THE WIDEST RING STARTS OVER */
+    if (plant && !d->way_waive) plant_pass_over(d, type);
     return 0;
 }
 
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
-    return ring_build(d, b, type, NULL, NULL, 0);
+    return ring_build(d, b, type, NULL, NULL, 0, -1);
 }
 
 int impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const int32_t key[2] = { d->def_x, d->def_z };
-    return ring_build(d, b, type, key, NULL, 0);
+    return ring_build(d, b, type, key, NULL, 0, -1);
 }
 
 /* THE SENSORS' SITE (impai_econ.c, THE SENSORS): a site within three quarters of the type's distance of the want's
@@ -1916,12 +2166,12 @@ int impai_build_sensor(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     const uint32_t cover = (uint32_t)(d->want_sensor == IMPAI_SENSE_SONAR ? t->sonar : t->radar) * 3u / 4u;
     IMPAI_RECT at;
     if (!cover) return 0;
-    if (ring_build(d, b, type, key, NULL, cover)) return 1;
+    if (ring_build(d, b, type, key, NULL, cover, -1)) return 1;
     if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER) return -1;
     if (t->flags & IMPAI_TF_WATER) return 0;
     at.x0 = at.x1 = (int16_t)(d->sensor_x >> 4);
     at.z0 = at.z1 = (int16_t)(d->sensor_z >> 4);
-    return ring_build(d, b, type, key, &at, cover);
+    return ring_build(d, b, type, key, &at, cover, -1);
 }
 
 int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
@@ -1933,6 +2183,45 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     return ok;
 }
 
+/* THE AIR PLANT'S OWN SEARCH (the owner's decision, 2026-11-17; research/notes/impai/decisions.md, *The air plant for
+   the blind*): the air plant for the blind at a site of the rings from its own growth to AIR_OUT_RINGS past it round the
+   base box -- the base ring's, then outside it --, nearest first, each site one the builder reaches
+   (builder_reaches) and every test of the base ring's held: no claim, failure or far record, off ground threat and,
+   for a constructor, on a route that passes none, for the commander within comm_r of the anchor and its safe
+   distance, and the plant's way out unless `waived` (THE PLANT'S FALLBACK). The search spends AIR_OUT_TESTS site
+   tests a decision of its own, never the decision's site_tests, so a decision whose air plant finds no site still
+   has every site test the sea plant's search spends after it (impai_econ.c, air_take); neither its success nor its
+   exhaustion touches ring_grow or a plant type's pass-over, which are the base ring's (a way it refuses counts, as
+   THE WAY REFUSALS do anywhere). The builder's reach is tested before the site test, and its refusals end its own
+   search at AIR_REACH_REFUSALS without spending a site test, so a builder that reaches none of the sites -- an idle
+   constructor on another landmass, asked first -- leaves every one of the decision's AIR_OUT_TESTS to the builders
+   asked after it (the commander on its energy build). 1 ordered. BOUND: a builder asked walks AIR_OUT_RINGS + 1
+   place_ring rings of at most PLACE_MAX_SITES sites and runs at most AIR_REACH_REFUSALS + AIR_OUT_TESTS + 1
+   builder_reaches (the last finds the site tests spent); the decision runs at most AIR_OUT_TESTS site tests here.
+   THE DECISION'S REACH TESTS: the refusals are counted a builder (air_reach starts over at each call) and the
+   reaches that pass the decision (air_sites), so a decision whose air_take asks B builders runs at most
+   B x AIR_REACH_REFUSALS + AIR_OUT_TESTS + 1 builder_reaches. B is at most the census's lists, nidle + nhelpers +
+   njobbed <= 4 IMPAI_IDLE_CAP = 128 (impai_brain.h, IMPAI_DEC; impai_econ.c, air_take), which gives 4 129 calls of
+   at most 1 089 label reads each: CPU alone, and reached only when every listed builder offers the plant and
+   reaches none of its first AIR_REACH_REFUSALS sites. No cap spans the decision: one would end the search for the
+   builders asked last, and those are the ones the per-builder count exists to reach.
+   RESIDUAL: the walk is the same each decision, so while its first AIR_OUT_TESTS sites fail the sites past them
+   are not tested. */
+#define AIR_OUT_RINGS 8
+int impai_build_air(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int waived)
+{
+    const int g0 = *ring_growth(d, b, type);
+    int ok = 0, g;
+    d->way_waive = waived;
+    d->air_reach = 0;
+    for (g = g0; !ok && g <= g0 + AIR_OUT_RINGS && d->air_sites < AIR_OUT_TESTS &&
+                 d->air_reach < AIR_REACH_REFUSALS && d->roots < d->root_cap;
+         g++)
+        ok = ring_build(d, b, type, NULL, NULL, 0, g);
+    d->way_waive = 0;
+    return ok;
+}
+
 /* ---- the sea plant ---- */
 
 #define SEA_EST_BLOCKS 48       /* the estimate's water: sea_ref labels within this many blocks of it (1536 px) */
@@ -1940,11 +2229,11 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 #define SEA_LOOK       64       /* the candidates a decision tests against the fail ring                        */
 #define SEA_REACH_BLOCKS 16     /* THE BUILDER'S REACH reads the blocks this many rings round a site at most    */
 
-/* the sea plant's radius from the anchor: comm_r, and FAR_PATCH_K x comm_r in THE FINISH AT SEA (IMPAI_DEC.sea_far,
+/* the sea plant's radius from the anchor: comm_r, and FAR_PATCH_K x comm_r in THE FINISH AT SEA (the posture's dry,
    impai_brain.c, economy) -- the search's (sea_search) and THE COMMANDER'S REACH's for its order (build_at) */
 static uint32_t sea_radius(const IMPAI_DEC* d)
 {
-    return (d->sea_far ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
+    return (d->pos.dry ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
 }
 
 /* 1 when the 32-px square from (x0, z0) lies within lim of (px, pz): the corner of it farthest from the point does */
@@ -2023,21 +2312,18 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    minwaterdepth. Content candidates depend on the level's content and on the type, the anchor, the estimate's block and
    the radius only, so a search that finds none is remembered against those (IMPAI_BRAIN.sea_none_*) and not walked
    again while they hold. Each content candidate is then held against the claims -- the footprint grown by gap
-   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands -- and against
-   the seat's exploration: a footprint centre the seat has not explored, which its site test refuses
-   (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c, THE SEAT'S OWN SITE TEST; it tests the centre sheared by half
-   the altitude, this the centre itself, a filter the site test still decides), so an unmapped seat looks past the near
-   water it has not seen. Neither spends SEA_LOOK, so neither a field of standing extractors nor unseen water can hold
-   the search short of a free site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and
-   then the way out (THE WAY OUT) decide.
+   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands. That
+   spends no SEA_LOOK, so a field of standing extractors cannot hold the search short of a free site. The first
+   SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out (THE WAY OUT)
+   decide.
    THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
    way out or then the resolver refused it, or no builder took it (THE SITE NO BUILDER TAKES) -- is passed by the
    cursor (IMPAI_BRAIN.sea_*), and the next decision's
    walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
    fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
    holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
-   walk starts again at the first candidate. A candidate before the cursor that the claims or the exploration
-   passed over waits for that restart too. The walk still counts every content candidate, the cursor's skipped
+   walk starts again at the first candidate. A candidate before the cursor that the claims passed over waits for
+   that restart too. The walk still counts every content candidate, the cursor's skipped
    ones included, so a search with candidates never reads as one with none.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
@@ -2049,7 +2335,7 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
    BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024, 16 641 in
    THE FINISH AT SEA's 2 048 --, each one label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a
-   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests
+   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps); SEA_LOOK failure tests
    (IMPAI_FAILS each); site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
    (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
 static int sea_search(IMPAI_DEC* d, int type)
@@ -2068,7 +2354,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     if (!rc || !rc->labels || !rc->top || rc->sea_ref >= WQ_MCLASSES || !(rc->present >> rc->sea_ref & 1u)) return -1;
     if (!d->q->ops->def_econ(d->q, type, &e) || e.minwater <= 0 || (need = (int)d->m.sea - e.minwater) < 0) return -1;
     if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
-        st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far)
+        st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->pos.dry)
         return -1;
     if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
         d->now - st->sea_from >= in->plan->fail_t) {
@@ -2102,7 +2388,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-            if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
+            if (impai_claimed(d, &wide)) continue;
             if (!site_within(d, type, cx, cz, in->plan->comm_r) && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))
                 continue;
             if (looked >= SEA_LOOK) return 0;
@@ -2132,7 +2418,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     st->sea_none_az = st->az;
     st->sea_none_ex = (int16_t)ex;
     st->sea_none_ez = (int16_t)ez;
-    st->sea_none_far = d->sea_far;
+    st->sea_none_far = d->pos.dry;
     return -1;
 }
 
@@ -2141,7 +2427,7 @@ int impai_sea_none_now(const IMPAI_DEC* d)
     const IMPAI_BRAIN* st = d->in->st;
     const int ex = d->in->mil ? d->in->mil->ebx : IMPAI_NO_ANCHOR, ez = d->in->mil ? d->in->mil->ebz : IMPAI_NO_ANCHOR;
     return st->sea_none_type != WQ_NONE && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
-           st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far;
+           st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->pos.dry;
 }
 
 /* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
@@ -2149,10 +2435,10 @@ int impai_sea_none_now(const IMPAI_DEC* d)
    the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
    builder offering another type than the searched one waits for a later decision.
    TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
-   whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
+   whatever stopped it: the site test or the resolver refusing, the claims, the failures, its
    own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
    once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
-   site the seat has not yet explored, a refusal the cursor passed) costs one count, not
+   refusal the cursor passed) costs one count, not
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
@@ -2213,75 +2499,6 @@ void impai_sea_untaken(IMPAI_DEC* d)
     if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->roots < d->root_cap &&
         d->in->st->sea_i < 0xFFFFu)
         d->in->st->sea_i++;
-}
-
-/* ---- exploring ---- */
-
-/* THE EXPLORE CELL, once a decision: of the 256-px cells, the one nearest the anchor (integer distance, ties
-   in row-major order) whose centre cell the seat has not explored, that holds no failure, that the seat holds
-   (THE HELD GROUND, the extractors' rule) and that b can travel into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
-   (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
-   (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
-   cell it never arrives at). A cell whose straight way from b crosses known ground threat (THE ROUTE) fails for
-   fail_t and b is not sent: the next decision takes the next cell, one route test a decision. Else b moves there
-   (resolver mode 2), at the ground's height, and becomes the seat's one explorer; the job and its failure keep
-   the cell's centre. WHY THE HELD GROUND: the explorer is asked for once no held patch is left (impai_econ.c,
-   assign), and mid-game, the seat's own half explored, the nearest unexplored cell lies in the enemy's half --
-   the walk the held ground keeps the constructors from. BOUND: at most IMPAI_GRID_MAX^2 cells, each one held bit
-   and one label read, and for a cell nearer than the best so far whose centre block is not b's, at most
-   (2 EXPLORE_NEAR + 1)^2 = 81 more. */
-#define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
-int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
-{
-    const IMPAI_BRAIN_IN* in = d->in;
-    const int gw = (d->m.w * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX, gh = (d->m.h * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX;
-    const int per = IMPAI_CELL_PX / 16;
-    const int l = builder_label(d, b);
-    const unsigned cls = in->ti[b->type].mclass;
-    int gx, gz, bx = -1, bz = -1, tx = 0, tz = 0;
-    uint64_t best = 0;
-    int32_t pos[3];
-    if (d->explored_once || gw < 1 || gh < 1 || gw > IMPAI_GRID_MAX || gh > IMPAI_GRID_MAX) return 0;
-    d->explored_once = 1;
-    if (!l) return 0;
-    for (gz = 0; gz < gh; gz++)
-        for (gx = 0; gx < gw; gx++) {
-            int cx = gx * per + per / 2, cz = gz * per + per / 2, px, pz, ox, oz;
-            IMPAI_RECT r;
-            int64_t dx, dz;
-            uint64_t dd;
-            if (cx >= d->m.w) cx = d->m.w - 1;
-            if (cz >= d->m.h) cz = d->m.h - 1;
-            dx = (int64_t)cx - in->st->ax;
-            dz = (int64_t)cz - in->st->az;
-            dd = (uint64_t)(dx * dx + dz * dz);
-            if (bx >= 0 && dd >= best) continue;
-            r.x0 = r.x1 = (int16_t)cx;
-            r.z0 = r.z1 = (int16_t)cz;
-            if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r)) continue;
-            px = cx * 16 + 8;
-            pz = cz * 16 + 8;
-            if (!patch_held(d, px, pz)) continue;
-            if (l > 0 && impai_reach_at(in->reach, cls, cx >> 1, cz >> 1) != l) {
-                if (!impai_reach_near(in->reach, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) continue;
-                px = ox * 32 + 16;
-                pz = oz * 32 + 16;
-            }
-            best = dd; bx = cx; bz = cz; tx = px; tz = pz;
-        }
-    if (bx < 0) return 0;
-    if (route_threatened(d, b, tx, tz)) {
-        impai_fail_add(d, bx, bz);
-        return 0;
-    }
-    pos[0] = (int32_t)((uint32_t)tx << 16);
-    pos[1] = 0;
-    pos[2] = (int32_t)((uint32_t)tz << 16);
-    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
-    if (!order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_EXPLORE, bx, bz)) return 0;
-    in->st->explorer = b->slot;
-    d->explorer_live = 1;
-    return 1;
 }
 
 /* ---- assisting ---- */
@@ -2418,12 +2635,12 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    CONSTRUCTION: the seat knows a feature exactly when DrawGameScreen would draw it for the seat's player
    (tasim_feature_drawn, tasim_sweep.c: on explored ground every feature, live, greyed outside sight, except a
    nodrawundergray def, drawn only to its owner or in sight), so it knows what a human in its seat is shown and no
-   more. A feature on unexplored ground is never taken; a look (tasim_sweep_targets with seat_sight), the refresh and
-   the jobs' checks (impai_brain.c, reclaim_seen) all ask THE FEATURE SHOWN. What the memory holds where the draw
-   does not show it -- unexplored ground, a gated def out of sight -- is a belief, as old as its `seen`. On the
-   bar's setting, True line of sight with the map explored, the draw shows every feature on the map, so every
-   remembered one is a fact at every decision and the decay of a belief (THE CONFIDENCE) is left to an
-   unexplored map. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
+   more. A look (tasim_sweep_targets with seat_sight), the refresh and the jobs' checks (impai_brain.c,
+   reclaim_seen) all ask THE FEATURE SHOWN, whose explored test is the draw rule's own (tasim_feature_drawn).
+   The seat's view answers every cell of the map explored (the layout,
+   tagpu_worldq_open_layout), so what the memory holds where the draw does not show it is a gated def out of
+   sight -- a belief, as old as its `seen` (THE CONFIDENCE) -- and every other remembered feature is a fact at
+   every decision. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
    the threat at the feature and on THE ROUTE, THE HELD GROUND, the commander's comm_r and safe distance, and the
    walk checks -- are the same whatever told the seat of the feature.
    THE REFRESH, every decision: each remembered feature is asked THE FEATURE SHOWN -- there and shown, its amounts
@@ -2443,7 +2660,7 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    LOOKS: the wrecks lie where the army fought, which the builders, who keep out of known threat, rarely reach; in
    the owner's four-seat game on Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes
    (MEASURED 2026-11-14).
-   BOUND, a decision: the refresh's IMPAI_FEATS explored tests, cell reads and gates (at most four block tests
+   BOUND, a decision: the refresh's IMPAI_FEATS cell reads, each with the draw rule's explored test and gates (at most four block tests
    each); the held entries' walk of the census's claims, an IMPAI_FEATS find for each reclaim job's, and one walk a
    feature newly remembered; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16) / 16 + 1)^2 = 105^2 explored tests each, as many reads of
    the explored cells and a gate for each anchor; and IMPAI_RECLAIM_LOOK reads again and finds of IMPAI_FEATS
@@ -2452,7 +2669,6 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 int impai_feat_seen(const IMPAI_DEC* d, const IMPAI_FMEM* e, WQ_FEAT* f)
 {
     WQ_FEAT was;
-    if (!d->q->ops->explored(d->q, e->ax, e->az)) return -1;
     if (d->q->ops->feature(d->q, e->ax, e->az, f) && f->ax == e->ax && f->az == e->az && f->def == e->def) {
         if (!tasim_feature_drawn(d->q, f)) return -1;
         return impai_feat_takeable(f);

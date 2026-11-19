@@ -40,6 +40,42 @@ static int category(const WQ_DEF* d, const WQ_DEF_ECON* e, const TASIM_ROLE_OUT*
     return IMPAI_C_OTHER;
 }
 
+/* PLACED ON WATER ONLY (IMPAI_TF_WATER) is the site test's answer, and the site test reads it from more than one
+   key (engine/orders.md, the 0x47D2E0 row, *The height tail*, DISASSEMBLED):
+   - minwaterdepth above 0: the footprint's highest cell must lie that far under the sea;
+   - a tidal generator, which earns nothing off the water;
+   - A YARD OF WATER CELLS AND NO LAND CELL WITH MINWATERDEPTH 0. The test's last compare refuses a footprint
+     whose highest cell -- the larger of the land maximum, 0 with no land cell, and the water maximum -- lies
+     above sea - minwaterdepth (0x47D7D7..0x47D7F0: the two byte maxima, `movsx` of def +0x1C0, a signed 32-bit
+     `jg`), so with minwaterdepth 0 every water cell lies at or below the sea, whatever the type's waterline.
+     Escalation's floating wind generator is this type: minwaterdepth 0, a yard of `w`.
+   yard_afloat answers the yard's half for a building: a mobile type is placed by its factory, never by the site
+   test, and keeps the keys' answer. INVARIANT, a bound on what the flag claims: a type flagged by its yard has
+   a water cell, and the site test refuses it wherever one of its water cells lies above the sea, so on ground
+   above the sea it has no site at all.
+   NOT FLAGGED: such a yard with minwaterdepth below 0. The last compare then binds nowhere a map reaches, and
+   what holds the type to the water is the water path's altitude alone: the sea less the waterline byte def
+   +0x22C in an 8-bit subtract (0x47D77B..0x47D787), which the water maximum may not pass
+   (0x47D7AE..0x47D7B8), and which wraps where the waterline is above the sea level. The seam gives no
+   waterline, so no bound is at hand and the keys decide: the type is no water type here, and the site test
+   refuses the sites it cannot take. Escalation's and TA Twilight's floating radar towers are these: their def's
+   word +0x1C0 is -10000 (MEASURED 2026-11-18, the native loader's def image of Escalation's ARMFRAD and
+   CORFRAD).
+   A yard that cannot be read whole (no yard map, a footprint past WQ_FOOT_MAX) answers 0: the keys decide. */
+static int yard_afloat(const WORLDQ* q, int type, const WQ_DEF* d)
+{
+    uint8_t yard[WQ_FOOT_MAX * WQ_FOOT_MAX];
+    int k, n, water = 0;
+    if (d->fx < 1 || d->fz < 1 || d->fx > WQ_FOOT_MAX || d->fz > WQ_FOOT_MAX) return 0;
+    n = d->fx * d->fz;
+    if (q->ops->yard(q, type, yard, (int)sizeof yard) != n) return 0;
+    for (k = 0; k < n; k++) {
+        if (yard[k] & WQ_YARD_LAND) return 0;
+        water |= yard[k] & WQ_YARD_WATER;
+    }
+    return water != 0;
+}
+
 int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, IMPAI_TINFO* ti, int nti)
 {
     const int n = q->ops->ndefs(q);
@@ -61,7 +97,9 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
         o->tech = (uint8_t)(r && r->tech > 0 ? (r->tech < 255 ? r->tech : 255) : 0);
         o->flags = (uint8_t)(((r ? (r->flags & TASIM_RF_MOBILE) != 0 : (d.flags & WQ_DF_MOVER) != 0) ? IMPAI_TF_MOBILE : 0) |
                              ((d.flags & WQ_DF_VTOL) ? IMPAI_TF_VTOL : 0) |
-                             (e.minwater > 0 || e.tidal > 0 ? IMPAI_TF_WATER : 0) |
+                             (e.minwater > 0 || e.tidal > 0 ||
+                              (e.building && e.minwater == 0 && yard_afloat(q, t, &d))
+                                  ? IMPAI_TF_WATER : 0) |
                              ((d.flags & WQ_DF_ONOFF) ? IMPAI_TF_ONOFF : 0) |
                              ((d.flags & WQ_DF_RECLAIMER) ? IMPAI_TF_RECLAIM : 0));
         o->mclass = d.mclass;
@@ -95,18 +133,31 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
      keeps every friendly unit clear of (impai_mil.c, THE D-GUN'S GUARD); none otherwise, and none when the radius
      passes the 255 px dgun_r holds, so no guard is ever narrower than the shot (retail ARM_ and
      CORE_DISINTEGRATOR: areaofeffect 48, a 24 px radius; MEASURED 2026-11-13, `tasim_run defs`).
+   - WHAT IT HITS (IMPAI_TF_HITDRY, HITWET, HITAIR; impai.h, THE TARGET CLASSES): of its regular weapons -- the
+     classifier's, not CommandFire, stockpile or interceptor (tasim_roles.c, regular) --, one that is neither a
+     waterweapon nor a toairweapon, one that is a waterweapon, one in an anti-air slot (tasim_roles_slot_antiair,
+     the classifier's and the fight content's rule). The other flags are the def's and stay.
    BOUND: nweapons is held to the input's slots; an energy not finite reads as 0. */
 _Static_assert(((TASIM_F245_CANATTACK | TASIM_F245_CANDGUN) & ~TASIM_ROLE_F245) == 0,
                "the type facts test only +0x245 bits the role fillers copy");
 _Static_assert(((TASIM_F241_KAMIKAZE | TASIM_F241_CANHOVER | TASIM_F241_CANFLY) & ~TASIM_ROLE_F241) == 0,
                "the type facts test only +0x241 bits the role fillers copy");
-_Static_assert(((TASIM_WF_TOAIR | TASIM_WF_WATER | TASIM_WF_DROPPED | TASIM_WF_COMMANDFIRE) & ~TASIM_ROLE_WF) == 0,
+_Static_assert(((TASIM_WF_TOAIR | TASIM_WF_WATER | TASIM_WF_DROPPED | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE |
+                 TASIM_WF_INTERCEPTOR) & ~TASIM_ROLE_WF) == 0,
                "the type facts test only +0x111 bits the role fillers copy");
 void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
 {
     const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
     const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
-    unsigned k, r = 0;
+    unsigned k, r = 0, hits = 0;
+    for (k = 0; k < nw; k++) {
+        const uint32_t f = in->w[k].flags;
+        if (f & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR)) continue;
+        if (!(f & (TASIM_WF_WATER | TASIM_WF_TOAIR))) hits |= IMPAI_TF_HITDRY;
+        if (f & TASIM_WF_WATER) hits |= IMPAI_TF_HITWET;
+        if (tasim_roles_slot_antiair(in, (int)k)) hits |= IMPAI_TF_HITAIR;
+    }
+    t->flags = (uint8_t)((t->flags & ~(IMPAI_TF_HITDRY | IMPAI_TF_HITWET | IMPAI_TF_HITAIR)) | hits);
     t->attack = (uint8_t)(((in->flags245 & TASIM_F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
                           ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
                           ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
@@ -290,8 +341,8 @@ float impai_tinfo_e_per_m(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, 
    term, and a homing shot's hit coefficients are held at their prior (tools/impai/predfit.py), so the hovers'
    values are the model's mechanics extrapolated (research/notes/impai/calibration.md).
    THE COST: each field is chosen by rank, n^2 comparisons for its n candidates, and a field equal to the one below
-   it is copied, not run again; at most (nti - 1) x IMPAI_QTECH x IMPAI_QFIELD runs. Retail (MEASURED offline): 47
-   scored types, fields of 12, 32, 32 and 32 (T4 = T3, copied), 3 572 runs. The level init's line states the
+   it is copied, not run again; at most (nti - 1) x IMPAI_QTECH x IMPAI_QFIELD runs. Retail (MEASURED 2026-11-18,
+   the level init's line): 46 scored types, fields of 12, 32, 32 and 32 (T4 = T3, copied), 3 496 runs. The level init's line states the
    build's own count and time. Engine-free and deterministic: every float is rounded once on SSE2 (the Makefile's
    rule for impai_*.c), each sum taken in the field's order. */
 static int value_gated(const IMPAI_TINFO* t)

@@ -309,13 +309,10 @@ Both are the coordinator's; the first was moved by the bar's diagnosis, and the 
   the plant comes once the constructors have the income up. **What it costs**: an island-map seat with a poor start
   holds one land plant longer; a seat whose military refuses every decision keeps one factory (`refused=` on its
   mil line).
-- **Builders keep to their layer too.** The explore cell and an assist's target must be reachable on the
-  builder's class (`impai_build.c`, `impai_build_explore` and `builder_near`), which widens the rule beyond the
-  military. **Why**: a sea plant makes sea constructors; without the test one of them, made the seat's one
-  explorer, is sent at a land cell it never arrives at and holds the explorer until `job_timeout`, and a sea
-  constructor walks at a plant inland to help it. On Comet Catcher every block is one component for every class,
-  so neither test changes `impai-eco`'s choices; on the brain test's walled map the explorer now goes to a cell on
-  its own side of the wall.
+- **Builders keep to their layer too.** An assist's target must be reachable on the builder's class
+  (`impai_build.c`, `builder_near`), which widens the rule beyond the military. **Why**: a sea plant makes sea
+  constructors; without the test a sea constructor walks at a plant inland to help it. On Comet Catcher every
+  block is one component for every class, so the test does not change `impai-eco`'s choices.
 
 ## Finishing a won game: two changes to A2 §4.3 (b7, 2026-11-13)
 
@@ -494,11 +491,6 @@ The design calls, each with its evidence; the owner may reverse any of them:
   fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
   builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
   past the front waits until a push holds its ground; the commander keeps `comm_r`.
-- **The explorer keeps to held ground**, 2026-11-15: the explore cell is the nearest unexplored 256-px cell the
-  seat holds. **Why**: the explorer is asked for once no held patch is left, and mid-game, the seat's own half
-  explored, the nearest unexplored cell lay in the enemy's half -- the walk the held ground keeps the constructors
-  from. **What it costs**: the enemy's half stays unexplored by the builders; the army's sweep and scouts still go
-  there.
 - **The held ground's enemy side starts from each enemy's base**, 2026-11-15: every identified enemy structure that
   is not a tower, and while an enemy the seat identifies has none known, or none is identified, every start but the
   seat's own -- not the military's estimate. **Why**: the estimate is one value-weighted centre of every enemy's
@@ -574,6 +566,117 @@ The owner's answers to the spec's questions:
   type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
   **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
   estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+- **On an island the plant order is a calculation, not "sea, then air"** (owner's decision, 2026-11-17; it replaces
+  the fixed order below): the sea first when there is metal in the water -- the open water patches a sea plant's
+  constructor reaches are at least the island's -- or sea defences are needed (an enemy ship or submarine known);
+  a land plant first when the island is big enough that land constructors pay (at least six open patches its
+  constructors reach and 1 024 blocks of its ground within 1 536 px of the anchor, both the brain writer's
+  hand-written figures); never an air plant first, and aircraft eventually: past the first plant the sea plant
+  until the seat holds two, then an air plant. The owner: "Air should be built eventually but probably not as a
+  first plant on naval maps if there are metal extractors in water. Maybe the AI has to calculate if it's better to
+  go air or water first for resources / defences. Air first is often a bad idea and extremely hard to pull off even
+  for a human. Whether you have a land plant first really depends on the size of the island to know if it's worth
+  it." **What it costs**: the default table buys no aircraft, so the air plant makes constructors until an air
+  share is added for seats whose enemy land cannot reach (in scope, not done); the island's area is read near the
+  base only.
+- **The air plant for the blind** (owner's decision, 2026-11-17): on an island the air plant may come ahead of the
+  second sea plant -- never ahead of the first, never the first plant -- while (a) an enemy area needs the air
+  scout (*One air scout a seat*), (b) the seat safely holds the water and (c) the economy pays for it without
+  stalling the yard. The owner: "When blind AND you safely control the water. Not much upside to seeing the island
+  if you're losing the water war. We need a heuristic that is not too safe but also a bit cautious, so that an air
+  plant won't hobble your naval forces in the early game." **The heuristic** (the brain writer's figures, the bar's
+  to move): (b) the seat's sea army value -- built, building and queued -- is above 0 and at least 1.5 times the
+  most enemy sea army value seen in the last three minutes (held, since the picture counts a ship only while it is
+  seen); a lost prediction does not count against it, since an island seat's retreats come from what stands ashore
+  -- on the naval turtle a retreat from the commander at its shore came 127 ticks before the second plant, no enemy
+  ship ever seen (MEASURED 2026-11-17 at b54d27f3) --, which is what the air scout is for; (c) no metal or
+  energy stall, not in the hold, and a steady metal income of `factory_per_m` (8 a pass) or more, the plan's own
+  pace for a further plant, so the air plant never takes a slot the surplus alone would have paid. **What it does
+  not reach**: a seat that never builds a sea army, or one whose income stays under 8, keeps the old order (air
+  past two sea plants); and the air plant never makes the yard wait: with no free builder offering it, the sea
+  plant comes as before. **The figures are kept** (owner's decision, 2026-11-17): re-fly after 2 700 ticks, the
+  water held at a sea army of 1.5 times the enemy sea army seen in three minutes, the early air plant at a steady
+  metal income of `factory_per_m` (8).
+  **The air plant takes the energy builder** (owner's decision, 2026-11-17): a due air plant for the blind takes a
+  builder off an energy build -- wind, solar, any energy type -- unless the energy store is in a stall. On the naval
+  turtle only the commander offers the air plant and it was on wind generators whenever the plant was due, so
+  before this the turtle got no air plant (MEASURED 2026-11-17 at 73593317). The energy frame stays where it was
+  ordered; a builder on any other build (an extractor, a plant, a defence) is not taken, and in a stall the air
+  plant for the blind does not hold at all. **The take is for the air plant for the blind only** (owner's answer,
+  2026-11-17): no other plant takes a builder off an energy build. Before the energy builders, every free builder
+  that offers the air plant is asked -- the idle ones, then the helpers --; the first that places it gets it.
+  **Its own site search** (owner's answer, 2026-11-17): on the naval turtle the commander's base ring at 8 587
+  held 24 sites, 20 tested, none taking CORAP (none past its reach, none threatened: the base ring is full at its
+  first size), so the second shipyard came instead and the seat wanted no further plant before the cap at 20 000
+  (MEASURED 2026-11-17 at 38efc351, a diagnostic build). The owner: give the air plant for the blind its own
+  site search outside the base ring -- a safe, unthreatened site the builder can reach -- and do not hold the
+  shipyard up for it. **As built**: the rings from the base ring's present size out to eight more round the base
+  box, nearest first, each site one the builder reaches -- tested before the site test, so a builder that reaches
+  none of them (an idle constructor on another landmass, asked first) spends none of the search's site tests and
+  ends its own walk after 32 such sites -- and every safety test of the base ring's held (no ground
+  threat at the site or on a constructor's route, the commander's reach and safe distance, the way out); the
+  search spends 32 site tests a decision of its own, never the decision's, so the sea plant's search after it
+  keeps all of them, and it never grows the base ring. When no builder places the air plant, the first builder
+  asked for a plant is asked the sea plant's question in the same decision -- the yard is never held up and the
+  want never goes unanswered. **What it does not reach**: the search walks the same sites each decision, so on a
+  map where its first 32 tested sites all fail the sites past them are never tried. On the naval turtle it does
+  not bring the air plant: at 8 587, with the budget lifted to 600 in a diagnostic build, the commander's rings
+  0..4 offered 136 sites within its 1 024 px leash and the engine's site test refused every one, and rings 5..8 lay
+  wholly past the leash (MEASURED 2026-11-17 at d9d34dcb's tree); a CORAP set down 160 px from the commander at
+  the game's start stands and works, so the island's room is gone by the time the plant is due. Only the commander
+  offers CORAP there, so a site past its leash, or the air plant earlier, is the owner's call.
+- **A commander at the shore** (owner's decision, 2026-11-17): ships treat an enemy commander they cannot reach --
+  one confined to land, whose class has no way to the ships' water -- like a defence: they stand off past its D-gun
+  reach plus a pad and shell it from range; they do not retreat home for it. **As built**: its reach is the longer of
+  its ground reach and its D-gun's range; the stand-off measures it from the block of the commander's component
+  nearest the member, not from where the commander stands, so no walk along its shore brings a ship into reach;
+  the member moves out when inside reach + 64 px and attacks the commander only when it is in the member's own
+  range from where the member stands. Every other order an ATTACK gives is kept out of that reach: its travel
+  point and its fight's moves are moved out past it (the review of 82cab0f3 found that holding a member where it
+  stood froze every ship near any coast of the commander's landmass, so the hold was replaced by this), the
+  arrival is measured at the moved point, and the fight attacks no target it would have to close on inside it.
+  The stay-or-go reads such a commander as one that does not close on an ATTACK squad only when every member of
+  the squad stands it off, and then a contact's other members still close by their own test. **Scope kept**
+  (owner's answer, 2026-11-17): as built, for any ATTACK squad that cannot reach the commander -- ships ashore,
+  and a land squad facing it across water. **What it does not reach**: a commander that can walk to the ships
+  (amphibious into their water) is left to the fight as before; only ATTACK squads stand off; a commander farther
+  inland than the ships' range is not shelled, and the squad moves on from the stand-off line -- a ship stands at
+  least the commander's reach + 64 px from every shore block the commander can walk to, so it hits only what lies
+  within its own range less that of the shore (a destroyer of 660 px against a D-gun of 240: about 356 px inland);
+  a commander in a bay, or behind a strait narrower than its reach + 64 px, leaves no clear point at all: a ship
+  sent there stops where it stands when that is clear and otherwise keeps its order, its arrival counts as made
+  and the squad moves on, so that commander is never shelled (the brain test's shore-commander case (j)); the
+  stand-off's own attack on a defence is not held out of the commander's reach; the engine's own path to a firing
+  point is not checked.
+- **Q3 on an island: the land army is capped, and the plants past the first are sea or air plants** (owner's
+  decision, 2026-11-17). When the military judges the seat on an island (THE ISLAND: on a naval map the land army
+  reaches no start that can hold an enemy and no enemy known), the land factories build only a base-defence
+  budget, and every plant past the first is a sea or an air plant. Q3 stays as it is on every linked map, so a map
+  of three or more players keeps its land army. **The cap** (the brain writer's choice): the land army classes
+  take an order only while their value -- built, building and queued -- is below a quarter of the whole army's,
+  so the base's defence grows with the army the seat can send and is nothing while it has none; the base meets
+  only what crosses the water, hovercraft and amphibious units, which the sea army and the air meet first. A
+  share and not a fixed value, so the bound means the same at minute 10 and minute 60. **The plants**: a further
+  plant on the island, on the pacing of any further plant, follows the island's plant order (above; it replaced
+  "first the sea plant, then the air plant" on 2026-11-17): the sea plant by the sea plant's own search
+  while its refusals are not spent, and the plant choice's air plant only once a search finds no site at all or no
+  builder of the seat offers a sea plant -- one builder that cannot place it now leaves it to the others. Sea before
+  air because the default table buys no aircraft, so an air plant there makes only constructors. **Both wait for
+  the economy's own reach to agree** (the brain writer's call): the plants only when no plant the choice may take
+  has a land army that reaches, the cap only when no army type of a gated class on the seat's factories' menus
+  reaches -- both aimed at the estimate and the foe's starts together, so an estimate first taken from structures
+  on a lake does not stand for an enemy base the land army reaches (the brain writer's call on review 1001266a's
+  MED-2). The military's
+  verdict reads a row on a block the land army does not stand on as off the land, so it came and went on Trout
+  Farm, a linked map: at GameTime 12 517 the seat's second plant was an air plant beside a lab whose army reached,
+  and the win came at 54 559 against 45 445 (MEASURED 2026-11-17, `bar-hota-troutfarm-ca-1` at 31ada7aa; with
+  the agreement the lab again, and 45 445).
+  **Why**: on Gods of War the island seat's vehicle plant, its two constructors and its one Leveler cost 1 242
+  metal by the cap, 1.4 of the destroyers it had three of (MEASURED 2026-11-17, `exploit-naval-turtle` at
+  cc27da06); with the rule its second plant was a second shipyard at 8 527 and it held four destroyers at the cap
+  (the scratch build of the change). **What it costs**: an island seat whose menus offer no sea plant builds no
+  land plant past its first; a linked map misread as an island (THE ISLAND's gaps, [brain](brain.html)) loses
+  its land army to the cap.
 
 The first bar runs of the plant choice (13 games, 2026-11-14) found three faults. The fixes are design calls within
 the approval, each with its evidence; the owner may reverse any of them:
@@ -596,13 +699,108 @@ the approval, each with its evidence; the owner may reverse any of them:
 - **A poor plant buys army in a surplus**, its cheapest type of any class. **Why**: the governor promises that no
   factory idles beside a full store, and part 4's "or nothing" was about the metal a poor army would cost, which a
   full store does not lack.
-- **The reach targets every other start until an enemy structure is seen**, and a class reaches when it reaches
-  one of them. A class's component at the base is the label most blocks within 8 rings of the anchor carry, not
-  the anchor's block alone. Allies' starts are still targets: the brain has no read of the teams yet.
+- **The reach targets every start that can hold an enemy's base until an enemy structure is seen** -- the foe's
+  starts, the military's and the held ground's rule: not the seat's own and, where the level seated its starts,
+  neither left empty nor an ally's -- and a class reaches when it reaches one of them. A class's component at the
+  base is the label most blocks within 8 rings of the anchor carry, not the anchor's block alone.
   **Why**: ImpAI's guess, the nearest other start, sits across the water on Trout Farm, while the enemy there was
   land-linked, so the hover plant was chosen for a route the map did not need. Separately, the anchor's impassable
-  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. **What it costs**: a seat whose real
-  enemy sits on the one start cut off from it builds land plants until it sees an enemy structure.
+  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. The foe's starts since 2026-11-17: an
+  empty start on the seat's own island of Gods of War made every land class reach, and the seat opened on a
+  vehicle plant whose army reached no enemy (`exploit-naval-turtle` at 5e4e9c24). **What it costs**: at random
+  starts a seat whose real enemy sits on the one start cut off from it builds land plants until it sees an enemy
+  structure, and an ally's start is a target.
+- **On an island the first plant is the sea plant when the island's plant order says sea** (brain writer's call
+  within Q1, 2026-11-17; the order is the owner's, above). With the foe's
+  starts as the targets, on an island no plant on the commander's menu has a land army that reaches, and Q1 then
+  takes the least value of all; a water plant is no candidate on a dry anchor only because the ring holds no water
+  site, so the sea plant is placed by its own search instead, when the military judges the map naval. A builder
+  that offers none builds the land plant as before, and the sea gets one attempt: once a refusal of the sea plant is
+  counted -- a search that orders none, a job that ends unbuilt -- every later decision builds the land plant
+  (coordinator's call on review d8799688's MED-1, 2026-11-17: before it, a sea plant whose jobs kept failing held
+  the first plant for up to sixteen `fail_t` windows). **Why**: on Gods of War the seat's vehicle plant came at
+  2 974 and its shipyard on the pacing at 9 552, and at the cap it held two ships and had attacked nothing. **What
+  it costs**: the island seat's land economy has the commander alone, its plants past the first being sea or air
+  plants (Q3 on an island, above); a seat whose one sea attempt fails builds the land plant one failed job late.
+- **On an island the waves of every layer but land go at the finish's size** (brain writer's call, 2026-11-17):
+  while the seat's land army reaches no start that can hold an enemy's base and no enemy row on a naval map, a sea
+  or air wave goes at 1 + its layer's waves median units, still predicted to win, inside the attention. **Why**: the
+  finish's own reason -- the land army has nothing it can reach --, and the 8 median units a sea wave asks never
+  came on Gods of War. A start counts by the ground within 8 rings of it, the economy's reach of a target, and at
+  random starts, once enemy structures are known, an occupant-unknown start is no evidence (review d8799688's LOW-1
+  and LOW-4). **What it costs**: a row on a block the land army's classes do not stand on reads as off the land; at
+  random starts with two enemies, one enemy's structures seen hide a second enemy's base on the seat's own land
+  until a row of it is seen, and the sea's waves then go small.
+- **The scout is the first layer's that has a start to go to**, land, then sea, then air (brain writer's call,
+  2026-11-17). **Why**: on Gods of War no land unit reached a start, so no scout went and the seat saw no enemy to
+  the cap. A leg is arrived at where travel sends the scout, as a squad's arrival reads it, and a leg with nowhere
+  to travel to is over at once. **What it costs**: a ship's scouting trip ends at the water nearest the start, which
+  may lie past its sight of it.
+- **Scouts are cheap, fast, bought first and expendable** (owner's decision, 2026-11-17: "we can use cheap scouts to
+  see what is on the island and then shell it from memory or use that to attack. On land we use weasels or
+  equivalent [...] and on water it's ships like skeeters [...] Scouts are expected to die and go as deep as they
+  can."). Each surface layer has a scout class by the classifier's role -- a mobile armed type of role SCOUT: the
+  land scout (`lscout`: ARMFAV, CORFAV, ARMFLEA) and the sea scout (`sscout`, new: CORPT) --, and its plant buys one
+  before any other class whenever the seat holds none of it, built, building or queued, so the first unit of a layer
+  is its scout and a dead scout is replaced by the next order. **The scout is one** (brain writer's call, the same
+  day): no other buy takes a scout class -- the table's share, 0.05 on each surface layer, is only the switch --, so
+  a layer holds one scout at a time. **Why**: a share is a share of what the layer can build, and at sea, with the
+  destroyer the only other class a seat's targets allowed, 0.05 became a sixth of the navy: five CORPT beside two
+  destroyers on Gods of War (MEASURED 2026-11-17 at bf92df19). **What it costs**: the land army no longer carries
+  the jeeps the share bought as fighters (16 of 64 army units on Steel Jungle `ca-1` at d8799688). A scout's trip no longer ends at its first contact: it walks its legs to the end, so on the sea a
+  leg to a start ashore is a peek at the shore, and the next leg pulls it away. What it sees becomes the seat's rows,
+  and the army shells a remembered defence from them (the stand-off's ground attack, bounded by the unreached ring).
+  **Not the rule**: blind fire at a start never seen -- the owner calls it an option; scouting comes first.
+  **The replacements' cost is accepted** (coordinator's call on review 133c30c2's LOW-1): nothing bounds how often a
+  dead scout is replaced but the one built, building or queued a layer at a time, so a seat whose scout dies on every
+  trip pays a scout's price every trip -- what the owner's "expected to die" buys. A cooldown waits for a game that
+  shows the cost: 3 to 9 land scouts a game in the confirm set at bca430ab.
+  **Repair stays removed** (*The mend: removed*, reconfirmed by the owner on 2026-11-17). **What it does not reach**:
+  a seat whose side has no role-SCOUT type on a layer (ARM's skeeter, ARMPT, is a raider by the classifier's
+  thresholds) buys none there, and its scout is then the cheapest of the layer's fastest quarter, as before; a sea
+  scout's eyes reach no farther than a destroyer's -- under stock's `numtables` the engine holds every unit's sight
+  to 8 blocks, 256 px on an axis ([engine/map](../engine/map.html), *The sight table and the stamp*) --, so on Gods of War it sees no farther
+  inland than the navy (the
+  naval turtle: [the bar](bar.html), *The exploiter suite*).
+- **One air scout a seat** (owner's decision, 2026-11-17: yes to one unarmed air scout per seat, an explicit
+  exception to *No army class without damage*). An aircraft of role SCOUT that deals nothing -- CORFINK, ARMPEEP,
+  the AWACs, the seaplane scouts -- takes the air scout's class, and the seat buys one, under *The scout is one*,
+  while a known or expected enemy area -- a start that can hold an enemy's base, or the base's estimate -- is out of
+  sight of every land and sea army unit the seat has: none reaches it, and none's nearest point of its own
+  component has it in its eyes -- the engine's sight table, at most 8 blocks (THE BLIND SPOT). The scout flies
+  there first, beside any scout of another layer, and what it sees becomes rows the ships shell from memory (the
+  stand-off's ground attack). The air plant stays never-first. **Why**: on Gods of War the enemy commander and its
+  west tower stand ~370 and ~415 px from the nearest water, past every ship's eyes, so nothing the seat bought saw
+  them to the cap (MEASURED 2026-11-17 at bca430ab). **The air scout is scout only** (owner's decision,
+  2026-11-17): it is never in a wave, a defence or any army sum; between trips it waits at home in no squad. **Re-fly
+  only when needed** (owner's decision, 2026-11-17): it flies only to an area no land or sea unit sees and that it
+  has not had in its eyes for `IMPAI_EYED_REFRESH` -- 2 700 ticks, 90 s, the writer's figure inside the owner's
+  "about 1-2 game minutes" --, each leg to the nearest such area, and home when none is left; so a start that stays
+  empty (random starts, or one an ally watches) costs one look a refresh, not a trip at every decision. Only a unit
+  of the air scout's class makes the trip: a seat without one sends none of its aircraft, which would otherwise
+  detach a fighter to a blind area at every decision. **The enemy's air scouts stay out**: the exception is for the
+  seat's own buy, so an enemy air scout that deals nothing is never what a radar dot counts as (*the substitute*)
+  and counts in no class of the picture, as before the class took it. With it in the substitute's median, on
+  bar-nota-lavamania-ca-2 under ProTA nine radar dots were weighed as air scouts, the stay-or-go retreated 344
+  times against 164 and the game reached the cap where the brain before the class won at 57 495 (MEASURED
+  2026-11-17; the brain with the rule, built beside *A commander at the shore* at c7f40dd4, wins it at 37 242). **What it costs**: an enemy air scout presses
+  nothing (THE PRESSURE takes armed members only), and the fight content's digest changes with the class, so
+  `predfit check` needs a refit to the same coefficients. **What it does not reach**: the turtle's seat gets no air plant before the cap (its second sea
+  plant came at GameTime 8 587, metal income 9.7 at the cap, MEASURED at bca430ab), so there the scout waits on the
+  economy.
+- **A type is bought only if its weapons can hit a target class the seat knows or expects** (coordinator's call,
+  2026-11-17, approving the brain writer's proposal). The classes are dry, floating, under the sea and air, as the
+  engine's can-engage test sorts a target; known are those of the enemies the military counted within 5 400 ticks,
+  expected the ground of every start that can hold an enemy's base. With no evidence nothing is narrowed, and with
+  something known but no such start dry is kept beside it, so an aircraft or a ship alone never narrows the land
+  away (review 1fa981c3's LOW-3). The plant choice scores a plant only by the types that pass the same filter, so
+  it never takes a plant for a unit its factory would not buy (LOW-2). **Why**: on Gods of War the island seat's
+  shipyard made two submarines of 1 199 metal each while every enemy it knew stood on land. **What it costs**: a
+  submarine waits for a ship or a submarine the seat identifies -- a radar contact on the water counts as dry --;
+  the anti-air classes wait for an aircraft known, which the default table's shares already did. Two misreadings
+  (LOW-1): a land unit wading below the sea, no floater, counts as dry though a waterweapon hits it, and a landed
+  aircraft counts as air though an anti-air weapon cannot hit it; both stand until the unit moves, and neither
+  is worth a read of the unit's height.
 - **A plant the values do not score walks after every scored plant** for the governor's constructor -- a shipyard,
   an air plant: a factory that offers no land fighting class -- and makes one only when no scored plant is idle
   that decision (coordinator's call on the plant choice's high review, 2026-11-14). **Why**: such a plant's best
@@ -804,7 +1002,8 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   Pin Cushion game, 4.6 % of the army's value at about four times a combat unit's build time per value
   (MEASURED). 17 retail types lose their class -- ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC,
   CORSPY, CORTRUCK, CORVOYR, CORVRAD, ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK, CORHUNT -- and over the six
-  contents no type that deals damage does. The scouting rule still prefers a land scout, now an armed one, and
+  contents no type that deals damage does. **The owner's one exception** (2026-11-17, *One air scout a seat* below):
+  the six air scouts take the air scout's class again. The scouting rule still prefers a land scout, now an armed one, and
   takes the fastest-quarter cheapest member when none stands. The class is part of the fight content's digest
   and enters no fight, so the predictor's coefficients refit to the same values under the new digest.
   **Not covered**: Total Mayhem gives its jammers and radar units a 720-damage vertical-launch rocket their scripts
@@ -817,6 +1016,14 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   whether it stays or goes, so it decides neither the retreat nor the wave. 185 of 200 retreats on a base-game
   Pin Cushion had an aircraft nearest (CORVENG 121), and the army of 70 to 169 units sat at home from GameTime
   41 000 to 72 600. The anti-air answer itself is A3's.
+- **A wave leaves against what will decide whether it stays** (brain writer's call, 2026-11-17): its departure is
+  predicted against the mobiles seen now that its stay-or-go weighs and every enemy structure the seat holds a row
+  for within 1 280 px of the goal, seen or remembered, armed or not -- the side its stay-or-go meets at a base's
+  contact -- over the goal's armed defences alone. **Why**: with the two tests weighing different sides, the waves
+  on `bar-hota-plainspasses-ac-1` left at margin 0.12 and turned back at −0.45, 50 times, each retreat the whole
+  way home, and the game reached the cap with 280 units against 61. **Chosen over** dropping unarmed structures
+  from the stay-or-go: a wave's fire is spread over a base's plants, so a stay-or-go that saw only the defenders
+  would hold the wave in a fight it is losing.
 - **The enemy's plants are a wave's goal**, after the commander seen or remembered and before the estimate's
   most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
@@ -884,6 +1091,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   needs no estimate per enemy. **Why the hysteresis**: an army that sways a cell back and forth would otherwise
   claim and refuse the same patch in turn. **What it costs**: a straight step ignores water and cliffs, and a ghost
   holds ground for the enemy until the seat looks again.
+- **The held ground is judged once in every decision, at its start**, 2026-11-18 ([the brain](brain.html), *Task
+  allocation*). The judgement used to run in the first decision step that asked whether a patch was held, so a
+  decision in which nothing asked kept the old bits, and which rung ran decided when the hysteresis stepped: a
+  rung that ordered nothing still moved recorded state, and removing one changed three games' state. **Why an
+  ordering and not a call kept where it was**: a call kept for its side effect is that fault again; judged before
+  any reader, every reader of a decision reads that decision's judgement whoever asks. **What it changes**: the
+  hysteresis steps in decisions where it did not, so a cell is gained or let go sooner. MEASURED on the session
+  tier against the champion 275d56ca, the same category in every game: Red Triangle ac-1 won at 74 077 by both,
+  Plains and Passes ac-1 at 36 363 by both, Core Prime cc-1 at 48 285 by both; Trout Farm ca-1 won at 42 509 |
+  47 710, Lava Mania ca-2 on ProTA at 32 216 | 43 160, Metal Heck aa-2 at 37 236 | 40 771 -- three wins later
+  and none sooner; Steel Jungle ca-1 at the cap not ahead by both, value 0.85. **What it costs**: the two walks
+  and the maps in every decision, where a decision with no asker made neither.
 - **The harvest: an idle builder reclaims outside a surplus, the army looks for wrecks, and a reclaim reaches 2 048
   px** ([the brain](brain.html), *Task allocation*). Without them the fields were learned only by one builder's
   look a decision, the army's sightings never entered the memory, the choice reached 768 px, and the ladder
@@ -1443,3 +1662,330 @@ The economy diagnosis of the mod games at d665a00a
   the main builder. **What it does not do**: a commander never seen near ours can still arrive unseen; holding ours off every place an unseen commander
   could be would hold it off its own base for most of a game, the economy's first builder lost to a risk the
   sighting already bounds. **Owner's decision wanted** if a stronger rule is preferred.
+
+## The posture and the arbiter (the owner, 2026-11-17)
+
+**The fault it answers.** The economy decides through flags that name one another. `economy` (impai_brain.c) writes six wants (`want_factory`, `want_sea`, `want_tech`, `want_def`, `want_aa`, `want_sensor`), each a conjunction over the same gates (`hold`, `pressed`, `surplus`, `e_stall`, `m_stall`, `m_short`) and over what the military judged of the map (`naval`, `dry`, `island`, the blind seat); `assign` (impai_econ.c) spends them down a fixed chain of tests, clearing a want as it places it; and the island's rules reach into both (`air_take`, `air_let_go`, `plant_pick`). `hold` alone is read by eight functions in three files (`tools/impai/rules.py hold`). A rule added to one want is a term added to the others', which is where the whole-brain review of 2026-11-14 found its faults: a defence refused in a metal stall that the pressure had lifted the hold for, a helpers' gate that left out three wants, an unlock and an attention cap reading two predicates for one question. On 2026-11-17 one scenario, the naval turtle, took six rulings and about twenty-five commits and still ends at the cap.
+
+**What is taken**, in four steps, the first three proved neutral -- the same seeds play the same games, decision for decision (`session.py --neutral`, and the brain test's transcript unchanged):
+
+1. **The gates, one table.** The decision computes its gates once, as bits (the hold, the two stalls, the pressure, the surplus, the judgement not yet made), and each want is its need and no gate its row of the table vetoes: `want[k] = need[k] && !(gates & VETO[k])`. The table is the one place that says which gate holds which spend, and a hard constraint (a veto, safe by construction) is apart from a need (a preference, a number). The rows reproduce today's conjunctions exactly, the disagreements included; a disagreement is then one cell, changed in a session of its own and judged by its games.
+2. **The posture, one object.** What the seat has judged of its map and its enemy -- naval, the dry hunt, the island, blind, pressed and where -- is filled once a decision from the military's record and read by every rule that asks; no rule reads the military's record for it or derives `island && blind && sea_plants >= 1` itself. It is derived each decision, so the recorded layout does not change. One log line a decision states it.
+3. **The wants as requests.** A want becomes a request: its kind, what it asks for (a type, a point), its priority. `assign` walks the requests in priority order for each builder, and takes the first one that builder can serve (its menu, its reach, a site). The order is a table; today's chain of tests is its first value.
+4. **Then, not neutral, each judged by its games**: the priorities become numbers the tuning reads; a new map situation is a posture and rows of the tables, not terms in every want; and the squads' tasks get one commitment rule (a task is kept for a stated time or margin before it may flip) in place of the exceptions that each ended one oscillation (the home holds, at the rally, the retreat home).
+
+    MEASURED 2026-11-18 on the champion's session base: no task flip of the tier's games costs anything a commitment would recover (the artillery creep's FORM and DEFEND six times in 210 ticks moves two units and loses none; Red Triangle's and Lava Mania's are a goal with nothing left at it and whole trips ended by the stay-or-go). The squads' commitment rule is therefore not built; it waits for a game that shows its cost.
+
+**What is not taken.** No rewrite, no behaviour tree or planner library, no scoring of every action from the start: the ladder's order is right in almost every game, and a utility score that replaced it at once could not be proved neutral. The scores come in step 4, one priority at a time, where a game can say whether each helped.
+
+**Why neutral first.** A refactor that also changes play cannot be told from a regression, and the brain's games are exact: one build plays one id the same way every time, so a step that changes nothing shows no parting in any game, and a parting names the decision where the step went wrong.
+
+## A start with no room in sight (2026-11-18)
+
+The seat reads the map's layout in every game ([the brain](brain.html), *The map's layout is known in every game*), so no site of a base ring lies on ground it has not seen: the ring gives every site its cheap tests leave to the site test, and the brain has no rule for an unseen site and no walk to look at one. A start hemmed in by ground no plant fits is answered by the ring's growth alone: *The ring the budget cut* and *The first plant past the commander's reach*, below.
+
+## A unit seen gone leaves no row (2026-11-18)
+
+**The fault.** On `bar-hota-redtriangle-ac-1` at the champion 0a4ec04e (the session tier's base) the enemy's last structure, the advanced shipyard in slot 3028 at block (73,108), is destroyed at GameTime 35 226 by three land squads on the shore. The seat's row for it goes from line of sight to a ghost at tick 35 232 and stays to the end. Five waves take the ghost as their goal (35 371, 35 941, 36 601, the sea wave at 36 721, 37 141); a squad that arrives has nothing to attack, goes back to FORM and walks home, and the next wave forms. The win comes at 37 721, 2 495 ticks after the shipyard's death.
+
+**The cause**, from the recording and the source, no diagnostic build: the slice made a row a ghost whenever `observe` showed nothing, and emptied a ghost only when the seat saw the row's block. The engine sees a unit by four points of its box (`0x465AC0`, `unit_los`) and the row keeps the block of its centre, so the seat saw the shipyard by a corner from the shore, saw it die, and kept a ghost at a centre block on the water that no land squad lights: the block is dark at every visit of the slice for 2 500 ticks. Of the item's two candidate faults -- a death the seat saw is not believed; a ghost that is a goal is never looked at -- the game shows the first, and the second follows from it here.
+
+**What is taken.** A row the slice finds held by line of sight whose slot holds no unit any longer is emptied, its radar classes with it ([impai](../modules/impai.html), the information rule, with its bound of one slice round). Nothing is read of a unit: a row held by sight asks `observe` as for a contact, which then answers for any live unit, and only whether it answers is used, so the tick's work stays one observe a slot.
+
+**The games after it** (`.data/impai/runs/session/item7-t1` against `session/base-32d93b3d89fc`, the scratch build of the committed rule): Red Triangle is won at 36 456; the shipyard dies at 36 115 and its row is empty at tick 36 119, no wave takes a dead unit's row as its goal (five before), and the win is 341 ticks after the death. The game parts from the champion's long before the shipyard, though (the rows at tick 8 924, an extractor destroyed in sight whose radar class the champion keeps until the next publish; the decisions at 22 530), so the two win ticks are two games' and not one game's with and without the ghost: the one other parted build on record (`session/nm-look-openE`, an unrelated opening change) won the same game at 41 374. The tier: no game in a worse category. The artillery creep parts at 14 017 (pass, 34 449 against 34 740); Trout Farm at 19 807 (won at 42 976 against 40 743); Plains & Passes at 16 620 (won at 49 291 against 35 901; `nm-look-openE` won it at 44 885); Steel Jungle at 27 007 (at the cap not ahead, 0.48 against 0.51); Lava Mania at 13 957 (won at 39 212 against 37 207). In each the first row that differs is a unit destroyed in sight -- an extractor, a solar collector, a mobile artillery piece, on Steel Jungle an advanced shipyard the champion keeps as a ghost and weighs in the enemy's base (`mil.ebx` 110 against 98) -- that the champion holds on as a radar contact or a ghost and the rule empties. The wave counts' resets are no more frequent (Red Triangle 1 against 3, Trout Farm 4 and 4, Plains & Passes none in either).
+
+**What it does not do.** A unit destroyed from beyond sight, or after the seat's sight left it, is a ghost as before, and a squad sent to a ghost it cannot light from where its task holds it still stands there (the naval turtle's tower, 1 580 to 2 150 ticks of shelling a ghost): the arrival that includes seeing the spot is not built. Four of the five fight games end later or lower with the rule and one sooner; one game an id cannot tell a slower finish from another game's dice, and the paired margin test is what judges the time to win.
+
+## The ring the budget cut (2026-11-18)
+
+**The fault.** In every game of the look at the games the champion does not win ([landings](landings.html), *What holds the champion back*, row 1) the seat's metal store stands full and it gives no build order for the rest of the game, at one or two tier-1 plants, while `think.py why` reads the factory want "needed, taken".
+
+**The cause, MEASURED 2026-11-18 at c16b60cc with a diagnostic build** that logs, at every fourth decision, each rung a builder at the ladder is asked and what the plant's ring walk met (three games; the share is of the metal wasted in the spans where that reason stood):
+
+| the game, its end | the plant want met | ticks | share of the waste |
+|---|---|---|---|
+| `bar-hota-lavaalley-cc-1`, the cap, 16 382 wasted of 46 704 made | wanted (tech-up and surplus), CORALAB: ring 0 has 54 sites, the nearest 32 fail the site test, the decision's 32 site tests are spent | 43 087 to the cap | 61 % |
+| | a plant order stands: eight CORALAB orders, each standing 1 980 to 2 700 ticks (`job_timeout` is 2 700) and ending with no frame | 29 887 to 69 487 | 32 % |
+| | not wanted: the energy term | scattered | 5 % |
+| `bar-hota-steeljungle-ca-1`, the cap, 2 826 wasted of 18 734 | wanted (the reaching plant), CORHP: ring 2 has 44 sites, the nearest 32 fail the site test | 15 427 to the cap | 67 % |
+| | not wanted: income 5.9 below the pacing's 8 | 10 447 to 26 107 | 28 % |
+| `bar-hota-lavaalley-aa-1`, won at 48 701, 5 051 wasted of 22 644 | wanted (tech-up and surplus), ARMAVP: the nearest 32 ring sites fail the site test | 20 707 to the end | 75 % |
+| | a plant order stands | to 45 607 | 23 % |
+
+The walk starts at the same site at every decision and ends at the decision's 32 site tests, so a ring with more than 32 sites the cheap tests leave, whose nearest 32 the site test refuses, is never walked to its end: it is not exhausted, does not grow and is not passed over, and the same 32 tests are spent at every decision -- 585 of Lava Alley cc-1's 1 351 sampled decisions and 1 096 of Steel Jungle's -- so no builder asked after it has a site test for its energy or its maker either. That is the "no build order". The constructors that take nothing are the helpers asked the plant rung for a type their menu lacks, and on Steel Jungle the idle vehicles with no extractor site, the energy at its target, the makers off and no frame to help.
+
+**What is taken.** A walk the site tests end that tested at least one site and had every one refused is exhausted as a ring walked to its end is: the ring grows, and at ring 8 the plant type is passed over ([the brain](brain.html), *The base ring grows from the anchor*; `impai_build.c`, THE CUT RING GROWS). No state is added and no want: the plant comes under the wants' own terms, one pending at a time. A cursor that resumes the walk where it was cut was not taken: the walk's order belongs to the type, the growth and the builder's key, so a cursor is recorded state for each, and the growth already ends the wait.
+
+**The games after it** (the scratch build of the committed rule; `runs/diag/item8-t1-run`, `runs/diag/item8-t1-dev`, `runs/session/item8-t1`):
+
+- Lava Alley cc-1: won at 53 002 with a tier-2 plant standing, 3 528 wasted of 28 507 (the champion 0a4ec04e: won at 50 345, two tier-1 plants, 4 927 wasted; c16b60cc without the rule: the cap). Lava Alley aa-1: won at 39 056 with a tier-2 plant, 711 wasted of 19 588 (the champion 50 211 and 6 533; c16b60cc 48 701 and 5 051).
+- Steel Jungle ca-1 is the same game in its end: the cap, one plant, 2 826 wasted, value 0.48. The ring grows to 8 and CORHP has no site there either (none of the 56 sites past its cut passes the site test), the type is passed over and the reaching plant's want ends; the site tests are spent at 166 of the 1 351 sampled decisions. Its waste is then the pacing's (income 5.9 below 8, 62 %) and the sea plant's search with no candidate (27 %): row 3 of the table, not this rule's.
+- The session tier against the champion: no game in a worse category (3 the same, 2 better as at c16b60cc, 7 parted). Fifteen games against c16b60cc, game by game (the tier's four won bar games and Steel Jungle; Lava Alley aa-1, ac-1, ca-1 and cc-1; Acid Foursome, Luschaven and Gasplant Plain ac-1 and ca-1): eight won sooner (by 467 to 12 928 ticks), three later (Lava Alley ac-1 by 1 921 and ca-1 by 6 175; Red Triangle ac-1 at 58 051 against 36 456), one the same game, one won that reached the cap (Lava Alley cc-1), and two at the cap in both (Steel Jungle; Luschaven ca-1, value 1.98 against 1.31). The eleven parted games both builds won end 23 770 ticks sooner in sum.
+- Red Triangle's decision lines part at 28 807, after the rule first acts at 25 807: an energy ring's walk of 82 sites, cut after ten refusals behind the walks that spent the decision's other 22 tests, grows the ring, though 27 of the 61 sites past that cut pass the site test. The same kinds of plant are ordered to 38 077; it is not won at 36 456 as c16b60cc's game is, and from 38 047 the seat stands at seven plants with a full store and idle factories, no plant wanted while a factory is idle: 21 478 of its 26 711 wasted metal fall in those spans, before the attacks of 53 070 and 57 030. The same game was won at 37 721, 36 456 and 41 374 by three other builds.
+
+**What it does not do.** The sites of a ring past the cut are not tested before the next ring's nearest: on Steel Jungle 7 of CORLAB's 64 sites past the cut at ring 8 pass the site test, and the type is passed over without them. A walk cut after few tests, the decision's others spent by the walks before it, grows the ring on those few (Red Triangle at 25 807, ten). A walk that resumes where it was cut would answer both, at the price of recorded state. Nothing past the cut is looked at either: a site there that a whole walk would have left for the commander's reach or for ground threat does not hold the ring.
+
+**The keyed walks are left out** (`impai_build.c`, A KEYED WALK IS NOT EXHAUSTED BY A CUT). The defence's walk and the sensors' are ordered from their key, so a cut one tested the key's nearest sites, whose refusals say nothing of the base's room, and the sensors' sites past the cover -- which hold a whole walk -- are its last and never reached; with the rule as first taken such a cut grew the base ring for every builder. A keyed walk the site tests cut now leaves the ring; walked to its end it exhausts it as before. MEASURED 2026-11-18, the scratch build `runs/diag/item11-a` against the tip 6bf6d229 (`runs/diag/item11-a-run`; the session tier `runs/session/item11-a` against `session/item10-t1` and `item10-rule`), fifteen games: eleven equal in every decision line, Red Triangle ac-1 among them (won at 74 077); the naval turtle's attacks 3 for 2, at its cap either way; `bar-hota-lavaalley-cc-1` won at 45 468 where the tip reaches the cap at 81 000, and `-aa-1` at 50 773 for 68 374, a tier-2 plant standing in each; `bar-hota-steeljungle-ca-1` at the cap not ahead, value 0.85, where the tip wins at 54 973 (the two part at 19 477, the tip's ring at 8 and this one's at 0). Against the champion 5643b394 the tier has no game in a worse category (4 the same, 9 parted). **What it costs**: a keyed walk whose nearest sites are refused, more of them than the tests the decision has left, is cut at the same sites at every decision while its want stands, as every walk was without the rule, and the walks asked after it test nothing; and Steel Jungle's win, which the keyed cuts' growth had carried. A plant order that stands and ends with no frame (Lava Alley cc-1's eight) is untouched, as is a full store beside idle factories (Red Triangle from 38 047; Luschaven ca-1, 59 817 wasted of 143 652 at the cap).
+
+## The first plant past the commander's reach (2026-11-18)
+
+**The fault.** Arm at Luschaven's start 3 never builds a plant, in a mapped skirmish and an unmapped one alike: `think.py why` reads the factory want "needed, taken" at every decision to the cap, no `plant` line follows, the store stands full and the seat ends with its commander, its extractors and its solars ([landings](landings.html), *Two opening faults*).
+
+**The cause, MEASURED 2026-11-18 with the `plantwalk` line** ([the brain](brain.html), *The plant walk's trace*; the opening's game to GameTime 24 000, the commander the seat's only builder, the choice ARMVP throughout):
+
+| the game | `ring_grow` | the walk | its return |
+|---|---|---|---|
+| mapped | 0, 1, 2 (3 321 to 3 966) | 8, 21 and 31 sites tested, none passed | grew |
+| | 4 (3 981) | 50 sites: 27 past the reach, 21 tested, 1 passed and its way out refused | left |
+| | 5 (3 996 to the cap) | 58 sites: 50 past the reach, 7 tested, none passed | left, at every decision |
+
+The vehicle plant fits nowhere near that start, and a ring that leaves one site for the commander's reach is not exhausted, so it never grows to its widest and the type is never passed over. A scratch build that asked, for each plant type on the commander's menu and each ring, the sites within the reach that the site test passes found room for other types at the base: mapped, ARMLAB 3 sites on ring 0 and 2 on ring 1, ARMAP 2 on ring 0, each with a way out, ARMVP one site on rings 3 and 4 and none elsewhere, ARMSY 15 on ring 3; unmapped at 18 006, ARMLAB 2 and 2, ARMAP 1 and 1, ARMVP none. So the seat's case is not "no plant type has a site in reach": the type the choice takes has none, and nothing passes it over.
+
+**What is taken.** Two rules of the base ring (`impai_build.c`, THE LONE COMMANDER'S PLANT and A TYPE PASSED OVER GIVES THE RING BACK; the second is since replaced by each plant type's own growth, *The plant's ring is its own* below). A plant site past the commander's reach counts as a lack of room while the census holds no constructor and no factory, frames included: the reach leaves such a site for another builder, and that seat has none and can get none before a plant stands. And the pass-over at the widest ring puts `ring_grow` back at 0, so the next type the choice takes is walked from the base outward: `ring_grow` is one counter for every type, and without that the next type is asked at ring 8 alone, where on Luschaven every site is past the reach. No state is added and no want; the reach itself stands, every order to the commander within `comm_r`. With no plant type that has a site in reach, each type is passed over in turn within nine walks, the waived pass walks the rings once more and stays at the widest, and the seat orders no plant, as before; whether the commander may then go farther for a first plant, or the first plant be the sea plant, is not decided here.
+
+**The games after it** (the scratch build of the rule; `.data/impai/item10/`, `runs/session/item10-t1`), the figures named before the try -- the first plant's GameTime, the pulse's `built` at 6 000 and 24 000, metal made by 18 000:
+
+| Luschaven, arm at start 3 | first plant | built at 6 000 | metal by 18 000 | built at 24 000, army |
+|---|---|---|---|---|
+| mapped, the champion 5643b394 and the line's tip | none | 10 | 5 855 | 10, 0 |
+| mapped, the rule | 4 056 (ARMLAB; the tech-up's ARMALAB at 6 921) | 11 | 7 873 | 62, 20 |
+
+- Mapped, the ring reaches 8 at 4 041, three decisions after it stood at 5, ARMVP is passed over and ARMLAB is ordered on ring 0 at the next decision.
+- The session tier against the champion 5643b394: no game in a worse category (4 the same, 1 better, 7 parted, each of the seven on the `plantwalk` line or on 7c73bf7b's change). Against the line's tip with the `plantwalk` line alone, every decision line of eleven games is equal and one game parts: `bar-hota-steeljungle-ca-1`, at 11 842, where CORAP is exhausted at the widest ring and the ring is given back -- won at 54 973, against the cap at value 0.48 for the champion and the tip.
+
+**What it does not do.** A seat with a constructor or a factory keeps the reach's rule, so a commander asked for a further plant with sites past its reach still leaves the ring. The fixture (`impai_brain_test.c`, `check_plantwalk`), `tools/impai/mutations/lone-plant.py` and the tier's opening `mapped-luschaven-3` hold it.
+
+## The plant's ring is its own (2026-11-18)
+
+**The fault.** One counter, `ring_grow`, held the growth of every type's base ring: any exhausted walk pushed it out for all, and any ring build, or a plant type's pass-over, put it back to 0. Three measured consequences, each read with a scratch line a base-ring walk (the type, the ring, the sites and what each test took):
+
+- **A plant type's first walk met a ring other types had climbed.** `bar-hota-metalheck-ac-1`: under the commander's far record (532 to 5 932) the wind generator's and the extractor's walks, every site left for the record, climbed the ring to 8 from 2 227; at 5 932 the vehicle plant's first walk met ring 8, each of its 76 sites past the reach, and the lone commander's rule passed the type over with no site tested. ARMLAB was ordered at 6 352.
+- **A ring was never walked for the type.** `mapped-luschaven-3`: the vehicle plant's walks took rings 0, 1 and 2 (3 321, 3 516, 3 966; 8, 21 and 31 sites tested, none passed) and its next walk, at 3 981, was ring 4: the counter had been pushed past ring 3 between them ([INFERRED] by another type's exhausted walk; the plant rung's trace holds one walk a decision). Ring 3 was not walked for the type; it was passed over at 4 041 and ARMLAB ordered at 4 056. On its own growth the vehicle plant is ordered at 3 336, the decision after its first 32 site tests took rings 0 to 2.
+- **A plant walk that orders nothing costs a job.** The builder goes on down the ladder and takes the next rung's work, so each ring of a plant's climb waits for that builder's next idle decision. `bar-hota-plainspasses-ac-1`: the vehicle plant's ring 0 is exhausted at 2 092 and the plant is ordered at 4 447.
+
+**The reading that chose the rule** (`bar-hota-metalheck-ca-2` to 8 000, the base beside a scratch build where every kind of walk kept a growth of its own). On a metal map the extractors stand on the base ring. At the base the wind generator's walk, in the stall rung, exhausts ring 0 at 1 754 and at 2 474 (8 sites, 5 under the extractors' claims, 3 refused); the extractor ordered at ring 1 in the first decision puts the counter back, and in the second the vehicle plant's one walk is at ring 1 (12 sites) and orders. With a growth a kind the wind generator is ordered at ring 1 at 2 579 and again at 3 329, 3 899, 4 409, 4 799 and 5 129, and the vehicle plant's one walk, at 5 459, is at its own ring 0 (16 sites by then) and orders at once: the plant's growth climbed nowhere. The plant is later because the stall rung stands above the plant rung and takes the commander at each idle decision once its walk finds a site -- as it does on every map whose ring 0 takes a wind generator. So the first plant's tick on a metal map rests on the wind generator's walk failing, and a growth of its own for the energy walk is a change to the opening's order, not a repair of the ring: it is not taken here, and `ring_grow` stays one counter for every type that is no plant.
+
+**What is taken** (`impai_build.c`).
+
+- THE PLANT'S RING IS ITS OWN. A plant type's base ring has its own growth, in the type's refusal row: `IMPAI_PLANTREF.cgrow` for the commander's walks, `.grow` for every other builder's. No plant's walk reads or writes `ring_grow`. INVARIANT, an ordering: a plant growth is written by its own walks alone -- one more at an exhausted ring below the widest, 0 at the walk's order, 0 at its exhaustion at the widest (the type then passed over unless waived), and the commander's 0 at a ring it leaves for its reach -- so no growth stands at the widest ring for a later walk to meet, whether the walks that climbed it met refusals or the builder's far record. Two growths, because the commander leaves a site past its reach for another builder: one growth for both would stand at the ring the commander leaves until a constructor asks for the type, or go back to the base under the constructor whose site lies past that ring. BOUND: two bytes of a type's eight-byte row, the row's padding until now, each 0..8; the rows are recorded whole and their size is unchanged.
+- THE PLANT'S WALK CLIMBS. A plant's walk that exhausts a ring below the widest walks the next ring in the same decision, to an order, a site that is left, a way out deferred, the decision's site tests or the widest ring. BOUND: nine rings a walk and the decision's site tests, which are not raised; a walk they cut goes on from its growth at the next decision.
+- THE PASS-OVERS OVERLAP. Each pass-over gives every pass-over still standing `fail_t` from then, and so does each exhausted ring of a plant's walk by a constructor or by the lone commander, the waived pass's excepted, so the choice reaches the waived pass however short `fail_t` is against a type's climb. The commander's exhausted rings beside another builder renew nothing (below).
+
+**The renewal that never ended** (a review of the rule, 2026-11-18; a fixture, no game). As first written every exhausted ring of a plant's walk renewed, the commander's beside another builder among them, and the rule's text said each type is passed over within nine exhausted rings of its own. That is false for the one growth a ring left for the reach puts back: with a factory counted, type A passed over and type B refused on its first ring, the commander's walk of B exhausts ring 0, renews A, leaves ring 1 for its reach and starts over, at every decision; B is never passed over nor ordered by it, and A stays off for as long as such decisions come within `fail_t` -- until a constructor asks the plant. `check_plant_ring` (e) holds the case: a reach of 520 px, the standing pass-over 20 ticks from its end, renewed to now + 5 400 at each of three decisions before the fix. **The fix** is the rule's own test turned on the walk: a renewal must be a step that cannot come again without a plant's order or a pass-over between, so only a pass-over, a constructor's exhausted ring and the lone commander's renew. **Not taken**: renewing only when the walk does not end left for the reach -- a walk the site tests cut one ring below the ring it leaves renews at one decision and is put back at the next, every other decision for good; and a cap on a pass-over's renewals at its first end plus `fail_t`, which needs the first end kept in the row. **What it gives up**: beside another builder a commander's climb that the site tests cut over more than `fail_t` lets a type passed over come back before the climb ends; the choice then takes that type again, and the climb goes on from its growth when the choice returns.
+
+**The tries.** The plant's own growth with one ring a decision was played first and dropped on the figure named for it: the first plant at 3 254 for 2 474 in ca-2 and at 5 324 for 2 324 in aa-2. The plant's ring 0 there holds 4 sites, 3 under the extractors' claims and 1 refused; the walk grew its ring and ordered nothing, and the commander took an extractor (ca-2) or, by the energy rung at the shared ring 1, the first of six wind generators (aa-2). The climb within the decision is what the base had by accident, the wind generator's failed walk pushing the shared ring out for the plant in the same decision.
+
+**MEASURED 2026-11-18** against the base 92d5f58a, one game each (a game replays exactly from its seed).
+
+| the game | the base | with the rules |
+|---|---|---|
+| `bar-hota-metalheck-ca-2`, first plant; first wind generator ordered | 2 474 at ring 1; 4 319 | 2 474 at ring 1 (its own 0, then 1); 4 319 |
+| `bar-hota-metalheck-aa-2`, the same | 2 324; 4 004 | 2 324; 4 004 |
+| `bar-hota-metalheck-ac-1`, first plant | ARMLAB 6 352, the vehicle plant passed over at ring 8 | ARMVP 5 932 |
+| `mapped-luschaven-3`, first plant | ARMLAB 4 056 | ARMVP 3 336 |
+| `mapped-steeljungle-2`, first plant | ARMVP 5 324 | ARMVP 4 814 |
+| `bar-hota-plainspasses-ac-1`, first plant; first army unit done | 4 447; 7 800 | 2 092; 6 480 |
+
+The session tier: no game in a worse category, 5 the same and 10 parted. Won sooner: Plains & Passes 43 017 -> 32 303, Core Prime cc-1 48 285 -> 32 999 (parted at 12 292, a tech-2 plant ordered one decision sooner), Metal Heck aa-2 53 343 -> 43 588. Won later: Trout Farm ca-1 47 710 -> 51 296, parted at 36 577. Steel Jungle ca-1 is at the cap not ahead either way, value 0.76 for 0.85: the vehicle plant, every site of its rings within the reach refused by the site test or by its way out, is passed over at 3 667, five decisions after its first walk, and the K-bot lab is ordered at 8 377 where the base, its counter put back before it ever left ring 0, ordered the vehicle plant at 8 917 once the base box had grown; the first army unit is done at 12 900 for 11 610. The naval turtle and the artillery creep part at 11 917 and 16 987 with equal figures; the Luschaven openings hold 12 units at 6 000 both ways, with 4 extractors for 5. Beside the tier, whole games: Metal Heck ac-1 won at 53 992 for 73 238, and ca-2 at 51 819 for 43 923 -- its opening equal to 4 319, where the first wind generator stands at the shared ring 1 the plant's order no longer puts back, 10 units at 6 000 both ways, the second plant at 11 444 for 11 654.
+
+**Gaps.** `ring_grow` is still one counter for every type that is no plant: on a metal map an extractor's order puts the wind generator's climb back, and the first wind generator of Metal Heck is ordered when the first plant is done (4 319), not at the first stall (1 754). It kept the ring the walks under a far record climbed until one of them built -- in ac-1 the first wind generator after the record is ordered at ring 8 (6 697) and begun at 7 380, where the base, its counter put back by the vehicle plant's pass-over, began one at 6 150 --; the widest ring's exhaustion now puts it back (*The widest ring starts over* below). A plant search with no site spends the decision's site tests over every ring from the base at each decision that asks it. A type passed over sooner is a different first plant where the first choice has no site yet (Steel Jungle, above). A plant ring left for ground threat keeps its growth until the threat leaves. The fixture (`impai_brain_test.c`, `check_plant_ring` and `check_plantwalk`) and `tools/impai/mutations/plant-ring.py` hold the rules; the tier's openings `mapped-luschaven-3` and `mapped-steeljungle-2` and its two metal games show them.
+
+## The finish's yards (2026-11-18)
+
+**The fault.** `bar-hota-troutfarm-ca-2` at 2c386510 reaches the cap with 273 units against 32: from GameTime 35 000 every enemy unit stands in the lake, the dry hunt holds from 40 657, and for 65 % of the 48 000 ticks to the cap the metal store is full (7 254 wasted at 39 000, 56 743 at the cap) while one shipyard builds eight ships.
+
+**The cause, MEASURED 2026-11-18 with a diagnostic build at 0e3ec587** that logs, at every fourth decision from 30 000, the sea want's terms, the factory lists and what the governor answered each idle factory. The tip wins the Trout Farm game on land at 34 081, before any dry hunt, so the trace ran on the one game of the session tier that holds a dry hunt beside a full store, `bar-hota-redtriangle-ac-1` (won at 58 051; dry from 40 860; 20 410 of the 38 700 metal made between 42 000 and 57 000 wasted). The share is of the 22 719 metal wasted in the 334 decisions sampled from 38 000:
+
+| ticks | the term | what it met | share |
+|---|---|---|---|
+| 43 567 to 58 027 | `want_sea` | dry, the store full, the overflow standing, the energy term holding, nothing pending: off, because one sea plant is counted; the one yard busy at every sample | 77.5 % |
+| 43 867 to 57 247 | `want_sea` | the same, the overflow's test failing | 15.6 % |
+| 41 827 to 43 567 | `want_sea` | the same, a plant pending (the hover platform's frame) | 4.5 % |
+| 45 847 to 57 067 | the governor | the yard idle at three samples, given an army order at each | 1.5 % |
+| the same spans | `want_factory`, the metal term | never needed: five or six factories idle at every sample -- three K-bot labs, the vehicle plant, the advanced vehicle plant and the hover platform, each answered "no type" by the governor, the dry menu holding water weapons alone | inside the rows above |
+
+The yard itself runs without a pause: on the Trout Farm recording a CORSUB is finished every 3 240 ticks and a CORROY every 4 440, the built fraction linear. In that dry hunt nothing but the first yard spends: a land plant is offered only its types with a water weapon, and none of those six has one the governor takes.
+
+**What is taken.** The finish wants one more sea plant while the overflow stands, every sea plant the census counts is a finished factory at work, the energy term holds and an enemy on or under the water is known ([the brain](brain.html), *the finish's yards*). It is the surplus plant's own rule with its idle test read over the sea plants, so its bound is that rule's: income nobody asks for, one plant at a time. The target term is the yard's reach: a shipyard's army hits what floats or stands under the water, and the dry hunt also holds over an enemy on land the land army does not reach.
+
+**The games.** On 2c386510's lineage (`impai_build.c` of that commit under the rule) the Trout Farm game is won at 57 520: six yards by 55 320, 8 602 metal wasted between 40 000 and 57 000 against 16 678, and a sea wave of six to nine ships leaves at 53 438 and holds its attack to the end, the enemy commander dead at 57 520 (without the rule the first sea wave, of five, leaves at 60 578 and retreats). At the tip the rule acts in one game of nineteen played: the session tier against the champion 0a4ec04e reads 3 SAME, 2 BETTER, 7 PARTED, every game ending at the tip's own tick but Red Triangle ac-1, and Red Triangle's seven other games against OTA AI end at the tip's ticks, none of them ever dry.
+
+**What it does not do.** Red Triangle ac-1 is won at 74 077 with the rule, 16 026 ticks later than without. From 42 000 the enemy commander stands on the west island at blocks (32..63, 43..85) and rebuilds there on dry ground -- 6 units at 42 000, 43 at 68 000 --, where no land unit of the seat stands and the seat's nearest unit is 23 to 62 blocks from every enemy unit until 72 000 (sampled every 1 500 ticks); the seat holds one ghost row and then none, and an enemy on the water is counted until 48 690 [INFERRED: the floating metal maker, alive to about 48 000], so one is known until 54 090. The seven yards the rule orders in that time buy ships that reach nothing there; the game ends in both builds when the enemy comes back within reach (without the rule the commander is at block (80,68) at 57 000 and dead at 58 051 [INFERRED: it walked out]; with the rule a land enemy is seen at 67 350, the dry hunt ends and the land plants finish it). Without the target term the same game reaches the cap, ten yards and 335 units against 61. An enemy on land that neither the land army nor the ships reach is not answered by any rule here: the dry hunt reads it as off the land and buys water weapons, and no scout is sent to look -- the blind spot's areas are the estimate and the starts.
+
+
+## A paralysing weapon deals no damage (the owner, 2026-11-18)
+
+**The owner's decision.** After a base-game game of three Hard seats in which the Arm seats "loved" tier-2 Spiders: the seat builds no unit whose weapons only stun until it has a use for them.
+
+**The fault, MEASURED 2026-11-18** on that game's recording and with `tasim_run roles`: ARMSPID's one weapon, ARM_PARALYZER, carries `paralyzer` and `damage=900` at a 36-tick reload. The engine applies a paralyser's hit as damage kind 2, which takes no hit points ([weapons](../engine/weapons.html), [network](../engine/network.html)): the 900 takes none [INFERRED: it is the paralysis' length]. The classifier summed it as damage -- 25 a tick against ARMBULL's 3.5 and ARMFLASH's 2.0 -- and the fight predictor returned it as damage, so the Spider's value at tech 2 was +0.502, the best of the Arm tech-2 menus by far, and it alone made the advanced vehicle plant Arm's tech-up plant (`plant ... want=tech T=2 chose=ARMAVP s=0.502 next=ARMALAB s=0.068`). One seat of the owner's game spent a third of its army's value on Spiders, the other a ninth; in the session tier's three Arm games that reach tech 2 the champion 398a3664 begins 14, 10 and 8.
+
+**What is taken.** One meaning of a paralyser's damage everywhere the brain reads a weapon's damage: none ([the brain](brain.html), *A paralyser deals no damage*; [the calibration runner](../modules/tasim-calibration.html), *Roles*). The classifier adds a regular paralyser to no damage figure and no range, the ground reach leaves it out, and the predictor's damage on any target is 0. Nothing names a unit: the bit is the weapon record's own, already copied by both role fillers and stored in the fight content.
+
+**What each type becomes** (`tasim_run roles` before and after; no other row and no percentile moves in either game set):
+
+| | type | before | after |
+|---|---|---|---|
+| base game | ARMSPID (tech 2) | raider, 25.0 a tick over 220, land raider | raider, 0 over 0, **no class** |
+| | ARMEMP (stockpile) | other, 0 | the same |
+| Escalation 10.2 | ARMSPID (tech 2) | raider, 1.67 over 270, land raider | raider, 0, **no class** |
+| | ARMCBT (tech 3) | assault, 0.74 over 1 050, land assault | assault, 0, **no class** |
+| | MSCORP (on no menu) | raider, 1.67 over 270, land raider | raider, 0, **no class** |
+| | ARMSTUN (tech 3 building) | defence, 3.75 over 1 050 | defence, 0 over 0: no ground reach, so never the defence rung's type |
+| | ARMHSTUN (two paralysers and a gauss gun) | raider, 10.2 over 288, land raider | raider, 6.9 over 288, land raider |
+| | ARMASPID (a paralyser beside its guns) | artillery, 302.6 over 750 | artillery, 300.6 over 750 |
+| | the 26 plants with the CommandFire `LAB_DIR` | builder, 0 | the same |
+
+No reference fight of the calibration holds a paralysing type in either game set, so no reference and no fitted figure moves; the fight content is the same file, the rule reading its flag.
+
+**The values after it.** ARMSPID leaves the field, so every tech-2 value moves in its second decimal: ARMAVP scores -0.037, ARMALAB +0.074 (0.068 before), CORALAB +0.484 (0.463), CORAVP -0.042 (-0.028) (the games' plant lines; by an offline approximation over the whole field the best types are ARMBULL and ARMZEUS); retail scores 46 types in 3 496 runs. Arm's tech-up plant is the advanced K-bot lab wherever a constructor of the seat's can reach both.
+
+**The games** (the session tier against the champion 398a3664, `.data/impai/runs/session/item14-a` against `session/base-f9b5b32a4c70`): 6 SAME, 9 PARTED, none in a worse category, and no ARMSPID begun in any game.
+
+| game | 398a3664 | with the rule | what changed |
+|---|---|---|---|
+| Red Triangle ac-1 | won at 74 077; ARMAVP; 14 ARMSPID, 7 ARMBULL, 3 ARMMERL | won at 40 210; ARMAVP (the one tech plant in reach, s=-0.037); 10 ARMMERL, 6 ARMBULL | 33 867 ticks sooner |
+| Plains & Passes ac-1 | won at 36 363; ARMAVP at 11 542; 10 ARMSPID, 4 ARMMERL | won at 43 017; ARMALAB at 11 767; 29 ARMZEUS | 6 654 later; the army at 36 000 is 102 against 58, the metal made within 3 % |
+| Metal Heck aa-2 | won at 40 771; ARMAVP at 11 189; 8 ARMSPID, 11 ARMMERL | won at 53 343; ARMALAB at 14 039, after an ARMCK is built to unlock it (11 909); 38 ARMZEUS, 30 ARMSH | 12 572 later; 2 850 ticks to the tech plant's order, the army at 36 000 42 against 71 |
+| Core Prime cc-1, Lava Mania ca-2 (ProTA) | won at 48 285, 43 160 | the same ticks | only the plant line's two scores differ |
+| Trout Farm ca-1 | won at 47 710 | the same tick | `naval` 1 -> 0, below |
+| the air rush, the artillery creep | pass | pass | the tech plant is ARMALAB |
+
+**What it does not do.**
+
+- **The two later wins are the advanced K-bot lab's**, not a paralyser's: with the Spider gone the values rank the lab's best type above the vehicle plant's, and the two games that could choose took the lab and won later, while the game that could only take the vehicle plant won far sooner without Spiders. Eight more Arm games of the champion's batch played with the rule (`.data/impai/item14/wide`, every one won): the six that take the lab end at +2 333 (Lava Mania ac-1), +4 771 and +168 (Plains & Passes aa-1, ac-2), +3 660 and -6 507 (Trout Farm ac-1, aa-2) and -14 821 (Pin Cushion ac-2) ticks from the champion's; the two on Red Triangle, the vehicle plant alone in reach, at +3 606 (aa-2) and -6 556 (ac-2). Over the eleven Arm games seven are won later and four sooner, the median +2 333; of the eight that take the lab six are later, their mean +1 104. One game an id cannot tell a slower plant from another game's dice: the paired margin test judges the time to win, and no reference fight checks ARMZEUS, ARMFIDO or ARMFAST ([calibration](calibration.html)).
+- **An enemy's paralysers count for nothing**: an enemy Spider stamps no threat, is not armed in the picture, presses nothing, and the predictor takes it as a target that returns no damage. A stunned unit neither moves nor fires, and nothing in the brain models that. Whether an enemy's stun must count as a threat is not decided.
+- **Trout Farm's naval judgement turned on the Spider.** The land link asks whether at least half of the land army types can walk from the anchor to the enemy's estimate; there 28 can, of 57 with ARMSPID and of 56 without, so the seat judged the map naval before and judges it land now. The games' orders are the same (no sea site was ever found there); the judgement stands on one type's count.
+- A mixed type (Escalation's ARMHSTUN, ARMASPID) is bought on its other weapons; its stun is neither valued nor used.
+
+## A floating building is a water type (2026-11-18)
+
+**The owner's report**, from an Escalation game: "the AI never builds energy producers. It does a couple of metal extractors and then jumps to a kbot lab."
+
+**The fault, MEASURED 2026-11-18** with a scratch trace of the two energy rungs' answers (the builder, the type chosen, the ring walk's counts and return) on `bar-nota-pincushion-ac-1` and `-ca-1`, `--setup escalation`, to GameTime 12 000:
+
+- The map's mean wind ratio is 0.3499. On the commander's menu the Floating Wind Generator (ARMFWIN: 36 of wind, value 68.5, a gain of 12.60 a pass) outranks the Solar Collector (25 over 157.7) and the Wind Generator (10.50 over 68.5): 0.184 a value against 0.159 and 0.153. It does so on every map whose ratio is above 0.302. The constructor kbot's menu has no floating generator, and its choice was the solar collector.
+- ARMFWIN has `minwaterdepth = 0` and a yard of `w`. The type information flagged a type as placed on water only by `minwaterdepth > 0` or a tidal generator, so the commander's energy choice was ARMFWIN on a dry anchor, and the site test refused every site: in ac-1 the stall's energy rung asked the commander at 203 decisions from GameTime 3 127 to 11 647 and the energy rung at 7 where it wanted energy, every one ARMFWIN, not one site passed (ca-1: 263 and 10).
+- Those walks spent the decision's site tests (32 a decision): 20 of the stall's walks exhausted the base ring and grew it, until its sites passed the commander's reach, and the 183 after them tested what the decision had and left the ring as it was. So a builder asked after the commander in the same decision tested nothing: the constructor's solar collector was cut with no site tested at 21 of its 25 asks (ca-1: 25 of 30), and the commander ended 130 decisions with no order (ca-1: 175) [INFERRED: its other rungs' walks were cut the same way].
+
+**What is taken.** The flag is read from what the site test reads ([the brain](brain.html), *Placed on water only*): a building of minwaterdepth 0 whose yard map has water cells and no land cell is placed on water only: the site test's last compare holds every cell of such a footprint at or below the sea. Considered and not taken: a second choice when the best type finds no site -- it would have ended the commander's fault too, at the cost of the 32 site tests a decision the refused type's walk spends before the second is tried, and it leaves the type in every other choice that reads the flag; the flag is the cause, and with it right the first choice is one the ground takes.
+
+**The figures named before the try**, both games to GameTime 12 000, the tip 789a3231 and then the rule:
+
+| | ac-1 (Arm) | | ca-1 (Core) | |
+|---|---|---|---|---|
+| | before | after | before | after |
+| the commander's first energy BUILD job | none | 3 150 | none | 3 240 |
+| the first energy building begun | 5 949 | 3 173 | 6 369 | 3 479 |
+| energy buildings begun | 3 | 7 | 4 | 5 |
+| energy income at 6 000 / 12 000 | 64 / 130 | 164 / 255 | 64 / 125 | 139 / 185 |
+| energy made by 12 000 | 29 322 | 54 192 | 29 396 | 48 636 |
+| samples with the store below 20 % (30, every 300 ticks from 3 300) | 23 | 7 | 29 | 8 |
+| decisions with the store empty (`e_empty`, of 406) | 134 | 38 | 194 | 37 |
+| the second plant ordered | 10 447 | 5 527 | none | 5 587 |
+| army units ordered | 6 | 4 | 7 | 8 |
+
+The army in ac-1 is two fewer at 12 000: with the energy the seat spends its metal -- the store, above 1 000 of 1 125 from 5 100 to 10 500 before, holds 0 at 10 500 and 8 at 12 000 -- and it orders the advanced lab at 8 197 (ca-1 at 10 927), which the tech-up's rule takes at this income; that rule is not this change's.
+
+**The same two games played whole** (to the commander's death or GameTime 81 000, against OTA AI on Escalation; MEASURED 2026-11-18, one game each): neither build wins one, and the rule does not change that.
+
+| | 789a3231 | the rule |
+|---|---|---|
+| ac-1 (Arm) | lost at 37 981: 22 army units built, metal income at most 20.9, no attack | lost at 72 698: 198 built, at most 59.3, 7 attacks from 29 835 |
+| ca-1 (Core) | at the cap, behind: value 34 415 against 107 240, 297 built, at most 68.9, 3 attacks from 30 105 | **lost at 70 041**: 212 built, at most 55.0, 3 attacks from 16 830 |
+
+In ca-1 the rule's seat is ahead of the other build's to 36 000 (metal income 41.7 against 28.2 at 24 000 and 49.8 against 41.5 at 36 000, energy 653 against 485 and 809 against 669) and behind it from 48 000 (39.7 against 53.9, then 18.3 against 66.8 at 60 000), while its opponent's energy income passes 2 400 and its own stays below 1 100 in both builds: by the session tier's categories that game is worse with the rule, at the cap behind for a loss. Why the later game turns is not read here.
+
+**The base game.** No type of the base game or of ProTA 4.8 changes its flag, so the rule cannot fire there: `session.py --neutral --state` against 789a3231 holds it, every game SAME in its decisions and its recorded brain state.
+
+**What the two whole games with the rule rest on** (MEASURED 2026-11-18 from their recordings: the player records' lifetime totals and the unit images begun and ended). Not on the flag's path through the military: neither opponent began one floating generator or radar tower, Pin Cushion has no sea block, and the seat ordered no sea plant and bought land types alone. They rest on an economy that stops growing at 30 000. In ca-1 the seat makes 51 metal a second at 30 000 against its opponent's 53, with 39 extractors against 17, and never more: it builds no advanced constructor and no moho extractor in 70 000 ticks -- its seven constructors, the attention's count beside the commander, are all of the first tech by 24 000 and stay --, while its opponent goes from 3 moho extractors and 7 metal makers to 6 and 14 and from 53 to 155 a second. In ac-1 two advanced constructors are among the seven and begin seven moho extractors from 25 800 on; the seat makes 41 a second at 30 000 and 54 at most, its opponent 49 and then 270 with 22 moho extractors. Energy is not what binds: the seat wastes 11 % (ac-1) and 18 % (ca-1) of the energy it makes, its store is at 90 % or more at 8 and 11 of the 13 samples from 24 000 to 60 000, and every energy building it begins is a solar collector. Its army is never above 38 alive in ca-1: from 30 000 the seat begins 22 to 34 units every 6 000 ticks and loses as many, and its opponent begins 30 to 59 beside 3 to 19 defences.
+
+**Gaps.** No whole Escalation game is won, with the rule or without, and one of the two is lost that reached the cap. **Everything that reads the flag** takes the changed types: the energy, defence and sensor choices and the sensor's site walk, the extractor's ranking (a water extractor with no depth above 0 is passed over), the plant candidates and the island's order, and the military's target class -- an enemy's floating generator is a FLOAT target (`targets_known`), which makes the island's order the sea first, lets a dry hunt want a further sea plant, and widens the army's buy to the types that hit only what floats; no game played shows that path, the two whole games above having no enemy floating building. The floating radar towers (ARMFRAD, CORFRAD) are not flagged -- their minwaterdepth is −10 000, where no bound holds without the waterline ([the brain](brain.html), *Placed on water only*) --, so the sensor choice can take one on a dry anchor and find no site; no game showed a sensor want at a shore. TA Twilight's six floating mines change with Escalation's two generators and no Twilight game was played. On a dry anchor with a shore inside the ring the flag costs the seat the floating generator it could have stood there, on Escalation and TA Twilight both: the choice passes over a water type unless the anchor's own ground is under the sea. Escalation's fusion reactors carry `Builder = 1` and build their own upgrade, so the classifier flags them factories on the live table (MEASURED 2026-11-18: ARMFUS, CORFUS, ARMSFUS, CORSFUS category factory, gains 1 200 and 6 250 a pass) and the energy rung never chooses one: not changed here.
+
+## The opening's order (the coordinator, on the owner's report, 2026-11-18)
+
+**The report.** The owner: the AI opens with "a couple of metal extractors and then jumps to a kbot lab" with no energy standing, and it plays metal maps badly.
+
+**The fault, measured.** The plan's terms for the first factory are `open_mex` extractors finished and `open_energy` energy buildings standing, or `open_t`. Nothing made the opening's builder meet them in that order, and two rungs of the ladder stood in the way.
+
+- **A commander with more than `open_mex` patches within `comm_r` walked patch to patch.** The energy term was then met by `open_t` alone, the plant was ordered with no energy standing, and the first energy building came on the first stall the plant caused. Escalation on Pin Cushion (`bar-nota-pincushion-ac-1` and `-ca-1`, to 12 000): four extractor images and no energy image before the K-bot lab's order at 2 160 / 2 190, the commander's first energy job at 3 150 / 3 240. In the owner's base-game match of the same day each commander had two patches in reach, the extractor rung had nothing after the second, and the wind generators at 717 to 851 came from the ordinary energy rung -- so the base game opened as the plan says only where the reach held no third patch.
+- **On a metal map the extractors stand on the base ring, so the commander never runs out of them.** Metal Heck (`bar-hota-metalheck-ca-2` and `-aa-2`, to 12 000): five extractor images and no energy before the vehicle plant at 2 474 / 2 324, the first wind generator begun at 4 440 / 4 110, the energy store empty in 0.62 / 0.53 of the first 10 000 ticks -- extractors whose upkeep nothing paid --, the first army unit at 9 660 / 8 550.
+- **Where energy did come early, the stall's rung answered its cost with more energy before the plant was asked.** The opening's energy buildings cost energy, so they bring the first stall forward, and the stall's energy is the ladder's top rung: each idle decision of the stall took the commander for one more. With the opening's energy alone (the first rule below, played without the second): four or five energy buildings begun before the first plant on Red Triangle (first stall 2 017 -> 937), Core Prime and Metal Heck (1 424 -> 734), and on Luschaven's start 3 five and no plant by 6 000. On Metal Heck, with the energy walk given a ring growth of its own (played for *The plant's ring is its own*, not kept), the wind generator's walk finds a site in the stall and the rung orders six running before the vehicle plant, at 5 459 for 2 474.
+
+**The decision** (the coordinator's): the opening's builder meets the plan's own terms in their order, and in the opening the stall's energy does not stand above the first plant for ever. Both rules read the terms where the ladder already reads them -- each term through the function that is its one reader, `impai_econ_open_mex` and `impai_econ_open_energy` -- and add no number. (The opening's far patch holds `open_mex` against another count, the extractors counted and ordered.)
+
+- **The opening's energy** (`impai_econ.c`, THE OPENING'S ENERGY; the rung `open-energy`, second in the ladder). While the seat has never had a factory and none is ordered, once `open_mex` extractors are finished and until `open_energy` energy buildings are counted or ordered, a builder's next building is energy, before a further extractor and before the plant. **Bounds**: it ends for the level with the first factory counted, so at most `open_energy` buildings. **The invariant for a seat no site takes energy for**, an ordering: the first walk of the rung that orders nothing ends the rule for the level (`IMPAI_BRAIN.open_e_refused`); such a seat pays one decision's site tests at most, once.
+- **The stall yields to the first plant** (THE STALL YIELDS TO THE FIRST PLANT; the rows `stall-energy` and `stall-yielded`). While the seat has never had a factory and none is ordered, once `open_energy` energy buildings are counted or ordered the stall's top row passes a builder on to the plant's rows, and the row under them asks it the stall's energy in the same decision when they gave it no order. **The invariant, so that no seat is left stalled behind a plant it cannot place**, an ordering: the first time the plant's rung is asked of a builder passed on and gives it no order, the yield is over for the level (`IMPAI_BRAIN.open_stall_over`), whatever ended the walk. A plant's walk with no site takes the decision's 32 site tests, so in that one decision the stalled builder may be ordered nothing; from the next the stall's rung is the top rung, as past the opening. **Bounds**: one plant at most is put ahead of the stall's energy; after the first factory is ordered or counted the stall's rung is what it was. **The yield is the ladder's alone**: a reclaimer the stall takes is asked the stall's energy itself, whether the yield stands or not.
+
+**The reclaimer the yield left reclaiming** (a review of the rule, 2026-11-18; a fixture, no game). As first written the reclaimers' pass called the stall's rung, yield and all: a reclaimer passed on kept its job, to be asked the plant at its next idle decision. But that pass asks no row under the stall's, and the yield is ended only by the row under the plant, so a commander at a reclaim when the opening's stall began, `open_energy` met, was asked neither the plant nor energy for as long as the reclaim lasted -- `job_timeout`, 2 700 ticks, at the longest -- and the invariant's "one decision's site tests at most, once" did not hold for it. `check_stall_yield_reclaimer` holds the case: one extractor, two wind generators, the commander sent to a reclaim at 900, the store at 10 % at 1 900 past `open_t`; before the fix it is ordered nothing in that decision. **Two fixes were weighed.** Asking the reclaimer the rows the ladder asks under a yield -- the sea plant's, the plant's, then the stall's energy -- puts a second reader of the ladder's gates beside the table, or a ladder asked from a row to a row, and makes THE STALL TAKES THE RECLAIMERS more than "the ladder's first rung alone". Giving a reclaimer no yield is one call, keeps that rule as it is written and gives the reclaimers what they had before the yield existed; it is the one taken. **What it gives up**: a seat whose builder is at a reclaim when the opening's stall begins takes one energy building before its first plant; idle again, it is passed on to the plant.
+
+**Why not the energy term alone, or the stall rung moved for good.** The first rule alone was played on an earlier tree and not kept: three tier games worse -- Luschaven's start 3 twice, its plant search then sharing one ring growth with every build between its walks, and Core Prime at the cap --, the plant behind four or five energy buildings. The stall's rung below every plant past the opening would let a stalled seat order plants its energy cannot run, which THE STALLS exist to refuse; the yield is the opening's alone and ends at the first factory's order.
+
+**Measured** (2026-11-18, the two rules against the tree without them, one game each from its seed; a capped opening is exact).
+
+| game, to 12 000 | first energy begun | first plant ordered | extractor / energy images before the plant | first army unit | army at 12 000 | energy store |
+|---|---|---|---|---|---|---|
+| Escalation, Pin Cushion `ac-1` | 3 173 -> 812 | 2 160 -> 1 500 | 4 / 0 -> 2 / 2 | -- | 4 -> 7 | below 20 % in 7 -> 6 of 30 samples |
+| Escalation, Pin Cushion `ca-1` | 3 479 -> 843 | 2 190 -> 1 560 | 4 / 0 -> 2 / 2 | -- | 9 -> 9 | 11 -> 6 of 30 |
+| Metal Heck `ca-2` | 4 440 -> 660 | 2 474 -> 1 349 | 5 / 0 -> 2 / 2 | 9 660 -> 5 370 | 2 -> 8 | empty in 0.62 -> 0.16 of the first 10 000 |
+| Metal Heck `aa-2` | 4 110 -> 630 | 2 324 -> 1 229 | 5 / 0 -> 2 / 2 | 8 550 -> 5 580 | 5 -> 7 | 0.53 -> 0.20 |
+
+The plant is sooner in each because the terms are met before `open_t`. **The cost is early metal**: two extractors stand for four or five while the energy and the plant are built -- Escalation's metal income at 3 000 is 6.5 for 8.6 / 8.1 (equal or above from 6 000: 9.3 for 9.3 / 8.8), Metal Heck's at 6 000 is 5.9 for 12.5 in `ca-2` (above from 12 000: 20.2 / 24.8 for 15.1 / 13.0). Escalation's energy income at 6 000 is lower, 115 for 164 / 139: the four solar collectors the stalls of 3 150 to 5 130 ordered are not built; at 12 000 it is 285 for 232 / 211. Luschaven's start 3 (the tier's opening, to 6 000): the vehicle plant at 1 731 for 3 336, two energy buildings before it for four, 17 units for 12, six extractors for four.
+
+**The session tier** against the tree without the rules (fifteen games, one each): 5 the same, 2 better, 8 parted, none worse by its categories.
+
+| game | first energy job | first plant job | images begun by 6 000 | metal income at 6 000 | the end |
+|---|---|---|---|---|---|
+| Red Triangle `ac-1` | 2 040 -> 720 | 3 840 -> 1 380 | 11 -> 12 | 6.3 -> 7.2 | won 40 210 -> 30 019 |
+| Lava Mania `ca-2`, ProTA | not read | parts at 2 294 | 9 -> 10 | 3.6 -> 5.1 | won 43 160 -> 38 114 |
+| Plains and Passes `ac-1` | 3 030 -> 1 350 | 2 100 -> 2 490 | 13 -> 13 | 6.6 -> 9.5 | won 32 303 -> 36 031, later |
+| Core Prime `cc-1` | 840 -> 540 | 3 420 -> 1 800 | 16 -> 18 | 19.4 -> 12.8 | won 32 999 -> 60 020, later |
+| Metal Heck `aa-2` | 4 020 -> 540 | 2 340 -> 1 230 | 11 -> 17 | 1.0 -> 5.9 | won 43 588 -> 71 733, later |
+| the air rush | 3 750 -> 1 350 | 2 370 -> 2 130 | 10 -> 18 | 1.0 -> 4.6 | passes both; the opponent's units at 18 000 24 -> 19 |
+| the artillery creep | 3 750 -> 1 350 | 2 370 -> 2 130 | 11 -> 17 | 6.5 -> 4.6 | passes both; value 34 483 against 27 658 -> 35 690 against 27 105 |
+| the naval turtle | 3 960 -> 840 | 1 980 -> 1 500 | 10 -> 11 | 6.3 -> 8.6 | fails both; first attack 6 960 -> 5 220 |
+| Luschaven start 3, mapped and unmapped | 990 -> 630 | 3 360 -> 1 740 | 12 -> 17 | 9.1 -> 11.3 | better: 17 units for 12 |
+
+The same: the commander rush, Trout Farm `ca-1`, Steel Jungle `ca-1` and the two slow openings, whose seats have one extractor finished by 6 000 and so never meet `open_mex`.
+
+**Gaps.**
+
+- **Both metal-map games of the tier are won much later with the better opening**: Core Prime at 60 020 for 32 999 and Metal Heck `aa-2` at 71 733 for 43 588, one game each. Why is not read. At the end the seat holds 307 and 231 units against none, and on Core Prime 326 against 41 at 60 000, so the game is not close when it ends; the same was seen with the first rule alone (Core Prime not finished at 81 000 with 543 units against 58). The capped metal-map openings above say the opening is the better one; what the later games do with it is open.
+- **Past `open_t` the opening's energy still comes before the plant.** On Plains and Passes the second extractor is finished late, the two wind generators are ordered from 1 350, and the plant's job is at 2 490 for 2 100: 390 ticks later than `open_t` alone ordered it, in a game won 3 700 ticks later.
+- **The cost in early metal** is in every opening that parted: two extractors stand where three to five stood.
+- No whole Escalation game was played for these rules; the two capped openings are all that is measured on that setup.
+- The energy walk's ring growth is still the one every type but a plant shares, put back by each extractor's order on a metal map. Given a growth of its own on top of these rules it moved nothing in the four capped openings before 6 000 and was not carried to a tier.
+
+## The widest ring starts over (2026-11-18)
+
+**The fault.** On a metal map every cell yields metal, so the extractors stand on the base ring with the energy buildings, and the owner reported that the seat plays those maps badly. In `bar-hota-metalheck-aa-2` the seat finished no extractor and no wind generator between 12 000 and 24 000 while its builders assisted and reclaimed, its energy used passed its energy made (56 310 against 44 538 from 18 000 to 24 000), it held 64 army units at 49 800 and won at 71 733. `ring_grow`, the growth every type that is no plant shares, was 8 for 11 715 of those 12 000 ticks.
+
+**The cause, MEASURED 2026-11-18** with a scratch line a base-ring walk (the type, the builder, the ring, what each test took) and, every 600 ticks, a count of each ring's sites as the walk's tests see them, on that game to 24 500:
+
+| what | the walks from 12 000 to 24 000 (2 545) |
+|---|---|
+| the climb: the wind generator's walks of two constructors under their far record, every site of every ring past their reach, none tested | `ring_grow` 0 to 8 in five decisions, 11 684 to 11 759; again in six, 23 759 to 23 849 |
+| at ring 8, a builder under its far record: every site past its reach | 1 386 |
+| at ring 8, a builder with no record: cut at its 32 nearest sites, each refused by the site test | 336 |
+| at ring 8, the walks after that one in the decision: no site test left | 508 |
+| at ring 8, the commander: every site past `comm_r`, the ring left | 257 |
+| of them the extractor's walks, met the same three ways | 50 |
+| orders that put the counter back | two: a keyed walk of a missile tower at 18 989, a wind generator at 23 759 |
+
+Seven of the twelve constructors that walk the ring in that window do so under a far record, six of them in 157 to 294 walks each, one from 12 014 to 23 999 (`fail_t` is 5 400; what renews the records was not traced). At every count the rings inside the widest held room: 39 to 50 sites of ring 0, 38 to 53 of ring 1 and 45 to 64 of ring 2 pass the site test unclaimed for the wind generator, and 46 to 50 of ring 8's 126 to 134, past the cut. The three decisions after the order at 23 759 give six wind generators and two fusion plants on rings 0 to 2, each at its walk's first site test, before two builders under their records climb the counter again. So nothing lacked room: only an order put `ring_grow` back, no walk could order at ring 8, and the rings inside it were nobody's to walk. The extractor is seldom asked in that window for another reason, the metal surplus's gate (22 of the 31 `why` lines carry it).
+
+**What is taken** (`impai_build.c`, THE WIDEST RING STARTS OVER). `ring_grow` goes back to 0 at a base ring exhausted at the widest, as a plant type's growth does. INVARIANT, an ordering: `ring_grow` is written by a base-ring walk of a type that is no plant alone -- one more at an exhausted ring below the widest, 0 at the walk's order, 0 at an exhausted widest ring -- so no exhaustion leaves it at the ring the walk met: exhausted walks running take the rings in turn, each ring met by some walk once in any nine of them, whatever exhausted the others, a far record, a cut or refusals. That is a claim about the walks together, not about one builder: the ring a walk meets is the count of exhausted walks before it, so a builder asked at a fixed place among three exhausted walks a decision meets every third ring only, for as long as the others' walks stay exhausted (a residual beside the far record's). BOUND: the walk's cost is unchanged, one ring a walk of a type that is no plant and the decision's site tests. No recorded field is added. The energy walk gets no growth of its own: it is the climber, and a counter of its own would stand at the widest the same way.
+
+**MEASURED 2026-11-18** against the base 913d8398, one whole game each (a game replays exactly from its seed); the figures were named before the games were played.
+
+| the game | ticks at ring 8, 12 000-24 000 | extractors / wind generators finished in them | energy made / used, 18 000-24 000 | 64 army units at | won at |
+|---|---|---|---|---|---|
+| `bar-hota-metalheck-aa-2` | 11 715 -> 750 | 0 / 0 -> 0 / 11 | 44 538 / 56 310 -> 51 455 / 46 523 | 49 800 -> 34 200 | 71 733 -> 54 084 |
+| `bar-hota-metalheck-ca-2` | 9 195 -> 525 | 2 / 5 -> 11 / 17 | 50 493 / 46 734 -> 65 126 / 68 122 | 32 700 -> 30 600 | 42 501 -> 52 544 |
+| `bar-hota-metalheck-ac-1` | 10 335 -> 585 | 1 / 2 -> 1 / 12 | 55 014 / 56 168 -> 64 117 / 41 944 | 32 700 -> 38 100 | 57 586 -> 78 069 |
+| `bar-hota-coreprime-cc-1` | 0 -> 0 (5 775 -> 435 in the game) | 2 / 0 -> 2 / 0 | equal | 35 400 -> 35 400 | 60 020 -> 47 840 |
+
+Two of the four are won sooner and two later. In ca-2 the seat's metal income at 24 000 is 47.2 a second for 26.5 and it holds 98 units for 69; the later end is the finish's. In ac-1 three builders stand on wind generators at 24 000 where eleven assisted, 22 773 of the 64 117 energy made from 18 000 to 24 000 is wasted, 9 army units are finished in those ticks for 13, and five plants stand at 36 000 for six: with the ring free the energy want is served past what the seat uses.
+
+The session tier against 913d8398: no game in a worse category, 13 the same in every decision line and 2 parted, both won sooner -- Metal Heck aa-2 at 54 084 for 71 733, parted at 12 224, and Core Prime cc-1 at 47 840 for 60 020, parted at 39 300 --, so every opening of the tier is equal line for line. The rule acts only where a walk exhausts ring 8: in thirteen of the fifteen games none does. The two Metal Heck games won later are whole games played beside the tier.
+
+**Gaps.** A walk that leaves its ring writes nothing, so a seat whose commander is the only builder asked keeps `ring_grow` at a ring wholly past `comm_r` until another builder's walk exhausts or orders on it. A builder under its far record that reaches no ring site moves `ring_grow` one ring a walk for as long as the record lives, so the other builders' walks meet the ring it left and not the base's nearest; a far record's sites still count as refusals, since that growth is how such a builder comes to the rings near it. The energy want itself is not bounded by what the seat uses (ac-1 above; the two fusion plants aa-2 bought at the base). The fixture (`impai_brain_test.c`, `check_ring_widest`) and `tools/impai/mutations/widest-ring.py` hold the rule.

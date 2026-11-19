@@ -46,7 +46,8 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  dgun;                                /* 1 when the commander was ordered to D-gun               */
     uint8_t  leash;                               /* 1 when the leash moved the commander home               */
     uint16_t unreached;                           /* moves not given: no block of the member's component
-                                                     near the point, or the substitutes' cache full          */
+                                                     near the point, or a cache full; a member sent home
+                                                     with no point is stopped instead (travel_home)          */
     uint16_t cross;                               /* predictions made with a side that cannot close          */
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
     uint16_t acts;                                /* actions spent: squads served and commander orders       */

@@ -84,7 +84,6 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     unsigned i;
     memset(st, 0, sizeof *st);
     st->ax = st->az = IMPAI_NO_ANCHOR;
-    st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = st->sea_cur_type = (uint16_t)WQ_NONE;
     st->fscan = st->ascan = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
@@ -350,6 +349,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
     if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
+    if (cat == IMPAI_C_FACTORY && impai_econ_air_plant(d, (unsigned)type)) d->air_plants++;
     if (u->finished) d->done[cat]++;
     if (u->finished && cat == IMPAI_C_CONS) d->gov_c++;
     if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
@@ -373,7 +373,6 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             d->mk_active[d->nmk++] = (uint8_t)(u->active != 0);
         }
     }
-    if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
     if ((cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) && u->finished && d->nbtype < IMPAI_SEA_BUILDERS) {
         int k;
         for (k = 0; k < d->nbtype && d->btype[k] != type; k++) {}
@@ -828,8 +827,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
    covers the site; else the builder could not reach the site (THE REACH ABANDON), which holds it back (THE FAR
    RECORD), or the site failed. A busy one older than job_timeout with no frame of it at the site is stopped
-   (job_stop) and the site failed. An EXPLORE ends when its cell is explored, or after job_timeout with the cell
-   failed. A reclaim (reclaim_check) ends the moment the seat is shown its feature gone. */
+   (job_stop) and the site failed. A reclaim (reclaim_check) ends the moment the seat is shown its feature gone. */
 /* THE HELP REFUSED, an ORDERING: a builder whose help ended while its frame stood unfinished is given no help on
    a frame at that frame's cell for fail_t (IMPAI_JOB.help_cx, help_cz, help_until).
    - THE ENGINE. HelpBuild 0x403F70, its state table at 0x40425C: state 0 (0x403FD9) walks through 0x438A00
@@ -920,13 +918,6 @@ static void job_checks(IMPAI_DEC* d)
         } else if (reclaim_job(j)) {
             checks++;
             reclaim_check(d, b, d->jobbed_idle[i], j, age);
-        } else if (j->kind == IMPAI_JOB_EXPLORE) {
-            checks++;
-            if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
-            else if (age > in->plan->job_timeout) {
-                impai_fail_add(d, j->cx, j->cz);
-                impai_job_end(j);
-            }
         }
     }
 }
@@ -934,15 +925,13 @@ static void job_checks(IMPAI_DEC* d)
 /* THE WALK CHECK, an ORDERING: a constructor's job the seat learns is threatened ends within one decision. For
    every busy constructor of the census's jobbed list -- never the commander, whose safety is the military's
    (impai_mil.c), so two managers never order it in one decision --, at its job's point: a BUILD's footprint
-   centre, an EXPLORE's cell centre, an ASSIST's target where the census found it, a RECLAIM_GO's or a RECLAIM's
-   feature anchor cell centre. A BUILD with no building of its type at the site yet, an EXPLORE, a RECLAIM_GO and a
+   centre, an ASSIST's target where the census found it, a RECLAIM_GO's or a RECLAIM's
+   feature anchor cell centre. A BUILD with no building of its type at the site yet, a RECLAIM_GO and a
    RECLAIM whose builder stands farther from its feature than its build reach (TASIM's sweep builder, the reach the
    reclaim's own score walks to) are walks, turned back when the point or the straight way there holds known ground
    threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat goes on); a
    BUILD whose frame stands, an ASSIST and a RECLAIM within reach are work, turned back when the point's cell or the
-   builder's own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an
-   EXPLORE's
-   cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
+   builder's own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job. The builder, holding the move and no job, is listed idle from the next decision on
    (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
    is no exception: one sent to a site at the edge of the threat it answers is turned back by this work test once
    the threat's reach covers its own cell or the frame's; only the commander is exempt. Outside job_checks, which
@@ -993,9 +982,6 @@ static void walk_checks(IMPAI_DEC* d)
             if (t && (impai_threatened(d, t->pos[0] >> 16, t->pos[2] >> 16) ||
                       impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16)))
                 impai_turn_back(d, b);
-        } else if (j->kind == IMPAI_JOB_EXPLORE) {
-            const int cx = j->cx, cz = j->cz;
-            if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
         } else if (reclaim_job(j)) {
             SweepBuilder sb;
             x = j->cx * 16 + 8;
@@ -1287,18 +1273,34 @@ static void sensor_want(IMPAI_DEC* d, const IMPAI_MIL* m)
    anything below 1 read 0 */
 static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
 
-/* the surplus, the pressure and THE HOLD, read from the seat's record and its military alone, before the census's
-   roots are cut (root_cap_of) */
+/* THE POSTURE, filled once a decision and before anything else reads the decision (impai_brain_decide): what the
+   military's record says of the seat's map and its enemy, each flag of IMPAI_POSTURE (impai_brain.h) read from the
+   record here and nowhere else in the economy. With no military record every flag stays 0 (carve clears the
+   decision). INVARIANT, a bound on recorded data: every flag is a compare against the record, never an index.
+   - THE PRESSURE (impai_mil.c): a press_until past now + press_hold holds nothing, so a byte restored from a
+     recording can hold the constructors for at most press_hold;
+   - THE BLIND SPOT is read through impai_blind, which bounds its stamp the same way;
+   - dry, island and press_base are compared with 0 only; naval is copied, and its readers compare it with 1 and
+     with 0. */
+static void posture_read(IMPAI_DEC* d)
+{
+    const IMPAI_MIL* mil = d->in->mil;
+    if (!mil) return;
+    d->pos.naval = mil->naval;
+    d->pos.dry = mil->dry != 0;
+    d->pos.island = mil->island != 0;
+    d->pos.blind = (uint8_t)impai_blind(mil, d->now);
+    d->pos.pressed = mil->press_until > d->now && mil->press_until - d->now <= d->in->plan->press_hold;
+    d->pos.at_base = d->pos.pressed && mil->press_base != 0;
+}
+
+/* the surplus and THE HOLD, read from the seat's record and the posture alone, before the census's roots are cut
+   (root_cap_of) */
 static void hold_read(IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
-    const IMPAI_MIL* mil = d->in->mil;
     const WQ_ECON* e = &d->e;
     d->surplus = e->metal_max > 0.0f && e->metal >= SURPLUS_FRAC * e->metal_max;
-    /* THE PRESSURE as the economy reads it (impai_mil.c): a recorded press_until is data, and one past now +
-       press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
-       press_hold */
-    d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
     /* THE HOLD. While the stored metal is below stall_pm thousandths of the storage, outside a surplus and outside
        THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
        THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
@@ -1320,12 +1322,185 @@ static void hold_read(IMPAI_DEC* d)
        whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
        cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
        factory beside a store at SURPLUS_FRAC or more is never held -- stall_pm < SURPLUS_FRAC x 1000
-       (impai_brain_test.c, check_plan) keeps the band between the two non-empty. `pressed` is the seat's own
-       stamp, bounded above. */
+       (impai_brain_test.c, check_plan) keeps the band between the two non-empty. The posture's `pressed` is
+       bounded where it is read (posture_read). */
     {
         const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
-        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pressed;
+        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pos.pressed;
     }
+}
+
+/* THE VETOES: which gate holds which spend, one row a want. A decision's gates are the IMPAI_G_* bits of
+   IMPAI_DEC.gates, set once (economy); a want is its need and no gate its row names:
+   want = need && !(gates & impai_veto[want].gates). A want's need -- what the seat lacks, its income, its counts --
+   stays in economy; what refuses the spend whatever the need is here and nowhere else.
+   - The next plant (want_factory past the first: the pacing's, the surplus's, THE REACHING PLANT) waits on the
+     military's judgement of the map, on both stalls and on THE HOLD. The first plant is held by no gate and has
+     no row.
+   - The sea plant waits on both stalls and the hold, and not on the judgement: its need is the judgement made
+     naval, or THE FINISH AT SEA, which asks for none.
+   - The tech-up waits on both stalls and the hold.
+   - A ground defence waits on the energy stall alone: the pressure it needs lifts the hold, and a metal stall
+     beside the pressure does not hold it (economy, THE GROUND DEFENCES).
+   - An anti-air structure waits on nothing: seen air is a threat, answered whatever the economy (THE HOLD).
+   - A sensor waits on both stalls and the hold.
+   No row names the pressure or the surplus: each acts through THE HOLD, which neither stands beside, and through
+   the needs. impai_brain_test.c, check_veto_rows, holds the table to one row a want at the want's own index. */
+const IMPAI_VETO impai_veto[IMPAI_WANTS] = {
+    [IMPAI_W_FACTORY] = { "want_factory", IMPAI_G_UNJUDGED | IMPAI_G_E_STALL | IMPAI_G_M_STALL | IMPAI_G_HOLD },
+    [IMPAI_W_SEA]     = { "want_sea",     IMPAI_G_E_STALL | IMPAI_G_M_STALL | IMPAI_G_HOLD },
+    [IMPAI_W_TECH]    = { "want_tech",    IMPAI_G_E_STALL | IMPAI_G_M_STALL | IMPAI_G_HOLD },
+    [IMPAI_W_DEF]     = { "want_def",     IMPAI_G_E_STALL },
+    [IMPAI_W_AA]      = { "want_aa",      0u },
+    [IMPAI_W_SENSOR]  = { "want_sensor",  IMPAI_G_E_STALL | IMPAI_G_M_STALL | IMPAI_G_HOLD },
+};
+
+/* THE REASON TRACE (impai.h, IMPAI_WHY), read once economy has set every want: `need`, bit k, is want k as it
+   would stand with every gate down (less the term read last, impai.h). INVARIANT: a want that stands was needed,
+   and a gate is named only for a want needed and not standing -- so the first plant, which no gate holds, names
+   none while THE HOLD is up beside it. impai_brain_test.c, why_check, holds every decision of the test to it. */
+static void why_read(IMPAI_DEC* d, unsigned need)
+{
+    const int want[IMPAI_WANTS] = { [IMPAI_W_FACTORY] = d->want_factory, [IMPAI_W_SEA] = d->want_sea,
+                                    [IMPAI_W_TECH] = d->want_tech,       [IMPAI_W_DEF] = d->want_def,
+                                    [IMPAI_W_AA] = d->want_aa,           [IMPAI_W_SENSOR] = d->want_sensor };
+    IMPAI_WHY* w = &d->out->why;
+    int k;
+    memset(w, 0, sizeof *w);
+    w->set = 1;
+    w->gates = (uint8_t)d->gates;
+    w->naval = d->pos.naval;
+    w->pos = (uint8_t)((d->pos.dry ? IMPAI_WHY_DRY : 0u) | (d->pos.island ? IMPAI_WHY_ISLAND : 0u) |
+                       (d->pos.blind ? IMPAI_WHY_BLIND : 0u) | (d->pos.pressed ? IMPAI_WHY_PRESSED : 0u) |
+                       (d->pos.at_base ? IMPAI_WHY_AT_BASE : 0u));
+    for (k = 0; k < IMPAI_WANTS; k++) {
+        const unsigned bit = 1u << k;
+        if (need & bit) w->need |= (uint8_t)bit;
+        if (want[k]) w->take |= (uint8_t)bit;
+        if ((need & bit) && !want[k]) w->veto[k] = (uint8_t)(d->gates & impai_veto[k].gates);
+        /* THE REQUESTS (impai.h), before the assignment: one that stands is open until a rung ends it */
+        d->out->req[k] = (uint8_t)(want[k] ? IMPAI_RQ_OPEN : !(need & bit) ? IMPAI_RQ_NONE :
+                                   w->veto[k] ? IMPAI_RQ_VETOED : IMPAI_RQ_HELD);
+    }
+}
+
+/* the names the `why` line gives the gates, bit 0 first, and the posture's flags (IMPAI_WHY_*) */
+static const char* const WHY_GATE[] = { "HOLD", "E_STALL", "M_STALL", "PRESSED", "SURPLUS", "UNJUDGED" };
+static const char* const WHY_POS[] = { "dry", "island", "blind", "pressed", "at_base" };
+_Static_assert((1u << sizeof WHY_GATE / sizeof WHY_GATE[0]) - 1u == IMPAI_G_ALL, "a name a gate");
+
+/* BOUND: every write is held below `end`, which is left for the NUL */
+static void why_put(char** p, const char* end, const char* s)
+{
+    while (*s && *p < end) *(*p)++ = *s++;
+}
+
+/* the names of `bits` among `name`'s `n`, joined by `+`; `-` for none */
+static void why_names(char** p, const char* end, unsigned bits, const char* const* name, int n)
+{
+    int k, any = 0;
+    for (k = 0; k < n; k++)
+        if (bits & (1u << k)) {
+            if (any++) why_put(p, end, "+");
+            why_put(p, end, name[k]);
+        }
+    if (!any) why_put(p, end, "-");
+}
+
+int impai_why_text(const IMPAI_WHY* w, char* out, size_t cap)
+{
+    /* a want's name is its field's less `want_` (impai_veto[k].want), which check_veto_rows holds each row to */
+    const char* want[IMPAI_WANTS];
+    char* p = out;
+    const char* end;
+    int k, any = 0;
+    if (!cap) return 0;
+    end = out + cap - 1;
+    for (k = 0; k < IMPAI_WANTS; k++) want[k] = impai_veto[k].want + 5;
+    why_put(&p, end, "gates=");
+    why_names(&p, end, w->gates, WHY_GATE, (int)(sizeof WHY_GATE / sizeof WHY_GATE[0]));
+    why_put(&p, end, w->naval > 0 ? " naval=1" : w->naval < 0 ? " naval=-1" : " naval=0");
+    why_put(&p, end, " pos=");
+    why_names(&p, end, w->pos, WHY_POS, (int)(sizeof WHY_POS / sizeof WHY_POS[0]));
+    why_put(&p, end, " need=");
+    why_names(&p, end, w->need, want, IMPAI_WANTS);
+    why_put(&p, end, " veto=");
+    for (k = 0; k < IMPAI_WANTS; k++)
+        if (w->veto[k]) {
+            if (any++) why_put(&p, end, ",");
+            why_put(&p, end, want[k]);
+            why_put(&p, end, ":");
+            why_names(&p, end, w->veto[k], WHY_GATE, (int)(sizeof WHY_GATE / sizeof WHY_GATE[0]));
+        }
+    if (!any) why_put(&p, end, "-");
+    why_put(&p, end, " take=");
+    why_names(&p, end, w->take, want, IMPAI_WANTS);
+    *p = 0;
+    return (int)(p - out);
+}
+
+int impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w)
+{
+    if (!w->set) return 0;
+    if (now < seen->after) seen->why.set = 0;   /* not above the last decision's: no remembered trace equals `w` */
+    seen->after = now + 1;
+    if (!memcmp(w, &seen->why, sizeof *w)) return 0;
+    seen->why = *w;
+    return 1;
+}
+
+/* the names the `plantwalk` line gives the rung's returns (IMPAI_PW_*) */
+static const char* const PW_EXIT[] = { "notype", "menu", "sea", "left", "cut", "grew", "widest", "way", "roots" };
+_Static_assert(sizeof PW_EXIT / sizeof PW_EXIT[0] == IMPAI_PW_EXITS, "a name a return");
+
+/* `name` and then v in decimal. BOUND: a uint32 is at most ten digits, and why_put's: every write below `end` */
+static void pw_field(char** p, const char* end, const char* name, unsigned v)
+{
+    char digits[10];
+    int n = 0;
+    do digits[n++] = (char)('0' + v % 10u); while ((v /= 10u) && n < (int)sizeof digits);
+    why_put(p, end, name);
+    while (n && *p < end) *(*p)++ = digits[--n];
+}
+
+int impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap)
+{
+    char* p = out;
+    const char* end;
+    if (!cap) return 0;
+    end = out + cap - 1;
+    pw_field(&p, end, "builder=", w->slot);
+    pw_field(&p, end, "/", w->btype);
+    pw_field(&p, end, " waived=", w->waived);
+    pw_field(&p, end, " grow=", w->grow);
+    pw_field(&p, end, " sites=", w->sites);
+    pw_field(&p, end, " claimed=", w->claimed);
+    pw_field(&p, end, " failed=", w->failed);
+    pw_field(&p, end, " far=", w->far_rec);
+    pw_field(&p, end, " way_failed=", w->way_failed);
+    pw_field(&p, end, " coverage=", w->coverage);
+    pw_field(&p, end, " beyond=", w->beyond);
+    pw_field(&p, end, " threat=", w->threat);
+    pw_field(&p, end, " tested=", w->tested);
+    pw_field(&p, end, " passed=", w->passed);
+    pw_field(&p, end, " way_refused=", w->way_refused);
+    pw_field(&p, end, " unbuilt=", w->unbuilt);
+    pw_field(&p, end, " cut=", w->cut);
+    why_put(&p, end, " exit=");
+    why_put(&p, end, w->exit < IMPAI_PW_EXITS ? PW_EXIT[w->exit] : "?");
+    why_put(&p, end, w->sea == IMPAI_PW_SEA_UNASKED ? " sea=-" : w->sea < 0 ? " sea=none" : " sea=wait");
+    *p = 0;
+    return (int)(p - out);
+}
+
+int impai_plantwalk_due(IMPAI_PLANTWALK_SEEN* seen, uint32_t now, const IMPAI_PLANTWALK* w)
+{
+    if (!w->set) return 0;
+    if (now < seen->after) seen->walk.set = 0;  /* not above the last decision's: no remembered trace equals `w` */
+    seen->after = now + 1;
+    if (!memcmp(w, &seen->walk, sizeof *w)) return 0;
+    seen->walk = *w;
+    return 1;
 }
 
 static void economy(IMPAI_DEC* d)
@@ -1335,8 +1510,9 @@ static void economy(IMPAI_DEC* d)
     const WQ_ECON* e = &d->e;
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
-    const int judged = !mil || mil->naval >= 0;
-    int plant_metal, plant_reach = 0, tech_metal = 0, blind;
+    const int judged = d->pos.naval >= 0;
+    int plant_pace, plant_metal, plant_reach = 0, reach_need = 0, tech_metal = 0, no_patch, first;
+    unsigned need = 0;              /* THE REASON TRACE: bit k, want k with every gate down (why_read)       */
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
          SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
@@ -1390,7 +1566,10 @@ static void economy(IMPAI_DEC* d)
         d->e_stall = e->energy < stall * e->energy_max;
         d->m_stall = e->metal < stall * e->metal_max && d->m_steady < e->metal_out;
     }
-    d->out->pressed = (uint8_t)d->pressed;
+    /* THE GATES, once a decision: every want below reads them through its row of impai_veto */
+    d->gates = (d->hold ? IMPAI_G_HOLD : 0u) | (d->e_stall ? IMPAI_G_E_STALL : 0u) | (d->m_stall ? IMPAI_G_M_STALL : 0u) |
+               (d->pos.pressed ? IMPAI_G_PRESSED : 0u) | (d->surplus ? IMPAI_G_SURPLUS : 0u) | (judged ? 0u : IMPAI_G_UNJUDGED);
+    d->out->pressed = d->pos.pressed;
     d->out->hold = (uint8_t)d->hold;
     d->out->e_empty = (uint8_t)(e->energy_max > 0.0f && e->energy < IMPAI_E_EMPTY * e->energy_max);
     d->out->f_idle = (uint16_t)d->nfidle;
@@ -1461,30 +1640,28 @@ static void economy(IMPAI_DEC* d)
        commander, busy every decision, wanted the yard from GameTime 11 707 to the end and never ran THE CHOICE,
        which want_sea holds back, nor ordered the yard (MEASURED 2026-11-16, round 3's p:L5 ca-1 with a diagnostic
        build at 1322160c: `naval=1 chose=none sea_site=-`) */
-    plant_metal = d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
-                  ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
+    plant_pace = d->count[IMPAI_C_FACTORY] >= 1 &&
+                 ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
+    plant_metal = plant_pace && !(d->gates & impai_veto[IMPAI_W_FACTORY].gates);
     if (d->count[IMPAI_C_FACTORY] >= 1 && !d->pending[IMPAI_C_FACTORY] && impai_econ_metal_short(d) &&
         impai_econ_reach_plant(d)) {
         d->mr_only = 1;
-        plant_reach = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP && judged && !d->e_stall && !d->m_stall && !d->hold;
+        reach_need = d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP;
+        plant_reach = reach_need && !(d->gates & impai_veto[IMPAI_W_FACTORY].gates);
     }
-    /* THE BLIND START: the first plant is also wanted at once when the seat's patch scan has read the whole map
-       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The opening's extractors stand on patches,
-       and with none in sight the commander has nothing to place them on: it would stand idle to open_t, and only
-       the plant's constructors explore for metal (impai_econ.c, the ladder's explore rung). The opening's own terms
-       are unchanged. INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c),
-       so before the first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map,
-       whose extractors take the base ring and never a patch (impai_metal_map), never takes it. WHY: the seat at
-       Two Continents' start 3, whose nearest patch lies just past the commander's sight, gave no order to GameTime
-       1 806 in an unmapped game, a network game's joining peer and a skirmish alike, and in a mapped skirmish
-       gave its first order at 81 (MEASURED 2026-11-16 with a diagnostic build: nspots 0 at every decision,
-       the commander listed idle with 19 options on its menu). */
-    blind = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
-    d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
-        ((d->count[IMPAI_C_FACTORY] == 0 &&
-          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t ||
-           blind)) ||
-         ((plant_metal || plant_reach) && d->plant_e));
+    /* NO PATCH ON THE MAP: the first plant is also wanted at once when the seat's patch scan has read the whole map
+       (IMPAI_BRAIN_IN.scanned) and published no patch, off a metal map. The scan reads the map's layout, so the map
+       holds no closed metal patch at all: the opening's extractors have nothing to stand on, the commander would
+       stand idle to open_t, and the plant is what the opening can start. The opening's own terms are unchanged.
+       INVARIANT, a bound on when it fires: `scanned` is set only at a scan's last row (impai_know.c), so before the
+       first whole scan nothing changes, and a seat that knows a patch, or stands on a metal map, whose extractors
+       take the base ring and never a patch (impai_metal_map), never takes it. */
+    no_patch = d->in->scanned && !d->in->nspots && !impai_metal_map(d);
+    first = d->count[IMPAI_C_FACTORY] == 0 &&
+            ((impai_econ_open_mex(d) && impai_econ_open_energy(d, 0)) || d->now >= plan->open_t || no_patch);
+    d->want_factory = !d->pending[IMPAI_C_FACTORY] && (first || ((plant_metal || plant_reach) && d->plant_e));
+    if (!d->pending[IMPAI_C_FACTORY] && (first || ((plant_pace || reach_need) && d->plant_e)))
+        need |= 1u << IMPAI_W_FACTORY;
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
        land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy
        stands where the land army cannot walk, so the seat wants its sea plant whatever its pacing and its factory
@@ -1496,25 +1673,52 @@ static void economy(IMPAI_DEC* d)
        base's own shore can be too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r
        (MEASURED at 198899ef, bar-nota-troutfarm-aa-2: `sea_site=none`) and its nearest lies off a shore no land
        constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
-       one plant, the stalls, the hold, the refusals and a builder that offers one. */
-    d->sea_far = (uint8_t)(mil && mil->dry);
-    d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
-    d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_metal) &&
-                  !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
-                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
+       one plant but for THE FINISH'S YARDS below, the stalls, the hold, the refusals and a builder that offers
+       one. A further sea plant on an island is THE CHOICE's (impai_econ.c, THE ISLAND'S PLANTS).
+       THE FINISH'S YARDS: past its first sea plant the finish wants one more while THE OVERFLOW stands (over_m:
+       the surplus, a busy plant's price measured, and the steady income less the seat's request at least that
+       price), every sea plant the census counts -- finished, a frame or a builder's order (sea_plants) -- is a
+       finished factory at work, THE ENERGY TERM holds (plant_e), and the seat knows a target on or under the
+       water (THE TARGETS KNOWN, impai_tg_known: FLOAT or UNDER), which is what a yard's army hits: the dry hunt
+       also holds over an enemy on land the land army does not reach, where a further yard buys nothing that
+       reaches it. It is THE METAL TERM (plant_m) read over the sea plants: in the dry hunt a land plant is
+       offered only its types with a water weapon (impai_econ.c, army_menu), and one whose menu holds none stands
+       idle by that rule, so plant_m's "no idle factory" may never hold there while the sea plants are what
+       spends (decisions.md, *The finish's yards*). INVARIANT, a bound: a further yard is wanted only while no yard is idle, unfinished or on
+       order, a busy plant asks metal, and the income nobody asks for pays the mean busy plant's request -- so
+       each yard past the first comes on metal the full store is wasting, one at a time, below IMPAI_IDLE_CAP
+       factories --, and under the sea plant's own gates: the stalls and the hold refuse it. Every value is the
+       census's of this decision; the busy list is cut at IMPAI_IDLE_CAP, which only refuses. */
+    d->sea_able = (uint8_t)(d->pos.dry && impai_econ_sea_able(d));
+    {
+        int sea_busy = 0, more, sea_need, k;
+        for (k = 0; k < d->nfbusy; k++) sea_busy += impai_water_plant(d->in, d->fbusy[k].type);
+        more = d->pos.dry && d->over_m && d->plant_e && sea_busy == (int)d->sea_plants && mil &&
+               (impai_tg_known(mil, d->now) & ((1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER)));
+        /* the need but for a builder that offers one: the menus are read last, for a want nothing else refuses */
+        sea_need = (d->pos.naval == 1 || d->pos.dry) && (!d->sea_plants || more) && d->count[IMPAI_C_FACTORY] >= 1 &&
+                   (d->pos.dry ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP : plant_pace) &&
+                   !d->pending[IMPAI_C_FACTORY] && d->in->st->sea_refused < IMPAI_SEA_REFUSALS;
+        d->want_sea = sea_need && !(d->gates & impai_veto[IMPAI_W_SEA].gates) &&
+                      (d->pos.dry ? d->sea_able : impai_econ_sea_able(d));
+        if (sea_need) need |= 1u << IMPAI_W_SEA;
+    }
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a steady metal income (THE STEADY INCOME) of the table's tech_m a
        pass, the next factory's build tech is higher (impai_econ.c, THE CHOICE) */
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m;
-        tech_metal = tech_m > 0 && d->m_steady >= tech_m && d->ftop_n >= plan->factory_max && !d->e_stall &&
-                     !d->m_stall && !d->hold;
+        const int tech_need = tech_m > 0 && d->m_steady >= tech_m && d->ftop_n >= plan->factory_max;
+        int aa_need, def_need, sensor_need;
+        tech_metal = tech_need && !(d->gates & impai_veto[IMPAI_W_TECH].gates);
         d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_metal && d->plant_e;
+        if (!d->pending[IMPAI_C_FACTORY] && tech_need && d->plant_e) need |= 1u << IMPAI_W_TECH;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
-        d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
-                     m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
+        aa_need = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
+                  m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
+        d->want_aa = aa_need && !(d->gates & impai_veto[IMPAI_W_AA].gates);
+        if (aa_need) need |= 1u << IMPAI_W_AA;
         /* THE GROUND DEFENCES (impai_econ.c): one while THE PRESSURE stands at the base, one more for each def_v
            of pressing value, at most def_max, outside an energy stall. A NaN press_v fails the compare and wants
            nothing. A METAL STALL DOES NOT HOLD IT BACK, as the pressure lifts THE HOLD: a raid that lasts keeps
@@ -1522,14 +1726,16 @@ static void economy(IMPAI_DEC* d)
            is for never came. An energy stall still holds it back: the economy pass pays each resource at one
            fraction (0x401A4D..0x401AB1, engine/weapons.md, The settle), so in an energy stall a frame grows at the
            energy's fraction, and the stall's energy is the ladder's first rule. */
-        d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
-                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
+        def_need = d->pos.at_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
+                   (float)d->def_n < 1.0f + m->press_v / plan->def_v;
+        d->want_def = def_need && !(d->gates & impai_veto[IMPAI_W_DEF].gates);
+        if (def_need) need |= 1u << IMPAI_W_DEF;
         if (d->want_def) def_point(d, m);
         /* THE SENSORS (impai_econ.c): with factory_max plants finished, outside the stalls and the hold, below
            sensor_max */
-        if (d->done[IMPAI_C_FACTORY] >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold &&
-            d->sens_n < plan->sensor_max)
-            sensor_want(d, m);
+        sensor_need = d->done[IMPAI_C_FACTORY] >= plan->factory_max && d->sens_n < plan->sensor_max;
+        if (sensor_need) need |= 1u << IMPAI_W_SENSOR;
+        if (sensor_need && !(d->gates & impai_veto[IMPAI_W_SENSOR].gates)) sensor_want(d, m);
     }
     /* plant_e_need: the energy a pass short of THE ENERGY TERM, while a plant's metal is there and its energy is not */
     if (!((plant_metal || plant_reach || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
@@ -1552,6 +1758,7 @@ static void economy(IMPAI_DEC* d)
         d->m_short = d->m_stall || (!d->surplus && d->m_steady < want_m);
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }
+    why_read(d, need);
 }
 
 /* ---- the entry ---- */
@@ -1639,6 +1846,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->out = out;
     d->q = q;
     d->now = (uint32_t)q->ops->gametime(q);
+    posture_read(d);
     d->sea_type = out->sea_type = (uint16_t)WQ_NONE;
     q->ops->map(q, &d->m);
     if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);
@@ -1650,7 +1858,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_off = q->ops->action(q, WQ_ACT_DEACTIVATE);
     d->e_per_m = in->e_per_m > 0.0f && in->e_per_m < 1e6f ? in->e_per_m : in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
-    if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     /* THE MEMORY'S COUNT IS DATA, as every recorded field is: a restored nfmem past IMPAI_FEATS is held to it before
        anything walks the memory or its marks (the census's claims, the refresh, the place, the reclaim's scores),
        so no walk passes the arrays */
@@ -1669,7 +1876,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
         st->ax = (int16_t)(a->pos[0] >> 20);
         st->az = (int16_t)(a->pos[2] >> 20);
     }
-    if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
+    impai_held_judge(d);
     base_box(d);
     impai_fmem_refresh(d);
     impai_fmem_observe(d);
@@ -1707,5 +1914,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     out->queued = (uint16_t)d->queued;
     out->sea_type = d->sea_type;
     out->sea_answer = (int8_t)d->sea_answer;
+    /* THE PLANT WALK'S TRACE is of a decision that ordered no plant */
+    if (out->plant || out->sea_plants) memset(&out->walk, 0, sizeof out->walk);
     return 0;
 }

@@ -167,8 +167,10 @@ int impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int
 int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox, int* oz)
 {
     const uint16_t* l = class_labels(r, c);
+    const int fx = bx > r->bw - 1 - bx ? bx : r->bw - 1 - bx, fz = bz > r->bh - 1 - bz ? bz : r->bh - 1 - bz;
     int ring, i, dx, dz;
     if (!l) return 0;
+    if (radius > fx && radius > fz) radius = fx > fz ? fx : fz;
     for (ring = 0; ring <= radius; ring++)
         for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
             const int x = bx + dx, z = bz + dz;
@@ -178,6 +180,29 @@ int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, i
             return 1;
         }
     return 0;
+}
+
+int impai_reach_nearest(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox,
+                        int* oz)
+{
+    const uint16_t* l = class_labels(r, c);
+    const int fx = bx > r->bw - 1 - bx ? bx : r->bw - 1 - bx, fz = bz > r->bh - 1 - bz ? bz : r->bh - 1 - bz;
+    int64_t best = -1;
+    int ring, i, dx, dz;
+    if (!l) return 0;
+    if (radius > fx && radius > fz) radius = fx > fz ? fx : fz;
+    for (ring = 0; ring <= radius && (best < 0 || (int64_t)ring * ring < best); ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
+            const int x = bx + dx, z = bz + dz;
+            if (x < 0 || z < 0 || x >= r->bw || z >= r->bh || l[(size_t)z * r->bw + x] != label) continue;
+            if (best < 0 || (int64_t)dx * dx + (int64_t)dz * dz < best) {
+                best = (int64_t)dx * dx + (int64_t)dz * dz;
+                *ox = x;
+                *oz = z;
+            }
+            break;
+        }
+    return best >= 0;
 }
 
 static int sea_army(const IMPAI_TINFO* t) { return t->klass >= IMPAI_K_SRAIDER && t->klass <= IMPAI_K_SAA; }
@@ -226,10 +251,11 @@ int impai_mostly_water(const IMPAI_REACH* r)
     return 2u * (uint64_t)r->sea_blocks > (uint64_t)r->bw * r->bh;
 }
 
-int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz)
+int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz, int radius)
 {
     uint64_t linked = 0;
     unsigned c;
+    int ox, oz;
     if (!r || !r->labels || !r->land_total || ax < 0 || az < 0 || bx < 0 || bz < 0 || ax >= r->bw || az >= r->bh ||
         bx >= r->bw || bz >= r->bh)
         return 1;
@@ -238,7 +264,7 @@ int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz)
         uint16_t la;
         if (!l) continue;
         la = l[(size_t)az * r->bw + ax];
-        if (la && la == l[(size_t)bz * r->bw + bx]) linked += r->land_w[c];
+        if (la && impai_reach_near(r, c, la, bx, bz, radius, &ox, &oz)) linked += r->land_w[c];
     }
     return 2u * linked >= r->land_total;
 }
@@ -278,14 +304,16 @@ static uint32_t round_to(double v, uint32_t max)
    dps_ground leaves those slots out: a role says what a type is for, this row what it hits; the fight
    predictor's hurts() has the same rule (impai_fight.c).
    Over the type's first min(nweapons, TASIM_ROLE_WEAPONS) slots, every regular one (tasim_roles.c's `regular`:
-   no commandfire, stockpile or interceptor) whose weapon lacks toairweapon, its slot's NOTAIR notwithstanding:
+   no commandfire, stockpile or interceptor) whose weapon lacks toairweapon, its slot's NOTAIR notwithstanding,
+   and does not paralyse (tasim_roles.c, A PARALYSER DEALS NO DAMAGE: its hit takes no hit points):
    hit_ground the sum of tasim_roles.c's per-slot `dps` of the [DAMAGE] default, x 30 x 16, rounded once and
    held to 0..0xFFFF; hit_range the largest such range, held the same. A slot that is not anti-air is in the
    classifier's dps_ground by the same formula, in the same order, so for a type with no anti-air slot the two
    rows agree exactly (tests/impai_brain_test.c, check_threat_reach). */
 static int reach_slot(const TASIM_ROLE_WEAPON* w)
 {
-    return !(w->flags & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR));
+    return !(w->flags & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR |
+                         TASIM_WF_PARALYZER));
 }
 
 static void ground_reach(const TASIM_ROLE_IN* u, IMPAI_THREAT* t)

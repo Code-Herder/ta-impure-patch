@@ -151,12 +151,14 @@ static float strength(const char* d, int k)
 }
 
 /* The explored-map grid: LoadMap allocates W*H/4 u16 entries, the dimensions even (the open's bound), and
-   the stamp 0x481930 writes the player's map bit +0x146 -- not its seat number. */
+   the stamp 0x481930 writes the player's map bit +0x146 -- not its seat number. A view that knows the layout
+   (tagpu_worldq_open_layout) answers for the map itself: every cell inside it, and the grid is not read. */
 static int discovered(const WQ_ENGINE* c, int x, int z)
 {
     const unsigned short* mapped;
     unsigned bit;
     if (x < 0 || z < 0 || x >= c->w || z >= c->h) return 0;
+    if (c->layout) return 1;
     mapped = *(const unsigned short* const*)(c->ta + 0x14273);
     bit = *(unsigned char*)(c->rec + 0x146);
     if (!mapped || bit >= 16) return 0;
@@ -377,9 +379,11 @@ static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, in
    leaves the engine's own reading of them as it was.
    THE PLAYER. With a player 0x47D2E0 refuses a site whose centre the VIEWED player has not mapped
    (main[0x2A43], 0x47D3D1..0x47D3FA) whatever record it is passed -- but through WQ_SITE_SEAT's thunk, where
-   the patch at 0x47D3D1 tests the passed record's own bit +0x146 -- and under LosType bit 1 reads the passed
-   record's line-of-sight counters +0x7C (0x47D40C..0x47D42C) -- DISASSEMBLED; a unit or a yard occupant
-   refuses only while that flag is set (0x47D53B, 0x47D55B). The record passed is the seat's. */
+   the patch at 0x47D3D1 leaves that refusal out -- and then sets the flag [esp+0x10]: under LosType bit 1 from
+   the passed record's line-of-sight counters +0x7C (0x47D40C..0x47D42C), otherwise from the mapped bit of the
+   same block (0x47D446..0x47D471; through the thunk the passed record's own, +0x146) -- DISASSEMBLED; a unit
+   or a yard occupant refuses only while that flag is set (0x47D53B, 0x47D55B). The record passed is the
+   seat's. */
 static int wq_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -874,33 +878,46 @@ static int sight_lit(const SIGHT* s, unsigned k)
     return s->truelos ? s->los[k] != 0 : (s->mapped[k] >> s->bit) & 1u;
 }
 
-/* THE BLOCK 0x47D2E0 READS THE MAPPED BIT AT, DISASSEMBLED 0x47D36C..0x47D3FA: the centre (2 cx + fx) << 19,
-   (2 cz + fz) << 19 and the height byte of the first cell (0x485010, the feature grid's +4: 0 off the map) as the
-   altitude; column x >> 5, row (z - altitude / 2) >> 5 on the high words, each below the passed record's grid
-   +0x80 / +0x84 (0x47D3B0, 0x47D3B8: under the shear fix, a sheared row off the grid is read at the point's own
-   row, the rule sight_block applies); the mapped grid main+0x14273 at row x +0x80 + column. This reads the
-   seat's own bit there, rec+0x146, as the patch at 0x47D3D1 makes the thunk's call do. The footprint is held
-   first to the test's own bounds (0x47D302..0x47D352). */
-int tagpu_worldq_site_mapped(const WORLDQ* q, int type, int cx, int cz)
+/* THE SITE TEST GIVEN NO PLAYER, AND THE SIGHT FLAG, for ImpAI's self-check. With a player 0x47D2E0 first places
+   the centre's block, DISASSEMBLED 0x47D36C..0x47D3BE: the centre (2 cx + fx) << 19, (2 cz + fz) << 19 and the height byte of the
+   first cell (0x485010, the feature grid's +4: 0 off the map) as the altitude; column x >> 5, row
+   (z - altitude / 2) >> 5 on the high words, each below the passed record's grid +0x80 / +0x84 (0x47D3B0,
+   0x47D3B8: under the shear fix, a sheared row off the grid is read at the point's own row, the rule sight_block
+   applies) -- and refuses a block off that grid. Where it would, and where the footprint is outside the test's
+   own bounds (0x47D302..0x47D352), this answers -1. Elsewhere it is the test with a NULL player, which skips the
+   block, the mapped test and the sight flag alike (`cmp edi,ebx; je 0x47D479` at 0x47D364, EBX zero): a copy of
+   the view with no record and the stock target, so wq_site_ok saves the scratch words around it as for any
+   call.
+   *lit is the sight flag [esp+0x10] the test given the seat's record sets at that block (DISASSEMBLED
+   0x47D400..0x47D471): under LosType bit 1 the record's line-of-sight counter of the block non-zero
+   (0x47D414..0x47D430), otherwise the block's explored word under the record's own bit (0x47D45A..0x47D46F, the
+   seat's thunk; stock tests the viewed player's) -- sight_lit on the block sight_block places, the two bounds at
+   0x47D446..0x47D454 being the ones 0x47D3B0 and 0x47D3B8 already passed. The flag's only readers are the two
+   unit refusals, 0x47D53B and 0x47D55B: a unit on the footprint refuses the site while the flag is set, and the
+   test given no player keeps the flag 1 (0x47D35C). So with *lit 1 the seat's test answers as this one does, and
+   with *lit 0 it refuses on no unit and accepts every site this one accepts. No sight (sight_of): -1. */
+int tagpu_worldq_site_free(const WORLDQ* q, int type, int cx, int cz, int* lit)
 {
     const WQ_ENGINE* c = ctx_of(q);
     const char* d = def_at(c, type);
-    const uint16_t* mapped = *(const uint16_t* const*)(c->ta + 0x14273);
+    WQ_ENGINE fc;
+    WORLDQ fq;
     SIGHT s;
-    unsigned k, bit = *(const unsigned char*)(c->rec + PL_MAPBIT);
+    unsigned k;
     int fx, fz, alt;
-    if (!d || !footprint(d, &fx, &fz) || cx < 1 || cz < 1 || cx + fx >= c->w || cz + fz >= c->h || !mapped ||
-        bit >= 16)
-        return -1;
-    memset(&s, 0, sizeof s);
-    s.w = *(const unsigned*)(c->rec + PL_LOS_W);
-    s.h = *(const unsigned*)(c->rec + PL_LOS_H);
-    if (s.w != (unsigned)c->w / 2 || s.h != (unsigned)c->h / 2) return -1;
+    if (!d || !footprint(d, &fx, &fz) || cx < 1 || cz < 1 || cx + fx >= c->w || cz + fz >= c->h) return -1;
+    if (!sight_of(c, &s)) return -1;
     alt = (unsigned char)c->grid[((size_t)cz * c->w + cx) * FT_STRIDE + 4];
     if (!sight_block(&s, (int32_t)((uint32_t)(2 * cx + fx) << 19), (int32_t)((uint32_t)alt << 16),
                      (int32_t)((uint32_t)(2 * cz + fz) << 19), &k))
         return -1;
-    return (mapped[k] >> bit) & 1u;
+    *lit = sight_lit(&s, k);
+    fc = *c;
+    fc.rec = NULL;
+    fc.site = (WqSiteFn)0x0047D2E0u;
+    fq = *q;
+    fq.self = &fc;
+    return wq_site_ok(&fq, type, cx, cz, 0, NULL);
 }
 
 /* A unit of any owner at `slot` with the alive bit, dying or not -- the line of sight and the radar pass test
@@ -1824,5 +1841,12 @@ int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn 
     out->ops = &OPS;
     out->self = ctx;
     out->seat = seat;
+    return 1;
+}
+
+int tagpu_worldq_open_layout(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu)
+{
+    if (!tagpu_worldq_open(ctx, out, seat, site, menu)) return 0;
+    ctx->layout = 1;
     return 1;
 }

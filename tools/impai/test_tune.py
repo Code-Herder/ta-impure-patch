@@ -31,8 +31,8 @@ MAPS = ["m1", "m2", "m3", "m4", "m5"]
 def a_table(**kw) -> tablefile.Table:
     """A table of the format's shape: A2's base shares on both surface layers, the anti-air row at 1.5."""
     t = tablefile.Table(
-        base=[0.25, 0.45, 0.15, 0.0, 0.05, 0.25, 0.45, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0],
-        rows=[(12, 13), (7, 2), (2, 0), (0, 1), (5, 9), (6, 9), (13, 10), (3, 14)],
+        base=[0.25, 0.45, 0.15, 0.0, 0.05, 0.25, 0.45, 0.15, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0],
+        rows=[(12, 14), (7, 2), (2, 0), (0, 1), (5, 10), (6, 10), (13, 11), (3, 15)],
         gains=[1.5, 0, 0, 0, 0, 0, 0, 0], counter=1.0, air_from_t=10.0, aa_cap=0.35, tech_m=8.0)
     for k, v in kw.items():
         setattr(t, k, v)
@@ -319,7 +319,7 @@ class TierBRace(unittest.TestCase):
         self.tops = []
         for i, c in enumerate((1.2, 1.4, 1.6, 1.8)):
             p = self.d / f"top{i}.tbl"
-            tablefile.write(p, a_table(counter=c, base=[0.2, 0.4, 0.1, 0, 0.05, 0.2, 0.4, 0.1, 0, 0.1, 0.1, 0, 0]))
+            tablefile.write(p, a_table(counter=c, base=[0.2, 0.4, 0.1, 0, 0.05, 0.2, 0.4, 0.1, 0, 0, 0.1, 0.1, 0, 0]))
             self.tops.append(p)
 
     def tearDown(self):
@@ -342,7 +342,7 @@ class TierBRace(unittest.TestCase):
         self.assertAlmostEqual(up.air_from_t, 12.5)
         self.assertAlmostEqual(up.tech_m, 10.0)
         self.assertAlmostEqual(sum(up.base), sum(t.base), places=5)
-        self.assertAlmostEqual(up.base[9], 0.125, places=6)
+        self.assertAlmostEqual(up.base[tablefile.CLASSES.index("fighter")], 0.125, places=6)
 
     def test_race(self):
         b = tune.TierB.init(self.d / "b", self.d / "hand.tbl", MAPS, self.tops)

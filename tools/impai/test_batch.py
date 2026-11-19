@@ -2,7 +2,8 @@
 """test_batch -- the per-batch loop offline, on a fake player: the regression list as tracked, the gates' games
 and their pieces (a game of two gates played once, the setups' pieces beside the base game's), every gate passed,
 fail fast (a game lost stops every gating piece still playing, never the held-out one, and the margin test is not
-played), a piece with a game that could not run played once more, a piece past its deadline stopped, the margin
+played), a piece with a game that could not run played once more, a piece past its deadline stopped, a piece
+admitted by its own play's lines in a log an earlier play wrote to, the margin
 test's verdicts, the held-out check reported or, with --gate-held-out, gating, and a directory of other DLLs
 refused. No game runs.
 
@@ -175,6 +176,70 @@ class TestBatch(unittest.TestCase):
         self.outcome = lambda gid, setup: "cap" if gid.startswith("bar-p:L5") else "A"
         self.assertEqual(self.run_(gate_held_out=True), 1)
         self.assertEqual(self.margins, [])
+
+    def test_a_held_out_game_worse_than_the_champions_is_flagged_and_judges_nothing(self):
+        champion = self.tmp / "champion"
+        (champion / "base").mkdir(parents=True)
+
+        def theirs(gid, outcome, end=bar.CAP, live=(900.0, 1000.0)):
+            r = {"id": gid, "outcome": outcome, "end_tick": end}
+            if outcome == "cap":
+                r["value"] = {"A": {"live": live[0], "t": bar.CAP}, "B": {"live": live[1], "t": bar.CAP}}
+            (champion / "base" / f"{gid}.json").write_text(json.dumps(r))
+        same, ahead, won, absent, lost = batch.HELD_OUT[:5]
+        theirs(same, "cap")
+        theirs(ahead, "cap", live=(1650.0, 1000.0))
+        theirs(won, "A", end=48742)
+        theirs(lost, "B", end=20000)
+        self.outcome = lambda gid, setup: "cap" if gid.startswith("bar-p:L5") else "A"
+        self.assertEqual(self.run_(base_batch=str(champion)), 0)         # the flag judges nothing
+        text = (self.tmp / "out" / "summary.txt").read_text()
+        cap = "reached the cap not ahead, value A/B 0.90"
+        for line in (f"    {same}: {cap}\n",                             # another game in the same category
+                     f"    {ahead}: {cap}  WORSE than the champion's (reached the cap ahead, value A/B 1.65)\n",
+                     f"    {won}: {cap}  WORSE than the champion's (won at 48742)\n",
+                     f"    {absent}: {cap}  (no game of the champion's to compare)\n",
+                     f"    {lost}: {cap}\n",                             # better than the champion's: no flag
+                     "    2 of 4 compared ended worse than the champion's (champion)\n"):
+            self.assertIn(line, text)
+        doc = json.loads((self.tmp / "out" / "summary.json").read_text())
+        self.assertEqual((doc["held_out_worse"], len(doc["held_out"]), doc["verdict"]), ([ahead, won], 8, "pass"))
+        # without the option the summary names no champion
+        self.setUp()
+        self.assertEqual(self.run_(), 0)
+        self.assertNotIn("champion", (self.tmp / "out" / "summary.txt").read_text())
+        self.assertNotIn("held_out_worse", json.loads((self.tmp / "out" / "summary.json").read_text()))
+        # a champion's directory that is not there
+        self.setUp()
+        self.assertEqual(self.run_(base_batch=str(self.tmp / "nowhere")), 2)
+        self.assertEqual(self.launched, [])
+
+    def test_a_bar_games_reading(self):
+        value = {"A": {"live": 1.0}, "B": {"live": 1.0}}
+        self.assertEqual([batch.reading(r)[0] for r in ({"outcome": "A"}, {"outcome": "cap", "value": value},
+                                                        {"outcome": "cap", "draw": True}, {"outcome": "cap"},
+                                                        {"outcome": "B"}, {"outcome": "could_not_run"}, None)],
+                         [batch.WON, batch.NOT_AHEAD, batch.NOT_AHEAD, batch.NOT_AHEAD, batch.LOST, None, None])
+        self.assertGreater(batch.WON, batch.AHEAD)
+        self.assertGreater(batch.AHEAD, batch.NOT_AHEAD)
+        self.assertGreater(batch.NOT_AHEAD, batch.LOST)
+
+    def test_a_piece_is_admitted_by_its_own_plays_lines(self):
+        logs = self.tmp / "logs"
+        logs.mkdir()
+        (logs / "base-1.log").write_text("runlock: took the run lock (6 slots) after 1.3 min\n"
+                                         "03:04:08 tareplay-1 on Xvfb :318 (pid 1)\n")
+
+        def says(line):
+            h = batch.Piece({"name": "base-1"}, None, logs, lambda p, dll: [sys.executable, "-c", f"print({line!r})"])
+            h.proc.wait()
+            return h.admitted()
+        # an earlier play's admission in the appended log is not this play's
+        self.assertFalse(says("runlock: waiting for the run lock: 0 of the 12 slots wanted taken"))
+        self.assertTrue(says("runlock: took the run lock (12 slots) after 8.3 min"))
+        self.assertFalse(says("runlock: waiting for the run lock"))
+        self.assertTrue(says("03:15:02 tareplay-1 on Xvfb :315 (pid 2)"))
+        self.assertEqual((logs / "base-1.log").read_text().count("\n"), 6)
 
     def test_a_directory_of_other_dlls_is_refused(self):
         other = self.tmp / "y.dll"

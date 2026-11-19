@@ -132,6 +132,7 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   pairs of 42 (MEASURED 2026-11-14, b7 round 2, whose 242 logs carry `test seeds` and no `run seeds`), so a pair's
   five games a map and pairing were two distinct games.
 - **The maps**, one of each kind by the rule the specification states (at least three starts, no uniform metal;
+- **The metal maps** stand outside both pools (`bar.METAL_MAPS`: `coreprime`, `metalheck`, `metalgridlock`): an id names one as it names any map (`bar-hota-coreprime-cc-1`), no level, table or margin is chosen or judged on them, and they stand after the pools' maps in `MAPS` so no pool map's sides in a block change. The session tier plays two ([testing](testing.html)).
   land, sea and mixed from the middle third of the 90 such retail maps by area, small from the smallest third,
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
   under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large). These five
@@ -529,6 +530,14 @@ the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\*
   | 6 | 2.253 | 0.300 |
 
   The looks waited on the run lock beside other runs; the six took 2 h 10 min from the first admission.
+- **Every champion's fit** (the strength figure that still moves once every fair game is won; one `ladder.py run` a champion, 120 games):
+
+  | champion | measured | m\* | 90 % | slope |
+  |---|---|---|---|---|
+  | 57d39d71 | 2026-11-16 | ×1.95 | ×1.78..×2.14 | 0.298 |
+  | ed3e5634 | 2026-11-17 | ×2.07 | ×1.92..×2.23 | 0.344 |
+
+  The two intervals overlap over most of their width: the forty-odd brain commits between the two builds show no gain the ladder can tell from none. ed3e5634's looks: ×2.828 0.275, ×1.682 0.750, ×2.181 0.300, ×1.915 0.600, ×2.044 0.450, ×1.978 0.625 (`.data/impai/runs/ladder/ed3e5634/`).
 
 ## The champion gauntlet
 
@@ -558,7 +567,24 @@ holds it offline.
 - MEASURED 2026-11-16: `bar-g:L3.L0b-acidfoursome-ac-1` played to GameTime 3 600 (27.8 s at one lane) logged both
   seats' persona lines `from=lever`, seat 1 on L3's values and seat 2 on L0b's.
 
-**Code against code is designed, not built.** It would play two builds' brains in one game, and there are two
+**Code against code plays, by the network game** (`tools/impai/codeduel.py --a DLL_A --b DLL_B --out DIR [--map KEY] [--sides aa|ac|ca|cc] [--cap T]`; `test_codeduel.py` holds its judge offline): two peers in one network game, the host running DLL_A and the joiner DLL_B, each adding one ImpAI seat, judged from both peers' logs, the result in `bar.py`'s shape.
+
+- MEASURED 2026-11-17: 57d39d71 (A) against ed3e5634 (B) on Lava Mania played to an end, B the winner: seat A held no unit on both peers, at GameTime 60 409 on the host and 60 254 on the joiner. Each peer logged ImpAI's turns for the seat it added and no other (60 446 and 60 440 calls), and the two seats' tables differ. Games at a cap on Lava Mania (6 000), Acid Foursome (9 000) and Pincushion (12 000) ended with both peers agreeing on every seat's units.
+- **The humans stay, idle.** A network game ends when its last human has no unit, whatever the computer seats hold ([network](../engine/network.html), *The network game's end test*), and a peer whose human has died still runs its ImpAI seat (MEASURED, the same games). So each human is on a team with its own peer's ImpAI seat and gives no order; the judge checks the teams on both peers. A game is then not the two brains alone: in the game above B killed the host's idle commander near GameTime 59 700.
+- **The humans gone** (`--no-humans`; `gauntlet.py run --code --no-humans` passes it to every duel): both peers' game folders hold the duel lever `tagpu_impai_duel.on`, under which the DLL holds off the end test for want of a human ([the duel lever](../modules/duel-lever.html)), and both humans watch from the battle room (the host's `WATCHING` at Allowed, each `SIDE0` at its third stage). A watcher has no commander and takes no start, and the engine runs no end test for its record, so the two seats play alone until the harness leaves. MEASURED 2026-11-18 on Lava Mania, one build on both peers, to a cap of 6 000: the level played past GameTime 35 to the cap; each peer logged ImpAI's turns for its own seat and no other (6 176 and 6 502); **the seats stood on the map's starts 0 and 1, the bar's own two** (their commanders at 2000,96 and 1952,3632 in both peers' rosters); the host's Pause key stood both clocks and both peers read 10 and 8 units, 31 416.92 and 31 294.15, to the cent; a game to a cap of 70 000 (2 304 s of play) ended with 210 and 174 units, 79 779.72 and 70 311.23 on both peers. Not there yet: a `--no-humans` game that ends by a seat's loss, and one between two builds (these had one build on both peers, which the fingerprint check refuses). **It plays at Normal speed**, 30.4 ticks a second: the engine refuses a watcher's speed keys, and the Options screen's Game Speed slider at its end left it at 30.0, so such a duel takes twice the wall time. The default, with no flag, is the duel above.
+- **The starts**: with fixed locations the humans take starts 0 and 1 and the ImpAI seats starts 2 and 3, so a map needs four starts and the seats do not play the bar's two; with `--no-humans` they play starts 0 and 1.
+- **Its speed**: a network game starts at Normal speed whatever the store says; the harness presses `+` ten times on both peers for about 60 ticks a second (60.6 and 59.8 MEASURED; 30.1 without). The game to an end: 1 011 s of play and 50 s of launch and lobby on 4 slots, about 71 slot-minutes. Two games at once, on two leased ports, ran clean.
+- **A game at the cap scores.** A network game writes no skirmish recording and refuses a pause at a GameTime, so at the host's cap the harness presses the game's own Pause key, both clocks stand, and each seat's units are read from both peers' memory and valued as `bar.py` values a skirmish look (`bar.value_at`, the peer's own costs). A seat's value is its own peer's figure and the other peer's is the check: more than 2 % apart is a desync, by name. MEASURED 2026-11-17, 17 reads on 9 maps at caps of 5 000, 6 000 and 20 000, 1 to 60 units a seat: the two peers' figures equal to the cent every time.
+- **The peers' clocks run apart.** In three of four duels played at once the joiner's GameTime gained 1 003 to 1 308 ticks on the host's and stayed there (15 in the fourth; the host at about 57 ticks a second, the joiner about 60), its cause not established. The cap is the host's clock, and the joiner's lead is taken off when the two ends are compared; at the cap the leading peer's seat has played that many more ticks.
+- **The gauntlet plays a member by duels**: `gauntlet.py run --code --cand DLL --pool NAME=DLL[,NAME=DLL...] --tag TAG [--games N] [--maps KEY,...] [--cap T] [--at-once K]`. For each member the candidate plays N duels (20 by default), each pairing once as host and once as joiner, every map meeting every side pairing over four rounds, at most 7 at once on the lock's 28 slots; a duel that could not run or desynced is played once more; the points and the verdict are the settings gauntlet's, and `run` again goes on from the first duel not judged. Its default maps are Acid Foursome, Lusch Haven, Gas Plant Plain and Lava Alley.
+    - MEASURED 2026-11-18, the first gauntlet of whole games: 08ddffe6 against 0a4ec04e and 57d39d71, 20 duels a member to a cap of 81 000, 5 at once: 0.650 against 0a4ec04e (11 won, 4 drawn, 5 lost; 95 % one-sided 0.466 to 0.834), even, and 0.750 against 57d39d71 (12 won, 6 drawn, 2 lost; 0.566 to 0.934), beats. 21 of the 40 reached the cap and were scored by value; no game was `unverified`; one was played once more (its level ended at 53 099 with both seats holding units and no won bit, the end a network game takes once no human holds a unit; these duels kept their idle humans, and `--no-humans` is what takes that end away). A duel to the cap is about 1 340 s of play at 60 ticks a second.
+    - **The two starts are not one start.** The candidate scored 0.400 as host and 0.900 as joiner against 0a4ec04e (0.650 and 0.850 against 57d39d71): the host's seat plays start 2 and the joiner's start 3, and on these maps the unmapped opening differs by start more than the builds differ ([landings](landings.html), *Two opening faults*: Acid Foursome's start 2 made 704 to 763 metal by 18 000 in all twelve seat-games; on Lusch Haven arm at start 3 and core at start 2 build no plant). Each pairing is played from both seats, so the mean is fair; twenty duels tell a difference of this size apart only as far as the interval says.
+    - MEASURED 2026-11-17, ed3e5634 against 57d39d71, 4 duels to a cap of 20 000: four draws by value (0.500, 95 % one-sided 0.089 to 0.911), even. A cap that short tells nothing apart; a duel to 20 000 is 335 to 393 s of play and 36 to 40 s of launch.
+- **What a duel's result says it could not verify.** Each peer leaves through the game's own menus so its level-end lines are written (`impai: calls`, the judge's proof of which seat ran ImpAI); the leave reads the screen on top at each step and takes that screen's action. A peer whose leave fails is named in `leave`, the check it leaves unproved in `unverified`, its own seat's pulse lines standing in; the gauntlet counts such a game and names it in its tally. Every look reads the game-over word, so a level that ended between two looks names its winner from the stop and won bits; a peer that shows only `ended` beside one that names the winner is `unverified` too. Two byte-identical DLLs are refused before the launch; `--same-build` plays them and skips the fingerprint check, said in the result. Two builds that are two files but hold the same log line stems (a change that adds no log line) are played under the installed file's proof instead: after both peers have left, the hash of the `ddraw.dll` each peer's game folder holds must be its own build's, or the game could not run; the result's `fingerprint` says `installed file` and `installed` holds each hash. It proves which file each peer loaded from, not that the lines read came from it. MEASURED 2026-11-18: all twenty duels of 08ddffe6 against 0a4ec04e ran under it, both peers' files their own in each.
+- **What the duels showed of the brain**, not the harness's to fix: on Steel Jungle neither build's network seat gave an order by GameTime 5 000 or 6 000 (two duels), and on Trout Farm ed3e5634's seat at start 2 gave none. A network game seats the computer players at starts 2 and 3.
+- **Not there yet**: no gauntlet has run 7 at once (5 at once ran clean); `gauntlet.py judge` and the duel's judge do not read the level's end line (`impai: end`), which names each seat's lost commanders and the game-over word; the DLL logs no line naming its build, so "each seat ran its own peer's brain" rests on the DLLs' hashes and the log lines only one of them writes; nothing else may `peek` a duel's instances while it plays.
+
+**The design it came from.** It plays two builds' brains in one game, and there are two
 ways to do it.
 
 - **Two processes, a network game** (each peer's DLL runs the ImpAI seat its own peer added, and only that one:
@@ -612,13 +638,18 @@ lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`gam
   created with an `attack` order on ImpAI's ground (TA has no attack-move; an attack on the ground advances and
   engages). The opponent has no economy. OTA AI has no lever for a forced build list, and a persona limits ImpAI's
   attention rather than its plan, so placed units are the cheapest honest script: no DLL change.
+- **The seats stand at their starts.** ImpAI's anchor, home and empty-start rules all read the seat's start, so a
+  situation places ImpAI's commander at its seat's start and the opponent's at its own, seat k at StartPos(k + 1) as
+  the bar's fixed starts seat them, and declares it `seated`; `exploit.seated_start_misses` names a commander off its
+  seat's start, and `test_exploit.py` checks every seated situation against the installed maps. The commander rush
+  alone is not seated: its opponent's commander is the rush, set down away from every start.
 - **The situations**, each ImpAI Hard as A in seat 1 at Difficulty Hard:
 
   | situation | map | the opponent | verdict, at the cap |
   |---|---|---|---|
-  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), flown at ImpAI's start | ImpAI's commander lives to 18 000 |
-  | `naval-turtle` | Gods of War | its commander and two light laser towers on another island | ImpAI has killed all of it by 20 000 |
-  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000 | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
+  | `air-rush` | Acid Foursome | waves of bombers from 9 000, then gunships and fighters (3, 8 and 14 aircraft at 9 000, 12 000 and 15 000), taking off beside its start and flown at ImpAI's, 5 680 wu away | ImpAI's commander lives to 18 000 |
+  | `naval-turtle` | Gods of War | its commander at its start and two light laser towers beside it, on an island apart from ImpAI's | ImpAI has killed all of it by 20 000 |
+  | `artillery-creep` | Acid Foursome | a heavy laser tower and three mobile artillery set down closer to ImpAI's start every 3 000 ticks from 6 000, the tower 4 400, 3 600, 3 040 and 2 560 wu from it | ImpAI's commander lives and its value is at least the opponent's at 18 000 (or the opponent is gone) |
   | `commander-rush` | Acid Foursome | its commander alone, a quarter of the way from ImpAI's start, ordered at the load to attack ImpAI's commander | ImpAI's commander lives to 6 000 |
 
 - **The puzzles** are real positions. `exploit.py cut RESULTS_DIR... --out FILE` takes every bar game against OTA AI
@@ -641,7 +672,7 @@ lock, at turbo with no draw on GDI, into `.data/impai/runs/exploit/<tag>/` (`gam
   value at the cap at least the opponent's, or the opponent gone). A situation that could not run, or a value not
   read, could not run, never a failure. Exit 0 every situation passed, 1 one failed, 2 one could not run.
 
-MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes: the four situations in 47 s of play
+MEASURED 2026-11-16 on the reference setup, the c1dc2e70 brain, four lanes, with the situations placed before their seats stood at their starts: the four situations in 47 s of play
 each at most (under a minute from admission to verdict), three passed and one failed. The commander rush ended at
 3 582 with the opponent's commander dead. The air rush passed on its commander, but 20 of the opponent's 26 units
 were still alive at the cap, ImpAI having completed three anti-air units. The artillery creep passed on value, 33 777
@@ -652,6 +683,43 @@ games and `bar-hota-redtriangle-cc-1`, all at the cap) were each taken over at 6
 played to 80 971 in 30 to 55 s of play, four lanes, 1.6 min from admission: **one passed** (Steel Jungle `ca-2`,
 the opponent gone at 75 906), **eight failed**, the opponent still holding units at the cap. Lava Alley `ca-4`
 ended with ImpAI at 8 units against 146.
+
+MEASURED 2026-11-17 on the reference setup, the d8799688 brain, the Acid Foursome situations at their seats' starts
+against the same brain's games before: the air rush passed on its commander again, the opponent holding 20 units at
+the cap (18 before); the artillery creep passed on value, 34 716 against 27 381 (34 893 against 26 828 before), 7 of
+the opponent's units alive (5 before). Each game took 46 to 50 s of play.
+
+MEASURED 2026-11-17 on the reference setup, the naval turtle at 4487c188 (the air plant for the blind, the shelling
+holds the goal): still failed, the commander and both towers at full health at the cap. What loses it:
+
+- **No air plant, so no air scout.** No unit the seat has sees the commander or the west tower -- they stand about
+  370 and 415 px from the nearest water a boat sails, past the 256 px the engine's sight table gives any unit on an
+  axis. The air plant may now come ahead of the second shipyard ([decisions](decisions.html), *The air plant for the
+  blind*), and the rule holds at 8 587 (blind, no enemy ship seen, income 8.6), but only the commander offers CORAP
+  and it is on wind generators whenever the plant is wanted, so the seat builds its second shipyard as before (*the
+  air plant waits for no builder*).
+- **With an air plant given** (a scratch situation, a CORAP of ImpAI's set down at its start): the scout finds the
+  towers, the destroyers ground-attack the remembered west tower, and it falls -- 149 of 750 hp at 16 500, gone by
+  19 500; the commander and the east tower stand at the cap. Before the shelling held the goal, each ATTACK moved
+  on at its goal 90 to 690 ticks after the ground attack was given, before the engine had closed the destroyers
+  in to where the gun reaches the point (about 400 px on this hill: a scratch roy-test).
+- **The retreat, read from the predictions** (a diagnostic build at a7fc308e, no air plant): the sea wave went at
+  16 470 predicted to win (m 1.000 against the tower alone), and at 18 930 its two destroyers, 281 px from the
+  commander, retreated against the commander and the tower (m -0.945): the commander can come within its reach
+  of them over its own shore (cb 1), and the model's commander walks to them and fires its D-gun, a CommandFire
+  weapon it counts, killing both in four steps. The wave's prediction credits the range already; what it does not
+  had was a ship that keeps off the shore by the commander's reach (since built: *A commander at the shore*,
+  [decisions](decisions.html)).
+
+MEASURED 2026-11-17 on the reference setup, the naval turtle at 38efc351 (the air plant takes the energy builder,
+a commander at the shore): still failed, the opponent's three units alive at the cap. The take reaches the
+commander at 8 587, but its ring at its first size holds no CORAP site (24 sites, 20 tested, none past its reach or
+threatened), so the second shipyard comes in the same decision and the seat wants no further plant before 20 000
+on its income of 9.7: still no air plant, so no air scout (*What it does not reach*, [decisions](decisions.html),
+*The air plant takes the energy builder*). The confirm games, played at c7f939c1 (the take after the idle
+builders; not played again at 38efc351): Red Triangle `ac-1` won at 37 832, Trout Farm `ca-1` at 40 743, Plains &
+Passes `ac-1` at 35 901, Steel Jungle `ca-1` at the cap as before, and `bar-nota-lavamania-ca-2` under ProTA won at
+37 242.
 
 ## Automatic tuning
 

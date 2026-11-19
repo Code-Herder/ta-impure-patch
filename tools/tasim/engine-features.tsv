@@ -84,6 +84,7 @@ order_anyone	outside	an order mode with nobody to order, the GUI	tagpu_patches.c
 queued_site	outside	the build cursor's site test over queued sites, the GUI; the shared rules carry their own	tagpu_patches.c, the build cursor 0x4197D0
 loader_defects	outside	the startup's DirectX dialog and other loader defects	tagpu_patches.c
 sight_cap	outside	a test launch's lever (tagpu_sightcap.on) for the packed calibration lane, never a player's game; tasim keeps the engine's cap of 20 temporary sight records (tasim_world.c, tasim_kill)	tagpu_patches.c, the temporary sight records' cap raised to N in a test launch
+duel_lever	outside	a test launch's lever (tagpu_impai_duel.on) for the code duel's network game, never a player's game; the network: tasim plays no network game and ends its games itself	tagpu_patches.c, the network game's end test 0x4655E0 never ends the level for want of a human in a test launch
 apply_patches	outside	the installer of every fix	tagpu_patches.c
 limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c, TADR's EngineLimits and LimitCrack re-derived
 cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c, cob_run_step and cob_allocated; tagpu_cobvm.c's header

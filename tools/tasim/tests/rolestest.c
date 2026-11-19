@@ -148,10 +148,65 @@ static void test_maker_ratio(void)
     CHECK(tasim_roles_maker_ratio(in + 1, 0) == 0.0, "no maker");
 }
 
+/* A PARALYSER DEALS NO DAMAGE (tasim_roles.c): a mobile whose one regular weapon paralyses (ARMSPID's shape: 900
+   at a 36-tick reload) beside its twin with the same weapon not paralysing; a tank beside its twin that carries
+   a long ballistic paralyser in its first slot; a standing type whose one weapon paralyses; a plant beside its
+   twin with a CommandFire paralyser of damage 0 (Escalation's plants carry one); and a mobile whose paralyser
+   sits in a NOTAIR slot. */
+static void test_paralyser(void)
+{
+    enum { COM, SPID, TWIN, TANK, MIX, WARD, LAB, LABP, AASTUN, N };
+    static const uint16_t com_b[] = { SPID, TWIN, TANK, MIX, WARD, LAB, LABP, AASTUN };
+    TASIM_ROLE_IN in[N];
+    TASIM_ROLE_Q q;
+    TASIM_ROLE_OUT* out;
+    int rc;
+    in[COM] = unit("COM", 1, 1.0, 2500); in[COM].flags241 = TASIM_F241_BUILDER;
+    in[COM].flags245 |= TASIM_F245_COMMANDER; in[COM].build = com_b; in[COM].nbuild = N - 1;
+    in[SPID] = unit("SPID", 1, 1.5, 250); gun(&in[SPID], 220, 900, 36, TASIM_WF_PARALYZER);
+    in[TWIN] = unit("TWIN", 1, 1.5, 250); gun(&in[TWIN], 220, 900, 36, 0);
+    in[TANK] = unit("TANK", 1, 1.0, 900); gun(&in[TANK], 288, 60, 30, 0);
+    in[MIX] = unit("MIX", 1, 1.0, 900); gun(&in[MIX], 1050, 400, 30, TASIM_WF_PARALYZER | TASIM_WF_BALLISTIC);
+    gun(&in[MIX], 288, 60, 30, 0);
+    in[WARD] = unit("WARD", 0, 0, 3000); gun(&in[WARD], 1050, 900, 240, TASIM_WF_PARALYZER);
+    in[LAB] = unit("LAB", 0, 0, 600); in[LAB].flags241 = TASIM_F241_BUILDER;
+    in[LABP] = in[LAB]; gun(&in[LABP], 100, 0, 30, TASIM_WF_COMMANDFIRE | TASIM_WF_PARALYZER);
+    in[AASTUN] = unit("AASTUN", 1, 1.0, 300); gun(&in[AASTUN], 600, 900, 36, TASIM_WF_PARALYZER);
+    in[AASTUN].slot_notair[0] = 1;
+    out = classify(in, N, &q, &rc);
+    CHECK(rc == 0, "classify returned %d", rc);
+    CHECK(out[TWIN].dps_ground == 25.0 && out[TWIN].range_ground == 220, "the twin's gun: %g over %d",
+          out[TWIN].dps_ground, out[TWIN].range_ground);
+    CHECK(out[SPID].dps_ground == 0.0 && out[SPID].dps_air == 0.0 && out[SPID].dps_water == 0.0 &&
+              out[SPID].range_ground == 0,
+          "a paralyser alone deals nothing: %g %g %g over %d", out[SPID].dps_ground, out[SPID].dps_air,
+          out[SPID].dps_water, out[SPID].range_ground);
+    CHECK(out[SPID].role == out[TWIN].role && out[SPID].role != TASIM_ROLE_OTHER,
+          "a regular paralyser arms its type for the role: %s against the twin's %s",
+          tasim_roles_name(out[SPID].role), tasim_roles_name(out[TWIN].role));
+    CHECK(out[MIX].dps_ground == out[TANK].dps_ground && out[MIX].dps_ground == 2.0 &&
+              out[MIX].range_ground == 288 && out[MIX].role == out[TANK].role,
+          "a mixed type is its other weapon's: %g over %d, %s (the tank %g over %d, %s)", out[MIX].dps_ground,
+          out[MIX].range_ground, tasim_roles_name(out[MIX].role), out[TANK].dps_ground, out[TANK].range_ground,
+          tasim_roles_name(out[TANK].role));
+    CHECK(out[WARD].role == TASIM_ROLE_DEFENCE && out[WARD].dps_ground == 0.0 && out[WARD].range_ground == 0,
+          "a standing paralyser is a defence that deals nothing: %s %g over %d", tasim_roles_name(out[WARD].role),
+          out[WARD].dps_ground, out[WARD].range_ground);
+    CHECK(out[LABP].role == TASIM_ROLE_BUILDER && out[LABP].flags == out[LAB].flags &&
+              out[LABP].dps_ground == 0.0 && out[LABP].range_ground == out[LAB].range_ground,
+          "a CommandFire paralyser changes nothing: %s flags %x against %x", tasim_roles_name(out[LABP].role),
+          (unsigned)out[LABP].flags, (unsigned)out[LAB].flags);
+    CHECK(out[AASTUN].dps_air == 0.0 && out[AASTUN].dps_ground == 0.0 && out[AASTUN].role != TASIM_ROLE_ANTIAIR,
+          "a paralyser in an anti-air slot hurts no aircraft: %g, %s", out[AASTUN].dps_air,
+          tasim_roles_name(out[AASTUN].role));
+    free(out);
+}
+
 int main(void)
 {
     test_quantile();
     test_branches_and_tech();
+    test_paralyser();
     test_tech_least_factories();
     test_maker_ratio();
     printf("rolestest: %s (%d failed)\n", s_fail ? "FAIL" : "ok", s_fail);

@@ -11,7 +11,7 @@ _Static_assert(((TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | 
 _Static_assert(((TASIM_F245_CANMOVE | TASIM_F245_COMMANDER) & ~TASIM_ROLE_F245) == 0,
                "the classifier tests only +0x245 bits the role fillers copy");
 _Static_assert(((TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR | TASIM_WF_WATER |
-                 TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH) & ~TASIM_ROLE_WF) == 0,
+                 TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER) & ~TASIM_ROLE_WF) == 0,
                "the classifier tests only +0x111 bits the role fillers copy");
 
 /* The thresholds, in one table: each is a percentile over the mobile non-builder units of the
@@ -81,6 +81,20 @@ static int regular(const TASIM_ROLE_WEAPON* w)
     return !(w->flags & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR));
 }
 
+/* A PARALYSER DEALS NO DAMAGE. A weapon with `paralyzer` (+0x111 bit 7, parsed at 0x42EBBB) hits with damage
+   kind 2 (0x499E20..0x499E32), and the damage apply 0x489CE0 leaves a kind-2 hit by 0x489DF5 without touching
+   hit points (engine/weapons.md, engine/network.md; DISASSEMBLED): its `damage` goes to the paralysis alone
+   [INFERRED: its length]. So its [DAMAGE] figures are no damage per second, and its range is no reach of one: a regular
+   paralyser makes its type armed for the role (a standing type stays a defence) and adds nothing to dps_ground,
+   dps_air, dps_water, range_ground or the artillery test. A type whose regular weapons all paralyse has damage
+   0 everywhere the brain reads it -- no army class (impai_table.c, NO ARMY CLASS WITHOUT DAMAGE), no threat
+   row -- and a mixed type is its other weapons'. The same rule stands in THE GROUND REACH (impai_maps.c) and
+   in the fight predictor's damage (impai_fight.c, damage_on). */
+static int paralyses(const TASIM_ROLE_WEAPON* w)
+{
+    return (w->flags & TASIM_WF_PARALYZER) != 0;
+}
+
 static double dps(double damage, const TASIM_ROLE_WEAPON* w)
 {
     int burst = w->burst > 1 ? w->burst : 1;
@@ -107,13 +121,18 @@ static TASIM_LAYER layer_of(const TASIM_ROLE_IN* u)
     return TASIM_LAYER_LAND;
 }
 
+/* has_regular: a regular slot, a paralyser included, which arms the type for its role; has_damaging: a regular
+   slot that deals damage; first_regular_aa: the first of those is an anti-air slot. THE PRIMARY WEAPON is the
+   first regular slot that deals damage: a paralyser deals none (A PARALYSER DEALS NO DAMAGE), so a ground
+   paralyser in front of an anti-air missile leaves the missile primary and the type anti-air, and an anti-air
+   paralyser in front of a ground gun leaves the type its ground role. */
 typedef struct {
-    int has_regular, has_any, first_regular_aa, ground_arty;
+    int has_regular, has_damaging, has_any, first_regular_aa, ground_arty;
 } Arms;
 
 static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
 {
-    Arms a = { 0, 0, 0, 0 };
+    Arms a = { 0, 0, 0, 0, 0 };
     int k, n = u->nweapons < TASIM_ROLE_WEAPONS ? u->nweapons : TASIM_ROLE_WEAPONS;
     o->layer = layer_of(u);
     o->value = (double)u->cost_metal + (double)u->cost_energy / TASIM_ROLES_R;
@@ -135,8 +154,10 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
         const TASIM_ROLE_WEAPON* w = &u->w[k];
         a.has_any = 1;
         if (!regular(w)) continue;
-        if (!a.has_regular) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
         a.has_regular = 1;
+        if (paralyses(w)) continue;
+        if (!a.has_damaging) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
+        a.has_damaging = 1;
         if (tasim_roles_slot_antiair(u, k)) {
             o->dps_air += dps((double)w->damage_air, w);
             continue;
@@ -186,9 +207,9 @@ static TASIM_ROLE role_of(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o, Arms a, con
     if (!mobile || (u->transportcapacity && !a.has_regular) ||
         (u->flags241 & TASIM_F241_KAMIKAZE) || (a.has_any && !a.has_regular))
         return TASIM_ROLE_OTHER;
-    /* anti-air: the primary regular weapon is an anti-air slot and it hurts aircraft; a unit
-       whose first weapon is for the ground and which carries a missile besides stays a ground
-       role */
+    /* anti-air: the primary weapon (Arms) is an anti-air slot and it hurts aircraft; a unit
+       whose first damaging weapon is for the ground and which carries a missile besides stays a
+       ground role */
     if (a.first_regular_aa && o->dps_air > 0.0) return TASIM_ROLE_ANTIAIR;
     if (!a.has_regular) return TASIM_ROLE_SCOUT;
     if (a.ground_arty && (double)o->range_ground >= q->range75[L]) return TASIM_ROLE_ARTILLERY;

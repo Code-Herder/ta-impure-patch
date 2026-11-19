@@ -495,7 +495,14 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
   Impure's `nottoair` (`TASIM_WF_NOTTOAIR`), which the engine honours by never aiming it at an
   aircraft, so it hurts none ([data keys](data-keys.html), the can-engage verdict `0x49ABB0`); its damage is the weapon's
   [DAMAGE] averaged over the aircraft types (category VTOL). Ground dps and range are the other
-  regular slots' (regular: not commandfire, stockpile or interceptor). The role is what a slot is *for*: a NOTAIR
+  regular slots' (regular: not commandfire, stockpile or interceptor). **A paralysing weapon adds nothing to
+  any of them**: `paralyzer` (`+0x111` bit 7) makes its hit damage kind 2, which the damage apply `0x489CE0`
+  leaves without touching hit points ([weapons](../engine/weapons.html), [network](../engine/network.html)), so its
+  `damage` is no damage [INFERRED: the paralysis' length]. A regular paralyser still arms its type for the role -- a standing one is a defence,
+  a mobile one a scout, raider or assault by its speed and value -- with damage 0 and range 0 when it has no other weapon.
+  Retail has one such type, ARMSPID; Escalation 10.2 has four (ARMSPID, ARMCBT, MSCORP and the building
+  ARMSTUN) and two that keep another weapon's figures (ARMHSTUN, ARMASPID) (MEASURED 2026-11-18,
+  `tasim_run roles` before and after the rule: no other row and no percentile moves). The role is what a slot is *for*: a NOTAIR
   slot is no toairweapon, and the engine fires it on ground units when no aircraft is a candidate (`0x40B7B0`,
   [orders](../engine/orders.html)), so ImpAI's threat rows (the ground reach, [ImpAI in the engine](impai.html),
   *The threat table*) and its fight predictor count it against ground; the role, the classifier and this
@@ -503,7 +510,7 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
 - **Thresholds**: percentiles (numpy's linear rule) over the layer group's mobile non-builders.
 - **Precedence**: builder (flags commander, factory = static) · defence (static, armed) · other
   (static unarmed, an unarmed transport, kamikaze, only stockpile or interceptor weapons) ·
-  antiair (the primary regular slot anti-air, hurting aircraft) · scout (no regular weapon) ·
+  antiair (the first regular slot that deals damage is anti-air, hurting aircraft; a paralyser is passed over) · scout (no regular weapon) ·
   artillery (ballistic or vertical-launch ground weapon, ground range ≥ P75) · scout (speed ≥ P75,
   value ≤ P10) · raider (speed ≥ P50) · assault.
 - **Tech**: max(1, the least number of factories before the unit on a build chain from a

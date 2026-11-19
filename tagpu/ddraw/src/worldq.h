@@ -14,9 +14,13 @@
    NEVER STORED. A WORLDQ is opened for one call on the caller's stack and never outlives it: `self` is the
    implementation's context on that same stack and dies with the call. Nothing stores one.
 
-   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders -- but for
+   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map (or, for a layout view, every
+   cell of the map), its own orders -- but for
    the engine's site_ok (outside the seat's own site test, WQ_SITE_SEAT), can and mapped_point, which test the
-   viewed player's mapped bit whatever seat asks (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
+   viewed player's mapped bit whatever seat asks (beside each, below). An ImpAI seat's view in the engine knows
+   the map's LAYOUT (tagpu_worldq_open_layout): every cell of the map is explored to it, in an unmapped game as in
+   a mapped one, and its site test refuses no unmapped centre; what it SEES of units is its own sight in both.
+   No op allocates; every list is copied into the caller's buffer, with its capacity.
 
    DETERMINISM. No op reads a clock, the cursor or a random generator. Lists come in a fixed order: slots
    ascending, order nodes in list order, cells row-major. Arithmetic is integer, or the definitions' own floats
@@ -203,6 +207,12 @@ typedef struct WQ_ECON {
     float metal_out, energy_out;/* requested over the last pass, refused requests included                 */
 } WQ_ECON;
 
+/* A yard map's cell, the two bits the site test's height tail reads (engine/orders.md, the 0x47D2E0 row;
+   engine/units.md, *A yardmap parsed past its string*, DISASSEMBLED): a LAND cell gives the footprint's land
+   extremes (`c o O f y G`), a WATER cell its water maximum (`C w Y`); `.` is neither. */
+#define WQ_YARD_LAND  0x08u
+#define WQ_YARD_WATER 0x10u
+
 /* A unit type's economy keys, each float finite or 0. */
 typedef struct WQ_DEF_ECON {
     float    cost_m, cost_e;
@@ -324,7 +334,7 @@ typedef struct WORLDQ_OPS {
     int (*def)(const WORLDQ*, int type, WQ_DEF* out);
     /* the type's economy keys; 1, or 0 with out zeroed for a type that is none */
     int (*def_econ)(const WORLDQ*, int type, WQ_DEF_ECON* out);
-    /* the type's yard map, fx * fz bytes row-major; 0 when it has none or cap is short */
+    /* the type's yard map, fx * fz bytes row-major (WQ_YARD_*); 0 when it has none or cap is short */
     int (*yard)(const WORLDQ*, int type, uint8_t* out, int cap);
     /* the types a builder type's build menu offers, ascending; their count, -1 when cap is short */
     int (*build_options)(const WORLDQ*, int builder_type, uint16_t* out, int cap);
@@ -332,7 +342,8 @@ typedef struct WORLDQ_OPS {
        `ignore_slot` taken as gone (0 none); with `alt` the free site's altitude, 0..255. The engine's tests the
        VIEWED player's mapped bit at the site's centre whatever record it is given (0x47D2E0 reads
        1 << main[0x2A43] at 0x47D3D1..0x47D3FA, DISASSEMBLED), so for any other seat it answers by the
-       viewer's map, not the seat's -- but in a WQ_SITE_SEAT view, which tests the seat's own bit */
+       viewer's map, not the seat's -- but in a WQ_SITE_SEAT view, which makes no mapped test and lets a unit
+       on the footprint refuse only where the seat's own sight holds the centre */
     int (*site_ok)(const WORLDQ*, int type, int cx, int cz, int ignore_slot, int* alt);
     /* the altitude the build cursor gives a refused site */
     int (*blocked_alt)(const WORLDQ*, int type, int cx, int cz);
@@ -366,7 +377,9 @@ typedef struct WORLDQ_OPS {
     int (*gametime)(const WORLDQ*);
     /* What the seat may know of the unit at `slot`, the first class that holds: WQ_SEEN_OWN, _LOS, _SHARED,
        or, when `contact` says the seat's own radar pass found the slot (radar_step's bits), _CONTACT; 0 for
-       none, out zeroed. Another player's unit reaches a rule through here alone */
+       none, out zeroed. With `contact` it so answers for any live unit: the knowledge slice asks it of a row
+       it holds by sight and reads only whether a unit is there (impai_know.c, A UNIT SEEN GONE). Another
+       player's unit reaches a rule through here alone */
     int (*observe)(const WORLDQ*, int slot, int contact, WQ_OBS* out);
     /* the seat sees 32-px block (bx, bz) now; 0 off the map */
     int (*block_lit)(const WORLDQ*, int bx, int bz);

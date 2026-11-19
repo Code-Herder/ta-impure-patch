@@ -216,11 +216,17 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
        IMPAI_C_CONS, IMPAI_C_COMMANDER, IMPAI_C_OTHER, IMPAI_CATS };
 #define IMPAI_TF_MOBILE 0x01u
 #define IMPAI_TF_VTOL   0x02u
-#define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
+#define IMPAI_TF_WATER  0x04u           /* placed on water only: minwaterdepth > 0, a tidal generator, or a
+                                           building of minwaterdepth 0 whose yard has water cells and no
+                                           land cell (impai_tinfo.c, PLACED ON WATER ONLY)                      */
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
 #define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
+/* what its weapons hit (impai_tinfo_attack): a regular weapon -- not CommandFire, stockpile or interceptor -- */
+#define IMPAI_TF_HITDRY 0x20u           /* ... that is neither a waterweapon nor a toairweapon                  */
+#define IMPAI_TF_HITWET 0x40u           /* ... that is a waterweapon                                            */
+#define IMPAI_TF_HITAIR 0x80u           /* ... in an anti-air slot (tasim_roles_slot_antiair)                   */
 
-/* One type, 36 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 40 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
    ordered (DISASSEMBLED, engine/orders.md, *What each resolver mode answers*; impai_mil.c, can_attack) */
 #define IMPAI_TA_CANATTACK 0x01u    /* +0x245 bit 4 (0x43F154)                                             */
@@ -258,8 +264,33 @@ typedef struct IMPAI_TINFO {
                                    (TASIM_ROLE_IN.explode_aoe); 0 none                                          */
     uint16_t radar, sonar;      /* its radardistance and sonardistance, px (WQ_DEF_ECON): a sensor's coverage
                                    (impai_econ.c, THE SENSORS)                                                  */
+    uint16_t sight;             /* its sightdistance +0x202, px (TASIM_ROLE_IN.sight): THE BLIND SPOT's reach of
+                                   a land or sea unit's eyes (impai_mil.c)                                      */
+    uint16_t pad;
 } IMPAI_TINFO;
-_Static_assert(sizeof(IMPAI_TINFO) == 36, "IMPAI_TINFO is 36 bytes, as its comment says");
+_Static_assert(sizeof(IMPAI_TINFO) == 40, "IMPAI_TINFO is 40 bytes, as its comment says");
+
+/* THE TARGET CLASSES: where an enemy stands, as the can-engage test 0x49ABB0 sorts it for a weapon (DISASSEMBLED,
+   engine/weapons.md, *The can-engage test*), bit g of a mask for class g:
+   - DRY, above the sea and not floating: a waterweapon refuses a target that is no `floater` with its y above the
+     sea (0x49AC0F), and a hovercraft above it (0x49AC3B); every other weapon but a toairweapon hits it;
+   - FLOAT, on the water: a type placed on water only (IMPAI_TF_WATER) and not held submerged -- a ship, whose
+     altitude the fix-up sets to the sea level less its waterline (`floater`, 0x48A938, engine/units.md), or a
+     structure on the water: the water path passes it, and its top stands above the sea for the other weapons;
+   - UNDER, under the sea: the other weapons refuse a target whose top is at or below it (0x49ACFB), so only a
+     waterweapon hits it;
+   - AIR, an aircraft, which the fight content hits only through an anti-air slot (impai_fight.c, hurts). */
+enum { IMPAI_TG_DRY, IMPAI_TG_FLOAT, IMPAI_TG_UNDER, IMPAI_TG_AIR, IMPAI_TGS };
+#define IMPAI_TG_ALL ((1u << IMPAI_TGS) - 1u)
+
+/* the target classes type t's weapons hit (THE TARGET CLASSES): DRY and FLOAT with a weapon for the surface
+   (IMPAI_TF_HITDRY), FLOAT and UNDER with a waterweapon (IMPAI_TF_HITWET), AIR with an anti-air slot */
+static inline unsigned impai_type_hits(const IMPAI_TINFO* t)
+{
+    return ((t->flags & IMPAI_TF_HITDRY) ? (1u << IMPAI_TG_DRY) | (1u << IMPAI_TG_FLOAT) : 0u) |
+           ((t->flags & IMPAI_TF_HITWET) ? (1u << IMPAI_TG_FLOAT) | (1u << IMPAI_TG_UNDER) : 0u) |
+           ((t->flags & IMPAI_TF_HITAIR) ? 1u << IMPAI_TG_AIR : 0u);
+}
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
    tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is
@@ -344,8 +375,8 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
    remembered one to see whether it is still there (impai_build.c, THE RECLAIM). IMPAI_JOB_SWITCH: a maker the
    economy switched on or off, `since` the GameTime of the switch (impai_econ.c, THE MAKERS). */
-enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM,
-       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_SWITCH };
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO,
+       IMPAI_JOB_SWITCH };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
@@ -357,8 +388,7 @@ typedef struct IMPAI_JOB {
     uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
     uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
-    int16_t  cx, cz;            /* the site's first cell, the cell explored, or the reclaimed feature's
-                                   anchor cell                                                             */
+    int16_t  cx, cz;            /* the site's first cell, or the reclaimed feature's anchor cell         */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS          */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: 0                               */
     int16_t  far_cx, far_cz;    /* THE FAR RECORD (impai_brain.c): the last site or feature this builder could
@@ -385,10 +415,13 @@ _Static_assert(sizeof(IMPAI_JOB) == 40, "IMPAI_JOB is 40 bytes with no padding")
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
 /* THE PLANT REFUSALS (impai_build.c, THE PLANT'S FALLBACK), one a unit type for each seat: the type's refused ways
-   in a row, and the GameTime until which the factory choice passes it over. The plant types a seat's menus can
-   offer are at most the world's types, so with an entry for every type none is ever evicted; the caller keeps
-   them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN, whose rows a recording carries whole. */
-typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, pad[3]; } IMPAI_PLANTREF;
+   in a row, the GameTime until which the factory choice passes it over, and how far the type's base ring has been
+   pushed out, 0..8 -- `cgrow` for the commander's walks, `grow` for every other builder's (impai_build.c, THE
+   PLANT'S RING IS ITS OWN). The plant types a seat's menus can offer are at most the world's types, so with an
+   entry for every type none is ever evicted; the caller keeps them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN,
+   whose rows a recording carries whole. Eight bytes a row: a recording images the rows by that size. */
+typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, grow, cgrow, pad; } IMPAI_PLANTREF;
+_Static_assert(sizeof(IMPAI_PLANTREF) == 8, "a plant refusal row is eight bytes");
 
 /* A plant site the way out refused (impai_build.c, THE WAY OUT), for plants of `type`, until a GameTime. */
 #define IMPAI_WAY_FAILS 32
@@ -435,10 +468,10 @@ typedef struct IMPAI_FMEM {
 
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
-    uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
+    uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8, for every type but a
+                                   plant, whose growth is its own (IMPAI_PLANTREF)                        */
     uint8_t    nfail;
     uint16_t   fail_next;
-    uint16_t   explorer;        /* the slot sent exploring; WQ_NONE                                        */
     uint8_t    sea_refused;     /* the sea plant's counted refusals this level -- a decision whose search
                                    placed none, a failed water-factory job -- at most one a decision and
                                    one a fail_t; at IMPAI_SEA_REFUSALS it is given up (impai_build.c, THE
@@ -449,7 +482,7 @@ typedef struct IMPAI_BRAIN {
     int16_t    sea_none_ax, sea_none_az, sea_none_ex, sea_none_ez;  /* anchor and estimate blocks it was
                                    searched for; WQ_NONE for none. The candidates are content, these and the
                                    radius (impai_build.c), so the answer holds while they do               */
-    IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
+    IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites, each until a GameTime                      */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
     uint8_t    nwfail, wfail_next;
@@ -458,6 +491,14 @@ typedef struct IMPAI_BRAIN {
                                    whose commander may walk FAR_PATCH_K x comm_r from the anchor           */
     uint8_t    root_turn;       /* THE FACTORIES' TURN (impai_brain.c, root_cap_of): 1 when the next decision
                                    of one command whose idle factories want a root gives it to them        */
+    uint8_t    open_e_refused;  /* 1 once a walk of THE OPENING'S ENERGY (impai_econ.c) ordered nothing: the
+                                   rule is over for the level                                              */
+    uint8_t    open_stall_over; /* 1 once the first plant, asked ahead of the stall's energy, ordered nothing
+                                   (impai_econ.c, THE STALL YIELDS TO THE FIRST PLANT): the stall rung
+                                   stands first again for the level. The two bytes stand after
+                                   root_turn, in what was the row's padding (the assert under the
+                                   struct), so root_turn keeps its offset and a recording made before
+                                   them reads both 0                                                       */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
     /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
@@ -479,8 +520,12 @@ typedef struct IMPAI_BRAIN {
     uint16_t   unlock_plant;
     uint8_t    held[IMPAI_GRID_MAX * IMPAI_GRID_MAX / 8];  /* THE HELD GROUND (impai_build.c): bit gx & 7 of byte
                                    (gz IMPAI_GRID_MAX + gx) >> 3 is 1 while 256-px cell (gx, gz) is held, as the
-                                   last decision that judged it left it; all 0 at the level's start          */
+                                   seat's last decision judged it; all 0 at the level's start                */
 } IMPAI_BRAIN;
+_Static_assert(offsetof(IMPAI_BRAIN, opened) + 1 == offsetof(IMPAI_BRAIN, root_turn) &&
+               offsetof(IMPAI_BRAIN, root_turn) + 2 == offsetof(IMPAI_BRAIN, open_stall_over) &&
+               offsetof(IMPAI_BRAIN, open_stall_over) + 2 == offsetof(IMPAI_BRAIN, wfail),
+               "root_turn follows opened, and the opening's two bytes lie in the padding before wfail");
 
 /* THE PLAN: every constant a decision decides by, what it limits beside it. One row, IMPAI_PLAN_ROW
    (impai_brain.c), which every level plays: a level changes how the decisions are carried out, its persona
@@ -574,8 +619,8 @@ int impai_com_safe(uint32_t until, uint32_t now);
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
-   naval rule reads (impai_reach_summary). A sea army type is one of klass IMPAI_K_SRAIDER..IMPAI_K_SAA, a land
-   army type a mobile type that is not a VTOL of klass IMPAI_K_LRAIDER..IMPAI_K_LSCOUT. */
+   naval rule reads (impai_reach_summary). A sea army type is one of klass IMPAI_K_SRAIDER..IMPAI_K_SAA (the sea
+   scout aside), a land army type a mobile type that is not a VTOL of klass IMPAI_K_LRAIDER..IMPAI_K_LSCOUT. */
 typedef struct IMPAI_REACH {
     const uint16_t* labels;
     uint32_t        at[WQ_MCLASSES];
@@ -606,17 +651,28 @@ int  impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz);
    round the first cell's block carry (THE LABEL BESIDE, impai_maps.c). -1 and 0 as impai_reach_at. */
 int  impai_reach_unit(const IMPAI_REACH* r, unsigned c, int32_t x, int32_t z, int fx, int fz);
 /* the first block in ring order within `radius` rings of (bx, bz) whose class-c label is `label`, into (ox,
-   oz): 1, or 0 for none. Off-grid blocks are skipped. BOUND: at most (2 radius + 1)^2 label reads */
+   oz): 1, or 0 for none. Off-grid blocks are skipped, and the radius is held to the ring of the grid's block
+   farthest from (bx, bz): no ring past it holds a block. BOUND: at most (2 radius' + 1)^2 label reads, radius' the
+   held radius, below max(bw, bh) + the distance of (bx, bz) off the grid */
 int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
                       int* ox, int* oz);
+/* as impai_reach_near, the block of least Euclidean distance: a ring's first block in ring order is its nearest
+   (THE RING ORDER), and a block of ring R lies at least R blocks off, so the rings past the first hit are read
+   while R^2 is below the best squared distance -- to ring ceil(r sqrt 2) at most for a first hit at ring r --,
+   within `radius`. Ties to the lower ring. BOUND: as impai_reach_near's, the radius held the same way */
+int  impai_reach_nearest(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
+                         int* ox, int* oz);
 /* sea_blocks, land_total, land_w and sea_ref from the type information ti[1..nti) over the classes the level
    has labels for. BOUND: nti types, and each sea class's labels read once, at most WQ_MCLASSES x bw x bh */
 void impai_reach_summary(IMPAI_REACH* r, const IMPAI_TINFO* ti, unsigned nti);
 /* more than half of the level's blocks carry a label of some sea army class */
 int  impai_mostly_water(const IMPAI_REACH* r);
-/* 1 when blocks a and b are LAND-LINKED: the classes whose labels agree there, both nonzero, hold at least half
-   of land_total; 1 too with no evidence (land_total 0, a block off the grid) */
-int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz);
+/* 1 when blocks a and b are LAND-LINKED within `radius` rings of b: the classes whose label at a is nonzero and
+   lies on a block within `radius` rings of b (impai_reach_near; 0, b itself) hold at least half of land_total; 1
+   too with no evidence (land_total 0, a block off the grid). BOUND: one impai_reach_near a class with land types */
+int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz, int radius);
+#define IMPAI_REACH_RINGS 8     /* 256 px round a block: where a class's label is looked for about the anchor or a
+                                   target (impai_econ.c, THE REACH) and about a start (impai_mil.c, THE ISLAND)   */
 /* the distinct nonzero sea_ref labels within `radius` rings of (bx, bz), nearest ring first, at most cap, into
    out: their count. BOUND: at most (2 radius + 1)^2 label reads */
 int  impai_sea_labels(const IMPAI_REACH* r, int bx, int bz, int radius, uint16_t* out, int cap);
@@ -635,7 +691,7 @@ typedef struct IMPAI_BRAIN_IN {
     const IMPAI_TINFO* ti;   unsigned nti;      /* type-indexed, nti == ndefs                                */
     const SNAP_PATCH*  spots; unsigned nspots;  /* the seat's published metal patches                       */
     unsigned           scanned;         /* IMPAI_SEAT.scanned: nspots is a whole scan's count; 0, it may not be
-                                           (THE BLIND START, impai_brain.c)                                  */
+                                           (NO PATCH ON THE MAP, impai_brain.c)                              */
     const IMPAI_REACH* reach;           /* NULL: no reach test                                                */
     const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
     const IMPAI_PLAN*  plan;
@@ -701,6 +757,8 @@ typedef struct IMPAI_GOALFAIL {       /* 12 bytes                               
 #define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land enemy known (impai_mil.c)          */
 #define IMPAI_AIR_KS     4              /* the air classes, IMPAI_K_FIGHTER .. IMPAI_K_ASCOUT                     */
 #define IMPAI_AIR_HOLD   5400           /* ticks THE AIR HELD keeps a class's value [hand-written: the bar's to move] */
+#define IMPAI_TG_HOLD    5400           /* ticks THE TARGETS KNOWN keep a class known [hand-written: the bar's to
+                                           move, as IMPAI_AIR_HOLD]                                              */
 #define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
                                            bar's to move]                                                        */
 typedef struct IMPAI_FOE {            /* 12 bytes                                                              */
@@ -739,6 +797,13 @@ _Static_assert(sizeof(IMPAI_EXEC) == 2900, "IMPAI_EXEC is 2900 bytes");
    remembered; that centroid kept after no structure is known any longer */
 enum { EST_START = 0, EST_STRUCT = 1, EST_KEPT = 2 };
 
+#define IMPAI_AREAS      17             /* the enemy areas THE BLIND SPOT weighs: 16 starts and the estimate     */
+#define IMPAI_SEA_HOLD   5400           /* ticks THE WATER HELD keeps an enemy sea value seen: three minutes
+                                           [hand-written: the bar's to move]                                     */
+#define IMPAI_EYED_REFRESH 2700         /* ticks an area the air scout had in its eyes needs no new look: ninety
+                                           seconds (the owner's "about 1-2 game minutes") [hand-written: the bar's
+                                           to move]                                                          */
+
 /* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
    here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
    had seen of the enemy at its last military decision, which its factories buy against. */
@@ -766,6 +831,9 @@ typedef struct IMPAI_MIL {
     float    air_held[IMPAI_AIR_KS];  /* THE AIR HELD (impai_mil.c): each air class's most value seen at once,
                                          IMPAI_K_FIGHTER on, recorded data bounded where it is read            */
     uint32_t air_held_t[IMPAI_AIR_KS];    /* the GameTime it was last seen at that much or more               */
+    uint32_t tg_t[IMPAI_TGS];         /* THE TARGETS KNOWN (impai_mil.c): the GameTime of the last military
+                                         decision that knew an enemy of each target class, 0 never; recorded
+                                         data, read through impai_tg_known                                     */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
@@ -804,6 +872,11 @@ typedef struct IMPAI_MIL {
        Recorded data, compared with 0 only */
     uint8_t       lead;
     uint8_t       unreached_next;     /* the ring's next entry, held below IMPAI_UNREACHED before it indexes   */
+    /* THE ISLAND (impai_mil.c, island): 1 when the last military decision found the seat's land army reaching
+       nothing that can hold an enemy on a naval map; the economy then builds no land plant past the first and
+       holds the land army to THE ISLAND'S LAND BUDGET (impai_econ.c). Recorded data, compared with 0 only. It
+       stands where the record had padding before unreached[], so the record's size is unchanged */
+    uint8_t       island;
     IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];
     /* THE LEAD's evidence and memory (impai_mil.c, lead), recorded data: the GameTime of the seat's last lost
        prediction -- a squad's retreat, the home losing --, 0 never, held to now; and the enemy's mobile value at
@@ -819,15 +892,172 @@ typedef struct IMPAI_MIL {
        impai_persona_ok (tagpu_impai.c, seat_persona) */
     IMPAI_PERSONA persona;
     IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
+    /* THE BLIND SPOT (impai_mil.c, blind_spot): the GameTime of the last military decision that found an enemy area
+       out of sight of every land and sea army unit of the seat and not in the air scout's eyes within
+       IMPAI_EYED_REFRESH, 0 never; recorded data, read through impai_blind. The economy then buys the seat's one air
+       scout (impai_econ.c, THE SCOUT FIRST) and may raise its air plant early (THE AIR PLANT FOR THE BLIND) */
+    uint32_t      blind_t;
+    /* THE AIR SCOUT'S EYES (impai_mil.c, air_eyes): the GameTime / 64 at which an air scout of the seat last had each
+       enemy area in its eyes -- start k at eyed[k], the enemy base's estimate at eyed[IMPAI_AREAS - 1], whose
+       stamp counts only while the estimate stays in sweep cell eyed_cell --, 0 never. Recorded data: a stamp past
+       now reads as never */
+    uint16_t      eyed[IMPAI_AREAS];
+    uint8_t       eyed_cell, eyed_pad;
+    /* THE WATER HELD (impai_mil.c, sea_held): the most enemy sea army value seen at once, sea_held, held for
+       IMPAI_SEA_HOLD ticks after the seat last saw that much or more, at sea_held_t; recorded data, a value not
+       finite or below 0 or a tick past now let go where it is read (impai_econ.c, THE AIR PLANT FOR THE BLIND) */
+    float         sea_held;
+    uint32_t      sea_held_t;
 } IMPAI_MIL;
+/* THE ISLAND's byte is the one unreached[] was aligned past, so the record's size and every later field's offset
+   are the ones recordings made before it hold */
+_Static_assert(offsetof(IMPAI_MIL, island) + 1 == offsetof(IMPAI_MIL, unreached),
+               "IMPAI_MIL.island stands in the padding before unreached[]");
 
 /* 1 when the military's estimate rests on enemy structures seen, now or before (EST_STRUCT, EST_KEPT): the one
    reading of est_seen, so a recorded byte past the enum reads as EST_START in the military and the economy alike */
 static inline int impai_est_known(const IMPAI_MIL* m) { return m->est_seen == EST_STRUCT || m->est_seen == EST_KEPT; }
 
+/* THE TARGETS KNOWN at GameTime now: the target classes whose stamp (IMPAI_MIL.tg_t) is set, not past now and
+   within IMPAI_TG_HOLD of it, as a mask -- the one reading of the recorded stamps, so a stamp restored in the
+   future or older than the hold knows nothing */
+static inline unsigned impai_tg_known(const IMPAI_MIL* m, uint32_t now)
+{
+    unsigned g, mask = 0;
+    for (g = 0; g < IMPAI_TGS; g++)
+        if (m->tg_t[g] && m->tg_t[g] <= now && now - m->tg_t[g] <= IMPAI_TG_HOLD) mask |= 1u << g;
+    return mask;
+}
+
+/* THE BLIND SPOT at GameTime now: 1 when the stamp (IMPAI_MIL.blind_t) is set, not past now and within
+   IMPAI_BLIND_HOLD of it -- the one reading of the recorded stamp */
+#define IMPAI_BLIND_HOLD 900            /* ticks a blind spot keeps the air scout wanted: thirty seconds, many
+                                           military decisions [hand-written: the bar's to move]                 */
+static inline int impai_blind(const IMPAI_MIL* m, uint32_t now)
+{
+    return m->blind_t && m->blind_t <= now && now - m->blind_t <= IMPAI_BLIND_HOLD;
+}
+
 /* a seat's military at a level's start: no squad, no estimate; the level, the persona and the table given */
 void  impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona, const IMPAI_TABLE* table,
                       int from_lever);
+
+/* THE REASON TRACE (impai_brain.c, why_read): what one decision's economy held of each of its six wants, the rows
+   of THE VETOES (impai_brain.h, impai_veto) by their index -- for the seam's `why` line (tagpu_impai.c) and
+   tools/impai/think.py's `why`, which answers "why was this want not taken at tick T" from it. A want is its need
+   and no gate of its row: `need` is the want as it would stand with every gate down, `take` the want as it stands,
+   and veto[k] the gates of row k that are up while want k is needed and not taken. NEEDED, NOT TAKEN AND NO GATE
+   NAMED is the term the want's rule reads last, for a want nothing else refuses: the sea plant's builder that
+   offers one (impai_econ_sea_able), the sensor's kind and point (sensor_want). Every member is one byte, so two
+   traces are compared whole. Scratch of the decision: no recorded struct holds it, and nothing reads it back. */
+#define IMPAI_WHY_WANTS   6
+#define IMPAI_WHY_DRY     0x01u     /* IMPAI_WHY.pos: the posture's flags (impai_brain.h, IMPAI_POSTURE)        */
+#define IMPAI_WHY_ISLAND  0x02u
+#define IMPAI_WHY_BLIND   0x04u
+#define IMPAI_WHY_PRESSED 0x08u
+#define IMPAI_WHY_AT_BASE 0x10u
+#define IMPAI_WHY_TEXT    512       /* above impai_why_text's longest line and its NUL: 481 bytes for a trace
+                                       of any bytes, every name of every list (impai_brain_test.c, check_why)   */
+typedef struct IMPAI_WHY {
+    uint8_t set;                    /* 1: the decision reached its economy, which filled the rest               */
+    uint8_t gates;                  /* THE GATES up (IMPAI_G_*)                                                 */
+    int8_t  naval;                  /* the posture's naval judgement: 1 naval, 0 not, below 0 not judged        */
+    uint8_t pos;                    /* IMPAI_WHY_* bits                                                         */
+    uint8_t need, take;             /* bit k: want k is needed; want k stands                                   */
+    uint8_t veto[IMPAI_WHY_WANTS];
+} IMPAI_WHY;
+_Static_assert(sizeof(IMPAI_WHY) == 6 + IMPAI_WHY_WANTS, "IMPAI_WHY has no padding: traces are compared by memcmp");
+/* `w` as the `why` line's fields, `gates= naval= pos= need= veto= take=`, NUL-ended in out[cap]; names joined by
+   `+`, a veto `want:GATE+GATE` and the vetoes by `,`, `-` for none. Returns the bytes written, the NUL left out. */
+int   impai_why_text(const IMPAI_WHY* w, char* out, size_t cap);
+/* THE WHY LINE's rule (tagpu_impai.c, why_line): 1 when the decision at GameTime `now` with trace `w` writes its
+   line -- `w` differs from the trace of the seat's last line, or `now` is not above the GameTime of the seat's last
+   traced decision. INVARIANT, an ordering: in play a seat's decisions come at rising GameTimes (impai_brain_due is a
+   function of the GameTime, and a seat has one turn a step), so a decision that does not rise is the first after a
+   state restored into the level behind the last one -- a rewind's fork --, and the lines written since belong to
+   the timeline left. It writes its line whatever its trace, so the log's GameTimes go back there and
+   tools/impai/think.py refuses the log by name; left out, the log would read as one game's and answer with the
+   other timeline's trace. A restore that does not go back leaves `seen` the trace of the log's last line, which
+   is all the comparison reads. `seen` is the caller's, zeroed at a level's start; a trace not set writes nothing
+   and moves nothing. */
+typedef struct IMPAI_WHY_SEEN {
+    IMPAI_WHY why;                  /* the trace of the seat's last line, `set` 0 before one                    */
+    uint32_t  after;                /* the GameTime + 1 of its last traced decision, 0 before one               */
+} IMPAI_WHY_SEEN;
+int   impai_why_due(IMPAI_WHY_SEEN* seen, uint32_t now, const IMPAI_WHY* w);
+
+/* THE PLANT WALK'S TRACE (impai_econ.c, rung_plant; impai_build.c, ring_build): what a decision's plant rung met
+   when it asked a builder for the plant THE CHOICE took and ordered none -- for the seam's `plantwalk` line
+   (tagpu_impai.c), which names the cause of a plant want that stands taken and never becomes an order. `exit` is
+   the return the rung took; from IMPAI_PW_LEFT up the base ring was walked, and the counts are that walk's: its
+   sites, those each cheap test skipped, those the site test was given and passed, and those refused after it. The
+   decision keeps the first builder's walk, or with no walk the first builder's answer, and a decision that orders
+   a plant keeps none (set 0). Every member is one or two bytes with no padding, so two traces are compared whole.
+   Scratch of the decision: no recorded struct holds it, and nothing reads it back. */
+enum {
+    IMPAI_PW_NOTYPE,        /* THE CHOICE took no plant type                                                    */
+    IMPAI_PW_MENU,          /* the builder's menu lacks the type                                                */
+    IMPAI_PW_SEA,           /* the sea plant's search holds the plant (THE ISLAND'S PLANTS)                     */
+    IMPAI_PW_LEFT,          /* walked to its end, a site left for a cause that is no lack of room: no growth    */
+    IMPAI_PW_CUT,           /* the decision's site tests ended it and it is not exhausted (THE CUT RING GROWS)  */
+    IMPAI_PW_GREW,          /* exhausted below the widest ring: its growth rose, and the tests ended the climb  */
+    IMPAI_PW_WIDEST,        /* exhausted at the widest ring: the type is passed over, a waived one is not       */
+    IMPAI_PW_WAY,           /* a way out deferred (THE WORK BUDGET) ended the ring for the decision             */
+    IMPAI_PW_ROOTS,         /* a site's order was refused and the decision's roots are spent                    */
+    IMPAI_PW_EXITS
+};
+#define IMPAI_PW_SEA_UNASKED 1  /* IMPAI_PLANTWALK.sea when the rung ran no sea search                          */
+#define IMPAI_PW_TEXT 320       /* above impai_plantwalk_text's longest line and its NUL (impai_brain_test.c,
+                                   check_plantwalk)                                                             */
+typedef struct IMPAI_PLANTWALK {
+    uint8_t  set;           /* 1: a plant rung answered a builder and the decision ordered no plant             */
+    uint8_t  exit;          /* IMPAI_PW_*                                                                       */
+    uint8_t  grow;          /* the type's growth for the builder as the rung began                              */
+    uint8_t  waived;        /* 1: the type is the waived pass's (THE PLANT'S FALLBACK)                          */
+    uint8_t  cut;           /* 1: the decision's site tests ended the walk                                      */
+    int8_t   sea;           /* the rung's sea search: IMPAI_PW_SEA_UNASKED, 0 no order now, below 0 no site     */
+    uint16_t type, slot, btype;     /* the plant type (0 none), the builder asked and its type                  */
+    uint16_t sites;         /* the sites of every ring the walk took (THE PLANT'S WALK CLIMBS)                  */
+    uint16_t claimed, failed, far_rec, way_failed, coverage;   /* skipped: a claim, a failure, the builder's far
+                               record, a way refused earlier (THE WAY REFUSALS), explored metal                 */
+    uint16_t beyond;        /* past THE COMMANDER'S REACH                                                       */
+    uint16_t threat;        /* ground threat at the site or on the route, THE COMMANDER'S SAFE DISTANCE         */
+    uint16_t tested, passed;        /* given to the site test; passed by it                                     */
+    uint16_t way_refused, unbuilt;  /* of those passed: the way out refused now; the order refused (build_at)   */
+} IMPAI_PLANTWALK;
+_Static_assert(sizeof(IMPAI_PLANTWALK) == 6 + 2 * 15, "IMPAI_PLANTWALK has no padding: traces are compared by memcmp");
+/* `w` as the `plantwalk` line's fields from `builder=` on, NUL-ended in out[cap]: `builder=SLOT/TYPE waived= grow=
+   sites= claimed= failed= far= way_failed= coverage= beyond= threat= tested= passed= way_refused=
+   unbuilt= cut= exit=NAME sea=-|wait|none`. The plant type's name is the seam's to give. Returns the bytes
+   written, the NUL left out. */
+int   impai_plantwalk_text(const IMPAI_PLANTWALK* w, char* out, size_t cap);
+/* THE PLANTWALK LINE's rule (tagpu_impai.c, plantwalk_line), THE WHY LINE's: 1 when the decision at GameTime `now`
+   with trace `w` writes its line -- `w` differs from the trace of the seat's last line, or `now` is not above the
+   GameTime of the seat's last traced decision (impai_why_due's ordering: the first decision after a state restored
+   behind the last one writes its line whatever its trace). A trace not set writes nothing and moves nothing. */
+typedef struct IMPAI_PLANTWALK_SEEN {
+    IMPAI_PLANTWALK walk;           /* the trace of the seat's last line, `set` 0 before one                    */
+    uint32_t        after;          /* the GameTime + 1 of its last traced decision, 0 before one               */
+} IMPAI_PLANTWALK_SEEN;
+int   impai_plantwalk_due(IMPAI_PLANTWALK_SEEN* seen, uint32_t now, const IMPAI_PLANTWALK* w);
+
+/* THE REQUESTS: a want is a request, and this is how one decision leaves each of the six, by the want's index in
+   THE VETOES. Economy says whether it is needed and what holds it (impai_brain.c, why_read); the assignment, which
+   asks each builder the rungs of THE LADDER'S ORDER (impai_econ.c), says how one that stood ended. What a request
+   asks for stays where its rule writes it: the plant's type is THE CHOICE's, the defence's point def_point's, the
+   sensor's kind and point sensor_want's, and the rest is the asked builder's menu. Scratch of the decision, like
+   the trace: no recorded struct holds it, and no rule reads it back. */
+enum {
+    IMPAI_RQ_NONE,          /* not needed                                                                       */
+    IMPAI_RQ_VETOED,        /* needed, a gate of its row up (IMPAI_WHY.veto names them)                         */
+    IMPAI_RQ_HELD,          /* needed, no gate up: refused by the term its rule reads last (IMPAI_WHY)          */
+    IMPAI_RQ_OPEN,          /* stands: no builder the assignment asked served it in this decision               */
+    IMPAI_RQ_ANSWERED,      /* ordered                                                                          */
+    IMPAI_RQ_YIELDED,       /* ended by another request's order: one plant a decision                           */
+    IMPAI_RQ_REFUSED,       /* ended with no order: the sea plant's search has no site at all, the sensor's
+                               builder placed none (impai_build.c)                                              */
+    IMPAI_RQ_STATES
+};
 
 /* What one decision did, against the plan's bounds, and the census's counts. */
 typedef struct IMPAI_BRAIN_OUT {
@@ -898,6 +1128,9 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
     uint8_t  sensors;                   /* sensor structures ordered (impai_econ.c, THE SENSORS)                */
+    IMPAI_WHY why;                      /* THE REASON TRACE                                                    */
+    uint8_t  req[IMPAI_WHY_WANTS];      /* THE REQUESTS: IMPAI_RQ_*, a want                                    */
+    IMPAI_PLANTWALK walk;               /* THE PLANT WALK'S TRACE                                              */
 } IMPAI_BRAIN_OUT;
 
 #define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs
@@ -912,7 +1145,7 @@ int    impai_brain_due(unsigned gametime, unsigned seat, unsigned look);
    time, so a caller may hold it statically. */
 #define IMPAI_BRAIN_SCRATCH_MAX (768u * 1024u)
 size_t impai_brain_scratch_bytes(void);
-/* the decision's state at a level's start: no anchor, no failure, no explorer, every job none */
+/* the decision's state at a level's start: no anchor, no failure, every job none */
 void   impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob);
 /* One decision: the census, the job checks, the economy, the builders, the factories. 0, or -1 when the input
    is refused (a table short of the world, the scratch short), with nothing written. */

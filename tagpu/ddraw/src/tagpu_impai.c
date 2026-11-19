@@ -241,7 +241,7 @@ static struct {
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
     unsigned radar_stale;               /* IMPAI_WORK.stale over every ImpAI seat's publishes: 0 */
-    unsigned site_eval, site_miss, site_ok, site_stock_diff, site_type, site_area;
+    unsigned site_eval, site_miss, site_lit, site_ok, site_stock_diff, site_type, site_area;
     unsigned char los_said, radar_said, site_said, econ_said[PLAYER_COUNT];
 } s_obs;
 SIM_VAR(s_obs, SIM_PRIVATE);
@@ -304,10 +304,15 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      engine/recorder.md). So with +0xF0 past GameTime nothing of the pass runs after the line in this step, and
      a peek held at the end of any step from `t` to `pass` - 1 reads what the line read; the line names both.
    - THE SITE CHECK, under tagpu_impai_check.on: four sites of the level's smallest plain building type a turn,
-     two near the seat's first unit and two anywhere, each tested through the thunk and held to the seat's own
-     mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
-     is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
-     the two answers differ. The cells come from GameTime and the unit's position alone. */
+     two near the seat's first unit and two anywhere, each tested through the thunk and held to the test given
+     no player (tagpu_worldq_site_free), which makes no mapped test and refuses on every unit, and to the sight
+     flag that call gives for the site's block: the thunk's test differs from the other only by that flag, so
+     where the seat's own sight lights the block the two answers are equal, and where it does not the thunk
+     accepts whatever the other accepts. Either broken is a mismatch -- a flag set where the seat does not see
+     refuses a free site, and one clear where it does see builds over a unit. `lit` counts the sites the first
+     rule judged. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
+     the two answers differ. The cells come from GameTime and the unit's position alone; nothing steps the
+     engine between the flag's read and the thunk's call. */
 static const IMPAI_PERSONA* seat_persona(int seat);
 
 static void impai_seat_view(int seat)
@@ -318,7 +323,7 @@ static void impai_seat_view(int seat)
     WQ_UNIT u;
     WQ_DEF d;
     int t, k, first, last, slot, ux = 0, uz = 0;
-    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
+    if (!tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
     t = q.ops->gametime(&q);
     if (!s_obs.econ_said[seat] && t >= 590 &&
         impai_brain_due((unsigned)t, (unsigned)seat, seat_persona(seat)->look_eco) &&
@@ -351,20 +356,21 @@ static void impai_seat_view(int seat)
         const unsigned h = (unsigned)t * 2654435761u + (unsigned)k * 40503u;
         const int cx = k < 2 ? ux + (int)(h % 61u) - 30 : (int)(h % (unsigned)c.w);
         const int cz = k < 2 ? uz + (int)((h >> 8) % 61u) - 30 : (int)((h >> 12) % (unsigned)c.h);
-        const int bit = tagpu_worldq_site_mapped(&q, (int)s_obs.site_type, cx, cz);
-        int ok, stock;
-        if (bit < 0) continue;
+        int lit = 0, ok, stock;
+        const int free_ = tagpu_worldq_site_free(&q, (int)s_obs.site_type, cx, cz, &lit);
+        if (free_ < 0) continue;
         ok = q.ops->site_ok(&q, (int)s_obs.site_type, cx, cz, 0, NULL);
         stock = eq.ops->site_ok(&eq, (int)s_obs.site_type, cx, cz, 0, NULL);
         s_obs.site_eval++;
         s_obs.site_ok += (unsigned)ok;
         s_obs.site_stock_diff += (unsigned)(ok != stock);
-        if (ok && !bit) {
+        s_obs.site_lit += (unsigned)(lit != 0);
+        if (lit ? ok != free_ : free_ && !ok) {
             s_obs.site_miss++;
             if (!s_obs.site_said) {
                 s_obs.site_said = 1;
-                tagpu_logf("impai: check site mismatch seat=%d type=%u cell=%d,%d gametime=%d", seat,
-                           s_obs.site_type, cx, cz, t);
+                tagpu_logf("impai: check site mismatch seat=%d type=%u cell=%d,%d gametime=%d lit=%d free=%d ok=%d",
+                           seat, s_obs.site_type, cx, cz, t, lit, free_, ok);
             }
         }
     }
@@ -418,7 +424,7 @@ static int impai_observe(int seat, SNAP_SCRATCH* scr, IMPAI_WORK* w)
     WQ_ENGINE c;
     WORLDQ q;
     memset(w, 0, sizeof *w);
-    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
+    if (!tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
         impai_know_tick(&q, &s_seatst[seat], &arrays, &s_budget, scr, w) < 0) {
         s_obs.refused[seat]++;
         return -1;
@@ -632,8 +638,8 @@ static void impai_observe_end(unsigned now)
     tagpu_logf("impai: check los-local evaluated=%u mismatch=%u", s_obs.local_eval, s_obs.local_miss);
     tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u stale=%u", s_obs.radar_passes,
                s_obs.radar_eval, s_obs.radar_miss, s_obs.radar_stale);
-    tagpu_logf("impai: check site evaluated=%u mismatch=%u accepted=%u stock_differs=%u", s_obs.site_eval,
-               s_obs.site_miss, s_obs.site_ok, s_obs.site_stock_diff);
+    tagpu_logf("impai: check site evaluated=%u mismatch=%u lit=%u accepted=%u stock_differs=%u", s_obs.site_eval,
+               s_obs.site_miss, s_obs.site_lit, s_obs.site_ok, s_obs.site_stock_diff);
 }
 
 /* The level init's half of observation, on every level, live or puppet: nothing of the previous level's
@@ -824,6 +830,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         impai_tinfo_attack(&in[t], &s_tinfo[t]);
         s_tinfo[t].blast_r = (uint16_t)(in[t].explode_aoe / 2u);
+        s_tinfo[t].sight = in[t].sight;
         dguns += s_tinfo[t].dgun_range > 0;
         attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
         blasts += s_tinfo[t].blast_r > 0;
@@ -1438,7 +1445,6 @@ static IMPAI_BRAIN s_brain[PLAYER_COUNT];
    CENSUS'S BOUND) */
 _Static_assert(TAGPU_LIM_UNITS <= IMPAI_CENSUS_MAX, "a census walks a seat's whole block");
 static const SimField s_brain_layout[] = {
-    { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -1473,6 +1479,14 @@ static const SimField s_job_layout[] = {
     SIM_FIELD_END
 };
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
+/* THE JOB KINDS ARE PART OF THE RECORDED ROW: IMPAI_JOB.kind is stored as its number, and the layout's hash covers
+   the declared fields only, so a renumbering of IMPAI_JOB_* alone would leave the hash as it is and a recording
+   of the old numbering would be taken and misread. A change to the kinds must change the declaration above with
+   it (a field added, or the rows' declaration), and then these numbers: each kind's, since a reorder among them
+   keeps the last one's. */
+_Static_assert(IMPAI_JOB_NONE == 0 && IMPAI_JOB_BUILD == 1 && IMPAI_JOB_ASSIST == 2 && IMPAI_JOB_SQUAD == 3 &&
+                   IMPAI_JOB_RECLAIM == 4 && IMPAI_JOB_RECLAIM_GO == 5 && IMPAI_JOB_SWITCH == 6,
+               "the job kinds are recorded by number: change s_job's declaration with them");
 
 /* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its persona and its table, set at a live
    level's init or for a takeover's fresh seat (seat_fresh), its squads, its picture and its hunt's memory (each
@@ -1528,8 +1542,11 @@ static const IMPAI_PERSONA* seat_persona(int seat)
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
    largest use of each budget against the plan's bound, and the most units of each category any census
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
-   clears every unit before the level-end lines are written (scenarios/replay-end.json); and the GameTime + 1 of
-   the seat's second-factory line (THE SECOND FACTORY), 0 before it. Diagnostics the simulation never reads. */
+   clears every unit before the level-end lines are written (scenarios/replay-end.json); the GameTime + 1 of
+   the seat's second-factory line (THE SECOND FACTORY), 0 before it; and the trace of the seat's last `why` line
+   with the GameTime of its last traced decision (THE WHY LINE; impai.h, IMPAI_WHY_SEEN), zero before them, and
+   of its last `plantwalk` line the same way (THE PLANTWALK LINE; IMPAI_PLANTWALK_SEEN).
+   Diagnostics the simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
@@ -1549,6 +1566,8 @@ static struct {
     unsigned com_idle[PLAYER_COUNT], sensors[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
+    IMPAI_WHY_SEEN why[PLAYER_COUNT];
+    IMPAI_PLANTWALK_SEEN walk[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
 
@@ -1741,6 +1760,44 @@ static void second_line(int seat, unsigned now, const IMPAI_BRAIN_OUT* o)
                o->sea_plants ? "sea" : "land", site);
 }
 
+/* THE WHY LINE, at each economy decision whose reason trace (impai.h, IMPAI_WHY) differs from the trace of the
+   seat's last such line, the level's first traced decision included: `impai: why seat= t= gates= naval= pos= need=
+   veto= take=` -- the decision's GameTime; THE GATES up; the posture's naval judgement and its flags; the wants
+   needed; for each want needed and not taken the gates of its row that hold it, `want:GATE+GATE`; the wants taken
+   (impai_why_text). So the last `why` line at or before a GameTime states the trace of every decision up to the
+   next line, and tools/impai/think.py's `why` answers "why was this want not taken at tick T" from the log alone.
+   A want needed, not taken and under no veto waits on the term its rule reads last (impai.h). What the seam
+   remembers of the seat's last line is a diagnostic (s_play): a level's start clears it and no restore touches it,
+   so the rule that leaves a line out is impai_why_due's, which a restore cannot make leave out a line the log
+   needs: the first decision after a state restored behind the seat's last one writes its line whatever its trace.
+   Logging alone: nothing reads it back. */
+static void why_line(int seat, unsigned now, const IMPAI_WHY* w)
+{
+    char text[IMPAI_WHY_TEXT];
+    if (!impai_why_due(&s_play.why[seat], now, w)) return;
+    impai_why_text(w, text, sizeof text);
+    tagpu_logf("impai: why seat=%d t=%u %s", seat, now, text);
+}
+
+/* THE PLANTWALK LINE, at each economy decision whose plant rung answered a builder, ordered no plant, and met
+   something other than the seat's last such line states (impai.h, THE PLANT WALK'S TRACE): `impai: plantwalk seat=
+   t= type= builder= waived= grow= sites= ... exit= sea=` -- the plant type THE CHOICE took by its name (`-` for
+   none), the builder asked as slot/type, the ring's growth, its sites and how many each test skipped or refused,
+   the return the rung took and its sea search's answer (impai_plantwalk_text). So a plant want that the `why`
+   line shows taken while no `plant` line follows has its cause in the last `plantwalk` line at or before that
+   GameTime. What the seam remembers of the seat's last line is THE WHY LINE's kind of diagnostic (s_play), under
+   the same rule (impai_plantwalk_due). Logging alone: nothing reads it back. */
+static void plantwalk_line(int seat, const WORLDQ* q, const IMPAI_PLANTWALK* w)
+{
+    const unsigned now = (unsigned)q->ops->gametime(q);
+    char text[IMPAI_PW_TEXT];
+    WQ_DEF type;
+    if (!impai_plantwalk_due(&s_play.walk[seat], now, w)) return;
+    impai_plantwalk_text(w, text, sizeof text);
+    tagpu_logf("impai: plantwalk seat=%d t=%u type=%s %s", seat, now,
+               w->type && q->ops->def(q, w->type, &type) ? type.name : "-", text);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1758,7 +1815,7 @@ static void impai_decide(int seat)
     IMPAI_EXEC_VIEW xv;
     int rc = -1, first = 0, last = -1, k;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
-        tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
+        tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_brain[seat];
@@ -1798,6 +1855,8 @@ static void impai_decide(int seat)
             s_react.acts_eco[seat] += out.roots;
             play_max(&s_react.busy_max[seat], out.busy);
         }
+        if (rc >= 0) why_line(seat, (unsigned)q.ops->gametime(&q), &out.why);
+        if (rc >= 0) plantwalk_line(seat, &q, &out.walk);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && !s_play.second[seat] && out.count[IMPAI_C_FACTORY] == 1 &&
             (out.sea_plants || (out.plant && out.plant_want == 2)))
@@ -1910,7 +1969,7 @@ static void impai_pulse(int seat, const char* ta, unsigned now)
     WQ_ENGINE c;
     WORLDQ q;
     int k, n = 0;
-    if (s_tinfo_n && tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) value_walk(seat, &q);
+    if (s_tinfo_n && tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) value_walk(seat, &q);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (s_mil[seat].sq[k].task != IMPAI_SQ_FREE) sq[n++] = impai_mil_letter(s_mil[seat].sq[k].task);
     if (!n) sq[n++] = '-';
@@ -1963,7 +2022,7 @@ static void impai_react_apply(int seat, unsigned now)
     WQ_ENGINE c;
     WORLDQ q;
     if (!x->npend) return;
-    impai_exec_apply(x, tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
+    impai_exec_apply(x, tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
                      seat_persona(seat), now, &s_react.n[seat]);
 }
 
@@ -2178,7 +2237,7 @@ static void impai_play_end(const char* ta, unsigned now)
     }
 }
 
-/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure, no explorer and
+/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure and
    no job survive a level, and a puppet's come from its recording. */
 static void impai_play_clear(void)
 {
@@ -2191,6 +2250,39 @@ static void impai_play_clear(void)
     memset(&s_react, 0, sizeof s_react);
     memset(&s_value, 0, sizeof s_value);
     memset(&s_payout, 0, sizeof s_payout);
+}
+
+/* THE LEVEL'S LAST WORD, one line at the level end: the game-over word and, for each active record, its
+   DirectPlay ID, its controller, its units alive and its commanders lost, as the engine holds them before the
+   teardown clears them. Each peer of a network game writes its own, so a judge reads how the level ended on
+   both from the two logs, with no look that falls between a seat's last unit and the teardown.
+   ENGINE FACTS: main+0x3923B is the game's end, a u16 of flags (bit 2 stop, bit 4 won, bit 6 lost:
+   tagpu_recorder.c, OFF_GAME_END); a record is active when its dword +0 is not 0, +4 is its DirectPlay ID
+   (engine/network.md; in a skirmish the field holds the record's index, MEASURED 2026-11-18 on two skirmishes of
+   three records: 0, 1, 2), +0x73 its controller (1 the local human, 2 a local AI, 3 a remote
+   player: engine/sim.md), and the words +0x144 and +0x106 its live-unit count and its commanders lost, which
+   the unit's destructor lowers and raises (engine/memory.md, 0x486DFC and 0x486996).
+   BOUND: the ten records, each at a fixed offset inside main's block, read and never written; the line holds
+   at most ten fields of at most 27 characters. */
+#define OFF_GAME_OVER 0x3923B
+#define PL_DPID       0x04
+#define PL_COM_LOST   0x106
+#define PL_ALIVE      0x144
+static void impai_end_line(const char* ta, unsigned now)
+{
+    char line[PLAYER_COUNT * 40];
+    unsigned i;
+    int at = 0;
+    line[0] = 0;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        const char* r = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+        if (!*(const uint32_t*)(r + PL_ACTIVE)) continue;
+        at += snprintf(line + at, sizeof line - (size_t)at, " %u:%08x:%u:%u:%u", i, *(const uint32_t*)(r + PL_DPID),
+                       (unsigned)(uint8_t)r[PL_CONTROL], (unsigned)*(const uint16_t*)(r + PL_ALIVE),
+                       (unsigned)*(const uint16_t*)(r + PL_COM_LOST));
+    }
+    tagpu_logf("impai: end tick=%u over=0x%04x seat:dpid:control:alive:com_lost=%s", now,
+               (unsigned)*(const uint16_t*)(ta + OFF_GAME_OVER), line);
 }
 
 /* THE LEVEL END, on the game thread in the teardown 0x491B60's entry, after the recorder has
@@ -2214,6 +2306,7 @@ void tagpu_impai_level_end(void)
         tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
         impai_observe_end(now);
         impai_play_end(ta, now);
+        impai_end_line(ta, now);
     }
     memset(s_seat, 0, sizeof s_seat);
 }
@@ -2345,7 +2438,7 @@ static void impai_mil_turn(int seat)
     uint8_t dry;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
-        tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
+        tagpu_worldq_open_layout(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.reach = reach_view(&r) ? &r : NULL;
@@ -2615,7 +2708,8 @@ static void seat_fresh(const char* ta, unsigned seat)
     memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
     impai_brain_reset(&s_brain[seat], s_job, 0);
     for (k = 0; k < TAGPU_LIM_TYPES; k++) memset(&s_pref[k].seat[seat], 0, sizeof s_pref[k].seat[seat]);
-    if (tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) && q.ops->seat_units(&q, &first, &last)) {
+    if (tagpu_worldq_open_layout(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) &&
+        q.ops->seat_units(&q, &first, &last)) {
         if (first < 0) first = 0;
         if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;
         for (slot = first; slot <= last; slot++) {
@@ -3045,9 +3139,10 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
 }
 
 /* THE SEAT'S OWN SITE TEST. 0x47D2E0(def, cell, ignore, player) refuses a site whose centre the VIEWED player
-   has not mapped, `mov cl,[ebx+0x2A43]` at 0x47D3D1 loading the bit index whatever record it is passed
-   (DISASSEMBLED 0x47D3C4..0x47D3FA; tagpu_worldq.c, wq_site_ok). ImpAI calls it only through a thunk, and the
-   instruction at 0x47D3D1 tells that caller apart by its return address:
+   has not mapped, `mov cl,[ebx+0x2A43]` at 0x47D3D1 loading the bit index whatever record it is passed and the
+   `je` at 0x47D3FA refusing (DISASSEMBLED 0x47D3C4..0x47D3FA; tagpu_worldq.c, wq_site_ok). An ImpAI seat knows
+   the map's layout in every game, so its test makes no such refusal. ImpAI calls the function only through a
+   thunk, and the instruction at 0x47D3D1 tells that caller apart by its return address:
 
      thunk:  push dword [esp+0x10]  x4     player, ignore, cell, def, re-pushed in order
              call 0x47D2E0
@@ -3057,9 +3152,23 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
      stub:   cmp dword [esp+0x3C], ret_va
              jne stock
              mov cl,[edi+0x146]            the passed record's own mapped bit
-             jmp 0x47D3D7
+             shl esi,cl                    0x47D3D7
+             mov ecx,[ebx+0x14273]         0x47D3D9
+             mov [esp+0x4C],esi            0x47D3DF
+             mov ebx,esi                   what 0x47D3F4 loads
+             mov esi,[edi+0x80]            0x47D3E3
+             jmp 0x47D400                  past the word's read, the test and the `je`
      stock:  mov cl,[ebx+0x2A43]           the stock instruction
              jmp 0x47D3D7
+
+   THE THUNK'S ARM is the stock block 0x47D3D7..0x47D3F9 less the explored word's read and its test. What
+   0x47D400 on reads of that block (DISASSEMBLED 0x47D400..0x47D479): ESI the record's grid width (0x47D414,
+   0x47D45A), ECX the explored map and [esp+0x4C] the bit's mask (0x47D461, 0x47D465, taken only with LosType bit
+   1 clear), EDX and EAX the block's column and row, which the arm leaves alone, and EDI; EBP and BL are loaded
+   again at 0x47D400 and 0x47D406, and the `cmp` at 0x47D40F writes the flags before the `jne` at 0x47D412. So
+   the flag [esp+0x10] a unit on the footprint refuses on is the passed record's own sight in both modes: its
+   line-of-sight counters under LosType bit 1, its own bit of the explored map otherwise (in a level that starts
+   Mapped that bit is set in every word, so there the arm answers as the test's own read of it did).
 
    THE INVARIANT is an identity, not a state. At 0x47D3D1 [esp+0x3C] is the function's return address: it
    opens with `sub esp,0x2C` and four pushes (0x47D2E0..0x47D306), and its one call before the site, 0x485010
@@ -3070,15 +3179,15 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
    record the caller passed from 0x47D358 on, the seat's own (ctx->rec), whose +0x146 is its mapped bit
    (the activation 0x464290; the stamp 0x481930 writes 1 << rec+0x146); the LOS-shear fix's row at
    0x47D3B8..0x47D3C3 (tagpu_patches.c, fix_los_local) ends before 0x47D3C4 and leaves EDI alone, so the two do
-   not overlap. ECX is the loaded register in both arms; the flags the `cmp` leaves are written again by the
-   `add` at 0x47D3EE before the first read, the `je` at 0x47D3FA (the `shl` at 0x47D3D7 writes none when CL
-   is 0). The occupancy flag that follows reads the passed record's sight counters under True line of sight
-   (0x47D40C..0x47D43A), which is what a human in the seat gets. */
+   not overlap. In the stock arm ECX is the loaded register and the flags the `cmp` leaves are written again by
+   the `add` at 0x47D3EE before the first read, the `je` at 0x47D3FA (the `shl` at 0x47D3D7 writes none when CL
+   is 0). */
 #define VA_SITE_TEST  0x0047D2E0u
 #define VA_SITE_BIT   0x0047D3D1u   /* `mov cl,[ebx+0x2A43]`, 8A 8B 43 2A 00 00 */
 #define VA_SITE_AFTER 0x0047D3D7u
+#define VA_SITE_FLAG  0x0047D400u   /* past the `je` at 0x47D3FA: the sight flag's block */
 static const uint8_t SITE_BIT_WAS[6] = { 0x8A, 0x8B, 0x43, 0x2A, 0x00, 0x00 };
-#define SEAT_SITE_ROOM 64u          /* the thunk and the stub: 24 and 32 bytes */
+#define SEAT_SITE_ROOM 96u          /* the thunk and the stub: 24 and 52 bytes */
 _Static_assert(18 * STUB_ROOM + SEAT_SITE_ROOM <= 0x1000, "the thunk and its stub fit after the handicap stubs");
 
 /* the thunk at `p`, the stub after it; returns the stub */
@@ -3092,9 +3201,14 @@ static unsigned char* seat_site_emit(unsigned char* p)
     *p++ = 0xC2; *p++ = 0x10; *p++ = 0x00;
     stub = p;
     *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x3C; p = put32(p, (uint32_t)(uintptr_t)ret_va);
-    *p++ = 0x75; *p++ = 0x0B;
+    *p++ = 0x75; *p++ = 0x1F;
     *p++ = 0x8A; *p++ = 0x8F; p = put32(p, 0x146);
-    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER); p += 4;
+    *p++ = 0xD3; *p++ = 0xE6;
+    *p++ = 0x8B; *p++ = 0x8B; p = put32(p, 0x14273);
+    *p++ = 0x89; *p++ = 0x74; *p++ = 0x24; *p++ = 0x4C;
+    *p++ = 0x8B; *p++ = 0xDE;
+    *p++ = 0x8B; *p++ = 0xB7; p = put32(p, 0x80);
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_FLAG); p += 4;
     memcpy(p, SITE_BIT_WAS, sizeof SITE_BIT_WAS); p += sizeof SITE_BIT_WAS;
     *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER);
     return stub;
