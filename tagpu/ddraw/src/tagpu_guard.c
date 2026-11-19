@@ -27,7 +27,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 
    STATE, all SIM_STATE: the plant rows s_plant (its identity, its frame's centre, its box, its lanes and the
    signature of the structures in its box) and the builder rows s_seat (its identity, its plant, its seat or
-   wait spot, and its stuck count). The level's plant types s_type are SIM_CONTENT: the build menus of the level's
+   wait spot, and the cell it last stood on and since when). The level's plant types s_type are SIM_CONTENT: the build menus of the level's
    data. Rows name units by slot and birth (tagpu_unit_birth): a slot recycled for another unit never matches a
    row. OWNER: the guard handler runs only on its owner's peer (0x48AEB5..0x48AECD), never for a puppet seat, and
    the visit refuses a puppet level besides.
@@ -91,7 +91,8 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define GUARD_BOX      112           /* cells a side at most                                                */
 #define LANE_MARGIN    1             /* cells either side of the largest product                            */
 #define SEAT_BUDGET    96            /* candidates a seat search tests for a way out                        */
-#define STUCK_VISITS   4             /* visits standing still short of the seat before it is given up       */
+#define STUCK_TICKS    180           /* ticks with no change of cell short of the seat before it is given up:
+                                        three of the pathfinder's 60-tick re-searches of a held walker        */
 #define REACH_MAX      400           /* px: a builddistance past it is taken as this                        */
 #define MENU_CAP       4096
 
@@ -138,9 +139,10 @@ enum { GS_FREE, GS_SEATED, GS_WAITING };
 typedef struct GuardSeat {
     uint16_t builder, plant;          /* the builder's slot; its plant's row                               */
     uint32_t birth;
-    uint8_t  state, stuck;
+    uint8_t  state, pad;
     int16_t  x, z;                    /* the seat's place, or the wait spot                                 */
-    int16_t  lastx, lastz;            /* where it stood at its last visit                                   */
+    int16_t  lastx, lastz;            /* the cell it last stood on                                          */
+    int32_t  moved;                   /* GameTime it was first seen on that cell                            */
     int16_t  avoidx, avoidz;          /* a seat it could not reach; -32768 none                             */
 } GuardSeat;
 static const SimField SEAT_LAYOUT[] = {
@@ -513,7 +515,7 @@ static int still_guards(const Eng* e, const GuardSeat* t, const char* p, unsigne
 
 /* TAKEN, for builder `self`'s search: the structures, every plant's lanes in the box, every other row's seat or
    wait spot in it, and every other unit standing still -- a mover that has not changed cell for 30 ticks, which
-   the pathfinder takes as an obstacle (the per-cell rule 0x47DE60 at 0x47DF22..0x47DF2A) */
+   the pathfinder takes as an obstacle (the per-cell rule 0x47DE60 at 0x47DEF8..0x47DF32) */
 static void build_taken(const Eng* e, const GuardPlant* r, Scratch* s, unsigned self)
 {
     int i, k, x, z;
@@ -630,7 +632,8 @@ static int seat_holds(const GuardPlant* r, const GuardSeat* t, int fx, int fz, c
 }
 
 /* the builder's seat, the band's outer edge first, else a wait spot: where it stands when that is free, else the
-   nearest free place within 8 cells, else where it stands */
+   nearest free place within 8 cells, else where it stands; a builder outside the box searches from the box's
+   nearest place to it */
 static void seat_or_wait(Eng* e, Scratch* s, const GuardPlant* r, GuardSeat* t, unsigned bslot, int bfx, int bfz,
                          unsigned mc, int gx, int gz, int r2min, int r2max, int cur_x, int cur_z)
 {
@@ -656,14 +659,19 @@ static void seat_or_wait(Eng* e, Scratch* s, const GuardPlant* r, GuardSeat* t, 
                         s->taken2, &sx, &sz)) {
         t->state = GS_SEATED;
         t->x = (int16_t)sx; t->z = (int16_t)sz;
-        t->stuck = 0;
+        t->moved = e->now;
         s_diag.seated++;
         tagpu_logf("guard: seat builder=%u plant=%u at=%d,%d band=%d..%d seated=%d lanes=%u", bslot, (unsigned)r->slot,
                    sx, sz, r2min, r2max, ns, (unsigned)r->nlane);
         return;
     }
-    if (pass && cur_x >= r->bx0 && cur_z >= r->bz0 && cur_x + bfx <= r->bx0 + r->bw && cur_z + bfz <= r->bz0 + r->bh)
-        gg_wait_spot(&box, cur_x, cur_z, bfx, bfz, pass, s->taken, 8, &wx, &wz);
+    if (pass) {
+        /* a builder outside the box waits at the box's nearest place to it, so it waits near the plant */
+        const int ax = cur_x < r->bx0 ? r->bx0 : cur_x > r->bx0 + r->bw - bfx ? r->bx0 + r->bw - bfx : cur_x;
+        const int az = cur_z < r->bz0 ? r->bz0 : cur_z > r->bz0 + r->bh - bfz ? r->bz0 + r->bh - bfz : cur_z;
+        wx = ax; wz = az;
+        gg_wait_spot(&box, ax, az, bfx, bfz, pass, s->taken, 8, &wx, &wz);
+    }
     if (t->x != wx || t->z != wz)
         tagpu_logf("guard: wait builder=%u plant=%u at=%d,%d band=%d..%d seated=%d", bslot, (unsigned)r->slot, wx, wz,
                    r2min, r2max, ns);
@@ -760,7 +768,7 @@ static int __cdecl guard_visit(unsigned* regs)
     if (t->plant != prow) {                        /* a builder that guarded another plant starts over */
         t->plant = (uint16_t)prow;
         t->state = GS_WAITING;
-        t->stuck = 0;
+        t->moved = e.now;
         t->avoidx = t->avoidz = INT16_MIN;
     }
 
@@ -788,19 +796,19 @@ static int __cdecl guard_visit(unsigned* regs)
             memset(o, 0, sizeof *o);
     }
 
-    /* a seat it has stood short of, still, for STUCK_VISITS visits is given up: it waits, and that seat is avoided */
-    if (t->state == GS_SEATED) {
-        if (cur_x == t->x && cur_z == t->z) t->stuck = 0;
-        else if (cur_x == t->lastx && cur_z == t->lastz) {
-            if (++t->stuck >= STUCK_VISITS) {
-                t->avoidx = t->x; t->avoidz = t->z;
-                t->state = GS_WAITING;
-                t->stuck = 0;
-            }
-        } else t->stuck = 0;
+    /* a seat it has stood short of, on one cell, for STUCK_TICKS is given up: it waits, and that seat is avoided.
+       Counted in GameTime, not in visits: the guard is woken by its move goal's events as well as its 30-tick
+       timer, several times a tick on a walk */
+    if (cur_x != t->lastx || cur_z != t->lastz) {
+        t->lastx = (int16_t)cur_x;
+        t->lastz = (int16_t)cur_z;
+        t->moved = e.now;
     }
-    t->lastx = (int16_t)cur_x;
-    t->lastz = (int16_t)cur_z;
+    if (t->state == GS_SEATED && (cur_x != t->x || cur_z != t->z) && e.now - t->moved >= STUCK_TICKS) {
+        t->avoidx = t->x; t->avoidz = t->z;
+        t->state = GS_WAITING;
+        t->moved = e.now;
+    }
 
     if (replan || t->state != GS_SEATED) {
         if (!scratch_get(&s, r->bw, r->bh)) return 0;
