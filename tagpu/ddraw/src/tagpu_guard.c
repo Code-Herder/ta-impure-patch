@@ -229,6 +229,14 @@ static unsigned type_of(const Eng* e, const char* u)
     return (unsigned)(off / UDEF_STRIDE);
 }
 
+/* a building: no mover, and a def without movement. A unit whose def moves is never one, whatever its mover
+   pointer reads -- a product's frame in a yard is no obstacle a seat or a lane must respect: it leaves when done */
+static int building(const Eng* e, const char* u)
+{
+    WQ_DEF d;
+    return structure(u) && e->q.ops->def(&e->q, (int)type_of(e, u), &d) && !(d.flags & WQ_DF_MOVER);
+}
+
 static unsigned birth_of(unsigned slot)
 {
     unsigned b = 0;
@@ -363,7 +371,7 @@ static uint32_t box_sig(const Eng* e, const GuardPlant* r)
             const unsigned s = cell_unit(e, x, z);
             const char* u = s ? unit_at(e, s) : NULL;
             uint32_t v;
-            if (!u || !structure(u)) continue;
+            if (!u || !building(e, u)) continue;
             v = (uint32_t)s * 2654435761u ^ birth_of(s) ^ (uint32_t)(x << 16 | (z & 0xFFFF));
             h = (h ^ v) * 16777619u;
         }
@@ -432,7 +440,29 @@ static void box_blocked(const Eng* e, const GuardPlant* r, Scratch* s)
         for (x = 0; x < r->bw; x++) {
             const unsigned u = cell_unit(e, r->bx0 + x, r->bz0 + z);
             const char* p = u ? unit_at(e, u) : NULL;
-            s->blocked[z * r->bw + x] = (uint8_t)(p && structure(p));
+            s->blocked[z * r->bw + x] = (uint8_t)(p && building(e, p));
+        }
+}
+
+static void mark_rect(uint8_t* t, const GuardPlant* r, int x0, int z0, int x1, int z1, uint8_t v);
+
+/* every structure with a cell in the box marks its WHOLE footprint (first cell +0x76/+0x78, size +0x7E/+0x80),
+   clipped to the box: a factory's open yard cells are held by no unit in the map (its products drive through
+   them), so `blocked` leaves them free, and a seat or wait spot there stands inside the plant. The lane search
+   keeps `blocked`: it starts from the yard's exits and must see the yard open */
+static void mark_footprints(const Eng* e, const GuardPlant* r, uint8_t* t)
+{
+    int x, z;
+    for (z = 0; z < r->bh; z++)
+        for (x = 0; x < r->bw; x++) {
+            const unsigned u = cell_unit(e, r->bx0 + x, r->bz0 + z);
+            const char* q = u ? unit_at(e, u) : NULL;
+            int fx, fz, cx, cz;
+            if (!q || !building(e, q)) continue;
+            fx = *(const int16_t*)(q + U_FX); fz = *(const int16_t*)(q + U_FZ);
+            if (fx < 1 || fz < 1 || fx > WQ_FOOT_MAX || fz > WQ_FOOT_MAX) continue;
+            cx = *(const int16_t*)(q + U_CELLX); cz = *(const int16_t*)(q + U_CELLZ);
+            mark_rect(t, r, cx, cz, cx + fx - 1, cz + fz - 1, 1);
         }
 }
 
@@ -535,6 +565,7 @@ static void build_taken(const Eng* e, const GuardPlant* r, Scratch* s, unsigned 
 {
     int i, k, x, z;
     memcpy(s->taken, s->blocked, (size_t)r->bw * r->bh);
+    mark_footprints(e, r, s->taken);
     for (i = 0; i < GUARD_PLANTS; i++) {
         const GuardPlant* o = &s_plant[i];
         if (!o->used) continue;
@@ -697,8 +728,8 @@ static void seat_or_wait(Eng* e, Scratch* s, const GuardPlant* r, GuardSeat* t, 
 }
 
 /* every seat of plant row r (type g) that no longer holds -- out of its builder's band round the frame's centre,
-   on a structure of `blocked` or on a lane -- goes back to waiting */
-static void recheck_seats(const Eng* e, const GuardPlant* r, const GuardType* g, const uint8_t* blocked)
+   on a structure's footprint (`foot`, mark_footprints) or on a lane -- goes back to waiting */
+static void recheck_seats(const Eng* e, const GuardPlant* r, const GuardType* g, const uint8_t* foot)
 {
     const int prow = (int)(r - s_plant);
     int i;
@@ -715,7 +746,7 @@ static void recheck_seats(const Eng* e, const GuardPlant* r, const GuardType* g,
         }
         lo = g->rin_max / 16;
         hi = (od.reach + g->rin_min) / 16;
-        if (!seat_holds(r, o, ofx, ofz, blocked, gg_goal_place(r->spot_x, ofx), gg_goal_place(r->spot_z, ofz), lo * lo,
+        if (!seat_holds(r, o, ofx, ofz, foot, gg_goal_place(r->spot_x, ofx), gg_goal_place(r->spot_z, ofz), lo * lo,
                         hi * hi))
             o->state = GS_WAITING;
     }
@@ -782,7 +813,7 @@ static void plan_neighbours(Eng* e, const GuardPlant* r, unsigned self)
             Scratch s;
             int fx, fz;
             float nano;
-            if (!q || u == self || !alive(q) || !structure(q)) continue;
+            if (!q || u == self || !alive(q) || !building(e, q)) continue;
             for (k = 0; k < n && seen[k] != u; k++) {}
             if (k < n) continue;
             seen[n++] = u;
@@ -797,7 +828,9 @@ static void plan_neighbours(Eng* e, const GuardPlant* r, unsigned self)
             o->sig = box_sig(e, o);
             o->sig_tick = e->now;
             plan_lanes(e, q, o, g, &s);
-            recheck_seats(e, o, g, s.blocked);
+            memcpy(s.taken2, s.blocked, (size_t)o->bw * o->bh);
+            mark_footprints(e, o, s.taken2);
+            recheck_seats(e, o, g, s.taken2);
             tagpu_sim_scratch_free(s.block);
         }
 }
@@ -882,7 +915,9 @@ static int __cdecl guard_visit(unsigned* regs)
         if (replan) {
             plan_lanes(&e, p, r, g, &s);
             plan_neighbours(&e, r, (unsigned)pslot);
-            recheck_seats(&e, r, g, s.blocked);
+            memcpy(s.taken2, s.blocked, (size_t)r->bw * r->bh);
+            mark_footprints(&e, r, s.taken2);
+            recheck_seats(&e, r, g, s.taken2);
             seats_off_lanes(&e);
         }
         if (t->state != GS_SEATED)
