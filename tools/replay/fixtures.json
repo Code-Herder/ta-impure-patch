@@ -141,6 +141,18 @@
              [180, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]]],
    "end": 3600
   },
+  "stock-guard-seats": {
+   "load": "guard-seats.json",
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
+             [140, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
+             [150, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
+             [160, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
+             [170, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
+             [180, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]]],
+   "end": 3600,
+   "dll": "stock"
+  },
   "transport-pad": {
    "load": "replay-transport-pad.json",
    "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],

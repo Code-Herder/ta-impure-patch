@@ -9,7 +9,7 @@
 /* The seats and the lane a guarded plant keeps, which tagpu_guard.c orders its builders by. OWNER: a guard's
    handler runs only on its owner's machine (the order run's owner test, 0x48AEB5..0x48AECD), and a puppet's
    builders move as the recording says. */
-SIM_FEATURE(guard_geometry, SIM_PUPPET_OWNER, "guard-seats");
+SIM_FEATURE(guard_geometry, SIM_PUPPET_OWNER, "guard-seats stock-guard-seats");
 
 void gg_exits(const uint8_t* yard, int fx, int fz, GgExits* out)
 {

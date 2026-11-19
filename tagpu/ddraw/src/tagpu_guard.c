@@ -1,5 +1,5 @@
 #include "tagpu_simreg.h"
-SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
+SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats stock-guard-seats");
 /* THE GUARD'S SEATS: builders that guard a factory are seated where they can help build without moving, packed
    round the plant, and a lane is kept free for each movement class of its ground products
    (research/notes/factory-guard-plan.md; the module note research/notes/modules/factory-guard.md). The geometry
