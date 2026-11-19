@@ -500,7 +500,10 @@ The byte stores to `unit+0x10F` are COB `SET` (`0x480B7A`, `0x480B9E`, `0x480BD9
 **StartBuilding `0x438590(unit, node, heading)`** (`ret 0xC`): the index of `StartBuilding`
 (`0x5050F4`) by `0x4B07C0`, the start `0x4B0B00(idx, cb 0, runNow 0, argc 1, heading & 0xFFFF,
 0, 0, 0)` at `0x4385C7`, its broadcast `0x456290` at `0x4385D7`, then `node+0x42 |= 0x400000`
-(`0x4385E3`). **Run-later, one word.** The heading every caller passes is
+(`0x4385E3`). Its entry, `53 56 57 8B 7C 24 10` (three pushes, `mov edi,[esp+0x10]`, the
+unit, ending at `0x438597`), is where Impure's guard skips a seated guard's start
+([hook map](../modules/hook-map.html)).
+**Run-later, one word.** The heading every caller passes is
 `0x48A980(builder+0x6A, target+0x6A) − builder+0x66` (MobileBuild `0x403DCA..0x403DDA`, HelpBuild
 `0x4040BD..0x4040CD`): the target's bearing from the builder relative to its own heading. **No
 build handler tests the builder's heading** before it starts or works (MobileBuild state 1
@@ -541,7 +544,7 @@ the yard and makes the frame.
 
 1. **Mobile builders** (MobileBuild, HelpBuild, Reclaim, Resurrect, the VTOL pair): StopBuilding
    comes only from the **order node's destructor `0x43A1F0`**, when `node+0x42` has bit
-   `0x400000` (`0x43A21E`): the index of `StopBuilding` (`0x505104`), `0x4B0B00(idx, 0, runNow 0,
+   `0x400000` (the test at `0x43A21E`, read by the `je 0x43A264` at `0x43A225`): the index of `StopBuilding` (`0x505104`), `0x4B0B00(idx, 0, runNow 0,
    argc 0, …)` at **`0x43A251`**, its broadcast `0x456190` at `0x43A258`, the bit cleared
    (`0x43A25D`). Only `0x438590` sets the bit, so **StopBuilding comes exactly when StartBuilding
    was started for that node.** Run-later, no argument. Inside the destructor the handler's
@@ -549,7 +552,11 @@ the yard and makes the frame.
    owned object at `+0x52` is freed, then `0x489800(unit, 3)` unless `node+0x42` has `0x10000`
    (`0x43A2AB..0x43A2B9`). Capture, ReclaimUnit and RepairUnit also call `0x4385F0` themselves
    (`0x404599`, `0x404A7F`, `0x4055B5`), the same start at `0x43862B` behind the same bit, which
-   it then clears, so the destructor does not repeat it.
+   it then clears, so the destructor does not repeat it. **`0x4385F0(unit, node)`** (stdcall,
+   `ret 8`) reads nothing of the node but `+0x42`: the bit test at `0x4385F5`, the clear at
+   `0x438637..0x438641`; the script and its broadcast `0x456190` (`0x438632`) take the unit
+   alone. Impure's guard folds a held arm through it with a scratch node
+   ([factory guard](../modules/factory-guard.html), *The arm*).
    - **A build that completes**: state 3's step finishes the frame (`0x41BA60` → `0x41B8D0`, so
      the frame's own completion, its activation included, comes first), state 4 returns 5 and the
      controller destroys the node (`0x43B8A8` → `0x43A1F0` at `0x43B93B`): **StopBuilding in the

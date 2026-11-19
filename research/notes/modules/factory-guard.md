@@ -16,7 +16,7 @@ unit. Anything else -- a tank guarding a plant, a builder guarding a commander, 
 a nanoframe -- runs as stock. A plant that makes only aircraft gets seats and no lane; a plant that
 makes both keeps the lanes of its ground classes only.
 
-**The hook.** The guard order's state 1 reaches its assist at `0x40654B` on every wake, and every
+**The hooks.** The guard order's state 1 reaches its assist at `0x40654B` on every wake, and every
 path to its home move passes there. The stub calls `guard_visit`, which points the guard node's
 offset `+0x22..+0x2D` and radius `+0x36` at the builder's seat, or at its wait spot, before the home
 move `0x4066AC` reads them, and skips the assist for a builder not standing on its seat, so a waiting
@@ -58,6 +58,31 @@ footprints, else at the nearest free place within 8 cells, and takes a seat at a
 frees. A seated builder that has stood on one cell short of its seat for 180 ticks gives it up, waits, and
 avoids that seat. A builder outside the box waits at the box's nearest place to it.
 
+**The arm.** A seated guard's arm stays open from one product to the next. Stock folds it after
+every unit: the HelpBuild node's destructor `0x43A1F0` starts StopBuilding when the node's `+0x42`
+has bit `0x400000`, which only StartBuilding `0x438590` sets, and the next unit's HelpBuild starts
+StartBuilding again. Here the two are skipped as a pair, so the unit's script sees one long build:
+
+- **Held.** A HelpBuild node destroyed while its builder stands on its seat, still guarding its live
+  plant, has the bit cleared at `0x43A21E` before the destructor tests it; the builder's row holds
+  the open arm.
+- **Taken back.** That builder's next StartBuilding, for a HelpBuild on its plant's frame at the
+  heading of its last one, is not started at `0x438590`; the node gets the bit, owns the open arm
+  and folds it as stock when it ends. A different heading folds and starts again: the builder turned,
+  and the nano must be re-aimed.
+- **Folded**, through the engine's own `0x4385F0` (with a scratch node, which it reads only the bit
+  of), so the broadcast to the other players goes with it: before any other StartBuilding of the
+  builder; when its guard order's node is destroyed, which is how another order, the plant's death or
+  a change of hands reaches it; at a visit that finds it off its seat or no longer seated, which
+  comes before the home move that would walk it; when the plant has had no build at its head for
+  `ARM_GRACE` (150 ticks: 61 to 96 measured from one unit to the next on a clear yard, plus a
+  margin, for a next unit queued by hand); and when its row is freed with the builder alive. A plant
+  with a queue keeps its BuildingBuild node at its head between two units, so a queued plant never
+  folds the arm, however long its yard stays blocked.
+
+Every way a guard leaves its seat folds the arm first, so it never travels open. A plant's own build
+stance still folds between units (`0x402B1B`); that is the plant's script, not the guard's.
+
 **Neighbours.** At a re-plan every other finished plant of a ground product whose footprint stands in
 the box gets a row and its own lanes, so no seat or wait spot stands in another plant's way out, and
 its seats are checked again like the plant's own; then every seat of any plant that a lane now covers
@@ -67,7 +92,8 @@ goes back to waiting.
 
 `s_plant` (64 rows: the plant's slot, birth and type, its first cell, the frame's centre, its box, the
 signature of the structures in it, its lanes) and `s_seat` (256 rows: the builder's slot and birth,
-its plant's row, its seat or wait spot, the cell it last stood on and since when, a seat it avoids) are
+its plant's row, its seat or wait spot, the cell it last stood on and since when, a seat it avoids, its
+held arm, the heading of its last StartBuilding and since when its plant has been idle) are
 SIM_STATE; a row names a unit by slot and birth, so a recycled slot never matches, and a builder's row is
 freed at the next visit after its builder dies or stops guarding its plant. `s_type` (the
 level's plant types by side: their ground classes, each class's largest product, the band's terms)
@@ -78,9 +104,12 @@ owner test) and never on a puppet level: a replay's builders move as the recordi
 
 ## Log lines
 
-- `guard: installed: the guard's assist 0x40654B` at attach.
+- `guard: installed: the guard's assist 0x40654B` and `guard: installed: the arm kept open 0x438590
+  0x43A21E` at attach.
 - `guard: level plant types=N sides=S reach=R` at each level init.
 - `guard: lanes plant= type= cell= exits= rally_exit= classes= rects= box=` at each plan of a plant.
+- `guard: arm held builder= tick=`, `guard: arm kept builder= tick=` and `guard: arm folded builder=
+  why= tick=` (`why`: heading, other-build, guard-ended, off-seat, queue-empty, plant-gone, row-freed).
 - `guard: seat builder= plant= at= band= seated= lanes=` when a builder is seated;
   `guard: wait builder= plant= at= ...` when its wait spot changes.
 
@@ -88,7 +117,6 @@ owner test) and never on a puppet level: a replay's builders move as the recordi
 
 - **Products park as stock.** With no rally a product's Park ring (8n × 6n round it) ends just
   outside the yard's mouth, in the lane, and later products queue behind; the owner keeps that.
-- **The arm still folds between units** (StopBuilding at the end of every HelpBuild); landing 3.
 - **No mod switch yet**; landing 4. The feature is always on.
 - **ImpAI's yard rule** keeps its own copy of the yard's exits and its own way out; landing 5 puts it
   on `tagpu_guardgeo.c`.

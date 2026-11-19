@@ -802,8 +802,8 @@ static void seats_off_lanes(const Eng* e)
    sent together with the starts. */
 /* ticks a held arm stays open on a plant with nothing at its head, for a next unit queued by hand: the gap from
    one unit's end to the next one's StartBuilding on a stock plant plus a margin (MEASURED 2026-11-18, ARMVP making
-   Flashes for a seated ARMCK, gamespeed 10: 91, 91 and 91 ticks with the yard clear, 241 with a product waiting
-   in it; the 241 waits behind a queued build, which holds the arm anyway). Counted from the first visit that
+   Flashes for a seated ARMCK, gamespeed 10, two games: 61 to 96 ticks with the yard clear, 241 with a product
+   waiting in it; that one waits behind a queued build, which holds the arm anyway). Counted from the first visit that
    finds the plant idle, so the fold comes at the first visit at or past it, within the guard's 30-tick timer */
 #define ARM_GRACE 150
 

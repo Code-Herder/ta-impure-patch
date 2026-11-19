@@ -53,7 +53,7 @@ of the room around the plant or of the arm.
 |---|---|---|
 | 1 | The seats and the lane: the engine-free geometry (`tagpu_guardgeo.c`), the coordinator (`tagpu_guard.c`) and the hook at the guard's assist `0x40654B` (seat, wait spot, assist skip) | a unit test of the geometry; a scenario: six ARMCK and two ARMCV guarding an ARMVP, the seated still through a queue of six, the rest waiting, no builder in the lane |
 | 2 | (dropped: products leave as stock, decision 7) | -- |
-| 3 | The arm kept open | the scenario's builders run StartBuilding once for the queue; a fold within the grace of the queue's end; a move order folds at once |
+| 3 | The arm kept open: the hooks at StartBuilding `0x438590` and the destructor's bit test `0x43A21E` | the scenario's seated builder runs StartBuilding once for the queue; a fold within the grace of the queue's end; a move order folds at once |
 | 4 | The mod switch | a catalog entry with the switch off plays as stock |
 | 5 | ImpAI on the shared geometry | after ImpAI's branch lands: its yard region and the coordinator's lane are the same rectangles |
 
@@ -107,3 +107,18 @@ Industrial Area, where nothing could move; it is on Two Continents now.
 **Park, MEASURED in the same games**: with no rally the Flashes stop one to two cells outside the yard's mouth
 and the later ones queue behind them, so by the sixth the newest waits inside the yard. Stock behaviour, kept
 (decision 7).
+
+## Landing 3, as built
+
+The pair is skipped at its two ends (the module note's *The arm*): the HelpBuild destructor's bit
+test `0x43A21E` holds the arm, the StartBuilding entry `0x438590` takes it back or folds it first,
+and every other way out folds through `0x4385F0`, whose only read of its node is the bit.
+
+**MEASURED 2026-11-18** (`guard-seats`, six Flashes, gamespeed 10, two games): the seated ARMCK's arm
+was held at each unit's end and taken back at the next one's start 61 to 96 ticks later with the yard
+clear, 241 with a Flash waiting in it; the queue's end folded it 90 ticks after the last unit under a
+90-tick grace, now `ARM_GRACE` 150; a move order given mid-queue folded it in the same tick (the
+HelpBuild under way held, then the guard node's destructor folded), and the next builder took the
+freed seat and held its own. Each builder's second unit folded and started again once: its heading
+to the frame differed from its first. The decision's "fold and next open skipped as a pair" holds;
+the grace is decision 8's measured gap plus a margin.
