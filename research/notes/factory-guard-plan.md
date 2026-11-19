@@ -53,5 +53,34 @@ of the room around the plant or of the arm.
 
 ## Engine facts the design rests on
 
-Filled from the disassembly before landing 1 is built; each with its address and how it was
-established. See the engine map's [orders](engine/orders.html) page, *The ground Guard's node*.
+All DISASSEMBLED 2026-11-18 in the pristine image unless marked; the entries are in the engine map.
+
+- **The guard's assist `0x40654B`** is passed on every way to the home move, and a hook there can
+  point the home move anywhere and skip the assist ([orders](engine/orders.html), *The ground
+  Guard's node*). The attack reaction and the repair branch run before it, so a damaged plant
+  still pulls every guard into repairing it.
+- **HelpBuild's band** ([orders](engine/orders.html), *HelpBuild's walk*): an annulus round the
+  frame's centre, `rin = (int)(16 √(fx² + 2fz)) / 2` of the frame's footprint, `rout =
+  builddistance + rin`, in whole cells from the place the helper would have centred on the frame.
+  Inside it a helper never steps; closer than rin it walks out.
+- **A still unit is an obstacle** to every path search: the per-cell rule `0x47DE60` blocks a mover
+  whose claim stamp is older than the class's watermark, GameTime − 30
+  ([map](engine/map.html), *The pathing maps*). A unit walking into one is held and searches again
+  at most once a 60 ticks; nothing was found that pushes the standing unit
+  [not established beyond the readers of the mover's `+0x2E` bit 2].
+- **Park's goal** is the border of a box of 8n × 6n cells round the product, n its footprint (+3 for
+  a ship), the cheapest border cell taken [INFERRED from the search]: about 9 cells off for a 2 x 2
+  unit, inside a lane. Landing 2's subject.
+- **The factory's queue**: BuildingBuild count nodes on the main list, `+0x3A` the units still to
+  make with the one in progress included; between two units the head's frame `+0x16` is NULL until
+  the next create. Landing 3's input.
+- **The arm**: a HelpBuild's StopBuilding starts in the node destructor `0x43A1F0` behind `+0x42`
+  bit `0x400000`, which only StartBuilding `0x438590` sets ([cob](engine/cob.html), *The scripts a
+  unit's work starts*). Landing 3's subject.
+- **The handlers run on the owner's peer only** (`0x48AEB5..0x48AECD`), never for a puppet seat.
+
+## Landing 1, as built
+
+`tagpu_guardgeo.c` (engine-free: the yard's exits, the lane search, the seat search with its way out,
+the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the hook, the rows, the level's plant
+types). The module as it stands is [the module note](modules/factory-guard.html).

@@ -79,6 +79,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
+#include "tagpu_guard.h"
 #include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
@@ -1194,7 +1195,8 @@ static int viewer_buffers(char* ta)
 
 /* THE VIEWER'S BUFFERS: the level init's call 0x4919C8, in LoadGameData_Main 0x4917D0 on the
    LOADER thread (0x497581), its only call site, retargeted here. The engine's own init first,
-   then ImpAI's seat table (tagpu_impai.h) and the income lever's rows (tagpu_income.h) on every
+   then ImpAI's seat table (tagpu_impai.h), the income lever's rows (tagpu_income.h) and the guard's
+   rows and plant types (tagpu_guard.h) on every
    level, then, on a level the seating armed, record 10's buffers. Three invariants:
    - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
      state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
@@ -1217,6 +1219,7 @@ static void __cdecl tagpu_replay_level_players(void)
     E_PlayersInit();
     tagpu_impai_level_init();
     tagpu_income_level_init();
+    tagpu_guard_level_init();
     if (!tagpu_puppet_on() ||
         InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
     ta = ta_main();

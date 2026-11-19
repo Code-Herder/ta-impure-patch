@@ -50,7 +50,7 @@ int gg_overlaps(const GgRect* r, int x, int z, int fx, int fz);
 /* THE BAND a helper builds from. HelpBuild's goal (0x44D3B0, vtable 0x4FD358) is an annulus around the frame's
    centre: with G the place the helper would have were it centred on the frame, the helper at place P is in
    range iff (rin/16)^2 <= |P - G|^2 <= (rout/16)^2, the divisions truncating, where rin = trunc((int)(16
-   sqrt(fx^2 + 2 fz)) / 2) of the FRAME's footprint and rout = builddistance + rin (0x403FFF..0x404045,
+   sqrt(fx^2 + 2 fz)) / 2) of the FRAME's footprint and rout = builddistance + rin (0x403FF9..0x404045,
    0x44D3BF..0x44D434, 0x44D800). A seat must be in range for every product the plant makes. */
 int  gg_rin(int fx, int fz);
 /* G for a helper of footprint (bfx, bfz) and a frame centre (cx, cz), 16.16 world px: ((c - (bf << 19) +
