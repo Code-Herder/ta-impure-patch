@@ -97,8 +97,8 @@ def comment_or_directive_lines(text):
 STOCK = "TAGPU_LIMITS_STOCK"
 BOTH = frozenset(("raised", "stock"))
 # the macros only a test program's command line defines: what they guard is in no DLL build
-# (inc/tagpu_recframe.h, RECF_TEST_COPY)
-TEST_ONLY = ("RECF_TEST_COPY",)
+# (inc/tagpu_recframe.h, RECF_TEST_COPY; src/tagpu_guardgeo.h, GUARDGEO_TEST)
+TEST_ONLY = ("RECF_TEST_COPY", "GUARDGEO_TEST")
 
 
 def builds(text):

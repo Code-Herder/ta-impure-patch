@@ -20,7 +20,7 @@ def build():
     if EXE.exists() and all(EXE.stat().st_mtime >= s.stat().st_mtime for s in SRCS):
         return
     print("guardtest: building", EXE.name, flush=True)
-    subprocess.run(["gcc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc", "-O1", "-g",
+    subprocess.run(["gcc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc", "-O1", "-g", "-DGUARDGEO_TEST",
                     "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                     "-o", str(EXE), "tests/guardtest.c", "src/tagpu_guardgeo.c", "-lm"],
                    cwd=DDRAW, check=True)

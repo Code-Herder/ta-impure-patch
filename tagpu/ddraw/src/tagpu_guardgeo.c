@@ -257,6 +257,7 @@ static int way_out_rel(const GgBox* box, int ox, int oz, int fx, int fz, const u
     return 0;
 }
 
+#ifdef GUARDGEO_TEST
 int gg_way_out(const GgBox* box, int x, int z, int fx, int fz, const uint8_t* pass, const uint8_t* taken,
                const GgWork* wk)
 {
@@ -264,6 +265,7 @@ int gg_way_out(const GgBox* box, int x, int z, int fx, int fz, const uint8_t* pa
     if (!in_box(box, ox, oz, fx, fz)) return 0;
     return way_out_rel(box, ox, oz, fx, fz, pass, taken, wk);
 }
+#endif
 
 /* a footprint at box-relative (x, z) that lies in the box, fits pass and covers no taken cell */
 static int place_free(const GgBox* box, int x, int z, int fx, int fz, const uint8_t* pass, const uint8_t* taken)

@@ -74,10 +74,13 @@ int gg_seat(const GgBox* box, int fx, int fz, const uint8_t* pass, const uint8_t
             int r2min, int r2max, const GgSeated* seated, int nseated, int budget, const GgWork* wk,
             uint8_t* taken2, int* sx, int* sz);
 
+#ifdef GUARDGEO_TEST
 /* A way out of the box for a builder of footprint fx x fz at place (x, z), over `pass` and around `taken`, its own
-   footprint's cells excepted: 1 found. Work: `wk` as gg_lane's. */
+   footprint's cells excepted: 1 found. Work: `wk` as gg_lane's. Only the self-test asks it from outside
+   (tests/guardtest.py defines GUARDGEO_TEST): gg_seat makes the same test itself, so no DLL build compiles it. */
 int gg_way_out(const GgBox* box, int x, int z, int fx, int fz, const uint8_t* pass, const uint8_t* taken,
                const GgWork* wk);
+#endif
 
 /* THE WAIT SPOT: the place nearest (x, z) -- rings of growing Chebyshev radius up to `rmax`, each walked from its
    top-left corner clockwise -- whose footprint lies in the box, fits `pass` and covers no `taken` cell. 1 with
