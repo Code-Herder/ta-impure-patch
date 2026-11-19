@@ -20,18 +20,22 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
    stands in the plant's yard, so for a stock builddistance that band barely leaves the plant's footprint
    (ARMCK on a Flash in an ARMVP: one cell outside it); a mod's longer builddistances give more seats.
 
-   THE HOOK. A stub at 0x40654B runs the stolen `mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]` and calls guard_visit
+   THE HOOKS. A stub at 0x40654B runs the stolen `mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]` and calls guard_visit
    with the registers: ebx the guard node, edi the guarder, eax the plant. The visit rewrites the node's offset
    and radius so that the home move goes to the builder's seat, or to its wait spot, and answers whether to skip
    the assist: a builder with no seat goes home instead of walking in to help. It then runs the stolen `cmp
    ecx,ebp` and goes on at 0x406553, or, skipped, at 0x4066AC with eax the plant, which is what the home move
    reads. The assist is taken only by a builder standing on its seat. The visit is stock -- it writes nothing and answers 0 -- for a guarder that
    is not a ground builder, for a guarded unit that is not a finished plant whose build menu makes a mobile
-   unit, and for every guard once a table is full.
+   unit, and for every guard once a table is full. Three more keep a seated guard's arm open from one unit to the
+   next, at StartBuilding's entry 0x438590, the order destructor's bit test 0x43A21E and the order controller's
+   handler dispatch 0x43B865 (THE ARM, below).
 
    STATE, all SIM_STATE: the plant rows s_plant (its identity, its frame's centre, its box, its lanes and the
    signature of the structures in its box) and the builder rows s_seat (its identity, its plant, its seat or
-   wait spot, and the cell it last stood on and since when). The level's plant types s_type are SIM_CONTENT: the build menus of the level's
+   wait spot, the cell it last stood on and since when, a seat it avoids, its held arm, the heading of its last
+   StartBuilding and since when its plant has been idle), and s_armed, the count of rows holding an arm. The
+   level's plant types s_type are SIM_CONTENT: the build menus of the level's
    data. Rows name units by slot and birth (tagpu_unit_birth): a slot recycled for another unit never matches a
    row. OWNER: the guard handler runs only on its owner's peer (0x48AEB5..0x48AECD), never for a puppet seat, and
    the visit refuses a puppet level besides.
@@ -42,7 +46,8 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
    engine's own call, where the guard handler itself reads the same memory.
 
    THREADS. The rows are cleared and the plant types read on the LOADER thread at the PLAYERS call (0x4919C8),
-   before the game thread's first step; the visit runs on the game thread inside the order run. */
+   before the game thread's first step; the visit, the arm's three hooks and its folds run on the game thread
+   inside the unit tick: the order run 0x43B7C0 and the destructor and StartBuilding calls of its handlers. */
 
 #include <windows.h>
 #include <stdint.h>
@@ -69,6 +74,8 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define VA_FOLD        0x004385F0u   /* stdcall (unit, node): StopBuilding behind node+0x42 bit 0x400000     */
 #define VA_DTOR_TEST   0x0043A21Eu   /* the order destructor 0x43A1F0's `test [esi+0x42],0x400000`          */
 #define VA_DTOR_NEXT   0x0043A225u   /* its `je 0x43A264`, which reads the test                             */
+#define VA_DISPATCH    0x0043B865u   /* the order run 0x43B7C0's `mov ecx,[0x512344]` before its handler call */
+#define VA_DISP_NEXT   0x0043B86Bu
 #define S_HELPBUILD    0x005013F0u   /* "HelpBuild"                                                         */
 #define S_FOLLOW       0x005014D8u   /* "Follow_Ground"                                                     */
 #define S_BUILDINGBLD  0x005011F0u   /* "BuildingBuild"                                                     */
@@ -79,6 +86,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define U_FX           0x7E          /* s16 the footprint, copied from the def (0x485AAA)                   */
 #define U_FZ           0x80
 #define U_ORDERS       0x5C          /* the main order list's head                                          */
+#define U_STANCE       0x10F         /* bit 0 INBUILDSTANCE: HelpBuild's state 2 waits on it (0x438709)       */
 #define MV_STAMP       0x26          /* u32 the mover's claim stamp: GameTime at its last change of cell    */
 #define N_ACTION       0x04
 #define N_TARGET       0x16
@@ -175,12 +183,31 @@ static const SimField SEAT_LAYOUT[] = {
 static GuardSeat s_seat[GUARD_SEATS];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_NONE, SEAT_LAYOUT);
 
+/* the rows with arm set: the dispatch hook's one test while none is held. Every change of arm goes through
+   arm_hold, arm_drop and seat_clear */
+static int32_t s_armed;
+SIM_VAR(s_armed, SIM_STATE);
+
+static void arm_drop(GuardSeat* t)
+{
+    if (t->arm) { t->arm = 0; s_armed--; }
+    t->idle = 0;
+}
+
+static void seat_clear(GuardSeat* t)
+{
+    arm_drop(t);
+    memset(t, 0, sizeof *t);
+}
+
 static unsigned char* s_stub;
 SIM_CODE(s_stub);
 static unsigned char* s_start_stub;
 SIM_CODE(s_start_stub);
 static unsigned char* s_dtor_stub;
 SIM_CODE(s_dtor_stub);
+static unsigned char* s_disp_stub;
+SIM_CODE(s_disp_stub);
 static struct { uint8_t installed, arm; } s_install;
 SIM_VAR(s_install, SIM_INSTALL);
 
@@ -615,12 +642,12 @@ static GuardSeat* seat_row(unsigned slot, unsigned birth, int create)
         if (s_seat[i].state == GS_FREE) { if (free_i < 0) free_i = i; continue; }
         if (s_seat[i].builder == slot) {
             if (s_seat[i].birth == birth) return &s_seat[i];
-            memset(&s_seat[i], 0, sizeof s_seat[i]);
+            seat_clear(&s_seat[i]);                 /* the slot's unit died: its arm needs no fold */
             if (free_i < 0) free_i = i;
         }
     }
     if (!create || free_i < 0) return NULL;
-    memset(&s_seat[free_i], 0, sizeof s_seat[free_i]);
+    seat_clear(&s_seat[free_i]);
     s_seat[free_i].builder = (uint16_t)slot;
     s_seat[free_i].birth = birth;
     s_seat[free_i].state = GS_WAITING;
@@ -791,12 +818,15 @@ static void seats_off_lanes(const Eng* e)
      the last one, is not started; the node gets the bit, so it owns the open arm again and folds it as stock
      (arm_start).
    - FOLDED, through the engine's own 0x4385F0 so the broadcast to the other players goes with it: before any
-     other StartBuilding of that builder (arm_start); when its guard order's node is destroyed -- another order,
+     other StartBuilding of that builder, and before a skipped start would wait on a cleared build stance
+     (arm_start); before the order run dispatches any handler of the builder's but its guard's on its plant and a
+     HelpBuild on its plant's frame (arm_dispatch); when its guard order's node is destroyed -- another order,
      the plant's death, the unit changing hands (arm_dtor); at a visit that finds it off its seat or no longer
-     seated, which comes before the home move that would walk it, every move of a guard being that home move's
-     (guard_visit); when its plant has had no build at its head for ARM_GRACE ticks (guard_visit); and when its
-     row is freed with the builder alive (rows_gc).
-   An open arm therefore never travels: every way a guard leaves its seat folds it first. A dead builder needs no
+     seated, before the home move that would walk it (guard_visit); when its plant has had no build at its head
+     for ARM_GRACE ticks (guard_visit); and when its row is freed with the builder alive (rows_gc).
+   An open arm therefore never travels: a guard moves only through an order's handler, and the only handlers that
+   run while it is held are its guard's, which moves it only to its seat, and the plant's HelpBuild, whose band
+   holds the seat. A dead builder needs no
    fold. The feature runs on the builder's owner's machine only; the destructor and StartBuilding run on that
    machine for its own nodes, and the other machines see the arm through the broadcasts, which are skipped or
    sent together with the starts. */
@@ -814,8 +844,7 @@ static void arm_fold(const Eng* e, GuardSeat* t, const char* why)
     char node[0x48];
     char* b;
     if (!t->arm) return;
-    t->arm = 0;
-    t->idle = 0;
+    arm_drop(t);
     if (!(b = unit_at(e, t->builder)) || !alive(b) || birth_of(t->builder) != t->birth) return;
     memset(node, 0, sizeof node);
     *(uint32_t*)(node + N_FLAGS) = NF_STARTED;       /* 0x4385F0 reads the node's +0x42 and nothing else */
@@ -874,9 +903,48 @@ static void __cdecl arm_dtor(unsigned* regs)
     if (act != action_of(S_HELPBUILD) || !(*(const uint32_t*)(node + N_FLAGS) & NF_STARTED)) return;
     if (seated_row(&e, b, &p) != t) return;
     *(uint32_t*)(node + N_FLAGS) &= ~NF_STARTED;
-    t->arm = 1;
+    if (!t->arm) { t->arm = 1; s_armed++; }
     t->idle = 0;
     tagpu_logf("guard: arm held builder=%d tick=%d", bslot, (int)e.now);
+}
+
+/* the order run's handler dispatch: regs[1] esi the node about to run. A held arm is folded before any handler
+   but its guard's on its plant and a HelpBuild on its plant's frame runs: an order put in front of the guard --
+   the attack reaction 0x43B1F0 at 0x4063F5, the repair branch, any other insert -- is run by the same controller
+   loop, in the same tick (result 3's wait goes on at 0x43B99F to the new head), so this is the first place it can
+   move the builder */
+static void __cdecl arm_dispatch(unsigned* regs)
+{
+    const char* node = (const char*)(uintptr_t)regs[1];
+    char* b;
+    const char* p;
+    unsigned char act;
+    GuardSeat* t;
+    Eng e;
+    int bslot;
+    if (!s_armed || tagpu_puppet_on() || !eng_open(&e)) return;
+    b = *(char* const*)(node + N_UNIT);
+    if ((bslot = slot_of(&e, b)) < 0 || !(t = seat_row((unsigned)bslot, birth_of((unsigned)bslot), 0)) || !t->arm)
+        return;
+    act = *(const uint8_t*)(node + N_ACTION);
+    if (seated_row(&e, b, &p) == t) {
+        const char* tg = *(char* const*)(node + N_TARGET);
+        if (act == action_of(S_FOLLOW) && tg == p) return;
+        /* a HelpBuild on the plant's frame: it stands where the seat's band is centred, so the seat is in range and
+           the builder walks no step. A HelpBuild on the unit just finished, which the assist can still find at the
+           plant's head as it ends, is folded for: state 0 sets its goal and its wait (0x404053), state 1 ends it
+           only at a later tick (0x40408E), and in between the movement pass walks toward a unit that has begun to
+           leave the yard */
+        if (act == action_of(S_HELPBUILD) && tg && tg == plant_frame(p)) return;
+        {
+            float tn = -1.0f;
+            if (tg && slot_of(&e, tg) >= 0) memcpy(&tn, tg + U_NANO, 4);
+            tagpu_logf("guard: arm other order builder=%d action=%u target=%d build=%.3f", bslot, (unsigned)act,
+                       tg ? slot_of(&e, tg) : -1, (double)tn);
+        }
+    } else
+        tagpu_logf("guard: arm other order builder=%d action=%u not seated", bslot, (unsigned)act);
+    arm_fold(&e, t, "other-order");
 }
 
 /* StartBuilding's entry: regs is the pushad frame, regs[3] the esp at the entry (return address, unit, node,
@@ -895,14 +963,16 @@ static int __cdecl arm_start(unsigned* regs)
     if (!(t = seat_row((unsigned)bslot, birth_of((unsigned)bslot), 0))) return 0;
     help = *(const uint8_t*)(node + N_ACTION) == action_of(S_HELPBUILD) && seated_row(&e, b, &p) == t &&
            plant_frame(p) != NULL && *(char* const*)(node + N_TARGET) == plant_frame(p);
-    if (t->arm && help && heading == t->heading) {
+    /* the skipped start leaves the build stance as the held arm left it: HelpBuild's state 2 goes on only with
+       INBUILDSTANCE set, which only a script SET writes, so a stance some other script cleared is folded and
+       started again, never waited on */
+    if (t->arm && help && heading == t->heading && (*(const uint8_t*)(b + U_STANCE) & 1)) {
         *(uint32_t*)(node + N_FLAGS) |= NF_STARTED;
-        t->arm = 0;
-        t->idle = 0;
+        arm_drop(t);
         tagpu_logf("guard: arm kept builder=%d tick=%d", bslot, (int)e.now);
         return 1;
     }
-    arm_fold(&e, t, help ? "heading" : "other-build");
+    arm_fold(&e, t, !help ? "other-build" : heading != t->heading ? "heading" : "stance");
     if (help) t->heading = heading;
     return 0;
 }
@@ -922,7 +992,7 @@ static void rows_gc(const Eng* e, unsigned char follow)
         for (k = 0; k < GUARD_SEATS; k++)
             if (s_seat[k].state != GS_FREE && s_seat[k].plant == i) {
                 arm_fold(e, &s_seat[k], "plant-gone");
-                memset(&s_seat[k], 0, sizeof s_seat[k]);
+                seat_clear(&s_seat[k]);
             }
         memset(r, 0, sizeof *r);
     }
@@ -933,7 +1003,7 @@ static void rows_gc(const Eng* e, unsigned char follow)
         p = s_plant[t->plant].used ? unit_at(e, s_plant[t->plant].slot) : NULL;
         if (!p || !still_guards(e, t, p, follow)) {
             arm_fold(e, t, "row-freed");
-            memset(t, 0, sizeof *t);
+            seat_clear(t);
         }
     }
 }
@@ -1088,23 +1158,29 @@ static const unsigned char STOLEN[8] = { 0x8B, 0x43, 0x16, 0x8B, 0x48, 0x5C, 0x3
 
 static const unsigned char START_STOLEN[7] = { 0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x10 };
 static const unsigned char DTOR_STOLEN[7] = { 0xF7, 0x46, 0x42, 0x00, 0x00, 0x40, 0x00 };
+static const unsigned char DISP_STOLEN[6] = { 0x8B, 0x0D, 0x44, 0x23, 0x51, 0x00 };
 
-/* THE ARM's two hooks. Both act only once both are in (s_install.arm): a held arm with no StartBuilding hook would
-   never be taken back.
+/* THE ARM's three hooks. All act only once all are in (s_install.arm): a held arm with no StartBuilding hook would
+   never be taken back, and one with no dispatch hook could travel.
    0x438590: pushad; push esp; call arm_start; add esp,4; test eax,eax; popad; jz +3; ret 0xC; push ebx; push esi;
    push edi; mov edi,[esp+0x10]; jmp 0x438597.
-   0x43A21E: pushad; push esp; call arm_dtor; add esp,4; popad; test [esi+0x42],0x400000; jmp 0x43A225 */
+   0x43A21E: pushad; push esp; call arm_dtor; add esp,4; popad; test [esi+0x42],0x400000; jmp 0x43A225.
+   0x43B865: pushad; push esp; call arm_dispatch; add esp,4; popad; mov ecx,[0x512344]; jmp 0x43B86B (no branch
+   lands in 0x43B866..0x43B86A; the recorder's observer is at 0x43B878, after it) */
 static void arm_install(void)
 {
     unsigned char* p;
     if (!tagpu_detour_bytes_ok(VA_START, START_STOLEN, (int)sizeof START_STOLEN) ||
-        !tagpu_detour_bytes_ok(VA_DTOR_TEST, DTOR_STOLEN, (int)sizeof DTOR_STOLEN)) {
-        tagpu_log("guard: arm NOT installed: 0x438590 or 0x43A21E does not hold the retail code");
+        !tagpu_detour_bytes_ok(VA_DTOR_TEST, DTOR_STOLEN, (int)sizeof DTOR_STOLEN) ||
+        !tagpu_detour_bytes_ok(VA_DISPATCH, DISP_STOLEN, (int)sizeof DISP_STOLEN)) {
+        tagpu_log("guard: arm NOT installed: 0x438590, 0x43A21E or 0x43B865 does not hold the retail code");
         return;
     }
-    if (!(s_start_stub = tagpu_detour_stub()) || !(s_dtor_stub = tagpu_detour_stub())) {
+    if (!(s_start_stub = tagpu_detour_stub()) || !(s_dtor_stub = tagpu_detour_stub()) ||
+        !(s_disp_stub = tagpu_detour_stub())) {
         if (s_start_stub) tagpu_detour_stub_free(s_start_stub);
-        s_start_stub = NULL;
+        if (s_dtor_stub) tagpu_detour_stub_free(s_dtor_stub);
+        s_start_stub = s_dtor_stub = NULL;
         tagpu_log("guard: arm NOT installed: no stub memory");
         return;
     }
@@ -1125,10 +1201,23 @@ static void arm_install(void)
     *p++ = 0x61;
     memcpy(p, DTOR_STOLEN, sizeof DTOR_STOLEN); p += sizeof DTOR_STOLEN;
     *p++ = 0xE9; tagpu_detour_rel(p, VA_DTOR_NEXT); p += 4;
+    p = s_disp_stub;
+    *p++ = 0x60; *p++ = 0x54;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(uintptr_t)arm_dispatch); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61;
+    memcpy(p, DISP_STOLEN, sizeof DISP_STOLEN); p += sizeof DISP_STOLEN;
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_DISP_NEXT); p += 4;
+    if (!tagpu_detour_land(VA_DISPATCH, s_disp_stub, (int)sizeof DISP_STOLEN)) {
+        tagpu_detour_stub_free(s_disp_stub); tagpu_detour_stub_free(s_dtor_stub); tagpu_detour_stub_free(s_start_stub);
+        s_disp_stub = s_dtor_stub = s_start_stub = NULL;
+        tagpu_log("guard: arm NOT installed: 0x43B865 could not be written");
+        return;
+    }
     if (!tagpu_detour_land(VA_DTOR_TEST, s_dtor_stub, (int)sizeof DTOR_STOLEN)) {
         tagpu_detour_stub_free(s_dtor_stub); tagpu_detour_stub_free(s_start_stub);
         s_dtor_stub = s_start_stub = NULL;
-        tagpu_log("guard: arm NOT installed: 0x43A21E could not be written");
+        tagpu_log("guard: arm NOT installed: 0x43A21E could not be written (the dispatch hook stays inert)");
         return;
     }
     if (!tagpu_detour_land(VA_START, s_start_stub, (int)sizeof START_STOLEN)) {
@@ -1138,7 +1227,7 @@ static void arm_install(void)
         return;
     }
     s_install.arm = 1;
-    tagpu_log("guard: installed: the arm kept open 0x438590 0x43A21E");
+    tagpu_log("guard: installed: the arm kept open 0x438590 0x43A21E 0x43B865");
 }
 
 /* mov eax,[ebx+0x16]; mov ecx,[eax+0x5c]; pushad; push esp; call guard_visit; add esp,4; test eax,eax; popad
@@ -1183,6 +1272,7 @@ void tagpu_guard_level_init(void)
     unsigned side, sides, t;
     memset(s_plant, 0, sizeof s_plant);
     memset(s_seat, 0, sizeof s_seat);
+    s_armed = 0;
     memset(&s_diag, 0, sizeof s_diag);
     s_ntype = 0;
     s_reach = 0;

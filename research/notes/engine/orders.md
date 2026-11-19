@@ -1090,7 +1090,9 @@ movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild n
 and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
 node: the annulus built there is the whole range rule. The call's return is `0x404053`, which sets the node's
 `+0x06` to `0xE8`. Not established: who posts the event `0x02` that ends a
-help in states 2 and 3. Impure's guard seats are placed in that annulus
+help in states 2 and 3. State 0 sets the wait mask `0xE8` and returns 1 (`0x404053..0x40405A`), so
+state 1 runs only at a later tick, on a goal event; a target already finished then ends it (5) at
+`0x40408E..0x4040A1`, after the movement pass has had one tick of its goal. Impure's guard seats are placed in that annulus
 ([factory guard](../modules/factory-guard.html)).
 
 **What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
@@ -1389,7 +1391,12 @@ What that rests on:
   (`0x48AFAA`). For the head node `[unit+0x5C]` it ORs the node's `+0x4E` with the unit's event word
   `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
   and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
-  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`). Results 1, 2 and 4 go
+  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`; the descriptor array
+  is loaded just before it at `0x43B865`, where Impure's guard folds a held arm).
+  Result 3 is no stop: its random wait sets the node's timer (`0x43B890` → `0x43B951..0x43B970`)
+  and goes on at `0x43B99F` to the head again, so a node a handler linked in front of itself and
+  then answered 3 for -- Follow_Ground's attack reaction (`0x4063F5`, returning 3 at `0x406405`)
+  and its assist (`0x406532`, returning 3 at `0x40653A`) -- runs in the same tick. Results 1, 2 and 4 go
   through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
   whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
   `0x439E80` sets, never the tick.

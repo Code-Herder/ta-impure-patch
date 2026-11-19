@@ -116,7 +116,10 @@ and the later ones queue behind them, so by the sixth the newest waits inside th
 
 The pair is skipped at its two ends (the module note's *The arm*): the HelpBuild destructor's bit
 test `0x43A21E` holds the arm, the StartBuilding entry `0x438590` takes it back or folds it first,
-and every other way out folds through `0x4385F0`, whose only read of its node is the bit.
+the order run's dispatch `0x43B865` folds it before any other order of the builder runs, and every
+fold goes through `0x4385F0`, whose only read of its node is the bit. The landing's review found the
+dispatch was needed: an order the guard links in front of itself (the attack reaction, the repair
+branch) runs in the same controller loop, before any visit.
 
 **MEASURED 2026-11-18** (`guard-seats`, six Flashes, gamespeed 10, two games): the seated ARMCK's arm
 was held at each unit's end and taken back at the next one's start 61 to 96 ticks later with the yard
@@ -125,4 +128,6 @@ clear, 241 with a Flash waiting in it; the queue's end folded it 90 ticks after 
 HelpBuild under way held, then the guard node's destructor folded), and the next builder took the
 freed seat and held its own. Each builder's second unit folded and started again once: its heading
 to the frame differed from its first. The decision's "fold and next open skipped as a pair" holds;
-the grace is decision 8's measured gap plus a margin.
+the grace is decision 8's measured gap plus a margin. With the dispatch hook in, each game's first
+unit folds once more for the assist's HelpBuild on the Flash just finished (`other-order`, build
+0.000), whose goal the movement pass would follow for a tick; the later units are kept.
