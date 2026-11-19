@@ -16,27 +16,24 @@ unit. Anything else -- a tank guarding a plant, a builder guarding a commander, 
 a nanoframe -- runs as stock. A plant that makes only aircraft gets seats and no lane; a plant that
 makes both keeps the lanes of its ground classes only.
 
-**The hooks.** The guard order's state 1 reaches its assist at `0x40654B` on every wake, and every
+**The hook.** The guard order's state 1 reaches its assist at `0x40654B` on every wake, and every
 path to its home move passes there. The stub calls `guard_visit`, which points the guard node's
 offset `+0x22..+0x2D` and radius `+0x36` at the builder's seat, or at its wait spot, before the home
-move `0x4066AC` reads them, and skips the assist for a builder that has no seat, so a waiting builder
-does not walk in to help. A seated builder takes the assist as stock, and the HelpBuild it gets is in
-range from the seat (below), so it builds without a step.
+move `0x4066AC` reads them, and skips the assist for a builder not standing on its seat, so a waiting
+builder does not walk in to help and one on its way does not take a help that walks it elsewhere. A
+builder on its seat takes the assist as stock, and the HelpBuild it gets is in range from there, so it
+builds without a step.
 
-**Help from the plant's edge.** Stock HelpBuild's one range rule is the annulus its state 0 builds
-round the frame's centre: in range when `(rin/16)² ≤ d² ≤ ((builddistance + rin)/16)²`, d from the
-place the builder would have centred on the frame, rin from the frame's footprint. The frame stands in
-the plant's yard, so for a stock builddistance that band hardly leaves the footprint: ARMCK
-(builddistance 40) on a Flash (rin 22) in an ARMVP reaches 3 cells from the frame, one cell outside
-the plant. A seated guard therefore helps from the plant's edge: a seat lies in **the plant's own
-band** -- centred on the plant, rin of the plant's footprint (55 for 6 × 6), rout the builder's
-builddistance + rin -- and the hook at `0x40404E` gives the seated guard's help on the plant's own
-frame that annulus in place of the frame's. It is the engine's rule for building a structure the
-plant's size: in range when the builddistance reaches the plant. The builddistance is unchanged; the
-reach to the frame grows by the frame's distance to the footprint's edge, and only for that help:
-every other build, repair, reclaim and capture, a help from a builder off its seat and the player's
-own help keep the frame's annulus. Nothing after the goal tests range again (HelpBuild's states 1-3,
-the work `0x41BA60`, the nano emitter), so a builder on its seat builds every product from it.
+**The band is the engine's.** HelpBuild's one range rule is the annulus its state 0 builds round the
+frame's centre: in range when `(rin/16)² ≤ d² ≤ ((builddistance + rin)/16)²`, d from the place the
+builder would have centred on the frame, rin from the frame's footprint, and nothing after the goal
+tests range again ([orders](../engine/orders.html), *Range is tested once*). A seat lies in that band
+for every product the plant makes: from the largest product's rin to the builder's builddistance plus
+the smallest product's rin. The frame's centre is read from the plant's BuildingBuild head while it
+has a frame and kept in the plant's row (the plant's own centre until the first frame is seen); a
+frame elsewhere re-plans the plant. The frame stands in the yard, so with OTA's builddistances the band
+barely leaves the footprint -- ARMCK (40) on an ARMVP's products (rin 22..30) has one seat, behind the
+plant -- and a mod's longer builddistances give more. Builddistance and every help keep stock's rule.
 
 **The lane.** For each ground class the plant builds, a breadth-first search from the yard's exits --
 the footprint edges holding cells a product walks off -- over the places where the class's largest
@@ -46,7 +43,8 @@ The path is kept as rectangles grown by one cell either side. Other exits may be
 with no way out keeps no lane: nothing it builds could leave.
 
 **The seats.** A seat is a place in the plant's box that the builder's class can stand on, inside
-its band, covering no structure, no lane of any plant in the box, no other row's seat or wait spot
+its band, covering no building's footprint (its open yard included: those cells are held by no unit
+in the map, so a test of the cells alone would seat a builder inside the plant), no lane of any plant in the box, no other row's seat or wait spot
 and no unit standing still (a mover that has not changed cell for 30 ticks, which the pathfinder
 itself treats as an obstacle), and from which a way leads out of the box for the builder -- and still
 leads out for every builder already seated. Seats are taken from the band's outer edge inward, so a
@@ -66,12 +64,12 @@ goes back to waiting.
 
 ## State
 
-`s_plant` (64 rows: the plant's slot, birth and type, its first cell, its box, the
+`s_plant` (64 rows: the plant's slot, birth and type, its first cell, the frame's centre, its box, the
 signature of the structures in it, its lanes) and `s_seat` (256 rows: the builder's slot and birth,
 its plant's row, its seat or wait spot, the cell it last stood on and since when, a seat it avoids) are
 SIM_STATE; a row names a unit by slot and birth, so a recycled slot never matches, and a builder's row is
 freed at the next visit after its builder dies or stops guarding its plant. `s_type` (the
-level's plant types by side: their ground classes and each class's largest product)
+level's plant types by side: their ground classes, each class's largest product, the band's terms)
 and `s_reach` (the widest builddistance of a mobile assisting builder, at most 400 px) are
 SIM_CONTENT, read at the level init from the defs and the build menus. When a table is full, a
 further guard runs as stock. The visit runs only on the builder's owner's machine (the order run's
@@ -79,18 +77,16 @@ owner test) and never on a puppet level: a replay's builders move as the recordi
 
 ## Log lines
 
-- `guard: installed: the guard's assist 0x40654B` and `guard: installed: help from the plant's edge
-  0x40404E` at attach.
+- `guard: installed: the guard's assist 0x40654B` at attach.
 - `guard: level plant types=N sides=S reach=R` at each level init.
 - `guard: lanes plant= type= cell= exits= rally_exit= classes= rects= box=` at each plan of a plant.
 - `guard: seat builder= plant= at= band= seated= lanes=` when a builder is seated;
   `guard: wait builder= plant= at= ...` when its wait spot changes.
-- `guard: help from the edge builder= plant= rin= rout=` at each help given the plant's band.
 
 ## Not yet done
 
-- **The finished product parks in the lane.** Park's ring (8n × 6n round the product) lies inside a
-  lane; landing 2 steers it past the lane's end.
+- **Products park as stock.** With no rally a product's Park ring (8n × 6n round it) ends just
+  outside the yard's mouth, in the lane, and later products queue behind; the owner keeps that.
 - **The arm still folds between units** (StopBuilding at the end of every HelpBuild); landing 3.
 - **No mod switch yet**; landing 4. The feature is always on.
 - **ImpAI's yard rule** keeps its own copy of the yard's exits and its own way out; landing 5 puts it

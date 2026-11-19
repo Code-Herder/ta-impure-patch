@@ -25,7 +25,8 @@ of the room around the plant or of the arm.
    inner ring boxed in by the outer one.
 6. **A builder with no seat waits nearby**, off every lane and footprint, and does not walk in to
    help; it takes a seat when one frees.
-7. **The finished product does not park in the lane**: the Park goal is steered past the lane's end.
+7. **Products leave the plant as stock** (owner, 2026-11-18, after playing landing 1): the Park goal is not
+   changed. With no rally the products stop just outside the yard's mouth, as they always have.
 8. **The arm stays open** while the plant has more queued; once the queue is empty it folds after a
    grace, the measured gap between two units on a stock plant plus a margin. Any other order, the
    plant's death, or the builder dying or changing hands folds it at once. The fold and the next open
@@ -36,12 +37,11 @@ of the room around the plant or of the arm.
     obstacles where they stand.
 11. **One hard switch per mod, on by default.** A mod's catalog entry can turn the whole feature off
     (seats, lane, arm), with a reason; a player cannot turn it back on, and there is no player switch.
-13. **A seated guard helps from the plant's edge** (decided after landing 1's first game showed the
-    stock band leaves one seat): a guard the coordinator has seated, helping its own plant's product, is
-    in range when its builddistance reaches the plant's footprint, not the frame's centre. Its
-    builddistance is unchanged; its reach to the frame grows by the frame's distance to the footprint's
-    edge (3 cells on a 6 x 6 plant), and to nothing else: every other build, repair, reclaim, capture
-    and the player's own help keeps stock's band. Seats may touch the footprint; no gap is kept.
+13. **Range stays the engine's own, from the unit being built** (owner, 2026-11-18, after playing both): a
+    seat lies in HelpBuild's stock band round the frame's centre for every product, and builddistance and
+    every help keep stock's rule. With OTA's builddistances that band barely leaves a plant's footprint (one
+    seat behind an ARMVP for an ARMCK); a mod's longer builddistances give more seats. A plant's-edge range
+    for seated guards was built, played and removed.
 12. **One way-out geometry for the coordinator and ImpAI.** The yard's exits, the product classes and
     the lane search live in one engine-free module; ImpAI moves onto it once its own branch has landed
     on main (its `impai_build.c` is 193 commits ahead on `worktree-Bar_game_AI` as this plan is written,
@@ -51,8 +51,8 @@ of the room around the plant or of the arm.
 
 | # | Landing | Proof |
 |---|---|---|
-| 1 | The seats and the lane: the engine-free geometry (`tagpu_guardgeo.c`), the coordinator (`tagpu_guard.c`), the hook at the guard's assist `0x40654B` (seat, wait spot, assist skip) and the help from the plant's edge at `0x40404E` | a unit test of the geometry; a scenario: six ARMCK and two ARMCV guarding an ARMVP sit still through a queue of six, no builder in the lane |
-| 2 | The Park goal past the lane | the same scenario with no rally: no product stands in the lane |
+| 1 | The seats and the lane: the engine-free geometry (`tagpu_guardgeo.c`), the coordinator (`tagpu_guard.c`) and the hook at the guard's assist `0x40654B` (seat, wait spot, assist skip) | a unit test of the geometry; a scenario: six ARMCK and two ARMCV guarding an ARMVP, the seated still through a queue of six, the rest waiting, no builder in the lane |
+| 2 | (dropped: products leave as stock, decision 7) | -- |
 | 3 | The arm kept open | the scenario's builders run StartBuilding once for the queue; a fold within the grace of the queue's end; a move order folds at once |
 | 4 | The mod switch | a catalog entry with the switch off plays as stock |
 | 5 | ImpAI on the shared geometry | after ImpAI's branch lands: its yard region and the coordinator's lane are the same rectangles |
@@ -76,7 +76,7 @@ All DISASSEMBLED 2026-11-18 in the pristine image unless marked; the entries are
   [not established beyond the readers of the mover's `+0x2E` bit 2].
 - **Park's goal** is the border of a box of 8n × 6n cells round the product, n its footprint (+3 for
   a ship), the cheapest border cell taken [INFERRED from the search]: about 9 cells off for a 2 x 2
-  unit, inside a lane. Landing 2's subject.
+  unit, inside a lane. Left as stock (decision 7).
 - **The factory's queue**: BuildingBuild count nodes on the main list, `+0x3A` the units still to
   make with the one in progress included; between two units the head's frame `+0x16` is NULL until
   the next create. Landing 3's input.
@@ -92,14 +92,18 @@ the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the two hooks, the row
 types). The module as it stands is [the module note](modules/factory-guard.html).
 
 **MEASURED 2026-11-18** (`guard-seats` on Two Continents, the ARMVP at (1100, 7400), six ARMCK and two ARMCV
-in a line south of it across the yard's mouth, six Flashes queued, gamespeed 10, 25 rosters 5 s apart):
-seven builders seated round the plant's north, west and east sides, 4-6 cells from its centre, each on its
-seat from the 20 s sample to the end; the eighth (an ARMCV) waited where it stood; 50 helps were given the
-plant's band; all six Flashes were made within about 60 s, against five in two minutes with the one seat the
-stock band allows. The first games found the band's limit (decision 13) and two faults since fixed: a seat
-given up after four visits rather than 180 ticks, and a seated builder that took the assist on its way to its
-seat and walked into the yard for the frame's band.
+in a line south of it across the yard's mouth, six Flashes queued, gamespeed 10, 25 rosters 5 s apart): the
+stock band (1..9 cells² round the frame's place for an ARMCK) holds one seat outside the footprint and off the
+lane, behind the plant; one ARMCK took it and stood on it from the first sample after its walk to the end,
+the other seven waited where they stood, outside the yard and the lane, and nothing crashed. The owner played
+the same build in ProTA, where longer builddistances seat more builders.
+
+The games found, and the landing fixed: a seat given up after four visits rather than 180 ticks; a seated
+builder that took the assist on its way to its seat and walked to another place of the band; and, in ProTA,
+a seat inside the plant's own yard, whose open cells no unit holds in the map, so seats and wait spots now
+keep off every building's whole footprint. The first test group stood the builders on a wall of Core Prime
+Industrial Area, where nothing could move; it is on Two Continents now.
 
 **Park, MEASURED in the same games**: with no rally the Flashes stop one to two cells outside the yard's mouth
-and the later ones queue behind them, so by the sixth the newest waits inside the yard. Stock behaviour, with
-no builder in the lane; landing 2's subject.
+and the later ones queue behind them, so by the sixth the newest waits inside the yard. Stock behaviour, kept
+(decision 7).

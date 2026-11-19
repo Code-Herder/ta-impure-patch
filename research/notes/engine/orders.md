@@ -1090,7 +1090,7 @@ movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild n
 and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
 node: the annulus built there is the whole range rule. The call's return is `0x404053`, which sets the node's
 `+0x06` to `0xE8`. Not established: who posts the event `0x02` that ends a
-help in states 2 and 3. Impure's guard seats replace that annulus for a seated guard
+help in states 2 and 3. Impure's guard seats are placed in that annulus
 ([factory guard](../modules/factory-guard.html)).
 
 **What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
