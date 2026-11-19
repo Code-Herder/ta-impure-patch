@@ -133,6 +133,7 @@
   "guard-seats": {
    "load": "guard-seats.json",
    "steps": [[120, "keys", ["pclick:512,384"]],
+             [1500, "apply", "guard-seats-solar.json"],
              [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
              [140, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
              [150, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
@@ -144,6 +145,7 @@
   "stock-guard-seats": {
    "load": "guard-seats.json",
    "steps": [[120, "keys", ["pclick:512,384"]],
+             [1500, "apply", "guard-seats-solar.json"],
              [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
              [140, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],
              [150, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMFLASH"]],

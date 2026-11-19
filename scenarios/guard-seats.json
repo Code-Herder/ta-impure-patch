@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The `guard-seats` test group (research/notes/factory-guard-plan.md): the human seat's finished ARMVP at the pinned camera centre, six ARMCK and two ARMCV guarding it from a line south of it, across the yard's mouth, metal and energy to spare. The test group selects the plant with a native click and queues Flashes through its build panel; the builders walk to their seats, help every Flash from there without a step, and the Flashes leave by the plant's lane. Two ARMCV beside the ARMCK, so the seats hold two footprints and two reaches.",
+ "description": "The `guard-seats` test groups (research/notes/factory-guard-plan.md): the human seat's finished ARMVP at the pinned camera centre, six ARMCK, two ARMCV and two ARMCOM guarding it from a line south of it, across the yard's mouth, metal and energy to spare. The test group selects the plant with a native click and queues Flashes through its build panel; the builders walk to their seats, help every Flash from there without a step, and the Flashes leave by the plant's lane. The commanders' builddistance seats several builders in the stock band, so a seat is taken with a way out kept for those already seated; the ARMCV beside the ARMCK give the seats two footprints. The test group's step guard-seats-solar.json then puts a solar collector in the plant's box, and the re-plan checks every seat again.",
  "setup": {
   "map": "Two Continents",
   "res": "1024x768",
@@ -86,6 +86,10 @@
     },
     {
      "type": "ARMCV",
+     "count": 2
+    },
+    {
+     "type": "ARMCOM",
      "count": 2
     }
    ],
