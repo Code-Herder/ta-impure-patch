@@ -60,14 +60,17 @@ frees. A seated builder that has stood on one cell short of its seat for 180 tic
 avoids that seat. A builder outside the box waits at the box's nearest place to it.
 
 **Neighbours.** At a re-plan every other finished plant of a ground product whose footprint stands in
-the box gets a row and its own lanes, so no seat or wait spot stands in another plant's way out.
+the box gets a row and its own lanes, so no seat or wait spot stands in another plant's way out, and
+its seats are checked again like the plant's own; then every seat of any plant that a lane now covers
+goes back to waiting.
 
 ## State
 
 `s_plant` (64 rows: the plant's slot, birth and type, its first cell, its box, the
 signature of the structures in it, its lanes) and `s_seat` (256 rows: the builder's slot and birth,
 its plant's row, its seat or wait spot, the cell it last stood on and since when, a seat it avoids) are
-SIM_STATE; a row names a unit by slot and birth, so a recycled slot never matches. `s_type` (the
+SIM_STATE; a row names a unit by slot and birth, so a recycled slot never matches, and a builder's row is
+freed at the next visit after its builder dies or stops guarding its plant. `s_type` (the
 level's plant types by side: their ground classes and each class's largest product)
 and `s_reach` (the widest builddistance of a mobile assisting builder, at most 400 px) are
 SIM_CONTENT, read at the level init from the defs and the build menus. When a table is full, a
@@ -93,5 +96,5 @@ owner test) and never on a puppet level: a replay's builders move as the recordi
 - **ImpAI's yard rule** keeps its own copy of the yard's exits and its own way out; landing 5 puts it
   on `tagpu_guardgeo.c`.
 - A damaged plant still pulls every guard, a waiting one too, into repairing it (the repair branch
-  runs before the assist). A builder that cannot reach the box at all holds no seat but waits where
-  it stands, outside the box.
+  runs before the assist). A builder that cannot reach the box at all is still sent to the box's
+  nearest place and stops wherever its path search leaves it.

@@ -11,7 +11,8 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
    puts a HelpBuild on the frame in front of the guard (0x43ACB0 at 0x40667A); any other way it falls to the home
    move 0x4066AC, a point goal at the plant's position plus the node's offset +0x22/+0x26/+0x2A, of radius
    (+0x36) / 2, then 30 ticks of sleep (0x4066E0..0x4066F6). Every path to the home move passes 0x40654B: the
-   branches reach it from 0x406500 and 0x406549, and no branch from outside lands in 0x40654C..0x4066AB. HelpBuild
+   branches reach it from 0x406500 and 0x406549, and the one branch from outside into 0x40654C..0x4066AB,
+   0x406516's `je 0x406691` (the repair branch's failed allocation), returns 3 there without a move. HelpBuild
    0x403F70 walks a helper only when it is outside the annulus its state 0 builds round the frame's centre
    (tagpu_guardgeo.h, THE BAND); inside it the goal is reached in the class step, before any physics, and the
    build starts the next tick. The frame stands in the plant's yard, so for a stock builddistance that band
@@ -132,10 +133,16 @@ typedef struct GuardPlant {
     int32_t  sig_tick;                /* GameTime the signature was taken; -1 none                          */
     GgRect   lane[GUARD_LANES];
 } GuardPlant;
+/* the cells, the box, the lanes and the tick are numbers whose dwords (two int16 cells read as z << 16 | x) can
+   take any value, an address's included, so the address scan passes over them while the replay compares them */
 static const SimField PLANT_LAYOUT[] = {
     SIM_FIELD(GuardPlant, slot, SIMF_ID, SIM_ID_UNIT_SLOT),
     SIM_FIELD(GuardPlant, type, SIMF_ID, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_AT(offsetof(GuardPlant, used), offsetof(GuardPlant, sig) - offsetof(GuardPlant, used), SIMF_OPAQUE,
+                 SIM_ID_NONE),
     SIM_FIELD(GuardPlant, sig, SIMF_OPAQUE, SIM_ID_NONE),
+    SIM_FIELD_AT(offsetof(GuardPlant, sig_tick), sizeof(GuardPlant) - offsetof(GuardPlant, sig_tick), SIMF_OPAQUE,
+                 SIM_ID_NONE),
     SIM_FIELD_END
 };
 static GuardPlant s_plant[GUARD_PLANTS];
@@ -153,6 +160,8 @@ typedef struct GuardSeat {
 } GuardSeat;
 static const SimField SEAT_LAYOUT[] = {
     SIM_FIELD(GuardSeat, builder, SIMF_ID, SIM_ID_UNIT_SLOT),
+    SIM_FIELD_AT(offsetof(GuardSeat, state), sizeof(GuardSeat) - offsetof(GuardSeat, state), SIMF_OPAQUE,
+                 SIM_ID_NONE),
     SIM_FIELD_END
 };
 static GuardSeat s_seat[GUARD_SEATS];
@@ -496,13 +505,15 @@ static void mark_rect(uint8_t* t, const GuardPlant* r, int x0, int z0, int x1, i
         for (x = x0; x <= x1; x++) t[(z - r->bz0) * r->bw + (x - r->bx0)] = v;
 }
 
-/* the builder's own footprint, from its def */
-static void builder_foot(const Eng* e, const char* b, int* fx, int* fz, unsigned* mclass)
+/* the builder's own footprint and movement class; 0 when the footprint is not 1..WQ_FOOT_MAX a side, which the
+   geometry's indexing rests on (tagpu_guardgeo.h) */
+static int builder_foot(const Eng* e, const char* b, int* fx, int* fz, unsigned* mclass)
 {
     WQ_DEF d;
     *fx = *(const int16_t*)(b + U_FX);
     *fz = *(const int16_t*)(b + U_FZ);
     *mclass = e->q.ops->def(&e->q, (int)type_of(e, b), &d) ? d.mclass : WQ_MCLASS_NONE;
+    return *fx >= 1 && *fz >= 1 && *fx <= WQ_FOOT_MAX && *fz <= WQ_FOOT_MAX;
 }
 
 /* whether the seat row's builder still guards plant p: a guard node on p within its list's first three */
@@ -550,12 +561,21 @@ static void build_taken(const Eng* e, const GuardPlant* r, Scratch* s, unsigned 
         int fx, fz;
         unsigned mc;
         if (t->state == GS_FREE || t->builder == self || !(b = unit_at(e, t->builder))) continue;
-        builder_foot(e, b, &fx, &fz, &mc);
+        if (!builder_foot(e, b, &fx, &fz, &mc)) continue;
         mark_rect(s->taken, r, t->x, t->z, t->x + fx - 1, t->z + fz - 1, 2);
     }
 }
 
 /* ---- the visit ---- */
+
+/* the live row of builder `slot` of this birth, or NULL; changes nothing */
+static const GuardSeat* seat_find(unsigned slot, unsigned birth)
+{
+    int i;
+    for (i = 0; i < GUARD_SEATS; i++)
+        if (s_seat[i].state != GS_FREE && s_seat[i].builder == slot && s_seat[i].birth == birth) return &s_seat[i];
+    return NULL;
+}
 
 static GuardSeat* seat_row(unsigned slot, unsigned birth, int create)
 {
@@ -630,7 +650,7 @@ static void seat_or_wait(Eng* e, Scratch* s, const GuardPlant* r, GuardSeat* t, 
         int ofx, ofz;
         unsigned omc;
         if (o->state != GS_SEATED || o == t || !(ob = unit_at(e, o->builder))) continue;
-        builder_foot(e, ob, &ofx, &ofz, &omc);
+        if (!builder_foot(e, ob, &ofx, &ofz, &omc)) continue;
         if (o->x < r->bx0 || o->z < r->bz0 || o->x + ofx > r->bx0 + r->bw || o->z + ofz > r->bz0 + r->bh) continue;
         seated[ns].x = o->x; seated[ns].z = o->z; seated[ns].fx = ofx; seated[ns].fz = ofz;
         seated[ns].pass = omc < WQ_MCLASSES ? class_map(e, s, r, omc) : NULL;
@@ -661,9 +681,58 @@ static void seat_or_wait(Eng* e, Scratch* s, const GuardPlant* r, GuardSeat* t, 
     s_diag.waiting++;
 }
 
+/* every seat of plant row r (plant p) that no longer holds -- out of its builder's band, on a structure of
+   `blocked` or on a lane -- goes back to waiting */
+static void recheck_seats(const Eng* e, const GuardPlant* r, const char* p, const uint8_t* blocked)
+{
+    const int prow = (int)(r - s_plant);
+    const int fx = *(const int16_t*)(p + U_FX), fz = *(const int16_t*)(p + U_FZ), rin = gg_rin(fx, fz);
+    int32_t px, pz;
+    int i;
+    memcpy(&px, p + U_XFIX, 4);
+    memcpy(&pz, p + U_YFIX, 4);
+    for (i = 0; i < GUARD_SEATS; i++) {
+        GuardSeat* o = &s_seat[i];
+        const char* ob;
+        int ofx, ofz, lo, hi;
+        unsigned omc;
+        WQ_DEF od;
+        if (o->state != GS_SEATED || o->plant != prow || !(ob = unit_at(e, o->builder))) continue;
+        if (!builder_foot(e, ob, &ofx, &ofz, &omc) || !e->q.ops->def(&e->q, (int)type_of(e, ob), &od)) {
+            o->state = GS_WAITING;
+            continue;
+        }
+        lo = rin / 16;
+        hi = (od.reach + rin) / 16;
+        if (!seat_holds(r, o, ofx, ofz, blocked, gg_goal_place(px, ofx), gg_goal_place(pz, ofz), lo * lo, hi * hi))
+            o->state = GS_WAITING;
+    }
+}
+
+/* every seat, of any plant, that a lane now covers goes back to waiting: a re-plan moves lanes over other plants'
+   seats as well as its own */
+static void seats_off_lanes(const Eng* e)
+{
+    int i, k, m;
+    for (i = 0; i < GUARD_SEATS; i++) {
+        GuardSeat* o = &s_seat[i];
+        const char* ob;
+        int ofx, ofz, hit = 0;
+        unsigned omc;
+        if (o->state != GS_SEATED || !(ob = unit_at(e, o->builder)) || !builder_foot(e, ob, &ofx, &ofz, &omc))
+            continue;
+        for (k = 0; k < GUARD_PLANTS && !hit; k++)
+            if (s_plant[k].used)
+                for (m = 0; m < s_plant[k].nlane && !hit; m++)
+                    hit = gg_overlaps(&s_plant[k].lane[m], o->x, o->z, ofx, ofz);
+        if (hit) o->state = GS_WAITING;
+    }
+}
+
 /* rows whose unit is gone: a plant row whose slot holds no live unit of its birth and type, and with it every
-   builder row of that plant */
-static void rows_gc(const Eng* e)
+   builder row of that plant; and a builder row whose builder is gone or no longer guards its plant, so that its
+   seat or wait spot stops holding ground for every plant's search */
+static void rows_gc(const Eng* e, unsigned char follow)
 {
     int i, k;
     for (i = 0; i < GUARD_PLANTS; i++) {
@@ -675,6 +744,13 @@ static void rows_gc(const Eng* e)
         for (k = 0; k < GUARD_SEATS; k++)
             if (s_seat[k].state != GS_FREE && s_seat[k].plant == i) memset(&s_seat[k], 0, sizeof s_seat[k]);
         memset(r, 0, sizeof *r);
+    }
+    for (k = 0; k < GUARD_SEATS; k++) {
+        GuardSeat* t = &s_seat[k];
+        const char* p;
+        if (t->state == GS_FREE || t->plant >= GUARD_PLANTS) continue;
+        p = s_plant[t->plant].used ? unit_at(e, s_plant[t->plant].slot) : NULL;
+        if (!p || !still_guards(e, t, p, follow)) memset(t, 0, sizeof *t);
     }
 }
 
@@ -709,6 +785,7 @@ static void plan_neighbours(Eng* e, const GuardPlant* r, unsigned self)
             o->sig = box_sig(e, o);
             o->sig_tick = e->now;
             plan_lanes(e, q, o, g, &s);
+            recheck_seats(e, o, q, s.blocked);
             tagpu_sim_scratch_free(s.block);
         }
 }
@@ -742,8 +819,8 @@ static int __cdecl guard_visit(unsigned* regs)
     pfx = *(const int16_t*)(p + U_FX); pfz = *(const int16_t*)(p + U_FZ);
     if (pfx < 1 || pfz < 1 || pfx > WQ_FOOT_MAX || pfz > WQ_FOOT_MAX) return 0;
     s_diag.visits++;
-    rows_gc(&e);
     follow = *(const uint8_t*)(node + N_ACTION);
+    rows_gc(&e, follow);
     if (!(r = plant_row(&e, p, (unsigned)pslot, (unsigned)ptype, 1))) { s_diag.full++; return 0; }
     prow = (int)(r - s_plant);
     if (!(t = seat_row((unsigned)bslot, birth_of((unsigned)bslot), 1))) { s_diag.full++; return 0; }
@@ -763,7 +840,7 @@ static int __cdecl guard_visit(unsigned* regs)
         r->sig_tick = e.now;
     }
 
-    builder_foot(&e, b, &bfx, &bfz, &mc);
+    if (!builder_foot(&e, b, &bfx, &bfz, &mc)) return 0;
     memcpy(&px, p + U_XFIX, 4);
     memcpy(&pz, p + U_YFIX, 4);
     rin = gg_rin(pfx, pfz);
@@ -774,16 +851,9 @@ static int __cdecl guard_visit(unsigned* regs)
     cur_x = *(const int16_t*)(b + U_CELLX);
     cur_z = *(const int16_t*)(b + U_CELLZ);
 
-    /* the rows of this plant whose builder left it are freed */
-    for (i = 0; i < GUARD_SEATS; i++) {
-        GuardSeat* o = &s_seat[i];
-        if (o->state != GS_FREE && o != t && o->plant == prow && !still_guards(&e, o, p, follow))
-            memset(o, 0, sizeof *o);
-    }
-
     /* a seat it has stood short of, on one cell, for STUCK_TICKS is given up: it waits, and that seat is avoided.
-       Counted in GameTime, not in visits: the guard is woken by its move goal's events as well as its 30-tick
-       timer, several times a tick on a walk */
+       Counted in GameTime, not in visits: the guard wakes on its move goal's events as well as on its 30-tick
+       timer, so a count of visits is no measure of time */
     if (cur_x != t->lastx || cur_z != t->lastz) {
         t->lastx = (int16_t)cur_x;
         t->lastz = (int16_t)cur_z;
@@ -796,27 +866,16 @@ static int __cdecl guard_visit(unsigned* regs)
     }
 
     if (replan || t->state != GS_SEATED) {
-        if (!scratch_get(&s, r->bw, r->bh)) return 0;
+        if (!scratch_get(&s, r->bw, r->bh)) {
+            if (replan) r->planned = 0;          /* the next visit plans it again */
+            return 0;
+        }
         box_blocked(&e, r, &s);
         if (replan) {
             plan_lanes(&e, p, r, g, &s);
             plan_neighbours(&e, r, (unsigned)pslot);
-            /* every seat of this plant that no longer holds goes back to waiting */
-            for (i = 0; i < GUARD_SEATS; i++) {
-                GuardSeat* o = &s_seat[i];
-                const char* ob;
-                int ofx, ofz, lo, hi;
-                unsigned omc;
-                WQ_DEF od;
-                if (o->state != GS_SEATED || o->plant != prow || !(ob = unit_at(&e, o->builder))) continue;
-                builder_foot(&e, ob, &ofx, &ofz, &omc);
-                if (!e.q.ops->def(&e.q, (int)type_of(&e, ob), &od)) { o->state = GS_WAITING; continue; }
-                lo = rin / 16;
-                hi = (od.reach + rin) / 16;
-                if (!seat_holds(r, o, ofx, ofz, s.blocked, gg_goal_place(px, ofx), gg_goal_place(pz, ofz), lo * lo,
-                                hi * hi))
-                    o->state = GS_WAITING;
-            }
+            recheck_seats(&e, r, p, s.blocked);
+            seats_off_lanes(&e);
         }
         if (t->state != GS_SEATED)
             seat_or_wait(&e, &s, r, t, (unsigned)bslot, bfx, bfz, mc, gx, gz, r2min, r2max, cur_x, cur_z);
@@ -855,7 +914,7 @@ static void __cdecl help_goal(unsigned* regs)
     if (tagpu_puppet_on() || !eng_open(&e)) return;
     b = *(const char* const*)(node + N_UNIT);
     if ((bslot = slot_of(&e, b)) < 0 || !alive(b)) return;
-    if (!(t = seat_row((unsigned)bslot, birth_of((unsigned)bslot), 0)) || t->state != GS_SEATED ||
+    if (!(t = seat_find((unsigned)bslot, birth_of((unsigned)bslot))) || t->state != GS_SEATED ||
         t->plant >= GUARD_PLANTS)
         return;
     if (*(const int16_t*)(b + U_CELLX) != t->x || *(const int16_t*)(b + U_CELLZ) != t->z) return;

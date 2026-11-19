@@ -1363,8 +1363,8 @@ What that rests on:
   (`0x406629..0x40662C`). The node is `0x43A0C0(action, head+0x16, &head+0x22, 0, 0, 0)` put first
   by `0x43ACB0` (`0x40667A`), the guard's `+6` zeroed and 3 returned. **Every path to the home
   move passes `0x40654B`**: the attack reaction's refusal falls into the repair branch, which
-  reaches it at `0x406549` or from `0x406500`, and no branch from outside lands in
-  `0x40654C..0x4066AB` (a grep of every direct jump and call). Impure's guard seats hook it
+  reaches it at `0x406549` or from `0x406500`; the one branch from outside into `0x40654C..0x4066AB`,
+  `0x406516`'s `je 0x406691` (the repair branch's failed allocation), returns 3 there without a move (a grep of every direct jump and call). Impure's guard seats hook it
   (`tagpu_guard.c`; [hook map](../modules/hook-map.html)): the hook writes the node's offset and
   `+0x36` before the home move reads them, and skips the assist for a builder with no seat.
 - **The home move `0x4066AC..0x406702`** reads the target's position `+0x6A`/`+0x6E`/`+0x72` plus the node's

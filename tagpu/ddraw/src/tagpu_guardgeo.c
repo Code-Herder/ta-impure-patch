@@ -291,15 +291,23 @@ int gg_seat(const GgBox* box, int fx, int fz, const uint8_t* pass, const uint8_t
     int tried = 0, slack;
     if (r2min > r2max) return 0;
     /* the ranking, walked without a sort: slack 0 (the band's outer edge) first, each slack's places in z then x
-       order. The band's places number at most its area, so the walk is O(box x band width). */
+       order. For one d2 a row z holds at most the two places x = gx -+ r with r * r = d2 - dz * dz, so the walk
+       is O(band width x box height) */
     for (slack = 0; slack <= r2max - r2min; slack++) {
-        int x, z;
+        const int d2 = r2max - slack;
+        int z;
         for (z = 0; z + fz <= h; z++) {
-            const int dz = z + box->z0 - gz;
-            for (x = 0; x + fx <= w; x++) {
-                const int dx = x + box->x0 - gx, d2 = dx * dx + dz * dz;
+            const int dz = z + box->z0 - gz, rem = d2 - dz * dz;
+            int r, side;
+            if (rem < 0) continue;
+            r = (int)sqrt((double)rem);
+            while (r * r > rem) r--;
+            while ((r + 1) * (r + 1) <= rem) r++;
+            if (r * r != rem) continue;
+            for (side = 0; side < (r ? 2 : 1); side++) {
+                const int x = gx + (side ? r : -r) - box->x0;
                 int k, ok = 1;
-                if (r2max - d2 != slack || !place_free(box, x, z, fx, fz, pass, taken)) continue;
+                if (x < 0 || x + fx > w || !place_free(box, x, z, fx, fz, pass, taken)) continue;
                 if (tried++ >= budget) return 0;
                 if (!way_out_rel(box, x, z, fx, fz, pass, taken, wk)) continue;
                 memcpy(taken2, taken, (size_t)w * h);
