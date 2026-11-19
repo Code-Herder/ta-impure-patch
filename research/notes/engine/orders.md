@@ -1088,7 +1088,8 @@ emitted (`0x473EE1`). The goal cannot come back after a bump: the class step `0x
 the mover has one, and on reaching it calls set-goal(0) through `0x44F2A0` (posting `0x80`); the physics and the
 movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild never returns 0 or 9, so state 0,
 and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
-node: the annulus built there is the whole range rule. Not established: who posts the event `0x02` that ends a
+node: the annulus built there is the whole range rule. The call's return is `0x404053`, which sets the node's
+`+0x06` to `0xE8`. Not established: who posts the event `0x02` that ends a
 help in states 2 and 3. Impure's guard seats replace that annulus for a seated guard
 ([factory guard](../modules/factory-guard.html)).
 
@@ -1366,8 +1367,11 @@ What that rests on:
   `0x40654C..0x4066AB` (a grep of every direct jump and call). Impure's guard seats hook it
   (`tagpu_guard.c`; [hook map](../modules/hook-map.html)): the hook writes the node's offset and
   `+0x36` before the home move reads them, and skips the assist for a builder with no seat.
-- **The home move's goal** is the point goal `0x44CF60` (built by `0x438930`): reached when the
-  guarder's first cell is within `((+0x36) / 2 / 16)²` cells² of the place it would have centred
+- **The home move `0x4066AC..0x406702`** reads the target's position `+0x6A`/`+0x6E`/`+0x72` plus the node's
+  offset `+0x22`/`+0x26`/`+0x2A` and passes `(+0x36) / 2` (`0x4066AC..0x4066D6`), calls `0x438930` (`0x4066E0`),
+  sleeps 30 (`0x4066E5..0x4066E9`), sets the node's `+0x06` bits `0x18` and returns 2 (`0x4066EE..0x4066F6`).
+  `0x438930` takes the node's unit from the node's `+0x0E` (`0x438934`) and, for a def without `+0x241` bit
+  `0x800`, builds the point goal `0x44CF60`: reached when the guarder's first cell is within `((+0x36) / 2 / 16)²` cells² of the place it would have centred
   on the point. It re-issues a fresh goal at every wake (the 30-tick timer, events `0x08` and
   `0x10`); a guarder already in its goal stays put, the class step posting `0x20` before any
   physics (*HelpBuild's walk*, below).
