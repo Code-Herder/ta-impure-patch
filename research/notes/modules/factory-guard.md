@@ -44,7 +44,8 @@ with no way out keeps no lane: nothing it builds could leave.
 
 **The seats.** A seat is a place in the plant's box that the builder's class can stand on, inside
 its band, covering no building's footprint (its open yard included: those cells are held by no unit
-in the map, so a test of the cells alone would seat a builder inside the plant), no lane of any plant in the box, no other row's seat or wait spot
+in the map, so a test of the cells alone would seat a builder inside the plant; a plant with only its
+yard in the box is found from its held cells outside it), no lane of any plant in the box, no other row's seat or wait spot
 and no unit standing still (a mover that has not changed cell for 30 ticks, which the pathfinder
 itself treats as an obstacle), and from which a way leads out of the box for the builder -- and still
 leads out for every builder already seated. Seats are taken from the band's outer edge inward, so a

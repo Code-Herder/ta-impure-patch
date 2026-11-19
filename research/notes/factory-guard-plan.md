@@ -88,7 +88,7 @@ All DISASSEMBLED 2026-11-18 in the pristine image unless marked; the entries are
 ## Landing 1, as built
 
 `tagpu_guardgeo.c` (engine-free: the yard's exits, the lane search, the seat search with its way out,
-the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the two hooks, the rows, the level's plant
+the wait spot; `tests/guardtest.py`) and `tagpu_guard.c` (the hook, the rows, the level's plant
 types). The module as it stands is [the module note](modules/factory-guard.html).
 
 **MEASURED 2026-11-18** (`guard-seats` on Two Continents, the ARMVP at (1100, 7400), six ARMCK and two ARMCV

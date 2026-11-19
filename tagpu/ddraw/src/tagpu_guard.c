@@ -64,8 +64,6 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define VA_HOME        0x004066ACu   /* the home move                                                       */
 
 #define VA_ACTION_OF   0x00438760u   /* thiscall (u8* out, const char* name): an order name's action byte   */
-#define S_HELPBUILD    0x005013F0u   /* "HelpBuild"                                                         */
-#define S_FOLLOW       0x005014D8u   /* "Follow_Ground"                                                     */
 #define S_BUILDINGBLD  0x005011F0u   /* "BuildingBuild"                                                     */
 #define S_QMOVE        0x005010A4u   /* "QMove": a lab's rally (engine/recorder.md)                         */
 
@@ -79,11 +77,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define N_TARGET       0x16
 #define N_OFFSET       0x22          /* i32 x3: the guard's offset from the plant, 16.16                   */
 #define N_RADIUS       0x36          /* i32: the home goal's radius is half of it                           */
-#define N_COUNT        0x3A          /* a factory count node: the units still to make                       */
 #define N_NEXT         0x4A
-#define D_FLAGS        0x241
-#define DF_BUILDER     0x40u
-#define DF_CANFLY      0x800u
 #define CELL_STRIDE    0x0D
 #define PL_SIDE_INFO   0x27          /* PlayerInfo*; its +0x95 the side (tagpu_impai.c, record_side)        */
 #define M_SIDES        0x37F39       /* u32 the sides the game loaded                                       */
@@ -113,6 +107,10 @@ static GuardType s_type[GUARD_TYPES];
 static unsigned  s_ntype;
 SIM_VAR(s_ntype, SIM_CONTENT);
 SIM_ROWS_LIVE(s_type, SIM_CONTENT, SIM_ID_NONE, s_ntype, NULL);
+
+/* the level's widest footprint side of a def with a yard, cells, at most WQ_FOOT_MAX */
+static int32_t s_yard_max;
+SIM_VAR(s_yard_max, SIM_CONTENT);
 
 /* the level's widest builddistance of a mobile builder that can assist, px, at most REACH_MAX */
 static int32_t s_reach;
@@ -227,14 +225,6 @@ static unsigned type_of(const Eng* e, const char* u)
     off = (uintptr_t)(d - e->defs);
     if (off % UDEF_STRIDE || off / UDEF_STRIDE >= e->ndefs) return 0;
     return (unsigned)(off / UDEF_STRIDE);
-}
-
-/* a building: no mover, and a def without movement. A unit whose def moves is never one, whatever its mover
-   pointer reads -- a product's frame in a yard is no obstacle a seat or a lane must respect: it leaves when done */
-static int building(const Eng* e, const char* u)
-{
-    WQ_DEF d;
-    return structure(u) && e->q.ops->def(&e->q, (int)type_of(e, u), &d) && !(d.flags & WQ_DF_MOVER);
 }
 
 static unsigned birth_of(unsigned slot)
@@ -371,7 +361,7 @@ static uint32_t box_sig(const Eng* e, const GuardPlant* r)
             const unsigned s = cell_unit(e, x, z);
             const char* u = s ? unit_at(e, s) : NULL;
             uint32_t v;
-            if (!u || !building(e, u)) continue;
+            if (!u || !structure(u)) continue;
             v = (uint32_t)s * 2654435761u ^ birth_of(s) ^ (uint32_t)(x << 16 | (z & 0xFFFF));
             h = (h ^ v) * 16777619u;
         }
@@ -440,25 +430,28 @@ static void box_blocked(const Eng* e, const GuardPlant* r, Scratch* s)
         for (x = 0; x < r->bw; x++) {
             const unsigned u = cell_unit(e, r->bx0 + x, r->bz0 + z);
             const char* p = u ? unit_at(e, u) : NULL;
-            s->blocked[z * r->bw + x] = (uint8_t)(p && building(e, p));
+            s->blocked[z * r->bw + x] = (uint8_t)(p && structure(p));
         }
 }
 
 static void mark_rect(uint8_t* t, const GuardPlant* r, int x0, int z0, int x1, int z1, uint8_t v);
 
-/* every structure with a cell in the box marks its WHOLE footprint (first cell +0x76/+0x78, size +0x7E/+0x80),
-   clipped to the box: a factory's open yard cells are held by no unit in the map (its products drive through
-   them), so `blocked` leaves them free, and a seat or wait spot there stands inside the plant. The lane search
-   keeps `blocked`: it starts from the yard's exits and must see the yard open */
+/* every structure whose footprint reaches the box marks its WHOLE footprint (first cell +0x76/+0x78, size
+   +0x7E/+0x80), clipped to the box: a factory's open yard cells are held by no unit in the map (its products drive
+   through them), so `blocked` leaves them free, and a seat or wait spot there stands inside the plant. The scan
+   runs over the box grown by the level's widest yard less one, so a plant with only its open cells in the box
+   is found by a held cell outside it. The lane search keeps `blocked`: it starts from the yard's exits and must
+   see the yard open */
 static void mark_footprints(const Eng* e, const GuardPlant* r, uint8_t* t)
 {
+    const int m = s_yard_max > 1 ? s_yard_max - 1 : 0;
     int x, z;
-    for (z = 0; z < r->bh; z++)
-        for (x = 0; x < r->bw; x++) {
+    for (z = -m; z < r->bh + m; z++)
+        for (x = -m; x < r->bw + m; x++) {
             const unsigned u = cell_unit(e, r->bx0 + x, r->bz0 + z);
             const char* q = u ? unit_at(e, u) : NULL;
             int fx, fz, cx, cz;
-            if (!q || !building(e, q)) continue;
+            if (!q || !structure(q)) continue;
             fx = *(const int16_t*)(q + U_FX); fz = *(const int16_t*)(q + U_FZ);
             if (fx < 1 || fz < 1 || fx > WQ_FOOT_MAX || fz > WQ_FOOT_MAX) continue;
             cx = *(const int16_t*)(q + U_CELLX); cz = *(const int16_t*)(q + U_CELLZ);
@@ -813,7 +806,7 @@ static void plan_neighbours(Eng* e, const GuardPlant* r, unsigned self)
             Scratch s;
             int fx, fz;
             float nano;
-            if (!q || u == self || !alive(q) || !building(e, q)) continue;
+            if (!q || u == self || !alive(q) || !structure(q)) continue;
             for (k = 0; k < n && seen[k] != u; k++) {}
             if (k < n) continue;
             seen[n++] = u;
@@ -875,6 +868,7 @@ static int __cdecl guard_visit(unsigned* regs)
         t->avoidx = t->avoidz = INT16_MIN;
     }
 
+    if (!builder_foot(&e, b, &bfx, &bfz, &mc)) return 0;   /* before update_spot and the signature store */
     replan = update_spot(&e, p, r, action_of(S_BUILDINGBLD));
     if (!r->bw) { plant_box(&e, r, g, pfx, pfz); replan = 1; }
     if (r->sig_tick != e.now) {
@@ -884,7 +878,6 @@ static int __cdecl guard_visit(unsigned* regs)
         r->sig_tick = e.now;
     }
 
-    if (!builder_foot(&e, b, &bfx, &bfz, &mc)) return 0;
     gx = gg_goal_place(r->spot_x, bfx);
     gz = gg_goal_place(r->spot_z, bfz);
     r2min = (g->rin_max / 16) * (g->rin_max / 16);
@@ -979,6 +972,7 @@ void tagpu_guard_level_init(void)
     memset(&s_diag, 0, sizeof s_diag);
     s_ntype = 0;
     s_reach = 0;
+    s_yard_max = 0;
     if (!s_install.installed || !eng_open(&e)) return;
     sides = *(const unsigned*)(e.ta + M_SIDES);
     if (sides > 8) sides = 8;
@@ -987,6 +981,11 @@ void tagpu_guard_level_init(void)
         if (e.q.ops->def(&e.q, (int)t, &d) && (d.flags & WQ_DF_ASSIST) && (d.flags & WQ_DF_MOVER) &&
             !(d.flags & WQ_DF_VTOL) && d.reach > s_reach)
             s_reach = d.reach > REACH_MAX ? REACH_MAX : d.reach;
+        if (e.q.ops->def(&e.q, (int)t, &d) && d.yard && !(d.flags & WQ_DF_MOVER) && d.fx <= WQ_FOOT_MAX &&
+            d.fz <= WQ_FOOT_MAX) {
+            if (d.fx > s_yard_max) s_yard_max = d.fx;
+            if (d.fz > s_yard_max) s_yard_max = d.fz;
+        }
     }
     if (!(menu = (uint16_t*)tagpu_sim_scratch(MENU_CAP * sizeof *menu))) return;
     for (side = 0; side < sides; side++)
