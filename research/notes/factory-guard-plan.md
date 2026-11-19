@@ -57,6 +57,10 @@ of the room around the plant or of the arm.
 | 4 | The mod switch | a catalog entry with the switch off plays as stock |
 | 5 | ImpAI on the shared geometry | after ImpAI's branch lands: its yard region and the coordinator's lane are the same rectangles |
 
+**Landed on main after landing 3, at the owner's word (2026-11-18)**: seats, lanes and the arm ship
+together; the mod switch (4) and ImpAI on the shared geometry (5) follow on a later branch, and until
+the switch lands the feature is on for every mod.
+
 ## Engine facts the design rests on
 
 All DISASSEMBLED 2026-11-18 in the pristine image unless marked; the entries are in the engine map.
