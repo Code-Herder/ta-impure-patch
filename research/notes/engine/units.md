@@ -1022,7 +1022,8 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   signed compare (`0x48280B..0x48281B`) and calls the emitter `0x4825B0` (`0x482824`).
 - **The emitter `0x4825B0(rec)`** tests LosType bit 2 (`0x4825BA..0x4825CE`). **Set** (the ray
   fan, `0x4825D4..0x48261C`): the column `sx = movsx(x >> 16) >> 5`; the height `h = clamp(byte
-  +0xA + movsx(altitude >> 16), 0, 255)`; the row `sz = (movsx(z >> 16) − (h >> 1)) >> 5`, all
+  +0xA + movsx(altitude >> 16), 0, 255)` (the floor a `jns` at `0x4825E6`, the ceiling `cmp ebx,0xFF` at
+  `0x4825EA`); the row `sz = (movsx(z >> 16) − (h >> 1)) >> 5`, all
   arithmetic shifts. It returns writing nothing when both cells equal the stored ones and the stored
   height byte is within 5 of `h` (`0x48261F..0x48262E`); otherwise it stores the cells
   (`0x48264C`, `0x482652`), bounds them unsigned against `main+0x14293` and `main+0x14297`
