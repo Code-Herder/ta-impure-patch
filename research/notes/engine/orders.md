@@ -1090,9 +1090,12 @@ movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild n
 and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
 node: the annulus built there is the whole range rule. The call's return is `0x404053`, which sets the node's
 `+0x06` to `0xE8`. Not established: who posts the event `0x02` that ends a
-help in states 2 and 3. State 0 sets the wait mask `0xE8` and returns 1 (`0x404053..0x40405A`), so
-state 1 runs only at a later tick, on a goal event; a target already finished then ends it (5) at
-`0x40408E..0x4040A1`, after the movement pass has had one tick of its goal. Impure's guard seats are placed in that annulus
+help in states 2 and 3. State 0 sets the wait mask `0xE8` and returns 1 (`0x404053..0x40405A`); the
+goal (`0x438A00` → `0x44D3B0`) takes the target's x and z by value (`0x438A2A..0x438A42`), so the
+target's later moves never move it. The controller loops, and state 1 runs at the first pass whose events -- the node's `+0x4E` with the unit's
+`+0xBA` -- hold a bit of `0xE8` (`0x438A00` clears only the node's `0x3E0` bits, `0x438A84`, so an event
+already pending on the unit can run it in the same tick). A target already finished then ends it (5)
+at `0x40408E..0x4040A1`; until that pass, the movement pass follows its goal. Impure's guard seats are placed in that annulus
 ([factory guard](../modules/factory-guard.html)).
 
 **What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
@@ -1395,8 +1398,9 @@ What that rests on:
   is loaded just before it at `0x43B865`, where Impure's guard folds a held arm).
   Result 3 is no stop: its random wait sets the node's timer (`0x43B890` → `0x43B951..0x43B970`)
   and goes on at `0x43B99F` to the head again, so a node a handler linked in front of itself and
-  then answered 3 for -- Follow_Ground's attack reaction (`0x4063F5`, returning 3 at `0x406405`)
-  and its assist (`0x406532`, returning 3 at `0x40653A`) -- runs in the same tick. Results 1, 2 and 4 go
+  then answered 3 for -- Follow_Ground's attack reaction (`0x4063F5`, returning 3 at `0x406405`),
+  its repair branch (`0x406532`, returning 3 at `0x40653A`) and its assist (`0x40667A`, returning 3
+  at `0x406682`) -- runs in the same tick. Results 1, 2 and 4 go
   through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
   whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
   `0x439E80` sets, never the tick.

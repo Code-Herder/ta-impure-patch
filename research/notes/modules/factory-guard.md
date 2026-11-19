@@ -75,10 +75,12 @@ StartBuilding again. Here the two are skipped as a pair, so the unit's script se
 - **Folded**, through the engine's own `0x4385F0` (with a scratch node, which it reads only the bit
   of), so the broadcast to the other players goes with it: before any other StartBuilding of the
   builder; before the order run `0x43B7C0` dispatches any handler of the builder's but its guard's on
-  its plant and a HelpBuild on its plant's frame (`0x43B865`) -- an order put in front of the guard,
-  such as the attack reaction `0x43B1F0` at `0x4063F5` or the repair branch, is run by the same
-  controller loop in the same tick, and a HelpBuild on the unit just finished, which the assist can
-  still find at the plant's head, sets a goal toward a unit already leaving; when its guard order's node is destroyed, which is how another order, the plant's death or
+  its plant and a HelpBuild whose goal is the seat's own band (`0x43B865`) -- an order put in front of
+  the guard, such as the attack reaction `0x43B1F0` at `0x4063F5` or the repair branch, is run by the
+  same controller loop in the same tick. A HelpBuild's goal copies its target's position at its state
+  0 (`0x438A2A..0x438A42`), so one made on a target standing on the frame centre (the frame, or the
+  unit finished that tick, which the assist still finds at the plant's head) keeps the arm, and one
+  made on a unit that has begun to leave folds it; when its guard order's node is destroyed, which is how another order, the plant's death or
   a change of hands reaches it; at a visit that finds it off its seat or no longer seated, which
   comes before the home move that would walk it; when the plant has had no build at its head for
   `ARM_GRACE` (150 ticks: 61 to 96 measured from one unit to the next on a clear yard, plus a

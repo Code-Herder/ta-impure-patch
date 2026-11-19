@@ -89,6 +89,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats");
 #define U_STANCE       0x10F         /* bit 0 INBUILDSTANCE: HelpBuild's state 2 waits on it (0x438709)       */
 #define MV_STAMP       0x26          /* u32 the mover's claim stamp: GameTime at its last change of cell    */
 #define N_ACTION       0x04
+#define N_STATE        0x05          /* the handler's state: the controller steps it (0x43B897, 0x43B89F)    */
 #define N_TARGET       0x16
 #define N_UNIT         0x0E          /* the node's unit (the destructor reads it at 0x43A227)               */
 #define N_FLAGS        0x42          /* bit 0x400000: StartBuilding was started for this node (0x4385E3)    */
@@ -884,6 +885,16 @@ static GuardSeat* seated_row(const Eng* e, const char* b, const char** pp)
     return t;
 }
 
+/* whether unit u stands on the frame's centre plant row r keeps */
+static int at_spot(const Eng* e, const GuardPlant* r, const char* u)
+{
+    int32_t x, z;
+    if (!r->spot_known || slot_of(e, u) < 0) return 0;
+    memcpy(&x, u + U_XFIX, 4);
+    memcpy(&z, u + U_YFIX, 4);
+    return x == r->spot_x && z == r->spot_z;
+}
+
 /* the destructor's bit test: regs is the pushad frame, regs[1] esi the node */
 static void __cdecl arm_dtor(unsigned* regs)
 {
@@ -930,12 +941,15 @@ static void __cdecl arm_dispatch(unsigned* regs)
     if (seated_row(&e, b, &p) == t) {
         const char* tg = *(char* const*)(node + N_TARGET);
         if (act == action_of(S_FOLLOW) && tg == p) return;
-        /* a HelpBuild on the plant's frame: it stands where the seat's band is centred, so the seat is in range and
-           the builder walks no step. A HelpBuild on the unit just finished, which the assist can still find at the
-           plant's head as it ends, is folded for: state 0 sets its goal and its wait (0x404053), state 1 ends it
-           only at a later tick (0x40408E), and in between the movement pass walks toward a unit that has begun to
-           leave the yard */
-        if (act == action_of(S_HELPBUILD) && tg && tg == plant_frame(p)) return;
+        /* a HelpBuild walks only toward the goal its state 0 makes, and that goal copies the target's x and z by
+           value (0x40404E -> 0x438A00, 0x438A2A..0x438A42 -> 0x44D3B0): later states never move it. So in state 0
+           the arm is kept only when the target stands on the frame centre the row keeps -- the frame being built,
+           or the unit finished this very tick, which the assist finds at the plant's head (0x406668) as its last
+           help ends -- whose band the seat was chosen in: the builder walks no step. Past state 0 its goal was
+           checked here when it was made, and a finished target only ends it (0x40408E) */
+        if (act == action_of(S_HELPBUILD) && tg &&
+            (*(const uint8_t*)(node + N_STATE) != 0 || at_spot(&e, &s_plant[t->plant], tg)))
+            return;
         {
             float tn = -1.0f;
             if (tg && slot_of(&e, tg) >= 0) memcpy(&tn, tg + U_NANO, 4);
