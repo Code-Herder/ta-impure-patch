@@ -14,7 +14,7 @@
        of the vertex's faces' normals, at rest), its piece index, and a flags word. Static: it survives a team
        change and an atlas recycle, and it dies only with the LEVEL or when the
        cache evicts it.
-     MATERIAL, per (type, owner, atlas generation) — the UV, the flat colour
+     MATERIAL, per (type, owner, atlas generation, animated frames) — the UV, the flat colour
        and colour key, a SKIP flag, and a textured quad's shape and frame
        rect. `face_texframe` picks
        `tab + owner*0x18` for team-coloured faces, and every UV in the atlas
@@ -159,8 +159,18 @@ typedef struct TAGPU_PBGEOM {
     int          orphan;       /* a piece whose parent link never resolved        */
     int          oddFace;      /* a face the emitters skip: fvc outside [3,32],
                                   or indices that do not read                    */
+    /* THE ANIMATED FACES: every body face whose texture is a sequence of more
+       than one frame and no team colour (FF_ANIM set, FF_TEAM clear), in walk
+       order, with its piece. Their frames are the only part of a material that
+       changes while a level runs, so they are what a material's `akey` names
+       (TAGPU_PBMAT). At most TAGPU_PB_MAXANIM a model; a face past it keeps
+       frame 0, and the model says so once. One block the entry owns. */
+    int          nanim;
+    const char** animFace;
+    unsigned char* animPiece;
     unsigned     lastFrame;                   /* for eviction                 */
 } TAGPU_PBGEOM;
+#define TAGPU_PB_MAXANIM 128
 
 typedef struct TAGPU_PBMAT {
     const TAGPU_PBGEOM* geom;
@@ -172,8 +182,28 @@ typedef struct TAGPU_PBMAT {
     unsigned     serial;         /* as the geometry entry's, and for the same
                                     reason: `mat_slot` recycles slots too      */
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
+    /* WHICH FRAME EACH ANIMATED FACE SHOWS: `geom->nanim` bytes, one per
+       entry of the geometry's animated-face list -- the frame (0..254), or
+       TAGPU_PB_ANIM_NONE for a face the engine paints nothing for. NULL is
+       every face at frame 0, the stream a unit takes when none of its
+       animated faces is drawn live, so a model with none keys exactly as
+       (type, owner, atlas) alone. Compared whole in the lookup; `akeyHash`
+       only picks the chain. */
+    unsigned char* akey;
+    unsigned     akeyHash;
     unsigned     lastFrame;
 } TAGPU_PBMAT;
+#define TAGPU_PB_ANIM_NONE 0xFFu
+
+/* What a unit's animated faces show this frame: the unit's
+   TAGPU_PK_U_ANIMDC / TAGPU_PK_U_ANIMALL bits and the packet's animated-face
+   table (tagpu_packet.h). A NULL source, or a unit with neither bit, takes
+   frame 0 on every face. */
+typedef struct TAGPU_PBANIM {
+    unsigned                    flags;
+    const struct TAGPU_PK_ANIM* tab;
+    unsigned                    n;
+} TAGPU_PBANIM;
 
 /* Render thread, once per frame, before any tagpu_posebake_unit: drops every
    entry whose level generation or atlas generation has moved, freeing its
@@ -197,10 +227,12 @@ void tagpu_posebake_work(unsigned* baked, unsigned* dropped);
    run and keys the geometry entry APART from the units' (see the field).
    Returns 0 when the template could not be read or the unit atlas is not
    ready (tagpu_r3d_ready); a caller that gets 0 keeps whatever it was
-   doing. */
+   doing. `anim` says which frame each animated face shows (TAGPU_PBANIM);
+   NULL is frame 0 everywhere. A stream whose new frame waits for the atlas
+   allowance falls back to the frame-0 stream, so the unit is drawn. */
 struct TAGPU_PK_PIECE;
 int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
-                         int ghost,
+                         int ghost, const TAGPU_PBANIM* anim,
                          const TAGPU_PBGEOM** geom, const TAGPU_PBMAT** mat);
 
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the UNIT pass) -----------------

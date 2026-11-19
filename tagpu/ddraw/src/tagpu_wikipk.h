@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (448u + 128u + 4u)   /* TAGPU_CMD_WIKI is 19924 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (448u + 128u + 4u)   /* TAGPU_CMD_WIKI is 19932 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -204,6 +204,12 @@ typedef struct TAGPU_CMD_WIKI {
     float    tech_lo;           /* the zoom's floor: the fitted zoom or a fifth of 1:1, the
                                    smaller                                                   */
     float    tech_cv[4];        /* the canvas: x0, y0, the uncovered width, the height        */
+    uint32_t tech_sent;         /* the times the HUD pass has sent the tree's instances to the
+                                   device: a pan sends none (tagpu_vk_hud.c, THE TECH TREE ON
+                                   THE DEVICE)                                               */
+    int16_t  tech_dsel;         /* the pick the tree drawn was drawn with, -1 none            */
+    uint8_t  tech_dev;          /* 1: that frame drew the tree from the device's copy of its
+                                   ops, 0: the copy was still due and the tree was not drawn */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
     TAGPU_CMD_WIKIBAR bar[TAGPU_WIKI_NSCROLL];

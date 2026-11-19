@@ -556,7 +556,7 @@ function drawTech() {
   frameClear();
   const g = stage.getContext('2d'), W = stage.width, H = stage.height;
   g.setTransform(1, 0, 0, 1, 0, 0);
-  g.fillStyle = '#16180f'; g.fillRect(0, 0, W, H);
+  WikiTech.ground(g, W, H, techU());
   const d = techData(), M = techModel();
   const say = t => { g.fillStyle = '#b7b7ae'; g.font = `${(9 * techU()).toFixed(1)}px sans-serif`; g.textAlign = 'center';
     g.fillText(t, W / 2, H / 2); g.textAlign = 'start'; };
@@ -567,6 +567,10 @@ function drawTech() {
   }
   if (TT.fitted || !TT.cam) techFit();
   WikiTech.draw(g, M, TT.L, { cam: TT.cam, s: techU(), sel: S.unit, all: S.links, pic: techPic, font: techFont });
+  /* FOR THE CHECK (tools/wiki/treecheck.py), which sees the page's DOM and not its script: the camera drawn, and the
+     pictures still loading (a unit with no picture waits for none) */
+  const wait = Object.entries(TT.pics).filter(([id, im]) => !im && (M.units[id.slice(id.indexOf('/') + 1)] || {}).pic).length;
+  stage.dataset.tech = `${TT.cam.z},${TT.cam.x},${TT.cam.y},${wait}`;
   const n = M.order.length, nb = M.spine.length, nu = M.order.filter(k => M.units[k].upgrade).length;
   const t = `${M.side.name} · ${n} units · ${nb} builders and factories${nu ? ` · ${nu} upgrades` : ''}`;
   if ($('#t-title').textContent !== t) $('#t-title').textContent = t;

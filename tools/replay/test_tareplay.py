@@ -3913,27 +3913,37 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         self.assertEqual(len(tarec.occupancy(a, b)), 1)
 
-    def test_contest_an_open_yard_gives_nothing_back(self):
-        # lab 1 (2 x 1) held (2, 1) against walker 2 while closed; YARD_OPEN let the cell go
-        # and kept walker 2's bit 27, and nanoframe 3 took the empty cell unmarked
+    def test_an_open_yard_leaves_its_loser_over_an_empty_cell(self):
+        # MEASURED 2026-11-17 (tarec.occupancy, AN OPEN YARD): the lab opened its yard and let go
+        # the cell its closed yard had taken from the walker, which keeps bit 27
         lab = tarec.STRUCTURE | 1 << 26 | 1 << 27 | 1
-        walker = 1 << 27 | 1
+        units = {1: self.unit(1, 1, 2, 1, state=lab), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        units[1][tarec.U_YARD] = 4
+        a, b = self.worlds(units, {(1, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        # and the lab's product made on the freed cell takes it unmarked
+        units[3] = self.unit(2, 1)
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (3, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        units[1][tarec.U_YARD] = 0
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (3, 0)})
+        self.assertIn("without the holder's mark", tarec.occupancy(a, b)[0])
 
-        def check(yard, nanoframe, holder=lab, loser=walker):
-            s = self.unit(1, 1, 2, 1, state=holder)
-            s[tarec.U_YARD] = yard
-            units, names = {1: s, 2: self.unit(2, 1, state=loser)}, {(1, 1): (1, 0)}
-            if nanoframe:
-                units[3], names[(2, 1)] = self.unit(2, 1), (3, 0)
-            return tarec.occupancy(*self.worlds(units, names))
-        self.assertEqual(check(tarec.YARD_OPEN, False), [])
-        self.assertEqual(check(tarec.YARD_OPEN, True), [])
-        # the closed yard, a lab that never held the cell, a layer-2 loser: no clause
-        for out in (check(0, False), check(0, True),
-                    check(tarec.YARD_OPEN, False, holder=lab & ~(1 << 26)),
-                    check(tarec.YARD_OPEN, True, loser=1 << 27 | 2)):
-            self.assertEqual(len(out), 1, out)
-            self.assertIn("mobile unit 2's footprint", out[0])
+    def test_an_empty_cell_under_a_loser_fails_where_no_yard_is_open(self):
+        lab = tarec.STRUCTURE | 1 << 26 | 1
+        for yard, walker in ((0, 1 << 27 | 1), (4, 1)):
+            units = {1: self.unit(1, 1, 2, 1, state=lab), 2: self.unit(2, 1, state=walker)}
+            units[1][tarec.U_YARD] = yard
+            a, b = self.worlds(units, {(1, 1): (1, 0)})
+            out = tarec.occupancy(a, b)
+            self.assertEqual(len(out), 1, (yard, out))
+            self.assertIn("does not name it in slot A", out[0])
+        # outside the open yard's footprint, and in slot B, the loser's cell must still be named
+        units = {1: self.unit(1, 1, state=lab), 2: self.unit(3, 1, state=1 << 27 | 1),
+                 3: self.unit(1, 1, state=1 << 27 | 2)}
+        units[1][tarec.U_YARD] = 4
+        a, b = self.worlds(units, {(1, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b)), 2, tarec.occupancy(a, b))
 
     def test_contest_a_structure_named_in_slot_b_fails(self):
         a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})

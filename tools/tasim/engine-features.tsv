@@ -37,6 +37,7 @@ restore_record_owner	outside	a saved game's wreck records; tasim loads no saved 
 composite_scratch	outside	the composite draw context's scratch frame, a drawing	tagpu_patches.c, ctx+0x10 made by 0x458180
 build_list	modelled	tools/tasim/tasim_load.c, build_options: a builder's options are never cut short, as the fix keeps its list whole; they are the build menu's (tagpu_buildmenu), which ImpAI builds from	tagpu_patches.c, three stock defects a large mod reaches
 download_records	modelled	tools/tasim/tasim_load.c, each_download: every MENUENTRY of a download TDF is kept, as the fix continues a file past five entries	tagpu_patches.c, 0x42DCF0's 0xBD-byte record per download TDF
+debris_emission	outside	the particles a flying piece emits from the explosion draw, a drawing; SIM_PUPPET_INDEPENDENT	tagpu_patches.c, a flying piece's smoke and fire once a tick
 oom_message	outside	the allocator's out-of-memory text	tagpu_patches.c, the new handler 0x49E700
 sync_keys	outside	the network's unit sync	tagpu_patches.c, def+0x13E matched between peers
 weapon_ids	T2	the raised weapon limit	tagpu_patches.c, Weapons[256] at main+0x2CF3

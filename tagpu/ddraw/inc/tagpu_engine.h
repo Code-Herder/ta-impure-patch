@@ -161,6 +161,8 @@
 #define U_XFIX             0x6A        /* i32 16.16 world x                     */
 #define U_ZFIX             0x6E        /* i32 16.16 altitude                    */
 #define U_YFIX             0x72        /* i32 16.16 map depth                   */
+#define U_CARRIER          0x86        /* UnitStruct* that carries it, 0 = none:
+                                          DrawUnit skips such a unit (0x45AC29) */
 #define U_CARGO            0x8A        /* UnitStruct* first unit carried/built  */
 #define U_CARGONEXT        0x8E        /* UnitStruct* next in that chain        */
 #define U_TYPE             0x92        /* UnitDef*                              */
@@ -183,7 +185,12 @@
 #define U_NANO             0x104       /* float, the build fraction REMAINING   */
 #define U_HEALTH           0x108       /* s16                                   */
 #define U_CLOAKF           0x10E       /* u8, bit2 = actively cloaked           */
+#define UA_ACTIVE          0x01u       /* U_CLOAKF bit0, activated (Activate)   */
 #define U_STATE            0x110       /* u32 UnitStateMask                     */
+#define ST_STRUCTURE       0x20000000u /* the composite-sprite unit (0x458845)  */
+#define U_MOVER            0x00        /* the unit's move object; a structure's
+                                          is not read by the draw (0x458862)    */
+#define MV_SPEED           0x20        /* i32 the move object's speed: 0 = still */
 #define ST_ALIVE           0x10000000u
 #define ST_EXCLUDED        0x4000u
 #define ST_NOCARGO         0x20000u    /* the blit's own skip on a chain member */
@@ -199,6 +206,16 @@
                                        /* level's unit-data load, freed and     */
                                        /* zeroed by the teardown's 0x42DB90     */
 #define OFF_MODELPTRS      0x14377     /* Model3DONode*[UNITINFOCount]          */
+/* THE ANIMATED-FACE LIST: one anim state pointer (a template face's +0x10) per
+   face the binder 0x42A140 gives a sequence of more than one frame and no team
+   colour, appended through a realloc 0x4D84A0 (0x42A236..0x42A282) while the
+   level's models load, walked by 0x415B30 from the game loop (0x49558A), which
+   steps each state through 0x4B8B90, and freed and zeroed with the level
+   (0x42A5DA..0x42A603). DISASSEMBLED. */
+#define OFF_ANIMLIST_N     0x148E7     /* i32 the list's count                  */
+#define OFF_ANIMLIST       0x148EB     /* u32* the list                         */
+#define AS_FRAME           0x00        /* u16 the anim state's current frame    */
+#define AS_SEQ             0x08        /* the GAF sequence; u16 +0 its count    */
 
 #define O3_NUMPARTS        0x00        /* u16                                   */
 #define O3_COMPOSITE       0x10        /* GAFFrame* the unit's sprite           */

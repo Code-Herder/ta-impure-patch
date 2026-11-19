@@ -40,8 +40,11 @@
 
    The vertex stage puts a four-vertex strip on the instance's rect, in clip space as the CPU
    computed it with y DOWN, so the pass needs no viewport flip and gl_FragCoord is in device
-   pixels from the top left. The fragment stage clips to the instance's clip rect by pixel
-   centre, then draws by mode:
+   pixels from the top left -- moved by the draw's shift (tagpu_vk_hud.c KENTRY: zero for every
+   list but the tech tree kept on the device, whose pan it is), which moves the instance and the
+   points its px holds and never its clip rect. The fragment stage drops the glyphs, or the
+   parts, the draw's constants hide, clips to the instance's clip rect by pixel centre, then
+   draws by mode:
      PART   the part's premultiplied texel times its opacity;
      SOLID  the colour;
      SHADE  the colour under an inset shadow: CSS `box-shadow: inset 0 0 B rgba(0,0,0,.55)`, a
@@ -57,17 +60,37 @@
             opacity -- an SVG <g opacity> composites its children first, so lines that cross in
             the faint part show the top one, not the two summed;
      DROP   CSS box-shadow: the box vPx moved down by vUV.x and blurred as SHADE blurs, drawn
-            outside the box only, as an outer shadow is;
+            outside the box only, as an outer shadow is -- outside the box rounded by vUV.y
+            pixels at its corners when that is above 0, so a rounded card's corners are shaded;
      RING   the colour over the band vPrm.y pixels deep inside the circle inscribed in vPx, each
             edge antialiased over a pixel as DOT's is: the disc of the outer radius less the disc
             of the inner, none when the band reaches the centre. Unsnapped, as a canvas arc is.
      TRI    the colour over the triangle vPx.xy, vPx.zw, vPx.xy + vUV: each edge covers a pixel
             by the pixel-wide box filter across it, half at the edge, as LINE's sides do, and the
             three edges' shares multiply, as LINE's across and along do. The draw emits one only
-            with an area, so no edge has length 0. Unsnapped, as a canvas path is.
+            with an area, so no edge has length 0. Unsnapped, as a canvas path is;
+     RRECT  the colour inside the box vPx with its corners rounded by vPrm.y pixels, a pixel's
+            share of it by its distance to the rounded edge -- whole at a straight edge on a pixel
+            boundary, as SOLID is, and antialiased round a corner, as a canvas roundRect is;
+     CURVE  HOP_CURVE's stroke. NOT A QUAD: the vertex stage builds a strip of HUD_CURVE_SEG + 1
+            pairs, the pair j at the cubic's point j / HUD_CURVE_SEG, either side of it along its
+            normal by the half width and a pixel, the two end pairs a pixel past the ends along the
+            tangent; it hands on (arc length, signed distance across) as vUV, the arc length summed
+            over the pieces. The fragment stage covers |across| by the pixel-wide box filter as
+            LINE does, and along the arc the pixel's share of the stroke between its butt ends, and
+            of that the share a dash pattern of vPx.z on and vPx.z off from the start covers;
+     GRID   the colour on each whole-pixel square vUV.y wide at round(k vUV.x) from vPx.xy in x
+            and in y: the pixel's square found by arithmetic, so the grid is one instance;
+     CELLS  HOP_CELLS: the pixel's cell found by arithmetic -- the last whose first pixel,
+            round(vPx.x + k pitch), is at or before it, held to the cells -- read texel for texel
+            from the cells image: its shade, opaque, darkened 12 % on a grid pixel when vPrm.y
+            is 1; or with vPrm.y 2 its fog, grey at 50 % or black at 90 %, or nothing. Times the
+            colour's alpha, which hiding the image's instances zeroes.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
    whole row. Its matrix is the Filter Effects spec's saturate. */
+#define HUD_STR_(x) #x
+#define HUD_STR(x) HUD_STR_(x)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -78,17 +101,57 @@ static const char* VS =
     "layout(location=3) in vec4 aCol;\n"
     "layout(location=4) in vec4 aClip;\n"
     "layout(location=5) in vec4 aPrm;\n"
-    "out vec2 vUV; flat out vec4 vPx; flat out vec4 vCol; flat out vec4 vClip; flat out vec4 vPrm;\n"
+    /* the draw's constants (tagpu_vk_hud.c KENTRY): the shift in clip space and in pixels, and the
+       glyphs and the pictures hidden */
+    "layout(location=6) in vec4 aK;\n"
+    "layout(location=7) in vec4 aH;\n"
+    "out vec2 vUV; flat out vec4 vPx; flat out vec4 vCol; flat out vec4 vClip; flat out vec4 vPrm; flat out vec2 vHide;\n"
+    /* HOP_CURVE's cubic: its ends a and b, its handles at their middle x, level with each end */
+    "vec2 bez(vec2 a, vec2 b, float t){\n"
+    "  float u = 1.0 - t, m = 0.5 * (a.x + b.x);\n"
+    "  return vec2(u * u * u * a.x + 3.0 * u * t * m + t * t * t * b.x, (u * u * u + 3.0 * u * u * t) * a.y + (3.0 * u * t * t + t * t * t) * b.y);\n"
+    "}\n"
     "void main(){\n"
+    "  int m = int(aPrm.x + 0.5);\n"
+    "  vPx = aPx; vCol = aCol; vClip = aClip; vPrm = aPrm; vHide = aH.xy;\n"
+    "  if (m == 11) {\n"
+    /* aPx the ends in device pixels, aNdc.xy 2 / the attachment's size, aPrm.y the half width,
+       aUv.x the dash */
+    "    const int N = " HUD_STR(HUD_CURVE_SEG) ";\n"
+    "    int j = gl_VertexID >> 1;\n"
+    "    float sd = (gl_VertexID & 1) == 1 ? 1.0 : -1.0, s = 0.0, L = 0.0;\n"
+    "    vec2 a = aPx.xy + aK.zw, b = aPx.zw + aK.zw, q0 = a;\n"
+    "    for (int i = 1; i <= N; i++) {\n"
+    "      vec2 q1 = bez(a, b, float(i) / float(N));\n"
+    "      float l = length(q1 - q0);\n"
+    "      if (i <= j) s += l;\n"
+    "      L += l;\n"
+    "      q0 = q1;\n"
+    "    }\n"
+    "    vec2 lo = bez(a, b, float(max(j - 1, 0)) / float(N)), hi = bez(a, b, float(min(j + 1, N)) / float(N));\n"
+    "    vec2 d = hi - lo;\n"
+    "    if (dot(d, d) < 1e-8) d = b - a;\n"
+    "    if (dot(d, d) < 1e-8) d = vec2(1.0, 0.0);\n"
+    "    vec2 T = normalize(d), Nn = vec2(-T.y, T.x);\n"
+    "    float e = aPrm.y + 1.0, ext = j == 0 ? -1.0 : (j == N ? 1.0 : 0.0);\n"
+    "    vec2 pos = bez(a, b, float(j) / float(N)) + Nn * (sd * e) + T * ext;\n"
+    "    gl_Position = vec4(pos * aNdc.xy - 1.0, 0.0, 1.0);\n"
+    "    vUV = vec2(s + ext, sd * e);\n"
+    "    vPx = vec4(aPrm.y, L, aUv.x, 0.0);\n"
+    "    return;\n"
+    "  }\n"
     "  vec2 k = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
-    "  gl_Position = vec4(mix(aNdc.xy, aNdc.zw, k), 0.0, 1.0);\n"
+    "  gl_Position = vec4(mix(aNdc.xy, aNdc.zw, k) + aK.xy, 0.0, 1.0);\n"
     "  vUV = mix(aUv.xy, aUv.zw, k);\n"
-    "  vPx = aPx; vCol = aCol; vClip = aClip; vPrm = aPrm;\n"
+    /* the shift moves every point px holds: the grid's corner alone (its zw is no point), a
+       chart band's nothing (its px are indices) */
+    "  if (m == 12) vPx.xy += aK.zw;\n"
+    "  else if (m != 6) vPx += aK.zwzw;\n"
     "}\n";
 
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec4 vPx; flat in vec4 vCol; flat in vec4 vClip; flat in vec4 vPrm;\n"
+    "in vec2 vUV; flat in vec4 vPx; flat in vec4 vCol; flat in vec4 vClip; flat in vec4 vPrm; flat in vec2 vHide;\n"
     "uniform sampler2D uTex;\n"
     "out vec4 oCol;\n"
     "float phi(float x){\n"
@@ -99,6 +162,8 @@ static const char* FS =
     "}\n"
     /* a pixel's share of a band hw either side of a line d away: a pixel-wide box filter */
     "float cover(float d, float hw){ return clamp(min(d + 0.5, hw) - max(d - 0.5, -hw), 0.0, 1.0); }\n"
+    /* the length a dash pattern of dl on and dl off, on first, covers from 0 to x >= 0 */
+    "float on(float x, float dl){ return floor(x / (2.0 * dl)) * dl + min(mod(x, 2.0 * dl), dl); }\n"
     /* a segment's stroke: round at an end that joins another, butt at an end b0 / b1 */
     "float seg(vec2 p, vec2 a, vec2 b, float hw, bool b0, bool b1){\n"
     "  vec2 d = b - a;\n"
@@ -120,6 +185,7 @@ static const char* FS =
     "  if (vClip.z >= vClip.x && (p.x < vClip.x || p.x >= vClip.z || p.y < vClip.y || p.y >= vClip.w)) discard;\n"
     "  vec4 t = texture(uTex, vUV);\n"
     "  int m = int(vPrm.x + 0.5);\n"
+    "  if ((vHide.x > 0.5 && m == 4) || (vHide.y > 0.5 && m == 0)) discard;\n"
     "  vec4 c;\n"
     "  if (m == 0) c = t * vCol;\n"
     "  else if (m == 1) c = vCol;\n"
@@ -168,12 +234,48 @@ static const char* FS =
     "    vec2 ce = 0.5 * (vPx.xy + vPx.zw);\n"
     "    float r = 0.5 * (vPx.z - vPx.x), ri = r - vPrm.y, d = length(p - ce);\n"
     "    c = vCol * (clamp(r - d + 0.5, 0.0, 1.0) - (ri > 0.0 ? clamp(ri - d + 0.5, 0.0, 1.0) : 0.0));\n"
+    "  } else if (m == 10) {\n"
+    "    vec2 ce = 0.5 * (vPx.xy + vPx.zw), hb = 0.5 * (vPx.zw - vPx.xy);\n"
+    "    vec2 q = abs(p - ce) - (hb - vec2(vPrm.y));\n"
+    "    float dd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - vPrm.y;\n"
+    "    c = vCol * clamp(0.5 - dd, 0.0, 1.0);\n"
+    "  } else if (m == 11) {\n"
+    /* along the stroke: the pixel's interval [s - .5, s + .5] cut to the stroke [0, L], and of
+       that, when dashed, the share the dashes cover -- on(x) the dash length from the start to x,
+       so the ends and the dashes are counted once */
+    "    float dl = vPx.z, lo = clamp(vUV.x - 0.5, 0.0, vPx.y), hi = clamp(vUV.x + 0.5, 0.0, vPx.y), al = hi - lo;\n"
+    "    if (dl > 0.0) al = on(hi, dl) - on(lo, dl);\n"
+    "    c = vCol * (cover(abs(vUV.y), vPx.x) * clamp(al, 0.0, 1.0));\n"
+    "  } else if (m == 12) {\n"
+    "    vec2 q = floor(p - vPx.xy);\n"
+    "    vec2 st = floor(floor((q + 0.5) / vUV.x) * vUV.x + 0.5);\n"
+    "    vec2 in2 = step(st, q) * step(q, st + vUV.y - 0.5);\n"
+    "    c = vCol * (in2.x * in2.y);\n"
+    "  } else if (m == 13) {\n"
+    "    vec2 e = floor(vUV + 0.5), n = floor(e / 256.0), o = e - 256.0 * n;\n"
+    "    vec2 k = clamp(ceil((p - vPx.xy) / ((vPx.zw - vPx.xy) / n)) - 1.0, vec2(0.0), n);\n"
+    "    vec4 t = texelFetch(uTex, ivec2(o + min(k, n - 1.0)), 0);\n"
+    "    int L = int(vPrm.y + 0.5);\n"
+    "    if (L == 2) {\n"
+    "      int f = int(t.a * 255.0 + 0.5);\n"
+    "      if (f == 0) discard;\n"
+    /* stage.js fogColour: rgba(128,128,128,.5), rgba(0,0,0,.9), premultiplied */
+    "      c = f == 2 ? vec4(0.0, 0.0, 0.0, 0.9) : vec4(vec3(0.5 * 128.0 / 255.0), 0.5);\n"
+    "    } else {\n"
+    "      c = vec4(t.rgb, 1.0);\n"
+    "      vec2 st = floor(vPx.xy + k * ((vPx.zw - vPx.xy) / n) + 0.5);\n"
+    "      if (L == 1 && any(equal(st, floor(p)))) c.rgb *= 0.88;\n"
+    "    }\n"
+    "    c *= vCol.a;\n"
     "  } else if (m == 9) {\n"
     "    vec2 a = vPx.xy, b = vPx.zw, q = vPx.xy + vUV;\n"
     "    float s = sign((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x));\n"
     "    c = vCol * (side(p, a, b, s) * side(p, b, q, s) * side(p, q, a, s));\n"
     "  } else {\n"
-    "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) discard;\n"
+    "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) {\n"
+    "      vec2 q = clamp(p, vPx.xy + vec2(vUV.y), vPx.zw - vec2(vUV.y));\n"
+    "      if (vUV.y <= 0.0 || length(p - q) <= vUV.y) discard;\n"
+    "    }\n"
     "    float s = max(vPrm.y, 1e-3);\n"
     "    float ix = phi((p.x - vPx.x) / s) - phi((p.x - vPx.z) / s);\n"
     "    float iy = phi((p.y - vPx.y - vUV.x) / s) - phi((p.y - vPx.w - vUV.x) / s);\n"
@@ -290,12 +392,13 @@ typedef struct {
 /* a device coordinate snapped as a part's edges are (tagpu_hud_snap) */
 static float snap(float v) { return (float)tagpu_hud_snap(v); }
 
-static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
+static HUDINST* emit_nv(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op, int nv)
 {
     HUDINST* q;
     /* a fill (tex -1) joins the run it falls in, but never a layer's: the pass rescales a layer
-       run's uv (layer_record), and a drop shadow carries its offset there */
-    const int join = !c->fresh && c->nb > 0 &&
+       run's uv (layer_record), and a drop shadow carries its offset there; and only a run drawn
+       with as many vertices an instance */
+    const int join = !c->fresh && c->nb > 0 && c->b[c->nb - 1].nv == nv &&
                      (tex == -1 ? c->b[c->nb - 1].tex != HUD_TEX_LAYER : c->b[c->nb - 1].tex == tex);
     if (c->n >= c->cap) return NULL;
     if (!join) {
@@ -304,6 +407,7 @@ static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, floa
         c->b[c->nb].tex = tex == -1 ? HUD_TEX_ATLAS : tex;
         c->b[c->nb].first = c->n;
         c->b[c->nb].count = 0;
+        c->b[c->nb].nv = nv;
         c->nb++;
     }
     q = &c->inst[c->n++];
@@ -337,6 +441,11 @@ static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, floa
     } else
         q->prm[2] = q->prm[3] = 1;
     return q;
+}
+
+static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
+{
+    return emit_nv(c, tex, mode, x0, y0, x1, y1, op, 4);
 }
 
 static void colour(HUDINST* q, uint32_t rgb, float a)
@@ -601,7 +710,9 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
             if (!(in = emit(c, -1, HUDM_DROP, x0 - e, y0 - e + (dy < 0 ? dy : 0), x1 + e, y1 + e + (dy > 0 ? dy : 0), op))) break;
             in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
             in->uv[0] = in->uv[2] = dy;
-            in->uv[1] = in->uv[3] = 0;
+            /* the corner radius, in pixels: the box less its rounded corners is what the shadow
+               keeps out of; never more than half the box's narrower side */
+            in->uv[1] = in->uv[3] = op->style > 0 ? fminf(op->style / HOP_RADIUS * px, 0.5f * fminf(x1 - x0, y1 - y0)) : 0;
             colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
             in->prm[1] = sg;
             break;
@@ -630,11 +741,16 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
             in->prm[1] = op->size * px;
             break;
         }
-        if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
-                        snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
-                        (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
-        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
-        in->prm[1] = op->shade * px / 2;
+        {
+            /* a solid with a corner radius is rounded, never more than half its narrower side */
+            const int round = op->kind == HOP_SOLID && op->style > 0 && !(op->flags & HOPF_SHADE);
+            if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : round ? HUDM_RRECT : HUDM_SOLID,
+                            snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
+                            (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+            in->prm[1] = round ? fminf(op->style / HOP_RADIUS * px, 0.5f * fminf(in->px[2] - in->px[0], in->px[3] - in->px[1]))
+                               : op->shade * px / 2;
+        }
         break;
     case HOP_LINE: {
         float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
@@ -722,6 +838,56 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         in->uv[0] = in->uv[2] = x2 - x0;
         in->uv[1] = in->uv[3] = y2 - y0;
         colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
+    case HOP_CURVE: {
+        /* ONE INSTANCE, drawn as a strip of 2 (HUD_CURVE_SEG + 1) vertices the vertex stage places
+           (the CURVE mode): its ends in px, the attachment's scale to clip space in ndc, the half
+           width in prm, the dash in uv. Its ndc is no quad, so a group's box (group_box) would
+           misread it: the tree draws no curve in a group, and one in a group draws nothing */
+        const float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+        if (op->grp || !isfinite(x0) || !isfinite(y0) || !isfinite(x1) || !isfinite(y1) || !(op->size > 0)) break;
+        if (!(in = emit_nv(c, -1, HUDM_CURVE, x0, y0, x1, y1, op, 2 * (HUD_CURVE_SEG + 1)))) break;
+        in->ndc[0] = 2.0f / c->W; in->ndc[1] = 2.0f / c->H; in->ndc[2] = in->ndc[3] = 0;
+        in->uv[0] = in->uv[2] = op->shade > 0 ? op->shade * px : 0;
+        in->uv[1] = in->uv[3] = 0;
+        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        in->prm[1] = op->size * px / 2;
+        break;
+    }
+    case HOP_GRID: {
+        /* the box whole, its squares by arithmetic in the GRID mode: px holds the box, uv the pitch
+           and the square's side -- uv, which a group's move leaves alone */
+        const float pitch = op->size * px, side = floorf(op->shade * px + 0.5f);
+        if (!(pitch >= 1) || !(side >= 1) || side > pitch) break;
+        if (!(in = emit(c, -1, HUDM_GRID, snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
+                        (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+        in->uv[0] = in->uv[2] = pitch;
+        in->uv[1] = in->uv[3] = side;
+        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
+    case HOP_CELLS: {
+        /* the cells' box to the pixel past their last, the cells themselves by arithmetic in the
+           CELLS mode: px holds the unsnapped box, uv the first cell and the count (DATA: bounded to
+           the image) */
+        const float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+        int c0, r0, n, m;
+        if (!(op->size >= 1 && op->size <= HUD_CELLS) || !(op->shade >= 1 && op->shade <= HUD_CELLS)) break;
+        c0 = op->part % HUD_CELLS; r0 = op->part / HUD_CELLS;
+        n = (int)op->size; m = (int)op->shade;
+        if (op->part < 0 || c0 + n > HUD_CELLS || r0 + m > HUD_CELLS || !(x1 > x0) || !(y1 > y0) || op->centre > 2)
+            break;
+        if (!(in = emit(c, HUD_TEX_CELLS, HUDM_CELLS, floorf(x0 + 0.5f), floorf(y0 + 0.5f), floorf(x1 + 0.5f) + 1,
+                        floorf(y1 + 0.5f) + 1, op)))
+            break;
+        in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy;
+        in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+        /* the first cell and the count across in u, down in v, as c + 256 n: the fragment stage
+           has u and v alone */
+        in->uv[0] = in->uv[2] = (float)(c0 + 256 * n);
+        in->uv[1] = in->uv[3] = (float)(r0 + 256 * m);
+        in->prm[1] = (float)op->centre;
         break;
     }
     case HOP_TEXT:

@@ -655,6 +655,41 @@ static uint32_t ground(const WIKISTAGEVIEW* v, int i, double top)
     return rgba(L, L, L - 4, 1);
 }
 
+/* THE MAP'S CELLS, one op a layer (HOP_CELLS; stage.js `cells`): cells [c0, c1) x [r0, r1) of the
+   image tagpu_wikistage_cells fills, from (x0, y0) to (x1, y1) canvas pixels, unsnapped */
+static void cells(B* c, int layer, double x0, double y0, double x1, double y1, int c0, int r0, int c1, int r1)
+{
+    HUDOP* p;
+    if (c1 <= c0 || r1 <= r0 || !(x1 > x0) || !(y1 > y0)) return;
+    if (!(p = op(c, HOP_CELLS, x0, y0, x1 - x0, y1 - y0))) return;
+    p->part = (int16_t)(c0 + r0 * HUD_CELLS);
+    p->size = (float)(c1 - c0);
+    p->shade = (float)(r1 - r0);
+    p->centre = (uint8_t)layer;
+}
+
+typedef char wikistage_cells_fit[WIKISTAGE_MAP <= HUD_CELLS ? 1 : -1];
+
+void tagpu_wikistage_cells(const WIKISTAGEVIEW* v, unsigned char* rgba)
+{
+    double top;
+    int i, x, z;
+    memset(rgba, 0, (size_t)HUD_CELLS * HUD_CELLS * 4);
+    if (!v || v->w <= 0 || v->h <= 0 || v->w > WIKISTAGE_MAP || v->h > WIKISTAGE_MAP) return;
+    top = v->surface_metal;
+    for (i = 0; i < v->w * v->h; i++)
+        if (v->metal[i] > top) top = v->metal[i];
+    for (z = 0; z < v->h; z++)
+        for (x = 0; x < v->w; x++) {
+            const uint32_t g = ground(v, z * v->w + x, top);
+            unsigned char* t = rgba + ((size_t)z * HUD_CELLS + (size_t)x) * 4;
+            t[0] = (unsigned char)(g >> 24);
+            t[1] = (unsigned char)(g >> 16);
+            t[2] = (unsigned char)(g >> 8);
+            t[3] = v->fog[z * v->w + x] <= 2 ? v->fog[z * v->w + x] : 2;
+        }
+}
+
 /* ---- the sidebar ------------------------------------------------------------------------------
    stage.js `drawSide`: the column x in [-128, 0) of the stage at one game pixel a world unit,
    whatever the HUD scale, side.h rows tall. In the game look one image, the column the frame
@@ -1240,31 +1275,10 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             c.clip.h = (float)(fmax(vp[3] - vp[1], 0) / u);
         }
 
-        /* the ground: plain cells light, metal darker by how far it stands above surfaceMetal */
+        /* the ground: plain cells light, metal darker by how far it stands above surfaceMetal,
+           with the grid when a cell is 5 pixels or more -- one op of the cells' image */
         mark(&c, WIKISTAGE_IN_GROUND, 0);
-        for (z = r0; z < r1; z++)
-            for (x = c0; x < c1; x++)
-                rect(&c, floor(X(x * cell)), floor(Z(z * cell)), ceil(cp) + 1, ceil(cp) + 1, ground(v, z * mw + x, top));
-        /* the grid: one pixel wide on pixel centres, each row broken at the columns so that no
-           pixel of the translucent stroke is laid twice */
-        if (cp >= 5) {
-            const uint32_t g = rgba(0, 0, 0, .12);
-            const double end = X(c1 * cell);
-            for (x = c0; x <= c1; x++) {
-                const double px = floor(X(x * cell) + 0.5);
-                line(&c, px + .5, Z(r0 * cell), px + .5, Z(r1 * cell), 1, g);
-            }
-            for (z = r0; z <= r1; z++) {
-                const double pz = floor(Z(z * cell) + 0.5) + .5;
-                double a = X(c0 * cell);
-                for (x = c0; x <= c1; x++) {
-                    const double px = floor(X(x * cell) + 0.5);
-                    if (px > a) line(&c, a, pz, px, pz, 1, g);
-                    a = px + 1;
-                }
-                if (end > a) line(&c, a, pz, end, pz, 1, g);
-            }
-        }
+        cells(&c, cp >= 5, X(c0 * cell), Z(r0 * cell), X(c1 * cell), Z(r1 * cell), c0, r0, c1, r1);
         /* a geothermal vent: a ringed circle with a cross */
         for (i = 0; i < v->nvent; i++) {
             const double vx = X(v->vent[i][0]), vz = Z(v->vent[i][1]), r = cp * .8, lw = fmax(1, 1.5 * U);
@@ -1287,14 +1301,13 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             ring(&c, x0 + lw / 2, y0 + lw / 2, w - lw, h - lw, lw, edge[k]);
         }
         /* fog: grey half over seen-before ground, black over unexplored, on the cells the ground
-           is drawn on */
-        for (z = r0; z < r1; z++)
-            for (x = c0; x < c1; x++) {
-                const int fg = v->fog[z * mw + x];
-                if (!fg) continue;
-                rect(&c, floor(X(x * cell)), floor(Z(z * cell)), ceil(cp) + 1, ceil(cp) + 1,
-                     fg == 2 ? rgba(0, 0, 0, .9) : rgba(128, 128, 128, .5));
-            }
+           is drawn on -- one op of the cells' image, when any of them is fogged */
+        {
+            int fogged = 0;
+            for (z = r0; z < r1 && !fogged; z++)
+                for (x = c0; x < c1 && !fogged; x++) fogged = v->fog[z * mw + x] != 0;
+            if (fogged) cells(&c, 2, X(c0 * cell), Z(r0 * cell), X(c1 * cell), Z(r1 * cell), c0, r0, c1, r1);
+        }
 
         /* order lines, dashed, coloured by kind, each ending on a dot */
         mark(&c, WIKISTAGE_IN_OVER, 0);

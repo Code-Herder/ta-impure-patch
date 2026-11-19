@@ -21,7 +21,8 @@
    stand-in `side_art` below, in the frames whose tick / 30 is 1 or 2 past a multiple of 3 (with
    its minimap in the first, without in the second), and the whitebox column in the rest.
    One line a frame: {"e", "d", "t", "x0", "y0", "w", "h", "dropped", "trunc", "cur" (the op
-   drawing the cursor, -1 none), "grp" (each group's opacity), "ops": [[kind, flags, part, x, y,
+   drawing the cursor, -1 none), "cells" (the map cells' image's FNV-1a, its cells' red, green, blue
+   and fog row by row), "grp" (each group's opacity), "ops": [[kind, flags, part, x, y,
    w, h, clip x, y, w, h, rgba, size, style, centre, text, rgb, shade, grp], ...]}, every position
    in units as the op holds it.
 
@@ -106,6 +107,19 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
     printf("{\"e\":\"%s\",\"d\":\"%s%s\",\"t\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,"
            "\"dropped\":%d,\"trunc\":%u,\"cur\":%d,", e, d, v->frame ? "/frame" : "", t, x0, y0, w, h, o->dropped, (unsigned)v->trunc,
            o->cursor);
+    /* the map cells' image (tagpu_wikistage_cells): FNV-1a over each cell's red, green, blue and fog,
+       row by row */
+    {
+        static unsigned char img[HUD_CELLS * HUD_CELLS * 4];
+        uint32_t hsh = 0x811c9dc5u;
+        int c;
+        tagpu_wikistage_cells(v, img);
+        for (i = 0; i < v->w * v->h; i++) {
+            const unsigned char* q = img + ((size_t)(i / v->w) * HUD_CELLS + (size_t)(i % v->w)) * 4;
+            for (c = 0; c < 4; c++) hsh = (hsh ^ q[c]) * 0x01000193u;
+        }
+        printf("\"cells\":%u,", (unsigned)hsh);
+    }
     /* each op's range and, for a box, its type's name (WIKISTAGE_IN_*); then where it is drawn
        (tagpu_wikistage_keep) under three images -- every type resolved with the ground in the image,
        none resolved, and the ground fallen back -- one digit an op; and the image's rect */

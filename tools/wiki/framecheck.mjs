@@ -278,7 +278,9 @@ function layouts() {
 function idleSim(layout, casting, k) {
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
-  const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${tree.tree.flatMap(leaves)[0]}.json`), 'utf8'));
+  // the first entry with a demo: an entry that draws its own stage (the Tech tree) has none
+  const entry = tree.tree.flatMap(leaves).map(e => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${e}.json`), 'utf8')))
+    .find(e => e.demos && e.demos.length);
   const demo = { ...entry.demos[0], scene: { ...(entry.demos[0].scene || {}), selected: [] }, inputs: [] };
   const sim = WikiSim.create({ ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) => [n, { ...sc, selected: [] }])) },
     demo, layout, { side: k, casting: casting ? casting[k] ?? null : null, iface: 1 });

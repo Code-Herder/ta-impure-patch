@@ -311,13 +311,16 @@ state dump's `tech`: the view asked, the camera the last frame drew, its canvas 
   (tt1) the open lands on the tree's first entry, the Tech tree, its tree drawn fitted with nothing picked,
         its row drawing Fit, the zoom steps, All links and About and no demo control (DIR gets the frame);
   (tt2) a click on the second card's centre picks its unit;
-  (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom and picks nothing;
+  (tt3) a press dragged 120 x 40 pixels moves the camera by that over the zoom, picks nothing and sends the tree's
+       instances to the device not once (the dump's tech.sent);
   (tt4) a wheel notch up zooms by e^0.15 (or to four times 1:1) and keeps the tree point under the pointer, and a
     click on the zoomed tree picks the card under it;
   (tt5) the pick's unit panel narrows the canvas; a chip in it picks its unit at no less than 1:1, a click on its
        padding leaves the pick, the wheel over it
     scrolls it, and its close button closes it;
-  (tt6) Fit returns to the open's fitted camera; All links turns on and off;
+  (tt6) Fit returns to the open's fitted camera; All links turns on and off; with --shots the fitted tree and the
+       fitted tree with every link grabbed, with their canvases and cameras (tree.json), for tools/wiki/treecheck.py
+       to hold to the mockup's;
   (tt7) About narrows the canvas the tree is fitted to, clears the pick, and closes;
   (tt8) the unit's view: the commander's script runs on the view's host and its picture is drawn (`wikiview:`'s
        vertices; --shots grabs it), Walk moves its pieces, Reset makes a new host with Turn kept, a drag turns the
@@ -4077,9 +4080,11 @@ def techtree(c, shots, res):
     fit_cam, cv0 = t["cam"], t["cv"]
     print(f"wiki techtree: (tt1) open on {TECHTREE}: side {t['side']}, {t['n']} units on {t['cards']} cards, fitted at "
           f"z {fit_cam[0]:.4f} in a {cv0[2]:.0f}x{cv0[3]:.0f} canvas")
+    trees = []                                      # the tree's shots for tools/wiki/treecheck.py (tree.json)
     if shots:
         time.sleep(2.0)                             # the sheet's bands: a few frames
         grab(c, shots / f"techtree-{res}-fit.png")
+        trees.append({"file": f"techtree-{res}-fit.png", "res": res, "cv": t["cv"], "cam": t["cam"], "links": 0})
 
     # (tt2) a click on a card picks its unit: the second card, the commander's first builder
     k, x, y = t["cards_at"][1]
@@ -4090,7 +4095,12 @@ def techtree(c, shots, res):
     if shots:
         grab(c, shots / f"techtree-{res}-picked.png")
 
-    # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing
+    # (tt3) a drag moves the camera by what the pointer moved over the zoom, and picks nothing -- and sends the tree's
+    # instances to the device not once: a pan moves the copy the device holds (tagpu_vk_hud.c, THE TECH TREE ON THE DEVICE)
+    # the frame drawn with the pick, from the device's copy: what the render thread drew, not what the game thread asked
+    d = wait_dump(c, lambda d: d["tech"]["dsel"] == k and d["tech"]["dev"] and d["tech"]["sel"] == k,
+                  "(tt3) the pick's tree was not drawn from the device")
+    sent0 = d["tech"]["sent"]
     z, x0, y0 = d["tech"]["cam"]
     sx, sy = round(cv0[0] + cv0[2] / 2), round(cv0[1] + cv0[3] / 2)
     c.keys(f"ddown:{sx},{sy}", f"dmove:{sx + 60},{sy + 20}", f"dmove:{sx + 120},{sy + 40}", f"dup:{sx + 120},{sy + 40}")
@@ -4098,7 +4108,9 @@ def techtree(c, shots, res):
     d = wait_dump(c, lambda d: not d["tech"]["fit"] and abs(d["tech"]["cam"][1] - want[0]) < 1e-3 and
                   abs(d["tech"]["cam"][2] - want[1]) < 1e-3, f"(tt3) a drag of 120,40 did not move the camera to {want}")
     assert d["tech"]["sel"] == k, f"(tt3) the drag changed the pick: {d['tech']['sel']}"
-    print(f"wiki techtree: (tt3) a drag of 120,40 pixels moved the camera by {120 / z:.2f},{40 / z:.2f} tree units")
+    assert d["tech"]["sent"] == sent0, f"(tt3) the drag sent the tree to the device {d['tech']['sent'] - sent0} times"
+    print(f"wiki techtree: (tt3) a drag of 120,40 pixels moved the camera by {120 / z:.2f},{40 / z:.2f} tree units and "
+          f"sent the tree to the device no time (sent {sent0} times before)")
 
     # (tt4) a wheel notch up zooms about the pointer: the tree point under it stays, the zoom up by e^0.15 or to 4:1
     z, x0, y0 = d["tech"]["cam"]
@@ -4164,6 +4176,8 @@ def techtree(c, shots, res):
     d = wait_dump(c, lambda d: d["tech"]["all"] == 1, "(tt6) All links did not turn on")
     if shots:
         grab(c, shots / f"techtree-{res}-links.png")
+        trees.append({"file": f"techtree-{res}-links.png", "res": res, "cv": d["tech"]["cv"], "cam": d["tech"]["cam"], "links": 1})
+        (shots / "tree.json").write_text(json.dumps(trees, indent=1))
     press(c, d, "links")
     d = wait_dump(c, lambda d: d["tech"]["all"] == 0, "(tt6) All links did not turn off")
     print("wiki techtree: (tt6) Fit returned to the fitted camera; All links on and off")

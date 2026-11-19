@@ -105,6 +105,7 @@ static int draw(char** a)
     int i, ci;
     WTART art;
     static WIKISTAGEOPS o;
+    WTSHIFT sh;
     for (i = 0; i < WT_ROLES; i++) if (!face(&s_face[i], a[3 + i])) return 2;
     memset(&art, 0, sizeof art);
     if (sscanf(a[6], "%hd,%hd,%hd", &art.style[0], &art.style[1], &art.style[2]) != 3) return 2;
@@ -134,9 +135,11 @@ static int draw(char** a)
                 low[q] = 0;
                 if (!strcmp(low, tj_str(member(v, "sel"), ""))) sel = j;
             }
-        tagpu_wikitech_draw(&tr, &cam, sel, tj_is(member(v, "all"), TJ_TRUE), &art, stage, u, &o);
-        printf("{\"i\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,\"cam\":[%.17g,%.17g,%.17g],\"dropped\":%d,\"ops\":[",
-               ci, x0, y0, w, h, cam.z, cam.x, cam.y, o.dropped);
+        /* the stage as the game draws it: its ground, then the tree (techcheck.mjs draws WikiTech.ground first) */
+        tagpu_wikitech_stage(&tr, NULL, &cam, sel, tj_is(member(v, "all"), TJ_TRUE), &art, stage, u, &o, &sh);
+        printf("{\"i\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,\"cam\":[%.17g,%.17g,%.17g],\"dropped\":%d,"
+               "\"tree0\":%d,\"dx\":%d,\"dy\":%d,\"ops\":[",
+               ci, x0, y0, w, h, cam.z, cam.x, cam.y, o.dropped, sh.tree0, sh.dx, sh.dy);
         for (j = 0; j < o.n; j++) {
             const HUDOP* p = &o.op[j];
             printf("%s[%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%d,%d,", j ? "," : "", p->kind, p->flags, p->part,
@@ -146,8 +149,8 @@ static int draw(char** a)
                 const char* s = o.text + r->off;
                 putchar('"');
                 for (; *s; s++) if (*s == '"' || *s == '\\') printf("\\%c", *s); else putchar(*s);
-                printf("\",%u]", r->rgb);
-            } else printf("null,0]");
+                printf("\",%u,%.9g]", r->rgb, p->shade);
+            } else printf("null,0,%.9g]", p->shade);
         }
         /* the hit test at each of the case's tree points: [unit, card, icon] in order indices, -1 none */
         printf("],\"hits\":[");

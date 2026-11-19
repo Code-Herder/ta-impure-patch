@@ -312,6 +312,18 @@ The owner's decisions:
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
   buffer. The parts are premultiplied, so a linear average is the right one.
 - **The HUD draws once every part is on the device** and the atlas has a generation there.
+- **The instances are never in mapped memory between frames.** A frame builds them into the
+  render thread's scratch (`HUD_MAXINST`, 16 384 quads, 1.5 MB), hides there what the device
+  cannot draw yet, points the groups' composites into the layer, and copies them through the
+  slot's staging into the slot's range of a device-local buffer, behind barriers, before
+  anything of the frame draws. They take their bytes of the staging first, so no upload can
+  leave a frame without them; a staging that cannot be mapped even that large draws nothing
+  and refuses the pass, as a refused build does. The staging is mapped only while the pass has
+  something to send -- while the HUD or the wiki draws, at least the instances -- at most 2 MiB a
+  slot; after 30 of a slot's frames with no upload due it is mapped at the instances' size rounded
+  up to 256 KB, when it was more than twice that. The log
+  tells the most the slots held mapped at once, with the wiki's peaks and when the pass comes
+  down. The tech tree's instances live on the device across frames (*the in-game wiki*).
 - **The glyph atlas** is one 2048 × 2048 R8 image. It goes whole once after a build, as the
   frame's first copy, 4 MiB, banded. After that only the rows that changed go, in the frame's own
   command buffer, as many as the slot's buffer has room for, the rest on the next frames; nothing
@@ -568,7 +580,15 @@ the recorder writes nothing for it.
   do ([The replay HUD's layout](hud-layout.md), *The stats window*, *The chart*). Four new kinds
   of op: `HOP_LINE`, an antialiased stroke with butt ends; `HOP_CHART`, the chart's lines;
   `HOPF_DROP` on a solid, a CSS outer box shadow; and `HOPF_BASE` on a text, an SVG `<text>` on
-  its baseline at its anchor.
+  its baseline at its anchor. The tech tree adds three more, each one instance drawn per pixel: a
+  solid's corner radius (`HOP_RADIUS`, a canvas `roundRect`, the drop shadow's too), `HOP_CURVE`
+  (the tree's S-curve, dashed per pixel; its instance is a strip of `2 (HUD_CURVE_SEG + 1)`
+  vertices the vertex stage lays along the cubic, so its batch carries that count, `HUDBATCH.nv`)
+  and `HOP_GRID` (the tree's dot grid) -- [the in-game wiki](ingame-wiki.html), *The look*. The
+  wiki stage's map adds `HOP_CELLS`: its cells' ground, grid or fog, one instance, each pixel's
+  cell found by arithmetic and read texel for texel from `HUD_TEX_CELLS` (128 × 128 RGBA8, the
+  shade in rgb and the fog in alpha), which the pass sends whole when its generation moves and
+  hides the instances of until it holds it.
 - **The chart's lines are data**, one RGBA32F image a chart slot (`tagpu_huddraw_chart(slot, …)`,
   `HUD_CHART_SLOTS` 2: slot 0 this HUD's, `HUD_TEX_CHART`, slot 1 the in-game wiki's stage HUD's,
   `HUD_TEX_CHART_WIKI`; a list's `chart_slot` picks the image its `HOP_CHART` reads, so two stats

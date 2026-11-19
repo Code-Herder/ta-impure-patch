@@ -637,6 +637,112 @@ static int wiki_iface(const char* ta)
     return RD32(ta, OFF_IFACE) == 1;
 }
 
+/* WHICH OF A UNIT'S PIECES THE ENGINE JUST DREW WITH MODE 0 -- the mode in
+   which an animated face shows its anim state's current frame rather than
+   frame 0 (tagpu_packet.h, TAGPU_PK_U_ANIMDC). Read after DrawGameScreen
+   returned, so the composite is the one this frame's draw left. The draw
+   0x458810 computes `still` first: for a structure the unit is NOT activated
+   (`not al; and 1` over unit+0x10E, 0x45884C..0x45885C), for anything else
+   its move object's speed is 0 (`cmp [mover+0x20],0; sete`, 0x458862..
+   0x45886C). It bakes a composite at a unit's first draw (0x458870..0x458875,
+   0x4588FE..0x45890C), mobile units included, so a unit has one from then on
+   unless that bake failed:
+
+     composite, a depth  the composite holds the cached pieces, baked with
+     plane               mode 1 (0x4586A0's calls), and the blit 0x459200
+                         redraws the visible dont-cache ones with mode 0
+                         (0x459641), unless the unit is a structure with any
+                         build fraction left (0x45960D..0x45962D)
+     composite, no       the blit draws the visible dont-cache pieces itself
+     depth plane         (0x4593D4..0x4593FF) with `still` as the mode
+     no composite        every visible piece, directly (0x4584D0 from
+                         0x458997), with `still` as the mode
+
+   A CARRIED UNIT is not drawn by its own call: DrawUnit returns at 0x45AC29
+   when unit+0x86 is set, and its carrier's blit draws it -- with a depth
+   plane through 0x4586A0(cargo, 1, -1) (0x459669..0x459670), whose mode -1
+   takes every piece (0x459963) at frame 0 (0x459B67); without one, its
+   visible pieces through 0x4584D0 with the CARRIER's `still`
+   (0x459423..0x459476). So it is 0 here, and `*cargo` is the class this unit's
+   blit gives each member of its cargo chain (fill_world sets them).
+
+   So a finished energy storage's dont-cache glow cycles while its cached
+   body holds frame 0, and a walking unit cycles only its dont-cache pieces.
+   DISASSEMBLED 2026-11-18. */
+/* the class the unit fill_unit last filled gives its cargo (anim_class), and
+   each packet unit's, for fill_world's cargo pass */
+static unsigned      s_fillCargoCls;
+static unsigned char s_uCargoCls[TAGPU_PK_MAX_UNITS];
+
+static unsigned anim_class(const char* u, const char* o3, unsigned* cargo)
+{
+    const unsigned st = RDU32(u, U_STATE);
+    const char* comp = ptr_ok(o3) ? *(const char* const*)(o3 + O3_COMPOSITE) : NULL;
+    int still;
+    if (st & ST_STRUCTURE) {
+        still = !(RDU8(u, U_CLOAKF) & UA_ACTIVE);
+    } else {
+        const char* mv = *(const char* const*)(u + U_MOVER);
+        still = !ptr_ok(mv) || RD32(mv, MV_SPEED) == 0;
+    }
+    *cargo = 0u;
+    if (!ptr_ok(comp)) return *(const char* const*)(u + U_CARRIER) ? 0u
+                            : still ? 0u : TAGPU_PK_U_ANIMALL;
+    if (!RDU32(comp, GF_PTRDEPTH)) *cargo = still ? 0u : TAGPU_PK_U_ANIMALL;
+    if (*(const char* const*)(u + U_CARRIER)) return 0u;
+    if (RDU32(comp, GF_PTRDEPTH)) {
+        /* the engine's `fcomp 0.0; test ah,0x40`: equal, and a NaN alike, redraws */
+        const float nano = *(const float*)(u + U_NANO);
+        if ((st & ST_STRUCTURE) && nano != 0.0f && nano == nano) return 0u;
+        return TAGPU_PK_U_ANIMDC;
+    }
+    return still ? 0u : TAGPU_PK_U_ANIMDC;
+}
+
+/* THE ANIMATED-FACE TABLE (tagpu_packet.h, TAGPU_PK_ANIM): the engine's list
+   copied as values. The list is built while the level's models load, on the
+   loader thread, and freed by the level's teardown; the in-play fill runs on
+   the game thread between the two, after the load (the publish point's gate
+   excludes every loading-screen draw). Each frame is bounded below its own
+   sequence's count here, where the sequence is the game thread's to read. */
+static TAGPU_PK_ANIM s_animScratch[TAGPU_PK_MAX_ANIM];
+
+static int anim_cmp(const void* a, const void* b)
+{
+    const uint32_t x = ((const TAGPU_PK_ANIM*)a)->state, y = ((const TAGPU_PK_ANIM*)b)->state;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static unsigned fill_anims(const char* ta, int* over)
+{
+    const int n = RD32(ta, OFF_ANIMLIST_N);
+    const unsigned* list = *(const unsigned* const*)(ta + OFF_ANIMLIST);
+    unsigned k = 0, w, i;
+    *over = 0;
+    if (n <= 0 || !ptr_ok(list)) return 0;
+    if ((unsigned)n > TAGPU_PK_MAX_ANIM) { *over = 1; return 0; }
+    for (i = 0; i < (unsigned)n; i++) {
+        const char* s = (const char*)(size_t)list[i];
+        const char* seq;
+        unsigned fr, cnt;
+        if (!ptr_ok(s)) continue;
+        fr  = RDU16(s, AS_FRAME);
+        seq = *(const char* const*)(s + AS_SEQ);
+        cnt = ptr_ok(seq) ? RDU16(seq, 0) : 0u;
+        s_animScratch[k].state = (uint32_t)(size_t)s;
+        s_animScratch[k].frame = (uint16_t)(fr < cnt ? fr : TAGPU_PK_ANIM_NONE);
+        s_animScratch[k].pad = 0;
+        k++;
+    }
+    qsort(s_animScratch, k, sizeof s_animScratch[0], anim_cmp);
+    /* one entry a state: the binder registers each face once, and a repeat
+       would break the strict order the acquire checks */
+    for (w = 0, i = 0; i < k; i++)
+        if (!w || s_animScratch[i].state != s_animScratch[w - 1].state)
+            s_animScratch[w++] = s_animScratch[i];
+    return w;
+}
+
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value
    that leaves here is either a copy of a field or an index this function has
    already bounded. */
@@ -724,6 +830,7 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
             if (RDU32(fr, GF_PTRDEPTH)) e->flags |= TAGPU_PK_U_DEPTHPLANE;
         }
     }
+    e->flags |= (unsigned char)anim_class(u, o3, &s_fillCargoCls);
     /* THE OWNERSHIP ANSWER IS TAKEN HERE, ON THIS THREAD, WITH THE DEF IN
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
        build fraction, so the unit pass takes the answer from the packet rather
@@ -1646,6 +1753,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
             ue = &s_uScratch[nu];
             fill_unit(ue, ta, u, i, udefCount, udefs);
+            s_uCargoCls[nu] = (unsigned char)s_fillCargoCls;
             /* what the engine's draw list would leave out for the viewed player:
                the unit pass draws none of it (tagpu_native.c, the refusals) */
             if (!tagpu_packet_pub_unit_seen(ta, u)) ue->flags |= TAGPU_PK_U_UNSEEN;
@@ -1743,6 +1851,21 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                                         ? (short)s_slotIdx[s1] : (short)-1;
             s_uScratch[i].cargo_next  = (s2 >= 0 && (unsigned)s2 < walk && s_slotIdx[s2] != 0xFFFFu)
                                         ? (short)s_slotIdx[s2] : (short)-1;
+        }
+        /* THE CARGO'S ANIM CLASS IS ITS CARRIER'S BLIT'S (anim_class): each member
+           of a chain the blit walks, every one but a ST_NOCARGO member, which
+           both of its loops skip (0x459657, 0x459423). A chain is followed at
+           most `nu` links, so a cycle in the engine's links ends. */
+        for (i = 0; i < nu; i++) {
+            int c = s_uScratch[i].cargo_first;
+            unsigned hop = 0;
+            while (c >= 0 && (unsigned)c < nu && hop++ < nu) {
+                TAGPU_PK_UNIT* m = &s_uScratch[c];
+                if (!(m->state & ST_NOCARGO))
+                    m->flags = (unsigned char)((m->flags & ~(TAGPU_PK_U_ANIMDC | TAGPU_PK_U_ANIMALL)) |
+                                               s_uCargoCls[i]);
+                c = m->cargo_next;
+            }
         }
         /* the oracle's bitmap, cleared only where it was set */
         for (i = 0; i < nu; i++) s_idSeen[s_idUsed[i] >> 3] = 0;
@@ -1921,6 +2044,14 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     e = append_table(p, cursor, s_utype, s_utypeN, (unsigned)sizeof(TAGPU_PK_UTYPE),
                      &p->utype_off, &p->utype_n, TAGPU_PK_TRUNC_UTYPE);
     if (e > need) need = e;
+    {
+        int over;
+        const unsigned nanim = fill_anims(ta, &over);
+        if (over) p->truncated |= TAGPU_PK_TRUNC_ANIM;
+        e = append_table(p, cursor, s_animScratch, nanim, (unsigned)sizeof(TAGPU_PK_ANIM),
+                         &p->anim_off, &p->anim_n, TAGPU_PK_TRUNC_ANIM);
+        if (e > need) need = e;
+    }
     e = append_table(p, cursor, s_wScratch, nw, (unsigned)sizeof(TAGPU_PK_WRECK),
                      &p->off_wrecks, &p->n_wrecks, TAGPU_PK_TRUNC_WRECKS);
     if (e > need) need = e;
@@ -1952,9 +2083,11 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    because only the tick writes it. These four are not: **the engine's own
    explosion DRAW emits particles** — 0x420B00's debris loop calls 0x421550
    (0x420B18), which calls the grey-smoke emitter 0x472810 (0x421583) and the
-   fire emitter 0x472AB0 (0x4215AA), and both append to a layer. So a second
-   draw of one tick can find a layer the first did not
-   produce.
+   fire emitter 0x472AB0 (0x4215AA), and both append to a layer. Those two
+   emit only in the first explosion draw after GameTime moves
+   (tagpu_patches.c, fix_debris_emission), so they land in the tick's first
+   draw, before the gather of the tick's first publish. The cache does not rest on that: the argument below holds
+   for any append after the gather.
 
    What actually licenses the cache is weaker and is enough:
 
@@ -1966,11 +2099,11 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        and debris piece once per tick, so what a reused table gets WRONG is
        confined to objects created between two publishes of one tick — never a
        stale position for an object that was already there.
-     * WHAT THAT COSTS is that the newest smoke or fire of a tick can land one
-       publish late: under 4 ms of wall time at the publish rates the reference
-       setup reaches, on a sprite that is one frame old. It is a quality trade, taken
-       deliberately, and the alternative is the whole gather at the DRAW rate —
-       measured at 6 to 7 % of the game thread.
+     * WHAT THAT COSTS is that an object made by a later draw of the tick can
+       land one publish late: under 4 ms of wall time at the publish rates the
+       reference setup reaches, on a sprite that is one frame old. It is a quality
+       trade, taken deliberately, and the alternative is the whole gather at the
+       DRAW rate — measured at 6 to 7 % of the game thread.
 
    At the 250-odd publishes a second the reference setup reaches against a
    60 Hz sim, four publishes in five reuse.

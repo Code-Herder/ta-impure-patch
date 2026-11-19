@@ -582,6 +582,16 @@ static const char* frame_valid(const void* rec)
        it bounds by `utype_n` */
     if (!table_ok(p, p->utype_off, p->utype_n, sizeof(TAGPU_PK_UTYPE))) return "unit type table";
     if (p->utype_n > (unsigned)TAGPU_LIM_TYPES) return "more unit types than the table holds";
+    /* the animated-face table: the bake binary-searches it by state, so the
+       order it rests on is checked here with the extent */
+    if (!table_ok(p, p->anim_off, p->anim_n, sizeof(TAGPU_PK_ANIM))) return "animated face table";
+    if (p->anim_n > TAGPU_PK_MAX_ANIM) return "more animated faces than the table holds";
+    {
+        const TAGPU_PK_ANIM* a = tagpu_pk_anims(p);
+        unsigned i;
+        for (i = 1; i < p->anim_n; i++)
+            if (a[i].state <= a[i - 1].state) return "animated face table out of order";
+    }
     /* the build-orders table (the build ghost). Its consumer walks it with the
        raw pointer and no cap of its own, which is this line's whole point:
        every table a consumer indexes by `n_` alone is checked HERE. */

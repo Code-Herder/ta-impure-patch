@@ -349,6 +349,31 @@ const unsigned char* tagpu_wikistate_side(unsigned* gen)
     return s_colRgba;
 }
 
+/* THE MAP'S CELLS (HUD_TEX_CELLS), the image the stage's HOP_CELLS ops draw: made from the view the
+   stage was built from, into the one of two buffers that does not hold the image drawn last, and
+   compared with that one byte for byte, so a new generation, which tagpu_vk_hud.c sends whole,
+   moves exactly when a texel differs -- a fog that clears, another map. 64 KB each; this thread's
+   alone. */
+static unsigned char  s_cells[2][HUD_CELLS * HUD_CELLS * 4];
+static int            s_cellsCur;
+static unsigned       s_cellsGen;       /* bumped at every new image; 0: none yet              */
+
+static void cells_bind(const WIKISTAGEVIEW* v)
+{
+    unsigned char* t = s_cells[s_cellsCur ^ 1];
+    tagpu_wikistage_cells(v, t);
+    if (!s_cellsGen || memcmp(t, s_cells[s_cellsCur], sizeof s_cells[0])) {
+        s_cellsCur ^= 1;
+        if (++s_cellsGen == 0) s_cellsGen = 1;
+    }
+}
+
+const unsigned char* tagpu_wikistate_cells(unsigned* gen)
+{
+    *gen = s_cellsGen;
+    return s_cells[s_cellsCur];
+}
+
 /* ---- the tech tree entry (tagpu_wikitech.h; wiki.js drawTech) ------------------------------------
    THE TREE THIS THREAD DRAWS IS ITS OWN, made by tagpu_wikitech_tree from the published block --
    immutable and never freed, read through tagpu_wikitech_get, whose interlocked read pairs with the
@@ -375,6 +400,15 @@ static unsigned        s_tgen;         /* bumped at every new sheet; 0: none yet
 static int             s_tsaidFit, s_tsaidMem;
 static WTCAM           s_tcam;         /* the camera this frame drew                             */
 static float           s_tlo, s_tcv[4];
+static unsigned        s_ttSerial;     /* bumped at every tree made (tech_tree_rt)               */
+/* THE TREE'S OPS AND THEIR GENERATION (WIKILISTS tree): this frame's split and pan, the op count
+   the stage had when they were drawn, and the arguments of the pure tagpu_wikitech_stage that are
+   not the pan -- a generation moves exactly when one of them does, so equal generations are equal
+   ops. The sheet's generation is among them: the instances carry its uv. */
+static WTSHIFT         s_tsh;
+static int             s_tshN = -1, s_tsaidSplit;
+static unsigned        s_treeGen;
+static struct { unsigned serial, sheet; int sel, all; double z; HUDRECT stage; float u; } s_tkey;
 
 static double tech_measure(void* ctx, int role, double size, const char* s)
 {
@@ -473,6 +507,7 @@ static const WIKITECHTREE* tech_tree_rt(const TAGPU_PK_WIKI* w)
     if (t != s_ttOf || w->tech_side != s_ttSide) {
         if (s_ttOk) tagpu_wikitech_free(&s_tt);
         s_ttOk = tagpu_wikitech_tree(t, w->tech_side, &s_tt);
+        s_ttSerial++;
         s_ttOf = t;
         s_ttSide = w->tech_side;
         if (s_ttOk) tech_sheet(&s_tt);
@@ -537,6 +572,10 @@ static void tech_stage(const TAGPU_PK_WIKI* w, float u)
     if (T) {
         const double hi = 4.0 * u, cz = w->tech_cam[0], ccx = w->tech_cam[1], ccy = w->tech_cam[2];
         tagpu_wikitech_fit(T, cwu, ch, u, &fit);
+        /* the zoom at the packet's precision: a drag or a notch starts from the camera as drawn,
+           which travels as a float (TAGPU_CMD_WIKI tech_cam), so the fitted zoom and the one the
+           first drag hands back are one value and the tree's ops stay the same across them */
+        fit.z = (float)fit.z;
         s_tlo = (float)(fit.z < 0.2 * u ? fit.z : 0.2 * u);
         cam = fit;
         if (!w->tech_fit && isfinite(cz) && isfinite(ccx) && isfinite(ccy) && fabs(ccx) < 1e7 && fabs(ccy) < 1e7 && cz > 0) {
@@ -547,7 +586,19 @@ static void tech_stage(const TAGPU_PK_WIKI* w, float u)
         if (w->tech_sel >= 0 && w->tech_sel < T->n) sel = w->tech_sel;
     }
     tagpu_wikitech_stage(T, st == WIKISIDE_PENDING ? "loading\xE2\x80\xA6" : "No tech tree: this mod's could not be read", &cam,
-                         sel, w->tech_all != 0, &s_tart, s_fr.stage, u, &s_stage);
+                         sel, w->tech_all != 0, &s_tart, s_fr.stage, u, &s_stage, &s_tsh);
+    s_tshN = s_stage.n;
+    if (s_tkey.serial != s_ttSerial || s_tkey.sheet != s_tgen || s_tkey.sel != sel || s_tkey.all != (w->tech_all != 0) ||
+        s_tkey.z != cam.z || memcmp(&s_tkey.stage, &s_fr.stage, sizeof s_tkey.stage) || s_tkey.u != u || !s_treeGen) {
+        s_tkey.serial = s_ttSerial;
+        s_tkey.sheet = s_tgen;
+        s_tkey.sel = sel;
+        s_tkey.all = w->tech_all != 0;
+        s_tkey.z = cam.z;
+        s_tkey.stage = s_fr.stage;
+        s_tkey.u = u;
+        if (++s_treeGen == 0) s_treeGen = 1;
+    }
     s_tcam = cam;
     s_tcv[0] = (float)(cx + s_ox);
     s_tcv[1] = (float)(cy + s_oy);
@@ -1064,9 +1115,11 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
             frame_hud(sv, side, u, w, &sf);
         }
         if (s_tentry) tech_stage(w, u);
-        else
+        else {
             tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, s_frameOn ? &sf : NULL,
                                   &s_sart, &s_stage);
+            cells_bind(sv);
+        }
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
         if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {
@@ -1185,6 +1238,23 @@ int tagpu_wikistate_frame(unsigned frame, WIKILISTS* out)
     if (s_haveStage) {
         out->stage = stage_list();
         out->stage.watch = s_curList == 1 ? s_curAt : -1;
+        /* the tech tree's ops, split off the stage's while they stand where they were drawn: no
+           split by the 3D image moved them (the tree's entry has none) */
+        if (s_tentry && s_tsh.tree0 >= 0 && s_tsh.tree0 < out->stage.n) {
+            if (s_tshN == out->stage.n && !s_nover && !s_ntop) {
+                out->tree = out->stage;
+                out->tree.op = out->stage.op + s_tsh.tree0;
+                out->tree.n = out->stage.n - s_tsh.tree0;
+                out->tree.watch = -1;
+                out->tree_dx = s_tsh.dx;
+                out->tree_dy = s_tsh.dy;
+                out->tree_gen = s_treeGen;
+            } else if (!s_tsaidSplit) {
+                s_tsaidSplit = 1;
+                tagpu_logf("wiki: the tech tree's ops were moved after they were drawn - the tree is not drawn (said once)");
+            }
+            out->stage.n = s_tsh.tree0;
+        }
         if (s_nover) {
             out->over = out->stage;
             out->over.op = s_over;
@@ -1245,7 +1315,7 @@ static void page_hits(int top, int* cut)
     }
 }
 
-void tagpu_wikistate_drawn(int drew, int cursor)
+void tagpu_wikistate_drawn(int drew, int cursor, unsigned tree_sent, int tree_dev)
 {
     int i, top, cut = 0;
     memset(&s_map, 0, offsetof(TAGPU_CMD_WIKI, hit));
@@ -1322,6 +1392,9 @@ void tagpu_wikistate_drawn(int drew, int cursor)
         s_map.tech_cam[2] = (float)s_tcam.y;
         s_map.tech_lo = s_tlo;
         memcpy(s_map.tech_cv, s_tcv, sizeof s_map.tech_cv);
+        s_map.tech_sent = tree_sent;
+        s_map.tech_dsel = (int16_t)s_tkey.sel;
+        s_map.tech_dev = (uint8_t)(tree_dev != 0);
     }
     /* a game frame: its world takes a click only on a live frame in Try it, through the frame's fit
        (tagpu_wiki.c live_world), and the stage HUD's playhead run as drawn turns a pointer into a

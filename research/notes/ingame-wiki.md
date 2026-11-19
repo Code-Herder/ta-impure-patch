@@ -2336,9 +2336,36 @@ kind, each one line, clipped), the icons 13 units square, 8 a row, a 9-unit foot
 is exact before anything is drawn. A tidy tree: each childless card takes the next row, a parent is
 centred over its children but never above the cursor, and one cursor runs down the whole tree,
 every card starting at or below it and moving it past its own bottom plus `GAP` (6 units). That is
-the invariant: two cards of one column are at least `GAP` apart, whatever the fonts. The drawing
-is rectangles, polylines (an edge leaves a card's header at its right, turns at the gap's middle
-and enters the child's header), images and clipped one-line text: what a HUD op list carries.
+the invariant: two cards of one column are at least `GAP` apart, whatever the fonts.
+
+**The look** is the research tree's prototype's (the throwaway `tools/wiki/techtree-prototype/`,
+last at commit `3b92ed28`), its CSS pixels halved (its card 236 px to our 118 units): a card with
+2-unit rounded corners, a soft shadow (`0 1u 3u #0008`), a half-unit rim and a black line under the
+header, the selected card a one-unit halo outside its rim; an edge the cubic from the parent's
+right edge to the child's left at the headers' middles, its handles at the midpoint's x (an
+S-curve), an "also built by" edge dashed; the stage a dot grid every 16 window units, fixed to the
+canvas while the tree pans and zooms over it. Each shape is one op the HUD shader draws per pixel:
+a rounded rectangle is a `HOP_SOLID` with its corner radius (`HOP_RADIUS`; the `RRECT` mode), the
+shadow a `HOPF_DROP` box with the same radius -- the sharp box blurred and kept outside the
+rounded one, a little heavier at the corners than the canvas's blur of the rounded shape; an
+edge is one `HOP_CURVE`, a strip the vertex stage lays along the cubic in `HUD_CURVE_SEG` (24)
+pieces and the fragment stage strokes with butt ends and, for an "also built by" edge, dashes 2
+units on and 2 off from its start, as the canvas's `setLineDash` does, at any zoom; and the dot
+grid is one `HOP_GRID` over the canvas. So the tree's ops are bounded by its cards and edges,
+whatever the zoom or the window: `techcheck`'s budget case, every card at the game's stage size
+and the most zoom (so every line of text is drawn) with every link, is 1 348 ops and 4 976 bytes
+of text at most (Escalation), of the stage's 16 384 ops. A dimmed card
+(opacity 0.28, the prototype's) has its frame drawn in opaque colours mixed with the stage, so its
+overlapping shapes fade as one layer; an edge under a dimmed card is hidden rather than seen
+through it, and its pictures and text are drawn at the opacity, so a picture over its black
+square is a little darker than the prototype's. The pan is a whole-pixel shift of the tree drawn at
+its zoom (a point rounded at the zoom, the camera's offset rounded on its own) and every card is
+drawn whatever the pan, so the tree's ops change only with the zoom, the pick, All links and the
+canvas; the game keeps their instances on the device and moves them by the pan
+([the plan](hud-on-device-plan.html), D2). The faces are the HUD's (the
+prototype's description and footer were the browser's system face), so those two lines read
+narrower than the prototype's.
+
 Every rectangle's corners are rounded to canvas pixels and a line one pixel wide sits on a pixel's
 centre, so rims stay one crisp line at any zoom; a picture is drawn nearest-neighbour at its own
 size or larger and filtered at high quality smaller; a text line under 6 canvas pixels is left out
@@ -2444,7 +2471,11 @@ the demo controls left out. The plan and what is left: [the plan](ingame-wiki-te
   from the same pack (`tests/techpack.h`); `wiki_regression.py techtree` plays it in the game:
   the open on the tree, fitted, a click that picks, a drag, a notch about the pointer and a click
   on the zoomed tree, the panel a pick opens with a chip, the wheel and its close, Fit, All links
-  and About narrowing the fit.
+  and About narrowing the fit; and `tools/wiki/treecheck.py` holds the lane's two shots of the
+  fitted tree, with and without every link, to the mockup's canvas at the same camera, pixel for
+  pixel -- the shader's rounded boxes, curves, dashes and grid against Chrome's paths. MEASURED
+  2026-11-17 at 1920 x 1080, stock: 0.76 and 0.80 levels apart on average, 0.4 % of the canvas more
+  than 48 apart, most of it the cards' shrunken pictures and the text.
 
 - **The unit's view** is the game thread's (`tagpu_wiki.c`, THE TECH TREE'S UNIT VIEW): the
   panel's unit -- an upgrade's first builder -- runs its own COB script on a host of its own, made
@@ -3567,12 +3598,15 @@ of the function it imitates; the code cites each address where it applies it.
 - **The wheel's step and a track's page are the DLL's.** The mockup leaves both to the browser: the
   game scrolls 48 units a notch (three of the tree's rows) and a press on a track off its thumb
   pages by seven eighths of the panel, as Chrome does.
-- **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
-  as the canvas calls them. By `tagpu_wikistage.h`'s count, a 40 × 30 map's cells, grid and fog
-  come to about 3750 ops, the whitebox minimap's to at most 2 × 1200 + 128 more and the sidebar's
-  buttons to about 200, against `WIKI_MAXOP` 16384; a 40 × 48 map has 1.6 times the cells, about
-  6000 and 3970 by the same counts [INFERRED: scaled, not measured]. A square map past about 70 cells a side, fogged everywhere, drops ops and
-  edges the stage in red.
+- **The stage's budget holds the data's map, not the largest.** The map's cells, grid and fog are
+  two ops whatever the map: `HOP_CELLS`, drawn per pixel from an image of the cells' shades and
+  fog (`tagpu_wikistage_cells`, sent when a texel changes), cell k from the device pixel
+  `round(X(k))` to the next cell's, the last one pixel past the map, in the mockup as in the game
+  ([the plan](hud-on-device-plan.html), D3). The whitebox minimap is still one op a cell, its fog
+  and its dots: at most 2 × 1200 + 128 for a 40 × 30 map, and the sidebar's buttons about 200,
+  against `WIKI_MAXOP` 16384. stagecheck's busiest frame over a third of its passes is 8 439 ops
+  (MEASURED 2026-11-17). A square map past about 80 cells a side, fogged everywhere, has a
+  whitebox minimap that drops ops and edges the stage in red.
 - **The controls' glyphs and the tree's marks are kit icons, pending the owner.** No HUD face has
   play, pause, replay, the folds' triangles or the entry's dot, so both the mockup and the game
   draw them as icons rasterised from `glyphs.js`, in the kit icons' pale fill and black edge; the

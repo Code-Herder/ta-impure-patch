@@ -444,7 +444,7 @@ static unsigned geom_bucket(const TAGPU_PBGEOM* g)
 
 static unsigned mat_bucket(const TAGPU_PBMAT* m)
 {
-    return pb_hash((unsigned)(m->geom - s_geom), (unsigned)m->owner);
+    return pb_hash((unsigned)(m->geom - s_geom), (unsigned)m->owner ^ m->akeyHash);
 }
 
 static void chain_unlink(unsigned short* head, unsigned short* next, unsigned b, int k)
@@ -463,6 +463,7 @@ static void mat_drop(int i)
     s_geomNmat[m->geom - s_geom]--;
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
     if (s_matMirror[i]) { free(s_matMirror[i]); s_matMirror[i] = NULL; }
+    free(m->akey);
     memset(m, 0, sizeof *m);
     s_matFree[s_nmatFree++] = (unsigned short)i;
     s_matLive--;
@@ -484,6 +485,7 @@ static void geom_drop(TAGPU_PBGEOM* g)
        hand-over published before this from reading the next model's bytes */
     if (s_geomMirror[k]) { free(s_geomMirror[k]); s_geomMirror[k] = NULL; }
     free(g->restOff);                         /* the topology block */
+    free((void*)g->animFace);                 /* the animated-face block */
     memset(g, 0, sizeof *g);
     s_geomFree[s_ngeomFree++] = (unsigned short)k;
     s_geomLive--;
@@ -541,6 +543,32 @@ static void say_full(const char* table)
     blog(b);
 }
 
+/* THE ANIMATED-FACE LIST (TAGPU_PBGEOM.animFace): the body walk's faces with
+   FF_ANIM set and FF_TEAM clear, each once -- the walk hands a face back once a
+   fan triangle, consecutively. These are exactly the faces the binder 0x42A140
+   registers in the engine's list (0x42A22F..0x42A234 skips a team face), so each
+   has an entry there keyed by its address + 0x10. */
+typedef struct {
+    int n, over;
+    const char* face[TAGPU_PB_MAXANIM];
+    unsigned char piece[TAGPU_PB_MAXANIM];
+} PBANIMCTX;
+
+static void anim_emit(void* vctx, int range, int p, const char* nd,
+                      const int* rv, int nvert, const char* fa, int fvc,
+                      const unsigned short* vi, const int* slot, int n)
+{
+    PBANIMCTX* c = (PBANIMCTX*)vctx;
+    const unsigned fl = *(const unsigned*)(fa + F_FLAGS);
+    (void)range; (void)nd; (void)rv; (void)nvert; (void)fvc; (void)vi; (void)slot; (void)n;
+    if ((fl & (FF_ANIM | FF_TEAM)) != FF_ANIM) return;
+    if (c->n && c->face[c->n - 1] == fa) return;
+    if (c->n >= TAGPU_PB_MAXANIM) { c->over++; return; }
+    c->face[c->n] = fa;
+    c->piece[c->n] = (unsigned char)p;
+    c->n++;
+}
+
 static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
                                int ghost)
 {
@@ -579,6 +607,29 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     }
     g->badNode = st.badNode; g->oddFace = st.oddFace;
     bake_topology(g, nd, nparts);
+    {
+        static PBANIMCTX a;
+        a.n = 0; a.over = 0;
+        pb_walk(nd, nparts, TAGPU_PB_BODY, anim_emit, &a, NULL);
+        if (a.n) {
+            unsigned char* blk = (unsigned char*)malloc((size_t)a.n * (sizeof(char*) + 1));
+            /* no block: the model keeps frame 0 on every face, as before the
+               list existed, rather than failing its bake */
+            if (blk) {
+                g->animFace = (const char**)(void*)blk;
+                g->animPiece = blk + (size_t)a.n * sizeof(char*);
+                memcpy(g->animFace, a.face, (size_t)a.n * sizeof(char*));
+                memcpy(g->animPiece, a.piece, (size_t)a.n);
+                g->nanim = a.n;
+            }
+        }
+        if (a.over) {
+            _snprintf(b, sizeof b, "posebake: root=%p has %d animated faces past the %d a "
+                      "model holds; they show frame 0", (const void*)nd[0], a.over,
+                      TAGPU_PB_MAXANIM);
+            blog(b);
+        }
+    }
     if (c.over) {
         _snprintf(b, sizeof b,
                   "posebake: REFUSED root=%p — %d pieces bake past the %d-vertex bound",
@@ -630,7 +681,22 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
 }
 
 /* ---- the material stream ------------------------------------------------ */
-typedef struct { int nv; int owner; int nskip; int anom; int over; int defer; } PBMATCTX;
+typedef struct { int nv; int owner; int nskip; int anom; int over; int defer;
+                 const TAGPU_PBGEOM* g; const unsigned char* akey; } PBMATCTX;
+
+/* THE FRAME ONE ANIMATED FACE SHOWS in the stream being baked: its byte of the
+   key, found by the face's place in the geometry's list. A face not in the list
+   -- a team face, a plain texture, one past TAGPU_PB_MAXANIM -- is frame 0, as
+   is every face of the NULL key. */
+static int mat_anim(const PBMATCTX* c, const char* fa)
+{
+    int j;
+    if (!c->akey) return 0;
+    for (j = 0; j < c->g->nanim; j++)
+        if (c->g->animFace[j] == fa)
+            return c->akey[j] == TAGPU_PB_ANIM_NONE ? TAGPU_R3D_ANIM_NONE : (int)c->akey[j];
+    return 0;
+}
 
 /* A TEXTURED QUAD'S OWN FRAME, which is what lets the fragment stage map it
    per pixel. The engine pins a quad's four corners to the frame's four
@@ -702,14 +768,17 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
        paints nothing for gets no outline either — so the lookup runs for it and
        only its skip flag is kept. */
     if (range != TAGPU_PB_SLANT) {
-        const char* tg = tagpu_r3d_face_texframe(fa, c->owner);
+        const int anim = mat_anim(c, fa);
+        const char* tg = tagpu_r3d_face_texframe(fa, c->owner, anim);
         const int got = tg ? tagpu_r3d_atlas_uv(tg, uv, &ckf) : 0;
         if (got > 0) hasTex = 1;
         /* DEFERRED past the allowance: the bake is refused below, so this face
            is never baked flat for want of a texel that arrives next frame */
         if (got < 0) c->defer = 1;
         if (!hasTex) {
-            int fc = tagpu_r3d_face_colour(fa);
+            /* a live face whose anim state names no frame: 0x4B7EE0 returns 0
+               and the rasteriser paints nothing, so it takes no flat colour */
+            int fc = anim == TAGPU_R3D_ANIM_NONE ? -1 : tagpu_r3d_face_colour(fa);
             /* neither a texture the atlas has nor a flat colour: the engine's
                rasteriser paints nothing for this face and neither do we. It is
                baked and collapsed, so the two buffers stay the same length
@@ -758,13 +827,16 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
 }
 
 static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
-                             int owner, unsigned atlasGen, unsigned lvl)
+                             int owner, unsigned atlasGen, unsigned lvl,
+                             const unsigned char* akey, unsigned akeyHash)
 {
     PBMATCTX c;
     TAGPU_PBMAT* m;
+    unsigned char* keep = NULL;
     int r, slot;
     char b[192];
     c.nv = 0; c.owner = owner; c.nskip = 0; c.anom = 0; c.over = 0; c.defer = 0;
+    c.g = g; c.akey = akey;
     for (r = 0; r < TAGPU_PB_NRANGE; r++)
         pb_walk(nd, g->nparts, r, mat_emit, &c, NULL);
     /* A FACE WHOSE TEXTURE WAITS FOR THE ALLOWANCE (tagpu_r3d_atlas_uv's -1):
@@ -784,12 +856,20 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         blog(b);
         return NULL;
     }
+    /* the key is the stream's identity: an entry that cannot keep it is not
+       made, or the lookup would match it as the frame-0 stream */
+    if (akey) {
+        keep = (unsigned char*)malloc((size_t)g->nanim);
+        if (!keep) return NULL;
+        memcpy(keep, akey, (size_t)g->nanim);
+    }
     slot = mat_slot();
-    if (slot < 0) { say_full("material"); return NULL; }
+    if (slot < 0) { free(keep); say_full("material"); return NULL; }
     m = &s_mat[slot];
     memset(m, 0, sizeof *m);
     m->geom = g; m->root = g->root; m->owner = owner; m->atlasGen = atlasGen;
     m->levelGen = lvl;
+    m->akey = keep; m->akeyHash = akey ? akeyHash : 0u;
     {
         const unsigned b = mat_bucket(m);
         s_matNext[slot] = s_matHead[b];
@@ -945,8 +1025,66 @@ const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
 }
 
 /* ---- the lookup --------------------------------------------------------- */
+/* THE FRAME OF ONE ANIMATED FACE, out of the packet's table: binary search on
+   the face's anim state address, a KEY that is compared and never followed.
+   A face the table does not hold (it did not fit this packet, or the engine's
+   list does not name it) shows frame 0. A frame the bake's byte cannot carry is
+   past every sequence face_texframe accepts (64 frames), so it is NONE. */
+static unsigned char anim_frame(const TAGPU_PBANIM* a, const char* fa)
+{
+    const uint32_t key = (uint32_t)(size_t)(fa + 0x10);
+    unsigned lo = 0, hi = a->n;
+    while (lo < hi) {
+        const unsigned mid = lo + (hi - lo) / 2;
+        if (a->tab[mid].state < key) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= a->n || a->tab[lo].state != key) return 0;
+    return a->tab[lo].frame >= TAGPU_PB_ANIM_NONE ? (unsigned char)TAGPU_PB_ANIM_NONE
+                                                  : (unsigned char)a->tab[lo].frame;
+}
+
+/* The unit's key into `kb` (g->nanim bytes): a face on a piece the engine drew
+   with mode 0 shows its state's frame, every other face frame 0. Returns 0
+   when every byte is 0 -- the frame-0 stream, keyed NULL -- else 1 with the
+   key's hash. A piece is live when it is visible (P_FLAGS bit0) and the unit's
+   class takes it: every piece, or the dont-cache ones (bit1 clear). */
+static int anim_key(const TAGPU_PBGEOM* g, const TAGPU_PK_PIECE* pc,
+                    const TAGPU_PBANIM* a, unsigned char* kb, unsigned* hash)
+{
+    int j, any = 0;
+    unsigned h = 2166136261u;
+    if (!a || !a->tab || !a->n || !g->nanim ||
+        !(a->flags & (TAGPU_PK_U_ANIMDC | TAGPU_PK_U_ANIMALL))) return 0;
+    for (j = 0; j < g->nanim; j++) {
+        const unsigned fl = pc[g->animPiece[j]].flags;
+        const int live = (fl & 1u) &&
+                         ((a->flags & TAGPU_PK_U_ANIMALL) || !(fl & 2u));
+        kb[j] = live ? anim_frame(a, g->animFace[j]) : 0;
+        if (kb[j]) any = 1;
+        h = (h ^ kb[j]) * 16777619u;
+    }
+    *hash = h;
+    return any;
+}
+
+static TAGPU_PBMAT* mat_find(const TAGPU_PBGEOM* g, const char* root, int owner,
+                             unsigned agen, const unsigned char* akey, unsigned akeyHash)
+{
+    const unsigned hh = akey ? akeyHash : 0u;
+    unsigned k = s_matHead[pb_hash((unsigned)(g - s_geom), (unsigned)owner ^ hh)];
+    for (; k; k = s_matNext[k - 1]) {
+        TAGPU_PBMAT* e = &s_mat[k - 1];
+        if (e->geom == g && e->root == root && e->owner == owner &&
+            e->atlasGen == agen && e->akeyHash == hh &&
+            (akey ? e->akey && !memcmp(e->akey, akey, (size_t)g->nanim) : !e->akey))
+            return e;
+    }
+    return NULL;
+}
+
 int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
-                        int ghost,
+                        int ghost, const TAGPU_PBANIM* anim,
                         const TAGPU_PBGEOM** geomOut, const TAGPU_PBMAT** matOut)
 {
     const char* nd[TAGPU_PBMAXPIECE];
@@ -996,15 +1134,18 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
     g->lastFrame = s_frame;
 
     {
-        unsigned k = s_matHead[pb_hash((unsigned)(g - s_geom), (unsigned)owner)];
-        for (; k; k = s_matNext[k - 1]) {
-            TAGPU_PBMAT* e = &s_mat[k - 1];
-            if (e->geom == g && e->root == nd[0] && e->owner == owner &&
-                e->atlasGen == agen) { m = e; break; }
+        static unsigned char kb[TAGPU_PB_MAXANIM];
+        unsigned kh = 0;
+        const unsigned char* key = anim_key(g, pc, anim, kb, &kh) ? kb : NULL;
+        m = mat_find(g, nd[0], owner, agen, key, kh);
+        if (!m) m = mat_bake(g, nd, owner, agen, lvl, key, kh);
+        /* A FRAME NOT IN THE ATLAS YET waits for the allowance like any face
+           (mat_bake's deferral); the unit is drawn meanwhile from the frame-0
+           stream, which a frame of the same sequence is no worse than */
+        if (!m && key) {
+            m = mat_find(g, nd[0], owner, agen, NULL, 0);
+            if (!m) m = mat_bake(g, nd, owner, agen, lvl, NULL, 0);
         }
-    }
-    if (!m) {
-        m = mat_bake(g, nd, owner, agen, lvl);
         if (!m) return 0;
     }
     m->lastFrame = s_frame;

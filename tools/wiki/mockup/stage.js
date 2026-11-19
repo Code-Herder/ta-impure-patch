@@ -273,26 +273,32 @@ const WikiStage = (() => {
     }
 
     if (at('ground')) {
-      // the ground, in the shades of grounds()
-      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
-        g.fillStyle = shade(z * mw + x);
-        g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-      }
-      // the cell grid, one pixel wide on pixel centres. A row is broken at each column, so no pixel is stroked
-      // twice: the pieces are the one path's pixels, and the game draws each piece as its own stroke
-      if (cp >= 5) {
-        g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
-        const cols = [];
-        for (let x = c0; x <= c1; x++) cols.push(Math.round(X(x * cell)));
-        for (const px of cols) { g.moveTo(px + .5, Z(r0 * cell)); g.lineTo(px + .5, Z(r1 * cell)); }
-        for (let z = r0; z <= r1; z++) {
-          const pz = Math.round(Z(z * cell)) + .5, end = X(c1 * cell);
-          let a = X(c0 * cell);
-          for (const px of cols) { if (px > a) { g.moveTo(a, pz); g.lineTo(px, pz); } a = px + 1; }
-          if (end > a) { g.moveTo(a, pz); g.lineTo(end, pz); }
+      /* THE MAP'S CELLS, one image a layer (tagpu_wikistage.c cells, HOP_CELLS): cell x covers the device pixels from
+         Math.round(X(x * cell)) to the next cell's, the last cell one pixel past the map's edge, and so for rows. The
+         ground in grounds()'s shades, with the grid when a cell is 5 pixels or more -- one pixel black at 12 % on each
+         cell's first column and row and on the pixel past the last, laid once -- and, after the features, the fog. A
+         recording context takes each layer as one call (g.cells), with each cell's shade and fog. */
+      const fog = M.fog || [];
+      const cells = layer => {
+        if (g.cells) {
+          g.cells(layer, X(c0 * cell), Z(r0 * cell), X(c1 * cell), Z(r1 * cell), c0, r0, c1, r1, mw * mh, i => [shade(i), fog[i]]);
+          return;
         }
-        g.stroke();
-      }
+        const xs = [], zs = [];
+        for (let x = c0; x <= c1; x++) xs.push(Math.round(X(x * cell)));
+        for (let z = r0; z <= r1; z++) zs.push(Math.round(Z(z * cell)));
+        for (let j = 0; j < r1 - r0; j++) for (let i = 0; i < c1 - c0; i++) {
+          const k = (r0 + j) * mw + c0 + i;
+          if (layer === 2) { if (!fog[k]) continue; g.fillStyle = fogColour(fog[k]); } else g.fillStyle = shade(k);
+          g.fillRect(xs[i], zs[j], xs[i + 1] - xs[i] + (i === c1 - c0 - 1), zs[j + 1] - zs[j] + (j === r1 - r0 - 1));
+        }
+        if (layer === 1) {
+          g.fillStyle = 'rgba(0,0,0,.12)';
+          for (const px of xs) g.fillRect(px, zs[0], 1, zs.at(-1) + 1 - zs[0]);
+          for (const pz of zs) { let a = xs[0]; for (const px of xs) { if (px > a) g.fillRect(a, pz, px - a, 1); a = px + 1; } }
+        }
+      };
+      if (c1 > c0 && r1 > r0) cells(cp >= 5 ? 1 : 0);
       // a geothermal vent: a ringed circle with a cross
       for (const vt of M.vents || []) {
         const p = pt(vt); if (!p) continue;
@@ -310,13 +316,10 @@ const WikiStage = (() => {
         g.lineWidth = lw; g.strokeStyle = FEAT_WB[look + 'Edge'];
         g.strokeRect(x0 + lw / 2, y0 + lw / 2, w - lw, h - lw);
       }
-      // fog, in fogColour's, on the cells the ground is drawn on
-      const fog = M.fog || [];
-      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
-        const f = fog[z * mw + x]; if (!f) continue;
-        g.fillStyle = fogColour(f);
-        g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-      }
+      // fog, in fogColour's, on the cells the ground is drawn on, when any of them is fogged
+      let fogged = false;
+      for (let z = r0; z < r1 && !fogged; z++) for (let x = c0; x < c1 && !fogged; x++) fogged = !!fog[z * mw + x];
+      if (fogged) cells(2);
     }
     // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear), each
     // edge snapped to the device pixel as the game's composite rect is (tagpu_wikistage_image): the composite's
