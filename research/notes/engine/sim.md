@@ -444,8 +444,8 @@ counter of the profile block `main+0x38D85`. The calls, and the phase that has j
 | | `0x469660` | the terrain, the bars and the minimap |
 | | `0x469D43` | the sort, the sweep and the markers |
 | | `0x469D9F` | the fog |
-| the accumulate `0x46A400` | `0x46A404` | the HUD; the accumulate is called at `0x46A3EE`, after the flip |
-| the popup dialog `0x4689C0` | `0x4689D5`, `0x4689E6` | its 15 ms throttle, not a phase |
+| the draw's accumulate | `0x46A404` | the HUD: the stamp inside the accumulate `0x46A400` ([ui](ui.md)), which the draw calls at `0x46A3EE`, after the flip |
+| the popup dialog | `0x4689D5`, `0x4689E6` | the 15 ms throttle of `0x4689C0` ([ui](ui.md)), not a phase |
 
 Impure's frame profiler takes the thunk when `tagpu_prof.on` is present at attach and reads the
 phase from the return address ([the profiler](../modules/profiler.md)). MEASURED 2026-11-20 with
