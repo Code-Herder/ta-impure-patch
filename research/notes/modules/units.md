@@ -451,7 +451,7 @@ B baked and D dropped since the start`.
 
 | | |
 |---|---|
-| committed memory, a live battle | 749–753 MB |
+| committed memory, a live battle | 749–767 MB over five runs |
 | the same, paused, 13 647 units | 711 MB |
 | zoomed out whole during the load's first seconds | the lane stays up, peak 914–920 MB |
 | what the two caches settle at | 490 models and 1 760 streams, 941 of them an animation frame's |
@@ -461,7 +461,7 @@ B baked and D dropped since the start`.
 A forced lane restart (`tagpu_passrefuse.on`) at that view drops every entry the old table was
 sent (2 170 of them); the frame that rebuilds draws no unit, and the next ones bake what they ask
 for and send it at 32 MB a frame, 144–164 streams, each a wait of 51–97 ms. Committed memory
-after it: 754–755 MB.
+after it: 754–759 MB.
 
 **Not covered.**
 - **The frame rate with the whole map in view is 4–5 a second**, bound by the simulation of 13 000
