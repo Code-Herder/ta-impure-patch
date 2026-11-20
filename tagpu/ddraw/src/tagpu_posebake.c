@@ -913,6 +913,46 @@ void tagpu_posebake_work(unsigned* baked, unsigned* dropped)
     *dropped = s_nDrop;
 }
 
+/* WHAT THE TWO CACHES HOLD, in host memory, said when it has moved and no more often than
+   every five seconds: the streams the Vulkan lane's mirrors keep (which are the bulk) and
+   each entry's side blocks. A scene that is settled bakes nothing and says nothing; one
+   that keeps baking -- more streams asked for than the keep holds, each new one evicting
+   one the next frames ask for again -- shows as `baked` growing while the bytes stand. */
+static void held_say(void)
+{
+    static DWORD lastMs;
+    static unsigned lastBaked;
+    static size_t lastBytes;
+    const DWORD now = GetTickCount();
+    size_t gb = 0, mb = 0;
+    int i, keyed = 0;
+    char b[256];
+
+    if (now - lastMs < 5000u) return;
+    for (i = 0; i < s_ngeom; i++) {
+        const TAGPU_PBGEOM* g = &s_geom[i];
+        if (!g->root) continue;
+        if (s_geomMirror[i]) gb += (size_t)g->nvert * TAGPU_PB_GEOMST * sizeof(float);
+        gb += (size_t)g->nparts * (sizeof(float[3]) + sizeof(short) + 1);
+        if (g->animFace) gb += (size_t)g->nanim * (sizeof(char*) + 1);
+    }
+    for (i = 0; i < s_nmat; i++) {
+        const TAGPU_PBMAT* m = &s_mat[i];
+        if (!m->geom) continue;
+        if (s_matMirror[i]) mb += (size_t)m->nvert * TAGPU_PB_MATST * sizeof(float);
+        mb += (size_t)(m->nvert ? m->nvert : 1);
+        if (m->akey) { mb += (size_t)m->geom->nanim; keyed++; }
+    }
+    if (gb + mb == lastBytes && s_serial - 1 == lastBaked) return;
+    lastMs = now; lastBytes = gb + mb; lastBaked = s_serial - 1;
+    _snprintf(b, sizeof b, "posebake: holding %d geometry entries, %u KB, and %d material "
+              "streams, %u KB (%d of them one animation frame's) - %u baked and %u dropped "
+              "since the start", s_geomLive, (unsigned)(gb >> 10), s_matLive,
+              (unsigned)(mb >> 10), keyed, s_serial - 1, s_nDrop);
+    b[sizeof b - 1] = 0;
+    blog(b);
+}
+
 /* ---- the four invalidations --------------------------------------------- */
 /* level teardown (node pointers are recycled by the next level), the mirror
    latch's first arming (below), an atlas recycle (every UV moves) and the
@@ -937,6 +977,7 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
         b[sizeof b - 1] = 0;
         blog(b);
     }
+    held_say();
     s_frame++;
     s_lvlGen = lvl; s_atlasGen = agen;
     /* the same 30-frame cadence tagpu_native.on is read on: this is a file

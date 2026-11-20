@@ -94,8 +94,8 @@
    features, effects, terrain) map at most 24 MiB at the three slots the
    swapchain gives and 64 MiB at the TAGPU_VK_SLOTS ceiling of eight, whatever
    the atlases. A frame with nothing to send maps nothing. The unit pass's
-   vertex staging is a second one a slot, to a cap of its own
-   (tagpu_vk_unit.c VSTAGE_CAP). */
+   vertex staging is a second one a slot, and its band buffer one for the
+   pass, to a cap of its own (tagpu_vk_unit.c `s_band`). */
 #define TAGPU_VK_STAGE_CAP ((VkDeviceSize)2 << 20)
 
 typedef struct {
@@ -113,8 +113,8 @@ int  tagpu_vk_stage_begin(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                           VkDeviceSize want, VkDeviceSize floor);
 
 /* The same with a cap of the caller's in place of TAGPU_VK_STAGE_CAP, for bytes that are not
-   an atlas's and that no allowance bounds: the unit pass's vertex streams
-   (tagpu_vk_unit.c VSTAGE_CAP, which carries the figure and what it costs in address space). */
+   an atlas's and that no allowance bounds: the unit pass's banded vertex streams
+   (tagpu_vk_unit.c `s_band`, which carries the figure and what a band costs). */
 int  tagpu_vk_stage_begin_to(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                              VkDeviceSize want, VkDeviceSize floor, VkDeviceSize cap);
 

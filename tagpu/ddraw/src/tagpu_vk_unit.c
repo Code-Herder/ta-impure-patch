@@ -412,8 +412,8 @@ typedef struct {
     unsigned char*  pmap;
     VkDeviceSize    pcap;
 
-    TAGPU_VKSTAGE   vstage;                /* this frame's vertex uploads: bounded,
-                                              and banded past it (tagpu_vk_stage.h) */
+    TAGPU_VKSTAGE   vstage;                /* this frame's vertex uploads, when they
+                                              fit it (`s_band` when they do not) */
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's, when one is due */
 
@@ -954,24 +954,27 @@ static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, keep);
 }
 
-/* THE VERTEX STAGING'S CAP: what one slot maps for a frame's new vertex streams. A frame
-   within it uploads in its own command buffer and waits for nothing; a frame past it goes in
-   bands, each waited on, and the first wait is the frames in flight (tagpu_vk_stage.h).
+/* A FRAME'S NEW VERTEX STREAMS GO UP ONE OF TWO WAYS, by size (tagpu_vk_stage.h).
 
-   32 MiB, FOR THE FRAMES THAT REPEAT. A map of units seen for the first time is hundreds of
-   megabytes once (793 streams, 117.5 MB, a wait of 234 ms) and bands whatever the cap. What
-   comes back is smaller: a zoom-out onto ten seats re-bakes the material streams whose
-   textures stepped an animation frame -- 46 to 63 streams, 16.1 to 20.1 MB, more than once a
-   second, for as long as the view holds more (type, owner) pairs than the bake keeps
-   (tagpu_posebake.h TAGPU_PB_KEEPMAT). MEASURED on 9 400 units of ten seats: at 2 MiB and at
-   16 MiB every one of those frames banded and waited 124 to 206 ms.
+   WITHIN TAGPU_VK_STAGE_CAP they are copied into the slot's own staging and the copies ride
+   this frame's command buffer: nothing waits. That buffer lives until the slot's next frame,
+   so it is one a slot, and it is small for that reason.
 
-   A PREFERENCE, NOT A REQUIREMENT: `tagpu_vk_stage_begin_to` halves a refused map down to
-   VSTAGE_FLOOR and the frame then bands through what it got, so a process short of address
-   space uploads the same bytes more slowly. Mapped only on a slot whose frame sends vertices. */
-#define VSTAGE_CAP   ((VkDeviceSize)32 << 20)
-/* The least it is asked for: a band of this size still carries every stream, cut across
-   bands. */
+   PAST IT they go in bands through `s_band`, ONE buffer for the pass: each band is submitted
+   and waited on, so when the last has gone nothing submitted reads the buffer and it is
+   given back before the frame goes on. The pass holds it only for the length of that wait,
+   whatever the slot count. Its cap is a preference -- `tagpu_vk_stage_begin_to` halves a
+   refused map down to VSTAGE_FLOOR, and a band of that size still carries every stream, cut
+   across bands -- so a process short of address space sends the same bytes more slowly.
+
+   WHAT A BANDED FRAME COSTS, MEASURED on scenarios/zombie-kingdom-13k: a map of units seen
+   for the first time, 793 streams and 117.5 MB, waited 234 ms; a frame of 46 to 63 re-baked
+   streams, 16 to 20 MB, waited 124 to 206 ms, most of it the frames in flight. The second
+   kind repeats, more than once a second, while a live battle's whole map is in view: the
+   bake's two caches stand at their keeps (512 and 1 024) and it baked 7 157 entries and
+   dropped 5 621 in two minutes. */
+static TAGPU_VKSTAGE s_band;
+#define VBAND_CAP    ((VkDeviceSize)16 << 20)
 #define VSTAGE_FLOOR ((VkDeviceSize)64 << 10)
 
 /* ---- build -------------------------------------------------------------- */
@@ -2418,7 +2421,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     int fogW = 0, fogH = 0, i, fd, anyUpload = 0, fogWanted = 0;
     /* the frame's vertex streams pass the slot's staging and go in bands; how many went */
     int banded = 0;
-    unsigned bandStreams = 0;
+    unsigned bandStreams = 0, bandCapKB = 0;
     LARGE_INTEGER bandT0;
     unsigned fxDrawn = 0, k;
     /* the records that are effects models and the rest, whether this frame
@@ -2915,21 +2918,28 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        of its own (`base_upload`), and nothing is copied into the restored twin
        from the host -- the restorer paints it on the device. */
     if (stageNeed) {
-        /* THE STAGING IS BOUNDED, WHATEVER THE FRAME BRINGS INTO VIEW (tagpu_vk_stage.h): the
-           slot maps VSTAGE_CAP at most. Streams that fit go into this frame's command
-           buffer. Streams that do not -- a map of units zoomed out onto at once, every frame
-           after the lane comes up -- go in bands through the same buffer, each waited on, and
-           are all on the device before this frame's draws are submitted. */
-        if (!tagpu_vk_stage_begin_to(d, &s->vstage, stageNeed, VSTAGE_FLOOR, VSTAGE_CAP)) {
-            short_note("the vertex staging's map", 0, VSTAGE_FLOOR);
-            goto refuse;
-        }
-        banded = stageNeed > s->vstage.cap;
+        /* THE STAGING IS BOUNDED, WHATEVER THE FRAME BRINGS INTO VIEW (`s_band`, above): the
+           slot's own when the streams fit it, the pass's one band buffer when they do not --
+           a map of units zoomed out onto at once, every frame after the lane comes up -- or
+           when the slot's came back smaller than they need. Banded streams are all on the
+           device before this frame's draws are submitted. */
+        banded = stageNeed > TAGPU_VK_STAGE_CAP ||
+                 !tagpu_vk_stage_begin(d, &s->vstage, stageNeed, VSTAGE_FLOOR) ||
+                 !tagpu_vk_stage_fits(&s->vstage, stageNeed);
         if (banded) {
-            if (!tagpu_vk_stage_bufs_begin(d, &s->vstage)) {
+            /* the slot's is not this frame's: the seam waited on fence[slot], so nothing
+               submitted reads it */
+            tagpu_vk_stage_drop(d, &s->vstage);
+            if (!tagpu_vk_stage_begin_to(d, &s_band, stageNeed, VSTAGE_FLOOR, VBAND_CAP)) {
+                short_note("the vertex band's map", 0, VSTAGE_FLOOR);
+                goto refuse;
+            }
+            if (!tagpu_vk_stage_bufs_begin(d, &s_band)) {
+                tagpu_vk_stage_drop(d, &s_band);      /* nothing was submitted from it */
                 short_note("the banded upload's command buffer", 0, stageNeed);
                 goto refuse;
             }
+            bandCapKB = (unsigned)(s_band.cap >> 10);
             QueryPerformanceCounter(&bandT0);
         }
     } else if (s->vstage.buf) {
@@ -3079,7 +3089,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 /* the entry is linked and its bytes are in a band not yet submitted: the
                    flush below the loop is what makes the link true, and a device that fails
                    one takes the table with the lane */
-                if (tagpu_vk_stage_bufs_put(d, &s->vstage, (*e)->buf, src, bytes) < 0) {
+                if (tagpu_vk_stage_bufs_put(d, &s_band, (*e)->buf, src, bytes) < 0) {
                     short_note("a banded vertex upload", 0, bytes);
                     goto refuse;
                 }
@@ -3146,18 +3156,23 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        table: nothing between the first put and here leaves the function but `refuse`, whose
        teardown empties the table. The copies ran in submits of their own, ahead of this
        frame's command buffer and each waited on, so this frame's draws need no barrier
-       against them. */
+       against them.
+
+       THE BAND BUFFER GOES BACK HERE, and only here: every band that read it has been waited
+       on. A band the device failed may still be reading it, so the paths to `refuse` leave
+       it for the teardown, which frees it behind the device's idle. */
     if (banded) {
         LARGE_INTEGER t1, hz;
         if (tagpu_vk_stage_bufs_end(d) < 0) {
             short_note("a banded vertex upload's last band", 0, bandBytes);
             goto refuse;
         }
+        tagpu_vk_stage_drop(d, &s_band);
         QueryPerformanceCounter(&t1);
         QueryPerformanceFrequency(&hz);
         plog(d, "unit: %u vertex stream(s), %.1f MB, came into view on one frame and went up "
                 "in bands through %u KB of staging - a wait of %u ms in this frame",
-             bandStreams, (double)bandBytes / 1048576.0, (unsigned)(s->vstage.cap >> 10),
+             bandStreams, (double)bandBytes / 1048576.0, bandCapKB,
              (unsigned)((t1.QuadPart - bandT0.QuadPart) * 1000 / (hz.QuadPart ? hz.QuadPart : 1)));
     }
 
@@ -3934,6 +3949,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
         s_state = ST_UNBUILT;
         return;
     }
+    tagpu_vk_stage_drop(d, &s_band);          /* a refused frame's, left for here */
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
         s_slot[i].dsMain = VK_NULL_HANDLE;   /* both go back with the pool */
