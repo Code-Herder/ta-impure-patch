@@ -24,7 +24,7 @@
                        stage output, interpolated across the face as the
                        engine's scanline does
 
-   THREE RANGES IN THE BAKE, TWO OF THEM THIS PROGRAM'S, `uRange`. The bake
+   THREE RANGES IN THE BAKE, TWO OF THEM THIS PROGRAM'S, VS's `range`. The bake
    lays the body, the slant and the wire down in one buffer, so a range is a
    different `first`/`count` on the same bind; what differs in the shader is
    small and explicit:
@@ -73,7 +73,7 @@
    piece cap out of the design (gpu-posing.md decision 7). Every posed unit's
    rows are packed back to back, then every unit's `shaded` words, then every
    unit's visibility words (tagpu_posebake.h has the layout), and a unit reaches
-   its own slice through three base indices in its uniform block. A unit
+   its own slice through three base indices in its `Unit` block. A unit
    therefore costs what its model has -- 2 016 bytes for stock's worst, 36
    pieces -- and the model ceiling, TAGPU_PBMAXPIECE (256), is a bound on one
    unit rather than a size every unit pays. The pass arms only on a device
@@ -128,9 +128,8 @@
 #define PD_FLAGV   TAGPU_PD_FLAGV
 #define PD_UNITMAX TAGPU_PD_UNITMAX
 
-/* `uRange`'s two values (BODY 0, SLANT 1) have no macro: the Vulkan
-   consumer writes the number itself (tagpu_vk_unit.c's `b.i[40]`), and the
-   shader below is where `uRange` is defined and the only place it can be read. */
+/* The range's two values (BODY 0, SLANT 1) have no macro: VS derives it from
+   the draw kind and the unit's `uSlant`, and is the only place it is read. */
 
 static void plog(const char* s)
 {
@@ -298,6 +297,22 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
    The pragma below is paired and its `pop` is PROVED with a planted probe
    rather than read: a `pop` at column 0 inside a comment is text, not a
    directive. */
+/* THE VERTEX STAGES' UNIFORMS, the same three declarations in VS, FXVS and
+   WVS because tagpu_vk_unit.c fills one layout for all three. The default
+   block is what every unit of a frame shares for one draw kind, written once
+   a frame; `Unit` is the unit's own, written once a unit (tagpu_glsl.h).
+   uShadowMat is read on the uDepthPass branch alone. */
+#define PD_VS_UNIFORMS \
+    "uniform vec2 uGame;\n" \
+    "uniform float uZoom;\n" \
+    "uniform vec2 uZoomC;\n" \
+    "uniform float uDepthScale;\n" \
+    "uniform float uShNeutral;\n"           /* the neutral shade row          */ \
+    "uniform int uDepthPass;\n" \
+    "uniform int uPass;\n"                  /* TAGPU_GLSL_PASS_*              */ \
+    "uniform mat4 uShadowMat;\n" \
+    TAGPU_GLSL_UNIT_BLOCK
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -332,25 +347,7 @@ static const char* VS =
     "layout(std430) readonly buffer Pose {\n"
     "  vec4 uPose[];\n"
     "};\n"
-    "uniform vec2 uGame;\n"
-    "uniform vec2 uOffset;\n"
-    "uniform float uZoom;\n"
-    "uniform vec2 uZoomC;\n"
-    "uniform float uDepthScale;\n"
-    "uniform vec4 uAnchor;\n"                /* ax, ay, world x, world z      */
-    "uniform float uEnc;\n"                  /* the row's depth key base      */
-    "uniform float uMdBias;\n"               /* cargo vs parent, md units     */
-    "uniform vec2 uShd;\n"                   /* shNeutral, lit (1 = engine-shaded) */
-    "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv  */
-    "uniform int uDepthPass;\n"
-    "uniform mat4 uShadowMat;\n"
-    "uniform int uRange;\n"                 /* 0 body, 1 slant               */
-    "uniform float uWire;\n"                /* the nanoframe blue, idx/255: WVS's */
-    /* this unit's three slices of `uPose`, in vec4: its first row, its first
-       shaded word, its first visibility word */
-    "uniform int uRowBase;\n"
-    "uniform int uFlagBase;\n"
-    "uniform int uVisBase;\n"
+    PD_VS_UNIFORMS
     "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* the line test's two inputs, which only WVS turns on (tagpu_native.c FS) */
@@ -396,8 +393,18 @@ static const char* VS =
        needs its matrix there. */
     "  vLine = vec4(0.0); vLineOn = 0;\n"
     "  vQH = aQH; vQAB = aQAB; vQR = aQR;\n"
+    /* THE HARD SHADOW IS THE BODY'S DRAW WITH TWO THINGS MOVED, both the
+       unit's own: its RANGE (1 = the structure's slant, whose projection and
+       per-piece rule are 0x45A610's; every other shadow is the body's
+       triangles again, blackened) and its SHIFT, 5 px right and onto the
+       ground line -- the engine blits the shadow at `(sx + 0x85, groundY)`
+       against the body's `sx + 0x80` (shadows-cloak.md 3), and uShOffY is
+       `groundY - ay`, 0 for anything standing on the ground. */
+    "  bool hard = uPass == " TAGPU_GLSL_STR(TAGPU_GLSL_PASS_SHADOW) ";\n"
+    "  int range = hard ? uSlant : 0;\n"
+    "  vec2 shift = hard ? vec2(5.0, uShOffY) : vec2(0.0);\n"
     "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
-    "  if (aSkip > 0.5 || (uRange == 1 && pvis < 2.5)) {\n"
+    "  if (aSkip > 0.5 || (range == 1 && pvis < 2.5)) {\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
     "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vShQ = vec4(0.0); vWorld = vec2(0.0);\n"
     "    vEnc = 0.0; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0); vShW = vec3(0.0);\n"
@@ -418,7 +425,7 @@ static const char* VS =
     /* the engine's projection of a unit's body — and, for the slant range,
        0x45A610's instead */
     "  float px, py;\n"
-    "  if (uRange == 1) {\n"
+    "  if (range == 1) {\n"
     /* emit_slant_at's snap: `xi = v[0] >> 16`, `nzi = (-v[2]) >> 16`,
        `q = (v[1] >> 16) >> 2` — every one an arithmetic FLOOR and never a
        truncation toward zero. `m` is already the 16.16 value, so `floor` of it
@@ -438,7 +445,7 @@ static const char* VS =
        +-1.8 band into a neighbour's. */
     "  float md = clamp((2.0 * m.y - m.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
     "  float enc = uEnc + md;\n"
-    /* THE SHADE, and it is the engine's only for a LIT unit (uShd.y: the
+    /* THE SHADE, and it is the engine's only for a LIT unit (uLit: the
        structure bit and the Shading option, tagpu_native.c). The sprite builder
        sends a structure through 0x459C70 and everything else through the plain
        rasteriser (0x45873C, 0x45874A), so every other unit stays on the neutral
@@ -472,13 +479,13 @@ static const char* VS =
        VERTEX's smoothed normal, not its face's, and `vNrm` is flat: a lambert
        from it would light unit facets from the provoking vertex's mean. Nothing
        reads it while `uLambert` is published as 0. */
-    "  float shade = uShd.x / 31.0;\n"
+    "  float shade = uShNeutral / 31.0;\n"
     "  vShQ = vec4(shade);\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
     "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"
     "  if (aGF >= 0.5) {\n"
     "    vec3 n = shRot(pb, aNrm);\n"
-    "    if (uShd.y > 0.5) {\n"
+    "    if (uLit > 0.5) {\n"
     "      if (pShaded) {\n"
     "        shade = shRow(n);\n"
     "        vShQ = vec4(shRow(shRot(pb, aCA.xyz)), shRow(shRot(pb, vec3(aCA.w, aCB.xy))),\n"
@@ -494,7 +501,7 @@ static const char* VS =
     "      if (nl > 1e-6) un = vec3(n.x / nl, n.y / nl, -n.z / nl);\n"
     "    }\n"
     "  }\n"
-    "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
+    "  vec2 p = (p0 + shift - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vFC = aFC;\n"
@@ -545,23 +552,7 @@ static const char* FXVS =
     "layout(std430) readonly buffer Pose {\n"
     "  vec4 uPose[];\n"
     "};\n"
-    "uniform vec2 uGame;\n"
-    "uniform vec2 uOffset;\n"
-    "uniform float uZoom;\n"
-    "uniform vec2 uZoomC;\n"
-    "uniform float uDepthScale;\n"
-    "uniform vec4 uAnchor;\n"
-    "uniform float uEnc;\n"
-    "uniform float uMdBias;\n"
-    "uniform vec2 uShd;\n"
-    "uniform vec3 uCast;\n"
-    "uniform int uDepthPass;\n"
-    "uniform mat4 uShadowMat;\n"
-    "uniform int uRange;\n"
-    "uniform float uWire;\n"
-    "uniform int uRowBase;\n"             /* this model's first run, in vec4 */
-    "uniform int uFlagBase;\n"
-    "uniform int uVisBase;\n"
+    PD_VS_UNIFORMS
     "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
@@ -580,11 +571,11 @@ static const char* FXVS =
     "  float cx = (c == 1 || c == 4 || c == 5) ? 1.0 : 0.0;\n"
     "  float cy = (c == 2 || c == 3 || c == 5) ? 1.0 : 0.0;\n"
     "  vec2 p0 = vec2(mix(r0.x, r0.y, cx), r0.z + cy);\n"
-    "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
+    "  vec2 p = (p0 - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = r1.xy; vFC = vec2(r1.z, -1.0);\n"
-    "  vShade = uShd.x / 31.0; vShQ = vec4(vShade);\n"
+    "  vShade = uShNeutral / 31.0; vShQ = vec4(vShade);\n"
     "  vWorld = uAnchor.zw;\n"
     "  vEnc = uEnc; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0);\n"
     "  vShW = vec3(uAnchor.z, uCast.y, uAnchor.w + uCast.x * 0.5);\n"
@@ -597,7 +588,7 @@ static const char* FXVS =
    rule lights between the record's two ends (`vLineOn` 1) -- `0x4CC7AB`'s
    walk on the world target's own pixels, thickened to `ss` of them.
 
-   A RECORD, three vec4 from `uRowBase + 3 * edge` in the pose buffer, made on
+   A RECORD, three vec4 from `uWireBase + 3 * edge` in the pose buffer, made on
    the CPU by tagpu_vk_unit.c from the bake's WIRE pairs, this unit's pose
    and its visibility words -- only edges of visible pieces on painted faces
    are there, so nothing here has to hide a vertex:
@@ -621,23 +612,7 @@ static const char* WVS =
     "layout(std430) readonly buffer Pose {\n"
     "  vec4 uPose[];\n"
     "};\n"
-    "uniform vec2 uGame;\n"
-    "uniform vec2 uOffset;\n"
-    "uniform float uZoom;\n"
-    "uniform vec2 uZoomC;\n"
-    "uniform float uDepthScale;\n"
-    "uniform vec4 uAnchor;\n"
-    "uniform float uEnc;\n"
-    "uniform float uMdBias;\n"
-    "uniform vec2 uShd;\n"
-    "uniform vec3 uCast;\n"
-    "uniform int uDepthPass;\n"
-    "uniform mat4 uShadowMat;\n"
-    "uniform int uRange;\n"
-    "uniform float uWire;\n"
-    "uniform int uRowBase;\n"             /* this unit's first wire record  */
-    "uniform int uFlagBase;\n"
-    "uniform int uVisBase;\n"
+    PD_VS_UNIFORMS
     "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
@@ -649,7 +624,7 @@ static const char* WVS =
        sizes the pose buffer to hold every record it writes, so on data that
        reaches a draw this is a no-op */
     "  int pl = uPose.length() - 1;\n"
-    "  int b = clamp(uRowBase + r * 3, 0, pl - 2);\n"
+    "  int b = clamp(uWireBase + r * 3, 0, pl - 2);\n"
     "  vec4 r0 = uPose[b], r1 = uPose[b + 1], r2 = uPose[b + 2];\n"
     "  float t;\n"
     "  vec2 p = taBand(r0.xy, r0.zw, c, t);\n"
@@ -660,10 +635,12 @@ static const char* WVS =
     /* the wire's colour is per UNIT (the nanoframe's animated blue), on the
        flat path, on the neutral SHD row the bake gives every wire vertex */
     "  vUV = vec2(-1.0); vFC = vec2(uWire, -1.0);\n"
-    "  vShade = uShd.x / 31.0; vShQ = vec4(vShade);\n"
+    "  vShade = uShNeutral / 31.0; vShQ = vec4(vShade);\n"
     "  vWorld = uAnchor.zw + mix(r2.xy, r2.zw, t);\n"
     "  vEnc = enc; vVY = vy; vNrm = vec3(0.0, 1.0, 0.0);\n"
-    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * vy, vWorld.y + (uCast.x + vy) * 0.5);\n"
+    /* the shadow-space point of a wire is its own height over its own
+       world point: the unit's uCast is its body's */
+    "  vShW = vec3(vWorld.x, vy, vWorld.y + vy * 0.5);\n"
     "  vLine = r0; vLineOn = 1;\n"
     "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
     "}\n";
