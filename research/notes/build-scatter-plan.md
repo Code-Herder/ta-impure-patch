@@ -75,6 +75,12 @@ The mechanism is the module note's. What was decided while building it:
   `0x47D49D`).
 - **The abandon is held by taking one off the retry counter**, not by a longer limit: a builder
   whose site is blocked by something that will not move gives up exactly as stock.
+- **Human seats only.** The stubs would serve any local seat; an AI's are left out so that the stock
+  AI's base-building, and every game ImpAI is tuned and tested on, stay as they are. Serving ImpAI's
+  seats is a decision for its own plan.
+- **The builder walks off its own site.** The cursor accepts a site under the selected idle
+  builder; MobileBuild's approach moves it off before the test and no refusal is seen (MEASURED,
+  below).
 - **The stock-limits build runs the feature too** (unit births are known there), so the twin test
   group plays the same steps and the same assertions.
 
@@ -99,6 +105,8 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
   866. The builder is refused at 1048, its four units are moved (`moved=4`) and stand off the site,
   no solar exists at 1600 and the builder's order list is headed by its default order: abandoned as
   stock.
+- **The builder's own site.** A solar placed on the selected ARMCK (`main+0x2CC6` `0x46`): the
+  builder walks 50 px off, the solar is built, no `scatter:` line.
 - **A unit that cannot leave.** In a hand run the wreck was dropped over one of the units: that unit
   stayed, its row stopped holding the builder after 180 ticks, and the builder gave up. No fault.
 - **Replay.** Both test groups pass: the record, the puppets, three round trips and the seek each,

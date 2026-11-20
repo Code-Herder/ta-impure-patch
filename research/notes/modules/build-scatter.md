@@ -16,6 +16,9 @@ any unit on a cell the structure stamps refuses it. The builder says "Waiting fo
 clear", tests again every 30 ticks and abandons the order at the twelfth refusal. The build cursor
 asks the same test, so stock refuses the placement in the first place.
 
+**Whose builders.** A seat a local human controls (its record's controller byte `+0x73` is 1). An AI's seat, stock's or ImpAI's, builds and gives up as stock, and so does every seat on a
+puppet.
+
 **Who is moved.** A unit standing on the refused site that is the builder's owner's, a finished
 ground mover that nothing carries, and **idle**: its order list is empty, or headed by the node the
 order controller makes from its type's default order (the head carries `0x4000` and its action is the
@@ -85,6 +88,11 @@ A site accepted this way is ordered as any other. The builder's own test ignores
 refuses the site on arrival, and that refusal is what moves the units: the cursor promises only what
 the tick will do, by the same rule.
 
+**The builder itself.** A selected builder with nothing to do is an idle unit, so the cursor accepts
+a site it stands on. No move is given for it: MobileBuild's own approach walks the builder off its
+site before the test (MEASURED 2026-11-20, an ARMCK and a solar collector placed on it: the builder
+ends 50 px north of the site's centre, the solar is built and no refusal is logged).
+
 **The square.** The frame packet carries `site_moves`, the cursor's last answer, and the marker pass
 (`tagpu_mark.c`) draws the build square in the GUI palette's yellow instead of its green when it is
 set. The several-buildings gestures ([placement](placement.html)) judge each site with the same test,
@@ -142,6 +150,11 @@ There is no setting: the module is installed in every game.
   builder arrives.
 - **A unit boxed in** -- no free place within 12 cells of the site that it can reach -- stays, and
   the builder gives up as stock.
+- **A moved unit that cannot get to its place keeps the move**, as after a click on a place it
+  cannot reach; it stops holding the builder after 180 ticks on one cell. The search knows the
+  movement class's map and the units in the box, not a wreck or a tree that appeared since the
+  level's load.
+- **AI seats are not served.**
 - **The several-buildings previews show such a site green**, not yellow.
 - **The GDI renderer draws the engine's own square**, green.
 - **No per-mod switch.**

@@ -36,7 +36,8 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    so an idle unit's reaction attack and a Paralyze carry it too; or a Park that is the list's only node, which
    never ends (engine/orders.md, *Park*). And only a finished ground mover that nothing carries, of the
    builder's owner: a structure, an aircraft, a frame, a passenger and every other player's unit stay, and the
-   builder waits and gives up on them as stock.
+   builder waits and gives up on them as stock. The owner is a seat a local human controls
+   (view_open); an AI's builders and units are left to stock.
 
    THE HOLD. While a unit this file moved is still on the site and has changed cell within STUCK_TICKS, or
    another of the owner's units is crossing it under a move, the builder's refusal does not count: the stub takes
@@ -106,6 +107,7 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #define U_FZ             0x80
 #define MV_STAMP         0x26          /* u32 the mover's claim stamp: GameTime at its last change of cell      */
 #define UD_DEFAULT       0x230         /* u8 the type's default order's action, 0 none (0x43B9D0)               */
+#define PL_CONTROL       0x73          /* u8 a player record's controller: 1 a local human, 2 a local AI, 3 remote */
 #define N_OWNER          0x0E          /* the node's unit                                                       */
 #define N_RETRY          0x3E          /* i32 MobileBuild's refusals of its site (0x403CE4..0x403CEA)           */
 #define CELL_STRIDE      0x0D
@@ -189,9 +191,11 @@ typedef unsigned (__stdcall* SiteTest)(const void* def, unsigned cell, unsigned 
 /* one seat's view and the step it was opened in */
 typedef struct View { WQ_ENGINE wc; WORLDQ q; int32_t now; int open; } View;
 
+/* WHOSE BUILDERS: a seat a local human controls, the one test every entry of this file passes through. An AI's seat builds and gives up as stock. */
 static int view_open(View* v, unsigned seat)
 {
-    v->open = seat < WQ_SEATS && tagpu_worldq_open(&v->wc, &v->q, (int)seat, WQ_SITE_ENGINE, NULL);
+    v->open = seat < WQ_SEATS && tagpu_worldq_open(&v->wc, &v->q, (int)seat, WQ_SITE_ENGINE, NULL) &&
+              *(const uint8_t*)(v->wc.rec + PL_CONTROL) == 1;
     if (v->open) memcpy(&v->now, v->wc.ta + OFF_GAMETIME, 4);
     return v->open;
 }
