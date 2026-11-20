@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "A step of the build-scatter test groups: every unit removed while site B's four ARMPW are walking off it and their builder waits, so each row's unit and the site's builder are gone at the next step; then a third site's units in their place -- an ARMCK at the pinned camera centre and four idle ARMPW where site A stood.",
+ "description": "A step of the build-scatter test groups: every unit removed while site B's four ARMPW are walking off it and their builder waits, so each row's unit and the site's builder are gone at the next step; then a third site's units in their place -- an ARMCK at the pinned camera centre and four idle ARMPW on the corners of the place where site A stood, the four cells at its middle left free for build-scatter-wreck.json's wreck.",
  "setup": {
   "clear_existing": true
  },
@@ -19,8 +19,8 @@
    "type": "ARMPW",
    "owner": 0,
    "pos": [
-    924,
-    7542
+    928,
+    7536
    ]
   },
   {
@@ -28,8 +28,8 @@
    "type": "ARMPW",
    "owner": 0,
    "pos": [
-    972,
-    7542
+    992,
+    7536
    ]
   },
   {
@@ -37,8 +37,8 @@
    "type": "ARMPW",
    "owner": 0,
    "pos": [
-    924,
-    7590
+    928,
+    7600
    ]
   },
   {
@@ -46,8 +46,8 @@
    "type": "ARMPW",
    "owner": 0,
    "pos": [
-    972,
-    7590
+    992,
+    7600
    ]
   },
   {

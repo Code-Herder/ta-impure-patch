@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "A step of the build-scatter test groups: an ARMPW's wreck on the third site after the cursor accepted it and before its builder arrives. The site's units are moved off it; the wreck is a feature nothing moves, so the builder's site stays refused and the order is abandoned as stock.",
+ "description": "A step of the build-scatter test groups: an ARMPW's wreck on the four free cells at the middle of the third site, after the cursor accepted the site and before its builder arrives. The site's units are moved off it; the wreck is a feature nothing moves, so the builder's site stays refused and the order is abandoned as stock.",
  "setup": {
   "clear_existing": false
  },
@@ -9,8 +9,8 @@
    "id": "wreck",
    "type": "armpw_dead",
    "pos": [
-    948,
-    7566
+    952,
+    7560
    ]
   }
  ]
