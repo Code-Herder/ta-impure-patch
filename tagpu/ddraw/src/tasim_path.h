@@ -115,10 +115,18 @@ typedef struct TS_PFNODE {
     int16_t  straight;          /* +0x12: steps since the last turn                                             */
 } TS_PFNODE;
 
+/* A heap entry: the node, and a copy of its f. The engine's entry is the node's pointer and every compare reads f
+   through it; the copy keeps a sift inside the heap's own memory. It equals the node's f wherever a compare reads
+   it: each of the three stores of a node's f while it is in the heap stores the entry's too. */
+typedef struct TS_PFHEAP {
+    int32_t  f;
+    uint32_t n;
+} TS_PFHEAP;
+
 /* The pathfinder object [main+0x14207] and its three .data globals. */
 typedef struct TS_PF {
     TS_PFNODE* pool;            /* +0x00                                                                        */
-    uint32_t*  heap;            /* +0x04: node indices (the engine's are pointers)                              */
+    TS_PFHEAP* heap;            /* +0x04                                                                        */
     int32_t    freehead;        /* +0x08, -1 for none                                                           */
     int32_t    used;            /* +0x0C: nodes taken from the pool's end                                       */
     int32_t    nodes;           /* the pool's and the heap's length, W * H (the engine's +0x10 grows)           */

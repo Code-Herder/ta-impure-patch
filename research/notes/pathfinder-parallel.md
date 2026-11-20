@@ -152,11 +152,28 @@ them, a cheaper search.
    3.9 on one and the engine's 4.5; every result equal to the one-thread search's
    ([the module](modules/pathfinder.md)). The thread count is the machine's cores less one, at most
    4: threads past four end a batch no sooner.
-4. **A cheaper search** — the heap and the expansion are half of a search's time.
+4. **A cheaper search** — the same pops in the same order for less: the heap's entries carry their
+   node's `f`, a cell's read takes its constants from a view made once a pass, the grid's reset
+   steps over the touched blocks. **Built 2026-11-20**: 18 % less time a search on the captured
+   searches, every result the engine's (3152 of 3152 offline at the capture's weights, the same
+   results at the three weights before and after, and 74 304 of 74 304 in a game beside the
+   engine's). In the battle the scheduler's time is the batches', not the searches' sum, so it
+   moved little: 2.4 ms a tick in a run of a fifth more pops.
 
 ## Open
 
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
+- **The batch's size, the owner's to set.** A batch ends with its longest search, and the top 5 %
+  of searches are 46 % of the pops, so a batch of 8 leaves three threads idle through each long
+  one. MEASURED 2026-11-20, the battle on four threads with the cheaper search: batches of 8,
+  16 and 32 took 2.39, 1.95 and 1.65 ms a tick (22 700, 19 000 and 18 600 pops a tick). The size is
+  a rule: a search reads the map as the writes of its own batch and the earlier ones left it, and
+  the pops cap is tested between batches, so a larger batch can pass the cap by more — at most
+  its own searches, each up to the pool's 65 536 pops.
+- **What a cheaper search cannot reach without changing a result**: a goal that cannot be reached
+  opens every cell the unit can reach before it fails; knowing that before the search (the map's
+  connected regions) would end it at once, and changes which path a unit that cannot arrive gets.
+  The owner's decision; not built.
 - A goal of a kind other than the three ground kinds (point, annulus, ring) reaching a ground unit:
   none in the 300 000 searches the oracle counted and none logged by the scheduler in 500 000 more;
   not ruled out by the disassembly. It gets the result of a search that

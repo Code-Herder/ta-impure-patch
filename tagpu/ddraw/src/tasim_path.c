@@ -200,7 +200,8 @@ size_t ts_pf_bytes_n(int32_t w, int32_t h, int32_t nslot, int32_t nodes)
         return 0;
     cells = grid_cells(w, h);
     return AL4((size_t)cells * sizeof(TS_PFCELL)) + 4 * (size_t)touch_words(cells) +
-           (size_t)nodes * sizeof(TS_PFNODE) + 4 * (size_t)nodes + 3 * 4 * (size_t)slot_words(nslot);
+           (size_t)nodes * sizeof(TS_PFNODE) + (size_t)nodes * sizeof(TS_PFHEAP) +
+           3 * 4 * (size_t)slot_words(nslot);
 }
 
 size_t ts_pf_bytes(int32_t w, int32_t h, int32_t nslot)
@@ -240,8 +241,8 @@ int ts_pf_init_n(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32
     p += 4 * (size_t)touch_words(pf->cells);
     pf->pool = (TS_PFNODE*)p;
     p += (size_t)pf->nodes * sizeof(TS_PFNODE);
-    pf->heap = (uint32_t*)p;
-    p += 4 * (size_t)pf->nodes;
+    pf->heap = (TS_PFHEAP*)p;
+    p += (size_t)pf->nodes * sizeof(TS_PFHEAP);
     pf->nslot = nslot;
     pf->mob = (uint32_t*)p;
     pf->cand = pf->mob + slot_words(nslot);
@@ -277,23 +278,35 @@ static int32_t cidx(const TS_PF* pf, int32_t x, int32_t z) { return z * pf->w + 
 /* the touched-block bit of cell c, as 0x40D8B0 and every inline copy set it: dword c >> 8, bit (c >> 3) & 31 */
 static void touch(TS_PF* pf, int32_t c) { pf->touch[(uint32_t)c >> 8] |= 1u << (((uint32_t)c >> 3) & 31); }
 
+/* the lowest set bit's index, of a word that has one */
+static int ctz32(uint32_t v)
+{
+#if defined(__GNUC__)
+    return __builtin_ctz(v);
+#else
+    int n = 0;
+    while (!(v & 1)) v >>= 1, n++;
+    return n;
+#endif
+}
+
 /* 0x40D900, DISASSEMBLED 0x40D900..0x40D9BE: b0 = 0 in all 8 cells of every touched block, and the bits cleared; b1
    and the node word keep the last search's values, dead while b0 is 0. The engine bounds the last dword's cells by
    (dword << 8) + k < cells, which always holds there; the core bounds every cell by cells. */
 static void reset_grid(TS_PF* pf)
 {
     const int32_t n = touch_words(pf->cells);
-    int32_t i, j, k;
+    int32_t i, k;
     for (i = 0; i < n; i++) {
         uint32_t bits = pf->touch[i];
         if (!bits) continue;
         pf->touch[i] = 0;
-        for (j = 0; bits; j++, bits >>= 1)
-            if (bits & 1)
-                for (k = 0; k < 8; k++) {
-                    const int32_t c = (i << 8) + (j << 3) + k;
-                    if (c < pf->cells) pf->grid[c].b0 = 0;
-                }
+        for (; bits; bits &= bits - 1) {
+            /* a block is 8 cells and cells a multiple of 8, so a block is inside whole or not at all */
+            const int32_t c = (i << 8) + (ctz32(bits) << 3);
+            if (c < pf->cells)
+                for (k = 0; k < 8; k++) pf->grid[c + k].b0 = 0;
+        }
     }
 }
 
@@ -304,30 +317,63 @@ static int class_ok(const TS_CLASSMAPS* cm, int32_t i)
     return i >= 0 && i < TS_CLASSES && cm->c[i].present && cm->c[i].map;
 }
 
+/* THE READER'S VIEW of a world for the search's class: everything 0x40D7B0 reads that one search, or one pass of a
+   search that spans ticks, holds still -- the class's map and footprint, the grids' sizes, the explored map and the
+   served player's bit, the patch. Taken once by the code that reads many cells (the walk, a pass of the A*), so
+   that a cell's read is its own two loads. */
+typedef struct RD {
+    const uint32_t* map;        /* NULL for no class: every cell reads 0 */
+    const uint16_t* mapped;
+    const TS_PFPATCH* patch;
+    uint32_t cw, ch;            /* the class's grid */
+    int32_t mw, mh;             /* the feature grid's blocks */
+    int32_t ox, oz;             /* the footprint's centre, in blocks */
+    uint32_t bit;
+} RD;
+
+static void rd_open(RD* rd, const TS_PF* pf, const TS_PFWORLD* W)
+{
+    const TS_CLASSMAPS* cm = W->cm;
+    memset(rd, 0, sizeof *rd);
+    if (!class_ok(cm, pf->cls)) return;
+    rd->map = cm->c[pf->cls].map;
+    rd->mapped = W->mapped;
+    rd->patch = W->patch;
+    rd->cw = (uint32_t)cm->w;
+    rd->ch = (uint32_t)cm->h;
+    rd->mw = cm->map->w >> 1;
+    rd->mh = cm->map->h >> 1;
+    rd->ox = cm->c[pf->cls].fx >> 2;
+    rd->oz = cm->c[pf->cls].fz >> 2;
+    rd->bit = 1u << (pf->rr & 31);
+}
+
+static inline int rd_code(const RD* rd, int32_t x, int32_t z)
+{
+    int32_t bx, bz;
+    if (!rd->map || (uint32_t)x >= rd->cw || (uint32_t)z >= rd->ch) return 0;
+    bx = (x >> 1) + rd->ox;
+    bz = (z >> 1) + rd->oz;
+    if (bx >= rd->mw || bz >= rd->mh) return 0;
+    if (rd->mapped && !(rd->mapped[bz * rd->mw + bx] & rd->bit)) return 2;
+    if (rd->patch) {
+        const TS_PFPATCH* p = rd->patch;
+        const uint32_t px = (uint32_t)(x - p->x0), pz = (uint32_t)(z - p->z0);
+        if (px < (uint32_t)p->w && pz < (uint32_t)p->h) return p->code[pz * (uint32_t)p->w + px] & 3;
+    }
+    /* ts_class_code's read (tasim_class.c): two bits a cell, a dword a column of 16 */
+    return (int)(rd->map[((uint32_t)z >> 4) * rd->cw + (uint32_t)x] >> (2 * (z & 15))) & 3;
+}
+
 /* 0x40D7B0(x, z), thiscall on the pathfinder ret 8, DISASSEMBLED 0x40D7B0..0x40D870: 0 off the class's grid
    (unsigned, the class's +0x10/+0x14); 0 when the 32-px block at the footprint's centre, ((x >> 1) + (fx >> 2),
    (z >> 1) + (fz >> 2)), is outside (W >> 1, H >> 1) of the feature grid; 2 when that block's explored bit of the
    player being served, 1 << rr, is clear; else the class map's code, 0 blocked, 1 bad or 3 good. */
 int ts_pf_reader(const TS_PF* pf, const TS_PFWORLD* W, int32_t x, int32_t z)
 {
-    const TS_CLASSMAPS* cm = W->cm;
-    const TS_CLASSMAP* c;
-    int32_t bx, bz, mw, mh;
-    if (!class_ok(cm, pf->cls)) return 0;
-    c = &cm->c[pf->cls];
-    if ((uint32_t)x >= (uint32_t)cm->w || (uint32_t)z >= (uint32_t)cm->h) return 0;
-    mw = cm->map->w >> 1;
-    mh = cm->map->h >> 1;
-    bx = (x >> 1) + (c->fx >> 2);
-    bz = (z >> 1) + (c->fz >> 2);
-    if (bx >= mw || bz >= mh) return 0;
-    if (W->mapped && !(W->mapped[bz * mw + bx] & (1u << (pf->rr & 31)))) return 2;
-    if (W->patch) {
-        const TS_PFPATCH* p = W->patch;
-        const uint32_t px = (uint32_t)(x - p->x0), pz = (uint32_t)(z - p->z0);
-        if (px < (uint32_t)p->w && pz < (uint32_t)p->h) return p->code[pz * (uint32_t)p->w + px] & 3;
-    }
-    return ts_class_code(cm, pf->cls, x, z);
+    RD rd;
+    rd_open(&rd, pf, W);
+    return rd_code(&rd, x, z);
 }
 
 /* ---- the slots and the goals ------------------------------------------------------------------------------------- */
@@ -510,7 +556,9 @@ static int32_t bug_walk(TS_PF* pf, const TS_PFWORLD* W, const TS_GOAL* g)
     int32_t ax, az, bx, bz, h;
     int64_t steps;
     int d = 0, da, db, lim, started;
-    if (ts_pf_reader(pf, W, px, pz) < 1) return best;
+    RD rd;
+    rd_open(&rd, pf, W);
+    if (rd_code(&rd, px, pz) < 1) return best;
     for (;;) {
         for (;;) {
             int32_t nx, nz, gx;
@@ -520,7 +568,7 @@ static int32_t bug_walk(TS_PF* pf, const TS_PFWORLD* W, const TS_GOAL* g)
             d = gx < 0 ? 2 : gx > 0 ? 6 : (SUB(pf->near_z, pz) <= 0 ? 0 : 4);
             nx = px + DX[d];
             nz = pz + DZ[d];
-            if (ts_pf_reader(pf, W, nx, nz) < 1) break;
+            if (rd_code(&rd, nx, nz) < 1) break;
             px = nx;
             pz = nz;
             if (walk_onto(pf, nx, nz, d)) return 0;
@@ -536,7 +584,7 @@ static int32_t bug_walk(TS_PF* pf, const TS_PFWORLD* W, const TS_GOAL* g)
             pf->cost = ADD(pf->cost, 1);
             lim = (da - 3) & 7;
             da = (da - 2) & 7;
-            while (ts_pf_reader(pf, W, ax + DX[da], az + DZ[da]) < 1) {
+            while (rd_code(&rd, ax + DX[da], az + DZ[da]) < 1) {
                 if (da == lim) return best;
                 da = (da + 1) & 7;
             }
@@ -554,7 +602,7 @@ static int32_t bug_walk(TS_PF* pf, const TS_PFWORLD* W, const TS_GOAL* g)
             if (h < best) best = h;
             lim = (db + 3) & 7;
             db = (db + 2) & 7;
-            while (ts_pf_reader(pf, W, bx - DX[db], bz - DZ[db]) < 1) {
+            while (rd_code(&rd, bx - DX[db], bz - DZ[db]) < 1) {
                 if (db == lim) return best;
                 db = (db - 1) & 7;
             }
@@ -579,40 +627,38 @@ static int32_t bug_walk(TS_PF* pf, const TS_PFWORLD* W, const TS_GOAL* g)
    strictly; nothing is written when it does not move. */
 static void sift_up(TS_PF* pf, int32_t i)
 {
-    uint32_t x;
+    TS_PFHEAP x;
     int32_t p;
     if (i == 0) return;
     x = pf->heap[i];
     p = (i - 1) >> 1;
-    if (pf->pool[x].f >= pf->pool[pf->heap[p]].f) return;
+    if (x.f >= pf->heap[p].f) return;
     do {
         pf->heap[i] = pf->heap[p];
-        pf->pool[pf->heap[i]].link = i;
+        pf->pool[pf->heap[i].n].link = i;
         i = p;
         if (!i) break;
         p = (i - 1) >> 1;
-    } while (pf->pool[x].f < pf->pool[pf->heap[p]].f);
+    } while (x.f < pf->heap[p].f);
     pf->heap[i] = x;
-    pf->pool[x].link = i;
+    pf->pool[x.n].link = i;
 }
 
 /* 0x40F060(i), thiscall ret 4, DISASSEMBLED 0x40F060..0x40F109: with both children present the right one is taken
    only when its f is below the left's, so ties go left; a child moves up only when its f is below heap[i]'s. */
 static void sift_down(TS_PF* pf, int32_t i)
 {
-    const uint32_t x = pf->heap[i];
-    const int32_t fx = pf->pool[x].f;
+    const TS_PFHEAP x = pf->heap[i];
     for (;;) {
         const int32_t l = 2 * i + 1, r = 2 * i + 2;
-        uint32_t c;
+        TS_PFHEAP c;
         int32_t to;
         if (r < pf->count) {
-            const uint32_t L = pf->heap[l], R = pf->heap[r];
-            if (pf->pool[R].f < pf->pool[L].f) {
-                c = R;
+            if (pf->heap[r].f < pf->heap[l].f) {
+                c = pf->heap[r];
                 to = r;
             } else {
-                c = L;
+                c = pf->heap[l];
                 to = l;
             }
         } else if (l < pf->count) {
@@ -620,13 +666,13 @@ static void sift_down(TS_PF* pf, int32_t i)
             to = l;
         } else
             break;
-        if (pf->pool[c].f >= fx) break;
+        if (c.f >= x.f) break;
         pf->heap[i] = c;
-        pf->pool[c].link = i;
+        pf->pool[c.n].link = i;
         i = to;
     }
     pf->heap[i] = x;
-    pf->pool[x].link = i;
+    pf->pool[x.n].link = i;
 }
 
 /* the free 0x40F1E0(i), DISASSEMBLED 0x40F1E0..0x40F1F6, and its inline copies: LIFO */
@@ -660,7 +706,7 @@ static void heap_fill(TS_PF* pf, int32_t at)
     pf->count -= 1;
     if (at < 0 || at >= pf->count) return;
     pf->heap[at] = pf->heap[pf->count];
-    pf->pool[pf->heap[at]].link = at;
+    pf->pool[pf->heap[at].n].link = at;
     sift_down(pf, at);
 }
 
@@ -683,7 +729,7 @@ static void heap_fill(TS_PF* pf, int32_t at)
    keeps a wrapped index and a relax reads another node. THE BOUNDS: that index against the pool's live part, and the
    relaxed node's heap position against the heap's count -- the engine sifts whatever its +0x00 holds, a free-list
    link included; the core sifts only a position in the heap. */
-static void expand(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* L, int32_t pc, int k)
+static void expand(TS_PF* pf, const RD* rd, const TS_GOAL* g, const TS_PFNODE* L, int32_t pc, int k)
 {
     const int d = (pf->grid[pc].b1 + k) & 7;
     const int32_t nx = L->x + DX[d], nz = L->z + DZ[d];
@@ -699,7 +745,7 @@ static void expand(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* 
         int32_t h, gg;
         int16_t pen;
         touch(pf, ci);
-        code = ts_pf_reader(pf, W, nx, nz);
+        code = rd_code(rd, nx, nz);
         if (code < 1) {
             if (!(c->b0 & 8)) c->b0 |= 3;
             return;
@@ -711,7 +757,7 @@ static void expand(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* 
         gg = ADD(ADD(ADD(pf->turnpen[k], pf->step[d]), L->g), pen);
         gg = ADD(gg, add);
         if (pf->lazy) {
-            n = (int32_t)pf->heap[0];
+            n = (int32_t)pf->heap[0].n;
         } else {
             n = node_take(pf);
             if (n < 0) return;
@@ -723,11 +769,13 @@ static void expand(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* 
         pf->pool[n].pen = pen;
         pf->pool[n].straight = straight;
         if (pf->lazy) {
+            pf->heap[0].f = pf->pool[n].f;
             sift_down(pf, 0);
             pf->lazy = 0;
         } else {
             pf->pool[n].link = pf->count;
-            pf->heap[pf->count] = (uint32_t)n;
+            pf->heap[pf->count].f = pf->pool[n].f;
+            pf->heap[pf->count].n = (uint32_t)n;
             pf->count += 1;
             sift_up(pf, pf->count - 1);
         }
@@ -745,10 +793,12 @@ static void expand(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* 
         N->g = gg;
         N->straight = straight;
         hi = N->link;
+        /* the entry's copy of f: an open cell's node stands in the heap at its link */
+        if ((uint32_t)hi < (uint32_t)pf->count && pf->heap[hi].n == (uint32_t)n) pf->heap[hi].f = N->f;
         if (!pf->lazy) {
             if (hi > 0 && hi < pf->count) sift_up(pf, hi);
         } else {
-            const uint32_t top = pf->heap[0];
+            const uint32_t top = pf->heap[0].n;
             int32_t at;
             if (hi > 0 && hi < pf->count) sift_up(pf, hi);
             at = pf->pool[top].link;
@@ -811,23 +861,25 @@ static void extract(TS_PF* pf, TS_PFWORLD* W)
 static void astar(TS_PF* pf, TS_PFWORLD* W)
 {
     const TS_GOAL* g = goal_at(W, pf->goal);
+    RD rd;
     if (pf->count - pf->lazy == 0 || !g) {
         fail(pf, W);
         return;
     }
+    rd_open(&rd, pf, W);
     for (;;) {
         TS_PFNODE L;
         int32_t pc, k;
         if (pf->count - pf->lazy == 0) return;
         pf->cost = ADD(pf->cost, 1);
         if (pf->lazy) {
-            const uint32_t top = pf->heap[0];
+            const uint32_t top = pf->heap[0].n;
             const int32_t at = pf->pool[top].link;
             pf->lazy = 0;
             node_free(pf, top);
             heap_fill(pf, at);
         }
-        L = pf->pool[pf->heap[0]];
+        L = pf->pool[pf->heap[0].n];
         pf->lazy = 1;
         if (!inside(pf, L.x, L.z)) {
             fail(pf, W);
@@ -844,7 +896,7 @@ static void astar(TS_PF* pf, TS_PFWORLD* W)
             return;
         }
         pf->grid[pc].b0 = 2;
-        for (k = -pf->fan; k <= pf->fan; k++) expand(pf, W, g, &L, pc, k & 7);
+        for (k = -pf->fan; k <= pf->fan; k++) expand(pf, &rd, g, &L, pc, k & 7);
         pf->fan = 2;
         if (pf->cost >= 100) return;
     }
@@ -938,7 +990,8 @@ static void search_start(TS_PF* pf, TS_PFWORLD* W, int32_t goal)
     pf->pool[n].f = h0;
     pf->pool[n].pen = 0;
     pf->pool[n].straight = 100;
-    pf->heap[0] = (uint32_t)n;
+    pf->heap[0].f = h0;
+    pf->heap[0].n = (uint32_t)n;
     pf->count = 1;
     c->node = (uint16_t)n;
     pf->fan = 4;
