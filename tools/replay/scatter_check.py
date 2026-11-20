@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """scatter_check.py -- the build-scatter test groups' assertions (tools/replay/fixtures.json).
 
-    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 740
-    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1500
+    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 804
+    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1600
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and
@@ -24,12 +24,16 @@ walked and their builder waited; the third site is where site A stood, its four 
 on its middle.
 
     a third line of cell 57,470 moved all four, after WALKED's lines
-    no ARMSOLAR stands anywhere                 the wreck kept the site refused and the order was abandoned
+    no ARMSOLAR stands anywhere                 the wreck kept the site refused
     the seat's ARMCK and its four ARMPW live, none of the four on the site
+    the ARMCK's order list is empty or headed by its type's default order (the order controller's own, the
+    byte at def +0x230)                         the build order was abandoned, as stock abandons it
 
 Exit 0 when every check holds, 1 with the first that does not, 2 when it could not run.
 """
+import json
 import re
+import subprocess
 import sys
 import time
 from importlib.machinery import SourceFileLoader
@@ -46,6 +50,11 @@ SITE_CELLS = 5
 AWAY = (1000, 7300)                         # where the fixture's `order` step sends the first ARMPW
 NEAR = 24                                   # px: a unit stops within a cell or so of its move's point
 ROSTER_S = 60                               # a dump comes every 5 s of wall time, held or not
+ACK_S = 60
+MAIN = 0x511DE8
+OFF_UNITS, UNIT_STRIDE = 0x14357, 0x118     # the unit array's first record, and a record's size
+U_ORDERS, U_DEF = 0x5C, 0x92                # a unit's order list head and its type's definition
+N_ACTION, UD_DEFAULT = 0x04, 0x230          # an order node's action byte; a definition's default order
 SITE_LINE = re.compile(r"scatter: GameTime (\d+): site builder=(\d+) type=\d+ cell=(\d+),(\d+) \d+x\d+ "
                        r"on=(\d+) moved=(\d+) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+)")
 
@@ -101,13 +110,42 @@ def roster_block(lines: list, start: int, rx):
         for ln in lines[i:end]:
             m = rx.match(ln)
             units.append({"type": m.group(2).upper(), "owner": int(m.group(3)),
+                          "slot": int(m.group(4)) if m.group(4) else None,
                           "world": (int(m.group(5)), int(m.group(6)))})
         return units
     return None
 
 
+def peek(cli, instance, *specs) -> list:
+    """The values of `specs` (tacli peek's grammar), as unsigned ints."""
+    r = subprocess.run([sys.executable, str(TACLI), "peek", instance, "--json", *specs],
+                       capture_output=True, text=True, timeout=ACK_S + 30)
+    if r.returncode:
+        raise CannotRun(f"tacli peek: {(r.stdout + r.stderr).strip()[-200:]}")
+    rows = json.loads(r.stdout)["peeks"]
+    out = [cli._peek_uint(row) for row in rows]
+    if len(out) != len(specs) or None in out:
+        raise CannotRun(f"tacli peek {specs}: {[row['value'] for row in rows]}")
+    return out
+
+
+def head_and_default(cli, instance, slot: int) -> tuple:
+    """(the action of the head of unit `slot`'s order list, None when the list is empty; its type's default
+    order)."""
+    base, = peek(cli, instance, f"*0x{MAIN:X}+0x{OFF_UNITS:X}:4")
+    unit = base + slot * UNIT_STRIDE
+    head, udef = peek(cli, instance, f"0x{unit + U_ORDERS:X}:4", f"0x{unit + U_DEF:X}:4")
+    if not udef:
+        raise CannotRun(f"unit {slot} has no definition")
+    dflt, = peek(cli, instance, f"0x{udef + UD_DEFAULT:X}:1")
+    if not head:
+        return None, dflt
+    action, = peek(cli, instance, f"0x{head + N_ACTION:X}:1")
+    return action, dflt
+
+
 def read(instance):
-    """The run's site lines and a roster dump begun after this call."""
+    """The run's site lines, a roster dump begun after this call, and the tacli module."""
     cli = cli_module()
     gamedir = cli.Instance(instance).gamedir
     start = len(talog.run_text(gamedir).splitlines())
@@ -116,7 +154,7 @@ def read(instance):
         lines = talog.run_text(gamedir).splitlines()
         units = roster_block(lines, start, cli.ROSTER_RX)
         if units is not None:
-            return site_lines(lines), units
+            return site_lines(lines), units, cli
         if time.monotonic() > deadline:
             raise CannotRun(f"no roster dump began in {ROSTER_S} s")
         time.sleep(0.25)
@@ -153,7 +191,8 @@ def judge_walked(sites: list, units: list) -> list:
     return fails
 
 
-def judge_gaveup(sites: list, units: list) -> list:
+def judge_gaveup(sites: list, units: list, head=None, dflt=None) -> list:
+    """`head` and `dflt`: head_and_default of the seat's ARMCK."""
     fails = []
     a = [s for s in sites if s["cell"] == SITE_A]
     first = a[0]["builder"] if a else None
@@ -168,6 +207,9 @@ def judge_gaveup(sites: list, units: list) -> list:
         fails.append(f"{len(mine(units, 'ARMCK'))} ARMCK and {len(pws)} ARMPW live, not 1 and 4")
     if any(on_site(u["world"], SITE_A) for u in pws):
         fails.append(f"an ARMPW still stands on the site: {[u['world'] for u in pws]}")
+    if head is not None and head != dflt:
+        fails.append(f"the ARMCK's list is headed by action {head}, not its default {dflt}: the build order "
+                     f"was not abandoned")
     return fails
 
 
@@ -176,8 +218,16 @@ def main(argv):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     try:
-        sites, units = read(argv[2])
-        fails = (judge_walked if argv[1] == "walked" else judge_gaveup)(sites, units)
+        sites, units, cli = read(argv[2])
+        if argv[1] == "walked":
+            fails = judge_walked(sites, units)
+        else:
+            cks = mine(units, "ARMCK")
+            if len(cks) != 1 or cks[0]["slot"] is None:
+                raise Fail(f"{len(cks)} ARMCK of seat 0 in the roster, not 1 with its slot")
+            fails = judge_gaveup(sites, units, *head_and_default(cli, argv[2], cks[0]["slot"]))
+    except Fail as e:
+        fails = [str(e)]
     except CannotRun as e:
         print(f"scatter_check: could not run: {e}")
         return 2
