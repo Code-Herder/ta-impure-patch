@@ -60,8 +60,9 @@
    EVERYTHING BUT A BATCH'S SEARCHES RUNS ON THE THREAD THAT RUNS THE PLAYERS PHASE, inside it or inside a set goal
    the simulation calls: the game thread in play, and once the loader at 0x497C10 during a load, after the level
    init and before the game thread's first step (tagpu_income.c's line of thread-split.allow has the handshake).
-   That thread owns what is read and written here, and every engine write is its own. A batch's searches run on
-   it and on the helpers, which read engine memory only while it is inside batch_search. A value
+   That thread owns what is read and written here, and every engine write is its own. In play a batch's searches
+   run on it and on the helpers, which read engine memory only while it is inside batch_search; in the loader's
+   call they run on the loader's thread alone. A value
    taken from engine memory is data until bounded: a player's block against the unit array, the class record
    against the 32 records, the grid's size against the class's and the pathfinder's, a cell's unit slot against the
    unit array's end, a feature definition against the count, the patch's rectangle against PF_PATCH_MAX, a unit's
@@ -180,11 +181,10 @@ SIM_VAR(s_done, SIM_INSTALL);
 /* THE SCRATCHES, one for each thread that searches: s_pf[0] the scheduler's own thread's and the oracle's, s_pf[k]
    helper k's. Each is written by a search before it reads it, and left with every cell new (ts_pf_search). They
    share one block, ours alone to free; the TS_PFs over it are rebuilt whenever they do not describe that block.
-   s_scratch counts the ones laid out: 1 + s_helpers, or 1 when that much memory was not to be had. */
+   The ones laid out are 1 + s_helpers, or s_pf[0] alone when that much memory was not to be had; one not laid out
+   has no pool. */
 static TS_PF s_pf[PF_THREADS];
 SIM_VAR(s_pf, SIM_TRANSIENT);
-static unsigned s_scratch;
-SIM_VAR(s_scratch, SIM_TRANSIENT);
 static unsigned char* s_mem;
 static unsigned s_mem_bytes;
 SIM_VAR(s_mem_bytes, SIM_TRANSIENT);
@@ -381,11 +381,10 @@ static int scratch_for(int w, int h)
     const int nodes = (long long)w * h < PF_POOL ? w * h : PF_POOL;
     const size_t need = (ts_pf_bytes_n(w, h, 2, nodes) + 15u) & ~(size_t)15u;
     unsigned n, i;
-    if (s_mem && s_scratch && s_pf[0].w == w && s_pf[0].h == h) return 1;
+    if (s_mem && s_pf[0].pool && s_pf[0].w == w && s_pf[0].h == h) return 1;
     if (s_mem) SIM_FREE(s_mem, s_mem);
     s_mem = NULL;
     s_mem_bytes = 0;
-    s_scratch = 0;
     memset(s_pf, 0, sizeof s_pf);
     if (need < 16) return 0;
     for (n = 1 + s_helpers; n && !s_mem; n = n > 1 ? 1 : 0) {
@@ -403,7 +402,6 @@ static int scratch_for(int w, int h)
             memset(s_pf, 0, sizeof s_pf);
             return 0;
         }
-    s_scratch = n;
     return 1;
 }
 
@@ -452,6 +450,7 @@ typedef struct SCHED {
     const unsigned short* mapped;
     int wgt;
     unsigned wm;                    /* the tick's watermark, every class's: max(now, 30) - 30 (0x440B03) */
+    int play;                       /* no load in hand: the game thread runs this tick (batch_search)    */
     unsigned nstill;                /* THE STILL UNITS (sched_walk), ascending by slot                   */
     const unsigned short* still_slot;
     const unsigned* still_stamp;
@@ -507,6 +506,7 @@ static int sched_open(SCHED* e)
     e->mapped = *(const unsigned short* const*)(e->ta + OFF_EXPLORED);
     e->wgt = *(const int*)(e->pf + PF_BASE_WEIGHT);
     e->wm = (e->now > 30 ? e->now : 30) - 30;
+    e->play = *(const unsigned short*)(e->ta + OFF_LOADFLAGS) == 0;
     if ((size_t)(e->last - e->first) / UNIT_STRIDE >= PF_SLOTS) why = "the unit array is longer than the table of stamps";
     else if (!e->mapped) why = "there is no explored map";
     else if (e->w < 1 || e->h < 1 || !scratch_for(e->w, e->h)) why = "no scratch could be made for the grid";
@@ -685,13 +685,17 @@ static void job_search(const SCHED* e, JOB* j, TS_PF* pf)
    THE ORDERING the helpers rest on, a handshake:
      - a helper reads s_run, a job or engine memory only between a count of s_go it has taken and its own
        decrement of `pending`;
-     - this thread writes s_run before it releases the counts, releases exactly `pending` of them, and does not
-       leave batch_search -- so writes nothing, and lets nothing else run on the simulation's thread -- until
-       s_done, which the helper that brings `pending` to 0 sets after its last read. Each count is taken once and
+     - this thread, the game thread (helpers are woken only in play), writes s_run before it releases the counts,
+       releases exactly `pending` of them, and does not leave batch_search -- so writes nothing, and lets nothing
+       else run on the game thread -- until s_done, which the helper that brings `pending` to 0 sets after its
+       last read. batch_search is left by its return alone: s_run names this thread's frame, so nothing may
+       unwind past it while a helper is in a batch. Each count is taken once and
        answered by one decrement, whichever helpers take them, so `pending` reaches 0 exactly when every count
        released has been answered.
-   So while any helper reads, the thread that owns the engine's memory is inside this call, and the engine's state
-   is what the batch's writes left. A job is claimed by one thread, the one whose increment of `next` returned it.
+   So while any helper reads, the game thread, which owns the engine's memory, is inside this call, and the
+   engine's state is what the batch's writes left: no other thread of the process writes or frees what a search
+   reads (the mouse thread writes its lock bytes and the cursor's positions, engine/process.md; the render thread
+   writes no engine memory, thread-split.allow). A job is claimed by one thread, the one whose increment of `next` returned it.
    The searches' results do not depend on which thread ran which, or on how many there are: a search reads
    nothing another search of its batch writes. */
 static struct {
@@ -723,8 +727,16 @@ static DWORD WINAPI helper_main(LPVOID scratch)
 
 static void batch_search(const SCHED* e, JOB* job, unsigned nj)
 {
-    /* every helper has a scratch, or none is woken; and no more than there are searches beside this thread's */
-    unsigned woken = s_scratch == 1 + s_helpers ? s_helpers : 0, i;
+    /* Helpers are woken only IN PLAY, when the scheduler's thread is the game thread: the load's word main + 0x38D75
+       is 0. THE ORDERING: the loader goes on to its call of the players phase only once it has read bit 3 of that
+       word (0x4975D6..0x4975F1), which the game thread sets (0x498576) and nothing clears until the game thread
+       zeroes the word at its entry into play (0x49847E, 0x498480), after it has read the loader's last store
+       (0x497C62, 0x498342). So in the loader's call the word is not 0, and where it is 0 no loader lives. In that
+       call the game thread is not stopped -- it runs its loading frame -- and the loader's entry 0x497C70 catches
+       a fault and ends its thread, frame and all; there the searches run on the loader's own thread alone, as
+       the engine's did. And every helper has a scratch, or none is woken; and no more are woken than there are
+       searches beside this thread's. */
+    unsigned woken = e->play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0, i;
     if (woken > nj - 1) woken = nj - 1;
     if (woken) {
         s_run.e = e;

@@ -165,8 +165,8 @@ them, a cheaper search.
   search that found nothing; none occurred.
 - A batch's searches can pass the pops cap together (507 000 pops in the worst tick measured, eight
   searches that each found no way); on the helpers a batch's time is its longest search's.
-- **The batch in hand is `SIM_TRANSIENT`** (`s_run`, all zero between two batches) and so is the
-  count of scratches: the class the owner approved for the scratch, on two more variables.
+- **The batch in hand is `SIM_TRANSIENT`** (`s_run`, all zero between two batches): the class the
+  owner approved for the scratch, on one more variable, and the owner's decision again.
 - Cores against hardware threads for the helpers' number: not measured (the module's gaps).
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.

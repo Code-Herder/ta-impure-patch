@@ -63,15 +63,23 @@ and the two cursors (`s_cursor`); both are recorded state.
 
 **The helpers.** Threads made at install search a batch beside the scheduler's own thread, each on
 a scratch of its own. Their number is the machine's processor cores less one, left to the render
-thread, and at most 4 with the scheduler's thread counted: one thread on two cores, three on four,
-four from six up. It decides how long a batch takes and nothing of what it finds: a search reads
+thread, and at most 4 with the scheduler's thread counted: one thread on two cores, two on three,
+three on four, four from five up. It decides how long a batch takes and nothing of what it finds: a search reads
 nothing another search of its batch writes, and the results are applied in the batch's order.
 The batch is handed out and waited for by a handshake (`batch_search`): the scheduler's thread
 writes the batch, releases one count of a semaphore for each helper it wakes, searches too, and
 does not go on until the helper that answers the last count has set an event. A helper reads the
 batch, a job or engine memory only between a count it has taken and its answer, so while any helper
-reads, the thread that owns the engine's memory is inside that call. When the scratches' memory is
-not to be had for every thread, one is made and the searches run one after another.
+reads, the thread that owns the engine's memory is inside that call. **Helpers are woken only in
+play**, when that thread is the game thread — the load's word `main+0x38D75` is 0: the loader goes
+on to its call of the players phase only after reading the game thread's bit 3
+(`0x4975D6..0x4975F1`, set `0x498576`), and the game thread zeroes the word at its entry into play
+(`0x49847E`) after the loader's last store. No other thread of the process writes what a search
+reads. In the loader's one call of the players phase
+the game thread is not stopped — it runs its loading frame, the network pump included — and the
+loader's entry `0x497C70` catches a fault and ends its thread; there the searches run on the
+loader's thread alone, as the engine's own did. When the scratches' memory is not to be had for
+every thread, one is made and the searches run one after another.
 
 **The heuristic's weight** is one of the engine's three, by the tick's load where the engine goes
 by how slowly its budget serves a player:
@@ -197,6 +205,11 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 
 - **The searches are still most of the time**, 1.65 of 2.4 ms a tick on four threads, and a batch
   waits for its longest: a cheaper search is the plan's next landing.
+- **Nothing may unwind past a batch**: the batch in hand names the game thread's frame, so a fault
+  there that a handler caught and survived would leave the helpers reading it. No such handler is
+  known above the players phase in play; the loader's, the one known, runs no helper.
+- **The loader's call reads beside the game thread's loading frame**, as the engine's own players
+  phase does there; what keeps the units still in that window is the engine's arrangement, not ours.
 - **Cores against hardware threads was not measured**: the display's start gives the process every
   processor (`dd.c`), so a run pinned to four cores is not confined to them. The rule counts cores.
 - **A batch can pass the pops cap** by its own searches: the cap is tested between batches, and a
