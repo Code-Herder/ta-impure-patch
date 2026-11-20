@@ -26,7 +26,7 @@ play defaults' cap of tools/runlock-vram.cfg -- for the tests of the GPU memory.
 is given too, from a file each test writes (none: no load guard), so the machine the tests run on
 never decides an admission, and so are the lane weights, a test's own file (GDI and VULKAN unless
 a test writes others), so the tree's figures never decide a test's arithmetic, and so are the sim
-pool's figures and the machine's threads (the owner's 8, 24 and 2048 MiB on THREADS). A step is waited for, never timed: WAIT_S bounds a step that takes
+pool's figures and the machine's threads (the owner's 8, 24 and 3072 MiB on THREADS). A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
 import json
@@ -52,8 +52,8 @@ UNITS = 287                     # its GPU budget: (12 282 - 3072) // 32 (tools/r
 GAMES = 9                       # the games at the play defaults' cap: 287 * 32 // (920 + 64 + 32)
 LIMIT = 32.0                    # the load guard's limit: the reference setup's threads at load_per_thread 1.0
 THREADS = 32                    # the reference setup's threads, which the sim pool's size is taken from
-SIM_FLOOR, SIM_CAP, SIM_MIB = 8, 24, 2048   # the sim pool's figures as the owner set them (THE SIM POOL)
-PLACE_MIB = SIM_MIB // SIM_CAP  # 85
+SIM_FLOOR, SIM_CAP, SIM_MIB = 8, 24, 3072   # the sim pool's figures as the owner set them (THE SIM POOL)
+PLACE_MIB = SIM_MIB // SIM_CAP  # 128
 # the lane weights every run here reads, unless a test writes others: the tests' own, not the tree's
 # (tools/runlock-lanes.cfg), and different, so that a run charged the other renderer's weight shows
 GDI, VULKAN = 1, 2

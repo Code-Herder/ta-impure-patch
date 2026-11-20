@@ -194,8 +194,8 @@ the tree that takes the place, each with how it was decided. Its properties:
     starts (Workers.argv(); `run --sim` binds its command and everything that starts), so a batch
     that runs one process a place keeps the pool's processes inside pool_mib. RLIMIT_DATA counts a
     process's private writable mappings, touched or not, not what is resident (bind()): a coarse
-    game needs 128 MiB of it, more than the 85 the owner's figures give a place, and a game under
-    too small a bound exits 2 by name (tools/runlock-sim.cfg, MEASURED). The batch's own process,
+    game needs 128 MiB of it, which the owner's figures give a place, and a game under too small a
+    bound exits 2 by name (tools/runlock-sim.cfg, MEASURED). The batch's own process,
     which took the places and starts its games -- the coarse driver, a thread and its stack a
     game -- is neither bound nor charged: one a batch.
   * No GPU: a sim batch plays no engine game, and `run --sim` takes no --vram, --suite or resource.
