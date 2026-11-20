@@ -146,7 +146,12 @@ them, a cheaper search.
    **Built 2026-11-20**: 30 to 34 searches a tick against the engine's 24, a unit's wait 20 to 23
    ticks on average against 48, for the engine's time a tick or up to two fifths more (4.3 and 6.3 ms in two
    runs against about 4.5; [the module](modules/pathfinder.md)).
-3. **The workers** — the same searches on worker threads while the game thread waits.
+3. **The workers** — a batch's searches on the scheduler's thread and up to three helpers at once,
+   the scheduler's thread inside the call until the last helper has answered; the still units listed
+   once a tick for every class's sweep. **Built 2026-11-20**: 2.4 ms a tick on four threads against
+   3.9 on one and the engine's 4.5; every result equal to the one-thread search's
+   ([the module](modules/pathfinder.md)). The thread count is the machine's cores less one, at most
+   4: threads past four end a batch no sooner.
 4. **A cheaper search** — the heap and the expansion are half of a search's time.
 
 ## Open
@@ -159,7 +164,9 @@ them, a cheaper search.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
 - A batch's searches can pass the pops cap together (507 000 pops in the worst tick measured, eight
-  searches that each found no way); with workers a batch's time is its longest search's.
-- The class's sweep walks every unit once for each class that searches in a tick, as the engine's.
+  searches that each found no way); on the helpers a batch's time is its longest search's.
+- **The batch in hand is `SIM_TRANSIENT`** (`s_run`, all zero between two batches) and so is the
+  count of scratches: the class the owner approved for the scratch, on two more variables.
+- Cores against hardware threads for the helpers' number: not measured (the module's gaps).
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.

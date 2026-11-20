@@ -775,7 +775,12 @@ So the mask closes the border to building, to movement and to feature spawns, an
 `maxslope`, `badslope`, `maxwaterslope`, `badwaterslope` (bytes) — the parser `0x440340`'s, in
 [the key inventory](keys.md) — `+0x10`/`+0x14` the map's W and H,
 `+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick, the
-search's watermark.
+search's watermark. The 32 watermarks, class 0 to 31, are the recorded globals `mcwatermark00` to
+`mcwatermark31`: `0x512374`, `0x512394`, `0x5123B4`, `0x5123D4`, `0x5123F4`, `0x512414`, `0x512434`,
+`0x512454`, `0x512474`, `0x512494`, `0x5124B4`, `0x5124D4`, `0x5124F4`, `0x512514`, `0x512534`,
+`0x512554`, `0x512574`, `0x512594`, `0x5125B4`, `0x5125D4`, `0x5125F4`, `0x512614`, `0x512634`,
+`0x512654`, `0x512674`, `0x512694`, `0x5126B4`, `0x5126D4`, `0x5126F4`, `0x512714`, `0x512734`,
+`0x512754`.
 `0x440940` builds them: for each present class it frees the old map, allocates the new one and
 fills it (`0x440500`), and it runs once a load, at `0x4918E3` in `LoadGameData_Main`, after LoadMap
 (`0x4918C0`): after the mask and before any saved feature is back. It gives every present class

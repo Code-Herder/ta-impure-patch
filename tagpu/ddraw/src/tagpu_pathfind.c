@@ -15,8 +15,8 @@
 
    THE SCHEDULER (sched_tick) stands at the players phase's call of the engine's 0x40EB70 (0x464F92), which then
    never runs. Once a tick, on the game thread:
-     1. THE WALK. Every unit of every player the engine's scheduler serves, in the players' and their blocks' order,
-        whose ground course wants a search (bit 1 of its +0x64) is READY when
+     1. THE WALK, one pass over the unit array. Every unit of every player the engine's scheduler serves, in slot
+        order, whose ground course wants a search (bit 1 of its +0x64) is READY when
           - its stamp +0x60 is 0: a new goal. Set goal 0x44F2A0 zeroes the stamp when the last search began 10
             ticks ago or more, and before_set_goal inside those 10 ticks when that search found a path;
           - or it is not blocked and has fewer than two corners left (0x44F24B) of a path its last search found:
@@ -31,7 +31,8 @@
         over all its searches before the next: THE WRITES (the unit's stamp; its class's watermark and the marking
         of the units that have just become obstacles, once a class a tick, as 0x440AF0's sweep; an obstacle
         searcher's rectangle recomputed in the map through the engine's 0x440830, as the cleanup would); THE
-        SEARCHES, which read the map and the cells and write only their own patch, scratch and result; THE
+        SEARCHES, which read the map and the cells and write only their own patch, their thread's scratch and
+        their result, on the scheduler's thread and the helpers at once (batch_search has the handshake); THE
         RESULTS, each applied through the engine's own set path 0x44F080 and its flag call 0x44CED0.
    No search spans ticks, so nothing of a search is state: what a tick carries to the next is the units' own
    stamps and paths, the two cursors and, per unit slot, the stamp of its last search that found a path.
@@ -56,10 +57,11 @@
    the engine wrote: the exit, the path's points and count, the goal cell, the pool's use, the bug walk's answer
    and the flags ORed into the order. It writes no engine memory and decides nothing.
 
-   EVERYTHING HERE RUNS ON THE THREAD THAT RUNS THE PLAYERS PHASE, inside it or inside a set goal the simulation
-   calls: the game thread in play, and once the loader at 0x497C10 during a load, after the level init and
-   before the game thread's first step (tagpu_income.c's line of thread-split.allow has the handshake). That
-   thread owns what is read and written here. A value
+   EVERYTHING BUT A BATCH'S SEARCHES RUNS ON THE THREAD THAT RUNS THE PLAYERS PHASE, inside it or inside a set goal
+   the simulation calls: the game thread in play, and once the loader at 0x497C10 during a load, after the level
+   init and before the game thread's first step (tagpu_income.c's line of thread-split.allow has the handshake).
+   That thread owns what is read and written here, and every engine write is its own. A batch's searches run on
+   it and on the helpers, which read engine memory only while it is inside batch_search. A value
    taken from engine memory is data until bounded: a player's block against the unit array, the class record
    against the 32 records, the grid's size against the class's and the pathfinder's, a cell's unit slot against the
    unit array's end, a feature definition against the count, the patch's rectangle against PF_PATCH_MAX, a unit's
@@ -152,6 +154,8 @@ SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-all
    in a tick that searches at the base weight (MEASURED: 2900 pops a search at the base, 510 at 3 times, 410 at 6
    times). */
 #define PF_BATCH         8
+#define PF_THREADS       4              /* the most threads that search a batch: more end it no sooner (MEASURED,
+                                           modules/pathfinder.md): a batch ends with its longest search       */
 #define PF_CAP_SEARCHES  64
 #define PF_CAP_POPS      64000
 #define PF_QUIET         4
@@ -177,7 +181,7 @@ SIM_VAR(s_done, SIM_INSTALL);
    helper k's. Each is written by a search before it reads it, and left with every cell new (ts_pf_search). They
    share one block, ours alone to free; the TS_PFs over it are rebuilt whenever they do not describe that block.
    s_scratch counts the ones laid out: 1 + s_helpers, or 1 when that much memory was not to be had. */
-static TS_PF s_pf[PF_BATCH];
+static TS_PF s_pf[PF_THREADS];
 SIM_VAR(s_pf, SIM_TRANSIENT);
 static unsigned s_scratch;
 SIM_VAR(s_scratch, SIM_TRANSIENT);
@@ -447,6 +451,10 @@ typedef struct SCHED {
     int w, h;                       /* the pathfinder's grid                                             */
     const unsigned short* mapped;
     int wgt;
+    unsigned wm;                    /* the tick's watermark, every class's: max(now, 30) - 30 (0x440B03) */
+    unsigned nstill;                /* THE STILL UNITS (sched_walk), ascending by slot                   */
+    const unsigned short* still_slot;
+    const unsigned* still_stamp;
     unsigned nblock;                /* the served players' blocks of the unit array, ascending           */
     struct { char* b0; char* b1; unsigned char seat; } block[10];
 } SCHED;
@@ -498,6 +506,7 @@ static int sched_open(SCHED* e)
     e->h = *(const int*)(e->pf + PF_H);
     e->mapped = *(const unsigned short* const*)(e->ta + OFF_EXPLORED);
     e->wgt = *(const int*)(e->pf + PF_BASE_WEIGHT);
+    e->wm = (e->now > 30 ? e->now : 30) - 30;
     if ((size_t)(e->last - e->first) / UNIT_STRIDE >= PF_SLOTS) why = "the unit array is longer than the table of stamps";
     else if (!e->mapped) why = "there is no explored map";
     else if (e->w < 1 || e->h < 1 || !scratch_for(e->w, e->h)) why = "no scratch could be made for the grid";
@@ -534,65 +543,74 @@ static char* wanting_course(const char* unit)
     return course;
 }
 
-/* THE WALK. ready[0] takes the units served first -- a new goal (the stamp is 0), and a unit that has followed its
-   path to its end -- and ready[1] the others whose last search began PF_RETRY ticks ago. Slots, ascending, which
-   the cursors' rotation rests on. */
-static void sched_walk(const SCHED* e, unsigned short (*ready)[PF_SLOTS], unsigned* n)
+/* THE WALK, one pass over the unit array. ready[0] takes the units served first -- a new goal (the stamp is 0), and
+   a unit that has followed its path to its end -- and ready[1] the others whose last search began PF_RETRY ticks
+   ago: slots of the served players' blocks, ascending, which the cursors' rotation rests on.
+   THE STILL UNITS are what a class's sweep marks from (class_tick): every slot from 1 on whose unit is alive
+   (+0x110 bit 28), has a mover and a claim stamp below the tick's watermark, with that stamp. Nothing inside the
+   tick's call writes a unit's alive bit, its mover or a mover's stamp, so the list holds for every class the tick
+   sweeps. */
+static void sched_walk(SCHED* e, unsigned short (*ready)[PF_SLOTS], unsigned* n, unsigned short* still_slot,
+                       unsigned* still_stamp)
 {
-    unsigned b;
+    unsigned b = 0;
+    char* u;
     n[0] = n[1] = 0;
-    for (b = 0; b < e->nblock; b++) {
-        char* u;
-        for (u = e->block[b].b0; u <= e->block[b].b1; u += UNIT_STRIDE) {
-            const char* course = wanting_course(u);
-            const unsigned slot = (unsigned)((size_t)(u - e->first) / UNIT_STRIDE);
-            unsigned stamp, age;
-            int kind;
-            if (!course) {
-                if (s_log) s_v.ready_since[slot] = 0;
-                continue;
-            }
-            stamp = *(const unsigned*)(course + OBJ_LAST);
-            age = e->now - stamp;
-            if (!stamp) {
-                kind = 0;
-                s_v.ready_order++;
-            } else if (!(*(const unsigned char*)(*(const char* const*)u + MOVER_FLAGS) & 4) &&
-                       *(const int*)(course + OBJ_COUNT) < 2 && s_found[slot] == stamp) {
-                kind = 0;
-                s_v.ready_end++;
-            } else if (age >= PF_RETRY)
-                kind = 1;
-            else {
-                if (s_log) s_v.ready_since[slot] = 0;
-                s_v.held_retry++;
-                continue;
-            }
-            if (n[kind] >= PF_SLOTS) continue;
-            ready[kind][n[kind]++] = (unsigned short)slot;
-            if (s_log && !s_v.ready_since[slot]) s_v.ready_since[slot] = e->now ? e->now : 1;
+    e->still_slot = still_slot;
+    e->still_stamp = still_stamp;
+    for (u = e->first; u <= e->last; u += UNIT_STRIDE) {
+        const unsigned slot = (unsigned)((size_t)(u - e->first) / UNIT_STRIDE);
+        const char* const mover = *(const char* const*)u;
+        const char* course;
+        unsigned stamp, age;
+        int kind;
+        if (slot && mover && (*(const unsigned*)(u + UNIT_STATE) & 0x10000000u) &&
+            *(const unsigned*)(mover + MOVER_STAMP) < e->wm) {
+            still_slot[e->nstill] = (unsigned short)slot;
+            still_stamp[e->nstill++] = *(const unsigned*)(mover + MOVER_STAMP);
         }
+        while (b < e->nblock && u > e->block[b].b1) b++;
+        if (b >= e->nblock || u < e->block[b].b0) continue;
+        if (!(course = wanting_course(u))) {
+            if (s_log) s_v.ready_since[slot] = 0;
+            continue;
+        }
+        stamp = *(const unsigned*)(course + OBJ_LAST);
+        age = e->now - stamp;
+        if (!stamp) {
+            kind = 0;
+            s_v.ready_order++;
+        } else if (!(*(const unsigned char*)(mover + MOVER_FLAGS) & 4) && *(const int*)(course + OBJ_COUNT) < 2 &&
+                   s_found[slot] == stamp) {
+            kind = 0;
+            s_v.ready_end++;
+        } else if (age >= PF_RETRY)
+            kind = 1;
+        else {
+            if (s_log) s_v.ready_since[slot] = 0;
+            s_v.held_retry++;
+            continue;
+        }
+        ready[kind][n[kind]++] = (unsigned short)slot;
+        if (s_log && !s_v.ready_since[slot]) s_v.ready_since[slot] = e->now ? e->now : 1;
     }
 }
 
 /* The class's watermark, and the marking of the units that have just become obstacles: 0x440AF0's own, less its
-   searcher (0x440B03..0x440B18, 0x440B4E..0x440BB8). The watermark moves once a tick, so the sweep runs for the
-   first search of a class in a tick and for no other. */
+   searcher (0x440B03..0x440B18, 0x440B4E..0x440BB8) -- the alive units with a mover whose stamp is in
+   [the class's old watermark, the new one), in slot order, here taken from the walk's still units. The watermark
+   moves once a tick, so the sweep runs for the first search of a class in a tick and for no other. */
 static void class_tick(const SCHED* e, char* cls)
 {
     const unsigned old = *(const unsigned*)(cls + 0x1C);
-    const unsigned wm = (e->now > 30 ? e->now : 30) - 30;
-    char* u;
-    *(unsigned*)(cls + 0x1C) = wm;
-    if (wm == old) return;
-    for (u = e->first + UNIT_STRIDE; u <= e->last; u += UNIT_STRIDE) {
-        const char* mover;
-        unsigned stamp;
-        if (!(*(const unsigned*)(u + UNIT_STATE) & 0x10000000u) || !(mover = *(const char* const*)u)) continue;
-        stamp = *(const unsigned*)(mover + MOVER_STAMP);
-        if (stamp >= old && stamp < wm)
+    unsigned i;
+    *(unsigned*)(cls + 0x1C) = e->wm;
+    if (e->wm == old) return;
+    for (i = 0; i < e->nstill; i++)
+        if (e->still_stamp[i] >= old) {
+            const char* u = e->first + (size_t)e->still_slot[i] * UNIT_STRIDE;
             ((PFN_Remark)(size_t)VA_REMARK)(cls, *(const unsigned*)(u + UNIT_CELL), *(const unsigned*)(u + UNIT_FOOT));
-    }
+        }
 }
 
 /* THE WRITES of one search. The stamp is the engine's wants-search's (0x44F27E), held off 0, which here reads as a
@@ -768,6 +786,7 @@ static void sched_line(void)
 {
     const double t = s_v.ticks ? (double)s_v.ticks : 1.0;
     if (s_log) {
+
     tagpu_logf("pathsched: %u ticks: %.1f searches a tick (most %u; cap %d), %.0f pops (most %u; cap %d): %u found, "
                "%u no search, %u no path, %u off the grid, %u not made, %u read a patch; ready a tick: %.1f on a new "
                "goal, %.1f at a path's end, %.1f for a retry; left for the next tick %.1f (most %u); held by the retry "
@@ -791,14 +810,15 @@ static void sched_line(void)
    0x44CED0 an order's flags -- so a pointer the walk read is the same object in every later step. */
 static void __fastcall sched_tick(void* pf_unused)
 {
-    unsigned short ready[2][PF_SLOTS];
+    unsigned short ready[2][PF_SLOTS], still_slot[PF_SLOTS];
+    unsigned still_stamp[PF_SLOTS];
     JOB job[PF_BATCH];
     unsigned n[2], at[2], taken[2] = { 0, 0 }, begun = 0, pops = 0, kind, i;
     SCHED e;
     (void)pf_unused;
     if (!sched_open(&e)) return;
     tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
-    sched_walk(&e, ready, n);
+    sched_walk(&e, ready, n, still_slot, still_stamp);
     /* THE WEIGHT, by the tick's load: the engine's three (0x40EBBF..0x40EC06) */
     i = n[0] + n[1] > PF_CAP_SEARCHES ? 2 : n[0] + n[1] > PF_QUIET;
     e.wgt *= i == 2 ? 6 : i == 1 ? 3 : 1;
@@ -879,23 +899,33 @@ static int __cdecl before_extract(void* esp);
 static int __cdecl before_cleanup(void* esp);
 static int __cdecl before_scheduler(void* esp);
 
-/* THE NUMBER OF THREADS that search a batch: the machine's processors, less one left to the render thread, and no
-   more than a batch has searches; the scheduler's own thread is one of them, so the helpers are one fewer. It
-   decides how long a batch takes and nothing of what it finds. The processors are the system's: the display's
-   start gives the process all of them (dd.c). A helper that cannot be made is one thread fewer. Returns the
-   processors counted. */
+/* The machine's processor cores, counted once each whatever hardware threads they carry; 0 when the system does
+   not say. */
+static unsigned cores_count(void)
+{
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION info[1024];
+    DWORD bytes = sizeof info;
+    unsigned cores = 0, i;
+    if (!GetLogicalProcessorInformation(info, &bytes)) return 0;
+    for (i = 0; i < bytes / sizeof info[0]; i++)
+        if (info[i].Relationship == RelationProcessorCore) cores++;
+    return cores;
+}
+
+/* THE NUMBER OF THREADS that search a batch: the machine's cores less one, left to the render thread, and at most
+   PF_THREADS; the scheduler's own thread is one of them, so the helpers are one fewer. Cores, not hardware
+   threads: a batch ends with its longest search, and a search that shares a core waits on its sibling. The number
+   decides how long a batch takes and nothing of what it finds. A helper that cannot be made is one thread fewer.
+   Returns the cores counted. */
 static unsigned helpers_start(void)
 {
-    DWORD_PTR mine = 0, all = 0;
-    unsigned cpus = 0, want, k;
-    if (GetProcessAffinityMask(GetCurrentProcess(), &mine, &all))
-        for (; all; all &= all - 1) cpus++;
-    want = cpus > 2 ? cpus - 2 : 0;
-    if (want > PF_BATCH - 1) want = PF_BATCH - 1;
-    if (!want) return cpus;
-    s_go = CreateSemaphoreA(NULL, 0, PF_BATCH, NULL);
+    const unsigned cores = cores_count();
+    unsigned want = cores > 1 ? cores - 1 : 1, k;
+    if (want > PF_THREADS) want = PF_THREADS;
+    if (--want == 0) return cores;
+    s_go = CreateSemaphoreA(NULL, 0, PF_THREADS, NULL);
     s_done = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!s_go || !s_done) return cpus;
+    if (!s_go || !s_done) return cores;
     for (k = 0; k < want; k++) {
         /* helper k searches on s_pf[1 + k]; the helpers are numbered as they are made, with no gap */
         const HANDLE t = CreateThread(NULL, 0, helper_main, (LPVOID)(size_t)(1 + s_helpers), 0, NULL);
@@ -903,7 +933,7 @@ static unsigned helpers_start(void)
         CloseHandle(t);
         s_helpers++;
     }
-    return cpus;
+    return cores;
 }
 
 void tagpu_pathfind_init(void)
@@ -916,7 +946,7 @@ void tagpu_pathfind_init(void)
     static const unsigned char X_REMARK[8]  = { 0x83, 0xEC, 0x14, 0x0F, 0xBF, 0x54, 0x24, 0x1A };
     static const unsigned char X_SETPATH[7] = { 0x56, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C };
     static const unsigned char X_GOALFLAG[7] = { 0x8B, 0x41, 0x04, 0x85, 0xC0, 0x74, 0x0C };
-    unsigned cpus;
+    unsigned cores;
     s_log = tagpu_sim_lever("tagpu_pathlog.on");
     if (tagpu_sim_lever("tagpu_pathverify.on")) {
         if (!tagpu_detour_bytes_ok(VA_SCHEDULER, X_SCHED, sizeof X_SCHED) ||
@@ -953,10 +983,10 @@ void tagpu_pathfind_init(void)
         return;
     }
     s_mode = MODE_OURS;
-    cpus = helpers_start();
+    cores = helpers_start();
     tagpu_logf("pathsched: installed - our scheduler at the players phase's call 0x464F92, set goal 0x44F2A0 watched; "
-               "%d searches and %d pops a tick, in batches of %d searched by %u threads at once (%u processors)",
-               PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH, 1 + s_helpers, cpus);
+               "%d searches and %d pops a tick, in batches of %d searched by %u threads at once (%u cores)",
+               PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH, 1 + s_helpers, cores);
 }
 
 SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "battle");
