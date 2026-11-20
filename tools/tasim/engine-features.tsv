@@ -66,6 +66,7 @@ map_terrain	outside	the map lists, which leave out a map with no terrain; tasim'
 map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c, BuildMinimapSurface's call at 0x46685F
 load_unpaused	outside	the pause bit across levels	tagpu_patches.c, main+0x38A51 bit 0
 particle_walk	outside	the particle layers' tick, a drawing's state: the same objects destroyed and updated in the same order, the survivors kept in one pass; SIM_PUPPET_INDEPENDENT	tagpu_patches.c, the particle walker 0x471EB0's call at 0x4955BF
+path_verify	outside	our search beside the engine's pathfinder under a test lever, comparing the two results and writing nothing; SIM_PUPPET_INDEPENDENT	tagpu_pathfind.c, the pathfinder's scheduler 0x40EB70, grid reset 0x40D900, extraction 0x40E050 and cleanup 0x440BE0, observed
 hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and tilts, with the movement and the terrain	tagpu_patches.c, the call at 0x48A66A
 mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c, the constructor 0x43DC00
 planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c, the call at 0x4081E2

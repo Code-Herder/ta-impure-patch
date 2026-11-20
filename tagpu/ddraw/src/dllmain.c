@@ -50,6 +50,7 @@
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
 #include "tagpu_guard.h"
+#include "tagpu_pathfind.h"
 #include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
@@ -353,6 +354,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            byte-matched, disjoint from every site above; a guard that is not a ground builder's of a
            finished plant runs as stock. */
         tagpu_guard_init();
+
+        /* tagpu: our search beside the engine's pathfinder (tagpu_pathfind.h). No-op unless
+           "tagpu_pathverify.on" exists; four observers at 0x40EB70, 0x40D900, 0x40E050 and 0x440BE0,
+           byte-matched, all or none, disjoint from every site above; reads only. */
+        tagpu_pathfind_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever

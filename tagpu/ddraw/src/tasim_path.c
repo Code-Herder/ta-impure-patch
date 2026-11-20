@@ -193,13 +193,19 @@ static int32_t slot_words(int32_t n) { return (n + 31) >> 5; }
    node is the one other, on a cell the expansion never opens (it is open from the start). So a search allocates at
    most W * H nodes, the heap holds at most as many, and the free list reuses popped ones. The engine grows both with
    cap + cap / 2 + 16 (0x40DDB6..0x40DDCE, 0x40F110); the core is sized to the bound the engine cannot exceed. */
-size_t ts_pf_bytes(int32_t w, int32_t h, int32_t nslot)
+size_t ts_pf_bytes_n(int32_t w, int32_t h, int32_t nslot, int32_t nodes)
 {
     int32_t cells;
-    if (w <= 0 || h <= 0 || (int64_t)w * h > TS_MAP_CELLS_MAX || nslot < 1) return 0;
+    if (w <= 0 || h <= 0 || (int64_t)w * h > TS_MAP_CELLS_MAX || nslot < 1 || nodes < 1 || (int64_t)nodes > (int64_t)w * h)
+        return 0;
     cells = grid_cells(w, h);
     return AL4((size_t)cells * sizeof(TS_PFCELL)) + 4 * (size_t)touch_words(cells) +
-           (size_t)w * h * sizeof(TS_PFNODE) + 4 * (size_t)w * h + 3 * 4 * (size_t)slot_words(nslot);
+           (size_t)nodes * sizeof(TS_PFNODE) + 4 * (size_t)nodes + 3 * 4 * (size_t)slot_words(nslot);
+}
+
+size_t ts_pf_bytes(int32_t w, int32_t h, int32_t nslot)
+{
+    return w > 0 && h > 0 && (int64_t)w * h <= TS_MAP_CELLS_MAX ? ts_pf_bytes_n(w, h, nslot, w * h) : 0;
 }
 
 static void reset_grid(TS_PF* pf);
@@ -207,7 +213,14 @@ static void reset_grid(TS_PF* pf);
 int ts_pf_init(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32_t nslot, int32_t budget,
                const TS_PFSEAT seat[TS_PF_SEATS])
 {
-    const size_t need = ts_pf_bytes(w, h, nslot);
+    if (w <= 0 || h <= 0 || (int64_t)w * h > TS_MAP_CELLS_MAX) return -1;
+    return ts_pf_init_n(pf, mem, bytes, w, h, nslot, w * h, budget, seat);
+}
+
+int ts_pf_init_n(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32_t nslot, int32_t nodes, int32_t budget,
+                 const TS_PFSEAT seat[TS_PF_SEATS])
+{
+    const size_t need = ts_pf_bytes_n(w, h, nslot, nodes);
     unsigned char* p = (unsigned char*)mem;
     int32_t exams[TS_PF_SEATS], calls = pf->calls;
     int i;
@@ -220,7 +233,7 @@ int ts_pf_init(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32_t
     pf->w = w;
     pf->h = h;
     pf->cells = grid_cells(w, h);
-    pf->nodes = w * h;
+    pf->nodes = nodes;
     pf->grid = (TS_PFCELL*)p;
     p += AL4((size_t)pf->cells * sizeof(TS_PFCELL));
     pf->touch = (uint32_t*)p;
@@ -309,6 +322,11 @@ int ts_pf_reader(const TS_PF* pf, const TS_PFWORLD* W, int32_t x, int32_t z)
     bz = (z >> 1) + (c->fz >> 2);
     if (bx >= mw || bz >= mh) return 0;
     if (W->mapped && !(W->mapped[bz * mw + bx] & (1u << (pf->rr & 31)))) return 2;
+    if (W->patch) {
+        const TS_PFPATCH* p = W->patch;
+        const uint32_t px = (uint32_t)(x - p->x0), pz = (uint32_t)(z - p->z0);
+        if (px < (uint32_t)p->w && pz < (uint32_t)p->h) return p->code[pz * (uint32_t)p->w + px] & 3;
+    }
     return ts_class_code(cm, pf->cls, x, z);
 }
 
@@ -414,7 +432,7 @@ void ts_pf_set_path(TS_PF* pf, TS_PFWORLD* W, int32_t slot, const int16_t (*pts)
 static void fail(TS_PF* pf, TS_PFWORLD* W)
 {
     ts_pf_set_path(pf, W, pf->cls_obj, NULL, 0);
-    ts_class_cleanup(W->cm, pf->cls, pf->searching);
+    if (!W->frozen) ts_class_cleanup(W->cm, pf->cls, pf->searching);
     pf->searching = 0;
     pf->cls = TS_PF_NOCLASS;
 }
@@ -628,7 +646,10 @@ static int32_t node_take(TS_PF* pf)
         pf->freehead = pf->pool[n].link;
         return n;
     }
-    if (pf->used >= pf->nodes) return -1;
+    if (pf->used >= pf->nodes) {
+        pf->overflow = 1;
+        return -1;
+    }
     return pf->used++;
 }
 
@@ -817,7 +838,7 @@ static void astar(TS_PF* pf, TS_PFWORLD* W)
             pf->found_x = L.x;
             pf->found_z = L.z;
             extract(pf, W);
-            ts_class_cleanup(W->cm, pf->cls, pf->searching);
+            if (!W->frozen) ts_class_cleanup(W->cm, pf->cls, pf->searching);
             pf->searching = 0;
             pf->cls = TS_PF_NOCLASS;
             return;
@@ -854,7 +875,7 @@ static void search_start(TS_PF* pf, TS_PFWORLD* W, int32_t goal)
     pf->goal = goal;
     pf->start_x = cu->cx;
     pf->start_z = cu->cz;
-    ts_class_watermark(W->cm, pf->cls, slot, W->now);
+    if (!W->frozen) ts_class_watermark(W->cm, pf->cls, slot, W->now);
     memcpy(pf->turnpen, TURNPEN, 8);
     memcpy(pf->step, STEP, 8);
     reset_grid(pf);
@@ -921,6 +942,98 @@ static void search_start(TS_PF* pf, TS_PFWORLD* W, int32_t goal)
     pf->count = 1;
     c->node = (uint16_t)n;
     pf->fan = 4;
+}
+
+/* ---- one search, whole (tasim_path.h) ---------------------------------------------------------------------------- */
+
+/* A world of one unit in slot 1 and one goal, its class the map handed over, frozen; then the search start and the
+   passes to the end. The slot's path starts empty with bit 1, so bit 0 afterwards is set path's with points. */
+int ts_pf_search(TS_PF* pf, const TS_PFQUERY* q, TS_PFRESULT* r)
+{
+    TS_MAP m;
+    TS_CLASSMAPS cm;
+    TS_CUNIT cu[2];
+    TS_CUNITS units;
+    TS_PFSLOT slot[2];
+    TS_GOAL goal = q->goal;
+    TS_PFWORLD W;
+    memset(r, 0, sizeof *r);
+    r->used = -1;
+    if (!q->map || q->w != pf->w || q->h != pf->h || goal.kind == TS_GOAL_NONE || q->fx < 0 || q->fz < 0) {
+        r->kind = TS_PF_REFUSED;
+        return r->kind;
+    }
+    memset(&m, 0, sizeof m);
+    m.w = q->w;
+    m.h = q->h;
+    m.cells = q->w * q->h;
+    memset(&cm, 0, sizeof cm);
+    memset(cu, 0, sizeof cu);
+    memset(slot, 0, sizeof slot);
+    cu[1].cx = q->sx;
+    cu[1].cz = q->sz;
+    cu[1].mover = 1;
+    cu[1].alive = 1;
+    units.u = cu;
+    units.n = 2;
+    cm.map = &m;
+    cm.units = &units;
+    cm.w = q->w;
+    cm.h = q->h;
+    cm.rows16 = (q->h + 15) >> 4;
+    cm.c[0].present = 1;
+    cm.c[0].fx = q->fx;
+    cm.c[0].fz = q->fz;
+    cm.c[0].map = (uint32_t*)(uintptr_t)q->map;    /* read only: the world is frozen */
+    slot[1].type = 1;
+    slot[1].cls = 0;
+    slot[1].heading = q->heading;
+    slot[1].path.goal = 0;
+    slot[1].path.pflags = 2;
+    goal.flags = 0;
+    memset(&W, 0, sizeof W);
+    W.cm = &cm;
+    W.slot = slot;
+    W.goal = &goal;
+    W.ngoal = 1;
+    W.mapped = q->mapped;
+    W.patch = q->patch;
+    W.frozen = 1;
+    pf->rr = q->seat;
+    pf->wgt = q->wgt;
+    pf->searching = 1;
+    pf->cls_obj = 1;
+    pf->used = -1;
+    pf->relax = 0;
+    pf->overflow = 0;
+    search_start(pf, &W, 0);
+    while (pf->searching && !pf->overflow) {
+        pf->cost = 0;
+        astar(pf, &W);
+        r->pops = ADD(r->pops, pf->cost);
+    }
+    pf->cost = 0;
+    r->used = pf->used;
+    r->relax = pf->relax;
+    r->goalflags = goal.flags;
+    if (pf->overflow) {
+        pf->searching = 0;
+        pf->cls = TS_PF_NOCLASS;
+        pf->used = 0;
+        r->kind = TS_PF_OVERFLOW;
+    } else if (slot[1].path.pflags & 1) {
+        r->kind = TS_PF_FOUND;
+        r->n = slot[1].path.count;
+        memcpy(r->pts, slot[1].path.wp, sizeof r->pts);
+        r->found_x = pf->found_x;
+        r->found_z = pf->found_z;
+    } else if (r->used >= 0)
+        r->kind = TS_PF_NOPATH;
+    else
+        r->kind = !ts_goal_in(&goal, q->sx, q->sz) && !inside(pf, q->sx, q->sz) ? TS_PF_OFFGRID : TS_PF_NOSEARCH;
+    pf->cls_obj = 0;
+    pf->goal = TS_PF_NOGOAL;
+    return r->kind;
 }
 
 /* ---- the scheduler ----------------------------------------------------------------------------------------------- */
