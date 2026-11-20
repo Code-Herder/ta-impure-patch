@@ -80,6 +80,7 @@
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
 #include "tagpu_guard.h"
+#include "tagpu_pathfind.h"
 #include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
@@ -1221,6 +1222,7 @@ static void __cdecl tagpu_replay_level_players(void)
     tagpu_impai_level_init();
     tagpu_income_level_init();
     tagpu_guard_level_init();
+    tagpu_pathfind_level_init();
     if (!tagpu_puppet_on() ||
         InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
     ta = ta_main();

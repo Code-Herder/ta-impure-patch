@@ -40,6 +40,7 @@ enum {
     TAGPU_PG_PROJ,        /* projectiles                                                        */
     TAGPU_PG_EXPL,        /* explosions and flying pieces                                       */
     TAGPU_PG_PLAYERS,     /* the players phase: sight, the AIs, radar, the minimap, the economy */
+    TAGPU_PG_PATHFIND,    /* our pathfinder inside the players phase: the walk, the searches   */
     TAGPU_PG_FEATURES,    /* features, and the small steppers after them: wind, meteors, camera */
     TAGPU_PG_PARTICLES,
     TAGPU_PG_TICK_TAIL,   /* what ends an iteration and the step                                */

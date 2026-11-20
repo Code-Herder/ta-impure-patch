@@ -6,7 +6,7 @@
 #include "tagpu_prof.h"
 #include "tagpu_log.h"
 
-#define MAXSPAN    24
+#define MAXSPAN    25
 #define MAXDEPTH   8
 #define POLL_MS    500u
 #define SUMMARY_MS 5000u
@@ -21,7 +21,7 @@ typedef char a_row_fits_the_buffer[(ROW_MAX * 4u <= BUF_BYTES) ? 1 : -1];
 
 static const char* const GAME_NAMES[TAGPU_PG_N] = {
     "outside", "frame", "net", "tick_ours", "units", "projectiles", "explosions", "players",
-    "features", "particles", "tick_tail", "before_draw", "terrain", "bars", "sort", "sweep",
+    "pathfind", "features", "particles", "tick_tail", "before_draw", "terrain", "bars", "sort", "sweep",
     "markers", "fog", "hud", "ui_capture", "flip", "publish_world", "publish", "prof"
 };
 static const char* const RENDER_NAMES[TAGPU_PR_N] = {
