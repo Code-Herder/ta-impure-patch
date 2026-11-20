@@ -211,10 +211,14 @@ the tree that takes the place, each with how it was decided. Its properties:
     runs engine regressions has merged this.
   * THE RESIDUAL. The idle class decides which thread a CPU runs, not what the other hardware
     thread of the same core does. A sim process on the sibling thread of a core an engine game runs
-    on shares that core's execution units and caches and slows the game, by an estimated 10-30 %
-    [INFERRED, not measured]; the checks bounded in wall-clock time are the ones exposed. So the
-    pool lowers the odds that a batch slows an engine run and is not an invariant. The measurement
-    of a replay run beside a full pool is owed.
+    on shares that core's execution units and caches and slows the game. MEASURED 2026-11-20 on the
+    reference setup, one run each: `tareplay.py run` of resource-locked, resource-plain,
+    resource-refusals, stock-sweep-basic, battle and stock-limits, 28 slots, played 442 s alone,
+    507 s beside a batch of the floor's 8 places (15 % longer) and about 677 s beside a batch of the
+    cap's 24 admitted before it (53 % longer); all 494 checks passed in each. The batch slowed too:
+    1.1 games a second on 24 places against 2.2 alone. A batch keeps the places of its admission
+    to its end, so an engine run that arrives after a full batch plays beside all of it. The pool
+    lowers what a batch costs an engine run and is not an invariant.
 
 THE SLOTS are flock(2) files, runslots/slot-00 .. slot-27, beside `tareplay.lock` in the
 repository's common git directory, the one every worktree and every scratch worktree shares. A run
