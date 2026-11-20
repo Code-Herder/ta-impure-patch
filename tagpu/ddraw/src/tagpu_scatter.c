@@ -34,15 +34,22 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    type's own default order (the byte def+0x230 the controller makes the node from when the list empties,
    0x43B9CA..0x43BA0D) -- not merely 0x4000, which every put-first copies onto the new head (0x43ACF2..0x43ACFF),
    so an idle unit's reaction attack and a Paralyze carry it too; or a Park that is the list's only node, which
-   never ends (engine/orders.md, *Park*). And only a finished ground mover that nothing carries, of the
+   never ends (engine/orders.md, *What an idle unit does*); or A MOVE THE ENGINE HAS FAILED: a MOVE_GROUND that
+   is the list's only node, carries 0x800000 -- the order run's mark on a lone node whose handler answered 9,
+   which Move_Ground does when its goal ends without arriving (0x403209, 0x43B8E5..0x43B8EE) -- on a unit that
+   has not changed cell for STILL_TICKS. The run starts such a node over every 30 to 59 steps for ever
+   (0x43B94B..0x43B970), so the units of a group sent to one point that the first arrivals stand on keep it for
+   good; a unit under way changes cell within STILL_TICKS. And only a finished ground mover that nothing carries, of the
    builder's owner: a structure, an aircraft, a frame, a passenger and every other player's unit stay, and the
    builder waits and gives up on them as stock. The owner is a seat a local human controls
    (view_open); an AI's builders and units are left to stock.
 
-   THE HOLD. While a unit this file moved is still on the site and has changed cell within STUCK_TICKS, or
+   THE HOLD. While a unit this file moved stands on the site and has changed cell within STUCK_TICKS, or
    another of the owner's units is crossing it under a move, the builder's refusal does not count: the stub takes
    one off the counter before stock adds one, never below 1, so the first refusal's reply is said once. A site
-   with nothing moving on it counts as stock and is abandoned as stock.
+   with nothing moving on it counts as stock and is abandoned as stock. THE BOUND: a site's row counts the
+   refusals it has held and holds no more than HOLD_MAX of them, whatever keeps moving on the site, so a builder
+   gives up within HOLD_MAX + 11 refusals of one site.
 
    THE CURSOR'S SITE. The build cursor's test (0x47D2E0 from 0x4198C6, through tagpu_patches.c's
    build_site_test) refuses a cell the structure stamps when its unit word names a unit other than the ignore
@@ -52,7 +59,11 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    apply), and every other test of the site is stock's. The flag and the placing seat ride in the call's own
    argument, bits 16 and 17..20, so nothing is kept between calls and a nested call cannot see another's: the
    compare reads the argument's low word, the test's tail its low byte (0x47D7F2..0x47D7F6), every stock caller
-   passes a literal 0 or a unit number, and only tagpu_scatter_site_test sets the bits. The seat cannot be read
+   passes a literal 0 or a unit number, and only tagpu_scatter_site_test sets the bits (build_site_test calls it
+   for the cursor's call 0x4198C6 and for every caller of that call's decoded target: tagpu_place.c's gestures,
+   the WORLDQ cursor-site view). When the second question is refused too, the test's scratch 0x51E684 and
+   0x51E688, which the stock AI's site search reads as the last test left them, is put back as stock's one call
+   left it. The seat cannot be read
    from the test's player argument at the compare: the test has reused that slot by then. A site so accepted is
    ordered as any other, and the builder's own test, which ignores nobody, refuses it on arrival: that refusal
    is what moves the units.
@@ -76,6 +87,7 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #include <stdint.h>
 #include <string.h>
 
+#include "tagpu_allysight.h"
 #include "tagpu_detour.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
@@ -120,6 +132,12 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #define SITE_TTL         61            /* steps a site outlives its last refusal: two of the 30-step waits      */
 #define STUCK_TICKS      180           /* steps with no change of cell before a moved unit stops holding the
                                           builder: six of its 30-step waits                                    */
+#define STILL_TICKS      60            /* steps on one cell that make a failed move's unit idle: past the order
+                                          run's longest wait before it starts the node over, 59                */
+#define HOLD_MAX         20            /* refusals of one site that do not count: THE HOLD's bound             */
+#define OF_FAILED        0x800000u     /* a node's +0x42: the order run started it over after a result 9       */
+#define VA_SCRATCH_ALT   0x0051E684u   /* the site test's two scratch dwords (engine/recorder.md)              */
+#define VA_SCRATCH_SUM   0x0051E688u
 
 /* ---- the rows (SIM_STATE) ---- */
 
@@ -128,7 +146,8 @@ typedef struct ScSite {
     uint32_t birth;
     uint8_t  used, owner, fx, fz;
     int16_t  x0, z0;                  /* the site's first cell                                                 */
-    uint8_t  hold, told, pad[2];      /* hold: the next refusal does not count; told: its outcome is logged    */
+    uint8_t  hold, told, held, pad;   /* hold: the next refusal does not count; told: its outcome is logged;
+                                         held: the refusals not counted so far, at most HOLD_MAX               */
     int32_t  seen;                    /* GameTime of its last refusal                                          */
 } ScSite;
 /* the cells and the step are numbers whose dwords can take any value, an address's included, so the address scan
@@ -146,7 +165,8 @@ typedef struct ScRow {
     uint16_t unit;                    /* the moved unit's slot                                                 */
     uint8_t  used, owner;
     uint32_t birth;
-    uint8_t  action, on, stuck, pad;  /* the move's action byte; on: it still stands on the site               */
+    uint8_t  action, on, stuck, pad;  /* the move's action byte; on: it stands on its site; stuck: it has not
+                                         changed cell for STUCK_TICKS                                          */
     uint8_t  fx, fz, sfx, sfz;        /* its footprint; the site's                                             */
     int16_t  sx0, sz0;                /* the site's first cell                                                 */
     int16_t  dx, dz;                  /* the place it was sent to                                              */
@@ -248,21 +268,26 @@ static unsigned char move_action(void)
     return a;
 }
 
-/* IDLE (the header): the list empty, its head the type's default order as the controller made it, or a lone
-   Park */
+/* IDLE (the header): the list empty, its head the type's default order as the controller made it, a lone Park,
+   or a lone move the engine has failed on a unit that stands still. `u` has a mover (movable). */
 static int idle(const View* v, unsigned slot, const char* u)
 {
     WQ_ORDER o[2];
     const int n = v->q.ops->orders(&v->q, (int)slot, o, 2);
     const unsigned type = type_of(v, *(const char* const*)(u + U_TYPE));
     unsigned dflt;
+    uint32_t stamp;
     int park;
     if (n < 0 || !type) return 0;
     if (n == 0) return 1;
     dflt = (unsigned char)v->wc.defs[(size_t)type * UDEF_STRIDE + UD_DEFAULT];
     if ((o[0].flags & WQ_OF_DROP) && dflt && o[0].action == dflt) return 1;
+    if (n != 1) return 0;
     park = v->q.ops->action(&v->q, WQ_ACT_PARK);
-    return n == 1 && park > 0 && o[0].action == park;
+    if (park > 0 && o[0].action == park) return 1;
+    if (!(o[0].flags & OF_FAILED) || o[0].action != move_action()) return 0;
+    memcpy(&stamp, *(const char* const*)(u + U_MOVER) + MV_STAMP, 4);
+    return v->now - (int32_t)stamp >= STILL_TICKS;
 }
 
 /* WHO IS MOVED, the one rule the tick and the cursor apply: the view's seat's own live unit at slot `n` that is a
@@ -321,7 +346,7 @@ static void row_check(const View* v, ScRow* r)
     memcpy(&stamp, *(const char* const*)(u + U_MOVER) + MV_STAMP, 4);
     last = (int32_t)stamp > r->issued ? (int32_t)stamp : r->issued;
     r->on = (uint8_t)sg_overlap(x, z, fx, fz, r->sx0, r->sz0, r->sfx, r->sfz);
-    r->stuck = (uint8_t)(r->on && v->now - last > STUCK_TICKS);
+    r->stuck = (uint8_t)(v->now - last > STUCK_TICKS);      /* on whichever site it stands: progress asks */
 }
 
 /* the builder's site row: its own when the slot holds that incarnation still, else a free one or one whose last
@@ -377,25 +402,26 @@ static void blocked(char* node, char* b, const char* def, uint32_t cell)
     if (d.fx < 1 || d.fz < 1 || d.fx > WQ_FOOT_MAX || d.fz > WQ_FOOT_MAX || x0 < 0 || z0 < 0 ||
         x0 + d.fx > v.wc.w || z0 + d.fz > v.wc.h) return;
     if (!(s = site_get(bslot, birth, v.now))) return;
-    if (s->type != type || s->x0 != x0 || s->z0 != z0) { s->hold = 0; s->told = 0; }
+    if (s->type != type || s->x0 != x0 || s->z0 != z0) { s->hold = 0; s->told = 0; s->held = 0; }
     s->owner = (uint8_t)owner;
     s->type = (uint16_t)type;
     s->x0 = (int16_t)x0; s->z0 = (int16_t)z0;
     s->fx = (uint8_t)d.fx; s->fz = (uint8_t)d.fz;
     s->seen = v.now;
     s_diag.refusals++;
-    if (!s->hold) return;
+    if (!s->hold || s->held >= HOLD_MAX) return;
     memcpy(&n, node + N_RETRY, 4);
     if (n > 1) {
         n--;
         memcpy(node + N_RETRY, &n, 4);
+        s->held++;
         s_diag.held++;
     }
 }
 
 /* regs: the pushad frame, [0] edi [1] esi [2] ebp [3] the esp the branch has [4] ebx. At 0x403CD0 esi is the
-   node, edi the builder, ebp the product's def and [esp+0x40] the packed cell (the events slot, overwritten at
-   0x403CBF); at 0x41400D esi is the node, ebx the def, [esp+0x38] the builder and [esp+0x40] the packed cell. */
+   node, edi the builder, ebp the product's def and [esp+0x40] the packed cell (the events slot, its two words
+   stored at 0x403CA2 and 0x403CBA); at 0x41400D esi is the node, ebx the def, [esp+0x38] the builder and [esp+0x40] the packed cell. */
 static void __cdecl blocked_ground(unsigned* regs)
 {
     blocked((char*)(uintptr_t)regs[1], (char*)(uintptr_t)regs[0], (const char*)(uintptr_t)regs[2],
@@ -539,7 +565,11 @@ static void plan(const View* v, ScSite* s)
         ScRow* r;
         int fx, fz, dx, dz;
         if (!u || *(const uint8_t*)(u + U_OWNER) != s->owner) { foreign++; continue; }
-        if (row_of(n)) continue;                      /* on its way: its row holds the move still */
+        if ((r = row_of(n))) {
+            if (!r->stuck) continue;                  /* on its way: its row holds the move still */
+            memset(r, 0, sizeof *r);                  /* it did not get there: judged again, and the place it
+                                                         was sent to stays marked for this plan              */
+        }
         if (!movable(v, n, &m)) { busy++; continue; }
         fx = m.fx; fz = m.fz;
         if (!(pass = class_map(v, &sc, &box, m.mclass)) ||
@@ -670,13 +700,16 @@ unsigned tagpu_scatter_site_test(const void* def, unsigned cell, unsigned ignore
     const char* ta = *(char* const*)TA_MAIN_PP;
     const char* rec = (const char*)player;
     uintptr_t off;
+    uint32_t alt, sum;
     *moves = 0;
     if ((ok & 1) || !s_install.site || !ta || !rec || rec < ta + OFF_PLAYERS || (ignore & ~0xFFFFu)) return ok;
     off = (uintptr_t)(rec - (ta + OFF_PLAYERS));
     if (off % PLAYER_STRIDE || off / PLAYER_STRIDE >= PLAYER_COUNT) return ok;
+    alt = *(const uint32_t*)VA_SCRATCH_ALT; sum = *(const uint32_t*)VA_SCRATCH_SUM;
     ok = ((SiteTest)VA_SITE_TEST)(def, cell, ignore | SITE_MOVES | (unsigned)(off / PLAYER_STRIDE) << SITE_SEAT_SHIFT,
                                   player);
     *moves = (ok & 1) != 0;
+    if (!*moves) { *(uint32_t*)VA_SCRATCH_ALT = alt; *(uint32_t*)VA_SCRATCH_SUM = sum; }
     return ok;
 }
 
@@ -747,36 +780,37 @@ static void site_install(void)
 
 void tagpu_scatter_init(void)
 {
-    if (!tagpu_detour_bytes_ok(VA_BLOCKED, STOLEN, (int)sizeof STOLEN) ||
-        !tagpu_detour_bytes_ok(VA_VBLOCKED, VSTOLEN, (int)sizeof VSTOLEN)) {
-        tagpu_log("scatter: NOT installed: 0x403CD0 or 0x41400D does not hold the retail blocked-site branch");
+    const int vtol = tagpu_detour_bytes_ok(VA_VBLOCKED, VSTOLEN, (int)sizeof VSTOLEN);
+    /* the tick is called from allied sight's players phase alone: without it a recorded site would never be
+       planned, and a site the cursor accepted would be abandoned */
+    if (!tagpu_allysight_steps()) {
+        tagpu_log("scatter: NOT installed: the players phase 0x49555F is not redirected, so nothing would call "
+                  "the tick");
         return;
     }
-    s_stub = stub_make(blocked_ground, VA_BLOCKED_JNE, VA_BLOCKED_NEXT);
-    s_vstub = stub_make(blocked_vtol, VA_VBLOCKED_JNE, VA_VBLOCKED_NEXT);
-    if (!s_stub || !s_vstub) {
-        if (s_stub) tagpu_detour_stub_free(s_stub);
-        if (s_vstub) tagpu_detour_stub_free(s_vstub);
-        s_stub = s_vstub = NULL;
+    if (!tagpu_detour_bytes_ok(VA_BLOCKED, STOLEN, (int)sizeof STOLEN)) {
+        tagpu_log("scatter: NOT installed: 0x403CD0 does not hold the retail blocked-site branch");
+        return;
+    }
+    if (!(s_stub = stub_make(blocked_ground, VA_BLOCKED_JNE, VA_BLOCKED_NEXT))) {
         tagpu_log("scatter: NOT installed: no stub memory");
         return;
     }
     if (!tagpu_detour_land(VA_BLOCKED, s_stub, (int)sizeof STOLEN)) {
-        tagpu_detour_stub_free(s_stub); tagpu_detour_stub_free(s_vstub);
-        s_stub = s_vstub = NULL;
+        tagpu_detour_stub_free(s_stub);
+        s_stub = NULL;
         tagpu_log("scatter: NOT installed: 0x403CD0 could not be written");
         return;
     }
     s_install.installed = 1;
-    if (!tagpu_detour_land(VA_VBLOCKED, s_vstub, (int)sizeof VSTOLEN)) {
+    if (vtol && (s_vstub = stub_make(blocked_vtol, VA_VBLOCKED_JNE, VA_VBLOCKED_NEXT)) &&
+        !tagpu_detour_land(VA_VBLOCKED, s_vstub, (int)sizeof VSTOLEN)) {
         tagpu_detour_stub_free(s_vstub);
         s_vstub = NULL;
-        tagpu_log("scatter: installed: the blocked site 0x403CD0 (0x41400D could not be written: an air builder's "
-                  "site is cleared as stock)");
-        site_install();
-        return;
     }
-    tagpu_log("scatter: installed: the blocked site 0x403CD0 0x41400D");
+    if (s_vstub) tagpu_log("scatter: installed: the blocked site 0x403CD0 0x41400D");
+    else tagpu_log("scatter: installed: the blocked site 0x403CD0 (0x41400D is not the retail branch or could not "
+                   "be written: an air builder's site is stock's)");
     site_install();
 }
 

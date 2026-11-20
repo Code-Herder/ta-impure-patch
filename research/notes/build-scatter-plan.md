@@ -32,6 +32,9 @@ rewriting a code byte of the draw (`0x469E7F`) from inside the test.
 1. **The first landing moves idle units only**: a unit whose order list is empty or holds the
    engine's own stand-by. There the move is exactly a player's click on an idle unit. A unit passing
    over the site leaves by itself; a unit standing on it under an order is a later landing.
+   *Widened 2026-11-20 after the owner's first game* (a bunch of Jeffys read red): a unit standing
+   still under a lone move the engine has failed counts as idle too. Stated to the owner as a
+   widening of this decision when it was made.
 2. **Placing under your own units is in**, with the **yellow square** for a site that will be cleared.
 3. **Builders seated by the factory guard on a queued site are re-seated by the guard**: the scatter
    manager marks its site as taken ground for the guard's planner, so one manager orders a unit,
@@ -81,6 +84,10 @@ The mechanism is the module note's. What was decided while building it:
 - **The builder walks off its own site.** The cursor accepts a site under the selected idle
   builder; MobileBuild's approach moves it off before the test and no refusal is seen (MEASURED,
   below).
+- **The hold has a bound**, 20 held refusals a site, so that no traffic across a site can keep a
+  builder waiting for ever (the landing review's finding: the first cut rested on units stopping).
+- **Nothing installs without its tick.** The tick's one caller is allied sight's players phase; the
+  module asks for it first, so the cursor never accepts a site nothing would clear (the review's).
 - **The stock-limits build runs the feature too** (unit births are known there), so the twin test
   group plays the same steps and the same assertions.
 
@@ -107,6 +114,11 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
   stock.
 - **The builder's own site.** A solar placed on the selected ARMCK (`main+0x2CC6` `0x46`): the
   builder walks 50 px off, the solar is built, no `scatter:` line.
+- **The bunch** (the owner's game, 2026-11-20, GameTime 21 093 to 23 983). Ten ARMFAV sent together
+  to one point: eight on Standby, two still holding the lone move with `0x800000`, unmoved for
+  12 000 ticks; the square over them was red with the first build, since those two were busy by the
+  first rule. In the test group site B's four ARMPW are sent to its centre at GameTime 121 to 124
+  and the cursor is asked at 420.
 - **A unit that cannot leave.** In a hand run the wreck was dropped over one of the units: that unit
   stayed, its row stopped holding the builder after 180 ticks, and the builder gave up. No fault.
 - **Replay.** Both test groups pass: the record, the puppets, three round trips and the seek each,
@@ -116,6 +128,5 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
 ### Not closed by landing 1
 
 The module note's *Gaps*, and: no run in a network game (the orders are local and no order crosses
-the wire, as for a click, but no two-player game was played); no run with an AI seat's builder,
-which the module serves like a player's; an air builder's twin branch `0x41400D` is installed and
-byte-matched but no game exercised it.
+the wire, as for a click, but no two-player game was played); an air builder's twin branch
+`0x41400D` is installed and byte-matched but no game exercised it.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """scatter_check.py -- the build-scatter test groups' assertions (tools/replay/fixtures.json).
 
-    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 804
-    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1600
+    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 1300
+    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 2112
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and
@@ -15,7 +15,8 @@ each, four idle ARMPW on each.
     site A's first line moved all four          the cursor accepted the site under them, and the refusal moved them
     a later line of site A moved exactly one    the unit ordered back onto the site by hand at the step after the
                                                 refusal stood idle on it at a later refusal and was moved again
-    site B's line moved all four
+    site B's line moved all four                the four were sent together to the site's centre at the start, so
+                                                some stand under a move the engine has failed: idle by that rule
     an ARMPW stands within NEAR of AWAY         the unit ordered away by hand went where the player sent it
     an ARMSOLAR stands on site A                the site cleared and the build started
 
@@ -23,7 +24,7 @@ GAVEUP (build-scatter-clear.json, then build-scatter-wreck.json). Every unit was
 walked and their builder waited; the third site is where site A stood, its four ARMPW on its corners and a wreck
 on its middle.
 
-    a third line of cell 57,470 moved all four, after WALKED's lines
+    a line of cell 57,470 after the clear's GameTime moved all four
     no ARMSOLAR stands anywhere                 the wreck kept the site refused
     the seat's ARMCK and its four ARMPW live, none of the four on the site
     the ARMCK's order list is empty or headed by its type's default order (the order controller's own, the
@@ -48,6 +49,7 @@ import talog  # noqa: E402
 SITE_A, SITE_B = (57, 470), (72, 468)       # first cells; a solar collector is 5 x 5
 SITE_CELLS = 5
 AWAY = (1000, 7300)                         # where the fixture's `order` step sends the first ARMPW
+CLEAR_AT = 1302                             # the GameTime of the fixture's build-scatter-clear.json step
 NEAR = 24                                   # px: a unit stops within a cell or so of its move's point
 ROSTER_S = 60                               # a dump comes every 5 s of wall time, held or not
 ACK_S = 60
@@ -194,9 +196,7 @@ def judge_walked(sites: list, units: list) -> list:
 def judge_gaveup(sites: list, units: list, head=None, dflt=None) -> list:
     """`head` and `dflt`: head_and_default of the seat's ARMCK."""
     fails = []
-    a = [s for s in sites if s["cell"] == SITE_A]
-    first = a[0]["builder"] if a else None
-    third = [s for s in a if s["builder"] != first]
+    third = [s for s in sites if s["cell"] == SITE_A and s["tick"] > CLEAR_AT]
     if not third or (third[0]["on"], third[0]["moved"]) != (4, 4):
         fails.append(f"the third site's plan is {third[0] if third else None}, not four units on it and four moved")
     if mine(units, "ARMSOLAR"):

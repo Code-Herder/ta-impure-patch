@@ -22,7 +22,11 @@ puppet.
 **Who is moved.** A unit standing on the refused site that is the builder's owner's, a finished
 ground mover that nothing carries, and **idle**: its order list is empty, or headed by the node the
 order controller makes from its type's default order (the head carries `0x4000` and its action is the
-def's byte `+0x230`), or holds a lone Park. Everything else stays where it is and the builder waits
+def's byte `+0x230`), or holds a lone Park, or holds **a lone move the engine has failed** while the
+unit has stood on one cell for 60 ticks. That last one is the bunch: units sent together to one point
+that the first arrivals stand on keep their move for good, the engine starting it over every 30 to
+59 ticks and marking the node `0x800000` ([orders](../engine/orders.html), the Move_Ground row). A
+unit under way changes cell within the 60 ticks and is not touched. Everything else stays where it is and the builder waits
 and gives up on it as stock: a unit doing anything a player or the engine ordered, a structure, an
 aircraft, a frame being built, a passenger, another player's unit (an ally's included), a wreck or
 any other feature. The one rule is `movable`, which the tick and the cursor both apply.
@@ -60,14 +64,19 @@ still that move by value. Anything else frees the row and nothing is done to the
   way; no address is kept, so there is nothing to dangle;
 - a unit ordered back onto the site by hand is left alone while that order runs; when it has ended
   and the unit stands idle on a site the builder is still refused on, it is moved again;
-- the row of a unit that has arrived goes when the engine frees the finished move.
+- the row of a unit that has arrived goes when the engine frees the finished move;
+- a moved unit that has not changed cell for 180 ticks is *stuck*: at the next refusal of a site it
+  stands on its row is dropped and it is judged again, and planned for another place when the engine
+  has failed its move (the place it did not reach stays marked for that plan).
 
 **The hold.** The stock abandon counts refusals, not time, so units still walking off would use the
 builder's patience up. While a unit the module moved is on the site and has changed cell within 180
 ticks, or another of the owner's units is crossing the site under a move and has changed cell
 within 180 ticks, the stub takes one off the counter before stock adds one: the refusal does not
 count. The counter never goes below 1, so the first refusal's reply is said once. A site with
-nothing moving on it counts as stock and is abandoned as stock.
+nothing moving on it counts as stock and is abandoned as stock. **The hold is bounded**: a site's
+row counts the refusals it has held and holds at most 20, whatever keeps moving on the site -- a
+rally route across it, a unit shuttling -- so a builder gives up within 31 refusals of one site.
 
 **A site's row** is kept per builder (slot and birth): the product, the first cell, the step of the
 last refusal and whether the next one is held. It is dropped 61 steps after the last refusal, or when
@@ -82,7 +91,9 @@ seat in bits 17 to 20; a stub on the test's occupant compare `0x47D554` then pas
 ground, structures, features, slope, water -- is stock's, in the same call. The queued-site rule
 (*a queued site is taken ground*, [engine patches](engine-patches.html)) is applied to the answer
 either way. The bits ride in the call's own argument, which the test reads as a word at the compare
-and nowhere else before its tail overwrites the low byte, so nothing is kept between calls.
+and nowhere else before its tail overwrites the low byte, so nothing is kept between calls. When the
+second question is refused too, the test's two scratch words are put back as the first call left
+them: the stock AI's site search reads them as the last test anywhere left them.
 
 A site accepted this way is ordered as any other. The builder's own test ignores nobody, so it
 refuses the site on arrival, and that refusal is what moves the units: the cursor promises only what
@@ -117,7 +128,9 @@ waits (`build-scatter-clear.json`); and on a third site a wreck is dropped after
 it (`build-scatter-wreck.json`). `tools/replay/scatter_check.py` asserts on the live game, at two
 held GameTimes, that all four were moved off each site, that the unit ordered back in was moved
 again, that the unit ordered away went where the player sent it, that the first solar stands, and
-that the wreck's site was abandoned with its four units off it.
+that the wreck's site was abandoned with its four units off it. Site B's four are a bunch: sent
+together to its centre at the start, so that the cursor's yes and the plan's four moves there rest on
+the failed-move rule.
 
 The geometry is engine-free (`tagpu_scattergeo.c`, listed `engine-free sim`) and has a native
 self-test under ASan and UBSan: `python3 tagpu/ddraw/tests/scattertest.py`.
@@ -128,9 +141,14 @@ of the def array and a structure; the cell must hold the footprint on the map; e
 a map cell is bounded by the slot count. **Threads.** The tables are cleared and the yard read on the
 loader thread at the level's PLAYERS call; the stubs, the tick and the cursor run on the game thread.
 
+**Install.** At attach, and only when allied sight has redirected the players phase that calls the
+tick (`tagpu_allysight_steps`): without a tick the cursor would accept sites nothing clears. Then
+`0x403CD0`, without which nothing is installed; `0x41400D` and the cursor's `0x47D554` each on their
+own bytes.
+
 **Log.** `scatter: installed: the blocked site 0x403CD0 0x41400D` and `scatter: installed: the
-cursor's site 0x47D554` at attach (the second address of the first line and the whole second line
-are absent when those bytes do not match). One line a plan that moved something, and one for a
+cursor's site 0x47D554` at attach; a site that is not the retail bytes is named in its line, and
+`scatter: NOT installed: …` says why nothing is. One line a plan that moved something, and one for a
 site's first plan whatever it did: `scatter: GameTime N: site builder=<slot> type=<def>
 cell=<x>,<z> <w>x<h> on=<units on it> moved= noway= busy= other= full=`.
 
@@ -150,10 +168,10 @@ There is no setting: the module is installed in every game.
   builder arrives.
 - **A unit boxed in** -- no free place within 12 cells of the site that it can reach -- stays, and
   the builder gives up as stock.
-- **A moved unit that cannot get to its place keeps the move**, as after a click on a place it
-  cannot reach; it stops holding the builder after 180 ticks on one cell. The search knows the
-  movement class's map and the units in the box, not a wreck or a tree that appeared since the
-  level's load.
+- **The search knows the movement class's map and the units in the box**, not a wreck or a tree
+  that appeared since the level's load: a unit sent past one stops, is planned once more for
+  another place after 180 ticks, and keeps its last move when that fails too, as after a click on a
+  place it cannot reach.
 - **AI seats are not served.**
 - **The several-buildings previews show such a site green**, not yellow.
 - **The GDI renderer draws the engine's own square**, green.
