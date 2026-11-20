@@ -130,8 +130,8 @@ the scratch and the result and nothing else; a search leaves nothing in the scra
   A searcher that is no obstacle has no patch and reads the map as it stands, as the engine does.
 
 **What a search costs** [MEASURED 2026-11-20, the 3152 searches captured from the battle below,
-built natively, the best of three runs]: 53 µs a search at 3 times the base weight and 44 at 6
-times, against 64 and 53 before the heap's copy and the reader's view; about 12 µs of a search does
+built natively, the best of three runs]: 53 µs a search at 3 times the base weight, 44 at 6
+times and 243 at the base; about 12 µs of a search does
 not depend on its pops (the reset, the goal's cells, the straight walk) and a pop is 80 ns. A
 sampling profile of the rest: the expansion 29 %, the heap 24 %, the cells' reads 12 %, the reset
 and the straight walk 13 %: the loads of the map's and the grid's cells that are not in cache.
@@ -152,7 +152,7 @@ which about 6000 units are given a goal within a few ticks of one another.
 | waited 30 ticks or more | 40 % | 24 to 26 % |
 | the longest wait | 479 ticks | 393 to 423 |
 | the pathfinder's time a tick, one thread | about 4.5 ms | 3.9 ms |
-| on four threads | | 2.4 ms; 2.4 with the cheaper search, in a run of a fifth more pops |
+| on four threads | | 2.4 ms |
 
 The time is the frame profiler's: ours the span `pathfind`; the engine's the players phase of a
 run on its scheduler, 7.4 ms a tick, less the 2.9 to 3.0 ms that phase takes beside ours. The
@@ -196,8 +196,8 @@ observers, byte-matched and all or none, on the game thread inside the players p
 
 MEASURED 2026-11-20, the same battle: of 77 133 searches in one game, the 75 249 that ended in the
 tick they began all gave the engine's result, field for field; 33 540 of them read a patch, whose
-1 543 197 entries all equalled what the engine had just recomputed. Again with the heap's copy and
-the reader's view: 74 304 of 74 304, and 1 460 524 patch entries. Offline, the same search
+1 543 197 entries all equalled what the engine had just recomputed; in a second game 74 304 of
+74 304, and 1 460 524 patch entries. Offline, the same search
 equalled the engine's on 3152 searches captured with their maps, built natively, under the
 sanitizers and with the DLL's compiler. A search of the engine's that spanned ticks (2 to 3 % of
 them) is counted apart: the map changes under it, and about one in seven differed.
@@ -221,9 +221,9 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 ## Gaps
 
 - **A batch waits for its longest search**, and the searches are uneven (above), so three of the
-  four threads idle through most of a long one. The batch's size is what changes that, and it is a
-  rule of the simulation: the battle at batches of 8, 16 and 32 took 2.39, 1.95 and 1.65 ms a tick
-  ([the plan](../pathfinder-parallel.md), *Open*).
+  four threads idle through most of a long one. A larger batch packs more searches around it; the
+  batch's size is a rule of the simulation and the owner's to set
+  ([the plan](../pathfinder-parallel.md), *Open*, has what 16 and 32 measured).
 - **Nothing may unwind past a batch**: the batch in hand names the game thread's frame, so a fault
   there that a handler caught and survived would leave the helpers reading it. No such handler is
   known above the players phase in play; the loader's, the one known, runs no helper.
@@ -232,8 +232,8 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 - **Cores against hardware threads was not measured**: the display's start gives the process every
   processor (`dd.c`), so a run pinned to four cores is not confined to them. The rule counts cores.
 - **A batch can pass the pops cap** by its own searches: the cap is tested between batches, and a
-  search that finds no way pops up to the pool's 65 536. The most pops in one tick was 507 000,
-  a batch of eight such searches.
+  search that finds no way pops every cell its unit can reach. The most pops in one tick was
+  507 000.
 - **Nothing but the caps bounds one unit's searches at a path's end**: a unit whose found path ends
   short of its goal searches again when it reaches that end. A 5-tick floor between two such
   searches held no unit in 3300 ticks of the battle, and was dropped.

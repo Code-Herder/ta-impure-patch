@@ -151,7 +151,7 @@ SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-all
 
 /* THE RULES' NUMBERS. A tick begins at most PF_CAP_SEARCHES searches, and no batch once their pops have reached
    PF_CAP_POPS: the first bounds a tick that many units ask at once, the second a tick whose searches are long (one
-   that finds no way opens every cell it can reach, up to the pool's 65 536). PF_QUIET is the most units ready
+   that finds no way pops every cell it can reach). PF_QUIET is the most units ready
    in a tick that searches at the base weight (MEASURED: 2900 pops a search at the base, 510 at 3 times, 410 at 6
    times). */
 #define PF_BATCH         8

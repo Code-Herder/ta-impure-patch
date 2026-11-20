@@ -117,7 +117,8 @@ typedef struct TS_PFNODE {
 
 /* A heap entry: the node, and a copy of its f. The engine's entry is the node's pointer and every compare reads f
    through it; the copy keeps a sift inside the heap's own memory. It equals the node's f wherever a compare reads
-   it: each of the three stores of a node's f while it is in the heap stores the entry's too. */
+   it: each store of a node's f stores its entry's too -- the start node's, a pushed node's, the lazy top's when a
+   new cell overwrites it, a relaxed node's. */
 typedef struct TS_PFHEAP {
     int32_t  f;
     uint32_t n;

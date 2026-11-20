@@ -292,7 +292,8 @@ static int ctz32(uint32_t v)
 
 /* 0x40D900, DISASSEMBLED 0x40D900..0x40D9BE: b0 = 0 in all 8 cells of every touched block, and the bits cleared; b1
    and the node word keep the last search's values, dead while b0 is 0. The engine bounds the last dword's cells by
-   (dword << 8) + k < cells, which always holds there; the core bounds every cell by cells. */
+   (dword << 8) + k < cells, which always holds there; the core bounds every block by its first cell, cells being
+   a multiple of 8. */
 static void reset_grid(TS_PF* pf)
 {
     const int32_t n = touch_words(pf->cells);
@@ -793,7 +794,8 @@ static void expand(TS_PF* pf, const RD* rd, const TS_GOAL* g, const TS_PFNODE* L
         N->g = gg;
         N->straight = straight;
         hi = N->link;
-        /* the entry's copy of f: an open cell's node stands in the heap at its link */
+        /* the entry's copy of f. An open cell's node stands in the heap at its link; a cell whose 16-bit node word
+           names another node (THE ENGINE'S, KEPT, above) may not, and then no entry is this node's to store */
         if ((uint32_t)hi < (uint32_t)pf->count && pf->heap[hi].n == (uint32_t)n) pf->heap[hi].f = N->f;
         if (!pf->lazy) {
             if (hi > 0 && hi < pf->count) sift_up(pf, hi);

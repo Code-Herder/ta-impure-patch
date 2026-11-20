@@ -154,8 +154,9 @@ them, a cheaper search.
    4: threads past four end a batch no sooner.
 4. **A cheaper search** — the same pops in the same order for less: the heap's entries carry their
    node's `f`, a cell's read takes its constants from a view made once a pass, the grid's reset
-   steps over the touched blocks. **Built 2026-11-20**: 18 % less time a search on the captured
-   searches, every result the engine's (3152 of 3152 offline at the capture's weights, the same
+   steps over the touched blocks. **Built 2026-11-20**: on the captured searches 11 % less time a
+   search at the base weight, 14 % at the capture's own weights and 18 % at 3 and at 6 times (64.2 to
+   52.7 µs and 53.3 to 43.9, built natively), every result the engine's (3152 of 3152 offline at the capture's weights, the same
    results at the three weights before and after, and 74 304 of 74 304 in a game beside the
    engine's). In the battle the scheduler's time is the batches', not the searches' sum, so it
    moved little: 2.4 ms a tick in a run of a fifth more pops.
@@ -165,11 +166,15 @@ them, a cheaper search.
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
 - **The batch's size, the owner's to set.** A batch ends with its longest search, and the top 5 %
   of searches are 46 % of the pops, so a batch of 8 leaves three threads idle through each long
-  one. MEASURED 2026-11-20, the battle on four threads with the cheaper search: batches of 8,
-  16 and 32 took 2.39, 1.95 and 1.65 ms a tick (22 700, 19 000 and 18 600 pops a tick). The size is
-  a rule: a search reads the map as the writes of its own batch and the earlier ones left it, and
-  the pops cap is tested between batches, so a larger batch can pass the cap by more — at most
-  its own searches, each up to the pool's 65 536 pops.
+  one. MEASURED 2026-11-20, the battle on four threads with the cheaper search, one run each:
+  batches of 8, 16 and 32 took 2.39, 1.95 and 1.65 ms a tick, on 22 700, 19 000 and 18 600 pops a
+  tick — 105, 103 and 89 ns a pop, so the runs show a gain at 32 and none that the pops do not
+  explain at 16. At equal work, the captured searches' costs packed in capture order onto four
+  threads, 34 a tick: the searches' part falls by 17 % at 16, 27 % at 32 and 33 % at 64, which
+  of a scheduler whose walk and writes are 0.7 ms a tick is about 10, 15 and 20 %. The size is a
+  rule: a search reads the map as the writes of its own batch and the earlier ones left it, and
+  the pops cap is tested between batches, so a larger batch can pass the cap by more — its own
+  searches, each of which pops at most the cells its unit can reach.
 - **What a cheaper search cannot reach without changing a result**: a goal that cannot be reached
   opens every cell the unit can reach before it fails; knowing that before the search (the map's
   connected regions) would end it at once, and changes which path a unit that cannot arrive gets.
@@ -180,8 +185,8 @@ them, a cheaper search.
   found nothing.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
-- A batch's searches can pass the pops cap together (507 000 pops in the worst tick measured, eight
-  searches that each found no way); on the helpers a batch's time is its longest search's.
+- A batch's searches can pass the pops cap together (507 000 pops in the worst tick
+  measured); on the helpers a batch's time is its longest search's.
 - **The batch in hand is `SIM_TRANSIENT`** (`s_run`, all zero between two batches): the class the
   owner approved for the scratch, on one more variable, and the owner's decision again.
 - Cores against hardware threads for the helpers' number: not measured (the module's gaps).
