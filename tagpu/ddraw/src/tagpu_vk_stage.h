@@ -14,8 +14,8 @@
 
    THE SHAPE. Each slot keeps one TAGPU_VKSTAGE, at most TAGPU_VK_STAGE_CAP
    bytes, allocated on a frame that uploads and given back on that slot's next
-   frame with nothing to send. There are two ways through it, and which one a
-   caller takes is a question of WHEN, not of size:
+   frame with nothing to send. An image has two ways through it, and which one
+   a caller takes is a question of WHEN, not of size; a buffer has one:
 
      * IN PLAY, AN UPLOAD IS IN THE FRAME'S OWN COMMAND BUFFER OR IT IS NOT
        MADE. `tagpu_vk_stage_expand_rects` -- the tiles an atlas painted since
@@ -44,6 +44,17 @@
        refused the repack's move buffer (tagpu_vk_stage_move_ready); the
        caller then takes that repack as a whole page and logs it as a wait in
        play.
+
+     * A PASS'S NEW BUFFERS GO IN BANDS WHEN THEY PASS THE SLOT'S BUFFER
+       (`tagpu_vk_stage_bufs_begin`, `_put`, `_end`): the vertex streams of
+       the unit types a frame draws for the first time, which a full zoom-out
+       or a lane just brought up asks for by the hundred megabytes (MEASURED:
+       190 MB for 9 400 units of ten seats). Each band is as many copies as
+       the slot's buffer holds, submitted and waited on like a page's; a
+       stream longer than the buffer is cut across bands. A destination is a
+       buffer no submitted command names yet, so nothing is ordered against
+       it. This one play does reach, on such a frame, and the caller logs the
+       wait.
 
    WHAT A FRAME SAMPLES. Never a texel the device has not received. An
    in-frame copy is ordered before the frame's draws by its barriers. A banded
@@ -82,14 +93,16 @@
    slot, and only on frames that send -- the four world passes (units,
    features, effects, terrain) map at most 24 MiB at the three slots the
    swapchain gives and 64 MiB at the TAGPU_VK_SLOTS ceiling of eight, whatever
-   the atlases. A frame with nothing to send maps nothing. */
+   the atlases. A frame with nothing to send maps nothing. The unit pass's
+   vertex staging is a second one a slot, to a cap of its own
+   (tagpu_vk_unit.c VSTAGE_CAP). */
 #define TAGPU_VK_STAGE_CAP ((VkDeviceSize)2 << 20)
 
 typedef struct {
     VkBuffer       buf;
     VkDeviceMemory mem;
     unsigned char* map;
-    VkDeviceSize   cap;                    /* bytes mapped, <= TAGPU_VK_STAGE_CAP */
+    VkDeviceSize   cap;                    /* bytes mapped, <= the cap it began to */
     VkDeviceSize   used;                   /* held this frame by in-frame copies  */
 } TAGPU_VKSTAGE;
 
@@ -98,6 +111,12 @@ typedef struct {
    has a buffer to upload through, 0 when not even `floor` could be mapped. */
 int  tagpu_vk_stage_begin(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                           VkDeviceSize want, VkDeviceSize floor);
+
+/* The same with a cap of the caller's in place of TAGPU_VK_STAGE_CAP, for bytes that are not
+   an atlas's and that no allowance bounds: the unit pass's vertex streams
+   (tagpu_vk_unit.c VSTAGE_CAP, which carries the figure and what it costs in address space). */
+int  tagpu_vk_stage_begin_to(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                             VkDeviceSize want, VkDeviceSize floor, VkDeviceSize cap);
 
 /* Give the slot's buffer back. Legal where the slot is the pass's own -- the
    seam has waited on its fence -- and nowhere else. */
@@ -225,6 +244,20 @@ int  tagpu_vk_stage_copy_layer(const TAGPU_VKPASS* d, VkCommandBuffer cb,
 int  tagpu_vk_stage_copy_banded_layer(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                                       VkImage img, int layer, int had, const unsigned char* src,
                                       int pitch, int w, int h, int bpp);
+
+/* HOST BYTES INTO BUFFERS, IN BANDS, through the banded path's own command buffer and the
+   whole of the slot's buffer, so the slot must hold no in-frame copy (`used` 0). `_begin`: 1
+   when a band can be recorded, 0 when not (nothing is submitted; the caller's frame is as it
+   was). `_put`: `bytes` from `src` to offset 0 of `dst`, a buffer with TRANSFER_DST usage that
+   no command submitted so far names; it submits a band and waits whenever the buffer fills.
+   `_end`: the last band, submitted and waited on -- EVERY PUT IS ON THE DEVICE WHEN IT
+   RETURNS, AND NOT BEFORE: a caller that records which buffers hold their bytes must reach
+   `_end` on every path that keeps those buffers. `_put` and `_end` answer 1, or -1 when the
+   device failed a submit or a fence, which is the pass coming down. */
+int  tagpu_vk_stage_bufs_begin(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st);
+int  tagpu_vk_stage_bufs_put(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkBuffer dst,
+                             const void* src, VkDeviceSize bytes);
+int  tagpu_vk_stage_bufs_end(const TAGPU_VKPASS* d);
 
 /* This module's command pool and fence, with the device. Called by the seam
    after every pass's `_down`, behind its vkDeviceWaitIdle. */

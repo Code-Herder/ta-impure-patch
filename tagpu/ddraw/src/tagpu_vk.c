@@ -1102,6 +1102,63 @@ static void va_log(const char* when)
           (double)freetotal / 1048576.0, (double)largest / 1048576.0);
 }
 
+/* The address space as VirtualQuery tells it, when a pass is refused: how much is free and in
+   what pieces, how much is reserved with nothing committed in it, and the largest reserved
+   runs by where they start. A refusal with free space left is a different fault from one with
+   none, and "reserved" is where the space of a process that commits little has gone. */
+static void va_map_log(const char* when)
+{
+    enum { TOP = 6 };
+    MEMORY_BASIC_INFORMATION mbi;
+    SIZE_T addr = 0, freetotal = 0, reserved = 0, priv = 0, mapped = 0, image = 0;
+    SIZE_T fsz[TOP] = { 0 }, fat[TOP] = { 0 }, rsz[TOP] = { 0 }, rat[TOP] = { 0 };
+    SIZE_T runAt = 0, runSz = 0;
+    unsigned nfree = 0;
+    SYSTEM_INFO si;
+    char fb[200], rb[200];
+    int i, j, n;
+
+    GetSystemInfo(&si);
+    for (;;) {
+        int more = addr < (SIZE_T)si.lpMaximumApplicationAddress &&
+                   VirtualQuery((LPCVOID)addr, &mbi, sizeof mbi) == sizeof mbi && mbi.RegionSize;
+        int isRes = more && mbi.State == MEM_RESERVE;
+        /* a reserved run is consecutive reserved regions, whoever made them */
+        if (isRes && runSz && runAt + runSz == addr) runSz += mbi.RegionSize;
+        else {
+            if (runSz) {
+                for (i = 0; i < TOP && rsz[i] >= runSz; i++) {}
+                for (j = TOP - 1; j > i; j--) { rsz[j] = rsz[j - 1]; rat[j] = rat[j - 1]; }
+                if (i < TOP) { rsz[i] = runSz; rat[i] = runAt; }
+            }
+            runSz = isRes ? mbi.RegionSize : 0; runAt = addr;
+        }
+        if (!more) break;
+        if (mbi.State == MEM_FREE) {
+            freetotal += mbi.RegionSize; nfree++;
+            for (i = 0; i < TOP && fsz[i] >= mbi.RegionSize; i++) {}
+            for (j = TOP - 1; j > i; j--) { fsz[j] = fsz[j - 1]; fat[j] = fat[j - 1]; }
+            if (i < TOP) { fsz[i] = mbi.RegionSize; fat[i] = addr; }
+        } else if (mbi.State == MEM_RESERVE) reserved += mbi.RegionSize;
+        else if (mbi.Type == MEM_IMAGE) image += mbi.RegionSize;
+        else if (mbi.Type == MEM_MAPPED) mapped += mbi.RegionSize;
+        else priv += mbi.RegionSize;
+        addr += mbi.RegionSize;
+    }
+    for (i = 0, n = 0; i < TOP && fsz[i]; i++)
+        n += _snprintf(fb + n, sizeof fb - n, " %.1f@%08X", (double)fsz[i] / 1048576.0, (unsigned)fat[i]);
+    fb[n < (int)sizeof fb ? n : (int)sizeof fb - 1] = 0;
+    for (i = 0, n = 0; i < TOP && rsz[i]; i++)
+        n += _snprintf(rb + n, sizeof rb - n, " %.1f@%08X", (double)rsz[i] / 1048576.0, (unsigned)rat[i]);
+    rb[n < (int)sizeof rb ? n : (int)sizeof rb - 1] = 0;
+    vklog("VA map %s: of %.0f MB, free %.1f MB in %u block(s), reserved and uncommitted %.1f MB, "
+          "committed %.1f MB private + %.1f MB mapped + %.1f MB of images",
+          when, (double)(SIZE_T)si.lpMaximumApplicationAddress / 1048576.0,
+          (double)freetotal / 1048576.0, nfree, (double)reserved / 1048576.0,
+          (double)priv / 1048576.0, (double)mapped / 1048576.0, (double)image / 1048576.0);
+    vklog("VA map %s: the largest free blocks, MB@base:%s; the largest reserved runs:%s", when, fb, rb);
+}
+
 /* ---- loading the runtime -------------------------------------------------
    real_LoadLibraryA, never LoadLibraryA: the fork hooks the latter (hook=4) and
    the hook re-scans the module tree, which is not something to trigger from
@@ -2529,6 +2586,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
+    va_map_log("with Vulkan up");
     /* ONE HANDLE: there is one window and it is the game's. */
     vklog("up in %lu ms on \"%s\" (row %d), the game window %p, %ux%u, vsync %d "
           "- the surface is on the game window",
@@ -2707,6 +2765,7 @@ static int vk_present(void)
         tagpu_vk_feat_down_owed()) {
         vklog("a pass the picture cannot do without was refused its resources - "
               "the lane comes down and back");
+        va_map_log("at the refusal");
         s_lostLike = LL_ASK;
         return -2;
     }

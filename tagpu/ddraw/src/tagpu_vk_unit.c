@@ -396,10 +396,8 @@ typedef struct {
     unsigned char*  pmap;
     VkDeviceSize    pcap;
 
-    VkBuffer        vstage;                /* this frame's vertex uploads      */
-    VkDeviceMemory  vsmem;
-    unsigned char*  vsmap;
-    VkDeviceSize    vscap;
+    TAGPU_VKSTAGE   vstage;                /* this frame's vertex uploads: bounded,
+                                              and banded past it (tagpu_vk_stage.h) */
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's, when one is due */
 
@@ -524,6 +522,16 @@ static int mem_type(const TAGPU_VKPASS* d, uint32_t bits, VkMemoryPropertyFlags 
     return -1;
 }
 
+/* The allocation that last came back refused, for the refusal's log line: which call, what it
+   answered and how large the request was. A refused frame is the lane coming down, and "the
+   device would not" reads the same for a full device, a full address space and a full heap. */
+static struct { const char* call; long answer; unsigned long long bytes; } s_short;
+
+static void short_note(const char* call, long answer, unsigned long long bytes)
+{
+    s_short.call = call; s_short.answer = answer; s_short.bytes = bytes;
+}
+
 static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlags use,
                      VkMemoryPropertyFlags props, VkBuffer* buf, VkDeviceMemory* mem,
                      unsigned char** map)
@@ -531,26 +539,36 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     VkMemoryRequirements mr;
     VkMemoryAllocateInfo ai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkResult r;
     int mt;
     void* p = NULL;
     bi.size = size ? size : 1;
     bi.usage = use;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(d->dev, &bi, NULL, buf) != VK_SUCCESS) return 0;
+    if ((r = vkCreateBuffer(d->dev, &bi, NULL, buf)) != VK_SUCCESS) {
+        short_note("vkCreateBuffer", (long)r, bi.size);
+        return 0;
+    }
     vkGetBufferMemoryRequirements(d->dev, *buf, &mr);
     mt = mem_type(d, mr.memoryTypeBits, props);
-    if (mt < 0) { vkDestroyBuffer(d->dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0; }
-    ai.allocationSize = mr.size;
-    ai.memoryTypeIndex = (uint32_t)mt;
-    if (vkAllocateMemory(d->dev, &ai, NULL, mem) != VK_SUCCESS) {
+    if (mt < 0) {
+        short_note("no memory type", 0, bi.size);
         vkDestroyBuffer(d->dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0;
     }
-    if (vkBindBufferMemory(d->dev, *buf, *mem, 0) != VK_SUCCESS) {
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = (uint32_t)mt;
+    if ((r = vkAllocateMemory(d->dev, &ai, NULL, mem)) != VK_SUCCESS) {
+        short_note("vkAllocateMemory", (long)r, mr.size);
+        vkDestroyBuffer(d->dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0;
+    }
+    if ((r = vkBindBufferMemory(d->dev, *buf, *mem, 0)) != VK_SUCCESS) {
+        short_note("vkBindBufferMemory", (long)r, mr.size);
         vkFreeMemory(d->dev, *mem, NULL); vkDestroyBuffer(d->dev, *buf, NULL);
         *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; return 0;
     }
     if (map) {
-        if (vkMapMemory(d->dev, *mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) {
+        if ((r = vkMapMemory(d->dev, *mem, 0, VK_WHOLE_SIZE, 0, &p)) != VK_SUCCESS) {
+            short_note("vkMapMemory", (long)r, mr.size);
             vkFreeMemory(d->dev, *mem, NULL); vkDestroyBuffer(d->dev, *buf, NULL);
             *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; return 0;
         }
@@ -748,6 +766,43 @@ static VBENT* vb_find(unsigned serial)
     return NULL;
 }
 
+/* THE SERIALS A FRAME'S STAGING PRE-PASS HAS COUNTED. A type's stream is staged once however
+   many of its units the frame carries: `upload_draw` links the entry at the type's first unit,
+   stamped with the frame so `vb_slot` cannot evict it, and every later unit of the type finds
+   it. Counting the miss at every unit instead reserves the type's vertices once a unit: a
+   frame that brings a whole map of units into view with none of their types uploaded -- a full
+   zoom-out, and every frame after the lane comes back up -- asked for over 1 GB of staging,
+   MEASURED on a 9 400-unit frame, which no 32-bit process maps.
+
+   An open-addressed set, emptied by moving the generation on. It takes VB_HSIZE / 2 serials,
+   so a probe always ends at a free cell; one past that is counted at each of its units, which
+   reserves too much and never too little. */
+static unsigned       s_missSerial[VB_HSIZE];
+static unsigned short s_missGen[VB_HSIZE];
+static unsigned short s_missNow;
+static unsigned       s_missCount;
+
+static void miss_begin(void)
+{
+    if (++s_missNow == 0) { memset(s_missGen, 0, sizeof s_missGen); s_missNow = 1; }
+    s_missCount = 0;
+}
+
+/* 1 the first time this pre-pass asks about the serial, 0 every time after */
+static int miss_first(unsigned serial)
+{
+    unsigned k = vb_bucket(serial);
+    for (;;) {
+        if (s_missGen[k] != s_missNow) {
+            if (s_missCount >= VB_HSIZE / 2) return 1;
+            s_missGen[k] = s_missNow; s_missSerial[k] = serial; s_missCount++;
+            return 1;
+        }
+        if (s_missSerial[k] == serial) return 0;
+        k = (k + 1) & (VB_HSIZE - 1);
+    }
+}
+
 /* a new entry, once its buffer exists and its serial is set */
 static void vb_link(VBENT* e)
 {
@@ -805,9 +860,9 @@ static void slot_free_sized(const TAGPU_VKPASS* d, SLOT* s)
 {
     kill_buffer(d, &s->ubuf, &s->umem, &s->umap);
     kill_buffer(d, &s->pbuf, &s->pmem, &s->pmap);
-    kill_buffer(d, &s->vstage, &s->vsmem, &s->vsmap);
+    tagpu_vk_stage_drop(d, &s->vstage);
     tagpu_vk_stage_drop(d, &s->stage);
-    s->ucap = s->pcap = s->vscap = 0;
+    s->ucap = s->pcap = 0;
     /* the models' share went with the buffers (`s_fxShort`) */
     s_fxShortOk &= ~(1u << (unsigned)(s - s_slot));
 }
@@ -879,18 +934,25 @@ static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, keep);
 }
 
-static int slot_vstage(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
-{
-    if (s->vscap >= bytes && s->vstage) return 1;
-    kill_buffer(d, &s->vstage, &s->vsmem, &s->vsmap);
-    s->vscap = 0;
-    if (!mk_buffer(d, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s->vstage, &s->vsmem, &s->vsmap)) return 0;
-    s->vscap = bytes;
-    return 1;
-}
+/* THE VERTEX STAGING'S CAP: what one slot maps for a frame's new vertex streams. A frame
+   within it uploads in its own command buffer and waits for nothing; a frame past it goes in
+   bands, each waited on, and the first wait is the frames in flight (tagpu_vk_stage.h).
+
+   32 MiB, FOR THE FRAMES THAT REPEAT. A map of units seen for the first time is hundreds of
+   megabytes once (793 streams, 117.5 MB, a wait of 234 ms) and bands whatever the cap. What
+   comes back is smaller: a zoom-out onto ten seats re-bakes the material streams whose
+   textures stepped an animation frame -- 46 to 63 streams, 16.1 to 20.1 MB, more than once a
+   second, for as long as the view holds more (type, owner) pairs than the bake keeps
+   (tagpu_posebake.h TAGPU_PB_KEEPMAT). MEASURED on 9 400 units of ten seats: at 2 MiB and at
+   16 MiB every one of those frames banded and waited 124 to 206 ms.
+
+   A PREFERENCE, NOT A REQUIREMENT: `tagpu_vk_stage_begin_to` halves a refused map down to
+   VSTAGE_FLOOR and the frame then bands through what it got, so a process short of address
+   space uploads the same bytes more slowly. Mapped only on a slot whose frame sends vertices. */
+#define VSTAGE_CAP   ((VkDeviceSize)32 << 20)
+/* The least it is asked for: a band of this size still carries every stream, cut across
+   bands. */
+#define VSTAGE_FLOOR ((VkDeviceSize)64 << 10)
 
 /* ---- build -------------------------------------------------------------- */
 static int build_samplers(const TAGPU_VKPASS* d)
@@ -2418,7 +2480,7 @@ static int draw_room(unsigned n)
     want = s_drawCap ? s_drawCap * 2 : 128;
     while (want < n) want *= 2;
     q = (DRAW*)realloc(s_draw, (size_t)want * sizeof(DRAW));
-    if (!q) return 0;
+    if (!q) { short_note("the draw list's realloc", 0, (unsigned long long)want * sizeof(DRAW)); return 0; }
     s_draw = q; s_drawCap = want;
     return 1;
 }
@@ -2430,8 +2492,12 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkDeviceSize ustride, fxStride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3,
                  fxFglOff, poseBytes;
-    VkDeviceSize poseBase, ubase, stageOff, stageNeed;
+    VkDeviceSize poseBase, ubase, stageNeed, bandBytes = 0;
     int fogW = 0, fogH = 0, i, fd, anyUpload = 0, fogWanted = 0;
+    /* the frame's vertex streams pass the slot's staging and go in bands; how many went */
+    int banded = 0;
+    unsigned bandStreams = 0;
+    LARGE_INTEGER bandT0;
     unsigned fxDrawn = 0, k;
     /* the records that are effects models and the rest, whether this frame
        drops the models (`dropFx`), and the runs it then copies (`nrun`) */
@@ -2878,7 +2944,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        costs the frame EVERY effect -- the effects pass draws none of a frame
        whose models this pass drops -- so the share is owed (`s_fxShort`) and
        the frames after it take back only their model records. Above
-       `slot_vstage`, so a stand-down below is still safe. */
+       the vertex staging, so a stand-down below is still safe. */
     if (tagpu_grow_stress()) s->ucap = s->pcap = 0;   /* the lever: rebuilt every frame */
     if (!slot_sized(d, s, ubase, poseBase, 0) || !draw_room(nbase)) goto refuse;
     if (!dropFx && nfxAll) {
@@ -2933,27 +2999,43 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
     /* ---- what has to be uploaded this frame, and the staging to carry it ---- */
     stageNeed = 0;
+    miss_begin();
     for (i = 0; i < h.nunit; i++) {
         const TAGPU_PDUREC* r = &h.units[i];
         if (r->fx) continue;                /* runs, not vertices */
-        if (!vb_find(r->geomSerial))
+        /* once a serial, not once a unit: `miss_first` has why */
+        if (!vb_find(r->geomSerial) && miss_first(r->geomSerial))
             stageNeed += (VkDeviceSize)r->nvert * GEOM_STRIDE;
-        if (!vb_find(r->matSerial))
+        if (!vb_find(r->matSerial) && miss_first(r->matSerial))
             stageNeed += (VkDeviceSize)r->nvert * MAT_STRIDE;
     }
     /* THE ATLASES RESERVE NOTHING HERE: the base atlas has a staging buffer
        of its own (`base_upload`), and nothing is copied into the restored twin
        from the host -- the restorer paints it on the device. */
     if (stageNeed) {
-        if (!slot_vstage(d, s, stageNeed)) goto refuse;
-    } else if (s->vstage) {
+        /* THE STAGING IS BOUNDED, WHATEVER THE FRAME BRINGS INTO VIEW (tagpu_vk_stage.h): the
+           slot maps VSTAGE_CAP at most. Streams that fit go into this frame's command
+           buffer. Streams that do not -- a map of units zoomed out onto at once, every frame
+           after the lane comes up -- go in bands through the same buffer, each waited on, and
+           are all on the device before this frame's draws are submitted. */
+        if (!tagpu_vk_stage_begin_to(d, &s->vstage, stageNeed, VSTAGE_FLOOR, VSTAGE_CAP)) {
+            short_note("the vertex staging's map", 0, VSTAGE_FLOOR);
+            goto refuse;
+        }
+        banded = stageNeed > s->vstage.cap;
+        if (banded) {
+            if (!tagpu_vk_stage_bufs_begin(d, &s->vstage)) {
+                short_note("the banded upload's command buffer", 0, stageNeed);
+                goto refuse;
+            }
+            QueryPerformanceCounter(&bandT0);
+        }
+    } else if (s->vstage.buf) {
         /* nothing to upload this frame: give the staging back, as the feature
            pass gives its atlas staging back -- a settled scene holds none */
-        kill_buffer(d, &s->vstage, &s->vsmem, &s->vsmap);
-        s->vscap = 0;
+        tagpu_vk_stage_drop(d, &s->vstage);
     }
 
-    stageOff = 0;
     kBase = 0; kFx = 0;
     for (i = 0; i < h.nunit; i++) {
         const TAGPU_PDUREC* r = &h.units[i];
@@ -3025,7 +3107,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             int st = j ? MAT_STRIDE : GEOM_STRIDE;
             const float* src;
             int nv = 0;
-            VkDeviceSize bytes;
+            VkDeviceSize bytes, stageOff = 0;
+            unsigned char* staged = NULL;
             VkBufferCopy cp;
             if (*e) continue;
             /* THE MIRROR IS ASKED FOR WITH THE SERIAL, at the instant of the
@@ -3056,7 +3139,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                here consumes nothing: the pointer is still NULL, the unit is
                not drawn, and the every-unit-or-none gate turns that into a
                refused frame. */
-            if (stageOff + bytes > s->vscap) break;
+            if (!banded) {
+                staged = tagpu_vk_stage_take(&s->vstage, bytes, 4, &stageOff);
+                if (!staged) break;
+            }
             *e = vb_slot(d, d->frame);
             if (!*e) {
                 if (!s_saidVbFull) {
@@ -3087,11 +3173,22 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                use-after-free; it is a buffer uploaded and then immediately
                thrown away, which is worth one store to prevent. */
             (*e)->lastFrame = d->frame;
-            memcpy(s->vsmap + stageOff, src, (size_t)bytes);
+            if (banded) {
+                /* the entry is linked and its bytes are in a band not yet submitted: the
+                   flush below the loop is what makes the link true, and a device that fails
+                   one takes the table with the lane */
+                if (tagpu_vk_stage_bufs_put(d, &s->vstage, (*e)->buf, src, bytes) < 0) {
+                    short_note("a banded vertex upload", 0, bytes);
+                    goto refuse;
+                }
+                bandBytes += bytes;
+                bandStreams++;
+                continue;
+            }
+            memcpy(staged, src, (size_t)bytes);
             memset(&cp, 0, sizeof cp);
             cp.srcOffset = stageOff; cp.dstOffset = 0; cp.size = bytes;
-            vkCmdCopyBuffer(cb, s->vstage, (*e)->buf, 1, &cp);
-            stageOff += bytes;
+            vkCmdCopyBuffer(cb, s->vstage.buf, (*e)->buf, 1, &cp);
             anyUpload = 1;
         }
         if (!g || !m) continue;     /* both are stamped above, either way */
@@ -3140,6 +3237,26 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         }
         if (w->wireCount) s_nwire++;
         s_ndraw++;
+    }
+
+    /* THE LAST BAND, BEFORE ANYTHING BELOW CAN RETURN. Every entry the loop linked answers
+       `vb_find` from now on, so its bytes must be on the device on every path that keeps the
+       table: nothing between the first put and here leaves the function but `refuse`, whose
+       teardown empties the table. The copies ran in submits of their own, ahead of this
+       frame's command buffer and each waited on, so this frame's draws need no barrier
+       against them. */
+    if (banded) {
+        LARGE_INTEGER t1, hz;
+        if (tagpu_vk_stage_bufs_end(d) < 0) {
+            short_note("a banded vertex upload's last band", 0, bandBytes);
+            goto refuse;
+        }
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&hz);
+        plog(d, "unit: %u vertex stream(s), %.1f MB, came into view on one frame and went up "
+                "in bands through %u KB of staging - a wait of %u ms in this frame",
+             bandStreams, (double)bandBytes / 1048576.0, (unsigned)(s->vstage.cap >> 10),
+             (unsigned)((t1.QuadPart - bandT0.QuadPart) * 1000 / (hz.QuadPart ? hz.QuadPart : 1)));
     }
 
     /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME, AND IT IS
@@ -3198,7 +3315,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
     /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
        samples has not reached the device, and the next frame sends it. It
-       is below `slot_vstage`, so it returns without freeing the slot -- the
+       is below the vertex staging, so it returns without freeing the slot -- the
        rule `standdown` states -- exactly as the every-unit-or-none gate above
        does. */
     switch (base_upload(d, cb, s, &h)) {
@@ -3346,14 +3463,15 @@ standdown:
        given back because the next one may not draw either.
 
        SAFE ONLY ABOVE THE STAGING -- a property of every caller, not of this
-       label. Every `goto standdown` is above `slot_vstage`, so no copy out of
-       `s->vstage` has been recorded when control reaches here. Below it:
+       label. Every `goto standdown` is above the vertex staging's
+       `tagpu_vk_stage_begin`, so no copy out of `s->vstage` has been recorded
+       when control reaches here. Below it:
 
-         by the time control is below `slot_vstage`, the vertex loop has
+         by the time control is below it, the vertex loop has
          memcpy'd every missing type's streams into `s->vstage` and recorded a
          `vkCmdCopyBuffer` out of it for each. `cb` is submitted whether this
          pass draws or not, so those copies WILL run -- and `slot_free` here is
-         `kill_buffer(&s->vstage)`, the SOURCE buffer of copies the GPU has not
+         `tagpu_vk_stage_drop(&s->vstage)`, the SOURCE buffer of copies the GPU has not
          executed yet.
 
        What that looks like, because the shape is worth recognising rather than
@@ -3362,7 +3480,7 @@ standdown:
        never received its vertices, and every later frame draws that type from
        undefined contents until the entry is evicted.
 
-       SO: a new stand-down added BELOW `slot_vstage` must `return 0` without
+       SO: a new stand-down added BELOW the vertex staging must `return 0` without
        freeing the slot -- never `goto standdown`. */
     if (s_state == ST_READY) slot_free(d, s);
     return 0;
@@ -3380,6 +3498,12 @@ refuse:
        these objects" a fact rather than a hope. */
     plog(d, "unit: slot %u would not take this frame's resources - the pass "
             "stops drawing and owes a teardown", (unsigned)slot);
+    if (s_short.call)
+        plog(d, "unit: the refused request: %s of %u KB answered %ld", s_short.call,
+             (unsigned)(s_short.bytes >> 10), s_short.answer);
+    else
+        plog(d, "unit: the refused request was no buffer's (an image, a set or a view)");
+    s_short.call = NULL;
     refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;

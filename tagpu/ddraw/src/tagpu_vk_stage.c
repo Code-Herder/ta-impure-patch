@@ -22,7 +22,7 @@
     X(vkGetFenceStatus) \
     X(vkQueueSubmit) \
     X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) \
-    X(vkCmdClearColorImage)
+    X(vkCmdClearColorImage) X(vkCmdCopyBuffer)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -55,6 +55,10 @@ static VkFence         s_fence;
    that submit done (`banded_ready`). */
 static int             s_inflight;
 static int             s_saidRefused;      /* the halving reached the floor    */
+/* THE BUFFERS' BAND (tagpu_vk_stage_bufs_*): whether `s_cb` is recording one, and the bytes
+   of the slot's buffer its copies read. Both are zero between a flush and the next put. */
+static int             s_bufsOpen;
+static VkDeviceSize    s_bufsUsed;
 
 static void slog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -145,15 +149,21 @@ void tagpu_vk_stage_drop(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st)
 int tagpu_vk_stage_begin(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                          VkDeviceSize want, VkDeviceSize floor)
 {
+    return tagpu_vk_stage_begin_to(d, st, want, floor, TAGPU_VK_STAGE_CAP);
+}
+
+int tagpu_vk_stage_begin_to(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                            VkDeviceSize want, VkDeviceSize floor, VkDeviceSize cap)
+{
     VkDeviceSize size;
 
     if (!resolve(d)) return 0;
     st->used = 0;
     floor = ALIGN4(floor);
     if (floor < 4) floor = 4;
-    if (floor > TAGPU_VK_STAGE_CAP) return 0;   /* a row wider than the cap */
+    if (floor > cap) return 0;                  /* a row wider than the cap */
     size = ALIGN4(want);
-    if (size > TAGPU_VK_STAGE_CAP) size = TAGPU_VK_STAGE_CAP;
+    if (size > cap) size = cap;
     if (size < floor) size = floor;
     if (st->buf && st->cap >= size) return 1;
     tagpu_vk_stage_drop(d, st);
@@ -465,6 +475,74 @@ unsigned char* tagpu_vk_stage_take(TAGPU_VKSTAGE* st, VkDeviceSize bytes, VkDevi
     return st->map + o;
 }
 
+/* ---- host bytes into buffers, in bands ------------------------------------ */
+
+/* The open band, submitted and waited on. The wait is the ordering the buffer's reuse rests
+   on, as in `banded_one`: the next band's bytes are written only after this fence says the
+   copies that read these have completed. 1 done (or nothing was open), -1 the device failed. */
+static int bufs_flush(const TAGPU_VKPASS* d)
+{
+    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+
+    if (!s_bufsOpen) return 1;
+    s_bufsOpen = 0;
+    s_bufsUsed = 0;
+    if (vkEndCommandBuffer(s_cb) != VK_SUCCESS) return -1;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &s_cb;
+    if (vkQueueSubmit(d->queue, 1, &si, s_fence) != VK_SUCCESS) return -1;
+    s_inflight = 1;
+    if (vkWaitForFences(d->dev, 1, &s_fence, VK_TRUE, 1000000000ull) != VK_SUCCESS) return -1;
+    if (vkResetFences(d->dev, 1, &s_fence) != VK_SUCCESS) return -1;
+    s_inflight = 0;
+    return 1;
+}
+
+int tagpu_vk_stage_bufs_begin(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st)
+{
+    /* the whole of the slot's buffer is the band: an in-frame copy holding part of it until
+       the frame's submit would be overwritten by the second band */
+    if (!resolve(d) || !st->buf || !st->map || !st->cap || st->used) return 0;
+    if (!banded_ready(d)) return 0;
+    s_bufsOpen = 0;
+    s_bufsUsed = 0;
+    return 1;
+}
+
+int tagpu_vk_stage_bufs_put(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkBuffer dst,
+                            const void* src, VkDeviceSize bytes)
+{
+    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    VkDeviceSize done = 0;
+
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    while (done < bytes) {
+        VkDeviceSize room = st->cap - s_bufsUsed;
+        VkDeviceSize n = bytes - done < room ? bytes - done : room;
+        VkBufferCopy cp;
+        if (!n) {                           /* the band is full: it goes, and the next starts */
+            if (bufs_flush(d) < 0) return -1;
+            continue;
+        }
+        if (!s_bufsOpen) {
+            if (vkResetCommandBuffer(s_cb, 0) != VK_SUCCESS ||
+                vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) return -1;
+            s_bufsOpen = 1;
+        }
+        memcpy(st->map + s_bufsUsed, (const unsigned char*)src + done, (size_t)n);
+        cp.srcOffset = s_bufsUsed; cp.dstOffset = done; cp.size = n;
+        vkCmdCopyBuffer(s_cb, st->buf, dst, 1, &cp);
+        s_bufsUsed += n;
+        done += n;
+    }
+    return 1;
+}
+
+int tagpu_vk_stage_bufs_end(const TAGPU_VKPASS* d)
+{
+    return bufs_flush(d);
+}
+
 /* ---- the move ------------------------------------------------------------ */
 
 int tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int dim,
@@ -680,4 +758,6 @@ void tagpu_vk_stage_down(const TAGPU_VKPASS* d)
     s_dev = VK_NULL_HANDLE;
     s_inflight = 0;
     s_saidRefused = 0;
+    s_bufsOpen = 0;
+    s_bufsUsed = 0;
 }
