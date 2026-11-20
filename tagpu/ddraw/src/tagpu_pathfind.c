@@ -464,7 +464,7 @@ static int served_block(const SCHED* e, unsigned p, char** b0, char** b1)
            !((size_t)(*b1 - e->first) % UNIT_STRIDE);
 }
 
-/* The unit's local ground course when it wants a search, as the engine's examination reads it (0x40ED33..0x40ED57:
+/* The unit's local ground course when it wants a search, as the engine's examination reads it (0x40ED33..0x40ED4D:
    a type, a mover, the mover's class) and as its wants-search 0x44F260 tests bit 1; no other course class ever
    answers yes (their slot is 0x44EFF0, `xor eax, eax`). */
 static char* wanting_course(const char* unit)
@@ -614,7 +614,7 @@ static void job_search(const SCHED* e, JOB* j)
 }
 
 /* THE RESULT of one job, through the engine's own set path 0x44F080: a path's corners, or none -- and with none it
-   ORs 0x40 into the order when the unit is not in its goal (0x44F089..0x44F0A4), which is why that bit is left to
+   ORs 0x40 into the order when the unit is not in its goal (0x44F089..0x44F0B9), which is why that bit is left to
    it. The search's other flags go through the goal's 0x44CED0, as the search start ORs them. */
 static void job_result(JOB* j)
 {
@@ -683,7 +683,7 @@ static void __fastcall sched_tick(void* pf_unused)
     if (!sched_open(&e)) return;
     tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
     sched_walk(&e, ready, n);
-    /* THE WEIGHT, by the tick's load: the engine's three (0x40EBD6..0x40EC06) */
+    /* THE WEIGHT, by the tick's load: the engine's three (0x40EBBF..0x40EC06) */
     i = n[0] + n[1] > PF_CAP_SEARCHES ? 2 : n[0] + n[1] > PF_QUIET;
     e.wgt *= i == 2 ? 6 : i == 1 ? 3 : 1;
     s_v.weight[i]++;
@@ -719,7 +719,7 @@ static void __fastcall sched_tick(void* pf_unused)
 }
 
 /* The ground course's set goal 0x44F2A0, at its entry, with a goal. The function's own rule zeroes the stamp when
-   the course's last search began more than 10 ticks ago (0x44F426..0x44F436), and the walk then serves the unit at
+   the course's last search began more than 10 ticks ago (0x44F420..0x44F436), and the walk then serves the unit at
    once. Here the same is done inside those 10 ticks for a unit whose last search found a path: A UNIT ON ITS WAY
    THAT IS SENT ELSEWHERE. The function only ever zeroes the stamp, so the 0 stands. A unit whose last search
    found nothing keeps the engine's rule: an order handler answers such a search with a new goal within a tick or
