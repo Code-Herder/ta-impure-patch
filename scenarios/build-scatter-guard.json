@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The `build-scatter-guard` test groups (research/notes/build-scatter-plan.md, landing 2): the human seat's finished ARMVP with an ARMCOM guarding it, which the factory guard seats beside the plant, and an idle ARMCK at the pinned camera centre. The test group orders the ARMCK, through the build panel and a native click, to build a solar collector on the commander's seat: the cursor accepts the site, the builder is refused on it, the guard gives the seat up and seats the commander off the site, and the solar is built.",
+ "description": "The `build-scatter-guard` test groups (research/notes/build-scatter-plan.md, landing 2): the human seat's finished ARMVP with an ARMCOM guarding it, which the factory guard seats beside the plant, and an idle ARMCK at the pinned camera centre. The test group orders the ARMCK, through the build panel and a native click, to build a solar collector on the commander's seat, and then gives the plant a construction vehicle to make, which the commander helps from its seat: the cursor accepts the site, the builder is refused on it while the commander helps, the refusals are held until the vehicle is done, the guard then gives the seat up and seats the commander off the site, and the solar is built.",
  "setup": {
   "map": "Two Continents",
   "res": "1024x768",
@@ -34,8 +34,8 @@
    "type": "ARMVP",
    "owner": 0,
    "pos": [
-    1204,
-    7618
+    964,
+    7650
    ]
   },
   {
@@ -80,8 +80,8 @@
    "id": "guards",
    "owner": 0,
    "at": [
-    1204,
-    7760
+    964,
+    7780
    ],
    "pattern": {
     "kind": "line",

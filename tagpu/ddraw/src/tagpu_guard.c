@@ -1144,8 +1144,8 @@ static int __cdecl guard_visit(unsigned* regs)
     /* A BUILD SITE: a seat one covers is given up, and the search below takes the site as taken ground */
     owner = *(const uint8_t*)(b + U_OWNER);
     if (t->state == GS_SEATED && tagpu_scatter_covers(owner, e.now, t->x, t->z, bfx, bfz)) {
-        tagpu_logf("guard: site builder=%u plant=%u seat=%d,%d given up", (unsigned)bslot, (unsigned)r->slot, t->x,
-                   t->z);
+        tagpu_logf("guard: site builder=%u plant=%u seat=%d,%d given up tick=%d", (unsigned)bslot,
+                   (unsigned)r->slot, t->x, t->z, (int)e.now);
         t->state = GS_WAITING;
         t->moved = e.now;
     }
@@ -1349,6 +1349,8 @@ int tagpu_guard_seats(unsigned slot)
     Eng e;
     const GuardPlant* r;
     const char* p;
+    const char* head;
+    unsigned char follow;
     int i;
     if (!s_install.installed || tagpu_puppet_on() || !eng_open(&e) || !slot || slot >= e.nslots) return 0;
     for (i = 0; i < GUARD_SEATS; i++)
@@ -1356,7 +1358,10 @@ int tagpu_guard_seats(unsigned slot)
     if (i == GUARD_SEATS || s_seat[i].plant >= GUARD_PLANTS) return 0;
     r = &s_plant[s_seat[i].plant];
     if (!r->used || !(p = unit_at(&e, r->slot)) || !alive(p) || birth_of(r->slot) != r->birth) return 0;
-    return still_guards(&e, &s_seat[i], p, action_of(S_FOLLOW));       /* the builder's own incarnation too */
+    follow = action_of(S_FOLLOW);
+    if (!still_guards(&e, &s_seat[i], p, follow)) return 0;            /* the builder's own incarnation too */
+    head = *(const char* const*)(unit_at(&e, slot) + U_ORDERS);
+    return head && *(const uint8_t*)(head + N_ACTION) == follow && *(char* const*)(head + N_TARGET) == p ? 1 : 2;
 }
 
 void tagpu_guard_mark(int x0, int z0, int w, int h, unsigned char* t)

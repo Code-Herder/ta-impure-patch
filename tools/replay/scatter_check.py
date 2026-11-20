@@ -33,11 +33,14 @@ on its middle.
     byte at def +0x230)                         the build order was abandoned, as stock abandons it
 
 GUARDED (scenarios/build-scatter-guard.json, the build-scatter-guard test groups). An ARMCOM guards an ARMVP and
-the factory guard seats it on what the test group then makes a solar collector's site, at site B's cells.
+the factory guard seats it on what the test group then makes a solar collector's site, at site A's cells; the
+plant is then given a construction vehicle to make, which the commander helps from its seat.
 
     the site's line counts one unit of the guard's and moves none     the cursor accepted the site under the
                                                 seated commander, and build scatter left it to its manager
-    the log holds the guard's `site ... given up` line                the guard gave the seat up for the site
+    the log holds the guard's `site ... given up` line, more than     the commander was helping, so its guard's visit
+    STOCK_PATIENCE ticks after the site's line                        came when the vehicle was done: the refusals
+                                                                      in between were held, or the builder had gone
     an ARMSOLAR stands on the site, and the ARMCOM does not           it was seated off the site, and the build began
 
 Exit 0 when every check holds, 1 with the first that does not, 2 when it could not run.
@@ -70,7 +73,8 @@ N_ACTION, UD_DEFAULT = 0x04, 0x230          # an order node's action byte; a def
 SITE_LINE = re.compile(r"scatter: GameTime (\d+): site builder=(\d+) type=\d+ cell=(\d+),(\d+) \d+x\d+ "
                        r"on=(\d+) moved=(\d+) \(failed=(\d+)\) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+) "
                        r"guard=(\d+)")
-GUARD_GAVE_UP = re.compile(r"guard: site builder=\d+ plant=\d+ seat=-?\d+,-?\d+ given up")
+GUARD_GAVE_UP = re.compile(r"guard: site builder=\d+ plant=\d+ seat=-?\d+,-?\d+ given up tick=(\d+)")
+STOCK_PATIENCE = 330                        # ticks from MobileBuild's first refusal to its twelfth, the abandon
 
 
 class Fail(Exception):
@@ -230,16 +234,20 @@ def judge_gaveup(sites: list, units: list, head=None, dflt=None) -> list:
 
 def judge_guarded(sites: list, units: list, lines: list) -> list:
     fails = []
-    b = [s for s in sites if s["cell"] == SITE_B]
-    if not b or (b[0]["on"], b[0]["moved"], b[0]["guard"]) != (1, 0, 1):
-        fails.append(f"the site's first plan is {b[0] if b else None}, not one unit on it, the guard's, and none "
+    a = [s for s in sites if s["cell"] == SITE_A]
+    gave = [int(m[1]) for m in map(GUARD_GAVE_UP.search, lines) if m]
+    if not a or (a[0]["on"], a[0]["moved"], a[0]["guard"]) != (1, 0, 1):
+        fails.append(f"the site's first plan is {a[0] if a else None}, not one unit on it, the guard's, and none "
                      f"moved")
-    if not any(GUARD_GAVE_UP.search(ln) for ln in lines):
+    if not gave:
         fails.append("the log holds no `guard: site ... given up` line: the guard kept the seat")
-    if not any(on_site(u["world"], SITE_B) for u in mine(units, "ARMSOLAR")):
+    elif a and gave[0] - a[0]["tick"] <= STOCK_PATIENCE:
+        fails.append(f"the seat was given up {gave[0] - a[0]['tick']} ticks after the first refusal, within the "
+                     f"{STOCK_PATIENCE} a stock builder waits: the run does not show the hold")
+    if not any(on_site(u["world"], SITE_A) for u in mine(units, "ARMSOLAR")):
         fails.append(f"no ARMSOLAR on the site: {[u['world'] for u in mine(units, 'ARMSOLAR')]}")
     coms = mine(units, "ARMCOM")
-    if len(coms) != 1 or on_site(coms[0]["world"], SITE_B):
+    if len(coms) != 1 or on_site(coms[0]["world"], SITE_A):
         fails.append(f"the ARMCOM is not one unit standing off the site: {[u['world'] for u in coms]}")
     return fails
 

@@ -56,7 +56,7 @@ rewriting a code byte of the draw (`0x469E7F`) from inside the test.
 | | what | state |
 |---|---|---|
 | 1 | Idle units are moved off a refused site; the cursor accepts a site under them and draws it yellow; the test groups | built 2026-11-20 |
-| 2 | The factory guard's seated builders on a site (decision 3), and scatter destinations kept off the guard's lanes and seats | to do |
+| 2 | The factory guard's seated builders on a site (decision 3), and scatter destinations kept off the guard's lanes and seats | built 2026-11-20 |
 | 3 | Units standing on the site under an order (decision 1's later landing): which orders may be interrupted, and how the unit takes its order up again | open: needs the owner's rule |
 
 ## Landing 1 as built
@@ -126,6 +126,50 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
 - **Replay.** Both test groups pass: the record, the puppets, three round trips and the seek each,
   with no COB or native write on a puppet.
 - `python3 tagpu/ddraw/tests/scattertest.py`: `ok (0 failed)`.
+
+## Landing 2 as built
+
+Decision 3 says one manager orders a unit. So the two modules exchange ground, never units:
+
+- **The guard reads build scatter's site rows** (`tagpu_scatter_covers`, `tagpu_scatter_mark`): a
+  seat a refused site covers is given up at the builder's next visit, and the site is taken ground
+  for the seat search and the wait spot. No signature or re-plan is involved: the test is one call
+  in the visit, per builder.
+- **Build scatter reads the guard's rows** (`tagpu_guard_seats`, `tagpu_guard_mark`): the cursor
+  accepts a site under a seated builder, the plan leaves it alone and counts it (`guard=`), the hold
+  holds while it walks, and no moved unit is sent to a lane, a seat or a wait spot.
+- **A builder that is helping is waited for.** The guard's visit is its handler's, and a seated
+  builder helping its plant has a HelpBuild in front of its guard until the product is done. The
+  hold therefore also holds while a builder the guard seats has another order in front of its guard,
+  moving or not, within the bound of 20 refusals.
+- **A waiting builder on a site walks to its spot itself.** The guard's wait goal is reached within
+  two cells, which can leave the builder on the site; from a site the goal is the place.
+- **Its own test groups.** The guard's case first rode in `build-scatter` as a fourth phase and the
+  record-against-puppet counts failed there: a third build placement in one window put three of the
+  local player's `oktobuild` sounds (`0x47F1A0` from `0x498FA9`, and the build menu's from
+  `0x41ABA8`) past the harness's band of two. The band was left as it is and the case got its own
+  pair, `build-scatter-guard` and `stock-build-scatter-guard`.
+
+### MEASURED 2026-11-20 (landing 2)
+
+`scenarios/build-scatter-guard.json` on the raised build. The ARMCOM is seated at cell 59,472, north
+of the ARMVP. The solar is ordered at GameTime 720 on the site of first cell 57,470 and the plant is
+given an ARMCV at 810, which the commander helps from its seat (a HelpBuild in front of its guard).
+The ARMCK is refused at 912: `on=1 moved=0 … guard=1`. The vehicle is done at 1301, 389 ticks later
+and 59 past the refusal a stock builder abandons on; the guard's visit then logs `site builder=2
+plant=3 seat=59,472 given up tick=1301`, seats the commander at 62,473 and folds its arm
+(`off-seat`), and the solar stands at 1900 with the commander off it. With a Flash in the vehicle's
+place the seat is given up 137 ticks after the refusal, and with nothing in production 11 ticks
+after it.
+
+Two things the test's first tries taught:
+
+- **A scenario's plant makes nothing on some ground.** At (1204, 7618) the ARMVP took the order
+  (BuildingBuild at its head, states 1 and 2) and no frame ever appeared; at (964, 7650) it builds
+  [INFERRED: ground the engine would not have let the plant, or its product, stand on]. The seats
+  and the site were right in both places.
+- **A refused placement leaves the build cursor armed**, and the harness's paused twin then differs
+  in the site test's scratch (`sitebyte`, `sitesum`): the stock cursor writes it every frame.
 
 ### Not closed by landing 1
 

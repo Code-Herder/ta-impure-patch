@@ -206,17 +206,21 @@
    "load": "build-scatter-guard.json",
    "steps": [[700, "keys", ["pclick:512,384"]],
              [710, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
-             [720, "keys", ["pclick:600,510"]],
-             [1300, "run", ["tools/replay/scatter_check.py", "guarded", "{instance}"]]],
-   "end": 1360
+             [720, "keys", ["pclick:360,550"]],
+             [800, "keys", ["pclick:376,634"]],
+             [810, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMCV"]],
+             [1900, "run", ["tools/replay/scatter_check.py", "guarded", "{instance}"]]],
+   "end": 1960
   },
   "stock-build-scatter-guard": {
    "load": "build-scatter-guard.json",
    "steps": [[700, "keys", ["pclick:512,384"]],
              [710, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
-             [720, "keys", ["pclick:600,510"]],
-             [1300, "run", ["tools/replay/scatter_check.py", "guarded", "{instance}"]]],
-   "end": 1360,
+             [720, "keys", ["pclick:360,550"]],
+             [800, "keys", ["pclick:376,634"]],
+             [810, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMCV"]],
+             [1900, "run", ["tools/replay/scatter_check.py", "guarded", "{instance}"]]],
+   "end": 1960,
    "dll": "stock"
   },
   "transport-pad": {

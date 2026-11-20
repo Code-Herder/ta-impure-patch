@@ -45,7 +45,7 @@ with no way out keeps no lane: nothing it builds could leave.
 **The seats.** A seat is a place in the plant's box that the builder's class can stand on, inside
 its band, covering no building's footprint (its open yard included: those cells are held by no unit
 in the map, so a test of the cells alone would seat a builder inside the plant; a plant with only its
-yard in the box is found from its held cells outside it), no lane of any plant in the box, no other row's seat or wait spot
+yard in the box is found from its held cells outside it), no build site one of the builder's owner's builders is being refused on (*A build site*, below), no lane of any plant in the box, no other row's seat or wait spot
 and no unit standing still (a mover that has not changed cell for 30 ticks, which the pathfinder
 itself treats as an obstacle), and from which a way leads out of the box for the builder -- and still
 leads out for every builder already seated. Seats are taken from the band's outer edge inward, so a
@@ -93,6 +93,17 @@ run are its guard's, which moves it only to its seat, and its plant's HelpBuild,
 seat; so the arm never travels open. A plant's own build
 stance still folds between units (`0x402B1B`); that is the plant's script, not the guard's.
 
+**A build site.** A site one of the builder's owner's builders has been refused on within the last
+61 steps ([build scatter](build-scatter.html)'s rows, `tagpu_scatter_covers` and `tagpu_scatter_mark`)
+is ground a structure is about to stand on. At a builder's visit a seat such a site covers is given
+up, and the search that follows takes the site as taken ground, for the seat and for the wait spot
+alike. A wait spot's goal is reached two cells short of it, which can be on the site still, so a
+builder standing on a site is sent to the place itself. Build scatter orders no unit the guard seats
+and sends none to a lane, a seat or a wait spot (`tagpu_guard_seats`, `tagpu_guard_mark`): a unit has
+one manager. The visit is the guard handler's, so a builder whose list is headed by another order --
+the HelpBuild the assist put in front, while its plant's product is being built -- gives the seat up
+when that order has ended; build scatter holds the waiting builder's refusals meanwhile.
+
 **Neighbours.** At a re-plan every other finished plant of a ground product whose footprint stands in
 the box gets a row and its own lanes, so no seat or wait spot stands in another plant's way out, and
 its seats are checked again like the plant's own; then every seat of any plant that a lane now covers
@@ -125,6 +136,7 @@ owner test) and never on a puppet level: a replay's builders move as the recordi
   `other-order` fold was for.
 - `guard: seat builder= plant= at= band= seated= lanes=` when a builder is seated;
   `guard: wait builder= plant= at= ...` when its wait spot changes.
+- `guard: site builder= plant= seat= given up tick=` when a refused build site covers a builder's seat.
 
 ## Not yet done
 

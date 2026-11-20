@@ -58,7 +58,9 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter 
    THE GUARD'S. A builder the factory guard seats (tagpu_guard.h) is never ordered here: a unit has one manager.
    A site row is taken ground for the guard's own search, which gives up a seat or wait spot the site covers at
    the builder's next visit and walks it to another; so the cursor accepts a site under such a builder, the plan
-   counts it apart (`guard=`), and THE HOLD holds while it changes cell. No unit is sent to a lane, a seat or a
+   counts it apart (`guard=`), and THE HOLD holds while it changes cell -- and, whether it moves or not, while
+   another order runs in front of its guard: the guard's visit comes when that order ends, which for the
+   HelpBuild the guard itself puts there is when the plant's product is done. THE BOUND holds as for any hold. No unit is sent to a lane, a seat or a
    wait spot of the guard's (tagpu_guard_mark).
 
    THE CURSOR'S SITE. The build cursor's test (0x47D2E0 from 0x4198C6, through tagpu_patches.c's
@@ -642,7 +644,8 @@ static void plan(const View* v, ScSite* s)
 }
 
 /* THE HOLD's test: a unit this file moved still getting off the site, or another of the owner's movers crossing
-   it under a move, or one the factory guard seats (THE GUARD'S), having changed cell within STUCK_TICKS */
+   it under a move, or one the factory guard seats (THE GUARD'S), having changed cell within STUCK_TICKS; or one
+   the guard seats whose visit waits behind another order */
 static int progress(const View* v, const ScSite* s)
 {
     const unsigned char move = move_action();
@@ -654,13 +657,15 @@ static int progress(const View* v, const ScSite* s)
             const ScRow* r;
             WQ_ORDER h;
             uint32_t stamp;
+            int seats;
             if (!u || *(const uint8_t*)(u + U_OWNER) != s->owner || structure(u)) continue;
             if ((r = row_of(n))) {
                 if (!r->stuck) return 1;
                 continue;
             }
-            if ((!move || v->q.ops->head(&v->q, (int)n, &h) != 1 || h.action != move) && !tagpu_guard_seats(n))
-                continue;
+            seats = tagpu_guard_seats(n);
+            if (seats == 2) return 1;                 /* THE GUARD'S, an order in front of its guard */
+            if ((!move || v->q.ops->head(&v->q, (int)n, &h) != 1 || h.action != move) && !seats) continue;
             memcpy(&stamp, *(const char* const*)(u + U_MOVER) + MV_STAMP, 4);
             if (v->now - (int32_t)stamp <= STUCK_TICKS) return 1;
         }

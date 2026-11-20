@@ -32,6 +32,17 @@ and gives up on it as stock: a unit doing anything a player or the engine ordere
 aircraft, a frame being built, a passenger, another player's unit (an ally's included), a wreck or
 any other feature. The one rule is `movable`, which the tick and the cursor both apply.
 
+**The factory guard's builders.** A builder the [factory guard](factory-guard.html) seats is never
+ordered here: a unit has one manager. A site row is taken ground for the guard's own search, so at
+the builder's next visit, within the guard's 30-tick sleep, the guard gives up a seat or wait spot
+the site covers and walks the builder to another. The cursor therefore accepts a site under such a
+builder (`tagpu_guard_seats`: a row of that incarnation whose builder still guards its live plant),
+the plan counts it apart (`guard=` in the log) and the hold holds while it changes cell -- and,
+whether it moves or not, while another order runs in front of its guard. That is above all the
+HelpBuild the guard itself puts there: a seated builder helping its plant is visited again when the
+product is done, and the builder waits for it, within the hold's bound of 20 refusals. No unit is
+sent to a lane, a seat or a wait spot of the guard's: `tagpu_guard_mark` marks them taken.
+
 **Where the engine is touched, and where the orders are given.** Two stubs sit on the refused branch,
 `0x403CD0` in MobileBuild and `0x41400D` in its VTOL twin. They run inside the builder's order
 handler and write only the module's own tables and that node's retry counter. Order lists are
@@ -45,7 +56,8 @@ at every click.
 **The plan of one refusal** (`plan`). The box is the site grown by 12 cells on every side, clipped
 to the map. Three rasters are filled from it: *wall*, every cell a structure holds; *taken*, those,
 every structure's whole footprint (a yard's open cells are held by no unit in the map), every site
-the module knows and every place a row has already sent a unit to; *occ*, the mover standing on each
+the module knows, every place a row has already sent a unit to and the factory guard's lanes, seats
+and wait spots; *occ*, the mover standing on each
 cell. The site's units are taken in the order its cells hold them, row-major, up to 64 a refusal. For
 each, a breadth-first search (`sg_way_off`, four-connected, neighbours north, west, east, south) runs
 from the unit's own place over the places its footprint fits, its movement class can stand on
@@ -72,8 +84,8 @@ still that move by value. Anything else frees the row and nothing is done to the
 
 **The hold.** The stock abandon counts refusals, not time, so units still walking off would use the
 builder's patience up. While a unit the module moved is on the site and has changed cell within 180
-ticks, or another of the owner's units is crossing the site under a move and has changed cell
-within 180 ticks, the stub takes one off the counter before stock adds one: the refusal does not
+ticks, or another of the owner's units is crossing the site under a move, or one the factory guard
+seats is walking off it, and has changed cell within 180 ticks, the stub takes one off the counter before stock adds one: the refusal does not
 count. The counter never goes below 1, so the first refusal's reply is said once. A site with
 nothing moving on it counts as stock and is abandoned as stock. **The hold is bounded**: a site's
 row counts the refusals it has held and holds at most 20, whatever keeps moving on the site -- a
@@ -123,7 +135,7 @@ click's. **On a puppet nothing of the module runs**: the stubs, the tick and the
 question return at once under `tagpu_puppet_on()`, and the recorder is the only writer of the tables.
 
 The feature declares itself `SIM_PUPPET_OWNER` with the test groups `build-scatter` and
-`stock-build-scatter` (the same game on the stock-limits build). Their game
+`build-scatter-guard`, each with its `stock-` twin (the same game on the stock-limits build). Their game
 (`scenarios/build-scatter.json`, Two Continents): two ARMCK place a solar collector each over four
 idle ARMPW through the build panel and native clicks; one moved unit is ordered away by hand and one
 back onto the site; every unit is removed while the second site's four are walking and their builder
@@ -133,7 +145,12 @@ held GameTimes, that all four were moved off each site, that the unit ordered ba
 again, that the unit ordered away went where the player sent it, that the first solar stands, and
 that the wreck's site was abandoned with its four units off it. Site B's four are a bunch: sent
 together to its centre at the start, so that the cursor's yes and the plan's four moves there rest on
-the failed-move rule.
+the failed-move rule. The guard's game (`scenarios/build-scatter-guard.json`): an ARMCOM guards an
+ARMVP and is seated beside it, an ARMCK is ordered to build a solar collector on that seat, and the
+plant is given a construction vehicle, which the commander helps; `scatter_check.py guarded` asserts
+that the site's plan counted one unit of the guard's and moved none, that the guard logged the seat
+given up more than 330 ticks after the first refusal (past a stock builder's patience, so the
+refusals were held), that the solar stands and that the commander stands off it.
 
 The geometry is engine-free (`tagpu_scattergeo.c`, listed `engine-free sim`) and has a native
 self-test under ASan and UBSan: `python3 tagpu/ddraw/tests/scattertest.py`.
@@ -153,8 +170,8 @@ own bytes.
 cursor's site 0x47D554` at attach; a site that is not the retail bytes is named in its line, and
 `scatter: NOT installed: …` says why nothing is. One line a plan that moved something, and one for a
 site's first plan whatever it did: `scatter: GameTime N: site builder=<slot> type=<def>
-cell=<x>,<z> <w>x<h> on=<units on it> moved= (failed=) noway= busy= other= full=`, `failed` the moved
-units that were idle by a failed move.
+cell=<x>,<z> <w>x<h> on=<units on it> moved= (failed=) noway= busy= other= full= guard=`, `failed` the
+moved units that were idle by a failed move and `guard` the units left to the factory guard.
 
 There is no setting: the module is installed in every game.
 
@@ -163,9 +180,12 @@ There is no setting: the module is installed in every game.
 - **Only idle units are moved.** A unit standing on the site under an order that keeps it there --
   guarding, patrolling through, attacking from where it stands, a builder building -- is `busy`:
   the cursor refuses the site and a queued site is abandoned as stock.
-- **Builders seated by the factory guard are busy units.** The guard planner does not know a
-  scatter site and the scatter planner does not know a lane or a seat, so a moved unit can be sent
-  onto a plant's lane ([factory guard](factory-guard.html)).
+- **A guard builder the guard cannot place off the site stays.** With no seat and no free place
+  within 8 cells its wait spot is where it stands, and the builder gives up as stock.
+- **A seated builder helping a product that takes longer than the hold** -- 20 held refusals, about
+  600 ticks past the stock 330 -- is still on the site when the builder gives up.
+- **A unit guarding anything but a plant the guard seats it at** -- another unit, a structure that
+  builds nothing mobile, an air builder guarding -- is a busy unit.
 - **Aircraft are not moved**, landed ones included.
 - **A destination can lie on another builder's queued site.** Only sites already refused, built
   structures and other rows' places are kept clear; the unit is moved again when that site's
