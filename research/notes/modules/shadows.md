@@ -31,7 +31,7 @@ regenerated.**
 |---|---|
 | `tagpu_native.c` | **the policy**. `pk->gfx_opt` (the frame packet's copy of `main+0x37F06`) and the Classic++ `shadows=` key decide, per unit, one of `TAGPU_PDSH_NONE` / `_SIL` / `_SLANT`, plus `shOffY = gy - ay`, the shift onto the ground line under the unit |
 | `tagpu_posedraw.c` | **the range**. `pd_record` turns the kind into a `first`/`count` — the BODY range for a silhouette, the bake's SLANT range for a structure — and hands it over. A ghost casts nothing |
-| `tagpu_vk_unit.c` | **the draw**. A third record stage, before the bodies, two pipelines and two more uniform windows a unit |
+| `tagpu_vk_unit.c` | **the draw**. A third record stage, before the bodies, and two pipelines. A unit's shadow draw binds the unit's one `Unit` block; the stage knows it is the hard shadow from `uPass` ([units](units.html), *A unit's block, and the frame's*) |
 
 **The engine's option word is read from the packet, not across the threads.** `pk->gfx_opt` is
 `RDU8(ta, OFF_GFXOPT)` in the publisher, on the game thread, exactly as the marker pass reads

@@ -308,6 +308,39 @@ capture time out; it never returns a stale file.
   before, `tools/talog.py since <gamedir> "$M"` after. A byte offset breaks at the first
   rotation, and a grep over the whole run can hand you the previous game's lines after a reload.
 
+## A player's game as a scenario, and the process's memory
+
+**A `tagpu.log` holds enough of a game to stand it up again.** The DLL logs every living unit
+every 5 s (type, seat, world position, build fraction), and `tools/roster2scenario.py` turns one
+dump into a `tacli scenario` file:
+
+```bash
+tools/roster2scenario.py tagpu.3.log tagpu.2.log tagpu.1.log --list        # the dumps: index, units, units a seat
+tools/roster2scenario.py tagpu.1.log --map "[M] Zombie Kingdom" \
+    --catalogue tagpu/instances/<i>/catalogue.json -o scenarios/<name>.json   # the last dump (--dump N for another)
+tools/tacli scenario load <i> <name> --restart
+```
+
+It is the situation, not the game: health, facing, orders, wrecks and resources are not in the
+log, a unit in flight is created on the ground, and a seat past its 1 499 free slots or a type
+the instance's catalogue lacks is left out and counted. Files a player sends are untrusted: keep
+them in a folder of their own and read them with the tool, never run anything from there.
+`scenarios/zombie-kingdom-13k.json` is one such, 13 526 units of ten seats on Total Mayhem.
+
+**The process's memory is read from the host, not from the DLL's line.** For a 32-bit game under
+Wine, `vk: VA map` under-reports the free space (*A pass refused its memory*, the Vulkan backend
+note); read `/proc/<pid>/smaps` of `TotalA.exe` (pid from `tacli ls --json`) and sum what is
+committed. Three log lines say what the unit pass and the bake hold and move:
+
+| line | says |
+|---|---|
+| `posebake: holding N geometry entries, X KB, and M material streams, Y KB (…), and Z KB of streams not yet sent - B baked and D dropped since the start` | the two caches; `dropped` climbing through a steady view is churn |
+| `vk: unit: N vertex stream(s), X MB, came into view on one frame and went up in bands through K KB of staging - a wait of T ms in this frame` | a frame that waited on its uploads |
+| `vk: unit: the refused request: <call> of N KB answered R` | what the device or the process would not give, before the lane restarts |
+
+`tagpu_passrefuse.on` forces a lane restart (`references/levers.md`): every bake entry is dropped
+and baked again, which is the road a real refusal takes.
+
 ## The restore-dump byte oracle
 
 `tagpu_restoredump.on` makes the Vulkan restorer write each atlas's restored twin once its queue

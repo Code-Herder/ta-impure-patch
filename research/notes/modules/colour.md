@@ -321,9 +321,9 @@ chain are asked of the restorer's memory rule ([restorer](restorer.html) §2.103
 are made; the per-tile atlas the terrain falls back to, the base's size × 4, is not asked, only
 refused by the device or not. The small per-slot images removed at 2d come
 to about 10 KiB a slot. The unit pass's transient staging no longer reserves up to 4 MiB a frame
-for an R8 upload. Its fragment-stage uniform block is 256 bytes, down from 272 now that `uLit`
-is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit instead of
-1 728, so the design point's blocks come to 23.0 MB a frame slot (§2.86).
+for an R8 upload. A unit's uniforms are one 112-byte block, 128 bytes at the reference device's
+64-byte alignment, so the design point's blocks come to 1.9 MB a frame slot
+([units](units.html), *A unit's block, and the frame's*).
 
 **The staging: host-visible memory, bounded by a constant** (`tagpu_vk_stage.c`, the header
 carries the argument). Every upload into a shared image — the base atlases of the feature, effect
@@ -340,7 +340,9 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
   agree. **The address-space bound** is a constant whatever the atlas: one buffer per slot per
   pass, and only on a frame that sends. The four world passes map at most **24 MiB** at the three
   frame slots the swapchain gives on the reference setup, and **64 MiB** at the `TAGPU_VK_SLOTS`
-  ceiling of eight.
+  ceiling of eight. The unit pass has a second one a slot for its vertex streams, and one band
+  buffer for the pass of at most 16 MiB, held only while a frame's bands are waited on
+  ([units](units.html), *Vertex streams*).
     - **In play an upload is in the frame's own command buffer, or it is not made.** The tiles an
       atlas painted since the device's copy go as one copy when they fit what the slot mapped
       (`tagpu_vk_stage_expand_rects`). The atlas's allowance is what makes them fit. When they do
