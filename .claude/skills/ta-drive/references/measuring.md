@@ -256,6 +256,29 @@ capture time out; it never returns a stale file.
   A/B is `terrown.off`, and that costs the zoomed-out fog rather than the picture
   (`references/levers.md`, the play defaults).
 
+## Where a frame's time goes: the frame profiler
+
+`tagpu_prof.on`, **present at launch**, times every frame of the game thread and of the render
+thread, cut into spans (the tick's phases, the draw's sections, the render loop's stages), and
+writes one row a frame to `tagpu_prof_game.csv` and `tagpu_prof_render.csv` in the instance's
+`log\`. The lever is polled, so removing and re-creating it cuts a new pair of files per window;
+the game thread's phase marks need it at attach, and `scenario load --restart` relaunches, so it
+must be there before the load. `tools/profsum.py <csv>` prints the table: ms a frame, share,
+median, p99 and, for the game thread, ms a tick. **Read ms a tick** for the simulation: a frame
+runs up to five ticks.
+
+`tagpu_prof_sample.on` beside it adds samples of the game thread (`tagpu_prof_samples.bin`):
+`tools/profsample.py <samples> --csv <game csv>` says which call of the unit tick, the players
+phase or the particle walk the thread was inside, and in which function. `--dll <ddraw.dll>` names
+our own functions, from a DLL linked with symbols (`tools/runlock.py make -- -C tagpu/ddraw
+LDFLAGS='-Wl,--enable-stdcall-fixup -static -shared -Wl,--file-alignment,4096'`); keep the DLL
+that ran beside its samples.
+
+**Comparing two builds' tick times needs a quiet machine or one game.** Two runs see different
+battles and different loads. Alternate the two code paths every 64 ticks inside one game with a
+test-only switch and compare neighbouring blocks by the rows' GameTime tag, then remove the
+switch ([the profiler](../../../../research/notes/modules/profiler.md), *Measuring a change*).
+
 ## Movies
 
 - **Only an `--intro` instance has one.** `tacli create <i> --intro` keeps `Data/1.ZRB`/`2.zrb` in

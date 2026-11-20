@@ -388,7 +388,16 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   tick `0x48AD30` at `0x4954ED`; GameTime `main+0x38A47` is advanced at `0x4954C0`, before both):
   for each of the ten layers, for each object, slot 3 first (`0x471EE0`); an object whose
   sub-vector is empty (`0x472FD0`) is destroyed and the rest shifted down (`0x471EE7..0x471F16`),
-  any other updated through slot 1 (`0x471F1C`).
+  any other updated through slot 1 (`0x471F1C`). Its reads [DISASSEMBLED 2026-11-20]: the table
+  at `0x471EBB`; slot 0 with 1, the deleting destructor, at `0x471EF1`; the shift a pointer at a
+  time (`0x471EFF..0x471F09`); the end lowered by 4 (`0x471F14`) and read again at every turn
+  (`0x471F25`). **The table `main+0x38D77` is named at nineteen places in the image** (a scan of
+  the disassembly for the displacement): its allocation `0x471DCB`, its release `0x471DEC` and
+  `0x471E97`, this walker, the draws `0x471F4B` and `0x471F9C`, and the thirteen emitters
+  `0x471FD9`..`0x472C58`. None of those functions is reached by direct calls from slots 0, 1, 3,
+  4 or 5 of the seven vtables, and the indirect calls inside the classes are those vtables' own
+  slots: an object's methods never see the layer they are in. Impure calls its own walker from
+  `0x4955BF` instead (`tagpu_patches.c`, `particle_walk`; [engine patches](../modules/engine-patches.md)).
 - **Two bursts an emission.** At tick T the handler's emitter makes burst 1 in the unit's turn; the
   walker of the same tick moves it (the update) and the spawn-again test fails (`+0x08` = T + 1 >
   T). At T + 1 the object is not empty (a particle of burst 1 has steps ≥ 1 and so dies at T +
@@ -1827,7 +1836,9 @@ simulation's generator.
   and `0x472C50`. The dead sites are written with the rest, since their bytes are compared anyway.
 - **The layers' tick `0x471EB0` erases by shifting:** for every object of every layer it calls
   `vtbl+0xC`, and a finished object is deleted and the tail moved down one slot. Like the emitter's
-  own front-drop, that is O(layer) a removal; it runs in the sim tick (`0x4955BF`). The teardown
+  own front-drop, that is O(layer) a removal; it runs in the sim tick (`0x4955BF`). MEASURED
+  2026-11-20 by sampling a battle of 7 500 units: the shift was a third of the particle tick,
+  1.9 ms of 5.7 a tick, the first read of each object another 1.7, the updates 1.8. The teardown
   `0x471DE0` empties a layer front first the same way (`0x471E17..0x471E48`), n²/2 moves a layer.
   The draw is `0x471F90(ctx, layer)`, called ten times from DrawGameScreen (`0x469849` …
   `0x469D2C`), which calls `vtbl+8` on each object; `0x471F40`, a whole-table twin of it, has no

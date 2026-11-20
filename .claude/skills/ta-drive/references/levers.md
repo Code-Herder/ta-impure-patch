@@ -464,6 +464,8 @@ that map's size.
 | `surfdump.on` | one-shot: writes the golden source as `tagpu_surf.ppm` and logs `surf: re-read check at draw N: 0 byte(s) of M differ` — must be 0 |
 | `surfcheck.on` | continuous: re-reads the golden source on every capture while present; `surf: the continuous re-read check is ARMED …`, silent while 0, a cumulative tally in the heartbeat, the total printed when removed. It roughly doubles the capture cost and holds the surface lock across the compare — arm it for a run, take it away again |
 | `ftime.on` | `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time |
+| `prof.on` (at launch), `prof_sample.on` | the frame profiler's rows and samples in `log\\` (`references/measuring.md`, *Where a frame's time goes*); the log says `prof: the game lane's marks are the engine's own clock stamps` |
+| `candverify.on` (at launch) | every search for the enemies in range also runs the engine's function and the two lists are compared; `tacli weapons <i> --json` carries it in `hits` as `candidates_differ`, which must be 0 |
 | `suppress.on` | the render-suppressor (installs at attach) |
 | `tracer.on` | the unit-draw tracer (installs at attach) |
 | `spxlog.on` | the sub-pixel anchor filmstrip log |

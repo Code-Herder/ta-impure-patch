@@ -464,8 +464,11 @@ for and send it at 32 MB a frame, 144–164 streams, each a wait of 51–97 ms. 
 after it: 754–759 MB.
 
 **Not covered.**
-- **The frame rate with the whole map in view is 4–5 a second**, bound by the simulation of 13 000
-  units, not by this pass; a banded frame still waits 120–240 ms.
+- **The frame rate with the whole map in view is 4–5 a second**, and this pass is half of why:
+  MEASURED 2026-11-20 with the frame profiler on 13 500 units, the render thread ran 5 frames a
+  second there with the simulation running or paused, about 90 ms a frame in the unit upload and
+  90 in the present on a virtual display, while the paused game thread ran 57. With the simulation
+  running the game thread is bound as well, by the step ([the profiler](profiler.md)).
 - **A lane restart changes the picture** on both builds (the side panel's texture and unit
   shading, 46–60 thousand pixels at 1080p against the frame before it). Not investigated.
 - **Where the address space does run out, a third bring-up can find no hardware device**, take

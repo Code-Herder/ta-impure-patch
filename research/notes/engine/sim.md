@@ -417,6 +417,42 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   k+1's images in step k, which is why a rebuild at the frame visit is in place there and would not
   be on the recording machine.
 
+**The engine's phase stamps: the thunk `0x4B6560` and its 23 callers** [DISASSEMBLED 2026-11-20,
+every `call 0x4B6560` in `.text`]. `0x4B6560` is `FF 25 DC C0 4F 00`, `jmp [0x4FC0DC]`, the
+GetTickCount import, and nothing jumps to it. The frame function `0x496790`, the step `0x495490`
+and DrawGameScreen `0x468CF0` call it after each of their phases and add the difference to a
+counter of the profile block `main+0x38D85`. The calls, and the phase that has just ended at each:
+
+| in | call | what ended |
+|---|---|---|
+| the frame function | `0x4967DB` | nothing: its first, at the entry |
+| | `0x49681C` | what precedes a network game's pump |
+| | `0x496881`, `0x496903` | the pump, on its two ways out |
+| | `0x49694F` | a skirmish's step |
+| | `0x4969DD` | the draw (the call at `0x4969CD`): its last |
+| the step | `0x4954D8` | what precedes the unit tick |
+| | `0x4954FE` | the unit tick (`0x4954ED`) |
+| | `0x495524` | projectiles (`0x495513`) |
+| | `0x49554A` | explosions and flying pieces (`0x495539`) |
+| | `0x495570` | the players phase `0x464F80` |
+| | `0x4955AA` | features, wind, meteors, the camera |
+| | `0x4955D0` | particles (`0x4955BF`) |
+| | `0x4955F6` | `0x466580` (`0x4955E5`) |
+| | `0x495657` | the block `0x49560D` and `0x495616` skip: `0x457D30` and `0x4618A0` |
+| | `0x495699` | the step's tail after its loop: `0x428BD0`, `0x428BE0`, `0x428BF0`, `0x463EF0`, `0x482130` |
+| the draw | `0x468D96` | the frame function up to the draw, and the draw's first lines |
+| | `0x469660` | the terrain, the bars and the minimap |
+| | `0x469D43` | the sort, the sweep and the markers |
+| | `0x469D9F` | the fog |
+| the accumulate `0x46A400` | `0x46A404` | the HUD; the accumulate is called at `0x46A3EE`, after the flip |
+| the popup dialog `0x4689C0` | `0x4689D5`, `0x4689E6` | its 15 ms throttle, not a phase |
+
+Impure's frame profiler takes the thunk when `tagpu_prof.on` is present at attach and reads the
+phase from the return address ([the profiler](../modules/profiler.md)). MEASURED 2026-11-20 with
+it, the same battle: at 13 500 units the step ran 45 ms a tick against its 33 ms slot (the unit
+tick 21, the players phase 17, particles 5), so the scheduler ran its cap of five ticks a frame.
+
+
 ### The demo recorder's counts and the step's phases: sinks, impacts, emitters and the images gate's map [DISASSEMBLED + MEASURED 2026-10-01]
 
 S3c-2 of the [skirmish slice](../tadr-port/demo-recorder-skirmish-slice.md#s3c-2-counted-on-puppets-and-the-images-gate)

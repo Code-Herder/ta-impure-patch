@@ -4976,7 +4976,7 @@ static void* __cdecl after_draw_timed(unsigned int* regs)
    function 0x496790, the step 0x495490 and DrawGameScreen 0x468CF0 read GetTickCount after each
    of their phases through one thunk, 0x4B6560 (`jmp [0x4FC0DC]`, the import), and add the
    difference to a counter of the engine's profile block main+0x38D85; the draw's last stamp is
-   in the block's own accumulate 0x46A400, called at 0x46A3EE after the flip. The thunk has 22
+   in the block's own accumulate 0x46A400, called at 0x46A3EE after the flip. The thunk has 23
    callers and no other [DISASSEMBLED: every `call 0x4B6560` in .text], all of them in those
    three functions, 0x46A400 and the popup dialog's throttle 0x4689C0, which the draw calls.
 
