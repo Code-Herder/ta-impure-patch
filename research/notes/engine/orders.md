@@ -1060,10 +1060,43 @@ then walks: `0x438A00` at `0x40404E` with the node, the target's position `+0x6A
 `+0x14A`, `+0x14C` (`0x403FF9..0x404045`; `0x4FC928` holds the double 16.0; the cast `0x4E43A0`, the halving
 `cdq; sub; sar 1`, so toward zero). The sum squares fx alone (`fld st(1); fmul st,st(2); fadd st,st(1); fadd
 st,st(1)`), so it is the footprint's diagonal only when fz is 2; for a 6 x 6 target it is 16 · √48, not √72. It
-then sets `node+0x06` to `0xE8` and returns 1. **State 1** answers the event bit `0x40`, the walk's end short of
-that distance, with "I can't get there" (`0x5015BC`, `0x404072..0x40407A`) and 8, abandoned
+then sets `node+0x06` to `0xE8` and returns 1. **The walk's goal is an annulus** [DISASSEMBLED 2026-11-18]:
+`0x438A00` builds `0x44D3B0(node, x, z, rout, rin)` (vtable `0x4FD358`), with G the first cell the builder would
+have centred on the target's centre, `(c − (f << 19) + 0x80000) >> 20` per axis for the builder's own footprint
+`+0x7E`/`+0x80`, and `+0x18 = (rout/16)²`, `+0x14 = (rin/16)²`, the divisions truncating
+(`0x44D3BF..0x44D434`); it is reached (`0x44D800`) when the builder's first cell `+0x76`/`+0x78` lies at
+`(rin/16)² ≤ d² ≤ (rout/16)²` from G -- **a builder closer than rin is out of range too, and walks out**. A
+builder already in the band does not step: the movement pass `0x43DD20` runs the class step first
+(`0x43DD28` → `0x44F1A0`), which posts `0x20` and clears the goal (the annulus's slot `+0x2C` is `0x44CEF0`,
+returning 0) before the physics (`0x43DD46`/`0x43DD4D`), and state 1 starts the build on the next tick.
+Impure's guard seats rest on this ([factory guard](../modules/factory-guard.html)). **State 1** answers the
+event bit `0x40` -- the path search found no points while the goal is not reached (`0x44F0A4`), not a walk that
+stopped short -- with "I can't get there" (`0x5015BC`, `0x404072..0x40407A`) and 8, abandoned
 (`0x404069..0x40408B`); a target already finished returns 5 (`0x40408E..0x4040AD`;
 [cob](cob.html), *The scripts a unit's work starts*). State 4 is the completion, "Building complete" and 5 (`0x404223..0x404248`).
+
+**Range is tested once, by the walk's goal** [DISASSEMBLED 2026-11-18]. The state table at `0x40425C` (file
+offset `0x365C`) holds `0x403FD9`, `0x404069`, `0x4040EE`, `0x404105`, `0x404223`. Otherwise state 1 starts the
+build on any wake in its mask `0xE8` but `0x40` -- `0x08` and `0x80` as well as `0x20` -- with `0x4898B0(unit, 3)`,
+the heading `0x48A980` and StartBuilding `0x438590`. State 2 waits for INBUILDSTANCE (`0x438700(unit, node, 0xA)`,
+unit `+0x10F` bit 0). State 3 is the work, every tick: `0x41BA60(unit, frame, WorkerTime def +0x1FE / 30)` at
+`0x404139`, then, when it worked, the nano piece `0x43E400` and the emitter `0x4720D0` aimed at the frame; its
+one comparison is the frame's `+0x104` against 0.0 (`0x4041E7`). None of them, nor `0x41BA60`, `0x41B8D0` or the
+frame's own GetBuilt `0x402DA0`, reads the distance between the helper and the frame. The emitter has no
+maximum: the particle's flight time is about distance / 4 px (`0x473EAF..`), and under about 4 px nothing is
+emitted (`0x473EE1`). The goal cannot come back after a bump: the class step `0x44F1A0` tests the goal only while
+the mover has one, and on reaching it calls set-goal(0) through `0x44F2A0` (posting `0x80`); the physics and the
+movement pass reach only the mover's slots `+0xC`, `+0x10`, `+0x14`. HelpBuild never returns 0 or 9, so state 0,
+and with it `0x438A00` at `0x40404E` -- HelpBuild's one goal-maker and its one reader of `+0x212` -- runs once per
+node: the annulus built there is the whole range rule. The call's return is `0x404053`, which sets the node's
+`+0x06` to `0xE8`. Not established: who posts the event `0x02` that ends a
+help in states 2 and 3. State 0 sets the wait mask `0xE8` and returns 1 (`0x404053..0x40405A`); the
+goal (`0x438A00` → `0x44D3B0`) takes the target's x and z by value (`0x438A2A..0x438A42`), so the
+target's later moves never move it. The controller loops, and state 1 runs at the first pass whose events -- the node's `+0x4E` with the unit's
+`+0xBA` -- hold a bit of `0xE8` (`0x438A00` clears only the node's `0x3E0` bits, `0x438A84`, so an event
+already pending on the unit can run it in the same tick). A target already finished then ends it (5)
+at `0x40408E..0x4040A1`; until that pass, the movement pass follows its goal. Impure's guard seats are placed in that annulus
+([factory guard](../modules/factory-guard.html)).
 
 **What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
 30 000-40 000): an ARMLAB made all 15 of its products at one 16.16 point, its cell (168, 414); three ARMCVs north
@@ -1322,8 +1355,32 @@ What that rests on:
   order's flags `+0x42` carry `0x100000` (`0x40658A`) [INFERRED: an assist of its build],
   through `0x43ACB0` at `0x40667A`; that branch is skipped when the target's head order targets
   the guarder itself (`0x406597`), which keeps two units guarding each other out of it. Otherwise it moves to the target position plus the offset (`0x438930` at
-  `0x4066E0`), waits 30 ticks (`0x439E80`), and returns 2. **No state-1 path writes
+  `0x4066E0`), waits 30 ticks (`0x439E80`), and returns 2. **No stock state-1 path writes
   `+0x22..+0x2D` or `+0x36`.**
+- **The assist, `0x40654B..0x4066A9`** [DISASSEMBLED 2026-11-18], with ebx the guard node, edi the
+  guarder, eax the target and ecx the target's head: six gates, each failing to the home move
+  `0x4066AC` -- a head (`0x406553`), a head action byte (`0x40655E`), the guarder's and the
+  target's def `+0x241` bit `0x40` (`0x406571`, `0x406584`), the head's `0x100000` (`0x406591`) and
+  the head's `+0x16` not the guarder (`0x40659A`). A MobileBuild or BuildingBuild head (the names
+  `0x5013FC`, `0x5011F0` through `0x438760`) with a frame `+0x16` gets a **HelpBuild on the frame**
+  (`0x5013F0`, `0x406636..0x406646`); any other head carrying `0x400`, or `0x200` with a target,
+  gets a copy of its own action (`0x406612..0x40661B`); a build head with no frame yet goes home
+  (`0x406629..0x40662C`). The node is `0x43A0C0(action, head+0x16, &head+0x22, 0, 0, 0)` -- the head's
+  target read at `0x406668`, the frame or, as its last help ends, the unit just finished -- put first
+  by `0x43ACB0` (`0x40667A`), the guard's `+6` zeroed and 3 returned. **Every path to the home
+  move passes `0x40654B`**: the attack reaction's refusal falls into the repair branch, which
+  reaches it at `0x406549` or from `0x406500`; the one branch from outside into `0x40654C..0x4066AB`,
+  `0x406516`'s `je 0x406691` (the repair branch's failed allocation), returns 3 there without a move (a grep of every direct jump and call). Impure's guard seats hook it
+  (`tagpu_guard.c`; [hook map](../modules/hook-map.html)): the hook writes the node's offset and
+  `+0x36` before the home move reads them, and skips the assist for a builder with no seat.
+- **The home move `0x4066AC..0x406702`** reads the target's position `+0x6A`/`+0x6E`/`+0x72` plus the node's
+  offset `+0x22`/`+0x26`/`+0x2A` and passes `(+0x36) / 2` (`0x4066AC..0x4066D6`), calls `0x438930` (`0x4066E0`),
+  sleeps 30 (`0x4066E5..0x4066E9`), sets the node's `+0x06` bits `0x18` and returns 2 (`0x4066EE..0x4066F6`).
+  `0x438930` takes the node's unit from the node's `+0x0E` (`0x438934`) and, for a def without `+0x241` bit
+  `0x800`, builds the point goal `0x44CF60`: reached when the guarder's first cell is within `((+0x36) / 2 / 16)²` cells² of the place it would have centred
+  on the point. It re-issues a fresh goal at every wake (the 30-tick timer, events `0x08` and
+  `0x10`); a guarder already in its goal stays put, the class step posting `0x20` before any
+  physics (*HelpBuild's walk*, below).
 - **The dispatch `0x43B87C`** maps a handler's result through the jump table `0x43BAA4`
   (10 entries; above 9 → `0x43BA90`): 0 → state 0 (`0x43B89F`); 1 → state + 1 (`0x43B897`);
   2 and 4 → nothing (`0x43B99F`); 3 → a random wait (`0x43B890` → `0x43B951`); 5 and 8 → unlink and
@@ -1338,7 +1395,14 @@ What that rests on:
   (`0x48AFAA`). For the head node `[unit+0x5C]` it ORs the node's `+0x4E` with the unit's event word
   `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
   and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
-  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`). Results 1, 2 and 4 go
+  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`; the descriptor array
+  is loaded just before it by the 6-byte `mov ecx,[0x512344]` at `0x43B865..0x43B86A`, which no branch
+  enters past its first byte, where Impure's guard folds a held arm; the code goes on at `0x43B86B`).
+  Result 3 is no stop: its random wait sets the node's timer (`0x43B890` → `0x43B951..0x43B970`)
+  and goes on at `0x43B99F` to the head again, so a node a handler linked in front of itself and
+  then answered 3 for -- Follow_Ground's attack reaction (`0x4063F5`, returning 3 at `0x406405`),
+  its repair branch (`0x406532`, returning 3 at `0x40653A`) and its assist (`0x40667A`, returning 3
+  at `0x406682`) -- runs in the same tick. Results 1, 2 and 4 go
   through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
   whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
   `0x439E80` sets, never the tick.
@@ -1361,7 +1425,7 @@ of attack orders (`tools/tasim/duelgen.py` `queue_orders`; [calibration](../modu
 | `0x4033A0` | **Patrol** | runs the idle search at each wake, every 30 to 59 ticks (`0x4033D9..0x403406`). Move_Ground `0x4031D0` runs no search |
 | `0x4031D0` | **Move_Ground** (action 26), a mover's move | state 0 (`0x403212`): 7 when the unit's `+0x86` is set, else the ok sound (`0x438880`), the move started at the node's point (`0x438930(node+0x22, node+0x36 + 4)`, `0x403232..0x40323F`), `node+6 = 0xE0`, result 1. State 1 (`0x4031EB`): result 5, done, only when the events carry `0x20`, the goal reached (the arrived sound `0x47F780(unit, 6, 0)` first, `0x4031F2..0x403206`); any other wake returns 9 (`0x403209`), which on a lone node starts the move over (the dispatch, below) (DISASSEMBLED 2026-11-14). **A move to a point inside a structure's footprint never ends**: MEASURED in the bar's cmdr run (65 games, the ImpAI commander's head every 300 ticks), its flights to an own structure's centre held the head with the flag `0x800000` set in 5 090 samples, the commander unmoved since the last sample in 5 063 and 39 / 43 / 51 px (p10 / p50 / p90) from the point, for up to 67 200 ticks [INFERRED: the mover stops at the footprint and never posts `0x20`]. Readers: ImpAI's hand-back (`impai_brain.c`, THE COMMANDER'S HAND-BACK) lists such a commander idle once the military's window lapses |
 | `0x402DA0` | **GetBuilt**'s end (action 19), a factory's unit finishing | at build fraction 0 (`0x402DAB..0x402DBC`) it copies the builder's QMove and QPatrol nodes (the names `0x5010A4`, `0x50109C` through `0x438760`, the builder `node+0x16`'s list `+0x5C` walked at `0x402E01..0x402E6D`, each re-asked of the resolver and appended with Shift by `0x43ADC0`); **with none copied it appends a `PARK`** (the name `0x501358` pushed at `0x402EF0`, `0x402EE2..0x402EFA`, Shift 1) and answers 5, so the unit's list is the Park alone. Its descriptor is the `.rdata` record `0x4FC7B0` (status "Parking", the handler at `+4`, the name "Park" at `+0x15`). The node carries no `0x4000`: MEASURED 2026-11-13, a CORCV out of a CORVP with no rally held flags `0x1001` |
-| `0x4061A0` | **Park** (action 28 in the retail vector) | state 0 (`0x4061FE`): a VTOL moves to its own point (`0x438760("VTOL_MOVE")`, `0x406240`); any other unit gets a move goal off the yard sized by its footprint (`+0x7E`, `0x406263..0x4062E1`, `0x438AD0`), `node+6 = 0xE0`, result 1. State 1 (`0x4061C3`): result 5, done, on the event bit `0x20` (`0x4061C3`) or when a node follows (`+0x4A` nonzero, `0x4061D7..0x4061DC`); otherwise it sleeps 30 ticks (`0x439E80(0x1E)`, `0x4061EB`) and answers 0, **so a Park that is the unit's only node never ends**. MEASURED 2026-11-13 (an instrumented build, games to GameTime 10 000): CORCVs out of their CORVP held it from the exit to the end on Lava Mania, Pincushion and Trout Farm. ImpAI's idle test counts a lone Park as idle (`impai_brain.c`, `idle_head`) |
+| `0x4061A0` | **Park** (action 28 in the retail vector) | state 0 (`0x4061FE`): a VTOL moves to its own point (`0x438760("VTOL_MOVE")`, `0x406240`); any other unit gets a move goal off the yard sized by its footprint (`+0x7E`, `0x406263..0x4062E1`, `0x438AD0`), `node+6 = 0xE0`, result 1. **The goal is a ring** [DISASSEMBLED 2026-11-18]: n is the footprint `+0x7E` for a def whose `minwaterdepth` `+0x1C0` is negative (every land unit) and `+0x7E` + 3 otherwise (`0x40625B..0x406269`); around the unit's own centre cell c (`+0x6A`, `+0x72` shifted by 20) the box has origin (cx − 4n, cz − 3n) and size (8n, 6n) cells (`0x4062A1..0x4062D4`), and `0x438AD0` builds `0x44D8A0` over it grown by the unit's footprint on the low sides, reached (`0x44DCB0`) when the unit's first cell lies on the rectangle's border. No random draw: the path search ends at the first border cell it pops [INFERRED: the cheapest]. For a 2 x 2 land unit the border is about 9 cells off in x and 7 in z. State 1 (`0x4061C3`): result 5, done, on the event bit `0x20` (`0x4061C3`) or when a node follows (`+0x4A` nonzero, `0x4061D7..0x4061DC`); otherwise it sleeps 30 ticks (`0x439E80(0x1E)`, `0x4061EB`) and answers 0, **so a Park that is the unit's only node never ends**. MEASURED 2026-11-13 (an instrumented build, games to GameTime 10 000): CORCVs out of their CORVP held it from the exit to the end on Lava Mania, Pincushion and Trout Farm. ImpAI's idle test counts a lone Park as idle (`impai_brain.c`, `idle_head`) |
 | `0x4034A0` | **Attack_Chase**, a mover's attack (action 6) | result 5 (`0x403853`) when the target `+0x16` is 0 (`0x4034BB..0x4034C0`), the events carry `0x800` or `0x10008` (`0x4034AF`, `0x4034C6`), or the unit is past its leash `+0x3E` (`0x4034D2..0x40351E`). The death walk `0x489740` posts 8 to every node targeting the dead unit and zeroes its `+0x16` (`0x489760..0x48978E`), so a dead target ends the order at the controller's next run and the next queued node starts. Each node starts at state 0 and takes the first armed slot `0x4897E0` (`0x403595..0x4035A1`); within `0x4034A0..0x403862` only `+0x110` bit 31 is read (`0x403557`), no move state. A unit without a mover gets result 7 (`0x403539..0x40353C`), which empties the main list (`0x43BA3D`) |
 | `0x402160` | **Attack_NoMove**, a structure's attack (action 8; the resolver gives it for `+0x110` bit 29, `0x43F367`) | result 5 when the target is 0 or the events carry `0x10808` (`0x402166..0x402175`); state 1 takes slot 0 from the weapon scan (`0x4898B0(unit, 0)`, slot byte `+0x1F` bit 4 cleared at `0x4898F4`), sets its target (`0x48A060`, `0x4021B3..0x4021BA`) and waits on `0x11808`; **a target out of reach ends it**: AutoAim raises `+0xBA |= 0x1000` at reload 0 when can-aim `0x49AA80` fails (`0x49E53A`), state 2 (`0x402191..0x4021A3`) hands slots 0..2 back to the scan and returns 9, and result 9 (`0x43B8E5`) frees a node that has a successor (`0x43B8F8`, `0x43B928..0x43B949`) or puts the last one back to state 0 behind 30 + `0x4B6C30(30)` ticks (`0x43B94B..0x43B973`). So a structure's nearest-first queue drains one out-of-reach head a tick at reload 0 to its farthest target, retries that one every 30 to 59 ticks, and never reaches its standing Guard_NoMove; the calibration gives structures no orders |
 | `0x4021F0` | **Guard_NoMove** (action 22), a tower's standing order | read in outline only: state 1 (`0x402256`) adopts slot 0's unit target (`0x48A190`, `0x489690`) or re-checks every 30 ticks; state 2 (`0x4022DF`) keeps it while `0x49ABB0` engages, waiting on `0x7008`; state 3 (`0x402347`) picks a random candidate from `0x40AD80(owner, node+0x22, 0x280, …)` [INFERRED: within 640 of its post]; it draws the RNG (`0x402327`, `0x4023B2`). What `0x40AD80` returns for it, and so whether sight limits a tower, is not established |

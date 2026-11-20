@@ -49,6 +49,7 @@
 #include "tagpu_seatcontact.h"
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
+#include "tagpu_guard.h"
 #include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
@@ -347,6 +348,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            registry closes its lever list, and redirects the economy pass's call 0x46555A, byte-matched,
            disjoint from every site above; with no lever every seat's pass runs as stock. */
         tagpu_income_init();
+
+        /* tagpu: builders guarding a factory (tagpu_guard.h): the guard handler's assist 0x40654B,
+           byte-matched, disjoint from every site above; a guard that is not a ground builder's of a
+           finished plant runs as stock. */
+        tagpu_guard_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever

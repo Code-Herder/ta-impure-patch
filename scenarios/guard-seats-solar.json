@@ -1,0 +1,18 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A step of the guard-seats test groups: a finished solar collector of the human seat in the guarded ARMVP's box, west of it and clear of its seats and its lane, so the plant re-plans with builders seated and every seat is checked again (tagpu_guard.c, recheck_seats).",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "solar",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    850,
+    7150
+   ]
+  }
+ ]
+}

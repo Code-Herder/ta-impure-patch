@@ -1814,32 +1814,82 @@ class Unsettled(Exception):
     pass
 
 
+# the wiki entry the refusal opens: its first demo builds a 3D stage. The wiki opens on the tree's first
+# entry, the Tech tree, which draws no stage, so the page is moved to this one.
+WIKI_STAGE_ENTRY = "quickbuild"
+
+
+def wiki_node(entry: str) -> "int | None":
+    """The wiki tree's node index of `entry` (art/wiki/tree.json in depth-first order, categories counted):
+    the open page's `entry:<n>` control."""
+    n = 0
+
+    def walk(nodes):
+        nonlocal n
+        for x in nodes:
+            k, n = n, n + 1
+            if x.get("entry") == entry:
+                return k
+            r = walk(x.get("children", []))
+            if r is not None:
+                return r
+        return None
+    return walk(json.loads((TREE / "art" / "wiki" / "tree.json").read_text())["tree"])
+
+
+def wiki_dump(gamedir: Path, ready) -> "dict | None":
+    """The wiki's state dump once `ready(dump)` holds, asked again until ACK_S runs out; None then."""
+    out, ask = gamedir / "tagpu_wiki.json", gamedir / "tagpu_wiki.dump"
+    end = time.monotonic() + ACK_S
+    while time.monotonic() < end:
+        out.unlink(missing_ok=True)
+        ask.write_text("")
+        d = None
+        while d is None and time.monotonic() < end:
+            try:
+                if out.exists() and not ask.exists():
+                    d = json.loads(out.read_text())
+            except ValueError:
+                pass
+            time.sleep(LOOK_S)
+        if d is not None and ready(d):
+            return d
+    return None
+
+
+def wiki_click(name, d: dict, key: str) -> "str | None":
+    """A click on the wiki control `key` of dump `d`; why it could not be, or None."""
+    rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == key), None)
+    if not rect:
+        return f"the last frame has no {key!r} control: {[h['key'] for h in d.get('hits', [])][:12]}"
+    tacli("keys", name, "dclick:%d,%d" % ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2), timeout=150)
+    return None
+
+
 def wiki_stage_refused(name, gamedir: Path) -> "str | None":
     """The driver refuses the wiki's stage its memory: the page opens and the 3D image is missing,
-    and the game's lane stays up. The lever goes before the click and refuses only what the stage's
-    passes allocate: opening the page makes the UI pass allocate too, and that is the game's. Why it
-    failed, or None."""
-    out, ask = gamedir / "tagpu_wiki.json", gamedir / "tagpu_wiki.dump"
-    out.unlink(missing_ok=True)
-    ask.write_text("")
-    end, d = time.monotonic() + ACK_S, None
-    while d is None:
-        if time.monotonic() >= end:
-            return "no tagpu_wiki.json: the wiki filled no record"
-        try:
-            if out.exists() and not ask.exists():
-                d = json.loads(out.read_text())
-        except ValueError:
-            pass
-        time.sleep(LOOK_S)
-    rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == "wiki"), None)
-    if not rect:
-        return f"the last frame has no wiki button: {[h['key'] for h in d.get('hits', [])][:8]}"
+    and the game's lane stays up. The page is opened first and drawn, so the UI pass has allocated
+    what it needs; the lever then goes before the click on an entry whose demo builds a stage, and
+    refuses only what the stage's passes allocate. Why it failed, or None."""
+    d = wiki_dump(gamedir, lambda d: True)
+    if d is None:
+        return "no tagpu_wiki.json: the wiki filled no record"
+    why = wiki_click(name, d, "wiki")
+    if why:
+        return why
+    node = wiki_node(WIKI_STAGE_ENTRY)
+    if node is None:
+        return f"art/wiki/tree.json has no entry {WIKI_STAGE_ENTRY!r}"
+    d = wiki_dump(gamedir, lambda d: d.get("drawn_open") and any(h["key"] == f"entry:{node}" for h in d.get("hits", [])))
+    if d is None:
+        return f"the wiki page was not drawn with its tree's entry:{node} ({WIKI_STAGE_ENTRY})"
     refuse_lever_write(gamedir, "wiki", "tagpu_vkfull.on")
-    tacli("keys", name, "dclick:%d,%d" % ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2), timeout=150)
-    said = log_says(gamedir, GUI_STAGE_REFUSED, 60)
+    why = wiki_click(name, d, f"entry:{node}")
+    said = not why and log_says(gamedir, GUI_STAGE_REFUSED, 60)
     (gamedir / "tagpu_vkfull.on").unlink(missing_ok=True)
     tacli("keys", name, "Escape", timeout=150)
+    if why:
+        return why
     if not said:
         return f"the driver refused the wiki's stage and the log never said {GUI_STAGE_REFUSED!r}"
     if not presents_after(gamedir):

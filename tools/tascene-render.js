@@ -75,6 +75,38 @@ function uniforms(gl, prog, names) {
   for (const n of names) U[n] = gl.getUniformLocation(prog, n);
   return U;
 }
+// A std140 uniform block of `prog`, fed from one buffer on binding point `point`. Each member's offset and type are
+// read from the linked program, so the block's layout is declared once, in the shader (tagpu_glsl.h for `Unit`).
+// `set({name: number | [numbers]})` writes the members named and uploads the block; a name the block does not have
+// throws, so a member renamed in the shader fails here and not as a picture.
+function uniformBlock(gl, prog, block, point) {
+  const ix = gl.getUniformBlockIndex(prog, block);
+  if (ix === gl.INVALID_INDEX) throw new Error(`${block}: the program has no such uniform block`);
+  const size = gl.getActiveUniformBlockParameter(prog, ix, gl.UNIFORM_BLOCK_DATA_SIZE);
+  const ids = Array.from(gl.getActiveUniformBlockParameter(prog, ix, gl.UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES));
+  const offs = gl.getActiveUniforms(prog, ids, gl.UNIFORM_OFFSET);
+  const types = gl.getActiveUniforms(prog, ids, gl.UNIFORM_TYPE);
+  const at = {};
+  ids.forEach((id, k) => {
+    at[gl.getActiveUniform(prog, id).name.replace(/^.*\./, "")] = { off: offs[k], int: types[k] === gl.INT };
+  });
+  const data = new ArrayBuffer(size), f32 = new Float32Array(data), i32 = new Int32Array(data);
+  const buf = gl.createBuffer();
+  gl.uniformBlockBinding(prog, ix, point);
+  gl.bindBufferBase(gl.UNIFORM_BUFFER, point, buf);
+  gl.bufferData(gl.UNIFORM_BUFFER, data, gl.DYNAMIC_DRAW);
+  return {
+    set(values) {
+      for (const [name, v] of Object.entries(values)) {
+        const m = at[name];
+        if (!m) throw new Error(`${block}.${name}: no such member`);
+        (m.int ? i32 : f32).set(typeof v === "number" ? [v] : v, m.off >> 2);
+      }
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, point, buf);
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, data);
+    },
+  };
+}
 function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
   const t = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + unit);
@@ -851,13 +883,15 @@ function emitUnits(p, L) {
 function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
   const prog = program(gl, vs, fs, "unit");
   const U = uniforms(gl, prog, ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
-                                "uPal", "uShadow", "uAlpha",
-                                "uWaterT", "uWaterMode", "uDigT",
+                                "uPal", "uPass",
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
                                 "uZoomCF", "uFogSrc", "uFogSize",
-                                "uFog", "uLambert", "uRestored",
+                                "uLambert", "uRestored",
                                 "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
-                                "uShadowOn", "uNanoOn", "uNanoT", "uNanoC"]);
+                                "uShadowOn"]);
+  // one draw's own numbers: the shaders' `Unit` block (tagpu_glsl.h). `uPass` says which of a unit's draws it is,
+  // 0 the body and 1 the hard shadow (TAGPU_GLSL_PASS_*).
+  const unit = uniformBlock(gl, prog, "Unit", 0);
   nameShadowUnits(gl, prog);
   const pad = units.atlas.pad || 0;
   const rects = Object.values(units.atlas.frames || {});
@@ -866,7 +900,7 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
   tex2D(gl, 19, gl.R32F, 32, 1, gl.RED, gl.FLOAT, shadeK(pal, shd, rows, neutral));
   gl.activeTexture(gl.TEXTURE0);
   return {
-    prog, U,
+    prog, U, unit,
     // the CLASSIC unit program's uniforms. `f` as classicTerrain's draw takes
     // it, with the viewport (vpL, vpT, vw, vh) and SS. The lab's Classic++
     // lane borrows them too, when `airshadow=drop` asks it for a Classic
@@ -879,10 +913,10 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       gl.uniform2f(U.uZoomC, f.zoomC[0], f.zoomC[1]);
       gl.uniform1f(U.uDepthScale, f.depth.scale);
       gl.uniform1i(U.uPal, 1);
-      gl.uniform1i(U.uShadow, 0); gl.uniform1f(U.uAlpha, 1.0);
+      gl.uniform1i(U.uPass, 0);
       // the water/dig tests are `vVY <= threshold`; -1e9 disables both
-      gl.uniform1f(U.uWaterT, -1e9); gl.uniform1i(U.uWaterMode, 0);
-      gl.uniform1f(U.uDigT, -1e9);
+      unit.set({ uAlpha: 1.0, uWaterT: -1e9, uWaterMode: 0, uDigT: -1e9, uFog: 0, uSlant: 0,
+                 uNanoOn: 0, uNanoT: 0, uNanoC: [0, 0, 0], uCast: [0, 0, 0] });
       // the scaffold is off here, but its float sampler still needs a unit no
       // integer sampler names: unit 2 is the fog source's usampler (R32UI),
       // and two samplers of different types on one unit refuse the draw
@@ -893,7 +927,6 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       gl.uniform2f(U.uZoomCF, f.zoomC[0], f.zoomC[1]);
       gl.uniform1i(U.uFogSrc, 2);
       gl.uniform2i(U.uFogSize, 0, 0);
-      gl.uniform1i(U.uFog, 0);
       // light=0: the base, the face-shade multiplier, and a lambert that is
       // exactly 1.0 (ambient 1, no shadow)
       gl.uniform1i(U.uLambert, 0);
@@ -921,7 +954,7 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
     silhouettes(ranges, want) {
       gl.depthMask(false);
       gl.enable(gl.STENCIL_TEST);
-      gl.uniform1i(U.uShadow, 1);
+      gl.uniform1i(U.uPass, 1);
       for (const r of ranges) {
         if (!r.shadow || !want(r)) continue;
         // a structure's shadow is the slant range (emitUnits), a mobile
@@ -942,7 +975,7 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       }
       gl.colorMask(true, true, true, true);
       gl.disable(gl.STENCIL_TEST);
-      gl.uniform1i(U.uShadow, 0);
+      gl.uniform1i(U.uPass, 0);
       gl.uniform2f(U.uOffset, 0, 0);
     },
   };

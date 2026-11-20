@@ -791,6 +791,12 @@ tools/tacli scenario expand  200v200 --json            # the flat entity list, n
 tools/tacli scenario expand  200v200 --wire            # the file the fork will read
 ```
 
+A scenario from a game somebody played: `tools/roster2scenario.py LOG... --map NAME -o
+scenarios/NAME.json` writes one unit dump of a `tagpu.log` (the roster the DLL logs every 5 s) as
+a scenario file: the same units, of the same seats, where they stood. Health, facing, orders,
+wrecks and resources are not in the log; `--catalogue` leaves out and counts the types an
+instance does not have, and a seat past its free slots is cut and counted.
+
 Built in phase C, and needing a running **game** (not the menus):
 
 ```bash

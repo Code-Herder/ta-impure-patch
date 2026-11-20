@@ -123,8 +123,16 @@
 #define tagpu_posedraw_unit             tagpu_pdw_unit
 
 #define tagpu_posebake_frame            tagpu_pbw_frame
+#define tagpu_posebake_geom_lost        tagpu_pbw_geom_lost
 #define tagpu_posebake_geom_mirror      tagpu_pbw_geom_mirror
+#define tagpu_posebake_geom_sent        tagpu_pbw_geom_sent
+#define tagpu_posebake_geom_wire        tagpu_pbw_geom_wire
+#define tagpu_posebake_lost_all         tagpu_pbw_lost_all
+#define tagpu_posebake_mat_lost         tagpu_pbw_mat_lost
 #define tagpu_posebake_mat_mirror       tagpu_pbw_mat_mirror
+#define tagpu_posebake_mat_sent         tagpu_pbw_mat_sent
+#define tagpu_posebake_mat_skip         tagpu_pbw_mat_skip
+#define tagpu_posebake_room             tagpu_pbw_room
 #define tagpu_posebake_unit             tagpu_pbw_unit
 #define tagpu_posebake_work             tagpu_pbw_work
 
@@ -197,6 +205,7 @@
    at the bound recycles only a full table, which a frame of at most the bound always leaves an
    entry to evict from (tagpu_posebake.c `geom_slot`). */
 #define TAGPU_PB_FRAMEMAX               WIKIWORLD_FRAMEMAX
+#define TAGPU_PB_KEEPSTREAMS            1   /* tagpu_wikiview.c reads them every frame */
 #define TAGPU_PB_KEEPGEOM               ((int)WIKIWORLD_FRAMEMAX)
 #define TAGPU_PB_KEEPMAT                ((int)WIKIWORLD_FRAMEMAX)
 

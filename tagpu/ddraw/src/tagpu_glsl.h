@@ -73,10 +73,74 @@
    (TAGPU_GLSL_FOG_GREY_RGB): whether a unit draws at all is decided per unit
    by the engine's draw list (0x465AC0), and the overlay 0x4848E0 then greys
    the unit's pixels that lie in grey cells, so a unit never takes bit1. */
-#define TAGPU_GLSL_FOG_UNIFORMS \
+#define TAGPU_GLSL_FOG_SOURCE \
     "uniform usampler2D uFogSrc;\n"   /* R32UI: 16 cells a texel, 2 bits each */ \
-    "uniform ivec2 uFogSize;\n"       /* the map in cells; (0,0) = no source */ \
+    "uniform ivec2 uFogSize;\n"       /* the map in cells; (0,0) = no source */
+#define TAGPU_GLSL_FOG_UNIFORMS \
+    TAGPU_GLSL_FOG_SOURCE \
     "uniform int uFog;\n"
+
+/* THE UNIT PASS'S PER-UNIT BLOCK, declared by both of its stages
+   (tagpu_posedraw.c VS, FXVS, WVS; tagpu_native.c FS) and filled once a unit
+   by tagpu_vk_unit.c `unit_block`, whose word indices are these std140
+   offsets. Every draw of a unit binds the same block -- its body, its hard
+   shadow, its nanoframe wire, its cast -- and what a draw kind changes is the
+   stage's own `uPass`, never a second copy of these. What is the same for
+   every unit of a frame is in each stage's default block instead. uFog is
+   TAGPU_GLSL_FOG_UNIFORMS' own, here because a unit and a ghost differ in it.
+
+      0 vec4  uAnchor    ax, ay, world x, world z
+     16 vec3  uCast      altitude, ground + throw, sv
+     28 float uEnc       the row's depth key base
+     32 float uMdBias    cargo against its parent, md units
+     36 float uLit       1 = engine-shaded
+     40 float uShOffY    the hard shadow's ground shift, frame px
+     44 float uWire      the nanoframe blue, idx/255
+     48 int   uSlant     1 = its hard shadow is the structure's slant
+     52 int   uRowBase   its first row in `uPose`, in vec4; a model's first run
+     56 int   uFlagBase  its first shaded word
+     60 int   uVisBase   its first visibility word
+     64 int   uWireBase  its first wire record
+     68 int   uFog
+     72 int   uWaterMode 1 erase (enemy), 2 tint (own)
+     76 int   uNanoOn    build-state staging on
+     80 float uAlpha
+     84 float uWaterT    vy <= this is under water
+     88 float uDigT      vy <= this is below ground
+     92 float uNanoT     height threshold, depth bytes
+     96 vec3  uNanoC     cAbove, cBand, cBelow
+    112 bytes */
+#define TAGPU_GLSL_UNIT_BLOCK \
+    "layout(std140) uniform Unit {\n" \
+    "  vec4 uAnchor;\n" \
+    "  vec3 uCast;\n" \
+    "  float uEnc;\n" \
+    "  float uMdBias;\n" \
+    "  float uLit;\n" \
+    "  float uShOffY;\n" \
+    "  float uWire;\n" \
+    "  int uSlant;\n" \
+    "  int uRowBase;\n" \
+    "  int uFlagBase;\n" \
+    "  int uVisBase;\n" \
+    "  int uWireBase;\n" \
+    "  int uFog;\n" \
+    "  int uWaterMode;\n" \
+    "  int uNanoOn;\n" \
+    "  float uAlpha;\n" \
+    "  float uWaterT;\n" \
+    "  float uDigT;\n" \
+    "  float uNanoT;\n" \
+    "  vec3 uNanoC;\n" \
+    "};\n"
+/* the draw kinds `uPass` names, in both stages: the vertex stage reads only
+   whether it is the hard shadow */
+#define TAGPU_GLSL_PASS_BODY   0    /* a body, a ghost, an effects model, the cast */
+#define TAGPU_GLSL_PASS_SHADOW 1    /* the Classic hard shadow                     */
+#define TAGPU_GLSL_PASS_WIRE   2    /* the nanoframe wire                          */
+/* a macro's value as shader text: TAGPU_GLSL_STR(TAGPU_GLSL_PASS_WIRE) is "2" */
+#define TAGPU_GLSL_STR2(x) #x
+#define TAGPU_GLSL_STR(x) TAGPU_GLSL_STR2(x)
 #define TAGPU_GLSL_FOG_FN \
     "float taFogCov(int m, vec2 f){\n" \
     "  float tl = float( m       & 1), tr = float((m >> 1) & 1);\n" \

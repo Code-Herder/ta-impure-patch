@@ -125,6 +125,21 @@ static unsigned short s_geomNmat[PB_MAXGEOM];
 static float*       s_geomMirror[PB_MAXGEOM];
 static float*       s_matMirror[PB_MAXMAT];
 static int          s_mirrorWant;             /* the Vulkan lane asked for them */
+/* the WIRE range of a geometry stream, 4 floats a vertex (x, y, z, piece): what the nanoframe
+   wire's records are posed from every frame, kept for the entry's life because the stream
+   itself is not (tagpu_posebake.h, A STREAM IS HELD UNTIL IT IS SENT) */
+static float*       s_geomWire[PB_MAXGEOM];
+/* THE STREAMS OWED: the mirrors the consumer has not said it sent, in bytes and in streams.
+   tagpu_posebake_unit bakes no further stream while the bytes are at TAGPU_PB_OWEMAX or the
+   streams at `s_room`, the buffers the consumer said it can still make
+   (tagpu_posebake_room); until it says, nothing bounds the count. */
+static size_t       s_owed;
+static unsigned     s_owedN;
+static unsigned     s_room = ~0u;
+static void owe_add(size_t nb) { if (!TAGPU_PB_KEEPSTREAMS) { s_owed += nb; s_owedN++; } }
+static void owe_sub(size_t nb) { if (!TAGPU_PB_KEEPSTREAMS) { s_owed -= nb; s_owedN--; } }
+static size_t geom_bytes(const TAGPU_PBGEOM* g) { return (size_t)g->nvert * TAGPU_PB_GEOMST * sizeof(float); }
+static size_t mat_bytes(const TAGPU_PBMAT* m) { return (size_t)m->nvert * TAGPU_PB_MATST * sizeof(float); }
 /* ONE COUNTER FOR BOTH TABLES, so that no geometry serial is ever a material
    serial and a ref handed to the wrong accessor cannot match. It starts at 1:
    0 is "never baked", which is what a zeroed entry reads. */
@@ -462,7 +477,10 @@ static void mat_drop(int i)
     chain_unlink(s_matHead, s_matNext, mat_bucket(m), i);
     s_geomNmat[m->geom - s_geom]--;
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
-    if (s_matMirror[i]) { free(s_matMirror[i]); s_matMirror[i] = NULL; }
+    if (s_matMirror[i]) {
+        owe_sub(mat_bytes(m));
+        free(s_matMirror[i]); s_matMirror[i] = NULL;
+    }
     free(m->akey);
     memset(m, 0, sizeof *m);
     s_matFree[s_nmatFree++] = (unsigned short)i;
@@ -483,7 +501,11 @@ static void geom_drop(TAGPU_PBGEOM* g)
     chain_unlink(s_geomHead, s_geomNext, geom_bucket(g), k);
     /* the mirror goes with the entry, and the serial in it is what stops a
        hand-over published before this from reading the next model's bytes */
-    if (s_geomMirror[k]) { free(s_geomMirror[k]); s_geomMirror[k] = NULL; }
+    if (s_geomMirror[k]) {
+        owe_sub(geom_bytes(g));
+        free(s_geomMirror[k]); s_geomMirror[k] = NULL;
+    }
+    if (s_geomWire[k]) { free(s_geomWire[k]); s_geomWire[k] = NULL; }
     free(g->restOff);                         /* the topology block */
     free((void*)g->animFace);                 /* the animated-face block */
     memset(g, 0, sizeof *g);
@@ -655,10 +677,26 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
        `tagpu_posebake_geom_mirror`. A refused malloc leaves the slot NULL,
        which the accessor reports as "no mirror" and the Vulkan pass stands
        down on, visibly. */
-    if (s_mirrorWant && c.nv > 0) {
+    /* A MODEL WITH NO BODY IS DRAWN BY NOBODY -- every caller leaves it out -- so it takes no
+       stream: one would be owed for as long as the model is asked for (`s_owed`). */
+    if (s_mirrorWant && c.nv > 0 && g->count[TAGPU_PB_BODY] > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_GEOMST * sizeof(float);
+        const int w0 = g->first[TAGPU_PB_WIRE], wn = g->count[TAGPU_PB_WIRE];
         s_geomMirror[slot] = (float*)malloc(nb);
-        if (s_geomMirror[slot]) memcpy(s_geomMirror[slot], tagpu_pb_scratch_geom, nb);
+        if (s_geomMirror[slot]) {
+            memcpy(s_geomMirror[slot], tagpu_pb_scratch_geom, nb);
+            owe_add(nb);
+        }
+        if (wn > 0 && w0 >= 0 && w0 <= c.nv - wn) {
+            float* w = (float*)malloc((size_t)wn * 4 * sizeof(float));
+            int v;
+            for (v = 0; w && v < wn; v++) {
+                const float* gv = tagpu_pb_scratch_geom + (size_t)(w0 + v) * TAGPU_PB_GEOMST;
+                w[v * 4 + 0] = gv[0]; w[v * 4 + 1] = gv[1];
+                w[v * 4 + 2] = gv[2]; w[v * 4 + 3] = gv[6];
+            }
+            s_geomWire[slot] = w;
+        }
     }
     if (s_log) {
         _snprintf(b, sizeof b,
@@ -854,6 +892,18 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
                   "geometry's %d; the two walks disagree",
                   (const void*)g->root, owner, c.nv, g->nvert);
         blog(b);
+        /* THE GEOMETRY'S STREAM HAS NO RECORD TO RIDE while this stands, and the model is
+           asked for every frame it is in view, so it would be owed for good and count
+           against the bake of every other type. It is given up; a material that does bake
+           later makes a record, the consumer finds no stream and says so, and both are
+           baked again. */
+        {
+            const int gk = (int)(g - s_geom);
+            if (s_geomMirror[gk]) {
+                owe_sub(geom_bytes(g));
+                free(s_geomMirror[gk]); s_geomMirror[gk] = NULL;
+            }
+        }
         return NULL;
     }
     /* the key is the stream's identity: an entry that cannot keep it is not
@@ -879,10 +929,13 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     s_matLive++;
     m->nvert = c.nv; m->nskip = c.nskip;
     m->serial = s_serial++;
-    if (s_mirrorWant && c.nv > 0) {
+    if (s_mirrorWant && c.nv > 0 && g->count[TAGPU_PB_BODY] > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
         s_matMirror[slot] = (float*)malloc(nb);
-        if (s_matMirror[slot]) memcpy(s_matMirror[slot], tagpu_pb_scratch_mat, nb);
+        if (s_matMirror[slot]) {
+            memcpy(s_matMirror[slot], tagpu_pb_scratch_mat, nb);
+            owe_add(nb);
+        }
     }
     /* WHAT THE VERTEX LAYOUT IS, recorded because the consumer has to
        reproduce it and nothing else in this file states it. Locations 0-3 come
@@ -913,6 +966,49 @@ void tagpu_posebake_work(unsigned* baked, unsigned* dropped)
     *dropped = s_nDrop;
 }
 
+/* WHAT THE TWO CACHES HOLD, in host memory, said when it has moved and no more often than
+   every five seconds: every entry's side blocks, and the streams still owed to the consumer
+   (all of them, where the instance keeps its streams). A scene that is settled bakes nothing
+   and says nothing; one that keeps baking -- more streams asked for over time than a keep
+   holds, each new one evicting one a later frame asks for again -- shows as `baked` growing
+   while the counts stand. */
+static void held_say(void)
+{
+    static DWORD lastMs;
+    static unsigned lastBaked;
+    static size_t lastBytes;
+    const DWORD now = GetTickCount();
+    size_t gb = 0, mb = 0, st = 0;
+    int i, keyed = 0;
+    char b[320];
+
+    if (now - lastMs < 5000u) return;
+    for (i = 0; i < s_ngeom; i++) {
+        const TAGPU_PBGEOM* g = &s_geom[i];
+        if (!g->root) continue;
+        if (s_geomMirror[i]) st += geom_bytes(g);
+        if (s_geomWire[i]) gb += (size_t)g->count[TAGPU_PB_WIRE] * 4 * sizeof(float);
+        gb += (size_t)g->nparts * (sizeof(float[3]) + sizeof(short) + 1);
+        if (g->animFace) gb += (size_t)g->nanim * (sizeof(char*) + 1);
+    }
+    for (i = 0; i < s_nmat; i++) {
+        const TAGPU_PBMAT* m = &s_mat[i];
+        if (!m->geom) continue;
+        if (s_matMirror[i]) st += mat_bytes(m);
+        mb += (size_t)(m->nvert ? m->nvert : 1);
+        if (m->akey) { mb += (size_t)m->geom->nanim; keyed++; }
+    }
+    if (gb + mb + st == lastBytes && s_serial - 1 == lastBaked) return;
+    lastMs = now; lastBytes = gb + mb + st; lastBaked = s_serial - 1;
+    _snprintf(b, sizeof b, "posebake: holding %d geometry entries, %u KB, and %d material "
+              "streams, %u KB (%d of them one animation frame's), and %u KB of streams %s - "
+              "%u baked and %u dropped since the start", s_geomLive, (unsigned)(gb >> 10),
+              s_matLive, (unsigned)(mb >> 10), keyed, (unsigned)(st >> 10),
+              TAGPU_PB_KEEPSTREAMS ? "kept" : "not yet sent", s_serial - 1, s_nDrop);
+    b[sizeof b - 1] = 0;
+    blog(b);
+}
+
 /* ---- the four invalidations --------------------------------------------- */
 /* level teardown (node pointers are recycled by the next level), the mirror
    latch's first arming (below), an atlas recycle (every UV moves) and the
@@ -936,6 +1032,19 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
                   TAGPU_PB_KEEPGEOM, TAGPU_PB_KEEPMAT, (unsigned)TAGPU_PB_FRAMEMAX);
         b[sizeof b - 1] = 0;
         blog(b);
+    }
+    held_say();
+    /* A STREAM OWED FOR AN ENTRY THE FRAME JUST ENDED DID NOT ASK FOR has no consumer left to
+       send it -- the consumer sends what the frame's records name -- and would stand against
+       TAGPU_PB_OWEMAX for good. The entry goes with it, and is baked again if it is asked for
+       again. One the frame did ask for is kept: the consumer was down, or refused the frame,
+       and takes it on the first frame it draws. */
+    if (!TAGPU_PB_KEEPSTREAMS && s_owed) {
+        for (i = 0; i < s_nmat; i++)
+            if (s_mat[i].geom && s_matMirror[i] && s_mat[i].lastFrame != s_frame) mat_drop(i);
+        for (i = 0; i < s_ngeom; i++)
+            if (s_geom[i].root && s_geomMirror[i] && s_geom[i].lastFrame != s_frame)
+                geom_drop(&s_geom[i]);
     }
     s_frame++;
     s_lvlGen = lvl; s_atlasGen = agen;
@@ -1024,6 +1133,79 @@ const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
     return s_matMirror[k];
 }
 
+const float* tagpu_posebake_geom_wire(const TAGPU_PBGEOM* g, unsigned serial, int* nvert)
+{
+    int k;
+    if (nvert) *nvert = 0;
+    if (!g || !serial) return NULL;
+    if (!in_table(g, s_geom, sizeof s_geom[0], PB_MAXGEOM)) return NULL;
+    k = (int)(g - s_geom);
+    if (g->serial != serial || !s_geomWire[k]) return NULL;
+    if (nvert) *nvert = g->count[TAGPU_PB_WIRE];
+    return s_geomWire[k];
+}
+
+const unsigned char* tagpu_posebake_mat_skip(const TAGPU_PBMAT* m, unsigned serial, int* nvert)
+{
+    int k;
+    if (nvert) *nvert = 0;
+    if (!m || !serial) return NULL;
+    if (!in_table(m, s_mat, sizeof s_mat[0], PB_MAXMAT)) return NULL;
+    k = (int)(m - s_mat);
+    if (m->serial != serial || !s_matSkip[k] || m->nvert <= 0) return NULL;
+    if (nvert) *nvert = m->nvert;
+    return s_matSkip[k];
+}
+
+void tagpu_posebake_geom_sent(const TAGPU_PBGEOM* g, unsigned serial)
+{
+    int k;
+    if (TAGPU_PB_KEEPSTREAMS || !g || !serial) return;
+    if (!in_table(g, s_geom, sizeof s_geom[0], PB_MAXGEOM)) return;
+    k = (int)(g - s_geom);
+    if (g->serial != serial || !s_geomMirror[k]) return;
+    owe_sub(geom_bytes(g));
+    free(s_geomMirror[k]); s_geomMirror[k] = NULL;
+}
+
+void tagpu_posebake_mat_sent(const TAGPU_PBMAT* m, unsigned serial)
+{
+    int k;
+    if (TAGPU_PB_KEEPSTREAMS || !m || !serial) return;
+    if (!in_table(m, s_mat, sizeof s_mat[0], PB_MAXMAT)) return;
+    k = (int)(m - s_mat);
+    if (m->serial != serial || !s_matMirror[k]) return;
+    owe_sub(mat_bytes(m));
+    free(s_matMirror[k]); s_matMirror[k] = NULL;
+}
+
+void tagpu_posebake_geom_lost(const TAGPU_PBGEOM* g, unsigned serial)
+{
+    if (!g || !serial) return;
+    if (!in_table(g, s_geom, sizeof s_geom[0], PB_MAXGEOM)) return;
+    if (g->serial != serial || s_geomMirror[g - s_geom]) return;
+    geom_drop(&s_geom[g - s_geom]);
+}
+
+void tagpu_posebake_mat_lost(const TAGPU_PBMAT* m, unsigned serial)
+{
+    if (!m || !serial) return;
+    if (!in_table(m, s_mat, sizeof s_mat[0], PB_MAXMAT)) return;
+    if (m->serial != serial || s_matMirror[m - s_mat]) return;
+    mat_drop((int)(m - s_mat));
+}
+
+void tagpu_posebake_room(unsigned streams) { s_room = streams; }
+
+void tagpu_posebake_lost_all(void)
+{
+    int i;
+    for (i = 0; i < s_nmat; i++)
+        if (s_mat[i].geom && !s_matMirror[i]) mat_drop(i);
+    for (i = 0; i < s_ngeom; i++)
+        if (s_geom[i].root && !s_geomMirror[i]) geom_drop(&s_geom[i]);
+}
+
 /* ---- the lookup --------------------------------------------------------- */
 /* THE FRAME OF ONE ANIMATED FACE, out of the packet's table: binary search on
    the face's anim state address, a KEY that is compared and never followed.
@@ -1083,6 +1265,13 @@ static TAGPU_PBMAT* mat_find(const TAGPU_PBGEOM* g, const char* root, int owner,
     return NULL;
 }
 
+/* No further stream while the consumer owes this many bytes: 1 = wait. Never true where the
+   instance keeps its streams, which nothing ever sends. */
+static int owe_full(void)
+{
+    return !TAGPU_PB_KEEPSTREAMS && (s_owed >= (size_t)TAGPU_PB_OWEMAX || s_owedN >= s_room);
+}
+
 int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
                         int ghost, const TAGPU_PBANIM* anim,
                         const TAGPU_PBGEOM** geomOut, const TAGPU_PBMAT** matOut)
@@ -1127,7 +1316,7 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
     }
     if (g && g->refused) { g->lastFrame = s_frame; return 0; }
     if (!g) {
-        if (!tagpu_r3d_ready()) return 0;
+        if (!tagpu_r3d_ready() || owe_full()) return 0;
         g = geom_bake(nd, nparts, lvl, ghost);
         if (!g) return 0;
     }
@@ -1138,13 +1327,14 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
         unsigned kh = 0;
         const unsigned char* key = anim_key(g, pc, anim, kb, &kh) ? kb : NULL;
         m = mat_find(g, nd[0], owner, agen, key, kh);
-        if (!m) m = mat_bake(g, nd, owner, agen, lvl, key, kh);
+        if (!m && !owe_full()) m = mat_bake(g, nd, owner, agen, lvl, key, kh);
         /* A FRAME NOT IN THE ATLAS YET waits for the allowance like any face
-           (mat_bake's deferral); the unit is drawn meanwhile from the frame-0
-           stream, which a frame of the same sequence is no worse than */
+           (mat_bake's deferral), and one past the streams owed waits for the
+           consumer; the unit is drawn meanwhile from the frame-0 stream, which
+           a frame of the same sequence is no worse than */
         if (!m && key) {
             m = mat_find(g, nd[0], owner, agen, NULL, 0);
-            if (!m) m = mat_bake(g, nd, owner, agen, lvl, NULL, 0);
+            if (!m && !owe_full()) m = mat_bake(g, nd, owner, agen, lvl, NULL, 0);
         }
         if (!m) return 0;
     }
