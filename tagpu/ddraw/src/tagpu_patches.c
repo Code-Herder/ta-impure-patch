@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_scatter.h"
 #include "tagpu_patches.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_limits.h"
@@ -11434,9 +11435,15 @@ SIM_FEATURE(queued_site, SIM_PUPPET_RUNS, "battle");
    not looked at, nor are units that are not alive (+0x110 bit 28) or are excluded (bit 14): the
    engine's own marker driver's set.
 
-   THE INVARIANT: this only ever turns a yes into a no, so it cannot order what stock refuses, and
-   it changes what the cursor shows, never what a peer simulates -- CLASS: local. The AI's calls
-   of the site test (0x40A4CD) and orders that do not come from the cursor are stock's.
+   THE INVARIANT: the queue's test only ever turns a yes into a no, so it cannot order what stock
+   refuses, and it changes what the cursor shows, never what a peer simulates -- CLASS: local. The
+   AI's calls of the site test (0x40A4CD) and orders that do not come from the cursor are stock's.
+
+   THE YES IT IS GIVEN is build scatter's, not stock's alone (tagpu_scatter.h, THE CURSOR'S SITE
+   TEST): a site stock refuses only for units of the placing player that the builder's arrival
+   would move off it is accepted, and the queue's test is then asked of it as of any other. The
+   cursor's own call, the one that returns to 0x4198CB, tells the frame packet whether its answer
+   was such a site, for the square's colour.
    Every read is bounded first: the units against the array's own slots (player_units), each
    def index against UNITINFOCount (unit_def, qs_def), a node's type byte against the
    descriptor array's length, a yardmap only for a def the parser gave one (BMcode +0x22F = 0,
@@ -11537,9 +11544,11 @@ static int qs_taken(const unsigned char* m, const unsigned char* def, unsigned c
 
 static unsigned __stdcall build_site_test(const void* def, unsigned cell, unsigned zero, void* player)
 {
-    unsigned ok = ((site_test_fn)0x0047D2E0)(def, cell, zero, player);
+    int moves = 0;
+    unsigned ok = tagpu_scatter_site_test(def, cell, zero, player, &moves);
     const unsigned char* m = *(const unsigned char* const*)0x00511DE8;
-    if ((ok & 1) && m && qs_taken(m, (const unsigned char*)def, cell)) return 0;
+    if ((ok & 1) && m && qs_taken(m, (const unsigned char*)def, cell)) ok = 0;
+    if (__builtin_return_address(0) == (void*)0x004198CBu) tagpu_scatter_cursor_set(moves && (ok & 1));
     return ok;
 }
 

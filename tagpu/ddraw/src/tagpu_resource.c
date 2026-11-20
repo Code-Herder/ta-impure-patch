@@ -529,6 +529,7 @@ void tagpu_resource_packet(TAGPU_PACKET* p)
     p->cursor_mode = 14; p->build_unit_id = (unsigned short)c.type;
     p->region_flags = (p->region_flags & ~0x48u) | 0x40u;
     p->resource_queued = (uint8_t)c.queued;
+    p->site_moves = 0;
     p->build_rect[0] = c.x * 16; p->build_rect[1] = c.height; p->build_rect[2] = c.z * 16;
     p->build_rect[3] = (c.x + d.fx) * 16; p->build_rect[4] = c.height; p->build_rect[5] = (c.z + d.fz) * 16;
 }

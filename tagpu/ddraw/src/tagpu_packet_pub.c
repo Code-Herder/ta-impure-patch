@@ -87,6 +87,7 @@
 #include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
 #include "tagpu_engine.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
+#include "tagpu_scatter.h"
 #include "tagpu_packet.h"
 #include "tagpu_nodraw.h"
 #include "tagpu_packet_pub.h"
@@ -3742,6 +3743,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->hovered_id   = RDU16(ta, OFF_HOVERED);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
     p->resource_queued = 0;
+    p->site_moves   = (uint8_t)tagpu_scatter_cursor_moves();
     tagpu_profiles_begin_match();
     tagpu_resource_packet(p);
 

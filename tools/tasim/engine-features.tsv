@@ -120,3 +120,5 @@ nodraw	outside	a test launch's GDI pacing: an undrawn frame runs the draw's own 
 income_mult	outside	a harness lever for the handicap ladder, off unless tagpu_impai_income.on names a seat; tasim tunes nothing against OTA AI	tagpu_income.c, the economy pass's call 0x46555A, one seat's production times its row
 guard_geometry	T4	the seats and lanes of builders guarding a factory, to be modelled with the guard order itself	tagpu_guardgeo.c, the seats, the yard's exits and the lanes
 guard_seats	T4	the guard order's home move to a seat and its assist skipped for a waiting builder, to be modelled with the guard order	tagpu_guard.c, the guard handler's assist 0x40654B
+build_scatter	T4	the moves off a refused build site and the held retry, to be modelled with MobileBuild's blocked site	tagpu_scatter.c, MobileBuild's blocked-site branch 0x403CD0 and the tick in the players phase
+build_scatter_geo	T4	the way off a build site, to be modelled with MobileBuild's blocked site	tagpu_scattergeo.c, the search for the nearest place a unit can reach and stand on

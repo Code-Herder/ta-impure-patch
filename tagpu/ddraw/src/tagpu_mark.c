@@ -898,7 +898,9 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
     if (mode == CUR_BUILD) {
         /* a multi-building placement's sites replace the square (gather_place) */
         if (tagpu_pk_place_replaces(pk)) return;
-        outer = gui[(pk->region_flags & 0x40) ? GUI_GREEN : GUI_BLOCKED];
+        /* yellow: accepted over the player's own idle units, which the builder's arrival moves off the
+           site (tagpu_scatter.h) */
+        outer = gui[!(pk->region_flags & 0x40) ? GUI_BLOCKED : pk->site_moves ? GUI_YELLOW : GUI_GREEN];
         inner = outer;
     } else {
         outer = gui[GUI_WHITE];

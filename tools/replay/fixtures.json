@@ -155,6 +155,17 @@
    "end": 3600,
    "dll": "stock"
   },
+  "build-scatter": {
+   "load": "build-scatter.json",
+   "steps": [[120, "keys", ["pclick:512,384"]]],
+   "end": 3600
+  },
+  "stock-build-scatter": {
+   "load": "build-scatter.json",
+   "steps": [[120, "keys", ["pclick:512,384"]]],
+   "end": 3600,
+   "dll": "stock"
+  },
   "transport-pad": {
    "load": "replay-transport-pad.json",
    "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],

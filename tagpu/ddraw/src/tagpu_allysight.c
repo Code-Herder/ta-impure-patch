@@ -9,6 +9,7 @@ SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_puppet.h"
+#include "tagpu_scatter.h"
 
 /* tagpu_allysight.c -- allies share their sight, their death vision and their explored map, and
    the engine's sight counters never wrap (research/notes/modules/allied-sharing.md).
@@ -948,7 +949,9 @@ static void share_compute(char* ta, uint16_t out[PLAYERS])
 
 /* The step's players phase, its call at 0x49555F (the loader's at 0x497C10 stays stock). On the
    owner's machine S follows the alliances before the phase, so its radar pass and the next unit
-   tick read the new S; on a puppet host the recording is S's writer (tables_put). */
+   tick read the new S; on a puppet host the recording is S's writer (tables_put). The step's
+   unit tick has returned by here, so no order handler is on the stack: where build scatter gives
+   its moves (tagpu_scatter.h), before the phase's own AI tick. */
 static void __cdecl players_phase(void)
 {
     char* ta = ta_main();
@@ -968,6 +971,7 @@ static void __cdecl players_phase(void)
                        was[6], was[7], was[8], was[9]);
         }
     }
+    tagpu_scatter_tick();
     E_PlayersPhase();
 }
 

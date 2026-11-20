@@ -1317,6 +1317,9 @@ typedef struct TAGPU_PACKET {
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
     uint8_t  resource_queued;         /* TAGPU_RESOURCE_QUEUED / TAGPU_RESOURCE_CANCEL */
+    uint8_t  site_moves;              /* the build cursor's site was accepted over units
+                                         the builder's arrival moves off it
+                                         (tagpu_scatter.h): the square is yellow      */
     uint16_t hovered_id;              /* 0x2CBA: the unit under the pointer, its
                                          +0xA8 as the hover query answered it; 0 =
                                          none. The radar dot it names is drawn
