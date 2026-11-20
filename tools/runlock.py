@@ -252,7 +252,9 @@ the tree that takes the place, each with how it was decided. Its properties:
     each. The batch slowed too: 1.1 games a second on 24 places against 2.2 alone. THE YIELD brings
     a full batch down to the size an engine run's arrival leaves as its games end, so an engine run
     of every slot plays beside the floor's 8 games once the games in play at its admission have
-    ended. The pool lowers what a batch costs an engine run and is not an invariant.
+    ended: the same run beside a batch of 24 places that yields played about 504 s (14 % longer),
+    494 checks passed (MEASURED the same day). The pool lowers what a batch costs an engine run
+    and is not an invariant.
 
 THE SLOTS are flock(2) files, runslots/slot-00 .. slot-27, beside `tareplay.lock` in the
 repository's common git directory, the one every worktree and every scratch worktree shares. A run
