@@ -48,10 +48,11 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    argument's (0x47D54C..0x47D561, `cmp cx,[esp+0x48]` at 0x47D554). tagpu_scatter_site_test asks stock first and,
    refused, asks once more with SITE_MOVES set in that argument: the stub at the compare then passes a cell whose
    unit is one this file would move for the placing player (movable, the one rule both the cursor and the tick
-   apply), and every other test of the site is stock's. The flag rides in the call's own argument, so nothing is
-   kept between calls and a nested call cannot see another's: the compare reads the argument's low word, the
-   test's tail its low byte (0x47D7F2..0x47D7F6), every stock caller passes a literal 0 or a unit number, and
-   only tagpu_scatter_site_test sets bit 16. A site so accepted is ordered as any other, and the builder's own
+   apply), and every other test of the site is stock's. The flag and the placing seat ride in the call's own
+   argument, bits 16 and 17..20, so nothing is kept between calls and a nested call cannot see another's: the
+   compare reads the argument's low word, the test's tail its low byte (0x47D7F2..0x47D7F6), every stock caller
+   passes a literal 0 or a unit number, and only tagpu_scatter_site_test sets the bits. The seat cannot be read
+   from the test's player argument at the compare: the test has reused that slot by then. A site so accepted is ordered as any other, and the builder's own
    test, which ignores nobody, refuses it on arrival: that refusal is what moves the units.
 
    STATE, all SIM_STATE: the sites s_site (the builder by slot and birth, its site, the step it was last
@@ -94,6 +95,7 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #define VA_OCC_NEXT      0x0047D559u   /* the `je 0x47D567` that reads the compare                              */
 #define VA_OCC_PASS      0x0047D567u   /* the cell passes                                                       */
 #define SITE_MOVES       0x10000u      /* in the test's ignore argument: THE CURSOR'S SITE                      */
+#define SITE_SEAT_SHIFT  17            /* and the placing seat, four bits above it                              */
 #define VA_ACTION_OF     0x00438760u   /* thiscall (u8* out, const char* name): an order name's action byte     */
 #define S_MOVE_GROUND    0x005052E4u   /* "MOVE_GROUND", the name the resolver's mode 2 passes it (0x43F845)    */
 
@@ -573,9 +575,9 @@ static void plan(const View* v, ScSite* s)
     tagpu_sim_scratch_free(sc.block);
     s_diag.moved += moved; s_diag.noway += noway; s_diag.full += full;
     if (moved || !s->told)
-        tagpu_logf("scatter: site builder=%u type=%u cell=%d,%d %ux%u on=%u moved=%u noway=%u busy=%u other=%u "
-                   "full=%u", (unsigned)s->builder, (unsigned)s->type, s->x0, s->z0, (unsigned)s->fx,
-                   (unsigned)s->fz, nlist, moved, noway, busy, foreign, full);
+        tagpu_logf("scatter: GameTime %d: site builder=%u type=%u cell=%d,%d %ux%u on=%u moved=%u noway=%u busy=%u "
+                   "other=%u full=%u", (int)v->now, (unsigned)s->builder, (unsigned)s->type, s->x0, s->z0,
+                   (unsigned)s->fx, (unsigned)s->fz, nlist, moved, noway, busy, foreign, full);
     s->told = 1;
 }
 
@@ -643,29 +645,32 @@ void tagpu_scatter_tick(void)
 /* ---- the cursor's site ---- */
 
 /* The stub's question at the yard test's occupant compare, asked only of a call that carries SITE_MOVES: would
-   the unit on this cell be moved for the player the test was given? regs: the pushad frame; cx the cell's unit
-   word, [esp+0x4C] the test's player record. The record is tested to be one of the ten before a view opens for
-   its seat, which bounds the rest. */
+   the unit on this cell be moved for the seat the call names? regs: the pushad frame; cx the cell's unit word,
+   [esp+0x48] the test's ignore argument. The seat comes from the argument because the test has by then reused
+   its player argument's slot [esp+0x4C] as a local (0x47D392, 0x47D3DF, 0x47D49D); a seat past the ten opens no
+   view, and the view bounds the rest. */
 static int __cdecl occupant_moves(unsigned* regs)
 {
     const unsigned n = regs[6] & 0xFFFFu;
-    const char* rec = *(char* const*)(uintptr_t)(regs[3] + 0x4C);
-    const char* ta = *(char* const*)TA_MAIN_PP;
-    uintptr_t off;
+    const unsigned arg = *(const unsigned*)(uintptr_t)(regs[3] + 0x48);
     View v;
     Mover m;
-    if (!s_install.installed || tagpu_puppet_on() || !ta || !rec || rec < ta + OFF_PLAYERS) return 0;
-    off = (uintptr_t)(rec - (ta + OFF_PLAYERS));
-    if (off % PLAYER_STRIDE || off / PLAYER_STRIDE >= PLAYER_COUNT) return 0;
-    return view_open(&v, (unsigned)(off / PLAYER_STRIDE)) && movable(&v, n, &m);
+    if (!s_install.installed || tagpu_puppet_on()) return 0;
+    return view_open(&v, (arg >> SITE_SEAT_SHIFT) & 0xFu) && movable(&v, n, &m);
 }
 
 unsigned tagpu_scatter_site_test(const void* def, unsigned cell, unsigned ignore, void* player, int* moves)
 {
     unsigned ok = ((SiteTest)VA_SITE_TEST)(def, cell, ignore, player);
+    const char* ta = *(char* const*)TA_MAIN_PP;
+    const char* rec = (const char*)player;
+    uintptr_t off;
     *moves = 0;
-    if ((ok & 1) || !s_install.site || !player || (ignore & ~0xFFFFu)) return ok;
-    ok = ((SiteTest)VA_SITE_TEST)(def, cell, ignore | SITE_MOVES, player);
+    if ((ok & 1) || !s_install.site || !ta || !rec || rec < ta + OFF_PLAYERS || (ignore & ~0xFFFFu)) return ok;
+    off = (uintptr_t)(rec - (ta + OFF_PLAYERS));
+    if (off % PLAYER_STRIDE || off / PLAYER_STRIDE >= PLAYER_COUNT) return ok;
+    ok = ((SiteTest)VA_SITE_TEST)(def, cell, ignore | SITE_MOVES | (unsigned)(off / PLAYER_STRIDE) << SITE_SEAT_SHIFT,
+                                  player);
     *moves = (ok & 1) != 0;
     return ok;
 }
