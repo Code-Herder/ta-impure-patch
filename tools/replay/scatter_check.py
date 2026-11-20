@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """scatter_check.py -- the build-scatter test groups' assertions (tools/replay/fixtures.json).
 
-    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 1300
-    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 2112
+    tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 990
+    tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1802
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and
-says so once a plan: `scatter: GameTime N: site builder=.. type=.. cell=X,Z WxH on=.. moved=.. ...`. The checks
+says so once a plan: `scatter: GameTime N: site builder=.. type=.. cell=X,Z WxH on=.. moved=.. (failed=..) ...`,
+`failed` the moved units that were idle by a move the engine had failed. The checks
 read those lines of the run's log and one roster dump begun after the step was entered.
 
 WALKED (scenarios/build-scatter.json). Site A is at cell 57,470 and site B at 72,468, a solar collector's 5 x 5
@@ -49,7 +50,7 @@ import talog  # noqa: E402
 SITE_A, SITE_B = (57, 470), (72, 468)       # first cells; a solar collector is 5 x 5
 SITE_CELLS = 5
 AWAY = (1000, 7300)                         # where the fixture's `order` step sends the first ARMPW
-CLEAR_AT = 1302                             # the GameTime of the fixture's build-scatter-clear.json step
+CLEAR_AT = 992                             # the GameTime of the fixture's build-scatter-clear.json step
 NEAR = 24                                   # px: a unit stops within a cell or so of its move's point
 ROSTER_S = 60                               # a dump comes every 5 s of wall time, held or not
 ACK_S = 60
@@ -58,7 +59,7 @@ OFF_UNITS, UNIT_STRIDE = 0x14357, 0x118     # the unit array's first record, and
 U_ORDERS, U_DEF = 0x5C, 0x92                # a unit's order list head and its type's definition
 N_ACTION, UD_DEFAULT = 0x04, 0x230          # an order node's action byte; a definition's default order
 SITE_LINE = re.compile(r"scatter: GameTime (\d+): site builder=(\d+) type=\d+ cell=(\d+),(\d+) \d+x\d+ "
-                       r"on=(\d+) moved=(\d+) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+)")
+                       r"on=(\d+) moved=(\d+) \(failed=(\d+)\) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+)")
 
 
 class Fail(Exception):
@@ -84,7 +85,7 @@ def site_lines(lines: list) -> list:
         m = SITE_LINE.search(ln)
         if m:
             out.append({"tick": int(m[1]), "builder": int(m[2]), "cell": (int(m[3]), int(m[4])),
-                        "on": int(m[5]), "moved": int(m[6])})
+                        "on": int(m[5]), "moved": int(m[6]), "failed": int(m[7])})
     return out
 
 
@@ -185,6 +186,8 @@ def judge_walked(sites: list, units: list) -> list:
         fails.append(f"no later plan of site A moved the one unit ordered back onto it: {a[1:]}")
     if not b or (b[0]["on"], b[0]["moved"]) != (4, 4):
         fails.append(f"site B's first plan is {b[0] if b else None}, not four units on it and four moved")
+    elif not b[0]["failed"]:
+        fails.append("none of site B's four was idle by a failed move: the bunch did not form")
     if not any(near(u["world"], AWAY) for u in mine(units, "ARMPW")):
         fails.append(f"no ARMPW within {NEAR} px of {AWAY}, where one was ordered by hand: "
                      f"{[u['world'] for u in mine(units, 'ARMPW')]}")

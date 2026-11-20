@@ -150,7 +150,8 @@ own bytes.
 cursor's site 0x47D554` at attach; a site that is not the retail bytes is named in its line, and
 `scatter: NOT installed: …` says why nothing is. One line a plan that moved something, and one for a
 site's first plan whatever it did: `scatter: GameTime N: site builder=<slot> type=<def>
-cell=<x>,<z> <w>x<h> on=<units on it> moved= noway= busy= other= full=`.
+cell=<x>,<z> <w>x<h> on=<units on it> moved= (failed=) noway= busy= other= full=`, `failed` the moved
+units that were idle by a failed move.
 
 There is no setting: the module is installed in every game.
 

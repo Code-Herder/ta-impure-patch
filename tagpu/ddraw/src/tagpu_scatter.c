@@ -269,7 +269,7 @@ static unsigned char move_action(void)
 }
 
 /* IDLE (the header): the list empty, its head the type's default order as the controller made it, a lone Park,
-   or a lone move the engine has failed on a unit that stands still. `u` has a mover (movable). */
+   or a lone move the engine has failed on a unit that stands still: 2 for that last. `u` has a mover (movable). */
 static int idle(const View* v, unsigned slot, const char* u)
 {
     WQ_ORDER o[2];
@@ -287,23 +287,26 @@ static int idle(const View* v, unsigned slot, const char* u)
     if (park > 0 && o[0].action == park) return 1;
     if (!(o[0].flags & OF_FAILED) || o[0].action != move_action()) return 0;
     memcpy(&stamp, *(const char* const*)(u + U_MOVER) + MV_STAMP, 4);
-    return v->now - (int32_t)stamp >= STILL_TICKS;
+    return v->now - (int32_t)stamp >= STILL_TICKS ? 2 : 0;
 }
 
 /* WHO IS MOVED, the one rule the tick and the cursor apply: the view's seat's own live unit at slot `n` that is a
    finished ground mover nothing carries, idle, of a known incarnation, standing on the map. */
-typedef struct Mover { int x, z, fx, fz; unsigned mclass, birth; } Mover;
+typedef struct Mover { int x, z, fx, fz; unsigned mclass, birth; int failed; /* idle by a failed move */ } Mover;
 
 static int movable(const View* v, unsigned n, Mover* m)
 {
     const char* u = unit_at(v, n);
     WQ_UNIT wu;
     WQ_DEF d;
+    int why;
     if (!u || !v->q.ops->unit(&v->q, (int)n, &wu) || structure(u) || !wu.finished ||
         *(char* const*)(u + U_CARRIER) || !wu.type || !v->q.ops->def(&v->q, wu.type, &d) ||
         !(d.flags & WQ_DF_MOVER) || (d.flags & WQ_DF_VTOL) || d.mclass >= WQ_MCLASSES ||
-        !foot(v, u, &m->x, &m->z, &m->fx, &m->fz) || !idle(v, n, u) || !tagpu_unit_birth(n, &m->birth)) return 0;
+        !foot(v, u, &m->x, &m->z, &m->fx, &m->fz) || !(why = idle(v, n, u)) ||
+        !tagpu_unit_birth(n, &m->birth)) return 0;
     m->mclass = d.mclass;
+    m->failed = why == 2;
     return 1;
 }
 
@@ -537,7 +540,7 @@ static void plan(const View* v, ScSite* s)
     GgBox box;
     uint16_t list[SC_PLAN];
     const unsigned char move = move_action();
-    unsigned nlist = 0, k, moved = 0, noway = 0, busy = 0, foreign = 0, full = 0;
+    unsigned nlist = 0, k, moved = 0, failed = 0, noway = 0, busy = 0, foreign = 0, full = 0;
     int x, z, x1, z1;
     box.x0 = s->x0 - SC_GROW; box.z0 = s->z0 - SC_GROW;
     x1 = s->x0 + s->fx - 1 + SC_GROW; z1 = s->z0 + s->fz - 1 + SC_GROW;
@@ -606,13 +609,15 @@ static void plan(const View* v, ScSite* s)
         mark_rect(sc.taken, &box, dx, dz, fx, fz);
         gg_sums(sc.taken, box.w, box.h, sc.tsums);
         moved++;
+        failed += (unsigned)m.failed;
     }
     tagpu_sim_scratch_free(sc.block);
     s_diag.moved += moved; s_diag.noway += noway; s_diag.full += full;
     if (moved || !s->told)
-        tagpu_logf("scatter: GameTime %d: site builder=%u type=%u cell=%d,%d %ux%u on=%u moved=%u noway=%u busy=%u "
-                   "other=%u full=%u", (int)v->now, (unsigned)s->builder, (unsigned)s->type, s->x0, s->z0,
-                   (unsigned)s->fx, (unsigned)s->fz, nlist, moved, noway, busy, foreign, full);
+        tagpu_logf("scatter: GameTime %d: site builder=%u type=%u cell=%d,%d %ux%u on=%u moved=%u (failed=%u) "
+                   "noway=%u busy=%u other=%u full=%u", (int)v->now, (unsigned)s->builder, (unsigned)s->type,
+                   s->x0, s->z0, (unsigned)s->fx, (unsigned)s->fz, nlist, moved, failed, noway, busy, foreign,
+                   full);
     s->told = 1;
 }
 
