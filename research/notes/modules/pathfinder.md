@@ -42,7 +42,7 @@ observer at the function's entry zeroes it inside those 10 ticks when that searc
 unit on its way that is sent elsewhere. A unit whose last search found nothing keeps the engine's
 rule.
 
-**The batches**, 8 searches each, while fewer than **64 searches** have begun this tick and their
+**The batches**, 16 searches each, while fewer than **64 searches** have begun this tick and their
 pops are below **64 000**. Both bounds count work and never time, and the batch is a constant: a
 tick begins the same searches on every machine. A batch is three steps, each over all its searches
 before the next:
@@ -152,14 +152,15 @@ which about 6000 units are given a goal within a few ticks of one another.
 | waited 30 ticks or more | 40 % | 24 to 26 % |
 | the longest wait | 479 ticks | 393 to 423 |
 | the pathfinder's time a tick, one thread | about 4.5 ms | 3.9 ms |
-| on four threads | | 2.4 ms |
+| on four threads, batches of 8 | | 2.4 ms |
+| on four threads, batches of 16 | | 1.95 ms, one run, of a sixth fewer pops |
 
 The time is the frame profiler's: ours the span `pathfind`; the engine's the players phase of a
 run on its scheduler, 7.4 ms a tick, less the 2.9 to 3.0 ms that phase takes beside ours. The
 battle does not play the same twice: three runs on one thread before the walk listed the still
 units took 4.3, 4.3 and 6.3 ms a tick, and the ranges above are the logged runs.
 
-**By thread**, each a run of the battle with the phases timed:
+**By thread**, each a run of the battle at batches of 8 with the phases timed:
 
 | threads searching | the searches, ms a tick | the walk | the writes | the scheduler |
 |---|---|---|---|---|
@@ -220,10 +221,12 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 
 ## Gaps
 
-- **A batch waits for its longest search**, and the searches are uneven (above), so three of the
-  four threads idle through most of a long one. A larger batch packs more searches around it; the
-  batch's size is a rule of the simulation and the owner's to set
-  ([the plan](../pathfinder-parallel.md), *Open*, has what 16 and 32 measured).
+- **A batch waits for its longest search**, and the searches are uneven (above), so threads idle
+  through most of a long one. A larger batch packs more searches around it and can pass the pops
+  cap by more; the size is a rule of the simulation, 16 by the owner's decision
+  ([the plan](../pathfinder-parallel.md) has what 8, 16 and 32 measured).
+- **Every measurement but the batch's own is from batches of 8**: the waits, the searches a tick,
+  the times by thread.
 - **Nothing may unwind past a batch**: the batch in hand names the game thread's frame, so a fault
   there that a handler caught and survived would leave the helpers reading it. No such handler is
   known above the players phase in play; the loader's, the one known, runs no helper.

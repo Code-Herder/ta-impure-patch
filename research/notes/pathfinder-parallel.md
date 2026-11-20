@@ -41,6 +41,8 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
 8. **The oracle's functions land without a replay test group reaching them**: they run only under
    `tagpu_pathverify.on`, which no test group arms, and the replay gate's coverage names them at
    the landing on main.
+9. **A batch is 16 searches** (the fourth landing's measurements, *Open*): 8 as first built left
+   the helpers idle around each long search.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -141,7 +143,7 @@ them, a cheaper search.
    gate holds, by why. Changes nothing in a game. **Built 2026-11-20**: equal on every search that ends in
    its tick ([the module](modules/pathfinder.md)).
 2. **Our scheduler on the game thread** — the units that want a path collected in one pass, searched
-   by our search one after another in batches of 8, the results applied in order; the caps; the
+   by our search one after another in batches, the results applied in order; the caps; the
    gate's split; the weight by the tick's load. The engine's scheduler and search no longer run.
    **Built 2026-11-20**: 30 to 34 searches a tick against the engine's 24, a unit's wait 20 to 23
    ticks on average against 48, for the engine's time a tick or up to two fifths more (4.3 and 6.3 ms in two
@@ -164,9 +166,9 @@ them, a cheaper search.
 ## Open
 
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
-- **The batch's size, the owner's to set.** A batch ends with its longest search, and the top 5 %
-  of searches are 46 % of the pops, so a batch of 8 leaves three threads idle through each long
-  one. MEASURED 2026-11-20, the battle on four threads with the cheaper search, one run each:
+- **What the batch's size measured** (it is 16, decision 9). A batch ends with its longest search,
+  and the top 5 % of searches are 46 % of the pops, so a batch of 8 leaves three threads idle
+  through each long one. MEASURED 2026-11-20, the battle on four threads with the cheaper search, one run each:
   batches of 8, 16 and 32 took 2.39, 1.95 and 1.65 ms a tick, on 22 700, 19 000 and 18 600 pops a
   tick — 105, 103 and 89 ns a pop, so the runs show a gain at 32 and none that the pops do not
   explain at 16. At equal work, the captured searches' costs packed in capture order onto four

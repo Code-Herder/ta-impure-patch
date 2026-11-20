@@ -153,8 +153,10 @@ SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-all
    PF_CAP_POPS: the first bounds a tick that many units ask at once, the second a tick whose searches are long (one
    that finds no way pops every cell it can reach). PF_QUIET is the most units ready
    in a tick that searches at the base weight (MEASURED: 2900 pops a search at the base, 510 at 3 times, 410 at 6
-   times). */
-#define PF_BATCH         8
+   times). PF_BATCH is a rule too: a search reads the map as its own batch's writes and the earlier ones left
+   it, and the pops cap is tested between batches. More searches a batch keep the helpers busy around a long one,
+   and can pass the cap by more. */
+#define PF_BATCH         16
 #define PF_THREADS       4              /* the most threads that search a batch: more end it no sooner (MEASURED,
                                            modules/pathfinder.md): a batch ends with its longest search       */
 #define PF_CAP_SEARCHES  64
