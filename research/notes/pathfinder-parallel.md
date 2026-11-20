@@ -43,6 +43,8 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
    the landing on main.
 9. **A batch is 16 searches** (the fourth landing's measurements, *Open*): 8 as first built left
    the helpers idle around each long search.
+10. **The batch in hand is `SIM_TRANSIENT`** (`s_run`): what the scheduler's thread hands the
+    helpers, all zero between two batches, and not recorded.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -189,8 +191,6 @@ them, a cheaper search.
   search that found nothing; none occurred.
 - A batch's searches can pass the pops cap together (507 000 pops in the worst tick
   measured); on the helpers a batch's time is its longest search's.
-- **The batch in hand is `SIM_TRANSIENT`** (`s_run`, all zero between two batches): the class the
-  owner approved for the scratch, on one more variable, and the owner's decision again.
 - Cores against hardware threads for the helpers' number: not measured (the module's gaps).
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.
