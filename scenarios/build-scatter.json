@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The `build-scatter` test groups (research/notes/build-scatter-plan.md): the human seat's ARMCK at the pinned camera centre and four idle ARMPW standing where the test group places a solar collector, south-west of it. The test group selects the builder with a native click, arms the solar through its build panel and clicks the site under the units: the cursor accepts it, the builder walks there, its site is refused, the four are moved off it and the solar is built.",
+ "description": "The `build-scatter` test groups (research/notes/build-scatter-plan.md). Two ARMCK of the human seat and, on each of the two places where the test group has them build a solar collector, four idle ARMPW: site A south-west of the pinned camera centre, where builder A stands, and site B south-east of it, a longer walk for builder B from the north-west. The test group selects each builder with a native click, arms the solar through its build panel and clicks the site under the units: the cursor accepts both, each builder's site is refused on arrival and its four units are moved off it. At site A one moved unit is then ordered away by hand and one back onto the site, and the solar is built; at site B the step build-scatter-clear.json removes every unit while the four are walking off and their builder waits. That step's units are a third site's: build-scatter-wreck.json puts a wreck on it after the cursor accepted it, so its units are moved and its builder then waits and gives up as stock.",
  "setup": {
   "map": "Two Continents",
   "res": "1024x768",
@@ -30,7 +30,7 @@
  },
  "units": [
   {
-   "id": "builder",
+   "id": "builder_a",
    "type": "ARMCK",
    "owner": 0,
    "pos": [
@@ -39,7 +39,7 @@
    ]
   },
   {
-   "id": "pw1",
+   "id": "a1",
    "type": "ARMPW",
    "owner": 0,
    "pos": [
@@ -48,7 +48,7 @@
    ]
   },
   {
-   "id": "pw2",
+   "id": "a2",
    "type": "ARMPW",
    "owner": 0,
    "pos": [
@@ -57,7 +57,7 @@
    ]
   },
   {
-   "id": "pw3",
+   "id": "a3",
    "type": "ARMPW",
    "owner": 0,
    "pos": [
@@ -66,12 +66,57 @@
    ]
   },
   {
-   "id": "pw4",
+   "id": "a4",
    "type": "ARMPW",
    "owner": 0,
    "pos": [
     972,
     7590
+   ]
+  },
+  {
+   "id": "builder_b",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    788,
+    7316
+   ]
+  },
+  {
+   "id": "b1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1164,
+    7502
+   ]
+  },
+  {
+   "id": "b2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1212,
+    7502
+   ]
+  },
+  {
+   "id": "b3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1164,
+    7550
+   ]
+  },
+  {
+   "id": "b4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1212,
+    7550
    ]
   },
   {

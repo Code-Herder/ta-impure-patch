@@ -157,13 +157,23 @@
   },
   "build-scatter": {
    "load": "build-scatter.json",
-   "steps": [[120, "keys", ["pclick:512,384"]]],
-   "end": 3600
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [140, "keys", ["pclick:360,550"]],
+             [150, "keys", ["pclick:200,300"]],
+             [160, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [170, "keys", ["pclick:600,510"]]],
+   "end": 1500
   },
   "stock-build-scatter": {
    "load": "build-scatter.json",
-   "steps": [[120, "keys", ["pclick:512,384"]]],
-   "end": 3600,
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [140, "keys", ["pclick:360,550"]],
+             [150, "keys", ["pclick:200,300"]],
+             [160, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [170, "keys", ["pclick:600,510"]]],
+   "end": 1500,
    "dll": "stock"
   },
   "transport-pad": {

@@ -1,0 +1,81 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A step of the build-scatter test groups: every unit removed while site B's four ARMPW are walking off it and their builder waits, so each row's unit and the site's builder are gone at the next step; then a third site's units in their place -- an ARMCK at the pinned camera centre and four idle ARMPW where site A stood.",
+ "setup": {
+  "clear_existing": true
+ },
+ "units": [
+  {
+   "id": "builder_c",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1100,
+    7400
+   ]
+  },
+  {
+   "id": "c1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    924,
+    7542
+   ]
+  },
+  {
+   "id": "c2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    972,
+    7542
+   ]
+  },
+  {
+   "id": "c3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    924,
+    7590
+   ]
+  },
+  {
+   "id": "c4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    972,
+    7590
+   ]
+  },
+  {
+   "id": "estor",
+   "type": "ARMESTOR",
+   "owner": 0,
+   "pos": [
+    1700,
+    7050
+   ]
+  },
+  {
+   "id": "mstor",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    1900,
+    7050
+   ]
+  },
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2800,
+    1200
+   ]
+  }
+ ]
+}
