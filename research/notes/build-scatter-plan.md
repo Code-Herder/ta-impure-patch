@@ -101,24 +101,25 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
   `0x46` (bit 6 set) with the module, and the Vulkan square is yellow there, green on free ground
   and red over a tree (a window capture of each).
 - **Site A.** Ordered at GameTime 140, the ARMCK is refused first at 332: `site builder=2 type=112
-  cell=57,470 5x5 on=4 moved=4 noway=0 busy=0 other=0 full=0`. The four end on four different places
-  round the site and the solar is built.
-- **A player's orders** (steps at 333 and 334). The ARMPW sent to (1000, 7300) stands there at 804.
+  cell=57,470 5x5 on=4 moved=4 (failed=0) noway=0 busy=0 other=0 full=0`. The four end on four
+  different places round the site and the solar is built.
+- **A player's orders** (steps at 333 and 334). The ARMPW sent to (1000, 7300) stands there at 990.
   The ARMPW sent back to the site's centre is left alone at the refusal of 362 and moved again at
   392: `on=1 moved=1`.
-- **Site B.** Its builder is refused at 796 (`moved=4`). At 806 every unit of the game is removed
-  while the four walk and the builder waits: no fault, and the next site's plan is unaffected.
-- **The wreck.** A third site is accepted by the cursor at 856 and a wreck dropped on its middle at
-  866. The builder is refused at 1048, its four units are moved (`moved=4`) and stand off the site,
-  no solar exists at 1600 and the builder's order list is headed by its default order: abandoned as
+- **Site B, the bunch.** Its four ARMPW are sent to its centre at 121 to 124; the cursor accepts
+  the site at 420 and the builder is refused at 982: `on=4 moved=4 (failed=4)`, all four idle by the
+  failed move. At 992 every unit of the game is removed while the four walk and the builder waits:
+  no fault, and the next site's plan is unaffected.
+- **The wreck.** A third site is accepted by the cursor at 1042 and a wreck dropped on its middle at
+  1052. The builder is refused at 1234, its four units are moved (`moved=4`) and stand off the site,
+  no solar exists at 1802 and the builder's order list is headed by its default order: abandoned as
   stock.
 - **The builder's own site.** A solar placed on the selected ARMCK (`main+0x2CC6` `0x46`): the
   builder walks 50 px off, the solar is built, no `scatter:` line.
 - **The bunch** (the owner's game, 2026-11-20, GameTime 21 093 to 23 983). Ten ARMFAV sent together
   to one point: eight on Standby, two still holding the lone move with `0x800000`, unmoved for
   12 000 ticks; the square over them was red with the first build, since those two were busy by the
-  first rule. In the test group site B's four ARMPW are sent to its centre at GameTime 121 to 124
-  and the cursor is asked at 420.
+  first rule.
 - **A unit that cannot leave.** In a hand run the wreck was dropped over one of the units: that unit
   stayed, its row stopped holding the builder after 180 ticks, and the builder gave up. No fault.
 - **Replay.** Both test groups pass: the record, the puppets, three round trips and the seek each,

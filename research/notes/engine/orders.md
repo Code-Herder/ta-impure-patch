@@ -1076,7 +1076,7 @@ collector 225 px away over four idle ARMPW reaches `0x403CD0` first at GameTime 
 registers above naming the builder, the product (type 112) and the cell (57, 470); with the four
 moved off, the site is accepted at the wait's end. With a wreck left on the site the same branch is
 reached every 30 ticks and the builder's list is headed by its type's default order again by
-GameTime 1600 (the first refusal at 1048): abandoned.
+GameTime 1802 (the first refusal at 1234): abandoned.
 
 #### MobileBuild's reach abandon [DISASSEMBLED + MEASURED 2026-11-13]
 
