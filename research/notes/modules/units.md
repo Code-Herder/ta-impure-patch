@@ -355,12 +355,11 @@ shadow, its nanoframe wire and its cast all bind the same bytes, written once a 
 frame for each draw kind (`VP_*`, `FP_*`): 1 408 bytes a frame slot at the reference device's
 64-byte alignment. **What a draw kind changes of a unit's numbers is the shader's**, from `uPass`
 (`TAGPU_GLSL_PASS_BODY` 0, `_SHADOW` 1, `_WIRE` 2): the hard shadow's shift, range and waterline
-rule, the wire's record base, alpha and build-state rule. The vertex stage reads only whether it
-is the hard shadow.
+rule, the wire's alpha and build-state rule. The vertex stage reads only whether it is the hard
+shadow.
 
 A unit and a model cost 128 bytes of the slot's uniform buffer at that alignment: 1.2 MB a slot
-for 9 400 units, where a window of seven blocks a unit — each stage's block once a draw kind — was
-16.2 MB (MEASURED 2026-11-19, `scenarios/zombie-kingdom-13k`).
+for 9 400 units (MEASURED 2026-11-19, `scenarios/zombie-kingdom-13k`).
 
 **The browser lab and the wiki's mockup link the same text** (`tools/tascene`, which pairs
 `tagpu_native.c`'s lab-only `VS` with `FS`): the `VS` declares the block for `uCast`, because a
@@ -374,7 +373,7 @@ from the linked program. A change to the block is checked there by the wiki gate
 The process is 32-bit and not large-address aware. A ten-seat battle with the whole map in view
 asks for some 1 500 material streams, about 200 KB each for a large model, and a first sight of
 them is 190 MB on one frame (MEASURED 2026-11-19, `scenarios/zombie-kingdom-13k`, 9 400 units
-in the frame). Three rules keep that inside the address space.
+in the frame). Three rules keep that inside the address space, and a fourth inside the device's allocation count.
 
 **1. The staging is bounded whatever the frame brings into view.** The pre-pass sums the streams
 the device does not hold, each serial once (`miss_first`), not once a unit that names it.
@@ -384,8 +383,9 @@ the device does not hold, each serial once (`miss_first`), not once a unit that 
 | fit `TAGPU_VK_STAGE_CAP`, 2 MiB | the slot's own vertex staging; the copies ride the frame's command buffer | nothing waits; one buffer a slot, given back on the slot's next frame with nothing to send |
 | pass it | bands through `s_band`, one buffer for the pass, `VBAND_CAP` 16 MiB (`tagpu_vk_stage_bufs_begin` / `_put` / `_end`): each band is submitted and waited on, a stream longer than the buffer is cut across bands | the frame waits for its bands, and the buffer is given back before the frame goes on; a refused map is halved down to `VSTAGE_FLOOR`, 64 KB, so a process short of address space sends the same bytes more slowly |
 
-Every band is on the device before the frame's draws are recorded, so the draws need no barrier
-against them. The pass logs each banded frame: `unit: N vertex stream(s), X MB, came into view on
+Every band has completed before the frame's draws are recorded, and the frame's one
+`TRANSFER_WRITE → VERTEX_ATTRIBUTE_READ` barrier orders its vertex reads after the banded copies
+as after the in-frame ones. The pass logs each banded frame: `unit: N vertex stream(s), X MB, came into view on
 one frame and went up in bands through K KB of staging - a wait of T ms in this frame`.
 
 **2. A stream is held until it is sent** (`tagpu_posebake.h` has the contract). The bake's host
@@ -393,10 +393,13 @@ copy of a stream is freed when the unit pass says its bytes are copied out
 (`tagpu_posebake_geom_sent`, `_mat_sent`); the entry stays and answers later frames with the same
 serial. The invariant is the unit pass's to keep — *for a live entry, the stream is in the bake or
 its buffer is in the pass's table* — and it is kept by an ordering, on one thread (the render
-thread): `_sent` only after the copy, and `_lost` whenever the pass finds it holds neither, which
-is an evicted buffer (`vb_slot`) or a table torn down with the lane. A lost entry is dropped, so
-the next frame that asks bakes it again under a new serial. Both calls check the entry's pointer
-and serial as the accessors do; a stale one does nothing.
+thread): `_sent` only after the copy; `_lost` when the pass gives one buffer up (`vb_slot`'s
+eviction); and `tagpu_posebake_lost_all` when the pass builds, which is the one place its table
+is empty by construction — it is torn down with the lane and built on the first frame after —
+and comes before any record of that frame is read. That covers every entry the old table was
+sent, the ones no frame is asking for included. A lost entry whose stream is not in the bake is
+dropped, so the next frame that asks bakes it again under a new serial. `_sent` and `_lost` check
+the entry's pointer and serial as the accessors do; a stale one does nothing.
 
 - **The bake bakes no further stream while `TAGPU_PB_OWEMAX` (32 MiB) is owed**, so a first sight
   of many types fills in over a few frames, each within the bound: a unit whose stream is a frame
@@ -415,6 +418,16 @@ animated faces show), so a stream evicted while its animation frame is a few tic
 round again is baked and sent each time it does. The two sum to 3 072 device buffers, under the
 4 096 allocations a device must allow with the lane's own few hundred beside them.
 
+**4. The table's device allocations are bounded, live and retiring together**
+(`tagpu_vk_unit.c` `s_vbAlloc`). Each buffer is one allocation, a device counts them
+(`maxMemoryAllocationCount`, 4 096 at the specification's floor), and an evicted buffer stays
+allocated until every frame slot has turned over. The pass's budget is the device's count less
+512 for everything else the lane holds (at most 276 allocations a game, vertex buffers included,
+over the test games on record), and it tells the bake how many more buffers it can make
+(`tagpu_posebake_room`) after every change to either count. A buffer is only made from a stream
+the bake owes, and the bake owes no more streams than that room, so the total never passes the
+budget: a view that would is short of its newest types for the frames the retire takes.
+
 `posebake:` logs what the two caches hold when it has moved: `holding N geometry entries, X KB,
 and M material streams, Y KB (K of them one animation frame's), and Z KB of streams not yet sent -
 B baked and D dropped since the start`.
@@ -422,21 +435,17 @@ B baked and D dropped since the start`.
 **MEASURED 2026-11-19/20** on `scenarios/zombie-kingdom-13k` (Total Mayhem 11.3.0, ten seats),
 1080p on a private display, the whole map in view:
 
-| | streams kept beside the device, keeps 512 / 1 024 | as above |
-|---|---|---|
-| committed memory, a live battle | 1 043 MB | 749–753 MB |
-| the same, paused, 13 647 units | 789 MB | 711 MB |
-| entries baked in two minutes (dropped) | 9 409 (7 959) | 2 098–2 399 (0) |
-| banded frames in two minutes | 159–209 | 31–51 |
-| a banded frame's wait | mean 195 ms | mean 160–170 ms, at most 239 ms |
-| zoomed out whole during the load's first seconds | the unit pass was refused its memory and the session went to GDI | the lane stays up, peak 914–920 MB |
-| the working set, with room | | 490 models, 1 760 streams, 941 of them an animation frame's |
+| | |
+|---|---|
+| committed memory, a live battle | 749–753 MB |
+| the same, paused, 13 647 units | 711 MB |
+| zoomed out whole during the load's first seconds | the lane stays up, peak 914–920 MB |
+| what the two caches settle at | 490 models and 1 760 streams, 941 of them an animation frame's |
+| entries baked in two minutes of battle (dropped) | 2 098–2 399 (0) |
+| banded frames in those two minutes | 31–51, each a wait of 160–170 ms on average and at most 239 ms |
 
-The first frame of the zoom-out sent 793 streams, 117.5 MB, in 234 ms. Against the build before,
-paused at GameTime 600: `nanoframe-ladder` 147 px, `pose-inventory` 30, `waterline` 1 467, all of
-them the top bar and the range rings' animated dashes. A forced lane restart
-(`tagpu_passrefuse.on`) drops every entry, bakes them again, and leaves the picture the old
-build's own restart leaves, within 58 px.
+A forced lane restart (`tagpu_passrefuse.on`) drops every entry the old table was sent; the frame
+that rebuilds draws no unit and the next ones bake what they ask for.
 
 **Not covered.**
 - **The frame rate with the whole map in view is 4–5 a second**, bound by the simulation of 13 000
@@ -446,7 +455,11 @@ build's own restart leaves, within 58 px.
 - **Where the address space does run out, a third bring-up can find no hardware device**, take
   llvmpipe, and the game exits. Seen once before rule 2; not reproduced since, and not fixed.
 - **No Windows run.** The measurements are Wine's, where `VirtualQuery` reports only a part of the
-  free space ([Vulkan backend](vulkan-backend.html), *A pass refused its memory*).
+  free space ([Vulkan backend](vulkan-backend.html), *A pass refused its memory*), and where the
+  driver's allocation count is not the 4 096 of rule 4: the budget has run only with room to
+  spare.
+- **A band that takes more than a second is the device not answering**, as a frame's fence is
+  (`tagpu_vk_stage.c`): the lane restarts.
 
 ### 2.87 Unit bodies before the effects, and cargo sorted by the merge's height
 

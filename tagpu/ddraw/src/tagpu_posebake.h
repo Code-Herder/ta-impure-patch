@@ -85,8 +85,9 @@
    settle at 490 models and 1 760 streams, 941 of those an animation frame's,
    and bake 2 266. A kept entry costs the process its side blocks -- some 19 KB
    a model and 5 KB a stream there -- and the device one buffer and one
-   allocation (tagpu_vk_unit.c): the two keeps sum to 3 072, under the 4 096
-   allocations a device must allow with the lane's own few hundred beside them.
+   allocation. The two keeps sum to 3 072, which leaves the buffers a frame
+   retires and the lane's own allocations their room under the 4 096 a device
+   must allow; what holds the total there is tagpu_vk_unit.c's `s_vbAlloc`.
 
    THE WIKI'S INSTANCE SETS ALL THREE BEFORE THIS HEADER (tagpu_scene.h), from the
    stage's own bounds; the game's takes the values below.
@@ -293,10 +294,12 @@ const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
    later frame with the same serial.
 
    THE INVARIANT IS THE CONSUMER'S TO KEEP: for a live entry, the stream is here or the
-   consumer holds its buffer. It says `_sent` only once the bytes are copied out, and `_lost`
-   when it finds it holds neither -- its table was torn down, or it gave the buffer up -- and
-   the entry is then dropped, so the next frame that asks bakes it again under a new serial.
-   Both check the pointer and the serial as the accessors above do; a stale one does nothing.
+   consumer holds its buffer. It says `_sent` only once the bytes are copied out; `_lost` when
+   it gives one buffer up; and `_lost_all` when it starts from an empty table, before it reads
+   any entry -- which is every entry it was ever sent, the ones no frame is asking for
+   included. A lost entry whose stream is not here is dropped, so the next frame that asks
+   bakes it again under a new serial; one whose stream is here has lost nothing. `_sent` and
+   `_lost` check the pointer and the serial as the accessors above do; a stale one does nothing.
 
    WHAT THE BAKE KEEPS FOR ITSELF is what is read every frame rather than once: a geometry
    stream's WIRE range, four floats a vertex (x, y, z, piece), and a material stream's skip
@@ -307,6 +310,11 @@ void tagpu_posebake_geom_sent(const TAGPU_PBGEOM* g, unsigned serial);
 void tagpu_posebake_mat_sent(const TAGPU_PBMAT* m, unsigned serial);
 void tagpu_posebake_geom_lost(const TAGPU_PBGEOM* g, unsigned serial);
 void tagpu_posebake_mat_lost(const TAGPU_PBMAT* m, unsigned serial);
+void tagpu_posebake_lost_all(void);
+/* How many more buffers the consumer can make: the bake owes it no more streams than that,
+   so a consumer whose device bounds its allocations is never handed a frame it must refuse.
+   It says so whenever the figure moves; until it has, nothing bounds the count. */
+void tagpu_posebake_room(unsigned streams);
 /* `*nvert` is the WIRE range's length; vertex v of it is the stream's `first[WIRE] + v` */
 const float* tagpu_posebake_geom_wire(const TAGPU_PBGEOM* g, unsigned serial, int* nvert);
 const unsigned char* tagpu_posebake_mat_skip(const TAGPU_PBMAT* m, unsigned serial, int* nvert);

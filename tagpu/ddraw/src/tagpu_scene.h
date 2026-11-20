@@ -127,10 +127,12 @@
 #define tagpu_posebake_geom_mirror      tagpu_pbw_geom_mirror
 #define tagpu_posebake_geom_sent        tagpu_pbw_geom_sent
 #define tagpu_posebake_geom_wire        tagpu_pbw_geom_wire
+#define tagpu_posebake_lost_all         tagpu_pbw_lost_all
 #define tagpu_posebake_mat_lost         tagpu_pbw_mat_lost
 #define tagpu_posebake_mat_mirror       tagpu_pbw_mat_mirror
 #define tagpu_posebake_mat_sent         tagpu_pbw_mat_sent
 #define tagpu_posebake_mat_skip         tagpu_pbw_mat_skip
+#define tagpu_posebake_room             tagpu_pbw_room
 #define tagpu_posebake_unit             tagpu_pbw_unit
 #define tagpu_posebake_work             tagpu_pbw_work
 

@@ -49,7 +49,8 @@
        (`tagpu_vk_stage_bufs_begin`, `_put`, `_end`): the vertex streams of
        the unit types a frame draws for the first time, which a full zoom-out
        or a lane just brought up asks for by the hundred megabytes (MEASURED:
-       190 MB for 9 400 units of ten seats). Each band is as many copies as
+       190 MB for 9 400 units of ten seats), a frame's share at a time
+       (tagpu_posebake.h TAGPU_PB_OWEMAX). Each band is as many copies as
        the slot's buffer holds, submitted and waited on like a page's; a
        stream longer than the buffer is cut across bands. A destination is a
        buffer no submitted command names yet, so nothing is ordered against

@@ -403,6 +403,23 @@ typedef struct {
 static VBRET*   s_ret;
 static unsigned s_nret, s_retCap;
 
+/* THE TABLE'S DEVICE ALLOCATIONS ARE BOUNDED, LIVE AND RETIRING TOGETHER. Each buffer is one
+   allocation and a device counts them (`maxMemoryAllocationCount`, 4 096 at the
+   specification's floor); an evicted buffer stays allocated until every slot has turned
+   over, so the keep alone bounds nothing on a frame that brings in new streams with the
+   table at its keep. `s_vbAlloc` is the device's count less VB_OTHERS, the allowance for
+   everything else the lane and the wiki's copy hold (MEASURED: at most 276 allocations a
+   game, vertex buffers included, over the test games whose `gpumem:` line the instances
+   keep). THE BOUND IS AN ORDERING WITH THE BAKE: a buffer is only ever made from a stream
+   the bake owes, the bake owes no more streams than the room last said (`room_say`,
+   tagpu_posebake_room), and the room is said again after every change to either count
+   before the bake next runs -- so live + retiring never passes `s_vbAlloc`, and a view that
+   would is short of its newest types for the frames the retire takes, where it was a
+   refused allocation and the lane coming down. The wiki's copy keeps its streams and is
+   bounded by its stage instead. */
+#define VB_OTHERS 512u
+static unsigned s_vbAlloc;
+
 /* ---- one of these per frame slot, and every field of it is ours for the
    duration of the hooks we are handed that slot on. ---- */
 typedef struct {
@@ -837,6 +854,12 @@ static void vb_link(VBENT* e)
     s_vbLive++;
 }
 
+static void room_say(void)
+{
+    const unsigned held = (unsigned)s_vbLive + s_nret;
+    tagpu_posebake_room(held < s_vbAlloc ? s_vbAlloc - held : 0u);
+}
+
 /* an entry back to the free slots: a live one leaves its chain first; one
    `vb_slot` handed out and whose buffer was never made has no chain to leave */
 static void vb_release(VBENT* e)
@@ -874,9 +897,10 @@ static VBENT* vb_slot(const TAGPU_VKPASS* d, unsigned frame)
                 (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame)) worst = i;
         if (worst >= 0 && ret_push(d, s_vb[worst].buf, s_vb[worst].mem)) {
             /* THE BAKE'S ENTRY GOES WITH THE BUFFER (tagpu_posebake.h, A STREAM IS HELD UNTIL
-               IT IS SENT): its stream was freed when this buffer took it, so an entry left
-               behind would answer a later frame with a serial nothing holds. Dropped here,
-               that frame bakes it again and this table takes the new stream. */
+               IT IS SENT): where its stream was freed when this buffer took it, an entry
+               left behind would answer a later frame with a serial nothing holds. Dropped
+               here, that frame bakes it again and this table takes the new stream. A bake
+               that keeps its streams drops nothing, and the stream is sent again. */
             if (s_vb[worst].mat)
                 tagpu_posebake_mat_lost((const TAGPU_PBMAT*)s_vb[worst].ent, s_vb[worst].serial);
             else
@@ -981,12 +1005,12 @@ static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
    refused map down to VSTAGE_FLOOR, and a band of that size still carries every stream, cut
    across bands -- so a process short of address space sends the same bytes more slowly.
 
-   WHAT A BANDED FRAME COSTS, MEASURED on scenarios/zombie-kingdom-13k: a map of units seen
-   for the first time, 793 streams and 117.5 MB, waited 234 ms; a frame of 46 to 63 streams,
-   16 to 20 MB, waited 124 to 206 ms, most of it the frames in flight. The bake hands a
-   frame no more than TAGPU_PB_OWEMAX of streams it has not sent, so a first sight of many
-   types is several such frames; a live battle with the whole map in view then banded 31 to
-   51 frames in two minutes, as animated faces reached frames not yet baked. */
+   WHAT A BANDED FRAME COSTS, MEASURED on scenarios/zombie-kingdom-13k: a frame of 46 to 63
+   streams, 16 to 20 MB, waited 124 to 206 ms, most of it the frames in flight -- 793 streams
+   and 117.5 MB sent as one frame waited 234 ms. The bake hands a frame no more than
+   TAGPU_PB_OWEMAX and one stream of what it has not sent, so a first sight of many types
+   is several such frames; a live battle with the whole map in view then banded 31 to 51
+   frames in two minutes, as animated faces reached frames not yet baked. */
 static TAGPU_VKSTAGE s_band;
 #define VBAND_CAP    ((VkDeviceSize)16 << 20)
 #define VSTAGE_FLOOR ((VkDeviceSize)64 << 10)
@@ -2054,6 +2078,9 @@ static int build(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceProperties(d->pd, &props);
     s_ualign = props.limits.minUniformBufferOffsetAlignment;
     if (s_ualign == 0) s_ualign = 1;
+    s_vbAlloc = props.limits.maxMemoryAllocationCount > VB_OTHERS
+                    ? props.limits.maxMemoryAllocationCount - VB_OTHERS : 0u;
+    if (s_vbAlloc > (unsigned)VB_MAX) s_vbAlloc = (unsigned)VB_MAX;
     /* THE BOUND THE DRIVER SETS ON A STORAGE RANGE, read rather than assumed.
        `upload` checks every frame's packed pose against it; here the pass
        refuses a device that could not bind even one unit at the piece
@@ -2463,6 +2490,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        return early, and the path that returns early is exactly the path that
        must still clear this slot's bit. */
     ret_slot_done(d, slot);
+    if (s_state == ST_READY) room_say();
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING IS KEPT
        ONCE THERE IS NOT. The two sized buffers scale with the units on screen
@@ -2490,9 +2518,19 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     /* A HAND-OVER THE PASS HAS NOT DRAWN, until `prepare` draws it */
     s_fxHold = 1;
 
+    s_short.call = NULL;                      /* a refusal names a request of its own frame */
     if (s_state == ST_UNBUILT) {
         if (!build(d)) { tagpu_vk_unit_down(d); s_state = ST_REFUSED; s_downOwed = 1; return 0; }
         s_state = ST_READY;
+        /* THE TABLE IS EMPTY HERE, BY CONSTRUCTION: ST_UNBUILT is left only through this
+           build and reached only through `tagpu_vk_unit_down`, which empties it. So every
+           stream the bake freed on this table's word is on no device, and the bake is told
+           before a record of this frame is read: an entry nothing asks for until minutes
+           later would otherwise answer then with a serial neither side holds
+           (tagpu_posebake.h, A STREAM IS HELD UNTIL IT IS SENT). This frame's records name
+           entries that are gone, so it draws no unit; the next bakes what it asks for. */
+        tagpu_posebake_lost_all();
+        room_say();
     }
 
     /* ---- every reason not to draw, before a byte is written ---- */
@@ -3056,11 +3094,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                unit is then simply not drawn, which the caster census turns into
                a refusal of the whole map.
 
-               NO BUFFER HERE AND NO STREAM THERE is the one state the bake cannot see: this
-               table was torn down with the lane, and the streams it had taken were freed
-               when it took them. Saying so drops the entry, and the next frame bakes it
-               again; this frame draws no unit, which a lane that has just come back up
-               is not showing yet anyway. */
+               NO BUFFER HERE AND NO STREAM THERE is an entry the bake could not give a
+               stream (a refused malloc), or one dropped since the record was made: a table
+               torn down with the lane told the bake so when it was built again. Saying so
+               drops the entry, and the next frame bakes it again. */
             src = j ? tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat, serial, &nv)
                     : tagpu_posebake_geom_mirror((const TAGPU_PBGEOM*)r->geom, serial, &nv);
             if (!src) {
@@ -3071,14 +3108,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             if (nv != r->nvert) break;
             bytes = (VkDeviceSize)nv * st;
             /* THE COPY IS BOUNDED BY THE ALLOCATION IT GOES INTO, and not by
-               the pre-pass that sized it. `stageNeed` above counts the
-               `vb_find` misses as the table stands BEFORE a byte is uploaded;
-               an eviction inside this loop can turn a hit into a miss for a
-               unit further down the list, and that unit's bytes were never
-               reserved. The pre-pass cannot be made exact without replaying
-               the eviction it is trying to budget for, so the bound is taken
-               here against the only number that is a fact -- the mapped
-               capacity.
+               the pre-pass that sized it: the mapped capacity is the number
+               that is a fact, whatever the sum above came to.
 
                IT IS TAKEN BEFORE `vb_slot`, NOT AFTER, and that placement is
                the whole of it: `vb_slot` RETIRES the buffer it evicts and
@@ -3116,6 +3147,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             (*e)->ent = j ? r->mat : r->geom;
             (*e)->mat = j;
             vb_link(*e);
+            room_say();
             /* STAMPED AT CREATION, not only when the unit is finally drawn. The
                copy below is already recorded into `cb`, so an entry left at
                frame 0 could be chosen by `vb_slot` for the NEXT unit of this
@@ -3135,6 +3167,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 }
                 bandBytes += bytes;
                 bandStreams++;
+                anyUpload = 1;
             } else {
                 memcpy(staged, src, (size_t)bytes);
                 memset(&cp, 0, sizeof cp);
@@ -3202,8 +3235,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        `vb_find` from now on, so its bytes must be on the device on every path that keeps the
        table: nothing between the first put and here leaves the function but `refuse`, whose
        teardown empties the table. The copies ran in submits of their own, ahead of this
-       frame's command buffer and each waited on, so this frame's draws need no barrier
-       against them.
+       frame's command buffer and each waited on; the barrier below orders this frame's
+       vertex reads after them as it does after the in-frame copies.
 
        THE BAND BUFFER GOES BACK HERE, and only here: every band that read it has been waited
        on. A band the device failed may still be reading it, so the paths to `refuse` leave
@@ -3229,6 +3262,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        against the reads the caster draw and the body draw are about to make
        out of the SAME command buffer -- one TRANSFER_WRITE ->
        VERTEX_ATTRIBUTE_READ dependency whatever the count.
+
+       A banded copy ran in an earlier submit, and a fence that signalled says it
+       completed, not that a later submit's vertex reads see it: the barrier's first scope
+       reaches commands submitted before it, so the one barrier covers both roads.
 
        IT MUST NOT SIT BELOW THE EVERY-UNIT-OR-NONE GATE. That gate returns
        without drawing, but the copies are already in `cb` and `cb` is submitted
