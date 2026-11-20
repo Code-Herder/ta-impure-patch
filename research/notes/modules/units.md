@@ -426,7 +426,10 @@ allocated until every frame slot has turned over. The pass's budget is the devic
 over the test games on record), and it tells the bake how many more buffers it can make
 (`tagpu_posebake_room`) after every change to either count. A buffer is only made from a stream
 the bake owes, and the bake owes no more streams than that room, so the total never passes the
-budget: a view that would is short of its newest types for the frames the retire takes.
+budget: a view that would is short of its newest types for the frames the retire takes. The
+budget passes the keep by 512 at the floor (asserted), which is what lets an eviction make room.
+MEASURED 2026-11-20 with the budget forced to 1 500, under the keep, on the scenario below: 380
+models and 1 120 streams baked, 1 500 exactly, the types past them not drawn, no pass refused.
 
 `posebake:` logs what the two caches hold when it has moved: `holding N geometry entries, X KB,
 and M material streams, Y KB (K of them one animation frame's), and Z KB of streams not yet sent -
@@ -444,8 +447,10 @@ B baked and D dropped since the start`.
 | entries baked in two minutes of battle (dropped) | 2 098–2 399 (0) |
 | banded frames in those two minutes | 31–51, each a wait of 160–170 ms on average and at most 239 ms |
 
-A forced lane restart (`tagpu_passrefuse.on`) drops every entry the old table was sent; the frame
-that rebuilds draws no unit and the next ones bake what they ask for.
+A forced lane restart (`tagpu_passrefuse.on`) at that view drops every entry the old table was
+sent (2 170 of them); the frame that rebuilds draws no unit, and the next ones bake what they ask
+for and send it at 32 MB a frame, 144–164 streams, each a wait of 51–97 ms. Committed memory
+after it: 754–755 MB.
 
 **Not covered.**
 - **The frame rate with the whole map in view is 4–5 a second**, bound by the simulation of 13 000

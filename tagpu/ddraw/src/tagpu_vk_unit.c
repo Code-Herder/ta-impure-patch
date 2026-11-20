@@ -416,8 +416,16 @@ static unsigned s_nret, s_retCap;
    before the bake next runs -- so live + retiring never passes `s_vbAlloc`, and a view that
    would is short of its newest types for the frames the retire takes, where it was a
    refused allocation and the lane coming down. The wiki's copy keeps its streams and is
-   bounded by its stage instead. */
+   bounded by its stage instead.
+
+   THE BUDGET MUST PASS THE KEEP, or the table would fill to the budget and stay: an
+   eviction is made by a new buffer, and a new buffer needs room. At the specification's
+   floor it does, by the 512 the assertion states -- the buffers that can be retiring at
+   once before the bake waits for a slot to turn over. MEASURED with the budget forced to
+   1 500, under the keep (scenarios/zombie-kingdom-13k, the whole map in view): 380 models
+   and 1 120 streams baked, 1 500 exactly, the types past them not drawn, every pass up. */
 #define VB_OTHERS 512u
+typedef char vb_budget_passes_keep[(4096u - VB_OTHERS >= (unsigned)VB_KEEP + 512u) ? 1 : -1];
 static unsigned s_vbAlloc;
 
 /* ---- one of these per frame slot, and every field of it is ours for the
@@ -3250,10 +3258,13 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         tagpu_vk_stage_drop(d, &s_band);
         QueryPerformanceCounter(&t1);
         QueryPerformanceFrequency(&hz);
-        plog(d, "unit: %u vertex stream(s), %.1f MB, came into view on one frame and went up "
-                "in bands through %u KB of staging - a wait of %u ms in this frame",
-             bandStreams, (double)bandBytes / 1048576.0, bandCapKB,
-             (unsigned)((t1.QuadPart - bandT0.QuadPart) * 1000 / (hz.QuadPart ? hz.QuadPart : 1)));
+        /* a frame that sized bands for streams the bake then had none of sent nothing */
+        if (bandStreams)
+            plog(d, "unit: %u vertex stream(s), %.1f MB, came into view on one frame and went "
+                    "up in bands through %u KB of staging - a wait of %u ms in this frame",
+                 bandStreams, (double)bandBytes / 1048576.0, bandCapKB,
+                 (unsigned)((t1.QuadPart - bandT0.QuadPart) * 1000 /
+                            (hz.QuadPart ? hz.QuadPart : 1)));
     }
 
     /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME, AND IT IS
