@@ -372,6 +372,10 @@ typedef struct {
     VkDeviceMemory mem;
     VkDeviceSize   size;
     unsigned       lastFrame;
+    /* the bake's entry this buffer is the stream of, and which table it is in: a key the
+       bake checks against the serial (tagpu_posebake.h), never followed here */
+    const void*    ent;
+    int            mat;
 } VBENT;
 static VBENT s_vb[VB_MAX];
 /* THE LOOKUP IS A HASH ON THE SERIAL: `vb_find` runs four times a unit a
@@ -851,8 +855,9 @@ static void vb_release(VBENT* e)
 
 /* THE SLOT A NEW BUFFER TAKES, on tagpu_posebake.h's rule and for its reason:
    never an entry this frame has drawn -- the frame in hand has already
-   recorded draws naming it -- and at the keep the least recently drawn of the
-   rest is evicted first. A unit record names two serials and the bake hands a
+   recorded draws naming it, and `upload_draw` stamps every buffer the frame's
+   records name before the first is made -- and at the keep the least recently
+   drawn of the rest is evicted first. A unit record names two serials and the bake hands a
    frame at most TAGPU_PB_FRAMEMAX of each, which is what the table holds, so a
    table with every slot live has one this frame has not drawn. An eviction
    also needs the retire to take the buffer; when it cannot, the table grows
@@ -867,8 +872,17 @@ static VBENT* vb_slot(const TAGPU_VKPASS* d, unsigned frame)
         for (i = 0; i < s_vbTop; i++)
             if (s_vb[i].serial && s_vb[i].lastFrame != frame &&
                 (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame)) worst = i;
-        if (worst >= 0 && ret_push(d, s_vb[worst].buf, s_vb[worst].mem))
+        if (worst >= 0 && ret_push(d, s_vb[worst].buf, s_vb[worst].mem)) {
+            /* THE BAKE'S ENTRY GOES WITH THE BUFFER (tagpu_posebake.h, A STREAM IS HELD UNTIL
+               IT IS SENT): its stream was freed when this buffer took it, so an entry left
+               behind would answer a later frame with a serial nothing holds. Dropped here,
+               that frame bakes it again and this table takes the new stream. */
+            if (s_vb[worst].mat)
+                tagpu_posebake_mat_lost((const TAGPU_PBMAT*)s_vb[worst].ent, s_vb[worst].serial);
+            else
+                tagpu_posebake_geom_lost((const TAGPU_PBGEOM*)s_vb[worst].ent, s_vb[worst].serial);
             vb_release(&s_vb[worst]);
+        }
     }
     if (s_nvbFree) return &s_vb[s_vbFree[--s_nvbFree]];
     if (s_vbTop < VB_MAX) return &s_vb[s_vbTop++];
@@ -968,11 +982,11 @@ static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
    across bands -- so a process short of address space sends the same bytes more slowly.
 
    WHAT A BANDED FRAME COSTS, MEASURED on scenarios/zombie-kingdom-13k: a map of units seen
-   for the first time, 793 streams and 117.5 MB, waited 234 ms; a frame of 46 to 63 re-baked
-   streams, 16 to 20 MB, waited 124 to 206 ms, most of it the frames in flight. The second
-   kind repeats, more than once a second, while a live battle's whole map is in view: the
-   bake's two caches stand at their keeps (512 and 1 024) and it baked 7 157 entries and
-   dropped 5 621 in two minutes. */
+   for the first time, 793 streams and 117.5 MB, waited 234 ms; a frame of 46 to 63 streams,
+   16 to 20 MB, waited 124 to 206 ms, most of it the frames in flight. The bake hands a
+   frame no more than TAGPU_PB_OWEMAX of streams it has not sent, so a first sight of many
+   types is several such frames; a live battle with the whole map in view then banded 31 to
+   51 frames in two minutes, as animated faces reached frames not yet baked. */
 static TAGPU_VKSTAGE s_band;
 #define VBAND_CAP    ((VkDeviceSize)16 << 20)
 #define VSTAGE_FLOOR ((VkDeviceSize)64 << 10)
@@ -2342,28 +2356,33 @@ static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogHeld, in
    agree for them.
 
    THE BOUNDS: `pi < npose` and the unit's slice inside the copied arenas
-   (checked by the caller before a unit is drawn), and the mirrors' vertex
-   count against `nvert`, which bounds every `e + k` below. */
+   (checked by the caller before a unit is drawn), and the wire range's length
+   and the skip flags' count against the record's, which bound every `e + k`
+   below. */
 static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
                              unsigned* nfar)
 {
-    int nvg = 0, nvm = 0, e;
-    const float* geo = tagpu_posebake_geom_mirror((const TAGPU_PBGEOM*)r->geom,
-                                                  r->geomSerial, &nvg);
-    const float* mat = tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat,
-                                                 r->matSerial, &nvm);
+    int nvw = 0, nvm = 0, e;
+    /* the bake's own copies of the two things read here every frame: the WIRE range's rest
+       vertices and pieces, vertex 0 of it the stream's `wireFirst`, and the material's skip
+       flags, one a stream vertex (tagpu_posebake.h) */
+    const float* geo = tagpu_posebake_geom_wire((const TAGPU_PBGEOM*)r->geom,
+                                                r->geomSerial, &nvw);
+    const unsigned char* skip = tagpu_posebake_mat_skip((const TAGPU_PBMAT*)r->mat,
+                                                        r->matSerial, &nvm);
     unsigned n = 0;
     const int ss = h->ss >= 1.0f ? (int)(h->ss + 0.5f) : 1;
-    if (!geo || !mat || nvg != r->nvert || nvm != r->nvert) return 0;
+    if (!geo || !skip || nvm != r->nvert || r->wireCount > nvw || r->wireFirst < 0 ||
+        r->wireFirst > r->nvert - r->wireCount) return 0;
     for (e = r->wireFirst; e + 1 < r->wireFirst + r->wireCount; e += 2) {
         int gx[2], gy[2], k, ok = 1;
         float enc[2], vy[2], qx[2], qy[2];
         for (k = 0; k < 2 && ok; k++) {
-            const float* gv = geo + (size_t)(e + k) * TAGPU_PB_GEOMST;
+            const float* gv = geo + (size_t)(e - r->wireFirst + k) * 4;
             const float* row;
             float m[3], md;
-            int pi = (int)(gv[6] + 0.5f), j;
-            if (mat[(size_t)(e + k) * TAGPU_PB_MATST + 4] > 0.5f) { ok = 0; break; }
+            int pi = (int)(gv[3] + 0.5f), j;
+            if (skip[e + k]) { ok = 0; break; }
             if (pi < 0 || pi >= r->npose) { ok = 0; break; }
             if (h->vis[r->flagOff + (unsigned)pi] < 0.5f) { ok = 0; break; }
             row = h->rows + ((size_t)r->rowOff + (size_t)pi * 3) * 4;
@@ -2909,10 +2928,18 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         const TAGPU_PDUREC* r = &h.units[i];
         if (r->fx) continue;                /* runs, not vertices */
         /* once a serial, not once a unit: `miss_first` has why */
-        if (!vb_find(r->geomSerial) && miss_first(r->geomSerial))
-            stageNeed += (VkDeviceSize)r->nvert * GEOM_STRIDE;
-        if (!vb_find(r->matSerial) && miss_first(r->matSerial))
-            stageNeed += (VkDeviceSize)r->nvert * MAT_STRIDE;
+        /* EVERY BUFFER THIS FRAME NAMES IS STAMPED HERE, before one is made: `vb_slot` then
+           evicts none of them, so a buffer found now is found by its unit below. That is
+           what the bake's side rests on -- an evicted buffer's stream is gone, and a unit
+           that met the eviction of its own would have nothing to draw from. */
+        {
+            VBENT* eg = vb_find(r->geomSerial);
+            VBENT* em = vb_find(r->matSerial);
+            if (eg) eg->lastFrame = d->frame;
+            else if (miss_first(r->geomSerial)) stageNeed += (VkDeviceSize)r->nvert * GEOM_STRIDE;
+            if (em) em->lastFrame = d->frame;
+            else if (miss_first(r->matSerial)) stageNeed += (VkDeviceSize)r->nvert * MAT_STRIDE;
+        }
     }
     /* THE ATLASES RESERVE NOTHING HERE: the base atlas has a staging buffer
        of its own (`base_upload`), and nothing is copied into the restored twin
@@ -3027,10 +3054,21 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                read and by the module that owns it -- tagpu_posebake.h. A type
                whose entry has been evicted and re-baked answers NULL, and this
                unit is then simply not drawn, which the caster census turns into
-               a refusal of the whole map. */
+               a refusal of the whole map.
+
+               NO BUFFER HERE AND NO STREAM THERE is the one state the bake cannot see: this
+               table was torn down with the lane, and the streams it had taken were freed
+               when it took them. Saying so drops the entry, and the next frame bakes it
+               again; this frame draws no unit, which a lane that has just come back up
+               is not showing yet anyway. */
             src = j ? tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat, serial, &nv)
                     : tagpu_posebake_geom_mirror((const TAGPU_PBGEOM*)r->geom, serial, &nv);
-            if (!src || nv != r->nvert) break;
+            if (!src) {
+                if (j) tagpu_posebake_mat_lost((const TAGPU_PBMAT*)r->mat, serial);
+                else   tagpu_posebake_geom_lost((const TAGPU_PBGEOM*)r->geom, serial);
+                break;
+            }
+            if (nv != r->nvert) break;
             bytes = (VkDeviceSize)nv * st;
             /* THE COPY IS BOUNDED BY THE ALLOCATION IT GOES INTO, and not by
                the pre-pass that sized it. `stageNeed` above counts the
@@ -3075,6 +3113,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             }
             (*e)->serial = serial;
             (*e)->size = bytes;
+            (*e)->ent = j ? r->mat : r->geom;
+            (*e)->mat = j;
             vb_link(*e);
             /* STAMPED AT CREATION, not only when the unit is finally drawn. The
                copy below is already recorded into `cb`, so an entry left at
@@ -3095,13 +3135,20 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 }
                 bandBytes += bytes;
                 bandStreams++;
-                continue;
+            } else {
+                memcpy(staged, src, (size_t)bytes);
+                memset(&cp, 0, sizeof cp);
+                cp.srcOffset = stageOff; cp.dstOffset = 0; cp.size = bytes;
+                vkCmdCopyBuffer(cb, s->vstage.buf, (*e)->buf, 1, &cp);
+                anyUpload = 1;
             }
-            memcpy(staged, src, (size_t)bytes);
-            memset(&cp, 0, sizeof cp);
-            cp.srcOffset = stageOff; cp.dstOffset = 0; cp.size = bytes;
-            vkCmdCopyBuffer(cb, s->vstage.buf, (*e)->buf, 1, &cp);
-            anyUpload = 1;
+            /* THE BYTES ARE OUT OF THE BAKE'S STREAM -- in the staging or the band, by a
+               memcpy that has returned -- and this table holds the buffer they go to, so
+               the bake may free it (tagpu_posebake.h, A STREAM IS HELD UNTIL IT IS SENT).
+               A frame refused below takes the table with the lane, and the next finds
+               neither, which is the case above. */
+            if (j) tagpu_posebake_mat_sent((const TAGPU_PBMAT*)r->mat, serial);
+            else   tagpu_posebake_geom_sent((const TAGPU_PBGEOM*)r->geom, serial);
         }
         if (!g || !m) continue;     /* both are stamped above, either way */
 
