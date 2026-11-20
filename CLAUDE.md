@@ -373,6 +373,19 @@ the lock admits is the kernel's first OOM victim (`oom_score_adj` 1000); that is
 bound. A tool whose worker grows past a slot declares its memory; `tools/runlock.py status` shows the
 figure.
 
+**The coarse simulator's batches use the sim pool, not the slots.** A batch
+(`runlock.sim_pool(tree, what, most, least)`, `offline()`'s drop-in, or `tools/runlock.py run --sim N`)
+takes places of a second pool outside the 28 slots: at its admission the machine's threads less the
+engine slots held, never under 8 nor over 24 (`tools/runlock-sim.cfg`), less the places other batches
+hold, kept to its end. Its processes run at idle priority (SCHED_IDLE), are the kernel's first OOM
+victims, and each game started through the grant's `argv()` is held by RLIMIT_DATA to the pool's memory
+over its cap. An engine run's admission changes only in that the load guard takes the places held off the
+load. A batch never delays an engine run, except under runlock code older than the pool, whose guard
+counts a batch's load and can delay (never over-admit) one. Idle priority does not protect an engine game
+from a sim process on the sibling thread of its core, so the pool lowers the odds of a slowed engine run
+and is not a guarantee. Never start an engine run from inside a sim batch: it is refused, because its
+games would run at idle priority.
+
 ## Python tooling: install what you need, into the shared venv
 
 **`.venv-undither/` at the main checkout root is the project's Python environment**, and you may
