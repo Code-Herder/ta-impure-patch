@@ -52,8 +52,9 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    argument, bits 16 and 17..20, so nothing is kept between calls and a nested call cannot see another's: the
    compare reads the argument's low word, the test's tail its low byte (0x47D7F2..0x47D7F6), every stock caller
    passes a literal 0 or a unit number, and only tagpu_scatter_site_test sets the bits. The seat cannot be read
-   from the test's player argument at the compare: the test has reused that slot by then. A site so accepted is ordered as any other, and the builder's own
-   test, which ignores nobody, refuses it on arrival: that refusal is what moves the units.
+   from the test's player argument at the compare: the test has reused that slot by then. A site so accepted is
+   ordered as any other, and the builder's own test, which ignores nobody, refuses it on arrival: that refusal
+   is what moves the units.
 
    STATE, all SIM_STATE: the sites s_site (the builder by slot and birth, its site, the step it was last
    refused in, whether the next refusal is held) and the rows s_row (the unit by slot and birth, the move, the
@@ -116,7 +117,7 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #define SC_CLASSES       4             /* class maps one refusal keeps                                         */
 #define SITE_TTL         61            /* steps a site outlives its last refusal: two of the 30-step waits      */
 #define STUCK_TICKS      180           /* steps with no change of cell before a moved unit stops holding the
-                                          builder: three of the pathfinder's 60-step re-searches               */
+                                          builder: six of its 30-step waits                                    */
 
 /* ---- the rows (SIM_STATE) ---- */
 
