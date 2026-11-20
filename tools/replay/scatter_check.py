@@ -3,7 +3,7 @@
 
     tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 990
     tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1802
-    tools/replay/scatter_check.py guarded <instance>   the guard's seat, held at GameTime 1300 (build-scatter-guard)
+    tools/replay/scatter_check.py guarded <instance>   the guard's seat, held at GameTime 1900 (build-scatter-guard)
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and

@@ -695,6 +695,9 @@ void tagpu_scatter_mark(unsigned owner, int now, int x0, int z0, int w, int h, u
     for (i = 0; i < SC_SITES; i++)
         if (site_live(&s_site[i], owner, now))
             mark_rect(t, &box, s_site[i].x0, s_site[i].z0, s_site[i].fx, s_site[i].fz);
+    for (i = 0; i < SC_ROWS; i++)                  /* a unit still walking there is no obstacle yet */
+        if (s_row[i].used && s_row[i].owner == owner)
+            mark_rect(t, &box, s_row[i].dx, s_row[i].dz, s_row[i].fx, s_row[i].fz);
 }
 
 void tagpu_scatter_tick(void)

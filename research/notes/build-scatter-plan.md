@@ -133,7 +133,7 @@ Decision 3 says one manager orders a unit. So the two modules exchange ground, n
 
 - **The guard reads build scatter's site rows** (`tagpu_scatter_covers`, `tagpu_scatter_mark`): a
   seat a refused site covers is given up at the builder's next visit, and the site is taken ground
-  for the seat search and the wait spot. No signature or re-plan is involved: the test is one call
+  for the seat search and the wait spot, as are the places build scatter's units are walking to. No signature or re-plan is involved: the test is one call
   in the visit, per builder.
 - **Build scatter reads the guard's rows** (`tagpu_guard_seats`, `tagpu_guard_mark`): the cursor
   accepts a site under a seated builder, the plan leaves it alone and counts it (`guard=`), the hold
@@ -146,8 +146,8 @@ Decision 3 says one manager orders a unit. So the two modules exchange ground, n
   two cells, which can leave the builder on the site; from a site the goal is the place.
 - **Its own test groups.** The guard's case first rode in `build-scatter` as a fourth phase and the
   record-against-puppet counts failed there: a third build placement in one window put three of the
-  local player's `oktobuild` sounds (`0x47F1A0` from `0x498FA9`, and the build menu's from
-  `0x41ABA8`) past the harness's band of two. The band was left as it is and the case got its own
+  local player's `oktobuild` sounds (`0x47F1A0` called at `0x498FA4`) and three of the build menu's
+  `addbuild` (called at `0x41ABA3`) past the harness's band of two. The band was left as it is and the case got its own
   pair, `build-scatter-guard` and `stock-build-scatter-guard`.
 
 ### MEASURED 2026-11-20 (landing 2)

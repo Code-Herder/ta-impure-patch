@@ -33,7 +33,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats stock-guard-seats");
 
    A BUILD SITE. A site one of the builder's owner's builders is being refused on (build scatter's rows,
    tagpu_scatter.h) is ground a structure is about to stand on: it is taken ground for that owner's seats and wait
-   spots, a seat it covers is given up at the builder's next visit, and a builder standing on one is sent to the
+   spots, as is every place build scatter has sent one of that owner's units to, a seat it covers is given up at the builder's next visit, and a builder standing on one is sent to the
    exact place it was given, not to within its wait spot's two cells. Build scatter orders no unit this module
    seats, and sends none to a lane, a seat or a wait spot (tagpu_guard_mark): a unit has one manager.
 
@@ -602,8 +602,8 @@ static int still_guards(const Eng* e, const GuardSeat* t, const char* p, unsigne
     return 0;
 }
 
-/* TAKEN, for builder `self`'s search: the structures, the build sites its owner's builders are refused on (A BUILD
-   SITE), every plant's lanes in the box, every other row's seat or
+/* TAKEN, for builder `self`'s search: the structures, the build sites its owner's builders are refused on and
+   the places build scatter has sent that owner's units to (A BUILD SITE), every plant's lanes in the box, every other row's seat or
    wait spot in it, and every other unit standing still -- a mover that has not changed cell for 30 ticks, which
    the pathfinder takes as an obstacle (the per-cell rule 0x47DE60 at 0x47DEF8..0x47DF32) */
 static void build_taken(const Eng* e, const GuardPlant* r, Scratch* s, unsigned self)

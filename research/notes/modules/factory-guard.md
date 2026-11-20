@@ -97,7 +97,8 @@ stance still folds between units (`0x402B1B`); that is the plant's script, not t
 61 steps ([build scatter](build-scatter.html)'s rows, `tagpu_scatter_covers` and `tagpu_scatter_mark`)
 is ground a structure is about to stand on. At a builder's visit a seat such a site covers is given
 up, and the search that follows takes the site as taken ground, for the seat and for the wait spot
-alike. A wait spot's goal is reached two cells short of it, which can be on the site still, so a
+alike, and with it every place build scatter has sent one of that owner's units to and the unit has
+not reached yet. A wait spot's goal is reached two cells short of it, which can be on the site still, so a
 builder standing on a site is sent to the place itself. Build scatter orders no unit the guard seats
 and sends none to a lane, a seat or a wait spot (`tagpu_guard_seats`, `tagpu_guard_mark`): a unit has
 one manager. The visit is the guard handler's, so a builder whose list is headed by another order --
