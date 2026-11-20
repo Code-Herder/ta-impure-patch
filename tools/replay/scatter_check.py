@@ -3,6 +3,7 @@
 
     tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 990
     tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1802
+    tools/replay/scatter_check.py guarded <instance>   the guard's seat, held at GameTime 1300 (build-scatter-guard)
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and
@@ -30,6 +31,14 @@ on its middle.
     the seat's ARMCK and its four ARMPW live, none of the four on the site
     the ARMCK's order list is empty or headed by its type's default order (the order controller's own, the
     byte at def +0x230)                         the build order was abandoned, as stock abandons it
+
+GUARDED (scenarios/build-scatter-guard.json, the build-scatter-guard test groups). An ARMCOM guards an ARMVP and
+the factory guard seats it on what the test group then makes a solar collector's site, at site B's cells.
+
+    the site's line counts one unit of the guard's and moves none     the cursor accepted the site under the
+                                                seated commander, and build scatter left it to its manager
+    the log holds the guard's `site ... given up` line                the guard gave the seat up for the site
+    an ARMSOLAR stands on the site, and the ARMCOM does not           it was seated off the site, and the build began
 
 Exit 0 when every check holds, 1 with the first that does not, 2 when it could not run.
 """
@@ -59,7 +68,9 @@ OFF_UNITS, UNIT_STRIDE = 0x14357, 0x118     # the unit array's first record, and
 U_ORDERS, U_DEF = 0x5C, 0x92                # a unit's order list head and its type's definition
 N_ACTION, UD_DEFAULT = 0x04, 0x230          # an order node's action byte; a definition's default order
 SITE_LINE = re.compile(r"scatter: GameTime (\d+): site builder=(\d+) type=\d+ cell=(\d+),(\d+) \d+x\d+ "
-                       r"on=(\d+) moved=(\d+) \(failed=(\d+)\) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+)")
+                       r"on=(\d+) moved=(\d+) \(failed=(\d+)\) noway=(\d+) busy=(\d+) other=(\d+) full=(\d+) "
+                       r"guard=(\d+)")
+GUARD_GAVE_UP = re.compile(r"guard: site builder=\d+ plant=\d+ seat=-?\d+,-?\d+ given up")
 
 
 class Fail(Exception):
@@ -85,7 +96,8 @@ def site_lines(lines: list) -> list:
         m = SITE_LINE.search(ln)
         if m:
             out.append({"tick": int(m[1]), "builder": int(m[2]), "cell": (int(m[3]), int(m[4])),
-                        "on": int(m[5]), "moved": int(m[6]), "failed": int(m[7])})
+                        "on": int(m[5]), "moved": int(m[6]), "failed": int(m[7]),
+                        "guard": int(m[12])})
     return out
 
 
@@ -148,7 +160,7 @@ def head_and_default(cli, instance, slot: int) -> tuple:
 
 
 def read(instance):
-    """The run's site lines, a roster dump begun after this call, and the tacli module."""
+    """The run's site lines, a roster dump begun after this call, the tacli module and the log's lines."""
     cli = cli_module()
     gamedir = cli.Instance(instance).gamedir
     start = len(talog.run_text(gamedir).splitlines())
@@ -157,7 +169,7 @@ def read(instance):
         lines = talog.run_text(gamedir).splitlines()
         units = roster_block(lines, start, cli.ROSTER_RX)
         if units is not None:
-            return site_lines(lines), units, cli
+            return site_lines(lines), units, cli, lines
         if time.monotonic() > deadline:
             raise CannotRun(f"no roster dump began in {ROSTER_S} s")
         time.sleep(0.25)
@@ -216,14 +228,32 @@ def judge_gaveup(sites: list, units: list, head=None, dflt=None) -> list:
     return fails
 
 
+def judge_guarded(sites: list, units: list, lines: list) -> list:
+    fails = []
+    b = [s for s in sites if s["cell"] == SITE_B]
+    if not b or (b[0]["on"], b[0]["moved"], b[0]["guard"]) != (1, 0, 1):
+        fails.append(f"the site's first plan is {b[0] if b else None}, not one unit on it, the guard's, and none "
+                     f"moved")
+    if not any(GUARD_GAVE_UP.search(ln) for ln in lines):
+        fails.append("the log holds no `guard: site ... given up` line: the guard kept the seat")
+    if not any(on_site(u["world"], SITE_B) for u in mine(units, "ARMSOLAR")):
+        fails.append(f"no ARMSOLAR on the site: {[u['world'] for u in mine(units, 'ARMSOLAR')]}")
+    coms = mine(units, "ARMCOM")
+    if len(coms) != 1 or on_site(coms[0]["world"], SITE_B):
+        fails.append(f"the ARMCOM is not one unit standing off the site: {[u['world'] for u in coms]}")
+    return fails
+
+
 def main(argv):
-    if len(argv) != 3 or argv[1] not in ("walked", "gaveup"):
+    if len(argv) != 3 or argv[1] not in ("walked", "gaveup", "guarded"):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     try:
-        sites, units, cli = read(argv[2])
+        sites, units, cli, lines = read(argv[2])
         if argv[1] == "walked":
             fails = judge_walked(sites, units)
+        elif argv[1] == "guarded":
+            fails = judge_guarded(sites, units, lines)
         else:
             cks = mine(units, "ARMCK")
             if len(cks) != 1 or cks[0]["slot"] is None:

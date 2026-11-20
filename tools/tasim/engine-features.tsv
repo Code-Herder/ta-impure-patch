@@ -122,3 +122,4 @@ guard_geometry	T4	the seats and lanes of builders guarding a factory, to be mode
 guard_seats	T4	the guard order's home move to a seat and its assist skipped for a waiting builder, to be modelled with the guard order	tagpu_guard.c, the guard handler's assist 0x40654B
 build_scatter	T4	the moves off a refused build site and the held retry, to be modelled with MobileBuild's blocked site	tagpu_scatter.c, MobileBuild's blocked-site branch 0x403CD0 and the tick in the players phase
 build_scatter_geo	T4	the way off a build site, to be modelled with MobileBuild's blocked site	tagpu_scattergeo.c, the search for the nearest place a unit can reach and stand on
+guard_build_site	T4	the guard's seats kept off a refused build site, and what build scatter asks of the guard's rows, to be modelled with the guard order and MobileBuild's blocked site	tagpu_guard.c, tagpu_guard_seats and tagpu_guard_mark

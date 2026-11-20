@@ -23,4 +23,11 @@ unsigned tagpu_scatter_site_test(const void* def, unsigned cell, unsigned ignore
 void tagpu_scatter_cursor_set(int moves);
 int  tagpu_scatter_cursor_moves(void);
 
+/* THE SITES, for the factory guard's planner (tagpu_guard.c): a site one of `owner`'s builders has been refused
+   on within the last SITE_TTL steps of `now` is ground a structure is about to stand on. _covers: the footprint
+   fx x fz at cell (x, z) overlaps one. _mark: every such site's cells in the w x h box at (x0, z0) set to 1 in
+   `t`. GAME THREAD; they read this file's rows and nothing of the engine. */
+int  tagpu_scatter_covers(unsigned owner, int now, int x, int z, int fx, int fz);
+void tagpu_scatter_mark(unsigned owner, int now, int x0, int z0, int w, int h, unsigned char* t);
+
 #endif

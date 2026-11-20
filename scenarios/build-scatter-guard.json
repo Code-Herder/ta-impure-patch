@@ -1,0 +1,111 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `build-scatter-guard` test groups (research/notes/build-scatter-plan.md, landing 2): the human seat's finished ARMVP with an ARMCOM guarding it, which the factory guard seats beside the plant, and an idle ARMCK at the pinned camera centre. The test group orders the ARMCK, through the build panel and a native click, to build a solar collector on the commander's seat: the cursor accepts the site, the builder is refused on it, the guard gives the seat up and seats the commander off the site, and the solar is built.",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 20000,
+    "energy": 20000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "plant",
+   "type": "ARMVP",
+   "owner": 0,
+   "pos": [
+    1204,
+    7618
+   ]
+  },
+  {
+   "id": "builder_g",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1100,
+    7400
+   ]
+  },
+  {
+   "id": "estor",
+   "type": "ARMESTOR",
+   "owner": 0,
+   "pos": [
+    1700,
+    7050
+   ]
+  },
+  {
+   "id": "mstor",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    1900,
+    7050
+   ]
+  },
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2800,
+    1200
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "id": "guards",
+   "owner": 0,
+   "at": [
+    1204,
+    7760
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 64,
+    "angle": 0
+   },
+   "composition": [
+    {
+     "type": "ARMCOM",
+     "count": 1
+    }
+   ],
+   "orders": [
+    {
+     "cmd": "guard",
+     "target": "plant"
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1100,
+   7400
+  ]
+ }
+}

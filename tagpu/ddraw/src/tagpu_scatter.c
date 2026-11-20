@@ -1,5 +1,5 @@
 #include "tagpu_simreg.h"
-SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter");
+SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter build-scatter-guard stock-build-scatter-guard");
 /* BUILD SCATTER: a builder that reaches its build site and finds its owner's idle units standing on it has them
    moved off, each to the nearest place it can reach and stand on (research/notes/build-scatter-plan.md; the
    module note research/notes/modules/build-scatter.md). The geometry is tagpu_scattergeo.c's; this file reads the
@@ -55,6 +55,12 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    aside) holds none. A refusal is held only at a counter past 1, so an order's node is held HOLD_MAX times at
    most and its builder gives up at the latest on refusal HOLD_MAX + 12, stock's twelfth plus the held ones.
 
+   THE GUARD'S. A builder the factory guard seats (tagpu_guard.h) is never ordered here: a unit has one manager.
+   A site row is taken ground for the guard's own search, which gives up a seat or wait spot the site covers at
+   the builder's next visit and walks it to another; so the cursor accepts a site under such a builder, the plan
+   counts it apart (`guard=`), and THE HOLD holds while it changes cell. No unit is sent to a lane, a seat or a
+   wait spot of the guard's (tagpu_guard_mark).
+
    THE CURSOR'S SITE. The build cursor's test (0x47D2E0 from 0x4198C6, through tagpu_patches.c's
    build_site_test) refuses a cell the structure stamps when its unit word names a unit other than the ignore
    argument's (0x47D54C..0x47D561, `cmp cx,[esp+0x48]` at 0x47D554). tagpu_scatter_site_test asks stock first and,
@@ -93,6 +99,7 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 
 #include "tagpu_allysight.h"
 #include "tagpu_detour.h"
+#include "tagpu_guard.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
 #include "tagpu_log.h"
@@ -509,7 +516,8 @@ static const uint8_t* class_map(const View* v, Scratch* s, const GgBox* box, uns
 
 /* WALL, TAKEN and OCC of the box. Wall: every cell a structure holds. Taken: those, every structure's whole
    footprint (a yard's open cells are held by no unit in the map, and a unit sent there stands in the plant), this
-   site and every other, and every place a row has sent a unit to. Occ: the mover standing on each cell. The
+   site and every other, every place a row has sent a unit to, and the factory guard's lanes, seats and wait spots
+   (tagpu_guard_mark). Occ: the mover standing on each cell. The
    structure scan runs over the box grown by the level's widest yard less one, so a plant with only its open
    cells in the box is found by a held cell outside it. */
 static void box_fill(const View* v, const GgBox* box, Scratch* s)
@@ -534,6 +542,7 @@ static void box_fill(const View* v, const GgBox* box, Scratch* s)
         if (s_site[i].used) mark_rect(s->taken, box, s_site[i].x0, s_site[i].z0, s_site[i].fx, s_site[i].fz);
     for (i = 0; i < SC_ROWS; i++)
         if (s_row[i].used) mark_rect(s->taken, box, s_row[i].dx, s_row[i].dz, s_row[i].fx, s_row[i].fz);
+    tagpu_guard_mark(box->x0, box->z0, box->w, box->h, s->taken);
 }
 
 /* The refused site's blockers, each of the owner's idle finished ground movers that nothing carries given a move
@@ -547,7 +556,7 @@ static void plan(const View* v, ScSite* s)
     GgBox box;
     uint16_t list[SC_PLAN];
     const unsigned char move = move_action();
-    unsigned nlist = 0, k, moved = 0, failed = 0, noway = 0, busy = 0, foreign = 0, full = 0;
+    unsigned nlist = 0, k, moved = 0, failed = 0, noway = 0, busy = 0, foreign = 0, full = 0, guard = 0;
     int x, z, x1, z1;
     box.x0 = s->x0 - SC_GROW; box.z0 = s->z0 - SC_GROW;
     x1 = s->x0 + s->fx - 1 + SC_GROW; z1 = s->z0 + s->fz - 1 + SC_GROW;
@@ -580,7 +589,11 @@ static void plan(const View* v, ScSite* s)
             memset(r, 0, sizeof *r);                  /* it did not get there: judged again, and the place it
                                                          was sent to stays marked for this plan              */
         }
-        if (!movable(v, n, &m)) { busy++; continue; }
+        if (!movable(v, n, &m)) {
+            if (tagpu_guard_seats(n)) guard++;        /* THE GUARD'S: its own manager takes it off the site */
+            else busy++;
+            continue;
+        }
         fx = m.fx; fz = m.fz;
         if (!(pass = class_map(v, &sc, &box, m.mclass)) ||
             !sg_way_off(&box, m.x, m.z, fx, fz, n, pass, sc.wsums, sc.tsums, sc.occ, &sc.wk, &dx, &dz)) {
@@ -622,14 +635,14 @@ static void plan(const View* v, ScSite* s)
     s_diag.moved += moved; s_diag.noway += noway; s_diag.full += full;
     if (moved || !s->told)
         tagpu_logf("scatter: GameTime %d: site builder=%u type=%u cell=%d,%d %ux%u on=%u moved=%u (failed=%u) "
-                   "noway=%u busy=%u other=%u full=%u", (int)v->now, (unsigned)s->builder, (unsigned)s->type,
-                   s->x0, s->z0, (unsigned)s->fx, (unsigned)s->fz, nlist, moved, failed, noway, busy, foreign,
-                   full);
+                   "noway=%u busy=%u other=%u full=%u guard=%u", (int)v->now, (unsigned)s->builder,
+                   (unsigned)s->type, s->x0, s->z0, (unsigned)s->fx, (unsigned)s->fz, nlist, moved, failed, noway,
+                   busy, foreign, full, guard);
     s->told = 1;
 }
 
 /* THE HOLD's test: a unit this file moved still getting off the site, or another of the owner's movers crossing
-   it under a move and having changed cell within STUCK_TICKS */
+   it under a move, or one the factory guard seats (THE GUARD'S), having changed cell within STUCK_TICKS */
 static int progress(const View* v, const ScSite* s)
 {
     const unsigned char move = move_action();
@@ -646,11 +659,37 @@ static int progress(const View* v, const ScSite* s)
                 if (!r->stuck) return 1;
                 continue;
             }
-            if (!move || v->q.ops->head(&v->q, (int)n, &h) != 1 || h.action != move) continue;
+            if ((!move || v->q.ops->head(&v->q, (int)n, &h) != 1 || h.action != move) && !tagpu_guard_seats(n))
+                continue;
             memcpy(&stamp, *(const char* const*)(u + U_MOVER) + MV_STAMP, 4);
             if (v->now - (int32_t)stamp <= STUCK_TICKS) return 1;
         }
     return 0;
+}
+
+/* tagpu_scatter.h, THE SITES: a row within SITE_TTL of its last refusal */
+static int site_live(const ScSite* s, unsigned owner, int now)
+{
+    return s->used && s->owner == owner && now - s->seen <= SITE_TTL;
+}
+
+int tagpu_scatter_covers(unsigned owner, int now, int x, int z, int fx, int fz)
+{
+    int i;
+    for (i = 0; i < SC_SITES; i++)
+        if (site_live(&s_site[i], owner, now) &&
+            sg_overlap(x, z, fx, fz, s_site[i].x0, s_site[i].z0, s_site[i].fx, s_site[i].fz)) return 1;
+    return 0;
+}
+
+void tagpu_scatter_mark(unsigned owner, int now, int x0, int z0, int w, int h, unsigned char* t)
+{
+    const GgBox box = { x0, z0, w, h };
+    int i;
+    if (w < 1 || h < 1) return;
+    for (i = 0; i < SC_SITES; i++)
+        if (site_live(&s_site[i], owner, now))
+            mark_rect(t, &box, s_site[i].x0, s_site[i].z0, s_site[i].fx, s_site[i].fz);
 }
 
 void tagpu_scatter_tick(void)
@@ -700,10 +739,13 @@ static int __cdecl occupant_moves(unsigned* regs)
 {
     const unsigned n = regs[6] & 0xFFFFu;
     const unsigned arg = *(const unsigned*)(uintptr_t)(regs[3] + 0x48);
+    const unsigned seat = (arg >> SITE_SEAT_SHIFT) & 0xFu;
+    const char* u;
     View v;
     Mover m;
-    if (!s_install.installed || tagpu_puppet_on()) return 0;
-    return view_open(&v, (arg >> SITE_SEAT_SHIFT) & 0xFu) && movable(&v, n, &m);
+    if (!s_install.installed || tagpu_puppet_on() || !view_open(&v, seat)) return 0;
+    if (movable(&v, n, &m)) return 1;
+    return (u = unit_at(&v, n)) && *(const uint8_t*)(u + U_OWNER) == seat && tagpu_guard_seats(n);
 }
 
 unsigned tagpu_scatter_site_test(const void* def, unsigned cell, unsigned ignore, void* player, int* moves)
