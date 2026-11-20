@@ -164,10 +164,23 @@ SIM_VAR(s_mode, SIM_INSTALL);
 static int s_log;
 SIM_VAR(s_log, SIM_INSTALL);
 
-/* THE SCRATCH of a search: written by each search before it reads it, and left with every cell new (ts_pf_search).
-   The block is ours alone to free; the TS_PF over it is rebuilt whenever it does not describe that block. */
-static TS_PF s_pf;
+/* THE HELPERS: threads made at install that search beside the scheduler's own thread, and the two handles a batch
+   is handed out and waited for through. All three are written at install and never closed. */
+static unsigned s_helpers;
+SIM_VAR(s_helpers, SIM_INSTALL);
+static HANDLE s_go;                     /* a semaphore: one count wakes one helper for the batch in s_run */
+SIM_VAR(s_go, SIM_INSTALL);
+static HANDLE s_done;                   /* an event: the last helper of a batch has left it               */
+SIM_VAR(s_done, SIM_INSTALL);
+
+/* THE SCRATCHES, one for each thread that searches: s_pf[0] the scheduler's own thread's and the oracle's, s_pf[k]
+   helper k's. Each is written by a search before it reads it, and left with every cell new (ts_pf_search). They
+   share one block, ours alone to free; the TS_PFs over it are rebuilt whenever they do not describe that block.
+   s_scratch counts the ones laid out: 1 + s_helpers, or 1 when that much memory was not to be had. */
+static TS_PF s_pf[PF_BATCH];
 SIM_VAR(s_pf, SIM_TRANSIENT);
+static unsigned s_scratch;
+SIM_VAR(s_scratch, SIM_TRANSIENT);
 static unsigned char* s_mem;
 static unsigned s_mem_bytes;
 SIM_VAR(s_mem_bytes, SIM_TRANSIENT);
@@ -355,28 +368,38 @@ static int patch_of(const PV* v, const char* unit, unsigned char* code, TS_PFPAT
     return 1;
 }
 
-/* The scratch for a w x h grid, made again when the grid's size changes (a new map). */
+/* The scratches for a w x h grid, made again when the grid's size changes (a new map): one for each thread that
+   searches, or one alone when that much memory is not to be had -- the searches are then the same ones, one after
+   another. */
 static int scratch_for(int w, int h)
 {
     static const TS_PFSEAT none[TS_PF_SEATS];
     const int nodes = (long long)w * h < PF_POOL ? w * h : PF_POOL;
-    size_t need;
-    if (s_mem && s_pf.w == w && s_pf.h == h) return 1;
-    need = ts_pf_bytes_n(w, h, 2, nodes);
+    const size_t need = (ts_pf_bytes_n(w, h, 2, nodes) + 15u) & ~(size_t)15u;
+    unsigned n, i;
+    if (s_mem && s_scratch && s_pf[0].w == w && s_pf[0].h == h) return 1;
     if (s_mem) SIM_FREE(s_mem, s_mem);
     s_mem = NULL;
     s_mem_bytes = 0;
-    memset(&s_pf, 0, sizeof s_pf);
-    if (!need || need > 0x7FFFFFFFu) return 0;
-    s_mem = (unsigned char*)SIM_ALLOC(s_mem, need);
-    if (!s_mem) return 0;
-    s_mem_bytes = (unsigned)need;
-    if (ts_pf_init_n(&s_pf, s_mem, need, w, h, 2, nodes, 0, none)) {
-        SIM_FREE(s_mem, s_mem);
-        s_mem = NULL;
-        s_mem_bytes = 0;
-        return 0;
+    s_scratch = 0;
+    memset(s_pf, 0, sizeof s_pf);
+    if (need < 16) return 0;
+    for (n = 1 + s_helpers; n && !s_mem; n = n > 1 ? 1 : 0) {
+        if (need > 0x7FFFFFFFu / n) continue;
+        s_mem = (unsigned char*)SIM_ALLOC(s_mem, need * n);
+        if (s_mem) break;
     }
+    if (!s_mem) return 0;
+    s_mem_bytes = (unsigned)(need * n);
+    for (i = 0; i < n; i++)
+        if (ts_pf_init_n(&s_pf[i], s_mem + i * need, need, w, h, 2, nodes, 0, none)) {
+            SIM_FREE(s_mem, s_mem);
+            s_mem = NULL;
+            s_mem_bytes = 0;
+            memset(s_pf, 0, sizeof s_pf);
+            return 0;
+        }
+    s_scratch = n;
     return 1;
 }
 
@@ -438,6 +461,7 @@ typedef struct JOB {
     unsigned slot, stamp;
     int whole;                      /* every value the search rests on is inside its bound              */
     unsigned char seat;
+    unsigned char patched, other;   /* the search read a patch; its goal is of a kind the search has not */
     TS_PFPATCH patch;
     TS_PFRESULT r;
     unsigned char code[PF_PATCH_MAX];
@@ -606,9 +630,9 @@ static void job_writes(const SCHED* e, JOB* j, unsigned slot)
                                         *(const unsigned*)(j->unit + UNIT_FOOT));
 }
 
-/* THE SEARCH of one job: it reads the class's map, the cells and the units' stamps, and writes the job and the
-   scratch. */
-static void job_search(const SCHED* e, JOB* j)
+/* THE SEARCH of one job, on the scheduler's thread or a helper: it reads the tick's view, the class's map, the cells
+   and the units' stamps, and writes its own job and its own thread's scratch -- nothing two searches share. */
+static void job_search(const SCHED* e, JOB* j, TS_PF* pf)
 {
     TS_PFQUERY q;
     PV v;
@@ -616,16 +640,14 @@ static void job_search(const SCHED* e, JOB* j)
     if (!j->whole) return;
     memset(&q, 0, sizeof q);
     if (!goal_of(j->goal, &q.goal)) {
-        if (s_v.other_goal++ < 4)
-            tagpu_logf("pathsched: a goal of a kind the search has not (vtable %#x): no path",
-                       *(const unsigned*)j->goal);
+        j->other = 1;
         return;
     }
     if (!pv_open(&v, e->ta, j->cls, j->unit)) return;
     if (*(const unsigned*)(j->mover + MOVER_STAMP) < v.wm) {
         if (!patch_of(&v, j->unit, j->code, &j->patch)) return;
         q.patch = &j->patch;
-        s_v.patched++;
+        j->patched = 1;
     }
     q.map = *(const unsigned* const*)(j->cls + 0x18);
     q.w = e->w;
@@ -638,7 +660,70 @@ static void job_search(const SCHED* e, JOB* j)
     q.sx = *(const short*)(j->unit + UNIT_CELL);
     q.sz = *(const short*)(j->unit + UNIT_CELL + 2);
     q.heading = *(const unsigned short*)(j->unit + UNIT_HEADING);
-    ts_pf_search(&s_pf, &q, &j->r);
+    ts_pf_search(pf, &q, &j->r);
+}
+
+/* A BATCH'S SEARCHES, on this thread and the helpers. s_run is the batch in hand, all zero between two batches.
+   THE ORDERING the helpers rest on, a handshake:
+     - a helper reads s_run, a job or engine memory only between a count of s_go it has taken and its own
+       decrement of `pending`;
+     - this thread writes s_run before it releases the counts, releases exactly `pending` of them, and does not
+       leave batch_search -- so writes nothing, and lets nothing else run on the simulation's thread -- until
+       s_done, which the helper that brings `pending` to 0 sets after its last read. Each count is taken once and
+       answered by one decrement, whichever helpers take them, so `pending` reaches 0 exactly when every count
+       released has been answered.
+   So while any helper reads, the thread that owns the engine's memory is inside this call, and the engine's state
+   is what the batch's writes left. A job is claimed by one thread, the one whose increment of `next` returned it.
+   The searches' results do not depend on which thread ran which, or on how many there are: a search reads
+   nothing another search of its batch writes. */
+static struct {
+    const SCHED* e;
+    JOB* job;
+    unsigned n;
+    volatile LONG next, pending;
+} s_run;
+SIM_VAR(s_run, SIM_TRANSIENT);
+
+static void run_take(TS_PF* pf)
+{
+    for (;;) {
+        const unsigned i = (unsigned)InterlockedIncrement(&s_run.next) - 1u;
+        if (i >= s_run.n) return;
+        job_search(s_run.e, &s_run.job[i], pf);
+    }
+}
+
+static DWORD WINAPI helper_main(LPVOID scratch)
+{
+    /* a wait that fails has taken no count, so it owes no answer; s_go is never closed, so none does */
+    while (WaitForSingleObject(s_go, INFINITE) == WAIT_OBJECT_0) {
+        run_take(&s_pf[(size_t)scratch]);
+        if (!InterlockedDecrement(&s_run.pending)) SetEvent(s_done);
+    }
+    return 0;
+}
+
+static void batch_search(const SCHED* e, JOB* job, unsigned nj)
+{
+    /* every helper has a scratch, or none is woken; and no more than there are searches beside this thread's */
+    unsigned woken = s_scratch == 1 + s_helpers ? s_helpers : 0, i;
+    if (woken > nj - 1) woken = nj - 1;
+    if (woken) {
+        s_run.e = e;
+        s_run.job = job;
+        s_run.n = nj;
+        s_run.next = 0;
+        s_run.pending = (LONG)woken;
+        if (ReleaseSemaphore(s_go, (LONG)woken, NULL)) {
+            run_take(&s_pf[0]);
+            WaitForSingleObject(s_done, INFINITE);
+            memset(&s_run, 0, sizeof s_run);
+            return;
+        }
+        /* no count was released (all or none), so no helper reads */
+        memset(&s_run, 0, sizeof s_run);
+    }
+    for (i = 0; i < nj; i++) job_search(e, &job[i], &s_pf[0]);
 }
 
 /* THE RESULT of one job, through the engine's own set path 0x44F080: a path's corners, or none -- and with none it
@@ -654,6 +739,9 @@ static void job_result(JOB* j)
     else
         ((PFN_SetPath)(size_t)VA_SET_PATH)(j->course, NULL, 0);
     s_found[j->slot] = found ? j->stamp : 0;
+    if (j->patched) s_v.patched++;
+    if (j->other && s_v.other_goal++ < 4)
+        tagpu_logf("pathsched: a goal of a kind the search has not (vtable %#x): no path", *(const unsigned*)j->goal);
     s_v.begun++;
     s_v.pops += (unsigned)j->r.pops;
     if (found) s_v.nfound++;
@@ -727,7 +815,7 @@ static void __fastcall sched_tick(void* pf_unused)
             s_cursor[kind] = slot;
             job_writes(&e, &job[nj++], slot);
         }
-        for (i = 0; i < nj; i++) job_search(&e, &job[i]);
+        batch_search(&e, job, nj);
         for (i = 0; i < nj; i++) {
             job_result(&job[i]);
             pops += (unsigned)job[i].r.pops;
@@ -791,6 +879,33 @@ static int __cdecl before_extract(void* esp);
 static int __cdecl before_cleanup(void* esp);
 static int __cdecl before_scheduler(void* esp);
 
+/* THE NUMBER OF THREADS that search a batch: the machine's processors, less one left to the render thread, and no
+   more than a batch has searches; the scheduler's own thread is one of them, so the helpers are one fewer. It
+   decides how long a batch takes and nothing of what it finds. The processors are the system's: the display's
+   start gives the process all of them (dd.c). A helper that cannot be made is one thread fewer. Returns the
+   processors counted. */
+static unsigned helpers_start(void)
+{
+    DWORD_PTR mine = 0, all = 0;
+    unsigned cpus = 0, want, k;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &mine, &all))
+        for (; all; all &= all - 1) cpus++;
+    want = cpus > 2 ? cpus - 2 : 0;
+    if (want > PF_BATCH - 1) want = PF_BATCH - 1;
+    if (!want) return cpus;
+    s_go = CreateSemaphoreA(NULL, 0, PF_BATCH, NULL);
+    s_done = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!s_go || !s_done) return cpus;
+    for (k = 0; k < want; k++) {
+        /* helper k searches on s_pf[1 + k]; the helpers are numbered as they are made, with no gap */
+        const HANDLE t = CreateThread(NULL, 0, helper_main, (LPVOID)(size_t)(1 + s_helpers), 0, NULL);
+        if (!t) continue;
+        CloseHandle(t);
+        s_helpers++;
+    }
+    return cpus;
+}
+
 void tagpu_pathfind_init(void)
 {
     static const unsigned char X_SCHED[5]   = { 0x83, 0xEC, 0x18, 0x53, 0x55 };
@@ -801,6 +916,7 @@ void tagpu_pathfind_init(void)
     static const unsigned char X_REMARK[8]  = { 0x83, 0xEC, 0x14, 0x0F, 0xBF, 0x54, 0x24, 0x1A };
     static const unsigned char X_SETPATH[7] = { 0x56, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C };
     static const unsigned char X_GOALFLAG[7] = { 0x8B, 0x41, 0x04, 0x85, 0xC0, 0x74, 0x0C };
+    unsigned cpus;
     s_log = tagpu_sim_lever("tagpu_pathlog.on");
     if (tagpu_sim_lever("tagpu_pathverify.on")) {
         if (!tagpu_detour_bytes_ok(VA_SCHEDULER, X_SCHED, sizeof X_SCHED) ||
@@ -837,8 +953,10 @@ void tagpu_pathfind_init(void)
         return;
     }
     s_mode = MODE_OURS;
+    cpus = helpers_start();
     tagpu_logf("pathsched: installed - our scheduler at the players phase's call 0x464F92, set goal 0x44F2A0 watched; "
-               "%d searches and %d pops a tick, in batches of %d", PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH);
+               "%d searches and %d pops a tick, in batches of %d searched by %u threads at once (%u processors)",
+               PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH, 1 + s_helpers, cpus);
 }
 
 SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "battle");
@@ -961,7 +1079,7 @@ static int __cdecl before_reset(void* esp)
         s_v.refused++;
         return 0;
     }
-    ts_pf_search(&s_pf, &q, &s_v.res);
+    ts_pf_search(&s_pf[0], &q, &s_v.res);
     s_v.unit = unit;
     s_v.obj = *(const char* const*)mover;
     s_v.node = *(const char* const*)(goal + 4);
