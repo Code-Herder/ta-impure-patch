@@ -415,21 +415,32 @@ the entry's pointer and serial as the accessors do; a stale one does nothing.
 **3. The keeps cover what a view asks for over its animations' cycles**, 768 models and 2 304
 streams (`TAGPU_PB_KEEPGEOM`, `_KEEPMAT`). A material stream is one (type, owner, frames its
 animated faces show), so a stream evicted while its animation frame is a few ticks from coming
-round again is baked and sent each time it does. The two sum to 3 072 device buffers, under the
-4 096 allocations a device must allow with the lane's own few hundred beside them.
+round again is baked and sent each time it does. The two sum to 3 072 device buffers; rule 4 is
+what a device that counts its allocations does to that.
 
 **4. The table's device allocations are bounded, live and retiring together**
-(`tagpu_vk_unit.c` `s_vbAlloc`). Each buffer is one allocation, a device counts them
+(`tagpu_vk_unit.c` `s_vbAlloc`, `s_vbKeep`). Each buffer is one allocation, a device counts them
 (`maxMemoryAllocationCount`, 4 096 at the specification's floor), and an evicted buffer stays
-allocated until every frame slot has turned over. The pass's budget is the device's count less
-512 for everything else the lane holds (at most 276 allocations a game, vertex buffers included,
-over the test games on record), and it tells the bake how many more buffers it can make
-(`tagpu_posebake_room`) after every change to either count. A buffer is only made from a stream
-the bake owes, and the bake owes no more streams than that room, so the total never passes the
-budget: a view that would is short of its newest types for the frames the retire takes. The
-budget passes the keep by 512 at the floor (asserted), which is what lets an eviction make room.
-MEASURED 2026-11-20 with the budget forced to 1 500, under the keep, on the scenario below: 380
-models and 1 120 streams baked, 1 500 exactly, the types past them not drawn, no pass refused.
+allocated until every frame slot has turned over. The device's count is shared out:
+
+| share | holds | how it is kept |
+|---|---|---|
+| `VB_OTHERS`, 384 | everything that is neither table | an allowance, not a bound: at most 276 allocations a game, vertex buffers included, over the test games on record |
+| `VB_WIKI_SHARE`, 1 024 | the wiki's copy of the pass, whose table is its stage's bound (898) | `vb_slot` makes no buffer past it: a wiki frame that would pass it draws no unit until the retire has turned over |
+| the rest, 2 688 at the floor | the game's table | `vb_slot` the same, and the bake never brings it there: the pass says how many more buffers it can make (`tagpu_posebake_room`) after every change to either count, a buffer is only made from a stream the bake owes, and the bake owes no more streams than that room |
+
+The keep a share affords is the share less the buffers that may be retiring (256 for the game:
+2 432 at the floor, over the 2 250 the widest view measured settles at; asserted), and never more
+than rule 3's. The table comes back to that keep every frame, once the frame's buffers are
+stamped, so a view that grew it to the share does not leave it there with no room for a new
+buffer. A device that allows 131 072 allocations or more bounds neither table, which is the
+reference setup's case.
+
+A view that needs more than the share churns, as any cache smaller than its working set does.
+MEASURED 2026-11-20 with the game's share forced to 1 500 (a keep of 1 244) on the scenario
+below, whose view settles at 2 250: the table stands at 1 244, 19 778 entries baked and 18 534
+dropped in three and a half minutes, 344 banded frames with a mean wait of 196 ms, and no pass
+refused.
 
 `posebake:` logs what the two caches hold when it has moved: `holding N geometry entries, X KB,
 and M material streams, Y KB (K of them one animation frame's), and Z KB of streams not yet sent -
@@ -461,8 +472,8 @@ after it: 754–755 MB.
   llvmpipe, and the game exits. Seen once before rule 2; not reproduced since, and not fixed.
 - **No Windows run.** The measurements are Wine's, where `VirtualQuery` reports only a part of the
   free space ([Vulkan backend](vulkan-backend.html), *A pass refused its memory*), and where the
-  driver's allocation count is not the 4 096 of rule 4: the budget has run only with room to
-  spare.
+  driver's allocation count is not the 4 096 of rule 4: the shares have run only forced, on a
+  test build, and the wiki's refusal at its share not at all.
 - **A band that takes more than a second is the device not answering**, as a frame's fence is
   (`tagpu_vk_stage.c`): the lane restarts.
 

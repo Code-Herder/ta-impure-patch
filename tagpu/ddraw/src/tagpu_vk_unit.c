@@ -406,27 +406,52 @@ static unsigned s_nret, s_retCap;
 /* THE TABLE'S DEVICE ALLOCATIONS ARE BOUNDED, LIVE AND RETIRING TOGETHER. Each buffer is one
    allocation and a device counts them (`maxMemoryAllocationCount`, 4 096 at the
    specification's floor); an evicted buffer stays allocated until every slot has turned
-   over, so the keep alone bounds nothing on a frame that brings in new streams with the
-   table at its keep. `s_vbAlloc` is the device's count less VB_OTHERS, the allowance for
-   everything else the lane and the wiki's copy hold (MEASURED: at most 276 allocations a
-   game, vertex buffers included, over the test games whose `gpumem:` line the instances
-   keep). THE BOUND IS AN ORDERING WITH THE BAKE: a buffer is only ever made from a stream
-   the bake owes, the bake owes no more streams than the room last said (`room_say`,
-   tagpu_posebake_room), and the room is said again after every change to either count
-   before the bake next runs -- so live + retiring never passes `s_vbAlloc`, and a view that
-   would is short of its newest types for the frames the retire takes, where it was a
-   refused allocation and the lane coming down. The wiki's copy keeps its streams and is
-   bounded by its stage instead.
+   over, so a keep alone bounds nothing on a frame that brings in new streams with the table
+   at its keep. The device's count is shared out, and each share is held where it is spent:
 
-   THE BUDGET MUST PASS THE KEEP, or the table would fill to the budget and stay: an
-   eviction is made by a new buffer, and a new buffer needs room. At the specification's
-   floor it does, by the 512 the assertion states -- the buffers that can be retiring at
-   once before the bake waits for a slot to turn over. MEASURED with the budget forced to
-   1 500, under the keep (scenarios/zombie-kingdom-13k, the whole map in view): 380 models
-   and 1 120 streams baked, 1 500 exactly, the types past them not drawn, every pass up. */
-#define VB_OTHERS 512u
-typedef char vb_budget_passes_keep[(4096u - VB_OTHERS >= (unsigned)VB_KEEP + 512u) ? 1 : -1];
-static unsigned s_vbAlloc;
+     VB_OTHERS      everything that is neither table. An allowance, not a bound: MEASURED, at
+                    most 276 allocations a game, vertex buffers included, over the test
+                    games whose `gpumem:` line the instances keep.
+     VB_WIKI_SHARE  the wiki's copy of this pass, whose table is its stage's bound and never
+                    less (asserted below).
+     the rest       the game's table.
+
+   `s_vbAlloc` is this copy's share and `vb_slot` makes no buffer past it. THE GAME'S COPY
+   NEVER MEETS THAT REFUSAL, BY AN ORDERING WITH THE BAKE: a buffer is only ever made from a
+   stream the bake owes, the bake owes no more streams than the room last said (`room_say`,
+   tagpu_posebake_room), and the room is said again after every change to either count
+   before the bake next runs. So a view that would pass the share is short of its newest
+   types, where it was a refused allocation and the lane coming down. The wiki's bake keeps
+   its streams and owes nothing, so its copy meets the refusal itself: a frame that would
+   pass its share draws no unit until the retire has turned over.
+
+   `s_vbKeep` IS THE KEEP THE SHARE AFFORDS: VB_KEEP, or the share less VB_RETIRING where
+   that is smaller, so the buffers retiring have their room and an eviction always buys
+   some. THE TABLE COMES BACK TO IT EVERY FRAME (`upload_draw`, after the frame's buffers
+   are stamped): a view that names more buffers than the keep grows the table to the share,
+   and nothing else would shrink it again -- an eviction is otherwise made by a new buffer,
+   and at the share there is no room for one. A VIEW THAT NEEDS MORE THAN THE SHARE CHURNS,
+   as any cache smaller than its working set does: MEASURED with the share forced to 1 500,
+   a keep of 1 244, on a view that settles at 2 250 buffers (scenarios/zombie-kingdom-13k,
+   the whole map in view): the table stands at 1 244, 19 778 entries baked and 18 534
+   dropped in three and a half minutes, 344 banded frames, and no pass refused.
+
+   A device that allows VB_UNCOUNTED allocations bounds neither table. */
+#define VB_OTHERS      384u
+#define VB_WIKI_SHARE 1024u
+#define VB_UNCOUNTED 131072u
+#if TAGPU_PB_KEEPSTREAMS
+#define VB_RETIRING ((unsigned)(VB_WIKI_SHARE - VB_MAX))
+typedef char vb_wiki_share_holds_its_table[(VB_MAX + 64 <= (int)VB_WIKI_SHARE) ? 1 : -1];
+#else
+#define VB_RETIRING 256u
+/* at the specification's floor the game's share is 2 688 and its keep 2 432, over the 2 250
+   buffers the widest view measured settles at (tagpu_posebake.h, the keeps) */
+typedef char vb_floor_keep_covers_the_measured_view
+    [(4096u - VB_OTHERS - VB_WIKI_SHARE - VB_RETIRING >= 2250u) ? 1 : -1];
+#endif
+typedef char vb_uncounted_holds_both[((unsigned)VB_MAX + VB_WIKI_SHARE + VB_OTHERS <= VB_UNCOUNTED) ? 1 : -1];
+static unsigned s_vbAlloc, s_vbKeep;
 
 /* ---- one of these per frame slot, and every field of it is ours for the
    duration of the hooks we are handed that slot on. ---- */
@@ -884,6 +909,28 @@ static void vb_release(VBENT* e)
     s_vbFree[s_nvbFree++] = (unsigned short)k;
 }
 
+/* The least recently drawn entry no record of `frame` names goes to the retire. 0 when there
+   is none, or the retire cannot take it. */
+static int vb_evict(const TAGPU_VKPASS* d, unsigned frame)
+{
+    int i, worst = -1;
+    for (i = 0; i < s_vbTop; i++)
+        if (s_vb[i].serial && s_vb[i].lastFrame != frame &&
+            (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame)) worst = i;
+    if (worst < 0 || !ret_push(d, s_vb[worst].buf, s_vb[worst].mem)) return 0;
+    /* THE BAKE'S ENTRY GOES WITH THE BUFFER (tagpu_posebake.h, A STREAM IS HELD UNTIL IT IS
+       SENT): where its stream was freed when this buffer took it, an entry left behind would
+       answer a later frame with a serial nothing holds. Dropped here, that frame bakes it
+       again and this table takes the new stream. A bake that keeps its streams drops
+       nothing, and the stream is sent again. */
+    if (s_vb[worst].mat)
+        tagpu_posebake_mat_lost((const TAGPU_PBMAT*)s_vb[worst].ent, s_vb[worst].serial);
+    else
+        tagpu_posebake_geom_lost((const TAGPU_PBGEOM*)s_vb[worst].ent, s_vb[worst].serial);
+    vb_release(&s_vb[worst]);
+    return 1;
+}
+
 /* THE SLOT A NEW BUFFER TAKES, on tagpu_posebake.h's rule and for its reason:
    never an entry this frame has drawn -- the frame in hand has already
    recorded draws naming it, and `upload_draw` stamps every buffer the frame's
@@ -894,28 +941,13 @@ static void vb_release(VBENT* e)
    also needs the retire to take the buffer; when it cannot, the table grows
    instead, so the retire never bounds what a frame can draw. Nothing drops the
    table at a level change: the last level's buffers are the least recently
-   drawn, so they are the first recycled. The NULL is the table full with the
-   retire unable to grow: host memory, not the frame. */
+   drawn, so they are the first recycled. The NULL is this copy's share of the
+   device's allocations spent (`s_vbAlloc`), or the table full with the retire
+   unable to grow: host memory, not the frame. */
 static VBENT* vb_slot(const TAGPU_VKPASS* d, unsigned frame)
 {
-    int i, worst = -1;
-    if (s_vbLive >= VB_KEEP || (!s_nvbFree && s_vbTop >= VB_MAX)) {
-        for (i = 0; i < s_vbTop; i++)
-            if (s_vb[i].serial && s_vb[i].lastFrame != frame &&
-                (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame)) worst = i;
-        if (worst >= 0 && ret_push(d, s_vb[worst].buf, s_vb[worst].mem)) {
-            /* THE BAKE'S ENTRY GOES WITH THE BUFFER (tagpu_posebake.h, A STREAM IS HELD UNTIL
-               IT IS SENT): where its stream was freed when this buffer took it, an entry
-               left behind would answer a later frame with a serial nothing holds. Dropped
-               here, that frame bakes it again and this table takes the new stream. A bake
-               that keeps its streams drops nothing, and the stream is sent again. */
-            if (s_vb[worst].mat)
-                tagpu_posebake_mat_lost((const TAGPU_PBMAT*)s_vb[worst].ent, s_vb[worst].serial);
-            else
-                tagpu_posebake_geom_lost((const TAGPU_PBGEOM*)s_vb[worst].ent, s_vb[worst].serial);
-            vb_release(&s_vb[worst]);
-        }
-    }
+    if ((unsigned)s_vbLive + s_nret >= s_vbAlloc) return NULL;
+    if ((unsigned)s_vbLive >= s_vbKeep || (!s_nvbFree && s_vbTop >= VB_MAX)) vb_evict(d, frame);
     if (s_nvbFree) return &s_vb[s_vbFree[--s_nvbFree]];
     if (s_vbTop < VB_MAX) return &s_vb[s_vbTop++];
     return NULL;
@@ -2086,9 +2118,21 @@ static int build(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceProperties(d->pd, &props);
     s_ualign = props.limits.minUniformBufferOffsetAlignment;
     if (s_ualign == 0) s_ualign = 1;
-    s_vbAlloc = props.limits.maxMemoryAllocationCount > VB_OTHERS
-                    ? props.limits.maxMemoryAllocationCount - VB_OTHERS : 0u;
-    if (s_vbAlloc > (unsigned)VB_MAX) s_vbAlloc = (unsigned)VB_MAX;
+    {
+        const unsigned n = props.limits.maxMemoryAllocationCount;
+        if (n >= VB_UNCOUNTED) {
+            s_vbAlloc = ~0u;
+            s_vbKeep = (unsigned)VB_KEEP;
+        } else {
+#if TAGPU_PB_KEEPSTREAMS
+            s_vbAlloc = VB_WIKI_SHARE;
+#else
+            s_vbAlloc = n > VB_OTHERS + VB_WIKI_SHARE ? n - VB_OTHERS - VB_WIKI_SHARE : 0u;
+#endif
+            s_vbKeep = s_vbAlloc > VB_RETIRING ? s_vbAlloc - VB_RETIRING : 0u;
+            if (s_vbKeep > (unsigned)VB_KEEP) s_vbKeep = (unsigned)VB_KEEP;
+        }
+    }
     /* THE BOUND THE DRIVER SETS ON A STORAGE RANGE, read rather than assumed.
        `upload` checks every frame's packed pose against it; here the pass
        refuses a device that could not bind even one unit at the piece
@@ -2987,6 +3031,9 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             else if (miss_first(r->matSerial)) stageNeed += (VkDeviceSize)r->nvert * MAT_STRIDE;
         }
     }
+    /* the table back to its keep, now that every buffer this frame names is stamped
+       (`s_vbKeep` has why) */
+    while ((unsigned)s_vbLive > s_vbKeep && vb_evict(d, d->frame)) {}
     /* THE ATLASES RESERVE NOTHING HERE: the base atlas has a staging buffer
        of its own (`base_upload`), and nothing is copied into the restored twin
        from the host -- the restorer paints it on the device. */
@@ -3136,9 +3183,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             if (!*e) {
                 if (!s_saidVbFull) {
                     s_saidVbFull = 1;
-                    plog(d, "unit: the per-type vertex buffer table is full and "
-                            "the retire cannot take an eviction - nothing drawn "
-                            "this frame (VB_MAX %d)", VB_MAX);
+                    plog(d, "unit: the per-type vertex buffer table has no room for "
+                            "another buffer - nothing drawn this frame (%d live and "
+                            "%u retiring of %u, VB_MAX %d)",
+                         s_vbLive, s_nret, s_vbAlloc, VB_MAX);
                 }
                 break;
             }

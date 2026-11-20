@@ -85,9 +85,9 @@
    settle at 490 models and 1 760 streams, 941 of those an animation frame's,
    and bake 2 266. A kept entry costs the process its side blocks -- some 19 KB
    a model and 5 KB a stream there -- and the device one buffer and one
-   allocation. The two keeps sum to 3 072, which leaves the buffers a frame
-   retires and the lane's own allocations their room under the 4 096 a device
-   must allow; what holds the total there is tagpu_vk_unit.c's `s_vbAlloc`.
+   allocation. The two keeps sum to 3 072; a device that counts its
+   allocations is given a smaller keep by tagpu_vk_unit.c (`s_vbKeep`), 2 432
+   at the 4 096 a device must allow.
 
    THE WIKI'S INSTANCE SETS ALL THREE BEFORE THIS HEADER (tagpu_scene.h), from the
    stage's own bounds; the game's takes the values below.
