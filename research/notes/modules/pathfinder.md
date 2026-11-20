@@ -170,8 +170,8 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 - **Nothing but the caps bounds one unit's searches at a path's end**: a unit whose found path ends
   short of its goal searches again when it reaches that end. A 5-tick floor between two such
   searches held no unit in 3300 ticks of the battle, and was dropped.
-- **The retry's 60 ticks and the caps' numbers are the engine's and a first choice**, the owner's to
-  set ([the plan](../pathfinder-parallel.md), *Open*).
+- **The weights' thresholds, 4 and 64 units ready, are a first choice**, the owner's to set; the
+  caps and the retry's 60 ticks are the owner's decisions ([the plan](../pathfinder-parallel.md)).
 - **The simulator's scheduler is the engine's**: `tasim_path.c`'s `ts_pf_tick` still models
   `0x40EB70` and its budget. The recorder still lists the engine scheduler's three tables
   (`replay-globals.tsv`: `pfweight`, `pfexamined`, `pfcalls`), which nothing writes now.

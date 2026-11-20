@@ -29,6 +29,19 @@ waits, with the results applied in unit order. The engine facts each decision re
 These change the simulation's rules: every player of a network game runs the same build, and a
 recording made before them does not play after them.
 
+Confirmed on the scheduler as built, with its measurements (2026-11-20):
+
+4. **Decision 3's first case stands as built**: a new goal searches at once for a unit whose last
+   search found a path; a unit whose last search found nothing keeps the engine's 10 ticks (rule 2
+   below).
+5. **The caps are 64 searches and 64 000 pops a tick.**
+6. **A blocked unit's limit stays the engine's 60 ticks.**
+7. **The search's scratch is `SIM_TRANSIENT`** (`s_pf`, `s_mem`, `s_mem_bytes`): written by each
+   search before it reads it, and not recorded.
+8. **The oracle's functions land without a replay test group reaching them**: they run only under
+   `tagpu_pathverify.on`, which no test group arms, and the replay gate's coverage names them at
+   the landing on main.
+
 ## The scheduler's rules as built, and what each rests on
 
 The rules themselves: [the module](modules/pathfinder.md). Each was arrived at by playing the
@@ -138,12 +151,7 @@ them, a cheaper search.
 
 ## Open
 
-- **The owner's to set**: the caps' two numbers, the blocked units' 60 ticks, the three weights'
-  thresholds (4 and 64 units ready), and whether decision 3's first case stands as built (rule 2
-  above).
-- **The scratch's class.** The search's scratch and its block are declared `SIM_TRANSIENT`: written
-  by each search before it reads it. That class on memory the simulation reads is the owner's
-  decision.
+- **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
 - A goal of a kind other than the three ground kinds (point, annulus, ring) reaching a ground unit:
   none in the 300 000 searches the oracle counted and none logged by the scheduler in 500 000 more;
   not ruled out by the disassembly. It gets the result of a search that
@@ -155,6 +163,3 @@ them, a cheaper search.
 - The class's sweep walks every unit once for each class that searches in a tick, as the engine's.
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.
-- **The oracle's functions run only under its lever**, which no replay test group arms, so the
-  replay gate's coverage will name them as not reached at the landing on main: landing them so is
-  the owner's decision.
