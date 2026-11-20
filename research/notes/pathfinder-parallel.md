@@ -18,7 +18,7 @@ waits, with the results applied in unit order. The engine facts each decision re
 3. **The 60-tick gate** (`0x44F260`: a unit that wants a path is refused until 60 ticks after its last
    search began) is split by why the unit wants one:
    - **a new order** searches at once. Stock opens the gate on a new goal only when the unit's last
-     search began more than 10 ticks ago (`0x44F426..0x44F436`), so a second order within a third of a
+     search began 10 ticks ago or more (`0x44F426..0x44F436`), so a second order within a third of a
      second leaves the unit up to two seconds on its old path;
    - **a unit out of waypoints** (a path is handed over 20 corners at a time; count below 2,
      `0x44F24B`) searches at once;
@@ -130,8 +130,8 @@ them, a cheaper search.
 2. **Our scheduler on the game thread** — the units that want a path collected in one pass, searched
    by our search one after another in batches of 8, the results applied in order; the caps; the
    gate's split; the weight by the tick's load. The engine's scheduler and search no longer run.
-   **Built 2026-11-20**: 34 searches a tick against the engine's 24, a unit's wait 20 ticks on
-   average against 48, for the engine's time a tick or up to two fifths more (4.3 and 6.3 ms in two
+   **Built 2026-11-20**: 30 to 34 searches a tick against the engine's 24, a unit's wait 20 to 23
+   ticks on average against 48, for the engine's time a tick or up to two fifths more (4.3 and 6.3 ms in two
    runs against about 4.5; [the module](modules/pathfinder.md)).
 3. **The workers** — the same searches on worker threads while the game thread waits.
 4. **A cheaper search** — the heap and the expansion are half of a search's time.
@@ -150,8 +150,11 @@ them, a cheaper search.
   found nothing.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
-- A batch's searches can pass the pops cap together; with workers a batch's time is its longest
-  search's.
+- A batch's searches can pass the pops cap together (507 000 pops in the worst tick measured, eight
+  searches that each found no way); with workers a batch's time is its longest search's.
 - The class's sweep walks every unit once for each class that searches in a tick, as the engine's.
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.
+- **The oracle's functions run only under its lever**, which no replay test group arms, so the
+  replay gate's coverage will name them as not reached at the landing on main: landing them so is
+  the owner's decision.

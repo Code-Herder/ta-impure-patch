@@ -9,8 +9,9 @@ arrived at: [the pathfinder in parallel](../pathfinder-parallel.md). The engine'
 
 **Every path of a ground unit a player's machine owns is found by our scheduler and our search.**
 The players phase's call of the engine's scheduler (`0x464F92`) goes to ours; the engine's scheduler
-`0x40EB70`, its budget and its search `0x40E630` do not run. It runs on the game thread, one search
-after another. The test lever `tagpu_pathverify.on` leaves the engine's in place and runs our
+`0x40EB70`, its budget and its search `0x40E630` do not run. It runs on the thread that runs the
+players phase — the game thread, and once the loader during a load, before the game thread's first
+step — one search after another. The test lever `tagpu_pathverify.on` leaves the engine's in place and runs our
 search beside it as an oracle (below).
 
 ## The scheduler — `sched_tick`
@@ -18,7 +19,7 @@ search beside it as an oracle (below).
 Once a tick, in three parts.
 
 **The walk.** Every unit of every player the engine's scheduler serves (a record in use, of type 1,
-2 or 3, not in state 10), in the players' and their blocks' order, whose local ground course wants
+2 or 3, not in state 10), in slot order, whose local ground course wants
 a search (bit 1 of its `+0x64`), is *ready* when:
 
 | the unit | ready | served |
@@ -27,11 +28,12 @@ a search (bit 1 of its `+0x64`), is *ready* when:
 | is not blocked and has fewer than two corners left of a path its last search found | at once | first |
 | any other: blocked, or its last search found nothing | 60 ticks after its last search began, the engine's own gate | after the first two |
 
-Each kind is served from its own cursor on — the slot served last — so the caps starve no unit, and
-a jam of blocked units never delays a new goal.
+Each kind is served from its own cursor on — the slot served last — so within a kind the caps
+starve no unit, and a jam of blocked units never delays a new goal. The third kind waits while the
+first two fill the caps: in the battle below that is its first 600 ticks.
 
 **The stamp is 0** for a course that has never searched, and after set goal `0x44F2A0`: the
-engine's own rule zeroes it when the course's last search began more than 10 ticks ago, and our
+engine's own rule zeroes it when the course's last search began 10 ticks ago or more, and our
 observer at the function's entry zeroes it inside those 10 ticks when that search found a path — a
 unit on its way that is sent elsewhere. A unit whose last search found nothing keeps the engine's
 rule.
@@ -70,10 +72,12 @@ engine itself searched 54 % at the base, 23 % at 4.5 and 23 % at 9.0.
 
 **What gets no search** gets the result of a search that found nothing, through the same set path,
 and is counted: a goal of a kind other than the three ground kinds, a search past the scratch's
-65 536 nodes, a unit whose class, grid or patch is outside its bound. None occurred.
+65 536 nodes, a unit whose class, grid or patch is outside its bound. None occurred. A game whose
+unit array is longer than the table of stamps, or for whose grid no scratch can be made, gets no
+search at all, and the log says so once a level: `pathsched: NO GROUND UNIT GETS A PATH`.
 
-**On a puppet** every unit's course is a proxy, so the walk finds nothing and the recorder alone
-writes the state.
+**On a level that plays a recording** the scheduler and the observer do nothing (`tagpu_puppet_on`):
+the recorder alone writes the state, and every seat's course is a proxy besides.
 
 ## The search — `ts_pf_search`
 
@@ -100,17 +104,18 @@ which about 6000 units are given a goal within a few ticks of one another.
 
 | | the engine's scheduler | ours |
 |---|---|---|
-| searches a tick | 24 | 34 |
-| that found a path, a tick | 20 | 28 |
-| a unit's wait from ready to its search, mean | 48 ticks | 20 |
-| searched in the tick they became ready | 24 % | 41 % |
-| waited 30 ticks or more | 40 % | 24 % |
-| the longest wait | 479 ticks | 393 |
-| the pathfinder's time a tick | about 4.5 ms | 4.3 and 6.3 ms, two runs |
+| searches a tick | 24 | 30 to 34 |
+| that found a path, a tick | 20 | 25 to 28 |
+| a unit's wait from ready to its search, mean | 48 ticks | 20 to 23 |
+| searched in the tick they became ready | 24 % | 38 to 41 % |
+| waited 30 ticks or more | 40 % | 24 to 26 % |
+| the longest wait | 479 ticks | 393 to 423 |
+| the pathfinder's time a tick | about 4.5 ms | 4.3, 4.3 and 6.3 ms, three runs |
 
 The time is the frame profiler's: ours the span `pathfind`; the engine's the players phase of a
 run on its scheduler, 7.4 ms a tick, less the 2.9 to 3.0 ms that phase takes beside ours. The
-battle does not play the same twice, and the two runs of ours are that spread.
+battle does not play the same twice, and the runs of ours are that spread; the ranges are two logged
+runs.
 
 The wait is the opening's: for its first 600 ticks 1000 to 3800 units a tick are ready on a new
 goal against a cap of 64, and a unit waits 30 to 76 ticks on average; over the next 300 ticks 16 to
@@ -145,8 +150,8 @@ Every value taken from engine memory is bounded before it is used: a player's bl
 unit array, the class record against the 32 records, the grid's size against the class's and the
 pathfinder's, a cell's unit slot against the unit array's end, a feature definition against the
 count, the patch's rectangle against 4096 entries, a unit's slot against the table of stamps. From
-the walk to the last result everything runs inside one call on the game thread, and nothing it
-calls makes, moves or frees a unit, a mover, a course or a goal.
+the walk to the last result everything runs inside one call on the simulation's thread, and nothing
+it calls makes, moves or frees a unit, a mover, a course or a goal.
 
 ## The log — `tagpu_pathlog.on`
 
@@ -159,8 +164,12 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
 
 - **The time a tick is not below the engine's**: it buys 40 % more searches, not less work. The
   searches run one after another on the game thread; the workers are the plan's next landing.
-- **A batch can pass the pops cap** by its own searches: the cap is tested between batches. The
-  most pops in one tick was 240 000.
+- **A batch can pass the pops cap** by its own searches: the cap is tested between batches, and a
+  search that finds no way pops up to the pool's 65 536. The most pops in one tick was 507 000,
+  a batch of eight such searches.
+- **Nothing but the caps bounds one unit's searches at a path's end**: a unit whose found path ends
+  short of its goal searches again when it reaches that end. A 5-tick floor between two such
+  searches held no unit in 3300 ticks of the battle, and was dropped.
 - **The retry's 60 ticks and the caps' numbers are the engine's and a first choice**, the owner's to
   set ([the plan](../pathfinder-parallel.md), *Open*).
 - **The simulator's scheduler is the engine's**: `tasim_path.c`'s `ts_pf_tick` still models
