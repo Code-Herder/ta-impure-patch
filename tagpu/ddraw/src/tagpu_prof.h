@@ -18,8 +18,8 @@
    phase boundaries are the engine's own clock stamps, taken by a hook tagpu_packet_pub.c
    installs only when the lever is present at attach.
 
-   WITH `tagpu_prof_sample.on` AS WELL, a sampler notes where the game thread stands about a
-   thousand times a second, for the spans whose inside the marks cannot time: the samples go to
+   WITH `tagpu_prof_sample.on` AS WELL, a sampler notes where the game thread stands about nine
+   hundred times a second, for the spans whose inside the marks cannot time: the samples go to
    `tagpu_prof_samples.bin`, and tools/profsample.py reads them (tagpu_prof.c, THE SAMPLER).
 
    ONE THREAD OWNS A LANE. The lane's frame mark names its owner, and every other mark is dropped

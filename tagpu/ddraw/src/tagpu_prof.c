@@ -176,14 +176,16 @@ static void row(LANE* L, const LARGE_INTEGER* now)
     L->sumFrames++;
     L->sumCount += L->count;
     t = GetTickCount();
-    if (t - L->sumAt >= SUMMARY_MS) { L->sumAt = t; summary(L); }
+    /* the rows go to the file with every summary: a game that ends with its lever still there
+       loses at most that interval */
+    if (t - L->sumAt >= SUMMARY_MS) { L->sumAt = t; summary(L); flush(L); }
 }
 
 /* ---- THE SAMPLER ---------------------------------------------------------------------------
 
    WHAT THE MARKS CANNOT SPLIT, COUNTED INSTEAD OF TIMED. A span like the unit tick is one loop
    over every unit, and its stages run once a unit: a clock read at each would cost more than the
-   stage. So a second thread stops the game thread about a thousand times a second, notes where
+   stage. So a second thread stops the game thread about nine hundred times a second, notes where
    it stands, and lets it go. A sample is the open span, the instruction pointer, and the values
    on the thread's stack that lie inside the exe's code section: its return addresses among them,
    from which tools/profsample.py tells which stage of a span the thread was in. A share of a span's
@@ -223,6 +225,7 @@ static struct {
     NT_TIB*  tib;               /* its stack's bounds                                  */
     unsigned exe, exeEnd;       /* the exe's code section                              */
     LONG     started;
+    DWORD    probed;          /* the game thread's last look for the sampler's lever */
 } s_samp;
 
 /* an image's size from its own header; `base` is a loaded module */
@@ -323,8 +326,12 @@ static DWORD WINAPI sampler(void* arg)
                 used = total = 0;
                 began = now;
                 active = 1;
-                tagpu_logf("prof: sampler ON - the game thread's position about 1000 times a second in %s%s",
+                tagpu_logf("prof: sampler ON - the game thread's position about 900 times a second in %s%s",
                            path, h == INVALID_HANDLE_VALUE ? " (the file did not open)" : "");
+            } else if (want && active && used) {
+                /* what a game ended without its lever removed would lose is this much */
+                if (h != INVALID_HANDLE_VALUE) WriteFile(h, buf, used * sizeof(SAMPLE), &wrote, NULL);
+                used = 0;
             } else if (!want && active) {
                 if (h != INVALID_HANDLE_VALUE) {
                     if (used) WriteFile(h, buf, used * sizeof(SAMPLE), &wrote, NULL);
@@ -347,12 +354,16 @@ static DWORD WINAPI sampler(void* arg)
 }
 
 /* The game lane's thread, at its frame mark with the lane on: the first time both levers are
-   there it names itself to the sampler and starts it. */
+   there it names itself to the sampler and starts it. The sampler's lever is looked for at the
+   lane's own poll interval, not at every frame. */
 static void sampler_start(void)
 {
     const unsigned char* exe;
     HANDLE t;
-    if (s_samp.started || GetFileAttributesA(SAMPLE_LEVER) == INVALID_FILE_ATTRIBUTES) return;
+    const DWORD now = GetTickCount();
+    if (s_samp.started || (s_samp.probed && now - s_samp.probed < POLL_MS)) return;
+    s_samp.probed = now ? now : 1;
+    if (GetFileAttributesA(SAMPLE_LEVER) == INVALID_FILE_ATTRIBUTES) return;
     s_samp.started = 1;
     exe = (const unsigned char*)GetModuleHandleA(NULL);
     code_range(exe, &s_samp.exe, &s_samp.exeEnd);

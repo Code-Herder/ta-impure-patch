@@ -9729,8 +9729,6 @@ SIM_FEATURE(particle_walk, SIM_PUPPET_INDEPENDENT, "battle");
    reached from slots 0, 1, 3, 4 or 5 of the seven vtables 0x4FD588..0x4FD638 by direct calls,
    whose indirect calls inside the classes are the same vtables' slots. The draws run from
    DrawGameScreen, never inside the step.
-   An emitter that did append during the walk would still be handled as the engine handles it:
-   the end is read again at every turn, and the appended object is visited and kept in its order.
    CLASS: local. Without it the engine's own walker runs. */
 typedef struct FxLayer { unsigned int unused; void** begin; void** end; void** cap; } FxLayer;
 

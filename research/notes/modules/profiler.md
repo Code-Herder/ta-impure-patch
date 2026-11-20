@@ -24,8 +24,8 @@ that are kept apart because they cost differently.
 
 | lever | read | what it does |
 |---|---|---|
-| `tagpu_prof.on` | at attach for the game thread's phase marks; polled every 500 ms by each thread at its frame boundary | rows to `tagpu_prof_game.csv` and `tagpu_prof_render.csv` in the log directory, and a summary line in the log every 5 s. Removing it closes the files; putting it back starts a new pair |
-| `tagpu_prof_sample.on` | polled every 250 ms by the sampler, with the lever above | samples to `tagpu_prof_samples.bin` |
+| `tagpu_prof.on` | at attach for the game thread's phase marks; polled every 500 ms by each thread at its frame boundary, in every game (a file probe twice a second a thread is what the profiler costs when it is off, with a test and a load at each mark) | rows to `tagpu_prof_game.csv` and `tagpu_prof_render.csv` in the log directory, and a summary line in the log every 5 s, when the rows are also written out. Removing it closes the files; putting it back **overwrites them**, so copy a window's files before starting the next |
+| `tagpu_prof_sample.on` | looked for every 500 ms by the game thread until the sampler starts, then polled every 250 ms by the sampler, with the lever above | samples to `tagpu_prof_samples.bin`, written out at each poll and overwritten like the rows |
 
 A row is `frame, start_ms, total_us, count, tag`, then microseconds per span; `count` is the ticks
 the frame ran and `tag` the game thread's GameTime at the frame's start.
@@ -61,9 +61,9 @@ The invariants it rests on:
   suspended thread may hold any lock, the heap's included. The record is filled from a buffer of
   its own.
 - **The stack it reads is bounded by the thread's own bounds**, its `StackLimit` and `StackBase`
-  read from its TIB, with the stack pointer tested for alignment and for lying between them, and
-  the scan capped at 256 KB. A sample whose stack pointer fails the test is kept with no stack and
-  flagged.
+  read from its TIB, with the stack pointer tested for alignment and for lying between them. A
+  sample whose stack pointer fails the test, or lies more than 256 KB under the base, is kept
+  with no stack and flagged.
 - **The span it reads is one word** the lane's owner writes; a torn read is impossible, a stale
   one charges one sample to the neighbouring span.
 
@@ -105,6 +105,9 @@ window reached further into it: the unit tick 15 ms, the players phase 9.4, the 
 a second.
 
 **Not covered.**
+- **A frame is whatever lies between two frame marks.** The game thread's row that spans a menu
+  or a level load holds all of it, and `profsum.py` drops only a file's first row: cut the window
+  with the lever, inside play.
 - **The script entry check's cost is mostly the engine's.** The samples in `cob_run_enter` sit two
   thirds on its first read of the thread record, which the engine reads four instructions later
   (`0x4B0DB9`); what is ours there is about 2 ms a tick, and under 1 ms of it could go without

@@ -261,7 +261,8 @@ capture time out; it never returns a stale file.
 `tagpu_prof.on`, **present at launch**, times every frame of the game thread and of the render
 thread, cut into spans (the tick's phases, the draw's sections, the render loop's stages), and
 writes one row a frame to `tagpu_prof_game.csv` and `tagpu_prof_render.csv` in the instance's
-`log\`. The lever is polled, so removing and re-creating it cuts a new pair of files per window;
+`log\`. The lever is polled: removing it closes the files and re-creating it **overwrites** them, so copy
+a window's files out before starting the next;
 the game thread's phase marks need it at attach, and `scenario load --restart` relaunches, so it
 must be there before the load. `tools/profsum.py <csv>` prints the table: ms a frame, share,
 median, p99 and, for the game thread, ms a tick. **Read ms a tick** for the simulation: a frame
