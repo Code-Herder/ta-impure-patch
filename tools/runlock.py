@@ -12,8 +12,8 @@
                                        make -jK MAKE_ARGS under at most N slots (8 by default), K
                                        the slots it was granted (BUILDS)
     runlock.py status                  who holds which slots, GPU memory, game seats, resources
-                                       and sim-pool places, what is free, and what the load guard
-                                       says
+                                       and sim-pool places, the sim games playing and the places
+                                       yielding, what is free, and what the load guard says
 
 All act on the lock of the repository the current directory is in.
 
@@ -148,9 +148,13 @@ does for a slot. Its properties:
     and what a run concludes never depends on the guard: it decides only when a run starts, and how
     many workers a flexible phase starts with. A load that cannot be read, or a load configuration
     that cannot be, leaves the guard out and the lock as it was without it.
-  * The sim pool is not counted. L is read less the sim-pool places held, never below zero (THE SIM
-    POOL): a place is about one runnable thread of a process that yields every CPU to an engine game,
-    so a sim batch never delays an engine run's admission.
+  * The sim pool is not counted. L is read less the sim games playing, never below zero (THE SIM
+    POOL): a game is one runnable thread of a process that yields every CPU to an engine game, so a
+    sim batch never delays an engine run's admission. The count is of the game files held, each by
+    the game's own process for exactly its life (THE YIELD), so it never passes the sim processes
+    running: a place held between games, and a `run --sim` command's processes, are not discounted
+    and count as load outside the lock. While L lags games just started, the discount hides up to
+    that many threads of other load for a minute or so, as max(L, H) does for runs just admitted.
 
 THE SIM POOL is a second budget, outside the BUDGET slots, for the coarse simulator's batches
 (tools/impai/coarse): hundreds of games, each one process that keeps one thread busy, holds about
@@ -160,12 +164,13 @@ slots beside other sessions' engine runs, and each slot carried 1534 MiB for a 3
 batch takes PLACES of the pool instead: sim_pool(tree, what, most, least), offline()'s drop-in, or
 `runlock.py run --sim N`. Its figures are tools/runlock-sim.cfg's (floor, cap, pool_mib), read by
 the tree that takes the place, each with how it was decided. Its properties:
-  * The size. At a batch's admission the pool holds threads - S places, threads the machine's (32
-    on the reference setup) and S the engine slots held at that moment, never under floor (8) nor
-    over cap (24) (sim_size): 24, 24, 16, 8, 8 places at S = 0, 8, 16, 24, 28. A batch is granted up
-    to `most` of what that leaves beside the places other batches hold, waits while it leaves fewer
-    than its `least`, and keeps its grant to its end: a batch is short, and engine runs admitted
-    after it do not shrink it, so the places held can pass the size an engine run's arrival leaves.
+  * The size. The pool holds threads - S places, threads the machine's (32 on the reference setup)
+    and S the engine slots held at that moment, never under floor (8) nor over cap (24) (sim_size):
+    24, 24, 16, 8, 8 places at S = 0, 8, 16, 24, 28. A batch is granted up to `most` of what the size
+    at its admission leaves beside the places other batches hold, waits while it leaves fewer than
+    its `least`, and keeps its places to its end; the games it starts on them follow the size as it
+    is when each starts (THE YIELD), so places held can pass the size an engine run's arrival leaves
+    and the games started after it cannot.
   * The places are flock(2) files, runslots/sim-NN, each held LOCK_EX by one batch as a slot is held
     by one run: a batch that dies frees its places with no cleanup step, and a place is counted by
     asking its own lock, so a stale holder is never counted. Only the holder of runslots/simq, the
@@ -191,8 +196,9 @@ the tree that takes the place, each with how it was decided. Its properties:
     reserve (runslots/mem.cfg, THE HOST MEMORY): the slots carry what they carried, and what the
     reserve leaves the owner's programs is the reserve less pool_mib. Each process a batch starts
     for a place runs held to place_mib(), pool_mib // cap, by RLIMIT_DATA, set before its program
-    starts (Workers.argv(); `run --sim` binds its command and everything that starts), so a batch
-    that runs one process a place keeps the pool's processes inside pool_mib. RLIMIT_DATA counts a
+    starts (Workers.game() and Workers.argv(); `run --sim` binds its command and everything that
+    starts), so a batch that runs one process a place keeps the pool's processes inside pool_mib.
+    RLIMIT_DATA counts a
     process's private writable mappings, touched or not, not what is resident (bind()): a coarse
     game needs 128 MiB of it, which the owner's figures give a place, and a game under too small a
     bound exits 2 by name (tools/runlock-sim.cfg, MEASURED). The batch's own process,
@@ -202,7 +208,34 @@ the tree that takes the place, each with how it was decided. Its properties:
   * Nested. A batch inside an engine run (RUNLOCK_HELD, or a flock(1) chain) takes no place and is
     granted min(most, the run's workers), as offline() is, at the run's priority. A batch inside a
     sim batch (RUNLOCK_SIM, which Workers.environ() gives a batch's processes) takes no place and is
-    granted min(most, that batch's places).
+    granted min(most, that batch's places). Neither yields (THE YIELD): its game() waits for nothing.
+  * THE YIELD. A batch starts each game through Workers.game(), which waits until the batch has a
+    place of its own that plays no game and is numbered below the pool's size as it is then -- the
+    engine slots held read again, each asked of its own lock -- and starts the game's one process on
+    that place: the process takes runslots/simgame-NN, NN the place's number, LOCK_EX before its
+    program starts (BOUND_CODE) and holds it for its life, so the kernel lets it go when the game
+    ends however it ends. So while an engine run holds its slots, a game starts only on a place
+    numbered below the size it leaves, a place is one batch's (its flock) and a game file one
+    process's (its flock): the games started after the engine run's admission, with those still
+    playing on the places below the size, never number more than that size, across all batches,
+    whatever each batch computes. A place at or above the size
+    starts no game until the size grows past it again; the batch's other places go on. A game file
+    held by a dead batch's game holds up the next game on that number until the game ends, so the
+    bound counts it too. Its properties:
+      - A throughput policy over the places' bound, not a correctness one. Games in play are never
+        killed: a game started before an engine run's admission -- one whose start read the size
+        before the run's last slot was taken -- plays to its end beside the run, about 10 s and up
+        to about 65 s for a stalemate, and that is THE YIELD's residual.
+      - No wait on a poll's timing. A game waiting for the size re-reads it every POLL_S, as the
+        queues' holders do: that bounds how soon a batch widens again, never what it may start.
+        Its batch says so every SAY_S.
+      - No starvation, and no delay to an engine run. An engine run takes no place and no game
+        file. A batch whose places are all at or above the size waits and resumes once the engine
+        run ends; its games wait only on the engine slots, which end, and on game files, whose
+        processes end.
+      - `run --sim N` does not yield: its command is one process the lock cannot see into, and its
+        processes hold no game file, so the load guard does not discount them either. Nor does a
+        process a batch starts through argv() alone, outside game().
   * Runlock code of before the pool does not see it. No file of the pool is one that code takes or
     counts, so the two never meet on a lock; but that code's load guard counts a batch's processes
     in L as work outside the lock, so while a batch plays it can DELAY an engine run that code
@@ -215,10 +248,11 @@ the tree that takes the place, each with how it was decided. Its properties:
     reference setup, one run each: `tareplay.py run` of resource-locked, resource-plain,
     resource-refusals, stock-sweep-basic, battle and stock-limits, 28 slots, played 442 s alone,
     507 s beside a batch of the floor's 8 places (15 % longer) and about 677 s beside a batch of the
-    cap's 24 admitted before it (53 % longer); all 494 checks passed in each. The batch slowed too:
-    1.1 games a second on 24 places against 2.2 alone. A batch keeps the places of its admission
-    to its end, so an engine run that arrives after a full batch plays beside all of it. The pool
-    lowers what a batch costs an engine run and is not an invariant.
+    cap's 24 admitted before it that kept all 24 playing (53 % longer); all 494 checks passed in
+    each. The batch slowed too: 1.1 games a second on 24 places against 2.2 alone. THE YIELD brings
+    a full batch down to the size an engine run's arrival leaves as its games end, so an engine run
+    of every slot plays beside the floor's 8 games once the games in play at its admission have
+    ended. The pool lowers what a batch costs an engine run and is not an invariant.
 
 THE SLOTS are flock(2) files, runslots/slot-00 .. slot-27, beside `tareplay.lock` in the
 repository's common git directory, the one every worktree and every scratch worktree shares. A run
@@ -440,7 +474,8 @@ behind the run it belongs to and wait for that run's end.
 HOLDERS. A run writes its line -- pid, slots, GPU memory, resources, start, what, directory, run id
 -- into each slot, unit and resource file it takes, after taking it (its units once it has them
 all), and into the token queue's or the slot queue's file while it waits there as the holder; a
-sim batch writes its own into each place it takes and into the sim queue's file likewise; a
+sim batch writes its own into each place it takes and into the sim queue's file likewise, and a
+sim game's process its own, with its batch's run id, into its game file; a
 game's keeper writes its own, with its run's id, into its seat, naming its own pid, which lives as
 long as the seat is held. `status` asks each file's own lock whether it is held and reads the line
 only to name the holder;
@@ -1223,14 +1258,16 @@ def _guard(d: Path, mine) -> "tuple[int | None, str]":
     limit, load = load_limit(), loadavg()
     if limit is None or load is None:
         return None, "no load guard"
-    # the sim pool's places come off the load: their processes yield every CPU to an engine game
-    # (THE SIM POOL), and never below zero, so a pool never adds room for an engine run
-    places = places_held(d)
-    seen = max(load - places, 0.0)
+    # the sim games playing come off the load: their processes yield every CPU to an engine game
+    # (THE SIM POOL). The games, not the places: a game file is held by its game's process for its
+    # life alone (THE YIELD), so the discount never passes the sim processes running; and never
+    # below zero, so a pool never adds room for an engine run
+    playing = games_playing(d)
+    seen = max(load - playing, 0.0)
     room = math.floor(limit - max(seen, held))
     return room, (f"the 1-minute load {load:.1f}"
-                  + (f" less the {places} sim-pool place{'s' if places != 1 else ''} held, {seen:.1f},"
-                     if places else "")
+                  + (f" less the {playing} sim game{'s' if playing != 1 else ''} playing, {seen:.1f},"
+                     if playing else "")
                   + f" beside {held} slots held by other runs leaves room for "
                     f"{max(room, 0)} under the load guard's {limit:g}")
 
@@ -1948,7 +1985,8 @@ def cmd_run(a) -> int:
 def _run_sim(a) -> int:
     """`run --sim N`: the command on N places of the sim pool, N clamped to the cap, at idle
     priority and held to the pool's memory bound with everything it starts (THE SIM POOL); inside
-    an engine run or a sim batch it takes none, as sim_pool() does."""
+    an engine run or a sim batch it takes none, as sim_pool() does. The command is one process the
+    lock cannot see into, so it does not yield (THE YIELD) and its processes hold no game file."""
     if a.vram is not None or a.suite is not None or a.resource:
         say("run: --sim takes no --vram, --suite or --resource: a sim batch plays no engine game")
         return 2
@@ -1972,14 +2010,18 @@ class Workers:
     its own (NESTING); share(weight), a task's turn on the grant; widen(k), the grant raised by
     slots the process holds already; release(), also on leaving a `with`. Inside another run it
     holds no file and its environment is the outer run's. A sim batch's (sim_pool) carries its
-    places in RUNLOCK_SIM instead, and argv(cmd) starts a process of it under the pool's memory
-    bound, `mib` (THE SIM POOL)."""
+    places in RUNLOCK_SIM instead; game() is a game's turn on them, and argv(cmd) starts a process
+    of it under the pool's memory bound, `mib` (THE SIM POOL, THE YIELD). `pool`, a batch's own
+    places: the lock's directory `d`, the `floor` and `cap` its size is kept within, the places'
+    numbers `places`, its `run` id and `what` it is."""
 
     def __init__(self, n: int, files=(), held: "dict | None" = None, var: str = ENV,
-                 mib: "int | None" = None):
+                 mib: "int | None" = None, pool: "dict | None" = None):
         self.n, self._files, self._held, self._var, self.mib = n, list(files), held, var, mib
         self._cv = threading.Condition()
         self._free, self._turns = n, collections.deque()
+        self._pool, self._playing, self._game_turns = pool, set(), collections.deque()
+        self._yielding = None           # when the batch last said its next game waits for the size; None while it does not
 
     def fds(self) -> tuple:
         return tuple(f.fileno() for f in self._files)
@@ -1998,7 +2040,71 @@ class Workers:
         cmd = [str(c) for c in cmd]
         if self.mib is None:
             return cmd
-        return [sys.executable, "-I", "-c", BOUND_CODE, str(self.mib), *cmd]
+        return [sys.executable, "-I", "-c", BOUND_CODE, str(self.mib), "", "", *cmd]
+
+    @contextlib.contextmanager
+    def game(self):
+        """One game of a sim batch, its turn held while the `with` runs (THE YIELD): it waits until
+        this batch has a place that plays no game and is numbered below the pool's size now, and
+        yields argv(cmd) for the game's one process, which holds that place's game file for its
+        life and runs under the pool's memory bound. Games are let in in the order they ask, on the
+        lowest such place. Outside a batch that holds places of its own -- inside an engine run, or
+        nested in a batch -- it waits for nothing and yields argv."""
+        if self._pool is None:
+            yield self.argv
+            return
+        p = self._pool
+        turn = object()
+        with self._cv:
+            self._game_turns.append(turn)
+            try:
+                k = self._place(turn)
+            except BaseException:
+                self._game_turns.remove(turn)
+                self._cv.notify_all()
+                raise
+            self._game_turns.popleft()
+            self._playing.add(k)
+            self._cv.notify_all()
+        line = f"a game of a sim batch on place {k}, {p['what']} [run {p['run']}]"
+        try:
+            yield lambda cmd: [sys.executable, "-I", "-c", BOUND_CODE, str(self.mib),
+                               str(game_file(p["d"], k)), line, *[str(c) for c in cmd]]
+        finally:
+            with self._cv:
+                self._playing.discard(k)
+                self._cv.notify_all()
+
+    def _place(self, turn) -> int:
+        """The place game() starts its game on, once `turn` heads the games' queue and a place of
+        this batch's plays no game and is numbered below the size; called holding the condition.
+        The size is read again every POLL_S, a liveness device: what a game may start on is decided
+        by the read, never by when it is made."""
+        p = self._pool
+        while True:
+            if self._game_turns[0] is not turn:
+                self._cv.wait()
+                continue
+            engine = engine_held(p["d"])
+            size = sim_size(machine_threads(), engine, p["floor"], p["cap"])
+            idle_places = [k for k in p["places"] if k not in self._playing]
+            below = [k for k in idle_places if k < size]
+            if below:
+                if self._yielding is not None:
+                    say(f"{p['what']}: the sim pool is {size} places now ({engine} engine slots held): "
+                        f"this batch starts games on {sum(k < size for k in p['places'])} of its "
+                        f"{len(p['places'])} places")
+                    self._yielding = None
+                return below[0]
+            if idle_places:             # a place is free and only the size keeps the game back
+                now = time.monotonic()
+                if self._yielding is None or now - self._yielding >= SAY_S:
+                    over = sum(k >= size for k in p["places"])
+                    say(f"{p['what']}: the sim pool is {size} places now ({engine} engine slots held), "
+                        f"so {over} of this batch's {len(p['places'])} places start no game until it "
+                        f"grows; the games in play finish")
+                    self._yielding = now
+            self._cv.wait(POLL_S)
 
     @contextlib.contextmanager
     def share(self, weight: int = 1):
@@ -2074,14 +2180,25 @@ def _offline(path: Path, what: str, most: int, least: int = 1) -> Workers:
 # ---- THE SIM POOL --------------------------------------------------------------------------------
 
 SIM_KEYS = ("floor", "cap", "pool_mib")
-# Workers.argv's program: RLIMIT_DATA set, soft and hard, under any lower hard limit it inherits,
-# then the game's program exec'd in its place, so the bound is the game's from its first allocation
-BOUND_CODE = ("import os, resource, sys\n"
+# Workers.argv's and Workers.game's program, `mib file line cmd...`: RLIMIT_DATA set, soft and hard,
+# under any lower hard limit it inherits; for a game (`file` not empty), its game file taken LOCK_EX,
+# waiting, its holder line written, and the descriptor made inheritable, so the game's own process
+# holds it from before its program starts to its exit (THE YIELD); then the game's program exec'd in
+# its place, so the bound is the game's from its first allocation
+BOUND_CODE = ("import fcntl, os, resource, sys\n"
               "b = int(sys.argv[1]) << 20\n"
               "h = resource.getrlimit(resource.RLIMIT_DATA)[1]\n"
               "b = b if h == resource.RLIM_INFINITY else min(b, h)\n"
               "resource.setrlimit(resource.RLIMIT_DATA, (b, b))\n"
-              "os.execvp(sys.argv[2], sys.argv[2:])\n")
+              "if sys.argv[2]:\n"
+              "    f = open(sys.argv[2], 'a+')\n"
+              "    fcntl.flock(f, fcntl.LOCK_EX)\n"
+              "    f.seek(0)\n"
+              "    f.truncate()\n"
+              "    f.write('pid %d, %s\\n' % (os.getpid(), sys.argv[3]))\n"
+              "    f.flush()\n"
+              "    os.set_inheritable(f.fileno(), True)\n"
+              "os.execvp(sys.argv[4], sys.argv[4:])\n")
 
 
 def sim_config() -> dict:
@@ -2135,6 +2252,17 @@ def place_mib(cfg: dict) -> int:
 
 def place_file(d: Path, k: int) -> Path:
     return d / f"sim-{k:02d}"
+
+
+def game_file(d: Path, k: int) -> Path:
+    """The file the game playing on place `k` holds for its life (THE YIELD)."""
+    return d / f"simgame-{k:02d}"
+
+
+def games_playing(d: Path) -> int:
+    """The sim games playing now, each game file asked of its own lock: never more than the sim
+    processes running, since each is held by its game's own process alone (THE YIELD)."""
+    return sum(1 for _k, p in _numbered(d, "simgame") if _held_now(p))
 
 
 def engine_held(d: Path) -> int:
@@ -2193,11 +2321,11 @@ def _sim_line(most: int, least: int, what: str, run: str) -> str:
             f"{time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()} [run {run}]\n")
 
 
-def _take_places(path: Path, what: str, most: int, least: int, cfg: dict) -> "tuple[list, str]":
+def _take_places(path: Path, what: str, most: int, least: int, cfg: dict) -> "tuple[dict, str]":
     """`least` to `most` places of the sim pool, taken in the sim queue (THE SIM POOL): their open
-    files and the batch's run id. Only the sim queue's holder takes a place, and it takes no more
-    than the size less every place held when it counts them, so the places held never pass that
-    size; it touches no slot and neither of the slot lock's queues."""
+    files by number and the batch's run id. Only the sim queue's holder takes a place, and it takes
+    no more than the size less every place held when it counts them, so the places held never pass
+    that size; it touches no slot and neither of the slot lock's queues."""
     d = slots_dir(path)
     t0 = time.monotonic()
     run = f"{os.getpid()}-{time.time_ns()}"
@@ -2242,16 +2370,18 @@ def _take_places(path: Path, what: str, most: int, least: int, cfg: dict) -> "tu
     if waited >= 1 or len(taken) < most:
         say(f"took {len(taken)} place{'s' if len(taken) != 1 else ''} of the sim pool"
             + (f" of the {most} asked" if len(taken) < most else "") + f" after {waited / 60:.1f} min")
-    return list(taken.values()), run
+    return taken, run
 
 
 def sim_pool(tree: Path, what: str, most: int, least: int = 1) -> Workers:
     """The places of a sim batch of at most `most` processes at once and at least `least`, each
     clamped to 1..cap, waited for in the sim queue (THE SIM POOL): offline()'s drop-in, a Workers
     whose `n` is the places granted. Once admitted, this process and all it starts run at idle
-    priority and go first when memory runs out; a game started through the Workers' argv() runs
-    under the pool's memory bound. Inside an engine run it takes no place and is granted min(`most`,
-    the run's workers), as offline() is; inside a sim batch, min(`most`, that batch's places)."""
+    priority and go first when memory runs out; each game is started inside the Workers' game(),
+    which holds it back while the pool's size leaves the batch no place for it (THE YIELD), and runs
+    under the pool's memory bound. Inside an engine run it takes no place and is granted
+    min(`most`, the run's workers), as offline() is; inside a sim batch, min(`most`, that batch's
+    places)."""
     return _sim_pool(lock_path(tree), what, most, least)
 
 
@@ -2265,25 +2395,29 @@ def _sim_pool(path: Path, what: str, most: int, least: int = 1) -> Workers:
     outer = _outer_hold(path, "gdi")
     if outer is not None:
         return Workers(min(most, outer.get("workers") or outer["slots"]))
-    files, run = _take_places(path, what, most, least, cfg)
+    taken, run = _take_places(path, what, most, least, cfg)
     try:
         idle_first()
     except OSError as e:
-        for f in files:
+        for f in taken.values():
             f.close()
         raise RuntimeError(f"{what}: the kernel refused the idle scheduling class ({e}): a batch at "
                            f"normal priority would contest the engine games' CPUs, so it is not "
                            f"run") from None
     oom_first()
     mib = place_mib(cfg)
-    return Workers(len(files), files, {"places": len(files), "place_mib": mib, "run": run,
-                                       "path": str(path)}, var=SIM_ENV, mib=mib)
+    return Workers(len(taken), taken.values(), {"places": len(taken), "place_mib": mib, "run": run,
+                                                "path": str(path)}, var=SIM_ENV, mib=mib,
+                   pool={"d": slots_dir(path), "floor": cfg["floor"], "cap": cfg["cap"],
+                         "places": sorted(taken), "run": run, "what": what})
 
 
 def sim_report(path: Path) -> list:
     """The sim pool's lines for `status` (THE SIM POOL): its size now and why, the places held and
-    free, its memory, the load guard's discount, the batch waiting in the sim queue and each batch
-    with the places it holds. Every count is of the lock files themselves, asked of each lock."""
+    free, the games playing and the places yielding (THE YIELD), its memory, the load guard's
+    discount, the batch waiting in the sim queue and each batch with the places it holds, its games
+    playing and its places yielding. Every count is of the lock files themselves, asked of each
+    lock; a game is its batch's by the run id its line names."""
     d = slots_dir(path)
     try:
         cfg = sim_config()
@@ -2292,21 +2426,29 @@ def sim_report(path: Path) -> list:
     threads, engine = machine_threads(), engine_held(d)
     size = sim_size(threads, engine, cfg["floor"], cfg["cap"])
     by = {}
-    for _k, p in _numbered(d, "sim"):
+    for k, p in _numbered(d, "sim"):
         if _held_now(p):
-            line = _read(p) or "a batch that has not written its line yet"
-            by[line] = by.get(line, 0) + 1
-    held = sum(by.values())
+            by.setdefault(_read(p) or "a batch that has not written its line yet", []).append(k)
+    games = {k: _read(p) for k, p in _numbered(d, "simgame") if _held_now(p)}
+    held = sum(len(ks) for ks in by.values())
+    over = sum(k >= size for k in games)
+    yielding = sum(k >= size for ks in by.values() for k in ks)
     lines = [f"sim pool: {size} places now ({threads} threads less the {engine} engine slots held, "
              f"kept within {cfg['floor']}..{cfg['cap']}), {held} held, {max(size - held, 0)} free; "
-             f"{cfg['pool_mib']} MiB out of the reserve, {place_mib(cfg)} MiB a process; idle "
-             f"priority; the load guard takes the {held} place{'s' if held != 1 else ''} held off "
-             f"the load"]
+             f"{len(games)} game{'s' if len(games) != 1 else ''} playing, {over} of them on places at "
+             f"or above the size, finishing; {yielding} place{'s' if yielding != 1 else ''} held at or "
+             f"above the size start no game; {cfg['pool_mib']} MiB out of the reserve, "
+             f"{place_mib(cfg)} MiB a process; idle priority; the load guard takes the {len(games)} "
+             f"game{'s' if len(games) != 1 else ''} playing off the load"]
     simq = d / "simq"
     if simq.exists() and _held_now(simq):
         lines.append(f"waiting for the sim pool: {_named(_read(simq) or 'a batch that has not written its line yet')}")
-    lines += [f"{n:2} place{'s' if n != 1 else ''} of the sim pool held by {_named(line)}"
-              for line, n in by.items()]
+    for line, ks in by.items():
+        run = re.search(r"\[run ([^\]]+)\]", line)
+        playing = sum(1 for g in games.values() if run and f"[run {run.group(1)}]" in g)
+        lines.append(f"{len(ks):2} place{'s' if len(ks) != 1 else ''} of the sim pool held by {_named(line)}; "
+                     f"{playing} game{'s' if playing != 1 else ''} playing, "
+                     f"{sum(k >= size for k in ks)} yielding")
     return lines
 
 
