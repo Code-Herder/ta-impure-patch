@@ -105,6 +105,7 @@
 #include "tagpu_boardwire.h"
 #include "tagpu_recmp_players.h"
 #include "git.h"
+#include "tagpu_prof.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PLAYERS    0x1B63       /* the eleven player records, 0x14B apart                     */
@@ -6496,7 +6497,16 @@ static void capture_put(const Lv* L)
     slice_plan(L, W);                   /* THE SCRIPT SLICES: this step's markers */
 }
 
+static void replay_capture(void);
 void __cdecl tagpu_replay_capture(void)
+{
+    /* the frame profiler: Impure's work before the unit tick starts here and ends where the
+       recorder's capture, the stub's next call, says so (tagpu_recorder.c) */
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_TICK_OURS);
+    replay_capture();
+}
+
+static void replay_capture(void)
 {
     char* ta;
     Lv L;
@@ -10517,8 +10527,10 @@ static void replay_step(void)
 void __cdecl tagpu_replay_step(void)
 {
     char* ta = ta_main();
+    tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_TICK_OURS);
     replay_step();
     slice_finish(ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+    tagpu_prof_leave(TAGPU_PROF_GAME);
 }
 
 /* ---- S-e: the teardown ---------------------------------------------------------------------- */

@@ -127,6 +127,7 @@
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
 #include "tagpu_icontype.h"  /* the icons' type table, built here at the in-play fill */
 #include "tagpu_iconset.h"   /* a mod's icon set: its files' parsers, pure */
+#include "tagpu_prof.h"      /* the frame profiler: the game lane's frame and phase marks */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -3772,7 +3773,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         if (e > need) need = e;
     }
     /* ---- the world tables ---- */
+    tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PUB_WORLD);
     e = fill_world(p, ta, &cursor);
+    tagpu_prof_leave(TAGPU_PROF_GAME);
     if (e > need) need = e;
     /* ---- the map's own features, until the mirror holds them: inside the
        reserve's design point with the world tables (tagpu_packet.c), so a cut
@@ -4949,6 +4952,99 @@ static void* __cdecl after_cursor(unsigned int* regs)
     return ret;
 }
 
+/* ---- the frame profiler's game lane (tagpu_prof.h) ------------------------ */
+
+static int __cdecl before_draw_timed(void* entry_esp)
+{
+    int r;
+    tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_BEFORE_DRAW);
+    r = before_draw(entry_esp);
+    tagpu_prof_leave(TAGPU_PROF_GAME);
+    return r;
+}
+
+static void* __cdecl after_draw_timed(unsigned int* regs)
+{
+    void* ret;
+    tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PUBLISH);
+    ret = after_draw(regs);
+    tagpu_prof_leave(TAGPU_PROF_GAME);
+    return ret;
+}
+
+/* THE ENGINE STAMPS ITS OWN PHASES, AND THOSE STAMPS ARE THE GAME LANE'S BOUNDARIES. The frame
+   function 0x496790, the step 0x495490 and DrawGameScreen 0x468CF0 read GetTickCount after each
+   of their phases through one thunk, 0x4B6560 (`jmp [0x4FC0DC]`, the import), and add the
+   difference to a counter of the engine's profile block main+0x38D85; the draw's last stamp is
+   in the block's own accumulate 0x46A400, called at 0x46A3EE after the flip. The thunk has 22
+   callers and no other [DISASSEMBLED: every `call 0x4B6560` in .text], all of them in those
+   three functions, 0x46A400 and the popup dialog's throttle 0x4689C0, which the draw calls.
+
+   With the lever present at attach the thunk jumps here instead. The engine's call is the same
+   call: this function takes no argument, returns the import's own answer from the import's own
+   slot, and keeps EBX, ESI, EDI and EBP as the import does, which is all a caller of an import
+   may rely on. What it adds is a mark keyed by the return address: the phase that ends at that
+   stamp, and the one that follows. A return address that is not in the table marks nothing.
+
+   The frame mark is the stamp at 0x4967DB, the frame function's first, and is given only on
+   the game thread: a lane has one owner (tagpu_prof.h), and every other mark is tested against
+   it there. */
+#define VA_STAMP_THUNK   0x004B6560u
+#define VA_STAMP_IMPORT  0x004FC0DCu
+static const unsigned char STAMP_THUNK[6] = { 0xFF, 0x25, 0xDC, 0xC0, 0x4F, 0x00 };
+
+#define G TAGPU_PROF_GAME
+static DWORD __stdcall __attribute__((noinline)) prof_stamp(void)
+{
+    switch ((unsigned)(size_t)__builtin_return_address(0)) {
+    case 0x004967E0u:                       /* the frame function's entry */
+        if (on_game_thread()) {
+            const char* ta = ta_main();
+            tagpu_prof_frame(G, TAGPU_PG_FRAME, ta ? RDU32(ta, OFF_GAMETIME) : 0);
+        }
+        break;
+    /* the step's iteration, in its order */
+    case 0x004954DDu: tagpu_prof_stamp(G, TAGPU_PG_NET,       TAGPU_PG_UNITS);     break;
+    case 0x00495503u: tagpu_prof_stamp(G, TAGPU_PG_UNITS,     TAGPU_PG_PROJ);
+                      tagpu_prof_count(G);                                         break;
+    case 0x00495529u: tagpu_prof_stamp(G, TAGPU_PG_PROJ,      TAGPU_PG_EXPL);      break;
+    case 0x0049554Fu: tagpu_prof_stamp(G, TAGPU_PG_EXPL,      TAGPU_PG_PLAYERS);   break;
+    case 0x00495575u: tagpu_prof_stamp(G, TAGPU_PG_PLAYERS,   TAGPU_PG_FEATURES);  break;
+    case 0x004955AFu: tagpu_prof_stamp(G, TAGPU_PG_FEATURES,  TAGPU_PG_PARTICLES); break;
+    case 0x004955D5u: tagpu_prof_stamp(G, TAGPU_PG_PARTICLES, TAGPU_PG_TICK_TAIL); break;
+    case 0x004955FBu: tagpu_prof_stamp(G, TAGPU_PG_TICK_TAIL, TAGPU_PG_TICK_TAIL); break;
+    case 0x0049565Cu: tagpu_prof_stamp(G, TAGPU_PG_NET,       TAGPU_PG_TICK_TAIL); break;
+    case 0x0049569Eu: tagpu_prof_stamp(G, TAGPU_PG_TICK_TAIL, TAGPU_PG_FRAME);     break;
+    /* the frame function after the step: a skirmish's, then a network game's three */
+    case 0x00496954u: tagpu_prof_stamp(G, TAGPU_PG_FRAME,     TAGPU_PG_FRAME);     break;
+    case 0x00496821u: tagpu_prof_stamp(G, TAGPU_PG_FRAME,     TAGPU_PG_NET);       break;
+    case 0x00496886u: tagpu_prof_stamp(G, TAGPU_PG_NET,       TAGPU_PG_FRAME);     break;
+    case 0x00496908u: tagpu_prof_stamp(G, TAGPU_PG_NET,       TAGPU_PG_FRAME);     break;
+    /* the draw: its entry, after the minimap, after the markers, after the fog, after the flip */
+    case 0x00468D9Bu: tagpu_prof_stamp(G, TAGPU_PG_FRAME,     TAGPU_PG_TERRAIN);   break;
+    case 0x00469665u: tagpu_prof_stamp(G, TAGPU_PG_BARS,      TAGPU_PG_SORT);      break;
+    case 0x00469D48u: tagpu_prof_stamp(G, TAGPU_PG_MARKERS,   TAGPU_PG_FOG);       break;
+    case 0x00469DA4u: tagpu_prof_stamp(G, TAGPU_PG_FOG,       TAGPU_PG_HUD);       break;
+    case 0x0046A409u: tagpu_prof_stamp(G, TAGPU_PG_HUD,       TAGPU_PG_FRAME);     break;
+    /* the frame function's last */
+    case 0x004969E2u: tagpu_prof_stamp(G, TAGPU_PG_FRAME,     TAGPU_PG_OUTSIDE);   break;
+    default: break;
+    }
+    return (*(DWORD (__stdcall* const*)(void))(size_t)VA_STAMP_IMPORT)();
+}
+#undef G
+
+/* all or nothing: the thunk's six bytes as the pristine exe has them, or no write */
+static int prof_install(void)
+{
+    unsigned char j[6];
+    const int32_t rel = (int32_t)((unsigned int)(size_t)prof_stamp - (VA_STAMP_THUNK + 5u));
+    if (memcmp((const void*)(size_t)VA_STAMP_THUNK, STAMP_THUNK, sizeof STAMP_THUNK) != 0) return 0;
+    j[0] = 0xE9;                            /* jmp rel32, from the instruction after it */
+    memcpy(j + 1, &rel, 4);
+    j[5] = 0x90;
+    return tagpu_detour_write(VA_STAMP_THUNK, j, sizeof j);
+}
 
 /* ---- install ------------------------------------------------------------- */
 
@@ -4981,13 +5077,17 @@ void tagpu_packet_pub_init(void)
         }
     }
     drawOk = tagpu_detour_observe(VA_DRAWGAMESCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN,
-                                  before_draw, s_countOnly ? NULL : after_draw);
+                                  before_draw_timed, s_countOnly ? NULL : after_draw_timed);
     if (!drawOk) {
         plog("packet: NOT armed — could not observe DrawGameScreen 0x468CF0");
         return;
     }
     s_installed = 1;
     tagpu_packet_producer(s_gameTid);
+    if (tagpu_prof_wanted())
+        plog(prof_install()
+             ? "prof: the game lane's marks are the engine's own clock stamps (the thunk 0x4B6560)"
+             : "prof: NOT armed on the game lane - the thunk 0x4B6560 does not hold the engine's bytes");
     loaderOk = tagpu_detour_bytes_ok(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN) &&
                tagpu_detour_observe(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN, before_loader, after_loader);
     /* the map's own features, taken inside LoadMap: only when something

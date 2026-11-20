@@ -162,6 +162,7 @@
 #include "tagpu_vk_range.h"
 #include "tagpu_vk_shot.h"
 #include "tagpu_vk_stage.h"
+#include "tagpu_prof.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
@@ -2717,7 +2718,9 @@ static int vk_present(void)
        that has not completed in a second means the device is wedged, so this is
        fatal rather than a skipped frame -- returning 0 here would leave the
        caller presenting nothing, for ever, at one frame a second, in silence. */
+    tagpu_prof_enter(TAGPU_PROF_RENDER, TAGPU_PR_FENCE);
     r = vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull);
+    tagpu_prof_leave(TAGPU_PROF_RENDER);
     if (r != VK_SUCCESS) {
         s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : r == VK_TIMEOUT ? LL_ASK : LL_NONE;
         vklog("a frame fence did not signal within a second - the device is not answering");
@@ -2826,8 +2829,10 @@ static int vk_present(void)
         }
     }
 
+    tagpu_prof_enter(TAGPU_PROF_RENDER, TAGPU_PR_ACQUIRE);
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
                               s_vk.semAcquire[fi], VK_NULL_HANDLE, &idx);
+    tagpu_prof_leave(TAGPU_PROF_RENDER);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;   /* the caller rebuilds */
     if (r == VK_SUBOPTIMAL_KHR) s_vk.rebuild = 1;   /* usable; rebuild after */
     /* EVERYTHING ELSE IS FATAL AND SAYS SO, for the reason the fence and the
@@ -2861,6 +2866,8 @@ static int vk_present(void)
 
     vkResetFences(s_vk.dev, 1, &s_vk.fence[fi]);
 
+    /* the frame profiler's spans from here to the present, each opened where its work starts */
+    tagpu_prof_mark(TAGPU_PROF_RENDER, TAGPU_PR_PREPARE);
     cb = s_vk.cmd[fi];
     vkResetCommandBuffer(cb, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -3008,14 +3015,18 @@ static int vk_present(void)
                have to exist before the map is drawn. It puts no pixel anywhere
                yet and its own descriptor set is not written here -- that is
                `tagpu_vk_unit_prepare`, below the map. */
+            tagpu_prof_enter(TAGPU_PROF_RENDER, TAGPU_PR_UNIT_UPLOAD);
             tagpu_vk_unit_upload(&s_pass, cb, fi);
+            tagpu_prof_leave(TAGPU_PROF_RENDER);
 
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
 
             /* ...AND THE UNIT PASS'S `prepare` AFTER IT, which is the one
                instant this slot's set may be pointed at the map the call above
                just drew and at the overlay the call above that just filled. */
+            tagpu_prof_enter(TAGPU_PROF_RENDER, TAGPU_PR_UNIT_PREPARE);
             draw_unit = tagpu_vk_unit_prepare(&s_pass, cb, fi);
+            tagpu_prof_leave(TAGPU_PROF_RENDER);
             ab_unit = tagpu_vk_unit_ab_frame();
 
             draw_terr = tagpu_vk_terr_prepare(&s_pass, cb, fi);
@@ -3166,6 +3177,7 @@ static int vk_present(void)
            vertex shaders divide by `uGame` rather than by the target. The
            offscreen render pass is format-compatible with `s_vk.rp`, so the
            same pipelines draw into either. */
+        tagpu_prof_mark(TAGPU_PROF_RENDER, TAGPU_PR_RECORD);
         if (draw_world) {
             tagpu_vk_world_begin(&s_pass, cb, fi);
             world_records(cb, fi, tw, th,
@@ -3423,6 +3435,7 @@ static int vk_present(void)
        whole frame. */
     if (s_vk.tsPool && s_vk.tsPend[fi])
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_vk.tsPool, fi * 2u + 1u);
+    tagpu_prof_mark(TAGPU_PROF_RENDER, TAGPU_PR_SUBMIT);
     vkEndCommandBuffer(cb);
 
     si.waitSemaphoreCount = 1; si.pWaitSemaphores = &s_vk.semAcquire[fi];
@@ -3442,7 +3455,9 @@ static int vk_present(void)
 
     pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &s_vk.semRelease[idx];
     pi.swapchainCount = 1; pi.pSwapchains = &s_vk.sc; pi.pImageIndices = &idx;
+    tagpu_prof_mark(TAGPU_PROF_RENDER, TAGPU_PR_PRESENT);
     r = vkQueuePresentKHR(s_vk.queue, &pi);
+    tagpu_prof_mark(TAGPU_PROF_RENDER, TAGPU_PR_LOOP);
     s_vk.frame++;
     /* A pending capture is NOT touched on any exit from here: the buffer is
        owned by the GPU until this slot's fence is waited on again, and every

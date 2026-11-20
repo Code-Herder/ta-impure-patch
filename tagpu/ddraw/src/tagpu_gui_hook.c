@@ -42,6 +42,7 @@
 #include "tagpu_gui.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_opt.h"
+#include "tagpu_prof.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_text.h"
 #include "tagpu_detour.h"
@@ -1315,11 +1316,13 @@ static void __stdcall wp_head_in(void* ctx)
 static void __stdcall wp_head_out(void* ctx)
 {
     s_world = 0;
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_BARS);
     ((void (__stdcall *)(void*))(size_t)WP_CLIPRESET_VA)(ctx);
 }
 static void __stdcall wp_sweep_in(void* ctx, int n)
 {
     s_world = 1;
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_SWEEP);
     ((void (__stdcall *)(void*, int))(size_t)WP_SFXLAYER_VA)(ctx, n);
 }
 /* `0x435100` takes its one argument in ECX and pops nothing, which is what
@@ -5226,6 +5229,26 @@ static int read_tokens(void)
    EVERY EXIT LOGS, AND THERE ARE FIVE. Only the first two mean the instance
    cannot be driven, and both of those say so in the words `no tacli verb can
    answer` — that phrase is the diagnostic, not the absence of a line. */
+/* The frame profiler's marks around the flip (tagpu_prof.h): our work before it and after it is
+   the UI capture's, the engine's function between them the flip. */
+static int __cdecl before_flip_timed(void* entry_esp)
+{
+    int r;
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_UI_CAPTURE);
+    r = before_flip(entry_esp);
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_FLIP);
+    return r;
+}
+
+static void* __cdecl after_flip_timed(unsigned int* regs)
+{
+    void* ret;
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_UI_CAPTURE);
+    ret = after_flip(regs);
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_HUD);
+    return ret;
+}
+
 void tagpu_gui_init(void)
 {
     char b[256];        /* 221 worst case: 126 literal characters, the longest
@@ -5248,7 +5271,7 @@ void tagpu_gui_init(void)
              "trigger family has no host on this build and no tacli verb can answer");
         return;
     }
-    ok = tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN, before_flip, after_flip);
+    ok = tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN, before_flip_timed, after_flip_timed);
     if (!ok) {
         glog("gui: NOT armed — the flip observer refused to install; the trigger "
              "family has no host and no tacli verb can answer");
