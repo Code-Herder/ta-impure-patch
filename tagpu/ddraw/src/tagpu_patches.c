@@ -9705,6 +9705,68 @@ static int fix_load_unpaused(void)
     return fix_write(site, 1);
 }
 
+SIM_FEATURE(particle_walk, SIM_PUPPET_INDEPENDENT, "battle");
+
+/* THE PARTICLE LAYERS' TICK IN ONE PASS [DISASSEMBLED]. The walker 0x471EB0 (cdecl, no argument,
+   one caller: 0x4955BF in the step 0x495490) goes over the ten layers of *(main+0x38D77), 16 bytes
+   each, a vector of object pointers from +4 to +8. For each object in order it calls slot 3 of
+   the object's vtable (thiscall, "have you no particle left?", 0x471EE0); on nonzero it calls
+   slot 0 with 1 (the deleting destructor, 0x471EF1), moves every later pointer of the layer down
+   one place (0x471EFF..0x471F09) and takes 4 off the end (0x471F14); otherwise it calls slot 1,
+   the update (0x471F1C). The end is read again at every turn (0x471F25). Removing k objects from
+   a layer of n is k*n moves: MEASURED 2026-11-20, a battle of 7 500 units, the moves were a third
+   of the particle tick, 1.9 ms of 5.7 a tick.
+   THE SAME CALLS IN THE SAME ORDER, THE SURVIVORS KEPT IN PLACE ORDER, ONE MOVE EACH. This makes
+   the engine's three calls on the same objects in the same order and leaves each layer holding
+   the same pointers in the same order with the same end; a survivor is written to its final place
+   once instead of being moved once for every removal before it.
+   THE INVARIANT IT RESTS ON: while a layer is walked, the places between the last survivor kept
+   and the object being visited hold stale pointers and the end is not yet lowered, which the
+   engine's layer never shows. Nothing the three slots reach can see it. Main+0x38D77 is named at
+   nineteen places in the image (a scan of its disassembly for the displacement): the table's
+   allocation 0x471DCB and release 0x471DEC/0x471E97, this walker 0x471EBB, the draws 0x471F4B
+   and 0x471F9C, and the thirteen emitters 0x471FD9..0x472C58; and none of those functions is
+   reached from slots 0, 1, 3, 4 or 5 of the seven vtables 0x4FD588..0x4FD638 by direct calls,
+   whose indirect calls inside the classes are the same vtables' slots. The draws run from
+   DrawGameScreen, never inside the step.
+   An emitter that did append during the walk would still be handled as the engine handles it:
+   the end is read again at every turn, and the appended object is visited and kept in its order.
+   CLASS: local. Without it the engine's own walker runs. */
+typedef struct FxLayer { unsigned int unused; void** begin; void** end; void** cap; } FxLayer;
+
+static void __cdecl particle_walk(void)
+{
+    typedef int  (__thiscall* PFN_FxEmpty)(void* object);
+    typedef void (__thiscall* PFN_FxUpdate)(void* object);
+    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
+    FxLayer* layer = *(FxLayer* const*)(*(char* const*)0x00511DE8u + 0x38D77);
+    int i;
+    for (i = 0; i < 10; i++, layer++) {
+        void** read = layer->begin;
+        void** keep = read;
+        for (; read != layer->end; read++) {
+            void* object = *read;
+            if (((PFN_FxEmpty)(*(void***)object)[3])(object)) {
+                ((PFN_FxDestroy)(*(void***)object)[0])(object, 1);
+                continue;
+            }
+            *keep++ = object;
+            ((PFN_FxUpdate)(*(void***)object)[1])(object);
+        }
+        layer->end = keep;
+    }
+}
+
+static int fix_particle_walk(void)
+{
+    FIXSITE site[1] = {
+        { 0x004955BFu, 5, { 0xE8, 0xEC, 0xC8, 0xFD, 0xFF }, { 0 } },    /* call 0x471EB0 */
+    };
+    if (!fix_match(site, 1)) return FIX_BYTES;
+    fix_branch(&site[0], 0xE8, particle_walk);
+    return fix_write(site, 1);
+}
+
 SIM_FEATURE(hover_clock, SIM_PUPPET_RUNS, "waterline transport-turn");
 
 /* THE HOVER WAVE ON THE WALL CLOCK [DISASSEMBLED]. 0x48A490(unit) fits a unit to the heights at
@@ -10135,6 +10197,7 @@ static void patch_engine_defects(void)
     int maps = fix_map_terrain();
     int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
+    int pwalk = fix_particle_walk();
     int pools = fix_effect_pools();
     int debris = fix_debris_emission();
     int hover = fix_hover_clock();
@@ -10265,6 +10328,12 @@ static void patch_engine_defects(void)
               "enginefix: a level starts unpaused outside a network game, the pause bit "
               "main+0x38A51 cleared before its first tick (0x49842A) %s",
               fix_state(unp));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: the particle layers' tick keeps its survivors in one pass (0x4955BF) %s",
+              fix_state(pwalk));
     b[sizeof b - 1] = 0;
     plog(b);
 

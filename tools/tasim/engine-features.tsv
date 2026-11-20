@@ -65,6 +65,7 @@ built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagp
 map_terrain	outside	the map lists, which leave out a map with no terrain; tasim's map is its TNT (classmap.c's input), so a map without one has nothing to load	tagpu_patches.c, an .ota with no .tnt
 map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c, BuildMinimapSurface's call at 0x46685F
 load_unpaused	outside	the pause bit across levels	tagpu_patches.c, main+0x38A51 bit 0
+particle_walk	outside	the particle layers' tick, a drawing's state: the same objects destroyed and updated in the same order, the survivors kept in one pass; SIM_PUPPET_INDEPENDENT	tagpu_patches.c, the particle walker 0x471EB0's call at 0x4955BF
 hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and tilts, with the movement and the terrain	tagpu_patches.c, the call at 0x48A66A
 mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c, the constructor 0x43DC00
 planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c, the call at 0x4081E2
