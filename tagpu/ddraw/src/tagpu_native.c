@@ -369,7 +369,9 @@ static const char* VS =
     "uniform float uZoom;\n"                 /* view zoom about uZoomC         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
-    "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
+    /* `uCast` is the block's, as FS declares it: a name is a default uniform
+       in one stage and a block member in the other in no program that links */
+    TAGPU_GLSL_UNIT_BLOCK
     "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
