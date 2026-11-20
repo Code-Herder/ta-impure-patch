@@ -1659,11 +1659,14 @@ class RunLock(unittest.TestCase):
                       f"size, finishing; 16 places held at or above the size start no game;", out)
         self.assertIn(f"24 places of the sim pool held by pid {b.pid}, a sim batch of 1 to 24 places, ", out)
         self.assertIn(f"; {SIM_FLOOR} games playing, 16 yielding", out)
-        # the engine run ends: the batch widens to its grant again
+        # the batch said it yields once, not at every game that started under the size meanwhile
+        said = (self.tree / "b.said").read_text()
+        self.assertEqual((said.count("start no game"), said.count("starts games on")), (1, 0), said)
+        # the engine run ends: the batch widens to its grant again. Its slots go one file at a time as
+        # its process exits, so the batch may read a size between the floor and the cap on the way
         self.let_go(engine)
         self.until(lambda: sorted(self.games()) == list(range(SIM_CAP)), "the batch did not widen to its 24 places")
-        self.said("b", f"b: the sim pool is {SIM_CAP} places now (0 engine slots held): this batch starts "
-                             f"games on 24 of its 24 places")
+        self.said("b", "this batch starts games on 24 of its 24 places")
 
     def test_two_batches_together_never_play_past_the_pools_size(self):
         a = self.gamer(16, what="a")
@@ -1691,8 +1694,7 @@ class RunLock(unittest.TestCase):
         # b, whose places are all above the size, resumes once the engine run ends
         self.let_go(engine)
         self.until(lambda: len(self.games()) == SIM_CAP, "the batches did not widen to their 24 places")
-        self.said("b", "b: the sim pool is 24 places now (0 engine slots held): this batch starts games on "
-                             "8 of its 8 places")
+        self.said("b", "this batch starts games on 8 of its 8 places")
 
     def test_a_batch_nested_in_an_engine_run_or_a_batch_takes_no_place(self):
         # a game played through game() there waits for nothing and holds no game file: it does not yield
@@ -1755,8 +1757,10 @@ class RunLock(unittest.TestCase):
         self.admitted(a)
         b = self.batch(5, what="five")
         self.granted(b, 5)
-        c = self.batch(16, least=12, what="twelve")
-        self.until(lambda: self.waiting_pool("twelve"), "the batch did not reach the sim queue")
+        # its least is its most: the engine run's slots go one file at a time as its process exits,
+        # and a size read on the way would grant a lower least fewer
+        c = self.batch(16, least=16, what="sixteen")
+        self.until(lambda: self.waiting_pool("sixteen"), "the batch did not reach the sim queue")
         out = self.status()
         self.assertIn(f"sim pool: 16 places now ({THREADS} threads less the 16 engine slots held, kept within "
                       f"{SIM_FLOOR}..{SIM_CAP}), 5 held, 11 free; 0 games playing, 0 of them on places at or above "
@@ -1765,7 +1769,7 @@ class RunLock(unittest.TestCase):
                       f"playing off the load", out)
         self.assertIn(f" 5 places of the sim pool held by pid {b.pid}, a sim batch of 1 to 5 places, ", out)
         self.assertIn("; 0 games playing, 0 yielding", out)
-        self.assertIn(f"waiting for the sim pool: pid {c.pid}, a sim batch of 12 to 16 places, ", out)
+        self.assertIn(f"waiting for the sim pool: pid {c.pid}, a sim batch of 16 places, ", out)
         self.assertIn(f"runlock: {runlock.BUDGET - 16} of {runlock.BUDGET} slots free", out)
         self.let_go(a)
         self.granted(c, 16)

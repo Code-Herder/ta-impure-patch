@@ -2021,7 +2021,7 @@ class Workers:
         self._cv = threading.Condition()
         self._free, self._turns = n, collections.deque()
         self._pool, self._playing, self._game_turns = pool, set(), collections.deque()
-        self._yielding = None           # when the batch last said its next game waits for the size; None while it does not
+        self._yielding = None           # (when, size) the batch last said it yields at; None while it does not
 
     def fds(self) -> tuple:
         return tuple(f.fileno() for f in self._files)
@@ -2090,7 +2090,9 @@ class Workers:
             idle_places = [k for k in p["places"] if k not in self._playing]
             below = [k for k in idle_places if k < size]
             if below:
-                if self._yielding is not None:
+                # said once the size has grown past the one the batch yielded at, not at each game
+                # that starts below it meanwhile
+                if self._yielding is not None and size > self._yielding[1]:
                     say(f"{p['what']}: the sim pool is {size} places now ({engine} engine slots held): "
                         f"this batch starts games on {sum(k < size for k in p['places'])} of its "
                         f"{len(p['places'])} places")
@@ -2098,12 +2100,13 @@ class Workers:
                 return below[0]
             if idle_places:             # a place is free and only the size keeps the game back
                 now = time.monotonic()
-                if self._yielding is None or now - self._yielding >= SAY_S:
+                if (self._yielding is None or size != self._yielding[1]
+                        or now - self._yielding[0] >= SAY_S):
                     over = sum(k >= size for k in p["places"])
                     say(f"{p['what']}: the sim pool is {size} places now ({engine} engine slots held), "
                         f"so {over} of this batch's {len(p['places'])} places start no game until it "
                         f"grows; the games in play finish")
-                    self._yielding = now
+                    self._yielding = (now, size)
             self._cv.wait(POLL_S)
 
     @contextlib.contextmanager
