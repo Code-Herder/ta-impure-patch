@@ -149,11 +149,12 @@ does for a slot. Its properties:
     many workers a flexible phase starts with. A load that cannot be read, or a load configuration
     that cannot be, leaves the guard out and the lock as it was without it.
   * The sim pool is not counted. L is read less the sim games playing, never below zero (THE SIM
-    POOL): a game is one runnable thread of a process that yields every CPU to an engine game, so a
-    sim batch never delays an engine run's admission. The count is of the game files held, each by
-    the game's own process for exactly its life (THE YIELD), so it never passes the sim processes
-    running: a place held between games, and a `run --sim` command's processes, are not discounted
-    and count as load outside the lock. While L lags games just started, the discount hides up to
+    POOL): a game is one runnable thread of a process that yields every CPU to an engine game, so the
+    games a batch starts through game() never delay an engine run's admission. The count is of the
+    game files held, each by the game's own process for exactly its life (THE YIELD), so it never
+    passes the sim processes running: a place held between games is not discounted, and the
+    processes of a `run --sim` command, or of argv() outside game(), count as load outside the lock
+    and can delay an engine run as any such load does. While L lags games just started, the discount hides up to
     that many threads of other load for a minute or so, as max(L, H) does for runs just admitted.
 
 THE SIM POOL is a second budget, outside the BUDGET slots, for the coarse simulator's batches
@@ -212,16 +213,17 @@ the tree that takes the place, each with how it was decided. Its properties:
   * THE YIELD. A batch starts each game through Workers.game(), which waits until the batch has a
     place of its own that plays no game and is numbered below the pool's size as it is then -- the
     engine slots held read again, each asked of its own lock -- and starts the game's one process on
-    that place: the process takes runslots/simgame-NN, NN the place's number, LOCK_EX before its
-    program starts (BOUND_CODE) and holds it for its life, so the kernel lets it go when the game
-    ends however it ends. So while an engine run holds its slots, a game starts only on a place
+    that place: the process takes runslots/simgame-NN, NN the place's number, LOCK_EX and without
+    waiting, before its program starts (BOUND_CODE) and holds it for its life, so the kernel lets
+    it go when the game ends however it ends; a process that finds the file held starts no game. So while an engine run holds its slots, a game starts only on a place
     numbered below the size it leaves, a place is one batch's (its flock) and a game file one
     process's (its flock): the games started after the engine run's admission, with those still
     playing on the places below the size, never number more than that size, across all batches,
     whatever each batch computes. A place at or above the size
-    starts no game until the size grows past it again; the batch's other places go on. A game file
-    held by a dead batch's game holds up the next game on that number until the game ends, so the
-    bound counts it too. Its properties:
+    starts no game until the size grows past it again; the batch's other places go on. A place
+    whose game file a process still holds -- a dead batch's game, a game whose turn ended before
+    its process did -- is given no game until that process ends, so the bound counts it too, and
+    game() refuses once the batch has released its places. Its properties:
       - A throughput policy over the places' bound, not a correctness one. Games in play are never
         killed: a game started before an engine run's admission -- one whose start read the size
         before the run's last slot was taken -- plays to its end beside the run, about 10 s and up
@@ -2024,6 +2026,7 @@ class Workers:
         self._free, self._turns = n, collections.deque()
         self._pool, self._playing, self._game_turns = pool, set(), collections.deque()
         self._yielding = None           # (when, size) the batch last said it yields at; None while it does not
+        self._released = False          # release() ran: the places are another batch's to take
 
     def fds(self) -> tuple:
         return tuple(f.fileno() for f in self._files)
@@ -2084,12 +2087,18 @@ class Workers:
         by the read, never by when it is made."""
         p = self._pool
         while True:
+            if self._released:
+                raise RuntimeError(f"{p['what']}: game() after the batch released its places: they "
+                                   f"are another batch's to take, so no game starts on them")
             if self._game_turns[0] is not turn:
                 self._cv.wait()
                 continue
             engine = engine_held(p["d"])
             size = sim_size(machine_threads(), engine, p["floor"], p["cap"])
-            idle_places = [k for k in p["places"] if k not in self._playing]
+            # a place whose game file a process still holds plays a game, whoever started it: a
+            # game of a batch that died, or one whose `with` ended before its process did
+            idle_places = [k for k in p["places"]
+                           if k not in self._playing and not _held_now(game_file(p["d"], k))]
             below = [k for k in idle_places if k < size]
             if below:
                 # said once the size has grown past the one the batch yielded at, not at each game
@@ -2149,6 +2158,9 @@ class Workers:
     def release(self) -> None:
         """This process's descriptors of the slots closed: they go once no worker process given
         fds() still runs. Safe to call twice, and from two threads (the wiki gate's)."""
+        with self._cv:                  # a game waiting in game() is refused, not started on a place let go
+            self._released = True
+            self._cv.notify_all()
         files, self._files = self._files, []
         for f in files:
             f.close()
@@ -2186,10 +2198,12 @@ def _offline(path: Path, what: str, most: int, least: int = 1) -> Workers:
 
 SIM_KEYS = ("floor", "cap", "pool_mib")
 # Workers.argv's and Workers.game's program, `mib file line cmd...`: RLIMIT_DATA set, soft and hard,
-# under any lower hard limit it inherits; for a game (`file` not empty), its game file taken LOCK_EX,
-# waiting, its holder line written, and the descriptor made inheritable, so the game's own process
-# holds it from before its program starts to its exit (THE YIELD); then the game's program exec'd in
-# its place, so the bound is the game's from its first allocation
+# under any lower hard limit it inherits; for a game (`file` not empty), its game file taken LOCK_EX
+# without waiting, its holder line written, and the descriptor made inheritable, so the game's own
+# process holds it from before its program starts to its exit (THE YIELD); then the game's program
+# exec'd in its place, so the bound is the game's from its first allocation. A game file already held
+# is another game on that place: the process exits by name and starts nothing, since a
+# process that waited for the file would start its game whatever the pool's size is by then
 BOUND_CODE = ("import fcntl, os, resource, sys\n"
               "b = int(sys.argv[1]) << 20\n"
               "h = resource.getrlimit(resource.RLIMIT_DATA)[1]\n"
@@ -2197,7 +2211,11 @@ BOUND_CODE = ("import fcntl, os, resource, sys\n"
               "resource.setrlimit(resource.RLIMIT_DATA, (b, b))\n"
               "if sys.argv[2]:\n"
               "    f = open(sys.argv[2], 'a+')\n"
-              "    fcntl.flock(f, fcntl.LOCK_EX)\n"
+              "    try:\n"
+              "        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+              "    except BlockingIOError:\n"
+              "        sys.exit('runlock: %s is held: a game already plays on this place, and '\n"
+              "                 'one turn of game() starts one game' % sys.argv[2])\n"
               "    f.seek(0)\n"
               "    f.truncate()\n"
               "    f.write('pid %d, %s\\n' % (os.getpid(), sys.argv[3]))\n"

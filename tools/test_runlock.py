@@ -30,6 +30,7 @@ a test writes others), so the tree's figures never decide a test's arithmetic, a
 pool's figures and the machine's threads (the owner's 8, 24 and 3072 MiB on THREADS). A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
+import fcntl
 import json
 import os
 import re
@@ -1695,6 +1696,33 @@ class RunLock(unittest.TestCase):
         self.let_go(engine)
         self.until(lambda: len(self.games()) == SIM_CAP, "the batches did not widen to their 24 places")
         self.said("b", "this batch starts games on 8 of its 8 places")
+
+    def test_a_place_whose_game_file_is_held_is_given_no_game(self):
+        b = self.gamer(SIM_FLOOR, what="b")
+        self.granted(b, SIM_FLOOR)
+        # a game of a batch that died still holds place 5's game file
+        left = runlock.game_file(self.lock.parent / "runslots", 5)
+        with open(left, "a+") as leftover:
+            fcntl.flock(leftover, fcntl.LOCK_EX)
+            self.ask(b, 100)
+            others = [k for k in range(SIM_FLOOR) if k != 5]
+            self.until(lambda: sorted(self.games()) == others, "the batch did not play on its other 7 places")
+            # a process that is handed the held file starts no game and says why
+            g = subprocess.run([sys.executable, "-I", "-c", runlock.BOUND_CODE, "128", str(left), "a game",
+                                sys.executable, "-c", "print('played')"], capture_output=True, text=True)
+            self.assertEqual((g.returncode, g.stdout), (1, ""), g.stderr)
+            self.assertIn("is held: a game already plays on this place", g.stderr)
+            self.assertEqual(sorted(self.games()), others)
+        # the leftover ends: the batch plays on place 5 again
+        self.until(lambda: sorted(self.games()) == list(range(SIM_FLOOR)), "no game followed on place 5")
+
+    def test_a_batch_that_released_its_places_starts_no_game(self):
+        w = runlock.Workers(2, pool={"what": "b", "places": [0, 1], "d": self.lock.parent / "runslots",
+                                     "floor": SIM_FLOOR, "cap": SIM_CAP, "run": "r"})
+        w.release()
+        with self.assertRaisesRegex(RuntimeError, "after the batch released its places"):
+            with w.game():
+                pass
 
     def test_a_batch_nested_in_an_engine_run_or_a_batch_takes_no_place(self):
         # a game played through game() there waits for nothing and holds no game file: it does not yield

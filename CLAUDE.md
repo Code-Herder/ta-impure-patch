@@ -383,11 +383,12 @@ to an engine run that arrives after it: no new game past the size the engine run
 play finish, and the batch widens again when the run ends. `run --sim N` runs one opaque command and does
 not yield. Its processes run at idle priority (SCHED_IDLE), are the kernel's first OOM victims, and each
 game is held by RLIMIT_DATA to the pool's memory over its cap. An engine run's admission changes only in
-that the load guard takes the sim games playing off the load. A batch never delays an engine run, except
-under runlock code older than the pool, whose guard counts a batch's load and can delay (never
-over-admit) one. Idle priority does not protect an engine game from a sim process on the sibling thread
+that the load guard takes the sim games playing off the load. The games a batch starts through `game()` never delay an
+engine run's admission; the processes of `run --sim N` count as load outside the lock and can, as can a
+whole batch under runlock code older than the pool (a delay, never an over-admission). Idle priority does not protect an engine game from a sim process on the sibling thread
 of its core, so the pool lowers the odds of a slowed engine run and is not a guarantee. Never start an
-engine run from inside a sim batch: it is refused, because its games would run at idle priority.
+engine run from inside a sim batch: a process of the idle class is refused one, because its games would
+run at idle priority.
 
 ## Python tooling: install what you need, into the shared venv
 
