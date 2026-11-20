@@ -466,6 +466,7 @@ that map's size.
 | `ftime.on` | `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time |
 | `prof.on` (at launch), `prof_sample.on` | the frame profiler's rows and samples in `log\\` (`references/measuring.md`, *Where a frame's time goes*); the log says `prof: the game lane's marks are the engine's own clock stamps` |
 | `candverify.on` (at launch) | every search for the enemies in range also runs the engine's function and the two lists are compared; `tacli weapons <i> --json` carries it in `hits` as `candidates_differ`, which must be 0 |
+| `pathverify.on` (at launch) | every search of the engine's pathfinder also runs our search (`tagpu_pathfind.c`) and the two results are compared; the log says `pathverify: ARMED`, then every 150 ticks three `pathverify:` lines: the searches equal and `DIFFERENT` (which must be 0; a search that spanned ticks is counted apart, the map having changed under the engine's), the units the 60-tick gate holds by why, and the wait from the gate opening to a search's start |
 | `suppress.on` | the render-suppressor (installs at attach) |
 | `tracer.on` | the unit-draw tracer (installs at attach) |
 | `spxlog.on` | the sub-pixel anchor filmstrip log |

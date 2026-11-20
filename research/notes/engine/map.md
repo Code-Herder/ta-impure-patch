@@ -863,7 +863,18 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
   rectangle when its old stamp was below the old watermark), and when the watermark moved every
   slot from 1 to the last whose unit is alive (`+0x110` bit 28) with a mover and a stamp in
   `[old, new)` is re-marked; then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
-  cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`).
+  cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`). So while a
+  search reads the map, its searcher's rectangle holds no obstacle of the searcher's own: recomputed
+  just now when the searcher was one (its stamp below the old watermark, `0x440B33..0x440B45`), and
+  otherwise as the last re-mark left it. **The map is a cache, and it is read stale in places**
+  [MEASURED 2026-11-20, a battle of 13 500 units]: every searcher's rectangle recomputed by the rule
+  with the searcher left out, at its search's start, differed from the map in 3 of 2 916 671 entries
+  in one game and 5 of 2 701 358 in another. One was the cells of a unit standing in a plant's yard,
+  where the rule answers 0 for the plant in slot A and the map held 1, and the engine's search left
+  the yard by them; the other a neighbour whose stamp was below the watermark and whose rectangle
+  the map held unmarked (a search dropped by `0x40E9C0` runs no cleanup). Where the engine itself
+  has just recomputed (the searcher an obstacle), the rule and the map agree entry for entry
+  (`tagpu_pathfind.c`, the patch, under `tagpu_pathverify.on`).
 
 **The restore.** `0x424C00(tdf)` (stdcall, `ret 4`) has one caller, `0x43265A`, in the game-load
 routine `0x432610`, which has one caller, `0x497B29` in the loader body (the condition is in
