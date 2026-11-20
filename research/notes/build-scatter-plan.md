@@ -33,7 +33,8 @@ rewriting a code byte of the draw (`0x469E7F`) from inside the test.
    engine's own stand-by. There the move is exactly a player's click on an idle unit. A unit passing
    over the site leaves by itself; a unit standing on it under an order is a later landing.
    *Widened 2026-11-20 after the owner's first game* (a bunch of Jeffys read red): a unit standing
-   still under a lone move the engine has failed counts as idle too. Stated to the owner as a
+   still (120 ticks, two of the engine's retries) under a lone move the engine has failed counts as
+   idle too. Stated to the owner as a
    widening of this decision when it was made.
 2. **Placing under your own units is in**, with the **yellow square** for a site that will be cleared.
 3. **Builders seated by the factory guard on a queued site are re-seated by the guard**: the scatter
@@ -84,7 +85,7 @@ The mechanism is the module note's. What was decided while building it:
 - **The builder walks off its own site.** The cursor accepts a site under the selected idle
   builder; MobileBuild's approach moves it off before the test and no refusal is seen (MEASURED,
   below).
-- **The hold has a bound**, 20 held refusals a site, so that no traffic across a site can keep a
+- **The hold has a bound**, 20 held refusals an order, so that no traffic across a site can keep a
   builder waiting for ever (the landing review's finding: the first cut rested on units stopping).
 - **Nothing installs without its tick.** The tick's one caller is allied sight's players phase; the
   module asks for it first, so the cursor never accepts a site nothing would clear (the review's).

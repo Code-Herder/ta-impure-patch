@@ -39,7 +39,9 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    which Move_Ground does when its goal ends without arriving (0x403209, 0x43B8E5..0x43B8EE) -- on a unit that
    has not changed cell for STILL_TICKS. The run starts such a node over every 30 to 59 steps for ever
    (0x43B94B..0x43B970), so the units of a group sent to one point that the first arrivals stand on keep it for
-   good; a unit under way changes cell within STILL_TICKS. And only a finished ground mover that nothing carries, of the
+   good. The mark is never cleared, so a unit under way can carry it from one failure: STILL_TICKS is two of the
+   run's longest waits, a unit that two fresh starts in a row have not moved one cell. That one loses the rest
+   of its way when it is moved (the module note, *Gaps*). And only a finished ground mover that nothing carries, of the
    builder's owner: a structure, an aircraft, a frame, a passenger and every other player's unit stay, and the
    builder waits and gives up on them as stock. The owner is a seat a local human controls
    (view_open); an AI's builders and units are left to stock.
@@ -48,8 +50,10 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
    another of the owner's units is crossing it under a move, the builder's refusal does not count: the stub takes
    one off the counter before stock adds one, never below 1, so the first refusal's reply is said once. A site
    with nothing moving on it counts as stock and is abandoned as stock. THE BOUND: a site's row counts the
-   refusals it has held and holds no more than HOLD_MAX of them, whatever keeps moving on the site, so a builder
-   gives up within HOLD_MAX + 11 refusals of one site.
+   refusals it has held and holds no more than HOLD_MAX of them, whatever keeps moving on the site; a row made
+   for a node whose counter is already past 1 (its earlier row timed out while the builder's order was put
+   aside) holds none. A refusal is held only at a counter past 1, so an order's node is held HOLD_MAX times at
+   most and its builder gives up at the latest on refusal HOLD_MAX + 12, stock's twelfth plus the held ones.
 
    THE CURSOR'S SITE. The build cursor's test (0x47D2E0 from 0x4198C6, through tagpu_patches.c's
    build_site_test) refuses a cell the structure stamps when its unit word names a unit other than the ignore
@@ -132,8 +136,8 @@ SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter"
 #define SITE_TTL         61            /* steps a site outlives its last refusal: two of the 30-step waits      */
 #define STUCK_TICKS      180           /* steps with no change of cell before a moved unit stops holding the
                                           builder: six of its 30-step waits                                    */
-#define STILL_TICKS      60            /* steps on one cell that make a failed move's unit idle: past the order
-                                          run's longest wait before it starts the node over, 59                */
+#define STILL_TICKS      120           /* steps on one cell that make a failed move's unit idle: two of the
+                                          order run's longest waits before it starts the node over, 59         */
 #define HOLD_MAX         20            /* refusals of one site that do not count: THE HOLD's bound             */
 #define OF_FAILED        0x800000u     /* a node's +0x42: the order run started it over after a result 9       */
 #define VA_SCRATCH_ALT   0x0051E684u   /* the site test's two scratch dwords (engine/recorder.md)              */
@@ -405,7 +409,11 @@ static void blocked(char* node, char* b, const char* def, uint32_t cell)
     if (d.fx < 1 || d.fz < 1 || d.fx > WQ_FOOT_MAX || d.fz > WQ_FOOT_MAX || x0 < 0 || z0 < 0 ||
         x0 + d.fx > v.wc.w || z0 + d.fz > v.wc.h) return;
     if (!(s = site_get(bslot, birth, v.now))) return;
-    if (s->type != type || s->x0 != x0 || s->z0 != z0) { s->hold = 0; s->told = 0; s->held = 0; }
+    memcpy(&n, node + N_RETRY, 4);
+    if (s->type != type || s->x0 != x0 || s->z0 != z0) {      /* a new row, or the builder's next site */
+        s->hold = 0; s->told = 0;
+        s->held = n > 1 ? HOLD_MAX : 0;                        /* THE BOUND: a counter past 1 has had its row */
+    }
     s->owner = (uint8_t)owner;
     s->type = (uint16_t)type;
     s->x0 = (int16_t)x0; s->z0 = (int16_t)z0;
@@ -413,7 +421,6 @@ static void blocked(char* node, char* b, const char* def, uint32_t cell)
     s->seen = v.now;
     s_diag.refusals++;
     if (!s->hold || s->held >= HOLD_MAX) return;
-    memcpy(&n, node + N_RETRY, 4);
     if (n > 1) {
         n--;
         memcpy(node + N_RETRY, &n, 4);

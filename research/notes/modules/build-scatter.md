@@ -23,10 +23,11 @@ puppet.
 ground mover that nothing carries, and **idle**: its order list is empty, or headed by the node the
 order controller makes from its type's default order (the head carries `0x4000` and its action is the
 def's byte `+0x230`), or holds a lone Park, or holds **a lone move the engine has failed** while the
-unit has stood on one cell for 60 ticks. That last one is the bunch: units sent together to one point
+unit has stood on one cell for 120 ticks. That last one is the bunch: units sent together to one point
 that the first arrivals stand on keep their move for good, the engine starting it over every 30 to
-59 ticks and marking the node `0x800000` ([orders](../engine/orders.html), the Move_Ground row). A
-unit under way changes cell within the 60 ticks and is not touched. Everything else stays where it is and the builder waits
+59 ticks and marking the node `0x800000` ([orders](../engine/orders.html), the Move_Ground row). The
+mark is never cleared, so the 120 ticks are what tells the bunch from a unit under way: two of the
+engine's longest waits before it starts the move over, with no cell changed. Everything else stays where it is and the builder waits
 and gives up on it as stock: a unit doing anything a player or the engine ordered, a structure, an
 aircraft, a frame being built, a passenger, another player's unit (an ally's included), a wreck or
 any other feature. The one rule is `movable`, which the tick and the cursor both apply.
@@ -76,7 +77,9 @@ within 180 ticks, the stub takes one off the counter before stock adds one: the 
 count. The counter never goes below 1, so the first refusal's reply is said once. A site with
 nothing moving on it counts as stock and is abandoned as stock. **The hold is bounded**: a site's
 row counts the refusals it has held and holds at most 20, whatever keeps moving on the site -- a
-rally route across it, a unit shuttling -- so a builder gives up within 31 refusals of one site.
+rally route across it, a unit shuttling -- and a row made for an order whose counter is already past
+1 holds none, so a builder gives up at the latest on the 32nd refusal of an order, stock's twelfth
+plus the 20.
 
 **A site's row** is kept per builder (slot and birth): the product, the first cell, the step of the
 last refusal and whether the next one is held. It is dropped 61 steps after the last refusal, or when
@@ -173,6 +176,9 @@ There is no setting: the module is installed in every game.
   that appeared since the level's load: a unit sent past one stops, is planned once more for
   another place after 180 ticks, and keeps its last move when that fails too, as after a click on a
   place it cannot reach.
+- **A unit on a long way that the engine has failed once**, and that then stands 120 ticks on one
+  cell of a site being refused -- jammed in traffic there -- is taken for a bunched unit and moved
+  off: it loses the rest of its way.
 - **AI seats are not served.**
 - **The several-buildings previews show such a site green**, not yellow.
 - **The GDI renderer draws the engine's own square**, green.

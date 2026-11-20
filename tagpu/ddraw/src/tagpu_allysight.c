@@ -863,9 +863,6 @@ static void visible_init(void);
    functions is in the image. At DllMain, before the engine runs. The radar pass's and
    UnitInPlayerLOS's sites install after these, each set whole or not at all, and only when these
    are in: both read S. */
-/* tagpu_allysight.h: every site is redirected, players_phase's 0x49555F among them (all or none) */
-int tagpu_allysight_steps(void) { return s_on; }
-
 void tagpu_allysight_init(void)
 {
     Site site[SITES_MAX] = {
@@ -927,6 +924,9 @@ void tagpu_allysight_init(void)
     radar_init();
     visible_init();
 }
+
+/* tagpu_allysight.h: every site is redirected, players_phase's 0x49555F among them (all or none) */
+int tagpu_allysight_steps(void) { return s_on; }
 
 SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied stock-battle-allied tenseat");
 
