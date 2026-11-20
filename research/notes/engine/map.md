@@ -859,10 +859,10 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
   32 records with no present test, relies on it.
 - **The claim `0x440A70(unit)`** (`0x440A70..0x440AE0`, [its entry](units.md)), **the watermark `0x440AF0(class, unit)`**
   and **the cleanup `0x440BE0(class, unit)`**: the watermark becomes
-  `max(GameTime, 30) − 30` (unsigned), the searcher's stamp is GameTime for the walk (re-marking its
+  `max(GameTime, 30) − 30` (unsigned, `0x440B03..0x440B18`), the searcher's stamp is GameTime for the walk (re-marking its
   rectangle when its old stamp was below the old watermark), and when the watermark moved every
   slot from 1 to the last whose unit is alive (`+0x110` bit 28) with a mover and a stamp in
-  `[old, new)` is re-marked; then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
+  `[old, new)` is re-marked (`0x440B4E..0x440BB8`); then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
   cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`). So while a
   search reads the map, its searcher's rectangle holds no obstacle of the searcher's own: recomputed
   just now when the searcher was one (its stamp below the old watermark, `0x440B33..0x440B45`), and

@@ -29,6 +29,40 @@ waits, with the results applied in unit order. The engine facts each decision re
 These change the simulation's rules: every player of a network game runs the same build, and a
 recording made before them does not play after them.
 
+## The scheduler's rules as built, and what each rests on
+
+The rules themselves: [the module](modules/pathfinder.md). Each was arrived at by playing the
+13 500-unit battle (MEASURED 2026-11-20, the reference setup, about 3500 ticks a run, the frame
+profiler's `pathfind` span and the scheduler's log).
+
+1. **The weight follows the load.** With the base weight for every search — the first rule
+   tried, on the ground that no player is served slowly any more — a search popped 6300 nodes on
+   average against the engine's 1200, the scheduler took 9.0 ms a tick, and the opening's backlog
+   made a unit wait 100 to 260 ticks. The engine's raised weights are what makes an army's searches
+   cheap: the same 3152 captured searches pop 2900, 510 and 410 nodes at the base, 3 times and 6
+   times. So the three weights stayed, chosen by the tick's load instead of a player's budget: the
+   base while at most 4 units are ready, 3 times while every ready unit can begin this tick, 6 times
+   past that, where a search pops a fifth to a quarter less than at 3 times.
+2. **A new goal opens the gate at once only for a unit on a path.** Decision 3's first case was
+   first built as "every set goal with a goal zeroes the stamp". The order handlers answer a search
+   that found nothing with a new goal within a tick or two, for as long as the unit stays where it
+   is: late in the battle that was 58 set-goal calls a tick inside 10 ticks of such a search, each a
+   search again, 85 % of all searches ending with none made, and the cap of 64 a tick spent on them.
+   The engine's 10-tick rule is what stops that loop. So it stands for a unit whose last search
+   found nothing, and the gate opens inside the 10 ticks only for a unit whose last search found a
+   path: the case decision 3 names, a unit on its way that is sent elsewhere. In a game 5 % of the
+   set-goal calls are opened that way and 10 % left to the engine's rule.
+3. **A unit at its path's end searches at once**, with no floor between two searches of one unit: a
+   floor of 5 ticks held no unit in 3300 ticks, a found path having at least two corners.
+4. **The caps are 64 searches and 64 000 pops a tick.** The scheduler's time is 150 to 190 µs
+   a search begun, the walk and the classes' sweeps included, so a tick at the searches' cap is
+   about 10 ms of the game thread; the pops bound a tick whose searches are long, and one that
+   finds no way opens every cell it can reach. The opening runs at the pops cap for its first 150
+   ticks.
+5. **The blocked units' limit is the engine's 60 ticks.** It holds 500 to 1700 units a tick, and
+   the searches it lets through are the ones that find nothing (one search in six); shortening it
+   buys more of those.
+
 ## What a search reads, and the one thing two searches share
 
 MEASURED and DISASSEMBLED 2026-11-20; the evidence is `.data/pathfinder-parallel/` in the main
@@ -94,17 +128,30 @@ them, a cheaper search.
    gate holds, by why. Changes nothing in a game. **Built 2026-11-20**: equal on every search that ends in
    its tick ([the module](modules/pathfinder.md)).
 2. **Our scheduler on the game thread** — the units that want a path collected in one pass, searched
-   by our search one after another, the results applied in unit order; the cap; the gate's split. The
-   engine's scheduler and search no longer run. The rules change here.
+   by our search one after another in batches of 8, the results applied in order; the caps; the
+   gate's split; the weight by the tick's load. The engine's scheduler and search no longer run.
+   **Built 2026-11-20**: 34 searches a tick against the engine's 24, a unit's wait 20 ticks on
+   average against 48, for the engine's time a tick or up to two fifths more (4.3 and 6.3 ms in two
+   runs against about 4.5; [the module](modules/pathfinder.md)).
 3. **The workers** — the same searches on worker threads while the game thread waits.
 4. **A cheaper search** — the heap and the expansion are half of a search's time.
 
 ## Open
 
+- **The owner's to set**: the caps' two numbers, the blocked units' 60 ticks, the three weights'
+  thresholds (4 and 64 units ready), and whether decision 3's first case stands as built (rule 2
+  above).
+- **The scratch's class.** The search's scratch and its block are declared `SIM_TRANSIENT`: written
+  by each search before it reads it. That class on memory the simulation reads is the owner's
+  decision.
 - A goal of a kind other than the three ground kinds (point, annulus, ring) reaching a ground unit:
-  none in 86 928 searches; not ruled out by the disassembly. Landing 2 needs a rule for it.
-- The cap's number, and the blocked units' limit: the owner's, from the counts above.
-- The weight of the heuristic, which the engine raises for a player its scheduler serves slowly
-  (`0x5119E8`): with every unit served each tick, the base weight `0x18000` always.
-- A search past 65 536 open nodes: the engine's node word wraps there. Our rule for it.
-- ImpAI's simulator and the recorder's list of the pathfinder's counters follow landing 2.
+  none in the 300 000 searches the oracle counted and none logged by the scheduler in 500 000 more;
+  not ruled out by the disassembly. It gets the result of a search that
+  found nothing.
+- A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
+  search that found nothing; none occurred.
+- A batch's searches can pass the pops cap together; with workers a batch's time is its longest
+  search's.
+- The class's sweep walks every unit once for each class that searches in a tick, as the engine's.
+- ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
+  tables, which nothing writes now.

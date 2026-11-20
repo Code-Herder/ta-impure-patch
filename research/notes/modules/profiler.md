@@ -39,7 +39,8 @@ address names ([sim](../engine/sim.md), *The engine's phase stamps*). So the tic
 timed with no hook of our own inside the step: `net`, `units`, `projectiles`, `explosions`,
 `players`, `features`, `particles`, `tick_tail`, and the draw's `terrain`, `bars`, `fog`, `hud`.
 Our own marks add what the engine does not stamp: `tick_ours` (the recorder's capture and a
-replay's step around the unit tick), `sort`, `sweep` and `markers` inside the draw, `before_draw`,
+replay's step around the unit tick), `pathfind` (our pathfinder's scheduler, entered and left
+inside the players phase by `tagpu_pathfind.c`), `sort`, `sweep` and `markers` inside the draw, `before_draw`,
 `ui_capture`, `flip`, `publish_world` and `publish` (the frame packet), and `outside` (the rest of
 the main loop).
 
