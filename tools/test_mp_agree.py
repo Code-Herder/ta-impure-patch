@@ -27,7 +27,12 @@ class Compare(unittest.TestCase):
     def test_unit_on_one_peer(self):
         r = mp_agree.compare(self.host + [unit(4, 0, 1, 1)], self.join, 128)
         self.assertEqual(len(r["problems"]), 1)
-        self.assertIn("host alone", r["problems"][0])
+        self.assertIn("alive on the host and gone on the joiner", r["problems"][0])
+
+    def test_death_in_flight(self):
+        # the host's unit 4 is gone on the host and still alive on the joiner: its death is on the way
+        r = mp_agree.compare(self.host, self.join + [unit(4, 1, 1, 1)], 128)
+        self.assertEqual((r["problems"], r["deaths_in_flight"]), ([], 1))
 
     def test_type_owner_and_position(self):
         self.join[0] = unit(1, 1, 100, 100, "ARMHAM")

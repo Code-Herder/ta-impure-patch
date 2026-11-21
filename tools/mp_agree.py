@@ -13,17 +13,24 @@ peer's roster (`tacli roster`, the game thread's log of every live unit) is read
 the two reads of a peer must be equal, which shows the rosters were taken paused.
 
 WHAT IT JUDGES, unit by unit, matched by engine slot (the same slot on every peer):
-  - the same units are alive on both peers, each of the same type;
+  - the same units are alive on both peers, each of the same type -- but for a DEATH IN FLIGHT: a unit gone
+    on its owner and alive on the other peer, whose death the other peer has not received when it pauses
+    (the owner alone decides a death, and the two pauses land a few ticks apart). Those are counted and
+    reported; a unit alive on its owner and gone on the other peer is a disagreement;
   - each unit belongs to the same player on both: a peer numbers the players from its own seat (its
     own units are owner 0), so the owners must map one to one between the peers, and every unit is
     its own peer's (owner 0) on exactly one of them;
-  - each unit stands where its owner's copy stands, within W world units (128 by default). A remote
-    copy is where its owner last reported it and the two pauses land a few ticks apart, so a unit
-    moving at the pause can be off by its speed times those ticks: 40 ticks of the armies' fastest
-    kbot is under 100. A stationary unit agrees exactly; the report gives the share that does.
+  - each unit stands where its owner's copy stands, within W world units (256 by default). A remote
+    copy is where its owner's last entry for it put it: a unit moving at the pause trails by its speed
+    times the ticks its entry waited, the message's way and the two pauses' skew. With the unit
+    stream in turn a unit's entry waits 45 ticks at most for a block of 1500 (tagpu_patches.c,
+    stream_order); MEASURED 2026-11-20 at most 42 ticks and 157 world units, a Peewee. A stationary
+    unit agrees exactly; the report gives the share that does.
 --engine-paths writes tagpu_pathverify.on into both game folders, which puts the engine's own path scheduler
 back in place of ours (our search runs beside it as an oracle and writes nothing): the same game with
-stock pathfinding, for a comparison. Both peers log the pathfinder's lines (tagpu_pathlog.on).
+stock pathfinding, for a comparison. Both peers log the pathfinder's lines (tagpu_pathlog.on) and the unit
+stream's queue (tagpu_netlog.on: the units left dirty after each tick's message, and how long a unit waited
+for its entry), which the report sums.
 Not judged: hit points, which a peer holds for its own units only (a remote copy reads 0), and kill
 counts, which differ by design (.claude/skills/ta-drive/references/modules.md, "To compare peers").
 
@@ -48,6 +55,9 @@ MAP = "Town & Country"
 ARMIES = ("limits-tier2-p0", "limits-tier2-p1")
 PAUSED = "*0x511DE8+0x38A51:1"          # the engine's pause byte (modules.md, "To compare peers")
 ROSTER_S = 6                            # past the roster's 5 s dump (tagpu_packet_pub.c, ROSTER_DUMP_MS)
+STREAM_RX = re.compile(r"netstream: record \d+, (\d+) ticks of a block of \d+ units: sent ([0-9.]+) a tick "
+                       r"\(most (\d+)\); left dirty ([0-9.]+) a tick \(most (\d+)\); .*?: (\d+) units, mean ([0-9.]+) "
+                       r"ticks, most (\d+), 30 ticks or more (\d+)")
 PATH_RX = re.compile(r"pathsched: (\d+) ticks: ([0-9.]+) searches a tick.*?searches carried past their tick (\d+)")
 
 
@@ -56,11 +66,14 @@ def compare(host: list, join: list, tol: float) -> dict:
     problems = []
     a = {u["engine_index"]: u for u in host if u.get("engine_index") is not None}
     b = {u["engine_index"]: u for u in join if u.get("engine_index") is not None}
-    only_a, only_b = sorted(set(a) - set(b)), sorted(set(b) - set(a))
-    if only_a:
-        problems.append(f"{len(only_a)} units alive on the host alone, slots {only_a[:10]}")
-    if only_b:
-        problems.append(f"{len(only_b)} units alive on the joiner alone, slots {only_b[:10]}")
+    in_flight = 0
+    for here, there, name, other in ((a, b, "host", "joiner"), (b, a, "joiner", "host")):
+        alone = sorted(s for s in set(here) - set(there))
+        mine = [s for s in alone if here[s]["owner"] == 0]     # alive on its owner, gone on the other peer
+        in_flight += len(alone) - len(mine)
+        if mine:
+            problems.append(f"{len(mine)} units of the {name}'s alive on the {name} and gone on the {other}, "
+                            f"slots {mine[:10]}")
     both = sorted(set(a) & set(b))
     if not both:
         problems.append("no unit alive on both peers")
@@ -86,6 +99,7 @@ def compare(host: list, join: list, tol: float) -> dict:
         problems.append(f"the owners do not map one to one: {owners}")
     offs.sort()
     return {"problems": problems, "host_alive": len(a), "join_alive": len(b), "both": len(both),
+            "deaths_in_flight": in_flight,
             "host_own": sum(1 for u in a.values() if u["owner"] == 0),
             "join_own": sum(1 for u in b.values() if u["owner"] == 0),
             "identical": identical, "off_p99": offs[int(len(offs) * 0.99)] if offs else 0,
@@ -111,6 +125,18 @@ def paused_rosters(tp, out: Path) -> tuple:
     raise twopeers.CouldNotRun("a peer's roster changed between two reads while the game was paused")
 
 
+def stream_line(log: str) -> str:
+    rows = [tuple(float(x) for x in r) for r in STREAM_RX.findall(log)]
+    if not rows:
+        return "no netstream lines"
+    ticks = sum(r[0] for r in rows)
+    waited = sum(r[5] for r in rows)
+    return (f"sent {sum(r[0] * r[1] for r in rows) / ticks:.1f} a tick (most {max(r[2] for r in rows):.0f}); "
+            f"left dirty {sum(r[0] * r[3] for r in rows) / ticks:.1f} a tick (most {max(r[4] for r in rows):.0f}); "
+            f"a unit's wait for its entry: mean {sum(r[5] * r[6] for r in rows) / max(waited, 1):.1f} ticks, "
+            f"most {max(r[7] for r in rows):.0f}, {sum(r[8] for r in rows):.0f} of {waited:.0f} waits 30 ticks or more")
+
+
 def path_line(log: str) -> str:
     if "pathverify: ARMED" in log:
         found = re.findall(r"pathverify: (\d+) searches: (\d+) equal, (\d+) DIFFERENT", log)
@@ -128,7 +154,7 @@ def main() -> int:
     ap.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw.dll")
     ap.add_argument("--join-dll", type=Path, help="the joiner's ddraw.dll, when it differs from the host's")
     ap.add_argument("--until", type=int, default=5400, help="the host's GameTime to pause at (5400)")
-    ap.add_argument("--tol", type=float, default=128.0, help="world units a unit may stand off its owner's copy")
+    ap.add_argument("--tol", type=float, default=256.0, help="world units a unit may stand off its owner's copy")
     ap.add_argument("--port", type=int, help="the DirectPlay port (leased when not given)")
     ap.add_argument("--engine-paths", action="store_true", help="the engine's own path scheduler (tagpu_pathverify.on)")
     ap.add_argument("--gpu", action="store_true", help="render both peers on the default renderer")
@@ -140,7 +166,7 @@ def main() -> int:
     try:
         with twopeers.TwoPeers(args.out, args.dll, args.port, "ag", args.gpu, args.join_dll) as tp:
             limit = ("--unit-limit", "1500")
-            levers = ("tagpu_pathlog.on",) + (("tagpu_pathverify.on",) if args.engine_paths else ())
+            levers = ("tagpu_pathlog.on", "tagpu_netlog.on") + (("tagpu_pathverify.on",) if args.engine_paths else ())
             tp.launch(host_args=limit, join_args=limit, levers=levers)
             tp.battle_room(MAP)
             tp.start()
@@ -160,7 +186,9 @@ def main() -> int:
             raise twopeers.CouldNotRun("; ".join(tp.refused))
         for name in (tp.host, tp.join):
             log = args.out / f"{name}.log"
-            result[f"path_{name[-1]}"] = path_line(log.read_text(errors="replace")) if log.exists() else "no log"
+            text = log.read_text(errors="replace") if log.exists() else ""
+            result[f"path_{name[-1]}"] = path_line(text) if text else "no log"
+            result[f"stream_{name[-1]}"] = stream_line(text) if text else "no log"
     except twopeers.CouldNotRun as e:
         result["could_not_run"] = str(e)
         (args.out / "result.json").write_text(json.dumps(result, indent=1))
@@ -171,8 +199,10 @@ def main() -> int:
     print(f"mp_agree: paused at GameTime {r['gametime']['host']} (host) / {r['gametime']['join']} (joiner); "
           f"{r['both']} units on both peers ({r['host_own']} the host's, {r['join_own']} the joiner's); "
           f"{r['identical']} at the identical position, off by {r['off_p99']:.0f} at the 99th percentile, "
-          f"{r['off_max']:.0f} at most")
+          f"{r['off_max']:.0f} at most; {r['deaths_in_flight']} deaths in flight")
     print(f"mp_agree: pathfinder, host: {r.get('path_H')}; joiner: {r.get('path_J')}")
+    print(f"mp_agree: unit stream, host: {r.get('stream_H')}")
+    print(f"mp_agree: unit stream, joiner: {r.get('stream_J')}")
     for p in r["problems"][:40]:
         print(f"mp_agree: DISAGREE {p}")
     print("mp_agree: " + ("the peers agree" if not r["problems"] else f"{len(r['problems'])} disagreements"))
