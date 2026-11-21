@@ -49,6 +49,9 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
     game thread waits for them at the step's end and not inside the scheduler. The pops cap stays,
     tested between groups by the threads that search (the owner's go-ahead named it as dropped,
     which measured 1.6 million pops in one tick).
+12. **The tick's jobs, what is due of them and the tick's copies are `SIM_TRANSIENT`** (`s_job`,
+    `s_due`, `s_frz`, `s_frz_bytes`): written by the scheduler before a search reads them, nothing
+    due between two ticks.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -179,10 +182,7 @@ them, a cheaper search.
 
 ## Open
 
-- **The owner's to confirm**: the tick's jobs, what is due of them and the tick's copies are
-  `SIM_TRANSIENT` (`s_job`, `s_due`, `s_frz`, `s_frz_bytes`): written by the scheduler before a
-  search reads them, nothing due between two ticks, the class the scratch and the batch in hand
-  have (decisions 7 and 10).
+
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
 - **What the batch's size measured** (it is 16, decision 9). A batch ends with its longest search,
   and the top 5 % of searches are 46 % of the pops, so a batch of 8 leaves three threads idle
