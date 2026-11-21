@@ -47,10 +47,11 @@
      5. A SET GOAL on a course with a search due meets it first (goal_touch): the search is taken back if it has
         not begun, applied if it has ended, and marked stale if it is running, so no result is applied to a goal
         it was not made for.
-   What a tick carries to the next: the units' own stamps and paths, the two cursors, per unit slot the stamp of
-   its last search that found a path, and THE SEARCHES OWED -- the carried searches' units (s_owed). A carried
-   search itself is not state: a game restored from a recording has none, and gives the owed units their stamps
-   back, so they are chosen again.
+   What a tick carries to the next: the units' own stamps and paths, the two cursors and, per unit slot, the
+   stamp of its last search that found a path. A CARRIED SEARCH IS NOT STATE, and nothing of it is recorded: the
+   recording holds no course (replay-layout.tsv, mover +0x000), so a game restored from one makes every unit
+   again, each with a new course, stamp 0, which the walk finds ready -- as it finds one whose search was carried
+   where the recording was cut.
    THE HEURISTIC'S WEIGHT is one of the engine's three: its base [pf + 0x54], 3 times it, 6 times it. The engine
    gives them to a player by how slowly its budget serves the player's units (0x40EBBF..0x40EC06); here they
    follow the tick's load: the base in a quiet tick, one with at most PF_QUIET units ready; 3 times while every
@@ -570,7 +571,7 @@ typedef struct RUN {
 
 /* THE WORK IN HAND, a block made at install. A search may be carried past its tick's end, so this is not empty
    between two ticks while one is, and nothing that resets statics between ticks may reach it: a helper is inside
-   it. What the simulation carries of a carried search is s_owed, below.
+   it. The simulation carries nothing of a carried search (the file's head).
      help[k].run   the handing-out helper k is in, NULL when it is in none: THE ONE WORD the helpers' ordering
                    rests on (run_send, helper_main).
      sync          the handing-out the scheduler's thread waits for inside the scheduler.
@@ -599,19 +600,6 @@ typedef struct MACH {
 } MACH;
 static MACH* s_m;
 SIM_BLOCK(s_m, SIM_TRANSIENT, SIM_ID_NONE, 1, NULL);
-
-/* THE SEARCHES OWED: for each carried search its unit's slot, the stamp the search wrote and the stamp before it
-   -- what the simulation carries of a search in flight, recorded with it. A game restored from a recording has
-   no thread behind an entry, and the scheduler then gives the unit its stamp back (owed_back): it is chosen
-   again as though it had not been. Entry k is carry[k]'s while that search is carried. */
-typedef struct OWED { unsigned slot, stamp, stamp0; } OWED;
-static const SimField OWED_LAYOUT[] = {
-    SIM_FIELD(OWED, slot, SIMF_ID, SIM_ID_UNIT_SLOT),
-    SIM_FIELD_AT(offsetof(OWED, stamp), sizeof(OWED) - offsetof(OWED, stamp), SIMF_OPAQUE, SIM_ID_NONE),
-    SIM_FIELD_END
-};
-static OWED s_owed[PF_HELPERS];
-SIM_ROWS(s_owed, SIM_STATE, SIM_ID_NONE, OWED_LAYOUT);
 
 /* Player p's block of the unit array when the engine's scheduler serves the player (0x40EC45..0x40EC62: a record
    in use, of type 1, 2 or 3, not in state 10). THE BOUND: both ends inside the array and on a slot. */
@@ -1090,8 +1078,8 @@ static void sched_line(void)
 }
 
 /* A search not ended when its tick is joined is CARRIED: its helper goes on, and the job waits in s_m->carry
-   for a later join. s_owed holds what the simulation carries of it. There is a helper inside each carried job, so
-   the list holds them; were it full, the job is waited for here. */
+   for a later join. There is a helper inside each carried job, so the list holds them; were it full, the job is
+   waited for here. */
 static void job_carry(JOB* j)
 {
     if (s_m->ncarry == PF_HELPERS) {
@@ -1100,9 +1088,6 @@ static void job_carry(JOB* j)
         job_free(j);
         return;
     }
-    s_owed[s_m->ncarry].slot = j->slot;
-    s_owed[s_m->ncarry].stamp = j->stamp;
-    s_owed[s_m->ncarry].stamp0 = j->stamp0;
     s_m->carry[s_m->ncarry++] = j;
     s_v.carried++;
     if (s_m->ncarry > s_v.carried_most) s_v.carried_most = s_m->ncarry;
@@ -1115,15 +1100,13 @@ static void carried_reap(void)
     for (i = 0; i < s_m->ncarry; i++) {
         JOB* j = s_m->carry[i];
         if (j->state != JOB_DONE) {
-            s_m->carry[k] = j;
-            s_owed[k++] = s_owed[i];
+            s_m->carry[k++] = j;
             s_v.carried_ticks++;
             continue;
         }
         job_result(j);
         job_free(j);
     }
-    memset(s_owed + k, 0, (PF_HELPERS - k) * sizeof *s_owed);
     s_m->ncarry = k;
 }
 
@@ -1170,8 +1153,9 @@ static void due_join(void)
 }
 
 /* Ends every search and drops every job, results and all: a level that has gone, a game put back to an earlier
-   tick, scratches about to be freed. THE LIFETIME: it returns once no helper is in any handing-out. s_owed is
-   left, so that a game that goes on gives the carried units their stamps back (owed_back). */
+   tick, a level that goes over to playing a recording, scratches about to be freed. THE LIFETIME: it returns once
+   no helper is in any handing-out. No stamp is put back: each of those makes its units again or frees them, and
+   a unit that kept a dropped search's stamp would be ready again PF_RETRY ticks on. */
 static void due_drop(void)
 {
     unsigned i;
@@ -1184,28 +1168,6 @@ static void due_drop(void)
     s_m->tick = NULL;
     s_m->held = 0;
     s_m->ncarry = 0;
-}
-
-/* THE SEARCHES OWED with no search behind them -- a game restored from a recording, or one whose searches were
-   dropped: the unit gets its stamp back where its course still carries the search's. THE BOUND: the slot against
-   the unit array, as the walk's. */
-static void owed_back(const SCHED* e)
-{
-    unsigned k;
-    for (k = s_m->ncarry; k < PF_HELPERS; k++) {
-        const OWED o = s_owed[k];
-        const char* unit;
-        const char* mover;
-        char* course;
-        memset(&s_owed[k], 0, sizeof s_owed[k]);
-        if (!o.stamp || o.slot > (size_t)(e->last - e->first) / UNIT_STRIDE) continue;
-        unit = e->first + (size_t)o.slot * UNIT_STRIDE;
-        if (!*(const unsigned short*)(unit + UNIT_TYPE) || !(mover = *(const char* const*)unit) ||
-            !(course = *(char* const*)mover) || *(const unsigned*)course != VT_GROUND_COURSE ||
-            *(const unsigned*)(course + OBJ_LAST) != o.stamp)
-            continue;
-        *(unsigned*)(course + OBJ_LAST) = o.stamp0;
-    }
 }
 
 /* Room for the copies of a tick that searches `ncls` classes: s_helpers class pages more than that. The block
@@ -1286,7 +1248,6 @@ static void __fastcall sched_tick(void* pf_unused)
     s_m->last_now = now;
     if (!sched_open(&e)) return;
     tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
-    owed_back(&e);
     sched_walk(&e, ready, n, still_slot, still_stamp);
     /* THE WEIGHT, by the tick's load: the engine's three (0x40EBBF..0x40EC06) */
     i = n[0] + n[1] > PF_CAP_SEARCHES ? 2 : n[0] + n[1] > PF_QUIET;
@@ -1479,7 +1440,6 @@ void tagpu_pathfind_level_init(void)
 {
     due_drop();
     if (s_m) s_m->last_now = 0;
-    memset(s_owed, 0, sizeof s_owed);
     memset(s_found, 0, sizeof s_found);
     memset(s_cursor, 0, sizeof s_cursor);
     memset(&s_v, 0, sizeof s_v);

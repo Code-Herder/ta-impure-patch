@@ -58,6 +58,18 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
 14. **The join waits for nothing: a search still running there is carried to a later tick**
     (2026-11-20). Which tick a long search's result arrives in then depends on the machine and the
     moment, which the owner chose over a rule counted in work, for a wait of none.
+    With it the groups of decision 9 are gone: the pops cap is tested where each search is begun.
+15. **Nothing of a carried search is recorded, and the work in hand is `SIM_TRANSIENT`**
+    (2026-11-20). The work in hand (`s_m`: the helpers' words, the handing-outs' records, the
+    jobs, the pages' pins) and the scratches' `TS_PF`s (`s_pf`) are blocks of that class, though
+    not empty between two ticks while a search is carried. A recording holds no course, so a
+    restored game makes its units again and each is ready for a search; a list of the carried
+    searches' units, built first, had nothing to give back and was taken out on the owner's word.
+16. **At the landing on main, `job_carry` and `goal_touch` named `UNCOVERED` by the replay gate
+    are accepted** (2026-11-20): a search is carried 10 to 70 times in 116 000 in the battle of
+    13 500 units, and the test groups' games may carry none. The gate has no list of exceptions;
+    this is the decision it asks for, for this feature and those two functions. Any other
+    function it names is asked about then.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -193,16 +205,6 @@ them, a cheaper search.
    search made twice, 124 335 of 124 335 results equal ([the module](modules/pathfinder.md)).
 
 ## Open
-
-- **The owner's to confirm**, the classes the last landing declares:
-  - `s_owed` (the carried searches' units: slot, stamp, stamp before) is `SIM_STATE`.
-  - The work in hand (`s_m`: the helpers' words, the handing-outs' records, the jobs, the pages'
-    pins) and the scratches' `TS_PF`s (`s_pf`) are blocks declared `SIM_TRANSIENT`, and are not
-    empty between two ticks while a search is carried. They are blocks so that nothing that resets
-    a static between ticks reaches memory a helper is inside; what the simulation carries of a
-    carried search is `s_owed`.
-  - **Groups are gone** (decision 9's 16): the pops cap is tested where each search is begun.
-
 
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
 - **What the batch's size measured** (it is 16, decision 9). A batch ends with its longest search,

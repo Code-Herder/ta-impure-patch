@@ -93,12 +93,14 @@ written only while no job pins it, and the block grows only while no search is c
 that finds no page while one is — the block wants to grow — puts its units back.
 
 **What a tick carries to the next**, beside the units' own records: per unit slot the stamp of its
-last search that found a path (`s_found`), the two cursors (`s_cursor`), and **the searches owed**
-(`s_owed`): for each carried search its unit's slot, the search's stamp and the stamp before it.
-All three are recorded state. A carried search itself is not: a game restored from a recording has
-no thread behind an owed entry, and the scheduler gives that unit its stamp back, so it is chosen
-again. A game put back to an earlier tick drops its searches whole, and so does a level that goes
-over to playing a recording: nothing of a search is applied there.
+last search that found a path (`s_found`), and the two cursors (`s_cursor`); both are recorded
+state. **A carried search is not state, and nothing of it is recorded.** The recording holds a
+unit's orders and no course — the object that has the path, the stamp and the flag that asks for a
+search (`replay-layout.tsv`, mover `+0x000`) — so a game restored from one makes every unit again,
+each with a new course, stamp 0, which the walk finds ready: a unit whose search was carried where
+the recording was cut is searched for again like every other. A game put back to an earlier tick
+drops its searches whole, and so does a level that goes over to playing a recording: nothing of a
+search is applied there.
 
 **The helpers.** Threads made at install work beside the scheduler's own thread, each search on a
 scratch of its thread's own. Their number is the machine's processor cores less one, left to the
