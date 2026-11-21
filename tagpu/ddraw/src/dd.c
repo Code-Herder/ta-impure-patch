@@ -1827,9 +1827,8 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
                happen on this path: this runs from the engine's DirectDraw
                creation, under the loader lock on some paths, which is the
                LoadLibrary-from-DllMain the companion-DLL rule forbids. The
-               bring-up is the render thread's own and `vk_render_main` hands
-               the session to GDI if it fails -- which route F measured as
-               still reaching the screen. See render_vk.c. */
+               bring-up is the render thread's own, and a lane that cannot
+               come up ends the session. See render_vk.c. */
             g_ddraw.renderer = vk_render_main;
         }
 

@@ -910,17 +910,6 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
     return z;
 }
 
-void tagpu_zoom_render_gone(void)
-{
-    cut_end();
-    s_liveHeld = 0;
-    s_live = 0;
-    /* the apply goes on running on the last record (render_gdi.c posts none), so
-       without this the scroll step, the minimap box and the pick stay at the last
-       level */
-    tagpu_zoom_frame_end();
-}
-
 void tagpu_zoom_presented(void)
 {
     s_liveHeld = 0;
@@ -933,8 +922,8 @@ void tagpu_zoom_presented(void)
    the game is paused). The gather goes on publishing the view with the lane down, so a published view
    says nothing about the lane: the world stays live, and the ground ours (tagpu_terrown_set_skip),
    from any rebuild's start until a frame reaches the screen. LIVE_HELD_FRAMES bounds it, counted on
-   every frame, for a lane that neither presents nor fails and for a level that ends under the rebuild,
-   and a lane given up on ends it at once: `tagpu_zoom_render_gone`. */
+   every frame, for a lane that neither presents nor fails and for a level that ends under the rebuild;
+   a lane given up on ends the session (render_vk.c). */
 int tagpu_zoom_live_held(void) { return s_liveHeld > 0; }
 
 void tagpu_zoom_lane_retrying(void)

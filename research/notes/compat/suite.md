@@ -363,6 +363,11 @@ second refusal (`dialog_after_reset`): the view has to change when it opens and 
 driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and `wiki-stage-refused` refuses the
 wiki's stage alone: the page loses its 3D image, and the lane has to stay up.
 
+**The `keep` rows assert a road the DLL no longer takes.** A Vulkan lane whose retries are spent ends the
+session (`vk: the lane cannot draw - the session ends`, a box, the process terminated: vulkan-backend.md) and is
+never handed to GDI, so `pass-refused-gdi`, `pass-full-gdi`, `pass-card-full` and the Windows rows' GDI branch
+fail until they are rewritten to expect that end.
+
 **On Windows** the refusal rows run only under `--smoke`, whose battle is where the refusal happens
 (`refuse_lane`): the log has to say the lane came back, or that the session went to GDI, and the game has
 to stay alive through the watch. On GDI the screen's side panel has to be the engine's (`win-shot.ps1`, the window

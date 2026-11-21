@@ -434,9 +434,8 @@ static int setting(TagpuSetting k, int def)
 }
 
 /* THE LANE DRAWS RINGS: the Vulkan backend, until its range pass refuses.
-   `g_ddraw.renderer` is stored before the first draw and once more by the
-   hand-over to GDI, after which no frame is drawn from a packet
-   (tagpu_packet_pub.c, wide_tick). `s_refused` is a one-way latch the render
+   `g_ddraw.renderer` is stored once, before the first draw (tagpu_packet_pub.c,
+   wide_tick). `s_refused` is a one-way latch the render
    thread sets and clears only in the pass's teardown; what a draw reads of it
    decides which picture the markers draw, never what memory is read. */
 static volatile LONG s_refused;

@@ -799,8 +799,7 @@ ones, until our terrain pass has gathered a frame and the game thread has latche
 `passive`; every draw of a session without `tagpu_terrown` (`terrown.off`); and every draw on
 the GDI lane. On the GDI lane nothing reads the source, so nothing packs it: `wide_tick`
 runs only while the session's renderer is Vulkan (`g_ddraw.renderer`, stored on the game thread
-at DirectDraw creation before the first draw and moved later only by the Vulkan backend's
-hand-over to GDI). That is a property of the session, not a per-frame zoom gate: a producer gated
+at DirectDraw creation before the first draw and never moved). That is a property of the session, not a per-frame zoom gate: a producer gated
 on the level the render thread publishes would pack one frame late at the start of every zoom-out.
 MEASURED 2026-09-24 on `big-battle` at 1920×1080 on Xvfb with `tagpu_gdi.on`, on the window
 builder that ran there then: no `fogwide:` line.

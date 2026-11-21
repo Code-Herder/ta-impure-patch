@@ -183,14 +183,13 @@ int tagpu_vk_mem_cap(unsigned long long* headroom, unsigned long long* cap);
    NOT the same question as `tagpu_vk_gpu_active() < 0`, which reads -1 for a
    lane that is still starting too.
 
-   AND NOT THE SAME QUESTION AS "THE BRING-UP CANNOT WORK", which is the one a
-   fallback wants. ST_FAILED is also published when a swapchain REBUILD is
+   AND NOT THE SAME QUESTION AS "THE BRING-UP CANNOT WORK", which is the one
+   that ends a session. ST_FAILED is also published when a swapchain REBUILD is
    refused and when a present goes fatal -- a one-second fence or acquire
    timeout, an allocation refused. The caller must therefore decide whether
    this lane had ever come up, and use `tagpu_vk_retry` for the case where it
-   had: handing the session to GDI on any ST_FAILED would turn one hiccup
-   after ten minutes of play into software rendering for the rest of the
-   process. */
+   had: ending the session on any ST_FAILED would turn one hiccup after ten
+   minutes of play into a lost game. */
 int tagpu_vk_failed(void);
 
 /* Put a lane that failed back to ST_OFF, so the next frame brings it up again;

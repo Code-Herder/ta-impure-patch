@@ -3113,8 +3113,8 @@ static void fog_rec_after(const char* ta)
    Vulkan lane; on the GDI lane nothing reads it, and a pack per sim tick there
    is paid for nothing. The renderer is a property of the session, not of a
    frame: `dd_CreateEx` stores `g_ddraw.renderer` on the game thread before the
-   first draw, and its one later store is render_vk.c's hand-over to GDI, after
-   which no frame is drawn from a packet at all.
+   first draw, and nothing stores it again (a Vulkan lane that cannot draw ends
+   the session, render_vk.c).
 
    WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: every
    in-play draw falls inside the lifetimes of both maps, and each index the

@@ -410,8 +410,7 @@ Premultiplied over, the target's alpha kept.
 ## The lane
 
 `tagpu_rangeown_on()` is 1 while `ranges` is on **and** the lane draws rings: the session's
-backend is Vulkan (`g_ddraw.renderer == vk_render_main`, stored before the first draw and once
-more by the hand-over to GDI) and the range pass has not refused. The pass refuses — a one-way
+backend is Vulkan (`g_ddraw.renderer == vk_render_main`, stored once, before the first draw) and the range pass has not refused. The pass refuses — a one-way
 latch, `tagpu_rangeown_refuse()` — on a target with no stencil plane or a pipeline that would not
 build, and its teardown clears it (`tagpu_rangeown_forgive()`) unless it leaves the pass refused,
 so the next device answers again; the HUD's `tagpu_hudstate` latch has the same shape. What a

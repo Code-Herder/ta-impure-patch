@@ -10,13 +10,10 @@
  * own frame, the same 98.5 % as the GDI control -- roadmap Phase G / G19a has
  * the table.
  *
- * AND WHY THE FALLBACK IS ALLOWED TO BE LATE. This hands the session to
- * `gdi_render_main` on `tagpu_vk_failed()`. That is only safe because route F
- * measured it: GDI still reaches the screen after a surface has existed on the
- * HWND, so winevulkan's takeover is specific to an OpenGL drawable rather than
- * to the window.
- * Had it not been, the fallback would have to be taken before the surface
- * was ever created and a later failure would be terminal.
+ * A LANE THAT CANNOT DRAW ENDS THE SESSION; it is never handed to GDI. GDI is
+ * the oracle a test turns on with tagpu_gdi.on at launch (tagpu_cfg.h), and a
+ * launch is one backend for its life: the engine's unit draw is removed on a
+ * Vulkan launch (tagpu_owndraw.c), so a GDI picture of it would have no units.
  */
 
 #include <windows.h>
@@ -24,7 +21,6 @@
 #include "dd.h"
 #include "render_vk.h"
 #include "tagpu_zoom.h"
-#include "render_gdi.h"
 #include "debug.h"
 #include "config.h"
 #include "tagpu.h"
@@ -54,18 +50,36 @@
    SO IT IS A FILE STATIC. */
 static unsigned s_frames = 0;
 
+/* THE END OF A SESSION WHOSE LANE CANNOT DRAW: the line, the box, and the
+   process terminated rather than exited. ExitProcess would run the detaches,
+   the graphics driver's among them, against a device that has just failed and
+   a game thread still in its frame (tagpu_modsui.c measured a driver's detach
+   holding the process for minutes); terminating runs none. The recorder is the
+   game thread's and is not touched from here: a recording ends at its last
+   written block. */
+static void vk_give_up(void)
+{
+    static const char TEXT[] =
+        "Total Annihilation: Impure could not draw the game with Vulkan on this "
+        "computer, so it has to close.\n\nThe reason is in the log folder beside "
+        "TotalA.exe (the newest tagpu log, its vk: lines).";
+    tagpu_logf("vk: the lane cannot draw - the session ends");
+    MessageBoxA(NULL, TEXT, "Total Annihilation: Impure",
+                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    TerminateProcess(GetCurrentProcess(), 1);
+}
+
 DWORD WINAPI vk_render_main(void)
 {
     /* HOW MANY TIMES A LANE THAT HAD COME UP MAY FAIL AND BE BROUGHT BACK
-       before the session gives up on Vulkan. A BOUND, not a timeout: each
-       retry is a real re-bring-up (~400 ms measured), so a device that is
-       genuinely gone reaches GDI in about a second and a transient stall costs
-       one rebuild. See the loop for why the two cases are not the same case. */
+       before the session ends. A BOUND, not a timeout: each retry is a real
+       re-bring-up (~400 ms measured), so a device that is genuinely gone ends
+       the session in about a second and a transient stall costs one rebuild. See the loop for why the two cases are not the same case. */
 #define VK_RETRY_BUDGET 3
 /* WHAT EARNS THE BUDGET BACK: this many frames on the screen since the lane last failed, about five
    minutes at 60 Hz. A count of frames, so a lane that keeps failing at once spends the budget in a
-   second and reaches GDI whatever the clock says, and four refusals an hour apart cost four rebuilds
-   and not the session's renderer. */
+   second whatever the clock says, and four refusals an hour apart cost four rebuilds and not the
+   session. */
 #define VK_RETRY_EARNED_FRAMES 18000
 
     unsigned fc = 0;
@@ -107,14 +121,7 @@ DWORD WINAPI vk_render_main(void)
         /* `g_ddraw.render.clear_screen` IS DELIBERATELY NOT TOUCHED. Only
            `render_gdi.c` consumes that flag, because a backend that clears its
            own target every frame has nothing to do with it -- and the seam
-           clears the whole swapchain image on every frame it presents.
-
-           And consuming it would be WRONG rather than merely idle: the lane
-           presents nothing while the bring-up runs (~420 ms measured), so a
-           mode change that set the flag in that window would have its clear
-           eaten by a frame that painted nothing. Left standing, the flag is
-           still there for the GDI fallback below, which is the one path that
-           owes it. */
+           clears the whole swapchain image on every frame it presents. */
 
         /* ONE NUMBER FOR THE WHOLE FRAME, TAKEN BEFORE ANYTHING USES IT. Every
            pass's hand-over is stamped with `TAGPU_FRAME::frame_counter` and the
@@ -191,15 +198,14 @@ DWORD WINAPI vk_render_main(void)
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
            frame that both fails and finds `render.run` clear is a shutdown or a
            mode change, not a verdict on the lane -- and honouring the failure
-           first would latch `g_ddraw.renderer` to GDI, so a MODE CHANGE would
-           restart the render thread as GDI for good. */
+           first would end the session on a MODE CHANGE. */
         if (!g_ddraw.render.run)
             break;
 
         /* A LANE THAT HAS GIVEN UP IS A FACT, NOT A FRAME COUNT -- but WHICH
            fact matters. ST_FAILED covers both "the bring-up cannot work" and "a
-           live lane hit an error", and only the first is a reason to give the
-           session to software rendering: the second includes a one-second fence
+           live lane hit an error", and only the first is a reason to end the
+           session: the second includes a one-second fence
            or acquire timeout and a single refused allocation, either of which
            can happen to a lane that has been presenting for ten minutes.
 
@@ -209,7 +215,7 @@ DWORD WINAPI vk_render_main(void)
         if (tagpu_vk_failed()) {
             if (!came_up) { gave_up = 1; break; }
             if (retries >= VK_RETRY_BUDGET) {
-                tagpu_logf("vk: the lane failed %d times after coming up - the session goes to GDI",
+                tagpu_logf("vk: the lane failed %d times after coming up - the session ends",
                            retries + 1);
                 gave_up = 1;
                 break;
@@ -235,24 +241,7 @@ DWORD WINAPI vk_render_main(void)
     else tagpu_vk_render_pause(g_ddraw.hwnd);
 
     if (gave_up)
-    {
-        /* THE HAND-OVER TO GDI. The renderer pointer is moved first so
-           nothing downstream still believes this backend is live, then GDI is
-           called and never returns. The warning text GDI prints is the fork's
-           own.
-
-           NOT COVERED, and it is a real loss: the GPU row's retry. Once the
-           session is on GDI the Vulkan lane is down for the process's life,
-           because this thread is GDI's now, so picking another device cannot
-           bring it back. The alternative -- sitting in this loop presenting
-           nothing while the player hunts for a device that works -- leaves
-           them with no picture at all, which is worse. */
-        TRACE("     Vulkan backend did not come up - switched to GDI renderer\n");
-        tagpu_overlay_gone();
-        g_ddraw.show_driver_warning = TRUE;
-        g_ddraw.renderer = gdi_render_main;
-        gdi_render_main();
-    }
+        vk_give_up();
 
     return TRUE;
 }

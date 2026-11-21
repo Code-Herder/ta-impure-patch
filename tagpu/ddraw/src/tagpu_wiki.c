@@ -3340,7 +3340,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
         if (cut && s_open) wiki_close("its record did not fit the frame packet");
     }
     if (!tagpu_hudstate_on() || tagpu_wikistate_refused()) {
-        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI, the
+        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the launch is GDI's, the
            HUD's pass refused, or the wiki's layout refused, so no frame will draw the window
            again */
         s_shown = 0;
