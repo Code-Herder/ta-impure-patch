@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=main..0924c426 findings=3 acted=3 rejected=0 date=2026-11-21 (L1 the stack proof: PROVE_CHECK lost its reason -> fixed + test; START/CALL child entry depth is 0 not argc -> bounds [0,4], argc into depth; 0x4B0A70/0x4B0BC0 inline the name loop -> doc fixed)
