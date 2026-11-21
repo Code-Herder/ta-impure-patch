@@ -712,6 +712,14 @@ repeat (`tagpu_nodraw.c`, THE REPOSE). With `edi = main+0x141FB`:
   argument. The composite pops its own two arguments, so DrawUnit's next instructions are its
   epilogue (`0x45AE78..0x45AE7C` pops, `ret 8` at `0x45AE7D..0x45AE7F`). Of what the composite writes, only `o3+4` belongs to
   the pose cache, and only the composite reads it (`0x458870`, `0x4589AA`).
+  **Callers, both functions** [DISASSEMBLED 2026-11-21, every `E8` and every dword of the image]:
+  `0x45AC20` is called from `0x469A00`, `0x469BA3` (the sweeps) and `0x46A762` (the 3D-wreck draw,
+  through the scratch feature unit) and nowhere else; `0x458810` only from `0x45AE73`; neither
+  address is stored as a datum. The composite's own calls: `0x4586A0`, the blit `0x459200`
+  (`0x458948`), `0x4584D0`, `0x458310` twice, `0x4B8A80`, `0x4B7F90` twice and the build-state
+  effect `0x458DD0` (`0x458D0E`), with `ret 8` at `0x458957`, `0x4589B8` and `0x458D1A`. Every
+  Vulkan launch removes the call at `0x45AE73` (`tagpu_owndraw.c`, hook map §2.1); what that costs
+  and saves is in [units](../modules/units.html), *The engine draws no unit on a Vulkan launch*.
 - **The pieces.** An Object3do's `+0` is its piece count: its build `0x45AEC0` places piece `i` at
   `o3+0x22+i·0x36` with `i` read from `+0` (`0x45AECA..0x45AED9`) and increments `+0` for each
   (`0x45AF35..0x45AF38`). The SweetSpot point `0x43E0B0(unit, out, piece)` is stdcall,

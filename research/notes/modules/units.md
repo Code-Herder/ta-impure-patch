@@ -100,17 +100,11 @@ same picture, but bounded, deliberate and visible in the log, rather than a race
 48-slot arena it reads `rest=6900` with the **same unit and triangle counts** as the healthy build:
 every unit still drawn, nothing dropped.
 
-**When it cannot arm at all** (step 8, decision B). `owndraw`'s detours skip the engine's own unit
-rasterisers and are installed at DLL attach, so with no CPU emitter left "draw nothing" would be
-the default failure — every unit in the game invisible. So `tagpu_owndraw_classify` **asks before
-it skips**: it reads a readiness word this pass publishes, and hands the draw back to the engine
-(8bpp, composited through the terrain key) when the pass is not live. That read crosses threads and
-is safe by **direction**, not by timing: the word is one aligned `int`, written only by the render
-thread, set to "live" only after the programs have linked, and cleared by `tagpu_posedraw_glreset()`
-*before* a new context is used. A stale "not ready" costs a one-frame double draw; a stale "ready"
-is the unsafe direction and no write order produces it. The log line fires only once the pass has
-**tried and failed**, not during the ordinary first frames before the render thread has built
-anything.
+**When it cannot arm at all**, nothing else draws the units: on a Vulkan launch the engine's own
+unit draw is removed at attach (*The engine draws no unit on a Vulkan launch*, below), and its
+pixels never reached the presented frame before that either. `tagpu_owndraw_classify` logs the
+refusal once the posed program has tried and failed, not during the first frames before the render
+thread has built anything.
 
 **What `MAXNV` stopping applying to units actually looks like.** The claim used to be a design
 note; `scenarios/crowd-static.json` (256 units of 16 types, one owner, no orders — the large scene
@@ -414,6 +408,37 @@ floor.
 **Not covered.** The oracle views did not include the floor; the precision argument is weakest
 where `|q·S|` is largest, which is the zoomed-in view, and that one was measured. The device was
 the RTX 4070 alone.
+
+### The engine draws no unit on a Vulkan launch (`tagpu_owndraw.c` `remove_composite`)
+
+**Every unit and husk on the screen is the unit pass's, so the engine no longer paints its own.**
+DrawUnit `0x45AC20` reposes its unit and then calls the composite `0x458810` at `0x45AE73`: the
+8bpp picture, its blit with the shadow, the build-state effect. On a Vulkan launch that call is
+replaced at attach by `add esp,8`, the composite's own `ret 8` (hook map §2.1), after
+`0x45AE5C..0x45AE7F` are checked. The repose before it stays: the pose cache is the one thing under
+DrawUnit the simulation reads. What is removed is draw-only by the census in
+[render](../engine/render.html), *Every store family*, and the cursor's pick reads the model's box
+(`0x48C6A0`). A launch is one backend for its life: `tagpu_gdi.on` is the only way to GDI, read
+at attach, and a Vulkan lane that cannot draw ends the session rather than handing it to GDI
+([vulkan-backend](vulkan-backend.html)). Under `tagpu_gdi.on` the engine draws every unit, as stock.
+
+MEASURED 2026-11-21, a scratch build whose gate followed a lever file each frame, 1280×1024 on a
+private display with the RTX 4070, `--defaults`, the game paused: `crowd-static`, `nanoframe-ladder`
+and `one-wreck`, each at the scenario's zoom and two notches out, captured twice with the engine's
+draw off, twice on, once off again. **0 px differ** between off and on in five of the six views; in
+the sixth 247 px changed between the second "off" and the first "on" capture and stayed changed
+with the draw off again: a piece that moved once.
+
+MEASURED 2026-11-21, `zombie-kingdom-13k` (13 500 units), 1920×1080, the profiler's game lane, the
+same two 20-s windows a zoom as *The nanoframe wire* above:
+
+| | `sweep` near / at the floor, ms a frame | game frames a second, near / at the floor |
+|---|---|---|
+| the engine's draw in | 9.9–10.4 / 28.4–46.8 | 4.9–11.8 / 5.8–10.1 |
+| removed | 6.0–7.2 / 13.0–22.6 | 4.9–18.0 / 7.2–14.9 |
+
+What is left of `sweep` is DrawUnit's repose and the sort: the engine transforms every posed piece
+of every unit in view into the pose cache, which the simulation's SweetSpot and EXPLODE read.
 
 ### Vertex streams: bounded on the way up, and held only until sent (`tagpu_vk_unit.c`, `tagpu_posebake.c`, `tagpu_vk_stage.c`)
 
