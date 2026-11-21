@@ -48,7 +48,8 @@ tools/compat/tacompat.py wine --impai 120 --resume DIR   # go on with an interru
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py windows --smoke 30          # also play an isolated in-game smoke
-tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
+tools/compat/tacompat.py wine --keep                 # keep every setup's instances (default: only UNEXPECTED ones)
+tools/compat/tacompat.py clean                       # remove the compat-* Wine instances a run left
 tools/compat/tacompat.py selftest                    # the hook decode, the UI and side-panel judges; no game
 ```
 
@@ -298,8 +299,11 @@ Run the new setup before writing its `today` — write down what it did, not wha
   game), each under the `compat` cap (`tools/runlock-suites.cfg`), so two runs together stay inside
   the device's memory (`tools/runlock-vram.cfg`). A network game's two peers need their two seats
   at once: a run granted fewer than two games plays no network game, and each reads `could not
-  run` by name instead of a joiner waiting forever for the host's seat. `tacompat.py clean` takes the whole run lock,
-  so it never removes a running run's instance.
+  run` by name instead of a joiner waiting forever for the host's seat.
+- **A setup's instances go when it settles** (`drop_instances`): once its last stage has ended, its
+  `compat-<setup>-<tag>` instance and its `-j` and `-a` ones are removed, unless its verdict is UNEXPECTED
+  or the run is `--keep` -- those stay for diagnosis, until a run of the same name replaces them or
+  `tacompat.py clean`. `clean` takes the whole run lock, so it never removes a running run's instance.
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
   is safe; it tests nothing new until the next run.
