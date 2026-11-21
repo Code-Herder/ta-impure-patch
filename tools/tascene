@@ -353,12 +353,14 @@ def read_glsl_macros(header: Path):
     return macros
 
 
-def _macro_body(body: str, params, args) -> str:
-    """A macro body is string literals interleaved with bare parameter tokens.
+def _macro_body(body: str, params, args, macros=None) -> str:
+    """A macro body is string literals interleaved with bare parameter tokens and other macros' names.
 
     TAGPU_GLSL_FOG_GREY_RGB(V) is written `"... " V " = vec3(dot(" V ", ..."`,
     so collecting only the quoted runs silently drops the argument — the substitution has to walk
-    literals and bare identifiers together.
+    literals and bare identifiers together. A body may also open with another macro
+    (TAGPU_GLSL_FOG_UNIFORMS is TAGPU_GLSL_FOG_SOURCE and one line more), which is expanded in
+    place; one that takes arguments is refused, since nothing here would pass them.
     """
     out = []
     for tok in re.finditer(r'"(?:[^"\\]|\\.)*"|[A-Za-z_]\w*', body):
@@ -367,6 +369,11 @@ def _macro_body(body: str, params, args) -> str:
             out.append(_unescape(text[1:-1]))
         elif params and text in params:
             out.append(args[params.index(text)])
+        elif macros and text in macros:
+            inner_params, inner = macros[text]
+            if inner_params:
+                raise ValueError(f"{text} is used with arguments inside another macro's body")
+            out.append(_macro_body(inner, None, [], macros))
     return "".join(out)
 
 
@@ -385,6 +392,19 @@ def read_int_macros(src_dir: Path):
     return ints
 
 
+def _stringifies(name, macros, depth=0) -> bool:
+    """True for a macro that only stringifies its one argument: `#x`, or another such macro applied to it
+    (tagpu_glsl.h's TAGPU_GLSL_STR, which goes through TAGPU_GLSL_STR2 so that the argument is expanded first)."""
+    params, body = macros.get(name, (None, ""))
+    if not params or len(params) != 1 or depth > 4:
+        return False
+    body = body.strip()
+    if body == "#" + params[0]:
+        return True
+    m = re.fullmatch(r"(TAGPU_\w+)\(\s*" + re.escape(params[0]) + r"\s*\)", body)
+    return bool(m) and _stringifies(m.group(1), macros, depth + 1)
+
+
 def expand_glsl(body: str, macros, ints=None) -> str:
     """Concatenate string literals and expand TAGPU_GLSL_* invocations in order."""
     out = []
@@ -398,8 +418,14 @@ def expand_glsl(body: str, macros, ints=None) -> str:
             out.append(_unescape(text[1:-1]))
             continue
         name = re.match(r"TAGPU_\w+", text).group(0)
-        if name not in macros and ints and name in ints:
+        # an integer macro is its spelling wherever it is defined: tagpu_glsl.h's own are in `macros` as well,
+        # with a body that holds no shader text
+        if ints and name in ints:
             out.append(ints[name])
+            continue
+        if _stringifies(name, macros):
+            # its argument is the next token, an integer macro's name, and the stringifier's answer is that
+            # integer's spelling: the branch above writes it, or the one below refuses a name that is no integer
             continue
         if name not in macros:
             # never drop it: a silently missing token is a shader that either
@@ -413,7 +439,7 @@ def expand_glsl(body: str, macros, ints=None) -> str:
             if not arg:
                 raise ValueError(f"{name} used without its argument")
             args = [_unescape(arg.group(1))]
-        out.append(_macro_body(mbody, params, args))
+        out.append(_macro_body(mbody, params, args, macros))
     return "".join(out)
 
 

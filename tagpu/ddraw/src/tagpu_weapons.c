@@ -151,11 +151,11 @@ SIM_VAR(g_name_aimfrom, SIM_INSTALL);
 
 enum { H_START, H_AUTOAIM, H_NAMES, H_RETALIATE, H_ACQUIRE, H_HELPERS, H_SPLICE,
        H_LOADER, H_VIOLATION, H_STOCKSPLICE, H_MISMATCH, H_GROUND, H_COBFULL,
-       H_HOLDFIRE, H_CRC, H__N };
+       H_HOLDFIRE, H_CRC, H_CANDIDATES, H_CAND_DIFF, H__N };
 static const char* const HIT_NAMES[H__N] =
     { "start", "autoaim", "names", "retaliate", "acquire", "helpers", "splice",
       "loader", "violation", "stock_splice", "mismatch", "ground", "cob_full",
-      "hold_fire", "crc" };
+      "hold_fire", "crc", "candidates", "candidates_differ" };
 /* cob_full: AimFromWeaponN/QueryWeaponN resolved to no piece. COBEngine_QueryScript
    (0x4B0BC0 -> 0x4B0C40) opens with a thread-slot allocation (0x4B08C0) that scans
    a fixed EIGHT records of 0xA4 bytes at cob+0x1C and returns -1 when they are all
@@ -509,6 +509,9 @@ typedef void  (__stdcall  *PFN_QueryPos)(char* unit, int* out, u32 idx, int piec
 typedef int   (__stdcall  *PFN_QueryPiece)(char* unit, u32 idx);
 typedef void  (__stdcall  *PFN_Retaliate)(char* attacker, char* victim, int unused);
 typedef int   (__thiscall *PFN_Acquire)(char* self, int param);
+/* an engine vector of unit pointers: begin, end and capacity after one unused dword */
+typedef struct EVec { u32 unused; char** begin; char** end; char** cap; } EVec;
+typedef void  (__stdcall  *PFN_Candidates)(u32 seat, const int* point, int radius, int unread, EVec* out);
 typedef u8    (__fastcall *PFN_FirstWeapon)(char* unit, int unused);
 typedef void  (__thiscall *PFN_SlotN)(char* unit, int n);
 typedef void  (__stdcall  *PFN_SetTarget)(char* unit, char* target, int idx);
@@ -528,6 +531,7 @@ static PFN_QueryPos     o_QueryPos;
 static PFN_QueryPiece   o_QueryPiece;
 static PFN_Retaliate    o_Retaliate;
 static PFN_Acquire      o_Acquire;
+static PFN_Candidates   o_Candidates;
 static PFN_FirstWeapon  o_FirstWeapon;
 static PFN_SlotN        o_ClearTargetN, o_EnableSlotN;
 static PFN_SetTarget    o_SetTarget;
@@ -546,6 +550,7 @@ SIM_VAR(o_QueryPos, SIM_INSTALL);
 SIM_VAR(o_QueryPiece, SIM_INSTALL);
 SIM_VAR(o_Retaliate, SIM_INSTALL);
 SIM_VAR(o_Acquire, SIM_INSTALL);
+SIM_VAR(o_Candidates, SIM_INSTALL);
 SIM_VAR(o_FirstWeapon, SIM_INSTALL);
 SIM_VAR(o_ClearTargetN, SIM_INSTALL);
 SIM_VAR(o_EnableSlotN, SIM_INSTALL);
@@ -1198,6 +1203,95 @@ static int __thiscall my_Acquire(char* self, int param)
     return 0;
 }
 
+/* -- the candidates in range (0x40AD80) ---------------------------------------
+   THE ENGINE'S ANSWER, WITH THE ENGINE'S READS, AT A FRACTION OF ITS COST. The target finder
+   0x40B7B0 (0x40B82F, 0x40B85F) and two order handlers (0x401D2C, 0x402379) ask 0x40AD80 for
+   every enemy a seat sees within a radius of a point: stdcall (seat, point, radius, unread, out),
+   `ret 0x14`. It walks the whole vector of the seat's acquisition record 0x5119C0[seat] at +5
+   (begin +9, end +0xD: every enemy unit the seat's last scan saw), and for each unit squares
+   point.x - unit+0x6A and point.z - unit+0x72 in 64 bits through two library calls each
+   (0x4E4400, then 0x4E43D0 by 32), adds the two high dwords and compares the sum, signed, with
+   radius * radius; a unit at or under it that is alive (+0x110 bit 28) and not dying (bit 14) is
+   appended to `out` through 0x408F30(out, out->end, 1, &unit). When the record's +0x79 is set
+   and `out` is still empty it walks the radar vector at +0x15 (begin +0x19, end +0x1D) the same
+   way. The finder then draws the simulation's random stream over what came back, so the list's
+   members AND THEIR ORDER are simulation state.
+
+   This walks the same vectors in the same order, reads the same three fields of each unit at
+   the same moment, does the same arithmetic inline (a 64-bit product's high dword; the sum and
+   the radius's square wrap in 32 bits as the engine's do) and appends through the engine's own
+   0x408F30, so it returns the engine's list. MEASURED 2026-11-20 before it, 13 500 units: the
+   engine's function and its two library calls were 98 % of the weapon scan's 9.5 ms a tick.
+
+   A seat outside the table or without a record is left to the engine's function, as is every
+   call when the module is not installed.
+
+   `tagpu_candverify.on` at launch (a test's lever) runs the engine's function too, into a
+   vector of its own, and counts the calls whose lists differ (`candidates_differ` in the
+   oracle's counters, the first of them logged): it must stay 0. */
+#define VA_ACQ_TABLE   0x005119C0u
+#define ACQ_SEATS      10u
+#define VA_VEC_INSERT  0x00408F30u      /* thiscall (vec, at, n, &value), `ret 0xc`   */
+#define VA_ENGINE_FREE 0x004B4F20u      /* cdecl (p)                                  */
+static int g_cand_verify;
+SIM_VAR(g_cand_verify, SIM_INSTALL);
+
+static void cand_append(EVec* out, char* unit)
+{
+    ((void (__thiscall *)(EVec*, char**, u32, char**))VA_VEC_INSERT)(out, out->end, 1, &unit);
+}
+
+static void cand_walk(const char* acq, u32 off_begin, const int* point, int r2, EVec* out)
+{
+    char** it;
+    /* the end is read at every turn, as the engine's loop reads it */
+    for (it = *(char** const*)(acq + off_begin); it != *(char** const*)(acq + off_begin + 4); it++)
+    {
+        char* u  = *it;
+        int   dx = (int)((u32)point[0] - *(const u32*)(u + 0x6A));
+        int   dz = (int)((u32)point[2] - *(const u32*)(u + 0x72));
+        int   d2 = (int)((u32)(((long long)dx * dx) >> 32) + (u32)(((long long)dz * dz) >> 32));
+        u32   st;
+        if (d2 > r2) continue;
+        st = *(const u32*)(u + 0x110);
+        if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
+        cand_append(out, u);
+    }
+}
+
+static void cand_list(const char* acq, const int* point, int radius, EVec* out)
+{
+    const int r2 = (int)((u32)radius * (u32)radius);
+    cand_walk(acq, 9, point, r2, out);
+    if (*(const u32*)(acq + 0x79) && (!out->begin || out->end == out->begin))
+        cand_walk(acq, 0x19, point, r2, out);
+}
+
+static void __stdcall my_Candidates(u32 seat, const int* point, int radius, int unread, EVec* out)
+{
+    const char* acq = seat < ACQ_SEATS ? ((const char* const*)VA_ACQ_TABLE)[seat] : 0;
+    if (!acq) { o_Candidates(seat, point, radius, unread, out); return; }
+    HIT(H_CANDIDATES);
+    if (g_cand_verify && (!out->begin || out->end == out->begin))
+    {
+        EVec ref = { 0, 0, 0, 0 };
+        size_t n;
+        o_Candidates(seat, point, radius, unread, &ref);
+        cand_list(acq, point, radius, out);
+        n = out->begin ? (size_t)(out->end - out->begin) : 0;
+        if (n != (ref.begin ? (size_t)(ref.end - ref.begin) : 0) ||
+            (n && memcmp(out->begin, ref.begin, n * sizeof(char*)) != 0))
+        {
+            if (g_diag.hits[H_CAND_DIFF]++ < 8)
+                wlog("CANDIDATES DIFFER: seat %u radius %d, %u here against the engine's %u",
+                     seat, radius, (u32)n, (u32)(ref.begin ? ref.end - ref.begin : 0));
+        }
+        if (ref.begin) ((void (__cdecl *)(void*))VA_ENGINE_FREE)(ref.begin);
+        return;
+    }
+    cand_list(acq, point, radius, out);
+}
+
 /* -- the unit-data load's start (0x42D2E0's entry, LOADER thread): every
    record emptied (def_rec's comment). An observer through the shared
    primitive rather than a splice of this module's table, so another module
@@ -1568,6 +1662,7 @@ static const u8 X_QUERYPOS[] = { 0x8B,0x44,0x24,0x10,0x83,0xEC,0x0C };
 static const u8 X_QUERYPC[]  = { 0x83,0xEC,0x10,0x8B,0x4C,0x24,0x18 };
 static const u8 X_RETAL[]    = { 0x51,0x53,0x55,0x56,0x8B,0x74,0x24,0x18 };
 static const u8 X_ACQ[]      = { 0x83,0xEC,0x10,0xA1,0xE8,0x1D,0x51,0x00 };
+static const u8 X_CAND[]     = { 0x83,0xEC,0x18,0x8B,0x44,0x24,0x24 };  /* sub esp,0x18; mov eax,[esp+0x24] */
 static const u8 X_FIRSTW[]   = { 0x8A,0x41,0x1F,0xB2,0x02 };
 static const u8 X_SLOTN[]    = { 0x8A,0x44,0x24,0x04,0x56,0x57 };     /* 0x4898B0 and 0x489800 */
 static const u8 X_SETTGT[]   = { 0x8B,0x44,0x24,0x0C,0x8B,0x54,0x24,0x08 };
@@ -1616,6 +1711,7 @@ static const Hook HOOKS[] = {
     { "QueryPiece",                0x43E1E0, 7, X_QUERYPC,  (void*)my_QueryPiece,         (void**)&o_QueryPiece },
     { "Retaliate",                 0x406F80, 8, X_RETAL,    (void*)my_Retaliate,          (void**)&o_Retaliate },
     { "Acquire",                   0x4089A0, 8, X_ACQ,      (void*)my_Acquire,            (void**)&o_Acquire },
+    { "Candidates",                0x40AD80, 7, X_CAND,     (void*)my_Candidates,         (void**)&o_Candidates },
     { "FirstWeapon",               0x4897E0, 5, X_FIRSTW,   (void*)my_FirstWeapon,        (void**)&o_FirstWeapon },
     { "ClearTargetN",              0x4898B0, 6, X_SLOTN,    (void*)my_ClearTargetN,       (void**)&o_ClearTargetN },
     { "EnableSlotN",               0x489800, 6, X_SLOTN,    (void*)my_EnableSlotN,        (void**)&o_EnableSlotN },
@@ -1763,6 +1859,7 @@ int tagpu_weapons_sites(TagpuWpnSite* out)
     u32 i, k = 0;
 
     build_names();
+    g_cand_verify = tagpu_sim_lever("tagpu_candverify.on");
     g_pool = (u8*)SIM_ALLOC(g_pool, 0x4000);
     g_def  = (WDef*)SIM_ALLOC(g_def, sizeof(WDef) * WPN_MAXDEFS);
     if (!g_pool || !g_def) { wlog("NOT INSTALLED: no memory for the code pool or the def records"); return TAGPU_WPN_OWN; }

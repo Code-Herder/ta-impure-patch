@@ -130,6 +130,19 @@
              [120, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMPW"]]],
    "end": 900
   },
+  "path-verify": {
+   "load": "replay-battle-load.json",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_pathverify.on"], "files": ["tagpu_pathverify.on"]},
+   "steps": [[1, "apply", "replay-battle-units.json"]],
+   "end": 900
+  },
+  "stock-path-verify": {
+   "load": "replay-battle-load.json",
+   "dll": "stock",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_pathverify.on"], "files": ["tagpu_pathverify.on"]},
+   "steps": [[1, "apply", "replay-battle-units.json"]],
+   "end": 900
+  },
   "guard-seats": {
    "load": "guard-seats.json",
    "steps": [[120, "keys", ["pclick:512,384"]],

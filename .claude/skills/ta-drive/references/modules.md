@@ -22,7 +22,7 @@ differs is the setup around it.
 `tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16). It is **always
 on**: its sites are in the fail-closed table, so every launch has it, `--defaults` or not, and
 stock units run the untouched engine code (`research/notes/extra-weapons.md`). The launch log
-says `weapons: 44 sites to the fail-closed table`, and the table's `limits: installed N sites`
+says `weapons: 45 sites to the fail-closed table`, and the table's `limits: installed N sites`
 line (`the simulation fixes' N sites installed` in the stock-limits build) says they went in; an
 exe that differs at one of them is refused at start, the site named.
 

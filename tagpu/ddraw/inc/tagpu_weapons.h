@@ -49,7 +49,7 @@
 
 /* One site of the module as the fail-closed table takes it: the retail bytes
    the table compares, and the bytes it writes in their place. */
-#define TAGPU_WPN_SITES     44    /* 19 entry hooks, 21 splices, 4 byte patches */
+#define TAGPU_WPN_SITES     45    /* 20 entry hooks, 21 splices, 4 byte patches */
 #define TAGPU_WPN_SITE_MAX  18    /* the longest site: the splice at 0x49DCA4   */
 typedef struct TagpuWpnSite {
     unsigned int         va;

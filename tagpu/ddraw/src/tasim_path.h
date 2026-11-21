@@ -75,6 +75,14 @@ typedef struct TS_PFSEAT {
     int32_t  first, last;       /* +0x67, +0x6B: its block's first and last unit, as slots                       */
 } TS_PFSEAT;
 
+/* A private view of a rectangle of the class's map: `code[(z - z0) * w + (x - x0)]` is the stored code the reader takes
+   for an entry inside it, in place of the map's. A search that must not write the shared map reads its own region
+   through one (ts_pf_search). */
+typedef struct TS_PFPATCH {
+    int32_t        x0, z0, w, h;
+    const uint8_t* code;
+} TS_PFPATCH;
+
 typedef struct TS_PFWORLD {
     TS_CLASSMAPS*   cm;         /* the class maps; cm->units is the slots' view (cell, footprint, mover, claim)  */
     TS_PFSLOT*      slot;       /* cm->units->n slots, indexed alike                                            */
@@ -86,6 +94,9 @@ typedef struct TS_PFWORLD {
     uint16_t        players;    /* main+0x2A3C, the budget's divisor                                            */
     uint16_t        per_seat;   /* main+0x1434F = S, copied at 0x4854D5 from main+0x37EE6                       */
     uint32_t        now;        /* GameTime main+0x38A47                                                       */
+    const TS_PFPATCH* patch;    /* NULL for none                                                                */
+    uint8_t         frozen;     /* the class maps are read as they stand: a search's start runs no watermark
+                                   0x440AF0 and its end no cleanup 0x440BE0                                     */
 } TS_PFWORLD;
 
 /* the grid's cell [pf+0x1C] + 4 * (z * W + x) */
@@ -104,10 +115,19 @@ typedef struct TS_PFNODE {
     int16_t  straight;          /* +0x12: steps since the last turn                                             */
 } TS_PFNODE;
 
+/* A heap entry: the node, and a copy of its f. The engine's entry is the node's pointer and every compare reads f
+   through it; the copy keeps a sift inside the heap's own memory. It equals the node's f wherever a compare reads
+   it: each store of a node's f stores its entry's too -- the start node's, a pushed node's, the lazy top's when a
+   new cell overwrites it, a relaxed node's. */
+typedef struct TS_PFHEAP {
+    int32_t  f;
+    uint32_t n;
+} TS_PFHEAP;
+
 /* The pathfinder object [main+0x14207] and its three .data globals. */
 typedef struct TS_PF {
     TS_PFNODE* pool;            /* +0x00                                                                        */
-    uint32_t*  heap;            /* +0x04: node indices (the engine's are pointers)                              */
+    TS_PFHEAP* heap;            /* +0x04                                                                        */
     int32_t    freehead;        /* +0x08, -1 for none                                                           */
     int32_t    used;            /* +0x0C: nodes taken from the pool's end                                       */
     int32_t    nodes;           /* the pool's and the heap's length, W * H (the engine's +0x10 grows)           */
@@ -143,6 +163,7 @@ typedef struct TS_PF {
     uint32_t*  mob;             /* an occupied slot with a mover and a move class: its examination writes cls_obj */
     uint32_t*  cand;            /* mob and pflags bit 1                                                         */
     uint32_t*  starter;         /* cand and past the 60-tick gate, this tick                                    */
+    int32_t    overflow;        /* a search asked for a node past a pool smaller than a node a cell (ts_pf_init_n) */
 } TS_PF;
 
 /* The bytes ts_pf_init needs for a w x h grid and nslot unit slots; 0 when it would refuse them. */
@@ -154,6 +175,12 @@ size_t ts_pf_bytes(int32_t w, int32_t h, int32_t nslot);
    (a fresh process's .data) or takes them from a recording. Returns 0, or -1 for a size ts_pf_bytes refuses. */
 int ts_pf_init(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32_t nslot, int32_t budget,
                const TS_PFSEAT seat[TS_PF_SEATS]);
+
+/* The same with a pool and a heap of `nodes` nodes, 1 .. w * h: a search that asks for one more sets `overflow` and
+   opens nothing further. ts_pf_bytes and ts_pf_init are these at w * h, the bound no search exceeds. */
+size_t ts_pf_bytes_n(int32_t w, int32_t h, int32_t nslot, int32_t nodes);
+int ts_pf_init_n(TS_PF* pf, void* mem, size_t bytes, int32_t w, int32_t h, int32_t nslot, int32_t nodes, int32_t budget,
+                 const TS_PFSEAT seat[TS_PF_SEATS]);
 
 /* The scheduler 0x40EB70, called once a tick by the players phase (0x464F92), with the skip-ahead: exactly the
    engine's effects, in O(players + searches + nodes) a tick rather than O(budget). ts_pf_tick_literal is the engine's
@@ -178,6 +205,47 @@ void ts_pf_set_path(TS_PF* pf, TS_PFWORLD* W, int32_t slot, const int16_t (*pts)
 
 /* The pathing map's reader 0x40D7B0(x, z) for the search's class and the player being served. */
 int ts_pf_reader(const TS_PF* pf, const TS_PFWORLD* W, int32_t x, int32_t z);
+
+/* ONE SEARCH, WHOLE, ON A FROZEN MAP: the search start 0x40E630 after its watermark, the A* passes to their end and
+   the extraction, for one unit, with nothing written but `pf`'s scratch and the result. The caller hands the class's
+   map as the search must see it -- the searcher's own region through `patch` where the shared map holds the searcher
+   as an obstacle -- and applies the result itself: set path's rule (0x44F080) with `n` points, or none, and
+   `goalflags` ORed into the goal's order node +0x4E. `pf` is any TS_PF of the map's size; a search leaves nothing in
+   it the next one reads. */
+enum {
+    TS_PF_FOUND = 1,            /* n points, the corners from the start on, at most TS_PF_WP                    */
+    TS_PF_NOSEARCH,             /* the start is in the goal, or the bug walk got no nearer than the start      */
+    TS_PF_OFFGRID,              /* the start is off the grid                                                    */
+    TS_PF_NOPATH,               /* the open set emptied                                                         */
+    TS_PF_OVERFLOW,             /* the pool is too small (ts_pf_init_n): no result, run it again on a larger one */
+    TS_PF_REFUSED               /* no map, no goal, or a map that is not the pathfinder's size                  */
+};
+
+typedef struct TS_PFQUERY {
+    const uint32_t*   map;      /* the class's map [class + 0x18], w x h entries                                */
+    int32_t           w, h;
+    int16_t           fx, fz;   /* the class's footprint                                                        */
+    const TS_PFPATCH* patch;    /* NULL for none                                                                */
+    const uint16_t*   mapped;   /* the explored map, NULL for everything explored                               */
+    uint8_t           seat;     /* the player whose explored bit the reader takes                               */
+    int32_t           wgt;      /* the heuristic's weight, 16.16                                                */
+    int16_t           sx, sz;   /* the searcher's cell, unit +0x76, +0x78                                       */
+    uint16_t          heading;  /* unit +0x66                                                                   */
+    TS_GOAL           goal;
+} TS_PFQUERY;
+
+typedef struct TS_PFRESULT {
+    int32_t  kind;
+    uint32_t goalflags;         /* TS_GOALF_WALKIN, _WALKOUT, and _NOPATH where set path with no points sets it  */
+    int32_t  n;
+    int16_t  pts[TS_PF_WP][2];
+    int32_t  pops;              /* the A* pops, the engine's cost of the search past its start                  */
+    int32_t  used;              /* the pool's high-water mark, [pf + 0x0C] at the search's end; -1 with no A*   */
+    int32_t  relax;             /* [pf + 0x40], the bug walk's answer; 0 when it did not run                    */
+    int16_t  found_x, found_z;  /* [pf + 0x34], the goal cell found                                             */
+} TS_PFRESULT;
+
+int ts_pf_search(TS_PF* pf, const TS_PFQUERY* q, TS_PFRESULT* r);
 
 /* The goals' constructors, each from its order node's unit footprint (fw, fh) = +0x7E, +0x80: the point 0x44CF60(node,
    x, z, r) and the annulus 0x44D3B0(node, x, z, rout, rin), x and z 16.16; the ring 0x44D8A0(node, cell, size), a

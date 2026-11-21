@@ -179,6 +179,27 @@ def functions(text):
     return out
 
 
+UNTESTED_RX = re.compile(r'^SIM_UNTESTED\((\w+), "([^"\\\n]+)"\);$', re.M)
+
+
+def untested(text):
+    """{function: reason}: the functions a SIM_UNTESTED line of the file marks (tagpu_simreg.h), of which
+    the landing tier asks no reach."""
+    return dict(UNTESTED_RX.findall(blank_comments(text)))
+
+
+def untested_problems(text, rel):
+    """A SIM_UNTESTED line the reader cannot take (so the mark would be silently none), and one whose function
+    the file does not define."""
+    marks = untested(text)
+    held = {f[0] for f in functions(text)}
+    lines = [ln for ln in blank_comments(text).split("\n") if ln.startswith("SIM_UNTESTED(")]
+    out = [f"{rel}: `{ln.strip()}`: not `SIM_UNTESTED(function, \"reason\");` on one line"
+           for ln in lines if not UNTESTED_RX.match(ln)]
+    return out + [f"{rel}: SIM_UNTESTED({fn}, ...): the file defines no function {fn}"
+                  for fn in sorted(marks) if fn not in held]
+
+
 # ---- the features ---------------------------------------------------------------------------
 
 def features_of(path, rel):
@@ -219,6 +240,7 @@ def all_features(ddraw=DDRAW):
         f, p = features_of(Path(ddraw) / rel, rel)
         feats += f
         problems += p
+        problems += untested_problems((Path(ddraw) / rel).read_text(), rel)
     known = fixture_names()
     seen = {}
     for f in feats:

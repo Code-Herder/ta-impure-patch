@@ -464,6 +464,10 @@ that map's size.
 | `surfdump.on` | one-shot: writes the golden source as `tagpu_surf.ppm` and logs `surf: re-read check at draw N: 0 byte(s) of M differ` — must be 0 |
 | `surfcheck.on` | continuous: re-reads the golden source on every capture while present; `surf: the continuous re-read check is ARMED …`, silent while 0, a cumulative tally in the heartbeat, the total printed when removed. It roughly doubles the capture cost and holds the surface lock across the compare — arm it for a run, take it away again |
 | `ftime.on` | `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time |
+| `prof.on` (at launch), `prof_sample.on` | the frame profiler's rows and samples in `log\\` (`references/measuring.md`, *Where a frame's time goes*); the log says `prof: the game lane's marks are the engine's own clock stamps` |
+| `candverify.on` (at launch) | every search for the enemies in range also runs the engine's function and the two lists are compared; `tacli weapons <i> --json` carries it in `hits` as `candidates_differ`, which must be 0 |
+| `pathlog.on` (at launch) | every 150 ticks two `pathsched:` lines from our pathfinder's scheduler (`tagpu_pathfind.c`): the searches and pops a tick against their caps, how the searches ended, the units ready by why and left for the next tick, the ticks at each weight, the waits' histogram. The log says `pathsched: installed` at every launch, lever or not; `prof.on` times the scheduler as the span `pathfind` |
+| `pathverify.on` (at launch) | the engine's own scheduler runs in place of ours, and every search of the engine's pathfinder also runs our search (`tagpu_pathfind.c`) and the two results are compared; the log says `pathverify: ARMED`, then every 150 ticks three `pathverify:` lines: the searches equal and `DIFFERENT` (which must be 0; a search that spanned ticks is counted apart, the map having changed under the engine's), the units the 60-tick gate holds by why, and the wait from the gate opening to a search's start |
 | `suppress.on` | the render-suppressor (installs at attach) |
 | `tracer.on` | the unit-draw tracer (installs at attach) |
 | `spxlog.on` | the sub-pixel anchor filmstrip log |

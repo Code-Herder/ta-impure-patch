@@ -98,7 +98,9 @@ wrappers and what the build check cannot prove:
   sought from a fresh process, on the coverage build — plays a two-player game on both coverage
   builds when the recorder changed, checks that they reached every changed
   function, and records a `replay-roundtrip:` note. A changed line no declaration covers, or a
-  changed function nothing reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+  changed function nothing reached, fails by name; landing it anyway is the owner's decision. A
+  function no game can be made to reach carries `SIM_UNTESTED` with its reason
+  (`inc/tagpu_simreg.h`) and is asked no reach. The broad tier,
   `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
   compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
   landings.
@@ -115,7 +117,8 @@ wrappers and what the build check cannot prove:
   events is `SIM_STATE`, not `SIM_PRIVATE`.
 - **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
   PRIVATE on memory the simulation reads, an expected-absent event, a tolerance, a hold row
-  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes). A
+  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes), a
+  `SIM_UNTESTED` mark. A
   difference the harness names is a bug in the change, never grounds for an exclusion.
 
 ## Land it yourself — what actually requires a human
@@ -372,6 +375,23 @@ allocation (and is run again on twice the slots) instead of taking the desktop's
 the lock admits is the kernel's first OOM victim (`oom_score_adj` 1000); that is the second line, not the
 bound. A tool whose worker grows past a slot declares its memory; `tools/runlock.py status` shows the
 figure.
+
+**The coarse simulator's batches use the sim pool, not the slots.** A batch
+(`runlock.sim_pool(tree, what, most, least)`, `offline()`'s drop-in, or `tools/runlock.py run --sim N`)
+takes places of a second pool outside the 28 slots, sized by the machine's threads less the engine slots
+held, never under 8 nor over 24 (`tools/runlock-sim.cfg`): granted at its admission from the size then,
+less the places other batches hold, and kept to its end. It starts each game inside the grant's
+`game()`, which starts it only on a place numbered below the pool's size as it is then, so a batch yields
+to an engine run that arrives after it: no new game past the size the engine run leaves, the games in
+play finish, and the batch widens again when the run ends. `run --sim N` runs one opaque command and does
+not yield. Its processes run at idle priority (SCHED_IDLE), are the kernel's first OOM victims, and each
+game is held by RLIMIT_DATA to the pool's memory over its cap. An engine run's admission changes only in
+that the load guard takes the sim games playing off the load. The games a batch starts through `game()` never delay an
+engine run's admission; the processes of `run --sim N` count as load outside the lock and can, as can a
+whole batch under runlock code older than the pool (a delay, never an over-admission). Idle priority does not protect an engine game from a sim process on the sibling thread
+of its core, so the pool lowers the odds of a slowed engine run and is not a guarantee. Never start an
+engine run from inside a sim batch: a process of the idle class is refused one, because its games would
+run at idle priority.
 
 ## Python tooling: install what you need, into the shared venv
 

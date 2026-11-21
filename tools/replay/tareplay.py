@@ -5779,6 +5779,7 @@ def landing_plan(base):
         text = (TREE / path).read_text()
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
+        marks = tafeat.untested(text)
         quiet = tafeat.comment_or_directive_lines(text)
         prelude = frozenset()
         src = text.split("\n")
@@ -5789,6 +5790,11 @@ def landing_plan(base):
             if skip_include(src[ln - 1] if ln <= len(src) else "", new_file):
                 continue
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
+            marked = fn is not None and fn[0] in marks
+            if marked:
+                said = f"{path}: {fn[0]} is SIM_UNTESTED ({marks[fn[0]]}): asked no reach"
+                if said not in why:
+                    why.append(said)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
             if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it
                 continue
@@ -5805,6 +5811,8 @@ def landing_plan(base):
                                         f"or a blank may stand")
                     continue
                 fx |= set(feat["fixtures"])
+                if marked:
+                    continue
                 if fn:
                     old = funcs.get((rel, fn[0]), (feat["name"], frozenset()))
                     funcs[(rel, fn[0])] = (feat["name"], old[1] | b)
@@ -5822,7 +5830,7 @@ def landing_plan(base):
                     old = regions.get(feat["name"], (held, frozenset(), "a changed file-scope "
                                                      "line, and no function of its region"))
                     regions[feat["name"]] = (old[0], old[1] | b, old[2])
-            elif fn:
+            elif fn and not marked:
                 old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))
                 funcs[(rel, fn[0])] = (old[0], old[1] | b)
         if prelude:

@@ -118,6 +118,7 @@
 #include "crc32.h"
 #include "git.h"
 #include "dd.h"
+#include "tagpu_prof.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PLAYERS    0x1B63       /* the eleven player records, 0x14B apart                     */
@@ -8008,7 +8009,17 @@ HANDLE tagpu_rec_rewind_end(void)
     return done;
 }
 
+static void rec_capture(void);
 void __cdecl tagpu_rec_capture(void)
+{
+    /* the frame profiler: the unit tick is what the stub calls after this, so its span opens
+       here, and a mark inside the tick charges the tick and not the span before it */
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_TICK_OURS);
+    rec_capture();
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_UNITS);
+}
+
+static void rec_capture(void)
 {
     char* ta = ta_main();
     Level L;

@@ -713,6 +713,20 @@ the pipeline has no picture to offer. The seam asks the device whether it is los
 atlas that does not fit falls back to tiny or per tile, and a twin that is not there draws the base
 atlas.
 
+**What a refusal logs.** The unit pass names the request that was refused — `vk: unit: the refused
+request: <call> of N KB answered R`, or that it was no buffer's — and the lane logs the address
+space as `VirtualQuery` tells it, at bring-up and at each refusal (`va_map_log`): `vk: VA map
+<when>: of … MB, free … MB in N block(s), reserved and uncommitted …, committed … private + …
+mapped + … of images`, then the largest free blocks and the largest reserved runs by base. Read
+the request first: a refusal with free space left is a different fault from one with none. The
+first refusal met in a ten-seat battle was one staging buffer of 1.04 GB, a request no 32-bit
+process grants, not a full address space ([units](units.html), *Vertex streams*). **On Wine the
+free figure is not the free space**: MEASURED 2026-11-19 on the reference setup (Wine 9), a
+process whose line read `free 24 MB` went on to commit 700 MB more, because `VirtualQuery` there
+reports as free only what lies below `0x20000000` at start and shows the rest as reserved while
+the host has it unmapped. The host's own map of the process (`/proc/<pid>/maps`) is the figure
+there; on Windows the same line read 1 326 MB free at start.
+
 `vk_down` gives back everything the process holds on the device, which is the only memory the lane
 can answer for. A GPU that something else has filled stays full: the retries then spend their
 budget in about a second and the session is on GDI, with its slow-renderer warning on screen.

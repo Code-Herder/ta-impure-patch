@@ -365,6 +365,28 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   counters change at the call's tail, `0x482130` after the last iteration. So the positions, owners, types
   and cloak a turn of the players phase reads hold for the rest of the step, under the same proviso (ImpAI's turns,
   [ImpAI in the engine](../modules/impai.html)).
+- **Between the scheduler's call `0x464F92` and the step's call of `0x466580` (`0x4955E5`), the
+  engine's direct calls touch no ground course's path** [DISASSEMBLED 2026-11-20 for the direct
+  calls, the indirect ones listed and not followed]: the closure over the rest of the players
+  phase from `0x464F97` and the step's `0x424050`, `0x415B30` (the animated faces), `0x490C40`,
+  `0x437DE0` (the meteor shower), `0x41CA10` and `0x471EB0` is 723 functions, and reaches none of
+  set goal `0x44F2A0`, set path `0x44F080`, the goal flag `0x44CED0`, wants search `0x44F260`, the
+  claim, watermark and cleanup `0x440A70`/`0x440AF0`/`0x440BE0`, the order-list rewriter `0x43ADC0`
+  or the unit destructor `0x4866D0`; no function in it loads a mover's course and touches its
+  `+0x0C`, `+0x5C`, `+0x60` or `+0x64`, and none tests an order's `+0x4E` for 0x20, 0x40, 0x100 or
+  0x200. What it does reach: the pathing maps' re-mark, `0x440A40` then `0x440830`, from the
+  feature tick's `FEATURES_Destroy` (`0x424822`) and from the Deathmatch respawn `0x485F50`
+  (`0x4653D9`), which also makes a course (`0x43DC00`, `0x44F010`); the explored map's writers
+  `0x4816A0` (`0x4654EF`, the respawn) and `0x481930` (the sight emitter, `0x465053` → `0x4827B0`
+  → `0x4825B0`); and the order's destructor `0x43A1F0`, from the burn spread's hit (`0x489DA2` →
+  the on-damage `0x406F80` → the order purge `0x439EB0`, for a unit whose def `+0x245` bit 12 is
+  set and whose owner is of type 2), which calls a course's set goal and frees its goal
+  ([units](units.md), *the ground class object*). The 58 indirect calls into game code: the stock
+  AI's planner (`0x408C8E`, whose slot 0 `0x407E90` reaches `0x43ADC0`), the order handlers' event
+  2 (`0x43A21A`), the script host's 24, the GUI pump's 13, the particle layers, the radar visitor
+  and the unit listener. `0x466580` itself is the radar's blink countdown (`main+0x142EF`, bit 0 of
+  `main+0x142F1`) and makes no call. From the players phase's return `0x495564` to that call the
+  step has no branch (`0x495564..0x4955E5`): an iteration that runs the players phase reaches it.
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
   `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
@@ -416,6 +438,42 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   between two steps. On a puppet host `tagpu_replay_step` has already put iteration
   k+1's images in step k, which is why a rebuild at the frame visit is in place there and would not
   be on the recording machine.
+
+**The engine's phase stamps: the thunk `0x4B6560` and its 23 callers** [DISASSEMBLED 2026-11-20,
+every `call 0x4B6560` in `.text`]. `0x4B6560` is `FF 25 DC C0 4F 00`, `jmp [0x4FC0DC]`, the
+GetTickCount import, and nothing jumps to it. The frame function `0x496790`, the step `0x495490`
+and DrawGameScreen `0x468CF0` call it after each of their phases and add the difference to a
+counter of the profile block `main+0x38D85`. The calls, and the phase that has just ended at each:
+
+| in | call | what ended |
+|---|---|---|
+| the frame function | `0x4967DB` | nothing: its first, at the entry |
+| | `0x49681C` | what precedes a network game's pump |
+| | `0x496881`, `0x496903` | the pump, on its two ways out |
+| | `0x49694F` | a skirmish's step |
+| | `0x4969DD` | the draw (the call at `0x4969CD`): its last |
+| the step | `0x4954D8` | what precedes the unit tick |
+| | `0x4954FE` | the unit tick (`0x4954ED`) |
+| | `0x495524` | projectiles (`0x495513`) |
+| | `0x49554A` | explosions and flying pieces (`0x495539`) |
+| | `0x495570` | the players phase `0x464F80` |
+| | `0x4955AA` | features, wind, meteors, the camera |
+| | `0x4955D0` | particles (`0x4955BF`) |
+| | `0x4955F6` | `0x466580` (`0x4955E5`) |
+| | `0x495657` | the block `0x49560D` and `0x495616` skip: `0x457D30` and `0x4618A0` |
+| | `0x495699` | the step's tail after its loop: `0x428BD0`, `0x428BE0`, `0x428BF0`, `0x463EF0`, `0x482130` |
+| the draw | `0x468D96` | the frame function up to the draw, and the draw's first lines |
+| | `0x469660` | the terrain, the bars and the minimap |
+| | `0x469D43` | the sort, the sweep and the markers |
+| | `0x469D9F` | the fog |
+| the draw's accumulate | `0x46A404` | the HUD: the stamp inside the accumulate `0x46A400` ([ui](ui.md)), which the draw calls at `0x46A3EE`, after the flip |
+| the popup dialog | `0x4689D5`, `0x4689E6` | the 15 ms throttle of `0x4689C0` ([ui](ui.md)), not a phase |
+
+Impure's frame profiler takes the thunk when `tagpu_prof.on` is present at attach and reads the
+phase from the return address ([the profiler](../modules/profiler.md)). MEASURED 2026-11-20 with
+it, the same battle: at 13 500 units the step ran 45 ms a tick against its 33 ms slot (the unit
+tick 21, the players phase 17, particles 5), so the scheduler ran its cap of five ticks a frame.
+
 
 ### The demo recorder's counts and the step's phases: sinks, impacts, emitters and the images gate's map [DISASSEMBLED + MEASURED 2026-10-01]
 

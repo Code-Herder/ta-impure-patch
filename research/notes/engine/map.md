@@ -775,7 +775,12 @@ So the mask closes the border to building, to movement and to feature spawns, an
 `maxslope`, `badslope`, `maxwaterslope`, `badwaterslope` (bytes) — the parser `0x440340`'s, in
 [the key inventory](keys.md) — `+0x10`/`+0x14` the map's W and H,
 `+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick, the
-search's watermark.
+search's watermark. The 32 watermarks, class 0 to 31, are the recorded globals `mcwatermark00` to
+`mcwatermark31`: `0x512374`, `0x512394`, `0x5123B4`, `0x5123D4`, `0x5123F4`, `0x512414`, `0x512434`,
+`0x512454`, `0x512474`, `0x512494`, `0x5124B4`, `0x5124D4`, `0x5124F4`, `0x512514`, `0x512534`,
+`0x512554`, `0x512574`, `0x512594`, `0x5125B4`, `0x5125D4`, `0x5125F4`, `0x512614`, `0x512634`,
+`0x512654`, `0x512674`, `0x512694`, `0x5126B4`, `0x5126D4`, `0x5126F4`, `0x512714`, `0x512734`,
+`0x512754`.
 `0x440940` builds them: for each present class it frees the old map, allocates the new one and
 fills it (`0x440500`), and it runs once a load, at `0x4918E3` in `LoadGameData_Main`, after LoadMap
 (`0x4918C0`): after the mask and before any saved feature is back. It gives every present class
@@ -859,11 +864,22 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
   32 records with no present test, relies on it.
 - **The claim `0x440A70(unit)`** (`0x440A70..0x440AE0`, [its entry](units.md)), **the watermark `0x440AF0(class, unit)`**
   and **the cleanup `0x440BE0(class, unit)`**: the watermark becomes
-  `max(GameTime, 30) − 30` (unsigned), the searcher's stamp is GameTime for the walk (re-marking its
+  `max(GameTime, 30) − 30` (unsigned, `0x440B03..0x440B18`), the searcher's stamp is GameTime for the walk (re-marking its
   rectangle when its old stamp was below the old watermark), and when the watermark moved every
   slot from 1 to the last whose unit is alive (`+0x110` bit 28) with a mover and a stamp in
-  `[old, new)` is re-marked; then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
-  cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`).
+  `[old, new)` is re-marked (`0x440B4E..0x440BB8`); then the searcher's stamp is put back (`0x440AF0..0x440BCE`). The
+  cleanup re-marks a searcher whose stamp is below the watermark (`0x440BE0..0x440BFF`). So while a
+  search reads the map, its searcher's rectangle holds no obstacle of the searcher's own: recomputed
+  just now when the searcher was one (its stamp below the old watermark, `0x440B33..0x440B45`), and
+  otherwise as the last re-mark left it. **The map is a cache, and it is read stale in places**
+  [MEASURED 2026-11-20, a battle of 13 500 units]: every searcher's rectangle recomputed by the rule
+  with the searcher left out, at its search's start, differed from the map in 3 of 2 916 671 entries
+  in one game and 5 of 2 701 358 in another. One was the cells of a unit standing in a plant's yard,
+  where the rule answers 0 for the plant in slot A and the map held 1, and the engine's search left
+  the yard by them; the other a neighbour whose stamp was below the watermark and whose rectangle
+  the map held unmarked (a search dropped by `0x40E9C0` runs no cleanup). Where the engine itself
+  has just recomputed (the searcher an obstacle), the rule and the map agree entry for entry
+  (`tagpu_pathfind.c`, the patch, under `tagpu_pathverify.on`).
 
 **The restore.** `0x424C00(tdf)` (stdcall, `ret 4`) has one caller, `0x43265A`, in the game-load
 routine `0x432610`, which has one caller, `0x497B29` in the loader body (the condition is in

@@ -202,7 +202,10 @@ copies its player's weight to `[pf+0x50]` (`0x40ED76`), which the search multipl
 the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0x40E191`,
 `0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
 budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
-raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+raised limits make it 66 650, TADR's value. **Under Impure this scheduler does not run**: the players
+phase's call `0x464F92` goes to Impure's own ([the module](../modules/pathfinder.md)), so the
+budget, the credits, the weights' table and the counts are never written, and the engine's search
+`0x40E630` is never started; with the test lever `tagpu_pathverify.on` it runs as below. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame. How the scheduler spends it, and the search itself: [the pathfinder](#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12).
 
 ### The pathfinder — the object `[main+0x14207]`, its scheduler `0x40EB70`, the search `0x40E630`, the bug walk `0x40E160`, the A* step `0x40DA70` and the extraction `0x40E050` [DISASSEMBLED 2026-11-12]
@@ -253,9 +256,12 @@ is their credits' sum. Then, while the total is positive, a pass: the cost is ze
 under way, an **examination** (`0x40ECDA..0x40ED8B`): rr advances to the first player with a
 positive credit, its count of slots examined +1 (`0x40ECF9`), its cursor one unit on (the block's
 first after its last), and an occupied unit with a mover whose class is set (`0x40ED33..0x40ED4D`)
-asks its class object's `+0x18` whether it wants a search. The answer — the object or 0 — is stored
+asks its class object's `+0x18` whether it wants a search (`0x40ED53..0x40ED57`); only the local
+ground course's answers (`0x44F260`): the slot of the remote ground proxy, of both air classes and
+of the two bases is `0x44EFF0`, `xor eax,eax; ret`. The answer — the object or 0 — is stored
 at `+0x5C` before the branch (`0x40ED5C`), so an examination that starts nothing still zeroes it.
-A yes costs 100 more, sets the searching unit and the weight and calls the search start. With a
+An examination costs 1 (`mov [esi+0x4c],1` at `0x40ECA2`) and a yes 100 more (`add edx,0x64` at
+`0x40ED6D`), sets the searching unit and the weight and calls the search start. With a
 search under way, the **A* steps** (`0x40ED90..0x40EEE2`): an empty open set fails the search
 (`0x40EEC9..0x40EEE2`: set path with no points on the class object, `0x440BE0`, searching and class
 0); else pops, a cost each, until the cost reaches 100 (`cmp eax,0x64` at `0x40EEAF`) or the open set
@@ -283,7 +289,12 @@ start node: g 0, f h0, straight 100, `b1` the heading's direction `((heading + 0
 fan 4. The node's pen word is uninitialised stack and nothing reads it (scout-Jb J6); the push's
 lazy branch `0x40E882..0x40E8C9` is dead (lazy was just zeroed), and its node comes from the free
 list or the pool's end (`0x40E8DE..0x40E902`). Every path out ends at `0x40E99E`'s free of the goal
-cells' vector.
+cells' vector. The heap's count, the free list's head, the pool's end `+0x0C`, the lazy flag and the
+fan are written only here, at the A* start (`0x40E807..0x40E814`, `0x40E94E`): a search that fails
+before it -- a start in the goal or off the grid, a walk no nearer than the start -- leaves the
+search before's values, so `+0x0C` read after one is not its own [DISASSEMBLED 2026-11-20]. A
+search reads nothing an earlier one left: every `b1` and node word it reads it has written, and
+the heap compares only f.
 
 **The weighed heuristic** is the goal's `+0x1C` times the weight, the 64-bit product shifted right
 16 (`_allshr`), at `0x40E769..0x40E77E`, `0x40DC89..0x40DCA3` and `0x40E174..0x40E191`; `0x40DA40`
@@ -349,15 +360,71 @@ footprint centre in px, `((2x + fx) << 3, (2z + fz) << 3)` as words, handed to s
 `0x44F150`, `+0x10` `0x44F000`, `+0x14` has path `0x44F290` (bit 0), `+0x18` wants search
 `0x44F260`; constructor `0x44F010`). Its fields: `+0x04` the goal, `+0x08` the unit, `+0x0C` 20
 waypoints as word pairs, `+0x5C` their count, `+0x60` the last search's GameTime, `+0x64` the flags
-(bit 0 a path, bit 1 wants a search, bit 3 changed). **Wants search `0x44F260..0x44F284`**: bit 1,
-and GameTime not below `last + 60` (the sum wraps): it stamps GameTime and answers itself; else 0,
-writing nothing. **Set path `0x44F080..0x44F0F7`** (thiscall, `ret 8`): with no points, a goal the
+(bit 0 a path, bit 1 wants a search, bit 3 changed). **Who writes the goal and the stamp, and who
+frees a goal** [DISASSEMBLED 2026-11-20]: `+0x04` is written by the constructor (0, `0x44F024`) and
+by set goal (`0x44F2D5`) alone — the base class's `0x44EF20`/`0x44EF90` and the remote proxy's
+`0x44F57B`/`0x44F5F3` write their own objects'; `+0x60` by the constructor (0, `0x44F033`), by
+wants search (GameTime, `0x44F27E`) and by set goal (0, `0x44F436`), and a scan of `.text` finds no
+other. Wants search has no direct caller: its address stands only in the vtable, and of the 31
+`call [reg+0x18]` sites only the scheduler's examination `0x40ED57` loads its object through a
+course. Set goal never frees the goal it replaces (it ORs 0x80 into that goal's order, `0x44F2C6`);
+a goal is freed by the order node that owns it, at its `+0x52`: the destructor `0x43A1F0` — when
+the unit's course names that goal it calls the course's set goal with 0 first (`0x43A26F..0x43A285`)
+and then the goal's deleting destructor (`0x43A293`; `0x43A2A2` when the course names another) —
+and the four goal installers `0x4388D0`, `0x438930`, `0x438A00`, `0x438AD0`, each of which calls
+set goal with 0 (`0x4388EA`), deletes the node's goal (`0x4388F8`), and calls set goal with the
+new one (`0x43891E`). So every free of a goal a course names is preceded by that course's set goal.
+The course's destructor `0x44F040` frees no goal. **Wants search `0x44F260..0x44F284`**: bit 1,
+and GameTime not below `last + 60` (`add edx,0x3c` at `0x44F271`; the sum wraps): it stamps
+GameTime (`0x44F27E`) and answers itself; else 0, writing nothing. So a unit's searches begin at least 60 ticks apart, and a second question in the
+same tick answers 0. **What sets bit 1** [DISASSEMBLED 2026-11-20]: the step `0x44F1A0`, each tick,
+for a unit with a goal that is blocked (its mover's `+0x2E` bit 2, `0x44F245`) or has fewer than 2
+waypoints left (`0x44F24B..0x44F251`); and set goal `0x44F2A0` with a goal (`0x44F2E8`), which also
+zeroes `last` when it is at most GameTime − 10 (`0x44F420..0x44F436`), so a new order's search
+begins at once unless the unit's last one began within 10 ticks, and then waits out the 60. The
+constructor zeroes `last`, the count and the goal (`0x44F024..0x44F033`). **The step
+`0x44F1A0..0x44F258`** [DISASSEMBLED 2026-11-20], in order: with a goal the unit has reached (the
+goal's `+0x10`), the order is flagged `0x20` (`0x44F1BE`) and, when the goal's `+0x2C` answers 0
+(the three ground kinds' `0x44CEF0` always does), the goal is cleared through set goal with 0
+(`0x44F1D4`); with 2 waypoints or more and the unit within 5 px of the second (the squared distance
+at most 25, `0x44F205`), the waypoints shift down by one, and a count that falls below 2 clears bit
+0 (`0x44F231`); then bit 1 as above. **Set goal `0x44F2A0`, with a goal** [DISASSEMBLED
+2026-11-20], after it abandons the course's search and flags the old goal's order `0x80`: bit 0 is
+cleared and bit 1 set (`0x44F2D2..0x44F2EA`); a path of 3 waypoints or more whose last one is in the
+new goal (the goal's `+0x14`) is kept, bit 0 set and bit 1 cleared (`0x44F2ED..0x44F319`); else,
+when the goal's `+0x20` gives a point: a path of 3 or more is kept by a comparison of two angles, the
+unit's to that point and the path's end's (`0x44F347..0x44F3D4`, two `0x4FB440` calls) [INFERRED:
+the path's end lies nearly the same way]; and with no path kept, when the unit's `+0x5C` object has
+bit 23 of its `+0x42` clear, the path becomes two points, the unit and the goal's point, with bit 0
+set and bit 1 left set (`0x44F3DF..0x44F41D`) — the unit starts straight for the goal while it waits
+for its search; then the 10-tick rule. MEASURED 2026-11-20 on a battle of 13 500 units, 3600 ticks,
+under Impure's scheduler: 24 calls a tick with a goal; 15 % of them came within 10 ticks of the
+course's last search, two in three of those after a search that had found nothing. **The 10-tick
+rule is what stops a loop**: with every such call made to open the gate, the order handlers
+answered a search that found nothing with a new goal within a tick or two, for as long as the unit
+stayed where it was — about 58 such calls a tick late in the same battle, each a search that again
+found nothing. **Set path `0x44F080..0x44F0F7`** (thiscall, `ret 8`): with no points (`0x44F089..0x44F0B9`), a goal the
 unit has not reached is flagged `0x40` (`0x44F0A4`) and bits 0 and 1 clear, bit 3 set — **the
 waypoint count is left as it was**; with points, the first `min(n, 20)` (`0x44F0BC..0x44F0C2`), bit
 0 set, bit 1 clear, bit 3 set. **`0x40E9C0..0x40E9D9`**, given a class object: when it is `+0x5C`,
 the search, the object, the goal and the class are zeroed, with no `0x440BE0`. Its callers: the
 destructor (`0x44F055`), set goal (`0x44F2B5`, which flags the old goal `0x80` at `0x44F2C6`) and
 `0x44F450` (`0x44F465`). `0x40E9A0` (`0x440BE0`, searching and class 0) has no direct call.
+
+**What the searches cost, and how long a unit waits for one** [MEASURED 2026-11-20, the reference
+setup, a battle of 13 500 units on a 1282 × 584 grid, ten players of 1500 units, budget 66 650].
+Each search timed from its grid reset to its cleanup, 86 928 searches over 3636 ticks: 85 % found a
+path, 142 µs and about 1200 pops each (126 ns a pop; the pool's high-water mark 456 nodes on
+average, 2362 at most); 15 % ended before the A* (a start in the goal, or a walk no nearer) at 8 µs;
+3 emptied the open set. The search start's watermark and tables took another 40 µs a search. In all
+2.8 ms a tick after the watermark and 0.9 ms in it, with the slowest 5 % of searches taking 38 % of
+the time and the longest 5.5 ms. 2 % of searches spanned ticks. **The budget, shared equally among
+the players, is what a unit waits on**: about 23 searches began a tick while, at the scheduler's
+entry, 1180 units a tick on average (7125 at most) wanted a search with the gate open; from the
+gate opening to the search's start a unit waited 48 ticks on average and 479 at most, 24 % none,
+40 % 30 ticks or more. The gate itself held 676 units a tick: 434 blocked, 8 out of waypoints, 234
+on a new order. The counts are `tagpu_pathfind.c`'s under `tagpu_pathverify.on`
+([the module](../modules/pathfinder.md)).
 
 **The ground goals.** `0x44CED0(v)` ORs v into the goal's order node `+0x4E` when the goal's `+0x04`
 (the node) is set. Each kind's vtable has 12 slots: `+0x08` the kind's id, `+0x10` reached (of the

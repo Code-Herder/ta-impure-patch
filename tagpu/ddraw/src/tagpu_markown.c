@@ -17,6 +17,7 @@
 #include "tagpu_place.h"
 #include "tagpu_placegeo.h"
 #include "tagpu_formation.h"
+#include "tagpu_prof.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -119,6 +120,7 @@ int tagpu_markown_key(void) { return tagpu_terr_key(); }
    the font latch the text pass needs taken at this instant. */
 static void __stdcall mark_hook8(void* ctx, int n)
 {
+    tagpu_prof_mark(TAGPU_PROF_GAME, TAGPU_PG_MARKERS);
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 
     /* The engine's own font and text colour, as of the start of the block that

@@ -289,6 +289,17 @@ typedef struct SimFeature {
     static const SimFeature* const simfeatreg_##id                                            \
         __attribute__((used, section(".rdata$simfeat$m"))) = &simfeat_##id
 
+/* A FUNCTION NO TEST GROUP IS ASKED TO REACH. The landing tier fails a changed function of a sim file that none
+   of its games reached (UNCOVERED). A function no game can be made to reach -- one only the moment reaches, as a
+   search still running where its tick is joined, or only a fault -- is marked below its definition, with the
+   reason, and is asked no reach: `tareplay.py landing` names it and its reason at each landing that changes it.
+   A MARK IS A LOOSENING, the owner's decision each. It names the function, so one whose function has gone does
+   not compile; one line at the line's start, the reason a literal string (`tareplay.py features --check`, in
+   the link recipe, refuses a line that begins with the mark's name in another shape). */
+#define SIM_UNTESTED(fn, why)                                                                  \
+    _Static_assert(sizeof(why) > 1, "SIM_UNTESTED states its reason");                         \
+    static __typeof__(fn)* const simuntested_##fn __attribute__((unused)) = &(fn)
+
 /* Walks the registry once every simulation module has installed (DllMain): checks each
    declaration's shape, closes the lever list and logs one summary line. */
 void tagpu_simreg_attach(void);

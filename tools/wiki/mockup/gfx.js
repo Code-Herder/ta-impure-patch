@@ -308,7 +308,6 @@ window.WikiGfx = (() => {
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.bindVertexArray(ua.vao);
         cu.use(f);
-        const P = cu.U;
         /* BACK FACES CULLED for the shadows and the bodies, as the game's body pipeline culls them (tagpu_vk_unit.c,
            BACK FACES CULLED): the engine's rasterisers paint only a face whose vertices run clockwise on its y-down
            screen, and a model closes a surface with two faces wound apart and textured apart, so a turned piece
@@ -322,11 +321,10 @@ window.WikiGfx = (() => {
         for (const r of look.unitRanges) {
           if (r.inst.ghost || !r.count) continue;
           const nn = r.inst.nano;
-          gl.uniform1i(P.uNanoOn, nn ? 1 : 0);
-          if (nn) { gl.uniform1f(P.uNanoT, nn.t); gl.uniform3f(P.uNanoC, nn.c[0], nn.c[1], nn.c[2]); }
+          cu.unit.set(nn ? { uNanoOn: 1, uNanoT: nn.t, uNanoC: nn.c } : { uNanoOn: 0 });
           gl.drawArrays(gl.TRIANGLES, r.first, r.count);
         }
-        gl.uniform1i(P.uNanoOn, 0);
+        cu.unit.set({ uNanoOn: 0 });
         gl.disable(gl.CULL_FACE);
         // each nanoframe's wire, after every body
         let wn = 0;
@@ -345,9 +343,9 @@ window.WikiGfx = (() => {
         }
         // the ghost stage: translucent, depth writes off, so ghosts blend with each other
         gl.depthMask(false);
-        gl.uniform1f(P.uAlpha, WS.GHOST_ALPHA);
+        cu.unit.set({ uAlpha: WS.GHOST_ALPHA });
         for (const r of look.unitRanges) if (r.inst.ghost && r.count) gl.drawArrays(gl.TRIANGLES, r.first, r.count);
-        gl.uniform1f(P.uAlpha, 1);
+        cu.unit.set({ uAlpha: 1 });
         gl.depthMask(true);
         gl.bindVertexArray(null);
         gl.disable(gl.BLEND);

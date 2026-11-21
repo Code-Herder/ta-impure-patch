@@ -369,7 +369,9 @@ static const char* VS =
     "uniform float uZoom;\n"                 /* view zoom about uZoomC         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
-    "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
+    /* `uCast` is the block's, as FS declares it: a name is a default uniform
+       in one stage and a block member in the other in no program that links */
+    TAGPU_GLSL_UNIT_BLOCK
     "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
@@ -403,15 +405,12 @@ static const char* FS =
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_SCAF_UNIFORMS                  /* scene scaffold, R8, viewport   */
-    TAGPU_GLSL_FOG_UNIFORMS
-    "uniform int uShadow;\n"
-    "uniform float uAlpha;\n"
-    "uniform float uWaterT;\n"              /* vy <= this is under water      */
-    "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
-    "uniform float uDigT;\n"                /* vy <= this is below ground     */
-    "uniform int uNanoOn;\n"                /* build-state staging on         */
-    "uniform float uNanoT;\n"               /* height threshold, depth bytes  */
-    "uniform vec3 uNanoC;\n"                /* cAbove, cBand, cBelow          */
+    TAGPU_GLSL_FOG_SOURCE
+    /* which of a unit's draws this is, TAGPU_GLSL_PASS_*: the default block is
+       the frame's for one draw kind, and the unit's own numbers are `Unit`'s,
+       the same block whatever the kind (tagpu_glsl.h) */
+    "uniform int uPass;\n"
+    TAGPU_GLSL_UNIT_BLOCK
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
@@ -447,6 +446,27 @@ static const char* FS =
     /* the shadow point's screen derivatives FIRST, while every fragment of
        the quad is still running -- the discards below end that (tagpu_glsl.h) */
     "  vec3 taSx = dFdx(vShW), taSy = dFdy(vShW);\n"
+    /* WHAT A DRAW KIND CHANGES OF THE UNIT'S OWN NUMBERS, in one place.
+
+       THE HARD SHADOW paints `vec4(0, 0, 0, 0.5)` -- premultiplied black at
+       half alpha, which against `ONE, ONE_MINUS_SRC_ALPHA` is `dst * 0.5` --
+       and returns before the shade, the build-state recolour and the light.
+       A completed unit's silhouette is erased below the water line and by the
+       digger's clip exactly as its body is. A STRUCTURE'S SLANT IS BLITTED AS
+       BUILT: 0x459319 and 0x4595E9 go straight from 0x45A790 to the blit, and
+       the waterline erase 0x4BA1B0 belongs to the completed branch and the
+       digger's inline branch only, so the slant takes neither threshold (a
+       Kbot lab's shadow stays below the waterline).
+
+       THE NANOFRAME WIRE is not re-classified by the recolour it traces, is
+       never erased at the waterline (it is tinted there, as the unit's own
+       are) and is opaque; the two thresholds stay the unit's. */
+    "  bool hard = uPass == " TAGPU_GLSL_STR(TAGPU_GLSL_PASS_SHADOW) ";\n"
+    "  bool wire = uPass == " TAGPU_GLSL_STR(TAGPU_GLSL_PASS_WIRE) ";\n"
+    "  bool slant = hard && uSlant == 1;\n"
+    "  float waterT = slant ? -1e9 : uWaterT;\n"
+    "  float digT = slant ? -1e9 : uDigT;\n"
+    "  float alpha = wire ? 1.0 : uAlpha;\n"
     /* THE TEXEL: a textured quad the bake gave a frame (vQR.x >= 0) is
        mapped per pixel through taQuadST, as the engine's own rasteriser
        spans the whole quad rather than two triangles; every other textured
@@ -509,9 +529,9 @@ static const char* FS =
        the engine erases or tints composite pixels whose depth (= vertex
        height + bias) is at or below the water line; shadows are always
        erased there. Our per-fragment height is the interpolated model y. */
-    "  if (vVY <= uDigT) discard;\n"
-    "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
-    "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
+    "  if (vVY <= digT) discard;\n"
+    "  if (hard) { if (vVY <= waterT) discard;\n"
+    "              frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     /* build-state (nanoframe) recolour, engine 0x458D30 semantics
        (build-state.md): classify the fragment by its composite DEPTH byte —
        the model height plus 0x32 — against the threshold that sweeps with the
@@ -534,7 +554,7 @@ static const char* FS =
     /* a flat face's colour is an index, and so is a nanoframe band's */
     "  float idx = vFC.x;\n"
     "  bool band = false;\n"
-    "  if (uNanoOn == 1) {\n"
+    "  if (uNanoOn == 1 && !wire) {\n"
     "    float nd = vVY + 50.0;\n"
     "    float nc = (nd < uNanoT - 4.0) ? uNanoC.z\n"
     "             : (nd < uNanoT)       ? uNanoC.y : uNanoC.x;\n"
@@ -563,13 +583,13 @@ static const char* FS =
     "  rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
-    "  if (vVY <= uWaterT) {\n"
-    "    if (uWaterMode == 1) discard;\n"
+    "  if (vVY <= waterT) {\n"
+    "    if (uWaterMode == 1 && !wire) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
     /* the world target is PREMULTIPLIED: additive content (effects flashes)
        can then ride the same composite as (rgb, alpha 0) */
-    "  frag = vec4(rgb * uAlpha, uAlpha);\n"
+    "  frag = vec4(rgb * alpha, alpha);\n"
     "}\n";
 
 /* the resolve: the supersampled world target onto the frame

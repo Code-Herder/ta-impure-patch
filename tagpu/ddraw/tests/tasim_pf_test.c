@@ -184,7 +184,7 @@ static void path_print(const WORLD* w)
 }
 
 /* the found node's g: the lazy top the last pop left at heap[0] */
-static int32_t found_g(const WORLD* w) { return w->pf.pool[w->pf.heap[0]].g; }
+static int32_t found_g(const WORLD* w) { return w->pf.pool[w->pf.heap[0].n].g; }
 
 /* An L corridor, entered heading east. The diagonal (4,5) -> (5,6) is opened before (5,5) is popped and is cheaper
    into (5,6): 62 (turn 1: 40 + diagonal 22, straight 102 >= 5) against 16 + 76 (turn 2: 60 + 16). A cell holds one g,
@@ -267,9 +267,25 @@ static uint32_t push(TS_PF* pf, int32_t f)
     const int32_t n = node_take(pf);
     pf->pool[n].f = f;
     pf->pool[n].link = pf->count;
-    pf->heap[pf->count++] = (uint32_t)n;
+    pf->heap[pf->count].f = f;
+    pf->heap[pf->count++].n = (uint32_t)n;
     sift_up(pf, pf->count - 1);
     return (uint32_t)n;
+}
+
+/* node n's f, and its heap entry's copy at the node's link */
+static void set_f(TS_PF* pf, uint32_t n, int32_t f)
+{
+    pf->pool[n].f = f;
+    pf->heap[pf->pool[n].link].f = f;
+}
+
+/* the expansion with the reader's view a pass of the A* takes */
+static void expand_in(TS_PF* pf, TS_PFWORLD* W, const TS_GOAL* g, const TS_PFNODE* L, int32_t pc, int k)
+{
+    RD rd;
+    rd_open(&rd, pf, W);
+    expand(pf, &rd, g, L, pc, k);
 }
 
 /* The fan: a pop expands the directions -fan .. +fan around the one its cell was reached by. A node at (5,5) reached
@@ -339,24 +355,24 @@ static void test_expand(void)
     w.pf.grid[cidx(&w.pf, 5, 5)].b1 = 6;
     w.pf.grid[cidx(&w.pf, 5, 5)].b0 = 2;
     /* k = 1: direction 7, (6,4): 40 + 22 + 100 + 75 (straight 4 < 5) = 237; h = 18*5 + 7*1 - 4 = 93 */
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
     c = cidx(&w.pf, 6, 4);
     N = &w.pf.pool[w.pf.grid[c].node];
     CHECK(w.pf.count == 1 && N->x == 6 && N->z == 4 && N->g == 237 && N->f == 237 + 93 && N->straight == 1 &&
           N->pen == 0 && w.pf.grid[c].b0 == 1 && w.pf.grid[c].b1 == 7, "expand k=1: g %d f %d", N->g, N->f);
     /* the same at straight 5: no 75, g 162; the cell is open now, so this relaxes it: f moves by -75 */
     L.straight = 5;
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
     CHECK(N->g == 162 && N->f == 162 + 93 && w.pf.count == 1, "expand relax: g %d f %d", N->g, N->f);
     /* not lower: nothing changes */
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 1);
     CHECK(N->g == 162, "expand no relax");
     /* k = 0 ahead: (6,5), 16 + 100 = 116, straight 6 */
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 0);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 0);
     N = &w.pf.pool[w.pf.grid[cidx(&w.pf, 6, 5)].node];
     CHECK(N->g == 116 && N->straight == 6, "expand k=0: g %d straight %d", N->g, N->straight);
     /* k = 6 (-2): direction 4, (5,6): 60 + 16 + 100 = 176 */
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 6);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 5), 6);
     N = &w.pf.pool[w.pf.grid[cidx(&w.pf, 5, 6)].node];
     CHECK(N->g == 176, "expand k=-2: g %d", N->g);
     /* a bad cell: L at (5,9) heading south (b1 4), k = 7 (-1): direction 3, (4,10)? no -- direction 5, k = 1: (6,10),
@@ -364,20 +380,20 @@ static void test_expand(void)
     L.x = 5;
     L.z = 9;
     w.pf.grid[cidx(&w.pf, 5, 9)].b1 = 4;
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 1);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 1);
     N = &w.pf.pool[w.pf.grid[cidx(&w.pf, 6, 10)].node];
     CHECK(N->g == 192 && N->pen == 30, "expand bad: g %d pen %d", N->g, N->pen);
     /* a goal cell by the relaxation: relax 1000 makes (4,10), k = -1 (direction 3), open as a goal (b0 5) */
     w.pf.relax = 1000;
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 7);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 7);
     CHECK(w.pf.grid[cidx(&w.pf, 4, 10)].b0 == 5, "expand relax goal: b0 %d", w.pf.grid[cidx(&w.pf, 4, 10)].b0);
     /* a blocked cell dies (b0 3), unless the walk stood on it (b0 bit 3), which leaves it new */
     code_put(&w, 0, 5, 10, 0);
     w.pf.grid[cidx(&w.pf, 5, 10)].b0 = 8;
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 0);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 0);
     CHECK(w.pf.grid[cidx(&w.pf, 5, 10)].b0 == 8, "expand walked blocked: b0 %d", w.pf.grid[cidx(&w.pf, 5, 10)].b0);
     w.pf.grid[cidx(&w.pf, 5, 10)].b0 = 4;
-    expand(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 0);
+    expand_in(&w.pf, &w.W, &w.goal[0], &L, cidx(&w.pf, 5, 9), 0);
     CHECK(w.pf.grid[cidx(&w.pf, 5, 10)].b0 == 7, "expand dead goal cell: b0 %d", w.pf.grid[cidx(&w.pf, 5, 10)].b0);
     world_free(&w);
 }
@@ -398,28 +414,28 @@ static void test_ties(void)
     push(pf, 5);
     push(pf, 5);
     push(pf, 5);
-    CHECK(pf->heap[0] == 0 && pf->heap[1] == 1 && pf->heap[2] == 2, "ties: equal pushes stay in order");
+    CHECK(pf->heap[0].n == 0 && pf->heap[1].n == 1 && pf->heap[2].n == 2, "ties: equal pushes stay in order");
     /* a lower one goes to the top; an equal to the top's stays under it */
     push(pf, 4);                                   /* node 3 at 3, parent 1 (5): up; parent 0 (5): up */
-    CHECK(pf->heap[0] == 3 && pf->heap[1] == 0 && pf->heap[3] == 1, "ties: the lower to the top %u %u %u",
-          pf->heap[0], pf->heap[1], pf->heap[3]);
+    CHECK(pf->heap[0].n == 3 && pf->heap[1].n == 0 && pf->heap[3].n == 1, "ties: the lower to the top %u %u %u",
+          pf->heap[0].n, pf->heap[1].n, pf->heap[3].n);
     push(pf, 4);                                   /* node 4 at 4, parent 1 (node 0, 5): up; parent 0 (4): stays */
-    CHECK(pf->heap[0] == 3 && pf->heap[1] == 4 && pf->heap[4] == 0, "ties: equal to the top stays under it");
+    CHECK(pf->heap[0].n == 3 && pf->heap[1].n == 4 && pf->heap[4].n == 0, "ties: equal to the top stays under it");
     /* sift-down: the root raised to 9 over children 4 (node 4) and 5 (node 2): the left, node 4, comes up; under it
        children 5 (node 1) and 5 (node 0): equal, so the left, node 1 */
-    pf->pool[3].f = 9;
+    set_f(pf, 3, 9);
     sift_down(pf, 0);
-    CHECK(pf->heap[0] == 4 && pf->heap[1] == 1 && pf->heap[3] == 3, "ties: sift-down goes left on a tie: %u %u %u",
-          pf->heap[0], pf->heap[1], pf->heap[3]);
+    CHECK(pf->heap[0].n == 4 && pf->heap[1].n == 1 && pf->heap[3].n == 3, "ties: sift-down goes left on a tie: %u %u %u",
+          pf->heap[0].n, pf->heap[1].n, pf->heap[3].n);
     /* a right child strictly lower is taken */
-    pf->pool[4].f = 9;
-    pf->pool[2].f = 3;
+    set_f(pf, 4, 9);
+    set_f(pf, 2, 3);
     sift_down(pf, 0);
-    CHECK(pf->heap[0] == 2 && pf->heap[2] == 4, "ties: sift-down takes a lower right child");
+    CHECK(pf->heap[0].n == 2 && pf->heap[2].n == 4, "ties: sift-down takes a lower right child");
     /* a child equal to the sinking node does not move up */
-    pf->pool[2].f = 5;
+    set_f(pf, 2, 5);
     sift_down(pf, 0);
-    CHECK(pf->heap[0] == 2, "ties: an equal child stays under");
+    CHECK(pf->heap[0].n == 2, "ties: an equal child stays under");
     world_free(&w);
 }
 
@@ -452,36 +468,36 @@ static void test_lazy(void)
     pf->grid[cidx(pf, 5, 5)].b1 = 6;
     pf->grid[cidx(pf, 5, 5)].b0 = 2;
     /* (6,5) ahead: g 16, h 18*5 - 4 = 86, f 102: overwrites node 0 at heap[0], stays the root (102 < 300) */
-    expand(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
-    CHECK(pf->lazy == 0 && pf->count == 3 && pf->used == 3 && pf->heap[0] == a && pf->pool[a].f == 102 &&
+    expand_in(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
+    CHECK(pf->lazy == 0 && pf->count == 3 && pf->used == 3 && pf->heap[0].n == a && pf->pool[a].f == 102 &&
           pf->pool[a].x == 6 && pf->grid[cidx(pf, 6, 5)].node == a, "lazy: overwrite in place");
     /* the same with an f above both children, 50 and 60: it sinks to the left, the lower */
     pf->lazy = 1;
     pf->grid[cidx(pf, 5, 5)].b1 = 2;                 /* reached heading west: ahead is (4,5), h 18*7-4 = 122 */
-    pf->pool[b].f = 50;
-    pf->pool[c].f = 60;
-    expand(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
-    CHECK(pf->heap[0] == b && pf->heap[1] == a && pf->pool[a].f == 16 + 122 && pf->pool[a].link == 1,
-          "lazy: overwrite sinks left: %u %u", pf->heap[0], pf->heap[1]);
+    set_f(pf, b, 50);
+    set_f(pf, c, 60);
+    expand_in(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
+    CHECK(pf->heap[0].n == b && pf->heap[1].n == a && pf->pool[a].f == 16 + 122 && pf->pool[a].link == 1,
+          "lazy: overwrite sinks left: %u %u", pf->heap[0].n, pf->heap[1].n);
     /* a relax under the lazy top: heap [b 50, a, c 60], lazy on b, a the open node of (4,5) with g 1000 and f 1100.
        From L (5,5) reached heading west, k 0: g 16 < 1000, so f moves by -984 to 116, still above b's 50: a sifts up
        nowhere and b stays the lazy top */
     pf->lazy = 1;
     pf->pool[a].g = 1000;
-    pf->pool[a].f = 1100;
+    set_f(pf, a, 1100);
     sift_down(pf, 1);
     L.x = 5;
     L.z = 5;
     L.g = 0;
-    expand(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
-    CHECK(pf->lazy == 1 && pf->heap[0] == b && pf->pool[a].g == 16 && pf->pool[a].f == 116, "lazy: relax under");
+    expand_in(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
+    CHECK(pf->lazy == 1 && pf->heap[0].n == b && pf->pool[a].g == 16 && pf->pool[a].f == 116, "lazy: relax under");
     /* a relax over it: g 1000 and f 1014 again relaxed by -984, to 30 below b's 50: a rises to the root, b is pushed
        down off it, so b is freed, the lazy state ends and the heap's last fills b's place */
     pf->pool[a].g = 1000;
-    pf->pool[a].f = 1014;
-    expand(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
-    CHECK(pf->lazy == 0 && pf->count == 2 && pf->freehead == (int32_t)b && pf->heap[0] == a && pf->pool[a].f == 30,
-          "lazy: the displaced top is freed: count %d freehead %d top %u", pf->count, pf->freehead, pf->heap[0]);
+    set_f(pf, a, 1014);
+    expand_in(pf, &w.W, &w.goal[0], &L, cidx(pf, 5, 5), 0);
+    CHECK(pf->lazy == 0 && pf->count == 2 && pf->freehead == (int32_t)b && pf->heap[0].n == a && pf->pool[a].f == 30,
+          "lazy: the displaced top is freed: count %d freehead %d top %u", pf->count, pf->freehead, pf->heap[0].n);
     /* the next node taken is the freed top (LIFO) */
     CHECK(node_take(pf) == (int32_t)b && pf->freehead == -1, "lazy: the free list is LIFO");
     world_free(&w);
@@ -821,7 +837,7 @@ static uint64_t state_hash(const WORLD* w)
     h = fnv(h, pf->grid, (size_t)pf->cells * sizeof *pf->grid);
     h = fnv(h, pf->touch, 4 * (size_t)touch_words(pf->cells));
     h = fnv(h, pf->pool, (size_t)pf->nodes * sizeof *pf->pool);
-    h = fnv(h, pf->heap, (size_t)pf->count * sizeof *pf->heap);
+    for (i = 0; i < pf->count; i++) h = fnv(h, &pf->heap[i].n, sizeof pf->heap[i].n);
     for (i = 0; i < w->units.n; i++) {
         h = fnv(h, &w->slot[i].path, sizeof w->slot[i].path);
         h = fnv(h, &w->cu[i].claim, sizeof w->cu[i].claim);

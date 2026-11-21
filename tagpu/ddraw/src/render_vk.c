@@ -37,6 +37,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_ftime.h"
 #include "tagpu_native.h"
+#include "tagpu_prof.h"
 
 
 /* THE FRAME NUMBER OUTLIVES THE THREAD, and it has to. `dd_SetDisplayMode`
@@ -122,6 +123,8 @@ DWORD WINAPI vk_render_main(void)
            and the present call must be given the SAME value, and a
            post-increment inside either call would silently differ by one. */
         fc = s_frames++;
+        /* the frame profiler's render lane: this loop's turn is its frame (tagpu_prof.h) */
+        tagpu_prof_frame(TAGPU_PROF_RENDER, TAGPU_PR_LOOP, fc);
 
         /* THE DRIVER. `tagpu_overlay_draw` is the single per-frame entry point
            for everything this fork adds: input injection, the trigger-file
@@ -146,11 +149,13 @@ DWORD WINAPI vk_render_main(void)
             /* The frame packet, taken ONCE here and handed to every pass
                through the struct; both pointers die at `frame_end`, which is
                unconditional for the reason the reclaim bracket's is. */
+            tagpu_prof_enter(TAGPU_PROF_RENDER, TAGPU_PR_GATHER);
             f.packet        = tagpu_packet_acquire(&f.packet_prev);
             tagpu_reclaim_pass_begin();
             tagpu_overlay_draw(&f);
             tagpu_reclaim_pass_end(f.frame_counter);
             tagpu_packet_frame_end(f.frame_counter);
+            tagpu_prof_leave(TAGPU_PROF_RENDER);
             /* The render-options screen's deferred cfg write, off the game
                thread because TA is lockstep. Nothing happens on a frame with
                no click. */

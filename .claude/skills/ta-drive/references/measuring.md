@@ -256,6 +256,30 @@ capture time out; it never returns a stale file.
   A/B is `terrown.off`, and that costs the zoomed-out fog rather than the picture
   (`references/levers.md`, the play defaults).
 
+## Where a frame's time goes: the frame profiler
+
+`tagpu_prof.on`, **present at launch**, times every frame of the game thread and of the render
+thread, cut into spans (the tick's phases, the draw's sections, the render loop's stages), and
+writes one row a frame to `tagpu_prof_game.csv` and `tagpu_prof_render.csv` in the instance's
+`log\`. The lever is polled: removing it closes the files and re-creating it **overwrites** them, so copy
+a window's files out before starting the next;
+the game thread's phase marks need it at attach, and `scenario load --restart` relaunches, so it
+must be there before the load. `tools/profsum.py <csv>` prints the table: ms a frame, share,
+median, p99 and, for the game thread, ms a tick. **Read ms a tick** for the simulation: a frame
+runs up to five ticks.
+
+`tagpu_prof_sample.on` beside it adds samples of the game thread (`tagpu_prof_samples.bin`):
+`tools/profsample.py <samples> --csv <game csv>` says which call of the unit tick, the players
+phase or the particle walk the thread was inside, and in which function. `--dll <ddraw.dll>` names
+our own functions, from a DLL linked with symbols (`tools/runlock.py make -- -C tagpu/ddraw
+LDFLAGS='-Wl,--enable-stdcall-fixup -static -shared -Wl,--file-alignment,4096'`); keep the DLL
+that ran beside its samples.
+
+**Comparing two builds' tick times needs a quiet machine or one game.** Two runs see different
+battles and different loads. Alternate the two code paths every 64 ticks inside one game with a
+test-only switch and compare neighbouring blocks by the rows' GameTime tag, then remove the
+switch ([the profiler](../../../../research/notes/modules/profiler.md), *Measuring a change*).
+
 ## Movies
 
 - **Only an `--intro` instance has one.** `tacli create <i> --intro` keeps `Data/1.ZRB`/`2.zrb` in
@@ -307,6 +331,39 @@ capture time out; it never returns a stale file.
 - **Slice the log with a cursor** to attribute a run: `M=$(tools/talog.py mark <gamedir>)`
   before, `tools/talog.py since <gamedir> "$M"` after. A byte offset breaks at the first
   rotation, and a grep over the whole run can hand you the previous game's lines after a reload.
+
+## A player's game as a scenario, and the process's memory
+
+**A `tagpu.log` holds enough of a game to stand it up again.** The DLL logs every living unit
+every 5 s (type, seat, world position, build fraction), and `tools/roster2scenario.py` turns one
+dump into a `tacli scenario` file:
+
+```bash
+tools/roster2scenario.py tagpu.3.log tagpu.2.log tagpu.1.log --list        # the dumps: index, units, units a seat
+tools/roster2scenario.py tagpu.1.log --map "[M] Zombie Kingdom" \
+    --catalogue tagpu/instances/<i>/catalogue.json -o scenarios/<name>.json   # the last dump (--dump N for another)
+tools/tacli scenario load <i> <name> --restart
+```
+
+It is the situation, not the game: health, facing, orders, wrecks and resources are not in the
+log, a unit in flight is created on the ground, and a seat past its 1 499 free slots or a type
+the instance's catalogue lacks is left out and counted. Files a player sends are untrusted: keep
+them in a folder of their own and read them with the tool, never run anything from there.
+`scenarios/zombie-kingdom-13k.json` is one such, 13 526 units of ten seats on Total Mayhem.
+
+**The process's memory is read from the host, not from the DLL's line.** For a 32-bit game under
+Wine, `vk: VA map` under-reports the free space (*A pass refused its memory*, the Vulkan backend
+note); read `/proc/<pid>/smaps` of `TotalA.exe` (pid from `tacli ls --json`) and sum what is
+committed. Three log lines say what the unit pass and the bake hold and move:
+
+| line | says |
+|---|---|
+| `posebake: holding N geometry entries, X KB, and M material streams, Y KB (…), and Z KB of streams not yet sent - B baked and D dropped since the start` | the two caches; `dropped` climbing through a steady view is churn |
+| `vk: unit: N vertex stream(s), X MB, came into view on one frame and went up in bands through K KB of staging - a wait of T ms in this frame` | a frame that waited on its uploads |
+| `vk: unit: the refused request: <call> of N KB answered R` | what the device or the process would not give, before the lane restarts |
+
+`tagpu_passrefuse.on` forces a lane restart (`references/levers.md`): every bake entry is dropped
+and baked again, which is the road a real refusal takes.
 
 ## The restore-dump byte oracle
 
