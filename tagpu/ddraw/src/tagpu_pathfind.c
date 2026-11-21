@@ -25,15 +25,24 @@
         The first two kinds are served before the third, each kind from its own cursor on: within a kind the
         caps starve no unit, and a jam never delays a new goal -- the third kind waits while the first two fill
         the caps.
-     2. THE BATCHES, PF_BATCH searches each, while fewer than PF_CAP_SEARCHES have begun this tick and their pops
-        are below PF_CAP_POPS. Both bounds count work, never time, and the batch is a constant: the searches a tick
-        begins are the same on every machine, however many threads run a batch. A batch is three steps, each
-        over all its searches before the next: THE WRITES (the unit's stamp; its class's watermark and the marking
-        of the units that have just become obstacles, once a class a tick, as 0x440AF0's sweep; an obstacle
-        searcher's rectangle recomputed in the map through the engine's 0x440830, as the cleanup would); THE
-        SEARCHES, which read the map and the cells and write only their own patch, their thread's scratch and
-        their result, on the scheduler's thread and the helpers at once (batch_search has the handshake); THE
-        RESULTS, each applied through the engine's own set path 0x44F080 and its flag call 0x44CED0.
+     2. THE TICK'S SEARCHES. At most PF_CAP_SEARCHES units are CHOSEN, and THE WRITES made for each (the unit's
+        stamp; its class's watermark and the marking of the units that have just become obstacles, once a class a
+        tick, as 0x440AF0's sweep; an obstacle searcher's rectangle recomputed in the map through the engine's
+        0x440830, as the cleanup would). THE SEARCHES follow in the order chosen, in groups of PF_BATCH: a group
+        begins only while the pops of the groups before it are below PF_CAP_POPS. Both caps count work, never
+        time, and the group is a constant, so the searches a tick makes are the same on every machine, however
+        many threads make them. THE RESULTS are applied in that order, through the engine's own set path 0x44F080
+        and its flag call 0x44CED0; a unit chosen whose group did not begin gets its stamp back and the cursor
+        does not pass it: it is chosen again as though it had not been.
+     3. THE SEARCHES RUN WHILE THE TICK GOES ON. In play, with a helper and the memory for it, a search reads no
+        engine memory: its query holds the goal, the unit's cell and heading and the patch, and names THE TICK'S
+        COPIES of its class's map and of the explored map, made after the writes. The helpers search while the
+        game thread leaves the scheduler and runs the rest of the players phase, the features and the particles;
+        THE JOIN, on the game thread, waits for them and applies the results in the order the searches were
+        chosen. It stands at the step's call 0x4955E5, after the particles, and before that at the first set goal
+        of a ground course -- the one engine function in between that writes what a result writes -- so a set
+        goal finds every result applied, as it does when the searches end inside the scheduler. Elsewhere (the
+        loader's call, no helper, no memory for the copies) the join is the scheduler's own last step.
    No search spans ticks, so nothing of a search is state: what a tick carries to the next is the units' own
    stamps and paths, the two cursors and, per unit slot, the stamp of its last search that found a path.
    THE HEURISTIC'S WEIGHT is one of the engine's three: its base [pf + 0x54], 3 times it, 6 times it. The engine
@@ -57,16 +66,18 @@
    the engine wrote: the exit, the path's points and count, the goal cell, the pool's use, the bug walk's answer
    and the flags ORed into the order. It writes no engine memory and decides nothing.
 
-   EVERYTHING BUT A BATCH'S SEARCHES RUNS ON THE THREAD THAT RUNS THE PLAYERS PHASE, inside it or inside a set goal
-   the simulation calls: the game thread in play, and once the loader at 0x497C10 during a load, after the level
-   init and before the game thread's first step (tagpu_income.c's line of thread-split.allow has the handshake).
-   That thread owns what is read and written here, and every engine write is its own. In play a batch's searches
-   run on it and on the helpers, which read engine memory only while it is inside batch_search; in the loader's
-   call they run on the loader's thread alone. A value
+   EVERYTHING BUT THE SEARCHES RUNS ON THE THREAD THAT RUNS THE PLAYERS PHASE, inside it, inside a set goal the
+   simulation calls, or at the step's join: the game thread in play, and once the loader at 0x497C10 during a load,
+   after the level init and before the game thread's first step (tagpu_income.c's line of thread-split.allow has
+   the handshake). That thread owns what is read and written here, and every engine write is its own. A helper
+   reads engine memory only in the tick's first handing-out (the patches and the copies), while that thread waits
+   inside the scheduler; in the second (the searches) it reads the jobs and the copies alone (run_begin has the
+   handshake). In the loader's call everything runs on the loader's thread. A value
    taken from engine memory is data until bounded: a player's block against the unit array, the class record
    against the 32 records, the grid's size against the class's and the pathfinder's, a cell's unit slot against the
    unit array's end, a feature definition against the count, the patch's rectangle against PF_PATCH_MAX, a unit's
-   slot against the table of stamps. */
+   slot against the table of stamps, and at the join a job's unit, mover, course and goal against what its slot
+   holds then. */
 #include <windows.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -148,17 +159,17 @@ SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-all
 #define VA_GOAL_FLAG     0x0044CED0u    /* (goal; flags), ret 4                                            */
 #define VA_SET_GOAL      0x0044F2A0u    /* the ground course's set goal                                    */
 #define VA_SCHED_CALL    0x00464F92u    /* the players phase's call of the scheduler                       */
+#define VA_JOIN_CALL     0x004955E5u    /* the step's call after the particles, of 0x466580                */
+#define VA_STEP_COUNT    0x00466580u    /* (void), cdecl: a countdown word of main's, nothing of a unit    */
 
-/* THE RULES' NUMBERS. A tick begins at most PF_CAP_SEARCHES searches, and no batch once their pops have reached
-   PF_CAP_POPS: the first bounds a tick that many units ask at once, the second a tick whose searches are long (one
-   that finds no way pops every cell it can reach). PF_QUIET is the most units ready
-   in a tick that searches at the base weight (MEASURED: 2900 pops a search at the base, 510 at 3 times, 410 at 6
-   times). PF_BATCH is a rule too: a search reads the map as its own batch's writes and the earlier ones left
-   it, and the pops cap is tested between batches. More searches a batch keep the helpers busy around a long one,
-   and can pass the cap by more. */
+/* THE RULES' NUMBERS. A tick chooses at most PF_CAP_SEARCHES units, which bounds a tick that many units ask at
+   once, and begins no group of PF_BATCH searches once the pops of the groups before it have reached PF_CAP_POPS,
+   which bounds a tick whose searches are long (one that finds no way pops every cell it can reach; MEASURED
+   2026-11-20 with no such cap: 1 621 833 pops in one tick of the battle, against 218 862 with it). PF_QUIET is
+   the most units ready in a tick that searches at the base weight (MEASURED: 2900 pops a search at the base, 510
+   at 3 times, 410 at 6 times). */
 #define PF_BATCH         16
-#define PF_THREADS       4              /* the most threads that search a batch: more end it no sooner (MEASURED,
-                                           modules/pathfinder.md): a batch ends with its longest search       */
+#define PF_THREADS       4              /* the most threads that search: the scratches made                */
 #define PF_CAP_SEARCHES  64
 #define PF_CAP_POPS      64000
 #define PF_QUIET         4
@@ -171,14 +182,17 @@ SIM_VAR(s_mode, SIM_INSTALL);
 static int s_log;
 SIM_VAR(s_log, SIM_INSTALL);
 
-/* THE HELPERS: threads made at install that search beside the scheduler's own thread, and the two handles a batch
-   is handed out and waited for through. All three are written at install and never closed. */
+/* THE HELPERS: threads made at install that work beside the scheduler's own thread, and the two handles a
+   handing-out is made and waited for through. All three are written at install and never closed. s_join: the
+   step's join is installed, without which the searches end inside the scheduler. */
 static unsigned s_helpers;
 SIM_VAR(s_helpers, SIM_INSTALL);
-static HANDLE s_go;                     /* a semaphore: one count wakes one helper for the batch in s_run */
+static HANDLE s_go;                     /* a semaphore: one count wakes one helper for the tasks in s_run */
 SIM_VAR(s_go, SIM_INSTALL);
-static HANDLE s_done;                   /* an event: the last helper of a batch has left it               */
+static HANDLE s_done;                   /* an event: the last helper woken has left the tasks             */
 SIM_VAR(s_done, SIM_INSTALL);
+static int s_join;
+SIM_VAR(s_join, SIM_INSTALL);
 
 /* THE SCRATCHES, one for each thread that searches: s_pf[0] the scheduler's own thread's and the oracle's, s_pf[k]
    helper k's. Each is written by a search before it reads it, and left with every cell new (ts_pf_search). They
@@ -191,6 +205,25 @@ static unsigned char* s_mem;
 static unsigned s_mem_bytes;
 SIM_VAR(s_mem_bytes, SIM_TRANSIENT);
 SIM_HEAP(s_mem, SIM_TRANSIENT, SIM_ID_NONE, 1, s_mem_bytes, NULL);
+
+/* THE TICK'S COPIES, what a search reads of the engine while the tick goes on: the explored map, then each of the
+   32 classes' maps in its own place, of the scratches' grid. Written after the tick's writes and before its
+   searches are handed out, read by those searches, and nothing after the join. NULL when the memory was not to
+   be had: the searches then end inside the scheduler and read the engine's own. */
+static unsigned char* s_frz;
+static unsigned s_frz_bytes;
+SIM_VAR(s_frz_bytes, SIM_TRANSIENT);
+SIM_HEAP(s_frz, SIM_TRANSIENT, SIM_ID_NONE, 1, s_frz_bytes, NULL);
+
+/* a class's map is two bits a cell, a dword a column of 16 rows (0x40D7B0's read, tasim_path.c rd_code); the
+   explored map a word a 32-px block; each copy on a 16-byte boundary */
+static size_t frz_class_bytes(int w, int h) { return (size_t)w * (size_t)((h + 15) >> 4) * 4u; }
+static size_t frz_explored_bytes(int w, int h) { return (size_t)(w >> 1) * (size_t)(h >> 1) * 2u; }
+static size_t frz_round(size_t n) { return (n + 15u) & ~(size_t)15u; }
+static unsigned char* frz_class(int w, int h, unsigned ci)
+{
+    return s_frz + frz_round(frz_explored_bytes(w, h)) + ci * frz_round(frz_class_bytes(w, h));
+}
 
 /* WHAT A TICK CARRIES TO THE NEXT, beside the units' own records: per unit slot the stamp of its last search that
    found a path, 0 for none -- it is that search's while it equals the course's stamp +0x60, so a slot's next unit
@@ -225,6 +258,9 @@ static struct {
     unsigned census_ticks, want, held, held_blocked, held_short, held_order, held_max, ready_max;
     /* the scheduler's, since its last line */
     unsigned ticks, begun, nfound, nosearch, nopath, offgrid, failed, pops, pops_max, begun_max;
+    /* ticks whose searches ran while the tick went on; of those, the ones a set goal joined; searches of the group
+       in hand the join found not ended; results whose unit no longer stood as searched */
+    unsigned late, joined_goal, unended, dropped;
     unsigned ready_a, ready_b, ready_order, ready_end, left, left_max, held_retry, weight[3];
     unsigned goals, goals_kept, goals_opened;
 } s_v;
@@ -376,7 +412,8 @@ static int patch_of(const PV* v, const char* unit, unsigned char* code, TS_PFPAT
 
 /* The scratches for a w x h grid, made again when the grid's size changes (a new map): one for each thread that
    searches, or one alone when that much memory is not to be had -- the searches are then the same ones, one after
-   another. */
+   another. With more than one, the tick's copies beside them, when that memory is to be had too. Nothing is due
+   where this is called (sched_tick joins first), so no search reads what it frees. */
 static int scratch_for(int w, int h)
 {
     static const TS_PFSEAT none[TS_PF_SEATS];
@@ -385,8 +422,9 @@ static int scratch_for(int w, int h)
     unsigned n, i;
     if (s_mem && s_pf[0].pool && s_pf[0].w == w && s_pf[0].h == h) return 1;
     if (s_mem) SIM_FREE(s_mem, s_mem);
-    s_mem = NULL;
-    s_mem_bytes = 0;
+    if (s_frz) SIM_FREE(s_frz, s_frz);
+    s_mem = s_frz = NULL;
+    s_mem_bytes = s_frz_bytes = 0;
     memset(s_pf, 0, sizeof s_pf);
     if (need < 16) return 0;
     for (n = 1 + s_helpers; n && !s_mem; n = n > 1 ? 1 : 0) {
@@ -404,6 +442,13 @@ static int scratch_for(int w, int h)
             memset(s_pf, 0, sizeof s_pf);
             return 0;
         }
+    {
+        const size_t ex = frz_round(frz_explored_bytes(w, h)), cl = frz_round(frz_class_bytes(w, h));
+        if (n > 1 && cl && cl <= (0x7FFFFFFFu - ex) / CLASS_COUNT) {
+            s_frz = (unsigned char*)SIM_ALLOC(s_frz, ex + CLASS_COUNT * cl);
+            if (s_frz) s_frz_bytes = (unsigned)(ex + CLASS_COUNT * cl);
+        }
+    }
     return 1;
 }
 
@@ -452,7 +497,8 @@ typedef struct SCHED {
     const unsigned short* mapped;
     int wgt;
     unsigned wm;                    /* the tick's watermark, every class's: max(now, 30) - 30 (0x440B03) */
-    int play;                       /* no load in hand: the game thread runs this tick (batch_search)    */
+    int play;                       /* no load in hand: the game thread runs this tick (sched_tick)      */
+    int late;                       /* the searches read the tick's copies and end at the join           */
     unsigned nstill;                /* THE STILL UNITS (sched_walk), ascending by slot                   */
     const unsigned short* still_slot;
     const unsigned* still_stamp;
@@ -460,21 +506,36 @@ typedef struct SCHED {
     struct { char* b0; char* b1; unsigned char seat; } block[10];
 } SCHED;
 
-/* one search of a batch */
+/* one search of a tick: what the walk chose, its query, its result */
 typedef struct JOB {
     char* unit;
     char* mover;
     char* course;
     char* goal;
     char* cls;
-    unsigned slot, stamp;
+    unsigned slot, stamp, ci;       /* ci: the class's index among the 32, bounded for a whole job       */
+    unsigned stamp0, kind;          /* the course's stamp before the writes; the ready list it came from */
     int whole;                      /* every value the search rests on is inside its bound              */
+    int ready;                      /* the query is made: the search runs                                */
     unsigned char seat;
     unsigned char patched, other;   /* the search read a patch; its goal is of a kind the search has not */
     TS_PFPATCH patch;
+    TS_PFQUERY q;
     TS_PFRESULT r;
     unsigned char code[PF_PATCH_MAX];
 } JOB;
+
+/* THE TICK'S JOBS, and how many of them are DUE: chosen, their writes made, their results not yet applied. All
+   written by the scheduler before a search reads them; nothing is due between two ticks (the join). `cls` lists
+   the classes the tick's whole jobs search, each once: the copies to make. */
+static JOB s_job[PF_CAP_SEARCHES];
+SIM_VAR(s_job, SIM_TRANSIENT);
+static struct {
+    unsigned n, ncls;
+    unsigned char cls[CLASS_COUNT];
+    int late;
+} s_due;
+SIM_VAR(s_due, SIM_TRANSIENT);
 
 /* Player p's block of the unit array when the engine's scheduler serves the player (0x40EC45..0x40EC62: a record
    in use, of type 1, 2 or 3, not in state 10). THE BOUND: both ends inside the array and on a slot. */
@@ -631,6 +692,7 @@ static void job_writes(const SCHED* e, JOB* j, unsigned slot)
     j->goal = *(char* const*)(j->course + 4);
     j->cls = *(char* const*)(j->mover + MOVER_CLASS);
     j->stamp = e->now ? e->now : 1;
+    j->stamp0 = *(const unsigned*)(j->course + OBJ_LAST);
     *(unsigned*)(j->course + OBJ_LAST) = j->stamp;
     j->seat = 10;
     for (b = 0; b < e->nblock; b++)
@@ -642,6 +704,7 @@ static void job_writes(const SCHED* e, JOB* j, unsigned slot)
         *(const int*)(e->ta + OFF_MAP_H16) != e->h)
         return;
     j->whole = 1;
+    j->ci = (unsigned)(ci / CLASS_STRIDE);
     class_tick(e, j->cls);
     /* an obstacle: its rectangle is recomputed in the map with the unit in it, as the cleanup 0x440BE0 leaves it;
        the search reads the patch there */
@@ -650,70 +713,143 @@ static void job_writes(const SCHED* e, JOB* j, unsigned slot)
                                         *(const unsigned*)(j->unit + UNIT_FOOT));
 }
 
-/* THE SEARCH of one job, on the scheduler's thread or a helper: it reads the tick's view, the class's map, the cells
-   and the units' stamps, and writes its own job and its own thread's scratch -- nothing two searches share. */
-static void job_search(const SCHED* e, JOB* j, TS_PF* pf)
+/* THE QUERY of one job, made from the engine's memory while the scheduler's thread is inside the scheduler: the
+   goal, the unit's cell and heading, the patch, and the maps the search reads -- the tick's copies when the
+   searches end at the join, else the engine's own. A job with no query is not searched. */
+static void job_ready(const SCHED* e, JOB* j)
 {
-    TS_PFQUERY q;
+    TS_PFQUERY* q = &j->q;
     PV v;
     j->r.kind = TS_PF_REFUSED;
     if (!j->whole) return;
-    memset(&q, 0, sizeof q);
-    if (!goal_of(j->goal, &q.goal)) {
+    if (!goal_of(j->goal, &q->goal)) {
         j->other = 1;
         return;
     }
     if (!pv_open(&v, e->ta, j->cls, j->unit)) return;
     if (*(const unsigned*)(j->mover + MOVER_STAMP) < v.wm) {
         if (!patch_of(&v, j->unit, j->code, &j->patch)) return;
-        q.patch = &j->patch;
+        q->patch = &j->patch;
         j->patched = 1;
     }
-    q.map = *(const unsigned* const*)(j->cls + 0x18);
-    q.w = e->w;
-    q.h = e->h;
-    q.fx = v.c.fx;
-    q.fz = v.c.fz;
-    q.mapped = e->mapped;
-    q.seat = j->seat;
-    q.wgt = e->wgt;
-    q.sx = *(const short*)(j->unit + UNIT_CELL);
-    q.sz = *(const short*)(j->unit + UNIT_CELL + 2);
-    q.heading = *(const unsigned short*)(j->unit + UNIT_HEADING);
-    ts_pf_search(pf, &q, &j->r);
+    q->map = e->late ? (const unsigned*)frz_class(e->w, e->h, j->ci) : *(const unsigned* const*)(j->cls + 0x18);
+    q->w = e->w;
+    q->h = e->h;
+    q->fx = v.c.fx;
+    q->fz = v.c.fz;
+    q->mapped = e->late ? (const unsigned short*)s_frz : e->mapped;
+    q->seat = j->seat;
+    q->wgt = e->wgt;
+    q->sx = *(const short*)(j->unit + UNIT_CELL);
+    q->sz = *(const short*)(j->unit + UNIT_CELL + 2);
+    q->heading = *(const unsigned short*)(j->unit + UNIT_HEADING);
+    j->ready = 1;
 }
 
-/* A BATCH'S SEARCHES, on this thread and the helpers. s_run is the batch in hand, all zero between two batches.
+/* One of the tick's copies: 0 the explored map, k the map of class s_due.cls[k - 1]. THE BOUND on each length: a
+   whole job of the class has held the class's grid, the cells' and the pathfinder's to one size (job_writes), and
+   the bytes copied are the ones the engine's reader 0x40D7B0 indexes for a grid of that size. */
+static void frz_copy(const SCHED* e, unsigned k)
+{
+    if (!k)
+        memcpy(s_frz, e->mapped, frz_explored_bytes(e->w, e->h));
+    else {
+        const unsigned ci = s_due.cls[k - 1];
+        memcpy(frz_class(e->w, e->h, ci), *(const void* const*)(size_t)(VA_CLASSES + ci * CLASS_STRIDE + 0x18),
+               frz_class_bytes(e->w, e->h));
+    }
+}
+
+/* THE TASKS HANDED OUT, on the scheduler's thread and the helpers. s_run is the handing-out in hand, all zero
+   outside one. A tick makes two, each begun by run_begin and ended by run_end on the scheduler's thread:
+     THE FIRST, begun and ended inside the scheduler: the jobs' queries, and the tick's copies when the searches
+       end at the join. Its tasks read engine memory.
+     THE SECOND, the searches: begun inside the scheduler and ended at the join. Its tasks read their own job,
+       the maps its query names and their thread's scratch, and write that job's result and that scratch.
+   Tasks 0 .. limit - 1 may be claimed. THE GATE: the thread whose task brings `done` to `limit` -- every task
+   claimed has ended, so no other thread is in one -- asks the handing-out's gate, and either raises the limit
+   by a group or leaves it, which ends the handing-out. The gate reads the ended tasks' results and nothing
+   else, so where the limit stops does not depend on which threads ran what, or when.
    THE ORDERING the helpers rest on, a handshake:
-     - a helper reads s_run, a job or engine memory only between a count of s_go it has taken and its own
-       decrement of `pending`;
-     - this thread, the game thread (helpers are woken only in play), writes s_run before it releases the counts,
-       releases exactly `pending` of them, and does not leave batch_search -- so writes nothing, and lets nothing
-       else run on the game thread -- until s_done, which the helper that brings `pending` to 0 sets after its
-       last read. batch_search is left by its return alone: s_run names this thread's frame, so nothing may
-       unwind past it while a helper is in a batch. Each count is taken once and
-       answered by one decrement, whichever helpers take them, so `pending` reaches 0 exactly when every count
-       released has been answered.
-   So while any helper reads, the game thread, which owns the engine's memory, is inside this call, and the
-   engine's state is what the batch's writes left: no other thread of the process writes or frees what a search
-   reads (the mouse thread writes its lock bytes and the cursor's positions, engine/process.md; the render thread
-   writes no engine memory, thread-split.allow). A job is claimed by one thread, the one whose increment of `next` returned it.
-   The searches' results do not depend on which thread ran which, or on how many there are: a search reads
-   nothing another search of its batch writes. */
+     - a helper reads s_run, a job, a copy or engine memory only between a count of s_go it has taken and its own
+       decrement of `pending`; `pending` counts the counts released and not yet answered, and the scheduler's
+       thread while it is inside run_end's taking;
+     - the scheduler's thread writes s_run before it releases the first counts, and after that writes neither
+       s_run (but as a taker), nor a job, nor a copy, nor frees a scratch or the copies, until run_end has
+       returned: run_end takes what tasks it can, and returns only when its own decrement brings `pending` to
+       0. A thread that raises the limit adds the counts it is about to release to `pending` while it is itself
+       counted, so `pending` is 0 only when no count is unanswered and no thread can raise the limit: nothing
+       reads after. s_done is set at each fall of `pending` to 0 and at each raise of the limit; run_end waits
+       on it only with `pending` above 0 and looks again after each wait, so a signal left from an earlier
+       handing-out costs one more look and nothing else, and a fall is never missed: some thread still owes
+       the decrement that sets it.
+   IN THE FIRST the scheduler's thread, the game thread (helpers are woken only in play), does not leave
+   run_end, so while a helper reads engine memory the engine's state is what the tick's writes left: no other
+   thread of the process writes or frees what a task reads (the mouse thread writes its lock bytes and the
+   cursor's positions, engine/process.md; the render thread writes no engine memory, thread-split.allow). s_run
+   names the scheduler's frame there, so nothing may unwind past it: sched_tick is left by its return alone.
+   IN THE SECOND the game thread goes on with the tick, and a search reads NO engine memory: its maps are the
+   tick's copies (job_ready), which with the jobs and the scratches are ours alone, written before the counts
+   were released and by nothing until the join's run_end has returned. What the engine does meanwhile cannot
+   reach a search, and what a search finds cannot depend on when it ran.
+   A task is claimed by one thread, the one whose exchange of `next` took it. The results do not depend on
+   which thread ran which task, or on how many threads there are: a task reads nothing another task of its
+   handing-out writes. */
 static struct {
-    const SCHED* e;
-    JOB* job;
-    unsigned n;
-    volatile LONG next, pending;
+    void (*task)(unsigned i, TS_PF* pf);
+    int (*gate)(unsigned limit);    /* may a further group begin, tasks 0 .. limit - 1 having ended; NULL: no */
+    const SCHED* e;                 /* the first handing-out's view of the engine; NULL in the second       */
+    unsigned n, helpers;            /* the tasks; the helpers that may be woken                             */
+    volatile LONG next, limit, done, pending;
 } s_run;
 SIM_VAR(s_run, SIM_TRANSIENT);
 
-static void run_take(TS_PF* pf)
+static void task_ready(unsigned i, TS_PF* pf)
+{
+    (void)pf;
+    if (i < s_due.n) job_ready(s_run.e, &s_job[i]);
+    else frz_copy(s_run.e, i - s_due.n);
+}
+
+static void task_search(unsigned i, TS_PF* pf)
+{
+    JOB* j = &s_job[i];
+    if (j->ready) ts_pf_search(pf, &j->q, &j->r);
+}
+
+/* the searches' gate: the pops cap, over the groups that have ended */
+static int gate_pops(unsigned limit)
+{
+    unsigned i, pops = 0;
+    for (i = 0; i < limit; i++) pops += (unsigned)s_job[i].r.pops;
+    return pops < PF_CAP_POPS;
+}
+
+/* `woken` more helpers, each owing an answer; none when the counts cannot be released (all or none) */
+static void run_wake(unsigned woken)
+{
+    if (!woken) return;
+    InterlockedExchangeAdd(&s_run.pending, (LONG)woken);
+    if (!ReleaseSemaphore(s_go, (LONG)woken, NULL)) InterlockedExchangeAdd(&s_run.pending, -(LONG)woken);
+}
+
+/* Takes tasks while one may be claimed. `helper`: the taker is one, so one fewer is left to wake. */
+static void run_take(TS_PF* pf, int helper)
 {
     for (;;) {
-        const unsigned i = (unsigned)InterlockedIncrement(&s_run.next) - 1u;
-        if (i >= s_run.n) return;
-        job_search(s_run.e, &s_run.job[i], pf);
+        const LONG i = s_run.next, limit = s_run.limit;
+        if (i >= limit) return;
+        if (InterlockedCompareExchange(&s_run.next, i + 1, i) != i) continue;
+        s_run.task((unsigned)i, pf);
+        /* the limit this task was claimed under stands until every task under it has ended, this one included */
+        if (InterlockedIncrement(&s_run.done) == limit && (unsigned)limit < s_run.n && s_run.gate &&
+            s_run.gate((unsigned)limit)) {
+            const unsigned more = s_run.n - (unsigned)limit < PF_BATCH ? s_run.n - (unsigned)limit : PF_BATCH;
+            const unsigned idle = s_run.helpers - (helper && s_run.helpers ? 1u : 0u);
+            InterlockedExchange(&s_run.limit, limit + (LONG)more);
+            run_wake(more - 1 < idle ? more - 1 : idle);
+            SetEvent(s_done);       /* the scheduler's thread, if it waits in run_end, takes of the group too */
+        }
     }
 }
 
@@ -721,50 +857,78 @@ static DWORD WINAPI helper_main(LPVOID scratch)
 {
     /* a wait that fails has taken no count, so it owes no answer; s_go is never closed, so none does */
     while (WaitForSingleObject(s_go, INFINITE) == WAIT_OBJECT_0) {
-        run_take(&s_pf[(size_t)scratch]);
+        run_take(&s_pf[(size_t)scratch], 1);
         if (!InterlockedDecrement(&s_run.pending)) SetEvent(s_done);
     }
     return 0;
 }
 
-static void batch_search(const SCHED* e, JOB* job, unsigned nj)
+/* Tasks 0 .. n - 1, the first `limit` of them claimable now and the rest as the gate allows; `woken` helpers at
+   first, of the `helpers` the handing-out may wake. */
+static void run_begin(void (*task)(unsigned, TS_PF*), int (*gate)(unsigned), const SCHED* e, unsigned n,
+                      unsigned limit, unsigned helpers, unsigned woken)
 {
-    /* Helpers are woken only IN PLAY, when the scheduler's thread is the game thread: the load's word main + 0x38D75
-       is 0. THE ORDERING: the loader goes on to its call of the players phase only once it has read bit 3 of that
-       word (0x4975D6..0x4975F1), which the game thread sets (0x498576) and nothing clears until the game thread
-       zeroes the word at its entry into play (0x49847E, 0x498480), after it has read the loader's last store
-       (0x497C62, 0x498342). So in the loader's call the word is not 0, and where it is 0 no loader lives. In that
-       call the game thread is not stopped -- it runs its loading frame -- and the loader's entry 0x497C70 catches
-       a fault and ends its thread, frame and all; there the searches run on the loader's own thread alone, as
-       the engine's did. And every helper has a scratch, or none is woken; and no more are woken than there are
-       searches beside this thread's. */
-    unsigned woken = e->play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0, i;
-    if (woken > nj - 1) woken = nj - 1;
-    if (woken) {
-        s_run.e = e;
-        s_run.job = job;
-        s_run.n = nj;
-        s_run.next = 0;
-        s_run.pending = (LONG)woken;
-        if (ReleaseSemaphore(s_go, (LONG)woken, NULL)) {
-            run_take(&s_pf[0]);
-            WaitForSingleObject(s_done, INFINITE);
-            memset(&s_run, 0, sizeof s_run);
-            return;
-        }
-        /* no count was released (all or none), so no helper reads */
-        memset(&s_run, 0, sizeof s_run);
-    }
-    for (i = 0; i < nj; i++) job_search(e, &job[i], &s_pf[0]);
+    s_run.task = task;
+    s_run.gate = gate;
+    s_run.e = e;
+    s_run.n = n;
+    s_run.helpers = helpers;
+    s_run.next = s_run.done = s_run.pending = 0;
+    s_run.limit = (LONG)limit;
+    run_wake(woken);
 }
 
-/* THE RESULT of one job, through the engine's own set path 0x44F080: a path's corners, or none -- and with none it
-   ORs 0x40 into the order when the unit is not in its goal (0x44F089..0x44F0B9), which is why that bit is left to
-   it. The search's other flags go through the goal's 0x44CED0, as the search start ORs them. */
+/* Ends the handing-out; returns the tasks that ended, 0 .. that - 1. */
+static unsigned run_end(void)
+{
+    unsigned done;
+    for (;;) {
+        InterlockedIncrement(&s_run.pending);
+        run_take(&s_pf[0], 0);
+        if (!InterlockedDecrement(&s_run.pending)) break;
+        WaitForSingleObject(s_done, INFINITE);
+    }
+    done = (unsigned)s_run.done;
+    memset(&s_run, 0, sizeof s_run);
+    return done;
+}
+
+/* The job's unit as the walk found it: its slot still holds that unit, mover, class, ground course and goal, and
+   the course's stamp is the search's. Read on the scheduler's thread from the unit array, as the walk reads it.
+   Inside the scheduler nothing can have changed them (sched_tick's ordering); at the join this is THE BOUND that
+   makes a result's writes land on the object it was found for, or nowhere. A set goal cannot come between: it
+   joins first (before_set_goal). */
+static int job_stands(const JOB* j)
+{
+    const char* ta = ta_main();
+    const char* first = ta ? *(const char* const*)(ta + OFF_UNIT_BEGIN) : NULL;
+    const char* last = ta ? *(const char* const*)(ta + OFF_UNIT_END) : NULL;
+    const char* unit;
+    const char* mover;
+    const char* course;
+    if (!first || last < first || (size_t)(last - first) / UNIT_STRIDE < j->slot) return 0;
+    unit = first + (size_t)j->slot * UNIT_STRIDE;
+    if (unit != j->unit || !*(const unsigned short*)(unit + UNIT_TYPE)) return 0;
+    mover = *(const char* const*)unit;
+    if (!mover || mover != j->mover || *(const char* const*)(mover + MOVER_CLASS) != j->cls) return 0;
+    course = *(const char* const*)mover;
+    return course && course == j->course && *(const unsigned*)course == VT_GROUND_COURSE &&
+           *(const unsigned*)(course + OBJ_LAST) == j->stamp && *(const char* const*)(course + 4) == j->goal;
+}
+
+/* THE RESULT of one job whose unit still stands as searched (job_stands), through the engine's own set path
+   0x44F080: a path's corners, or none -- and with none it ORs 0x40 into the order when the unit is not in its goal
+   (0x44F089..0x44F0B9), which is why that bit is left to it. The search's other flags go through the goal's
+   0x44CED0, as the search start ORs them. */
 static void job_result(JOB* j)
 {
     const unsigned flags = j->r.goalflags & ~0x40u;
     const int found = j->r.kind == TS_PF_FOUND && j->r.n >= 1 && j->r.n <= TS_PF_WP;
+    if (!job_stands(j)) {
+        if (s_v.dropped++ < 4)
+            tagpu_logf("pathsched: slot %u no longer holds the unit searched for: its result is not applied", j->slot);
+        return;
+    }
     if (flags && j->goal) ((PFN_GoalFlag)(size_t)VA_GOAL_FLAG)(j->goal, flags);
     if (found)
         ((PFN_SetPath)(size_t)VA_SET_PATH)(j->course, j->r.pts, j->r.n);
@@ -804,11 +968,12 @@ static void sched_line(void)
     tagpu_logf("pathsched: %u ticks: %.1f searches a tick (most %u; cap %d), %.0f pops (most %u; cap %d): %u found, "
                "%u no search, %u no path, %u off the grid, %u not made, %u read a patch; ready a tick: %.1f on a new "
                "goal, %.1f at a path's end, %.1f for a retry; left for the next tick %.1f (most %u); held by the retry "
-               "%.1f a tick; ticks at the base weight %u, at 3 times %u, at 6 times %u",
+               "%.1f a tick; ticks at the base weight %u, at 3 times %u, at 6 times %u; searched while the tick went "
+               "on: %u ticks, %u of them joined by a set goal, %u searches not ended at the join, %u results not applied",
                s_v.ticks, s_v.begun / t, s_v.begun_max, PF_CAP_SEARCHES, s_v.pops / t, s_v.pops_max, PF_CAP_POPS,
                s_v.nfound, s_v.nosearch, s_v.nopath, s_v.offgrid, s_v.failed, s_v.patched, s_v.ready_order / t,
                s_v.ready_end / t, s_v.ready_b / t, s_v.left / t, s_v.left_max, s_v.held_retry / t, s_v.weight[0],
-               s_v.weight[1], s_v.weight[2]);
+               s_v.weight[1], s_v.weight[2], s_v.late, s_v.joined_goal, s_v.unended, s_v.dropped);
     tagpu_logf("pathsched: wait from ready to the search, %u searches: mean %.1f ticks, most %u; 0: %u, 1-2: %u, "
                "3-9: %u, 10-29: %u, 30-89: %u, 90-299: %u, 300+: %u; set goal: %u calls, inside the engine's 10 "
                "ticks %u left to its rule and %u opened", s_v.waited, s_v.waited ? (double)s_v.wait_sum / s_v.waited : 0.0,
@@ -818,18 +983,45 @@ static void sched_line(void)
     memset(&s_v.calls, 0, (size_t)((char*)(&s_v + 1) - (char*)&s_v.calls));
 }
 
-/* In the engine's scheduler's place, once a tick (0x464F92). THE ORDERING the batches rest on: everything from the
-   walk to the last result runs inside this one call on the thread that runs the simulation, and nothing it calls makes, moves or frees
-   a unit, a mover, a course or a goal -- 0x440830 writes a class's map, 0x44F080 a course's own path and flags,
-   0x44CED0 an order's flags -- so a pointer the walk read is the same object in every later step. */
+/* THE JOIN: the searches handed out are ended and the due results applied, in the order the walk chose them, on
+   the scheduler's thread; a job whose group did not begin is put back as the walk found it -- its course's stamp
+   -- and the cursors move here, to the last unit searched of each kind. Nothing is due on return, and a set goal
+   reached from inside a result's own writes finds nothing due. `apply` 0 ends the searches and drops everything:
+   a level that has gone. */
+static void due_join(int apply)
+{
+    const unsigned n = s_due.n;
+    unsigned i, pops = 0, searched;
+    if (!n) return;
+    if (s_due.late) s_v.unended += (unsigned)s_run.limit - (unsigned)s_run.done;
+    searched = run_end();
+    memset(&s_due, 0, sizeof s_due);
+    if (!apply) return;
+    for (i = 0; i < searched; i++) {
+        s_cursor[s_job[i].kind] = s_job[i].slot;
+        job_result(&s_job[i]);
+        pops += (unsigned)s_job[i].r.pops;
+    }
+    for (; i < n; i++)
+        if (job_stands(&s_job[i])) *(unsigned*)(s_job[i].course + OBJ_LAST) = s_job[i].stamp0;
+    s_v.left += n - searched;
+    if (searched > s_v.begun_max) s_v.begun_max = searched;
+    if (pops > s_v.pops_max) s_v.pops_max = pops;
+}
+
+/* In the engine's scheduler's place, once a tick (0x464F92). THE ORDERING its steps rest on: everything from the
+   walk to the searches' handing-out runs inside this one call on the thread that runs the simulation, and nothing
+   it calls makes, moves or frees a unit, a mover, a course or a goal -- 0x440830 writes a class's map -- so a
+   pointer the walk read is the same object in every later step of the call. The results are the join's: this
+   call's own last step, or the step's and a set goal's (due_join, job_stands). */
 static void __fastcall sched_tick(void* pf_unused)
 {
     unsigned short ready[2][PF_SLOTS], still_slot[PF_SLOTS];
     unsigned still_stamp[PF_SLOTS];
-    JOB job[PF_BATCH];
-    unsigned n[2], at[2], taken[2] = { 0, 0 }, begun = 0, pops = 0, kind, i;
+    unsigned n[2], at[2], taken[2] = { 0, 0 }, nj = 0, kind, i;
     SCHED e;
     (void)pf_unused;
+    due_join(1);                    /* nothing is due here: the step joined (tick_join) */
     if (!sched_open(&e)) return;
     tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
     sched_walk(&e, ready, n, still_slot, still_stamp);
@@ -840,21 +1032,46 @@ static void __fastcall sched_tick(void* pf_unused)
     for (kind = 0; kind < 2; kind++)
         for (at[kind] = 0; at[kind] < n[kind] && ready[kind][at[kind]] <= s_cursor[kind]; at[kind]++)
             ;
-    while (begun < PF_CAP_SEARCHES && pops < PF_CAP_POPS && taken[0] + taken[1] < n[0] + n[1]) {
-        unsigned nj = 0;
-        while (nj < PF_BATCH && begun + nj < PF_CAP_SEARCHES && taken[0] + taken[1] < n[0] + n[1]) {
-            unsigned slot;
-            kind = taken[0] < n[0] ? 0 : 1;
-            slot = ready[kind][(at[kind] + taken[kind]++) % n[kind]];
-            s_cursor[kind] = slot;
-            job_writes(&e, &job[nj++], slot);
+    while (nj < PF_CAP_SEARCHES && taken[0] + taken[1] < n[0] + n[1]) {
+        unsigned slot;
+        kind = taken[0] < n[0] ? 0 : 1;
+        slot = ready[kind][(at[kind] + taken[kind]++) % n[kind]];
+        job_writes(&e, &s_job[nj], slot);
+        s_job[nj++].kind = kind;
+    }
+    if (nj) {
+        /* Helpers are woken only IN PLAY, when the scheduler's thread is the game thread: the load's word
+           main + 0x38D75 is 0. THE ORDERING: the loader goes on to its call of the players phase only once it has
+           read bit 3 of that word (0x4975D6..0x4975F1), which the game thread sets (0x498576) and nothing clears
+           until the game thread zeroes the word at its entry into play (0x49847E, 0x498480), after it has read the
+           loader's last store (0x497C62, 0x498342). So in the loader's call the word is not 0, and where it is 0
+           no loader lives. In that call the game thread is not stopped -- it runs its loading frame -- and the
+           loader's entry 0x497C70 catches a fault and ends its thread, frame and all; there every task runs on the
+           loader's own thread, as the engine's searches did. And every helper has a scratch, or none is woken. */
+        const unsigned helpers = e.play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0;
+        unsigned copies = 0;
+        e.late = helpers && s_join && s_frz;
+        s_due.n = nj;
+        s_due.late = e.late;
+        if (e.late) {
+            unsigned seen = 0;
+            for (i = 0; i < nj; i++)
+                if (s_job[i].whole && !(seen >> s_job[i].ci & 1)) {
+                    seen |= 1u << s_job[i].ci;
+                    s_due.cls[s_due.ncls++] = (unsigned char)s_job[i].ci;
+                }
+            copies = s_due.ncls ? 1 + s_due.ncls : 0;
         }
-        batch_search(&e, job, nj);
-        for (i = 0; i < nj; i++) {
-            job_result(&job[i]);
-            pops += (unsigned)job[i].r.pops;
-        }
-        begun += nj;
+        /* the first handing-out, ended here; this thread takes tasks too, so one helper fewer than tasks */
+        i = nj + copies - 1;
+        run_begin(task_ready, NULL, &e, nj + copies, nj + copies, helpers, helpers < i ? helpers : i);
+        run_end();
+        /* the second, its first group: ended at the join, which then finds the tasks ended or takes them */
+        kind = nj < PF_BATCH ? nj : PF_BATCH;
+        i = e.late ? kind : kind - 1;
+        run_begin(task_search, gate_pops, NULL, nj, kind, helpers, helpers < i ? helpers : i);
+        if (e.late) s_v.late++;
+        else due_join(1);
     }
     s_v.ticks++;
     s_v.ready_a += n[0];
@@ -862,10 +1079,21 @@ static void __fastcall sched_tick(void* pf_unused)
     i = n[0] + n[1] - taken[0] - taken[1];
     s_v.left += i;
     if (i > s_v.left_max) s_v.left_max = i;
-    if (begun > s_v.begun_max) s_v.begun_max = begun;
-    if (pops > s_v.pops_max) s_v.pops_max = pops;
     if (s_v.ticks >= 150) sched_line();
     tagpu_prof_leave(TAGPU_PROF_GAME);
+}
+
+/* THE STEP'S JOIN, in place of the step's call of 0x466580 (0x4955E5), which it then makes: every tick's searches
+   are ended and applied by here. The step runs from the players phase's return to this call in a straight line
+   (0x495564..0x4955E5), so a tick whose scheduler handed searches out reaches it. */
+static void __cdecl tick_join(void)
+{
+    if (s_due.n) {
+        tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
+        due_join(1);
+        tagpu_prof_leave(TAGPU_PROF_GAME);
+    }
+    ((void (__cdecl*)(void))(size_t)VA_STEP_COUNT)();
 }
 
 /* The ground course's set goal 0x44F2A0, at its entry, with a goal. The function's own rule zeroes the stamp when
@@ -874,7 +1102,9 @@ static void __fastcall sched_tick(void* pf_unused)
    THAT IS SENT ELSEWHERE. The function only ever zeroes the stamp, so the 0 stands. A unit whose last search
    found nothing keeps the engine's rule: an order handler answers such a search with a new goal within a tick or
    two, for as long as the unit stays where it is (MEASURED, modules/pathfinder.md), and each would be a search.
-   THE BOUND: the course's unit against the unit array, as a slot of the table. */
+   THE BOUND: the course's unit against the unit array, as a slot of the table.
+   FIRST IT JOINS: a set goal replaces the goal and reads the stamp a result writes beside, so the tick's results
+   are applied before it runs, as they are when the searches end inside the scheduler. */
 static int __cdecl before_set_goal(void* esp)
 {
     char* course = (char*)(size_t)*(const unsigned*)((const unsigned char*)esp - 0x0C);
@@ -883,7 +1113,12 @@ static int __cdecl before_set_goal(void* esp)
     const char* unit;
     unsigned stamp;
     size_t slot;
-    if (s_mode != MODE_OURS || !ta || tagpu_puppet_on() || !((const char* const*)esp)[1] || !course ||
+    if (s_mode != MODE_OURS) return 0;
+    if (s_due.n) {
+        s_v.joined_goal++;
+        due_join(1);
+    }
+    if (!ta || tagpu_puppet_on() || !((const char* const*)esp)[1] || !course ||
         *(const unsigned*)course != VT_GROUND_COURSE)
         return 0;
     s_v.goals++;
@@ -903,6 +1138,7 @@ static int __cdecl before_set_goal(void* esp)
 
 void tagpu_pathfind_level_init(void)
 {
+    due_join(0);
     memset(s_found, 0, sizeof s_found);
     memset(s_cursor, 0, sizeof s_cursor);
     memset(&s_v, 0, sizeof s_v);
@@ -926,18 +1162,18 @@ static unsigned cores_count(void)
     return cores;
 }
 
-/* THE NUMBER OF THREADS that search a batch: the machine's cores less one, left to the render thread, and at most
+/* THE NUMBER OF THREADS that search: the machine's cores less one, left to the render thread, and at most
    PF_THREADS; the scheduler's own thread is one of them, so the helpers are one fewer. Cores, not hardware
-   threads: a batch ends with its longest search, and a search that shares a core waits on its sibling. The number
-   decides how long a batch takes and nothing of what it finds. A helper that cannot be made is one thread fewer.
-   Returns the cores counted. */
+   threads: a search that shares a core waits on its sibling. The number decides how long the searches take and
+   nothing of what they find. A helper that cannot be made is one thread fewer. Returns the cores counted. */
 static unsigned helpers_start(void)
 {
     const unsigned cores = cores_count();
     unsigned want = cores > 1 ? cores - 1 : 1, k;
     if (want > PF_THREADS) want = PF_THREADS;
     if (--want == 0) return cores;
-    s_go = CreateSemaphoreA(NULL, 0, PF_THREADS, NULL);
+    /* a handing-out releases counts group by group, some before the earlier ones are taken */
+    s_go = CreateSemaphoreA(NULL, 0, 0x10000, NULL);
     s_done = CreateEventA(NULL, FALSE, FALSE, NULL);
     if (!s_go || !s_done) return cores;
     for (k = 0; k < want; k++) {
@@ -998,9 +1234,14 @@ void tagpu_pathfind_init(void)
     }
     s_mode = MODE_OURS;
     cores = helpers_start();
+    /* without the step's join the searches end inside the scheduler: the same searches and results */
+    s_join = s_helpers && tagpu_detour_redirect_ok(VA_JOIN_CALL, VA_STEP_COUNT) &&
+             tagpu_detour_redirect(VA_JOIN_CALL, VA_STEP_COUNT, (void*)tick_join);
     tagpu_logf("pathsched: installed - our scheduler at the players phase's call 0x464F92, set goal 0x44F2A0 watched; "
-               "%d searches and %d pops a tick, in batches of %d searched by %u threads at once (%u cores)",
-               PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH, 1 + s_helpers, cores);
+               "%d searches and %d pops a tick in groups of %d on %u threads (%u cores), %s",
+               PF_CAP_SEARCHES, PF_CAP_POPS, PF_BATCH, 1 + s_helpers, cores,
+               s_join ? "searched while the tick goes on and joined at the step's call 0x4955E5"
+                      : "searched inside the scheduler");
 }
 
 SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "battle");

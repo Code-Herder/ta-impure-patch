@@ -360,7 +360,21 @@ footprint centre in px, `((2x + fx) << 3, (2z + fz) << 3)` as words, handed to s
 `0x44F150`, `+0x10` `0x44F000`, `+0x14` has path `0x44F290` (bit 0), `+0x18` wants search
 `0x44F260`; constructor `0x44F010`). Its fields: `+0x04` the goal, `+0x08` the unit, `+0x0C` 20
 waypoints as word pairs, `+0x5C` their count, `+0x60` the last search's GameTime, `+0x64` the flags
-(bit 0 a path, bit 1 wants a search, bit 3 changed). **Wants search `0x44F260..0x44F284`**: bit 1,
+(bit 0 a path, bit 1 wants a search, bit 3 changed). **Who writes the goal and the stamp, and who
+frees a goal** [DISASSEMBLED 2026-11-20]: `+0x04` is written by the constructor (0, `0x44F024`) and
+by set goal (`0x44F2D5`) alone — the base class's `0x44EF20`/`0x44EF90` and the remote proxy's
+`0x44F57B`/`0x44F5F3` write their own objects'; `+0x60` by the constructor (0, `0x44F033`), by
+wants search (GameTime, `0x44F27E`) and by set goal (0, `0x44F436`), and a scan of `.text` finds no
+other. Wants search has no direct caller: its address stands only in the vtable, and of the 31
+`call [reg+0x18]` sites only the scheduler's examination `0x40ED57` loads its object through a
+course. Set goal never frees the goal it replaces (it ORs 0x80 into that goal's order, `0x44F2C6`);
+a goal is freed by the order node that owns it, at its `+0x52`: the destructor `0x43A1F0` — when
+the unit's course names that goal it calls the course's set goal with 0 first (`0x43A26F..0x43A285`)
+and then the goal's deleting destructor (`0x43A293`; `0x43A2A2` when the course names another) —
+and the four goal installers `0x4388D0`, `0x438930`, `0x438A00`, `0x438AD0`, each of which calls
+set goal with 0 (`0x4388EA`), deletes the node's goal (`0x4388F8`), and calls set goal with the
+new one (`0x43891E`). So every free of a goal a course names is preceded by that course's set goal.
+The course's destructor `0x44F040` frees no goal. **Wants search `0x44F260..0x44F284`**: bit 1,
 and GameTime not below `last + 60` (`add edx,0x3c` at `0x44F271`; the sum wraps): it stamps
 GameTime (`0x44F27E`) and answers itself; else 0, writing nothing. So a unit's searches begin at least 60 ticks apart, and a second question in the
 same tick answers 0. **What sets bit 1** [DISASSEMBLED 2026-11-20]: the step `0x44F1A0`, each tick,

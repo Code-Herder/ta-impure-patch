@@ -45,6 +45,10 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
    the helpers idle around each long search.
 10. **The batch in hand is `SIM_TRANSIENT`** (`s_run`): what the scheduler's thread hands the
     helpers, all zero between two batches, and not recorded.
+11. **The searches run while the tick goes on, and are joined in their own tick** (2026-11-20): the
+    game thread waits for them at the step's end and not inside the scheduler. The pops cap stays,
+    tested between groups by the threads that search (the owner's go-ahead named it as dropped,
+    which measured 1.6 million pops in one tick).
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -165,8 +169,19 @@ them, a cheaper search.
    engine's). In the battle the scheduler's time is the batches', not the searches' sum, so it
    moved little: 2.4 ms a tick in a run of a fifth more pops.
 
+5. **The searches beside the tick** — the tick's units chosen and their writes made at once; the
+   searches on the helpers from the tick's copies of the maps, in groups of 16 under the pops cap,
+   while the game thread goes on; the join at the step's call `0x4955E5` and at set goal.
+   **Built 2026-11-20**: 0.87 ms a tick on the game thread against 1.95, in a run of a fifth more
+   pops; 117 044 of 117 044 results equal to the same searches made inside the scheduler on the
+   engine's own maps ([the module](modules/pathfinder.md)).
+
 ## Open
 
+- **The owner's to confirm**: the tick's jobs, what is due of them and the tick's copies are
+  `SIM_TRANSIENT` (`s_job`, `s_due`, `s_frz`, `s_frz_bytes`): written by the scheduler before a
+  search reads them, nothing due between two ticks, the class the scratch and the batch in hand
+  have (decisions 7 and 10).
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
 - **What the batch's size measured** (it is 16, decision 9). A batch ends with its longest search,
   and the top 5 % of searches are 46 % of the pops, so a batch of 8 leaves three threads idle
@@ -189,8 +204,12 @@ them, a cheaper search.
   found nothing.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
-- A batch's searches can pass the pops cap together (507 000 pops in the worst tick
-  measured); on the helpers a batch's time is its longest search's.
+- A group's searches can pass the pops cap together (218 000 pops in the worst tick measured);
+  a group's time is its longest search's, and the join waits for what the tick did not cover.
+- **Long searches** — a goal deep inside a base or a crowd, where the search floods a disc before
+  it finds the way in: 39 % of searches and 67 % of pops on the captured set. Two ways on, neither
+  built: a search past a count of pops delivered a tick later, and one search shared by the units
+  sent to one place.
 - Cores against hardware threads for the helpers' number: not measured (the module's gaps).
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.

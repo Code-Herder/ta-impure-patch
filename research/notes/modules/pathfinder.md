@@ -42,44 +42,69 @@ observer at the function's entry zeroes it inside those 10 ticks when that searc
 unit on its way that is sent elsewhere. A unit whose last search found nothing keeps the engine's
 rule.
 
-**The batches**, 16 searches each, while fewer than **64 searches** have begun this tick and their
-pops are below **64 000**. Both bounds count work and never time, and the batch is a constant: a
-tick begins the same searches on every machine. A batch is three steps, each over all its searches
-before the next:
-
-1. **the writes**: the course's stamp; the class's watermark and the marking of the units that
-   have just become obstacles, once a class a tick, as the engine's `0x440AF0` does; and for a
-   searcher that is an obstacle, its rectangle recomputed in the map through the engine's
-   `0x440830`, as the engine's cleanup leaves it;
-2. **the searches**, which read the class's map, the cells and the units' stamps and write only
-   their own patch, their own thread's scratch and their result — on the scheduler's thread and the
-   helpers (below);
-3. **the results**, each through the engine's own set path `0x44F080` — a path's corners, or
-   none — and the search's order flags through `0x44CED0`.
+**The tick's searches.** At most **64 units** are chosen, and **the writes** made for each: the
+course's stamp; the class's watermark and the marking of the units that have just become
+obstacles, once a class a tick, as the engine's `0x440AF0` does; and for a searcher that is an
+obstacle, its rectangle recomputed in the map through the engine's `0x440830`, as the engine's
+cleanup leaves it. **The searches** follow in the order chosen, in groups of **16**: a group begins
+only while the pops of the groups before it are below **64 000**. Both caps count work and never
+time, and the group is a constant: a tick makes the same searches on every machine. **The
+results** are applied in that order, each through the engine's own set path `0x44F080` — a path's
+corners, or none — and the search's order flags through `0x44CED0`; a unit chosen whose group did
+not begin gets its stamp back and the cursor does not pass it. With no pops cap one tick of the
+battle popped 1 621 833 nodes; with it the most was 218 431.
 
 No search spans ticks, so nothing of a search is state. What a tick carries to the next, beside
 the units' own records: per unit slot the stamp of its last search that found a path (`s_found`),
 and the two cursors (`s_cursor`); both are recorded state.
 
-**The helpers.** Threads made at install search a batch beside the scheduler's own thread, each on
-a scratch of its own. Their number is the machine's processor cores less one, left to the render
-thread, and at most 4 with the scheduler's thread counted: one thread on two cores, two on three,
-three on four, four from five up. It decides how long a batch takes and nothing of what it finds: a search reads
-nothing another search of its batch writes, and the results are applied in the batch's order.
-The batch is handed out and waited for by a handshake (`batch_search`): the scheduler's thread
-writes the batch, releases one count of a semaphore for each helper it wakes, searches too, and
-does not go on until the helper that answers the last count has set an event. A helper reads the
-batch, a job or engine memory only between a count it has taken and its answer, so while any helper
-reads, the thread that owns the engine's memory is inside that call. **Helpers are woken only in
-play**, when that thread is the game thread — the load's word `main+0x38D75` is 0: the loader goes
-on to its call of the players phase only after reading the game thread's bit 3
-(`0x4975D6..0x4975F1`, set `0x498576`), and the game thread zeroes the word at its entry into play
-(`0x49847E`) after the loader's last store. No other thread of the process writes what a search
-reads. In the loader's one call of the players phase
-the game thread is not stopped — it runs its loading frame, the network pump included — and the
-loader's entry `0x497C70` catches a fault and ends its thread; there the searches run on the
-loader's thread alone, as the engine's own did. When the scratches' memory is not to be had for
-every thread, one is made and the searches run one after another.
+**The searches run while the tick goes on.** In play, with a helper and the memory for it, a
+search reads no engine memory. Its query holds the goal, the unit's cell and heading and the
+patch, and names **the tick's copies**, made after the writes: the explored map, and the map of
+each class the tick searches. The helpers search while the game thread leaves the scheduler and
+runs the rest of the players phase, the features and the particles. **The join**, on the game
+thread, ends the searches — taking those not yet claimed itself — and applies the results. It
+stands in two places:
+
+- at the step's call of `0x466580` (`0x4955E5`), after the particles: the step runs from the
+  players phase's return to it in a straight line, so every tick's searches are joined in their
+  own tick, and nothing of them is there when the recorder next captures;
+- before that, at the entry of the ground course's set goal `0x44F2A0`: the one engine function in
+  that window that writes what a result writes. Every free of a goal a course names — the order's
+  destructor `0x43A1F0`, the four goal installers — calls it first
+  ([units](../engine/units.md)), so a set goal, and whatever follows it, finds every result
+  applied, as when the searches ended inside the scheduler.
+
+So a result lands on the state its search was made for, or, where its slot no longer holds that
+unit (*Bounds*), nowhere. Elsewhere — the loader's call, a machine with no helper, no memory for
+the copies, the join's site not holding the engine's bytes — the join is the scheduler's own last
+step and the searches read the engine's maps: the same searches, the same results.
+
+**The helpers.** Threads made at install work beside the scheduler's own thread, each search on a
+scratch of its thread's own. Their number is the machine's processor cores less one, left to the
+render thread, and at most 4 with the scheduler's thread counted: one thread on two cores, two on
+three, three on four, four from five up. It decides how long the searches take and nothing of what
+they find: a search reads nothing another writes, where the groups stop is decided from the ended
+searches' results alone, and the results are applied in the order chosen.
+
+A tick hands tasks out twice (`run_begin`, `run_end`). **The first**, inside the scheduler: the
+jobs' queries and patches and the tick's copies, which read engine memory — the scheduler's thread
+stays inside `run_end` until the last helper has answered, so while a helper reads, the thread that
+owns the engine's memory is in that call. **The second**, the searches, is ended at the join: its
+tasks read their job, the tick's copies and their scratch, all ours and written by nothing between
+the handing-out and the join's return. The handshake is one for both: a helper reads only between
+a count of a semaphore it has taken and its own decrement of a counter of the counts not yet
+answered; the thread that raises the limit for the next group adds the counts it releases while it
+is itself counted; and `run_end` returns only when its own decrement brings the counter to 0.
+
+**Helpers are woken only in play**, when the scheduler's thread is the game thread — the load's
+word `main+0x38D75` is 0: the loader goes on to its call of the players phase only after reading
+the game thread's bit 3 (`0x4975D6..0x4975F1`, set `0x498576`), and the game thread zeroes the word
+at its entry into play (`0x49847E`) after the loader's last store. In the loader's one call of the
+players phase the game thread is not stopped — it runs its loading frame, the network pump
+included — and the loader's entry `0x497C70` catches a fault and ends its thread; there everything
+runs on the loader's thread alone, as the engine's own searches did. When the scratches' memory is
+not to be had for every thread, one is made and the searches run one after another.
 
 **The heuristic's weight** is one of the engine's three, by the tick's load where the engine goes
 by how slowly its budget serves a player:
@@ -153,14 +178,23 @@ which about 6000 units are given a goal within a few ticks of one another.
 | the longest wait | 479 ticks | 393 to 423 |
 | the pathfinder's time a tick, one thread | about 4.5 ms | 3.9 ms |
 | on four threads, batches of 8 | | 2.4 ms |
-| on four threads, batches of 16 | | 1.95 ms, one run, of a sixth fewer pops |
+| on four threads, groups of 16, the scheduler waiting for each | | 1.95 ms, one run, 19 000 pops a tick |
+| the same, the searches made while the tick goes on | | **0.87 ms**, one run, 23 000 pops a tick |
 
 The time is the frame profiler's: ours the span `pathfind`; the engine's the players phase of a
 run on its scheduler, 7.4 ms a tick, less the 2.9 to 3.0 ms that phase takes beside ours. The
 battle does not play the same twice: three runs on one thread before the walk listed the still
 units took 4.3, 4.3 and 6.3 ms a tick, and the ranges above are the logged runs.
 
-**By thread**, each a run of the battle at batches of 8 with the phases timed:
+**While the tick goes on** [one run, 3655 ticks]: the game thread's 0.87 ms a tick is the walk,
+the writes, the queries and copies, and what the join waits; over 5-frame rows the scheduler's
+time a frame was 0.7 ms at the median and 2.4 at the 99th percentile, against 1.25 and 5.4 with
+the scheduler waiting. The join found 367 of the run's 111 000 searches not yet ended, a set goal
+joined 45 of the ticks before the step did, and no result was dropped. In a second run every
+search was made twice, on the tick's copies beside the tick and on the engine's own maps inside
+the scheduler: 117 044 of 117 044 results equal.
+
+**By thread**, each a run of the battle at batches of 8, the scheduler waiting, with the phases timed:
 
 | threads searching | the searches, ms a tick | the walk | the writes | the scheduler |
 |---|---|---|---|---|
@@ -208,35 +242,49 @@ them) is counted apart: the map changes under it, and about one in seven differe
 Every value taken from engine memory is bounded before it is used: a player's block against the
 unit array, the class record against the 32 records, the grid's size against the class's and the
 pathfinder's, a cell's unit slot against the unit array's end, a feature definition against the
-count, the patch's rectangle against 4096 entries, a unit's slot against the table of stamps. From
-the walk to the last result everything runs inside one call on the simulation's thread, and nothing
-it calls makes, moves or frees a unit, a mover, a course or a goal.
+count, the patch's rectangle against 4096 entries, a unit's slot against the table of stamps. From the walk to the searches' handing-out everything runs inside one call on the simulation's
+thread, and nothing it calls makes, moves or frees a unit, a mover, a course or a goal. At the join
+a result is applied only where its slot still holds the unit, mover, class, ground course and goal
+the search was made for, and the course's stamp is the search's (`job_stands`): a course made
+since has the stamp 0 its constructor writes, and nothing but the scheduler writes another
+([units](../engine/units.md), *the ground class object*).
 
 ## The log — `tagpu_pathlog.on`
 
 Read at attach. Every 150 ticks two `pathsched:` lines: the searches and pops a tick against their
 caps, how the searches ended, the units ready by why and those left for the next tick, the ticks at
-each weight, the waits' histogram, and the set-goal calls inside the engine's 10 ticks by what the
+each weight, the ticks searched while the tick went on with the joins a set goal made, the searches
+a join found not ended and the results not applied, the waits' histogram, and the set-goal calls inside the engine's 10 ticks by what the
 observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the span `pathfind`.
 
 ## Gaps
 
-- **A batch waits for its longest search**, and the searches are uneven (above), so threads idle
-  through most of a long one. A larger batch packs more searches around it and can pass the pops
+- **A group ends with its longest search**, and the searches are uneven (above), so threads idle
+  through most of a long one. A larger group packs more searches around it and can pass the pops
   cap by more; the size is a rule of the simulation, 16 by the owner's decision
   ([the plan](../pathfinder-parallel.md) has what 8, 16 and 32 measured).
-- **Every measurement but the batch's own is from batches of 8**: the waits, the searches a tick,
-  the times by thread.
-- **Nothing may unwind past a batch**: the batch in hand names the game thread's frame, so a fault
-  there that a handler caught and survived would leave the helpers reading it. No such handler is
-  known above the players phase in play; the loader's, the one known, runs no helper.
+- **The waits and the times by thread are from batches of 8**, the scheduler waiting for each.
+- **Nothing may unwind past the scheduler's first handing-out**: it names the game thread's frame,
+  so a fault there that a handler caught and survived would leave the helpers reading it. No such
+  handler is known above the players phase in play; the loader's, the one known, runs no helper.
+- **What reads a path between the scheduler and the join is ruled out for direct calls only.** The
+  closure of the engine's direct calls over that window (723 functions) reaches no read or write
+  of a ground course's path, stamp or flags and no test of an order's search flags; it reaches the
+  order's destructor and, through handlers, the goal installers, which call set goal first, where
+  the join stands. Its 58 indirect calls into game code (the stock AI's planner, the order
+  handlers' event 2, the script host, the GUI pump) are not followed
+  ([sim](../engine/sim.md), *The game step*). ImpAI's turns run in that window and read no course.
+- **A spike is bounded, not gone**: a group of 16 long searches is still made in one tick, and the
+  join waits for what the rest of the tick did not cover (the most pops in a tick: 218 000).
+- **The class sweeps of a tick are made for every unit chosen**, the ones whose group does not
+  begin included: such a class's units that have just become obstacles are marked a tick or more
+  before the class's next search would have marked them.
 - **The loader's call reads beside the game thread's loading frame**, as the engine's own players
   phase does there; what keeps the units still in that window is the engine's arrangement, not ours.
 - **Cores against hardware threads was not measured**: the display's start gives the process every
   processor (`dd.c`), so a run pinned to four cores is not confined to them. The rule counts cores.
-- **A batch can pass the pops cap** by its own searches: the cap is tested between batches, and a
-  search that finds no way pops every cell its unit can reach. The most pops in one tick was
-  507 000.
+- **A group can pass the pops cap** by its own searches: the cap is tested between groups, and a
+  search that finds no way pops every cell its unit can reach.
 - **Nothing but the caps bounds one unit's searches at a path's end**: a unit whose found path ends
   short of its goal searches again when it reaches that end. A 5-tick floor between two such
   searches held no unit in 3300 ticks of the battle, and was dropped.

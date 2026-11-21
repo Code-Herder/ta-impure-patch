@@ -365,6 +365,27 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   counters change at the call's tail, `0x482130` after the last iteration. So the positions, owners, types
   and cloak a turn of the players phase reads hold for the rest of the step, under the same proviso (ImpAI's turns,
   [ImpAI in the engine](../modules/impai.html)).
+- **Between the scheduler's call `0x464F92` and the step's call of `0x466580` (`0x4955E5`), the
+  engine's direct calls touch no ground course's path** [DISASSEMBLED 2026-11-20 for the direct
+  calls, the indirect ones listed and not followed]: the closure over the rest of the players
+  phase from `0x464F97` and the step's `0x424050`, `0x415B30` (the animated faces), `0x490C40`,
+  `0x437DE0` (the meteor shower), `0x41CA10` and `0x471EB0` is 723 functions, and reaches none of
+  set goal `0x44F2A0`, set path `0x44F080`, the goal flag `0x44CED0`, wants search `0x44F260`, the
+  claim, watermark and cleanup `0x440A70`/`0x440AF0`/`0x440BE0`, the order-list rewriter `0x43ADC0`
+  or the unit destructor `0x4866D0`; no function in it loads a mover's course and touches its
+  `+0x0C`, `+0x5C`, `+0x60` or `+0x64`, and none tests an order's `+0x4E` for 0x20, 0x40, 0x100 or
+  0x200. What it does reach: the pathing maps' re-mark, `0x440A40` then `0x440830`, from the
+  feature tick's `FEATURES_Destroy` (`0x424822`) and from the Deathmatch respawn `0x485F50`
+  (`0x4653D9`), which also makes a course (`0x43DC00`, `0x44F010`); the explored map's writers
+  `0x4816A0` (`0x4654EF`, the respawn) and `0x481930` (the sight emitter, `0x465053` → `0x4827B0`
+  → `0x4825B0`); and the order's destructor `0x43A1F0`, from the burn spread's hit (`0x489DA2` →
+  the on-damage `0x406F80` → the order purge `0x439EB0`, for a unit whose def `+0x245` bit 12 is
+  set and whose owner is of type 2), which calls a course's set goal and frees its goal
+  ([units](units.md), *the ground class object*). The 58 indirect calls into game code: the stock
+  AI's planner (`0x408C8E`, whose slot 0 `0x407E90` reaches `0x43ADC0`), the order handlers' event
+  2 (`0x43A21A`), the script host's 24, the GUI pump's 13, the particle layers, the radar visitor
+  and the unit listener. `0x466580` itself is the radar's blink countdown (`main+0x142EF`, bit 0 of
+  `main+0x142F1`) and makes no call.
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
   `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
