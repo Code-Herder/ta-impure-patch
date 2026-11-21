@@ -10191,7 +10191,7 @@ SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
    THE SIZE BOUND. The writer's buffer is 0x100 dwords inside the sender's frame (0x415B60), and its
    growth is broken: 0x415C76, 0x415D14 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
    The queue below drops a message over 0x42A bytes (0x4628D0, 0x462911), and one that arrives when a
-   forced flush leaves its ring not empty (0x462716..0x462736); tagpu_netlog.on counts both as refused. So an entry is written
+   forced flush leaves its ring not empty (0x462716..0x462731); tagpu_netlog.on counts both as refused. So an entry is written
    only while the message, with that entry at its largest and the engine's tail at its largest
    after it, stays under STREAM_BITS_MAX: 16 + typeBits + 213 for an entry (the air payload
    0x4908C0: 2 + 209 + 2; the ground's 0x44F4A0 is 99) and 16 + 1 + typeBits + 211 for the tail
