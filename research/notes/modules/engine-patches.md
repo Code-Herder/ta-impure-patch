@@ -317,7 +317,8 @@ the download menus, the sync keys, the weapon IDs, the victim caps, the last col
 line of sight, stacked aircraft, stale hits, the ghost commander, the kill counts, the wind, the yardmaps,
 the shatter's random numbers and the unit stream (a peer's units sent in turn in up to four messages a tick,
 and the receiver stepping a sender's units on the tick's last message alone: a peer without the receiver's
-part would step them once a message),
+part would step them once a message, so the host takes only joiners of its own play revision,
+[mods](mods.html) *The gate*),
 and the five that make a game a function of its inputs from process to process: the hover wave on GameTime,
 the mover's unmoved stamp, the AI builder planner's site altitude, the patrols' reclaim search's altitude and a
 harness's random streams. The last is a harness's alone: it changes nothing unless the game folder holds the lever

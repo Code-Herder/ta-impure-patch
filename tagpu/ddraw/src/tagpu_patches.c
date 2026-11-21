@@ -10188,6 +10188,10 @@ SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
      not written; a walk that reaches every unit leaves the cursor where it was.
    - ONE STEP A TICK. The receiver's sweep is taken only for a message whose flag is set
      (stream_step), so the several messages of a tick step the sender's units once.
+   EVERY PEER HAS ALL THREE. A receiver without the third steps the sender's units once a message,
+   up to STREAM_MESSAGES times a tick, so the format is a play revision of its own: the host takes
+   no joiner of another, and no host of another takes this build's (tagpu_recorder.c,
+   MP_PLAY_REVISION). A change to what these messages carry raises that number.
    THE SIZE BOUND. The writer's buffer is 0x100 dwords inside the sender's frame (0x415B60), and its
    growth is broken: 0x415C76, 0x415D14 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
    The queue below drops a message over 0x42A bytes (0x4628D0, 0x462911), and one that arrives when a

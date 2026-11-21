@@ -4,8 +4,9 @@
     python3 tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]
 
 Each case's verdict is the game's own: START's grayed state read from the running battle room, a click on it placed by the
-display server, and both sides reaching play or staying in the room. --old-dll is an Impure build from before the fingerprint
-(v0.5's release DLL), which stands for a player with the key and no print: `stock` and `older` check that the host refuses them and says so. --film records the gameplay case's host from its start."""
+display server, and both sides reaching play or staying in the room. --old-dll is an older Impure build's ddraw.dll: v0.5's sends the
+key and no print, v0.6.1's the print and no play revision. `stock` and `older` check that the host refuses such a joiner and says so,
+`olderhost` that this build does not get into the older build's room. --film records the gameplay case's host from its start."""
 import argparse
 import json
 import re
@@ -230,13 +231,13 @@ def stock(_work):
 
 
 def older(old):
-    """An older Impure joining, whose data has the key and no print: refused, and the host told it is an older build."""
+    """An older Impure joining, with no print or with no play revision: refused, and the host told it is an older build."""
     with Pair("older", setup("managed-prota"), setup("managed-prota"), join_dll=old) as p:
         refused(p, "older Impure build")
 
 
 def olderhost(old):
-    """This build joining an older host: the host's exact size test refuses the longer data, as a stock host refuses any Impure player."""
+    """This build joining an older host, which refuses it by its size test or by the engine's own version test: the joiner is not in the room."""
     with Pair("olderhost", setup("managed-prota"), setup("managed-prota"), host_dll=old) as p:
         joined = True
         try:
@@ -244,14 +245,21 @@ def olderhost(old):
         except (t.Lobby, SystemExit) as e:
             joined = False
             print(f"      the walk ended: {str(e)[:160]}", flush=True)
+        # the refusal can land a moment after the joiner's room comes up
+        end = time.time() + 60
+        while time.time() < end and "LOUNGE2" in screen(p.join):
+            time.sleep(2)
+        time.sleep(3)
+        p.shot("host", "refused")
         p.shot("join", "refused")
-        report(not joined or "alive" not in screen(p.join), f"this build into an older host is refused (joined={joined}): {screen(p.join)[:40]}")
+        report("LOUNGE2" not in screen(p.join), f"the joiner is not in the room (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
+        report("LOUNGE2" in screen(p.host), f"the host stayed in its room: {screen(p.host)[:40]}")
 
 
 def main():
     a = argparse.ArgumentParser(description=__doc__)
     a.add_argument("--only", choices=["dropin", "gameplay", "cosmetic", "stock", "older", "olderhost"])
-    a.add_argument("--old-dll", help="an Impure build from before the fingerprint, v0.5's ddraw.dll or older; `older` and `olderhost` need it")
+    a.add_argument("--old-dll", help="an older Impure build's ddraw.dll (v0.5's: no fingerprint; v0.6.1's: no play revision); `older` and `olderhost` need it")
     a.add_argument("--film", type=Path)
     args = a.parse_args()
     global FILM, PORT, LEASE

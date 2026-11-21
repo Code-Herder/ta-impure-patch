@@ -481,8 +481,9 @@ engine's 21-byte prefix and appends a 280-byte public-key record, for exactly
 301 bytes. This reaches every native human and hosted-AI creation through the
 same wrapper. The fingerprint's tail follows the key (research/notes/modules/mods.md). The branch
 redirects `0x4CA762` to a stdcall helper and `0x454315` to `mp_join_admit`, which takes
-only the key with a tail and refuses every other size. The original password/version
-tests and HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
+only the key with a tail at this build's play revision (the prefix's WORD `+0x11`, the first
+of the engine's two version tests, made in the stub) and refuses the rest. The original
+password test, the second version test and the HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
 21 bytes, so a current host refuses that player as not running Impure: every player of a
 network game contributes, or does not play.
 All five start/player-data redirects share one preflight and installation.

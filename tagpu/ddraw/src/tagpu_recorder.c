@@ -68,8 +68,9 @@
    before entering the stock text case. The host's extended start retains the engine's
    original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
    the original 21-byte prefix plus a public key and the fingerprint through the redirect at
-   0x4CA762; the host's native-create size branch at 0x454315 takes only data that carries
-   both (mp_join_admit), and sends any other joiner to the engine's own refusal. The event
+   0x4CA762, with this build's play revision in the prefix's WORD +0x11; the host's
+   native-create size branch at 0x454315 takes only data that carries both at that revision
+   (mp_join_admit), and sends any other joiner to the engine's own refusal. The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -612,9 +613,17 @@ static void __cdecl mp_start_receive(void* frame)
 }
 
 /* The native player data: the engine's 21 bytes, the key, then Impure's tail. Stock takes exactly 21 at 0x454315, so a stock host refuses this. A
-   host of this build takes the key with a tail up to the bound, so a later build's longer tail stays welcome, and refuses the rest (mp_join_admit). */
+   host of this build takes the key with a tail up to the bound, so a tail's length is free to grow, and refuses the rest (mp_join_admit). */
 #define MP_DATA_BASE     (RECMP_PRIMARY_BYTES + sizeof(RecMpPublic))
 #define MP_DATA_TAIL_MAX 1024
+
+/* The engine's 21 bytes end in two WORDs, +0x11 and +0x13, which stock sends as 0 and 0x50 (the pushes at 0x451375 and 0x45135F, stored at
+   0x4CA740 and 0x4CA74B) and whose host takes no others (0x45435B, 0x454362). Impure sends in the first the revision of what its peers send
+   each other in play, and its host takes only its own (mp_join_admit). A change to what a message carries, or to how a receiver acts on one,
+   raises the number, and then neither build plays in the other's game: a host that knows no revision still tests the WORD for stock's 0.
+   1: a tick's units arrive in up to four 0x2C messages and the receiver steps them on the last (tagpu_patches.c, unit_stream). */
+#define MP_PLAY_REVISION    1u
+#define MP_PLAY_REVISION_AT 0x11
 
 /* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
    initial data. Preserve that prefix (including its password/version) and add
@@ -639,6 +648,8 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
     memcpy(extended, data, RECMP_PRIMARY_BYTES);
+    extended[MP_PLAY_REVISION_AT] = (unsigned char)MP_PLAY_REVISION;
+    extended[MP_PLAY_REVISION_AT + 1] = (unsigned char)(MP_PLAY_REVISION >> 8);
     tagpu_recmp_public(key, &public);
     memcpy(extended + RECMP_PRIMARY_BYTES, &public, sizeof public);
     /* The print follows the key, so a peer reads both from one record, and a process's print never changes, so this one send serves the session.
@@ -674,17 +685,36 @@ static void mp_join_name(DWORD id, char* out, size_t cap)
 
 /* Call-entered at 0x454315 inside the pump, so on the thread that pumps and under s_mp_rx_lock. The engine reaches it on the host alone: the
    host's row is one this peer controls (0x456030 at 0x454289; the host row is the first with PlayerInfo +0x97 bit 0, 0x454240 [INFERRED: bit 0
-   is the host's]) and the game has not begun (0x4542C6) [INFERRED]. 1 takes the joiner (0x45435B, stock's own version test); 0 refuses it through the
-   engine's refusal 0x45431B, whose 0x453010(id, 8) sends the joiner back to Select Game. Every player of a network game runs Impure of this build
-   or a later one: the rules it plays (the share module's, the recorder's channel) assume it (research/notes/modules/mods.md *The gate*). */
+   is the host's]) and the game has not begun (0x4542C6) [INFERRED]. It stands for the engine's size test and for the first of its two version
+   tests, the WORD +0x11 at 0x45435B: 1 takes the joiner on to the second (0x454362, the WORD +0x13); 0 refuses it through the engine's refusal
+   0x45431B, whose 0x453010(id, 8) sends the joiner back to Select Game. Every player of a network game runs Impure at this build's play
+   revision: the rules it plays (the share module's, the recorder's channel, the unit stream) assume it (research/notes/modules/mods.md
+   *The gate*).
+
+   THE READ. The revision is two bytes of the message's data, at the pointer the engine's own tests read next (edi, loaded from the same
+   message at 0x4542B2), and the size admitted above them is over MP_DATA_BASE, so both lie inside what DirectPlay delivered. */
 static int __cdecl mp_join_admit(const DPMSG_CREATEPLAYERORGROUP* m)
 {
     char name[32];
-    if (m->dwDataSize > MP_DATA_BASE && m->dwDataSize <= MP_DATA_BASE + MP_DATA_TAIL_MAX) return 1;
+    const unsigned char* data = m->lpData;
+    unsigned revision = 0;
+    MODGATE_REFUSAL why;
+    if (data && m->dwDataSize > MP_DATA_BASE && m->dwDataSize <= MP_DATA_BASE + MP_DATA_TAIL_MAX) {
+        revision = data[MP_PLAY_REVISION_AT] | (unsigned)data[MP_PLAY_REVISION_AT + 1] << 8;
+        if (revision == MP_PLAY_REVISION) return 1;
+        why = revision < MP_PLAY_REVISION ? MODGATE_OLDER : MODGATE_NEWER;
+    } else {
+        why = m->dwDataSize == MP_DATA_BASE ? MODGATE_OLDER : MODGATE_NOT_IMPURE;
+    }
     mp_join_name(m->dpId, name, sizeof name);
-    tagpu_logf("recmp: refused %s: %lu bytes of player data, %s", name, (unsigned long)m->dwDataSize,
-               m->dwDataSize == MP_DATA_BASE ? "an older Impure's (no fingerprint)" : "not Impure's");
-    tagpu_modgate_refused(name, m->dwDataSize == MP_DATA_BASE);
+    if (why == MODGATE_NOT_IMPURE)
+        tagpu_logf("recmp: refused %s: %lu bytes of player data, not Impure's", name, (unsigned long)m->dwDataSize);
+    else if (m->dwDataSize == MP_DATA_BASE)
+        tagpu_logf("recmp: refused %s: %lu bytes of player data, an older Impure's (no fingerprint)", name, (unsigned long)m->dwDataSize);
+    else
+        tagpu_logf("recmp: refused %s: play revision %u, this build's is %u: %s Impure", name, revision, MP_PLAY_REVISION,
+                   why == MODGATE_OLDER ? "an older" : "a newer");
+    tagpu_modgate_refused(name, why);
     return 0;
 }
 
@@ -1014,7 +1044,7 @@ static void mp_init(void)
     *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
     *p++ = 0x85; *p++ = 0xC0; *p++ = 0x61;
     *p++ = 0x74; *p++ = 0x06;
-    *p++ = 0x9D; *p++ = 0xE9; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0x9D; *p++ = 0xE9; tagpu_detour_rel(p, 0x454362); p += 4;
     *p++ = 0x9D; *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
     p=chat;
     *p++=0x9C; *p++=0x60;

@@ -43,7 +43,8 @@ static SAID s_said[ROWS];
    (tagpu_recorder.c mp_join_admit) and the flip on the game thread, so the queue is the lock's. */
 #define REFUSED_MAX 10
 static SRWLOCK s_refused_lock = SRWLOCK_INIT;
-static struct { char name[ROW_NAME_MAX + 1]; int older; } s_refused[REFUSED_MAX];
+typedef struct { char name[ROW_NAME_MAX + 1]; MODGATE_REFUSAL why; } REFUSED;
+static REFUSED s_refused[REFUSED_MAX];
 static unsigned s_refused_n, s_refused_dropped;
 
 static char* main_block(void)
@@ -104,12 +105,12 @@ static void say_seat(const char* row, const MODPRINT* mine, const MODPRINT* thei
     tagpu_logf("modgate: %s differs: there %s, here %s", name, theirs->label, mine->label);
 }
 
-void tagpu_modgate_refused(const char* name, int older)
+void tagpu_modgate_refused(const char* name, MODGATE_REFUSAL why)
 {
     AcquireSRWLockExclusive(&s_refused_lock);
     if (s_refused_n < REFUSED_MAX) {
         snprintf(s_refused[s_refused_n].name, sizeof s_refused[0].name, "%s", name);
-        s_refused[s_refused_n++].older = older;
+        s_refused[s_refused_n++].why = why;
     } else {
         s_refused_dropped++;
     }
@@ -129,7 +130,7 @@ static void say_refused(void)
 {
     char line[CHAT_MAX];
     unsigned i, n, dropped;
-    struct { char name[ROW_NAME_MAX + 1]; int older; } said[REFUSED_MAX];
+    REFUSED said[REFUSED_MAX];
     AcquireSRWLockExclusive(&s_refused_lock);
     n = s_refused_n;
     dropped = s_refused_dropped;
@@ -137,7 +138,8 @@ static void say_refused(void)
     s_refused_n = s_refused_dropped = 0;
     ReleaseSRWLockExclusive(&s_refused_lock);
     for (i = 0; i < n; i++) {
-        snprintf(line, sizeof line, "%s refused: %s", said[i].name, said[i].older ? "older Impure build" : "not running Impure");
+        snprintf(line, sizeof line, "%s refused: %s", said[i].name, said[i].why == MODGATE_OLDER ? "older Impure build" :
+                 said[i].why == MODGATE_NEWER ? "newer Impure build" : "not running Impure");
         chat_line(line);
         tagpu_logf("modgate: said: %s", line);
     }
