@@ -91,12 +91,20 @@ COB object, which Impure sizes already (`0x485D74`); the allocation at `0x485D78
 starts empty. A fault is the guarded interpreter's refusal: `cob_fault` with the core's reason. A
 saved game's records pass `tagpu_cobvm_loaded` after `cob_load`.
 
-**The oracle.** Two builds — the one before the swap and the swap — play the same scripted game, and
-the recorder's dumps of every tick must be byte-identical (`tarec compare-dumps`). Before trusting it,
-the same build plays the scenario twice and must match itself; a scenario that does not is not an
-oracle. Then the replay gate's groups that name COB (`"cob": "exact"`: slice-walkers, battle, tenseat,
-codec-decline; and cob-getters, resource-core-upgrade, stock-resource-mex, contest-waves, teleport,
-transport-turn) and the compatibility suite.
+**The oracle is the COB plan's: the recorder's, in process.** Two runs of one build are not one game,
+so two builds' dumps cannot be compared (MEASURED 2026-11-21: `slice-walkers` played twice on one DLL,
+both passing every test, differ by tick 961 in unit positions and records, and their recordings end at
+4 464 763 and 5 037 891 bytes; the parallel pathfinder's carried searches are one known source). So
+behind a lever the engine's interpreter goes on running the game, and around each entry call — a turn,
+a start, a query — the host takes the object's records, count, flag, statics, animation and model
+before it, and logs what the engine read and did during it: each getter's id and answer, each draw,
+each effect with its operands and the starts it nested (SET ACTIVATION's), each completion. Then the
+core runs the same call on the copy over a host that answers from that log in order and compares each
+effect with the next one logged, and the copy must equal the object byte for byte. A difference names
+the unit, the script, the pc and the field. Then the replay gate's groups that name COB
+(`"cob": "exact"`: slice-walkers, battle, tenseat, codec-decline; and cob-getters,
+resource-core-upgrade, stock-resource-mex, contest-waves, teleport, transport-turn) and the
+compatibility suite run on the swap.
 
 ### L3 — A turn only when something is due
 
@@ -119,9 +127,10 @@ gets a block of 128-word stacks. The unit loop prefetches the header line of the
 
 ## Gaps open
 
-- **The equivalence oracle is unproven**: whether two runs of one scenario on one build give
-  identical dumps has not been measured. If they do not, L2 needs another oracle (the COB plan's
-  recorder-as-oracle, which needs the host reads recorded).
+- **The oracle sees what the engine logs**: a getter whose answer the same call's own SET changes is
+  answered from the log as the engine saw it, which is the comparison's point; a host read the oracle
+  does not log (cargo, carrier) is read again after the engine's call, where an ATTACH or DROP in that
+  call could have changed it.
 - **`tagpu_cobvm.c` and `tagpu_cob_safe.c` are not `sim` files**: once the game runs them, they need
   their `thread-split.allow` lines and the program validator's `malloc` through the registry's
   wrappers (the COB plan, *Gaps open*). L2.
