@@ -78,6 +78,10 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
     did not install, or whose sites were rewritten before the exe's first DirectDraw call, refuses
     the launch (`tagpu_pathfind_report`); the stream fix is in the fail-closed table. The verify
     lever stays as the harness's oracle.
+19. **The unit stream sends up to four messages a tick** (2026-11-21): a bigger buffer in the
+    engine's transport was set aside for several stock-sized messages, the extra ones marked by
+    the round-robin flag the format already has, the receiver stepping on the tick's last. Eight
+    measured a wait of 2 ticks against 4 and twice the burst; the owner chose four.
 
 ## The scheduler's rules as built, and what each rests on
 

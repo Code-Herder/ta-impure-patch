@@ -728,9 +728,9 @@ describes by hand.
   `[vt+0x20]` clears the dirty state, so a skipped unit stays dirty and the high slots of a busy
   block starve until the round robin. MEASURED 2026-11-20 (`tagpu_netlog.on`, two peers of 1499
   kbots on Town & Country): with the stock order 168 to 509 units were left dirty after the average
-  message and a unit's entry waited up to 5266 ticks. Impure walks the list in turn
-  (`engine-patches.md`, `stream_order`), which bounds the wait by one turn of the block: at most
-  42 ticks there.
+  message and a unit's entry waited up to 5266 ticks. Impure walks the list in turn, in up to four
+  messages a tick (`engine/network.md`, *What Impure sends*), which bounds the wait by one turn of
+  the block: at most 4 ticks for a whole army ordered at once.
 - **The player blocks are ordered by DPID in a network game** (`0x485676` compares seat `+4`
   while ordering the ten records). **INF** that the block assignment follows that order; it is
   consistent with every peer agreeing on `engine_index` (tier 2).

@@ -596,8 +596,10 @@ MEASURED 2026-11-20 (`tools/mp_agree.py`, two peers of 1499 kbots on Town & Coun
 with our pathfinder 509 units left dirty after the average message, a unit's entry waiting up to 5266
 ticks and its copy standing up to 1408 world units off its owner's (three runs), worst in the top fifth
 of the slots; with the engine's pathfinder 328 left, 2273 ticks and 296 world units (two runs). Impure
-walks the list in turn (`tagpu_patches.c`, `stream_order`): 297 left, at most 42 ticks and 157 world
-units (one run), the lag the same in every fifth of the slots (90th percentile 16 to 30). A dirty entry whose type differs from its slot creates the unit
+walks the list in turn, in up to four messages a tick (`tagpu_patches.c`, `unit_stream`; *The size
+of a `0x2C` and the step it drives*, below). In turn with one stock-sized message: 297 left, at most
+42 ticks and 157 world units (one run), the lag the same in every fifth of the slots (90th
+percentile 16 to 30). A dirty entry whose type differs from its slot creates the unit
 (`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
 to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
 0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the
@@ -632,6 +634,63 @@ robin's tail after `0x48B40E` at most 211 (`0x48B4A9..0x48B6F2`); none loops on 
 reader `0x415DC0` also loads the next dword whenever a read reaches the end of one
 (`0x415E0C..0x415E3E`; a read from bit 0 of a dword takes it alone, `0x415DF5`), so 29 + 3 + 8 bytes
 cover it and the padding is 48.
+
+**The size of a `0x2C` and the step it drives** [DISASSEMBLED 2026-11-21].
+
+- **The writer.** `0x48B710` builds the message in a bit writer inside its own frame
+  (`sub esp,0x410`; the struct at `[esp+0xC]`): `0x415B60` sets `{+0 dword index 0, +4 bit index 0,
+  +8 capacity 0x100 dwords, +0xC buffer = the struct's own +0x10}`, a 1024-byte inline buffer.
+  `0x415C10` (thiscall `(value, nbits)`, `ret 8`) writes least significant bit first and, when a
+  write fills the buffer's last dword (the index reaching the capacity, `0x415C72`, `0x415D05`),
+  grows it — wrongly: `push 4; call 0x4B4F10` allocates **four bytes** (`0x415C76..0x415C7B`), the
+  doubled capacity is stored into them and the whole old buffer copied over them
+  (`0x415C8F..0x415CAA`). `0x415BB0` is the same growth with the same four bytes (`0x415BB6`;
+  callers `0x48B87A`, `0x48B2EF`, `0x48B361`). So a message of 8192 bits or more writes 1 KB over a
+  4-byte heap block; stock never reaches it (0x200 bytes and one entry's overshoot).
+- **Its end.** After the list: `[16] 0xFFFF` (`0x48B80E`), one flag bit set unconditionally
+  (`0x48B81B..0x48B84C`), the round-robin entry (`0x48B200`), the size — `dword index × 4 +
+  (bit index + 7) / 8` — patched into bytes 1 and 2 (`0x415DA0`, at `0x48B8C3` and `0x48B8E3`), and
+  `0x451DF0([rec+4], buffer, size)` (`0x48B903`, stdcall, `ret 0xC`). Nothing in `0x48B710` tests the size.
+- **The queue below.** In the default, queued mode `0x451DF0` hands the message to channel 0
+  (`0x461990` → `0x462710`, the channel at `0x513008`). `0x4628D0` appends it to a pool buffer only
+  while `used + length ≤ 0x42A` (`0x462911`), retries once on a fresh buffer, and otherwise drops it
+  ("out of space in buffer!", `0x462996`); a full ring (`[ch+0x38]` = 0x400 entries) that a forced
+  flush does not empty drops it too (`0x462731`). **A message is never split: one over 0x42A = 1066
+  bytes is always dropped.** Every message of every local record shares the channel.
+- **The receiver's step.** After a `0x2C`'s list `0x48B920` walks the sender's whole block
+  (`0x48BA28..0x48BA5C`) and calls, for every live unit with a mover, the movement pass `0x43DD20`
+  and the sight pass `0x48A870`: a remote unit steps **once a message received**, not once a tick
+  of the receiver's own clock. It then reads the flag bit (`0x48BA5E..0x48BA97`): set, the round
+  robin's entry follows (`0x48BA9F`); clear, the message ends (`0x48BAC8`) — a path stock's sender
+  never takes. MEASURED 2026-11-21 (`.data` archive `stream-rate`, the fight battle of
+  `tools/mp_agree.py`): a sender made to send two or four whole `0x2C`s a tick put the other peer's
+  copies up to 842 world units ahead of their owners, with no message lost (10 783 sent, 10 781
+  received).
+
+**What Impure sends** (`tagpu_patches.c`, `unit_stream`; both sites in the fail-closed table). The
+dirty list is walked in turn, from the unit the last tick stopped at. Before each entry the message
+must have room for the largest entry (`16 + typeBits + 213` bits, the air payload) and the largest
+end after it (`16 + 1 + typeBits + 211`) under 8191 bits; when it has not, the message ends with
+its flag **clear**, is sent, and the list continues in a new message on the same writer, up to
+**four messages a tick a record** (the owner's bound on a tick's traffic, 2026-11-21); the tick's
+last message is the engine's own, flag set, round robin after it. The receiver's sweep is taken only
+for a message whose flag is set (branch at `0x48BA28`), so a tick's messages step the sender's units
+once. The largest message is 1024 bytes: under the writer's growth and under the queue's 0x42A.
+MEASURED 2026-11-21, two peers of 1499 kbots, each army ordered to move as one ten times, 150 ticks
+apart (`mp_agree.py --marches 10`), the worse peer:
+
+| a tick's messages | a unit's longest wait | mean | left dirty, mean | bytes a second | a tick's most |
+|---|---|---|---|---|---|
+| one of 0x200 bytes, in turn | 42 ticks | 17.7 | 854 | 15 KB | 557 B |
+| one of 960 bytes | 22 | 7.8 | 474 | 23 KB | 1005 B |
+| up to four | 4 | 2.2 | 81 | 27 KB | 3.9 KB |
+| up to eight | 2 | 1.2 | 29 | 28 KB | 7.8 KB |
+
+The queue refused none of them and the peers agree in every row. **Not measured:** a link that
+loses packets (the channel keeps a sent buffer about four seconds for a resend, `0x462860(4000 ms)`
+at `0x460E7F`, and past 0x22 buffers reuses one still inside that window, `0x461BED` — whether a
+burst of four messages a tick meets that under loss is open [INFERRED from the disassembly, not
+run]); more than two peers; aircraft, whose entries are larger.
 
 **Where each stub continues and drops** (DISASSEMBLED 2026-09-25). The span is the stock bytes
 compared before any write; the branch sits at its first clean 5-byte boundary.

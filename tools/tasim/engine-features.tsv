@@ -78,7 +78,7 @@ engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651
 ai_economy_send	outside	a hosted AI's economy sent to the other peers; tasim has no wire	tagpu_patches.c, the players phase's economy send 0x4655A1 for each AI the peer hosts
 ai_untaxed	T1c	a give to an AI credited in full at every difficulty, with the economy's difficulty	tagpu_patches.c, the transfers' jne past the type-2 scale, 0x464D3A and 0x464C0A
 ai_autoshare	T1c	the auto-share to every ally, an AI's too, in a skirmish as in a network game, with the economy	tagpu_patches.c, the auto-share 0x457D30's remote, human and network tests and its caller 0x49560B
-stream_order	outside	the network: the order of the unit stream's dirty list	tagpu_patches.c, the 0x2C sender 0x48B710's walk resumed where the last tick stopped
+unit_stream	outside	the network: the unit stream's dirty list in turn, in several messages a tick	tagpu_patches.c, the 0x2C sender 0x48B710's walk and the receiver 0x48B920's step
 wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c, landing B6
 yardmap	modelled	tagpu/ddraw/src/tasim_keys.c, tasim_yard_cells: Impure's yard parse, every cell filled from inside the string	tagpu_patches.c, 0x42CF3E..0x42CF59
 save_order_fallback	outside	the saved-game loader's order fallback	tagpu_patches.c, 0x43A420

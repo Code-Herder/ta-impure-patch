@@ -475,7 +475,8 @@ loading chat, bandwidth or continued migration.
   the host launches and read `*511DE8+37EF6:1` as 0 on every peer; the value is the host
   instance's own.
 - **To compare peers, pause and read both rosters** — `tools/mp_agree.py --out DIR` does all of what
-  follows for two peers of 1499 kbots and judges it. `tacli keys h1 shift pause` sends the game's
+  follows for two peers of 1499 kbots and judges it; `--marches N` orders each whole army to move N
+  times back to back in place of the fight (the unit stream's worst case). `tacli keys h1 shift pause` sends the game's
   own `Pause` (the leading token is the one a `keys` call drops), which pauses every peer; confirm
   with `tacli peek <i> '*511DE8+38A51:1'` reading 1 on each. Then `tacli roster <i> --json` on
   every peer (`tacli units` lists unit TYPES, not live units): match units by `engine_index`,

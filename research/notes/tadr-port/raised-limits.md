@@ -433,9 +433,9 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   20 (60 ticks) that count is not measured.
 - How far a remote unit lags its owner at stock's 500 a player. At 1500 the dirty list's walk from
   the block's first unit made the wait unbounded (up to 5266 ticks, measured 2026-11-20 with
-  `tagpu_netlog.on`); Impure walks it in turn (`stream_order`), which bounds a unit's wait by one
-  turn of its block, about n / 33 ticks for n dirty ground units: at most 42 at 1500. At 500 the
-  same bound is about 15 ticks; not measured.
+  `tagpu_netlog.on`); Impure walks it in turn, in up to four messages a tick (`unit_stream`), which
+  bounds a unit's wait by one turn of its block, about n / 250 ticks for n dirty ground units: at
+  most 4 measured at 1500. At 500 the same bound is 2 ticks; not measured.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
 - A unit's own frame taller than 800 rows (landing 7): the 1× bakes draw it through the same
   800-row span tables, in stock and with the fix alike. A solar scaled ×22 (1544 rows) faults at

@@ -2400,9 +2400,9 @@ class Parser(unittest.TestCase):
         self.assertIn(tafeat.MULTIPLAYER, tafeat.fixture_names())
         self.assertNotIn(tafeat.MULTIPLAYER, tareplay.fixtures())
         feats, problems = tafeat.all_features()
-        self.assertEqual([f["fixtures"] for f in feats if f["name"] == "stream_order"],
+        self.assertEqual([f["fixtures"] for f in feats if f["name"] == "unit_stream"],
                          [[tafeat.MULTIPLAYER]])
-        self.assertFalse([p for p in problems if "stream_order" in p])
+        self.assertFalse([p for p in problems if "unit_stream" in p])
 
     def test_blank_comments_keeps_code(self):
         text = '#define A 1 /* x */\n"s/*t" // c\nint x; /* y */\n'

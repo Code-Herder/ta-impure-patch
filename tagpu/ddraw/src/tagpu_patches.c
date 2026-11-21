@@ -10151,7 +10151,7 @@ static int fix_ai_autoshare(void)
     return fix_write(site, 7);
 }
 
-SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "multiplayer");
+SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
 
 /* THE UNIT STREAM'S DIRTY LIST IN TURN [DISASSEMBLED 2026-11-20]. In a network game the unit tick
    calls 0x48B710(rec) once a tick for each local type-1/2 record (0x48B003): a 0x2C message of
@@ -10171,21 +10171,50 @@ SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "multiplayer");
    stood off its owner's by up to 1408 world units, the top fifth of each block's slots by 408 at the
    90th percentile against 0 in the bottom fifth.
 
-   THE FIX replaces the walk (0x48B76C..0x48B80E) with stream_dirty_list: the same test, the same
-   entries and the same budget, starting at the unit after the last one the previous tick wrote
-   and wrapping at the block's end. The receiver places an entry by its delta from the block's
-   first index (0x48B985..0x48B99A), so the order is free on the wire and a peer without the fix
-   reads the message as it is.
-   THE INVARIANT: each tick resumes where the last one stopped, and a tick writes at least one
-   entry when any unit is dirty (the budget is tested after an entry), so a unit dirty when the
-   walk reaches it is sent then; the walk passes every unit of the block within one turn of it.
-   The cursor is an index into the block, bounded by the block's count each tick. A record whose
-   block is not one of the ten the engine deals (wire_block_ok: inside [begin, main+0x1435B], the
-   array's last slot included, at its rank's place) sends an empty list. */
+   The receiver 0x48B920 applies each entry at the block's first index plus its delta
+   (0x48B985..0x48B99A), so the entries' order is free on the wire; after the list it runs the
+   movement pass 0x43DD20 and the sight pass 0x48A870 for every live unit of the sender's block that
+   has a mover (0x48BA28..0x48BA5C) -- a remote unit steps once a message, never by the receiver's
+   own clock -- and then reads one flag bit (0x48BA5E..0x48BA97): set, the round-robin entry follows;
+   clear, the message ends (0x48BAC8). Stock's sender always sets it (0x48B81B..0x48B84C).
+
+   THE FIX, three parts, all in the fail-closed table:
+   - IN TURN. stream_dirty_list replaces the walk (0x48B76C..0x48B80E): the same test and the same
+     entries, starting at the unit the previous tick stopped at and wrapping at the block's end.
+   - UP TO STREAM_MESSAGES MESSAGES A TICK. When the next entry might not fit, the message in hand
+     ends with its flag CLEAR -- a list and nothing else -- is sent, and the list goes on in a new
+     message on the same writer; the tick's last message is the one the engine's own tail ends,
+     flag set, round robin after it. At the cap the list stops and the cursor stays on the unit
+     not written; a walk that reaches every unit leaves the cursor where it was.
+   - ONE STEP A TICK. The receiver's sweep is taken only for a message whose flag is set
+     (stream_step), so the several messages of a tick step the sender's units once.
+   THE SIZE BOUND. The writer's buffer is 0x100 dwords inside the sender's frame (0x415B60), and its
+   growth is broken: 0x415C76 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
+   The queue below (0x4628D0, 0x462911) drops a message over 0x42A bytes. So an entry is written
+   only while the message, with that entry at its largest and the engine's tail at its largest
+   after it, stays under STREAM_BITS_MAX: 16 + typeBits + 213 for an entry (the air payload
+   0x4908C0: 2 + 209 + 2; the ground's 0x44F4A0 is 99) and 16 + 1 + typeBits + 211 for the tail
+   (the round robin 0x48B200), the readers' maxima of engine/network.md, which the writers mirror
+   field for field. The growth is never reached and the largest message is 1024 bytes.
+   THE INVARIANT: each tick resumes where the last one stopped and writes at least one entry when
+   any unit is dirty (an empty message always has room for one), so the walk passes every unit of
+   the block within one turn of it, and a turn is the block's dirty units over what STREAM_MESSAGES
+   messages hold. The cursor is an index into the block, bounded by the block's count each tick. A
+   record whose block is not one of the ten the engine deals (wire_block_ok: inside
+   [begin, main+0x1435B], the array's last slot included, at its rank's place) sends an empty list.
+   MEASURED 2026-11-21 (tools/mp_agree.py --marches 10: each peer's 1499 kbots ordered to move as
+   one, ten times, 150 ticks apart): a unit's entry waited at most 4 ticks, against 42 with one
+   0x200-byte message in turn; nothing refused by the queue; the peers agree. */
 #define STREAM_MAIN      0x00511DE8u
 #define STREAM_RESUME    0x0048B80Eu        /* the terminator, after the list */
 #define STREAM_BITS      0x00415C10u        /* the bit writer: thiscall (value, nbits), ret 8 */
-#define STREAM_BUDGET    0x200u
+#define STREAM_MESSAGES  4u                 /* messages a tick a record, at most: the owner's bound on a tick's traffic */
+#define STREAM_BITS_MAX  8191u              /* the writer's 0x100 dwords less the bit whose write would grow it */
+#define STREAM_HEAD_BITS 56u                /* [8] code, [16] size, [32] GameTime */
+#define STREAM_ENTRY_BITS(typeBits) (16u + (typeBits) + 213u)
+#define STREAM_TAIL_BITS(typeBits)  (16u + 1u + (typeBits) + 211u)
+#define STREAM_SEND      0x00451DF0u        /* the queue's send: stdcall (dpid, buf, size), ret 0xC; called 0x48B903 */
+#define STREAM_RECV      0x0048B920u        /* the receiver: stdcall (rec, buf), ret 8; called 0x4553F4 */
 #define STREAM_SLOTS     16384u             /* the unit array's slots, at most: 10 x 1500 + 1 */
 
 typedef int  (__thiscall *PFN_StreamDirty)(void* course);
@@ -10205,10 +10234,20 @@ static unsigned int s_streamSince[STREAM_SLOTS];    /* GameTime + 1 of a unit's 
 SIM_VAR(s_streamSince, SIM_PRIVATE);
 typedef struct STREAMDIAG {
     unsigned int ticks, sent, sentMost, left, leftMost, units, waited, waitSum, waitMost, waitLong;
+    unsigned int msgs, bytes, bytesMost, refused, tickBytes, tickBytesMost, tickMsgsMost;
     int window;
 } STREAMDIAG;
 static STREAMDIAG s_streamDiag[10];
 SIM_VAR(s_streamDiag, SIM_PRIVATE);
+/* the record whose message is being built, and whether its list stopped on the budget: read by
+   stream_tick and stream_sent within the one call of the sender that set them */
+static unsigned int s_streamCur;
+SIM_VAR(s_streamCur, SIM_TRANSIENT);
+/* the 0x2C messages this peer received from each record, a window of 150 ticks */
+static struct { unsigned int msgs, bytes; } s_streamRecv[10];
+SIM_VAR(s_streamRecv, SIM_PRIVATE);
+static int s_streamRecvWindow;
+SIM_VAR(s_streamRecvWindow, SIM_PRIVATE);
 
 static void stream_log(unsigned int p, int now)
 {
@@ -10217,13 +10256,51 @@ static void stream_log(unsigned int p, int now)
         if (d->ticks)
             tagpu_logf("netstream: record %u, %u ticks of a block of %u units: sent %.1f a tick (most %u); "
                        "left dirty %.1f a tick (most %u); a unit's wait from its first tick left dirty to "
-                       "its entry: %u units, mean %.1f ticks, most %u, 30 ticks or more %u",
+                       "its entry: %u units, mean %.1f ticks, most %u, 30 ticks or more %u; "
+                       "%u messages, %u bytes (most %u), %u refused by the queue; a tick's most: %u bytes in "
+                       "%u messages",
                        p, d->ticks, d->units, (double)d->sent / d->ticks, d->sentMost,
                        (double)d->left / d->ticks, d->leftMost, d->waited,
-                       d->waited ? (double)d->waitSum / d->waited : 0.0, d->waitMost, d->waitLong);
+                       d->waited ? (double)d->waitSum / d->waited : 0.0, d->waitMost, d->waitLong,
+                       d->msgs, d->bytes, d->bytesMost, d->refused, d->tickBytesMost, d->tickMsgsMost);
         memset(d, 0, sizeof *d);
         d->window = now / 150;
     }
+}
+
+/* a message to the queue (0x451DF0), and under the lever its size and whether the queue answered 0 (0x462710
+   drops a message it cannot hold). stream_sent is the same for the engine's own send of a tick's last message. */
+static int __stdcall stream_sent(int dpid, void* buf, unsigned int size)
+{
+    const int r = ((int (__stdcall*)(int, void*, unsigned int))(size_t)STREAM_SEND)(dpid, buf, size);
+    if (s_streamLog && s_streamCur < 10) {
+        STREAMDIAG* d = &s_streamDiag[s_streamCur];
+        d->msgs++;
+        d->bytes += size;
+        if (size > d->bytesMost) d->bytesMost = size;
+        if (!r) d->refused++;
+        d->tickBytes += size;
+    }
+    return r;
+}
+
+/* THE RECEIVER'S STEP ON A TICK'S LAST MESSAGE [DISASSEMBLED 2026-11-21]. After a 0x2C's list the
+   receiver 0x48B920 runs, for every live unit of the sender's block with a mover, the movement pass
+   0x43DD20 and the sight pass 0x48A870 (0x48BA28..0x48BA5C), then reads the flag bit after the
+   list's end (0x48BA5E..0x48BA97): set, a round-robin entry follows; clear, the message ends
+   (0x48BAC8). Stock's sender always sets it (0x48B81B..0x48B84C). So a remote unit moves one step a
+   message, and a second message in a tick would move it twice. Branch at 0x48BA28, before the
+   sweep's two loads: 0 -> 0x48BA5E, no sweep, for a message whose flag is clear; else the sweep.
+   A stopped parse (the reader on s_wireZero) keeps stock's sweep. The flag is the bit stock reads
+   next: inside B3's zero-padded copy when that reader is the one in use. */
+static int __cdecl stream_step(unsigned int* r)
+{
+    const unsigned char* rd = WPN_ESP_JMP(r) + 0x10;
+    const unsigned int* buf = *(const unsigned int* const*)rd;
+    unsigned long long pos;
+    if (buf == &s_wireZero) return 1;
+    pos = wire_pos(rd);
+    return (int)((buf[pos / 32u] >> (pos % 32u)) & 1u);
 }
 
 static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
@@ -10231,7 +10308,7 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     const PFN_StreamBits bits = (PFN_StreamBits)(size_t)STREAM_BITS;
     char* const ta = *(char* const*)(size_t)STREAM_MAIN;
     char *first, *last, *begin, *end, *players;
-    unsigned int n, k, i, p, sent = 0, left = 0, slot0;
+    unsigned int n, k, i, p, sent = 0, left = 0, slot0, msgs = 1, typeBits, room;
     int now;
     if (!ta) return;
     first = *(char* const*)(rec + 0x67);
@@ -10247,6 +10324,16 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
             ? (unsigned int)(rec - players) / 0x14B : 10;
     k = p < 10 && s_streamAt[p] < n ? s_streamAt[p] : 0;
     now = *(const int*)(ta + 0x38A47);
+    typeBits = *(const unsigned int*)(ta + 0x14393);
+    if (typeBits > 16u) return;                     /* a type is a u16 (+0xA6) */
+    room = STREAM_BITS_MAX - STREAM_ENTRY_BITS(typeBits) - STREAM_TAIL_BITS(typeBits);
+    s_streamCur = p;
+    if (s_streamLog && p < 10) {        /* the last tick's bytes are whole now: its last message left after the list */
+        STREAMDIAG* d = &s_streamDiag[p];
+        if (d->tickBytes > d->tickBytesMost) d->tickBytesMost = d->tickBytes;
+        d->tickBytes = 0;
+        stream_log(p, now);
+    }
     for (i = 0; i < n; i++) {
         const unsigned int at = (k + i) % n;
         char* const unit = first + (size_t)at * 0x118;
@@ -10255,9 +10342,33 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
         if (!(*(const unsigned int*)(unit + 0x110) & 0x10000000u) || !(mover = *(char**)unit)) continue;
         course = *(void**)mover;
         if (!(*(PFN_StreamDirty*)(*(char**)course + 0x1C))(course)) continue;
+        if (writer[0] * 32u + writer[1] > room) {       /* THE SIZE BOUND: this entry might not fit */
+            unsigned char* const buf = (unsigned char*)(size_t)writer[3];
+            unsigned int size;
+            if (msgs >= STREAM_MESSAGES) {          /* the tick's traffic is spent: this unit is the next tick's first */
+                if (p < 10) s_streamAt[p] = at;
+                break;
+            }
+            msgs++;
+            /* the message in hand, a list alone: its end, the flag clear, its size as the engine's
+               tail writes it (0x48B8A9..0x48B8E3), sent as that tail sends (0x48B8FD..0x48B903) */
+            bits(writer, 0xFFFFu, 16);
+            bits(writer, 0, 1);
+            size = writer[0] * 4u + ((writer[1] + 7u) >> 3);
+            buf[1] = (unsigned char)size;
+            buf[2] = (unsigned char)(size >> 8);
+            stream_sent(*(const int*)(rec + 4), buf, size);
+            /* the next on the same writer, as 0x415B60 leaves one, with the header 0x48B72A..0x48B74E writes */
+            writer[0] = 0;
+            writer[1] = 0;
+            *(unsigned int*)buf = 0;
+            bits(writer, 0x2Cu, 8);
+            bits(writer, 0, 16);
+            bits(writer, (unsigned int)now, 32);
+        }
         bits(writer, (unsigned int)(*(const unsigned short*)(unit + 0xA8) -
                                     *(const unsigned short*)(*(char* const*)(unit + 0x96) + 0x6F)), 16);
-        bits(writer, *(const unsigned short*)(unit + 0xA6), *(const unsigned int*)(ta + 0x14393));
+        bits(writer, *(const unsigned short*)(unit + 0xA6), typeBits);
         (*(PFN_StreamPayload*)(*(char**)course + 0x20))(course, writer);
         sent++;
         if (s_streamLog && slot0 + at < STREAM_SLOTS) {
@@ -10272,13 +10383,9 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
             }
             *since = 0;
         }
-        if (writer[0] * 4u + ((writer[1] + 7u) >> 3) >= STREAM_BUDGET) {
-            if (p < 10) s_streamAt[p] = (at + 1) % n;
-            break;
-        }
     }
     if (!s_streamLog || p >= 10) return;
-    stream_log(p, now);
+    s_streamDiag[p].sent += sent;
     for (i = 0; i < n; i++) {
         char* const unit = first + (size_t)i * 0x118;
         char* mover;
@@ -10299,18 +10406,43 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
         STREAMDIAG* d = &s_streamDiag[p];
         d->ticks++;
         d->units = n;
-        d->sent += sent;
         if (sent > d->sentMost) d->sentMost = sent;
+        if (msgs > d->tickMsgsMost) d->tickMsgsMost = msgs;
         d->left += left;
         if (left > d->leftMost) d->leftMost = left;
     }
 }
 
-/* CLASS: in the table, fail closed. The entries and every receiver are stock's, so no shared state rests on
-   it, but a game never runs without it: without it a peer's units reach the others with no bound on the wait,
-   and a launch where 0x48B76C does not hold stock's bytes, or is rewritten before the first DirectDraw call,
-   is refused (tagpu_limits_report). */
-static int fix_stream_order(void)
+/* the measurement's receive: the messages and bytes each sending record's 0x2C reached this peer with */
+static void __stdcall stream_recv(char* rec, unsigned char* buf)
+{
+    char* const ta = *(char* const*)(size_t)STREAM_MAIN;
+    char* const players = ta ? ta + 0x1B63 : NULL;
+    if (ta) {
+        const int now = *(const int*)(ta + 0x38A47);
+        if (s_streamRecvWindow != now / 150) {
+            unsigned int i;
+            for (i = 0; i < 10; i++)
+                if (s_streamRecv[i].msgs)
+                    tagpu_logf("netstream: received from record %u: %u messages, %u bytes", i,
+                               s_streamRecv[i].msgs, s_streamRecv[i].bytes);
+            memset(s_streamRecv, 0, sizeof s_streamRecv);
+            s_streamRecvWindow = now / 150;
+        }
+        if (rec >= players && rec < players + 10 * 0x14B && (size_t)(rec - players) % 0x14B == 0) {
+            const unsigned int i = (unsigned int)(rec - players) / 0x14B;
+            s_streamRecv[i].msgs++;
+            s_streamRecv[i].bytes += (unsigned int)buf[1] | (unsigned int)buf[2] << 8;
+        }
+    }
+    ((void (__stdcall*)(char*, unsigned char*))(size_t)STREAM_RECV)(rec, buf);
+}
+
+/* CLASS: simulation, fail closed. A peer without the receiver's part steps a sender's units once a message, up
+   to STREAM_MESSAGES times a tick, and its copies run ahead of their owners; a peer without the sender's part
+   sends its units with no bound on the wait. Both sites are the table's: a launch where either does not hold
+   stock's bytes, or is rewritten before the first DirectDraw call, is refused (tagpu_limits_report). */
+static int fix_unit_stream(void)
 {
     static const unsigned char was[9] = {
         0x3B, 0x77, 0x6B,                       /* cmp esi,[edi+0x6b] */
@@ -10328,6 +10460,21 @@ static int fix_stream_order(void)
     *p++ = 0xE9; tagpu_detour_rel(p, STREAM_RESUME);                    /* the terminator                */
     lim_branch(0x0048B76Cu, (int)sizeof was, was, 0xE9, (unsigned int)(size_t)c,
                "unit stream: the dirty list in turn");
+    {   /* the receiver's sweep, taken only for a message whose flag is set (stream_step) */
+        static const unsigned char sweep[8] = {
+            0x8B, 0x77, 0x67,               /* mov esi,[edi+0x67] */
+            0x8B, 0x47, 0x6B,               /* mov eax,[edi+0x6b] */
+            0x3B, 0xF0,                     /* cmp esi,eax        */
+        };
+        unsigned char* st = tagpu_detour_stub();
+        if (!st) { lim_no_stub(); return FIX_TABLE; }
+        wire_emit_tail(st, stream_step, 0x0048BA5Eu, sweep, 8, 0x0048BA30u);
+        lim_branch(0x0048BA28u, (int)sizeof sweep, sweep, 0xE9, (unsigned int)(size_t)st,
+                   "unit stream: the receiver's step on a tick's last message");
+    }
+    if (s_streamLog && !(tagpu_detour_redirect(0x0048B903u, STREAM_SEND, (void*)stream_sent) &&
+                         tagpu_detour_redirect(0x004553F4u, STREAM_RECV, (void*)stream_recv)))
+        tagpu_log("netstream: the send and receive counts could not be installed");
     return FIX_TABLE;
 }
 
@@ -10386,7 +10533,7 @@ static void patch_engine_defects(void)
     int aisend = fix_ai_economy_send();
     int aitax  = fix_ai_untaxed();
     int aishr  = fix_ai_autoshare();
-    int sorder = fix_stream_order();
+    int ustream = fix_unit_stream();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -10549,8 +10696,9 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
-              "enginefix: the unit stream's dirty list in turn, each tick from where the last stopped "
-              "(0x48B76C) %s%s", fix_state(sorder), s_streamLog ? "; its queue logged (tagpu_netlog.on)" : "");
+              "enginefix: the unit stream -- its dirty list in turn, in up to %u messages a tick (0x48B76C), "
+              "the receiver stepping on the tick's last (0x48BA28) %s%s", STREAM_MESSAGES, fix_state(ustream),
+              s_streamLog ? "; its queue logged (tagpu_netlog.on)" : "");
     b[sizeof b - 1] = 0;
     plog(b);
 

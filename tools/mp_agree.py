@@ -3,6 +3,7 @@
 fought for a few minutes, paused, and each peer's units compared with the other's.
 
     tools/mp_agree.py --out DIR [--dll PATH] [--join-dll PATH] [--until T] [--tol W] [--engine-paths] [--gpu]
+                      [--marches N [--march-every TICKS]]
 
 One two-player game on Town & Country (tools/impai/twopeers.py: the run's two instances on a private
 display and a DirectPlay port leased for the game, MultiCommanderDeath 0), the 1500 unit limit; the host
@@ -24,10 +25,15 @@ WHAT IT JUDGES, unit by unit, matched by engine slot (the same slot on every pee
     its own peer's (owner 0) on exactly one of them;
   - each unit stands where its owner's copy stands, within W world units (256 by default). A remote
     copy is where its owner's last entry for it put it: a unit moving at the pause trails by its speed
-    times the ticks its entry waited, the message's way and the two pauses' skew. With the unit
-    stream in turn a unit's entry waits at most one turn of the walk over its block, about 45 ticks
-    for 1500 ground units at about 33 entries a message (tagpu_patches.c, stream_order); MEASURED 2026-11-20 at most 42 ticks and 157 world units, a Peewee. A stationary
-    unit agrees exactly; the report gives the share that does.
+    times the ticks its entry waited, the message's way and the two pauses' skew. The unit stream
+    (tagpu_patches.c, unit_stream) sends a block's dirty units in turn, in up to four messages a tick,
+    so an entry waits one turn of the walk at most: MEASURED 2026-11-21 at most 4 ticks for a whole
+    army ordered at once, the copies 100 world units off at most there and unit for unit alike in the
+    fight. A stationary unit agrees exactly; the report gives the share that does.
+--marches N plays no fight: each peer's whole army is ordered to move as one, N times, --march-every ticks
+apart (150), between points apart from the other army, and the game is paused 300 ticks after the last. Every
+unit of a block is dirty in the tick of a march, the unit stream's worst case; the report's `unit stream`
+lines give the longest wait.
 --engine-paths writes tagpu_pathverify.on into both game folders, which puts the engine's own path scheduler
 back in place of ours (our search runs beside it as an oracle and writes nothing): the same game with
 stock pathfinding, for a comparison. Both peers log the pathfinder's lines (tagpu_pathlog.on) and the unit
@@ -55,6 +61,13 @@ import twopeers     # noqa: E402
 
 MAP = "Town & Country"
 ARMIES = ("limits-tier2-p0", "limits-tier2-p1")
+# --marches: the two points each peer's whole army is ordered between, apart from the other's so that
+# nothing fights and every unit lives: a march makes every unit of a block dirty in one tick
+# A march is a player's own: Ctrl+A, the camera on the point, a right click in the middle of the view --
+# the engine's order path for every selected unit (tacli's `order --sel` reaches 512). The points are empty
+# ground the army never reaches between two marches, so the click never lands on a unit.
+MARCH = (((7400, 2300), (5300, 2500)), ((4000, 6900), (5600, 7900)))
+VIEW_MIDDLE = ("576", "384")
 DEATHS_IN_FLIGHT = 32
 PAUSED = "*0x511DE8+0x38A51:1"          # the engine's pause byte (modules.md, "To compare peers")
 ROSTER_S = 6                            # past the roster's 5 s dump (tagpu_packet_pub.c, ROSTER_DUMP_MS)
@@ -164,6 +177,9 @@ def main() -> int:
     ap.add_argument("--port", type=int, help="the DirectPlay port (leased when not given)")
     ap.add_argument("--engine-paths", action="store_true", help="the engine's own path scheduler (tagpu_pathverify.on)")
     ap.add_argument("--gpu", action="store_true", help="render both peers on the default renderer")
+    ap.add_argument("--marches", type=int, default=0,
+                    help="order each peer's whole army to move, this many times back to back, in place of the fight")
+    ap.add_argument("--march-every", type=int, default=150, help="ticks between two marches (150)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     runlock.hold(TREE, f"mp_agree: two peers of {len(ARMIES) * 1499} units, compared paused", lanes=2,
@@ -178,6 +194,19 @@ def main() -> int:
             tp.start()
             for name, army in zip((tp.host, tp.join), ARMIES):
                 tp.tacli("scenario", "apply", name, army, "--timeout", "300", timeout=360)
+            if args.marches:
+                at = tp.gametime(tp.host) + 60
+                for k in range(args.marches):
+                    tp.play_to(at + k * args.march_every)
+                    for name, points in zip((tp.host, tp.join), MARCH):
+                        x, z = points[k % 2]
+                        tp.tacli("eye", name, str(x), str(z))
+                        tp.tacli("keys", name, "ctrl+a")
+                        tp.tacli("click", name, "--right", *VIEW_MIDDLE)
+                        print(f"mp_agree: march {k + 1} at GameTime {tp.gametime(tp.host)}, {name} to {x},{z}",
+                              flush=True)
+                args.until = at + args.marches * args.march_every + 300
+                result["until"] = args.until
             tp.play_to(args.until)
             tp.tacli("keys", tp.host, "shift", "pause")
             deadline = time.monotonic() + 60

@@ -311,20 +311,19 @@ random numbers.
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
 different shared state on an input stock does not fault on — hands its sites to the fail-closed
 table of §2.6b, in both builds: they are compared and written with the rest of the table or not at
-all, and a mismatch ends the process through the failure report. The twenty-three such fixes are the
+all, and a mismatch ends the process through the failure report. The twenty-four such fixes are the
 full wreck pool, the reclaim mark, the border features, the saved record's owner, whole build lists,
 the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, the
-line of sight, stacked aircraft, stale hits, the ghost commander, the kill counts, the wind, the yardmaps and
-the shatter's random numbers,
+line of sight, stacked aircraft, stale hits, the ghost commander, the kill counts, the wind, the yardmaps,
+the shatter's random numbers and the unit stream (a peer's units sent in turn in up to four messages a tick,
+and the receiver stepping a sender's units on the tick's last message alone: a peer without the receiver's
+part would step them once a message),
 and the five that make a game a function of its inputs from process to process: the hover wave on GameTime,
 the mover's unmoved stamp, the AI builder planner's site altitude, the patrols' reclaim search's altitude and a
 harness's random streams. The last is a harness's alone: it changes nothing unless the game folder holds the lever
 `tagpu_seeds.on`, which only the automated harnesses write, and its meteor rows join the table only then.
 The effect pools' level reset is in the table too, though its absence changes no shared state:
-in the raised build it is what initialises the static debris records. So is the unit stream's dirty
-list in turn, whose absence changes no shared state either: a game never runs without it, since
-without it a peer's units reach the others with no bound on the wait (once more of one player's
-units are dirty than a message holds, the block's high slots wait for the round robin). A
+in the raised build it is what initialises the static debris records. A
 *local* fix — a crash, a draw, a message or a malformed input — compares and writes its own sites
 and is skipped alone: the sort buffer, the NULL plot, the terrain window, the composite scratch,
 the out-of-memory text, flak's divides, the line of sight in local code, the projectile pass's

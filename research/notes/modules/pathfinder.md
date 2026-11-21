@@ -326,5 +326,6 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
   engine's (21 against 14), each path makes its unit dirty in the unit stream, and the stream sent
   the dirty units from each block's first slot until its message was full, so the high slots' copies
   trailed their owners by up to 1408 world units over three runs (the engine's scheduler: 296 over
-  two). With the stream in turn (`engine-patches.md`, the unit stream) a copy trails by 157 at most. Not measured: ten peers,
+  two). With the stream in turn, in up to four messages a tick (`engine/network.md`, *What Impure
+  sends*), a unit's entry waits 4 ticks at most and the fight's peers stand unit for unit alike. Not measured: ten peers,
   a game over the internet, Windows.
