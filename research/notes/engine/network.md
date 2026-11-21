@@ -649,7 +649,7 @@ cover it and the padding is 48.
   4-byte heap block; stock never reaches it (0x200 bytes and one entry's overshoot).
 - **Its end.** After the list: `[16] 0xFFFF` (`0x48B80E`), one flag bit set unconditionally
   (`0x48B81B..0x48B84C`), the round-robin entry (`0x48B200`), the size — `dword index × 4 +
-  (bit index + 7) / 8` — patched into bytes 1 and 2 (`0x415DA0`, at `0x48B8C3` and `0x48B8E3`), and
+  (bit index + 7) / 8` — patched into bytes 1 and 2 (`0x48B8A9..0x48B8E3`: `0x415DA0` at `0x48B8C3` and `0x48B8E3`), and
   `0x451DF0([rec+4], buffer, size)` (`0x48B903`, stdcall, `ret 0xC`). Nothing in `0x48B710` tests the size.
 - **The queue below.** In the default, queued mode `0x451DF0` hands the message to channel 0
   (`0x461990` → `0x462710`, the channel at `0x513008`). `0x4628D0` appends it to a pool buffer only
@@ -657,7 +657,8 @@ cover it and the padding is 48.
   ("out of space in buffer!", `0x462996`); a full ring (`[ch+0x38]` = 0x400 entries) that a forced
   flush does not empty drops it too (`0x462731`). **A message is never split: one over 0x42A = 1066
   bytes is always dropped.** Every message of every local record shares the channel.
-- **The receiver's step.** After a `0x2C`'s list `0x48B920` walks the sender's whole block
+- **The receiver's step.** After a `0x2C`'s list `0x48B920` (stdcall `(rec, message)`, `ret 8`; its
+  one caller the dispatcher's case, `0x4553F4`) walks the sender's whole block
   (`0x48BA28..0x48BA5C`) and calls, for every live unit with a mover, the movement pass `0x43DD20`
   and the sight pass `0x48A870`: a remote unit steps **once a message received**, not once a tick
   of the receiver's own clock. It then reads the flag bit (`0x48BA5E..0x48BA97`): set, the round
