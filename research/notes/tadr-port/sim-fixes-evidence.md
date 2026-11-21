@@ -724,12 +724,13 @@ describes by hand.
 ### Adjacent findings (not TADR items)
 
 - **The `0x2C` dirty list stops at 0x200 bytes a tick, filled in slot order from the block's
-  start** (`0x48B7F6`). **INF:** if `[vt+0x1C]` does not clear a unit's dirty state when it is
-  skipped, high slots of a busy block starve until the round robin, up to N ticks. At 1500 a
-  player, many movers can overflow 512 bytes. This bears on `raised-limits.md`'s open
-  "does the raise stretch the update interval" question, and on any allocator that pushes new
-  units to high slots, as TADR's bump pointer does. Settle it on a tier 2 run by logging, per
-  tick, the last slot the sender reached.
+  start** (`0x48B7F6`). `[vt+0x1C]` is a pure test (`0x44F480`, `0x4908B0`); only the payload
+  `[vt+0x20]` clears the dirty state, so a skipped unit stays dirty and the high slots of a busy
+  block starve until the round robin. MEASURED 2026-11-20 (`tagpu_netlog.on`, two peers of 1499
+  kbots on Town & Country): with the stock order 168 to 509 units were left dirty after the average
+  message and a unit's entry waited up to 5266 ticks. Impure walks the list in turn
+  (`engine-patches.md`, `stream_order`), which bounds the wait by one turn of the block: at most
+  42 ticks there.
 - **The player blocks are ordered by DPID in a network game** (`0x485676` compares seat `+4`
   while ordering the ten records). **INF** that the block assignment follows that order; it is
   consistent with every peer agreeing on `engine_index` (tier 2).

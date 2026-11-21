@@ -417,12 +417,12 @@ the line `enginefix: AI allies as human ones` reports them.
 
 | VA | What it is | Feature | Mechanism |
 |---|---|---|---|
+| `0x48B76C` | `cmp esi,[edi+0x6b]; ja 0x48B80E` (9 bytes), the head of the `0x2C` sender's dirty list | `stream_order` | jmp to a stub: `stream_dirty_list(rec, writer)` writes the same entries from the unit after the last one the previous message wrote, wrapping, under the same 0x200-byte budget, then jmp `0x48B80E` |
 | `0x4655A1` | `call 0x4573D0`, the players phase's `0x28` for the viewed record, every fourth 30-tick pass in a network game | `ai_economy_send` | call-site redirect to `ais_economy_send` (stdcall, `ret 0xC`): the original call, then `0x4573D0(ai, 0, 0)` for each active type-2 record of the ten |
 | `0x464D3A`, `0x464C0A` | the transfers' `jne` past the type-2 (local AI) scale, metal and energy | `ai_untaxed` | `75` → `EB`: the full credit at every difficulty |
 | `0x457DD8`, `0x457DE4`, `0x457EF6`, `0x457F02` | the auto-share's recipient tests: remote (`+0x73` = 3) and human (PlayerInfo `+0x94` = 1), metal then energy | `ai_autoshare` | `75 xx` → `90 90` |
 | `0x457D44` | the auto-share's `je` when not a network game | `ai_autoshare` | 6 × `90` |
 | `0x49560B` | the step's `test edi,edi; je; mov eax,[0x506DBC]` before the auto-share's call (9 bytes) | `ai_autoshare` | jmp to a stub: with `edi` ≠ 0 the stock path resumes at `0x495614`; with 0 it calls `ais_share_skirmish` and resumes at `0x49566C`, past the network block |
-| `0x48B76C` | `cmp esi,[edi+0x6b]; ja 0x48B80E` (9 bytes), the head of the `0x2C` sender's dirty list | `stream_order` | jmp to a stub: `stream_dirty_list(rec, writer)` writes the same entries from the unit after the last one the previous message wrote, wrapping, under the same 0x200-byte budget, then jmp `0x48B80E` |
 | `0x49563A` | `call 0x457D30`, the auto-share for the controlled record | `ai_autoshare` | call-site redirect to `ais_share_every` (stdcall, `ret 4`): nothing on a puppet level; else the original call, then one for each active type-2 record |
 
 ### Allied sight (`tagpu_allysight.c`)

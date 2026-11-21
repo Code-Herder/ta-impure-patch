@@ -266,7 +266,8 @@ int tagpu_sim_lever_read(const char* file, char* buf, int cap);
    the file's first coming before any code or declaration. `fixtures_` names, space-separated,
    the entries of tools/replay/fixtures.json that exercise it; the replay harness runs them when a
    landing changes the region (`tareplay.py landing`) and checks that they reached each changed
-   function. `puppet_` is what the feature does on a puppet host:
+   function. The name `multiplayer` is the landing's two-player network game on both builds
+   (tareplay.multiplayer_group), for code only a network game runs: no recording plays one. `puppet_` is what the feature does on a puppet host:
      SIM_PUPPET_RUNS         its code runs on a puppet and its effect must match the recording's;
      SIM_PUPPET_OWNER        its own code refuses to act on a puppet, the owner's machine's effect
                              reaching the puppet through the recording;

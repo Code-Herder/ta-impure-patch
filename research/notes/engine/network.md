@@ -591,12 +591,13 @@ less the block's first (`[[unit+0x96]+0x6F]`); the receiver places it from the b
 again (`0x48B985..0x48B99A`: `first + delta × 0x118`, the delta signed and `0xFFFF` the end), so the
 entries may come in any order. At about 15 bytes an entry the 0x200-byte budget (`0x48B7F6`) holds
 about 33 a message, and while more units are dirty the block's high slots wait for the round robin:
-MEASURED 2026-11-20 (`tools/mp_agree.py`, two peers of 1499 kbots on Town & Country, `tagpu_netlog.on`)
-with our pathfinder 368 and 509 units left dirty after the average message, a unit's entry waiting up
-to 4598 ticks and its copy standing up to 975 world units off its owner's, worst in the top fifth of
-the slots; with the engine's pathfinder 168 and 328 left, 1729 ticks and 296 world units. Impure walks
-the list in turn (`tagpu_patches.c`, `stream_order`): 296 and 297 left, at most 42 ticks, 157 world units,
-the lag the same in every fifth of the slots. A dirty entry whose type differs from its slot creates the unit
+MEASURED 2026-11-20 (`tools/mp_agree.py`, two peers of 1499 kbots on Town & Country paused at GameTime
+5400, `tagpu_netlog.on`; each figure the worse of the two peers, a lag the worst over the runs named):
+with our pathfinder 509 units left dirty after the average message, a unit's entry waiting up to 5266
+ticks and its copy standing up to 1408 world units off its owner's (three runs), worst in the top fifth
+of the slots; with the engine's pathfinder 328 left, 2273 ticks and 296 world units (two runs). Impure
+walks the list in turn (`tagpu_patches.c`, `stream_order`): 297 left, at most 42 ticks and 157 world
+units (one run), the lag the same in every fifth of the slots (90th percentile 16 to 30). A dirty entry whose type differs from its slot creates the unit
 (`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
 to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
 0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the

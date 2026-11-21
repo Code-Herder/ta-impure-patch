@@ -431,8 +431,11 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - The explosion tick's compaction at its 3000-record cap: tier 2 held 2936–2966 explosions on
   every peer at the full 30 ticks a second of a network game's speed 10; at single player's speed
   20 (60 ticks) that count is not measured.
-- How far a remote unit lags its owner at stock's 500 a player: tier 2's up-to-40-ticks at 1500 is
-  measured, stock's is not, so whether the raise stretches the update interval is open.
+- How far a remote unit lags its owner at stock's 500 a player. At 1500 the dirty list's walk from
+  the block's first unit made the wait unbounded (up to 5266 ticks, measured 2026-11-20 with
+  `tagpu_netlog.on`); Impure walks it in turn (`stream_order`), which bounds a unit's wait by one
+  turn of its block, about n / 33 ticks for n dirty ground units: at most 42 at 1500. At 500 the
+  same bound is about 15 ticks; not measured.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
 - A unit's own frame taller than 800 rows (landing 7): the 1× bakes draw it through the same
   800-row span tables, in stock and with the fix alike. A solar scaled ×22 (1544 rows) faults at

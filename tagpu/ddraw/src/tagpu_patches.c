@@ -10151,7 +10151,7 @@ static int fix_ai_autoshare(void)
     return fix_write(site, 7);
 }
 
-SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "battle");
+SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "multiplayer");
 
 /* THE UNIT STREAM'S DIRTY LIST IN TURN [DISASSEMBLED 2026-11-20]. In a network game the unit tick
    calls 0x48B710(rec) once a tick for each local type-1/2 record (0x48B003): a 0x2C message of
@@ -10167,9 +10167,9 @@ SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "battle");
    the next tick, which starts again at the first unit. So while more than that are dirty a tick,
    the block's high slots are sent only by the round robin, once every main+0x37EE6 ticks.
    MEASURED 2026-11-20 (tools/mp_agree.py, two peers of 1499 kbots on Town & Country, paused at
-   GameTime 5400): a unit's copy on the other peer stood off its owner's by up to 1393 world units,
-   and the top fifth of each block's slots by 408 at the 90th percentile against 0 in the bottom
-   fifth.
+   GameTime 5400, three runs): a unit's entry waited up to 5266 ticks and its copy on the other peer
+   stood off its owner's by up to 1408 world units, the top fifth of each block's slots by 408 at the
+   90th percentile against 0 in the bottom fifth.
 
    THE FIX replaces the walk (0x48B76C..0x48B80E) with stream_dirty_list: the same test, the same
    entries and the same budget, starting at the unit after the last one the previous tick wrote

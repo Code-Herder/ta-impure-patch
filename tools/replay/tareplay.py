@@ -6037,6 +6037,10 @@ def cmd_landing(args):
         say(w_)
     changed = git("diff", "--name-only", f"{base}...HEAD").split()
     multiplayer, mp_impai = wants_multiplayer(changed), wants_impai_multiplayer(changed)
+    if tafeat.MULTIPLAYER in fx:            # a changed feature that only a network game runs
+        fx.discard(tafeat.MULTIPLAYER)
+        multiplayer = True
+        say("tareplay landing: a changed feature names the two-player game")
     if not (gated_any or multiplayer):
         print("tareplay landing: nothing gated changed")
         return 0
@@ -6152,7 +6156,9 @@ def cmd_broad(args):
                    if f["line"] <= fn[1] <= f["end"]]
             if fns and not any(k in reached_fns for k in fns):
                 lines.append(f"UNCOVERED feature {f['name']} ({f['file']}:{f['line']}): none of "
-                             f"{' '.join(f['fixtures'])} reached it")
+                             f"{' '.join(f['fixtures'])} reached it"
+                             + (" (the two-player game is the landing's; this tier does not play it)"
+                                if tafeat.MULTIPLAYER in f["fixtures"] else ""))
     sites, changed, tables = set(), set(), None
     for name, fx in run.fx.items():
         Ts = fx["Ts"]
