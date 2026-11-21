@@ -198,8 +198,8 @@ void tagpu_posedraw_end(void);
    tagpu_vk_unit.c records them as a stage of its own, stencil-masked, before
    the bodies, with two pipelines. `wireFirst`/`wireCount` carry the bake's
    WIRE range for a unit with `nanoOn`, `wire` its colour, and tagpu_vk_unit.c
-   poses the range's vertex pairs on the CPU into line records and draws them
-   after the bodies with tagpu_posedraw.c's WVS.
+   draws the range's vertex pairs after the bodies with tagpu_posedraw.c's
+   WVS, which poses them on the device.
 
    NO POSED UNIT CASTS INTO THE CAST-SHADOW MAP, and this is the one that looks
    done. tagpu_vk_unit.c builds a `pose_depth` pipeline from the VS + DFS in
@@ -345,9 +345,8 @@ typedef struct TAGPU_PDHAND {
     const float* flags; const float* vis; unsigned nflag;
     /* THE EFFECTS MODELS' RUNS, 8 floats each (TAGPU_PDFX), every fx record's
        back to back. The storage buffer carries them after the two word
-       sections and the consumer's wire records (tagpu_vk_unit.c), so a
-       record's first run is at vec4 `nrow + nflag / 2 + <the wire's vec4> +
-       2 * first`. */
+       sections (tagpu_vk_unit.c), so a record's first run is at vec4
+       `nrow + nflag / 2 + 2 * first`. */
     const float* runs;  unsigned nrun;
 
     /* THE VERTEX STAGE'S BLOCK, as `_begin` left it. Its std140 offsets are
