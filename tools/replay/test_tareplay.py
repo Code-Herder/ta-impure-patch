@@ -2385,6 +2385,15 @@ class Parser(unittest.TestCase):
                 "int __cdecl b(void* E) { return 0; }\n")
         self.assertEqual(tafeat.functions(text), [("a", 3, 6), ("b", 7, 7)])
 
+    def test_untested_marks(self):
+        text = ("static void a(void)\n{\n}\n"
+                'SIM_UNTESTED(a, "only a fault reaches it");\n'
+                '/* SIM_UNTESTED(b, "a comment marks nothing"); */\n')
+        self.assertEqual(tafeat.untested(text), {"a": "only a fault reaches it"})
+        self.assertEqual(tafeat.untested_problems(text, "x.c"), [])
+        bad = text + 'SIM_UNTESTED(a);\nSIM_UNTESTED(gone, "why");\n'
+        self.assertEqual(len(tafeat.untested_problems(bad, "x.c")), 2)
+
     def test_blank_comments_keeps_code(self):
         text = '#define A 1 /* x */\n"s/*t" // c\nint x; /* y */\n'
         self.assertEqual(tafeat.blank_comments(text),

@@ -65,11 +65,11 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
     not empty between two ticks while a search is carried. A recording holds no course, so a
     restored game makes its units again and each is ready for a search; a list of the carried
     searches' units, built first, had nothing to give back and was taken out on the owner's word.
-16. **At the landing on main, `job_carry` and `goal_touch` named `UNCOVERED` by the replay gate
-    are accepted** (2026-11-20): a search is carried 10 to 70 times in 116 000 in the battle of
-    13 500 units, and the test groups' games may carry none. The gate has no list of exceptions;
-    this is the decision it asks for, for this feature and those two functions. Any other
-    function it names is asked about then.
+16. **`job_carry` is marked `SIM_UNTESTED`, and the replay gate asks no reach of it**
+    (2026-11-20): a search is carried 10 to 90 times in 116 000 in the battle of 13 500 units,
+    as the moment decides, and the test groups' games may carry none. `goal_touch`, if the gate
+    names it at the landing on main, is accepted there on the same decision; any other function
+    it names is asked about then.
 
 ## The scheduler's rules as built, and what each rests on
 

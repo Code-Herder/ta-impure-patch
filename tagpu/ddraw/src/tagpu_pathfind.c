@@ -1092,6 +1092,7 @@ static void job_carry(JOB* j)
     s_v.carried++;
     if (s_m->ncarry > s_v.carried_most) s_v.carried_most = s_m->ncarry;
 }
+SIM_UNTESTED(job_carry, "reached only where a search is still running at its tick's join: the moment decides");
 
 /* the carried searches that have ended: their results, in the order they were chosen */
 static void carried_reap(void)

@@ -398,7 +398,8 @@ two-player game on both coverage builds, so both must be built. A failure is the
 `MULTIPLAYER <build>:` line included: fix it in a new commit and re-run, three attempts. A game that
 cannot start at all (no X server, Wine, an instance) is escalation reason 3. An `UNFEATURED` line or an
 `UNCOVERED` function is fixed with a declaration or a test group that reaches it; landing without one
-is the owner's decision. Run it
+is the owner's decision, and so is a `SIM_UNTESTED` mark on a function no game can be made to reach
+(`inc/tagpu_simreg.h`), which is then asked no reach. Run it
 before Step 5; a review fix that touches a gated file runs it again.
 
 ## Step 5 — Review gate: check it, then run it if it is missing

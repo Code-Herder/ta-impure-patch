@@ -98,7 +98,9 @@ wrappers and what the build check cannot prove:
   sought from a fresh process, on the coverage build — plays a two-player game on both coverage
   builds when the recorder changed, checks that they reached every changed
   function, and records a `replay-roundtrip:` note. A changed line no declaration covers, or a
-  changed function nothing reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+  changed function nothing reached, fails by name; landing it anyway is the owner's decision. A
+  function no game can be made to reach carries `SIM_UNTESTED` with its reason
+  (`inc/tagpu_simreg.h`) and is asked no reach. The broad tier,
   `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
   compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
   landings.
@@ -115,7 +117,8 @@ wrappers and what the build check cannot prove:
   events is `SIM_STATE`, not `SIM_PRIVATE`.
 - **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
   PRIVATE on memory the simulation reads, an expected-absent event, a tolerance, a hold row
-  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes). A
+  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes), a
+  `SIM_UNTESTED` mark. A
   difference the harness names is a bug in the change, never grounds for an exclusion.
 
 ## Land it yourself — what actually requires a human
