@@ -831,6 +831,22 @@ class NoDraw(unittest.TestCase):
                 w.close()
             self.assertEqual(sorted(x.name for x in g.iterdir()), ["keep.txt"])
 
+    def closed(self, keep):
+        """The tacli commands a worker's close() sends, with `keep` set."""
+        with tempfile.TemporaryDirectory() as d:
+            w = tareplay.Worker.__new__(tareplay.Worker)
+            w.name, w.gamedir, w.keep = "tareplay-test", Path(d), keep
+            w.hold_lever, w.stop_display, w.lock = Mock(), Mock(), Mock()
+            with patch.object(tareplay, "tacli", return_value=(0, "")) as tacli:
+                w.close()
+            w.lock.close.assert_called_once()
+            return [c.args[:2] for c in tacli.call_args_list]
+
+    def test_close_removes_the_instance_unless_kept(self):
+        # THE INSTANCE'S END: a worker whose lanes passed leaves no instance; a failed lane or --keep keeps it
+        self.assertIn(("rm", "tareplay-test"), self.closed(False))
+        self.assertNotIn(("rm", "tareplay-test"), self.closed(True))
+
     def test_a_worker_has_no_draw_unless_it_asks(self):
         self.assertFalse(tareplay.Worker.nodraw)
 

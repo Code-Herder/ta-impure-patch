@@ -949,6 +949,22 @@ def tacli(*argv, timeout=120):
                           timeout=timeout)
 
 
+def drop_instances(*names) -> list:
+    """The instances removed once a run is done with them, with what each holds that the results do not
+    (its prefix, its game's ErrorLog.txt): what tacli said for each it could not remove, which leaves it for
+    `clean`. A run keeps a failed setup's instances, and every one under --keep, for diagnosis; one that is
+    not removed is replaced by the next prepare_wine of its name, and only that, since a name carries its
+    run's tag (inst_name)."""
+    failed = []
+    for name in names:
+        if not (INSTANCES / name / "instance.json").exists():
+            continue
+        r = tacli("rm", name, "--force", timeout=300)
+        if r.returncode:
+            failed.append(f"{name}: {(r.stderr or r.stdout).strip()}")
+    return failed
+
+
 DISPLAYS = threading.Lock()      # `taken` is reserved from the runs' threads as well
 
 
@@ -3913,10 +3929,14 @@ def cmd_wine(args):
             judged(s, settled[s["name"]])
 
     def settle(s, o):
-        """The setup's final verdict: journaled, and written to the results folder (VERDICT)."""
+        """The setup's final verdict: journaled, and written to the results folder (VERDICT); then, unless the
+        verdict is UNEXPECTED or the run is --keep, its instances removed, its last stage having ended."""
         o["folder_wrong"] = folder_wrong(s)
         judged(s, o)
         persist(out, o)
+        if not args.keep and o["verdict"] != "UNEXPECTED":
+            for why in drop_instances(*(inst_name(s["name"], x) for x in ("", "-j", "-a"))):
+                print(f"  {s['name']}: the instance stays: {why}")
 
     def prepared(s):
         inst = journaled(s, "prepare", prepare_wine, s, dll, create_display)
@@ -5113,6 +5133,8 @@ def main():
                     help="the start-up watch: the menu watched for SECONDS x 30 engine frames once "
                          "it is up (a game Impure is not in: SECONDS of its main thread's CPU time)")
     wi.add_argument("--screens", action="store_true", help="keep a picture of every run's display")
+    wi.add_argument("--keep", action="store_true",
+                    help="keep every setup's instances; by default only an UNEXPECTED setup's stay")
     wi.add_argument("--strict", action="store_true", help="a known gap fails the run too")
     wi.add_argument("--refuse", choices=("once", "keep"),
                     help="refuse the UI pass in every named setup's battle, as the pass-refused rows do")
