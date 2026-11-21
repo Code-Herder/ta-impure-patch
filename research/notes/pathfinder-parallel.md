@@ -68,6 +68,11 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
 16. **`job_carry` is marked `SIM_UNTESTED`, and the replay gate asks no reach of it**
     (2026-11-20): a search is carried 10 to 90 times in 116 000 in the battle of 13 500 units,
     as the moment decides, and the test groups' games may carry none.
+17. **The verify lever is played by test groups of its own, and `patch_why` is marked
+    `SIM_UNTESTED`** (2026-11-20): `path-verify` and `stock-path-verify` play 900 ticks of the
+    battle with `tagpu_pathverify.on` (668 searches compared in the first playing, none
+    different), which reaches the lever's observers; `patch_why` runs only for a patch entry
+    that differs from the map's, a fault in our rule.
 
 ## The scheduler's rules as built, and what each rests on
 

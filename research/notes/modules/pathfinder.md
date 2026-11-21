@@ -12,7 +12,8 @@ The players phase's call of the engine's scheduler (`0x464F92`) goes to ours; th
 `0x40EB70`, its budget and its search `0x40E630` do not run. It runs on the thread that runs the
 players phase — the game thread, and once the loader during a load, before the game thread's first
 step — and its searches run on up to three helper threads, beside the game. The test lever `tagpu_pathverify.on` leaves the engine's in place and runs our
-search beside it as an oracle (below).
+search beside it as an oracle (below); the replay gate plays it in the test groups `path-verify`
+and `stock-path-verify`, a battle of 900 ticks with the lever on.
 
 ## The scheduler — `sched_tick`
 

@@ -1566,7 +1566,7 @@ void tagpu_pathfind_init(void)
                          : "inside the scheduler");
 }
 
-SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "battle");
+SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "path-verify stock-path-verify");
 
 /* Who stands on the cells entry (x, z) reads, for the log: what makes the rule's answer when it is not the map's. */
 static void patch_why(const PV* v, int x, int z)
@@ -1596,6 +1596,7 @@ static void patch_why(const PV* v, int x, int z)
     tagpu_logf("pathverify: PATCH entry %d,%d reads (class footprint %d,%d, watermark %u):%s", x, z, v->c.fx, v->c.fz,
                v->wm, seen ? b : " no unit");
 }
+SIM_UNTESTED(patch_why, "only a patch entry that differs from the map's reaches it: a fault in our rule");
 
 /* ---- the oracle --------------------------------------------------------------------------------------------- */
 
