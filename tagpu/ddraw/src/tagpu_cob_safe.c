@@ -154,8 +154,10 @@ static const char* control_flow(TagpuCobProgram* p, uint32_t* bad_pc)
    rules, giving each instruction the bounds [lo, hi] of the words a running record holds on
    entering it.
    - A thread enters its script with 0 to 4 words from the engine (0x4B0940: none; 0x4B0B00:
-     argc - 1 of the four it writes; the query 0x4B0C40: four), or with the argc of a START or
-     CALL that names it. Every script can be started by the engine, so every entry's lo is 0.
+     argc - 1 of the four it writes; the query 0x4B0C40: four). A START or CALL child enters with
+     none: the allocator leaves sp at -1 (0x4B090C) and the arguments land in stack[0..argc-1]
+     below it (0x4B18C8..0x4B18E9), so argc enters `depth`, never the bounds. Every script can be
+     started by the engine, so every entry is [0, 4].
    - An instruction takes `need` and leaves `put` (shape; START and CALL take their argc, which
      IMPURE pops whether the child starts or not: tagpu_cob_parent_pops). A state below `need`
      faults in tagpu_cob_check_step and never reaches a successor, so a successor's lo is
@@ -185,29 +187,20 @@ static int widen(TagpuCobProgram* p, uint32_t pc, unsigned lo, unsigned hi)
 static int prove(TagpuCobProgram* p)
 {
     uint32_t n = p->words + 1, *queue, head = 0, tail = 0, pc, i;
-    unsigned char *entry_hi, *queued;
+    unsigned char* queued;
     uint32_t depth = 4;
     int bounded = 1;
     p->lo = (unsigned char*)malloc(n);
     p->hi = (unsigned char*)calloc(n, 1);
     p->guard = (unsigned char*)malloc(n);
-    entry_hi = (unsigned char*)malloc(p->scripts ? p->scripts : 1);
     queued = (unsigned char*)calloc(n, 1);
     queue = (uint32_t*)malloc((size_t)n * sizeof *queue);
-    if (!p->lo || !p->hi || !p->guard || !entry_hi || !queued || !queue) { bounded = 0; goto done; }
+    if (!p->lo || !p->hi || !p->guard || !queued || !queue) { bounded = 0; goto done; }
     memset(p->lo, PROOF_UNSET, n);
     memset(p->guard, 1, n);
-    memset(entry_hi, 4, p->scripts ? p->scripts : 1);
-    for (pc = 0; pc < p->words; ++pc) {
-        CobOp o;
-        if (p->starts[pc] != 1) continue;
-        o = shape(p->code[pc]);
-        if ((o.kind == 0x10061000 || o.kind == 0x10062000) && p->code[pc + 2] > entry_hi[p->code[pc + 1]])
-            entry_hi[p->code[pc + 1]] = (unsigned char)p->code[pc + 2];
-    }
     for (i = 0; i < p->scripts; ++i) {
         pc = p->entries[i];
-        if (widen(p, pc, 0, entry_hi[i]) && !queued[pc]) { queued[pc] = 1; queue[tail++ % n] = pc; }
+        if (widen(p, pc, 0, 4) && !queued[pc]) { queued[pc] = 1; queue[tail++ % n] = pc; }
     }
     while (head != tail && bounded) {
         uint32_t next[2], k, nn = 0;
@@ -241,6 +234,8 @@ static int prove(TagpuCobProgram* p)
         if ((o.kind == 0x10021000 || o.kind == 0x10023000) && (p->code[pc] & 7) == 2 &&
             p->code[pc + 1] + 1 > depth)
             depth = p->code[pc + 1] + 1;
+        if ((o.kind == 0x10061000 || o.kind == 0x10062000) && p->code[pc + 2] > depth)
+            depth = p->code[pc + 2];              /* the child's stack[0..argc-1] */
         need = o.need;
         if (o.kind == 0x10061000 || o.kind == 0x10062000) need = p->code[pc + 2];
         if (o.kind == 0x10065000) need = 1;
@@ -248,7 +243,6 @@ static int prove(TagpuCobProgram* p)
         p->guard[pc] = 0;
     }
 done:
-    free(entry_hi);
     free(queued);
     free(queue);
     if (!bounded) {

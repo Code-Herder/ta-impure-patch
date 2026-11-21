@@ -150,12 +150,13 @@ would answer "execute": one bound for both, and a fault is the core's refusal (d
 **The stack proof** (`tagpu_cob_safe.c`, `prove`, made by `tagpu_cob_program` at load) bounds, for each
 instruction, the words a running record holds on entering it, under IMPURE's rules: an interval
 analysis over the validated control flow, where a thread enters its script with 0 to 4 words from the
-engine (`0x4B0940` none, `0x4B0B00` `argc − 1` of the four it writes, the query four) or with the argc
-of any START or CALL that names it. An instruction is **guarded**, and checked, where the bounds leave
+engine (`0x4B0940` none, `0x4B0B00` `argc − 1` of the four it writes, the query four); a START or CALL
+child enters with none, its arguments in `stack[0..argc−1]` below an sp the allocator leaves at −1
+(`0x4B090C`, `0x4B18C8..0x4B18E9`). An instruction is **guarded**, and checked, where the bounds leave
 an underflow possible, at every division (its operands are data), at the terminal opcodes and at the
 terminal zero; everywhere else the check provably executes and is skipped. A path that can pass 128
 words makes the program unbounded and every opcode checked. The proof also gives `depth`, the words a
-record of the program ever touches (never below 4). The core checks every opcode under RETAIL's rules,
+record of the program ever touches, child argument copies included (never below 4). The core checks every opcode under RETAIL's rules,
 for an unbounded program, and once a host writes records the proof does not cover
 (`tagpu_cobvm_loaded`, for a saved game's). MEASURED 2026-11-21 over every compatibility setup
 (`cobcorpus.py`'s resolution): 27 102 scripts in 2 028 files, all bounded; 95.8 % reach at most 10

@@ -313,8 +313,15 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
         if (!guard || guard[r->pc])
             checked = tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason);
 #ifdef TAGPU_COBVM_PROVE_CHECK
-        else if (tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason) != 1)
-            return fail(vm, run, "the stack proof skipped a check that does not execute");
+        else {
+            char why[96];
+            int got = tagpu_cob_check_step(vm->program, r, why, sizeof why);
+            if (got != 1) {
+                snprintf(run->reason, sizeof run->reason, "the stack proof skipped a check (pc %u): %s",
+                         (unsigned)r->pc, got == 2 ? "a terminal opcode" : why);
+                return fail(vm, run, NULL);
+            }
+        }
 #endif
         if (!checked) return fail(vm, run, NULL);
         if (checked == 2) {                 /* 0x4B1B60: an opcode the engine lacks kills its thread */

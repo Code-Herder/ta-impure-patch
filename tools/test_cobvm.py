@@ -114,6 +114,8 @@ class Core(unittest.TestCase):
                     tacob.replay(cob, lines, timelines, type_name, lines[0].unit, rules=tacob.RULES_IMPURE,
                                  facts=self.FACTS)
                 except tacob.TacobError as e:
+                    # the check build names a skipped check that would not have executed, whatever
+                    # the check's own reason; any other refusal is the fixture's under IMPURE
                     self.assertNotIn("stack proof", str(e))
 
     # -- the stack proof ----------------------------------------------------------
@@ -166,6 +168,19 @@ class Core(unittest.TestCase):
                 else:
                     vm.start_script("Create", run_now=True, args=args, argwords=True)
                     self.assertEqual(vm.statics[0], 3)
+
+    def test_the_check_build_names_a_skipped_check_that_would_refuse(self):
+        # a guard cleared by hand where the pop can underflow stands in for a hole in the proof
+        cob = self.patched("Create() { s1 = 7; }", (0x10021001, 7), (0x10064000, 0))
+        cob.code[cob.code.index(0x10064000) + 1] = cob.code.index(0x10064000) + 2
+        vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                         rules=tacob.RULES_IMPURE)
+        vm.tick = 1
+        self.program(vm).guard[cob.code.index(0x10064000) + 2] = 0
+        with self.assertRaises(tacob.TacobError) as e:
+            vm.start_script("Create", run_now=True)
+        self.assertIn("stack proof skipped a check", str(e.exception))
+        self.assertIn("underflow", str(e.exception))
 
     def test_a_loop_that_leaves_words_is_unbounded_and_faults_at_the_bound(self):
         # each pass's `s1 = 1` becomes two pushes: the proof cannot bound it, so every opcode is

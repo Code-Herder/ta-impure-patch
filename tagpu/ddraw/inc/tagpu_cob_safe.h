@@ -35,12 +35,12 @@ typedef struct TagpuCobProgram {
     int terminal_zero;
     /* THE STACK PROOF, made at load under IMPURE's rules (tagpu_cob_safe.c, prove). For each
        instruction, `lo` and `hi` bound the words a running record holds on entering it, over
-       every way a thread can start: an engine start (0 to 4 words) and every START or CALL that
-       names its script. `guard` is 1 where tagpu_cob_check_step could answer anything but
+       every way a thread can start: an engine start leaves 0 to 4 words, a START or CALL child
+       none (its arguments sit in stack[0..argc-1] with sp at -1). `guard` is 1 where tagpu_cob_check_step could answer anything but
        "execute" for a state inside those bounds (an underflow the bounds do not rule out, a
        division, a terminal opcode, the terminal zero), and 0 where it cannot. `depth` is the
-       words a record of this program ever touches: the deepest bound, local index and engine
-       write, never below 4. All three arrays are NULL, and depth TAGPU_COB_WORDS, when some
+       words a record of this program ever touches: the deepest bound, local index, child
+       argument copy and engine write, never below 4. All three arrays are NULL, and depth TAGPU_COB_WORDS, when some
        path can pass TAGPU_COB_WORDS: such a program is checked at every opcode. */
     unsigned char *lo, *hi, *guard;
     uint32_t depth;

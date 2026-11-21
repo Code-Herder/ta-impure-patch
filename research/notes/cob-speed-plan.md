@@ -53,8 +53,9 @@ untouched: it still runs the engine's interpreter under the guard at `0x4B0E5D`.
 
 The entries `0x4B0940` (start by name, no words), `0x4B0B00` (start by index, four words), `0x4B0C40`
 (the query) and `0x4B0D60` (`DoScriptsNow`) jump to the game host's functions, which run the core on
-the unit's object. `0x4B0A70` and `0x4B0BC0` stay the engine's: they look the name up (`0x4B07C0`) and
-call `0x4B0B00` / `0x4B0C40`. The runner, the stepper and the allocator `0x4B08C0` are no longer
+the unit's object. `0x4B0A70` and `0x4B0BC0` stay the engine's: they look the name up themselves, with the
+first-match loop `0x4B07C0` also runs (`0x4B0A85..0x4B0AC1`, `0x4B0BD5..`), and call `0x4B0B00`
+(`0x4B0AEE`) / `0x4B0C40` (`0x4B0C2F`). The runner, the stepper and the allocator `0x4B08C0` are no longer
 reached. Every caller of the entries — the engine's 15 + 21 + 5 + 14 sites, the recorder's start and
 query stubs, `tagpu_replay.c`, `tagpu_weapons.c`, `dtor_killed` — keeps calling the same addresses.
 
