@@ -356,10 +356,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_guard_init();
 
         /* tagpu: the ground units' pathfinder (tagpu_pathfind.h): the players phase's call of the
-           engine's scheduler 0x464F92 sent to ours and set goal 0x44F2A0 observed, the observer
-           inert unless the call is ours, byte-matched with the three engine functions ours calls.
-           It then makes up to three threads that search beside the game thread; made under the
-           loader lock, they start when this attach returns and wait until a batch wakes them. With "tagpu_pathverify.on" the
+           engine's scheduler 0x464F92 sent to ours, the step's call 0x4955E5 sent to the join that
+           applies a tick's results, and set goal 0x44F2A0 observed -- the join and the observer
+           inert unless the scheduler is ours -- byte-matched with the three engine functions ours
+           calls. It then makes up to three threads that search beside the game thread; made under
+           the loader lock, they start when this attach returns and wait until the scheduler wakes
+           them. With "tagpu_pathverify.on" the
            engine's scheduler stays and four observers at 0x40EB70, 0x40D900, 0x40E050 and 0x440BE0
            run our search beside it, reading only. Disjoint from every site above. */
         tagpu_pathfind_init();

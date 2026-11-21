@@ -52,19 +52,15 @@ time, and the group is a constant: a tick makes the same searches on every machi
 results** are applied in that order, each through the engine's own set path `0x44F080` — a path's
 corners, or none — and the search's order flags through `0x44CED0`; a unit chosen whose group did
 not begin gets its stamp back and the cursor does not pass it. With no pops cap one tick of the
-battle popped 1 621 833 nodes; with it the most was 218 431.
+battle popped 1 621 833 nodes; with it the most was 169 222, 218 431 and 498 716 in three runs, a
+group of long searches past the cap.
 
 No search spans ticks, so nothing of a search is state. What a tick carries to the next, beside
 the units' own records: per unit slot the stamp of its last search that found a path (`s_found`),
 and the two cursors (`s_cursor`); both are recorded state.
 
-**The searches run while the tick goes on.** In play, with a helper and the memory for it, a
-search reads no engine memory. Its query holds the goal, the unit's cell and heading and the
-patch, and names **the tick's copies**, made after the writes: the explored map, and the map of
-each class the tick searches. The helpers search while the game thread leaves the scheduler and
-runs the rest of the players phase, the features and the particles. **The join**, on the game
-thread, ends the searches — taking those not yet claimed itself — and applies the results. It
-stands in two places:
+**In play the results are the join's**, on every machine. **The join**, on the game thread, ends
+the tick's searches and applies their results. It stands in two places:
 
 - at the step's call of `0x466580` (`0x4955E5`), after the particles: the step runs from the
   players phase's return to it in a straight line, so every tick's searches are joined in their
@@ -73,12 +69,21 @@ stands in two places:
   that window that writes what a result writes. Every free of a goal a course names — the order's
   destructor `0x43A1F0`, the four goal installers — calls it first
   ([units](../engine/units.md)), so a set goal, and whatever follows it, finds every result
-  applied, as when the searches ended inside the scheduler.
+  applied.
 
 So a result lands on the state its search was made for, or, where its slot no longer holds that
-unit (*Bounds*), nowhere. Elsewhere — the loader's call, a machine with no helper, no memory for
-the copies, the join's site not holding the engine's bytes — the join is the scheduler's own last
-step and the searches read the engine's maps: the same searches, the same results.
+unit (*Bounds*), nowhere. In the loader's call the join is the scheduler's own last step.
+
+**The searches run while the tick goes on** where there is a helper and the memory for it. A
+search then reads no engine memory: its query holds the goal, the unit's cell and heading and the
+patch, and names **the tick's copies**, made after the writes — the explored map, and the map of
+each class the tick searches, one a slot of a block of at most 32 MiB (32 slots on a map of the
+usual size, 7 on a grid of 4096 rows). The helpers search while the game thread leaves the
+scheduler and runs the rest of the players phase, the features and the particles; the join takes
+the searches not yet claimed itself and waits for the rest. On a machine with no helper, with no
+memory for the copies, or in a tick that searches more classes than there are slots, the searches
+are made inside the scheduler from the engine's own maps and their results kept for the join: the
+same searches, the same results, applied at the same place.
 
 **The helpers.** Threads made at install work beside the scheduler's own thread, each search on a
 scratch of its thread's own. Their number is the machine's processor cores less one, left to the
@@ -179,20 +184,24 @@ which about 6000 units are given a goal within a few ticks of one another.
 | the pathfinder's time a tick, one thread | about 4.5 ms | 3.9 ms |
 | on four threads, batches of 8 | | 2.4 ms |
 | on four threads, groups of 16, the scheduler waiting for each | | 1.95 ms, one run, 19 000 pops a tick |
-| the same, the searches made while the tick goes on | | **0.87 ms**, one run, 23 000 pops a tick |
+| the same, the searches made while the tick goes on | | **0.87 to 0.92 ms**, three runs, 23 000 to 25 000 pops a tick |
 
 The time is the frame profiler's: ours the span `pathfind`; the engine's the players phase of a
 run on its scheduler, 7.4 ms a tick, less the 2.9 to 3.0 ms that phase takes beside ours. The
 battle does not play the same twice: three runs on one thread before the walk listed the still
 units took 4.3, 4.3 and 6.3 ms a tick, and the ranges above are the logged runs.
 
-**While the tick goes on** [one run, 3655 ticks]: the game thread's 0.87 ms a tick is the walk,
-the writes, the queries and copies, and what the join waits; over 5-frame rows the scheduler's
-time a frame was 0.7 ms at the median and 2.4 at the 99th percentile, against 1.25 and 5.4 with
-the scheduler waiting. The join found 367 of the run's 111 000 searches not yet ended, a set goal
-joined 45 of the ticks before the step did, and no result was dropped. In a second run every
-search was made twice, on the tick's copies beside the tick and on the engine's own maps inside
-the scheduler: 117 044 of 117 044 results equal.
+**While the tick goes on** [three runs of about 3650 ticks]: the game thread's 0.87, 0.92 and
+0.88 ms a tick are the walk, the writes, the queries and copies; over 5-frame rows the scheduler's
+time a frame was 0.7 ms at the median and 2.2 to 2.4 at the 99th percentile, against 1.25 and 5.4
+with the scheduler waiting. **The join's wait for the searches is a fiftieth of that**: 68.8 and
+37.5 ms in all over 3750 ticks in the two runs that timed it, a tenth of a millisecond or more in
+30 and 37 ticks — 1 of them at the base weight, 11 and 17 at 3 times, 18 and 19 at 6 times — and
+3.9 ms at most (the one run that logged the longest). The join found 367, 74 and 159 searches of a
+run's 111 000 to 128 000 not yet ended, a set goal joined 44 or 45 of the ticks before the step
+did, and no result was dropped. In another run every search was made twice, on the tick's copies
+beside the tick and on the engine's own maps inside the scheduler: 117 044 of 117 044 results
+equal.
 
 **By thread**, each a run of the battle at batches of 8, the scheduler waiting, with the phases timed:
 
@@ -274,8 +283,8 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
   the join stands. Its 58 indirect calls into game code (the stock AI's planner, the order
   handlers' event 2, the script host, the GUI pump) are not followed
   ([sim](../engine/sim.md), *The game step*). ImpAI's turns run in that window and read no course.
-- **A spike is bounded, not gone**: a group of 16 long searches is still made in one tick, and the
-  join waits for what the rest of the tick did not cover (the most pops in a tick: 218 000).
+- **A group of long searches is still made in one tick**, and the join waits for what the rest of
+  the tick did not cover: 3.9 ms at most in the one run that logged it.
 - **The class sweeps of a tick are made for every unit chosen**, the ones whose group does not
   begin included: such a class's units that have just become obstacles are marked a tick or more
   before the class's next search would have marked them.

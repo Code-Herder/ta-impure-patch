@@ -171,9 +171,10 @@ them, a cheaper search.
 
 5. **The searches beside the tick** — the tick's units chosen and their writes made at once; the
    searches on the helpers from the tick's copies of the maps, in groups of 16 under the pops cap,
-   while the game thread goes on; the join at the step's call `0x4955E5` and at set goal.
-   **Built 2026-11-20**: 0.87 ms a tick on the game thread against 1.95, in a run of a fifth more
-   pops; 117 044 of 117 044 results equal to the same searches made inside the scheduler on the
+   while the game thread goes on; the join at the step's call `0x4955E5` and at set goal, where
+   the results are applied on every machine, whichever way its searches were made.
+   **Built 2026-11-20**: 0.87 to 0.92 ms a tick on the game thread against 1.95, in runs of a fifth
+   to a third more pops, of which the join's wait for the searches is 0.01 to 0.02 ms; 117 044 of 117 044 results equal to the same searches made inside the scheduler on the
    engine's own maps ([the module](modules/pathfinder.md)).
 
 ## Open
@@ -204,8 +205,13 @@ them, a cheaper search.
   found nothing.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
-- A group's searches can pass the pops cap together (218 000 pops in the worst tick measured);
-  a group's time is its longest search's, and the join waits for what the tick did not cover.
+- A group's searches can pass the pops cap together (498 716 pops in the worst tick measured);
+  a group's time is its longest search's, and the join waits for what the tick did not cover
+  (3.9 ms at most in the run that logged it).
+- **What is left on the game thread is the scheduler's own work**: the walk, the writes, the
+  queries and the copies, 0.9 ms a tick. The walk can be shared among the threads inside the
+  scheduler; the writes are the engine's `0x440830`, whose use off the game thread wants its
+  disassembly read for state it shares.
 - **Long searches** — a goal deep inside a base or a crowd, where the search floods a disc before
   it finds the way in: 39 % of searches and 67 % of pops on the captured set. Two ways on, neither
   built: a search past a count of pops delivered a tick later, and one search shared by the units
