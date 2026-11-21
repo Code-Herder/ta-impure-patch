@@ -238,9 +238,10 @@ DECLINE_LEVER = "tagpu_rec.decline"
 EXACT_LEVER = "tagpu_rec.exact"
 # A Worker with `gdi` set launches with this lever in its game folder: the GDI backend, the engine's
 # own stock draw path, and no Vulkan device (tagpu_cfg.c, dd.c). The AI tools' games render so by
-# default, take no GPU tokens and are compared only with other GDI games: the Vulkan lane makes the
-# game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
-# write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
+# default, take no GPU tokens and are compared only with other GDI games: on a Vulkan launch the game
+# thread does not run engine draws that GDI runs (the unit composite, removed at attach by
+# tagpu_owndraw.c; the effects, skipped by tagpu_fxown.c), and that those draws write no simulation
+# state is argued per site, not checked (research/notes/modules/impai.md)
 GDI_LEVER = "tagpu_gdi.on"
 # A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_nodraw.c), a test's GDI pacing,
 # accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the turbo's and

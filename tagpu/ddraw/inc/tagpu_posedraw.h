@@ -158,11 +158,6 @@ typedef struct {
 #define TAGPU_PDSH_SIL    1
 #define TAGPU_PDSH_SLANT  2
 
-/* Whether the pass has TRIED to arm and refused, as opposed to not having
-   run yet. Safe to call from the GAME thread, where `owndraw`'s classifier
-   reads it to log the refusal once: the render thread is the only writer. */
-int  tagpu_posedraw_refused(void);
-
 /* once per frame, before anything else. `frame_counter` is the fork's
    monotonic render-thread counter and stamps this frame's hand-over. */
 void tagpu_posedraw_frame(unsigned frame_counter);
@@ -456,26 +451,6 @@ int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
 int  tagpu_posedraw_atlas_hand(TAGPU_PDHAND* h);
 int  tagpu_posedraw_atlas_owed(void);
 void tagpu_posedraw_atlas_ack(unsigned serial, int keep);
-
-/* ---- WHO PAINTED A STRUCTURE'S SLANT, REPORTED BY THE PAINTER --------------
-   The structure-shadow gate in tagpu_native.c may only be raised on a frame
-   something actually drew a slant (its comment says why at length: it is
-   "observed, not predicted"), and the only code that knows is the consuming
-   pass. So the consumer SAYS SO after recording its shadow stage, and the
-   producer's next frame reads it and clears it.
-
-   RENDER THREAD ONLY, and the two calls are one iteration of the render loop
-   apart by construction: `tagpu_native_frame` publishes the hand-over and the
-   seam's `tagpu_vk_frame` consumes it later in the SAME iteration, so the
-   `_take` at the top of frame N+1 reads what the painter reported in frame N.
-   That is the one-frame cost the gate's own comment already budgets for, in
-   both directions.
-
-   `_drew` is idempotent within a frame (the consumer may record more than one
-   stage); `_take` reads and clears, so a frame that never reaches the painter
-   lowers the gate on its own. */
-void tagpu_posedraw_slant_drew(void);
-int  tagpu_posedraw_slant_take(void);
 
 /* THIS FRAME HAS UNITS THE HAND-OVER CANNOT CARRY, because the packet they
    came from was truncated: the frame's `otherDraws` becomes non-zero and the

@@ -530,10 +530,11 @@ keep only results of the renderer asked for. GDI is the ground truth for the AI'
 made on the default renderer (A2a's calibration among them) are not compared with GDI ones until
 they are made again under GDI.
 
-**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread skips
-engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
-`tagpu_terrown.c`, each armed by the render thread's own pass), and that those draws write no
-simulation state is argued per site, not checked. **On the exact scenarios it does not:**
+**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread does
+not run engine draws that GDI runs: the unit composite, removed at attach on every Vulkan launch
+(`tagpu_owndraw.c`), and the draws `tagpu_fxown.c`, `tagpu_featown.c` and `tagpu_terrown.c` skip,
+each armed by the render thread's own pass. That those draws write no simulation state is argued
+per site, not checked. **On the exact scenarios it does not:**
 `tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
 and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the
 renderers agree (3 GDI runs, 3 Vulkan runs)`), so GDI-made references hold for players on the

@@ -185,14 +185,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            exists next to the exe; all detours are byte-match guarded. */
         tagpu_tracer_init();
 
-        /* tagpu: Phase B own-the-draw — skip the engine's software rasterise of
-           the per-unit composite for chosen types (GPU thread paints instead).
-           No-op unless "tagpu_owndraw.on" exists; byte-match guarded. Five sites,
-           all disjoint from the suppress/tracer detours: the two rasterisers
-           0x459830/0x459C70, the build-state effect 0x458DD0, and the two
-           structure-shadow branches 0x4592BF/0x459522. EVERY ONE OF THEM
-           DECIDES PER DRAW against a flag a live lane sets — installing them
-           suppresses nothing. */
+        /* tagpu: on a Vulkan launch the engine draws no unit -- DrawUnit's call
+           of the composite at 0x45AE73 is removed, byte-match guarded; after
+           cfg_load, whose tagpu_gdi.on decides the backend. Disjoint from the
+           suppress/tracer detours on DrawUnit's entry 0x45AC20. */
         tagpu_owndraw_init();
 
         /* tagpu: own the effects draw — redirect the two effects-pass call sites

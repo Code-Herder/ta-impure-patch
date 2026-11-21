@@ -2879,8 +2879,7 @@ static void publish_window(unsigned flipSurf)
        deliberately NOT a value
        the world pass publishes — that is a render-thread counter read here a
        frame late, and on every 0->1 acquisition edge (level entry, recovery
-       from a `terr_bail`) the gate would still be down and the frame wrong.
-       `tagpu_owndraw.c` ~:210-225 is the precedent for that exact hazard. */
+       from a `terr_bail`) the gate would still be down and the frame wrong. */
     if (vr >= 0 && fs && s_winGameFlip) {
         TAGPU_PUBOP* c = pub_op(PK_CLEAR, fs->base);
         if (!c) return;

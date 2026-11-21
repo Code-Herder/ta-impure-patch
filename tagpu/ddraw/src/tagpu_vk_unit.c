@@ -4086,19 +4086,6 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        effect is drawn whole or not at all (tagpu_fx.h `nmodels`) */
     if (s_nfx && tagpu_vk_fx_models_ok(d->frame))
         record_stage(d, cb, slot, w, h, RS_FX);
-    /* THE PRODUCER IS TOLD, AND ONLY FROM HERE. The structure-shadow gate in
-       tagpu_native.c must be raised on a frame something actually painted a
-       slant and not on a frame that merely could have -- its own comment says
-       why. This is the painter
-       saying so, after the draws are in the command buffer.
-
-       IT IS RECORDED, NOT SUBMITTED, and that is the honest reading of the
-       claim: the seam submits this command buffer at the end of the same
-       iteration, and there is no path that records these draws and then throws
-       the buffer away. A gate raised over a frame that was dropped would cost
-       one frame with no structure shadow, which is the bounded direction the
-       gate is built for. */
-    if (s_nslant) tagpu_posedraw_slant_drew();
 }
 
 /* The build ghosts, AFTER the effects (tagpu_vk.c `world_records`), and the

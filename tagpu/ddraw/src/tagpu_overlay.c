@@ -18,7 +18,6 @@
 #include "screenshot.h"  /* ss_take_screenshot: `tacli shot`, now on the flip */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
-#include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
@@ -90,8 +89,6 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_tracer_flush(f->frame_counter);
     /* suppressor flush: no-op unless suppression was armed. */
     tagpu_suppress_flush(f->frame_counter);
-    /* own-the-draw flush: no-op unless armed. */
-    tagpu_owndraw_flush(f->frame_counter);
     /* effects own-the-draw flush: no-op unless armed at launch. */
     tagpu_fxown_flush(f->frame_counter);
     /* the build ghost's standing request for the packet's builds table: decays

@@ -836,9 +836,8 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
        build fraction, so the unit pass takes the answer from the packet rather
        than calling it from the render thread. It is the same predicate the
-       marker pass, the composite wipe and the owndraw classifier ask on the
-       game thread, so all four agree by construction rather than by two
-       threads reading the same bytes. */
+       marker pass and the zoom's pick ask on the game thread, so they agree by
+       construction rather than by two threads reading the same bytes. */
     if (tagpu_native_owns_unit(u)) e->flags |= TAGPU_PK_U_NATIVE;
     (void)ta;
 }

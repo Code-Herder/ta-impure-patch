@@ -55,7 +55,7 @@ the frame packet (§2.89), so `tagpu_native.c` builds no vertices at all.
 | **the ground does NOT cast** (2026-09-09) | **Since 2026-09-23 nothing builds a ground caster at all — `build_hills` and `tagpu_terr_hills_draw` are deleted and `terrainshadow=` is parsed and logged only.** The record: `terrainshadow` now defaults to **0** (`tagpu_classicpp.c` `shadow_defaults`), so `tagpu_shadow.c:398` returns before `tagpu_terr_hills_draw` and the heightfield contributes nothing to the depth map. Units are unaffected — this is the caster's own gate, not the shared bias. The ground casting on itself darkened open water in the caster's own 16-unit lattice and got worse as `Shadow quality` went up; seven candidate fixes were swept and costed and every one removed the artifact and the terrain-shadow feature together, because a cell's own relief *is* the terrain shadow ([renderers](../renderers.html) §2.7b). `terrainshadow=1` in the cfg still turns it on and is the fixture the eventual fix is measured in; the render-options screen has no row for the key and never writes it, so nothing a player can click re-enables it. The hills mesh is still BUILT at map load (6.4 MB + 12.9 MB on Two Continents) — it is simply never drawn, which is an **open TODO**: `build_hills` is unconditional where the draw is gated, and the fix is a lazy build on first draw rather than gating the build (the flag is live, and `terrainshadow=1` mid-session is the fixture the shadow fix is measured in). See [roadmap](../roadmap.html) |
 | **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
 | **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
-| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. Since step 8 there is no CPU emitter to leave those units to, so the refusal is *published* and `owndraw` stops skipping the engine's own unit rasterise — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
+| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. There is no CPU emitter to leave those units to, and the engine paints none on a Vulkan launch, so a refusal draws no unit — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
 | **the topology** | consumed from the bake entry's `parent[]` — `pose_accum_body`'s per-unit sibling scan is gone from the posed path, which is what §2.10 cached it for |
 | **the VAO** | one per material stream, built at bake time, binding the geometry buffer (locations 0-3) and the material stream (4-6) together, so a draw is one bind |
 | **the model top** | `s_emitTop` is gone; the top was each piece's baked BODY-range rest AABB through its pose matrix (`tagpu_posedraw_top`), an over-estimate that fed wrecks only. **Deleted 2026-09-23, with the AABB the bake kept for it (`pmn`/`pmx`/`pbody`): nothing called it once the Vulkan lane took the units** |
@@ -101,10 +101,9 @@ same picture, but bounded, deliberate and visible in the log, rather than a race
 every unit still drawn, nothing dropped.
 
 **When it cannot arm at all**, nothing else draws the units: on a Vulkan launch the engine's own
-unit draw is removed at attach (*The engine draws no unit on a Vulkan launch*, below), and its
-pixels never reached the presented frame before that either. `tagpu_owndraw_classify` logs the
-refusal once the posed program has tried and failed, not during the first frames before the render
-thread has built anything.
+unit draw is removed at attach (*The engine draws no unit on a Vulkan launch*, below). The pass
+logs its refusal once, in its own `posedraw: refused — …` line, when it has tried and failed, not
+during the first frames before the render thread has built anything.
 
 **What `MAXNV` stopping applying to units actually looks like.** The claim used to be a design
 note; `scenarios/crowd-static.json` (256 units of 16 types, one owner, no orders — the large scene
@@ -418,7 +417,11 @@ replaced at attach by `add esp,8`, the composite's own `ret 8` (hook map §2.1),
 `0x45AE5C..0x45AE7F` are checked. The repose before it stays: the pose cache is the one thing under
 DrawUnit the simulation reads. What is removed is draw-only by the census in
 [render](../engine/render.html), *Every store family*, and the cursor's pick reads the model's box
-(`0x48C6A0`). A launch is one backend for its life: `tagpu_gdi.on` is the only way to GDI, read
+(`0x48C6A0`). Nor does it move the game thread's CRT stream, the one channel by which a draw could
+reach the simulation ([sim](../engine/sim.html), *The two random streams*): `rand` `0x4E4870` is not
+among the 125 functions `0x458810` reaches by direct calls and jumps [DISASSEMBLED 2026-11-21; indirect
+calls not followed]. `tools/tasim/rendereq.py`'s "the renderers agree" (2026-11-13) was measured
+with the composite still running on both renderers and has not been run since. A launch is one backend for its life: `tagpu_gdi.on` is the only way to GDI, read
 at attach, and a Vulkan lane that cannot draw ends the session rather than handing it to GDI
 ([vulkan-backend](vulkan-backend.html)). Under `tagpu_gdi.on` the engine draws every unit, as stock.
 

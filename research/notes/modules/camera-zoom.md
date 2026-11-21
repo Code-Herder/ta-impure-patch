@@ -1024,8 +1024,8 @@ the draw, but the fog stub at `0x469D8E` comes after the whole world draw. The n
 callers of `DrawGameScreen` (`0x495C76` and `0x495E66` in the screenshot routine, `0x4962C2` the
 movie recorder) never latch and keep the last in-play value until the level end. So after the
 render thread withdraws, the key fill and the fog tick can still run for the rest of that draw.
-`tagpu_terrown_filled()` and the structure-shadow gate follow the request, which is already
-down, so no such frame is inverted. Handing the site back leaves nothing to void: the engine
+`tagpu_terrown_filled()` follows the request, which is already down, so no such frame is
+inverted. Handing the site back leaves nothing to void: the engine
 grid's build record is read off LosType bit 3 whoever builds it (§2.3), and the fog source is
 packed on every tracked draw, at our fog site or by the publisher.
 

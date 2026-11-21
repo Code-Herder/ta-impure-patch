@@ -115,10 +115,7 @@
 #define tagpu_posedraw_mirrors          tagpu_pdw_mirrors
 #define tagpu_posedraw_other_forecast   tagpu_pdw_other_forecast
 #define tagpu_posedraw_ready            tagpu_pdw_ready
-#define tagpu_posedraw_refused          tagpu_pdw_refused
 #define tagpu_posedraw_shadow_on        tagpu_pdw_shadow_on
-#define tagpu_posedraw_slant_drew       tagpu_pdw_slant_drew
-#define tagpu_posedraw_slant_take       tagpu_pdw_slant_take
 #define tagpu_posedraw_uncarried        tagpu_pdw_uncarried
 #define tagpu_posedraw_unit             tagpu_pdw_unit
 

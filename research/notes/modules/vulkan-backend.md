@@ -742,12 +742,11 @@ row: `HELP.GUI` open across the reset, 18.2 % of the view changed by opening it 
 closed.
 
 `tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
-suite's `pass-refused` row drives it in a battle. The `-gdi` rows (`pass-refused-gdi`, `pass-full-gdi`) and
-`pass-card-full` still expect the session to reach GDI, which it no longer does: they fail until they are
-rewritten to expect the session's end. `tagpu_vkfull.on` is the driver's
+suite's `pass-refused` (the lane comes back) and `pass-refused-ends` (every rebuild refused: the line, the
+box, the process gone) rows drive it in a battle. `tagpu_vkfull.on` is the driver's
 own no: it sits on the device's `vkAllocateMemory` and on what `gdpa` hands the passes, and refuses with
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` after the file's K allocations (the file is consumed), every one with
-`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-gdi` and
+`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-ends` and
 `wiki-stage-refused` rows use it, so the rebuilt lane's real road has been run: an allocation refused on
 it costs another retry, and the spent retries end the session. MEASURED 2026-11-07: one refusal, the line
 after 18 000 presented frames (478 s under Xvfb), then three more refusals and the lane still up. Filling the card is how the

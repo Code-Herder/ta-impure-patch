@@ -10,7 +10,7 @@
    different exe arms nothing.
 
    Used by tagpu_fxown.c (effects, particles) and tagpu_featown.c (features).
-   The older modules — owndraw, tracer, suppress, scenario — carry their own
+   The older modules — tracer, suppress, scenario — carry their own
    copies with different stub shapes and are left alone. */
 #include <windows.h>
 

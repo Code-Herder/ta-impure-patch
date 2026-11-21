@@ -616,7 +616,7 @@ commander or factory building it. Reported from play, reproduced on a scripted
 - **The engine's own copy had to be stopped.** Wiping the composite does not do
   it — `0x458DD0` runs on a scratch COPY every frame, so with the rasterise
   skipped it recoloured nothing and stamped its **wireframe alone**, at the 1×
-  position. `tagpu_owndraw.c` now carries a third detour on `0x458DD0` (6 stolen
+  position. `tagpu_owndraw.c` carried a third detour on `0x458DD0` (6 stolen
   bytes, `xor eax,eax; ret 8` on the skip path — the engine's own "did nothing"
   return), taken for exactly the units the native pass owns.
 - **A unit in a factory is part of the FACTORY's sprite, not a sprite beside

@@ -14,10 +14,7 @@
 #define MASTER_OFF "tagpu_defaults.off"
 
 /* `needs`: the pass this one is only useful with, so that its default follows that
-   pass -- the pairing tacli's launch makes when it auto-arms the `*own` half
-   (owndraw's skips make room for passes of ours, the native pass above all, and
-   without them it has nothing to stand aside for), and vpwide with zoom (the
-   ta-drive skill, "the wide viewport"). */
+   pass -- vpwide with zoom (the ta-drive skill, "the wide viewport"). */
 /* `store`: the settings store's say on this pass (tagpu_settings.h) -- 1 on,
    0 off, -1 no say -- for a pass that is a menu row. It ranks below the pass's
    own .on/.off files and above the table's default. */
@@ -53,25 +50,21 @@ static int store_formation(void)
 /* The table: the ta-drive skill's default arm set and Classic++. Order is the order
    the log line lists them in. Nothing that changes the simulation is here: the extra
    weapons are always on, in the fail-closed table (tagpu_weapons.h). */
-/* THREE OF THE `*own` LEVERS ARE NOT PLAY DEFAULTS, AND THE REASON IS THE
-   REFERENCE FRAME. `tagpu_featown`, `tagpu_fxown` and `tagpu_owndraw` stop the
-   ENGINE drawing something, so that ours can stand in its place.
+/* TWO OF THE `*own` LEVERS ARE NOT PLAY DEFAULTS, AND THE REASON IS THE
+   REFERENCE FRAME. `tagpu_featown` and `tagpu_fxown` stop the ENGINE drawing
+   features and effects, so that ours can stand in their place.
 
    The engine's frame reaches no pixel of the screen, so there is nothing for
-   them to cover. What those three suppressions do is damage the reference.
-   `tagpu_surf_capture` takes the engine's composed frame as the golden source,
-   and with them armed that capture holds a viewport with no trees, no effects,
-   no husks and no build-state effects -- it is not the picture the 1997 software
-   rasteriser draws, it is the picture it draws with its passes removed, which
-   is worth nothing to compare against. Measured with them armed: `FEATOWN skip=1`,
-   `OWND target=all skipped=0 passed=5311`.
+   them to cover. What they do is thin the golden source `tagpu_surf_capture`
+   takes, a diagnostic capture with no consumer in the tree: with them armed
+   it holds a viewport with no trees and no effects. Measured with them armed:
+   `FEATOWN skip=1`. What they buy is the CPU the engine spends rasterising a
+   frame nobody sees; arm `tagpu_featown.on` and the engine's features stop.
 
-   WHAT THEY COST is the CPU the engine spends rasterising a frame nobody sees,
-   which is real and is the whole of what those three buy. They are kept and
-   work -- arm `tagpu_featown.on` and the engine's features stop -- so the
-   trade is available to anyone who wants the frame time back and does not
-   need the reference. It is not the default, because a golden source with
-   holes in it is the more expensive mistake.
+   UNITS ARE NOT IN THAT TRADE ANY MORE: a Vulkan launch removes the engine's
+   unit draw outright (tagpu_owndraw.c), so the golden source holds no unit
+   or husk. The reference picture with every engine draw in it is GDI's, the
+   oracle, under `tagpu_gdi.on`.
 
    `tagpu_terrown` IS A PLAY DEFAULT AND IS NOT ONE OF THEM: it is an
    OPTIMISATION, kept on by default because it is free. The UI layer

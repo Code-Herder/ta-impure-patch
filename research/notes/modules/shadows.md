@@ -71,11 +71,10 @@ read; it draws nothing and the row then shows `Off`, which is what the player is
 `Shadow quality` (`shadowres=`) sizes that map and nothing else, so it is greyed unconditionally
 instead of being left looking live.
 
-**The structure-shadow gate has a painter again.** `s_ssSuppress` had had no writer since 11-3 and
-is deleted; the gate now reads `tagpu_posedraw_slant_take()`, which `tagpu_vk_unit_record` sets
-after it has recorded a slant. That is the "observed, not predicted" the gate's own comment asks
-for — the report comes from the code that drew, one render-loop iteration before the read, which
-is the one-frame cost in both directions the gate is built for.
+**No gate stands between the engine's slant and ours.** A Vulkan launch removes the engine's unit
+draw at `0x45AE73` ([units](units.html), *The engine draws no unit on a Vulkan launch*), so its
+cached structure shadow is never blitted and every slant on the screen is `tagpu_vk_unit.c`'s.
+Under `tagpu_gdi.on` the engine draws every shadow as stock and none of ours.
 
 **Measured, 2026-09-22, `pose-inventory` at the play defaults, 1024x768, paused.**
 

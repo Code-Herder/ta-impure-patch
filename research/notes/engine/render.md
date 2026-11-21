@@ -1118,11 +1118,10 @@ process). Per husk, `0x46A721` fills it in and draws:
 ```
 
 `DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
-`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites.** Which one
-depends on us: the scratch's permanent `0x20000000` puts both silhouette sites on the *bit-clear*
-side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two branches
-`tagpu_owndraw.c` takes over under target `all` (flipped to `EB` until 2026-09-18, detoured from
-`0x4592BF`/`0x459522` behind a runtime flag since). **Unpatched, a husk reaches only `0x4594DB`**
+`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites** under
+`tagpu_gdi.on` (a Vulkan launch removes that call, hook map §2.1). The scratch's permanent
+`0x20000000` puts both silhouette sites on the *bit-clear* side of the `je`s at `0x4592C6` and
+`0x45952C`, so **a husk reaches only `0x4594DB`**
 (itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
 `[main+0x1439B]`, the UnitInfo array base, copied in once at feature init by `0x422003`
 (`mov ecx,[eax+0x1439B]`) and `0x422009` (`mov [edx+0x92],ecx`) — so that test reads `UnitInfo[0]`'s flags, an
@@ -1138,8 +1137,7 @@ live-unit analogue is `0x485E14 mov [eax+0xc],esi`.
 `Object3do` (`0x485DCC` / `0x485E0E`), a recogniser testing only `*(scratch+0x9E) == obj3do`
 matches that live unit and goes on matching until the next 3D-wreck draw. Testing
 `*(obj3do+0x0C) == *(main+0x1420F)` as well closes it, because a block that has become a live
-unit's carries that unit's own record at `+0x0C`. `tagpu_owndraw.c`'s `is_wreck_draw()` tests
-both. Residual, not closed: the constructor path `0x485DCC` / `0x45A950` was not observed writing
+unit's carries that unit's own record at `+0x0C`. What that test leaves open: the constructor path `0x485DCC` / `0x45A950` was not observed writing
 `+0x0C` within the first 0x60 bytes, so a reused block taken down that path could still carry a
 stale scratch there.
 
@@ -2165,16 +2163,16 @@ tree, drawn before the body. Every site in it:
 | --- | --- | --- |
 | `0x45928E` `mov ax,[ecx+0x37F06]` | `0x4594A2` | the graphics-option word; `test al,4` (Shadow) right after, `je` to the body |
 | `0x4592A0..0x4592AC` | `0x4594B4..0x4594C0` | `unit+0x92 → UnitDefStruct`, `+0x241` type mask, `test …,0x2000000` = `noshadow` → skip |
-| **`0x4592BF`** `test byte [ecx+0x113],0x20` | **`0x459522`** `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` — and, since 2026-09-18, the two addresses `owndraw all` **detours** (5-byte `E9` + `nop` fill over the `test`+`je`: 9 bytes at A, 12 at B) |
-| `0x4592C6` `74 5C` `je 0x459324` | `0x45952C` `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. Until 2026-09-18 `owndraw all` rewrote both to `EB` (`jmp`) for the life of the process; they are now inside the stolen range and the stub re-emits the `je` behind a runtime flag, so the suppression is per draw and stands down on a lane that never paints. Still verified byte-for-byte before the write, still installed as a pair or not at all |
-| — | `0x4594D6` `74 4A` `je 0x459522` | **the only branch in the image into either stolen range** (a path-B instruction, hence the column), and it lands on the FIRST byte — our `E9` — so the detour is transparent to it. [MEASURED 2026-09-18: `objdump -d -M intel` over the whole image, every byte of `0x4592BF..0x4592C7` and `0x459522..0x45952D` searched for an incoming `j*`/`call`; and each of the four addresses searched through the raw image as a little-endian 32-bit datum, **0 occurrences**, so no jump table points at one either. A `je` flip is immune to an incoming branch and a detour is not, which is why this row exists] |
+| **`0x4592BF`** `test byte [ecx+0x113],0x20` | **`0x459522`** `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110`; with its `je` below, 9 bytes at A and 12 at B |
+| `0x4592C6` `74 5C` `je 0x459324` | `0x45952C` `74 4A` `je 0x459578` | not a structure → the COMPLETED branch |
+| — | `0x4594D6` `74 4A` `je 0x459522` | **the only branch in the image into either `test`+`je` pair** (a path-B instruction, hence the column), and it lands on the FIRST byte. [MEASURED 2026-09-18: `objdump -d -M intel` over the whole image, every byte of `0x4592BF..0x4592C7` and `0x459522..0x45952D` searched for an incoming `j*`/`call`; and each of the four addresses searched through the raw image as a little-endian 32-bit datum, **0 occurrences**, so no jump table points at one either. A `je` flip is immune to an incoming branch and a detour is not, which is why this row exists] |
 | `0x4592C8` `test [esp+0x10],0x40000000` (after the structure test) | `0x4594D0` `shr edx,0x1E; test dl,1` (**before** the structure test) | `digger`. Path A sends it to the COMPLETED branch, TShadow and `canhover`/`floater` tests included. Path B takes an **inline** branch `0x4594D8..0x45951D` — `0x45A470` silhouette, `0x4BA1B0(scratch, 0x7D)` ground clip, then `jmp 0x4595E9` to the shared blit — and applies neither test. So a digger never reaches the cached branch in either path |
 | `0x4592D5` `cmp word [eax+0xA6],0` | `0x45952E` | `unit+0xA6` — the **model index** (`U_MODELID` in the native pass), not a unit id. Zero → |
 | `0x4592E4` `movzx cx,byte [eax+0x1427F]` | `0x45953D` | sea level; `cmp word [esp+0x42],cx ; jl` skips the shadow for a model-0 unit below it |
 | `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
 | **`0x459319`** `call 0x4B8500` | `0x459576` `jmp 0x4595E9` → **`0x4595E9`** | blit the cached shadow, at `sx + 0x85` (`add edx,0x85` at `0x45930B` / `0x45956C`). Path B shares one call site between the digger, structure and completed branches; path A has one per branch |
 | `0x459324` `shr al,3; test al,1` | `0x459578` | the COMPLETED branch: TShadow bit, then `test …,0x81000` (`canhover`/`floater`), `0x45A470` (scratch := composite silhouette), blit at `0x459353` / `0x4595E9` |
-| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at the shadow takes the BODY with it whenever the wipe's predicate says yes and the pass drawing the replacement says no |
+| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at a shadow site takes the BODY with it |
 
 So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey above are:
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
@@ -2260,42 +2258,32 @@ What that settles for a renderer of our own: honouring the player's toggle is ho
 Testing bit3 for the silhouette, as `0x459324` does, reproduces the engine's branch and can never
 disagree with the player's intent, because the two bits cannot be set differently through the UI.
 
-**Why the branch flip is safe.** Both `je`s are 2-byte short jumps whose fall-through and
-target both continue with `eax` still holding the option word the target tests (`shr al,3`),
-and the COMPLETED branch is the engine's own path for every non-structure unit; under
-`owndraw all` its composite is blank, so `0x45A470` builds an all-key silhouette and the blit
-writes nothing. Nothing else reads `Object3do+0x14`; it is simply never allocated. Without
-`all` the bytes are left alone and structures keep the engine's cached shadow.
+**The two `je`s, for a patch that would flip them.** Both are 2-byte short jumps whose fall-through
+and target both continue with `eax` still holding the option word the target tests (`shr al,3`),
+and the COMPLETED branch is the engine's own path for every non-structure unit. Nothing else reads
+`Object3do+0x14`. Neither is patched: a Vulkan launch never reaches the blit (`0x45AE73`, hook map
+§2.1), and under `tagpu_gdi.on` structures keep the engine's cached shadow.
 
-**The two rasterisers `owndraw` already detours**, for completeness of this map: `0x459830`
+**The two rasterisers the composite calls**, for completeness of this map: `0x459830`
 (opaque, `thiscall`, `ret 0x10`; called from the builder `0x45878B` and from the blit's
-build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder `0x458765`).
-Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
-evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
+build-state path `0x459641`) and `0x459C70` (the Gouraud-lit one, called from the builder
+`0x458765`). Both open `mov eax,imm32` (5 bytes) before `call __chkstk`. Neither is patched;
+the evidence gathered while a detour classified there is in `own-the-draw.md`.
 
-**The completed-unit shadow's three emit sites — `owndraw`'s fourth detour until 2026-09-23.**
-[MEASURED 2026-09-13, from play: the commander kept one teal silhouette on its own body from
-map entry until it first moved. Read here off `objdump` of the pristine build.]
+**The completed-unit shadow's three emit sites.** [MEASURED 2026-09-13, from play: the commander
+kept one teal silhouette on its own body from map entry until it first moved. Read here off
+`objdump` of the pristine build.] **Not patched**: the three sites keep the engine's bytes, and a
+Vulkan launch never reaches them (hook map §2.1).
 
-**We no longer patch `0x459338`, `0x45958C`, `0x4594DB` or touch `0x45A470`'s callers:** the
-detour's wipe was gated on `tagpu_posedraw_live()`, which is the constant 0, so it replayed the
-engine's call and did nothing else — the three sites keep the engine's original bytes. The
-engine facts below stand; the detour paragraphs are its record.
-
-Under `owndraw all` the engine's completed-unit shadow is supposed to be nothing: the
-COMPLETED branch is the one every unit takes after the two `je`s are flipped, and with the
-composite blank `0x45A470` builds an all-key silhouette. That last clause is the whole
-guarantee, and it is not maintained by the composite being blank on every frame. Instrumented
-for one session: **not one of 7047 wipes in a 60-frame window found the plane already empty**
-(an empty plane reads 0 NON-Key bytes — the wipe fills it with the ColorKey, palette index 1 —
-and reading the same plane back right after the wipe's own `memset` read 0), and the plane each
-window's last wipe sampled held **557 non-Key bytes, all of them palette indices rather than the
-zeros a blackened shadow leaves**. That 557 is also the number of teal pixels the silhouette
-measured on screen; whether the two counts are the same shape is NOT established — the
-instrumented plane and the drawn silhouette are read at different places. So the shadow was being built from a
-real sprite while the classifier was skipping the rasterise that would have painted it. What
-refills the plane that way is not settled by this reading and is left open here; the detour
-below removes the dependency instead of answering it.
+An all-key silhouette needs a blank composite on every frame, and a blank composite at the
+rasterise is not that. Instrumented for one session, under a classifier that skipped the
+rasterise and wiped the composite ([own-the-draw](../own-the-draw.html)): **not one of 7047 wipes
+in a 60-frame window found the plane already empty** (an empty plane reads 0 NON-Key bytes — the
+wipe fills it with the ColorKey, palette index 1 — and reading the same plane back right after the
+wipe's own `memset` read 0), and the plane each window's last wipe sampled held **557 non-Key
+bytes, all of them palette indices rather than the zeros a blackened shadow leaves**. That 557 is
+also the number of teal pixels the silhouette measured on screen; whether the two counts are the
+same shape is NOT established. What refills the plane that way is not settled.
 
 The sites, one per branch — all three are the same two instructions and a call:
 
@@ -2311,9 +2299,8 @@ rewrites every non-ColorKey texel to palette index 0 — the unit's own silhouet
 Each site then blits the scratch at `sx + 0x85` (`0x459353`, `0x4595E9`) through the ALP blend
 `0x4B8500`, after the path-B clips. **The composite is read, never written, so emptying it at
 the call is the whole silhouette** — and the blit draws its BODY from the composite too
-(`0x459373` `mov esi,[ebp+0x10]`), which is why the wipe is gated on `tagpu_posedraw_live()`:
-on the frames the engine is the only renderer, emptying the composite would take the body with
-the shadow.
+(`0x459373` `mov esi,[ebp+0x10]`), so emptying the composite at a site takes the body with the
+shadow.
 
 `ebp` carries the blit's Object3do — the blit's **second** stack argument (`0x459205
 mov ebp,[esp+0x30]`, before the remaining two pushes, so entry esp + 8; `[ebp+0xc]` is the unit
@@ -2328,10 +2315,9 @@ cargo loop at `0x459649` walks the same list in **esi** (`8b b2 8a 00 00 00`
 = `mov esi,[edx+0x8A]`), not `ebp`; this note called it a second `ebp` reload until the
 2026-09-14 review disassembled it. The corrected fact is the stronger one: `ebp` is loaded
 once at `0x459205` and no path in the function reloads it before a site. (`0x4593FC push ebp` is an argument to the pose helper
-`0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) Because "it
-happens to survive" is not an argument, the stub passes `ebp` and the helper checks it:
-`*(Object3do+0x10)` must be the very composite the site is about to read, and a mismatch is a
-no-op.
+`0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) A patch at a site
+would still check it rather than rely on it: `*(Object3do+0x10)` must be the very composite the
+site is about to read.
 
 Two facts about the blit's own rasterise call, `0x459641` — and the first corrects an earlier
 reading of this note. **It is taken for every MOBILE unit, every frame.** The gate is
@@ -2342,26 +2328,10 @@ does `0x45961C fld [ecx+0x104]` / `0x459622 fcomp [0x4FD4C0]` (the constant is `
 which `fcomp` CLEARS on inequality, so ZF is set by *not* equal and the `je` is taken for an
 under-construction structure. **Its first argument is not the composite**: `0x459639
 mov ecx,[edi+0x10]` takes the blit's own frame — `edi` is the blit's `this`, which is not `ebp`
-(the Object3do) — so this call and the builder's pass DIFFERENT planes, and the classify stub is
-therefore called on two planes per unit per frame. The second fact: the only things that write a
+(the Object3do) — so this call and the builder's pass DIFFERENT planes: a detour on the rasteriser sees two
+planes per unit per frame. The second fact: the only things that write a
 composite's planes are the rasterisers and the allocators `0x437B50` / `0x437BE0` (chosen at
 `0x458702` / `0x458719`) — `0x4581E0` and `0x4584D0`, the AABB/pose helpers, call neither.
-
-The one case where the wipe's predicate and the classifier's differ is a husk: the classifier
-recognises a 3D-wreck draw by the scratch feature-unit `*(main+0x1420F)` holding this Object3do
-at `+0x9E` `[documented where the wreck path is: features.md §1 and its table, terrain-depth.md
-§3.4]`, and hands it to the engine unless the `wrecks` token is armed; the detour asks the same
-question, in the same order. A/B'd on `one-wreck` with `native.on` = `all` and no `wrecks` token:
-with the clause disabled in a test build the husk rendered either way, so the unit predicate does
-not answer yes to a husk there — the clause is an invariant, not a fix for a measured blanking.
-
-The detour empties the composite at the site, before the replayed `0x45A470`, so the silhouette
-is all-key on every frame our pass draws the unit; the engine cannot repaint it in between,
-because the two are adjacent instructions of one call. Measured 2026-09-13 on a fresh skirmish, the same map and
-the same starting spot either side: one 129-frame `glshot` burst spanning the load, the GL
-context change and the first seconds of play — **no `(0,128,128)` pixel in any frame**. Before
-the change the same burst found **557 in nearly every in-play frame**, and 0 in every frame
-once the commander was ordered to move — the latch the play report describes.
 
 **`0x459228..0x45927A` — where the body and the shadow are placed, register by register.**
 [BINARY-VERIFIED 2026-09-04, read for the aircraft work.] `[ebp+0xc]` is the unit; `+0x6A`,
@@ -2445,17 +2415,15 @@ The whole nanoframe look — the height-threshold recolour `0x458D30` and the wi
 | `0x458DEA..0x458E06` | `8b 44 24 18 / 8b 50 0c / d9 82 04 01 00 00 / d8 1d c0 d4 4f 00` | `obj+0x0C` → unit, `fld [unit+0x104]`, `fcomp ds:0x4FD4C0` (0.0f) — **`Nanoframe == 0` returns 0**, so this function only ever does anything for a unit under construction |
 | `0x458E11..0x458E1F` | `66 8b 8a a8 00 00 00` | `unit+0xA8` (the slot index) into the oscillator maths |
 
-Our detour (`tagpu_owndraw.c`, the third one) replays those six bytes after `popad` — at the
-entry `esp`, so the esp-relative `mov` reads what it always read — and takes `xor eax,0; ret 8`
-for units the native pass owns, which is the callee's own "did nothing" return. Call sites:
+Call sites:
 `0x458D0E` (the last `call` in `0x4589C0`, followed by that function's own
 `pop edi/esi/ebp/ebx; add esp,0x68; ret 8` — a plain call, not a tail call) for the unit's own
-scratch, and `0x459686` for each cargo composite, so a factory's unit-in-progress is covered by
-the same skip. Both call sites discard `eax`, so the stub's `xor eax,eax` cannot be observed even
-where the real function would have returned 1 (`0x458F88`).
+scratch, and `0x459686` for each cargo composite, a factory's unit-in-progress. Both call sites
+discard `eax`, so a skip returning 0 cannot be observed even where the real function would have
+returned 1 (`0x458F88`). Not patched: a Vulkan launch removes the composite call both sit under
+(hook map §2.1).
 
-The resume address is **`0x458DD6`**; the six stolen bytes end exactly on an instruction
-boundary there.
+The six entry bytes end exactly on an instruction boundary, at **`0x458DD6`**.
 
 ## `0x459646..0x4596DD` — the cargo loop, and `0x4B90A0` the z-merge — mapped by us
 

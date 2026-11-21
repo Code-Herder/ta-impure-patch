@@ -78,8 +78,7 @@
    unit rather than a size every unit pays. The pass arms only on a device
    that can hold one unit at that ceiling (`tagpu_posedraw_ready`); the
    consumer checks each frame's packed size against the device's own limit.
-   When the pass refuses to arm it says so (`tagpu_posedraw_refused`), and
-   `owndraw` repeats the refusal once in its own words.
+   When the pass refuses to arm it says so, in its own `posedraw:` line.
 
    THE EFFECTS MODELS ARE `FXVS`, the second vertex stage: no attributes and
    no pose, a run of the engine's own rasterisers per six vertices, read out
@@ -141,18 +140,9 @@ static void plog(const char* s)
    whether it can run at all, which `tagpu_posedraw_ready()` answers, and
    re-asks when the device changes.
 
-   ONE HALF OF THAT ANSWER IS PUBLISHED TO THE GAME THREAD: whether the pass
-   has tried and refused, which `tagpu_owndraw_classify` reads to log the
-   refusal once. `s_state` is one aligned int that only the render thread
-   writes, and the game thread's read decides nothing but whether a log line
-   is written, so a stale value moves that line by a frame and cannot change
-   a draw. */
+   `s_state` is the render thread's alone. */
 static int    s_state;          /* 0 untried, 1 ready, 2 refused, 3 building */
 
-/* 1 only once the pass has TRIED and failed — a driver this build cannot run
-   on. `s_state` is also 0 for the frame or two before the render thread has
-   built anything, and that is not a refusal. */
-int tagpu_posedraw_refused(void) { return s_state == 2; }
 
 /* ---- THE VULKAN LANE'S HAND-OVER -----------------------------------------
    The contract is tagpu_posedraw.h's; this is the state behind it.
@@ -237,13 +227,6 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
     return 1;
 }
 
-/* the consumer's report that it painted at least one structure slant this
-   frame, and the producer's read-and-clear of it -- tagpu_posedraw.h states
-   the ordering that makes the one-frame lag a property of the loop rather than
-   of who happened to run */
-static int s_slantDrew;
-void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
-
 /* NOT GATED ON THE ARM STATE: `tagpu_posedraw_ready` first arms the pass later
    in the same frame than the packet is checked, so a gate here would let the
    arming frame -- the one most likely to be truncated, at load -- through.
@@ -280,7 +263,6 @@ typedef char pd_maxhand_covers[(TAGPU_PD_MAXHAND >= (int)(TAGPU_PK_MAX_UNITS +
     TAGPU_PK_MAX_WRECKS + 1u + TAGPU_PK_MAX_BUILDS + TAGPU_PK_MAX_FXMODEL)) ? 1 : -1];
 typedef char pd_maxfx_covers[(TAGPU_PD_MAXFX >= (int)TAGPU_PK_MAX_FXMODEL) ? 1 : -1];
 typedef char pd_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
-int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; return v; }
 
 /* ---- the shader ---------------------------------------------------------
    NEITHER OF THE TWO BELOW HAS A C REFERENCE, and neither is dead code.
@@ -738,12 +720,9 @@ int tagpu_posedraw_ready(void)
         }
         return s_state == 1;
     }
-    /* 3 = BUILDING, not 2 = refused. This blocks re-entry exactly as 2
-       would, but `tagpu_posedraw_refused()` stays false while we load entry
-       points and query the block size — a window the GAME thread's owndraw
-       classify runs through many times a frame, in which a 2 here would latch
-       its one-shot "the posed unit program REFUSED to arm" on a perfectly
-       healthy run. Every real refusal below sets 2 before returning. */
+    /* 3 = BUILDING, not 2 = refused: it blocks re-entry exactly as 2 would,
+       while the entry points load and the block size is queried. Every real
+       refusal below sets 2 before returning. */
     s_state = 3;
 
     /* THIS PASS ARMS WITHOUT A PROGRAM OF ITS OWN. It never rasterises
