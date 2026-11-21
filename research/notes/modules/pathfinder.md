@@ -97,7 +97,8 @@ last search that found a path (`s_found`), the two cursors (`s_cursor`), and **t
 (`s_owed`): for each carried search its unit's slot, the search's stamp and the stamp before it.
 All three are recorded state. A carried search itself is not: a game restored from a recording has
 no thread behind an owed entry, and the scheduler gives that unit its stamp back, so it is chosen
-again. A game put back to an earlier tick drops its searches whole.
+again. A game put back to an earlier tick drops its searches whole, and so does a level that goes
+over to playing a recording: nothing of a search is applied there.
 
 **The helpers.** Threads made at install work beside the scheduler's own thread, each search on a
 scratch of its thread's own. Their number is the machine's processor cores less one, left to the
@@ -259,7 +260,8 @@ Read at attach. Every 150 ticks two `pathsched:` lines: the searches and pops a 
 caps, how the searches ended, the units ready by why and those left for the next tick, the ticks at
 each weight, the ticks searched beside the tick, the searches carried past their tick with the most
 at once and the ticks they were carried, the searches a set goal overtook running and not begun,
-the results not applied, the ticks put back for want of a page, the waits' histogram, and the set-goal calls inside the engine's 10 ticks by what the
+the results not applied, the ticks put back for want of a page and those with no helper free, the
+waits' histogram, and the set-goal calls inside the engine's 10 ticks by what the
 observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the span `pathfind`.
 
 ## Gaps
@@ -278,8 +280,8 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
   ([sim](../engine/sim.md), *The game step*). ImpAI's turns run in that window and read no course.
 - **Which tick a long search's path arrives in is not the same from run to run.** A test that
   expects a long path in an exact tick does not hold under load.
-- **A carried search keeps a helper**, so a tick that begins while three are carried searches
-  nothing; and a tick that wants a page the block has not while one is carried is put back whole.
+- **A carried search keeps a helper**: a tick that begins while every helper carries one chooses
+  nothing, and a tick that wants a page the block has not while one is carried is put back whole.
   Neither was seen in the battle but under the held searches.
 - **A stale search runs to its end**: nothing stops a search a set goal has overtaken.
 - **The class sweeps of a tick are made for every unit chosen**, the ones whose search does not

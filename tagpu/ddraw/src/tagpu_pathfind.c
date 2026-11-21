@@ -281,9 +281,10 @@ static struct {
     unsigned census_ticks, want, held, held_blocked, held_short, held_order, held_max, ready_max;
     /* the scheduler's, since its last line */
     unsigned ticks, begun, nfound, nosearch, nopath, offgrid, failed, pops, pops_max, begun_max;
-    /* ticks whose searches ran while the tick went on; of those, the ones a set goal joined; searches of the group
-       in hand the join found not ended; results whose unit no longer stood as searched */
-        unsigned late, carried, carried_most, carried_ticks, stale, skipped, dropped, noroom;
+    /* ticks whose searches ran beside the tick; searches carried past their tick, the most at once, and the joins
+       that found one still running; searches a set goal overtook running, and not begun; results whose unit no
+       longer stood as searched; ticks put back for want of a page; ticks that chose nothing, every helper carrying */
+    unsigned late, carried, carried_most, carried_ticks, stale, skipped, dropped, noroom, nohelper;
     unsigned ready_a, ready_b, ready_order, ready_end, left, left_max, held_retry, weight[3];
     unsigned goals, goals_kept, goals_opened;
 } s_v;
@@ -542,7 +543,8 @@ typedef struct JOB {
     int whole;                      /* every value the search rests on is inside its bound              */
     int ready;                      /* the query is made: the search runs                                */
     /* JOB_QUEUED until one exchange takes it: the helper's, to JOB_RUNNING and then JOB_DONE once the result is
-       whole, or a set goal's, to JOB_SKIPPED (goal_touch) */
+       whole, or a set goal's, to JOB_SKIPPED (goal_touch) -- which a helper that had claimed the job then makes
+       JOB_DONE too (task_search): JOB_DONE alone says a helper has left a claimed job */
     volatile LONG state;
     unsigned char seat;
     unsigned char patched, other;   /* the search read a patch; its goal is of a kind the search has not */
@@ -603,8 +605,13 @@ SIM_BLOCK(s_m, SIM_TRANSIENT, SIM_ID_NONE, 1, NULL);
    no thread behind an entry, and the scheduler then gives the unit its stamp back (owed_back): it is chosen
    again as though it had not been. Entry k is carry[k]'s while that search is carried. */
 typedef struct OWED { unsigned slot, stamp, stamp0; } OWED;
+static const SimField OWED_LAYOUT[] = {
+    SIM_FIELD(OWED, slot, SIMF_ID, SIM_ID_UNIT_SLOT),
+    SIM_FIELD_AT(offsetof(OWED, stamp), sizeof(OWED) - offsetof(OWED, stamp), SIMF_OPAQUE, SIM_ID_NONE),
+    SIM_FIELD_END
+};
 static OWED s_owed[PF_HELPERS];
-SIM_VAR(s_owed, SIM_STATE);
+SIM_ROWS(s_owed, SIM_STATE, SIM_ID_NONE, OWED_LAYOUT);
 
 /* Player p's block of the unit array when the engine's scheduler serves the player (0x40EC45..0x40EC62: a record
    in use, of type 1, 2 or 3, not in state 10). THE BOUND: both ends inside the array and on a slot. */
@@ -839,13 +846,14 @@ static void frz_copy(const SCHED* e, unsigned k)
        thread's scratch, and write that job's result and that scratch.
    THE ORDERING the helpers rest on is one word a helper, help[k].run:
      - only the scheduler's thread gives a handing-out, by exchanging NULL for it (run_send) and then setting the
-       helper's event; only helper k puts NULL back, as the last thing it does (helper_main). So between a
+       helper's event; helper k puts NULL back as the last thing it does (helper_main), and no other thread does
+       but the giver itself, for a helper whose event could not be set and so was never woken. So between a
        helper's NULL and the next exchange it touches nothing of ours, and a handing-out no helper's word names
        has no helper in it;
      - the scheduler's thread writes a handing-out's record before it gives it, and rewrites one only where no
        word names it: sync after run_wait, which returns only once none does, and a bg record where it finds none
        (bg_take).
-   s_done is set after each NULL; run_wait and run_drain look at the words again after each wait, so a signal left
+   s_done is set after each NULL a helper stores; run_wait and run_drain look at the words again after each wait, so a signal left
    over costs one more look and nothing else, and none is missed: a helper still named owes the signal.
    IN THE FIRST the scheduler's thread, the game thread (helpers are woken only in play), does not leave run_wait
    while a word names sync, so while a helper reads engine memory the engine's state is what the tick's writes
@@ -854,8 +862,10 @@ static void frz_copy(const SCHED* e, unsigned k)
    sync names the scheduler's frame there, so nothing may unwind past it: sched_tick is left by its return alone.
    IN THE SECOND the game thread goes on, with the tick and past its end, and a search reads NO engine memory.
    THE LIFETIME of what it reads and writes: its job, taken from the free ones before the handing-out and given
-   back only by the scheduler's thread after it has read the job's state as JOB_DONE or JOB_SKIPPED (job_free),
-   which the helper writes after its last touch of the job; the pages the job pins, written only while no job
+   back (job_free) by the scheduler's thread alone, and only where no helper can touch it again: it has read the
+   job's state as JOB_DONE, the helper's last write to a job it claimed -- a claimed job read as JOB_SKIPPED is
+   kept until then --; or the exchange that closed the claiming showed that no thread claimed it; or every
+   helper's word is NULL (due_drop). The pages the job pins, written only while no job
    pins them; its record, rewritten only where no word names it; its scratch, freed only after due_drop. So what
    the engine does meanwhile cannot reach a search, and a search reaches nothing the engine reads until the
    scheduler's thread applies its result (job_result).
@@ -891,6 +901,14 @@ static void run_send(RUN* r, unsigned want)
         if (SetEvent(s_wake[k])) want--;
         else InterlockedExchangePointer((void* volatile*)&s_m->help[k].run, NULL);
     }
+}
+
+static int run_idle(void)
+{
+    unsigned k;
+    for (k = 0; k < s_helpers; k++)
+        if (!s_m->help[k].run) return 1;
+    return 0;
 }
 
 static int run_named(const RUN* r)
@@ -1055,12 +1073,13 @@ static void sched_line(void)
                "goal, %.1f at a path's end, %.1f for a retry; left for the next tick %.1f (most %u); held by the retry "
                "%.1f a tick; ticks at the base weight %u, at 3 times %u, at 6 times %u; searched beside the tick: %u "
                "ticks; searches carried past their tick %u (most at once %u), for %u ticks in all; a set goal "
-               "overtook %u running and %u not begun; results not applied %u; ticks put back for want of a page %u",
+               "overtook %u running and %u not begun; results not applied %u; ticks put back for want of a page %u, "
+               "ticks with no helper free %u",
                s_v.ticks, s_v.begun / t, s_v.begun_max, PF_CAP_SEARCHES, s_v.pops / t, s_v.pops_max, PF_CAP_POPS,
                s_v.nfound, s_v.nosearch, s_v.nopath, s_v.offgrid, s_v.failed, s_v.patched, s_v.ready_order / t,
                s_v.ready_end / t, s_v.ready_b / t, s_v.left / t, s_v.left_max, s_v.held_retry / t, s_v.weight[0],
                s_v.weight[1], s_v.weight[2], s_v.late, s_v.carried, s_v.carried_most, s_v.carried_ticks, s_v.stale,
-               s_v.skipped, s_v.dropped, s_v.noroom);
+               s_v.skipped, s_v.dropped, s_v.noroom, s_v.nohelper);
     tagpu_logf("pathsched: wait from ready to the search, %u searches: mean %.1f ticks, most %u; 0: %u, 1-2: %u, "
                "3-9: %u, 10-29: %u, 30-89: %u, 90-299: %u, 300+: %u; set goal: %u calls, inside the engine's 10 "
                "ticks %u left to its rule and %u opened", s_v.waited, s_v.waited ? (double)s_v.wait_sum / s_v.waited : 0.0,
@@ -1253,15 +1272,16 @@ static void __fastcall sched_tick(void* pf_unused)
 {
     unsigned short ready[2][PF_SLOTS], still_slot[PF_SLOTS];
     unsigned still_stamp[PF_SLOTS];
-    unsigned n[2], at[2], taken[2] = { 0, 0 }, nj = 0, kind, i, wi;
+    unsigned n[2], at[2], taken[2] = { 0, 0 }, nj = 0, kind, i, wi, helpers;
     const char* const ta = ta_main();
     const unsigned now = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
     RUN* t;
     SCHED e;
     (void)pf_unused;
-    /* A GAME PUT BACK to an earlier tick has searches of a time that is no longer: they are dropped whole. Else
-       the carried searches that have ended give their results here, and a tick the step did not join is joined. */
-    if (now <= s_m->last_now && (s_m->tick || s_m->ncarry)) due_drop();
+    /* A GAME PUT BACK to an earlier tick has searches of a time that is no longer, and A LEVEL THAT PLAYS A
+       RECORDING takes no result of ours: there they are dropped whole. Else the carried searches that have ended
+       give their results here, and a tick the step did not join is joined. */
+    if (tagpu_puppet_on() || (now <= s_m->last_now && (s_m->tick || s_m->ncarry))) due_drop();
     else due_join();
     s_m->last_now = now;
     if (!sched_open(&e)) return;
@@ -1276,7 +1296,22 @@ static void __fastcall sched_tick(void* pf_unused)
     for (kind = 0; kind < 2; kind++)
         for (at[kind] = 0; at[kind] < n[kind] && ready[kind][at[kind]] <= s_cursor[kind]; at[kind]++)
             ;
+    /* Helpers are woken only IN PLAY, when the scheduler's thread is the game thread: the load's word
+       main + 0x38D75 is 0. THE ORDERING: the loader goes on to its call of the players phase only once it has
+       read bit 3 of that word (0x4975D6..0x4975F1), which the game thread sets (0x498576) and nothing clears
+       until the game thread zeroes the word at its entry into play (0x49847E, 0x498480), after it has read the
+       loader's last store (0x497C62, 0x498342). So in the loader's call the word is not 0, and where it is 0
+       no loader lives. In that call the game thread is not stopped -- it runs its loading frame -- and the
+       loader's entry 0x497C70 catches a fault and ends its thread, frame and all; there every task runs on the
+       loader's own thread, as the engine's searches did. And every helper has a scratch, or none is woken. */
+    /* IN PLAY WITH EVERY HELPER INSIDE A CARRIED SEARCH nothing could begin a search of this tick's, so none is
+       chosen: its units stay ready. (Which helpers are free is the moment's, as which searches are carried is.) */
+    helpers = e.play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0;
     t = bg_take();
+    if (helpers && !run_idle()) {
+        t = NULL;
+        s_v.nohelper++;
+    }
     while (t && nj < PF_CAP_SEARCHES && s_m->nfree && taken[0] + taken[1] < n[0] + n[1]) {
         JOB* j = job_new();
         unsigned slot;
@@ -1287,15 +1322,6 @@ static void __fastcall sched_tick(void* pf_unused)
         t->job[nj++] = j;
     }
     if (nj) {
-        /* Helpers are woken only IN PLAY, when the scheduler's thread is the game thread: the load's word
-           main + 0x38D75 is 0. THE ORDERING: the loader goes on to its call of the players phase only once it has
-           read bit 3 of that word (0x4975D6..0x4975F1), which the game thread sets (0x498576) and nothing clears
-           until the game thread zeroes the word at its entry into play (0x49847E, 0x498480), after it has read the
-           loader's last store (0x497C62, 0x498342). So in the loader's call the word is not 0, and where it is 0
-           no loader lives. In that call the game thread is not stopped -- it runs its loading frame -- and the
-           loader's entry 0x497C70 catches a fault and ends its thread, frame and all; there every task runs on the
-           loader's own thread, as the engine's searches did. And every helper has a scratch, or none is woken. */
-        const unsigned helpers = e.play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0;
         unsigned copies = 0, seen = 0;
         RUN* r = &s_m->sync;
         e.job = t->job;
@@ -1361,6 +1387,17 @@ static void __fastcall sched_tick(void* pf_unused)
     tagpu_prof_leave(TAGPU_PROF_GAME);
 }
 
+/* The searches due, met outside the scheduler: at the step's join, or by a set goal on `course`. ON A LEVEL THAT
+   PLAYS A RECORDING the recording is the only writer, and a game goes over to one between two steps with searches
+   carried (a rewind): there they are dropped whole, and nothing of them is applied. */
+static void goal_touch(const char* course);
+static void due_meet(const char* course)
+{
+    if (tagpu_puppet_on()) due_drop();
+    else if (course) goal_touch(course);
+    else due_join();
+}
+
 /* THE STEP'S JOIN, in place of the step's call of 0x466580 (0x4955E5), which it then makes. The step runs from the
    players phase's return to this call in a straight line (0x495564..0x4955E5), so a tick whose scheduler handed
    searches out reaches it. It waits for nothing. */
@@ -1368,7 +1405,7 @@ static void __cdecl tick_join(void)
 {
     if (s_m->held || s_m->ncarry) {
         tagpu_prof_enter(TAGPU_PROF_GAME, TAGPU_PG_PATHFIND);
-        due_join();
+        due_meet(NULL);
         tagpu_prof_leave(TAGPU_PROF_GAME);
     }
     ((void (__cdecl*)(void))(size_t)VA_STEP_COUNT)();
@@ -1419,7 +1456,7 @@ static int __cdecl before_set_goal(void* esp)
     unsigned stamp;
     size_t slot;
     if (s_mode != MODE_OURS) return 0;
-    if (course && (s_m->held || s_m->ncarry)) goal_touch(course);
+    if (course && (s_m->held || s_m->ncarry)) due_meet(course);
     if (!ta || tagpu_puppet_on() || !((const char* const*)esp)[1] || !course ||
         *(const unsigned*)course != VT_GROUND_COURSE)
         return 0;
