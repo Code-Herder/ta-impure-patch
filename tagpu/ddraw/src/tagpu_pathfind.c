@@ -191,6 +191,9 @@ SIM_VAR(s_mode, SIM_INSTALL);
 /* why the scheduler is not ours, for the refusal at the first DirectDraw call (tagpu_pathfind_report) */
 static const char* s_notInstalled;
 SIM_VAR(s_notInstalled, SIM_INSTALL);
+/* tagpu_pathfind_init ran: an attach that patches no game (the cnc-ddraw config tool's) has nothing to report */
+static int s_initRan;
+SIM_VAR(s_initRan, SIM_INSTALL);
 static int s_log;
 SIM_VAR(s_log, SIM_INSTALL);
 
@@ -1512,6 +1515,7 @@ void tagpu_pathfind_init(void)
     static const unsigned char X_SETPATH[7] = { 0x56, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C };
     static const unsigned char X_GOALFLAG[7] = { 0x8B, 0x41, 0x04, 0x85, 0xC0, 0x74, 0x0C };
     unsigned cores, i;
+    s_initRan = 1;
     s_log = tagpu_sim_lever("tagpu_pathlog.on");
     /* the TS_PFs and the work in hand: blocks, made here and never freed (THE WORK IN HAND) */
     s_pf = (TS_PF*)SIM_ALLOC(s_pf, PF_THREADS * sizeof *s_pf);
@@ -1543,7 +1547,7 @@ void tagpu_pathfind_init(void)
         return;
     }
     /* the engine functions the scheduler calls hold the engine's bytes, or it is not installed */
-        if (!tagpu_detour_redirect_ok(VA_SCHED_CALL, VA_SCHEDULER) ||
+    if (!tagpu_detour_redirect_ok(VA_SCHED_CALL, VA_SCHEDULER) ||
         !tagpu_detour_redirect_ok(VA_JOIN_CALL, VA_STEP_COUNT) ||
         !tagpu_detour_bytes_ok(VA_SET_GOAL, X_SETGOAL, sizeof X_SETGOAL) ||
         !tagpu_detour_bytes_ok(VA_REMARK, X_REMARK, sizeof X_REMARK) ||
@@ -1552,8 +1556,8 @@ void tagpu_pathfind_init(void)
         s_notInstalled = "a site of the engine's pathfinding does not hold the engine's bytes";
         return;
     }
-        /* the observer does nothing until the mode is ours, and the join nothing but the step's own call while no
-       result is held, so a redirect that fails leaves the engine's rules whole */
+    /* the observer does nothing until the mode is ours, and the join nothing but the step's own call while no
+       result is held, so a partial install is inert until the refusal at the first DirectDraw call */
     if (!tagpu_detour_observe(VA_SET_GOAL, X_SETGOAL, sizeof X_SETGOAL, before_set_goal, NULL) ||
         !tagpu_detour_redirect(VA_JOIN_CALL, VA_STEP_COUNT, (void*)tick_join) ||
         !tagpu_detour_redirect(VA_SCHED_CALL, VA_SCHEDULER, (void*)sched_tick)) {
@@ -1571,11 +1575,12 @@ void tagpu_pathfind_init(void)
                          : "inside the scheduler");
 }
 
-/* 1 when `va` holds a 5-byte jmp to the newest stub tagpu_detour landed there: the observer is still ours */
+/* 1 when `va` holds the 5-byte jmp to the first stub tagpu_detour landed there, which reaches every observer
+   chained on the site, ours among them: the site is still as Impure's modules left it */
 static int still_observed(unsigned va)
 {
     const unsigned char* p = (const unsigned char*)(size_t)va;
-    const unsigned char* stub = tagpu_detour_landed(va, NULL, NULL);
+    const unsigned char* stub = tagpu_detour_site_stub(va);
     unsigned rel;
     memcpy(&rel, p + 1, 4);
     return stub && p[0] == 0xE9 && rel == (unsigned)(size_t)stub - (va + 5);
@@ -1585,7 +1590,8 @@ static int still_observed(unsigned va)
    or a site some other module rewrote between attach and the exe's first DirectDraw call (the place the limits
    table re-reads its own, tagpu_limits_report), ends the launch here, before any game exists. The one exception
    is `tagpu_pathverify.on`, the harness's oracle, where the engine's scheduler runs by design with ours beside it
-   -- and its observers are held to the same rule. Called from DirectDrawCreate/Ex, outside the loader lock. */
+   -- and its observers are held to the same rule. Called from DirectDrawCreate/Ex, outside the loader lock. A write
+   made after this call is outside it, as it is outside the limits table's. */
 void tagpu_pathfind_report(void)
 {
     static LONG once;
@@ -1593,7 +1599,7 @@ void tagpu_pathfind_report(void)
     SIM_VAR(once, SIM_INSTALL);
     SIM_VAR(text, SIM_TRANSIENT);
     const char* why = s_notInstalled;
-    if (InterlockedExchange(&once, 1)) return;
+    if (!s_initRan || InterlockedExchange(&once, 1)) return;
     if (!why && s_mode == MODE_OURS &&
         !(tagpu_detour_redirect_ok(VA_SCHED_CALL, (unsigned)(size_t)sched_tick) &&
           tagpu_detour_redirect_ok(VA_JOIN_CALL, (unsigned)(size_t)tick_join) && still_observed(VA_SET_GOAL)))
@@ -1606,7 +1612,7 @@ void tagpu_pathfind_report(void)
     if (!why) return;
     tagpu_logf("pathsched: FAILED -- %s", why);
     _snprintf(text, sizeof text,
-              "Impure's pathfinder could not be installed, and Impure does not run the game without it.\n\n"
+              "Impure's pathfinder is not in place, and Impure does not run the game without it.\n\n"
               "Another patch or loader may have changed the game's code before or after Impure: start the game "
               "without it, or report this with the text below.\n\n--- report ---\npathfinder: %s", why);
     text[sizeof text - 1] = 0;

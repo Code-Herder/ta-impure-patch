@@ -121,6 +121,14 @@ unsigned char* tagpu_detour_landed(unsigned int va, int* stolenOff, int* nst)
     return NULL;
 }
 
+unsigned char* tagpu_detour_site_stub(unsigned int va)
+{
+    int i;
+    for (i = 0; i < s_nlanded; i++)                 /* the first owner of the site */
+        if (s_landed[i].va == va) return s_landed[i].stub;
+    return NULL;
+}
+
 int tagpu_detour_bytes_ok(unsigned int va, const unsigned char* stolen, int nst)
 {
     int off, pn;

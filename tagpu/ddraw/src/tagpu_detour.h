@@ -78,6 +78,9 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
    observer installed on its site (tagpu_packet_pub.c on DrawGameScreen, after
    tagpu_menu.c's). */
 unsigned char* tagpu_detour_landed(unsigned int va, int* stolenOff, int* nst);
+/* the OLDEST stub landed on `va`: the one the site's own jmp reaches, a chained observer being
+   reached through it (tagpu_detour_observe rewrites the earlier stub, never the site); NULL if none */
+unsigned char* tagpu_detour_site_stub(unsigned int va);
 int tagpu_detour_bytes_ok(unsigned int va, const unsigned char* stolen, int nst);
 typedef int   (__cdecl *tagpu_detour_before_fn)(void* entry_esp);
 typedef void* (__cdecl *tagpu_detour_after_fn)(unsigned int* regs);

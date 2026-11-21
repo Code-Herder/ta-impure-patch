@@ -17,7 +17,8 @@ step — and its searches run on up to three helper threads, beside the game.
 byte-matched at attach (the three sites and the three engine functions ours calls), and at the exe's
 first DirectDraw call `tagpu_pathfind_report` re-reads the sites: an install that failed, or a site
 another module rewrote after it, ends the launch there through `tagpu_refuse`, before any game exists
-(the limits table's re-read sits beside it, `tagpu_limits_report`). MEASURED 2026-11-21: a build that
+(the limits table's re-read sits beside it, `tagpu_limits_report`); a write made after that call is
+outside the check, as it is outside the table's. MEASURED 2026-11-21: a build that
 put `0x4955E5` back after installing was refused with `pathsched: FAILED -- a site of the pathfinder
 was rewritten after Impure installed it` and `log\startup-failure.txt`. The one exception is the test
 lever `tagpu_pathverify.on`, which only the harnesses write: it leaves the engine's scheduler in place
