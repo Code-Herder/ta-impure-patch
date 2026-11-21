@@ -385,7 +385,8 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   AI's planner (`0x408C8E`, whose slot 0 `0x407E90` reaches `0x43ADC0`), the order handlers' event
   2 (`0x43A21A`), the script host's 24, the GUI pump's 13, the particle layers, the radar visitor
   and the unit listener. `0x466580` itself is the radar's blink countdown (`main+0x142EF`, bit 0 of
-  `main+0x142F1`) and makes no call.
+  `main+0x142F1`) and makes no call. From the players phase's return `0x495564` to that call the
+  step has no branch (`0x495564..0x4955E5`): an iteration that runs the players phase reaches it.
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
   `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
