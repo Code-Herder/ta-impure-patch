@@ -10189,8 +10189,9 @@ SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
    - ONE STEP A TICK. The receiver's sweep is taken only for a message whose flag is set
      (stream_step), so the several messages of a tick step the sender's units once.
    THE SIZE BOUND. The writer's buffer is 0x100 dwords inside the sender's frame (0x415B60), and its
-   growth is broken: 0x415C76 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
-   The queue below (0x4628D0, 0x462911) drops a message over 0x42A bytes. So an entry is written
+   growth is broken: 0x415C76, 0x415D14 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
+   The queue below drops a message over 0x42A bytes (0x4628D0, 0x462911), and one that arrives when a
+   forced flush leaves its ring not empty (0x462716..0x462736); tagpu_netlog.on counts both as refused. So an entry is written
    only while the message, with that entry at its largest and the engine's tail at its largest
    after it, stays under STREAM_BITS_MAX: 16 + typeBits + 213 for an entry (the air payload
    0x4908C0: 2 + 209 + 2; the ground's 0x44F4A0 is 99) and 16 + 1 + typeBits + 211 for the tail
@@ -10203,12 +10204,12 @@ SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
    record whose block is not one of the ten the engine deals (wire_block_ok: inside
    [begin, main+0x1435B], the array's last slot included, at its rank's place) sends an empty list.
    MEASURED 2026-11-21 (tools/mp_agree.py --marches 10: each peer's 1499 kbots ordered to move as
-   one, ten times, 150 ticks apart): a unit's entry waited at most 4 ticks, against 42 with one
-   0x200-byte message in turn; nothing refused by the queue; the peers agree. */
+   one, ten times, 150 ticks apart): a unit's entry waited at most 4 ticks; nothing refused by the
+   queue; the peers agree. */
 #define STREAM_MAIN      0x00511DE8u
 #define STREAM_RESUME    0x0048B80Eu        /* the terminator, after the list */
 #define STREAM_BITS      0x00415C10u        /* the bit writer: thiscall (value, nbits), ret 8 */
-#define STREAM_MESSAGES  4u                 /* messages a tick a record, at most: the owner's bound on a tick's traffic */
+#define STREAM_MESSAGES  4u                 /* messages a tick a record, at most: the bound on a tick's traffic */
 #define STREAM_BITS_MAX  8191u              /* the writer's 0x100 dwords less the bit whose write would grow it */
 #define STREAM_HEAD_BITS 56u                /* [8] code, [16] size, [32] GameTime */
 #define STREAM_ENTRY_BITS(typeBits) (16u + (typeBits) + 213u)
@@ -10239,8 +10240,8 @@ typedef struct STREAMDIAG {
 } STREAMDIAG;
 static STREAMDIAG s_streamDiag[10];
 SIM_VAR(s_streamDiag, SIM_PRIVATE);
-/* the record whose message is being built, and whether its list stopped on the budget: read by
-   stream_tick and stream_sent within the one call of the sender that set them */
+/* the record whose message the sender is building, for the lever's counts (stream_sent): set on every entry of
+   stream_dirty_list, 10 while the record is not one of the ten */
 static unsigned int s_streamCur;
 SIM_VAR(s_streamCur, SIM_TRANSIENT);
 /* the 0x2C messages this peer received from each record, a window of 150 ticks */
@@ -10291,7 +10292,10 @@ static int __stdcall stream_sent(int dpid, void* buf, unsigned int size)
    (0x48BAC8). Stock's sender always sets it (0x48B81B..0x48B84C). So a remote unit moves one step a
    message, and a second message in a tick would move it twice. Branch at 0x48BA28, before the
    sweep's two loads: 0 -> 0x48BA5E, no sweep, for a message whose flag is clear; else the sweep.
-   A stopped parse (the reader on s_wireZero) keeps stock's sweep. The flag is the bit stock reads
+   A stopped parse (the reader on s_wireZero: B3's stop, for a malformed entry or a dirty create
+   that did not take) keeps stock's sweep, whichever of a tick's messages it stopped in -- the stop
+   cannot tell them apart -- so the sender's units step once more in that tick, as they do for
+   every stopped message in stock. The flag is the bit stock reads
    next: inside B3's zero-padded copy when that reader is the one in use. */
 static int __cdecl stream_step(unsigned int* r)
 {
@@ -10310,6 +10314,7 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     char *first, *last, *begin, *end, *players;
     unsigned int n, k, i, p, sent = 0, left = 0, slot0, msgs = 1, typeBits, room;
     int now;
+    s_streamCur = 10;
     if (!ta) return;
     first = *(char* const*)(rec + 0x67);
     last = *(char* const*)(rec + 0x6B);

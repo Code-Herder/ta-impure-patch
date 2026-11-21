@@ -65,9 +65,12 @@ ARMIES = ("limits-tier2-p0", "limits-tier2-p1")
 # nothing fights and every unit lives: a march makes every unit of a block dirty in one tick
 # A march is a player's own: Ctrl+A, the camera on the point, a right click in the middle of the view --
 # the engine's order path for every selected unit (tacli's `order --sel` reaches 512). The points are empty
-# ground the army never reaches between two marches, so the click never lands on a unit.
+# ground the army never reaches between two marches. The camera's pin is applied by a later frame, so the
+# click waits for it; a run whose marches did not take is told by its unit stream (MARCH_DIRTY).
 MARCH = (((7400, 2300), (5300, 2500)), ((4000, 6900), (5600, 7900)))
 VIEW_MIDDLE = ("576", "384")
+# a march that took leaves most of a block dirty after its tick's messages: at least this many units
+MARCH_DIRTY = 700
 DEATHS_IN_FLIGHT = 32
 PAUSED = "*0x511DE8+0x38A51:1"          # the engine's pause byte (modules.md, "To compare peers")
 ROSTER_S = 6                            # past the roster's 5 s dump (tagpu_packet_pub.c, ROSTER_DUMP_MS)
@@ -201,6 +204,7 @@ def main() -> int:
                     for name, points in zip((tp.host, tp.join), MARCH):
                         x, z = points[k % 2]
                         tp.tacli("eye", name, str(x), str(z))
+                        time.sleep(1)
                         tp.tacli("keys", name, "ctrl+a")
                         tp.tacli("click", name, "--right", *VIEW_MIDDLE)
                         print(f"mp_agree: march {k + 1} at GameTime {tp.gametime(tp.host)}, {name} to {x},{z}",
@@ -224,6 +228,11 @@ def main() -> int:
             text = log.read_text(errors="replace") if log.exists() else ""
             result[f"path_{name[-1]}"] = path_line(text) if text else "no log"
             result[f"stream_{name[-1]}"] = stream_line(text) if text else "no log"
+            if args.marches:
+                most = max((int(r[4]) for r in STREAM_RX.findall(text)), default=0)
+                if most < MARCH_DIRTY:
+                    raise twopeers.CouldNotRun(f"the marches did not take on {name}: at most {most} units were left "
+                                               f"dirty after a tick's messages, under {MARCH_DIRTY}")
     except twopeers.CouldNotRun as e:
         result["could_not_run"] = str(e)
         (args.out / "result.json").write_text(json.dumps(result, indent=1))

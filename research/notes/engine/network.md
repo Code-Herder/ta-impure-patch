@@ -644,8 +644,9 @@ cover it and the padding is 48.
   write fills the buffer's last dword (the index reaching the capacity, `0x415C72`, `0x415D05`),
   grows it — wrongly: `push 4; call 0x4B4F10` allocates **four bytes** (`0x415C76..0x415C7B`), the
   doubled capacity is stored into them and the whole old buffer copied over them
-  (`0x415C8F..0x415CAA`). `0x415BB0` is the same growth with the same four bytes (`0x415BB6`;
-  callers `0x48B87A`, `0x48B2EF`, `0x48B361`). So a message of 8192 bits or more writes 1 KB over a
+  (`0x415C8F..0x415CAA`); a value that spans two dwords takes the same growth at `0x415D14`.
+  `0x415BB0` is the same growth with the same four bytes (`0x415BB6`; callers `0x48B87A`, `0x48B2EF`,
+  `0x48B361`, `0x44F505`). So a message of 8192 bits or more writes 1 KB over a
   4-byte heap block; stock never reaches it (0x200 bytes and one entry's overshoot).
 - **Its end.** After the list: `[16] 0xFFFF` (`0x48B80E`), one flag bit set unconditionally
   (`0x48B81B..0x48B84C`), the round-robin entry (`0x48B200`), the size — `dword index × 4 +
@@ -654,8 +655,11 @@ cover it and the padding is 48.
 - **The queue below.** In the default, queued mode `0x451DF0` hands the message to channel 0
   (`0x461990` → `0x462710`, the channel at `0x513008`). `0x4628D0` appends it to a pool buffer only
   while `used + length ≤ 0x42A` (`0x462911`), retries once on a fresh buffer, and otherwise drops it
-  ("out of space in buffer!", `0x462996`); a full ring (`[ch+0x38]` = 0x400 entries) that a forced
-  flush does not empty drops it too (`0x462731`). **A message is never split: one over 0x42A = 1066
+  ("out of space in buffer!", `0x462996`). Before that, `0x462710` forces a flush (`0x4624A0(1)`,
+  `0x462716..0x46272C`) when the channel's pending bytes `[ch+0x20]` have reached 0x42A or its ring
+  holds 0x400 entries, and drops the message when the ring is not empty afterwards
+  (`0x462731` → `0x46284B`); the flush sends the ring's entries that share the first entry's key
+  (`0x46250D`, `0x462570`) and puts the others back (`0x4625CE..0x4625EE`) [the key not identified]. **A message is never split: one over 0x42A = 1066
   bytes is always dropped.** Every message of every local record shares the channel.
 - **The receiver's step.** After a `0x2C`'s list `0x48B920` (stdcall `(rec, message)`, `ret 8`; its
   one caller the dispatcher's case, `0x4553F4`) walks the sender's whole block
@@ -665,8 +669,9 @@ cover it and the padding is 48.
   robin's entry follows (`0x48BA9F`); clear, the message ends (`0x48BAC8`) — a path stock's sender
   never takes. MEASURED 2026-11-21 (`.data` archive `stream-rate`, the fight battle of
   `tools/mp_agree.py`): a sender made to send two or four whole `0x2C`s a tick put the other peer's
-  copies up to 842 world units ahead of their owners, with no message lost (10 783 sent, 10 781
-  received).
+  copies up to 842 world units ahead of their owners, with about as many messages received as sent
+  (host to joiner 10 783 sent and 10 794 received, joiner to host 10 799 and 10 781; the two peers'
+  150-tick windows are not aligned, so the counts agree to a few messages and no closer).
 
 **What Impure sends** (`tagpu_patches.c`, `unit_stream`; both sites in the fail-closed table). The
 dirty list is walked in turn, from the unit the last tick stopped at. Before each entry the message
@@ -685,9 +690,13 @@ apart (`mp_agree.py --marches 10`), the worse peer:
 | one of 0x200 bytes, in turn | 42 ticks | 17.7 | 854 | 15 KB | 557 B |
 | one of 960 bytes | 22 | 7.8 | 474 | 23 KB | 1005 B |
 | up to four | 4 | 2.2 | 81 | 27 KB | 3.9 KB |
-| up to eight | 2 | 1.2 | 29 | 28 KB | 7.8 KB |
+| up to eight | 2 | 1.2 | 29 | 29 KB | 7.8 KB |
 
-The queue refused none of them and the peers agree in every row. **Not measured:** a link that
+The queue refused none of them and the peers agree in every row. With **two local records a peer**
+— each peer its player and one hosted AI seat, all four with 1499 units ordered onto the centre, so
+that a peer's two streams go through the one channel, up to 3.9 KB a tick each — the queue refused
+none either (0 of 5781 and 5310 messages) and a unit's entry waited 4 ticks at most. **Not
+measured:** a link that
 loses packets (the channel keeps a sent buffer about four seconds for a resend, `0x462860(4000 ms)`
 at `0x460E7F`, and past 0x22 buffers reuses one still inside that window, `0x461BED` — whether a
 burst of four messages a tick meets that under loss is open [INFERRED from the disassembly, not
