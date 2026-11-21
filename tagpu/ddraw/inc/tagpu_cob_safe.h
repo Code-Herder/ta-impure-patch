@@ -33,6 +33,17 @@ typedef struct TagpuCobProgram {
     unsigned char *starts;
     uint32_t words, scripts, pieces, statics, model_pieces;
     int terminal_zero;
+    /* THE STACK PROOF, made at load under IMPURE's rules (tagpu_cob_safe.c, prove). For each
+       instruction, `lo` and `hi` bound the words a running record holds on entering it, over
+       every way a thread can start: an engine start (0 to 4 words) and every START or CALL that
+       names its script. `guard` is 1 where tagpu_cob_check_step could answer anything but
+       "execute" for a state inside those bounds (an underflow the bounds do not rule out, a
+       division, a terminal opcode, the terminal zero), and 0 where it cannot. `depth` is the
+       words a record of this program ever touches: the deepest bound, local index and engine
+       write, never below 4. All three arrays are NULL, and depth TAGPU_COB_WORDS, when some
+       path can pass TAGPU_COB_WORDS: such a program is checked at every opcode. */
+    unsigned char *lo, *hi, *guard;
+    uint32_t depth;
 } TagpuCobProgram;
 
 /* The caller owns the blob for the program's entire lifetime. Header/name
@@ -42,6 +53,11 @@ void tagpu_cob_program_free(TagpuCobProgram* program);
 int tagpu_cob_bind_model(TagpuCobProgram* program, uint32_t pieces, char* reason, size_t capacity);
 int tagpu_cob_id_valid(int32_t id, uint32_t slots);
 int32_t tagpu_cob_build_left(float remaining);
+/* 1 when the stack proof covers this record: the program is bounded, and a busy record's pc is a
+   validated instruction with sp + 1 inside its bounds (a CALL refused on child -1, which nothing
+   ever runs again, needs only sp + 1 within `depth`). A record the VM did not make itself -- a
+   saved game's -- is run under the full check unless every record of its object passes. */
+int tagpu_cob_record_proven(const TagpuCobProgram* program, const TagpuCobRecord* record);
 /* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. */
 int tagpu_cob_check_step(const TagpuCobProgram* program, const TagpuCobRecord* record,
                          char* reason, size_t capacity);

@@ -49,8 +49,11 @@ class Core(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="cobvm-")
         lib = Path(cls.temp.name) / "libcobvm.so"
+        # TAGPU_COBVM_PROVE_CHECK: every opcode the stack proof lets through unchecked is checked
+        # anyway, and a check that would not have executed is a fault by name
         subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", "-g",
-                        "-fsanitize=" + SANITIZE, "-fno-sanitize-recover=all", "-I", str(DDRAW / "inc"),
+                        "-fsanitize=" + SANITIZE, "-fno-sanitize-recover=all", "-DTAGPU_COBVM_PROVE_CHECK",
+                        "-I", str(DDRAW / "inc"),
                         str(DDRAW / "src" / "tagpu_cobvm.c"), str(DDRAW / "src" / "tagpu_cob_safe.c"),
                         "-o", str(lib)], check=True)
         cls.lib = tacob.bind_cobvm(C.CDLL(str(lib)))
@@ -90,6 +93,111 @@ class Core(unittest.TestCase):
                     self.skipTest(f"the fixtures need the game's archives: {e}")
                 self.assertTrue(report["trace_ok"], report["trace_diff"])
                 self.assertTrue(report.get("pose_ok", True), report.get("pose_bad"))
+
+    def test_every_fixture_runs_under_the_stack_proof(self):
+        # the fixtures are retail's and replay under RETAIL, which checks every opcode; under
+        # IMPURE's rules the proof skips checks, and the check build faults by name if one of
+        # them would not have executed
+        for cls in ("kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"):
+            with self.subTest(fixture=cls):
+                folder = tacob.fixtures_dir() / cls
+                try:
+                    header, lines = tacob.read_cobtrace(folder / "cobtrace.log")
+                    type_name = lines[0].fields[3]
+                    blob, _ = tacob.read_cob_source(type_name.lower())
+                except (tacob.TacobError, OSError) as e:
+                    self.skipTest(f"the fixtures need the game's archives: {e}")
+                cob = tacob.read_cob(blob)
+                timelines = {int(k): [tuple(p) for p in v]
+                             for k, v in (dict(tacob.replay_inputs(cls)).get("get") or {}).items()}
+                try:
+                    tacob.replay(cob, lines, timelines, type_name, lines[0].unit, rules=tacob.RULES_IMPURE,
+                                 facts=self.FACTS)
+                except tacob.TacobError as e:
+                    self.assertNotIn("stack proof", str(e))
+
+    # -- the stack proof ----------------------------------------------------------
+    class Program(C.Structure):
+        _fields_ = [("code", C.c_void_p), ("entries", C.c_void_p), ("names", C.c_void_p),
+                    ("starts", C.c_void_p), ("words", C.c_uint32), ("scripts", C.c_uint32),
+                    ("pieces", C.c_uint32), ("statics", C.c_uint32), ("model_pieces", C.c_uint32),
+                    ("terminal_zero", C.c_int), ("lo", C.POINTER(C.c_ubyte)), ("hi", C.POINTER(C.c_ubyte)),
+                    ("guard", C.POINTER(C.c_ubyte)), ("depth", C.c_uint32)]
+
+    def program(self, vm):
+        return C.cast(vm._program, C.POINTER(self.Program)).contents
+
+    def patched(self, source, old, new):
+        """`source` compiled, with the first run of words `old` replaced by `new` (as long)"""
+        cob = tacob.compile_bos(PRELUDE + source, "test.bos")
+        code = cob.code
+        at = next(i for i in range(len(code)) if code[i:i + len(old)] == list(old))
+        code[at:at + len(old)] = list(new)
+        return cob
+
+    def test_a_balanced_script_is_bounded_and_runs_unchecked(self):
+        vm = self.vm("Create() { s1 = 1 + (2 + (3 + (4 + 5))); }", rules=tacob.RULES_IMPURE)
+        p = self.program(vm)
+        self.assertTrue(p.guard)
+        # four words an engine start may leave, then five constants before the first add
+        self.assertEqual(p.depth, 9)
+        entry = vm.entries[vm.names.index("Create")]
+        self.assertEqual((p.lo[entry], p.hi[entry], p.guard[entry]), (0, 4, 0))
+        vm.start_script("Create", run_now=True)
+        self.assertEqual(vm.statics[0], 15)
+
+    def test_an_instruction_that_can_underflow_stays_checked(self):
+        # `s1 = 7` with its push turned into a jump to the next word: the pop then takes the
+        # start's own word, so an engine start with none underflows, as it did before the proof
+        cob = self.patched("Create() { s1 = 7; }", (0x10021001, 7), (0x10064000, 0))
+        cob.code[cob.code.index(0x10064000) + 1] = cob.code.index(0x10064000) + 2
+        for argwords, args, want in ((False, (), "underflow"), (True, (3,), None)):
+            with self.subTest(argwords=argwords):
+                vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                                 rules=tacob.RULES_IMPURE)
+                vm.tick = 1
+                p = self.program(vm)
+                pop = cob.code.index(0x10064000) + 2
+                self.assertEqual((p.lo[pop], p.guard[pop]), (0, 1))
+                if want:
+                    with self.assertRaises(tacob.TacobError) as e:
+                        vm.start_script("Create", run_now=True)
+                    self.assertIn(want, str(e.exception))
+                else:
+                    vm.start_script("Create", run_now=True, args=args, argwords=True)
+                    self.assertEqual(vm.statics[0], 3)
+
+    def test_a_loop_that_leaves_words_is_unbounded_and_faults_at_the_bound(self):
+        # each pass's `s1 = 1` becomes two pushes: the proof cannot bound it, so every opcode is
+        # checked and the 128-word bound faults the thread as before
+        cob = self.patched("Create() { while(1) { s1 = 1; sleep 1; } }", (0x10023004, 0), (0x10021001, 1))
+        vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                         rules=tacob.RULES_IMPURE)
+        vm.tick = 1
+        p = self.program(vm)
+        self.assertFalse(p.guard)
+        self.assertEqual(p.depth, 128)
+        with self.assertRaises(tacob.TacobError) as e:
+            vm.start_script("Create", run_now=True)
+            for _ in range(200):
+                vm.do_scripts_now(1)
+        self.assertIn("capacity", str(e.exception))
+
+    def test_a_record_outside_the_proof_turns_every_check_back_on(self):
+        vm = self.vm("Create() { while(1) { sleep 1; } }", rules=tacob.RULES_IMPURE)
+        vm.start_script("Create", run_now=True)
+        self.assertEqual(vm._vm.checked, 0)
+        self.lib.tagpu_cobvm_loaded.argtypes = [C.POINTER(tacob._Vm)]
+        self.lib.tagpu_cobvm_loaded(C.byref(vm._vm))
+        self.assertEqual(vm._vm.checked, 0)                  # the VM's own record is covered
+        record = 28                                          # the first record's sp, as a save could set it
+        struct.pack_into("<i", vm._object, record + 8, 40)
+        self.lib.tagpu_cobvm_loaded(C.byref(vm._vm))
+        self.assertEqual(vm._vm.checked, 1)
+
+    def test_retail_checks_every_opcode(self):
+        vm = self.vm("Create() { s1 = 1; }")
+        self.assertEqual(vm._vm.checked, 1)
 
     # -- the rules of the two builds ------------------------------------------
     POOL = """

@@ -25,9 +25,13 @@
    reads as callbacks, writes as TAGPU_COBVM_EFFECT entries (the effect log).
 
    BOUNDED BY CONSTRUCTION: the program comes from tagpu_cob_program (tagpu_cob_safe.c), which
-   validated every operand and branch, and every opcode passes tagpu_cob_check_step, the same
-   guard the game's interpreter takes at 0x4B0E5D. A fault is a refusal: the call returns -1 with
-   the reason in the run, and the VM is not run again. */
+   validated every operand and branch and proved the stack's bounds, and an opcode passes
+   tagpu_cob_check_step, the same guard the game's interpreter takes at 0x4B0E5D, wherever the
+   proof does not show that check would answer "execute" (the program's `guard`). A VM checks
+   every opcode under RETAIL's rules, for an unbounded program, and after tagpu_cobvm_loaded finds
+   a record the proof does not cover. Built with TAGPU_COBVM_PROVE_CHECK (the tests), it runs the
+   check at the unguarded opcodes too and faults by name if one would not have executed. A fault
+   is a refusal: the call returns -1 with the reason in the run, and the VM is not run again. */
 #include <stdint.h>
 #include "tagpu_cob_safe.h"
 
@@ -128,6 +132,7 @@ typedef struct TAGPU_COBVM {
     unsigned char*         model;
     unsigned               threads, rules;
     int                    faulted;
+    int                    checked;    /* every opcode through tagpu_cob_check_step */
     struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
 } TAGPU_COBVM;
 
@@ -138,6 +143,10 @@ typedef struct TAGPU_COBVM {
 int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
                      unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
                      char* reason, unsigned capacity);
+
+/* The host wrote the object's records itself (a saved game's): the VM checks every opcode from
+   now on unless every record is one the stack proof covers (tagpu_cob_record_proven). */
+void tagpu_cobvm_loaded(TAGPU_COBVM* vm);
 
 /* Name2Index 0x4B07C0: the first script of that name, or -1. */
 int tagpu_cobvm_index(const TagpuCobProgram* program, const char* name);
@@ -158,6 +167,9 @@ int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt);
 
 /* Write the latched start's trace line now (the oracle's last line of a run). */
 void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run);
+
+/* sizeof(TAGPU_COBVM), for a host that allocates the struct through a mirror of it (tacob's ctypes). */
+unsigned tagpu_cobvm_size(void);
 
 /* The records and the count, read from the object. */
 TagpuCobRecord* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot);

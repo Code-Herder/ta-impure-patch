@@ -253,7 +253,7 @@ static int32_t wrap_sub(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (
 static int32_t wrap_mul(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
 
 /* The two-operand words (0x4B1479..0x4B18AB): `b` popped, `a` rewritten in place. NOT and
-   BITWISE_NOT neither pop nor push. Division was bounded by tagpu_cob_check_step. */
+   BITWISE_NOT neither pop nor push. Division is guarded: tagpu_cob_check_step runs at every one. */
 static void arith(TagpuCobRecord* r, uint32_t op)
 {
     int32_t a, b, v;
@@ -305,10 +305,17 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
     const uint32_t* code = vm->program->code;
     int32_t* anim = vm->anim;
     int32_t rate = (int32_t)obj32(vm, OBJ_RATE);
+    const unsigned char* guard = vm->checked ? NULL : vm->program->guard;
     unsigned steps;
     for (steps = 0; steps < STEP_BUDGET; ++steps) {
         uint32_t pc, word, op, next;
-        int checked = tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason);
+        int checked = 1;
+        if (!guard || guard[r->pc])
+            checked = tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason);
+#ifdef TAGPU_COBVM_PROVE_CHECK
+        else if (tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason) != 1)
+            return fail(vm, run, "the stack proof skipped a check that does not execute");
+#endif
         if (!checked) return fail(vm, run, NULL);
         if (checked == 2) {                 /* 0x4B1B60: an opcode the engine lacks kills its thread */
             release(vm, slot);
@@ -680,12 +687,22 @@ int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned r
     vm->model = model;
     vm->rules = rules;
     vm->threads = rules == TAGPU_COBVM_IMPURE ? TAGPU_COB_THREADS : TAGPU_COB_LEGACY_THREADS;
+    vm->checked = rules != TAGPU_COBVM_IMPURE || !program->guard;   /* the proof is IMPURE's */
     memset(object + OBJ_RECORDS, 0, TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES + 4u);
     obj32_set(vm, OBJ_RATE, 30);
     obj32_set(vm, OBJ_DIRTY, 0);
     if (program->statics) memset(statics, 0, program->statics * sizeof *statics);
     if (program->pieces) memset(anim, 0, program->pieces * TAGPU_COBVM_ANIM * sizeof *anim);
     return 1;
+}
+
+unsigned tagpu_cobvm_size(void) { return (unsigned)sizeof(TAGPU_COBVM); }
+
+void tagpu_cobvm_loaded(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    for (s = 0; s < vm->threads && !vm->checked; ++s)
+        if (!tagpu_cob_record_proven(vm->program, tagpu_cobvm_record(vm, s))) vm->checked = 1;
 }
 
 int tagpu_cobvm_index(const TagpuCobProgram* program, const char* name)

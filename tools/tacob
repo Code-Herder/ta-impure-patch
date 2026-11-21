@@ -1832,7 +1832,7 @@ class _Pend(_C.Structure):
 class _Vm(_C.Structure):
     _fields_ = [("program", _C.c_void_p), ("object", _C.c_void_p), ("statics", _C.c_void_p),
                 ("anim", _C.c_void_p), ("model", _C.c_void_p), ("threads", _C.c_uint),
-                ("rules", _C.c_uint), ("faulted", _C.c_int), ("pend", _Pend)]
+                ("rules", _C.c_uint), ("faulted", _C.c_int), ("checked", _C.c_int), ("pend", _Pend)]
 
 
 def _cob_source_root():
@@ -1889,7 +1889,12 @@ def cobvm_lib():
 
 
 def bind_cobvm(lib):
-    """Declare the core's entries on a loaded copy of it (a sanitizer build in the tests too)."""
+    """Declare the core's entries on a loaded copy of it (a sanitizer build in the tests too). The VM
+    struct is allocated here, so its mirror _Vm must be the C struct's size."""
+    lib.tagpu_cobvm_size.restype = _C.c_uint
+    if lib.tagpu_cobvm_size() != _C.sizeof(_Vm):
+        raise TacobError(f"tacob's _Vm is {_C.sizeof(_Vm)} bytes, TAGPU_COBVM {lib.tagpu_cobvm_size()}: "
+                         "the mirror lags tagpu_cobvm.h")
     lib.tagpu_cob_program.restype = _C.c_void_p
     lib.tagpu_cob_program.argtypes = [_C.c_void_p, _C.c_size_t, _C.c_char_p, _C.c_size_t]
     lib.tagpu_cob_program_free.argtypes = [_C.c_void_p]
