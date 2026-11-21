@@ -765,7 +765,7 @@ static void job_ready(const SCHED* e, JOB* j)
 /* One of the tick's copies: 0 the explored map, k the map of class s_due.cls[k - 1] into slot k - 1. THE BOUND on
    each length: a whole job of the class has held the class's grid, the cells' and the pathfinder's to one size
    (job_writes), and the bytes copied are the ones the engine's reader 0x40D7B0 indexes for a grid of that size
-   -- the engine's own allocations, ((h + 15) >> 4) w dwords (0x440993..0x4409B0) and w h / 2 bytes (0x483CF6). */
+   -- the engine's own allocations, ((h + 15) >> 4) w dwords (0x44097E..0x4409B8) and w h / 2 bytes (0x483CF6). */
 static void frz_copy(const SCHED* e, unsigned k)
 {
     if (!k)
