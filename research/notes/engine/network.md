@@ -585,7 +585,18 @@ dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the mo
 (the writer ends the list once the message holds 0x200 bytes, a test made after each entry is
 written, `0x48B7E5..0x48B7FB`, so the last entry, the terminator and the round-robin entry can take a
 message past 0x200), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
-for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
+for slot `GameTime % N` (`0x48B3F0`). The **dirty list's walk** starts at the block's first unit every message
+(`0x48B766`, `mov esi,[edi+0x67]`; the block's end test `0x48B76C`) and an entry's slot is its index
+less the block's first (`[[unit+0x96]+0x6F]`); the receiver places it from the block's first slot
+again (`0x48B985..0x48B99A`: `first + delta × 0x118`, the delta signed and `0xFFFF` the end), so the
+entries may come in any order. At about 15 bytes an entry the 0x200-byte budget (`0x48B7F6`) holds
+about 33 a message, and while more units are dirty the block's high slots wait for the round robin:
+MEASURED 2026-11-20 (`tools/mp_agree.py`, two peers of 1499 kbots on Town & Country, `tagpu_netlog.on`)
+with our pathfinder 368 and 509 units left dirty after the average message, a unit's entry waiting up
+to 4598 ticks and its copy standing up to 975 world units off its owner's, worst in the top fifth of
+the slots; with the engine's pathfinder 168 and 328 left, 1729 ticks and 296 world units. Impure walks
+the list in turn (`tagpu_patches.c`, `stream_order`): 296 and 297 left, at most 42 ticks, 157 world units,
+the lag the same in every fifth of the slots. A dirty entry whose type differs from its slot creates the unit
 (`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
 to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
 0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the

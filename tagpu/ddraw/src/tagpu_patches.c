@@ -10305,7 +10305,8 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     }
 }
 
-/* CLASS: shared. Each peer sends its own records' units; the message is the same set of entries. */
+/* CLASS: local. Without it a peer's own units reach the others later; the entries and every receiver are
+   stock's. */
 static int fix_stream_order(void)
 {
     FIXSITE site[1] = {
