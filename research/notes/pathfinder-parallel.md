@@ -52,6 +52,12 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
 12. **The tick's jobs, what is due of them and the tick's copies are `SIM_TRANSIENT`** (`s_job`,
     `s_due`, `s_frz`, `s_frz_bytes`): written by the scheduler before a search reads them, nothing
     due between two ticks.
+13. **The helpers go on writing no engine memory** (2026-11-20): the walk in parts and a class's
+    writes as a task on the helpers measured 0.62 to 0.65 ms a tick against 0.90, and were taken
+    out; 0.3 ms did not pay for helpers that write the classes' maps.
+14. **The join waits for nothing: a search still running there is carried to a later tick**
+    (2026-11-20). Which tick a long search's result arrives in then depends on the machine and the
+    moment, which the owner chose over a rule counted in work, for a wait of none.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -180,7 +186,22 @@ them, a cheaper search.
    to a third more pops, of which the join's wait for the searches is 0.01 to 0.02 ms; 117 044 of 117 044 results equal to the same searches made inside the scheduler on the
    engine's own maps ([the module](modules/pathfinder.md)).
 
+6. **The join waits for nothing** — the helpers given their work by a word each; the tick's join
+   applies what has ended, puts back what has not begun and carries what is running, each carried
+   search with its own pages of the copies; a set goal meets its course's search first.
+   **Built 2026-11-20**: 10 searches of 116 000 carried in the battle, each for a tick; with every
+   search made twice, 124 335 of 124 335 results equal ([the module](modules/pathfinder.md)).
+
 ## Open
+
+- **The owner's to confirm**, the classes the last landing declares:
+  - `s_owed` (the carried searches' units: slot, stamp, stamp before) is `SIM_STATE`.
+  - The work in hand (`s_m`: the helpers' words, the handing-outs' records, the jobs, the pages'
+    pins) and the scratches' `TS_PF`s (`s_pf`) are blocks declared `SIM_TRANSIENT`, and are not
+    empty between two ticks while a search is carried. They are blocks so that nothing that resets
+    a static between ticks reaches memory a helper is inside; what the simulation carries of a
+    carried search is `s_owed`.
+  - **Groups are gone** (decision 9's 16): the pops cap is tested where each search is begun.
 
 
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
@@ -205,17 +226,15 @@ them, a cheaper search.
   found nothing.
 - A search past 65 536 open nodes: the engine's node word wraps there. It gets the result of a
   search that found nothing; none occurred.
-- A group's searches can pass the pops cap together (498 716 pops in the worst tick measured);
-  a group's time is its longest search's, and the join waits for what the tick did not cover
-  (3.9 ms at most in the run that logged it).
+- The searches in flight can pass the pops cap together; the join no longer waits for them.
 - **What is left on the game thread is the scheduler's own work**: the walk, the writes, the
   queries and the copies, 0.9 ms a tick. The walk can be shared among the threads inside the
   scheduler; the writes are the engine's `0x440830`, whose use off the game thread wants its
   disassembly read for state it shares.
 - **Long searches** — a goal deep inside a base or a crowd, where the search floods a disc before
-  it finds the way in: 39 % of searches and 67 % of pops on the captured set. Two ways on, neither
-  built: a search past a count of pops delivered a tick later, and one search shared by the units
-  sent to one place.
+  it finds the way in: 39 % of searches and 67 % of pops on the captured set. They no longer hold
+  the game thread (landing 6); what they cost is helpers' time. One way on, not built: one search
+  shared by the units sent to one place.
 - Cores against hardware threads for the helpers' number: not measured (the module's gaps).
 - ImpAI's simulator still models the engine's scheduler, and the recorder still lists its three
   tables, which nothing writes now.
