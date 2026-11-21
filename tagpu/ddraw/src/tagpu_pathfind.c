@@ -97,6 +97,7 @@
 #include "tagpu_pathfind.h"
 #include "tagpu_prof.h"
 #include "tagpu_puppet.h"
+#include "tagpu_refuse.h"
 #include "tasim_path.h"
 
 SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-allied formation-basic");
@@ -187,6 +188,9 @@ SIM_FEATURE(path_sched, SIM_PUPPET_OWNER, "battle battle-allied stock-battle-all
 enum { MODE_ENGINE, MODE_OURS, MODE_VERIFY };
 static int s_mode;
 SIM_VAR(s_mode, SIM_INSTALL);
+/* why the scheduler is not ours, for the refusal at the first DirectDraw call (tagpu_pathfind_report) */
+static const char* s_notInstalled;
+SIM_VAR(s_notInstalled, SIM_INSTALL);
 static int s_log;
 SIM_VAR(s_log, SIM_INSTALL);
 
@@ -1513,7 +1517,7 @@ void tagpu_pathfind_init(void)
     s_pf = (TS_PF*)SIM_ALLOC(s_pf, PF_THREADS * sizeof *s_pf);
     s_m = (MACH*)SIM_ALLOC(s_m, sizeof *s_m);
     if (!s_pf || !s_m) {
-        tagpu_log("pathsched: NOT installed - no memory for the scheduler's own records; the engine's scheduler runs");
+        s_notInstalled = "there is no memory for the scheduler's own records";
         return;
     }
     for (i = 0; i < PF_JOBS; i++) s_m->free[i] = &s_m->job[i];
@@ -1523,7 +1527,7 @@ void tagpu_pathfind_init(void)
             !tagpu_detour_bytes_ok(VA_GRID_RESET, X_RESET, sizeof X_RESET) ||
             !tagpu_detour_bytes_ok(VA_EXTRACT, X_EXTRACT, sizeof X_EXTRACT) ||
             !tagpu_detour_bytes_ok(VA_CLEANUP, X_CLEANUP, sizeof X_CLEANUP)) {
-            tagpu_log("pathverify: NOT armed - a site does not hold the engine's bytes; the engine's scheduler runs");
+            s_notInstalled = "tagpu_pathverify.on: a site of the engine's scheduler does not hold the engine's bytes";
             return;
         }
         if (tagpu_detour_observe(VA_SCHEDULER, X_SCHED, sizeof X_SCHED, before_scheduler, NULL) &&
@@ -1531,10 +1535,11 @@ void tagpu_pathfind_init(void)
             tagpu_detour_observe(VA_EXTRACT, X_EXTRACT, sizeof X_EXTRACT, before_extract, NULL) &&
             tagpu_detour_observe(VA_CLEANUP, X_CLEANUP, sizeof X_CLEANUP, before_cleanup, NULL))
             s_mode = MODE_VERIFY;
-        tagpu_log(s_mode == MODE_VERIFY
-                      ? "pathverify: ARMED - the engine's scheduler runs, and our search beside it on every search "
-                        "(0x40EB70, 0x40D900, 0x40E050, 0x440BE0)"
-                      : "pathverify: NOT armed - an observer could not be installed; the engine's scheduler runs");
+        if (s_mode == MODE_VERIFY)
+            tagpu_log("pathverify: ARMED - the engine's scheduler runs, and our search beside it on every search "
+                      "(0x40EB70, 0x40D900, 0x40E050, 0x440BE0)");
+        else
+            s_notInstalled = "tagpu_pathverify.on: an observer could not be installed in the engine's scheduler";
         return;
     }
     /* the engine functions the scheduler calls hold the engine's bytes, or it is not installed */
@@ -1544,7 +1549,7 @@ void tagpu_pathfind_init(void)
         !tagpu_detour_bytes_ok(VA_REMARK, X_REMARK, sizeof X_REMARK) ||
         !tagpu_detour_bytes_ok(VA_SET_PATH, X_SETPATH, sizeof X_SETPATH) ||
         !tagpu_detour_bytes_ok(VA_GOAL_FLAG, X_GOALFLAG, sizeof X_GOALFLAG)) {
-        tagpu_log("pathsched: NOT installed - a site does not hold the engine's bytes; the engine's scheduler runs");
+        s_notInstalled = "a site of the engine's pathfinding does not hold the engine's bytes";
         return;
     }
         /* the observer does nothing until the mode is ours, and the join nothing but the step's own call while no
@@ -1552,7 +1557,7 @@ void tagpu_pathfind_init(void)
     if (!tagpu_detour_observe(VA_SET_GOAL, X_SETGOAL, sizeof X_SETGOAL, before_set_goal, NULL) ||
         !tagpu_detour_redirect(VA_JOIN_CALL, VA_STEP_COUNT, (void*)tick_join) ||
         !tagpu_detour_redirect(VA_SCHED_CALL, VA_SCHEDULER, (void*)sched_tick)) {
-        tagpu_log("pathsched: NOT installed - a site could not be written; the engine's scheduler runs");
+        s_notInstalled = "a site of the engine's pathfinding could not be written";
         return;
     }
     s_mode = MODE_OURS;
@@ -1564,6 +1569,48 @@ void tagpu_pathfind_init(void)
                PF_CAP_SEARCHES, PF_CAP_POPS, 1 + s_helpers, cores,
                s_helpers ? "beside the tick, a search not ended at the join carried to a later one"
                          : "inside the scheduler");
+}
+
+/* 1 when `va` holds a 5-byte jmp to the newest stub tagpu_detour landed there: the observer is still ours */
+static int still_observed(unsigned va)
+{
+    const unsigned char* p = (const unsigned char*)(size_t)va;
+    const unsigned char* stub = tagpu_detour_landed(va, NULL, NULL);
+    unsigned rel;
+    memcpy(&rel, p + 1, 4);
+    return stub && p[0] == 0xE9 && rel == (unsigned)(size_t)stub - (va + 5);
+}
+
+/* THE PATHFINDER IS ALWAYS OURS. A game never runs on the engine's scheduler: an install that failed at attach,
+   or a site some other module rewrote between attach and the exe's first DirectDraw call (the place the limits
+   table re-reads its own, tagpu_limits_report), ends the launch here, before any game exists. The one exception
+   is `tagpu_pathverify.on`, the harness's oracle, where the engine's scheduler runs by design with ours beside it
+   -- and its observers are held to the same rule. Called from DirectDrawCreate/Ex, outside the loader lock. */
+void tagpu_pathfind_report(void)
+{
+    static LONG once;
+    static char text[1024];
+    SIM_VAR(once, SIM_INSTALL);
+    SIM_VAR(text, SIM_TRANSIENT);
+    const char* why = s_notInstalled;
+    if (InterlockedExchange(&once, 1)) return;
+    if (!why && s_mode == MODE_OURS &&
+        !(tagpu_detour_redirect_ok(VA_SCHED_CALL, (unsigned)(size_t)sched_tick) &&
+          tagpu_detour_redirect_ok(VA_JOIN_CALL, (unsigned)(size_t)tick_join) && still_observed(VA_SET_GOAL)))
+        why = "a site of the pathfinder was rewritten after Impure installed it (0x464F92, 0x4955E5 or 0x44F2A0)";
+    if (!why && s_mode == MODE_VERIFY &&
+        !(still_observed(VA_SCHEDULER) && still_observed(VA_GRID_RESET) && still_observed(VA_EXTRACT) &&
+          still_observed(VA_CLEANUP)))
+        why = "tagpu_pathverify.on: an observer in the engine's scheduler was rewritten after Impure installed it";
+    if (!why && s_mode == MODE_ENGINE) why = "the pathfinder was never installed";
+    if (!why) return;
+    tagpu_logf("pathsched: FAILED -- %s", why);
+    _snprintf(text, sizeof text,
+              "Impure's pathfinder could not be installed, and Impure does not run the game without it.\n\n"
+              "Another patch or loader may have changed the game's code before or after Impure: start the game "
+              "without it, or report this with the text below.\n\n--- report ---\npathfinder: %s", why);
+    text[sizeof text - 1] = 0;
+    tagpu_refuse(text);
 }
 
 SIM_FEATURE(path_verify, SIM_PUPPET_INDEPENDENT, "path-verify stock-path-verify");

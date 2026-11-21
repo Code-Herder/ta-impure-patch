@@ -417,7 +417,7 @@ the line `enginefix: AI allies as human ones` reports them.
 
 | VA | What it is | Feature | Mechanism |
 |---|---|---|---|
-| `0x48B76C` | `cmp esi,[edi+0x6b]; ja 0x48B80E` (9 bytes), the head of the `0x2C` sender's dirty list | `stream_order` | jmp to a stub: `stream_dirty_list(rec, writer)` writes the same entries from the unit after the last one the previous message wrote, wrapping, under the same 0x200-byte budget, then jmp `0x48B80E` |
+| `0x48B76C` | `cmp esi,[edi+0x6b]; ja 0x48B80E` (9 bytes), the head of the `0x2C` sender's dirty list | `stream_order` | jmp to a stub: `stream_dirty_list(rec, writer)` writes the same entries from the unit after the last one the previous message wrote, wrapping, under the same 0x200-byte budget, then jmp `0x48B80E`; in the fail-closed table (`lim_branch`) |
 | `0x4655A1` | `call 0x4573D0`, the players phase's `0x28` for the viewed record, every fourth 30-tick pass in a network game | `ai_economy_send` | call-site redirect to `ais_economy_send` (stdcall, `ret 0xC`): the original call, then `0x4573D0(ai, 0, 0)` for each active type-2 record of the ten |
 | `0x464D3A`, `0x464C0A` | the transfers' `jne` past the type-2 (local AI) scale, metal and energy | `ai_untaxed` | `75` → `EB`: the full credit at every difficulty |
 | `0x457DD8`, `0x457DE4`, `0x457EF6`, `0x457F02` | the auto-share's recipient tests: remote (`+0x73` = 3) and human (PlayerInfo `+0x94` = 1), metal then energy | `ai_autoshare` | `75 xx` → `90 90` |

@@ -321,12 +321,14 @@ the mover's unmoved stamp, the AI builder planner's site altitude, the patrols' 
 harness's random streams. The last is a harness's alone: it changes nothing unless the game folder holds the lever
 `tagpu_seeds.on`, which only the automated harnesses write, and its meteor rows join the table only then.
 The effect pools' level reset is in the table too, though its absence changes no shared state:
-in the raised build it is what initialises the static debris records. A
+in the raised build it is what initialises the static debris records. So is the unit stream's dirty
+list in turn, whose absence changes no shared state either: a game never runs without it, since
+without it a peer's units reach the others with no bound on the wait (once more of one player's
+units are dirty than a message holds, the block's high slots wait for the round robin). A
 *local* fix — a crash, a draw, a message or a malformed input — compares and writes its own sites
 and is skipped alone: the sort buffer, the NULL plot, the terrain window, the composite scratch,
 the out-of-memory text, flak's divides, the line of sight in local code, the projectile pass's
-view, the network receivers' bounds, the unit stream's dirty list in turn (a peer's own units reached
-the others only through the round robin once more of them were dirty than one message holds), the builder's finish's indices, the saved-game order
+view, the network receivers' bounds, the builder's finish's indices, the saved-game order
 fallback, the stockpile bar's divide, the range circle and the maps with no terrain. The engine map's table gives each
 one's reason. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock

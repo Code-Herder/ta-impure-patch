@@ -10306,27 +10306,29 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     }
 }
 
-/* CLASS: local. Without it a peer's own units reach the others later; the entries and every receiver are
-   stock's. */
+/* CLASS: in the table, fail closed. The entries and every receiver are stock's, so no shared state rests on
+   it, but a game never runs without it: without it a peer's units reach the others with no bound on the wait,
+   and a launch where 0x48B76C does not hold stock's bytes, or is rewritten before the first DirectDraw call,
+   is refused (tagpu_limits_report). */
 static int fix_stream_order(void)
 {
-    FIXSITE site[1] = {
-        { 0x0048B76Cu, 9, { 0x3B, 0x77, 0x6B, 0x0F, 0x87, 0x99, 0x00, 0x00, 0x00 }, { 0 } },
-                                                                    /* cmp esi,[edi+0x6b]; ja 0x48B80E */
+    static const unsigned char was[9] = {
+        0x3B, 0x77, 0x6B,                       /* cmp esi,[edi+0x6b] */
+        0x0F, 0x87, 0x99, 0x00, 0x00, 0x00,     /* ja 0x48B80E        */
     };
     unsigned char *c, *p;
     s_streamLog = tagpu_sim_lever("tagpu_netlog.on");
-    if (!fix_match(site, 1)) return FIX_BYTES;
-    if (!(c = fix_code(32))) return FIX_STUB;
-    p = c;
+    c = p = tagpu_detour_stub();
+    if (!c) { lim_no_stub(); return FIX_TABLE; }
     *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x0C;                 /* lea eax,[esp+0xc]: the writer */
     *p++ = 0x50;                                                        /* push eax                      */
     *p++ = 0x57;                                                        /* push edi: the record          */
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)stream_dirty_list); p += 4;
     *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                              /* add esp,8                     */
     *p++ = 0xE9; tagpu_detour_rel(p, STREAM_RESUME);                    /* the terminator                */
-    fix_branch(&site[0], 0xE9, c);
-    return fix_write(site, 1);
+    lim_branch(0x0048B76Cu, (int)sizeof was, was, 0xE9, (unsigned int)(size_t)c,
+               "unit stream: the dirty list in turn");
+    return FIX_TABLE;
 }
 
 SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");

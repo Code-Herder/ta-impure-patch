@@ -11,9 +11,19 @@ arrived at: [the pathfinder in parallel](../pathfinder-parallel.md). The engine'
 The players phase's call of the engine's scheduler (`0x464F92`) goes to ours; the engine's scheduler
 `0x40EB70`, its budget and its search `0x40E630` do not run. It runs on the thread that runs the
 players phase — the game thread, and once the loader during a load, before the game thread's first
-step — and its searches run on up to three helper threads, beside the game. The test lever `tagpu_pathverify.on` leaves the engine's in place and runs our
-search beside it as an oracle (below); the replay gate plays it in the test groups `path-verify`
-and `stock-path-verify`, a battle of 900 ticks with the lever on.
+step — and its searches run on up to three helper threads, beside the game.
+
+**It is always on.** There is no switch that runs a game on the engine's scheduler. The install is
+byte-matched at attach (the three sites and the three engine functions ours calls), and at the exe's
+first DirectDraw call `tagpu_pathfind_report` re-reads the sites: an install that failed, or a site
+another module rewrote after it, ends the launch there through `tagpu_refuse`, before any game exists
+(the limits table's re-read sits beside it, `tagpu_limits_report`). MEASURED 2026-11-21: a build that
+put `0x4955E5` back after installing was refused with `pathsched: FAILED -- a site of the pathfinder
+was rewritten after Impure installed it` and `log\startup-failure.txt`. The one exception is the test
+lever `tagpu_pathverify.on`, which only the harnesses write: it leaves the engine's scheduler in place
+and runs our search beside it as an oracle (below), its four observers held to the same check; the
+replay gate plays it in the test groups `path-verify` and `stock-path-verify`, a battle of 900 ticks
+with the lever on.
 
 ## The scheduler — `sched_tick`
 
