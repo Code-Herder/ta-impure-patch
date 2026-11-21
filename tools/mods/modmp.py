@@ -217,7 +217,7 @@ def refused(p, why):
     p.shot("host", "refused")
     p.shot("join", "refused")
     said = re.findall(r"modgate: said: (.*)", log_of(p.host))
-    report("LOUNGE2" not in screen(p.join), f"the joiner is not in the room (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
+    report("SELGAME" in screen(p.join), f"the joiner is back on Select Game (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
     report(len(said) == 1 and said[0].endswith("refused: " + why), f"the host was told once, {why}: {said}")
     report("LOUNGE2" in screen(p.host), f"the host stayed in its room: {screen(p.host)[:40]}")
 
@@ -252,7 +252,7 @@ def olderhost(old):
         time.sleep(3)
         p.shot("host", "refused")
         p.shot("join", "refused")
-        report("LOUNGE2" not in screen(p.join), f"the joiner is not in the room (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
+        report("SELGAME" in screen(p.join), f"the joiner is back on Select Game (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
         report("LOUNGE2" in screen(p.host), f"the host stayed in its room: {screen(p.host)[:40]}")
 
 

@@ -10188,10 +10188,13 @@ SIM_FEATURE(unit_stream, SIM_PUPPET_OWNER, "multiplayer");
      not written; a walk that reaches every unit leaves the cursor where it was.
    - ONE STEP A TICK. The receiver's sweep is taken only for a message whose flag is set
      (stream_step), so the several messages of a tick step the sender's units once.
-   EVERY PEER HAS ALL THREE. A receiver without the third steps the sender's units once a message,
-   up to STREAM_MESSAGES times a tick, so the format is a play revision of its own: the host takes
-   no joiner of another, and no host of another takes this build's (tagpu_recorder.c,
-   MP_PLAY_REVISION). A change to what these messages carry raises that number.
+   SEVERAL MESSAGES ONLY TO PEERS THAT STEP ON THE LAST. A receiver without the third part steps
+   the sender's units once a message, so the second part is a play revision of its own
+   (tagpu_recorder.c, MP_PLAY_REVISION) and is used only while this process holds it
+   (tagpu_rec_mp_revision_held: every player it makes carries the number, which no host of another
+   revision takes, and its own host test takes no joiner without it). Otherwise a tick is one
+   message, flag set, as stock sends it and any receiver steps it; the first and third parts change
+   nothing a stock peer can tell. A change to what these messages carry raises that number.
    THE SIZE BOUND. The writer's buffer is 0x100 dwords inside the sender's frame (0x415B60), and its
    growth is broken: 0x415C76, 0x415D14 and 0x415BB6 allocate four bytes and copy the whole buffer into them.
    The queue below drops a message over 0x42A bytes (0x4628D0, 0x462911), and one that arrives when a
@@ -10317,6 +10320,7 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     char* const ta = *(char* const*)(size_t)STREAM_MAIN;
     char *first, *last, *begin, *end, *players;
     unsigned int n, k, i, p, sent = 0, left = 0, slot0, msgs = 1, typeBits, room;
+    const unsigned int most = tagpu_rec_mp_revision_held() ? STREAM_MESSAGES : 1u;
     int now;
     s_streamCur = 10;
     if (!ta) return;
@@ -10354,7 +10358,7 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
         if (writer[0] * 32u + writer[1] > room) {       /* THE SIZE BOUND: this entry might not fit */
             unsigned char* const buf = (unsigned char*)(size_t)writer[3];
             unsigned int size;
-            if (msgs >= STREAM_MESSAGES) {          /* the tick's traffic is spent: this unit is the next tick's first */
+            if (msgs >= most) {                     /* the tick's traffic is spent: this unit is the next tick's first */
                 if (p < 10) s_streamAt[p] = at;
                 break;
             }

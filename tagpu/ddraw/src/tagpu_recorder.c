@@ -336,6 +336,8 @@ static unsigned s_smarks, s_sfulls;      /* script slices marked, and steps that
 static unsigned s_queries;               /* the owner's queries recorded (THE OWNER'S QUERIES) */
 
 static unsigned char s_mp_sites, s_mp_tried;
+static unsigned char s_mp_as_stock;      /* the test's lever tagpu_modprint_stock.on, read at attach: this process's players carry
+                                            stock's data and it sends as stock does (tools/mods/modmp.py, tools/mp_agree.py) */
 static RecMpChatInbox* s_mp_chat_inbox;
 static GUID s_mp_active_match;
 static DWORD s_mp_local;
@@ -626,10 +628,16 @@ static void __cdecl mp_start_receive(void* frame)
 #define MP_PLAY_REVISION_AT 0x11
 
 /* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
-   initial data. Preserve that prefix (including its password/version) and add
-   a public key and the fingerprint. The primary SDK binds the data to the actual
-   native owner; a private peer cannot replace another owner's key. Private bindings
-   are signed off-thread and require no extra primary-session send during play. */
+   initial data. Keep its password (bytes 0..0x10) and its WORD +0x13, put the play
+   revision in its WORD +0x11, and add a public key and the fingerprint. The primary SDK
+   binds the data to the actual native owner; a private peer cannot replace another
+   owner's key. Private bindings are signed off-thread and require no extra
+   primary-session send during play.
+
+   THE REVISION IS IN EVERY PLAYER THIS PROCESS MAKES, or the process sends as stock does
+   (tagpu_rec_mp_revision_held): under the lever the data is stock's own, and a player
+   whose key could not be made still sends the 21 bytes at this revision, which every
+   host refuses -- a current one by their size, any other by its test of the WORD for 0. */
 static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* name,
                                            HANDLE event, const void* data,
                                            DWORD bytes, DWORD flags)
@@ -638,18 +646,22 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
     const MODPRINT* print;
     unsigned char extended[MP_DATA_BASE + MODPRINT_TAIL];
     RecMpPublic public;
-    /* The test's lever: this player's data as stock sends it (tools/mods/modmp.py). */
-    if (GetFileAttributesA("tagpu_modprint_stock.on") != INVALID_FILE_ATTRIBUTES) {
+    if (s_mp_as_stock) {
         tagpu_logf("recmp: tagpu_modprint_stock.on: stock's player data, no key and no fingerprint");
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
-    if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
-        tagpu_logf("recmp: primary identity unavailable: this player sends stock's data, which a current host refuses as not running Impure");
-        return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
+    /* the call's arguments are the frame's buffer and 0x15, in the bytes mp_init matched at 0x4CA749: anything else makes no player */
+    if (!data || bytes != RECMP_PRIMARY_BYTES) {
+        tagpu_logf("recmp: CreatePlayer with %lu bytes of data: refused, no player made", (unsigned long)bytes);
+        return DPERR_INVALIDPARAMS;
     }
     memcpy(extended, data, RECMP_PRIMARY_BYTES);
     extended[MP_PLAY_REVISION_AT] = (unsigned char)MP_PLAY_REVISION;
     extended[MP_PLAY_REVISION_AT + 1] = (unsigned char)(MP_PLAY_REVISION >> 8);
+    if (!(key = tagpu_recmp_key())) {
+        tagpu_logf("recmp: primary identity unavailable: this player sends the engine's 21 bytes at this play revision, which every host refuses");
+        return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, bytes, flags);
+    }
     tagpu_recmp_public(key, &public);
     memcpy(extended + RECMP_PRIMARY_BYTES, &public, sizeof public);
     /* The print follows the key, so a peer reads both from one record, and a process's print never changes, so this one send serves the session.
@@ -691,8 +703,8 @@ static void mp_join_name(DWORD id, char* out, size_t cap)
    revision: the rules it plays (the share module's, the recorder's channel, the unit stream) assume it (research/notes/modules/mods.md
    *The gate*).
 
-   THE READ. The revision is two bytes of the message's data, at the pointer the engine's own tests read next (edi, loaded from the same
-   message at 0x4542B2), and the size admitted above them is over MP_DATA_BASE, so both lie inside what DirectPlay delivered. */
+   THE READ is one the engine makes itself: stock's test at 0x45435B reads the same two bytes through edi, which 0x4542B2 loads from the
+   same message's +0x10, for a size of 21, and the size admitted here is over MP_DATA_BASE. Nothing is read that stock does not read. */
 static int __cdecl mp_join_admit(const DPMSG_CREATEPLAYERORGROUP* m)
 {
     char name[32];
@@ -716,6 +728,13 @@ static int __cdecl mp_join_admit(const DPMSG_CREATEPLAYERORGROUP* m)
                    why == MODGATE_OLDER ? "an older" : "a newer");
     tagpu_modgate_refused(name, why);
     return 0;
+}
+
+/* 1 while every player this process makes carries the play revision and its host takes no joiner without it: the sites are in and the lever
+   is off, both settled at attach. What only a peer of this revision reads right is sent under it alone (tagpu_patches.c, unit_stream). */
+int tagpu_rec_mp_revision_held(void)
+{
+    return s_mp_sites && !s_mp_as_stock;
 }
 
 static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
@@ -933,6 +952,8 @@ static void mp_init(void)
         0x56,0xFF,0x51,0x18,0x33,0xC9
     };
     static const unsigned char data_size[] = { 0x83,0x7D,0x14,0x15,0x74,0x40 };
+    /* cmp word [edi+0x11],0; jne 0x4543DD; cmp word [edi+0x13],0x50; jne 0x4543DD: the admit stub stands for the first and resumes at the second */
+    static const unsigned char data_version[] = { 0x66,0x83,0x7F,0x11,0x00,0x75,0x7B,0x66,0x83,0x7F,0x13,0x50,0x75,0x74 };
     static const struct { unsigned va; unsigned char stock[5]; } chat_call[] = {
         { 0x493FAF, {0xE8,0x9C,0xFE,0xFC,0xFF} },
         { 0x463E9F, {0xE8,0xBC,0xF4,0xFE,0xFF} },
@@ -956,6 +977,7 @@ static void mp_init(void)
         memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
         memcmp((const void*)(size_t)0x4CA749, created, sizeof created) ||
         memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size) ||
+        memcmp((const void*)(size_t)0x45435B, data_version, sizeof data_version) ||
         *(const unsigned*)(size_t)0x456028!=0x455F50 ||
         tagpu_detour_landed(0x453D40,NULL,NULL) ||
         memcmp((const void*)0x453D40,pump_entry,sizeof pump_entry) ||
@@ -1088,6 +1110,7 @@ static void mp_init(void)
         DWORD ignored;
         VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
     }
+    s_mp_as_stock = GetFileAttributesA("tagpu_modprint_stock.on") != INVALID_FILE_ATTRIBUTES;
     s_mp_sites = 1;
     tagpu_modgate_install();
     tagpu_logf("recmp: ARMED %u-byte fresh start and %u-byte native player identity",

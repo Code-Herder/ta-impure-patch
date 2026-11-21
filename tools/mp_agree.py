@@ -77,6 +77,7 @@ ROSTER_S = 6                            # past the roster's 5 s dump (tagpu_pack
 STREAM_RX = re.compile(r"netstream: record \d+, (\d+) ticks of a block of \d+ units: sent ([0-9.]+) a tick "
                        r"\(most (\d+)\); left dirty ([0-9.]+) a tick \(most (\d+)\); .*?: (\d+) units, mean ([0-9.]+) "
                        r"ticks, most (\d+), 30 ticks or more (\d+)")
+TICK_MOST_RX = re.compile(r"netstream: record .*a tick's most: \d+ bytes in (\d+) messages")
 PATH_RX = re.compile(r"pathsched: (\d+) ticks: ([0-9.]+) searches a tick.*?searches carried past their tick (\d+)")
 
 
@@ -183,6 +184,9 @@ def main() -> int:
     ap.add_argument("--marches", type=int, default=0,
                     help="order each peer's whole army to move, this many times back to back, in place of the fight")
     ap.add_argument("--march-every", type=int, default=150, help="ticks between two marches (150)")
+    ap.add_argument("--host-as-stock", action="store_true",
+                    help="the host joins as stock does (tagpu_modprint_stock.on): it holds no play revision and must send one "
+                         "message a tick, which fails the run if it sends more")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     runlock.hold(TREE, f"mp_agree: two peers of {len(ARMIES) * 1499} units, compared paused", lanes=2,
@@ -192,7 +196,8 @@ def main() -> int:
         with twopeers.TwoPeers(args.out, args.dll, args.port, "ag", args.gpu, args.join_dll) as tp:
             limit = ("--unit-limit", "1500")
             levers = ("tagpu_pathlog.on", "tagpu_netlog.on") + (("tagpu_pathverify.on",) if args.engine_paths else ())
-            tp.launch(host_args=limit, join_args=limit, levers=levers)
+            tp.launch(host_args=limit, join_args=limit, levers=levers,
+                      host_levers=("tagpu_modprint_stock.on",) if args.host_as_stock else ())
             tp.battle_room(MAP)
             tp.start()
             for name, army in zip((tp.host, tp.join), ARMIES):
@@ -228,6 +233,7 @@ def main() -> int:
             text = log.read_text(errors="replace") if log.exists() else ""
             result[f"path_{name[-1]}"] = path_line(text) if text else "no log"
             result[f"stream_{name[-1]}"] = stream_line(text) if text else "no log"
+            result[f"tick_messages_{name[-1]}"] = max((int(n) for n in TICK_MOST_RX.findall(text)), default=0)
             if args.marches:
                 most = max((int(r[4]) for r in STREAM_RX.findall(text)), default=0)
                 if most < MARCH_DIRTY:
@@ -245,8 +251,10 @@ def main() -> int:
           f"{r['identical']} at the identical position, off by {r['off_p99']:.0f} at the 99th percentile, "
           f"{r['off_max']:.0f} at most; {r['deaths_in_flight']} deaths in flight")
     print(f"mp_agree: pathfinder, host: {r.get('path_H')}; joiner: {r.get('path_J')}")
-    print(f"mp_agree: unit stream, host: {r.get('stream_H')}")
-    print(f"mp_agree: unit stream, joiner: {r.get('stream_J')}")
+    print(f"mp_agree: unit stream, host: {r.get('stream_H')}; a tick's most messages {r.get('tick_messages_H')}")
+    print(f"mp_agree: unit stream, joiner: {r.get('stream_J')}; a tick's most messages {r.get('tick_messages_J')}")
+    if args.host_as_stock and r.get("tick_messages_H") != 1:
+        r["problems"].append(f"the host holds no play revision and sent {r.get('tick_messages_H')} messages in a tick, not 1")
     for p in r["problems"][:40]:
         print(f"mp_agree: DISAGREE {p}")
     print("mp_agree: " + ("the peers agree" if not r["problems"] else f"{len(r['problems'])} disagreements"))
