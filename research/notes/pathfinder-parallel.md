@@ -67,9 +67,7 @@ Confirmed on the scheduler as built, with its measurements (2026-11-20):
     searches' units, built first, had nothing to give back and was taken out on the owner's word.
 16. **`job_carry` is marked `SIM_UNTESTED`, and the replay gate asks no reach of it**
     (2026-11-20): a search is carried 10 to 90 times in 116 000 in the battle of 13 500 units,
-    as the moment decides, and the test groups' games may carry none. `goal_touch`, if the gate
-    names it at the landing on main, is accepted there on the same decision; any other function
-    it names is asked about then.
+    as the moment decides, and the test groups' games may carry none.
 
 ## The scheduler's rules as built, and what each rests on
 
@@ -207,17 +205,17 @@ them, a cheaper search.
 ## Open
 
 - **The owner's to set**: the three weights' thresholds (4 and 64 units ready), a first choice.
-- **What the batch's size measured** (it is 16, decision 9). A batch ends with its longest search,
+- **What the batch's size measured**, while the searches were made in batches (decision 9; gone
+  with decision 14). A batch ended with its longest search,
   and the top 5 % of searches are 46 % of the pops, so a batch of 8 leaves three threads idle
   through each long one. MEASURED 2026-11-20, the battle on four threads with the cheaper search, one run each:
   batches of 8, 16 and 32 took 2.39, 1.95 and 1.65 ms a tick, on 22 700, 19 000 and 18 600 pops a
   tick — 105, 103 and 89 ns a pop, so the runs show a gain at 32 and none that the pops do not
   explain at 16. At equal work, the captured searches' costs packed in capture order onto four
   threads, 34 a tick: the searches' part falls by 17 % at 16, 27 % at 32 and 33 % at 64, which
-  of a scheduler whose walk and writes are 0.7 ms a tick is about 10, 15 and 20 %. The size is a
-  rule: a search reads the map as the writes of its own batch and the earlier ones left it, and
-  the pops cap is tested between batches, so a larger batch can pass the cap by more — its own
-  searches, each of which pops at most the cells its unit can reach.
+  of a scheduler whose walk and writes are 0.7 ms a tick is about 10, 15 and 20 %. The size was a
+  rule: a search read the map as the writes of its own batch and the earlier ones left it, and
+  the pops cap was tested between batches, so a larger batch could pass the cap by more.
 - **What a cheaper search cannot reach without changing a result**: a goal that cannot be reached
   opens every cell the unit can reach before it fails; knowing that before the search (the map's
   connected regions) would end it at once, and changes which path a unit that cannot arrive gets.

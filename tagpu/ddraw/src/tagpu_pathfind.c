@@ -50,8 +50,8 @@
    What a tick carries to the next: the units' own stamps and paths, the two cursors and, per unit slot, the
    stamp of its last search that found a path. A CARRIED SEARCH IS NOT STATE, and nothing of it is recorded: the
    recording holds no course (replay-layout.tsv, mover +0x000), so a game restored from one makes every unit
-   again, each with a new course, stamp 0, which the walk finds ready -- as it finds one whose search was carried
-   where the recording was cut.
+   again, each with a new course, stamp 0, which the walk finds ready once its order gives it its goal -- as it
+   finds one whose search was carried where the recording was cut.
    THE HEURISTIC'S WEIGHT is one of the engine's three: its base [pf + 0x54], 3 times it, 6 times it. The engine
    gives them to a player by how slowly its budget serves the player's units (0x40EBBF..0x40EC06); here they
    follow the tick's load: the base in a quiet tick, one with at most PF_QUIET units ready; 3 times while every
@@ -284,7 +284,8 @@ static struct {
     unsigned ticks, begun, nfound, nosearch, nopath, offgrid, failed, pops, pops_max, begun_max;
     /* ticks whose searches ran beside the tick; searches carried past their tick, the most at once, and the joins
        that found one still running; searches a set goal overtook running, and not begun; results whose unit no
-       longer stood as searched; ticks put back for want of a page; ticks that chose nothing, every helper carrying */
+       longer stood as searched; ticks put back for want of a page; ticks with units ready that chose none, no
+       helper free */
     unsigned late, carried, carried_most, carried_ticks, stale, skipped, dropped, noroom, nohelper;
     unsigned ready_a, ready_b, ready_order, ready_end, left, left_max, held_retry, weight[3];
     unsigned goals, goals_kept, goals_opened;
@@ -852,8 +853,9 @@ static void frz_copy(const SCHED* e, unsigned k)
    THE LIFETIME of what it reads and writes: its job, taken from the free ones before the handing-out and given
    back (job_free) by the scheduler's thread alone, and only where no helper can touch it again: it has read the
    job's state as JOB_DONE, the helper's last write to a job it claimed -- a claimed job read as JOB_SKIPPED is
-   kept until then --; or the exchange that closed the claiming showed that no thread claimed it; or every
-   helper's word is NULL (due_drop). The pages the job pins, written only while no job
+   kept until then --; or the exchange that closed the claiming showed that no thread claimed it; or it was never
+   handed out (a tick put back for want of a page); or every helper's word is NULL (due_drop). The pages the job
+   pins, written only while no job
    pins them; its record, rewritten only where no word names it; its scratch, freed only after due_drop. So what
    the engine does meanwhile cannot reach a search, and a search reaches nothing the engine reads until the
    scheduler's thread applies its result (job_result).
@@ -1266,13 +1268,14 @@ static void __fastcall sched_tick(void* pf_unused)
        no loader lives. In that call the game thread is not stopped -- it runs its loading frame -- and the
        loader's entry 0x497C70 catches a fault and ends its thread, frame and all; there every task runs on the
        loader's own thread, as the engine's searches did. And every helper has a scratch, or none is woken. */
-    /* IN PLAY WITH EVERY HELPER INSIDE A CARRIED SEARCH nothing could begin a search of this tick's, so none is
-       chosen: its units stay ready. (Which helpers are free is the moment's, as which searches are carried is.) */
+    /* IN PLAY WITH EVERY HELPER'S WORD SET -- each helper inside a carried search, or not yet out of a record
+       the join has closed -- no helper could take a search of this tick's, so no unit is chosen: they stay ready.
+       (Which helpers are free is the moment's, as which searches are carried is.) */
     helpers = e.play && s_helpers && s_pf[s_helpers].pool ? s_helpers : 0;
     t = bg_take();
     if (helpers && !run_idle()) {
         t = NULL;
-        s_v.nohelper++;
+        if (n[0] + n[1]) s_v.nohelper++;
     }
     while (t && nj < PF_CAP_SEARCHES && s_m->nfree && taken[0] + taken[1] < n[0] + n[1]) {
         JOB* j = job_new();

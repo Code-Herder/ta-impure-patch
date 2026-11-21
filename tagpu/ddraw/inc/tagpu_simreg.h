@@ -295,7 +295,7 @@ typedef struct SimFeature {
    reason, and is asked no reach: `tareplay.py landing` names it and its reason at each landing that changes it.
    A MARK IS A LOOSENING, the owner's decision each. It names the function, so one whose function has gone does
    not compile; one line at the line's start, the reason a literal string (`tareplay.py features --check`, in
-   the link recipe, refuses another shape). */
+   the link recipe, refuses a line that begins with the mark's name in another shape). */
 #define SIM_UNTESTED(fn, why)                                                                  \
     _Static_assert(sizeof(why) > 1, "SIM_UNTESTED states its reason");                         \
     static __typeof__(fn)* const simuntested_##fn __attribute__((unused)) = &(fn)

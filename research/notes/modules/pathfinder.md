@@ -97,8 +97,8 @@ last search that found a path (`s_found`), and the two cursors (`s_cursor`); bot
 state. **A carried search is not state, and nothing of it is recorded.** The recording holds a
 unit's orders and no course — the object that has the path, the stamp and the flag that asks for a
 search (`replay-layout.tsv`, mover `+0x000`) — so a game restored from one makes every unit again,
-each with a new course, stamp 0, which the walk finds ready: a unit whose search was carried where
-the recording was cut is searched for again like every other. A game put back to an earlier tick
+each with a new course, stamp 0, which the walk finds ready once its order gives it its goal: a unit
+whose search was carried where the recording was cut is searched for again like every other. A game put back to an earlier tick
 drops its searches whole, and so does a level that goes over to playing a recording: nothing of a
 search is applied there.
 
@@ -287,8 +287,8 @@ observer did. The frame profiler (`tagpu_prof.on`) times the scheduler as the sp
   ([sim](../engine/sim.md), *The game step*). ImpAI's turns run in that window and read no course.
 - **Which tick a long search's path arrives in is not the same from run to run.** A test that
   expects a long path in an exact tick does not hold under load.
-- **A carried search keeps a helper**: a tick that begins while every helper carries one chooses
-  nothing, and a tick that wants a page the block has not while one is carried is put back whole.
+- **A carried search keeps a helper**: a tick that begins while no helper is free — each in a
+  carried search, or not yet out of the last tick's — chooses nothing, and a tick that wants a page the block has not while one is carried is put back whole.
   Neither was seen in the battle but under the held searches.
 - **A stale search runs to its end**: nothing stops a search a set goal has overtaken.
 - **The class sweeps of a tick are made for every unit chosen**, the ones whose search does not
