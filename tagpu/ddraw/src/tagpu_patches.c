@@ -4089,7 +4089,8 @@ static void wire_selfcheck(void)
         const char* p0l = p0 + 3 * 0x118;
         int ok = wire_block_ok(p0, p0l, begin, arr_last, 4) &&
                  !wire_block_ok(begin, begin + 3 * 0x118, begin, arr_last, 4) &&   /* slot 0 */
-                 !wire_block_ok(p0 + 1, p0l, begin, arr_last, 4);                  /* unaligned */
+                 !wire_block_ok(p0 + 1, p0l, begin, arr_last, 4) &&                /* unaligned */
+                 wire_block_ok(p0 + 4 * 0x118, arr_last, begin, arr_last, 4);       /* the last block ends on arr_last */
         t[n].name = "block shape ok/rejects"; t[n].got = ok; t[n].want = 1; n++;
     }
     for (i = 0; i < n; i++) {
@@ -10179,7 +10180,8 @@ SIM_FEATURE(stream_order, SIM_PUPPET_OWNER, "battle");
    entry when any unit is dirty (the budget is tested after an entry), so a unit dirty when the
    walk reaches it is sent then; the walk passes every unit of the block within one turn of it.
    The cursor is an index into the block, bounded by the block's count each tick. A record whose
-   block is not inside the unit array, or not a whole number of units, sends an empty list. */
+   block is not one of the ten the engine deals (wire_block_ok: inside [begin, main+0x1435B], the
+   array's last slot included, at its rank's place) sends an empty list. */
 #define STREAM_MAIN      0x00511DE8u
 #define STREAM_RESUME    0x0048B80Eu        /* the terminator, after the list */
 #define STREAM_BITS      0x00415C10u        /* the bit writer: thiscall (value, nbits), ret 8 */
@@ -10236,10 +10238,9 @@ static void __cdecl stream_dirty_list(char* rec, unsigned int* writer)
     last = *(char* const*)(rec + 0x6B);
     begin = *(char* const*)(ta + 0x14357);
     end = *(char* const*)(ta + 0x1435B);
-    if (first > last || first < begin || last >= end || (size_t)(last - first) % 0x118 ||
-        (size_t)(first - begin) % 0x118)
-        return;
+    if (first > last || (size_t)(last - first) % 0x118) return;
     n = (unsigned int)(last - first) / 0x118 + 1;
+    if (!wire_block_ok(first, last, begin, end, n)) return;     /* end is the array's last slot */
     slot0 = (unsigned int)(first - begin) / 0x118;
     players = ta + 0x1B63;
     p = rec >= players && rec < players + 10 * 0x14B && (size_t)(rec - players) % 0x14B == 0
