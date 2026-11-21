@@ -43,9 +43,15 @@ the VMs drifting apart as COB features are added.
 3. **It replaces the game's interpreter — in the next program, not this one.** The owner has
    committed to the swap; this program builds the core so that the swap is a change of code and not
    of recorded state.
-4. **It runs on the engine's memory layout** (below): the records, the statics block and the piece
-   animation block are byte for byte what Impure's game holds, pinned by static asserts, so the
-   recorder's script slice, the save format and the puppets see the same bytes after the swap.
+4. **The swap may give the game's COB state a layout of its own (the owner, 2026-11-21, reversing
+   "it runs on the engine's memory layout").** The core is built on the engine's layout (below),
+   and the swap program is free to change it for speed. What holds the layout in place is not a
+   recorded format: a recording carries no COB bytes (a playing rebuilds COB through the engine's
+   entries, and a seek, a rewind and a takeover recreate every unit), and the saved game's format
+   is Impure's own (`0x4B1EC0`/`0x4B2040`, `cob_save`/`cob_load`), so it is kept by translating at
+   the save. The measurements and the prototypes behind it:
+   `.data/prof/2026-11-21-zk13k-cobvm/` and `.data/prof/2026-11-21-zk13k-cobproto/` in the main
+   checkout (local).
 5. **It is safe to run on several threads.** Reentrant; the unit of parallelism is one COB object;
    reads leave through host callbacks, writes outside the object through an ordered per-object
    effect log (below). The core never owns a random number generator.
@@ -95,6 +101,8 @@ the VMs drifting apart as COB features are added.
 ## The core
 
 ### Its memory: the engine's layout
+
+The core as built runs on this layout; the game's own may differ after the swap (decision 4).
 
 Impure's COB object (`TAGPU_COB_OBJECT_BYTES` = `0x158C`, `tagpu_cob_safe.h`) is the engine's
 0x544-byte object with its records widened: the header `+0x00..+0x1B`, then
