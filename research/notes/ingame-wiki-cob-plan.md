@@ -143,8 +143,25 @@ reaches 12 words, and the core faults at 128 like the guarded game does.
 The runner `0x4B0DA0`, the stepper `0x4B1C00` and the engine's entries — `0x4B0940` (no arguments),
 `0x4B0B00` (four argument words, `sp = argc − 1`), `0x4B0C40` (the query: four words in and out,
 run inside the call), `0x4B0D60` (`DoScriptsNow`, `dt = 1`) — exactly as tacob's VM models them
-today, opcode for opcode. Before every opcode it calls **`tagpu_cob_check_step`**, the guard the game's
-adapter calls at `0x4B0E5D`: one bound for both, and a fault is the core's refusal (decision 9).
+today, opcode for opcode. It calls **`tagpu_cob_check_step`**, the guard the game's adapter calls at
+`0x4B0E5D` before every opcode, wherever the program's **stack proof** does not show that the check
+would answer "execute": one bound for both, and a fault is the core's refusal (decision 9).
+
+**The stack proof** (`tagpu_cob_safe.c`, `prove`, made by `tagpu_cob_program` at load) bounds, for each
+instruction, the words a running record holds on entering it, under IMPURE's rules: an interval
+analysis over the validated control flow, where a thread enters its script with 0 to 4 words from the
+engine (`0x4B0940` none, `0x4B0B00` `argc − 1` of the four it writes, the query four) or with the argc
+of any START or CALL that names it. An instruction is **guarded**, and checked, where the bounds leave
+an underflow possible, at every division (its operands are data), at the terminal opcodes and at the
+terminal zero; everywhere else the check provably executes and is skipped. A path that can pass 128
+words makes the program unbounded and every opcode checked. The proof also gives `depth`, the words a
+record of the program ever touches (never below 4). The core checks every opcode under RETAIL's rules,
+for an unbounded program, and once a host writes records the proof does not cover
+(`tagpu_cobvm_loaded`, for a saved game's). MEASURED 2026-11-21 over every compatibility setup
+(`cobcorpus.py`'s resolution): 27 102 scripts in 2 028 files, all bounded; 95.8 % reach at most 10
+words, the deepest 89 (Escalation's `CORDECI` and `ARMCRAWL` `Detect`), per program median 9.
+`tools/test_cobvm.py` and the corpus gate run a build with `TAGPU_COBVM_PROVE_CHECK`, which runs the
+skipped checks too and faults by name if one would not have executed.
 
 ### The host interface
 
