@@ -236,6 +236,23 @@
    "end": 1960,
    "dll": "stock"
   },
+  "build-scatter-air": {
+   "load": "build-scatter-air.json",
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [140, "keys", ["pclick:360,550"]],
+             [700, "run", ["tools/replay/scatter_check.py", "air", "{instance}"]]],
+   "end": 760
+  },
+  "stock-build-scatter-air": {
+   "load": "build-scatter-air.json",
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [130, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMSOLAR"]],
+             [140, "keys", ["pclick:360,550"]],
+             [700, "run", ["tools/replay/scatter_check.py", "air", "{instance}"]]],
+   "end": 760,
+   "dll": "stock"
+  },
   "transport-pad": {
    "load": "replay-transport-pad.json",
    "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],

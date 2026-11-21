@@ -4,6 +4,7 @@
     tools/replay/scatter_check.py walked <instance>    sites A and B, held at GameTime 990
     tools/replay/scatter_check.py gaveup <instance>    the third site, held at GameTime 1802
     tools/replay/scatter_check.py guarded <instance>   the guard's seat, held at GameTime 1900 (build-scatter-guard)
+    tools/replay/scatter_check.py air <instance>       an air builder's site, held at GameTime 700 (build-scatter-air)
 
 Run by tareplay as the test groups' `run` steps, on the live lane held at their GameTimes. Build scatter
 (tagpu/ddraw/src/tagpu_scatter.c) moves a builder's idle units off the site its build order was refused on, and
@@ -42,6 +43,12 @@ plant is then given a construction vehicle to make, which the commander helps fr
     STOCK_PATIENCE ticks after the site's line                        came when the vehicle was done: the refusals
                                                                       in between were held, or the builder had gone
     an ARMSOLAR stands on the site, and the ARMCOM does not           it was seated off the site, and the build began
+
+AIR (scenarios/build-scatter-air.json, the build-scatter-air test groups). An ARMCA is ordered to build a solar
+collector on site A's cells, four idle ARMPW on them: the refusal is VTOL_MobileBuild's.
+
+    the site's first line names the ARMCA as its builder and moved all four
+    an ARMSOLAR stands on the site, and no ARMPW does
 
 Exit 0 when every check holds, 1 with the first that does not, 2 when it could not run.
 """
@@ -252,8 +259,26 @@ def judge_guarded(sites: list, units: list, lines: list) -> list:
     return fails
 
 
+def judge_air(sites: list, units: list) -> list:
+    fails = []
+    a = [s for s in sites if s["cell"] == SITE_A]
+    cas = mine(units, "ARMCA")
+    if len(cas) != 1 or cas[0]["slot"] is None:
+        return [f"{len(cas)} ARMCA of seat 0 in the roster, not 1 with its slot"]
+    if not a or (a[0]["on"], a[0]["moved"]) != (4, 4):
+        fails.append(f"the site's first plan is {a[0] if a else None}, not four units on it and four moved")
+    elif a[0]["builder"] != cas[0]["slot"]:
+        fails.append(f"the site's builder is unit {a[0]['builder']}, not the ARMCA, unit {cas[0]['slot']}")
+    if not any(on_site(u["world"], SITE_A) for u in mine(units, "ARMSOLAR")):
+        fails.append(f"no ARMSOLAR on the site: {[u['world'] for u in mine(units, 'ARMSOLAR')]}")
+    pws = mine(units, "ARMPW")
+    if len(pws) != 4 or any(on_site(u["world"], SITE_A) for u in pws):
+        fails.append(f"the ARMPW are not four units standing off the site: {[u['world'] for u in pws]}")
+    return fails
+
+
 def main(argv):
-    if len(argv) != 3 or argv[1] not in ("walked", "gaveup", "guarded"):
+    if len(argv) != 3 or argv[1] not in ("walked", "gaveup", "guarded", "air"):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     try:
@@ -262,6 +287,8 @@ def main(argv):
             fails = judge_walked(sites, units)
         elif argv[1] == "guarded":
             fails = judge_guarded(sites, units, lines)
+        elif argv[1] == "air":
+            fails = judge_air(sites, units)
         else:
             cks = mine(units, "ARMCK")
             if len(cks) != 1 or cks[0]["slot"] is None:

@@ -1,5 +1,5 @@
 #include "tagpu_simreg.h"
-SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter build-scatter-guard stock-build-scatter-guard");
+SIM_FEATURE(build_scatter, SIM_PUPPET_OWNER, "build-scatter stock-build-scatter build-scatter-guard stock-build-scatter-guard build-scatter-air stock-build-scatter-air");
 /* BUILD SCATTER: a builder that reaches its build site and finds its owner's idle units standing on it has them
    moved off, each to the nearest place it can reach and stand on (research/notes/build-scatter-plan.md; the
    module note research/notes/modules/build-scatter.md). The geometry is tagpu_scattergeo.c's; this file reads the

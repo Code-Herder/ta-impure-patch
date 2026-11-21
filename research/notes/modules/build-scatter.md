@@ -134,8 +134,9 @@ address. The moves are orders through an engine root, so a recording carries the
 click's. **On a puppet nothing of the module runs**: the stubs, the tick and the cursor's second
 question return at once under `tagpu_puppet_on()`, and the recorder is the only writer of the tables.
 
-The feature declares itself `SIM_PUPPET_OWNER` with the test groups `build-scatter` and
-`build-scatter-guard`, each with its `stock-` twin (the same game on the stock-limits build). Their game
+The feature declares itself `SIM_PUPPET_OWNER` with the test groups `build-scatter`,
+`build-scatter-guard` and `build-scatter-air`, each with its `stock-` twin (the same game on the
+stock-limits build). The first's game
 (`scenarios/build-scatter.json`, Two Continents): two ARMCK place a solar collector each over four
 idle ARMPW through the build panel and native clicks; one moved unit is ordered away by hand and one
 back onto the site; every unit is removed while the second site's four are walking and their builder
@@ -150,7 +151,11 @@ ARMVP and is seated beside it, an ARMCK is ordered to build a solar collector on
 plant is given a construction vehicle, which the commander helps; `scatter_check.py guarded` asserts
 that the site's plan counted one unit of the guard's and moved none, that the guard logged the seat
 given up more than 330 ticks after the first refusal (past a stock builder's patience, so the
-refusals were held), that the solar stands and that the commander stands off it.
+refusals were held), that the solar stands and that the commander stands off it. The air builder's game
+(`scenarios/build-scatter-air.json`): an ARMCA places a solar collector over four idle ARMPW, which
+is the one game that runs the VTOL twin's stub; `scatter_check.py air` asserts that the site's plan
+names the ARMCA as its builder and moved all four, that the solar stands on the site and that the
+four stand off it.
 
 The geometry is engine-free (`tagpu_scattergeo.c`, listed `engine-free sim`) and has a native
 self-test under ASan and UBSan: `python3 tagpu/ddraw/tests/scattertest.py`.

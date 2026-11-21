@@ -123,6 +123,13 @@ GameTimes are the harness's, identical on the raised and the stock-limits build.
   first rule.
 - **A unit that cannot leave.** In a hand run the wreck was dropped over one of the units: that unit
   stayed, its row stopped holding the builder after 180 ticks, and the builder gave up. No fault.
+- **An air builder** (2026-11-21, `scenarios/build-scatter-air.json`, the test groups
+  `build-scatter-air` and `stock-build-scatter-air`). An ARMCA at the camera centre is given the
+  solar on site A's cells at GameTime 140, the cursor accepting it over the four idle ARMPW, and is
+  refused at 312 in VTOL_MobileBuild's branch `0x41400D`: `site builder=2 type=112 cell=57,470 5x5
+  on=4 moved=4 (failed=0)`. At 700 the solar stands on the site and the four off it. The same
+  GameTime on the stock-limits build. The landing's replay gate asked for it: no other game reached
+  the twin's stub.
 - **Replay.** Both test groups pass: the record, the puppets, three round trips and the seek each,
   with no COB or native write on a puppet.
 - `python3 tagpu/ddraw/tests/scattertest.py`: `ok (0 failed)`.
@@ -174,5 +181,4 @@ Two things the test's first tries taught:
 ### Not closed by landing 1
 
 The module note's *Gaps*, and: no run in a network game (the orders are local and no order crosses
-the wire, as for a click, but no two-player game was played); an air builder's twin branch
-`0x41400D` is installed and byte-matched but no game exercised it.
+the wire, as for a click, but no two-player game was played).
