@@ -345,10 +345,10 @@ pays what it draws.
 
 ### A unit's block, and the frame's (`tagpu_glsl.h` `TAGPU_GLSL_UNIT_BLOCK`, `tagpu_vk_unit.c` `unit_block`)
 
-**A unit owns one uniform block, 112 bytes, and every draw of it binds that block.** Both stages of
+**A unit owns one uniform block, 128 bytes, and every draw of it binds that block.** Both stages of
 the unit program declare `Unit` (std140; `tagpu_glsl.h` lists the offsets, which are `unit_block`'s
-word indices): the anchor, the cast's three numbers, the depth key base, the three pose bases and
-the wire base, the fog switch, the waterline and build-state numbers, alpha. Its body, its hard
+word indices): the anchor, the cast's three numbers, the depth key base, the three pose bases, the
+fog switch, the waterline and build-state numbers, alpha, and the anchor on the wire's line grid. Its body, its hard
 shadow, its nanoframe wire and its cast all bind the same bytes, written once a unit.
 
 **What every unit of a frame shares is the frame's.** Each stage's default block is written once a
@@ -367,6 +367,53 @@ name that is a default uniform in one stage and a block member in the other link
 and `tools/tascene-render.js` feeds the block from a uniform buffer whose member offsets it reads
 from the linked program. A change to the block is checked there by the wiki gate's `units` lane
 (`stage3dcheck`: the game's stage against the mockup).
+
+### The nanoframe wire: one instance an edge, posed on the device (`tagpu_posedraw.c` `WVS`, `tagpu_vk_unit.c`)
+
+**A nanoframe costs the CPU one draw, as its body does.** The bake's WIRE range is vertex pairs,
+one an edge, in the unit's own geometry and material streams. The wire's draw binds both streams
+again from the range's first vertex at INSTANCE rate, two vertices a step (`wire_layout`), so
+instance `i` is the pair `2i, 2i+1`: both rest positions and pieces, both skip flags.
+`vkCmdDraw(6, wireCount / 2)`. `WVS` poses each end as `VS` poses a vertex, puts it on the line
+grid by `tagpu_line.h`'s rule, and draws the band the fragment stage cuts to `0x4CC7AB`'s walk.
+An edge on a skipped face, on a hidden piece, or with an end past `TAGPU_LINE_MAXC` collapses
+outside the clip volume.
+
+**The ends are exact by construction against a CPU reference.** `tagpu_line.h`'s rule is
+`floor(ss·Z(anchor + q))`, `q` the posed end's offset from the anchor. `Z` is affine, so the rule
+is `floor(K + q·S)` with `K = ss·Z(anchor)` and `S = zoom·ss`. `wire_anchor` computes `K` in
+double once a unit and splits it into whole pixels and a fraction (`uWireKi`, `uWireKf` in `Unit`);
+`S` is one float a frame (`uLineS`, beside `uLineSs` in the vertex block's padding). The float sum
+then carries a few hundred pixels and a fraction, not a map coordinate. Every step after the split
+is `precise` in `WVS` (26 `NoContraction` decorations in its SPIR-V), and Vulkan rounds an add and
+a multiply correctly, so each operation rounds once; `wire_ref` performs the same operations in the
+same order on the CPU, each rounded to single through a store (the file builds for the x87, whose
+64-bit significand makes one rounding to single the correctly rounded result). `wire_ref` runs only
+on the A/B frame, for the line list `tools/line-oracle.py` walks; the bake keeps the WIRE range
+and the skip flags for it (*Vertex streams*, below).
+
+MEASURED 2026-11-21, `scenarios/nanoframe-ladder`, 1024×768, `ss = 2`, `--defaults`, a diagnostic
+build that drew the wire alone into the world target: 1 384 edges at four zooms (1×, 0.877×, 0.59×,
+and 1.6×), **0 px** between the capture and the oracle's walk of `wire_ref`'s list in every view
+(27 776, 23 877, 14 365 and 53 393 px lit). The build before, its ends placed in double on the CPU,
+gave the same four lists end for end and the same four captures pixel for pixel.
+
+MEASURED 2026-11-21, `scenarios/zombie-kingdom-13k` (`tools/battle13k.py`'s battle, 13 500 units
+falling, about 870 of them nanoframes), 1920×1080, a private Xvfb with the RTX 4070, the render
+lane's `unit_upload` span:
+
+| | default zoom | the floor, 0.088 |
+|---|---|---|
+| the wire posed on the CPU (the build before) | 0.2–2.4 ms a frame | 167–188 ms a frame |
+| the wire posed on the device | 0.04–0.08 ms | 0.5–0.7 ms |
+
+At the floor the render lane went from 3.3–3.7 to 14–15 frames a second there, the rest of each
+frame now Xvfb's present. The GPU's own time a frame, `tagpu_ftime`'s p50, stayed 10–13 ms at the
+floor.
+
+**Not covered.** The oracle views did not include the floor; the precision argument is weakest
+where `|q·S|` is largest, which is the zoomed-in view, and that one was measured. The device was
+the RTX 4070 alone.
 
 ### Vertex streams: bounded on the way up, and held only until sent (`tagpu_vk_unit.c`, `tagpu_posebake.c`, `tagpu_vk_stage.c`)
 
@@ -406,9 +453,10 @@ the entry's pointer and serial as the accessors do; a stale one does nothing.
   away is left out of the hand-over (`tagpu_native.c`'s gather, as for a type that will not bake)
   and drawn from the frame that bakes it. An owed stream that the frame just ended did not ask
   for has no consumer left to send it, and its entry is dropped.
-- **What is read every frame stays in the bake**: a geometry stream's WIRE range, four floats a
-  vertex, and a material stream's skip flags, a byte a vertex. The nanoframe wire's records are
-  posed from the two (`tagpu_posebake_geom_wire`, `_mat_skip`).
+- **What the A/B frame's wire list is placed from stays in the bake**: a geometry stream's WIRE
+  range, four floats a vertex, and a material stream's skip flags, a byte a vertex
+  (`tagpu_posebake_geom_wire`, `_mat_skip`). The device reads the same pairs out of the uploaded
+  streams; the CPU places them only for that list (`wire_ref`, *The nanoframe wire* below).
 - **The wiki's instance keeps its streams** (`TAGPU_PB_KEEPSTREAMS` 1, `tagpu_scene.h`): the tech
   tree's view poses its picture from them every frame, and its stage bounds how many there are.
 
@@ -553,7 +601,7 @@ to NONE:
   closed hull. Culling would lighten every ghost to 0.40, and it shows both skins of a
   back-to-back pair blended.
 - **the effects models' `s_pipeFx` and the nanoframe wire's `s_pipeWire`**: a run is a rectangle
-  and a wire record is a band, and neither's winding says anything about a face.
+  and a wire edge is a band, and neither's winding says anything about a face.
 
 The sun-shadow map's `s_pipeCast` keeps its own NONE (a caster's back faces write depth too).
 
@@ -575,7 +623,7 @@ body's argument above.
 - **The nanoframe wire still outlines faces seen from behind.** The engine's wire walk `0x4C0820`
   drops them like the fills do; ours draws every face's edges and relies on the body's depth, which
   hides them behind a closed hull but not on a single-sided face seen from behind. Not new with this
-  change. Closing it needs each wire record to carry its face's winding (a third vertex) so the
+  change. Closing it needs each wire pair to carry its face's winding (a third vertex) so the
   wire's vertex stage can drop the edges of back faces.
 - Whether the engine's face-0 skip (`0x459AA2`) meets the file's selection primitive or a real face
   is open (engine map, the same section); `tagpu_posebake.c` keeps face 0 in the body and wire

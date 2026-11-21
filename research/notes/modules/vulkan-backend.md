@@ -406,7 +406,7 @@ the map of what implements it.
 | `tagpu_line.h` `tagpu_line_nudge` | an end moved by whole game pixels of the ZOOMED frame, `n·ss` line-grid pixels, after `tagpu_line_px` has placed it; re-bounded to `TAGPU_LINE_FAR` after the move. For a line the engine draws a fixed pixel beside another, whose offset belongs to the screen: an end nudged by one and its neighbour differ by exactly `ss` = `w`, so the two bands abut at every zoom, and at 1× `floor(ss·(k + 0.5)) − ss = floor(ss·(k − 0.5))` is the engine's own offset |
 | `tagpu_order.c` `draw_build` | `0x438C00`'s eight lines in integers, in its order (exe-reverse-engineering.md). The colour-B lines are the engine's ends; the colour-A lines are those same ends nudged by the engine's `±1` in zoomed game pixels (`tagpu_mark_emit_line`'s `nudge`), where the engine takes it in 1× pixels. Taken in the 1× frame, that pixel is `zoom` screen pixels, and the pair drew `zoom − 1` pixels apart at a zoom-in (3 px at 4×; at a fractional wheel level the gap differs from edge to edge with each end's own rounding) and on one pixel at a zoom-out. MEASURED 2026-09-25 on `marker-mix` with a queued ARMSOLAR, `ss = 2`, 1024×768: the frame at 1× byte-identical to the build before (0 px in the viewport); at 0.5, 0.8, 1.5, 2, 2.37, 3 and 4 the two lines one contiguous run across every edge, where the build before had a gap of 1–3 px from 2× up |
 | `tagpu_fx.c` `LVS`/`LFS`; `tagpu_vk_fx.c` | the `LINES` bucket holds one record a line at the bucket stride, drawn `vkCmdDraw(6, n, 0, first)`; `uGrid` at 64 of the 80-byte fragment block, `ss` from the hand-over |
-| `tagpu_vk_unit.c` `wire_records`; `tagpu_posedraw.c` `WVS` | the wire posed on the CPU (the body's 16.16 rounding and projection, key + 0.15) into three-vec4 records after the pose words and before the effects runs, each end put on the line grid by `tagpu_line_px`; `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 256 of `tagpu_native::FS`'s 272-byte block |
+| `tagpu_posedraw.c` `WVS`; `tagpu_vk_unit.c` `wire_layout`, `wire_anchor`, `wire_ref` | the wire posed on the device, one instance an edge out of the unit's own geometry and material streams bound at instance rate, two vertices a step: the body's 16.16 rounding and projection, key + 0.15, each end put on the line grid as `uWireKi + floor(uWireKf + q·uLineS)` — the anchor's `ss·Z(anchor)` split in double once a unit, every step after it `precise` and rounded once (units.md, *The nanoframe wire*); `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 208 of `tagpu_native::FS`'s 224-byte block. `wire_ref` places the same ends on the CPU for the A/B frame's list alone |
 | `tagpu_native.c` FS | `vLineOn`/`vLine`: the line test for the wire; 0 from `VS` and `FXVS` |
 
 **The invariant, and why each part holds by construction.** The pixel decision takes only
@@ -455,8 +455,9 @@ G21a's depth clip control also gone, the device asks for no optional extension b
 also writes `tagpu_<pass>_lines.txt` — `# <pass> <grid w> <grid h> <w>`, then `ax ay bx by col`
 a line, the ends as integer LINE-GRID pixels. The marker and effects lists carry the clip rect as
 well (`# <pass> <grid w> <grid h> <w> <L> <T> <R> <B>`, line-grid pixels) and the ends BEFORE
-the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is its records
-as drawn. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
+the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is its ends as
+`tagpu_vk_unit.c` `wire_ref` places them on the CPU, by the float operations `WVS` performs on the
+device, so the oracle holds the device's ends to a reference computed apart from them. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
 walk of that list, clipping first — with `line-band-check.py`'s transcription, not the C —
 thickening to `w`, and dropping what lies outside the rect, as the viewport scissor does. It
 refuses a capture that is not the line grid rather than resampling it.
