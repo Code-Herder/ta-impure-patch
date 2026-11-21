@@ -191,6 +191,11 @@ one in a hundred over 5500, the largest 33 758; the top 5 % are 46 % of all pops
 MEASURED 2026-11-20 on a battle of 13 500 units, ten players, the reference setup, 3600 ticks, in
 which about 6000 units are given a goal within a few ticks of one another.
 
+**The battle is `tools/battle13k.py`**: it plays `scenarios/zombie-kingdom-13k.json` (Total Mayhem
+11.3.0 on the map *[M] Zombie Kingdom*) on the tree's DLL — off-screen under the frame profiler
+with the scheduler's log, or with `--watch` unshielded for a person. The map is a third party's
+and is not in the repository: `--map` or `TA_BATTLE13K_MAP` names a copy.
+
 | | the engine's scheduler | ours |
 |---|---|---|
 | searches a tick | 24 | 30 to 34 |
