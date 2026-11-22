@@ -12074,7 +12074,7 @@ static uint32_t pevt_wake_gone(const TAGPU_PEVT* e, unsigned k, uint32_t from, i
    b - a; the length len by the init's own x87 sequence (pevt_len, 0x4747CC..0x4747E6); the
    divisor the low dword of len * 0x20000 >> 16 (_allmul, _allshr: 0x4747FB, 0x474805), which is
    len * 2; q the low dword of 2^32 / divisor (_alldiv 0x474811), sign-extended; each axis's step
-   the low dword of (d * q) >> 16 (0x474822..0x47485F). A zero divisor makes no dot (the divide's
+   the low dword of (d * q) >> 16 (0x474822..0x474868). A zero divisor makes no dot (the divide's
    fix: fix_particle_divides). Then each dot's death walk; dot 1 exists when the object is updated
    at T + 1: always when late, otherwise when the walk of T left dot 0. */
 static void pevt_wake_fill(TAGPU_PEVT* e, const int32_t* a, const int32_t* b, int32_t period,
@@ -17411,14 +17411,14 @@ SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify stock-fp-verify battle slice-w
    cosine and sine (fsincos, 0x4B7189..0x4B7193), and from those the products, sums and two bare fistp
    (0x4B7194..0x4B71A4). It preserves every register but eax. Its fsincos sees only 65 536 inputs.
    THE INVARIANT: a call's result is, bit for bit, the one the engine's code computes on the same
-   machine. The table holds, for every angle word, the 80-bit cosine and sine that this machine's
+   machine. The table holds, for every angle word, the 80-bit cosine and sine that the running CPU's
    fsincos returns on fild word; fmul qword [0x509EF8] under the control word s_rotCw, computed by
    those instructions at install (rot_emit_build). A call under s_rotCw loads the pair from the table and
    runs the engine's own instructions around it, copied from the exe after byte-matching all of it;
    a call under any other control word runs the engine's code. The fmul's precision and rounding are
    the control word's and fsincos's result the CPU's, both the same for an entry as for the engine's
    call, and fld of a stored 80-bit value is exact. Nothing is shipped precomputed: x87 fsincos
-   differs between CPU makes, so a table made elsewhere could disagree with this machine's engine.
+   differs between CPU makes, so a table made elsewhere could disagree with the running CPU's engine.
    One machine can hold processors of more than one kind (performance and efficiency cores), whose
    fsincos nothing documents as equal; the table is therefore built on every processor of the machine,
    each pinned in turn, and installed only when every one fills it identically

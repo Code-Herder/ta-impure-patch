@@ -222,8 +222,24 @@ Vulkan in the event.
      200 events copied), and a lone run of this build gathered at a median of 3.55 ms, under every
      base run: the run order, not the landing's code. The fire colour against GDI (a clean yellow on
      Vulkan) is the base's too: the same scene on fd7d5a86 draws the same yellow.
-4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
-   shore and submarines against GDI.
+4. **Wake and bubbles,** with the death tick from the terrain at emission. *Landed locally
+   2026-11-22.* Check: the oracle; ships on a shore and submarines against GDI.
+   - **What it built** ([effects](effects.md) §7.8): the wake class in the event (the sprite layout's
+     point, step, period and dot count, the colour's direction, each dot's death walk) and
+     `tagpu_pevt_wake_at`/`_finish` in C and GLSL; the wake (layer 2, its only class) on nano's
+     no-object path, the bubbles (layer 7, beside COB fire) on the proxy path; the oracle and the
+     `particle-check-sea` test group (`scenarios/replay-wake-shore.json`) for the class.
+   - **The death walk, found at emission and exact**: the game thread asks the engine's own height
+     `0x485070` (pure: no store) for every walk the engine would, until a dot's move leaves it over
+     ground at the sea level or its end passes. It rests on the terrain not changing in play, which
+     the disassembly shows for the heights (only LoadMap writes a cell's `+4`) but not for the sea
+     level: the console's `SeaLevel` cheat writes it. So each walk compares the byte and finds every
+     live dot's death again on a change. No other way of the terrain changing was found.
+   - **Learned**: a bubbles emission exactly at sea level makes no dot (landing 1's divide fix), so
+     its event is empty and its proxy dies at the first walk; dot 1 exists only when the walk of T
+     left dot 0 (or the emission was late), as nano's second burst.
+   - **MEASURED** (`.data/gpu-particles/l4/`): see effects §7.8's *MEASURED* for the oracle, the
+     sea-level changes, the GDI pair, the replay groups and the battle's spans.
 5. **Smoke1 and Smoke2,** with the wind table and the countdowns. Check: the oracle; feature smoke, impact
    smoke, rocket trails and damaged-unit smoke against GDI.
 6. **The engine's particles off on Vulkan.** The pool capacity 0, the walker's call and the packet's
@@ -235,11 +251,22 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 
 ## Open
 
-- **The layer cap's count of events is exact only while nano shares its layer with nothing.** Every
-  caller files nano in layer 6 and no other emitter does. Fire and the flare, which share layers 5, 7
-  and 9 with smoke and bubbles, keep a proxy object in the engine's layer since landing 3, so the
-  engine counts and trims them itself; landings 4 and 5 can give wake, bubbles and smoke the same
-  proxy, and landing 6 retires the proxies with the pool.
+- **The layer cap's count of events is exact only while its class shares its layer with nothing.**
+  Every caller files nano in layer 6 and the wake in layer 2, and no other emitter files there. Fire,
+  the flare and the bubbles, which share layers 5, 7 and 9 with smoke or with each other, keep a proxy
+  object in the engine's layer (landings 3 and 4), so the engine counts and trims them itself;
+  landing 5 can give smoke the same proxy, and landing 6 retires the proxies with the pool.
+- **The sea level is a level constant to the recorder, a cheat to the console.** The wake's death
+  walks follow a change of `main+0x1427F` (the `SeaLevel` cheat, mask 4): each walk compares the byte
+  and finds every live dot's death again (`pevt_wake_resea`, MEASURED across two typed changes). But
+  `replay-globals.tsv` leaves the byte (`sealevel`, "a level constant"), so a recording of a game in
+  which the cheat was typed plays its puppet at the old sea level: a recorder gap that predates this
+  feature. Until it is settled no replay test group types the cheat, and the landing gate's reach
+  check will name `pevt_wake_resea` as reached by no test group: the owner's decision, with the
+  recorder's row.
+- **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
+  eight degenerate quads an event, whose vertex stage skips the draws. Landing 6, with every class an
+  event, can give each class its own vertex count.
 - **The shared pool no longer holds nano on Vulkan.** The stock build's pool of 1 000 objects counted
   nano with every other class; with nano as events, a pool that was full in stock has room for
   another class's object, and a nano emission is never refused for a full pool. Presentation only

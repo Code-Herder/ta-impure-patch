@@ -957,7 +957,7 @@ them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops o
 | read | what | established by |
 |---|---|---|
 | `main+0x14263`, i32 | gravity | read by the bank `0x43D186` and 13 other instructions in `.text`, stored by none by displacement (`replay-globals.tsv`, a `leave` row). The air war's 8155 was also fitted from its banks by the size research (unique: 588,252 exact against about 503,000 for 8154 or 8156) |
-| `main+0x1427F`, u8 | sea level | `mov al, [ecx+0x1427F]` at `0x48280D` after `xor eax, eax` at `0x48280B`, a zero-extended byte, in the sight emit (below); 70 byte accesses in `.text`, one of them a store (`0x416AA3`) |
+| `main+0x1427F`, u8 | sea level | `mov al, [ecx+0x1427F]` at `0x48280D` after `xor eax, eax` at `0x48280B`, a zero-extended byte, in the sight emit (below); 70 byte accesses in `.text`, one of them a store (`0x416AA3`, the console's `SeaLevel` `0x416A90`, a cheat of mask 4); LoadMap writes it through `[ebp+0x84]` at `0x483877` ([map](map.md), *The two lookups bound themselves*) |
 | `main+0x14281` bit 2 | LosType's ray fan: which sight path a unit takes | the emitter's test `0x4825BA..0x4825CE`; RT_PHYSICS stores the bit as it stands at the segment's start, since the typed command LOSType can change it during a game |
 | def `+0x241` bit 11 | the unit moves by the air step | the movement pass `0x43DD36..0x43DD44` (below) |
 | def `+0x170`, u8 | the sight emit's height term | `mov cl, byte [def+0x170]` at `0x4827FB`. The water state reads the same offset as a signed **word** (`movsx` at `0x43DBBA`); the sight emit's byte is the one RT_AIR carries |

@@ -229,7 +229,18 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
   with each division by 16 truncating toward zero, the `cdq; and edx,0xF; add; sar 4` idiom
   (`0x4850F8..0x48512A`; the body `0x485070..0x48513D`): `top = h00 + (h10 − h00)·fx/16`, `bot = h01 + (h11 − h01)·fx/16`, the
   answer `top + (bot − top)·fz/16`, `fx`/`fz` the integer halves' low four bits [DISASSEMBLED;
-  `tasim_map.c` `ts_map_ground`, whose test holds it to hand-computed cases].
+  `tasim_map.c` `ts_map_ground`, whose test holds it to hand-computed cases]. It stores nothing (its only
+  writes are its own pushes), and 48 `call 0x485070` sites read it; one is the wake's death
+  `0x474720` (`0x47472F`, [weapons](weapons.md), *The wake and the bubbles*). **The heights it reads
+  are static in play** [DISASSEMBLED 2026-11-22]: a cell's `+4` is written by LoadMap's two height
+  loops (`0x483A19` v1, `0x483AC1` v2) and by no other code that addresses the grid — every function
+  that reads `main+0x14287` or calls a cell lookup (`0x481550`, `0x4815A0`, `0x4815F0`, `0x485330`)
+  was scanned for a store at a cell's `+4`, `+0x11` or `+0x5/+0x6`: the stamp and the clear rewrite
+  the extremes `+5`/`+6` through `0x483210`, nothing the height. The sea level `main+0x1427F` is
+  written by LoadMap (`0x483877`, the header's `+0x24`) and by the console's `SeaLevel` command
+  `0x416A90` (`.data` row `0x5020E4` = {`"SeaLevel"`, `0x416A90`, mask 4}; its store `0x416AA3`),
+  a cheat that runs outside the step. Impure's wake events march `0x485070` itself at emission and
+  find every live dot's death again when that byte changes ([effects](../effects.md) §7.8).
 - **The destructor's arguments.** It passes `level` as the death record's `+0xA` low nibble, so
   1..15, and `smoke` as 1 unless the high nibble is 7 (`0x486D55..0x486D6E`: `test al,0xF` at
   `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four

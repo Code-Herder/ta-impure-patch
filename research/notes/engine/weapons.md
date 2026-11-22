@@ -34,7 +34,8 @@ which is how Impure's alloc stub tells a nano emission from any other. A NULL an
 `0x47226E`, `cmp eax,ebx`) jumps past the init, the layer's trim and the append (`0x472163` /
 `0x472293 je`), so an emitter whose pool gave nothing makes no object and leaves no trace. At the
 alloc the emitter's esp is the alloc's esp + 8: its arguments at `+0x2C` and `+0x30`, the layer's
-word at `+0x34` (read `movsx` at `0x47217C`, unbounded), and the degenerate box at `+0x10`
+word at `+0x34` (read `movsx` at `0x47217C`, unbounded; the bytes from each entry to that read end
+at `0x472187` / `0x4722B7`), and the degenerate box at `+0x10`
 (`0x4720E1..0x472108`; `0x472211..0x472238`). The forward emitter inits box1 = that box, box2 = its
 box argument (`0x472169..0x472179`); the reverse box1 = its box argument, box2 = that box
 (`0x472299..0x4722A9`). On a Vulkan launch Impure answers NULL here and records an emitter event
@@ -538,6 +539,80 @@ slots in order: destroy, update, draw, empty?, spawn, again?, init ([effects](..
 - **Impure**: on a Vulkan launch both inits' entries are hooked and turn the object into a proxy
   that holds the emission's place in its layer and pool ([effects](../effects.md) §7.8, [hook
   map](../modules/hook-map.md)).
+
+### The wake and the bubbles: emitters, init, spawn, update, death, draw [DISASSEMBLED 2026-11-22]
+
+One particle class (vtable `0x4FD5F8`: destroy `0x4717E0`, update `0x473170`, draw `0x473250`,
+empty `0x473290`, spawn `0x474880`, again `0x473220`, init `0x474760`; object `0x48` bytes,
+sub-particle stride `0x44`) drawn as 2×2 dots. Read for Impure's events ([effects](../effects.md) §7.8).
+
+- **The emitters**, stdcall `ret 0x10`, `(a*, b*, period, layer)`: the wake's `0x472430` and the
+  bubbles' `0x472530`, the same code but for the init's last argument. `push ebx; push ebp; push
+  esi; push edi`, the layer table `main+0x38D77` into ebp, the SFX test `0x51E608`, `push 0x48; call
+  0x470EB0` (`0x472455`, `0x472555`; the returns `0x47245A`, `0x47255A`); on NULL nothing else
+  (`0x47245C`, `0x47255C`); else `0x12`
+  dwords zeroed, `+4` 0, the layer's low byte at `+0xC` (`0x472478`, `0x472578`), `+0x10..+0x18` 0,
+  the vtable, and the init through slot 6 (`call [edx+0x18]` at `0x4724AF`, `0x4725AE`, its last
+  byte `0x4725B0`; the pushes from `0x472498`) with (a, b,
+  period, 1, 1) and (a, b, period, 1, 0): the wake's dir 1 (`push 1; push 1` at `0x4724A2`), the
+  bubbles' 0 (`push ebx`, `0x4725A2`). Then the layer's word (`movsx ecx,word [esp+0x20]`,
+  `0x4724B2`, `0x4725B1`; the wake's ends at `0x4724B6`), the cap (`0x4724D5`, `0x4725D4`) and the append `0x4732E0`. **Callers**:
+  COB `EMIT_SFX 0x480EB0`, types 2–5 to `0x472430` at `0x48104C` (period 16), `0x481069` (8),
+  `0x481086` (16, the points swapped), `0x4810A3` (8, swapped), each after `push 2`
+  (`0x48103E`, `0x48105B`, `0x481078`, `0x481095`); type `0x103` to `0x472530` at `0x481102` with b
+  = a at the sea level, `main+0x1427F << 16` in its altitude (`0x4810E7..0x4810F0`), period 8 and
+  `push 7` (`0x4810F4`). So layer 2 holds the wake alone and layer 7 the bubbles beside COB fire.
+  `0x4716E0` is a third copy with no caller (*Eight of the twenty compares*, below).
+- **The init `0x474760(a, b, period, life, dir)`**, thiscall `ret 0x14`: `0x471D70(this, life)`
+  (`0x47476B`), so `+4` = T + life; `+0x1C` period; `+0x20` a, `+0x2C` b (`0x474778..0x47478D`),
+  `+0x38` d = b − a; len =
+  `_ftol 0x4E43A0`(√(dx² + dalt² + dy²)) by the x87 (`0x4747CC..0x4747E6`, the nano spawn's
+  sequence); `_allmul 0x4E4400`(len, `0x20000`) and `_allshr 0x4E43D0` by 16 (`0x4747FB`,
+  `0x474805`), i.e. len · 2, whose low dword, sign-extended (`cdq` at `0x47480A`), divides 2^32
+  (`_alldiv 0x4E4440`, `0x474811`); the quotient's low dword, sign-extended, is q; each axis's step
+  = the low dword of `_allshr`(`_allmul`(d, q), 16) (`0x474822..0x474868`) over `+0x38..+0x40`: half a
+  world unit a tick toward b. `+0x44` = dir (`0x47486D`), then the spawn through slot 4
+  (`0x474872`). A zero divisor faults in stock (*Two inits divide by zero*, below).
+- **The spawn `0x474880`**: reserves room (`MEM_Alloc 0x4B4F10`, the old records copied, `0x4B4F20`),
+  builds one record from a copy on its stack — `+0` "smoke 1" `*(main+0x147CF)` (read by nothing of
+  this class), `+4` pos = a with the three draws `0x4749D9`, `0x474A00`, `0x474A27` each adding
+  `rand · 7 / 0x8000 − 3` (`_allmul`, `_alldiv`) to the x, altitude and y high words by a 16-bit add
+  (`add word [esp+0x1E/0x22/0x26],ax`, the last at `0x474A4B`), `+0x10` b, `+0x1C` step, `+0x28` 0x61
+  (`0x474A8C`) and `+0x2C` 0x67 (`0x474A91`) (the
+  colour's range), `+0x30` the colour and `+0x34` its step: 0x61 and +1 when `+0x44` is set, 0x67 and
+  −1 when not (`0x474A85..0x474AB4`), `+0x38` counter 0, `+0x3C` period, `+0x40` end = T + 6 ·
+  period (`0x4749AE..0x4749C3`) — appends it (`0x475EF0` at `0x474ACA`) and sets `+8` = T + 1
+  (`0x474AE7..0x474AEE`). One record a call (the loop count `[esp+0x10]` is 1, `0x474997`).
+- **Again `0x473220`**: `+8 <= +4` (signed, `jg`) and `+8 <= T` (unsigned, `ja`): with the life of 1
+  both emitters pass, the update of T + 1 spawns a second dot and none after.
+- **The update `0x473170`** (slot 1): for each record the move `0x474580` (`0x473190`), then the death
+  `0x474720(T)` (`0x4731A3`); a dead record is removed by shifting the rest down `0x11` dwords
+  (`0x4731B5..0x4731CB`); after the walk, again → spawn (`0x4731F7..0x473208`). **The move
+  `0x474580`**: pos += step on each axis; counter = (counter + 1) % period (`idiv [+0x3C]`,
+  `0x4745A7`: a period of 0 divides by zero); at 0, colour += its step, and past `+0x2C` it becomes
+  `+0x28`, under `+0x28` it becomes `+0x2C` (`0x4745B1..0x4745D5`): the colour cycles 0x61..0x67,
+  one step every `period` moves. **The death `0x474720(T)`** `ret 4`, on the record: 1 when T > the
+  end `+0x40` (signed `jg`, `0x474729`); else 1 when the ground's height `0x485070(&pos)`
+  (`0x47472F`, pos the record's `+4`) is at or above the sea level, the byte `main+0x1427F`
+  zero-extended (`cmp eax,ecx; jge`, `0x474742`): a dot over ground at sea level or higher dies. Off
+  the grid the height is −1 ([map](map.md), *The two lookups bound themselves*), so such a dot dies
+  only by its end. **Empty `0x473290`**: no record ((end − begin) / `0x44` by `0x78787879`).
+- **The draw** (slot 2) `0x473250(ctx)` `ret 4` calls the leaf `0x4745E0(ctx, eyeX, eyeY)` per record
+  with the words `main+0x1431F`, `main+0x14323` (`0x47327B`); the leaf projects sx = (int16)(hi(x) −
+  eyeX) + 0x80, sy = (int16)(hi(y) − eyeY) − (hi(alt) >> 1) + 0x20, tests sight at the tile (hi(x) >>
+  5, (hi(y) − (hi(alt) >> 1)) >> 5) as the nano's `0x473A00` does (`0x47462C..0x4746EF`), and calls
+  `DrawBar 0x4BF6F0(ctx, {sx, sy, sx + 1, sy + 1}, colour +0x30)` (`0x474703`). **Destroy** `0x4717E0`:
+  fire's (`MEM_Free [+0x10]` at `0x4717EC`, `+0x10..+0x18` zeroed, the base vtable, `0x470ED0` with
+  flag 1: `0x4717E4..0x471813`).
+- **What an emission makes** (LIVE-VERIFIED 2026-11-22 by Impure's oracle, [effects](../effects.md)
+  §7.8): dot 0 at T, moved from the update of T (T + 1 when emitted after that tick's walk); dot 1 at
+  the update of T + 1, after that update's moves, and only when the walk of T left dot 0 (else the
+  walk of T + 1 destroys the empty object first) or the emission was late; each removed by the first
+  update past its birth + 6 · period, or by the first whose move leaves it over ground at sea level;
+  the object destroyed by the walk after its last dot's removal.
+- **Impure**: on a Vulkan launch the wake's alloc answers NULL and the bubbles' init makes a proxy;
+  each emission is an event whose dots' death walks are found on the game thread at emission
+  ([effects](../effects.md) §7.8, [hook map](../modules/hook-map.md)).
 
 ### The projectile tick's steps: a burst parent, guidance, steer and the wind [DISASSEMBLED 2026-11-12]
 

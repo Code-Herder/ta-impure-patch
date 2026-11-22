@@ -136,9 +136,10 @@ the design point; should a slot count still exceed it, the packet's tables trunc
 **The particles follow the layer cap on our side too.** The publisher walks a layer up to the
 engine's own steady state, `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`; past it the layer is counted
 in `layerbad` and skipped). The packet's particle table is `TAGPU_PK_MAX_PART` = 24 576
-sub-particles, one and a half times tier 1's frame of 14 510. On a Vulkan launch the nano spray, fire
-and the teleport flare are not in it: the nano emitters make no object, fire and the flare make a
-proxy object with no particle, and the packet carries their events in a table of its own, up to
+sub-particles, one and a half times tier 1's frame of 14 510. On a Vulkan launch the nano spray, fire,
+the teleport flare, the wake and the bubbles are not in it: the nano and wake emitters make no
+object, fire, the flare and the bubbles make a proxy object with no particle, and the packet carries
+their events in a table of its own, up to
 `TAGPU_PK_MAX_PEVT` = `2·(TAGPU_LIM_SFX + 1)` in view and the slot's room, the newest kept, with the
 flare sequence's frames beside it ([effects](../effects.md) §7.8). **A frame that holds more is thinned,
 not truncated:** the publisher counts every layer's sub-particles first and, when the total is past
