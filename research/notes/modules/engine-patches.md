@@ -345,7 +345,7 @@ affinity mask names is refused; processors brought online later are not compared
 performance and efficiency cores holds two designs, whose `fsincos` nothing documents as equal); `_hypot` `0x4FB440` runs the engine's operations
 with one control-word switch each way instead of four or five. Each is written alone, and a mismatch
 leaves the engine's code. `tagpu_fpverify.on` at launch runs both beside the engine's code and counts
-the results that differ; the test group `fp-verify` plays a game under it.
+the results that differ; the test groups `fp-verify` and its stock-limits twin `stock-fp-verify` play a game under it.
 
 | VA | What it is | Mechanism |
 |---|---|---|

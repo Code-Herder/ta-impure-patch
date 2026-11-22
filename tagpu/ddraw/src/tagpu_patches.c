@@ -15834,7 +15834,7 @@ unsigned int tagpu_patches_restored(void)
 }
 
 
-SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-resource-mex");
+SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify stock-fp-verify battle slice-walkers stock-resource-mex");
 
 /* THE PIECE ROTATION FROM A TABLE (research/notes/engine/cob.md, the piece matrix). 0x4B7173(angle,
    pair), cdecl, rotates the int pair at `pair` by the signed 16-bit angle word, the low word of its
