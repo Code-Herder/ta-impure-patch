@@ -2944,19 +2944,26 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREA
 static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
 {
     unsigned at = PKT_ALIGN4(*cursor), room, met, wrote;
-    p->n_pevt = 0; p->off_pevt = 0; p->pevt_nframe = 0;
+    p->n_pevt = 0; p->off_pevt = 0; p->n_pwind = 0; p->off_pwind = 0; p->pwind_base = 0;
+    memset(p->pevt_nframe, 0, sizeof p->pevt_nframe);
     p->pevt_on = tagpu_pevt_on() ? 1u : 0u;
     if (!p->pevt_on || !(s_fxWant & 2u)) return *cursor;
     {
-        /* the flare sequence's frames, as the sprite classes' draw leaves index it (0x474286,
-           0x4736A6: 0x4B7F30 of the frame), one session asset resolved once a frame */
+        /* the sprite sequences' frames, as the classes' draw leaves index them (0x474286,
+           0x4736A6, 0x4755BB, 0x475750: 0x4B7F30 of the frame): the flare sequence, "smoke 1",
+           "smoke 2" (tagpu_pevt.h), session assets resolved once a frame */
+        static const unsigned offs[TAGPU_PEVT_NSEQ] = { OFF_FLARESEQ, 0x147CFu, 0x147D3u };
         const char* ta = *(const char* const*)TA_MAIN_PP;
-        const char* seq = ta ? *(const char* const*)(ta + OFF_FLARESEQ) : NULL;
-        int nf = tagpu_gaf_seq_nframes(seq), i;
-        if (nf > (int)TAGPU_PEVT_NFRAME) nf = (int)TAGPU_PEVT_NFRAME;
-        for (i = 0; i < nf; i++)
-            p->pevt_frame[i] = (unsigned)(size_t)tagpu_gaf_seq_frame(seq, i);
-        p->pevt_nframe = nf > 0 ? (unsigned)nf : 0u;
+        unsigned s;
+        for (s = 0; s < TAGPU_PEVT_NSEQ; s++) {
+            const char* seq = ta ? *(const char* const*)(ta + offs[s]) : NULL;
+            int nf = tagpu_gaf_seq_nframes(seq), i;
+            if (nf > (int)TAGPU_PEVT_NFRAME) nf = (int)TAGPU_PEVT_NFRAME;
+            for (i = 0; i < nf; i++)
+                p->pevt_frame[s * TAGPU_PEVT_NFRAME + (unsigned)i] =
+                    (unsigned)(size_t)tagpu_gaf_seq_frame(seq, i);
+            p->pevt_nframe[s] = nf > 0 ? (unsigned)nf : 0u;
+        }
     }
     room = at < p->cap_bytes ? (p->cap_bytes - at) / (unsigned)sizeof(TAGPU_PEVT) : 0u;
     if (room > TAGPU_PK_MAX_PEVT) room = TAGPU_PK_MAX_PEVT;
@@ -2966,6 +2973,15 @@ static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
     if (wrote) {
         p->off_pevt = at; p->n_pevt = wrote;
         *cursor = at + wrote * (unsigned)sizeof(TAGPU_PEVT);
+        /* the wind's rows the smoke events just copied reach back to, after them */
+        const unsigned wat = PKT_ALIGN4(*cursor);
+        unsigned wroom = wat < p->cap_bytes ? (p->cap_bytes - wat) / 16u : 0u;
+        if (wroom > TAGPU_PEVT_WIND) wroom = TAGPU_PEVT_WIND;
+        p->n_pwind = tagpu_pevt_wind((int*)(void*)((unsigned char*)p + wat), wroom, &p->pwind_base);
+        if (p->n_pwind) {
+            p->off_pwind = wat;
+            *cursor = wat + p->n_pwind * 16u;
+        }
     }
     if (met > wrote) {
         p->truncated |= TAGPU_PK_TRUNC_PEVT;

@@ -828,19 +828,31 @@ static const char* frame_valid(const void* rec)
     /* THE PARTICLE EVENTS: whole records, at most the packet's cap; every value in one is used
        as data by the shader (tagpu_pevt.h), and what it indexes or divides by is bounded here:
        the layer, the class, a sprite event's particle count, frame modulus and period (its
-       frame then lies in 0..nseq1-1, which the shader bounds again by the frame table), and a
-       wake event's dot count and period (its death walks are data the shader compares) */
+       frame then lies in 0..nseq1-1, which the shader bounds again by the frame table), a
+       wake event's dot count and period (its death walks are data the shader compares), and a
+       smoke event's interval (a divisor), reset, frame cap, sequence and puff count, which bound
+       the shader's frame walk; the wind's rows are whole and at most the ring */
     if (!table_ok(p, p->off_pevt, p->n_pevt, sizeof(TAGPU_PEVT))) return "particle event table";
     if (p->n_pevt > TAGPU_PK_MAX_PEVT) return "more particle events than the cap";
-    if (p->pevt_nframe > TAGPU_PEVT_NFRAME) return "more flare frames than the table";
+    if (!table_ok(p, p->off_pwind, p->n_pwind, 16u)) return "particle wind table";
+    if (p->n_pwind > TAGPU_PEVT_WIND) return "more wind rows than the ring";
+    {
+        unsigned s;
+        for (s = 0; s < TAGPU_PEVT_NSEQ; s++)
+            if (p->pevt_nframe[s] > TAGPU_PEVT_NFRAME) return "more sprite frames than the table";
+    }
     {
         const TAGPU_PEVT* q = tagpu_pk_pevt(p);
         unsigned k;
         for (k = 0; k < p->n_pevt; k++) {
             const unsigned c = TAGPU_PEVT_CLASS(q[k].flags);
             if (TAGPU_PEVT_LAYER(q[k].flags) >= TAGPU_PK_NLAYER) return "particle event layer";
-            if (c > TAGPU_PEVT_C_WAKE) return "particle event class";
-            if (c == TAGPU_PEVT_C_WAKE) {
+            if (c >= TAGPU_PEVT_NCLASS) return "particle event class";
+            if (TAGPU_PEVT_SMOKE(c)) {
+                if (q[k].ival < 1 || q[k].reset < 2 || q[k].ncap > TAGPU_PEVT_SMOKE_NCAP ||
+                    q[k].seqsel < 0 || q[k].seqsel > 1 || q[k].npuff < 1)
+                    return "smoke event fields";
+            } else if (c == TAGPU_PEVT_C_WAKE) {
                 if (q[k].nsub < 0 || q[k].nsub > 2 || q[k].period < 1 ||
                     q[k].period > TAGPU_PEVT_WAKE_PERIOD)
                     return "wake event fields";

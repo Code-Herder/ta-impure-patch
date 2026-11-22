@@ -365,12 +365,14 @@ static const char* LFS =
     "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
     "}\n";
 /* THE PARTICLES FROM THEIR EMITTER EVENTS (inc/tagpu_pevt.h; gpu-particles-plan.md, *The draw*).
-   No vertex attribute: the storage block `pe` holds the sprites' frame table (TAGPU_PEVT_NFRAME
-   rows of 8 words: ox, oy, w, h, u0, v0, u1, v1) and then the events as 20 uints each; vertex v
-   is corner v % 6 of particle (v / 6) % 10 of event v / 60, and the shader computes the particle
-   at GameTime `uTick` -- tagpu_pevt.h's tagpu_pevt_nano_at, tagpu_pevt_sprite_at and
-   tagpu_pevt_wake_at, statement for statement, in 32-bit integer arithmetic, which wraps in GLSL
-   as it does in C: the keyed
+   No vertex attribute: the storage block `pe` holds the sprites' frame table (TAGPU_PEVT_NSEQ *
+   TAGPU_PEVT_NFRAME rows of 8 words: ox, oy, w, h, u0, v0, u1, v1), the wind's rows (at word 1536:
+   base, n, two words free, then TAGPU_PEVT_WIND rows of x, rise, y, 0) and then the events as 20
+   uints each (at word 5636); vertex v is corner v % 6 of particle (v / 6) % 10 of event v / 60
+   (a smoke event's puff pbase + that), and the shader computes the particle at GameTime `uTick`
+   -- tagpu_pevt.h's tagpu_pevt_nano_at, tagpu_pevt_sprite_at, tagpu_pevt_wake_at and the puff's
+   tagpu_pevt_puff_u / _frame / _after, statement for statement, in 32-bit integer arithmetic,
+   which wraps in GLSL as it does in C (a puff's frame walk is bounded by the frame table, 64): the keyed
    draws (tagpu_prand.h), a nano particle's start and end out of the cut boxes (64-bit product,
    toward zero: umulExtended) and its step (toward zero), the updates a particle has had, its
    position and its colour or frame. A particle not in the engine's object then is a degenerate
@@ -380,7 +382,9 @@ static const char* LFS =
    that point less the hotspot, the quad emit_sprite makes, with the frame's atlas rect; both at
    the layer's key. EDIT tagpu_pevt.h WITH IT. NVS declares VS's uniforms first, in their order,
    so the two share the pass's vertex block; NFS declares FS's samplers and uniforms in theirs. */
-typedef char nvs_frame_rows[(TAGPU_PEVT_NFRAME == 64u) ? 1 : -1];   /* NVS's 512 and 63 */
+typedef char nvs_frame_rows[(TAGPU_PEVT_NFRAME == 64u) ? 1 : -1];   /* NVS's 64 and 63 */
+typedef char nvs_wind_at[(TAGPU_PEVT_WIND_AT == 1536u) ? 1 : -1];   /* NVS's 1536, 1540 */
+typedef char nvs_evt_at[(TAGPU_PEVT_EVT_AT == 5636u) ? 1 : -1];     /* NVS's 5636      */
 static const char* NVS =
     "#version 330 core\n"
     "uniform vec2 uGame;\n"
@@ -414,7 +418,7 @@ static const char* NVS =
     "}\n"
     "void main(){\n"
     "  uint vid = uint(gl_VertexID);\n"
-    "  uint k = (vid / 6u) % 10u, c = vid % 6u, b = 512u + (vid / 60u) * 20u;\n"
+    "  uint k = (vid / 6u) % 10u, c = vid % 6u, b = 5636u + (vid / 60u) * 20u;\n"
     "  uint seed = pe[b], t0 = pe[b + 1u], fl = pe[b + 2u], cls = (fl >> 8u) & 15u;\n"
     "  uint P = uint(uTick);\n"
     "  vec2 cxy = vec2((c == 1u || c == 3u || c == 4u) ? 1.0 : 0.0,\n"
@@ -455,6 +459,47 @@ static const char* NVS =
     "    int cc = (u / max(per, 1)) % 7;\n"
     "    int col = pe[b + 13u] != 0u ? 0x61 + cc : 0x67 - cc;\n"
     "    vCM = vec2(float(col) / 255.0, 0.0);\n"
+    "  } else if (cls == 4u || cls == 5u) {\n"
+    "    int ival = int(pe[b + 6u]), npuff = int(pe[b + 9u]), rst = int(pe[b + 10u]);\n"
+    "    int ncap = int(pe[b + 11u]), sq = int(pe[b + 12u]);\n"
+    "    uint again = pe[b + 8u], j = pe[b + 14u] + k;\n"
+    "    int dd = int(P - again);\n"
+    "    uint np = 1u;\n"
+    "    if (npuff > 1 && dd >= 0 && ival >= 1) np += uint(dd / ival) + 1u;\n"
+    "    np = min(np, uint(max(npuff, 1)));\n"
+    "    uint F = j == 0u ? pe[b + 7u] : again + (j - 1u) * uint(ival) + 1u;\n"
+    "    int u = max(int(P - F) + 1, 0);\n"
+    "    int nf = taCoord(2, ncap - 2, taRand(seed, j, 0u));\n"
+    "    int h = rst / 2, f = 0, st = 0, len = rst;\n"
+    "    bool live = ival >= 1 && rst >= 2 && j < np && !(u > 0 && nf <= 0);\n"
+    "    for (int i = 0; i < 64 && live && u >= st + len; i++) {\n"
+    "      f++;\n"
+    "      if (f >= nf) live = false;\n"
+    "      else { st += len; len = taCoord(h, h, taRand(seed, j, uint(f))); }\n"
+    "    }\n"
+    "    live = live && u < st + len;\n"
+    "    ivec3 d = ivec3(0);\n"
+    "    if (live && u > 0) {\n"            /* the wind's sums: row F + u - 1 less row F - 1 */
+    "      uint wb = pe[1536u], wn = pe[1537u];\n"
+    "      uint i0 = F - 1u - wb, i1 = F + uint(u) - 1u - wb;\n"
+    "      if (i0 < wn && i1 < wn) {\n"
+    "        uint a0 = 1540u + i0 * 4u, a1 = 1540u + i1 * 4u;\n"
+    "        d = ivec3(int(pe[a1] - pe[a0]), int(pe[a1 + 1u] - pe[a0 + 1u]),\n"
+    "                  int(pe[a1 + 2u] - pe[a0 + 2u]));\n"
+    "      } else live = false;\n"
+    "    }\n"
+    "    uint rs = cls == 5u ? 4u : 2u, am = (1u << rs) - 1u;\n"
+    "    pos.x = int(((pe[b + 3u] & ~7u) | (j & 7u)) + (uint(d.x) << 3u));\n"
+    "    pos.y = int(((pe[b + 4u] & ~am) | ((j >> 6u) & am)) + (uint(d.y) << rs));\n"
+    "    pos.z = int(((pe[b + 5u] & ~7u) | ((j >> 3u) & 7u)) + (uint(d.z) << 3u));\n"
+    "    uint fb = (uint(1 + clamp(sq, 0, 1)) * 64u + uint(clamp(f, 0, 63))) * 8u;\n"
+    "    int fw = int(pe[fb + 2u]), fh = int(pe[fb + 3u]);\n"
+    "    on = live && fw > 0 && fh > 0;\n"
+    "    off = vec2(float(int(pe[fb])), float(int(pe[fb + 1u])));\n"
+    "    sz = vec2(float(fw), float(fh));\n"
+    "    vUV = mix(vec2(uintBitsToFloat(pe[fb + 4u]), uintBitsToFloat(pe[fb + 5u])),\n"
+    "              vec2(uintBitsToFloat(pe[fb + 6u]), uintBitsToFloat(pe[fb + 7u])), cxy);\n"
+    "    vCM = vec2(0.0, cls == 5u ? 3.0 : 2.0);\n"   /* Smoke1's leaf 0x475700 tests no sight */
     "  } else {\n"
     "    bool fire = cls == 1u;\n"
     "    int per = int(pe[b + 9u]), nsub = int(pe[b + 10u]), m = int(pe[b + 11u]);\n"
@@ -495,7 +540,8 @@ static const char* NVS =
    exactly those (inc/tagpu_fogsrc.h: bit 1 out of LOS, set only in true-LOS mode; bit 0 never
    explored). The smoothed fog the other effects take is not applied: a particle is all there or
    not at all, as the engine draws it. A dot is its palette colour; a sprite (mode 2) is FS's
-   alpha path: the base atlas's key test, the restored twin where it is painted, 50 % alpha. */
+   alpha path: the base atlas's key test, the restored twin where it is painted, 50 % alpha. A
+   Smoke1 puff (mode 3) is a sprite with no sight test, as its leaf 0x475700 has none. */
 static const char* NFS =
     "#version 330 core\n"
     "flat in vec2 vCM; flat in ivec2 vTile; in vec2 vUV;\n"
@@ -509,13 +555,14 @@ static const char* NFS =
     "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
-    "  if ((uFog & 1) == 1) {\n"
+    "  int mode = int(vCM.y + 0.5);\n"
+    "  if ((uFog & 1) == 1 && mode != 3) {\n"
     "    if (vTile.x < 0 || vTile.y < 0 || vTile.x >= uFogSize.x || vTile.y >= uFogSize.y)\n"
     "      discard;\n"
     "    int c = taFogCell(vTile.x, vTile.y);\n"
     "    if ((uFog & 4) == 4 ? (c & 2) != 0 : (c & 1) != 0) discard;\n"
     "  }\n"
-    "  if (int(vCM.y + 0.5) == 2) {\n"
+    "  if (mode >= 2) {\n"
     "    vec4 b = texture(uBase, vUV);\n"
     "    if (b.a < 0.5) discard;\n"
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
@@ -723,55 +770,79 @@ void tagpu_fx_set_mute(int on) { s_mute = on; }
    Vulkan pass prepares after tagpu_packet_frame_end, past which no packet pointer may be read,
    so the hand-over carries this copy, as it carries s_verts and the LHT. Sized to the packet's
    own bound on the table (TAGPU_PK_MAX_PEVT, which the acquire has checked n against). `classes`
-   says which to draw: bit 0 nano, bit 1 the sprites (fire, flare), bit 2 the wake; the rest are
-   left out.
-   THE SPRITES' FRAMES: frame i of the flare sequence, as the packet resolved it, put through the
-   atlas here, the same lookup emit_sprite makes for a sprite the native pass draws: its size, its
-   hotspot and its atlas rect, for the GPU to index by the frame it computes. A frame not drawn
-   this frame -- no handle, a compound frame (the flare sequence's are plain; one is said once and
-   left out), not painted yet (the atlas's allowance) -- has w 0, and so has every frame while the
-   engine's alpha blit is not built (TAProgram+0xF0 bit 5, the gate the native pass takes). */
+   says which to draw: bit 0 nano, bit 1 fire and the flare, bit 2 the wake, bit 3 smoke; the rest
+   are left out.
+   THE SPRITES' FRAMES: frame i of each sprite sequence (the flare sequence, "smoke 1", "smoke 2"),
+   as the packet resolved it, put through the atlas here, the same lookup emit_sprite makes for a
+   sprite the native pass draws: its size, its hotspot and its atlas rect, for the GPU to index by
+   the frame it computes. A sequence no copied event draws is not looked up. A frame not drawn
+   this frame -- no handle, a compound frame (said once and left out), not painted yet (the
+   atlas's allowance) -- has w 0, and so has every frame while the engine's alpha blit is not built
+   (TAProgram+0xF0 bit 5, the gate the native pass takes).
+   THE WIND'S ROWS (smoke): copied as the packet carries them, after a header {base, n}; the GPU
+   reads row t - base for t in base .. base + n - 1 and draws no puff that needs another. */
 static TAGPU_PEVT s_evtBuf[TAGPU_PK_MAX_PEVT];
 static const TAGPU_PEVT* s_evt;
 static int      s_nEvt;
 static unsigned s_evtTick;
-static TAGPU_PEVT_FRAME s_evtFrame[TAGPU_PEVT_NFRAME];
+static TAGPU_PEVT_FRAME s_evtFrame[TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME];
+static uint32_t s_evtWind[4u + 4u * TAGPU_PEVT_WIND];
 static int      s_saidCompound;
 void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick, const unsigned* frames,
-                         int nframe, unsigned classes)
+                         const unsigned* nframe, const int32_t* wind, int nwind, unsigned wbase,
+                         unsigned classes)
 {
     int i, w = 0;
+    unsigned seqs = 0, s;
     if (!e || n < 1) n = 0;
     if (n > (int)TAGPU_PK_MAX_PEVT) n = (int)TAGPU_PK_MAX_PEVT;
     for (i = 0; i < n; i++) {
         const unsigned c = TAGPU_PEVT_CLASS(e[i].flags);
-        const unsigned bit = c == TAGPU_PEVT_C_NANO ? 1u : c == TAGPU_PEVT_C_WAKE ? 4u : 2u;
-        if (classes & bit) s_evtBuf[w++] = e[i];
+        const unsigned bit = c == TAGPU_PEVT_C_NANO ? 1u : c == TAGPU_PEVT_C_WAKE ? 4u :
+                             TAGPU_PEVT_SMOKE(c) ? 8u : 2u;
+        if (!(classes & bit)) continue;
+        s_evtBuf[w++] = e[i];
+        if (c == TAGPU_PEVT_C_FIRE || c == TAGPU_PEVT_C_FLARE) seqs |= 1u;
+        else if (TAGPU_PEVT_SMOKE(c)) seqs |= e[i].seqsel ? 4u : 2u;
     }
     s_evt = w ? s_evtBuf : NULL;
     s_nEvt = w;
     s_evtTick = tick;
+    if (!wind || nwind < 0) nwind = 0;
+    if (nwind > (int)TAGPU_PEVT_WIND) nwind = (int)TAGPU_PEVT_WIND;
+    s_evtWind[0] = wbase;
+    s_evtWind[1] = (uint32_t)nwind;
+    if (nwind) memcpy(s_evtWind + 4, wind, (size_t)nwind * 16u);
     memset(s_evtFrame, 0, sizeof s_evtFrame);
-    if (!frames || nframe < 1 || !(classes & 2u) || !(tagpu_fx_caps() & 0x20)) return;
-    if (nframe > (int)TAGPU_PEVT_NFRAME) nframe = (int)TAGPU_PEVT_NFRAME;
-    for (i = 0; i < nframe; i++) {
-        const unsigned char* g = (const unsigned char*)(size_t)frames[i];
-        const TAGPU_GAFENT* a;
-        TAGPU_GAFGEOM gm;
-        if (!g || !tagpu_gaf_frame_geom(g, &gm)) continue;
-        if (gm.subn) {
-            if (!s_saidCompound) {
-                s_saidCompound = 1;
-                flog("fx: the flare sequence has a compound frame; the particle events draw "
-                     "nothing for it");
+    if (!frames || !nframe || !(tagpu_fx_caps() & 0x20)) return;
+    for (s = 0; s < TAGPU_PEVT_NSEQ; s++) {
+        int nf = (int)nframe[s];
+        if (!(seqs & 1u << s)) continue;
+        if (nf > (int)TAGPU_PEVT_NFRAME) nf = (int)TAGPU_PEVT_NFRAME;
+        for (i = 0; i < nf; i++) {
+            const unsigned r = s * TAGPU_PEVT_NFRAME + (unsigned)i;
+            const unsigned char* g = (const unsigned char*)(size_t)frames[r];
+            const TAGPU_GAFENT* a;
+            TAGPU_GAFGEOM gm;
+            if (!g || !tagpu_gaf_frame_geom(g, &gm)) continue;
+            if (gm.subn) {
+                if (!(s_saidCompound & 1 << s)) {
+                    s_saidCompound |= 1 << s;
+                    flog(s == 0 ? "fx: the flare sequence has a compound frame; the particle "
+                                  "events draw nothing for it" :
+                         s == 1 ? "fx: \"smoke 1\" has a compound frame; the particle events "
+                                  "draw nothing for it" :
+                                  "fx: \"smoke 2\" has a compound frame; the particle events "
+                                  "draw nothing for it");
+                }
+                continue;
             }
-            continue;
+            if (!(a = tagpu_gaf_atlas_get(&s_atlas, g))) continue;
+            s_evtFrame[r].ox = -gm.hotx; s_evtFrame[r].oy = -gm.hoty;
+            s_evtFrame[r].w = gm.w;      s_evtFrame[r].h = gm.h;
+            s_evtFrame[r].u0 = a->u0; s_evtFrame[r].v0 = a->v0;
+            s_evtFrame[r].u1 = a->u1; s_evtFrame[r].v1 = a->v1;
         }
-        if (!(a = tagpu_gaf_atlas_get(&s_atlas, g))) continue;
-        s_evtFrame[i].ox = -gm.hotx; s_evtFrame[i].oy = -gm.hoty;
-        s_evtFrame[i].w = gm.w;      s_evtFrame[i].h = gm.h;
-        s_evtFrame[i].u0 = a->u0; s_evtFrame[i].v0 = a->v0;
-        s_evtFrame[i].u1 = a->u1; s_evtFrame[i].v1 = a->v1;
     }
 }
 
@@ -1318,7 +1389,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         s_rv.clipR = v->packet->vp_addr[2]; s_rv.clipB = v->packet->vp_addr[3];
     }
     s_encCur = key_after(0); s_under = 0; s_mute = 0;
-    tagpu_fx_set_events(NULL, 0, 0, NULL, 0, 0);
+    tagpu_fx_set_events(NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0);
     if (sfxOn) tagpu_sfx_gather(v, 0, 6);
     if (fxOn) gather_fx(v);
     if (sfxOn) { tagpu_sfx_gather(v, 7, 9); tagpu_sfx_frame_done(v); }
@@ -1396,6 +1467,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.fog = (v->fogMode & 1) | 2 | ((v->fogMode & 2) << 1);
     s_pub.pevt = s_evt; s_pub.npevt = s_nEvt; s_pub.pevtTick = s_evtTick;
     s_pub.pevtFrame = s_evtFrame;
+    s_pub.pevtWind = s_evtWind;
     s_pub.eyeX = v->eyeX; s_pub.eyeY = v->eyeY;
     memcpy(s_pub.encLayer, v->encLayer, sizeof s_pub.encLayer);
     s_pub.scafP[0] = (float)v->vpL; s_pub.scafP[1] = (float)v->vpT;

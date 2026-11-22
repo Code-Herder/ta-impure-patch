@@ -1361,8 +1361,8 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         off += (size_t)h.n[b] * VST * sizeof(float);
     }
 
-    /* THE PARTICLE EVENTS, after the sprites' frame table (TAGPU_PEVT_NFRAME rows: NVS reads an
-       event at word 8 * TAGPU_PEVT_NFRAME + 20 e), the layers the engine draws before its
+    /* THE PARTICLE EVENTS, after the sprites' frame table and the wind's rows (NVS reads an event
+       at word TAGPU_PEVT_EVT_AT + 20 e: tagpu_pevt.h), the layers the engine draws before its
        projectiles (0..6) first and the rest after them, so `record` draws each run at its own
        place in the bucket order with one pipeline: NVS finds its event by gl_VertexIndex, which
        counts from the run's firstVertex. */
@@ -1370,12 +1370,21 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     if (h.npevt > 0) {
         TAGPU_PEVT* o;
         int i, pass;
-        if (!slot_evts(d, s, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME +
+        const size_t frameB = sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME;
+        uint32_t* wind;
+        if (!slot_evts(d, s, (VkDeviceSize)TAGPU_PEVT_EVT_AT * 4u +
                              (VkDeviceSize)h.npevt * sizeof(TAGPU_PEVT)))
             goto refuse;
-        if (h.pevtFrame) memcpy(s->emap, h.pevtFrame, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
-        else memset(s->emap, 0, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
-        o = (TAGPU_PEVT*)(void*)(s->emap + sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
+        if (h.pevtFrame) memcpy(s->emap, h.pevtFrame, frameB);
+        else memset(s->emap, 0, frameB);
+        /* the header and this frame's rows; a row past them is never read (NVS tests t - base
+           against n) */
+        wind = (uint32_t*)(void*)(s->emap + (size_t)TAGPU_PEVT_WIND_AT * 4u);
+        if (h.pevtWind && h.pevtWind[1] <= TAGPU_PEVT_WIND)
+            memcpy(wind, h.pevtWind, (4u + 4u * (size_t)h.pevtWind[1]) * 4u);
+        else
+            memset(wind, 0, 16u);
+        o = (TAGPU_PEVT*)(void*)(s->emap + (size_t)TAGPU_PEVT_EVT_AT * 4u);
         for (pass = 0; pass < 2; pass++)
             for (i = 0; i < h.npevt; i++) {
                 const int under = TAGPU_PEVT_LAYER(h.pevt[i].flags) <= 6u;

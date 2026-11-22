@@ -162,6 +162,12 @@
    "steps": [[1150, "run", ["tools/replay/particlecheck_check.py", "{gamedir}", "--classes", "wake"]]],
    "end": 1200
   },
+  "particle-check-smoke": {
+   "load": "replay-smoke.json",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_particlecheck.on"], "files": ["tagpu_particlecheck.on"]},
+   "steps": [[1400, "run", ["tools/replay/particlecheck_check.py", "{gamedir}", "--classes", "smoke2,smoke1"]]],
+   "end": 1450
+  },
   "stock-fp-verify": {
    "load": "replay-battle-load.json",
    "dll": "stock",

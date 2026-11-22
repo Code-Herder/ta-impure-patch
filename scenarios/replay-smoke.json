@@ -1,0 +1,49 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The particle-check-smoke test group's game (tools/replay/fixtures.json): both smoke classes under the particle oracle. Two Continents has six vents whose endless feature smoke (Smoke1, layer 4) starts at the map's load; one stands at (3288, 1032), in the camera's view. A battle south of it makes Smoke2 of every kind: the explosions' and the corpses' smoke, rocket trails, shot trails, a burning forest's smoke (layer 5) and, from the units left badly damaged on hold, the damaged units' grey and black smoke (EMIT_SFX 0x101, 0x102). Everything is in sight (permanent LOS), so every COB emission is made.",
+ "seed": 20261122,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "los": "permanent",
+  "mapping": true,
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "groups": [
+  {
+   "id": "arm_wave",
+   "owner": 0,
+   "at": [2780, 1330],
+   "pattern": {"kind": "grid", "cols": 8, "spacing": 40, "jitter": 6},
+   "composition": [{"type": "ARMROCK", "count": 12}, {"type": "ARMHAM", "count": 12}, {"type": "ARMSTUMP", "count": 8}],
+   "facing": 90,
+   "orders": [{"cmd": "attack", "to": [3780, 1330]}]
+  },
+  {
+   "id": "core_wave",
+   "owner": 1,
+   "at": [3780, 1330],
+   "pattern": {"kind": "grid", "cols": 8, "spacing": 40, "jitter": 6},
+   "composition": [{"type": "CORSTORM", "count": 12}, {"type": "CORTHUD", "count": 12}, {"type": "CORRAID", "count": 8}],
+   "facing": 270,
+   "orders": [{"cmd": "attack", "to": [2780, 1330]}]
+  }
+ ],
+ "units": [
+  {"id": "hurt1", "type": "ARMSOLAR", "owner": 0, "pos": [3160, 1110], "health": 12},
+  {"id": "hurt2", "type": "ARMSOLAR", "owner": 0, "pos": [3420, 1110], "health": 30},
+  {"id": "hurt3", "type": "ARMSTUMP", "owner": 0, "pos": [3040, 1060], "facing": 90, "health": 12, "stance": "hold"},
+  {"id": "hurt4", "type": "ARMROCK", "owner": 0, "pos": [3540, 1060], "facing": 90, "health": 12, "stance": "hold"},
+  {"id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4600, 600]}
+ ],
+ "camera": {"at": [3290, 1180]}
+}

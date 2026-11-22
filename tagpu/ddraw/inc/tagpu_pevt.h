@@ -3,9 +3,10 @@
 /* tagpu_pevt -- a particle EMITTER EVENT, and the closed form a renderer draws it by
    (gpu-particles-plan.md, *The emitter event*; effects.md §7.8).
 
-   On a Vulkan launch four particle classes are drawn from events: the nano spray (emitters
-   0x4720D0, 0x472200), fire (0x472330, 0x472AB0), the teleport flare (0x471FD0) and the wake
-   with the submarines' bubbles (0x472430, 0x472530). The game
+   On a Vulkan launch every particle class is drawn from events: the nano spray (emitters
+   0x4720D0, 0x472200), fire (0x472330, 0x472AB0), the teleport flare (0x471FD0), the wake
+   with the submarines' bubbles (0x472430, 0x472530), Smoke2 (0x472630, 0x472810, 0x4728F0,
+   0x4729D0) and Smoke1 (0x472C50). The game
    thread records one event per emission (tagpu_patches.c, *The particles as events*), the frame
    packet carries the live ones, and the GPU computes every particle from its event and the
    packet's GameTime (tagpu_fx.c NVS). The engine's object is a pure function of the event, so
@@ -75,7 +76,46 @@
    rand * 7 / 0x8000 - 3 to the x, altitude and y high words (0x4749D9..0x474A4B). It moves at every
    update of its object from the next one on (dot 0 from the update of T, T + 1 when LATE): pos +=
    step, counter = (counter + 1) % period, and at counter 0 the colour one step on, 0x61..0x67
-   wrapping (0x474580); its end tick is its birth + 6 * period (0x4749AE..0x4749C3). */
+   wrapping (0x474580); its end tick is its birth + 6 * period (0x4749AE..0x4749C3).
+
+   A SMOKE EVENT (Smoke2 0x4FD618, init 0x474D50(pos, fcap, interval, countdown, life, seqsel);
+   Smoke1 0x4FD638, init 0x475150(pos, interval, countdown, life)) is an object that spawns puffs
+   over time, one at its emission and one every `ival` walks after (tagpu_patches.c computes the
+   timing words when the walk after the emission runs, THE SMOKE'S TIMING):
+     at      the init's point, 16.16 (0x474D5D..0x474D7C, 0x47515D..0x475178);
+     ival    the spawn interval +0x1C, 1 or more (the spawn divides by it, 0x474E10);
+     first   the walk of puff 0's first update: the first particle walk after the emission;
+     again   the walk that spawns puff 1: the first walk from `first` on at or past +8, which the
+             emission's spawn set to T + ival (0x474F71), as the again tests read it (Smoke2's
+             0x475440 `+8 <= T` unsigned, Smoke1's 0x4750F0 likewise);
+     npuff   the puffs the object makes: Smoke2's again also wants +8 <= +4 = T + life signed
+             (0x475446), so puff 1 needs T + ival <= T + life and puff j >= 2 needs again + (j - 1)
+             * ival <= T + life; Smoke1's has no end test (TAGPU_PEVT_ENDLESS);
+     reset   the countdown's reset +0x20: the init's countdown, or 7 when it is 0 (0x474DC7);
+     ncap    +0x24, the frame cap: the sequence's frame count - 1, capped by Smoke2's fcap when that
+             is nonzero and smaller (0x474DA1..0x474DB8);
+     seqsel  1: "smoke 2" main+0x147D3, else "smoke 1" main+0x147CF (0x474D7F..0x474DA0; Smoke1
+             always "smoke 1");
+     lmax    the most updates a puff can live, from reset and ncap: what the game thread's wind
+             table must reach back over;
+     pbase   the first puff one copy of the event draws: the frame packet's copy carries an event
+             once for every ten puffs that can be alive (tagpu_pevt_copy);
+     endT    Smoke2's +4, T + life.
+   Puff j (its spawn ordinal, the object's count of the puffs it began, which is the keyed rule's
+   particle: tagpu_prand.h) is spawned at the emission (j = 0) or by the update of again + (j-1) *
+   ival, AFTER that update's moves (0x475422), so it is first moved at the walk after its spawn.
+   It starts at `at` with j's low bits in its position's low bits (x bits 0..2, y bits 0..2, alt
+   bits 0..1 of Smoke2 and 0..3 of Smoke1: tagpu_patches.c THE PARTICLES' OWN RANDOM RULE), its
+   frame count nframes = 2 + draw 0 * (ncap - 2) / 0x8000, frame 0, countdown = reset. Each update
+   adds wind_x << 3 to x, the rise << 2 (Smoke2) or << 4 (Smoke1) to alt and wind_y << 3 to y, the
+   values main+0x37ECC, main+0x14263 and main+0x37ED4 hold at that walk (0x475340, 0x475600), and
+   counts the countdown down; at 0 the frame advances to f and the countdown is h + draw f * h /
+   0x8000, h = reset / 2 toward zero (0x4753A6..0x4753D0); the puff is removed by the update that
+   leaves its frame at nframes or more (0x4753D3). So after u updates a puff is at its start plus
+   the wind's sums over the walks of those updates, which the closed form takes as the difference
+   of two prefix sums (TAGPU_PEVT_WIND below). Its draws are those of its own ordinal j while the
+   object has spawned fewer than 256 (Smoke2) or 1024 (Smoke1) puffs since it, which the game
+   thread holds every smoke event to (an emission it cannot hold keeps its engine object). */
 #include <stdint.h>
 #include "tagpu_prand.h"
 
@@ -90,9 +130,14 @@
    oracle, the real object) of a class sharing its layer with the engine's objects. An event
    without it stands for an object nobody made, and the emitter's cap is applied to its events. */
 #define TAGPU_PEVT_PROXY     0x40u
+/* A smoke event whose timing words wait for the next particle walk (tagpu_patches.c) */
+#define TAGPU_PEVT_PEND      0x80u
 enum { TAGPU_PEVT_C_NANO = 0, TAGPU_PEVT_C_FIRE = 1, TAGPU_PEVT_C_FLARE = 2,
-       TAGPU_PEVT_C_WAKE = 3 };
-#define TAGPU_PEVT_NCLASS    4u
+       TAGPU_PEVT_C_WAKE = 3, TAGPU_PEVT_C_SMOKE2 = 4, TAGPU_PEVT_C_SMOKE1 = 5 };
+#define TAGPU_PEVT_NCLASS    6u
+#define TAGPU_PEVT_SMOKE(c)  ((c) == TAGPU_PEVT_C_SMOKE2 || (c) == TAGPU_PEVT_C_SMOKE1)
+/* a Smoke1 object's puff count: it re-puffs for the rest of the level */
+#define TAGPU_PEVT_ENDLESS   0x7FFFFFFF
 
 #define TAGPU_PEVT_NPART     10u
 #define TAGPU_PEVT_WORDS     20u     /* the GLSL reads the record as 20 uints */
@@ -120,16 +165,34 @@ typedef struct TAGPU_PEVT {
             int32_t  dir;               /* wake                               */
             uint32_t gone[2];           /* wake                               */
         };
+        struct {                        /* TAGPU_PEVT_C_SMOKE2, _C_SMOKE1      */
+            int32_t  at[3];
+            int32_t  ival;
+            uint32_t first, again;
+            int32_t  npuff, reset, ncap, seqsel, lmax;
+            uint32_t pbase, endT;
+        };
     };
 } TAGPU_PEVT;
 
 typedef char tagpu_pevt_size[(sizeof(TAGPU_PEVT) == TAGPU_PEVT_WORDS * 4u) ? 1 : -1];
 
-/* THE SPRITE'S FRAMES, the flare sequence *(main+0x147F3) both sprite classes draw from: the
-   render thread resolves frame i of it into the atlas once a frame and hands the GPU this table
-   ahead of the events, 8 words a frame. w == 0: the frame is not drawn this frame (beyond the
-   sequence, not painted yet, a compound frame, the alpha blit not built). */
+/* THE SPRITES' FRAMES: sequence s's frame i, s = 0 the flare sequence *(main+0x147F3) fire and
+   the flare draw from, 1 "smoke 1" *(main+0x147CF), 2 "smoke 2" *(main+0x147D3). The render thread
+   resolves them into the atlas once a frame and hands the GPU this table ahead of the events, 8
+   words a frame, row s * TAGPU_PEVT_NFRAME + i. w == 0: the frame is not drawn this frame (beyond
+   the sequence, not painted yet, a compound frame, the alpha blit not built). */
 #define TAGPU_PEVT_NFRAME    64u
+#define TAGPU_PEVT_NSEQ      3u
+/* THE WIND'S PREFIX SUMS, per particle walk: row t holds the sums of wind_x, the rise and wind_y
+   over the walks up to and including t, wrapping int32, from a base the game thread picks; a puff
+   first moved at walk F has moved, after the walk of P, by row P - row (F - 1). The game thread
+   keeps the last TAGPU_PEVT_WIND walks; a smoke event whose puffs could outlive that is not made.
+   The frame packet carries the rows its smoke events reach back to, the GPU table after the
+   frames: a header {base tick, rows} and then 4 words a row (x, rise, y, 0). */
+#define TAGPU_PEVT_WIND      1024u
+#define TAGPU_PEVT_WIND_AT   (TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME * 8u)
+#define TAGPU_PEVT_EVT_AT    (TAGPU_PEVT_WIND_AT + 4u + 4u * TAGPU_PEVT_WIND)
 typedef struct TAGPU_PEVT_FRAME {
     int32_t ox, oy;                     /* -hotx, -hoty: the quad's corner from the point   */
     int32_t w, h;
@@ -373,6 +436,123 @@ static inline uint32_t tagpu_pevt_wake_finish(const TAGPU_PEVT* e)
     if (e->nsub < 1) return (e->flags & TAGPU_PEVT_LATE) ? e->t0 + 1u : e->t0;
     if (e->nsub > 1 && (int32_t)(e->gone[1] - D) > 0) D = e->gone[1];
     return D + 1u;
+}
+
+/* the frame table holds TAGPU_PEVT_NFRAME frames of a sequence: a puff's frame stays under ncap
+   - 1 (nframes <= ncap - 1 for ncap >= 3), so an event's ncap is at most this */
+#define TAGPU_PEVT_SMOKE_NCAP  ((int32_t)TAGPU_PEVT_NFRAME)
+
+/* one puff record of the engine's smoke object (stride 0x20): seq* @0, pos @4, nframes @0x10,
+   frame @0x14, reset @0x18, countdown @0x1C */
+typedef struct TAGPU_PEVT_PUFF {
+    int32_t pos[3];
+    int32_t nframes, frame, reset, countdown;
+} TAGPU_PEVT_PUFF;
+
+/* puff j's frame count: 2 + draw 0 * (ncap - 2) / 0x8000, the 64-bit imul and _alldiv toward
+   zero (0x474F1C..0x474F3A, 0x4752D4..0x4752EF) */
+static inline int32_t tagpu_pevt_puff_nframes(const TAGPU_PEVT* e, uint32_t j)
+{
+    return tagpu_pevt_coord(2, e->ncap - 2, tagpu_prand(e->seed, j, 0));
+}
+
+/* Puff j after u updates (u >= 0): 1 and its frame and countdown while it is in its object, 0
+   once an update has removed it. Frame f lasts from the update `start` for `len` updates: frame 0
+   the reset, frame f h + draw f * h / 0x8000 (the countdown set at the advance to f); the update
+   that advances it to nframes removes it, and with nframes 0 or less the first update does. At
+   most nframes frames, each a draw: bounded by ncap. */
+static inline int tagpu_pevt_puff_frame(const TAGPU_PEVT* e, uint32_t j, int32_t u,
+                                        int32_t* frame, int32_t* count)
+{
+    const int32_t nf = tagpu_pevt_puff_nframes(e, j), h = e->reset / 2;
+    int32_t f = 0, start = 0, len = e->reset;
+    if (u > 0 && nf <= 0) return 0;
+    while (u >= start + len) {
+        if (++f >= nf) return 0;
+        start += len;
+        len = tagpu_pevt_coord(h, h, tagpu_prand(e->seed, j, (unsigned)f));
+    }
+    *frame = f;
+    *count = len - (u - start);
+    return 1;
+}
+
+/* the update that removes puff j: its count of updates in the object, 1 or more */
+static inline int32_t tagpu_pevt_puff_life(const TAGPU_PEVT* e, uint32_t j)
+{
+    const int32_t nf = tagpu_pevt_puff_nframes(e, j), h = e->reset / 2;
+    int32_t f = 0, start = 0, len = e->reset;
+    if (nf <= 0) return 1;
+    while (++f < nf) {
+        start += len;
+        len = tagpu_pevt_coord(h, h, tagpu_prand(e->seed, j, (unsigned)f));
+    }
+    return start + len;
+}
+
+/* the puffs spawned by the walk of P: puff 0 and those of the walks again, again + ival, ... up
+   to P, at most npuff */
+static inline uint32_t tagpu_pevt_puffs(const TAGPU_PEVT* e, uint32_t P)
+{
+    const int32_t d = (int32_t)(P - e->again);
+    uint32_t n = 1u;
+    if (e->npuff > 1 && d >= 0) n += (uint32_t)(d / e->ival) + 1u;
+    return n < (uint32_t)e->npuff ? n : (uint32_t)e->npuff;
+}
+
+/* the walk of puff j's first update */
+static inline uint32_t tagpu_pevt_puff_first(const TAGPU_PEVT* e, uint32_t j)
+{
+    return j ? e->again + (j - 1u) * (uint32_t)e->ival + 1u : e->first;
+}
+
+/* the updates puff j has had after the walk of P, or -1 when it is not spawned by then */
+static inline int32_t tagpu_pevt_puff_u(const TAGPU_PEVT* e, uint32_t j, uint32_t P)
+{
+    int32_t u;
+    if (j >= tagpu_pevt_puffs(e, P)) return -1;
+    u = (int32_t)(P - tagpu_pevt_puff_first(e, j)) + 1;
+    return u < 0 ? 0 : u;
+}
+
+/* Puff j after u updates, `d` the wind's sums over the walks of those updates (x, rise, y: the
+   prefix sums' difference, row F + u - 1 less row F - 1): 1 and *o while it is in its object. Its
+   start carries j's low bits (the alt bits are the rise's shift: 2 Smoke2, 4 Smoke1). */
+static inline int tagpu_pevt_puff_after(const TAGPU_PEVT* e, uint32_t j, int32_t u,
+                                        const int32_t* d, TAGPU_PEVT_PUFF* o)
+{
+    const unsigned rise = TAGPU_PEVT_CLASS(e->flags) == TAGPU_PEVT_C_SMOKE1 ? 4u : 2u;
+    const uint32_t am = (1u << rise) - 1u;
+    if (!tagpu_pevt_puff_frame(e, j, u, &o->frame, &o->countdown)) return 0;
+    o->pos[0] = (int32_t)((((uint32_t)e->at[0] & ~7u) | (j & 7u)) + ((uint32_t)d[0] << 3));
+    o->pos[1] = (int32_t)((((uint32_t)e->at[1] & ~am) | (j >> 6 & am)) + ((uint32_t)d[1] << rise));
+    o->pos[2] = (int32_t)((((uint32_t)e->at[2] & ~7u) | (j >> 3 & 7u)) + ((uint32_t)d[2] << 3));
+    o->nframes = tagpu_pevt_puff_nframes(e, j);
+    o->reset = e->reset;
+    return 1;
+}
+
+/* D, the walk that destroys a Smoke2 event's object: slot 3 0x474F80 finds its puffs all gone
+   (puff j's last update is the walk first(j) + life(j) - 1) AND +4 = endT before the walk
+   (`cmp +4, T; jae`), so the later of the walk after the last puff's removal and endT + 1 */
+static inline uint32_t tagpu_pevt_smoke_finish(const TAGPU_PEVT* e)
+{
+    uint32_t D = e->endT + 1u, j;
+    for (j = 0; j < (uint32_t)e->npuff; j++) {
+        const uint32_t X = tagpu_pevt_puff_first(e, j) + (uint32_t)tagpu_pevt_puff_life(e, j);
+        if ((int32_t)(X - D) > 0) D = X;
+    }
+    return D;
+}
+
+/* the most updates a puff of these words can live: nframes - 1 countdowns of the most a draw
+   gives, after the reset */
+static inline int32_t tagpu_pevt_smoke_lmax(const TAGPU_PEVT* e)
+{
+    const int32_t h = e->reset / 2, c = tagpu_pevt_coord(h, h, 0x7FFF);
+    int32_t nf = tagpu_pevt_coord(2, e->ncap - 2, 0x7FFF), n0 = tagpu_pevt_coord(2, e->ncap - 2, 0);
+    if (n0 > nf) nf = n0;
+    return nf <= 0 ? 1 : e->reset + (nf - 1) * c;
 }
 
 #endif

@@ -1412,13 +1412,17 @@ typedef struct TAGPU_PACKET {
        it (TAGPU_PK_TRUNC_PEVT). The particles are drawn at `tick`, the GameTime whose walk the
        engine's objects would have had last. Those classes' engine objects then hold no particle,
        so the particle table above holds none of them -- but under the oracle lever, which makes
-       them in full. `pevt_frame` is frame i of the flare sequence both sprite classes draw from,
-       resolved here for the first `pevt_nframe` of its frames, opaque handles like
-       `shadow_frame`. */
+       them in full. `pevt_frame` row s * TAGPU_PEVT_NFRAME + i is frame i of sequence s (the
+       flare sequence fire and the flare draw from, "smoke 1", "smoke 2": tagpu_pevt.h), resolved
+       here for the first `pevt_nframe[s]` of its frames, opaque handles like `shadow_frame`.
+       `pwind` the wind's prefix sums from tick `pwind_base` on that the smoke events reach back
+       to, 4 words a row (TAGPU_PEVT_WIND). */
     uint32_t n_pevt,   off_pevt;      /* TAGPU_PEVT                              */
     uint32_t pevt_on;                 /* 1: those classes are drawn from events  */
-    uint32_t pevt_nframe;             /* <= TAGPU_PEVT_NFRAME                    */
-    uint32_t pevt_frame[TAGPU_PEVT_NFRAME];
+    uint32_t pevt_nframe[TAGPU_PEVT_NSEQ];   /* each <= TAGPU_PEVT_NFRAME        */
+    uint32_t pevt_frame[TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME];
+    uint32_t n_pwind,  off_pwind;     /* int32[4] rows, <= TAGPU_PEVT_WIND       */
+    uint32_t pwind_base;
     uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
                                          a consumer walks 0..6, then the two
                                          effect passes, then 7..9 as the engine
@@ -1673,6 +1677,8 @@ static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
 { return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
 static __inline const TAGPU_PEVT* tagpu_pk_pevt(const TAGPU_PACKET* p)
 { return p->n_pevt ? (const TAGPU_PEVT*)(const void*)((const unsigned char*)p + p->off_pevt) : (const TAGPU_PEVT*)0; }
+static __inline const int32_t* tagpu_pk_pwind(const TAGPU_PACKET* p)
+{ return p->n_pwind ? (const int32_t*)(const void*)((const unsigned char*)p + p->off_pwind) : (const int32_t*)0; }
 /* the queued builds the order pass is showing site rects for, or NULL */
 static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
 { return p->n_builds ? (const TAGPU_PK_BUILD*)(const void*)((const unsigned char*)p + p->off_builds) : (const TAGPU_PK_BUILD*)0; }

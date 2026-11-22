@@ -147,10 +147,13 @@ int  tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
 int  tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under);
 void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing */
 /* this frame's particle events, the packet's table (tagpu_sfx.c): drawn by the Vulkan pass at
-   the packet's GameTime `tick`; `n` 0 draws none. `frames` the packet's flare-sequence frames
-   (`nframe` of them), `classes` bit 0 nano and bit 1 the sprites (fire, flare) to draw. */
+   the packet's GameTime `tick`; `n` 0 draws none. `frames` the packet's sprite frames, sequence s
+   at row s * TAGPU_PEVT_NFRAME (`nframe[s]` of them); `wind` the wind's prefix-sum rows from tick
+   `wbase` on (`nwind` of them, 4 words a row); `classes` bit 0 nano, bit 1 fire and the flare,
+   bit 2 the wake and the bubbles, bit 3 smoke to draw. */
 void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick, const unsigned* frames,
-                         int nframe, unsigned classes);
+                         const unsigned* nframe, const int32_t* wind, int nwind, unsigned wbase,
+                         unsigned classes);
 unsigned tagpu_fx_caps(void);                   /* the PACKET's copy of TAProgram+0xF0:
                                                    bit5 ALP built, bit7 LHT built      */
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */
@@ -315,9 +318,12 @@ typedef struct TAGPU_FXHAND {
        copy of the packet's table, made while the gather held the packet, drawn by the NVS/NFS
        program at `pevtTick`, the packet's GameTime, from the eye the gather projected with and
        each layer's depth key. NULL / 0 when the frame draws none. `pevtFrame`: the sprite
-       classes' frame table, TAGPU_PEVT_NFRAME rows put through this pass's atlas. */
+       classes' frame table, TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME rows put through this pass's
+       atlas; `pevtWind`: the wind's rows, a header {base, n} and TAGPU_PEVT_WIND rows of 4
+       words, of which n are this frame's (tagpu_pevt.h). */
     const TAGPU_PEVT* pevt;
     const TAGPU_PEVT_FRAME* pevtFrame;
+    const uint32_t* pevtWind;
     int      npevt;
     unsigned pevtTick;
     int      eyeX, eyeY;
