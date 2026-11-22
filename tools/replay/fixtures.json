@@ -149,6 +149,13 @@
              [850, "run", ["tools/replay/fpverify_check.py", "{gamedir}"]]],
    "end": 900
   },
+  "particle-check": {
+   "load": "replay-battle-load.json",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_particlecheck.on"], "files": ["tagpu_particlecheck.on"]},
+   "steps": [[1, "apply", "replay-battle-units.json"],
+             [850, "run", ["tools/replay/particlecheck_check.py", "{gamedir}", "--classes", "nano,fire"]]],
+   "end": 900
+  },
   "stock-fp-verify": {
    "load": "replay-battle-load.json",
    "dll": "stock",

@@ -11634,7 +11634,7 @@ void tagpu_seed_run(unsigned int seed)
                now ? "now" : "on the next step", wind, next);
 }
 
-SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport");
+SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport particle-check");
 
 /* THE PARTICLES' OWN RANDOM RULE [DISASSEMBLED]. The particle code draws the C runtime's rand
    0x4E4870 at twenty sites, and that rand keeps one stream per thread (*A harness's random
@@ -12063,10 +12063,14 @@ static int __cdecl pevt_pre(const unsigned* regs)
 /* THE PROXY, the engine object a sprite event keeps in its layer (THE PARTICLES AS EVENTS above):
    +4 D, the walk that destroys it, +8 its row's serial; +0xC the layer byte and +0x10..+0x18 the
    empty sub-vector, as the emitter left them. Its seven slots, thiscall as the engine calls them:
-   destroy(flags) ret 4, update, draw(ctx) ret 4, empty?, spawn, again?, init. Only the walker
-   (slots 3, 1), the emitters' trims, the level's teardown 0x471DE0 and tagpu_effects_clear (slot 0)
-   and the draw walker 0x471F90 (slot 2, not run on a Vulkan launch) call a layer object; spawn,
-   again and init are called by the class's own update and emitter, which a proxy never reaches. */
+   destroy(flags) ret 4, update, draw(ctx) ret 4, empty?, spawn, again?, init. A layer object is
+   called by the walker (slot 3, then slot 1 while not empty, slot 0 once empty: at D for a proxy),
+   the emitters' trims, the level's teardown 0x471DE0 and tagpu_effects_clear (slot 0), and the
+   draw walker 0x471F90 (slot 2, not run on a Vulkan launch). So only slots 0, 1 and 3 are the
+   proxy's own; the rest are the class's own entries, copied from its vtable at install: its draw
+   (0x4730F0, 0x472E30) walks the sub-vector +0x10..+0x14, empty here, and draws nothing; spawn,
+   again and init are called only by the class's update, which the proxy's replaces, and by the
+   emitter before the init makes the object a proxy. */
 static void* __thiscall pevt_proxy_destroy(void* self, int flags)
 {
     typedef void (__thiscall* PFN_PoolPush)(void* pool, void* object);
@@ -12076,10 +12080,7 @@ static void* __thiscall pevt_proxy_destroy(void* self, int flags)
     memcpy(&D, o + 4, 4);
     memcpy(&serial, o + 8, 4);
     r = pevt_find(serial);
-    if (r && r->gone) {
-        if ((int32_t)(prand_gametime() - D) < 0) s_pevt.trimmed++;
-        pevt_drop(r);
-    }
+    if (r && r->gone) pevt_drop(r);
     /* what the classes' deleting destructors 0x4716A0 / 0x471430 do to an object whose
        sub-vector is empty: the vector words zeroed, the base vtable, and with flag 1 the
        object back to the pool by 0x470ED0 */
@@ -12089,34 +12090,24 @@ static void* __thiscall pevt_proxy_destroy(void* self, int flags)
     return self;
 }
 static void __thiscall pevt_proxy_update(void* self) { (void)self; }
-static void __thiscall pevt_proxy_draw(void* self, void* ctx) { (void)self; (void)ctx; }
 static int __thiscall pevt_proxy_empty(void* self)
 {
     uint32_t D;
     memcpy(&D, (const unsigned char*)self + 4, 4);
     return (int32_t)(prand_gametime() - D) >= 0;
 }
-static int __thiscall pevt_proxy_again(void* self) { (void)self; return 0; }
-static void __thiscall pevt_proxy_init_fire(void* self, void* a, void* b, int c, int d)
+static uint32_t s_proxyFire[7];
+SIM_VAR(s_proxyFire, SIM_INSTALL);
+static uint32_t s_proxyFlare[7];
+SIM_VAR(s_proxyFlare, SIM_INSTALL);
+/* the class's vtable with the proxy's destroy, update and empty in slots 0, 1, 3 */
+static void pevt_proxy_vtable(uint32_t* vt, uint32_t classVt)
 {
-    (void)self; (void)a; (void)b; (void)c; (void)d;
+    memcpy(vt, (const void*)(size_t)classVt, 7u * sizeof *vt);
+    vt[0] = (uint32_t)(size_t)pevt_proxy_destroy;
+    vt[1] = (uint32_t)(size_t)pevt_proxy_update;
+    vt[3] = (uint32_t)(size_t)pevt_proxy_empty;
 }
-static void __thiscall pevt_proxy_init_flare(void* self, void* a, void* b, int c)
-{
-    (void)self; (void)a; (void)b; (void)c;
-}
-static const uint32_t s_proxyFire[7] = {
-    (uint32_t)(size_t)pevt_proxy_destroy, (uint32_t)(size_t)pevt_proxy_update,
-    (uint32_t)(size_t)pevt_proxy_draw, (uint32_t)(size_t)pevt_proxy_empty,
-    (uint32_t)(size_t)pevt_proxy_update, (uint32_t)(size_t)pevt_proxy_again,
-    (uint32_t)(size_t)pevt_proxy_init_fire,
-};
-static const uint32_t s_proxyFlare[7] = {
-    (uint32_t)(size_t)pevt_proxy_destroy, (uint32_t)(size_t)pevt_proxy_update,
-    (uint32_t)(size_t)pevt_proxy_draw, (uint32_t)(size_t)pevt_proxy_empty,
-    (uint32_t)(size_t)pevt_proxy_update, (uint32_t)(size_t)pevt_proxy_again,
-    (uint32_t)(size_t)pevt_proxy_init_flare,
-};
 
 /* the flare sequence's frame count - 1, the modulus both classes' spawns store (0x4B7F60 - 1:
    the u16 at the sequence's start, which the spawn this replaces reads unconditionally);
@@ -12598,8 +12589,9 @@ static void __cdecl prand_level_begin(void)
                    s_prand.outside);
     if (s_prand.levels && pevt_live())
         tagpu_logf("particles: the last level's events: nano %u, fire %u, flare %u emitted; %u "
-                   "trimmed by the layer cap, %u refused (a layer outside 0..9), %u dropped (the "
-                   "list full), %u sprite emissions kept their engine object", s_pevt.emitted[0],
+                   "nano trimmed by the layer cap (the engine trims the sprite classes' proxies), "
+                   "%u refused (a layer outside 0..9), %u dropped (the list full), %u sprite "
+                   "emissions kept their engine object", s_pevt.emitted[0],
                    s_pevt.emitted[1], s_pevt.emitted[2], s_pevt.trimmed, s_pevt.refused,
                    s_pevt.dropped, s_pevt.kept);
     if (s_prand.levels && s_pevtCheck && pevt_live())
@@ -12746,6 +12738,8 @@ static int fix_particle_rand(void)
                      "particles: the COB fire emitter's call of its init, read by the proxy");
         lim_same_run(0x00472B7Fu, sizeof pieceE, pieceE,
                      "particles: the pieces' fire emitter's call of its init, read by the proxy");
+        pevt_proxy_vtable(s_proxyFire, PEVT_VT_FIRE);
+        pevt_proxy_vtable(s_proxyFlare, PEVT_VT_FLARE);
         /* the init at its entry: the event and the proxy first (pevt_fire, pevt_flare); 1 returns
            past the init with its own `ret`, 0 runs it from its stolen bytes */
         for (i = 0; i < 2; i++) {

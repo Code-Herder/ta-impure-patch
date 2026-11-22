@@ -679,8 +679,10 @@ The pool's alloc and the emitter run as in stock; the class's init — fire's `0
 `0x4736E0`, reached only through slot 6 by those three emitters straight after the alloc — is hooked
 at its entry (`pevt_fire`, `pevt_flare`): it records the event from the init's own arguments, the
 object's seed (`prand_alloc` has just filed it by pool slot) and the layer byte the emitter stored
-at `+0xC`, and turns the object into a **proxy**: Impure's vtable, `+4` D (below), `+8` its event's
-serial, no sub-vector. The emitter then trims and appends the proxy where the real object would go;
+at `+0xC`, and turns the object into a **proxy**: a vtable that is the class's own with Impure's destroy,
+update and empty in slots 0, 1 and 3 (the class's draw walks an empty sub-vector and draws nothing;
+its spawn, again and init are called only by its update and its emitter, before the proxy exists),
+`+4` D (below), `+8` its event's serial, no sub-vector. The emitter then trims and appends the proxy where the real object would go;
 the walker calls its slot 3, which answers "empty" from the walk of D on, so it is destroyed at the
 walk that would destroy the real object; its slot 0 (the trim's, the teardown's, the walker's)
 removes its event and does what the classes' destructors do to an empty object, the object back to
@@ -713,7 +715,7 @@ tagpu_prand's draws 0..2 and 3..5 against the two boxes (`base + r·extent / 0x8
 product toward zero). *Fire and the flare* (`tagpu_pevt_sprite_at`; the engine map's *Fire and the
 teleport flare*): fire's particle k, k = 0 … life, is born by the update of T + k, the flare's by
 that of T + 10k while 10k ≤ life and the step count is 9 or more (with fewer, the walk of T + 10
-finds the object empty first: the scout's "fewer than 10" was one off); each is at `from + u·step`
+finds the object empty first); each is at `from + u·step`
 after `u` moves, moves from the update after its birth (particle 0 from the update of T), and is
 removed by the first update past its end — T + life for fire, its birth + the step count for the
 flare. Fire's frame is `(u / period) mod (count − 1)`, the flare's `(draw 0 of tagpu_prand(seed, k,
@@ -790,7 +792,7 @@ carried at most 753 events in view, never truncated. Across a live rewind (`nano
 plant building and the commander guarding it; rewind opened at 1 184, sought to 884, forked): 1 783
 ticks checked, 0 differing, 0 missing or extra; at the seek the events and the engine's objects are
 both gone (the paused frame draws neither) and both come back once play resumes. *Fire and the
-flare* (this build): the same battle, GameTime 1 to 2 885: 1 066 702 fire particles (the pieces'
+flare* (`7c4eb930`): the same battle, GameTime 1 to 2 885: 1 066 702 fire particles (the pieces'
 fire, layer 9) and 118 192 278 nano particles compared, 0 differing, 0 missing, extra or trimmed;
 `nano-factory` with eight Atlases built and flying (their `ProcessFlames`, COB `EMIT_SFX` 0, layer
 7), a live rewind opened at 1 786, sought to 1 486 and forked, to GameTime 2 553: 3 139 ticks,
@@ -800,7 +802,7 @@ extra. `tareplay.py run battle teleport --cover`: both test groups pass. Against
 scenarios at zoom 1 (Atlases flying on Two Continents, a teleport on Zombie Kingdom): fire and the
 flare stand where GDI puts them, frame for frame of the sequence; their colour is the restored
 twin's, as the gathered sprites' was, where GDI shows the palette's dithered frame. In the 13 500-unit battle
-(battle13k, 1920×1080, two runs each, the base fd7d5a86 against this build): the game thread's
+(battle13k, 1920×1080, two runs each, the base fd7d5a86 against `7c4eb930`): the game thread's
 `particles` 2.27/1.84 → 1.99/2.10 ms a tick, `publish` 2.55/2.35 → 2.36/2.41; the render thread's
 gather median 4.39/3.78 → 4.76/4.74 ms (the base's two runs differ by 0.6 ms themselves; no work
 the landing adds to the gather is of that size).

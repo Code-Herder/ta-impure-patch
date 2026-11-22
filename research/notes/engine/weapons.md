@@ -475,6 +475,13 @@ slots in order: destroy, update, draw, empty?, spawn, again?, init ([effects](..
   `0x4723A2` and `0x472BBD` (`push ebp`, the life) — the pieces' life in ebp, `rand·3/0x8000 +
   1` (`0x472B5D`, `0x472B64`). Then the layer's cap (`0x472071`, `0x4723D6`, `0x472BF2`: past it the
   front object's slot 0 with 1, the rest shifted down) and the append `0x4732E0`.
+- **Two dead copies of the emitters.** `0x471340` (flare, `ret 0x10`) and `0x4715A0` (COB fire,
+  `ret 0x14`) are the same alloc (`0x47135C`, `0x4715BC`), vtable store (`0x47138B` `0x4FD588`,
+  `0x4715EB` `0x4FD5D8`), init call through slot 6 (`0x4713B2`, `0x471617`), trim and append
+  (`0x471423`, `0x471688`) as `0x471FD0` and `0x472330`, but thiscall (`mov ebp,ecx` at `0x47134D`).
+  No call, jump or stored pointer names either: no `0x471340` or `0x4715A0` operand in a full
+  disassembly of the exe and no little-endian dword of either anywhere in the file (DISASSEMBLED
+  2026-11-22). Impure leaves them alone.
 - **Fire's init `0x4742C0(from, to, period, life)`**, thiscall `ret 0x10`: `0x471D70(this, life)`
   (`0x4742CB`), so `+4` = T + life; `+0x1C` period (`0x4742D8`); `+0x20` from, `+0x2C` to, `+0x38` d = to − from;
   q = the low dword, sign-extended, of `_alldiv 0x4E4440`(2^32, (int64)(life << 16))
