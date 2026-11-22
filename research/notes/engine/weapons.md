@@ -365,8 +365,8 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   kept as {base x, y, z, extent x, y, z}; the spawn follows (`call [vt+0x10]` at `0x473D39`). A
   degenerate box (the forward emitter's point) keeps base = the point and extent 0.
 - **The spawn `0x473D50`**: five particles a call (`[esp+0x18] = 5` at `0x473DA5`, the loop back
-  at `0x474109`); for each, six draws of the CRT `rand 0x4E4870` in the order start x, y, z (box1)
-  and end x, y, z (box2), each `base + rand·extent / 0x8000`, the product 64-bit (`imul`) and the
+  at `0x474109`); for each, six draws of the CRT `rand 0x4E4870` (Impure's keyed rule instead, above: the
+  particle's draws 0 to 5) in the order start x, y, z (box1) and end x, y, z (box2), each `base + rand·extent / 0x8000`, the product 64-bit (`imul`) and the
   division `_alldiv 0x4E4440`, toward zero (`0x473DAD..0x473E54`). The six draws are made whatever
   the extents. Then d = end − start, len = `_ftol` (`0x4E43A0`) of the x87 `fsqrt` of the sum of
   the squares (`0x473E6D..0x473EB1`), and **steps = the high word, as int16, of (len << 16) /
@@ -1853,14 +1853,32 @@ simulation's generator.
   `0x471E97` nulls `main+0x38D77`), and the table is allocated each level at `0x4918B1`: no leak a
   level.
 - **Two inits divide by zero** [DISASSEMBLED 2026-11-22]. The flare's `0x4736E0` divides each
-  axis by its step count, the length / 5 world units, with `idiv` and no guard (`0x47378E`): a
-  teleport shorter than 5 world units faults. The wake's `0x474760` divides 2^32 by twice the
-  length through `_alldiv` (`0x474811`): a wake or bubbles call whose two points are equal faults,
-  as `EMIT_SFX 0x103` from a piece exactly at sea level would.
-- **The emitters draw the C runtime's per-thread `rand`** (eighteen sites, [effects](../effects.html)
-  §7.3–§7.4), whose game-thread stream the meteor shower reads later and whose loader-thread stream
-  the skirmish start positions read: [sim](sim.md), *The two random streams*. Nothing else reads
-  particle state: the pool's 28 references are its own code; its fields `0x51E618..0x51E630` have no
+  axis by its step count, the length / 5 world units, with `idiv` and no guard: `0x473788`
+  (`movsx ecx,word [esp+0x1A]; cdq; idiv ecx`, the x axis, ending at `0x47378E`; `0x473790` stores
+  the count), then
+  `0x473799` and `0x4737A2` for the other two, the spawn's call at `0x4737AB` and the epilogue
+  `0x4737AE` (`pop edi; pop esi; pop ebx; ret 0xC`): a teleport shorter than 5 world units faults.
+  The wake's `0x474760` divides 2^32 by twice the length through `_alldiv`: `0x47480A` (`cdq; push
+  edx; push eax; push 1; push 0`, the divisor the sign-extended low dword of len · 2, then `call
+  0x4E4440` at `0x474811`), rejoining at `0x474816`; its epilogue is `0x474875` (`ret 0x14`). A wake
+  or bubbles call whose two points are equal faults, as `EMIT_SFX 0x103` from a piece exactly at sea
+  level would. In both the stack and the x87 stack at the divide are those of the epilogue: every
+  call between is callee-cleaned (`0x471D70` `ret 4`, `_allmul`/`_alldiv` `ret 0x10`, `_allshr`
+  none) and three `fstp` empty the x87 stack. **Impure** tests each divisor first and on zero jumps
+  to the epilogue, so the init spawns nothing and the walk destroys the empty object
+  ([engine patches](../modules/engine-patches.md), *two particle divides*).
+- **The particle code draws the C runtime's per-thread `rand` at twenty sites** in stock
+  ([effects](../effects.html) §7.3–§7.4, and the feature tick's two, `0x424345`, `0x424379`): the
+  fire emitter's `0x472ACF`, `0x472AF4`, `0x472B17`, `0x472B3A`; the flare spawn's `0x47395F`; the
+  nano spawn's six `0x473DAD`, `0x473DCA`, `0x473DE7`, `0x473E04`, `0x473E21`, `0x473E3E`; the
+  wake spawn's three `0x4749D9`, `0x474A00`, `0x474A27`; the smoke spawns' `0x474F1C`, `0x4752D4`;
+  the smoke updates' `0x4753B9`, `0x475679`. Their game-thread stream is the meteor shower's and
+  their loader-thread stream the skirmish start positions' ([sim](sim.md), *The two random
+  streams*). **Impure** redirects all twenty to its own keyed rule ([effects](../effects.html) §7.7),
+  counting emissions at the alloc `0x470EB0`, whose body it runs through a trampoline back to
+  `0x470EB7`, and indexing its seed table by pool slot from the block vector's begin and end
+  `0x51E618`/`0x51E61C` and the capacity `0x51E62C`, all written once by the constructor. Nothing
+  else reads particle state: the pool's 28 references are its own code; its fields `0x51E618..0x51E630` have no
   absolute reference; the layer table `main+0x38D77` has 19 references by displacement, all in the
   particle code (the alloc `0x471DCB`, the teardown `0x471DEC`/`0x471E97`, the walker `0x471EBB`,
   the draws `0x471F4B`/`0x471F9C`, thirteen in the emitters `0x471FD9..0x472C58`); and the particle

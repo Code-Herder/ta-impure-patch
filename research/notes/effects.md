@@ -477,11 +477,13 @@ players, features (`0x495585`: feature smoke, spawns), the wind (`0x49558F`), me
 is updated the same tick; the flying pieces' smoke and fire, emitted in the explosion
 draw, are updated on the next one.
 
-**Which random stream.** The emitters, spawns and smoke updates draw the C runtime's `rand`
-`0x4E4870` at eighteen sites (the tables above) and never the simulation's generator
-`0x4B6C30`. That `rand` keeps one seed per thread, and the game thread's stream is also
-the meteor shower's, the loader thread's also the skirmish start positions': the engine
-map's [*The two random streams*](engine/sim.html), which classifies all 61 call sites.
+**Which random stream.** In stock the emitters, spawns and smoke updates draw the C runtime's `rand`
+`0x4E4870` at eighteen sites (the tables above), and the feature tick two more for a burning
+feature's smoke point, never the simulation's generator `0x4B6C30`. That `rand` keeps one seed per
+thread, and the game thread's stream is also the meteor shower's, the loader thread's also the
+skirmish start positions': the engine map's [*The two random streams*](engine/sim.html), which
+classifies all 61 call sites and measures the loader's order. Impure answers all twenty from the
+particles' own rule instead (§7.7).
 
 ### 7.5 Native — `tagpu_sfx.c`, and owning the walker
 
@@ -589,6 +591,54 @@ rect `{x, y, x+1, y+1}` is taken as 2×2 from the panels, not from its fill rout
 (`0x4CCDEA`); sub-pixel motion for puffs is not used (engine parity: integer anchors);
 particles are drawn at 50 % alpha like the engine's ALP blend, so they look identical to
 the engine's rather than better — a translucency slider is a G13 freedom.
+
+### 7.7 The random rule — the same particles on both renderers [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
+
+Impure redirects every particle draw of the CRT's `rand` to a keyed rule (`tagpu_patches.c`, *The
+particles' own random rule*; the function itself in `inc/tagpu_prand.h`), on GDI and on Vulkan, so no
+CRT stream sees a particle and a closed form that knows an emission can compute every value the
+engine's particle code computes:
+
+    mix(x)            = lowbias32: x ^= x>>16; x *= 0x7FEB352D; x ^= x>>15; x *= 0x846CA68B; x ^= x>>16
+    seed(level, T, n) = mix(mix(level ^ T) ^ n)
+    value(seed, p, d) = mix(mix(seed ^ p) ^ d) >> 17          (0..0x7FFF, rand's range)
+
+32-bit unsigned arithmetic, wrapping: a GLSL `uint` port is bit-exact.
+
+- **level** is the level's particle seed, made at the layer table's allocation (`0x4918B1`) on the
+  loader thread, before the map load spawns a feature: from the session's GUID and the map in a
+  network game (every peer alike), from the harness's fixed seed and the map under
+  `tagpu_seeds.on`, otherwise from the performance counter. The log names it: `enginefix:
+  particles: level N draws from seed 0x…`.
+- **T** is GameTime and **n** the emission's ordinal among the GameTime's emissions, counted at
+  the pool's alloc `0x470EB0`, which every live emitter calls once a call after its SFX test,
+  whatever the pool answers. An object keeps its emission's seed, by pool slot.
+- **p**, the particle: the object's own count of the particles it began.
+  - nano (`0x473D50`): the first burst's particles 0..4, the second's 5..9; draws 0..2 the start
+    x, alt, y, 3..5 the end's, made whatever the steps (a particle of 0 steps is skipped, its
+    ordinal spent);
+  - wake and bubbles (`0x474880`): the dot at T is 0, at T+1 is 1; draws 0..2 the x, alt, y jitter;
+  - flare (`0x4737C0`): the sprite at T + 10k is k; draw 0 its start frame;
+  - smoke (`0x474DF0`, `0x4751C0`): a puff is its spawn's ordinal **modulo 256**; draw 0 its frame
+    count, and each frame advance's countdown (`0x475340`, `0x475600`) draw f, f the frame it
+    advances to (1 or more). The puff carries the ordinal in its position's low bits (x bits 0..2,
+    y bits 0..2, alt bits 0..1), which the updates only ever add multiples of 8 and 4 to, so every
+    high word, the only part the leaves and the packet read, is stock's;
+  - draws made before the object exists take the seed the next alloc gives and p = `0xFFFFFFFF`:
+    the fire emitter `0x472AB0`'s four (d 0..2 the x, alt, y jitter, 3 the life) and the feature
+    tick's two (d 0, 1, the smoke point's jitter), then the Smoke2 object it emits.
+- **What differs from stock**: only the values drawn, as any change of draw order would make them.
+  The emissions, their order, the classes' moves and deaths are the engine's. A replay host draws
+  its own particles from its own level seed and its own emissions: a puppet re-fires the emitters
+  as its replayed simulation reaches them.
+- **The two inits that divided by zero** — the flare's steps (`0x473788`) and the wake's length
+  (`0x47480A`) — end at their epilogues on a zero divisor, so such an emission makes no particle
+  (the walk destroys the empty object at its next pass).
+
+Its counters (draws answered, emissions, objects outside the pool) are in the install line's
+`Counters:` and logged for each level at the next level's load. MEASURED 2026-11-22: Two Continents'
+load makes six emissions (the vents' `SmokeInfinite`), and 1 274 values were drawn by the rule by
+the first `peek` in play, none outside the pool.
 
 ## Appendix — addresses
 

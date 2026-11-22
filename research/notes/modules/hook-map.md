@@ -228,6 +228,7 @@ and [the engine map](../engine/cob.html#cob-guarded-runtime-integration-disassem
 
 | Where | What |
 |---|---|
+| a smoke puff's position, sub-particle `+0x04`/`+0x08`/`+0x0C` bits 0..2, 0..1, 0..2 (Smoke1 `0x4FD638`, Smoke2 `0x4FD618`) | The puff's ordinal modulo 256, written by `prand_site` (`tagpu_patches.c`, *The particles' own random rule*) into the puff the spawn `0x474DF0` / `0x4751C0` builds on its own stack, before `0x476210` / `0x476490` appends it; on the thread the spawn runs on (the game thread, the loader thread at a level load). The updates add only multiples of 8 (x, y) and 4 (alt) there, so the bits last the puff's life and the high words, which every reader takes, stay stock's. Read back by the update's draw |
 | `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
 | `0x51E684` / `0x51E688` | The site test's scratch, which `0x47D2E0` (or the build cursor's own test) writes. **Written by build scatter** (`tagpu_scatter_site_test`): when the cursor's second question is refused as well, both words are put back as stock's one call left them; an accepted second call leaves its own, the accepted site's, as stock's accepting call would. The engine's WORLDQ saves both words before and restores them after every site test it makes (`tagpu_worldq.c` `wq_site_ok`) -- Quick Build's preview and click, the manual build cursor's geothermal snap, the placement's per-site tests -- and Quick Build's choice saves and restores them around the whole choice too (`tagpu_resource.c` `quick_saved`), since the build menu's page loads write them as well. The build cursor's own call `0x4198C6` keeps its native ownership. Game thread (§2.108, §2.109) |
 | Order nodes through `0x43ADC0`, `0x43AFC0`, `0x439F80` | Resource clicks append/replace build and reclaim orders through `0x43ADC0`; helpers use `0x43AFC0` for Guard; queued-plan cancellation removes exact nodes through `0x439F80`. No direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
@@ -413,6 +414,24 @@ Every row is in the fail-closed table: a mismatch at any ends the process at the
 | `0x4971AE` | the loader's `call 0x4E4860`, srand(time(0)) for the loader thread's CRT stream | `fix_test_seeds` (`test_crt_seed`) | call-site redirect to a cdecl C function: the time, or `TEST_SEED_CRT` under `tagpu_seeds.on`; `0x4971B8` (`add esp,4`) compared |
 | `0x4982CA` | the loader thread's start, already `fix_wind`'s stub (§2.6c) | `test_seed_game_thread`, called from that stub after the session capture | under `tagpu_seeds.on`, srand(`TEST_SEED_CRT`) on the game thread |
 | `0x437E37`, `0x437E57`, `0x437E88`, `0x437EAA`, `0x437F98`, `0x437FB5`, `0x4380AD`, `0x4380CE`, `0x438100`, `0x438124` | the meteor tick `0x437DE0`'s and the forced shower `0x438070`'s `call 0x4E4870`, the game thread's CRT rand | `fix_meteor_stream` (`meteor_rand`), under `tagpu_seeds.on` only | call-site redirect to a cdecl C function returning 15 bits of the meteors' own stream `s_meteorState` |
+
+### The particles' own random rule and two particle divides (`tagpu_patches.c`, always on)
+
+The rule's rows are in the fail-closed table ([engine patches](engine-patches.md), §2.6c); the two divides are local. Every redirected draw answers `tagpu_prand(seed, particle, draw)` (`inc/tagpu_prand.h`; [effects](../effects.md) §7.7), never the C runtime's rand `0x4E4870`.
+
+| VA | What it is | Module | Mechanism |
+|---|---|---|---|
+| `0x470EB0` | the particle pool's alloc (`mov edx,[ecx+0x20]; push esi; mov esi,[ecx+0x1C]`, 7 bytes), called once by every emitter after its SFX test | `fix_particle_rand` (`prand_alloc`) | `jmp` to a stub that runs the stolen bytes and rejoins at `0x470EB7` through a `call`, then counts the emission and files its seed by the object's pool slot; its registers on return are the alloc's own (`pushad`/`popad`) |
+| `0x4918B1` | `LoadGameData_Main 0x4917D0`'s `call 0x471D90` (`E8 DA 04 FE FF`), the layer table's allocation, before the map load spawns its features (`0x4918C0`) | `fix_particle_rand` (`prand_level_begin`) | call-site redirect to a stub: `pushad`, the level's particle seed, `popad`, `jmp 0x471D90` |
+| `0x472ACF`, `0x472AF4`, `0x472B17`, `0x472B3A` | the fire emitter `0x472AB0`'s four `call 0x4E4870` (x, alt, y jitter; the life) | `fix_particle_rand` (`prand_site`, `PRK_EMIT`) | call-site redirect to a stub: `pushad; push esp; push code; call prand_site; add esp,8; popad; ret`, eax the value |
+| `0x424345`, `0x424379` | the feature tick `0x424050`'s two `call 0x4E4870`, a burning feature's smoke point before its `call 0x472810` | `fix_particle_rand` (`PRK_EMIT`) | the same stub |
+| `0x47395F` | the flare spawn `0x4737C0`'s `call 0x4E4870` (the start frame), the object in ebx | `fix_particle_rand` (`PRK_FLARE`) | the same stub |
+| `0x473DAD`, `0x473DCA`, `0x473DE7`, `0x473E04`, `0x473E21`, `0x473E3E` | the nano spawn `0x473D50`'s six `call 0x4E4870` (start x, alt, y; end x, alt, y), the object in ebp | `fix_particle_rand` (`PRK_NANO`) | the same stub |
+| `0x4749D9`, `0x474A00`, `0x474A27` | the wake spawn `0x474880`'s three `call 0x4E4870` (x, alt, y jitter), the object in ebx | `fix_particle_rand` (`PRK_WAKE`) | the same stub |
+| `0x474F1C`, `0x4752D4` | the Smoke2 and Smoke1 spawns' `call 0x4E4870` (a puff's frame count), the object in ebx, the puff on the caller's stack at `+0x18` | `fix_particle_rand` (`PRK_PUFF`) | the same stub; it also writes the puff's ordinal into its position's low bits (§2.5) |
+| `0x4753B9`, `0x475679` | the Smoke2 and Smoke1 updates' `call 0x4E4870` (a frame's countdown), the object in edi, the puff in ebx | `fix_particle_rand` (`PRK_FRAME`) | the same stub |
+| `0x473788` | the flare init `0x4736E0`'s `movsx ecx,word [esp+0x1A]; cdq; idiv ecx` (8 bytes), the steps a teleport takes | `fix_particle_divides` | `jmp` to a stub that tests the steps: zero jumps to the init's epilogue `0x4737AE` (no particle), otherwise the stolen bytes and back to `0x473790` |
+| `0x47480A` | the wake init `0x474760`'s `cdq; push edx; push eax; push 1; push 0; call 0x4E4440` (12 bytes), 2^32 / (len · 2) | `fix_particle_divides` | `jmp` to a stub that tests the divisor's low dword: zero jumps to the init's epilogue `0x474875` (no particle), otherwise the stolen bytes, the call, and back to `0x474816` |
 
 ### Exact speed-ups of two FPU paths (`tagpu_patches.c`, feature `fp_exact`)
 

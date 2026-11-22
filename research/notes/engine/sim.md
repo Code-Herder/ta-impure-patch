@@ -831,21 +831,21 @@ without its block gets a `calloc`ed one of `0x74` bytes (`0x4EB110`), whose seed
 | `0x418688` | `0x418310`, the map debug overlay (one caller, DrawGameScreen `0x468DBA`) | game | presentation |
 | `0x41C737`, `0x41C757` | `0x41C6F0`, the camera shake (`0x41CC11`, `0x41CC32`, `0x41CC4D`) | game | presentation (the viewer's camera) |
 | `0x420D99` | `0x420D20`, the explosion-art generator, once a pixel (from the level init `0x420620` ← `0x4919D2`; `0x420CB0` has no caller) | loader | presentation (generated sprites) |
-| `0x424345`, `0x424379` | the feature tick `0x424050` (`0x495585`): a burning feature's smoke point, fed only to `0x472810` (`0x4243CF`) | game | particles, inside simulation code |
+| `0x424345`, `0x424379` | the feature tick `0x424050` (`0x495585`): a burning feature's smoke point, fed only to `0x472810` (`0x4243CF`) | game | particles, inside simulation code; Impure: the particles' rule |
 | `0x425C78`, `…C9C`, `…CBF`, `…CCF`, `…D00`, `…D0A` | `0x425B60` | — | dead: no call, jump or pointer |
 | `0x437E37`, `…E57`, `…E88`, `…EAA`, `…F98`, `…FB5` | the meteor tick `0x437DE0` (`0x495594`) | game | **simulation** (the strike points `0x512334`, `0x512320`, the stones) |
 | `0x4380AD`, `…0CE`, `…100`, `…124` | the forced shower `0x438070` (the `+meteor` handler, `0x41778A`) | game | **simulation** (console) |
 | `0x44FCC9` | the network send `0x44FC10`, only while `main+0x37F35` is set: `rand·101/0x8000` decides a simulated drop | game | network (debug) |
 | `0x450493` | `0x450380`, a network elimination's text (`rand & 7`, table `0x5061B8`) | game | presentation |
 | `0x456A58`, `0x456AA3` | `0x4568C0`, a network load's completion (`0x496853`, `0x498547`): a coin flip for two players, then a shuffle of the player records into `main+0x29FC`, `main+0x2A28` = 1 | game | network game start; what the order decides is not established |
-| `0x472ACF`, `…AF4`, `…B17`, `…B3A` | the fire emitter `0x472AB0` (from the explosion draw) | game | particles |
-| `0x47395F` | the flare's spawn `0x4737C0` | game | particles |
-| `0x473DAD`, `…DCA`, `…DE7`, `…E04`, `…E21`, `…E3E` | the nano spawn `0x473D50` | game | particles |
-| `0x4749D9`, `0x474A00`, `0x474A27` | the wake's spawn `0x474880` | game | particles |
+| `0x472ACF`, `…AF4`, `…B17`, `…B3A` | the fire emitter `0x472AB0` (from the explosion draw) | game | particles; Impure: the particles' rule |
+| `0x47395F` | the flare's spawn `0x4737C0` | game | particles; Impure: the particles' rule |
+| `0x473DAD`, `…DCA`, `…DE7`, `…E04`, `…E21`, `…E3E` | the nano spawn `0x473D50` | game | particles; Impure: the particles' rule |
+| `0x4749D9`, `0x474A00`, `0x474A27` | the wake's spawn `0x474880` | game | particles; Impure: the particles' rule |
 | `0x474B62`, `0x475022` | `0x474B00`, `0x474FC0`, stand-alone smoke puff updates | — | dead |
-| `0x474F1C` | Smoke2's spawn `0x474DF0` | game | particles |
-| `0x4752D4` | Smoke1's spawn `0x4751C0` | game **and loader** | particles |
-| `0x4753B9`, `0x475679` | the smoke updates `0x475340`, `0x475600` | game | particles |
+| `0x474F1C` | Smoke2's spawn `0x474DF0` | game | particles; Impure: the particles' rule |
+| `0x4752D4` | Smoke1's spawn `0x4751C0` | game **and loader** | particles; Impure: the particles' rule |
+| `0x4753B9`, `0x475679` | the smoke updates `0x475340`, `0x475600` | game | particles; Impure: the particles' rule |
 | `0x4787CD`, `0x4787FD`; `0x479030`, `0x479049` | `0x478790` (a GUI callback, stored at `0x4793F6`) and `0x478E80` (`0x427646`), animating `0x51E654` | game | front end |
 | `0x47BD96` | `0x47BD70`, a skirmish elimination's text (`0x486E54`) | game | presentation |
 | `0x47FDC6` | `0x47FD70`, a unit reply's variant | game | presentation (sound) |
@@ -855,21 +855,33 @@ without its block gets a `calloc`ed one of `0x74` bytes (`0x4EB110`), whose seed
 | `0x49C619`, `0x49C648`, `0x49C677` | the projectile draw `0x49BE60`, the lightning's jitter | game | presentation |
 | `0x4CDDE3`, `0x4CDE96` | `0x4CDB40`, the CD audio's random track | game | presentation (music) |
 
-**The particle draws share both streams with the simulation.** The eighteen particle sites
-(effects.md §7.3–§7.4) draw the game thread's stream, which the meteor shower and the network start
-shuffle `0x4568C0` read later, and Smoke1's spawn draws the loader thread's. On the loader thread the
-order is, from the static call sequence [DISASSEMBLED; **not measured live**]: the loader seeds at
-`0x4971AE`, calls `LoadGameData_Main 0x4917D0` at `0x497581`, which allocates the particle layers
-(`0x471D90` at `0x4918B1`) and loads the map (`0x483610` at `0x4918C0`), which spawns its features
-(`0x423C50` at `0x483A7E`, `0x483ADE`, `0x483B38`); a smoking feature calls `SmokeInfinite 0x472C50`
-(`0x423FE3`, layer 4), whose init `0x475150` spawns at once and draws once (`0x4752D4`). The
-explosion-art generator's draws follow (`0x4919D2`), and back in the loader the random starts draw the
-same stream (`0x4979E7`, `0x497A32`). So on a map with smoking features and random starts, a change to
-the particle code's draws — an emitter redirected, the pool built empty (which skips the init and its
-spawn) — moves where the commanders start, in a harness game too (`tagpu_seeds.on` fixes only the
-seed at `0x4971AE`). The 13 500-unit battle on Zombie Kingdom holds 55 such Smoke1 objects in layer 4
-from its load (MEASURED 2026-11-22, the `sfx:` log line). A player's meteor
-shower already depends on the frames drawn (above); stopping the particle draws moves it as well.
+**In stock the particle draws share both streams with the simulation.** The twenty particle sites
+(effects.md §7.3–§7.4, and the feature tick's two) draw the game thread's stream, which the meteor
+shower and the network start shuffle `0x4568C0` read later, and Smoke1's spawn draws the loader
+thread's. On the loader thread the order is: the loader seeds at `0x4971AE`, calls `LoadGameData_Main
+0x4917D0` at `0x497581`, which allocates the particle layers (`0x471D90` at `0x4918B1`) and loads the
+map (`0x483610` at `0x4918C0`), which spawns its features (`0x423C50` at `0x483A7E`, `0x483ADE`,
+`0x483B38`); a smoking feature calls `SmokeInfinite 0x472C50` (`0x423FE3`, layer 4), whose init
+`0x475150` spawns at once and draws once (`0x4752D4`). The explosion-art generator's draws follow
+(`0x4919D2`), and back in the loader the random starts draw the same stream (`0x4979E7`, `0x497A32`).
+**MEASURED 2026-11-22** (`tagpu_seeds.on`, so the loader's stream starts from one seed; four seats,
+random starts, the commanders' points read at the level's start): on Two Continents, whose load
+spawns six `SmokeInfinite` objects (six emissions counted before the first tick), the base build and
+a build whose particle code draws no CRT value start the commanders at the same four points but
+permuted (seat 0 at (5569, 12535) in the base build, at (9283, 5088) in the other); on Anteer Strait, whose load spawns none,
+both builds start every seat at the same point. So the load's smoke draws come before the shuffle in
+time, and in stock a map's smoking features decide where the commanders start. The 13 500-unit battle
+on Zombie Kingdom holds 55 such Smoke1 objects in layer 4 from its load (MEASURED 2026-11-22, the
+`sfx:` log line).
+**Impure draws no particle value from either stream**: all twenty sites answer from the particles' own
+keyed rule ([effects](../effects.html) §7.7; `tagpu_patches.c`, *The particles' own random rule*), on
+both renderers. So the random starts are a function of the loader's seed and the explosion-art
+generator's draws alone, and a player's meteor shower no longer follows the particles. It still
+follows the frames drawn: the lightning's jitter `0x49C619` (the projectile draw), the camera shake
+`0x41C6F0`, the debug overlay, the unit replies and the music draw the game thread's stream too (the
+table above), and under the harness's switch the shower draws its own stream instead (above). What
+the network start shuffle's order decides is still not established; its stream no longer carries
+particle draws.
 
 **Values in the records that look like addresses** (MEASURED on the first run's last live dumps of
 four fixtures; the DLL loaded at `0x76CF0000`, `SizeOfImage` `0x4949000`): 261 of 169,140 plain

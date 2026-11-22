@@ -64,20 +64,29 @@ landing 0). The ones the design rests on:
 
 ### The random rule (both renderers)
 
-Every particle `rand` site above is redirected to `particle_rand`, which answers in the CRT's range (0 to
-0x7FFF) from a hash of the object's seed, the sub-particle and the draw's number within that
-sub-particle. The engine's particle code, which still runs on GDI, and the GPU's closed form therefore
-compute the same values by construction. Neither draws the CRT stream, so meteors and start positions no
-longer depend on particles on either renderer, whatever was on screen.
+Built in landing 1 ([effects](effects.md) §7.7, `inc/tagpu_prand.h`). Every particle `rand` site above
+answers `tagpu_prand(seed, particle, draw)` instead, in the CRT's range (0 to 0x7FFF): a 32-bit integer
+hash of the emission's seed, the particle's ordinal within its object and the draw's number within that
+particle. The engine's particle code, which still runs on GDI, and the GPU's closed form therefore
+compute the same values by construction. Neither draws the CRT stream, so meteors and start positions
+no longer depend on particles on either renderer, whatever was on screen.
 
-- **The seed** of an object is a hash of the level's seed, the GameTime and the emission's ordinal in
-  that tick, which is the same on both renderers for the same game and the same viewer. Unit-script
+- **The seed** of an emission is `seed(level, GameTime, n)`: the level's particle seed (made at the
+  layer table's allocation, before the map's features spawn: the session and the map in a network
+  game, the fixed seed and the map under `tagpu_seeds.on`, otherwise the performance counter), the
+  GameTime, and n, the emission's ordinal among that GameTime's calls of the pool's alloc `0x470EB0`.
+  Every live emitter calls the alloc exactly once a call, after its SFX test, whatever the pool
+  answers, so an event recorder at the same point counts the same n with the pool emptied. Unit-script
   smoke, fire and wake are emitted only while the unit is in the viewed player's sight (`0x480EC5`), so
   emission depends on the viewer, as it does in stock.
-- **Where it lives:** on GDI, a side table indexed by the object's pool slot, presentation state. On
-  Vulkan, the emitter event.
+- **The particle** is the object's count of the particles it began (nano 0..4 then 5..9, wake 0 and 1,
+  flare 0..3). A smoke puff's is its spawn ordinal modulo 256, which the puff carries in its
+  position's low bits; its frame count is draw 0 and each frame advance's countdown draw is the frame
+  it advances to. Draws an emitter makes before its object exists use the particle `0xFFFFFFFF`.
+- **Where it lives:** on GDI and in the engine's code on Vulkan, a side table by pool slot, particle
+  state the simulation never reads. On Vulkan's GPU path, the emitter event will carry the seed.
 - **This is a simulation change:** start positions and meteors move compared with stock for a given
-  seed. It is a `SIM_FEATURE` and is landed through the replay gate.
+  seed. It is a `SIM_FEATURE` (`particle_rand`) and is landed through the replay gate.
 
 ### The emitter event (Vulkan)
 
@@ -144,7 +153,7 @@ Vulkan in the event.
    - The recorder's comment that calls `0x472630` a flare.
    - Measure each emitter's calls per tick in the battle from the recorder's sink counts, to size the
      event list and the instance buffer.
-1. **The random rule on both renderers** (simulation). The particle `rand` sites go to `particle_rand`,
+1. **The random rule on both renderers** (simulation). *Landed locally 2026-11-22.* The particle `rand` sites go to `particle_rand`,
    with the seed side table on GDI, and the two engine divide-by-zero fixes land. Checks:
    - the replay gate;
    - meteors and start positions no longer depend on particles: the same seed with the particle code
