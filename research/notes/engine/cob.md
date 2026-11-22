@@ -1191,11 +1191,16 @@ vertices** — unrotated, unposed, no body turn.
   `prim+0x22`, in place, one at a time, last to first** (`0x45B18C..0x45B1AA`) through
   `0x4B6CC0`, and then adds the parent origin to the piece origin and to every vertex, again in
   place (`0x45B1AC..0x45B204`). A piece with `prim+0x26 != 0` is left alone entirely.
-  The rotate loop is `0x45B179..0x45B1AA`; no branch from outside it lands inside it (scan of
+  Its callers are `0x45B12C` (in `0x45B0A0`) and itself at `0x45B219`, for a piece's children.
+  The rotate loop is `0x45B179..0x45B1AA`: the count's `dec; js` at `0x45B17E` skips it for a
+  piece with no vertex, and the bytes Impure matches before patching are `0x45B179`, `0x45B18D`
+  and `0x45B1A1`, in three runs; no branch from outside it lands inside it (scan of
   `.text`), and its store of the counter into the frame's second argument (`0x45B188`,
   `[esp+0x1C]`) is dead: that slot is read only at `0x45B155`, before the loop, and dropped by the
   `ret 0xC` at `0x45B23F`. Impure runs the loop as `repose_rotate` (engine fix `repose_trig`,
   always on): the three angles' `fsincos` once a piece, each vertex bit-identical to stock's.
+  After the loop, `0x45B1AC..0x45B1C9` adds the parent origin to the piece origin, reloading
+  `eax`, `ebx`, `ecx` and `edx` before it reads them.
 - `0x45B150` recurses on the child (`prim+0x2E`) and loops on the sibling (`prim+0x2A`), so the
   tree is composed piece by piece.
 
