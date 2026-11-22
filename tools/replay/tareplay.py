@@ -78,8 +78,9 @@ and every check fails by name: the recording's end block, `tarec check` and `tar
 a seek precedes (q, rt<T>c, w); each round trip's line has residue 0 and `tarec compare-dumps
 --seek rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
 claim; L's counts against P's `tarec compare-counts`, with --cob-exact where fixtures.json gives
-the fixture `"cob": "exact"` (counts_options). Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
-process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
+the fixture `"cob": "exact"` (counts_options). Passing dumps are deleted unless --keep, and so is each
+worker's tareplay-<k> instance once its lanes end, unless one of them failed or could not run
+(Worker.close). A fixture with `"decline": true` launches every process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
 declined on a schedule, each read back like any other, and the stream codec's check fails when it
 holds none.
 
@@ -605,6 +606,7 @@ class Worker:
     cap_failure once its games have ended. A Log's waits fail a game at the line itself."""
 
     caps = None
+    keep = False                        # close() leaves the instance for diagnosis (THE INSTANCE'S END)
     nodraw = False                      # the next launch skips its undrawn frames' draw (NODRAW_LEVER)
     shadow = False                      # ... checks its drawn frames' repose selection (SHADOW_LEVER)
     posecheck = False                   # ... logs its pose checks (POSE_LEVER)
@@ -673,15 +675,25 @@ class Worker:
         return self.caps.failure() if self.caps is not None else None
 
     def close(self):
-        """The instance stopped and left unheld, and no test lever left in its folder: a launch by hand between
-        runs plays as usual, whatever the run's games armed (ImpAI's levels and the income lever among them)."""
+        """The instance stopped and left unheld. THE INSTANCE'S END: it is removed unless `keep` -- a lane on it
+        failed or could not run, or the run is --keep -- since the results already hold what a passing lane
+        leaves (collect); a kept one has no test lever left in its folder, so a launch by hand between runs
+        plays as usual, whatever the run's games armed (ImpAI's levels and the income lever among them). The
+        cap's refusals are read first: cap_failure() is asked after close(), and reads the folder's log."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
         for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER, SEEDS_LEVER):
             (self.gamedir / lever).unlink(missing_ok=True)
         clear_impai_levers(self.gamedir)
         self.stop_display()
-        self.lock.close()
+        try:
+            if not self.keep:
+                self.sweep_caps()
+                rc, o = tacli("rm", self.name, "--force", timeout=300)
+                if rc:
+                    say(f"{self.name}: the instance stays: {last(o)}")
+        finally:
+            self.lock.close()
 
     def halt(self):
         """THE STOP's halt, from the signal's thread while this worker's own thread may sit in a call:
@@ -4773,6 +4785,8 @@ class Run:
         self.out = out
         self.measure = measure
         self.keep = bool(getattr(args, "keep", False))
+        # the passing lanes' instances kept too: --keep, which the broad tier's kept dumps do not imply
+        self.keep_instances = bool(getattr(args, "keep_instances", self.keep))
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         self.turbo = getattr(args, "turbo", 0)
         self.kind = getattr(args, "cmd", "run")
@@ -5007,6 +5021,7 @@ class Run:
             # memory cap anywhere in them fails the lane by name, and its checks still run
             refused = w.cap_failure()
             if refused:
+                w.keep = True
                 fx["problems"].append((proc, "FAILED", refused))
                 say(f"{name} {proc}: FAILED: {refused}")
             fx["procs"][proc] = "ran"
@@ -5021,6 +5036,7 @@ class Run:
             fx["problems"].append((proc, kind, why))
             say(f"{name} {proc}: {kind}: {why}")
             w.lane = None
+            w.keep = True
             J.finish(name, proc, "fail" if kind == "FAILED" else "unrun", why.splitlines()[0])
             # the lanes this one queues on success never start: L queues all the others, K its F
             J.never(name, fx["want"][1:] if proc == "L" else ["F"] if proc == "K" else [],
@@ -5062,6 +5078,7 @@ class Run:
         except Exception as e:
             say(f"a worker did not start: {e}")
             return
+        w.keep = self.keep_instances
         with LIVE_LOCK:
             LIVE[id(w)] = w
         try:
@@ -6130,6 +6147,7 @@ def cmd_broad(args):
         args.dll = args.release
     out = out_dir(args)
     args.keep = True
+    args.keep_instances = False
     try:
         run = Run(names, args, out, fixes=fixes)
     except CouldNotRun as e:
@@ -6277,6 +6295,7 @@ def cmd_forks(args):
     except (CouldNotRun, Failed) as e:
         say("forks:", str(e))
         status, why = 1 if isinstance(e, Failed) else 2, str(e)
+        w.keep = True
     finally:
         w.close()
     return ended_by_cap(w, "forks", status, why)
@@ -6327,6 +6346,7 @@ def cmd_rewind(args):
     except (CouldNotRun, Failed) as e:
         say("rewind:", str(e))
         status, why = 1 if isinstance(e, Failed) else 2, str(e)
+        w.keep = True
         w.collect(out / "failure", recordings=True)
         w.stop()
     finally:
@@ -6356,7 +6376,7 @@ def main(argv=None):
     r.add_argument("--stock-dll", help="the stock-limits build, for a fixture that names it")
     r.add_argument("--cover", action="store_true",
                    help="the coverage builds; each process writes its cover-<proc>.bin")
-    r.add_argument("--keep", action="store_true", help="keep the passing dumps")
+    r.add_argument("--keep", action="store_true", help="keep the passing dumps and every lane's instance")
     r.add_argument("--out", help="the run's folder")
     r.add_argument("--gdi", action="store_true",
                    help="every lane renders with GDI and the run takes no GPU token: the AI's test "
@@ -6378,7 +6398,7 @@ def main(argv=None):
     la.add_argument("--check", action="store_true",
                     help="exit 0 when a passing replay-roundtrip note covers HEAD")
     la.add_argument("-j", type=int, default=12, help="games at once (default 12)")
-    la.add_argument("--keep", action="store_true", help="keep the passing dumps")
+    la.add_argument("--keep", action="store_true", help="keep the passing dumps and every lane's instance")
     la.add_argument("--out", help="the run's folder")
     la.set_defaults(func=cmd_landing, dll=None, stock_dll=None)
     br = sub.add_parser("broad", help="the broad tier: every fixture, and what none exercised")
@@ -6394,7 +6414,7 @@ def main(argv=None):
                     help="the GameTime to take over at (default the entry's `at`, else T2)")
     tk.add_argument("-j", type=int, default=2, help="games at once (default 2)")
     tk.add_argument("--cover", action="store_true", help="the coverage builds")
-    tk.add_argument("--keep", action="store_true", help="keep the passing dumps")
+    tk.add_argument("--keep", action="store_true", help="keep the passing dumps and every lane's instance")
     tk.add_argument("--out", help="the run's folder")
     tk.set_defaults(func=cmd_takeover, dll=None, stock_dll=None)
     fk = sub.add_parser("forks", help="fork limit, LRU, shared prefixes, compaction and export")

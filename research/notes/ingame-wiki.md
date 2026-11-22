@@ -89,7 +89,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The fixture's castings | `tools/wiki/casting-fixture.json`: `identity` (the entries' own types and figures), `shifted` (invented figures, a 3 × 3 builder and a 4 × 4 geothermal plant with four interior G cells), `unbound` (`identity` without the wall) |
 | The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
 | Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
-| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N] [--resume]`: the offline checks on slots of the run lock of their own, from the moment the queue grants them, and every game lane (each single-player mode on its own instance `wikigate-<tag>-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
+| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N] [--resume] [--keep]`: the offline checks on slots of the run lock of their own, from the moment the queue grants them, and every game lane (each single-player mode on its own instance `wikigate-<tag>-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (the simulation at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
@@ -1263,7 +1263,9 @@ unless said).
   on `-j` workers (6 by default), each of `sp`, `page`, `demos`, `try`, `asset`, `stage3d`,
   `units`, `cursor`, `watch` and `rewind` with `--launch` on its own instance `wikigate-<tag>-<mode>` (`<tag>` the
   run's, `tools/runlock.py` TAGS), made afresh on its
-  own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
+  own private 1920 × 1080 X server, and `mods` for each of its six setups (each on its own
+  `prepare_wine` instance, as `mp`'s two peers are). A lane that passes removes its instances when it
+  ends; one that fails or could not run keeps them for diagnosis, and `--keep` keeps every one: each lane the same
   command as a serial run, a process of the script, its log `DIR/<mode>.log` or
   `DIR/mods-<setup>.log`. The game lanes start longest first, by the median of each lane's last five
   finished times in the runs journal (`game_lane_order`; a lane with none first): `players`, the
