@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import zlib
 from unittest.mock import Mock, patch
@@ -2748,6 +2749,43 @@ class Landing(unittest.TestCase):
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 3;\n}\n")
         self.assertEqual(tareplay.landing_check("main"), 1)       # gated since the note
 
+    def test_check_takes_the_owners_acceptance(self):
+        """a note the owner's decision wrote (every lane passed, its UNCOVERED landed on their word)
+        meets the gate; any other result does not"""
+        self.commit("tools/replay/x.c", "int f(void)\n{\n    return 2;\n}\n")
+        sh(self.root, "git", "notes", "append", "-m",
+           "replay-roundtrip: dll=x range=main..y lanes=all-pass result=fail date=2026-11-22", "HEAD")
+        self.assertEqual(tareplay.landing_check("main"), 1)
+        sh(self.root, "git", "notes", "append", "-m",
+           "replay-roundtrip: dll=x range=main..y lanes=all-pass result=uncovered-accepted-by-owner "
+           "date=2026-11-22 (run R: 1 UNCOVERED landed on the owner's word)", "HEAD")
+        self.assertEqual(tareplay.landing_check("main"), 0)
+
+    def test_a_stale_build_is_built_before_the_run(self):
+        """the build's DLL, missing or older than its sources, is built through the run lock; a DLL
+        the command gave is never rebuilt, only refused when stale"""
+        made = []
+
+        def make(argv, **kw):
+            made.append(argv[2:])
+            dll.parent.mkdir(parents=True, exist_ok=True)
+            dll.write_bytes(b"MZ")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        dll = tareplay.build_dll(True, True)[0]
+        args = types.SimpleNamespace(dll=None, stock_dll=None)
+        with patch.object(tareplay, "sources_mtime", return_value=0), \
+             patch.object(tareplay.subprocess, "run", side_effect=make):
+            self.assertEqual(tareplay.chosen_dll("g", args, True, True), dll.resolve())
+            self.assertEqual(made, [["make", "--", "-C", "tagpu/ddraw", "LIMITS=stock", "COVER=1"]])
+            self.assertEqual(tareplay.chosen_dll("g", args, True, True), dll.resolve())
+            self.assertEqual(len(made), 1)                        # current: not built again
+        with patch.object(tareplay, "sources_mtime", return_value=dll.stat().st_mtime + 10), \
+             patch.object(tareplay.subprocess, "run", side_effect=make):
+            args.stock_dll = str(dll)
+            with self.assertRaises(tareplay.CouldNotRun):
+                tareplay.chosen_dll("g", args, True, True)
+            self.assertEqual(len(made), 1)
+
     def test_check_asks_for_the_game_when_only_the_multiplayer_recorder_changed(self):
         path = self.root / tareplay.DD / "src" / "tagpu_recmp_x.c"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2863,6 +2901,70 @@ class Prelude(unittest.TestCase):
         got = tareplay.reached_by_build({"one": {(self.SRC, "f")}}, self.FIXTURES)
         missed, _, _ = tareplay.uncovered(funcs, regions, got, fx, False)
         self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
+
+
+    def test_a_header_changed_in_comments_alone_selects_nothing(self):
+        header = tareplay.DD + "inc/tagpu_new.h"
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        self.add(header, "#define NEW 1   /* one */\n")
+        self.to_main()
+        self.commit(header, "/* a note */\n#define NEW 1   /* one, said again */\n")
+        fx, funcs, regions, problems, why, gated_any = self.plan(includes={header})
+        self.assertEqual((fx, funcs, regions, problems, gated_any), (set(), {}, {}, [], False))
+        self.assertTrue(any("only its comments or whitespace" in w for w in why), why)
+        self.commit(header, "/* a note */\n#define NEW 2   /* one, said again */\n")
+        self.assertEqual(set(self.plan(includes={header})[2]), {f"{self.SRC}:headers"})
+
+    def test_unreached_behind_a_failed_two_player_game_is_said_under_it(self):
+        funcs = {(self.SRC, "f"): ("newfeat", tafeat.BOTH), (self.SRC, "g"): ("newfeat", tafeat.BOTH)}
+        got = {"raised": {(self.SRC, "f"), (self.SRC, "g")}, "stock": {(self.SRC, "g")}}
+        missed, k, total = tareplay.uncovered(funcs, {}, got, set(), True, frozenset({"stock"}))
+        self.assertEqual((self.where(missed), k, total),
+                         (["UNREACHED BEHIND THE FAILED TWO-PLAYER GAME stock"], 1, 2))
+        self.assertTrue(missed[0].endswith(f"{self.SRC}:f"), missed[0])
+        missed, _, _ = tareplay.uncovered(funcs, {}, got, set(), True)
+        self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:f (feature newfeat; builds "
+                                              f"raised+stock; fixtures none; and the two-player game)"])
+        got["raised"] = {(self.SRC, "g")}                # missing on a build whose game passed
+        missed, _, _ = tareplay.uncovered(funcs, {}, got, set(), True, frozenset({"stock"}))
+        self.assertTrue(self.where(missed)[0].startswith(f"UNCOVERED {self.SRC}:f"), missed)
+
+
+class SimBuilds(unittest.TestCase):
+    """tafeat.sim_builds: the builds whose simulation can run an engine-free file, from the lines
+    of the other instrumented sources that name its functions."""
+
+    FREE = ("int vm_run(int x)\n{\n    return helper(x);\n}\n"
+            "static int\nhelper(int x)\n{\n    return x;\n}\n")
+
+    def builds(self, callers, free=("src/vm.c",)):
+        texts = {"src/vm.c": self.FREE, **callers}
+        with patch.object(tafeat, "engine_free_files", return_value=set(free)):
+            return tafeat.sim_builds("src/vm.c", texts)
+
+    def test_a_caller_on_one_build_asks_that_build(self):
+        raised = "#ifndef TAGPU_LIMITS_STOCK\nvoid g(void)\n{\n    vm_run(1);\n}\n#endif\n"
+        self.assertEqual(self.builds({"src/a.c": raised}), frozenset({"raised"}))
+        stock = "#ifdef TAGPU_LIMITS_STOCK\nstatic int (*p)(int) = vm_run;\n#endif\n"
+        self.assertEqual(self.builds({"src/a.c": raised, "src/b.c": stock}), tafeat.BOTH)
+
+    def test_a_name_in_a_comment_or_a_static_name_is_no_caller(self):
+        both = "/* vm_run(1) */\nint helper2(void) { return 0; }\n"
+        raised = "#ifndef TAGPU_LIMITS_STOCK\nvoid g(void) { vm_run(1); helper(2); }\n#endif\n"
+        self.assertEqual(self.builds({"src/a.c": raised, "src/b.c": both}), frozenset({"raised"}))
+        self.assertEqual(tafeat.external_functions(self.FREE), ["vm_run"])
+
+    def test_no_caller_or_not_engine_free_asks_both(self):
+        raised = "#ifndef TAGPU_LIMITS_STOCK\nvoid g(void) { vm_run(1); }\n#endif\n"
+        self.assertEqual(self.builds({}), tafeat.BOTH)
+        self.assertEqual(self.builds({"src/a.c": raised}, free=()), tafeat.BOTH)
+
+    def test_the_cob_vm_runs_in_the_raised_game_alone(self):
+        """the tree's own case: tagpu_patches.c's interpreter swap is the simulation's only caller
+        of tagpu_cobvm.c, and it is compiled out of the stock-limits build"""
+        d = tafeat.DDRAW
+        texts = {r: (d / r).read_text() for r in tareplay.covered_sources() if (d / r).exists()}
+        self.assertEqual(tafeat.sim_builds("src/tagpu_cobvm.c", texts), frozenset({"raised"}))
 
 
 class EngineFree(unittest.TestCase):

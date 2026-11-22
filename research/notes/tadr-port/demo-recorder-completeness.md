@@ -558,6 +558,23 @@ line and a new sim file could not pass at all. The landing note's `features=` na
 region `<file>:prelude` or `<file>:headers`, with no space, since the note is read by splitting on
 spaces.
 
+A header **selects nothing when only its comments or whitespace changed**: the landing reads a
+header's change through the same comment filter as every changed line (`changed_lines`), and
+the same objects compile from it. A changed `#define`, string or character literal is a change.
+
+**The builds a function is asked to run on** are the builds that compile its changed line, and,
+for a file `thread-split.allow` classes `engine-free`, only the builds whose simulation names it
+(`tafeat.sim_builds`): the union, over every line of another instrumented source that names one
+of the file's external functions, of the builds that compile that line. That holds only for an
+engine-free file. It names no engine memory, so the engine enters it through no detour or
+redirect, and every way in is a name in another file, which the scan reads, preprocessor lines
+included. A file with no such name elsewhere, or any other class, is asked on every build that
+compiles the line. The one file it narrows is `tagpu_cobvm.c`. The simulation names it only from
+`tagpu_patches.c`'s interpreter swap, which is `#ifndef TAGPU_LIMITS_STOCK`. The stock-limits
+build links the VM for the in-game wiki (`tagpu_wikicob.c`) and the coarse simulator
+(`tasim_cobfire.c`), which no test group plays. So the VM is asked of the raised build alone, and
+the tier says so among its reasons.
+
 A feature that holds **no function** -- `impai_fitparams.c`, the fight predictor's coefficients, a
 table alone -- selects its test groups when a line of it changes and asks no reach, as a changed
 prelude line or included header of a file that holds none does, and the tier says so among its
@@ -1136,7 +1153,11 @@ cannot see an address recorded as a value; the scan looks for one instead.
   with chat, a selection and a click and a drawing-board line and pin from each human, `tarec
   check` on its recording, and the recording played to its end with one seek back, from GameTime
   600 to 200 (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
-  both builds at once beside the test groups' lanes. A change to ImpAI's files or to the battle
+  both builds at once beside the test groups' lanes. When the game fails on a build, a function
+  missing on that build alone is not called `UNCOVERED`. It is listed on one line,
+  `UNREACHED BEHIND THE FAILED TWO-PLAYER GAME <build>`, beside the game's own failure, which
+  already fails the landing: the reach of a game that did not finish is unknown, and a function
+  only a network game reaches would otherwise read as a gap of its own. A change to ImpAI's files or to the battle
   room's ImpAI step (`impai_*`, `tagpu_impai.*`, `tagpu_skirmish.c`) plays it too, in its **ImpAI
   form**: both hosted AIs ImpAI's by the battle room's first step (`--impai`: both peers launched
   with `netai=impai`, both AI rows named `ImpAI:` on both peers before the start, each peer's level
@@ -1237,8 +1258,10 @@ function, and records a `replay-roundtrip:` note; a changed line no declaration 
 changed function no fixture reached, fails by name, and landing it anyway is the owner's decision.
 The broad tier is a command, not a schedule. The landing command enforces it as **Step 4b**, the
 replay gate, between the documentation pass and the review: when the diff touches a gated file it
-passes on `tareplay.py landing --check` (a passing note on a commit R, nothing gated changed in
-`R..HEAD`), and otherwise runs `tareplay.py landing` on HEAD, three attempts at a failure, a game
+passes on `tareplay.py landing --check` (a note on a commit R whose result is `pass`, or
+`uncovered-accepted-by-owner` -- every lane passed and the owner landed its named `UNCOVERED`, the
+note written by hand with the run and the names -- and nothing gated changed in `R..HEAD`), and
+otherwise runs `tareplay.py landing` on HEAD, three attempts at a failure, a game
 that cannot start at all being escalation reason 3. Its Step 3 build runs the state and feature
 checks, and its Step 5 brief asks for each new class checked against the code, new direct sink
 calls and new engine writes on puppets, every loosening, and each new or moved `SIM_FEATURE`

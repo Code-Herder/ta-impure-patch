@@ -185,6 +185,56 @@ def functions(text):
     return out
 
 
+def engine_free_files(ddraw=DDRAW):
+    """The files thread-split.allow marks `engine-free`, relative to tagpu/ddraw."""
+    out = set()
+    for line in (Path(ddraw) / "thread-split.allow").read_text().splitlines():
+        f = line.split("#", 1)[0].split()
+        if len(f) >= 3 and f[1] == "engine-free":
+            out.add(f[0])
+    return out
+
+
+def external_functions(text):
+    """The names of `text`'s functions that are not static: the ones another file can name."""
+    lines = blank(text).split("\n")
+    out = []
+    for name, first, _ in functions(text):
+        head = lines[first - 1]
+        if first >= 2 and head.lstrip().startswith(name):     # the return type on the line above
+            head = lines[first - 2] + " " + head
+        if not re.search(r"\bstatic\b", head):
+            out.append(name)
+    return out
+
+
+def sim_builds(rel, texts):
+    """The builds in which the simulation can run the engine-free file `rel` (engine_free_files):
+    the union, over every line of another file of `texts` ({rel: text}, the instrumented sources)
+    that names one of `rel`'s external functions, of the builds that compile that line. BOTH when
+    `rel` is not engine-free, or when no other instrumented file names one of its functions.
+
+    The derivation holds only for an engine-free file: it names no engine memory, so the engine
+    enters it through no detour or redirect, and every way into it is a name in another file --
+    a call, or a pointer taken -- which this scan reads, preprocessor lines included. A file the
+    engine enters at an address (tagpu_patches.c) is asked on every build that compiles the line."""
+    if rel not in engine_free_files():
+        return BOTH
+    names = external_functions(texts[rel])
+    if not names:
+        return BOTH
+    word = re.compile(r"\b(?:" + "|".join(map(re.escape, names)) + r")\b")
+    got = frozenset()
+    for other, text in texts.items():
+        if other == rel:
+            continue
+        b = builds(text)
+        for n, line in enumerate(blank_comments(text).split("\n"), 1):
+            if word.search(line):
+                got = got | b[n]
+    return got if got else BOTH
+
+
 UNTESTED_RX = re.compile(r'^SIM_UNTESTED\((\w+), "([^"\\\n]+)"\);$', re.M)
 
 

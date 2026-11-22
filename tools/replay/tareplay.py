@@ -4539,17 +4539,30 @@ def build_dll(stock, cover):
 
 
 def chosen_dll(name, args, stock, cover):
-    """The DLL `name` runs: the one the command gave, else the build's, present and current."""
+    """The DLL `name` runs: the one the command gave, present and current; else the build's,
+    built from the tree first when it is missing or older than its sources -- through the run
+    lock (tools/runlock.py make), before any game of the run starts, so no game plays a DLL the
+    build is replacing."""
     dll, make = build_dll(stock, cover)
     given = args.stock_dll if stock else args.dll
+    make = make.split()[1:]
+    line = "tools/runlock.py make -- " + " ".join(make)
     if given:
-        dll = Path(given)
-    dll = dll.resolve()
-    if not dll.exists():
-        raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
-    if dll.stat().st_mtime < sources_mtime():
-        raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-    return dll
+        dll = Path(given).resolve()
+        if not dll.exists():
+            raise CouldNotRun(f"{name}: no DLL at {dll}")
+        if dll.stat().st_mtime < sources_mtime():
+            raise CouldNotRun(f"{name}: the DLL given, {dll}, is older than the tree's sources")
+        return dll
+    if not dll.exists() or dll.stat().st_mtime < sources_mtime():
+        say(f"{name}: {dll.name} is {'missing' if not dll.exists() else 'older than its sources'}: "
+            f"building it ({line})")
+        r = subprocess.run([sys.executable, str(TREE / "tools" / "runlock.py"), "make", "--", *make],
+                           cwd=TREE, capture_output=True, text=True)
+        if r.returncode != 0 or not dll.exists() or dll.stat().st_mtime < sources_mtime():
+            tail = (r.stdout + r.stderr).strip().splitlines()[-5:]
+            raise CouldNotRun(f"{name}: {line} failed ({r.returncode}): " + " | ".join(tail))
+    return dll.resolve()
 
 
 # The order a free worker takes queued lanes in: the long ones first -- X, U and K start the
@@ -5710,7 +5723,12 @@ def gated(paths, base):
         elif content_users(p):
             fx |= content_users(p)
             why.append(f"{p}: the content of {' '.join(sorted(content_users(p)))}")
-        else:
+        elif any(p in hs for hs in headers.values()):
+            # a header whose change is in comments or whitespace alone compiles to the same objects:
+            # it selects nothing (changed_lines, which every other path's lines go through too)
+            if (TREE / p).exists() and not changed_lines(p, base):
+                why.append(f"{p}: only its comments or whitespace changed, so it selects nothing")
+                continue
             for sim, hs in headers.items():
                 if p in hs:
                     whole.add(sim)
@@ -5767,6 +5785,18 @@ def landing_plan(base):
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
     funcs, regions, data_only = {}, {}, set()
+    texts = {p[len(DD):]: (TREE / p).read_text()
+             for p in sim_paths() | {DD + r for r in RECORDER_COVERED} if (TREE / p).exists()}
+
+    def simulated(rel):
+        """the builds whose simulation can run `rel` (tafeat.sim_builds), said in `why` when that
+        is fewer than both"""
+        bs = tafeat.sim_builds(rel, texts) if rel in texts else tafeat.BOTH
+        said = (f"{DD}{rel}: an engine-free file the simulation names only on the "
+                f"{'+'.join(sorted(bs))} build, so no other build is asked to reach it")
+        if bs != tafeat.BOTH and said not in why:
+            why.append(said)
+        return bs
 
     def whole_file(rel, text, key, bs, what):
         """Every feature of `rel`, and a function of it reached on each build of `bs` that
@@ -5776,6 +5806,7 @@ def landing_plan(base):
                 fx.update(f["fixtures"])
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
+        bs = bs & simulated(rel)
         if fns:
             bs = bs & frozenset().union(*(bl[f[1]] for f in fns))
         if not bs:
@@ -5800,6 +5831,7 @@ def landing_plan(base):
         bl = tafeat.builds(text)
         marks = tafeat.untested(text)
         quiet = tafeat.comment_or_directive_lines(text)
+        sim_bs = simulated(rel)
         prelude = frozenset()
         src = text.split("\n")
         new_file = subprocess.run(["git", "-C", str(TREE), "cat-file", "-e",
@@ -5814,8 +5846,9 @@ def landing_plan(base):
                 said = f"{path}: {fn[0]} is SIM_UNTESTED ({marks[fn[0]]}): asked no reach"
                 if said not in why:
                     why.append(said)
-            b = bl[ln] if ln < len(bl) else tafeat.BOTH
-            if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it
+            b = (bl[ln] if ln < len(bl) else tafeat.BOTH) & sim_bs
+            if not b:                   # a test program's line (tafeat.TEST_ONLY), or a build whose
+                                        # simulation never runs the file: no game runs it there
                 continue
             if "stock" in b:
                 fx.add(STOCK_FIXTURE)
@@ -5872,21 +5905,40 @@ def reached_by_build(per, fixes):
             for b in ("raised", "stock")}
 
 
-def uncovered(funcs, regions, got, fx, multiplayer):
+def uncovered(funcs, regions, got, fx, multiplayer, mp_failed=frozenset()):
     """(problems, reached, total): each changed function and each region of landing_plan not
-    reached on every build it names, by name, against `got` (reached_by_build)."""
+    reached on every build it names, by name, against `got` (reached_by_build).
+
+    A two-player game that failed on a build (`mp_failed`) left that build's reach incomplete, so
+    a function missing only on such builds is not UNCOVERED: it is listed under the failed game,
+    one line a build, beside the game's own failure, which already fails the landing."""
+    def missing(keys, bs):
+        return {b for b in bs if not any(k in got[b] for k in keys)}
+
     def reached(keys, bs):
-        return all(any(k in got[b] for k in keys) for b in bs)
-    problems = []
+        return not missing(keys, bs)
+    problems, unknown = [], {}
     for (src, fn), (feat, bs) in sorted(funcs.items()):
-        if not reached([(src, fn)], bs):
+        gone = missing([(src, fn)], bs)
+        if gone and gone <= mp_failed:
+            for b in gone:
+                unknown.setdefault(b, []).append(f"{src}:{fn}")
+        elif gone:
             problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
                             f"fixtures {' '.join(sorted(fx)) or 'none'}"
                             f"{'; and the two-player game' if multiplayer else ''})")
     for key, (fns, bs, what) in sorted(regions.items()):
-        if not reached(fns, bs):
+        gone = missing(fns, bs)
+        if gone and gone <= mp_failed:
+            for b in gone:
+                unknown.setdefault(b, []).append(key)
+        elif gone:
             problems.append(f"UNCOVERED {key}: {what} ran in the build{'s' if len(bs) > 1 else ''} "
                             f"{'+'.join(sorted(bs))}")
+    for b, names in sorted(unknown.items()):
+        problems.append(f"UNREACHED BEHIND THE FAILED TWO-PLAYER GAME {b}: {len(names)} reached by no "
+                        f"test group, and the game that might have reached them did not finish: "
+                        f"{' '.join(names)}")
     k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
         1 for fns, bs, _ in regions.values() if reached(fns, bs))
     return problems, k, len(funcs) + len(regions)
@@ -6090,12 +6142,15 @@ def cmd_landing(args):
     problems += unread
     got = reached_by_build(per, {n: run.fx[n]["fix"] for n in per})
     # the two-player groups played beside the test groups (Run.multiplayer_lane), or kept
+    mp_failed = set()
     for b in (mp_dlls if run else ()):
         reach, trouble = mp_kept.get(b) or run.mp_results[b]
         got[b] |= reach
         problems += trouble
+        if trouble:
+            mp_failed.add(b)
 
-    missed, k, total = uncovered(funcs, regions, got, fx, multiplayer)
+    missed, k, total = uncovered(funcs, regions, got, fx, multiplayer, frozenset(mp_failed))
     problems += missed
     for p in problems:
         print(f"tareplay landing: {p}")
@@ -6117,6 +6172,12 @@ def cmd_landing(args):
     return status or 1
 
 
+# the note results that meet the gate: the harness's pass, and the owner's acceptance of a run whose
+# every lane passed but whose named UNCOVERED they chose to land (CLAUDE.md, "landing it anyway is the
+# owner's decision"), which the landing writes by hand with the run and the names in the note
+NOTE_MET = {"pass", "uncovered-accepted-by-owner"}
+
+
 def landing_check(base):
     """0 when a passing note sits on a commit R of base..HEAD and R..HEAD changes no gated
     file; 1 otherwise, saying why."""
@@ -6127,14 +6188,17 @@ def landing_check(base):
         return 0
     for c in git("rev-list", f"{base}..HEAD").split():
         note = git("notes", "show", c, check=False)
-        if any(ln.startswith(NOTE) and " result=pass " in ln for ln in note.splitlines()):
+        results = {m.group(1) for ln in note.splitlines() if ln.startswith(NOTE)
+                   for m in [re.search(r" result=(\S+)", ln)] if m}
+        if results & NOTE_MET:
             later = [p for p in git("diff", "--name-only", c, "HEAD").split() if p]
             hit = [p for p in later if any(gated([p], c)[:4]) or wants_multiplayer([p])]
             if hit:
                 print(f"tareplay landing --check: the note on {c[:8]} predates gated changes: "
                       f"{' '.join(sorted(hit))}")
                 return 1
-            print(f"tareplay landing --check: pass ({c[:8]})")
+            verdict = "pass" if "pass" in results else "met on the owner's word"
+            print(f"tareplay landing --check: {verdict} ({c[:8]})")
             return 0
     print("tareplay landing --check: no passing replay-roundtrip note in "
           f"{base}..HEAD; run tools/replay/tareplay.py landing")

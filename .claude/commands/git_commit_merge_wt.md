@@ -392,9 +392,12 @@ once, when the finished feature lands on main, over everything it changed (`main
 It applies when `git diff --name-only main...HEAD` touches a gated file (a `sim` file of
 `thread-split.allow`, the recorder's own files or its multiplayer half, a replay TSV, a test group or a
 scenario a test group names; `tools/replay/tareplay.py landing --check` lists them). It passes when that
-command exits 0: a passing `replay-roundtrip:` note on a commit R, and nothing gated changed in
-`R..HEAD`. Otherwise run `tools/replay/tareplay.py landing` on HEAD; a recorder change also plays its
-two-player game on both coverage builds, so both must be built. A failure is the change's own, a
+command exits 0: a `replay-roundtrip:` note on a commit R whose result is `pass` or
+`uncovered-accepted-by-owner`, and nothing gated changed in `R..HEAD`. Otherwise run
+`tools/replay/tareplay.py landing` on HEAD; it builds each DLL it plays that is missing or older than
+its sources (the coverage builds among them) through the run lock before its first game. An owner's
+decision to land a run's named `UNCOVERED` is recorded by hand as a `replay-roundtrip:` note on the
+graded commit with `result=uncovered-accepted-by-owner`, the run's folder and the names. A failure is the change's own, a
 `MULTIPLAYER <build>:` line included: fix it in a new commit and re-run, three attempts. A game that
 cannot start at all (no X server, Wine, an instance) is escalation reason 3. An `UNFEATURED` line or an
 `UNCOVERED` function is fixed with a declaration or a test group that reaches it; landing without one
