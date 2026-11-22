@@ -227,6 +227,91 @@ def dump_stacks(instances, owned, output):
                     f.write(f"winedbg failed: {error}\n")
 
 
+# Each owner's builder reclaims a solar beside it, so every actor sprays (RK_EV_SPRAY) without
+# waiting on an AI's own builds. ReclaimUnit 0x404730 sprays only once its walk arrives (state 1,
+# 0x4047FA, the arrival event 0x20) and ends the order when the walk fails (the events 0x10008,
+# 0x40474A), so the builder must be able to walk to the solar: a unit placed on a map feature has no
+# path out [INFERRED: the one builder of four that never walked is the one standing on features], and
+# the scenario places a unit where it is told. On Two Continents the host AI's builder at its
+# commander + 256 stood on two feature anchors (cells 363 and 364 of row 783) and never moved; its
+# order ended by tick 236 and the test waited on the stock AI's own first build, which came as late
+# as tick 2958 (MEASURED 2026-11-22, the feature grid read from the recording, the order node read
+# live; the engine's own path scheduler, tagpu_pathverify.on, refused the walk as ours did). The
+# three builders that walked had a feature beside them or under their solar, never under
+# themselves. So each pair is placed where the feature grid shows the builder's cells clear
+# (placement).
+# A unit at world x covers the cells (x >> 4) - foot // 2 up to + foot - 1 (MEASURED 2026-11-22 from
+# the units' cell word +0x76 and footprint word +0x7E: ARMCOM at 5825 covers 363-364, ARMSOLAR at
+# 5921 covers 368-372); z the same.
+BUILDER_TYPE, BUILDER_FOOT, BUILDER_OFFSET = "ARMCOM", 2, 256
+SOLAR_TYPE, SOLAR_FOOT, SOLAR_GAP = "ARMSOLAR", 5, 96     # the solar this far past the builder in x
+CELL_BYTES, CELL_NONE = 13, 0xFFFF                          # engine/map.md, *The cell*
+GRID = "*0x511DE8+0x14287:4", "*0x511DE8+0x14233:4", "*0x511DE8+0x14237:4"   # cells, W, H
+SHIFT_CELLS = 10                                            # the search: up to this far, in 2-cell steps
+SHIFTS = sorted(((dx, dz) for dx in range(-SHIFT_CELLS, SHIFT_CELLS + 1, 2)
+                 for dz in range(-SHIFT_CELLS, SHIFT_CELLS + 1, 2)),
+                key=lambda d: (abs(d[0]) + abs(d[1]), d))
+
+
+def footprint(at, foot):
+    first = (at >> 4) - foot // 2
+    return range(first, first + foot)
+
+
+def pair_cells(bx, bz):
+    """(columns, rows): the rectangle from the builder at (bx, bz) to its solar, the cells between
+    them included -- what its walk crosses."""
+    sx = bx + SOLAR_GAP
+    rows = list(footprint(bz, BUILDER_FOOT)) + list(footprint(bz, SOLAR_FOOT))
+    return (range(footprint(bx, BUILDER_FOOT)[0], footprint(sx, SOLAR_FOOT)[-1] + 1),
+            range(min(rows), max(rows) + 1))
+
+
+def unoccupied(b):
+    """no unit filed in the cell (slot A +0x00) and no yard mark (flags +0x0C bit 1)"""
+    return struct.unpack_from("<H", b, 0)[0] == 0 and not b[12] & 2
+
+
+def placement(cell, bx, bz):
+    """(builder x, builder z): the nearest SHIFTS of (bx, bz) where the builder's own cells hold no
+    feature (def +0x08 0xFFFF) and every cell of pair_cells is unoccupied; None when none is.
+    `cell(x, z)` is the feature grid's 13-byte cell, None off the grid."""
+    for dx, dz in SHIFTS:
+        x, z = bx + dx * 16, bz + dz * 16
+        cols, rows = pair_cells(x, z)
+        got = [cell(c, r) for r in rows for c in cols]
+        own = [cell(c, r) for r in footprint(z, BUILDER_FOOT) for c in footprint(x, BUILDER_FOOT)]
+        if any(b is None for b in got):
+            continue
+        if all(map(unoccupied, got)) and all(struct.unpack_from("<H", b, 8)[0] == CELL_NONE for b in own):
+            return x, z
+    return None
+
+
+def grid_reader(peek, bx, bz):
+    """cell(x, z) over the window placement can search around (bx, bz), read from the live game
+    with `peek(specs) -> [value]` (tacli peek): the grid's cells, width and height, then each row of
+    the window in reads of at most 19 cells (tagpu_peek.c, PEEK_MAX 256 bytes)."""
+    base, w, h = (int(v.split()[0]) for v in peek(list(GRID)))
+    cols, rows = pair_cells(bx, bz)
+    x0, x1 = max(cols[0] - SHIFT_CELLS, 0), min(cols[-1] + SHIFT_CELLS, w - 1)
+    z0, z1 = max(rows[0] - SHIFT_CELLS, 0), min(rows[-1] + SHIFT_CELLS, h - 1)
+    specs, at = [], []
+    for z in range(z0, z1 + 1):
+        for x in range(x0, x1 + 1, 19):
+            n = min(19, x1 + 1 - x)
+            specs.append(f"0x{base + (z * w + x) * CELL_BYTES:X}:x{n * CELL_BYTES:X}")
+            at.append((x, z, n))
+    data = {}
+    for (x, z, n), value in zip(at, peek(specs)):
+        raw = bytes.fromhex(value.replace(" ", ""))
+        if len(raw) != n * CELL_BYTES:
+            raise RuntimeError(f"the feature grid's row {z} read {len(raw)} bytes, not {n * CELL_BYTES}")
+        for i in range(n):
+            data[(x + i, z)] = raw[i * CELL_BYTES:(i + 1) * CELL_BYTES]
+    return lambda x, z: data.get((x, z))
+
+
 # the drawing board's gesture each human makes: hold `\`, drag a line, a middle click for a pin
 MARKS = ("down:backslash", "mouse:400,300", "down:lbutton", "mouse:450,320", "mouse:500,340",
          "up:lbutton", "mouse:600,400", "down:mbutton", "up:mbutton", "up:backslash")
@@ -328,11 +413,28 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 if bad:
                     raise RuntimeError("ImpAI's network seats: " + "; ".join(bad))
                 print("PASS: each peer's level marks its own AI row ImpAI's and names the other's", flush=True)
+            def peeker(name):
+                def peek(specs):
+                    rows = json.loads(command(sys.executable, cli, "peek", name, *specs, "--json"))["peeks"]
+                    if len(rows) != len(specs) or any(r["addr"] is None for r in rows):
+                        raise RuntimeError(f"{name}: the feature grid could not be read: {rows[:3]}")
+                    return [r["value"] for r in rows]
+                return peek
+
+            def clear_pair(name, owner, base):
+                bx, bz = base[0] + BUILDER_OFFSET, base[1]
+                at = placement(grid_reader(peeker(name), bx, bz), bx, bz)
+                if at is None:
+                    raise RuntimeError(f"{name}: no clear ground for player {owner}'s builder and solar "
+                                       f"within {SHIFT_CELLS} cells of ({bx}, {bz})")
+                print(f"{name}: player {owner}'s builder at {list(at)}, its solar at "
+                      f"{[at[0] + SOLAR_GAP, at[1]]}", flush=True)
+                return at
             for name, unit_type, x, ai in ((host, "ARMFLASH", 2300, 2), (join, "CORAK", 2460, 3)):
                 roster = json.loads(command(sys.executable, cli, "roster", name, "--json"))
                 bases = {u["owner"]: u["world"] for u in roster["units"] if u["type"].upper() == "ARMCOM"}
-                hx, hz = bases[0][:2]
-                ax, az = bases[ai][:2]
+                hx, hz = clear_pair(name, 0, bases[0])
+                ax, az = clear_pair(name, ai, bases[ai])
                 scenario = dict(format="ta-scenario/1", seed=20261005, on_error="abort",
                     setup=dict(clear_existing=False, switches=dict(shootall=True, noshake=True)),
                     groups=[dict(id="human", owner=0, at=[x, 1200],
@@ -341,12 +443,12 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                             dict(id="ai", owner=ai, at=[x, 1400],
                                  pattern=dict(kind="grid", cols=5, spacing=32),
                                  composition=[dict(type=unit_type, count=10)], stance="hold")],
-                    units=[dict(id="human_builder", type="ARMCOM", owner=0, pos=[hx+256, hz],
+                    units=[dict(id="human_builder", type=BUILDER_TYPE, owner=0, pos=[hx, hz],
                                 orders=[dict(cmd="reclaim", target="human_solar")]),
-                           dict(id="human_solar", type="ARMSOLAR", owner=0, pos=[hx+352, hz]),
-                           dict(id="ai_builder", type="ARMCOM", owner=ai, pos=[ax+256, az],
+                           dict(id="human_solar", type=SOLAR_TYPE, owner=0, pos=[hx + SOLAR_GAP, hz]),
+                           dict(id="ai_builder", type=BUILDER_TYPE, owner=ai, pos=[ax, az],
                                 orders=[dict(cmd="reclaim", target="ai_solar")]),
-                           dict(id="ai_solar", type="ARMSOLAR", owner=ai, pos=[ax+352, az])])
+                           dict(id="ai_solar", type=SOLAR_TYPE, owner=ai, pos=[ax + SOLAR_GAP, az])])
                 path = output / (name+".json")
                 path.write_text(json.dumps(scenario))
                 command(sys.executable, cli, "scenario", "apply", name, path, "--json")

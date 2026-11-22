@@ -1887,6 +1887,51 @@ class MultiplayerNames(unittest.TestCase):
         self.assertEqual([n for n in names if len(n) > recmp.NICKNAME_CHARS], [])
         self.assertEqual(len({n.upper() for n in names}), len(names))
 
+    def test_each_builder_stands_off_the_maps_features(self):
+        """placement keeps the builder's spot when its cells hold no feature and nothing stands on
+        the pair's cells, and otherwise takes the nearest spot that does; grid_reader reads the
+        window from peeks of at most 19 cells"""
+        import recmp_create_begin_test as recmp
+        w, h = 64, 64
+        grid = {(x, z): bytearray(b"\x00\x00\xff\xff\x54\x54\x54\x00\xff\xff\x00\x00\x50")
+                for x in range(w) for z in range(h)}
+        cell = lambda x, z: bytes(grid[(x, z)]) if (x, z) in grid else None
+        bx, bz = 300, 500                      # the builder on cells 17-18 x 30-31, its solar 21-25
+        self.assertEqual(recmp.placement(cell, bx, bz), (bx, bz))
+        grid[(26, 31)][8:10] = b"\x07\x00"     # a feature past the solar: no matter
+        grid[(20, 31)][8:10] = b"\x07\x00"     # one between them: no matter
+        self.assertEqual(recmp.placement(cell, bx, bz), (bx, bz))
+        grid[(18, 31)][8:10] = b"\x08\x00"     # one under the builder: moved off it
+        got = recmp.placement(cell, bx, bz)
+        self.assertNotEqual(got, (bx, bz))
+        self.assertNotIn(18, recmp.footprint(got[0], recmp.BUILDER_FOOT))
+        grid[(22, 30)][12] |= 2                # a yard where the solar would go: moved again
+        cols, rows = recmp.pair_cells(*recmp.placement(cell, bx, bz))
+        self.assertFalse(22 in cols and 30 in rows)
+        self.assertIsNone(recmp.placement(lambda x, z: None, bx, bz))     # off the grid
+
+        base = 0x10000000
+        reads = []
+
+        def peek(specs):
+            reads.append(specs)
+            if specs == list(recmp.GRID):
+                return [f"{base} (0x{base:08X})", f"{w} (0x{w:08X})", f"{h} (0x{h:08X})"]
+            out = []
+            for spec in specs:
+                addr, n = spec.split(":x")
+                at, n = (int(addr, 16) - base) // 13, int(n, 16) // 13
+                self.assertLessEqual(n, 19)
+                out.append(" ".join(f"{v:02X}" for i in range(n) for v in grid[(at % w + i, at // w)]))
+            return out
+        read = recmp.grid_reader(peek, bx, bz)
+        self.assertEqual(len(reads), 2)
+        cols, rows = recmp.pair_cells(bx, bz)
+        self.assertEqual(read(18, 31), bytes(grid[(18, 31)]))
+        self.assertEqual(read(cols[-1] + recmp.SHIFT_CELLS, rows[0] - recmp.SHIFT_CELLS),
+                         bytes(grid[(cols[-1] + recmp.SHIFT_CELLS, rows[0] - recmp.SHIFT_CELLS)]))
+        self.assertIsNone(read(cols[-1] + recmp.SHIFT_CELLS + 1, rows[0]))
+
     def test_the_impai_form_reads_each_peers_seat_line(self):
         import recmp_create_begin_test as recmp
         line = ("impai: seats {} (netai=impai, a network game, level 2) of 4 records; "
