@@ -13,6 +13,10 @@
 
 /* Game-thread VM allocation with a stable START/CALL counter key. */
 int tagpu_rec_cob_child(char* cob, unsigned script, int call);
+/* The game's COB host's (tagpu_patches.c, THE GAME'S COB INTERPRETER): an allocation the core attempted, counted as 0x4B08C0's sink
+   would count it with `caller` its key; and a start on `cob` at its 0x4B0B00 or 0x4B0940 entry. */
+void tagpu_rec_cob_alloc(const char* cob, int script, unsigned caller);
+void tagpu_rec_cob_started(const char* cob);
 
 /* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
    between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a

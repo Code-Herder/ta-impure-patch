@@ -20,6 +20,14 @@
 #define TAGPU_COB_SAVE_BYTES (24u + TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES)
 #define TAGPU_COB_LEGACY_SAVE_BYTES (24u + TAGPU_COB_LEGACY_THREADS * TAGPU_COB_RECORD_BYTES)
 
+/* A record's header: the words a record holds before its stack, in TagpuCobRecord's order. */
+typedef struct TagpuCobHead {
+    uint32_t status, pc;
+    int32_t sp, sleep, piece, axis, child;
+    uint32_t mask, callback;
+} TagpuCobHead;
+
+/* The engine's record, the save's too: the header and TAGPU_COB_WORDS of stack. */
 typedef struct TagpuCobRecord {
     uint32_t status, pc;
     int32_t sp, sleep, piece, axis, child;
@@ -33,6 +41,17 @@ typedef struct TagpuCobProgram {
     unsigned char *starts;
     uint32_t words, scripts, pieces, statics, model_pieces;
     int terminal_zero;
+    /* THE STACK PROOF, made at load under IMPURE's rules (tagpu_cob_safe.c, prove). For each
+       instruction, `lo` and `hi` bound the words a running record holds on entering it, over
+       every way a thread can start: an engine start leaves 0 to 4 words, a START or CALL child
+       none (its arguments sit in stack[0..argc-1] with sp at -1). `guard` is 1 where tagpu_cob_check_step could answer anything but
+       "execute" for a state inside those bounds (an underflow the bounds do not rule out, a
+       division, a terminal opcode, the terminal zero), and 0 where it cannot. `depth` is the
+       words a record of this program ever touches: the deepest bound, local index, child
+       argument copy and engine write, never below 4. All three arrays are NULL, and depth TAGPU_COB_WORDS, when some
+       path can pass TAGPU_COB_WORDS: such a program is checked at every opcode. */
+    unsigned char *lo, *hi, *guard;
+    uint32_t depth;
 } TagpuCobProgram;
 
 /* The caller owns the blob for the program's entire lifetime. Header/name
@@ -42,7 +61,17 @@ void tagpu_cob_program_free(TagpuCobProgram* program);
 int tagpu_cob_bind_model(TagpuCobProgram* program, uint32_t pieces, char* reason, size_t capacity);
 int tagpu_cob_id_valid(int32_t id, uint32_t slots);
 int32_t tagpu_cob_build_left(float remaining);
-/* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. */
+/* 1 when the stack proof covers this record: the program is bounded, and a busy record's pc is a
+   validated instruction with sp + 1 inside its bounds (a CALL refused on child -1, which nothing
+   ever runs again, needs only sp + 1 within `depth`). A record the VM did not make itself -- a
+   saved game's -- is run under the full check unless every record of its object passes. */
+int tagpu_cob_record_proven(const TagpuCobProgram* program, const TagpuCobHead* record);
+/* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. A record's stack holds
+   `words` (at most TAGPU_COB_WORDS); the engine's record holds TAGPU_COB_WORDS. */
+int tagpu_cob_check_head_step(const TagpuCobProgram* program, const TagpuCobHead* head,
+                              const int32_t* stack, uint32_t words, char* reason, size_t capacity);
+int tagpu_cob_check_head(const TagpuCobProgram* program, const TagpuCobHead* head, uint32_t words,
+                         char* reason, size_t capacity);
 int tagpu_cob_check_step(const TagpuCobProgram* program, const TagpuCobRecord* record,
                          char* reason, size_t capacity);
 int tagpu_cob_check_record(const TagpuCobProgram* program, const TagpuCobRecord* record,

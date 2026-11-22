@@ -50,6 +50,7 @@
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
 #include "tagpu_guard.h"
+#include "tagpu_scatter.h"
 #include "tagpu_pathfind.h"
 #include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
@@ -349,6 +350,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            byte-matched, disjoint from every site above; a guard that is not a ground builder's of a
            finished plant runs as stock. */
         tagpu_guard_init();
+
+        /* tagpu: clearing a build site (tagpu_scatter.h): MobileBuild's blocked-site branch 0x403CD0 and
+           its VTOL twin 0x41400D, byte-matched, disjoint from every site above; a site with none of
+           the builder's idle units on it is waited on and abandoned as stock. */
+        tagpu_scatter_init();
 
         /* tagpu: the ground units' pathfinder (tagpu_pathfind.h): the players phase's call of the
            engine's scheduler 0x464F92 sent to ours, the step's call 0x4955E5 sent to the join that

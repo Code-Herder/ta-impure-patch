@@ -1812,11 +1812,14 @@ _COMMIT = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Effect))
 _TRACE = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Trace))
 
 
+_ALLOC = _C.CFUNCTYPE(None, _C.c_void_p, _C.c_int, _C.c_char)
+
+
 class _Host(_C.Structure):
     _fields_ = [("ctx", _C.c_void_p), ("get", _GET), ("world", _C.POINTER(_World)),
                 ("rand", _RAND), ("cargo", _CARGO),
                 ("carrier", _CARRIER), ("alive", _ALIVE), ("callback", _CALLBACK),
-                ("commit", _COMMIT), ("trace", _TRACE)]
+                ("commit", _COMMIT), ("trace", _TRACE), ("alloc", _ALLOC)]
 
 
 class _Run(_C.Structure):
@@ -1830,9 +1833,12 @@ class _Pend(_C.Structure):
 
 
 class _Vm(_C.Structure):
-    _fields_ = [("program", _C.c_void_p), ("object", _C.c_void_p), ("statics", _C.c_void_p),
-                ("anim", _C.c_void_p), ("model", _C.c_void_p), ("threads", _C.c_uint),
-                ("rules", _C.c_uint), ("faulted", _C.c_int), ("pend", _Pend)]
+    _fields_ = [("quiet", _C.c_int32), ("due", _C.c_int32), ("owed", _C.c_int32), ("faulted", _C.c_int),
+                ("object", _C.c_void_p), ("pend", _Pend), ("program", _C.c_void_p),
+                ("statics", _C.c_void_p), ("anim", _C.c_void_p), ("model", _C.c_void_p),
+                ("heads", _C.c_void_p), ("stacks", _C.c_void_p), ("count", _C.c_void_p),
+                ("head_stride", _C.c_uint32), ("stack_stride", _C.c_uint32), ("words", _C.c_uint32),
+                ("threads", _C.c_uint), ("rules", _C.c_uint), ("checked", _C.c_int)]
 
 
 def _cob_source_root():
@@ -1889,7 +1895,12 @@ def cobvm_lib():
 
 
 def bind_cobvm(lib):
-    """Declare the core's entries on a loaded copy of it (a sanitizer build in the tests too)."""
+    """Declare the core's entries on a loaded copy of it (a sanitizer build in the tests too). The VM
+    struct is allocated here, so its mirror _Vm must be the C struct's size."""
+    lib.tagpu_cobvm_size.restype = _C.c_uint
+    if lib.tagpu_cobvm_size() != _C.sizeof(_Vm):
+        raise TacobError(f"tacob's _Vm is {_C.sizeof(_Vm)} bytes, TAGPU_COBVM {lib.tagpu_cobvm_size()}: "
+                         "the mirror lags tagpu_cobvm.h")
     lib.tagpu_cob_program.restype = _C.c_void_p
     lib.tagpu_cob_program.argtypes = [_C.c_void_p, _C.c_size_t, _C.c_char_p, _C.c_size_t]
     lib.tagpu_cob_program_free.argtypes = [_C.c_void_p]
@@ -1901,6 +1912,8 @@ def bind_cobvm(lib):
                                       _C.c_int, _C.c_int, _C.POINTER(_C.c_int32)]
     lib.tagpu_cobvm_query.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run), _C.c_int, _C.POINTER(_C.c_int32)]
     lib.tagpu_cobvm_tick.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run), _C.c_int32]
+    lib.tagpu_cobvm_settle.argtypes = [_C.POINTER(_Vm)]
+    lib.tagpu_cobvm_settle.restype = None
     lib.tagpu_cobvm_flush.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run)]
     lib.tagpu_cobvm_flush.restype = None
     return lib
@@ -2182,6 +2195,9 @@ class CobVM:
     def _trace(self, ctx, t):
         t = t.contents
         kind = t.kind.decode("latin-1")
+
+        if kind == "H":                 # the game's stack peaks; no fixture line carries them
+            return
 
         def line():
             if kind == "S":

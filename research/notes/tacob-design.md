@@ -212,11 +212,14 @@ trace tab prints the same lines:
 | `X` | `tick  unit  script  source` | a start was **refused** — the eight records were all busy (the silent failure); `source` as above without the slot |
 | `K` | `tick  unit  slot  script  by` | a thread killed by another thread's `signal`; `by` = the signalling slot. Its `RETURN` never runs, so no `R` follows |
 | `D` | `tick  unit  slot  value` | a `rand( lo, hi )` draw; `value` = what the script received (`lo + result`) |
-| `H` | `tick  unit  slot  script  pc  depth` | a new per-record stack peak above 32 words, through the guarded runtime; allocation resets that record's peak |
+| `H` | `tick  unit  slot  script  pc  depth` | a new per-record stack peak above 32 words: the raised build's COB VM reports each step whose record holds more than 32 words, and the trace writes the new peaks; allocation resets that record's peak. The headless replay writes none |
 | `#` | free text | the header and diagnostics; `INCOMPLETE` invalidates the trace as a behavioral oracle |
 
-Lines are serialized under the trace lock. Each calling thread has its own pending start;
-an `S` line is written at its next hook event, after argument transfer. Native thread ordering
+Lines are serialized under the trace lock. In the stock-limits build the engine's interpreter
+runs and the trace's hooks inside it are its seams: each calling thread has its own pending start,
+and an `S` line is written at its next hook event, after argument transfer. In the raised build the
+game runs Impure's COB VM, whose trace events give the same lines, its start latched in the VM until
+its next event. Native thread ordering
 is not a claim of deterministic cross-thread event ordering. The
 file is created afresh at every attach and flushed per line, so a killed process loses nothing.
 A `# start dropped` line marks the one case a start is not written: the unit died between the

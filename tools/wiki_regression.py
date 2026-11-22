@@ -4384,9 +4384,9 @@ def tech_panels(c, what):
     return [TECH_KINDS[s] for s in sorted(seen)], opened
 
 
-def mp(name):
+def mp(name, keep=False):
     """(m): the compatibility suite's two-player start on the retail setup, then the wiki on the
-    host."""
+    host. Both peers' instances are removed once it passes, unless `keep`."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     import dpport
@@ -4475,6 +4475,9 @@ def mp(name):
     assert not refused, f"(m) {'; '.join(refused)}"
     print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
           "both run on after the close, no desync line, no refusal of the GPU memory cap")
+    if not keep:
+        for why in tacompat.drop_instances(host["name"], join["name"]):
+            print(f"wiki mp: the instance stays: {why}")
 
 
 MODS_SCREEN = "2560x1440"                     # the private display, and so the game's screen (private_xvfb)
@@ -5088,8 +5091,9 @@ def mods_table(rows):
                   + ("" if u["ok"] else f" - {u.get('why')}"))
 
 
-def mods(names, shots):
-    """(w1)..(w5) per setup, one at a time under the run lock."""
+def mods(names, shots, keep=False):
+    """(w1)..(w5) per setup, one at a time under the run lock; a setup that passes has its instance removed,
+    unless `keep`."""
     assert shots, "mods needs --shots DIR"
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
@@ -5101,6 +5105,9 @@ def mods(names, shots):
     rows = []
     for n in names:
         rows.append(mods_setup(tacompat, byname[n], dll, shots / n))
+        if rows[-1]["pass"] and not keep:
+            for why in tacompat.drop_instances(tacompat.inst_name(n, "-wk")):
+                print(f"wiki mods: {n}: the instance stays: {why}")
         (shots / "rows.json").write_text(json.dumps(rows, indent=1, default=str))
     mods_table(rows)
     bad = [r["setup"] for r in rows if not r["pass"]]
@@ -5558,7 +5565,7 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
         raise
 
 
-def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
+def gate(shots, jobs, offline_jobs, modes, setups, resume=False, keep=False):
     """Every part of the wiki's gate at once: the offline checks on at most `offline_jobs` slots of the run lock, the
     Wine ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
     own instance `wikigate-<tag>-<mode>` with its own registry and its own private X server, and a setup of the mods run
@@ -5571,7 +5578,9 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
     under the lock, named with its tag: tacli's instances are one set for every worktree, and another gate's game
     lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has.
     The game lanes start longest first (game_lane_order). With `resume` the gate goes on with the one an earlier sitting
-    left in `shots`: each lane kept there under this sitting's key is read back, not played (RESUMING A GATE)."""
+    left in `shots`: each lane kept there under this sitting's key is read back, not played (RESUMING A GATE).
+    A game lane that passes removes its instances when it ends, the mods and mp lanes' prepare_wine ones included;
+    a lane that fails or could not run keeps them for diagnosis, and with `keep` every lane does."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
     import functools
@@ -5604,6 +5613,7 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
                     f"setups, {len(offline)} offline checks) -j {jobs}", pools={"game": jobs, "offline": max(1, offline_jobs)},
                     gate=True)
     me = [sys.executable, "-u", str(Path(__file__).resolve())]
+    lane_keep = ["--keep"] if keep else []
     env = dict(os.environ)
     lanes = Lanes()
     servers = set()             # the game lanes' X servers not yet stopped by their lane
@@ -5636,12 +5646,15 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
         J.start("game", mode)
         try:
             cmd = me + [inst.name, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
-            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", genv, keep)
+            code, line = gate_lane(lanes, cmd + lane_keep, shots / f"{mode}.log", genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         finally:
             servers.discard(xv)
             tacompat.stop_xvfb(xv)
+        if code == 0 and not lane_keep:
+            for why in tacompat.drop_instances(inst.name):
+                print(f"wiki gate: {mode}: the instance stays: {why}", flush=True)
         J.finish("game", mode, verdict(code), line)
         print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return settled("game", mode, code, line)
@@ -5649,8 +5662,8 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
     def lane_setup(name, genv, keep):
         J.start("mods", name)
         try:
-            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log",
-                                   genv, keep)
+            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name] + lane_keep,
+                                   shots / f"mods-{name}.log", genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("mods", name, verdict(code), line)
@@ -5748,6 +5761,8 @@ def main():
                                                     "least 4; fewer when fewer are free")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
+    p.add_argument("--keep", action="store_true", help="gate, mp, mods: keep every instance; by default a lane or "
+                                                       "setup that passes has its instances removed when it ends")
     p.add_argument("--resume", action="store_true", help="gate: go on with the gate an earlier sitting left in --shots "
                                                          "DIR: each lane whose pass or fail it kept under this sitting's "
                                                          "key is read back, every other one played (RESUMING A GATE)")
@@ -5762,11 +5777,11 @@ def main():
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
             gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n],
-                 a.resume)
+                 a.resume, a.keep)
         elif a.mode == "mp":
-            mp(a.instance)
+            mp(a.instance, a.keep)
         elif a.mode == "mods":
-            mods(MODS_SETUPS if a.instance == "all" else a.instance.split(","), a.shots)
+            mods(MODS_SETUPS if a.instance == "all" else a.instance.split(","), a.shots, a.keep)
         else:
             if a.launch:
                 stop = launched(a.instance, a.mode, a.res)

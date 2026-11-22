@@ -31,6 +31,12 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats stock-guard-seats");
    next, at StartBuilding's entry 0x438590, the order destructor's bit test 0x43A21E and the order controller's
    handler dispatch 0x43B865 (THE ARM, below).
 
+   A BUILD SITE. A site one of the builder's owner's builders is being refused on (build scatter's rows,
+   tagpu_scatter.h) is ground a structure is about to stand on: it is taken ground for that owner's seats and wait
+   spots, as is every place build scatter has sent one of that owner's units to, a seat it covers is given up at the builder's next visit, and a builder standing on one is sent to the
+   exact place it was given, not to within its wait spot's two cells. Build scatter orders no unit this module
+   seats, and sends none to a lane, a seat or a wait spot (tagpu_guard_mark): a unit has one manager.
+
    STATE, all SIM_STATE: the plant rows s_plant (its identity, its frame's centre, its box, its lanes and the
    signature of the structures in its box) and the builder rows s_seat (its identity, its plant, its seat or
    wait spot, the cell it last stood on and since when, a seat it avoids, its held arm, the heading of its last
@@ -61,6 +67,7 @@ SIM_FEATURE(guard_seats, SIM_PUPPET_OWNER, "guard-seats stock-guard-seats");
 #include "tagpu_log.h"
 #include "tagpu_puppet.h"
 #include "tagpu_resource.h"
+#include "tagpu_scatter.h"
 #include "tagpu_worldq.h"
 #include "worldq.h"
 
@@ -595,14 +602,17 @@ static int still_guards(const Eng* e, const GuardSeat* t, const char* p, unsigne
     return 0;
 }
 
-/* TAKEN, for builder `self`'s search: the structures, every plant's lanes in the box, every other row's seat or
+/* TAKEN, for builder `self`'s search: the structures, the build sites its owner's builders are refused on and
+   the places build scatter has sent that owner's units to (A BUILD SITE), every plant's lanes in the box, every other row's seat or
    wait spot in it, and every other unit standing still -- a mover that has not changed cell for 30 ticks, which
    the pathfinder takes as an obstacle (the per-cell rule 0x47DE60 at 0x47DEF8..0x47DF32) */
 static void build_taken(const Eng* e, const GuardPlant* r, Scratch* s, unsigned self)
 {
+    const char* sb = unit_at(e, self);
     int i, k, x, z;
     memcpy(s->taken, s->blocked, (size_t)r->bw * r->bh);
     mark_footprints(e, r, s->taken);
+    if (sb) tagpu_scatter_mark(*(const uint8_t*)(sb + U_OWNER), e->now, r->bx0, r->bz0, r->bw, r->bh, s->taken);
     for (i = 0; i < GUARD_PLANTS; i++) {
         const GuardPlant* o = &s_plant[i];
         if (!o->used) continue;
@@ -1070,7 +1080,7 @@ static int __cdecl guard_visit(unsigned* regs)
     const GuardType* g;
     GuardPlant* r;
     GuardSeat* t;
-    unsigned mc;
+    unsigned mc, owner;
     int bslot, pslot, ptype, prow, pfx, pfz, bfx, bfz, gx, gz, r2min, r2max, replan, skip, cur_x, cur_z;
     unsigned char follow;
     WQ_DEF bd;
@@ -1131,6 +1141,15 @@ static int __cdecl guard_visit(unsigned* regs)
         t->moved = e.now;
     }
 
+    /* A BUILD SITE: a seat one covers is given up, and the search below takes the site as taken ground */
+    owner = *(const uint8_t*)(b + U_OWNER);
+    if (t->state == GS_SEATED && tagpu_scatter_covers(owner, e.now, t->x, t->z, bfx, bfz)) {
+        tagpu_logf("guard: site builder=%u plant=%u seat=%d,%d given up tick=%d", (unsigned)bslot,
+                   (unsigned)r->slot, t->x, t->z, (int)e.now);
+        t->state = GS_WAITING;
+        t->moved = e.now;
+    }
+
     if (replan || t->state != GS_SEATED) {
         if (!scratch_get(&s, r->bw, r->bh)) {
             if (replan) r->planned = 0;          /* the next visit plans it again */
@@ -1162,7 +1181,10 @@ static int __cdecl guard_visit(unsigned* regs)
         else if (e.now - t->idle >= ARM_GRACE)
             arm_fold(&e, t, "queue-empty");
     }
-    aim(node, p, t->x, t->z, bfx, bfz, t->state == GS_SEATED ? 16 : 64);
+    /* a wait spot's goal is reached two cells short of it, which can be on the site still: from a site the
+       builder walks to the place itself */
+    aim(node, p, t->x, t->z, bfx, bfz,
+        t->state == GS_SEATED || tagpu_scatter_covers(owner, e.now, cur_x, cur_z, bfx, bfz) ? 16 : 64);
     return skip;
 }
 
@@ -1317,4 +1339,47 @@ void tagpu_guard_level_init(void)
         }
     tagpu_sim_scratch_free(menu);
     tagpu_logf("guard: level plant types=%u sides=%u reach=%d", s_ntype, sides, (int)s_reach);
+}
+
+/* ---- for build scatter ---- */
+SIM_FEATURE(guard_build_site, SIM_PUPPET_OWNER, "build-scatter-guard stock-build-scatter-guard");
+
+int tagpu_guard_seats(unsigned slot)
+{
+    Eng e;
+    const GuardPlant* r;
+    const char* p;
+    const char* head;
+    unsigned char follow;
+    int i;
+    if (!s_install.installed || tagpu_puppet_on() || !eng_open(&e) || !slot || slot >= e.nslots) return 0;
+    for (i = 0; i < GUARD_SEATS; i++)
+        if (s_seat[i].state != GS_FREE && s_seat[i].builder == slot) break;
+    if (i == GUARD_SEATS || s_seat[i].plant >= GUARD_PLANTS) return 0;
+    r = &s_plant[s_seat[i].plant];
+    if (!r->used || !(p = unit_at(&e, r->slot)) || !alive(p) || birth_of(r->slot) != r->birth) return 0;
+    follow = action_of(S_FOLLOW);
+    if (!still_guards(&e, &s_seat[i], p, follow)) return 0;            /* the builder's own incarnation too */
+    head = *(const char* const*)(unit_at(&e, slot) + U_ORDERS);
+    return head && *(const uint8_t*)(head + N_ACTION) == follow && *(char* const*)(head + N_TARGET) == p ? 1 : 2;
+}
+
+void tagpu_guard_mark(int x0, int z0, int w, int h, unsigned char* t)
+{
+    const GuardPlant box = { .bx0 = (int16_t)x0, .bz0 = (int16_t)z0, .bw = (int16_t)w, .bh = (int16_t)h };
+    Eng e;
+    int i, k;
+    if (!s_install.installed || w < 1 || h < 1 || w > INT16_MAX || h > INT16_MAX || !eng_open(&e)) return;
+    for (i = 0; i < GUARD_PLANTS; i++)
+        for (k = 0; s_plant[i].used && k < s_plant[i].nlane; k++)
+            mark_rect(t, &box, s_plant[i].lane[k].x0, s_plant[i].lane[k].z0, s_plant[i].lane[k].x1,
+                      s_plant[i].lane[k].z1, 1);
+    for (i = 0; i < GUARD_SEATS; i++) {
+        const GuardSeat* o = &s_seat[i];
+        const char* b;
+        int fx, fz;
+        unsigned mc;
+        if (o->state == GS_FREE || !(b = unit_at(&e, o->builder)) || !builder_foot(&e, b, &fx, &fz, &mc)) continue;
+        mark_rect(t, &box, o->x, o->z, o->x + fx - 1, o->z + fz - 1, 1);
+    }
 }

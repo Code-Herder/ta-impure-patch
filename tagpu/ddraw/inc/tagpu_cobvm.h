@@ -3,9 +3,10 @@
 /* tagpu_cobvm -- the COB virtual machine, engine-free: the engine's runner 0x4B0DA0, its stepper
    0x4B1C00 and its entries 0x4B0940 / 0x4B0B00 / 0x4B0C40 / 0x4B0D60, opcode for opcode, on memory
    laid out as Impure's game lays it out (research/notes/ingame-wiki-cob-plan.md, "The core";
-   exe-reverse-engineering.md, "The COB engine"). The one COB VM outside the engine: tools/tacob
-   runs it; the in-game wiki and its mockup's server (L3) are to, and the game's own interpreter is
-   to be replaced by it.
+   exe-reverse-engineering.md, "The COB engine"). The one COB VM: the raised build's game runs it
+   on each unit's own COB object in place of the engine's (tagpu_patches.c, THE GAME'S COB
+   INTERPRETER), and tools/tacob, the in-game wiki and the coarse simulator's fire probe run it on
+   blocks of their own.
 
    ITS MEMORY IS THE ENGINE'S, in four blocks the caller owns:
      object   TAGPU_COB_OBJECT_BYTES, the COB object (tagpu_cob_safe.h): +0x04 the sim rate (30),
@@ -25,9 +26,13 @@
    reads as callbacks, writes as TAGPU_COBVM_EFFECT entries (the effect log).
 
    BOUNDED BY CONSTRUCTION: the program comes from tagpu_cob_program (tagpu_cob_safe.c), which
-   validated every operand and branch, and every opcode passes tagpu_cob_check_step, the same
-   guard the game's interpreter takes at 0x4B0E5D. A fault is a refusal: the call returns -1 with
-   the reason in the run, and the VM is not run again. */
+   validated every operand and branch and proved the stack's bounds, and an opcode passes
+   tagpu_cob_check_step, the same guard the game's interpreter takes at 0x4B0E5D, wherever the
+   proof does not show that check would answer "execute" (the program's `guard`). A VM checks
+   every opcode under RETAIL's rules, for an unbounded program, and after tagpu_cobvm_loaded finds
+   a record the proof does not cover. Built with TAGPU_COBVM_PROVE_CHECK (the tests), it runs the
+   check at the unguarded opcodes too and faults by name if one would not have executed. A fault
+   is a refusal: the call returns -1 with the reason in the run, and the VM is not run again. */
 #include <stdint.h>
 #include "tagpu_cob_safe.h"
 
@@ -70,7 +75,8 @@ typedef struct TAGPU_COBVM_EFFECT {
 
 /* One line of the cobtrace oracle (tacob-design.md, "The trace contract"), as fields. */
 typedef struct TAGPU_COBVM_TRACE {
-    char           kind;        /* 'S' start, 'R' return, 'K' kill, 'D' draw, 'X' refused start */
+    char           kind;        /* 'S' start, 'R' return, 'K' kill, 'D' draw, 'X' refused start,
+                                   'H' a step whose record holds more than 32 words (value: sp + 1) */
     uint32_t       tick;
     int32_t        slot;        /* S, R, K, D: the record; K: the killed one */
     int32_t        script;      /* S, X: the script's index; R, K: -1 (the host maps `pc`) */
@@ -106,6 +112,9 @@ typedef struct TAGPU_COBVM_HOST {
     void (*commit)(void* ctx, const TAGPU_COBVM_EFFECT* e);
     /* the oracle's lines; NULL for none */
     void (*trace)(void* ctx, const TAGPU_COBVM_TRACE* t);
+    /* every allocation 0x4B08C0 is asked for, before it is tried: `script` as asked (an unknown
+       script and a full pool included), `from` TAGPU_COBVM_FROM_*; NULL for none */
+    void (*alloc)(void* ctx, int script, char from);
 } TAGPU_COBVM_HOST;
 
 /* One call's context: the host, the effect log (when the host has no commit), the tick the trace
@@ -121,14 +130,29 @@ typedef struct TAGPU_COBVM_RUN {
 /* One unit's VM. The pointers are the caller's; the latch is the trace's start held until the
    next event, as the oracle writes it (the callers push a start's arguments after it returns). */
 typedef struct TAGPU_COBVM {
-    const TagpuCobProgram* program;
+    /* THE TURN SCHEDULE (tagpu_cobvm_tick): `quiet` when every busy record sleeps or waits on a
+       CALL, `due` then the dt after which the first sleeper wakes (its sleep), `owed` the dt the
+       sleepers have been given and not yet taken off (tagpu_cobvm_settle). It, `faulted`, `object`
+       and the latch's `on` come first: they are all a turn with nothing due reads of the VM
+       (tagpu_cobvm_rest), so a host that keeps the VM beside the object's header line keeps that
+       turn to one line. */
+    int32_t                quiet, due, owed;
+    int                    faulted;
     unsigned char*         object;
+    struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
+    const TagpuCobProgram* program;
     int32_t*               statics;
     int32_t*               anim;
     unsigned char*         model;
+    /* THE RECORDS: their headers from `heads`, `head_stride` bytes apart; their stacks from
+       `stacks`, `stack_stride` words apart, `words` a stack; the running count at `count`. In the
+       engine's layout (tagpu_cobvm_init, tagpu_cobvm_bind) all of it is in the object. */
+    unsigned char*         heads;
+    int32_t*               stacks;
+    uint32_t*              count;
+    uint32_t               head_stride, stack_stride, words;
     unsigned               threads, rules;
-    int                    faulted;
-    struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
+    int                    checked;    /* every opcode through tagpu_cob_check_step */
 } TAGPU_COBVM;
 
 /* Bind the blocks and clear them as the engine's constructor and allocations leave them: the
@@ -138,6 +162,36 @@ typedef struct TAGPU_COBVM {
 int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
                      unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
                      char* reason, unsigned capacity);
+
+/* Bind blocks the engine has already made and filled -- the game's own COB object after its
+   constructor 0x4B0610 and the script's attach 0x4B0720 -- without clearing them. The model's
+   piece count must be bound into `program` (tagpu_cob_bind_model). Returns 1, or 0 with the
+   reason. */
+int tagpu_cobvm_bind(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
+                     char* reason, unsigned capacity);
+
+/* A layout of the host's own for the records and the count (tagpu_cobvm_bind_layout). */
+typedef struct TAGPU_COBVM_LAYOUT {
+    unsigned char* heads;          /* TagpuCobHead of slot 0, 4-aligned */
+    uint32_t       head_stride;    /* bytes, at least sizeof(TagpuCobHead), a multiple of 4 */
+    int32_t*       stacks;         /* slot 0's stack */
+    uint32_t       stack_stride;   /* words, at least `words` */
+    uint32_t       words;          /* a stack: the program's `depth` up to TAGPU_COB_WORDS */
+    uint32_t*      count;          /* the running count */
+} TAGPU_COBVM_LAYOUT;
+
+/* tagpu_cobvm_bind with the records and the count where `layout` says; the object still holds the
+   rate at +0x04 and the flag at +0x18. A stack must hold the program's `depth` (the stack proof
+   shows no record of it touches more), so a record the proof does not cover -- a saved game's --
+   needs stacks of TAGPU_COB_WORDS. Nothing is cleared. Returns 1, or 0 with the reason. */
+int tagpu_cobvm_bind_layout(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                            unsigned char* object, const TAGPU_COBVM_LAYOUT* layout, int32_t* statics,
+                            int32_t* anim, unsigned char* model, char* reason, unsigned capacity);
+
+/* The host wrote the object's records itself (a saved game's): the VM checks every opcode from
+   now on unless every record is one the stack proof covers (tagpu_cob_record_proven). */
+void tagpu_cobvm_loaded(TAGPU_COBVM* vm);
 
 /* Name2Index 0x4B07C0: the first script of that name, or -1. */
 int tagpu_cobvm_index(const TagpuCobProgram* program, const char* name);
@@ -153,14 +207,40 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
    io. Returns 1, 0 refused (io untouched), -1 fault. */
 int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t io[4]);
 
-/* DoScriptsNow 0x4B0D60: every record with dt, then the stepper. Returns 1, or -1 fault. */
+/* DoScriptsNow 0x4B0D60: every record with dt, then the stepper. Returns 1, or -1 fault.
+   A TURN ONLY WHEN SOMETHING IS DUE: when the last turn left every busy record asleep or waiting
+   on a CALL, and none of the sleepers reaches 0 in this one, the records are not visited: the dt
+   is owed to the sleepers and only the stepper runs. That is the engine's turn exactly: such a
+   turn takes dt off each sleeper and wakes none (0x4B0DEF..0x4B0E01: runnable only at 0 or
+   below), a CALL record runs only when its child's RETURN or a signal wakes it, and both of those
+   run inside a turn or an entry, which settles the owed dt first. Outside the core a record's
+   sleep is read only settled: the save settles first (cob_save), a hash reads
+   tagpu_cobvm_settled, and the engine's record accesses are the COB module's own, every one
+   inventoried in cob_runtime_sites. */
 int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt);
+
+/* The turn tagpu_cobvm_tick makes when nothing is due, without a host: 1 when it owed the dt and
+   stepped the animations, 0 when the records must be visited -- by tagpu_cobvm_tick, which is the
+   engine's turn in either case. It answers 0 too with a start's trace line still latched, a
+   fault, a rate not positive, or dt not positive, so a host may call it first on every turn. */
+int tagpu_cobvm_rest(TAGPU_COBVM* vm, int32_t dt);
+
+/* Take the owed dt off the sleepers, as the turns that owed it would have. Every entry does it
+   first; a host that reads the records itself (a save) calls it before. */
+void tagpu_cobvm_settle(TAGPU_COBVM* vm);
+/* The object's TAGPU_COB_OBJECT_BYTES as tagpu_cobvm_settle would leave them, into `out`: the state
+   a hash or a comparison compares, whatever dt is still owed. The engine's layout only. */
+void tagpu_cobvm_settled(const TAGPU_COBVM* vm, unsigned char* out);
 
 /* Write the latched start's trace line now (the oracle's last line of a run). */
 void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run);
 
-/* The records and the count, read from the object. */
-TagpuCobRecord* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot);
-uint32_t        tagpu_cobvm_running(const TAGPU_COBVM* vm);
+/* sizeof(TAGPU_COBVM), for a host that allocates the struct through a mirror of it (tacob's ctypes). */
+unsigned tagpu_cobvm_size(void);
+
+/* A record's header and stack, and the running count, where the layout keeps them. */
+TagpuCobHead* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot);
+int32_t*      tagpu_cobvm_stack(const TAGPU_COBVM* vm, unsigned slot);
+uint32_t      tagpu_cobvm_running(const TAGPU_COBVM* vm);
 
 #endif

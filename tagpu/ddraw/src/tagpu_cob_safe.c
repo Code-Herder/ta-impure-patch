@@ -150,6 +150,120 @@ static const char* control_flow(TagpuCobProgram* p, uint32_t* bad_pc)
     return error;
 }
 
+/* THE STACK PROOF: an interval analysis over the graph control_flow validated, under IMPURE's
+   rules, giving each instruction the bounds [lo, hi] of the words a running record holds on
+   entering it.
+   - A thread enters its script with 0 to 4 words from the engine (0x4B0940: none; 0x4B0B00:
+     argc - 1 of the four it writes; the query 0x4B0C40: four). A START or CALL child enters with
+     none: the allocator leaves sp at -1 (0x4B090C) and the arguments land in stack[0..argc-1]
+     below it (0x4B18C8..0x4B18E9), so argc enters `depth`, never the bounds. Every script can be
+     started by the engine, so every entry is [0, 4].
+   - An instruction takes `need` and leaves `put` (shape; START and CALL take their argc, which
+     IMPURE pops whether the child starts or not: tagpu_cob_parent_pops). A state below `need`
+     faults in tagpu_cob_check_step and never reaches a successor, so a successor's lo is
+     max(lo, need) - need + put, and its hi is hi - need + put.
+   - A CALL's successor runs only after the child returns or is killed (a refused CALL waits on
+     -1 forever, 0x4B1965); RETURN, the terminal opcodes and the terminal zero have none; a
+     SIGNAL that kills its own thread never runs the next instruction, so pc + 1 is enough.
+   Bounds only widen and stay in 0..TAGPU_COB_WORDS, so the walk ends. A state past
+   TAGPU_COB_WORDS anywhere -- a loop that leaves words on the stack, or a deep script -- makes
+   the program unbounded: no arrays, every opcode checked, as before the proof.
+   An instruction is unguarded only where tagpu_cob_check_step returns 1 for every state inside
+   its bounds: the record is valid (the VM sets status and pc itself, onto validated
+   instructions; sp + 1 is in 0..TAGPU_COB_WORDS), the operands were validated at load and at
+   tagpu_cob_bind_model, lo >= need rules out underflow, every hi - need + put fits, and it is not
+   a division (whose operands are data), a terminal opcode or the terminal zero. RETURN needs a
+   word when its record has a completion object, so it is guarded unless lo >= 1. */
+#define PROOF_UNSET 0xFFu
+
+static int widen(TagpuCobProgram* p, uint32_t pc, unsigned lo, unsigned hi)
+{
+    int changed = 0;
+    if (p->lo[pc] == PROOF_UNSET || lo < p->lo[pc]) { p->lo[pc] = (unsigned char)lo; changed = 1; }
+    if (hi > p->hi[pc]) { p->hi[pc] = (unsigned char)hi; changed = 1; }
+    return changed;
+}
+
+static int prove(TagpuCobProgram* p)
+{
+    uint32_t n = p->words + 1, *queue, head = 0, tail = 0, pc, i;
+    unsigned char* queued;
+    uint32_t depth = 4;
+    int bounded = 1;
+    p->lo = (unsigned char*)malloc(n);
+    p->hi = (unsigned char*)calloc(n, 1);
+    p->guard = (unsigned char*)malloc(n);
+    queued = (unsigned char*)calloc(n, 1);
+    queue = (uint32_t*)malloc((size_t)n * sizeof *queue);
+    if (!p->lo || !p->hi || !p->guard || !queued || !queue) { bounded = 0; goto done; }
+    memset(p->lo, PROOF_UNSET, n);
+    memset(p->guard, 1, n);
+    for (i = 0; i < p->scripts; ++i) {
+        pc = p->entries[i];
+        if (widen(p, pc, 0, 4) && !queued[pc]) { queued[pc] = 1; queue[tail++ % n] = pc; }
+    }
+    while (head != tail && bounded) {
+        uint32_t next[2], k, nn = 0;
+        unsigned need, lo, hi;
+        CobOp o;
+        pc = queue[head++ % n];
+        queued[pc] = 0;
+        if (pc == p->words) continue;
+        o = shape(p->code[pc]);
+        if (o.terminal || o.kind == 0x10065000) continue;
+        need = o.need;
+        if (o.kind == 0x10061000 || o.kind == 0x10062000) need = p->code[pc + 2];
+        if (p->hi[pc] < need) continue;          /* every state faults here */
+        lo = (p->lo[pc] > need ? p->lo[pc] : need) - need + o.put;
+        hi = p->hi[pc] - need + o.put;
+        if (hi > TAGPU_COB_WORDS) { bounded = 0; break; }
+        if (o.kind == 0x10064000 || o.kind == 0x10066000) next[nn++] = p->code[pc + 1];
+        if (o.kind != 0x10064000) next[nn++] = pc + o.length;
+        for (k = 0; k < nn; ++k)
+            if (widen(p, next[k], lo, hi) && !queued[next[k]]) { queued[next[k]] = 1; queue[tail++ % n] = next[k]; }
+    }
+    if (!bounded) goto done;
+    for (pc = 0; pc < n; ++pc) {
+        CobOp o;
+        unsigned need;
+        if (p->lo[pc] == PROOF_UNSET) continue;  /* never reached: guarded, and never run */
+        if (p->hi[pc] > depth) depth = p->hi[pc];
+        if (pc == p->words) continue;            /* the terminal zero: check_step answers 2 */
+        o = shape(p->code[pc]);
+        if (o.terminal || o.kind == 0x10034000) continue;
+        if ((o.kind == 0x10021000 || o.kind == 0x10023000) && (p->code[pc] & 7) == 2 &&
+            p->code[pc + 1] + 1 > depth)
+            depth = p->code[pc + 1] + 1;
+        if ((o.kind == 0x10061000 || o.kind == 0x10062000) && p->code[pc + 2] > depth)
+            depth = p->code[pc + 2];              /* the child's stack[0..argc-1] */
+        need = o.need;
+        if (o.kind == 0x10061000 || o.kind == 0x10062000) need = p->code[pc + 2];
+        if (o.kind == 0x10065000) need = 1;
+        if (p->lo[pc] < need) continue;
+        p->guard[pc] = 0;
+    }
+done:
+    free(queued);
+    free(queue);
+    if (!bounded) {
+        free(p->lo); free(p->hi); free(p->guard);
+        p->lo = p->hi = p->guard = NULL;
+        depth = TAGPU_COB_WORDS;
+    }
+    p->depth = depth;
+    return bounded;
+}
+
+int tagpu_cob_record_proven(const TagpuCobProgram* p, const TagpuCobHead* r)
+{
+    if (!p->guard) return 0;
+    if (!r->status) return 1;
+    if (r->sp < -1 || r->pc > p->words || p->starts[r->pc] != 1) return 0;
+    if (r->status == 0x02800000u && r->child == -1) return (uint32_t)(r->sp + 1) <= p->depth;
+    return p->lo[r->pc] != PROOF_UNSET && (unsigned)(r->sp + 1) >= p->lo[r->pc] &&
+           (unsigned)(r->sp + 1) <= p->hi[r->pc];
+}
+
 static int fault(char* reason, size_t capacity, const char* text)
 {
     if (reason && capacity) snprintf(reason, capacity, "%s", text);
@@ -169,10 +283,11 @@ int tagpu_cob_bind_model(TagpuCobProgram* p, uint32_t pieces, char* reason, size
     return 1;
 }
 
-int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
-                           char* reason, size_t capacity)
+int tagpu_cob_check_head(const TagpuCobProgram* p, const TagpuCobHead* r, uint32_t words,
+                         char* reason, size_t capacity)
 {
-    if (r->sp < -1 || r->sp >= (int32_t)TAGPU_COB_WORDS)
+    if (words > TAGPU_COB_WORDS) return fault(reason, capacity, "record stack exceeds the engine's");
+    if (r->sp < -1 || r->sp >= (int32_t)words)
         return fault(reason, capacity, "stack pointer exceeds allocation");
     if (!r->status) return 1;
     if (r->pc > p->words || p->starts[r->pc] != 1)
@@ -194,13 +309,26 @@ int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
     return 1;
 }
 
+int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
+                           char* reason, size_t capacity)
+{
+    return tagpu_cob_check_head(p, (const TagpuCobHead*)(const void*)r, TAGPU_COB_WORDS, reason, capacity);
+}
+
 int tagpu_cob_check_step(const TagpuCobProgram* p, const TagpuCobRecord* r,
                          char* reason, size_t capacity)
+{
+    return tagpu_cob_check_head_step(p, (const TagpuCobHead*)(const void*)r, r->stack, TAGPU_COB_WORDS,
+                                     reason, capacity);
+}
+
+int tagpu_cob_check_head_step(const TagpuCobProgram* p, const TagpuCobHead* r, const int32_t* stack,
+                              uint32_t words, char* reason, size_t capacity)
 {
     CobOp o;
     unsigned need;
     const char* error;
-    if (!tagpu_cob_check_record(p, r, reason, capacity)) return 0;
+    if (!tagpu_cob_check_head(p, r, words, reason, capacity)) return 0;
     if (r->status != 0x01000000)
         return fault(reason, capacity, "attempt to execute a non-running record");
     if (r->pc == p->words) return p->terminal_zero ? 2 : fault(reason, capacity, "code exhausted");
@@ -211,11 +339,11 @@ int tagpu_cob_check_step(const TagpuCobProgram* p, const TagpuCobRecord* r,
     if (o.kind == 0x10061000 || o.kind == 0x10062000) need = p->code[r->pc + 2];
     if (o.kind == 0x10065000) need = !!r->callback;
     if ((unsigned)(r->sp + 1) < need) return fault(reason, capacity, "operand stack underflow");
-    if ((unsigned)(r->sp + 1) - need + o.put > TAGPU_COB_WORDS)
+    if ((unsigned)(r->sp + 1) - need + o.put > words)
         return fault(reason, capacity, "operand stack capacity exceeded");
     if (o.kind == 0x10034000) {
-        if (!r->stack[r->sp]) return fault(reason, capacity, "integer division by zero");
-        if (r->stack[r->sp - 1] == INT32_MIN && r->stack[r->sp] == -1)
+        if (!stack[r->sp]) return fault(reason, capacity, "integer division by zero");
+        if (stack[r->sp - 1] == INT32_MIN && stack[r->sp] == -1)
             return fault(reason, capacity, "integer division overflow");
     }
     return 1;
@@ -330,6 +458,9 @@ void tagpu_cob_program_free(TagpuCobProgram* program)
     if (program) {
         free(program->starts);
         free(program->names);
+        free(program->lo);
+        free(program->hi);
+        free(program->guard);
         free(program);
     }
 }
@@ -400,6 +531,7 @@ TagpuCobProgram* tagpu_cob_program(const void* data, size_t size, char* reason, 
         tagpu_cob_program_free(p);
         return NULL;
     }
+    prove(p);
     return p;
 bad:
     if (reason && capacity) snprintf(reason, capacity, "%s", error);

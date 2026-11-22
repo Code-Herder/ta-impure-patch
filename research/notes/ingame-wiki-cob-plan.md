@@ -43,9 +43,15 @@ the VMs drifting apart as COB features are added.
 3. **It replaces the game's interpreter — in the next program, not this one.** The owner has
    committed to the swap; this program builds the core so that the swap is a change of code and not
    of recorded state.
-4. **It runs on the engine's memory layout** (below): the records, the statics block and the piece
-   animation block are byte for byte what Impure's game holds, pinned by static asserts, so the
-   recorder's script slice, the save format and the puppets see the same bytes after the swap.
+4. **The swap may give the game's COB state a layout of its own (the owner, 2026-11-21, reversing
+   "it runs on the engine's memory layout").** The core is built on the engine's layout (below),
+   and the swap program is free to change it for speed. What holds the layout in place is not a
+   recorded format: a recording carries no COB bytes (a playing rebuilds COB through the engine's
+   entries, and a seek, a rewind and a takeover recreate every unit), and the saved game's format
+   is Impure's own (`0x4B1EC0`/`0x4B2040`, `cob_save`/`cob_load`), so it is kept by translating at
+   the save. The measurements and the prototypes behind it:
+   `.data/prof/2026-11-21-zk13k-cobvm/` and `.data/prof/2026-11-21-zk13k-cobproto/` in the main
+   checkout (local).
 5. **It is safe to run on several threads.** Reentrant; the unit of parallelism is one COB object;
    reads leave through host callbacks, writes outside the object through an ordered per-object
    effect log (below). The core never owns a random number generator.
@@ -96,6 +102,8 @@ the VMs drifting apart as COB features are added.
 
 ### Its memory: the engine's layout
 
+The core as built runs on this layout; the game's own may differ after the swap (decision 4).
+
 Impure's COB object (`TAGPU_COB_OBJECT_BYTES` = `0x158C`, `tagpu_cob_safe.h`) is the engine's
 0x544-byte object with its records widened: the header `+0x00..+0x1B`, then
 `TAGPU_COB_THREADS` (10) records of `TAGPU_COB_RECORD_BYTES` (`0x224`: nine dwords and 128 stack
@@ -135,8 +143,26 @@ reaches 12 words, and the core faults at 128 like the guarded game does.
 The runner `0x4B0DA0`, the stepper `0x4B1C00` and the engine's entries — `0x4B0940` (no arguments),
 `0x4B0B00` (four argument words, `sp = argc − 1`), `0x4B0C40` (the query: four words in and out,
 run inside the call), `0x4B0D60` (`DoScriptsNow`, `dt = 1`) — exactly as tacob's VM models them
-today, opcode for opcode. Before every opcode it calls **`tagpu_cob_check_step`**, the guard the game's
-adapter calls at `0x4B0E5D`: one bound for both, and a fault is the core's refusal (decision 9).
+today, opcode for opcode. It calls **`tagpu_cob_check_step`**, the guard the game's adapter calls at
+`0x4B0E5D` before every opcode, wherever the program's **stack proof** does not show that the check
+would answer "execute": one bound for both, and a fault is the core's refusal (decision 9).
+
+**The stack proof** (`tagpu_cob_safe.c`, `prove`, made by `tagpu_cob_program` at load) bounds, for each
+instruction, the words a running record holds on entering it, under IMPURE's rules: an interval
+analysis over the validated control flow, where a thread enters its script with 0 to 4 words from the
+engine (`0x4B0940` none, `0x4B0B00` `argc − 1` of the four it writes, the query four); a START or CALL
+child enters with none, its arguments in `stack[0..argc−1]` below an sp the allocator leaves at −1
+(`0x4B090C`, `0x4B18C8..0x4B18E9`). An instruction is **guarded**, and checked, where the bounds leave
+an underflow possible, at every division (its operands are data), at the terminal opcodes and at the
+terminal zero; everywhere else the check provably executes and is skipped. A path that can pass 128
+words makes the program unbounded and every opcode checked. The proof also gives `depth`, the words a
+record of the program ever touches, child argument copies included (never below 4). The core checks every opcode under RETAIL's rules,
+for an unbounded program, and once a host writes records the proof does not cover
+(`tagpu_cobvm_loaded`, for a saved game's). MEASURED 2026-11-21 over every compatibility setup
+(`cobcorpus.py`'s resolution): 27 102 scripts in 2 028 files, all bounded; 95.8 % reach at most 10
+words, the deepest 89 (Escalation's `CORDECI` and `ARMCRAWL` `Detect`), per program median 9.
+`tools/test_cobvm.py` and the corpus gate run a build with `TAGPU_COBVM_PROVE_CHECK`, which runs the
+skipped checks too and faults by name if one would not have executed.
 
 ### The host interface
 
@@ -189,9 +215,9 @@ is marked `sim` (*Gaps*, below).
   `tagpu_cob_safe.c` so that any change to the rules runs it.
 - **A landing that adds a COB feature to the game** adds a cobtrace fixture that exercises it. Until
   the core matches, that fixture fails by name.
-- **The swap program's entry gate** is the recorder as oracle: load a recorded COB object into the
-  core, step it, compare the next recorded tick byte for byte. It needs the host reads recorded too,
-  which is recorder work, so it is not this program's.
+- **The swap's oracle** is in process: the engine's interpreter runs the game and the core replays
+  each entry call on a copy, answered from what the engine asked (`tagpu_cobverify.on`; the
+  [COB speed plan](cob-speed-plan.html), L2), since two runs of one build are not one game.
 
 ## The wiki host
 
@@ -764,14 +790,13 @@ L4b starts when the wiki shows a unit that emits.
 - **The spray was not compared with a game capture of the same build**, the gate the plan's L4
   row named.
 
-- **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
-  (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`
-  does not mark it `sim`, so the replay gate checks no function of it for coverage, and the build's
-  writable-static check does not reach it or `tagpu_cobvm.c`. The `sources` binding of
-  `cob-getters` and `resource-core-upgrade` makes any change to it run those groups, and
-  `test_cobvm.py` checks both objects for written statics. Marking them `sim` needs the program
-  validator's `malloc`/`free` routed through the registry's wrappers, which the swap program does
-  when the core becomes the game's interpreter.
+- **`tagpu_cob_safe.c` is not `sim`.** It holds rules the game's simulation runs (the step guard,
+  the getters, the parent's pops, the attachment bound), but its validator allocates each program
+  with `malloc` at the script's load, which the sim scope refuses, so the replay gate checks no
+  function of it for coverage and the build's writable-static check does not reach it. The
+  `sources` binding of `cob-getters` and `resource-core-upgrade` makes any change to it run those
+  groups, and `test_cobvm.py` checks it for written statics. `tagpu_cobvm.c`, which has no static
+  and allocates nothing, is an `engine-free sim` file since the game runs it.
 
 - **The sound has no place.** An event carries no position, where L5's plan gave it the unit's
   point and decision 12 an attenuation by the stage's camera: the engine plays a reply and a named

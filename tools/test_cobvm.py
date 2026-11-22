@@ -49,8 +49,11 @@ class Core(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="cobvm-")
         lib = Path(cls.temp.name) / "libcobvm.so"
+        # TAGPU_COBVM_PROVE_CHECK: every opcode the stack proof lets through unchecked is checked
+        # anyway, and a check that would not have executed is a fault by name
         subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", "-g",
-                        "-fsanitize=" + SANITIZE, "-fno-sanitize-recover=all", "-I", str(DDRAW / "inc"),
+                        "-fsanitize=" + SANITIZE, "-fno-sanitize-recover=all", "-DTAGPU_COBVM_PROVE_CHECK",
+                        "-I", str(DDRAW / "inc"),
                         str(DDRAW / "src" / "tagpu_cobvm.c"), str(DDRAW / "src" / "tagpu_cob_safe.c"),
                         "-o", str(lib)], check=True)
         cls.lib = tacob.bind_cobvm(C.CDLL(str(lib)))
@@ -90,6 +93,253 @@ class Core(unittest.TestCase):
                     self.skipTest(f"the fixtures need the game's archives: {e}")
                 self.assertTrue(report["trace_ok"], report["trace_diff"])
                 self.assertTrue(report.get("pose_ok", True), report.get("pose_bad"))
+
+    def test_every_fixture_runs_under_the_stack_proof(self):
+        # the fixtures are retail's and replay under RETAIL, which checks every opcode; under
+        # IMPURE's rules the proof skips checks, and the check build faults by name if one of
+        # them would not have executed
+        for cls in ("kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"):
+            with self.subTest(fixture=cls):
+                folder = tacob.fixtures_dir() / cls
+                try:
+                    header, lines = tacob.read_cobtrace(folder / "cobtrace.log")
+                    type_name = lines[0].fields[3]
+                    blob, _ = tacob.read_cob_source(type_name.lower())
+                except (tacob.TacobError, OSError) as e:
+                    self.skipTest(f"the fixtures need the game's archives: {e}")
+                cob = tacob.read_cob(blob)
+                timelines = {int(k): [tuple(p) for p in v]
+                             for k, v in (dict(tacob.replay_inputs(cls)).get("get") or {}).items()}
+                try:
+                    tacob.replay(cob, lines, timelines, type_name, lines[0].unit, rules=tacob.RULES_IMPURE,
+                                 facts=self.FACTS)
+                except tacob.TacobError as e:
+                    # the check build names a skipped check that would not have executed, whatever
+                    # the check's own reason; any other refusal is the fixture's under IMPURE
+                    self.assertNotIn("stack proof", str(e))
+
+    # -- the stack proof ----------------------------------------------------------
+    class Program(C.Structure):
+        _fields_ = [("code", C.c_void_p), ("entries", C.c_void_p), ("names", C.c_void_p),
+                    ("starts", C.c_void_p), ("words", C.c_uint32), ("scripts", C.c_uint32),
+                    ("pieces", C.c_uint32), ("statics", C.c_uint32), ("model_pieces", C.c_uint32),
+                    ("terminal_zero", C.c_int), ("lo", C.POINTER(C.c_ubyte)), ("hi", C.POINTER(C.c_ubyte)),
+                    ("guard", C.POINTER(C.c_ubyte)), ("depth", C.c_uint32)]
+
+    def program(self, vm):
+        return C.cast(vm._program, C.POINTER(self.Program)).contents
+
+    def patched(self, source, old, new):
+        """`source` compiled, with the first run of words `old` replaced by `new` (as long)"""
+        cob = tacob.compile_bos(PRELUDE + source, "test.bos")
+        code = cob.code
+        at = next(i for i in range(len(code)) if code[i:i + len(old)] == list(old))
+        code[at:at + len(old)] = list(new)
+        return cob
+
+    def test_a_balanced_script_is_bounded_and_runs_unchecked(self):
+        vm = self.vm("Create() { s1 = 1 + (2 + (3 + (4 + 5))); }", rules=tacob.RULES_IMPURE)
+        p = self.program(vm)
+        self.assertTrue(p.guard)
+        # four words an engine start may leave, then five constants before the first add
+        self.assertEqual(p.depth, 9)
+        entry = vm.entries[vm.names.index("Create")]
+        self.assertEqual((p.lo[entry], p.hi[entry], p.guard[entry]), (0, 4, 0))
+        vm.start_script("Create", run_now=True)
+        self.assertEqual(vm.statics[0], 15)
+
+    def test_an_instruction_that_can_underflow_stays_checked(self):
+        # `s1 = 7` with its push turned into a jump to the next word: the pop then takes the
+        # start's own word, so an engine start with none underflows, as it did before the proof
+        cob = self.patched("Create() { s1 = 7; }", (0x10021001, 7), (0x10064000, 0))
+        cob.code[cob.code.index(0x10064000) + 1] = cob.code.index(0x10064000) + 2
+        for argwords, args, want in ((False, (), "underflow"), (True, (3,), None)):
+            with self.subTest(argwords=argwords):
+                vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                                 rules=tacob.RULES_IMPURE)
+                vm.tick = 1
+                p = self.program(vm)
+                pop = cob.code.index(0x10064000) + 2
+                self.assertEqual((p.lo[pop], p.guard[pop]), (0, 1))
+                if want:
+                    with self.assertRaises(tacob.TacobError) as e:
+                        vm.start_script("Create", run_now=True)
+                    self.assertIn(want, str(e.exception))
+                else:
+                    vm.start_script("Create", run_now=True, args=args, argwords=True)
+                    self.assertEqual(vm.statics[0], 3)
+
+    def test_the_check_build_names_a_skipped_check_that_would_refuse(self):
+        # a guard cleared by hand where the pop can underflow stands in for a hole in the proof
+        cob = self.patched("Create() { s1 = 7; }", (0x10021001, 7), (0x10064000, 0))
+        cob.code[cob.code.index(0x10064000) + 1] = cob.code.index(0x10064000) + 2
+        vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                         rules=tacob.RULES_IMPURE)
+        vm.tick = 1
+        self.program(vm).guard[cob.code.index(0x10064000) + 2] = 0
+        with self.assertRaises(tacob.TacobError) as e:
+            vm.start_script("Create", run_now=True)
+        self.assertIn("stack proof skipped a check", str(e.exception))
+        self.assertIn("underflow", str(e.exception))
+
+    def test_a_loop_that_leaves_words_is_unbounded_and_faults_at_the_bound(self):
+        # each pass's `s1 = 1` becomes two pushes: the proof cannot bound it, so every opcode is
+        # checked and the 128-word bound faults the thread as before
+        cob = self.patched("Create() { while(1) { s1 = 1; sleep 1; } }", (0x10023004, 0), (0x10021001, 1))
+        vm = tacob.CobVM(cob, tacob.UnitWorld(facts=self.FACTS), unit=1, type_name="T",
+                         rules=tacob.RULES_IMPURE)
+        vm.tick = 1
+        p = self.program(vm)
+        self.assertFalse(p.guard)
+        self.assertEqual(p.depth, 128)
+        with self.assertRaises(tacob.TacobError) as e:
+            vm.start_script("Create", run_now=True)
+            for _ in range(200):
+                vm.do_scripts_now(1)
+        self.assertIn("capacity", str(e.exception))
+
+    def test_a_record_outside_the_proof_turns_every_check_back_on(self):
+        vm = self.vm("Create() { while(1) { sleep 1; } }", rules=tacob.RULES_IMPURE)
+        vm.start_script("Create", run_now=True)
+        self.assertEqual(vm._vm.checked, 0)
+        self.lib.tagpu_cobvm_loaded.argtypes = [C.POINTER(tacob._Vm)]
+        self.lib.tagpu_cobvm_loaded(C.byref(vm._vm))
+        self.assertEqual(vm._vm.checked, 0)                  # the VM's own record is covered
+        record = 28                                          # the first record's sp, as a save could set it
+        struct.pack_into("<i", vm._object, record + 8, 40)
+        self.lib.tagpu_cobvm_loaded(C.byref(vm._vm))
+        self.assertEqual(vm._vm.checked, 1)
+
+    def test_retail_checks_every_opcode(self):
+        vm = self.vm("Create() { s1 = 1; }")
+        self.assertEqual(vm._vm.checked, 1)
+
+    # -- a turn only when something is due --------------------------------------
+    SCHEDULE = """
+    Walk() { while(1) { move arm to y-axis [5] speed [10]; sleep 500; turn base to y-axis <90> speed <45>; sleep 200; s1 = s1 + 1; } }
+    Waiter() { turn arm to x-axis <30> speed <60>; wait-for-turn arm around x-axis; sleep 100; turn arm to x-axis <0> speed <60>; wait-for-turn arm around x-axis; }
+    Child() { sleep 300; return(5); }
+    Parent() { while(1) { call-script Child(); sleep 50; } }
+    Sig() { set-signal-mask 2; sleep 1000; s2 = s2 + 100; }
+    Killer() { while(1) { sleep 700; signal 2; start-script Sig(); } }
+    Lazy() { sleep 2000; s2 = s2 + 1; }
+    Kick() { signal 2; start-script Sig(); sleep 40; s1 = s1 + 1000; }
+    Probe(a, b, c, d) { a = s1; b = s2; signal 2; start-script Sig(); start-script Lazy(); sleep 30; }
+    Create() { start-script Walk(); start-script Parent(); start-script Killer(); start-script Lazy(); }
+    """
+    ST_SLEEP = 0x02400000
+
+    def _settled(self, v):
+        """the object's bytes with the owed dt taken off each sleeper, worked out here"""
+        buf = bytearray(v._object)
+        for s in range(v._vm.threads):
+            at = 28 + s * tacob.RECORD_BYTES
+            if struct.unpack_from("<I", buf, at)[0] == self.ST_SLEEP:
+                sleep = struct.unpack_from("<i", buf, at + 12)[0] - v._vm.owed
+                struct.pack_into("<i", buf, at + 12, (sleep + 2**31) % 2**32 - 2**31)
+        return bytes(buf)
+
+    def _scheduled_against_every_turn(self, source, ticks, entry_at=(), query_at=()):
+        """(turns the schedule left unvisited, entries made while more than one turn's dt was owed):
+        one VM scheduled and never settled but by its own entries, one made to visit its records on
+        every turn, both given the same turns, starts and queries; after each turn the second equals
+        the first with its owed dt taken off, and the core's own settled copy says the same"""
+        a = self.vm(source, rules=tacob.RULES_IMPURE)
+        b = self.vm(source, rules=tacob.RULES_IMPURE)
+        for v in (a, b):
+            v.start_script("Create", run_now=True)
+        self.lib.tagpu_cobvm_settled.argtypes = [C.POINTER(tacob._Vm), C.c_void_p]
+        self.lib.tagpu_cobvm_settled.restype = None
+        out = (C.c_ubyte * tacob.OBJECT_BYTES)()
+        skipped = owed_entries = 0
+        for t in range(ticks):
+            if t in entry_at or t in query_at:
+                owed_entries += a._vm.owed > 1
+            if t in entry_at:
+                for v in (a, b):
+                    v.start_script("Kick" if t & 1 else "Waiter", run_now=bool(t & 1))
+            if t in query_at:
+                self.assertEqual(a.query_script("Probe", [0, 0, 0, 0]), b.query_script("Probe", [0, 0, 0, 0]),
+                                 f"the query at turn {t}")
+            b._vm.quiet = 0
+            skipped += bool(a._vm.quiet) and a._vm.owed + 1 < a._vm.due
+            a.do_scripts_now(1)
+            b.do_scripts_now(1)
+            self.assertEqual(self._settled(a), bytes(b._object), f"the records after turn {t}")
+            self.lib.tagpu_cobvm_settled(C.byref(a._vm), out)
+            self.assertEqual(bytes(out), bytes(b._object), f"the core's settled copy after turn {t}")
+            self.assertEqual(a.statics, b.statics, f"the statics after turn {t}")
+            self.assertEqual(list(a.anim), list(b.anim), f"the animation after turn {t}")
+            self.assertEqual(bytes(a._model), bytes(b._model), f"the model after turn {t}")
+        return skipped, owed_entries
+
+    def test_a_turn_with_nothing_due_is_owed_and_exact(self):
+        skipped, owed_entries = self._scheduled_against_every_turn(
+            self.SCHEDULE, 2500, entry_at=(37, 400, 401, 655, 1333), query_at=(90, 433, 1201, 1802, 2222))
+        self.assertGreater(skipped, 300)
+        self.assertGreaterEqual(owed_entries, 4)  # the entries' own settles took off more than one turn
+
+    def test_an_object_only_animating_steps_its_pieces_and_nothing_else(self):
+        skipped, _ = self._scheduled_against_every_turn(
+            "Create() { turn base to y-axis <180> speed <10>; move arm to x-axis [20] speed [1]; }", 300)
+        self.assertGreater(skipped, 200)
+
+    def test_a_sleep_of_zero_wakes_the_next_turn(self):
+        self._scheduled_against_every_turn("Create() { while(1) { sleep 0; s1 = s1 + 1; } }", 50)
+
+    # -- a layout of the host's own ---------------------------------------------
+    class Layout(C.Structure):
+        _fields_ = [("heads", C.c_void_p), ("head_stride", C.c_uint32), ("stacks", C.c_void_p),
+                    ("stack_stride", C.c_uint32), ("words", C.c_uint32), ("count", C.c_void_p)]
+
+    def _rebind(self, v, words, stride):
+        """`v` rebound with packed 36-byte headers and stacks of `words`, `stride` words apart; the
+        blocks it is bound to are kept on the VM so they live as long as it does"""
+        lib = self.lib
+        lib.tagpu_cobvm_bind_layout.argtypes = [C.POINTER(tacob._Vm), C.c_void_p, C.c_uint, C.c_void_p,
+                                                C.POINTER(self.Layout), C.c_void_p, C.c_void_p, C.c_void_p,
+                                                C.c_char_p, C.c_uint]
+        v._heads = (C.c_ubyte * (36 * 10))()
+        v._stacks = (C.c_int32 * (stride * 10))()
+        v._count = C.c_uint32(0)
+        lay = self.Layout(C.addressof(v._heads), 36, C.addressof(v._stacks), stride, words, C.addressof(v._count))
+        why = C.create_string_buffer(256)
+        ok = lib.tagpu_cobvm_bind_layout(C.byref(v._vm), v._program, tacob.RULES_IMPURE, v._object, C.byref(lay),
+                                         v._statics, v.anim, v._model, why, 256)
+        return ok, why.value.decode()
+
+    def test_a_packed_layout_runs_as_the_engine_layout_does(self):
+        a = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        b = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        depth = self.program(b).depth
+        self.assertLess(depth, 128)
+        ok, why = self._rebind(b, depth, depth)
+        self.assertTrue(ok, why)
+        for v in (a, b):
+            v.start_script("Create", run_now=True)
+        for t in range(1500):
+            if t in (37, 401, 900):
+                for v in (a, b):
+                    v.start_script("Kick" if t & 1 else "Waiter", run_now=bool(t & 1))
+            if t in (433, 1201):
+                self.assertEqual(a.query_script("Probe", [0, 0, 0, 0]), b.query_script("Probe", [0, 0, 0, 0]))
+            a.do_scripts_now(1)
+            b.do_scripts_now(1)
+            for s in range(10):
+                at = 28 + s * tacob.RECORD_BYTES
+                self.assertEqual(bytes(a._object[at:at + 36]), bytes(b._heads[36 * s:36 * s + 36]),
+                                 f"record {s}'s header after turn {t}")
+                self.assertEqual(list(struct.unpack_from(f"<{depth}i", a._object, at + 36)),
+                                 list(b._stacks[depth * s:depth * s + depth]), f"record {s}'s stack after turn {t}")
+            self.assertEqual(a.running, b._count.value)
+            self.assertEqual((a.statics, list(a.anim), bytes(a._model)), (b.statics, list(b.anim), bytes(b._model)))
+
+    def test_stacks_smaller_than_the_programs_depth_are_refused(self):
+        b = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        depth = self.program(b).depth
+        ok, why = self._rebind(b, depth - 1, depth)
+        self.assertFalse(ok)
+        self.assertIn("depth", why)
 
     # -- the rules of the two builds ------------------------------------------
     POOL = """
@@ -299,7 +549,10 @@ class Core(unittest.TestCase):
         self.assertEqual(C.sizeof(tacob._Record), tacob.RECORD_BYTES)
 
     def test_the_core_has_no_writable_static(self):
-        written = [ln for ln in self.symbols.splitlines() if ln.split()[-2:-1] and ln.split()[-2] in "BbDdGgSsVv"]
+        # the feature's descriptor and its registry pointer are const, in the registry's own section,
+        # which the native toolchain places in writable data (tagpu_simreg.h, SIM_FEATURE)
+        written = [ln for ln in self.symbols.splitlines() if ln.split()[-2:-1] and ln.split()[-2] in "BbDdGgSsVv"
+                   and not ln.split()[-1].startswith(("simfeat_", "simfeatreg_"))]
         self.assertEqual(written, [])
 
     def test_two_vms_on_two_threads(self):

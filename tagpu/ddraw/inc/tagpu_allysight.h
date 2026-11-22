@@ -6,6 +6,10 @@
 
 /* Installs every site or none, in DllMain's sequence, before the engine runs. */
 void tagpu_allysight_init(void);
+/* 1 once the init has redirected every site, the step's players-phase call 0x49555F among them: what a module
+   whose per-step work players_phase calls (tagpu_scatter_tick) asks before it installs anything of its own.
+   Set at DllMain before any thread of the game runs. */
+int tagpu_allysight_steps(void);
 
 /* 1 when owner != viewer, both are below 10 and the snapshot S shares owner's sight and contacts
    with viewer. The game thread, and the loader thread during a load. */

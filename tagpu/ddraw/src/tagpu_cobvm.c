@@ -6,6 +6,9 @@
 #include "tagpu_cobvm.h"
 #include <stdio.h>
 #include <string.h>
+#include "tagpu_simreg.h"
+
+SIM_FEATURE(cob_vm, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decline cob-getters resource-core-upgrade stock-resource-mex contest-waves teleport transport-turn cob-verify");
 
 #define ST_RUN       0x01000000u
 #define ST_WAIT_TURN 0x02100000u
@@ -31,17 +34,18 @@
 #define MODEL_CHANGED 0x08u  /* 1 when a position or angle changes */
 #define MODEL_COMPOSE 0x10u  /* zeroed by CACHE/DONT_CACHE and SHADE/DONT_SHADE */
 
-/* The longest a record runs without blocking before the VM refuses it. The engine has no
-   bound -- such a script hangs the game -- so no script the game runs reaches it. */
+/* The longest a record runs without blocking before the VM refuses it. The engine has no bound:
+   a script that never blocks hangs it, and one that blocks after more than this many steps it
+   finishes, the game standing still meanwhile, where the VM faults (cob-compat.md). */
 #define STEP_BUDGET (1u << 24)
 
 typedef char cobvm_record_at_engine_offset[(OBJ_RECORDS == 28u) ? 1 : -1];
-typedef char cobvm_record_size[(sizeof(TagpuCobRecord) == TAGPU_COB_RECORD_BYTES) ? 1 : -1];
-typedef char cobvm_record_fields[(offsetof(TagpuCobRecord, pc) == 4 && offsetof(TagpuCobRecord, sp) == 8 &&
-                                  offsetof(TagpuCobRecord, sleep) == 0x0C && offsetof(TagpuCobRecord, piece) == 0x10 &&
-                                  offsetof(TagpuCobRecord, axis) == 0x14 && offsetof(TagpuCobRecord, child) == 0x18 &&
-                                  offsetof(TagpuCobRecord, mask) == 0x1C && offsetof(TagpuCobRecord, callback) == 0x20 &&
-                                  offsetof(TagpuCobRecord, stack) == 0x24) ? 1 : -1];
+typedef char cobvm_head_size[(sizeof(TagpuCobHead) == 0x24u) ? 1 : -1];
+typedef char cobvm_head_fields[(offsetof(TagpuCobHead, pc) == 4 && offsetof(TagpuCobHead, sp) == 8 &&
+                                offsetof(TagpuCobHead, sleep) == 0x0C && offsetof(TagpuCobHead, piece) == 0x10 &&
+                                offsetof(TagpuCobHead, axis) == 0x14 && offsetof(TagpuCobHead, child) == 0x18 &&
+                                offsetof(TagpuCobHead, mask) == 0x1C && offsetof(TagpuCobHead, callback) == 0x20 &&
+                                offsetof(TagpuCobRecord, stack) == sizeof(TagpuCobHead)) ? 1 : -1];
 typedef char cobvm_count_after_records[(TAGPU_COB_COUNT_OFFSET == OBJ_RECORDS + TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES) ? 1 : -1];
 
 /* ---- the blocks ---- */
@@ -55,12 +59,14 @@ static uint32_t obj32(const TAGPU_COBVM* vm, unsigned off)
 
 static void obj32_set(TAGPU_COBVM* vm, unsigned off, uint32_t v) { memcpy(vm->object + off, &v, 4); }
 
-TagpuCobRecord* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot)
+TagpuCobHead* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot)
 {
-    return (TagpuCobRecord*)(void*)(vm->object + OBJ_RECORDS + slot * TAGPU_COB_RECORD_BYTES);
+    return (TagpuCobHead*)(void*)(vm->heads + slot * vm->head_stride);
 }
 
-uint32_t tagpu_cobvm_running(const TAGPU_COBVM* vm) { return obj32(vm, TAGPU_COB_COUNT_OFFSET); }
+uint32_t tagpu_cobvm_running(const TAGPU_COBVM* vm) { return *vm->count; }
+
+int32_t* tagpu_cobvm_stack(const TAGPU_COBVM* vm, unsigned slot) { return vm->stacks + slot * vm->stack_stride; }
 
 static unsigned char* prim(const TAGPU_COBVM* vm, int piece)
 {
@@ -151,7 +157,7 @@ static void trace(TAGPU_COBVM_RUN* run, const TAGPU_COBVM_TRACE* t)
 void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run)
 {
     TAGPU_COBVM_TRACE t;
-    TagpuCobRecord* r;
+    TagpuCobHead* r;
     int argc;
     if (!vm->pend.on) return;
     vm->pend.on = 0;
@@ -159,7 +165,7 @@ void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run)
     r = tagpu_cobvm_record(vm, (unsigned)vm->pend.slot);
     argc = vm->pend.argc < 0 ? r->sp + 1 : vm->pend.argc;
     if (argc < 0) argc = 0;
-    if (argc > (int)TAGPU_COB_WORDS) argc = (int)TAGPU_COB_WORDS;
+    if (argc > (int)vm->words) argc = (int)vm->words;
     memset(&t, 0, sizeof t);
     t.kind = 'S';
     t.tick = vm->pend.tick;
@@ -169,7 +175,7 @@ void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run)
     t.from = vm->pend.from;
     t.parent = vm->pend.parent;
     t.argc = argc;
-    t.args = r->stack;
+    t.args = tagpu_cobvm_stack(vm, (unsigned)vm->pend.slot);
     trace(run, &t);
 }
 
@@ -194,20 +200,21 @@ static int alloc(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, char from, i
 {
     unsigned slot;
     tagpu_cobvm_flush(vm, run);
+    if (run->host && run->host->alloc) run->host->alloc(run->host->ctx, script, from);
     if (script < 0 || (uint32_t)script >= vm->program->scripts) return -1;
     for (slot = 0; slot < vm->threads; ++slot) {
-        TagpuCobRecord* r = tagpu_cobvm_record(vm, slot);
+        TagpuCobHead* r = tagpu_cobvm_record(vm, slot);
         if (r->status) continue;
         if (vm->rules == TAGPU_COBVM_IMPURE) {
             r->sleep = r->piece = r->axis = r->child = 0;
-            memset(r->stack, 0, sizeof r->stack);
+            memset(tagpu_cobvm_stack(vm, slot), 0, vm->words * sizeof(int32_t));
         }
         r->status = ST_RUN;
         r->pc = vm->program->entries[script];
         r->sp = -1;
         r->callback = 0;
         r->mask = 1;
-        obj32_set(vm, TAGPU_COB_COUNT_OFFSET, tagpu_cobvm_running(vm) + 1);
+        *vm->count += 1;
         vm->pend.on = 1;
         vm->pend.slot = (int)slot;
         vm->pend.script = script;
@@ -230,7 +237,7 @@ static int alloc(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, char from, i
 static void release(TAGPU_COBVM* vm, unsigned slot)
 {
     tagpu_cobvm_record(vm, slot)->status = 0;
-    obj32_set(vm, TAGPU_COB_COUNT_OFFSET, tagpu_cobvm_running(vm) - 1);
+    *vm->count -= 1;
 }
 
 /* every record blocked in a call on `slot` goes runnable (0x4B19FF, 0x4B1AB1) */
@@ -238,29 +245,29 @@ static void wake_callers(TAGPU_COBVM* vm, unsigned slot)
 {
     unsigned k;
     for (k = 0; k < vm->threads; ++k) {
-        TagpuCobRecord* r = tagpu_cobvm_record(vm, k);
+        TagpuCobHead* r = tagpu_cobvm_record(vm, k);
         if ((r->status & 0xFFF00000u) == ST_CALL && r->child == (int32_t)slot) r->status = ST_RUN;
     }
 }
 
 /* ---- the opcodes ---- */
 
-#define POP()    (r->stack[r->sp--])
-#define PUSH(v)  (r->stack[++r->sp] = (v))
+#define POP()    (st[r->sp--])
+#define PUSH(v)  (st[++r->sp] = (v))
 
 static int32_t wrap_add(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
 static int32_t wrap_sub(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (uint32_t)b); }
 static int32_t wrap_mul(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
 
 /* The two-operand words (0x4B1479..0x4B18AB): `b` popped, `a` rewritten in place. NOT and
-   BITWISE_NOT neither pop nor push. Division was bounded by tagpu_cob_check_step. */
-static void arith(TagpuCobRecord* r, uint32_t op)
+   BITWISE_NOT neither pop nor push. Division is guarded: tagpu_cob_check_step runs at every one. */
+static void arith(TagpuCobHead* r, int32_t* st, uint32_t op)
 {
     int32_t a, b, v;
-    if (op == 0x10038000u) { r->stack[r->sp] = ~r->stack[r->sp]; return; }
-    if (op == 0x1005A000u) { r->stack[r->sp] = r->stack[r->sp] == 0; return; }
+    if (op == 0x10038000u) { st[r->sp] = ~st[r->sp]; return; }
+    if (op == 0x1005A000u) { st[r->sp] = st[r->sp] == 0; return; }
     b = POP();
-    a = r->stack[r->sp];
+    a = st[r->sp];
     switch (op) {
     case 0x10031000u: v = wrap_add(a, b); break;
     case 0x10032000u: v = wrap_sub(a, b); break;
@@ -280,7 +287,7 @@ static void arith(TagpuCobRecord* r, uint32_t op)
     case 0x10059000u: v = a ^ b; break;                  /* 0x4B1875: the bitwise word */
     default:          v = a; break;
     }
-    r->stack[r->sp] = v;
+    st[r->sp] = v;
 }
 
 /* Under IMPURE the extended getters are tagpu_cob_getter's, the rule the game's handler takes
@@ -301,14 +308,38 @@ static int32_t host_get(const TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t id,
 
 static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
 {
-    TagpuCobRecord* r = tagpu_cobvm_record(vm, slot);
+    TagpuCobHead* r = tagpu_cobvm_record(vm, slot);
+    int32_t* st = tagpu_cobvm_stack(vm, slot);
     const uint32_t* code = vm->program->code;
     int32_t* anim = vm->anim;
     int32_t rate = (int32_t)obj32(vm, OBJ_RATE);
+    const unsigned char* guard = vm->checked ? NULL : vm->program->guard;
+    const int tracing = run->host && run->host->trace;
     unsigned steps;
     for (steps = 0; steps < STEP_BUDGET; ++steps) {
         uint32_t pc, word, op, next;
-        int checked = tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason);
+        int checked = 1;
+        if (tracing && r->sp + 1 > 32) {    /* the oracle's H: a step past the retail stack's 32 words */
+            TAGPU_COBVM_TRACE t;
+            tagpu_cobvm_flush(vm, run);
+            memset(&t, 0, sizeof t);
+            t.kind = 'H'; t.tick = run->tick; t.slot = (int32_t)slot; t.script = -1; t.pc = (int32_t)r->pc;
+            t.parent = -1; t.value = r->sp + 1;
+            trace(run, &t);
+        }
+        if (!guard || guard[r->pc])
+            checked = tagpu_cob_check_head_step(vm->program, r, st, vm->words, run->reason, sizeof run->reason);
+#ifdef TAGPU_COBVM_PROVE_CHECK
+        else {
+            char why[96];
+            int got = tagpu_cob_check_head_step(vm->program, r, st, vm->words, why, sizeof why);
+            if (got != 1) {
+                snprintf(run->reason, sizeof run->reason, "the stack proof skipped a check (pc %u): %s",
+                         (unsigned)r->pc, got == 2 ? "a terminal opcode" : why);
+                return fail(vm, run, NULL);
+            }
+        }
+#endif
         if (!checked) return fail(vm, run, NULL);
         if (checked == 2) {                 /* 0x4B1B60: an opcode the engine lacks kills its thread */
             release(vm, slot);
@@ -428,7 +459,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
             return 1;
         case 0x10021000u: {                 /* PUSH constant / local / static */
             uint32_t sel = word & 7u, at = code[pc + 1];
-            int32_t v = sel == 1 ? (int32_t)at : sel == 2 ? r->stack[at] : sel == 4 ? vm->statics[at] : 0;
+            int32_t v = sel == 1 ? (int32_t)at : sel == 2 ? st[at] : sel == 4 ? vm->statics[at] : 0;
             PUSH(v);
             next = pc + 2;
             break;
@@ -439,7 +470,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
         case 0x10023000u: {                 /* POP into a local or a static */
             uint32_t sel = word & 7u, at = code[pc + 1];
             int32_t v = POP();
-            if (sel == 2) r->stack[at] = v;
+            if (sel == 2) st[at] = v;
             else if (sel == 4) vm->statics[at] = v;
             next = pc + 2;
             break;
@@ -452,7 +483,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
         case 0x10051000u: case 0x10052000u: case 0x10053000u: case 0x10054000u:
         case 0x10055000u: case 0x10056000u: case 0x10057000u: case 0x10058000u:
         case 0x10059000u: case 0x1005A000u:
-            arith(r, op);
+            arith(r, st, op);
             break;
         case 0x10041000u: {                 /* RAND: pops hi then lo, pushes lo + rng(hi - lo + 1) */
             TAGPU_COBVM_TRACE t;
@@ -462,7 +493,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
             PUSH(wrap_add(lo, got));
             memset(&t, 0, sizeof t);
             t.kind = 'D'; t.tick = run->tick; t.slot = (int32_t)slot; t.script = -1; t.pc = (int32_t)pc;
-            t.parent = -1; t.value = r->stack[r->sp]; t.has_value = 1;
+            t.parent = -1; t.value = st[r->sp]; t.has_value = 1;
             trace(run, &t);
             break;
         }
@@ -490,9 +521,10 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
             int child = alloc(vm, run, (int)code[pc + 1], call ? TAGPU_COBVM_FROM_CALL : TAGPU_COBVM_FROM_START,
                               (int)slot, (int)argc);
             if (child >= 0) {
-                TagpuCobRecord* ch = tagpu_cobvm_record(vm, (unsigned)child);
+                TagpuCobHead* ch = tagpu_cobvm_record(vm, (unsigned)child);
                 /* in push order, the child's sp left at -1 (0x4B18EB) */
-                for (k = 0; k < argc; ++k) ch->stack[k] = r->stack[r->sp + 1 - (int32_t)argc + (int32_t)k];
+                int32_t* cs = tagpu_cobvm_stack(vm, (unsigned)child);
+                for (k = 0; k < argc; ++k) cs[k] = st[r->sp + 1 - (int32_t)argc + (int32_t)k];
                 ch->mask = r->mask;
             }
             r->sp -= (int32_t)(vm->rules == TAGPU_COBVM_IMPURE ? tagpu_cob_parent_pops(op, child, argc)
@@ -515,7 +547,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
             memset(&t, 0, sizeof t);
             t.kind = 'R'; t.tick = run->tick; t.slot = (int32_t)slot; t.script = -1; t.pc = (int32_t)pc;
             t.parent = -1;
-            if (r->sp >= 0 && r->sp < (int32_t)TAGPU_COB_WORDS) { t.value = r->stack[r->sp]; t.has_value = 1; }
+            if (r->sp >= 0 && r->sp < (int32_t)vm->words) { t.value = st[r->sp]; t.has_value = 1; }
             trace(run, &t);
             if (r->callback) {
                 int32_t v = POP();
@@ -533,7 +565,7 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
             unsigned k;
             int stop = 0;
             for (k = 0; k < vm->threads; ++k) {
-                TagpuCobRecord* o = tagpu_cobvm_record(vm, k);
+                TagpuCobHead* o = tagpu_cobvm_record(vm, k);
                 TAGPU_COBVM_TRACE t;
                 if (!o->status || !(o->mask & (uint32_t)mask)) continue;
                 tagpu_cobvm_flush(vm, run);
@@ -586,10 +618,10 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
 /* 0x4B0DA0: wake the record if its block has cleared, then run it until it blocks or ends */
 static int run_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot, int32_t dt)
 {
-    TagpuCobRecord* r = tagpu_cobvm_record(vm, slot);
+    TagpuCobHead* r = tagpu_cobvm_record(vm, slot);
     tagpu_cobvm_flush(vm, run);
     if (!r->status) return 1;
-    if (!tagpu_cob_check_record(vm->program, r, run->reason, sizeof run->reason))
+    if (!tagpu_cob_check_head(vm->program, r, vm->words, run->reason, sizeof run->reason))
         return fail(vm, run, NULL);
     if ((r->status & 0xFF000000u) == 0x02000000u) {
         const int32_t* a = vm->anim + r->piece * (int32_t)TAGPU_COBVM_ANIM;
@@ -663,16 +695,31 @@ static void step_anim(TAGPU_COBVM* vm, int32_t dt)
 
 /* ---- the entries ---- */
 
-int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
-                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
-                     char* reason, unsigned capacity)
+int tagpu_cobvm_bind_layout(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                            unsigned char* object, const TAGPU_COBVM_LAYOUT* layout, int32_t* statics,
+                            int32_t* anim, unsigned char* model, char* reason, unsigned capacity)
 {
+    const char* bad = NULL;
     memset(vm, 0, sizeof *vm);
-    if (!program || !object || !model || (program->statics && !statics) || (program->pieces && !anim) ||
-        rules > TAGPU_COBVM_IMPURE || ((uintptr_t)object & 3)) {
-        if (reason && capacity) snprintf(reason, capacity, "%s", "COB VM blocks are missing or misaligned");
+    if (!program || !object || !model || !layout || (program->statics && !statics) ||
+        (program->pieces && !anim) || rules > TAGPU_COBVM_IMPURE || ((uintptr_t)object & 3))
+        bad = "COB VM blocks are missing or misaligned";
+    else if (!layout->heads || !layout->stacks || !layout->count || ((uintptr_t)layout->heads & 3) ||
+             layout->head_stride < sizeof(TagpuCobHead) || (layout->head_stride & 3))
+        bad = "COB VM record headers are missing or misaligned";
+    else if (layout->words < program->depth || layout->words > TAGPU_COB_WORDS ||
+             layout->stack_stride < layout->words)
+        bad = "COB VM record stacks are smaller than the program's depth";
+    if (bad) {
+        if (reason && capacity) snprintf(reason, capacity, "%s", bad);
         return 0;
     }
+    vm->heads = layout->heads;
+    vm->head_stride = layout->head_stride;
+    vm->stacks = layout->stacks;
+    vm->stack_stride = layout->stack_stride;
+    vm->words = layout->words;
+    vm->count = layout->count;
     vm->program = program;
     vm->object = object;
     vm->statics = statics;
@@ -680,12 +727,45 @@ int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned r
     vm->model = model;
     vm->rules = rules;
     vm->threads = rules == TAGPU_COBVM_IMPURE ? TAGPU_COB_THREADS : TAGPU_COB_LEGACY_THREADS;
+    vm->checked = rules != TAGPU_COBVM_IMPURE || !program->guard;   /* the proof is IMPURE's */
+    return 1;
+}
+
+int tagpu_cobvm_bind(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
+                     char* reason, unsigned capacity)
+{
+    TAGPU_COBVM_LAYOUT l;
+    l.heads = object + OBJ_RECORDS;
+    l.head_stride = TAGPU_COB_RECORD_BYTES;
+    l.stacks = (int32_t*)(void*)(object + OBJ_RECORDS + sizeof(TagpuCobHead));
+    l.stack_stride = TAGPU_COB_RECORD_BYTES / 4u;
+    l.words = TAGPU_COB_WORDS;
+    l.count = (uint32_t*)(void*)(object + TAGPU_COB_COUNT_OFFSET);
+    return tagpu_cobvm_bind_layout(vm, program, rules, object, &l, statics, anim, model, reason, capacity);
+}
+
+int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
+                     char* reason, unsigned capacity)
+{
+    if (!tagpu_cobvm_bind(vm, program, rules, object, statics, anim, model, reason, capacity)) return 0;
     memset(object + OBJ_RECORDS, 0, TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES + 4u);
     obj32_set(vm, OBJ_RATE, 30);
     obj32_set(vm, OBJ_DIRTY, 0);
     if (program->statics) memset(statics, 0, program->statics * sizeof *statics);
     if (program->pieces) memset(anim, 0, program->pieces * TAGPU_COBVM_ANIM * sizeof *anim);
     return 1;
+}
+
+unsigned tagpu_cobvm_size(void) { return (unsigned)sizeof(TAGPU_COBVM); }
+
+void tagpu_cobvm_loaded(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    vm->quiet = vm->owed = 0;               /* the records are new: the next turn runs them */
+    for (s = 0; s < vm->threads && !vm->checked; ++s)
+        if (!tagpu_cob_record_proven(vm->program, tagpu_cobvm_record(vm, s))) vm->checked = 1;
 }
 
 int tagpu_cobvm_index(const TagpuCobProgram* program, const char* name)
@@ -711,8 +791,10 @@ static int entered(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run)
 int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_t cb, int run_now,
                       int argwords, int argc, const int32_t args[4])
 {
-    TagpuCobRecord* r;
+    TagpuCobHead* r;
     int slot, i;
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     if (!entered(vm, run)) return -1;
     if (argwords && (argc < 0 || argc > 4 || !args)) {
         snprintf(run->reason, sizeof run->reason, "%s", "an engine start passes 0 to 4 words");
@@ -727,7 +809,7 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
     r = tagpu_cobvm_record(vm, (unsigned)slot);
     r->callback = cb;
     if (argwords) {
-        for (i = 0; i < 4; ++i) r->stack[i] = args[i];
+        for (i = 0; i < 4; ++i) tagpu_cobvm_stack(vm, (unsigned)slot)[i] = args[i];
         r->sp = argc - 1;
     }
     if (run_now) {
@@ -742,17 +824,67 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
 
 int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t io[4])
 {
-    TagpuCobRecord* r;
+    TagpuCobHead* r;
     int slot, i;
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     if (!entered(vm, run)) return -1;
     slot = alloc(vm, run, script, TAGPU_COBVM_FROM_ENGINE, -1, -1);
     if (slot < 0) return 0;                 /* the silent failure: io stays untouched */
     r = tagpu_cobvm_record(vm, (unsigned)slot);
     r->callback = 0;
-    for (i = 0; i < 4; ++i) r->stack[i] = io[i];
+    for (i = 0; i < 4; ++i) tagpu_cobvm_stack(vm, (unsigned)slot)[i] = io[i];
     r->sp = 3;
     if (run_thread(vm, run, (unsigned)slot, 0) < 0) return -1;
-    for (i = 0; i < 4; ++i) io[i] = r->stack[i];
+    for (i = 0; i < 4; ++i) io[i] = tagpu_cobvm_stack(vm, (unsigned)slot)[i];
+    return 1;
+}
+
+void tagpu_cobvm_settle(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    if (!vm->owed) return;
+    for (s = 0; s < vm->threads; ++s) {
+        TagpuCobHead* r = tagpu_cobvm_record(vm, s);
+        if (r->status == ST_SLEEP) r->sleep = wrap_sub(r->sleep, vm->owed);
+    }
+    vm->due = wrap_sub(vm->due, vm->owed);
+    vm->owed = 0;
+}
+
+void tagpu_cobvm_settled(const TAGPU_COBVM* vm, unsigned char* out)
+{
+    unsigned s;
+    memcpy(out, vm->object, TAGPU_COB_OBJECT_BYTES);
+    for (s = 0; s < vm->threads; ++s) {
+        TagpuCobHead* r = (TagpuCobHead*)(void*)(out + OBJ_RECORDS + s * TAGPU_COB_RECORD_BYTES);
+        if (r->status == ST_SLEEP) r->sleep = wrap_sub(r->sleep, vm->owed);
+    }
+}
+
+/* After a turn that ran: quiet when every busy record sleeps or waits on a CALL; `due` the smallest
+   sleep, INT32_MAX with no sleeper -- the owed dt then reaches it after 2^31 turns, and that turn
+   runs and settles */
+static void schedule(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    vm->quiet = 1;
+    vm->due = INT32_MAX;
+    for (s = 0; s < vm->threads; ++s) {
+        const TagpuCobHead* r = tagpu_cobvm_record(vm, s);
+        if (!r->status || r->status == ST_CALL) continue;
+        if (r->status != ST_SLEEP) { vm->quiet = 0; return; }
+        if (r->sleep < vm->due) vm->due = r->sleep;
+    }
+}
+
+int tagpu_cobvm_rest(TAGPU_COBVM* vm, int32_t dt)
+{
+    if (!vm->quiet || vm->faulted || vm->pend.on || dt <= 0 || (int32_t)obj32(vm, OBJ_RATE) <= 0 ||
+        (int64_t)vm->owed + dt >= (int64_t)vm->due)
+        return 0;
+    vm->owed += dt;
+    step_anim(vm, dt);
     return 1;
 }
 
@@ -760,8 +892,12 @@ int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt)
 {
     unsigned s;
     if (!entered(vm, run)) return -1;
+    if (tagpu_cobvm_rest(vm, dt)) return 1;
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     for (s = 0; s < vm->threads; ++s)
         if (run_thread(vm, run, s, dt) < 0) return -1;
     step_anim(vm, dt);
+    schedule(vm);
     return 1;
 }

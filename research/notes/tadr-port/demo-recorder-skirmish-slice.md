@@ -1956,7 +1956,9 @@ run (`tareplay.py`, THE STOP): a thread of its own, woken by the signal's wakeup
 handler itself does nothing, sets STOP, so no new game starts and each wait gives up; it stops every
 worker's game through its instance and its Xvfb by its Popen at once, and each worker stops them
 again once its own call in flight has returned, so the run ends within that call's bound. tacli runs
-in a session of its own, so a signal to the run's process group never ends a launch midway. Passing dumps are deleted unless `--keep`; the run's folder is outside
+in a session of its own, so a signal to the run's process group never ends a launch midway. Passing dumps are deleted unless `--keep`, and
+so is each worker's instance once its lanes end (`Worker.close`), unless one of them failed or could not run or the run is
+`--keep` -- the broad tier keeps its dumps, not its instances; the run's folder is outside
 the repository (`--out`, `$TAREPLAY_OUT`), since its logs carry absolute paths.
 
 **The fixtures**, `tools/replay/fixtures.json`, keyed by GameTime: `load`, a scenario under

@@ -44,7 +44,10 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `0x481422`), which has no owner test: it sends a `0x0A` from the DirectPlay id `0x44FDB0`
   returns (the first active type-1/2 record) and applies it locally through `0x48AB70`
   (`0x48AB58`, `0x48AB62`). EXPLODE, `vt+0x34` = `0x481140`, without flag `0x20` draws the sim RNG
-  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`); its flag bits 8..13
+  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`), which clears the piece's
+  visible bit in the posed model (`and word [o3 + piece × 0x36 + 0x4A], 0xFFFE` at `0x421639`: the
+  flags word `+0x28` of the piece's `PrimitiveStruct`; MEASURED 2026-11-21 by the COB oracle, a
+  `Killed` query's piece 0 going from `…07` to `…06` in the effect); its flag bits 8..13
   add explosions through `0x420A30`. EMIT_SFX, `vt+0x30` = `0x480EB0`, emits particles only, and
   only when the unit is in the viewed player's sight (`0x465AC0`, `0x480EC5..0x480EEC`).
   PLAY_SOUND `0x10072000` kills its own thread (`0x4B1B60`).
@@ -230,7 +233,12 @@ the file for each entry's address as a dword.
 | `0x4B1928` | the VM's CALL | inside a slice (the caller key `0x4B192D`) |
 
 The start by name with arguments `0x4B0A70` calls `0x4B0B00` (`0x4B0AEE`). A start by name of a
-script the COB lacks still reaches the allocator, with -1 (`0x4B0995..0x4B099F`), which refuses it
+script the COB lacks still reaches the allocator, with -1 (`0x4B0995..0x4B099F`; the name is found
+by the start's own first-match byte compare over the file's names, `0x4B0957..0x4B0993`, not by
+Name2Index `0x4B07C0`), which refuses it; the allocator's return address there is `0x4B09A4`, the
+start by index's `0x4B0B0D` and the query's `0x4B0C4D`, the keys the recorder counts each by. The
+query takes nothing back when the allocator refuses (`0x4B0C51`) and pushes 0 for a NULL pointer
+(`0x4B0C64..`)
 (`0x4B08C5..0x4B08D0`). No dword in the file holds `0x4B0B00`, `0x4B0940`, `0x4B0A70`, `0x4B08C0`,
 `0x4B0BC0`, `0x4B0C40` or `0x4B0D60`.
 
@@ -275,14 +283,27 @@ which the raised build sets to `TAGPU_COB_THREADS`), then the piece stepper `0x4
 one caller is the unit tick's `0x48ADEB`, with `dt` 1, and `dt` is the only amount a sleep counts
 down by (`0x4B0DEF..0x4B0E01`): a unit's COB clock is the number of slices it has had.
 
-**The object's life.** The setup `0x485D40` allocates `0x544` bytes (`0x4B4F10` at `0x485D78`),
-constructs (`0x4B0610` at `0x485D88`), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
+**The object's life.** The setup `0x485D40` allocates `0x544` bytes (`push` at `0x485D73`, its
+size at `0x485D74`; `MEM_Alloc 0x4B4F10` at `0x485D78`, `cdecl`: `add esp,4` at `0x485D7F`, the NULL
+test at `0x485D82` skipping the constructor; `esi` is the unit from `0x485D48` through the whole
+setup; `0x485D64` loads the def's script `[unit+0x92]+0x18E` into `ecx`, which stays there through
+`0x485D78`, and a NULL script jumps to `0x485DFE` at `0x485D6C`, so the allocation is reached only
+for a type with a script), and the raised build makes
+the call zeroed and the size its own (the COB module note, *The game's COB interpreter*) -- with
+the oracle unarmed, a block sized by the script's program, whose constructor and free are its own
+(`0x485D88`, `0x485E40`; the COB module note, *The block*);
+constructs (`0x4B0610` at `0x485D88`, the constructor's one caller in the file), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
 reference in the file), stores the object at `+0x9A` (`0x485D9F`), loads the script (`0x4B0720`
 at `0x485DAC`), makes the model (`0x45A950` at `0x485DC0`), binds it (`0x480D40` at `0x485DD2`),
 and then starts Create through `0x4B0940("Create" 0x508BE0, 0, run-now 1)` at `0x485DE6`
 unconditionally: every new COB object has a start. A type with no script takes `0x485DFE`, which
 stores NULL at `+0x9A` (`0x485DFF`). The vtable holds the VM's engine callbacks (`0x480770` ..
-`0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`. The unit destructor `0x4866D0`
+`0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`: `0x4B06F0` frees the animation
+`+0x14` then the statics `+0x10` (`MEM_Free 0x4D85A0`), and with the flag's bit 0
+(`test byte [esp+8],1` at `0x485E38`, `je` at `0x485E3D`) `push esi; call 0x4B4F20` at `0x485E40` frees the object
+(`0x4B4F20`, `cdecl`, wraps `0x4D8670`; `add esp,4` at `0x485E45`); it returns the object, `ret 4`.
+The constructor reads the sim rate from `0x4B6330`, which takes no argument and returns
+`[[0x51FBD0]+0xE8]` (`0x4B6330..0x4B633B`, 9 callers). The unit destructor `0x4866D0`
 deletes the object through `call [eax+0x50]` with flag 1 (`0x486D8A`) and stores NULL at `+0x9A`
 (`0x486D8D`), both on the game thread in play. `+0x9A` has two more stores in `.text`, `0x4A9FFE`
 and `0x4AA88D`, in GUI code beside `+0x96`, of elapsed times from `0x4B6340` [INFERRED: not a unit
@@ -698,14 +719,14 @@ vtable handler takes (`0x480770`, `0x480C30`, `0x480EB0` all open with it).
 | `+0x04` | sim rate (30) — `sleep` ticks = `ms × rate / 1000`, MOVE/TURN speeds `/ rate` | `0x4B0641`; `0x4B1363..0x4B1370`; `0x4B0EDE`, `0x4B0F7B` |
 | `+0x08` | the loaded `.cob`: `+4` script count, `+8` piece count, `+0x10` static count, `+0x18` entry table (word indices), `+0x1C` name pointers, `+0x24` code words — the on-disk header (`file-formats.md` §2.1) with the offsets relocated to pointers | `0x4B072A`, `0x4B08CA`, `0x4B0900`, `0x4B07D0`, `0x4B0E5D`, `0x4B073B`, `0x4B0759` |
 | `+0x0C` | `0x4B26F0(scriptfile)` result `[unknown]` | `0x4B0735` |
-| `+0x10` | static variables, `count × 4`, zero-filled | `0x4B076E`; read by `PUSH_STATIC` `0x4B13AA` |
+| `+0x10` | static variables, `count × 4`, **not filled**: `0x4B0720` takes it from the realloc `0x4D84A0` and writes nothing into it (`0x4B0769..0x4B0795`; only the animation block gets the `rep stos`), and the allocator does not zero | `0x4B076E`; read by `PUSH_STATIC` `0x4B13AA` |
 | `+0x14` | piece animation array, `19` dwords per piece, zero-filled | `0x4B0756`, `0x4B0777..0x4B0791` |
 | `+0x18` | "something is animating" — set by MOVE/TURN, cleared by the stepper | `0x4B0F1A`, `0x4B1C21` |
 | `+0x1C` | **eight thread records × `0xA4`** (below) | `0x4B08D4..0x4B08E6` |
 | `+0x53C` | running-thread count | `0x4B0921`, `0x4B19F9`, `0x4B1AAB` |
 | `+0x540` | the posed model `Object3do` (`unit+0x9E`); `+0xC` of it is the unit | `0x480D44`, `0x480EBB..0x480EC1` |
 
-**Vtable `0x4FD698`** (22 slots; the base `0x4FDB00` has slots 0–6 = `0x4E6110` (pure), 7–13 =
+**Vtable `0x4FD698`** (21 slots, `+0x00..+0x50`; the base `0x4FDB00` has slots 0–6 = `0x4E6110` (pure), 7–13 =
 `0x4B1E50..0x4B1EB0`, 14–20 = `0x4B0650..0x4B06B0`, the no-op bases, and `0x4B06B0` is the base
 destructor: frees `+0x14`, `+0x10`, then the object when the flag argument has bit 0). The
 slots the VM calls, with the handler each opcode reaches — this closes the "unidentified opcode
@@ -835,7 +856,7 @@ the name table; `0x4B07C0 Name2Index` is the standalone copy):
 | VA | Convention | What | Callers (`E8` scan) |
 |---|---|---|---|
 | `0x4B0A70` `COBEngine_StartScript` | `thiscall(cob, name, cb, runNow, argc, a0, a1, a2, a3)`, `ret 0x20` | name → index → `0x4B0B00` | 21: `0x406834` `0x4069BF` `0x4113EF` `0x437902` `0x43795E` `0x43798A` `0x43DBE8` `0x486877` `0x489898` `0x489948` `0x489F43` `0x489F8E` `0x48A149` `0x48A2E0` `0x499C5C` `0x49CBEB` `0x49CDA6` `0x49CFCA` `0x49E186` (`UNITS_StartWeaponsScripts`) `0x49E31C` `0x49E386` (`AutoAim`) |
-| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index) `0x4B0AEE` |
+| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index as a word `+3` and its byte `+5` as `argc` unchecked, `mov dl,[eax+5]` at `0x455544`, with the four dwords `+6..+0x12` as `a0..a3` and no callback) `0x4B0AEE` |
 | `0x4B0940` | `thiscall(cob, name, cb, runNow)`, `ret 0xC` | no-argument start, same shape; refused → returns 0 *without* calling the callback | 15: `0x40F433` `0x41148D` `0x411794` `0x411DA1` `0x411E2B` `0x43DAF2` `0x43DB27` `0x485DE6` (`Create`) `0x48B106` `0x48B12B` `0x48B14E` `0x48B169` (`UNITS_SetStateMask`) `0x49CB94` `0x49CD4F` `0x49CF73` (the fire paths) |
 | `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`0x43E400`, `QueryNanoPiece`) `0x4865C3` |
 | `0x4B0C40` | `thiscall(cob, idx, p0..p3)` | alloc; **refused → returns 0 leaving `*p0..*p3` untouched** (the silent failure); else callback `0`, pushes `*p0..*p3` (`0` for a null pointer), **sp = 3**, runs that thread now (`0x4B0DA0(cob, slot, 0)`), then copies `stack[0..3]` back through the non-null pointers — a `Query*` script answers by assigning its parameter | `0x4B0C2F` |
@@ -859,7 +880,7 @@ value; the handler follows each compare):
 | MOVE `0x10001000` / TURN `0x10002000` | `0x4B0E83` / `0x4B0E71` | piece and axis inline; pops target then speed; speed `/ (cob+4)` per tick; `vt+0x14` for the current value (sign of travel); sets `cob+0x18` |
 | SPIN `…3000` / STOP_SPIN `…4000` | `0x4B0FFE` / `0x4B0FEC` | |
 | SHOW/HIDE/CACHE/DONT_CACHE/MOVE_NOW/TURN_NOW/SHADE/DONT_SHADE | `0x4B10DD` `0x4B10D3` `0x4B1112` `0x4B1108` `0x4B11AA` `0x4B119C` `0x4B127C` `0x4B1272` | |
-| EMIT_SFX `0x1000F000` | `0x4B12B1` | pops type; piece inline; `vt+0x30(piece, type)` → `0x480EB0`; pc += 2 |
+| EMIT_SFX `0x1000F000` | `0x4B12B1` | pops type; piece inline; `vt+0x30(piece, type)` → `0x480EB0` (the call at `0x4B12D8`); pc += 2 |
 | WAIT_TURN `0x10011000` / WAIT_MOVE `…12000` | `0x4B12A7` / `0x4B1317` | piece, axis inline into `+0x10`/`+0x14`; status `0x2100000` / `0x2200000`; stop |
 | SLEEP `0x10013000` | `0x4B130D` | pops ms; **`+0x0C = ms × (cob+4) / 1000`** (the `0x10624DD3` magic, truncating: `sleep 150` = 4 ticks); status `0x2400000`; stop |
 | PUSH_* `0x10021xxx` | `0x4B1390` | `op & 7`: 1 constant inline, 2 `stack[inline]` (a local), 4 `statics[inline]` |
@@ -869,15 +890,15 @@ value; the handler follows each compare):
 | RAND `0x10041000` | `0x4B15BD` | pops hi, lo; **`call 0x4B6C30(hi − lo + 1)` at `0x4B15E0`** — the sim RNG (stdcall; returns 0 for `n < 2`; state at `0x51FC88`; 129 call sites across the sim), pushes `lo + result` |
 | GET_UNIT_VALUE `…42000` / GET `…43000` / `…44000` / `…45000` | `0x4B15B3` `0x4B1630` `0x4B1622` `0x4B16B8` | `vt+0x44(id, 0, 0, 0, 0)` for the first |
 | SET_LESS … LOGICAL_NOT | `0x4B16AE` `0x4B1707` `0x4B16FD` `0x4B1761` `0x4B1757` `0x4B17BB` `0x4B17B1` `0x4B181D` `0x4B1813` `0x4B188A` | |
-| START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
+| START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order (`0x4B18C8..0x4B18E9`) **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
 | CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool leaves the caller dormant until it is killed** |
 | `0x10063000` | `0x4B1903` (body `0x4B1984`) | pops `[pc+2]` words into the runner's own frame `[esp+0x20..]`, pc += 3 `[unknown use]` |
 | JUMP `0x10064000` | `0x4B19BB` | pc = inline |
-| RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`) | if `+0x20`: pop → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
+| RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`: `esi` the record, `edi` the object) | if `+0x20`: pop (`0x4B19D7`) → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
 | JUMP_NOT_EQUAL `0x10066000` | `0x4B1A40` | pops; jumps to the inline target when the value is **zero** |
 | SIGNAL `0x10067000` | `0x4B1A32` (body `0x4B1A75`) | pops mask; for each busy record with `+0x1C & mask`: status `0` (`0x4B1A99`), count--, its blocked callers woken, and if it is the running thread, stop — **no callback is called for a killed thread**, so an aim script killed by the next `AimPrimary`'s signal never reports |
 | SET_SIGNAL_MASK `0x10068000` | `0x4B1B00` | `+0x1C = pop` |
-| EXPLODE `0x10071000` | `0x4B1AF6` (body `0x4B1B1F`) | pops flags; piece inline; `vt+0x34(piece, flags)` → `0x481140` |
+| EXPLODE `0x10071000` | `0x4B1AF6` (body `0x4B1B1F`) | pops flags; piece inline; `vt+0x34(piece, flags)` → `0x481140` (the call at `0x4B1B3A`) |
 | SET `0x10082000` / ATTACH `…83000` / DROP `…84000` | `0x4B1B48` `0x4B1B50` `0x4B1B58` | `vt+0x40` (2 pops) / `vt+0x38` (3 pops) / `vt+0x3C` (1 pop) |
 | anything else | `0x4B1B60` | **the thread is killed silently** (status `0`, count--) |
 
@@ -1111,7 +1132,7 @@ mechanism behind the one-frame pose pop the native pass showed on a walking comm
 | site | when |
 |---|---|
 | `0x45AC89` (inside `DrawUnit 0x45AC20`) | the cached body turn `o3+0x18/+0x1A/+0x1C` differs from the live `unit+0x64/+0x66/+0x68` by ≥ 8 on any axis |
-| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above |
+| `0x45AB6C` (`0x45AB10`, the same test -- `\|o3+0x1C - unit+0x68\| < 8` at `0x45AB30`, then `+0x1A`/`+0x66`, then `+0x18`/`+0x64` at `0x45AB5D`, any axis at 8 or more going to the rewrite at `0x45AB5F`, all three under 8 to `0x45AB8E` -- called from the COB at `0x480EFC`) | as above; it first copies the unit's turn into the cached body turn (`0x45AB65`, `+0x18..+0x1B`, then `+0x1C`), so an EMIT_SFX rewrites both the cached turn and the flag |
 | `0x45ADA5` | the same test again, for each attached unit in `DrawUnit`'s cargo chain |
 | `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
 | `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |
@@ -1580,6 +1601,14 @@ byte-checked before replacement; the owning functions retain their native call s
 |---|---|---|
 | model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1588` |
 | model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1588` |
+
+With the oracle unarmed the model and count operands take the block's offsets instead, `0x20` and
+`0x1C` (`tagpu_patches.c`, `cob_layout_choose`, before `cob_get_sites` relocates `0x480770`'s
+first instruction with the same offset); the stride and record-count operands keep their raised
+values but belong to code the game no longer reaches (the interpreter is the host's).
+
+| Field or loop | Operand addresses | Native operation and raised value |
+|---|---|---|
 | active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x1584` |
 | active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x1584` |
 | record iteration | `0x4B062F`, `0x4B08DF`, `0x4B0D4C`, `0x4B1A1E`, `0x4B1AD0`, `0x4B1AE8` | constructor/free-slot search/runner cleanup/return/signal advance a record pointer by `0xA4`; stride becomes `0x224` |

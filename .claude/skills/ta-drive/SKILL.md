@@ -268,7 +268,7 @@ enter=SELECT  esc=PREVMENU
   save and load land on `LOADGAME.GUI`.
 - **A build button reports "delivered (no GUI-visible change)" — that is success**: it changes
   the cursor mode. Then place it: `keys t1 mouse:X,Y`, `click t1 X Y` (left; right cancels). A red
-  footprint means the site is blocked.
+  footprint is a blocked site; yellow, one the owner's idle units will be moved off (build scatter).
 - **`ui` is the gadget layer only.** The map, minimap and resource bars are not gadgets.
 - **Lists read out and can be picked** (`select <list> <text|#index>`); an off-screen row is
   walked to with the arrow keys, ~8 s for 99 maps (raise `--timeout`). **Map and campaign

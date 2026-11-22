@@ -80,6 +80,7 @@
 #include "tagpu_impai.h"
 #include "tagpu_income.h"
 #include "tagpu_guard.h"
+#include "tagpu_scatter.h"
 #include "tagpu_pathfind.h"
 #include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
@@ -1197,8 +1198,8 @@ static int viewer_buffers(char* ta)
 
 /* THE VIEWER'S BUFFERS: the level init's call 0x4919C8, in LoadGameData_Main 0x4917D0 on the
    LOADER thread (0x497581), its only call site, retargeted here. The engine's own init first,
-   then ImpAI's seat table (tagpu_impai.h), the income lever's rows (tagpu_income.h) and the guard's
-   rows and plant types (tagpu_guard.h) on every
+   then ImpAI's seat table (tagpu_impai.h), the income lever's rows (tagpu_income.h), the guard's
+   rows and plant types (tagpu_guard.h) and build scatter's rows (tagpu_scatter.h) on every
    level, then, on a level the seating armed, record 10's buffers. Three invariants:
    - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
      state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
@@ -1222,6 +1223,7 @@ static void __cdecl tagpu_replay_level_players(void)
     tagpu_impai_level_init();
     tagpu_income_level_init();
     tagpu_guard_level_init();
+    tagpu_scatter_level_init();
     tagpu_pathfind_level_init();
     if (!tagpu_puppet_on() ||
         InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
@@ -3622,8 +3624,9 @@ static void slice_finish(unsigned now)
 
 /* RK_EV_START: the 0x10 case's call (0x455528..0x455551), made here rather than through the case,
    which scales the unit's u16 unbounded. 0x4B0B00 bounds the index itself (0x4B08C5..0x4B08D0)
-   but not argc: its thread's stack pointer becomes argc - 1 (0x4B0B76), so argc is at most the
-   four arguments there are. */
+   but not argc: the engine's thread's stack pointer becomes argc - 1 (0x4B0B76), so the
+   stock-limits build plays at most the four arguments there are; the raised build's entry
+   (tagpu_patches.c, cg_start_idx) refuses any other count as a full pool, as the owner's did. */
 static int ev_start(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t id;
@@ -3635,7 +3638,10 @@ static int ev_start(const Lv* L, const unsigned char* b, unsigned len)
     memcpy(&idx, b + 4, 4);
     memcpy(&argc, b + 8, 4);
     memcpy(a, b + 12, 16);
-    if (!(u = live_unit(L, id)) || argc < 0 || argc > 4 || !(cob = cob_of(u))) return 0;
+#ifdef TAGPU_LIMITS_STOCK
+    if (argc < 0 || argc > 4) return 0;
+#endif
+    if (!(u = live_unit(L, id)) || !(cob = cob_of(u))) return 0;
     E_StartIdx(cob, idx, NULL, 0, argc, a[0], a[1], a[2], a[3]);
     return 1;
 }
