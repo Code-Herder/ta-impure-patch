@@ -596,7 +596,7 @@ static const char* FXVS =
      the pixel    uWireKi + floor(uWireKf + q * uLineS)
    `uWireKi` + `uWireKf` is the anchor's line-grid position ss * Z(anchor),
    computed once a unit in double and split into whole pixels and a fraction
-   (`unit_block`), so the float sum carries only an offset of a few hundred
+   (tagpu_vk_unit.c's `wire_anchor`; `unit_block` copies it into the block), so the float sum carries only an offset of a few hundred
    pixels and its fraction. tagpu_line.h's rule, floor(ss * Z(anchor + q)),
    is that sum with Z's affinity taken apart.
 

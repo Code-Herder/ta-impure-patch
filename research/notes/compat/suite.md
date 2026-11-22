@@ -358,7 +358,7 @@ with a lever plays no battle. `once`: the panel is opened, the lane is refused a
 present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
 the side panel has to pass. `keep`: the retries are spent and the session has to end as the DLL ends it
 (`vk_give_up`, render_vk.c), since GDI is the `tagpu_gdi.on` oracle and never a fallback: the log says
-`vk: the lane cannot draw - the session ends`, a box titled `Total Annihilation: Impure` comes up, and once
+`vk: the lane cannot draw - the session ends`, a box titled `Total Annihilation: Impure cannot draw` comes up, and once
 it is dismissed (Return on the game's private display, `xdotool`) the process is gone with code 1, its
 own `TerminateProcess` and not the suite's kill. The box is the evidence: `classify` makes it the
 outcome `impure-ended`, which only a row whose goal names it accepts, so the same box anywhere else is an

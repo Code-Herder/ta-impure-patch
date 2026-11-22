@@ -129,8 +129,10 @@ WINDOWS_CFG = CACHE / "windows.json"     # the machine's address and the player'
 # ExitProcess(0xC1) (ERROR_BAD_EXE_FORMAT): Impure (tagpu_patches.c), TADR
 # (EngineLimits::AbortIfInstallFailed), the Patch Loader (its DllMain, exit(1)). A session whose
 # Vulkan lane cannot draw ends through Impure's END_BOX and TerminateProcess(1) once it is
-# dismissed (render_vk.c, vk_give_up): GDI is the tagpu_gdi.on oracle, never a fallback.
-END_BOX = "Total Annihilation: Impure"
+# dismissed (render_vk.c, vk_give_up): GDI is the tagpu_gdi.on oracle, never a fallback. Its
+# title is its own: Impure's undithering notice and its out-of-memory box carry the bare
+# "Total Annihilation: Impure", and neither is the session's end.
+END_BOX = "Total Annihilation: Impure cannot draw"
 KNOWN_BOXES = {
     "Total Annihilation: Impure cannot start": "impure-refused",
     "Total Annihilation: Impure cannot load these units": "impure-refused",

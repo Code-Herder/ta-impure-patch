@@ -5069,21 +5069,10 @@ SIM_VAR(s_rtrigCheck, SIM_INSTALL);
 static struct { volatile unsigned int pieces, verts, differ; } s_rtrigDiag;   /* GAME THREAD */
 SIM_VAR(s_rtrigDiag, SIM_PRIVATE);
 
-static void repose_check(const int* stock, const int* ours, const short* turn)
-{
-    unsigned int n;
-    s_rtrigDiag.verts++;
-    if (memcmp(stock, ours, 12) != 0) {
-        n = ++s_rtrigDiag.differ;
-        if (n <= 8 || !(n & (n - 1u)))
-            tagpu_logf("enginefix: repose check: DIFFERS (%u so far) turn %d %d %d: stock %d %d %d, "
-                       "ours %d %d %d", n, turn[0], turn[1], turn[2], stock[0], stock[1], stock[2],
-                       ours[0], ours[1], ours[2]);
-    }
-}
-
 /* The loop 0x45B179..0x45B1AA: prim's vertex count is (*prim)+4, its vertices at prim+0x22,
-   12 bytes each; `turn` is the three int16 angles 0x45B150 was handed. */
+   12 bytes each; `turn` is the three int16 angles 0x45B150 was handed. The oracle's compare is
+   written inline rather than as a function of its own: the replay gate asks every function of
+   this file to be reached, and its games arm no oracle. */
 static void __cdecl repose_rotate(const unsigned char* prim, const short* turn)
 {
     const unsigned char* node;
@@ -5110,7 +5099,16 @@ static void __cdecl repose_rotate(const unsigned char* prim, const short* turn)
             ((TURN3_FN)0x004B6CC0)(stock, stock, turn);
         }
         tagpu_turn3_apply(&t, p, p);
-        if (s_rtrigCheck) repose_check(stock, p, turn);
+        if (s_rtrigCheck) {
+            s_rtrigDiag.verts++;
+            if (memcmp(stock, p, 12) != 0) {
+                unsigned int nd = ++s_rtrigDiag.differ;
+                if (nd <= 8 || !(nd & (nd - 1u)))
+                    tagpu_logf("enginefix: repose check: DIFFERS (%u so far) turn %d %d %d: stock "
+                               "%d %d %d, ours %d %d %d", nd, turn[0], turn[1], turn[2], stock[0],
+                               stock[1], stock[2], p[0], p[1], p[2]);
+            }
+        }
     }
 }
 

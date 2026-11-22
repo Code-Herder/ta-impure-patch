@@ -64,7 +64,9 @@ static void vk_give_up(void)
         "computer, so it has to close.\n\nThe reason is in the log folder beside "
         "TotalA.exe (the newest tagpu log, its vk: lines).";
     tagpu_logf("vk: the lane cannot draw - the session ends");
-    MessageBoxA(NULL, TEXT, "Total Annihilation: Impure",
+    /* A title of its own: the compatibility suite reads this box, and this box alone, as
+       the session's end (tools/compat/tacompat.py, END_BOX). */
+    MessageBoxA(NULL, TEXT, "Total Annihilation: Impure cannot draw",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
     TerminateProcess(GetCurrentProcess(), 1);
 }
