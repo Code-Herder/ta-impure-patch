@@ -15343,6 +15343,11 @@ SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-res
    the control word's and fsincos's result the CPU's, both the same for an entry as for the engine's
    call, and fld of a stored 80-bit value is exact. Nothing is shipped precomputed: x87 fsincos
    differs between CPU makes, so a table made elsewhere could disagree with this machine's engine.
+   One machine can hold processors of more than one kind (performance and efficiency cores), whose
+   fsincos nothing documents as equal; the table is therefore built on every processor the process may
+   run on, each pinned in turn, and installed only when every one fills it identically
+   (rot_build_everywhere). Where they differ the engine's code stays, and with it stock's own
+   dependence on which core ran the call.
    `tagpu_fpverify.on` at launch runs both on every call and counts the calls whose results differ
    (rot_verify): it must stay 0. */
 #define ROT_VA       0x004B7173u
@@ -15354,6 +15359,9 @@ SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-res
 typedef struct RotEntry { unsigned char cos[10], sin[10]; } RotEntry;
 static RotEntry s_rot[65536];
 SIM_ROWS(s_rot, SIM_INSTALL, SIM_ID_NONE, NULL);
+#define ROT_CHUNK 1024
+static RotEntry s_rotCheck[ROT_CHUNK];  /* another processor's fill of one chunk, compared to s_rot */
+SIM_ROWS(s_rotCheck, SIM_INSTALL, SIM_ID_NONE, NULL);
 static uint16_t s_rotCw;
 SIM_VAR(s_rotCw, SIM_INSTALL);
 static unsigned char* s_rotFast;       /* the table's entry, which checks the control word */
@@ -15383,7 +15391,8 @@ typedef char rot_bytes_whole[(sizeof ROT_BYTES == ROT_END - ROT_VA) ? 1 : -1];
      <0x4B717D..0x4B7188>; fld tbyte [ecx*4+sin]; fld tbyte [ecx*4+cos]; <0x4B7194..0x4B71A4>; pop ecx
    done: leave; ret
    slow: cmp word [ebp+8],0; jmp 0x4B717B
-   The control word goes through eax's slot, the one register the engine's function does not keep;
+   The control word goes through eax's slot: eax is cdecl's scratch register, which the engine's
+   function writes on every non-zero angle and none of its nine call sites reads after the call;
    pop changes no flag. fsincos leaves the cosine on top and the sine below it, as the two loads do. */
 static void rot_emit(unsigned char* p, volatile LONG* count)
 {
@@ -15425,20 +15434,21 @@ static void rot_emit_orig(unsigned char* p)
     *p++ = 0xE9; tagpu_detour_rel(p, ROT_AFTER);
 }
 
-/* The builder, cdecl (RotEntry* table, const uint16_t* cw): under *cw, for every angle word, the
-   engine's fild word; fmul qword [0x509EF8]; fsincos, the cosine and then the sine stored whole:
+/* The builder, cdecl (RotEntry* out, const uint16_t* cw, unsigned first, unsigned end): under *cw, for
+   the angle words first..end-1, the engine's fild word; fmul qword [0x509EF8]; fsincos, the cosine and
+   then the sine stored whole from out on:
      push ebp; mov ebp,esp; push ebx; push ecx; push ecx; fnstcw [ebp-8]; mov eax,[ebp+0xC]; fldcw [eax]
-     mov ebx,[ebp+8]; xor ecx,ecx
+     mov ebx,[ebp+8]; mov ecx,[ebp+0x10]
    loop: mov [ebp-0xC],cx; fild word [ebp-0xC]; fmul qword [0x509EF8]; fsincos
-     fstp tbyte [ebx]; fstp tbyte [ebx+10]; add ebx,20; inc ecx; cmp ecx,0x10000; jb loop
+     fstp tbyte [ebx]; fstp tbyte [ebx+10]; add ebx,20; inc ecx; cmp ecx,[ebp+0x14]; jb loop
      fldcw [ebp-8]; pop ecx; pop ecx; pop ebx; leave; ret */
 static void rot_emit_build(unsigned char* p)
 {
     static const unsigned char head[] = { 0x55,0x8B,0xEC,0x53,0x51,0x51,0xD9,0x7D,0xF8,0x8B,0x45,0x0C,
-                                          0xD9,0x28,0x8B,0x5D,0x08,0x31,0xC9 };
+                                          0xD9,0x28,0x8B,0x5D,0x08,0x8B,0x4D,0x10 };
     static const unsigned char body[] = { 0x66,0x89,0x4D,0xF4,0xDF,0x45,0xF4,0xDC,0x0D,0xF8,0x9E,0x50,0x00,
                                           0xD9,0xFB,0xDB,0x3B,0xDB,0x7B,0x0A,0x83,0xC3,0x14,0x41,
-                                          0x81,0xF9,0x00,0x00,0x01,0x00,0x72 };
+                                          0x3B,0x4D,0x14,0x72 };
     static const unsigned char tail[] = { 0xD9,0x6D,0xF8,0x59,0x59,0x5B,0xC9,0xC3 };
     memcpy(p, head, sizeof head); p += sizeof head;
     memcpy(p, body, sizeof body); p += sizeof body;
@@ -15478,6 +15488,69 @@ static void rot_emit_verify(unsigned char* p)
     memcpy(p, tail, sizeof tail);
 }
 
+typedef void (__cdecl *RotBuild)(RotEntry* out, const uint16_t* cw, unsigned first, unsigned end);
+
+/* s_rot filled on every processor in the process's affinity mask, the thread pinned to each in turn and
+   confirmed there before and after: 1 when every processor's fill equals the first's, else 0 with the
+   reason logged. The thread's own affinity is restored. A thread pinned to one processor cannot run on
+   another, so the comparison is between processors and not between scheduling accidents. */
+static int rot_build_everywhere(void)
+{
+    const RotBuild build = (RotBuild)(void*)s_rotCode;
+    DWORD (WINAPI *const here)(void) = GetCurrentProcessorNumber;
+    const HANDLE th = GetCurrentThread();
+    DWORD_PTR proc = 0, sys = 0, saved = 0;
+    unsigned cpu, n = 0, f;
+    int ok = 1;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) || !proc) {
+        tagpu_log("fprot: NOT installed: the process's processors could not be read");
+        return 0;
+    }
+    for (cpu = 0; ok && cpu < 8 * sizeof proc; cpu++) {
+        const DWORD_PTR bit = (DWORD_PTR)1 << cpu;
+        DWORD_PTR was;
+        int tries;
+        if (!(proc & bit))
+            continue;
+        if (!(was = SetThreadAffinityMask(th, bit))) {
+            tagpu_logf("fprot: NOT installed: the thread could not be pinned to processor %u", cpu);
+            ok = 0;
+            break;
+        }
+        if (!saved)
+            saved = was;
+        for (tries = 0; tries < 4 && here() != cpu; tries++)
+            Sleep(tries);
+        if (here() != cpu) {
+            tagpu_logf("fprot: NOT installed: processor %u could not be confirmed", cpu);
+            ok = 0;
+            break;
+        }
+        if (!n) {
+            build(s_rot, &s_rotCw, 0, 0x10000);
+        } else {
+            for (f = 0; ok && f < 0x10000; f += ROT_CHUNK) {
+                build(s_rotCheck, &s_rotCw, f, f + ROT_CHUNK);
+                if (memcmp(s_rotCheck, s_rot + f, sizeof s_rotCheck)) {
+                    tagpu_logf("fprot: NOT installed: processor %u's fsincos differs from the first's "
+                               "in angles 0x%04X..0x%04X", cpu, f, f + ROT_CHUNK - 1);
+                    ok = 0;
+                }
+            }
+        }
+        if (ok && here() != cpu) {
+            tagpu_logf("fprot: NOT installed: the thread left processor %u", cpu);
+            ok = 0;
+        }
+        n++;
+    }
+    if (saved)
+        SetThreadAffinityMask(th, saved);
+    if (ok)
+        tagpu_logf("fprot: the table is the same on all %u processors", n);
+    return ok;
+}
+
 static void rot_install(void)
 {
     const int verify = s_fpVerify = tagpu_sim_lever("tagpu_fpverify.on");
@@ -15496,7 +15569,7 @@ static void rot_install(void)
     }
     /* The table is made under this thread's control word at install; a call under another word
        takes the engine's code. The word is read by a three-instruction routine after the builder
-       (mov eax,[esp+4]; fnstcw [eax]; ret), the builder being 59 bytes. */
+       (mov eax,[esp+4]; fnstcw [eax]; ret), the builder being 57 bytes. */
     rot_emit_build(s_rotCode);
     {
         static const unsigned char rd[] = { 0x8B,0x44,0x24,0x04,0xD9,0x38,0xC3 };
@@ -15505,7 +15578,11 @@ static void rot_install(void)
         ((void (__cdecl*)(uint16_t*))(void*)(s_rotCode + 0x60))(&cw);
     }
     s_rotCw = cw;
-    ((void (__cdecl*)(RotEntry*, const uint16_t*))(void*)s_rotCode)(s_rot, &s_rotCw);
+    if (!rot_build_everywhere()) {
+        tagpu_detour_stub_free(s_rotFast); tagpu_detour_stub_free(s_rotOrig); tagpu_detour_stub_free(s_rotCode);
+        s_rotFast = s_rotOrig = s_rotCode = NULL;
+        return;
+    }
     rot_emit(s_rotFast, verify ? &s_rotDiag.table : NULL);
     rot_emit_orig(s_rotOrig);
     if (verify) rot_emit_verify(s_rotCode);

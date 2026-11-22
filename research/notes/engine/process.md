@@ -182,8 +182,8 @@ is `0x4E8CE0`), then `fnclex` (`0x4E4334`). The engine's own code holds no `fldc
 like a DirectSound buffer's creation (`0x4CF3F3`, `0x4CF401`, `0x4CF423`) [INFERRED], and the
 `-fpufussy` switch's two (`0x4DF1B1` unmasks them when the byte `0x5292BC` is set, `0x4DF1BC` masks
 them). `_ftol` `0x4E43A0` switches to truncation only around its `fistp`. MEASURED: `0x027F` at
-Impure's attach, and the word under which 132 M of the rotator's calls in the 13.5k battle took the
-table built under it.
+Impure's attach, and on the game thread at every call of the rotator in the 13.5k battle: of 268 435 456
+calls, 163 405 054 of angle 0 and the other 105 030 402 all under the word the table was built under.
 
 **`0x4EC4C0` is the CRT's internal `_ctrlfp(new, mask)`**: `fstcw`, merge, `fldcw`, return the old
 word. Its 23 call sites are all in the CRT: `floor` `0x4E5050` (`0x173F`, round down, read from
