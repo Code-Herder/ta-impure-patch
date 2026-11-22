@@ -87,8 +87,9 @@ int tagpu_pevt_on(void);
 unsigned tagpu_pevt_copy(struct TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int b,
                          unsigned* wrote);
 /* the wind's prefix-sum rows the last copy's smoke events reach back to, 4 words a row, from
-   *base on: answers how many (tagpu_pevt.h TAGPU_PEVT_WIND) */
-unsigned tagpu_pevt_wind(int* dst, unsigned max, unsigned* base);
+   *base on, the newest `max`: answers how many, *need how many they reach (tagpu_pevt.h
+   TAGPU_PEVT_WIND) */
+unsigned tagpu_pevt_wind(int* dst, unsigned max, unsigned* base, unsigned* need);
 void tagpu_patches_restore_begin(void);
 unsigned int tagpu_patches_restored(void);
 

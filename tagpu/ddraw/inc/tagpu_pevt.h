@@ -84,7 +84,9 @@
    timing words when the walk after the emission runs, THE SMOKE'S TIMING):
      at      the init's point, 16.16 (0x474D5D..0x474D7C, 0x47515D..0x475178);
      ival    the spawn interval +0x1C, 1 or more (the spawn divides by it, 0x474E10);
-     first   the walk of puff 0's first update: the first particle walk after the emission;
+     first   the walk of puff 0's first update: the first particle walk after the emission (for
+             a vent's emission at the map's load, which sees GameTime 0, the level's first walk,
+             after the catch-up ticks);
      again   the walk that spawns puff 1: the first walk from `first` on at or past +8, which the
              emission's spawn set to T + ival (0x474F71), as the again tests read it (Smoke2's
              0x475440 `+8 <= T` unsigned, Smoke1's 0x4750F0 likewise);
@@ -130,7 +132,9 @@
    oracle, the real object) of a class sharing its layer with the engine's objects. An event
    without it stands for an object nobody made, and the emitter's cap is applied to its events. */
 #define TAGPU_PEVT_PROXY     0x40u
-/* A smoke event whose timing words wait for the next particle walk (tagpu_patches.c) */
+/* A smoke event whose timing words wait for the next particle walk, which an emission cannot
+   know: the same tick's, the next tick's, or after a map's load the level's first (tagpu_patches.c
+   THE SMOKE'S TIMING) */
 #define TAGPU_PEVT_PEND      0x80u
 enum { TAGPU_PEVT_C_NANO = 0, TAGPU_PEVT_C_FIRE = 1, TAGPU_PEVT_C_FLARE = 2,
        TAGPU_PEVT_C_WAKE = 3, TAGPU_PEVT_C_SMOKE2 = 4, TAGPU_PEVT_C_SMOKE1 = 5 };

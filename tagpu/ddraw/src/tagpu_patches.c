@@ -12525,8 +12525,10 @@ static int __cdecl pevt_wake(unsigned* regs)
    walk reads (tagpu_pevt.h). Puff 0's first move is the first walk after the emission, whenever
    that runs: in the step, the same tick's; after it (the explosion draw's pieces, a replay's
    frame visit), the next tick's; on the loader thread at the map's load, the level's first walk,
-   at a GameTime the load set afresh after the emission (0x491979 stores 0 after the map load
-   0x4918C0, so an emission at the load reads the GameTime the last level left). So the event's
+   which runs only after the load and the catch-up ticks: the loader body 0x497180 stores
+   GameTime 0 (0x4971BB) before it calls 0x4917D0 (0x497581), whose map load 0x4918C0 reaches
+   SpawnFeatureOnMap and 0x472C50, so such an emission sees GameTime 0 and its walk comes
+   later. So the event's
    timing words wait for that walk (TAGPU_PEVT_PEND): pevt_walk_begin, at the start of every walk,
    sets them for the rows emitted since the last one -- `first` that walk, `again` the first walk
    from it on at or past +8 = T + ival (the again tests' unsigned compare), Smoke2's puff count
@@ -12536,9 +12538,10 @@ static int __cdecl pevt_wake(unsigned* regs)
    THE WIND'S SUMS: the same start of the walk notes wind_x, the rise and wind_y as the walk's
    updates will read them (nothing the walk reaches writes them: the walker's slots are the
    particle classes'), adding them to the previous walk's prefix sums, so a puff first moved at
-   walk F is, after the walk of P, at its start plus row P less row F - 1. A walk whose previous
-   walk's row is not the tick before it starts the chain again from 0 (`windFrom`), and a row
-   outside the chain is not read: a puff that would need one is not drawn (the GPU) or is a
+   walk F is, after the walk of P, at its start plus row P less row F - 1. A walk with no held row
+   for the tick before it starts the chain again from 0 (`windFrom`); a row kept from before a
+   seek is a consistent base, since the ticks before the seek's target are the same ticks on
+   both sides of it. A row outside the chain is not read: a puff that would need one is not drawn (the GPU) or is a
    difference (the oracle). The ring holds TAGPU_PEVT_WIND walks, and an event whose puffs could
    live longer is not made (`lmax`).
    WHAT AN EVENT CANNOT HOLD keeps its real init and engine object, counted in `kept`: an interval
@@ -13073,17 +13076,21 @@ unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int
 }
 
 /* THE WIND'S ROWS the last copy's smoke events reach back to (tagpu_pevt.h TAGPU_PEVT_WIND):
-   rows *base .. *base + n - 1 into dst (4 words a row), ending at the copy's GameTime, at most
-   `max`, only rows of the current chain. Answers n. */
-unsigned tagpu_pevt_wind(int32_t* dst, unsigned max, uint32_t* base)
+   rows *base .. *base + n - 1 into dst (4 words a row), ending at the copy's GameTime, only rows of
+   the current chain, the newest `max` of them. Answers n; *need is how many rows of the chain the
+   events reach, so a caller whose room cut the rows (n < *need) can say so and grow. */
+unsigned tagpu_pevt_wind(int32_t* dst, unsigned max, uint32_t* base, unsigned* need)
 {
     const uint32_t P = prand_gametime();
     uint32_t want = (uint32_t)s_pevt.copyLmax + 2u, n = 0, k;
     int32_t sum[3];
     *base = P;
+    *need = 0;
     if (!pevt_live() || !s_pevt.copyLmax) return 0;
-    if (want > max) want = max;
+    if (want > TAGPU_PEVT_WIND) want = TAGPU_PEVT_WIND;
     while (n < want && pevt_wind_sum(P - n, sum)) n++;
+    *need = n;
+    if (n > max) n = max;
     *base = P - n + 1u;
     for (k = 0; k < n; k++) {
         pevt_wind_sum(*base + k, dst + 4u * k);

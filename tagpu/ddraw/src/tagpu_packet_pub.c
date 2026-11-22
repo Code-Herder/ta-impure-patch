@@ -2943,7 +2943,7 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREA
    heartbeat's count, and grows by the shortfall for the next fill, as every table's does. */
 static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
 {
-    unsigned at = PKT_ALIGN4(*cursor), room, met, wrote;
+    unsigned at = PKT_ALIGN4(*cursor), room, met, wrote, wneed = 0;
     p->n_pevt = 0; p->off_pevt = 0; p->n_pwind = 0; p->off_pwind = 0; p->pwind_base = 0;
     memset(p->pevt_nframe, 0, sizeof p->pevt_nframe);
     p->pevt_on = tagpu_pevt_on() ? 1u : 0u;
@@ -2973,24 +2973,28 @@ static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
     if (wrote) {
         p->off_pevt = at; p->n_pevt = wrote;
         *cursor = at + wrote * (unsigned)sizeof(TAGPU_PEVT);
-        /* the wind's rows the smoke events just copied reach back to, after them */
+        /* the wind's rows the smoke events just copied reach back to, after them. A row the
+           slot's room cuts leaves the older puffs that need it undrawn, so a cut is a
+           truncation like a cut event: flagged, and its bytes counted in the short so the
+           slot grows and the refill fits them. */
         const unsigned wat = PKT_ALIGN4(*cursor);
         unsigned wroom = wat < p->cap_bytes ? (p->cap_bytes - wat) / 16u : 0u;
         if (wroom > TAGPU_PEVT_WIND) wroom = TAGPU_PEVT_WIND;
-        p->n_pwind = tagpu_pevt_wind((int*)(void*)((unsigned char*)p + wat), wroom, &p->pwind_base);
+        p->n_pwind = tagpu_pevt_wind((int*)(void*)((unsigned char*)p + wat), wroom, &p->pwind_base,
+                                     &wneed);
         if (p->n_pwind) {
             p->off_pwind = wat;
             *cursor = wat + p->n_pwind * 16u;
         }
     }
-    if (met > wrote) {
+    if (met > wrote || wneed > p->n_pwind) {
         p->truncated |= TAGPU_PK_TRUNC_PEVT;
-        s_fillShort += (met - wrote) * (unsigned)sizeof(TAGPU_PEVT);
+        s_fillShort += (met - wrote) * (unsigned)sizeof(TAGPU_PEVT) + (wneed - p->n_pwind) * 16u;
         s_cPevtTrunc++;
     }
     s_cLastPevt = wrote;
     if (wrote > s_cPevtMax) s_cPevtMax = wrote;
-    return at + met * (unsigned)sizeof(TAGPU_PEVT);
+    return PKT_ALIGN4(at + met * (unsigned)sizeof(TAGPU_PEVT)) + wneed * 16u;
 }
 
 /* the four tables into the record, after the world's; the models' five go

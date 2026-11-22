@@ -951,7 +951,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_PART    0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOGSRC  0x1000u
-#define TAGPU_PK_TRUNC_PEVT    0x2000u    /* the nano events: the oldest left out */
+#define TAGPU_PK_TRUNC_PEVT    0x2000u    /* the particle events, or the wind rows they reach: the oldest left out */
 #define TAGPU_PK_TRUNC_PLACE   0x4000u    /* the placement's sites did not fit:
                                              they still replace the square   */
 #define TAGPU_PK_TRUNC_MM      0x8000u
