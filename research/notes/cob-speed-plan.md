@@ -208,16 +208,21 @@ apart), `cg_vm` 6.0 % (the VM in the object's tail, 5.5 KB past its header), `st
 `tagpu_cobvm_rest` 4.4 % (the header line and the tail) -- each a read of a line the unit's turn
 does not share with another.
 
-**The block** (to build): a unit's COB object becomes one block sized by its program -- the engine's
-header line, the running count and the model pointer after it, the VM, the ten record headers
-packed and ten stacks of the program's `depth` -- so a quiet unit's turn reads two adjacent lines
-and an active one's headers six. The engine reads the object only through its header words, the
+**The block** (built): a unit's COB object is one block sized by its program -- the engine's header
+line, the running count `+0x1C` and the model pointer `+0x20`, the host's tail from `+0x24` with the
+VM's schedule, fault, object and latch words in the block's first line, the ten record headers
+packed and ten stacks of the program's `depth` -- so a quiet unit's turn reads one line and an
+active one's headers six more. The engine reads the object only through its header words, the
 model pointer and the statics and animation pointers, and writes the records only in its
-constructor (the scout's map of 2026-11-21, the engine map's COB page), so the block needs the
-model and count offsets the guard already patches moved, its own constructor in place of
-`0x4B0610`'s record loop, and its own free. The save translates to and from the 128-word format; a
-loaded record the proof does not cover gets stacks of 128 words of its own. With the oracle armed
-the object keeps the engine's layout, which its interpreter needs.
+constructor (the engine map's COB page, *The object's life*), so the block moves the model and
+count offsets the guard already patches (chosen at install, `cob_layout_choose`), replaces the
+constructor's call at `0x485D88` and the destructor's free at `0x485E40`, and is allocated by a stub
+at `0x485D78` that finds the program through the unit's def. The statics and the animation stay the
+engine's allocations: the bench valued moving them in at 0.08 ms, and the engine's destructor frees
+them. The save translates to and from the 128-word format; a loaded record the proof does not cover
+gets stacks of 128 words of its own. With the oracle armed the object keeps the engine's layout,
+which its interpreter needs. Not built: grouping the blocks of one program together (the bench's
+last 0.15 ms), which needs an allocator of its own.
 
 ## Gaps open
 
