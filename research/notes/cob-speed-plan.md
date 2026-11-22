@@ -200,7 +200,11 @@ turn, and refuses stacks smaller than the depth.
 **Not built: the prefetch.** MEASURED 2026-11-21 in the battle on the L3 tree (64-tick blocks cycling
 off, the header line and the tail of the unit 8 slots ahead, off, those and each record's first
 line; `.data/prof/2026-11-21-cobl4/pf-battle/`): -0.09 ± 0.21 and -0.02 ± 0.12 ms a tick, within
-noise. The prototype's -0.5 ms was measured when every unit visited its records every turn.
+noise. The prototype's -0.5 ms was measured when every unit visited its records every turn. On the
+block layout it costs time (MEASURED 2026-11-21, one game, 21 blocks a mode, the main checkout's
+`.data/prof/2026-11-21-cobl4/pf-block-battle/`): the first line of the block of the unit 8 slots ahead
++0.35 ± 0.12 ms a tick, that line and the record headers +0.40 ± 0.14, because reaching the block
+takes the unit record 8 slots ahead as a load the turn waits on.
 
 **What is left** (MEASURED 2026-11-21, the battle's sampled window with the rest turn): the core's
 functions are about 30 % of the unit tick -- `run_thread` 9.8 % (the ten record headers, 548 bytes
