@@ -286,7 +286,9 @@ down by (`0x4B0DEF..0x4B0E01`): a unit's COB clock is the number of slices it ha
 **The object's life.** The setup `0x485D40` allocates `0x544` bytes (`push` at `0x485D73`, its
 size at `0x485D74`; `MEM_Alloc 0x4B4F10` at `0x485D78`, `cdecl`: `add esp,4` at `0x485D7F`, the NULL
 test at `0x485D82` skipping the constructor; `esi` is the unit from `0x485D48` through the whole
-setup, and at `0x485D73..0x485D78` `ecx` is the def's script `def+0x18E`), and the raised build makes
+setup; `0x485D64` loads the def's script `[unit+0x92]+0x18E` into `ecx`, which stays there through
+`0x485D78`, and a NULL script jumps to `0x485DFE` at `0x485D6C`, so the allocation is reached only
+for a type with a script), and the raised build makes
 the call zeroed and the size its own (the COB module note, *The game's COB interpreter*) -- with
 the oracle unarmed, a block sized by the script's program, whose constructor and free are its own
 (`0x485D88`, `0x485E40`; the COB module note, *The block*);
