@@ -29,7 +29,10 @@
    pairs held 1.5 GiB. THE COST is the overlap of frame N's composite with
    frame N+1's world pass, which no longer run at once. THE LIFETIME: the target
    is replaced only behind a drain of the device, since any frame in flight may
-   be using it and the seam's fence wait proves only one slot free.
+   be using it and the seam's fence wait proves only one slot free. That drain
+   is also paid where the size changes often: the in-game wiki's instance
+   (TAGPU_SCENE_WIKI) is sized by its scene's map, so a page whose map differs
+   from the last one drains once (tagpu_vk_world.c, `tgt_size`).
 
    THE RENDER PASS IS COMPATIBLE WITH THE SEAM'S BY CONSTRUCTION, WHICH IS WHY
    NO PASS FILE CHANGED. Vulkan render-pass compatibility ignores load/store ops

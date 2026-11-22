@@ -307,9 +307,13 @@ static void tgt_free(const TAGPU_VKPASS* d)
    writing the target or sampling it, and the seam's fence wait at the top of
    this frame proves only this slot's last submit complete, so the images are
    given back only once `vkDeviceWaitIdle` has said no submit names them. It
-   runs only when the size changes -- the game's resolution or the
-   Supersampling row, never a zoom -- and not at all for the first build, when
-   nothing has been submitted against a target. Its cost is tagpu_vk_fps.c's:
+   runs only when the size changes, and not at all for the first build, when
+   nothing has been submitted against a target. The game's instance changes
+   size with the resolution, the Supersampling row and, under
+   `tagpu_devres.on`, the window's width (tagpu_native.c); the in-game wiki's
+   instance of this file (TAGPU_SCENE_WIKI) with the map size of the scene a
+   page shows (tagpu_wikiworld.c), so a page whose map differs from the last
+   one drains. A zoom never resizes either. Its cost is tagpu_vk_fps.c's:
    the render thread stalls for the frames in flight, unbounded on a wedged
    device. A failed drain is not a resize: the old images stay, and the frame
    reports a refusal. */
