@@ -168,8 +168,39 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 
 ## Open
 
-- The per-emitter rates (landing 0) size the event list and the instance buffer. A full buffer thins
-  as `tagpu_sfx.c` does today and says so, never silently.
+- **The emitter rates, measured** (2026-11-22). The 13 500-unit battle (`tools/battle13k.py`'s game:
+  Total Mayhem on Zombie Kingdom, 1920x1080, Vulkan, `--defaults`, a private X display, this branch's
+  DLL), the live game viewed by player 0, about 30 ticks a second. The recorder's counts (the ten
+  sinks and the two nano roots, `tagpu_recorder.c` *THE COUNTS*) were read from 100 dumps asked 1.5 s
+  apart through `tagpu_replay.trigger`, GameTime 67 to 4483, windows of 38 to 47 ticks (median 45).
+  **No counter gives a single tick**: the peak below is the highest 45-tick window's mean. 13 500
+  units at the start, about 6 900 alive at GameTime 3 600.
+
+  | Emitter | Calls | Mean a tick | Peak window a tick |
+  |---|---|---|---|
+  | wake `0x472430` (`EMIT_SFX` 3 and 5, 510 352 each) | 1 060 538 | 240 | 315 |
+  | nano `0x4720D0` (436 950 from `0x402AC2`) | 820 728 | 186 | 607 |
+  | grey smoke `0x472810` (flying pieces 325 537, trails `0x49BDC1` 180 775, COB 37 092) | 543 420 | 123 | 372 |
+  | fire `0x472AB0` (the flying pieces) | 306 572 | 69 | 151 |
+  | explosion and corpse smoke `0x472630` | 101 940 | 23 | 79 |
+  | black smoke `0x4728F0` | 89 939 | 20 | 36 |
+  | shot trail `0x4729D0` | 37 369 | 8.5 | 62 |
+  | nano reverse `0x472200` | 11 994 | 2.7 | 12 |
+  | bubbles `0x472530` | 373 | 0.08 | 0.5 |
+  | COB fire `0x472330`, teleport `0x471FD0`, `SmokeInfinite 0x472C50` | 0 | 0 | 0 |
+  | **all** | 2 972 873 | 673 | 1 263 (GameTime 144–187, the opening volley) |
+
+  `SmokeInfinite`'s 55 objects come from the map's load, before the counts start. **Live objects**,
+  the `sfx:` line's layer counts (`tagpu_sfx.on=log`, every 60 frames, 47 samples): layer 2 (wake)
+  median 13 013, most 16 118; layer 6 (nano) 4 245, 8 217; layer 9 6 195, 15 888; layer 4 55; layer 7
+  at most 18; **all layers median 21 692, most 35 903**. Sub-particles were not counted: the frame
+  packet's 24 576 particle entries were full in 1 665 of 1 712 gathers (the packet line's
+  `part=24575/24575 thin=1665`), so today's native draw thins through nearly the whole battle and the
+  live total is above 24 576. The bound from the classes ([effects](effects.md) §7.3): two dots a wake object,
+  ten a nano object, one to four a layer-9 object — about 32 000 + 82 000 + 64 000 at the sampled
+  maxima, which do not coincide. So the event list holds about 36 000 live events at the most seen and
+  takes up to about 1 300 new ones a tick; the instance buffer is sized in sub-particles, past 24 576.
+  A full buffer thins as `tagpu_sfx.c` does today and says so, never silently.
 - What the network start shuffle's order at `main+0x29FC` decides is not established. It draws the game
   thread's stream, whose particle draws landing 1 removes, so it is checked in landing 1's
   two-player game.

@@ -1820,7 +1820,11 @@ script index, scans eight fixed records, initializes a free record, increments
 uses the same synchronous allocation role. Neither executes the child's script
 inside the allocation, so the diagnostic context ends before VM execution resumes.
 
-### COB explosion additions and their child flares
+### COB explosion additions and their child smoke
+
+The child is `0x472630`, a Smoke2 object of "smoke 1" (three puffs, seven ticks apart:
+[effects](../effects.html) §7.4), not a flare; the counts' tools (`tarec.py`
+`bounded_cob_flare`, the recorder's log line) still call it the flare.
 
 DISASSEMBLED: EXPLODE `0x481140` gets the piece's world position through
 `0x43E060` at `0x48125A`. Flag `0x400` selects the call at `0x4812CE`, returning
@@ -1828,8 +1832,8 @@ to `0x4812D3`: explosion add `0x420A30(point, sequence, 2, 0)`. The sequence
 comes from `main+0x147FF`. The add checks its pool capacity at `0x420A42`, then
 its fourth argument at `0x420ABE..0x420AC4`; for zero, it compares the point's
 signed y word with the sea-level byte `main+0x1427F` at `0x420ACC..0x420AD8`.
-Only a point above water reaches its single flare call at `0x420AE1`, returning
-to `0x420AE6`. Thus each admitted add can emit at most one such flare. The
+Only a point above water reaches its single smoke call at `0x420AE1`, returning
+to `0x420AE6`. Thus each admitted add can emit at most one such smoke. The
 raised-limits build relocates the explosion count and records to `s_expl`;
 `main+0x1491B` is not that build's active pool count.
 

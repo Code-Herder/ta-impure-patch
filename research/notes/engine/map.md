@@ -214,11 +214,12 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
   anchor cell's flag bits 3–6 (`and al,0xF; shl al,3` at `0x423EFB`). The spawn's smoke
   `0x472C50` (called at `0x423FE3`) builds an emitter of class `0x4FD638` through `0x4750B0`
   (`0x472C8E`) and calls its slot `+0x18`, `0x475150`, which copies the 12-byte point into the
-  emitter's `+0x28` (`0x47515D..0x475178`). The helper's flare `0x472630` (`0x48644B`, with
+  emitter's `+0x28` (`0x47515D..0x475178`). The helper's smoke `0x472630` (`0x48644B`, with
   `(pos, 0xF, 0x384, 9)` when `smoke` is set, skipped after an underwater spawn that made a
-  record, `0x486420`) builds class `0x4FD618`
+  record, `0x486420`) builds a Smoke2 object, class `0x4FD618`,
   through `0x474CD0` and calls its slot `+0x18`, `0x474D50`, which copies the point into
-  `+0x2C` (`0x474D5D..0x474D7C`). So a playing can pass the helper a record on its stack.
+  `+0x2C` (`0x474D5D..0x474D7C`): a puff of "smoke 1" every 15 ticks for 900, 61 in all. The
+  feature's Smoke1 puffs every 5 ticks for the rest of the level ([effects](../effects.html) §7.2). So a playing can pass the helper a record on its stack.
 - **The two lookups bound themselves.** The cell lookup `0x481550(x, z)`, `ret 8`, returns NULL
   unless `0 ≤ x < W` and `0 ≤ z < H`, signed (`0x481551..0x481593`). The height `0x485070(pos)`,
   `ret 4`, takes the cell of the position's integer halves `>> 4` and returns −1 (`0x485136`)
@@ -232,7 +233,7 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
   1..15, and `smoke` as 1 unless the high nibble is 7 (`0x486D55..0x486D6E`: `test al,0xF` at
   `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four
   reads of `+0xA` take the high nibble alone (`0x4867DA`, `0x486880`, `0x486CA2`, `0x486D42`), so
-  a playing that clears the low nibble removes the corpse and its flare and nothing else.
+  a playing that clears the low nibble removes the corpse and its smoke and nothing else.
 - **The unit's model `+0x9E`** is freed only by the destructor, after the corpse (`0x486D9E`), and
   written otherwise only by the create
   ([`FreeObjectState`'s callers](memory.md#0x45aaa0-freeobjectstate-the-object3do-destructor)).

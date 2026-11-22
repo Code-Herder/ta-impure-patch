@@ -3196,7 +3196,7 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
    destructor reads it only at 0x486D55..0x486D69, to call the corpse helper 0x486360 at 0x486D6F
    (its only caller); its other reads of +0xA take the high nibble (0x4867DA, 0x486880, 0x486CA2,
    0x486D42), and the record reaches no callee (DISASSEMBLED 0x4866D0..0x486E60). So 0 removes
-   the corpse and its flare and nothing else. */
+   the corpse and its smoke 0x472630 and nothing else. */
 static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corpse)
 {
     uint32_t id, kid, netid = 0xFFFFFFFFu;
@@ -4217,10 +4217,11 @@ static int root_call(const Lv* L, unsigned root, const unsigned char* a, uint32_
            (0x486368, 0x486404), +0x76 and +0x78 (0x4863B7, 0x4863BB), the position +0x6A and the
            turn +0x64 by address (0x4863D0, 0x4863F1, 0x48642C), and +0xFF (0x4863EB, 0x486426).
            It writes none of them, and every callee copies what it takes: the spawn the position
-           and the turn (0x423E28..0x423E38, 0x423E9B..0x423EA6), the smoke's and the flare's
-           inits 12 bytes of the point (0x47515D..0x475178, 0x474D5D..0x474D7C). So nothing keeps
+           and the turn (0x423E28..0x423E38, 0x423E9B..0x423EA6), the two smoke inits (Smoke1's
+           0x475150, Smoke2's 0x474D50) 12 bytes of the point (0x47515D..0x475178,
+           0x474D5D..0x474D7C). So nothing keeps
            a pointer into the record past the call (DISASSEMBLED). The effect is the helper's
-           own: the spawn, the underwater velocity (0x486416) and the flare, as on the recording
+           own: the spawn, the underwater velocity (0x486416) and the smoke, as on the recording
            machine. Bounds: the type by the unit types' count (addr_of); the level 1..15 and the
            smoke 0..1, as 0x486D58..0x486D69 pass them; the corpse defs (corpse_def_ok); the cell
            by 0x481550 itself (0x481551..0x481593), the height by 0x485070 itself

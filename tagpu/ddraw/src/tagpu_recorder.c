@@ -7337,16 +7337,18 @@ void tagpu_rec_teleport_flare(const int32_t from[3], const int32_t to[3])
 static int __cdecl sink_472330(void* E) { return sink_count(E, 0x00472330u, 0); }
 static int __cdecl sink_472430(void* E) { return sink_count(E, 0x00472430u, 0); }
 static int __cdecl sink_472530(void* E) { return sink_count(E, 0x00472530u, 0); }
-/* The flare, keyed by the caller of the explosion add 0x420A30 that emits it. The add emits it at
+/* 0x472630, the explosion's smoke: a Smoke2 object (constructor 0x474CD0, "smoke 1"), three puffs
+   seven ticks apart (interval 7, life 15) -- not a flare, though the counts' tools and logs say
+   "flare" for it. Keyed by the caller of the explosion add 0x420A30 that emits it. The add emits it at
    0x420AE1 when its 4th argument is 0 and the point's y word +6 is above the sea level byte
-   main+0x1427F (0x420ABE..0x420AD8), so each add's flares are compared beside the add itself and
-   replay-absent.tsv's rows for the flying pieces' adds reach their flares and no other add's.
-   THE BOUND on what the key means: a return to 0x420AE6 is the add's one call of the flare, and
+   main+0x1427F (0x420ABE..0x420AD8), so each add's smoke is compared beside the add itself and
+   replay-absent.tsv's rows for the flying pieces' adds reach their smoke and no other add's.
+   THE BOUND on what the key means: a return to 0x420AE6 is the add's one call of 0x472630, and
    the add's frame there is fixed by its code (DISASSEMBLED): push edi 0x420A35, push esi 0x420A55,
    push ebx 0x420A58, the four arguments 0x420ADA..0x420AE0, and between them only 0x4B8B30, which
    returns `ret 0xC` on both exits (0x4B8B6B, 0x4B8B7E), and the sequence stub at 0x420AA2
    (tagpu_patches.c, which pushes and pops edx), so [esp+0x20] is the add's return address.
-   cnt_sinks_init matches those bytes (s_flareAux); on a mismatch the flare is counted with aux 0.
+   cnt_sinks_init matches those bytes (s_flareAux); on a mismatch the smoke is counted with aux 0.
    The word is a count key read from this thread's own stack, never dereferenced. */
 static const unsigned char ADD_EDI[1] = { 0x57 };                       /* 0x420A35 push edi */
 static const unsigned char ADD_A[77] = {                                /* 0x420A55..0x420AA1 */
@@ -7380,7 +7382,7 @@ static int __cdecl sink_472C50(void* E) { return sink_count(E, 0x00472C50u, 0); 
    0x47F202, then padding to 0x47F20F) and 0x47F300; 0x47F210 and 0x47F300 call 0x47F0C0 too
    (returning to 0x47F279, 0x47F31F), so one sound is counted under both keys, on both machines; the projectile init 0x49C740 and the three shot paths
    0x49CDE0, 0x49CC20, 0x49C9C0; the impact 0x499EB0; and the ten particle emitters with a caller
-   besides the two nano emitters (roots above), keyed by their callers (the flare 0x472630 from the
+   besides the two nano emitters (roots above), keyed by their callers (the smoke 0x472630 from the
    add also by the add's caller, as aux): each makes exactly one pool
    allocation 0x470EB0 a call while the console's SFX byte 0x51E608 is clear (the only branch
    before it), so the emitters account for the pool's allocations call for call */

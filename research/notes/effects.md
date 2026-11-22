@@ -319,17 +319,20 @@ gather log; owned through one more detour in `tagpu_fxown.c`. Fixtures
 The effects passes never draw a puff of smoke. Every smoke puff, flame, wake dot and
 nanolathe particle is a **pooled object filed into one of ten layer vectors**, and each
 layer is drawn by `0x471F90(ctx, n)` — `stdcall`, `ret 8` — at a fixed point of
-`DrawGameScreen`. terrain-depth.md §3 used to call these sites "plugin-layer hooks, empty
-in stock play"; they are the particle sfx, and **the layer number is the draw depth**:
+`DrawGameScreen`. These sites are the particle sfx, and **the layer number is the draw depth**.
+What each layer holds is the layer argument every caller of an emitter pushes (§7.4;
+DISASSEMBLED 2026-11-22, every call site of the twelve live emitters):
 
-| Layer | Site | Where in the frame | Seen live |
+| Layer | Site | Where in the frame | What the callers file there |
 |---|---|---|---|
-| 0, 1, 2 | `0x469849/55/61` | before the flat-feature pre-pass (under every unit and feature) | 2 = **wake foam** (`EmitSfx_Bubbles` class, the ship's trail) |
-| 3, 4 | `0x469964/70` | after the flat features, before the row sweep | 4 = **feature smoke** (`SmokeInfinite`, the vents on Two Continents) |
-| 5, 6 | `0x469AFD`, `0x469B18` | after the row sweep, before the projectile pass | 5 = **rocket/missile trail puffs**, 6 = **nanolathe spray** |
-| 7 | `0x469B38` | after the explosion pass | 7 = **submarine bubbles** |
-| 8 | `0x469BD7` | after the airborne sweep | — (nothing observed) |
-| 9 | `0x469D2C` | just before the fog overlay | 9 = **impact and damage smoke**, **fire** (burning debris) |
+| 0, 1 | `0x469849/55` | before the flat-feature pre-pass (under every unit and feature) | nothing: no caller passes 0 or 1 |
+| 2 | `0x469861` | the same | **wake foam**: COB `EMIT_SFX` types 2–5 (`0x472430`, the ship's trail) |
+| 3, 4 | `0x469964/70` | after the flat features, before the row sweep | 4 = **feature smoke** (`SmokeInfinite 0x472C50` from `SpawnFeatureOnMap 0x423FE3`, the vents on Two Continents); 3 nothing |
+| 5 | `0x469AFD` | after the row sweep, before the projectile pass | **a burning feature's smoke** (`0x472810` from the feature tick, `0x4243CF`, `push 5` at `0x42439E`) and **the teleport flare** (`0x471FD0` from `0x406B9F`, `push 5` at `0x406B6B`) |
+| 6 | `0x469B18` | the same | **nanolathe spray** (the seventeen order-handler calls) |
+| 7 | `0x469B38` | after the explosion pass | **COB fire** (`EMIT_SFX` types 0 and 1, `0x472330`) and **submarine bubbles** (`EMIT_SFX 0x103`, `0x472530`) |
+| 8 | `0x469BD7` | after the airborne sweep | nothing: no caller passes 8 |
+| 9 | `0x469D2C` | just before the fog overlay | **every weapon's smoke** — the impact (`0x49A007`), a line-of-sight shot expiring (`0x49BC80`), the projectile trail (`0x49BDC1`), the shot's trail `0x4729D0` (`0x49CC07`, `0x49CDC3`, `0x49CFE6`) — the explosion's and the corpse's smoke `0x472630`, COB smoke and black smoke (`0x101`, `0x102`), and the flying pieces' smoke and **fire** |
 
 Layer table: `*(main+0x38D77)` = `MEM_Alloc(0xA0)` by `0x471D90`, ten entries of `0x10`:
 `{u8 flag @0, void** begin @4, void** end @8, void** cap @0xC}`; `0x471DE0` destroys every
@@ -345,26 +348,33 @@ once a process by the C runtime's static initializer (1000 in stock, 204 800 und
 limits; the engine map, *The raised effect pools*): `0x470EB0` pops a
 pointer from the stack at `+0x14` (`+0x20` = handed out, `+0x1C` = capacity), `0x470ED0`
 pushes it back; `+8/+0xC` hold the vector of the pool's allocated blocks (one: `0x470C10` makes a
-single block, and the destructor `0x470B80` frees each). The byte `0x51E608` disables
-every emitter when set. Layout (`ParticleSystemStruct`):
+single block, and the destructor `0x470B80` frees each). A capacity of 0 is safe: the
+constructor then allocates nothing and every emitter makes no particle (the engine map,
+*The raised effect pools*). The byte `0x51E608` disables every emitter when set; its one
+writer is the console's `SFX` toggle at `0x419550`. Layout (`ParticleSystemStruct`):
 
 | Offset | Field |
 |---|---|
 | `+0x00` | vtable (class, table below) |
 | `+0x04` | end tick — `0x471D70(this, life)` = tick + life |
-| `+0x08` | tick of the last spawn (`+0x14`/`+0x10` slots re-spawn from it) |
-| `+0x0C` | u8 *type tag* (2 for smoke; the fire emitter stores its layer argument here) — **not** the layer |
+| `+0x08` | tick of the next spawn: each spawn sets it (tick + 1, the flare tick + 10, smoke tick + interval) and spawn-again (slot 5) compares it; the smoke constructors `0x4750B0` (Smoke1) and `0x474CD0` (Smoke2) first set it to GameTime |
+| `+0x0C` | u8, read by nothing found: every emitter but the two smoke classes stores its layer argument's low byte here; the smoke constructors store `[esp+7]`, the high byte of the spilled object pointer, so the "2" seen live on smoke is the heap address's top byte [INFERRED] — **not** the layer |
 | `+0x10 / +0x14 / +0x18` | sub-particle vector: begin, end, cap (stride per class) |
 | `+0x1C…` | class fields: emission point(s), spread, frame caps, sequence choice |
 
 vtable slots: **0** destroy(flag: 1 = return to pool), **1** update (walk the sub-vector:
 move by the per-particle step, advance the frame countdown, compact the dead; then if
 slot 5 says so, slot 4), **2** draw(ctx) — the only slot `0x471F90` calls, **3** empty?
-(sub-vector empty → the sim walker destroys the object), **4** spawn one burst, **5**
-spawn-again? (`+8 <= +4 && +8 <= tick`; Smoke1 never), **6** init(pos…, life). The update
-runs from the sim tick (the walker next to `0x471F90`, `0x471EC0..0x471F8F`, calls slot 3
-then slot 1 per object), so **the draw is pure** — rendering from the vectors at present
-rate reads exactly what the engine would blit.
+(sub-vector empty → the sim walker destroys the object; Smoke2's also needs its end tick
+passed, Smoke1's always answers 0), **4** spawn one burst, **5** spawn-again? (`+8 <= +4 &&
++8 <= tick`; Smoke1's is `tick >= +8` with no end test), **6** init(pos…, life). So a
+**Smoke1 object re-puffs every 5 ticks for the rest of the level**: its spawn-again
+`0x4750F0` has no end test and its empty `0x475330` is `xor eax,eax; ret`, so only the
+layer cap's trim or the level's teardown removes it. The update runs from the sim tick: the
+walker `0x471EB0`, called only at `0x4955BF` (Impure's `particle_walk` replaces that call),
+calls slot 3 then slot 1 per object, so **the draw is pure** — rendering from the vectors at
+present rate reads exactly what the engine would blit. Every init reads GameTime
+`main+0x38A47` through `0x471D70(this, life)` (`+4` = GameTime + life).
 
 ### 7.3 The classes (the draw side)
 
@@ -375,18 +385,45 @@ bit — the same rule as the projectiles.
 
 | vtable | Class (TADR's name) | Sub stride | Per-particle draw | Fields |
 |---|---|---|---|---|
-| `0x4FD638` | Smoke1 — grey | `0x20` | `AlphaCompsteBuf2OFFScreen` of `seq[frame]`, **no LOS gate** (`0x475700`) | `seq* @0, x/alt/y @4/8/C, nframes @0x10, frame @0x14, countdown reset @0x18, countdown @0x1C` (TADR's `SmokeGraphics`) |
-| `0x4FD618` | Smoke2 — dark | `0x20` | same, LOS-gated (`0x475470`) | same layout; sequence `*(main+0x147CF)` ("smoke 1") or `*(main+0x147D3)` ("smoke 2") by the emitter's last argument |
+| `0x4FD638` | Smoke1 (`SmokeInfinite`'s) | `0x20` | `AlphaCompsteBuf2OFFScreen` of `seq[frame]`, **no LOS gate** (`0x475700`) | `seq* @0, x/alt/y @4/8/C, nframes @0x10, frame @0x14, countdown reset @0x18, countdown @0x1C` (TADR's `SmokeGraphics`); the sequence is always `*(main+0x147CF)` ("smoke 1") |
+| `0x4FD618` | Smoke2 (every other smoke) | `0x20` | same, LOS-gated (`0x475470`) | same layout; sequence `*(main+0x147CF)` ("smoke 1") or `*(main+0x147D3)` ("smoke 2") by the init's last argument, which only `EmitSfx_BlackSmoke 0x4728F0` sets |
 | `0x4FD5D8` | fire | `0x3C` | alpha blit of `seq[frame]`, LOS-gated (`0x474170`) | `seq* @0` = the flare sequence `*(main+0x147F3)`, pos @4/8/C, velocity @0x10.., frame @0x2C, end tick @0x38 |
-| `0x4FD588` | flare sprite (teleport / `0x472630` callers) | `0x34` | alpha blit of `seq[frame]`, LOS-gated (`0x473590`) | pos @4/8/C, frame @0x2C |
+| `0x4FD588` | flare sprite (the teleport's) | `0x34` | alpha blit of `seq[frame]`, LOS-gated (`0x473590`) | pos @4/8/C, frame @0x2C |
 | `0x4FD5F8` | wake / bubbles | `0x44` | `DrawBar(ctx, {x, y, x+1, y+1}, colour)` = a **2×2 dot**, LOS-gated (`0x4745E0`) | pos @4/8/C, colour byte @0x30 cycling `0x61..0x67` (foam), dies when its ground height rises above sea level |
 | `0x4FD5B8` | nanolathe spray | `0x30` | `DrawBar(ctx, {sx, sy, sx+1, sy+1}, colour)` = a **2×2 dot** (its fill `0x4CCDEA` is inclusive), LOS-gated (`0x473A00`, which adds the constants `0x80` and `0x20`) | **pos @0/4/8**, target @0xC.., step @0x18.., colour byte @0x28 = `0xA1 + n%7` cycling its low nibble 1..7, end tick @0x2C |
 | `0x4FD5A8` | base (destroyed object) | — | nothing | the destructors reset the vtable to this |
 
-Smoke update (`0x475340`/`0x475600`): `x += wind_x(main+0x37ECC)·8`, `alt += main+0x14263·4`
-(Smoke1: `·16`), `y += wind_y(main+0x37ED4)·8`; the countdown at `+0x1C` reaches 0 → `frame++`,
-reset to `rand()·(reset/2)/0x8000 + reset/2`; a puff dies at `frame >= nframes`. The nano
-spray's init (`0x473B50`) cuts each of its two 6-int boxes, on every axis, to its middle: from
+**Each class's update** (slot 1; DISASSEMBLED 2026-11-22). Every update walks the
+sub-vector — move, death test, the dead compacted by shifting the rest down (`rep movs`) —
+then `if slot5() slot4()`. Positions are 16.16; T is GameTime after this tick's increment.
+
+| Class | Update | Per sub-particle per tick | Death | CRT `rand` |
+|---|---|---|---|---|
+| Smoke1 | `0x475600` | `x += wind_x(main+0x37ECC) << 3`, `alt += main+0x14263 << 4`, `y += wind_y(main+0x37ED4) << 3`; `--countdown`, at 0 `frame++` and `countdown = h + rand·h/0x8000`, h = reset/2 toward zero | `frame >= nframes`, tested every tick after the move | one a frame advance (`0x475679`) |
+| Smoke2 | `0x475340` | the same with `alt += main+0x14263 << 2` | the same | one a frame advance (`0x4753B9`) |
+| fire | `0x473010` → move `0x474130` | `pos += step`; `counter = (counter+1) % period`, at 0 `frame = (frame+1) % (nseq−1)` | `0x4742A0`: T > end | none |
+| flare | `0x472D50` → move `0x473560` | `pos += step`; `frame = (frame+1) % (nseq−1)` | `0x4736C0`: T > end | none |
+| wake | `0x473170` → move `0x474580` | `pos += step`; `counter = (counter+1) % period`, at 0 `colour += delta`, past max → min, under min → max | `0x474720`: T > end, **or** the ground under the dot `0x485070(&pos)` at or above the sea-level byte `main+0x1427F` | none |
+| nano | `0x472EB0` → move `0x4739B0` | `pos += step`; colour's low nibble + 1, 7 → 1 | `0x473B30`: T > end | none |
+
+The wind is piecewise constant (its updater changes it 150–300 ticks apart: the engine map's
+*The wind*), the rise `main+0x14263` has no store by displacement, and the ground `0x485070` is
+the terrain's height. So fire, flare and nano positions and frames are closed in (initial
+state, ticks updated), the wake's too but for its death over shallow ground, and smoke's
+position is closed given the wind's history, its frame times taking one `rand` a frame advance.
+
+**Each class's spawn and spawn-again** (slots 4 and 5; DISASSEMBLED 2026-11-22):
+
+| Class | Init (slot 6) | Spawn (slot 4) | Again (slot 5) | Empty (slot 3) |
+|---|---|---|---|---|
+| flare | `0x4736E0(from, to, life)`: `+0x20` from, `+0x2C` to, d = to − from; steps = `_ftol(fsqrt(dx²+dy²+dz²))` / 5 world units (the int16 high word of `(len << 16)/0x50000`, `0x47376A..0x473788`), step = d/steps by `idiv` — **no zero guard**: a teleport shorter than 5 world units divides by zero at `0x47378E` | `0x4737C0`: one sub `{flare seq, pos = from, step, frame = rand·(nseq−1)/0x8000 (0x47395F), end = T + steps}`; `+8 = T + 10` | `0x472E00`: `+8 <= +4 && +8 <= T`, so subs at T, T+10, T+20, T+30 (life 30) | `0x472E70`: sub-vector empty — a flare of fewer than 10 steps dies with its first sub |
+| nano | `0x473B50` (below) | `0x473D50`: five subs, six draws each | `0x472F60`: once, at T+1 | `0x472FD0`: sub-vector empty |
+| fire | `0x4742C0(from, to, period, life)`: end `+4 = T + life`, `+0x1C` period, step = `(d · ⌊2^32/(life << 16)⌋) >> 16` per axis (`0x47432C..0x47438B`) | `0x4743A0`: one sub `{flare seq, pos = from, step, frame 0, counter 0, period, end = +4}`, no `rand`; `+8 = T+1` | `0x4730C0`: every tick until `+8 > +4`, so life + 1 subs | `0x473130`: sub-vector empty |
+| wake | `0x474760(a, b, period, life, dir)`: end `+4 = T + life` (the emitters pass 1), step = d · (2^32 / (len·2)) >> 16, a half world unit a tick toward b (`0x4747CC..0x474868`) — **len 0 divides by zero** (`_alldiv` at `0x474811`), as bubbles emitted exactly at sea level are; `+0x44` = dir | `0x474880`: one sub; three draws (`0x4749D9`, `0x474A00`, `0x474A27`) add `rand·7/0x8000 − 3` to the x, alt and y high words; colours `0x61..0x67`, starting `0x61` rising when dir else `0x67` falling; end = T + 6·period; `+8 = T+1` | `0x473220`: at T+1, so two subs an emission | `0x473290`: sub-vector empty |
+| Smoke2 | `0x474D50(pos, fcap, interval, countdown, life, seqsel)` `ret 0x18`: `+4 = T + life`, `+0x1C` interval, `+0x28` seqsel, `+0x24` = nseq−1 capped by fcap when fcap is nonzero and smaller, `+0x20` = countdown or 7 | `0x474DF0`: one puff `{seq, pos, nframes = rand·(+0x24−2)/0x8000 + 2 (0x474F1C), frame 0, countdown = reset = +0x20}`; `+8 = T + interval` | `0x475440`: `+8 <= +4` (signed) `&& +8 <= T` | `0x474F80`: sub-vector empty **and** `+4 < T` |
+| Smoke1 | `0x475150(pos, interval, countdown, life)` `ret 0x10`, the same fields, the point at `+0x28` | `0x4751C0`: as Smoke2's (one draw, `0x4752D4`) | `0x4750F0`: `T >= +8`, no end test | `0x475330`: always 0 |
+
+The nano spray's init (`0x473B50`) cuts each of its two 6-int boxes, on every axis, to its middle: from
 the 4/11 to the 7/11 point of that axis's span, in int32. Its spawn (`0x473D50`) makes five
 sub-particles a call, each from a random point of the first box to a random point of the
 second (six CRT `rand` draws), in a straight line at about 4 world units a tick
@@ -398,23 +435,53 @@ particle. The engine map's *The nano particle* has the addresses.
 
 ### 7.4 Emitters — who makes them, and the layer argument
 
-| Emitter | Class | Callers (xrefs) |
-|---|---|---|
-| `EmitSfx_GraySmoke 0x472810(pos, layer)` | Smoke2, grey | `WEAPONS_ProjectileDamage 0x49A007` (impact puffs), `0x421550` (debris pieces: once a draw in stock; under Impure once per frame that ran ticks, none while paused — [engine patches](modules/engine-patches.html)), `0x4243CF`, `0x49BC80/0x49BDC1`, `0x4810B9` (damaged-unit smoke) |
-| `EmitSfx_BlackSmoke 0x4728F0(pos, layer)` | Smoke2, dark | `0x481118` |
-| `EmitSfx_SmokeInfinite 0x472C50(pos)` | Smoke1 | `SpawnFeatureOnMap 0x423FE3` (smoking map features) |
-| `0x4729D0(pos)` | Smoke2 | `UNITS_FireProjectile 0x49CC07/0x49CDC3/0x49CFE6` (rocket and missile trails) |
-| `EmitSfx_Unk5 0x472AB0(pos, layer)` = **fire** | fire | `0x421550` only (debris on fire: `sys+0x28` bit 0; under Impure once per frame that ran ticks, as the smoke) |
-| `0x472330(…, layer)` | fire | `0x481010/0x48102F` |
-| `EmitSfx_Bubbles 0x472530(…, layer)`, `0x472430(…, layer)` | wake / bubbles | `0x481102`; `0x48104C/69/86/A3` (the ship movement code) |
-| `EmitSfx_NanoParticles 0x4720D0(point3, box6, layer)` / `…Reverse 0x472200(box6, point3, layer)` | nanolathe | ten sites in `0x4025AE..0x4151EC` (build, help, the repairs, SelfRepair, resurrect; the spray runs point → box) / seven in `0x404676..0x414C43` (capture, reclaim unit, reclaim feature; box → point), every one in an order handler and passing layer 6 (*The nano spray* in the engine map) |
-| `EmitSfx_Teleport 0x471FD0`, `0x472630` | flare sprite | `0x406B9F`; `0x48644B`, `ShowExplodeGaf 0x420AE1` |
+DISASSEMBLED 2026-11-22 (every call site of each, and the pushes before it). All are
+`stdcall`; every one reads the layer table `main+0x38D77` (no NULL test), skips everything
+while `0x51E608` is set, takes an object from the pool (`0x470EB0(0x51E610, size)` — the
+size is ignored, `ret 4`, every slot is `0x4C`), zeroes it, sets the class, calls init (slot
+6), then trims the layer to its cap and appends (§7.1). A NULL from the pool skips init and
+append. The layer is the low word, sign-extended and **not bounded**.
 
-The layer is **an argument of the emitter** (GraySmoke reads it back from `[esp+0x14]`
-after the init call; the fire emitter stores the same argument in the object's `+0xC`),
-and each caller passes its own — which is why smoke from a rocket trail (layer 5) sits
-under the missile while an impact puff (layer 9) sits over everything. The `+0xC` byte is
-otherwise a type tag (TADR's "1 smoke, 2 wake, 6 nano, 7 fire" was read from it).
+| Emitter | Class | Object | Init call | `rand` in the emitter | Callers and the layer they pass |
+|---|---|---|---|---|---|
+| `EmitSfx_Teleport 0x471FD0(from, to, life, layer)` `ret 0x10` | flare | `0x44` | `0x4736E0(from, to, life)` | none | the Teleport handler `0x406AA0` at `0x406B9F`: life 30, layer 5; Impure's `tagpu_rec_teleport_flare` the same |
+| `EmitSfx_NanoParticles 0x4720D0(point3, box6, layer)` `ret 0xC` | nano | `0x4C` | `0x473B50(box1, box2, 1)` | none | ten order handlers, layer 6 (*The nano spray* in the engine map) |
+| `…Reverse 0x472200(box6, point3, layer)` `ret 0xC` | nano | `0x4C` | the same, box to point | none | seven order handlers, layer 6 |
+| `0x472330(from, to, period, life, layer)` `ret 0x14` | fire | `0x44` | `0x4742C0(from, to, period, life)` | none | COB `EMIT_SFX 0x480EB0`: type 0 (VTOL) at `0x481010` (period 1, life 6, layer 7), type 1 (thrust) at `0x48102F` (1, 7, layer 7) |
+| `0x472430(a, b, period, layer)` `ret 0x10` | wake | `0x48` | `0x474760(a, b, period, 1, 1)` | none | `EMIT_SFX` types 2–5: `0x48104C` (period 16), `0x481069` (8), `0x481086` (16, points swapped), `0x4810A3` (8, swapped); layer 2 |
+| `EmitSfx_Bubbles 0x472530(a, b, period, layer)` `ret 0x10` | wake | `0x48` | `0x474760(a, b, period, 1, 0)` | none | `EMIT_SFX 0x103` at `0x481102`: the point and the same point at sea level, period 8, layer 7 |
+| `0x472630(pos, interval, life, layer)` `ret 0x10` | **Smoke2** (constructor `0x474CD0`), "smoke 1" | `0x38` | `0x474D50(pos, 0, interval, 0, life, 0)` | none | the explosion add `0x420A30` at `0x420AE1` (interval 7, life 15, layer 9; only when its 4th argument is 0 and the point is above sea level: the engine map's *sinks*); the corpse helper `0x486360` at `0x48644B` (interval 15, life 900, layer 9) |
+| `EmitSfx_GraySmoke 0x472810(pos, layer)` `ret 8` | Smoke2, "smoke 1", one puff | `0x38` | `0x474D50(pos, 0, 1, 0, 0, 0)` | none | a flying piece `0x421583` (9: once a draw in stock; under Impure once per frame that ran ticks, none while paused — [engine patches](modules/engine-patches.html)); a burning feature every third tick `0x4243CF` (**5**); `EMIT_SFX 0x101` `0x4810B9` (9, damaged-unit smoke); the impact `0x49A007`, weapon `+0x111` bit 10 (9); a line-of-sight shot expiring without burnblow `0x49BC80` (9); the projectile trail `0x49BDC1`, weapon `+0x111` bit 18, one puff every `weapon+0xFA` ticks while the projectile lives (9) |
+| `EmitSfx_BlackSmoke 0x4728F0(pos, layer)` `ret 8` | Smoke2, **"smoke 2"**, one puff | `0x38` | `0x474D50(pos, 0, 1, 0, 0, 1)` | none | `EMIT_SFX 0x102` at `0x481118` (9) |
+| `0x4729D0(pos, layer)` `ret 8` | Smoke2, "smoke 1", frame cap 3, countdown 30 | `0x38` | `0x474D50(pos, 3, 1, 30, 0, 0)` | none | the three shot paths, weapon `+0x111` bit 9, once a shot: `0x49CC07`, `0x49CDC3`, `0x49CFE6` (9) |
+| `EmitSfx_Unk5 0x472AB0(pos, layer)` `ret 8` = **fire** | fire | `0x44` | `0x4742C0(&L, &L, 1, life)`, from = to = L | **four, before the `0x51E608` test**: x, alt, y of a copy L each `+= rand·3/0x8000 − 1` on the high word (`0x472ACF`, `0x472AF4`, `0x472B17`), life `rand·3/0x8000 + 1` (`0x472B3A`) | a flying piece on fire (`sys+0x28` bit 0) at `0x4215AA` only (9; emitted as the piece's smoke is) |
+| `EmitSfx_SmokeInfinite 0x472C50(pos, layer)` `ret 8` | **Smoke1** (constructor `0x4750B0`) | `0x34` | `0x475150(pos, 5, 0, 150)` | none | `SpawnFeatureOnMap 0x423C50` at `0x423FE3` (layer 4): at map load, on the loader thread, and in play (the feature tick, a reclaim's swap, a corpse, the console) |
+
+The layer is **an argument of the emitter**, and each caller passes its own: weapon smoke
+of every kind is filed in layer 9, over everything, while a burning feature's smoke and the
+teleport flare sit in layer 5, under the projectiles. TADR's "1 smoke, 2 wake, 6 nano,
+7 fire" type tags were read from the `+0xC` byte (§7.2).
+
+**What a call makes** (from §7.3's spawns): a nano emission two bursts of five; a wake or
+bubbles call two dots (T and T+1); a COB fire call life + 1 flames, one a tick; a fire from
+`0x472AB0` 2 to 4 flames; the teleport up to four flares, ten ticks apart; one-puff smoke
+(`0x472810`, `0x4728F0`, `0x4729D0`) one puff; `0x472630` a puff every `interval` ticks until
+`life` (3 from the explosion add, 61 from a corpse); `SmokeInfinite` a puff every 5 ticks for
+the rest of the level.
+
+**When inside a tick** (the sim step `0x495490`'s call order): GameTime is incremented
+(`0x4954C0`), then units (`0x4954ED`: the nano spray, and COB `EMIT_SFX` [INFERRED]),
+projectiles (`0x495513`: trails, impacts, shots), the explosion records (`0x495539`),
+players, features (`0x495585`: feature smoke, spawns), the wind (`0x49558F`), meteors
+(`0x495594`) and last the particle walker (`0x4955BF`). An object emitted inside the step
+is updated the same tick; the flying pieces' smoke and fire, emitted in the explosion
+draw, are updated on the next one.
+
+**Which random stream.** The emitters, spawns and smoke updates draw the C runtime's `rand`
+`0x4E4870` at eighteen sites (the tables above) and never the simulation's generator
+`0x4B6C30`. That `rand` keeps one seed per thread, and the game thread's stream is also
+the meteor shower's, the loader thread's also the skirmish start positions': the engine
+map's [*The two random streams*](engine/sim.html), which classifies all 61 call sites.
 
 ### 7.5 Native — `tagpu_sfx.c`, and owning the walker
 
@@ -435,6 +502,33 @@ sprites), 8 at `airKey + 3`, 9 at `airKey + 5`. LOS gate and the `TAProgram+0xF0
 alpha gate mirrored; the fog shader darkens them like everything else. A full sprite
 bucket or atlas drops the rest of the frame and says so (`fx: DROPPED this frame …`);
 a full atlas resets at the *next* gather, never mid-frame.
+
+**Where the native draw is not the engine's** (read in `tagpu_packet_pub.c`'s gather and
+`tagpu_sfx.c` against the leaves, 2026-11-22). The engine's leaves project `sx = (int16)(hi(x)
+− eyeX) + 0x80`, `sy = (int16)(hi(y) − eyeY) − (hi(alt) >> 1) + 0x20` with the eye words
+`main+0x1431F/0x14323`, and gate on the viewed player `main+0x2A43`'s record (`main+0x1B63 +
+0x14B·p`) at the exact tile `(hi(x) >> 5, (hi(y) − (hi(alt) >> 1)) >> 5)` — signed shifts, an
+unsigned bound against the width `+0x80` and height `+0x84`, the LOS byte map `+0x7C` when
+`main+0x14281` bit 1 is set, else the player's bit of the mapped words `*(main+0x14273)`; off
+the map hidden. The native pass differs in six ways:
+
+1. **The sight test** is `tagpu_fx_tile_visible` → `tagpu_fog_at`: a bilinear coverage of at
+   least 0.5 of the fog cells sampled at `(wx − 16)/32`, both fog bands hiding, answered past
+   the map — not the engine's tile, so the edges differ.
+2. **The projection** is 32-bit with the viewport's `vpL/vpT`, the same but for the int16 wrap.
+3. **Order and depth**: the under bucket, the per-layer depth keys and the scaffold test
+   above make occlusion the engine's painter order does not have.
+4. **Gathered once a sim tick** and reused, so an object a later draw of the tick makes
+   lands one publish late.
+5. **Thinned** when the packet is full (`TAGPU_PK_MAX_PART`, an even share a layer); an
+   object of more than `PART_SUBCAP` (4096) sub-particles is refused as bad, a layer past the
+   cap plus one dropped whole, a sprite whose frame lookup is NULL dropped.
+6. **Sprites at 50 % alpha** for the engine's ALP blit, behind the same `TAProgram+0xF0`
+   bit-5 gate.
+
+The classes by vtable, the strides, the frame and colour offsets, the nano position at `+0`,
+Smoke1 drawn ungated and the 2×2 dots match. `0x4B7F30(seq, i)` `ret 8` bounds i against
+the u16 count at `seq+0` and returns `seq + 0x28 + 8i`; `0x4B7F60(seq)` is that count.
 
 The engine's own particle draw is one more prologue detour in `tagpu_fxown.c`: `0x471F90`
 starts with `mov eax,[0x511DE8]` (five position-independent bytes), so the stub is `cmp byte
@@ -466,7 +560,7 @@ Same-fight A/B on one instance (`sfx.on="log passive"` → engine draws while we
   piece to the site, identical dot colours and spread; the engine surface shows only the
   frame.
 - **Smoke**: damage smoke over three badly damaged structures, grey puffs of the same
-  sequence frames at the same anchors; rocket trails (layer 5) and impact puffs (layer 9)
+  sequence frames at the same anchors; rocket trails and impact puffs (both layer 9, §7.1)
   read clean on `fx-rockets`.
 - **Fire**: a self-destructed metal extractor (its explosion emits 200 fire objects — a
   metal storage's does not) burns with the same flare-sequence flames in both.
@@ -489,9 +583,8 @@ as noted: a `GL_POINTS` bucket for dots (a 2×2 dot costs six vertices; the unde
 already keeps a nano flood from starving explosions), and the small helper duplication
 between `tagpu_sfx.c` and `tagpu_fx.c`.
 
-Gaps: layer 8 and the `0x4FD588` class were never observed live (the latter is emitted
-by teleport and `0x472630`, which the flash loop's callers reach); the sim-side update
-walker's exact entry is not pinned (not needed — only the draw is owned); `DrawBar`'s
+Gaps: the `0x4FD588` class was never observed live (only the teleport emits it; layer 8
+has no caller at all, §7.1); `DrawBar`'s
 rect `{x, y, x+1, y+1}` is taken as 2×2 from the panels, not from its fill routine
 (`0x4CCDEA`); sub-pixel motion for puffs is not used (engine parity: integer anchors);
 particles are drawn at 50 % alpha like the engine's ALP blend, so they look identical to
@@ -510,7 +603,7 @@ the engine's rather than better — a translucency slider is a G13 freedom.
 | `0x4B7F30` / `0x4B7EE0` | `GAF_SequenceIndex2Frame` / `GAFGetCurrentFramePtrAddr` |
 | `0x4B6CC0` / `0x4B7173` | vertex rotate by triple / 2D rotate |
 | `0x4BE950` / `0x4BEA20` / `0x4CC7AB` | `DrawLine` / clip / Bresenham |
-| `0x4E4870` | `rand2` = CRT `rand()` (per-thread `_getptd` seed), lightning jitter only |
+| `0x4E4870` | `rand2` = CRT `rand()` (per-thread `_getptd` seed): the lightning jitter here, eighteen particle sites (§7.3, §7.4), 61 sites in all ([sim](engine/sim.html), *The two random streams*) |
 | `main+0x141F3/0x141F7` | projectile count / array (stride 0x6B) |
 | `main+0x1491B/0x1491F` | explosion count / inline array (stride 0x54, 300) |
 | `main+0x38A47` | game tick |

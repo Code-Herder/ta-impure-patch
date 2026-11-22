@@ -25,7 +25,8 @@ nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is em
 (`0x472126`). The object's vtable is `0x4FD5B8`. Its init, slot `+0x18` = `0x473B50`, copies the
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
 (`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
-`0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
+`0x4B6C30`, so an emission writes no simulation state; it does advance the game thread's CRT
+stream, which a player's meteor shower reads later ([sim](sim.md), *The two random streams*). `0x4732E0` appends the object to the
 layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
 emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
 limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
@@ -1828,6 +1829,42 @@ simulation's generator.
   the particle (`0x471FFC..0x47202E`). DllMain runs before that initializer, so writing the operand
   is enough; TADR hooks `0x471C87` and rewrites the pushed value instead. At 204 800 the block is
   15.6 MB and the stack 0.8 MB, once a process.
+- **A capacity of 0 is safe and allocates nothing** [DISASSEMBLED 2026-11-22]. The constructor
+  `0x470A90(cap, size)` zeroes `+8..+0x20` and, when cap or size is 0, skips `0x470C10` (`cmp
+  edx,eax; je 0x470AD0` at `0x470AA9`, the size's at `0x470ABD`): no `realloc`, no `malloc`, the
+  stack `+0x14` NULL, the capacity `+0x1C` 0. The alloc `0x470EB0` then fails `used < cap` (`jge`
+  at `0x470EBB`) and returns 0, so every emitter skips its init and append (e.g. `0x47200D`,
+  `0x47285B`) and the free `0x470ED0` is never reached. At exit `0x471CA0` → `0x470B80` skips the
+  NULL stack (`0x470B92`) and frees NULL, which the engine's free `0x4B4F20 → 0x4D8670 → 0x4D85A0 →
+  0x4D85B0` tests (`0x4D85B5`). Nothing divides by the capacity (`0x470C10` uses `imul` and
+  compares). An emitter that finds the pool empty has still run up to the alloc: `0x472AB0` has
+  drawn its four `rand`s. Order: the DLL's attach, which writes `0x471C83` (`lim_dword`, all or
+  nothing, `tagpu_limits_install`), runs before the exe's entry `0x4E6FA0` → `_cinit 0x4E45D0` →
+  `_initterm(0x501000, 0x50104C)` at `0x4E45F7`, whose table holds `0x471C80` at `0x501024`; the
+  stock-limits build has no `lim_dword`.
+- **Every other particle allocation is the object's own.** Each object's sub-vector
+  (`+0x10/+0x14/+0x18`) comes from the engine heap (`MEM_Alloc 0x4B4F10` in the spawns' reserve
+  and the inserts `0x476210`, `0x476490`, `0x4758C0`, `0x475BD0`, `0x475EF0`) and is freed by the
+  class destructor, slot 0 (`MEM_Free [+0x10]`: `0x47143C` flare, `0x47156C` nano, `0x474D1C`
+  Smoke2, `0x47511C` Smoke1), which then returns the object to the pool when its flag is 1. Slot 0
+  with 1 is called by the walker for an empty object, by every emitter's cap trim, by the teardown
+  `0x471DE0` (`0x471E0B..0x471E5A`) and by Impure's `tagpu_effects_clear`. The ten layer vectors
+  and the `0xA0` table are freed only in the teardown (`0x471E74` a layer, `0x471E88` the table,
+  `0x471E97` nulls `main+0x38D77`), and the table is allocated each level at `0x4918B1`: no leak a
+  level.
+- **Two inits divide by zero** [DISASSEMBLED 2026-11-22]. The flare's `0x4736E0` divides each
+  axis by its step count, the length / 5 world units, with `idiv` and no guard (`0x47378E`): a
+  teleport shorter than 5 world units faults. The wake's `0x474760` divides 2^32 by twice the
+  length through `_alldiv` (`0x474811`): a wake or bubbles call whose two points are equal faults,
+  as `EMIT_SFX 0x103` from a piece exactly at sea level would.
+- **The emitters draw the C runtime's per-thread `rand`** (eighteen sites, [effects](../effects.html)
+  §7.3–§7.4), whose game-thread stream the meteor shower reads later and whose loader-thread stream
+  the skirmish start positions read: [sim](sim.md), *The two random streams*. Nothing else reads
+  particle state: the pool's 28 references are its own code; its fields `0x51E618..0x51E630` have no
+  absolute reference; the layer table `main+0x38D77` has 19 references by displacement, all in the
+  particle code (the alloc `0x471DCB`, the teardown `0x471DEC`/`0x471E97`, the walker `0x471EBB`,
+  the draws `0x471F4B`/`0x471F9C`, thirteen in the emitters `0x471FD9..0x472C58`); and the particle
+  range `0x470A90..0x475800` calls no sound, unit, network or simulation-RNG function.
 - **Eight of the twenty compares are in code nothing reaches.** The emitters at `0x471160`,
   `0x471340`, `0x471470`, `0x4715A0`, `0x4716E0`, `0x471820`, `0x471A50` and `0x472720` (the compares
   `0x471183` … `0x471AD7` and `0x4727B0`) have no call, jump or pointer anywhere in the image, nor
