@@ -261,9 +261,8 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   and finds every live dot's death again (`pevt_wake_resea`, MEASURED across two typed changes). But
   `replay-globals.tsv` leaves the byte (`sealevel`, "a level constant"), so a recording of a game in
   which the cheat was typed plays its puppet at the old sea level: a recorder gap that predates this
-  feature. Until it is settled no replay test group types the cheat, and the landing gate's reach
-  check will name `pevt_wake_resea` as reached by no test group: the owner's decision, with the
-  recorder's row.
+  feature. Until it is settled no replay test group types the cheat, so `pevt_wake_resea` carries
+  `SIM_UNTESTED` (the owner's decision); the recorder's row is still open.
 - **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
   eight degenerate quads an event, whose vertex stage skips the draws. Landing 6, with every class an
   event, can give each class its own vertex count.
