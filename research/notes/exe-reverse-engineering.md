@@ -413,6 +413,7 @@ made, or its page cannot be made writable. Each, and why:
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 | an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 | maps with no terrain `0x434D87`, `0x430B87` | local | which maps are offered; whether a network peer has the host's map is decided from the terrain file itself, not from this list |
+| the unit stream in turn, in up to four messages a tick `0x48B76C` (and the receiver's sweep, [recorder](engine/recorder.md)'s table) | simulation | the receiver steps a sender's units once a message, so a peer without the receiver's part would step them up to four times a tick, which the join data's play revision excludes (a host takes only a joiner of its own revision, `mp_join_admit`); without the sender's part a remote copy's wait has no bound |
 | a level starts unpaused `0x49842A` | local | the pause bit is the local player's outside a network game, and a recording carries the ticks that ran; inside one the fix does nothing |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug

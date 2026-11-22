@@ -2271,11 +2271,11 @@ only a live lane sets:
   every one of those suppressions is inert by construction rather than by luck.
 
 **The one that is not — and since 2026-09-20 it is not armed either.** `tagpu_owndraw_init`
-flips two `je`s to `jmp`s — `patch_je_to_jmp(0x4592C6)` and `(0x45952C)` — whenever
+flipped two `je`s to `jmp`s — `patch_je_to_jmp(0x4592C6)` and `(0x45952C)` — whenever
 `g_armed && g_all`, and **a byte flip has no runtime gate to be inert through**. The clean cut
 took `tagpu_owndraw.on` off the defaults table with the other `*own` levers, and the function's
-first line is `if (!tagpu_opt_on("tagpu_owndraw.on")) return;`, so at the shipped defaults the
-flip does not happen; what follows is what it costs whenever somebody arms the lever. `tagpu_owndraw.h` says what that costs: *"the engine then
+first line was `if (!tagpu_opt_on("tagpu_owndraw.on")) return;`, so at the shipped defaults the
+flip did not happen; what follows is what it costs whenever somebody arms the lever. `tagpu_owndraw.h` says what that costs: *"the engine then
 draws NO cached slant shadow and the native pass owes every structure one"*. With the shipped
 defaults (`tagpu_owndraw.on` = `all`) under `renderer=gdi`, nobody pays that debt, so **every
 building loses its slant shadow** and the lane is not stock.

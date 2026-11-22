@@ -799,8 +799,7 @@ ones, until our terrain pass has gathered a frame and the game thread has latche
 `passive`; every draw of a session without `tagpu_terrown` (`terrown.off`); and every draw on
 the GDI lane. On the GDI lane nothing reads the source, so nothing packs it: `wide_tick`
 runs only while the session's renderer is Vulkan (`g_ddraw.renderer`, stored on the game thread
-at DirectDraw creation before the first draw and moved later only by the Vulkan backend's
-hand-over to GDI). That is a property of the session, not a per-frame zoom gate: a producer gated
+at DirectDraw creation before the first draw and never moved). That is a property of the session, not a per-frame zoom gate: a producer gated
 on the level the render thread publishes would pack one frame late at the start of every zoom-out.
 MEASURED 2026-09-24 on `big-battle` at 1920×1080 on Xvfb with `tagpu_gdi.on`, on the window
 builder that ran there then: no `fogwide:` line.
@@ -1025,8 +1024,8 @@ the draw, but the fog stub at `0x469D8E` comes after the whole world draw. The n
 callers of `DrawGameScreen` (`0x495C76` and `0x495E66` in the screenshot routine, `0x4962C2` the
 movie recorder) never latch and keep the last in-play value until the level end. So after the
 render thread withdraws, the key fill and the fog tick can still run for the rest of that draw.
-`tagpu_terrown_filled()` and the structure-shadow gate follow the request, which is already
-down, so no such frame is inverted. Handing the site back leaves nothing to void: the engine
+`tagpu_terrown_filled()` follows the request, which is already down, so no such frame is
+inverted. Handing the site back leaves nothing to void: the engine
 grid's build record is read off LosType bit 3 whoever builds it (§2.3), and the fog source is
 packed on every tracked draw, at our fog site or by the publisher.
 

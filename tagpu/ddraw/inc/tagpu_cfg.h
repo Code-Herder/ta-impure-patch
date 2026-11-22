@@ -7,8 +7,9 @@
    Display mode, vsync and the windowed frame come from the settings
    store (tagpu_settings.h, `tagpu_settings_placement`), under every launch.
    The renderer is Vulkan unless the harness lever `tagpu_gdi.on` sits beside
-   TotalA.exe, which forces the GDI backend; GDI is otherwise only the lane the
-   Vulkan backend hands a session to when it cannot come up (render_vk.c). */
+   TotalA.exe, which forces the GDI backend for the launch: GDI is a test's
+   oracle and nothing else turns it on. A Vulkan lane that cannot draw ends the
+   session (render_vk.c). */
 
 /* Called from the END of cfg_load(), once cnc-ddraw's defaults are in place
    and the store is attached. At DLL attach, under the loader lock. */

@@ -1,4 +1,5 @@
-/* tagpu_fxown.c — own the effects draw (weapon fire, explosions, debris).
+/* tagpu_fxown.c — the engine draws no effect on a Vulkan launch (weapon fire,
+   explosions, debris, the particle layers).
 
    The engine draws effects in two passes called from DrawGameScreen
    (research/notes/effects.md), and every pixel they emit goes through a
@@ -16,32 +17,44 @@
                explosion pass is running.
      0x471F90  particle-layer draw walker (ctx, n) — the ONLY draw path of
                the smoke/fire/wake/nanolathe objects (ten DrawGameScreen
-               sites, pure draw: the sim tick updates them elsewhere);
-               stdcall, ret 8. Its own skip byte follows tagpu_sfx.on.
+               sites, pure draw: the sim tick updates them through vtbl+4,
+               this walker calls vtbl+8); stdcall, ret 8.
 
-   The projectile pass is pure draw (its only side effect is the CRT rand()
-   jitter of lightning bolts, not the sim RNG), so its call site is redirected
-   to a stub that returns at once while the skip is on. The explosion pass
-   must still run: it updates the debris particle systems (0x421550 emits
-   their smoke and fire), so its call site is redirected to a stub that
-   brackets the real call with an "inside" flag; the leaves above check the
-   skip flag (0x46BAE0 / 0x4B8EC0 / 0x4211D0) or the inside flag
-   (CopyGafToContext) and unwind exactly like the callee would.
+   WHY NOTHING IS LOST. The engine's world draws never reach the presented
+   frame on the Vulkan backend: the world phase stamps them and `publish`
+   refuses them (tagpu_gui_hook.c), so they land only in the golden source
+   `tacli shot` reads. Every effect on screen is the Vulkan effects and
+   particle passes'. What these patches remove is the CPU the engine spends
+   rasterising them, and the golden source's copy of them; the picture with
+   every engine draw in it is GDI's, the tagpu_gdi.on oracle, where nothing
+   here installs. A launch is Vulkan or GDI for its life (g_config.gdi is
+   fixed by cfg_load before DllMain reaches this, and the Vulkan lane never
+   hands a session to GDI), so the patches install at attach or never.
 
-   Two byte-matched call-site patches and four 5/6-byte prologue detours,
-   installed once at DllMain if tagpu_fxown.on exists (all-or-nothing). The
-   skip flag itself is a byte written by tagpu_fx.c each time it re-reads
-   tagpu_fx.on, so an A/B (engine draws vs ours) is a file flip, no relaunch.
-   Read-only over sim. Engine-only losses while skipping: the rendertype-2
-   background-refraction "ball" sprite (not reproduced natively). */
+   WHAT THE SIMULATION SEES. The projectile pass is pure draw but for the
+   CRT's rand 0x4E4870, which it draws from; the meteor tick reads that stream
+   too, and the draw path already draws from it a varying number of times a
+   tick, so its strike points depend on the frames drawn between ticks with or
+   without this pass (engine/sim.md, *The meteor shower and the CRT rand*:
+   a timing dependence, not a write; a puppet replays the recorded shower).
+   The simulation RNG 0x4B6C30 is not drawn here. The explosion pass must
+   still run: it updates the debris particle systems (0x421550 emits their
+   smoke and fire), so its call site is redirected to a stub that brackets
+   the real call with an "inside" flag; the leaves above return at once, and
+   CopyGafToContext returns at once only while that flag is up, each unwinding
+   exactly like the callee would.
+
+   Two byte-matched call-site patches and five prologue detours, all-or-nothing
+   in the byte checks. Engine-only losses: the rendertype-2 background-refraction
+   "ball" sprite (not reproduced natively). */
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_fxown.h"
-#include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "config.h"         /* g_config.gdi: the renderer chosen at attach */
 #include "tagpu_log.h"
 
 #define SITE_PROJ_VA   0x00469B22u
@@ -62,11 +75,11 @@ static const unsigned char PIECE_STOLEN[5]    = { 0xB8, 0x58, 0x3F, 0x00, 0x00 }
 static const unsigned char COPY_STOLEN[6]     = { 0x81, 0xEC, 0x94, 0x00, 0x00, 0x00 };
 static const unsigned char SFX_STOLEN[5]      = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }; /* mov eax,[0x511DE8] */
 
-volatile unsigned char g_fxown_skip = 0;     /* engine effects draw skipped */
-volatile unsigned char g_fxown_in   = 0;     /* inside the explosion pass   */
-volatile unsigned char g_fxown_skipSfx = 0;  /* particle layer draw skipped */
-static int g_installed = 0;
-static unsigned g_last = 0;
+/* THE BYTE THE STUBS TEST, AND IT IS NEVER WRITTEN: tagpu_detour's leaf stub
+   is `cmp byte [flag],0; jz resume; ret N`, so a flag that is always 1 makes
+   each leaf return at once. */
+static volatile unsigned char s_removed = 1;
+static volatile unsigned char g_fxown_in = 0;    /* inside the explosion pass */
 
 static void flog(const char* s)
 {
@@ -75,13 +88,13 @@ static void flog(const char* s)
 
 /* the stub/patch helpers are shared with tagpu_featown.c (tagpu_detour.c) */
 
-/* call-site -> stub: skip (ret 4) while g_fxown_skip, else jmp the pass */
+/* call-site -> stub: ret 4 (the pass's own unwind) while s_removed */
 static int install_site_proj(void)
 {
     unsigned char* s = tagpu_detour_stub(); unsigned char* p = s;
     unsigned char call5[5];
     if (!s) return 0;
-    p = tagpu_detour_cmp_flag(p, &g_fxown_skip);
+    p = tagpu_detour_cmp_flag(p, &s_removed);
     *p++ = 0x74; *p++ = 0x03;                       /* jz +3            */
     *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;          /* ret 4            */
     *p++ = 0xE9; tagpu_detour_rel(p, PASS_PROJ_VA); p += 4;  /* jmp 0x49BE60 */
@@ -90,17 +103,17 @@ static int install_site_proj(void)
     return tagpu_detour_write(SITE_PROJ_VA, call5, 5);
 }
 
-/* call-site -> stub: bracket the real pass with g_fxown_in = g_fxown_skip
-   (so the shared CopyGafToContext leaf skips only while the skip is on;
-   eax is caller-saved at a call site, so `mov al` is free) */
+/* call-site -> stub: bracket the real pass with g_fxown_in = s_removed, so the
+   shared CopyGafToContext leaf returns at once only inside it (eax is
+   caller-saved at a call site, so `mov al` is free) */
 static int install_site_expl(void)
 {
     unsigned char* s = tagpu_detour_stub(); unsigned char* p = s;
     unsigned char call5[5];
     unsigned int a;
     if (!s) return 0;
-    a = (unsigned int)(size_t)&g_fxown_skip;
-    *p++ = 0xA0; memcpy(p, &a, 4); p += 4;                /* mov al,[skip] */
+    a = (unsigned int)(size_t)&s_removed;
+    *p++ = 0xA0; memcpy(p, &a, 4); p += 4;                /* mov al,[removed] */
     a = (unsigned int)(size_t)&g_fxown_in;
     *p++ = 0xA2; memcpy(p, &a, 4); p += 4;                /* mov [in],al   */
     *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x04;   /* push [esp+4] */
@@ -114,8 +127,9 @@ static int install_site_expl(void)
 
 void tagpu_fxown_init(void)
 {
-    char b[200];
-    if (!tagpu_opt_on("tagpu_fxown.on")) return;
+    char b[256];
+    int installed;
+    if (g_config.gdi) return;
     int ok = memcmp((void*)SITE_PROJ_VA, SITE_PROJ_BYTES, 5) == 0 &&
              memcmp((void*)SITE_EXPL_VA, SITE_EXPL_BYTES, 5) == 0 &&
              memcmp((void*)LEAF_MODEL_VA, MODEL_STOLEN, 5) == 0 &&
@@ -123,53 +137,28 @@ void tagpu_fxown_init(void)
              memcmp((void*)LEAF_PIECE_VA, PIECE_STOLEN, 5) == 0 &&
              memcmp((void*)LEAF_COPY_VA,  COPY_STOLEN,  6) == 0 &&
              memcmp((void*)LEAF_SFX_VA,   SFX_STOLEN,   5) == 0;
-    if (!ok) { flog("fxown: NOT armed — engine bytes differ at a patch site"); return; }
+    if (!ok) { flog("fxown: the engine's effects draw is KEPT — engine bytes differ at a patch site"); return; }
     int a = install_site_proj();
     int c = install_site_expl();
-    int d = tagpu_detour_leaf(LEAF_MODEL_VA, MODEL_STOLEN, 5, &g_fxown_skip, 0x10);
-    int e = tagpu_detour_leaf(LEAF_FLASH_VA, FLASH_STOLEN, 6, &g_fxown_skip, 0x10);
-    int f = tagpu_detour_leaf(LEAF_PIECE_VA, PIECE_STOLEN, 5, &g_fxown_skip, 0x0C);
-    int g = tagpu_detour_leaf(LEAF_COPY_VA,  COPY_STOLEN,  6, &g_fxown_in,   0x10);
-    int h = tagpu_detour_leaf(LEAF_SFX_VA,   SFX_STOLEN,   5, &g_fxown_skipSfx, 0x08);
-    g_installed = a && c && d && e && f && g && h;
+    int d = tagpu_detour_leaf(LEAF_MODEL_VA, MODEL_STOLEN, 5, &s_removed,  0x10);
+    int e = tagpu_detour_leaf(LEAF_FLASH_VA, FLASH_STOLEN, 6, &s_removed,  0x10);
+    int f = tagpu_detour_leaf(LEAF_PIECE_VA, PIECE_STOLEN, 5, &s_removed,  0x0C);
+    int g = tagpu_detour_leaf(LEAF_COPY_VA,  COPY_STOLEN,  6, &g_fxown_in, 0x10);
+    int h = tagpu_detour_leaf(LEAF_SFX_VA,   SFX_STOLEN,   5, &s_removed,  0x08);
+    installed = a && c && d && e && f && g && h;
     _snprintf(b, sizeof b,
-        "fxown: %s site.proj=%d site.expl=%d model@0x46BAE0=%d flash@0x4B8EC0=%d piece@0x4211D0=%d copy@0x4B7F90=%d sfx@0x471F90=%d (skips follow tagpu_fx.on / tagpu_sfx.on)",
-        g_installed ? "ARMED" : "PARTIAL", a, c, d, e, f, g, h);
+        "fxown: the engine's effects draw is %s (Vulkan) site.proj=%d site.expl=%d model@0x46BAE0=%d flash@0x4B8EC0=%d piece@0x4211D0=%d copy@0x4B7F90=%d sfx@0x471F90=%d",
+        installed ? "removed" : "PARTLY removed", a, c, d, e, f, g, h);
     flog(b);
-}
-
-void tagpu_fxown_set_skip(int on)
-{
-    unsigned char v = (unsigned char)(on && g_installed);
-    if (v != g_fxown_skip) {
-        g_fxown_skip = v;
-        flog(v ? "fxown: engine effects draw SKIPPED (ours live)" : "fxown: engine effects draw restored");
-    }
-}
-
-/* the native effects pass reports each frame it actually gathered; if it
-   stops (overlay off, a frame path that never reaches it) the
-   engine's draw comes back after 90 present frames instead of vanishing */
-static unsigned g_beat = 0, g_beatSfx = 0;
-void tagpu_fxown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
-void tagpu_fxown_beat_sfx(unsigned int frame_counter) { g_beatSfx = frame_counter; }
-
-void tagpu_fxown_set_skip_sfx(int on)
-{
-    unsigned char v = (unsigned char)(on && g_installed);
-    if (v != g_fxown_skipSfx) {
-        g_fxown_skipSfx = v;
-        flog(v ? "fxown: engine particle draw SKIPPED (ours live)" : "fxown: engine particle draw restored");
-    }
 }
 
 /* the render thread's standing request for the packet's effect tables. Written
    on the render thread, read on the game thread, one writer, no ordering owed:
    a frame either side of the change costs one frame of empty or unused tables
    and nothing else — the publisher's watchdog below is what makes a pass that
-   stops paying stop being paid for. Unlike the skip bytes these are NOT gated
-   on the detours being installed: the tables are ours and the pass draws from
-   them whether or not the engine's own draw could be suppressed. */
+   stops paying stop being paid for. They are not tied to the patches above:
+   the tables are ours and the passes draw from them whether or not the
+   engine's own draw could be removed. */
 static volatile unsigned char g_wantFx, g_wantSfx;
 static unsigned g_beatWant;
 void tagpu_fxown_set_want(int fx, int sfx, unsigned int frame_counter)
@@ -183,26 +172,10 @@ int tagpu_fxown_want_sfx(void) { return g_wantSfx != 0; }
 
 void tagpu_fxown_flush(unsigned int frame_counter)
 {
-    if (!g_installed) return;
-    if (g_fxown_skip && frame_counter - g_beat > 90) {
-        flog("fxown: effects pass silent for 90 frames");
-        tagpu_fxown_set_skip(0);
-    }
-    if (g_fxown_skipSfx && frame_counter - g_beatSfx > 90) {
-        flog("fxown: particle pass silent for 90 frames");
-        tagpu_fxown_set_skip_sfx(0);
-    }
     /* the effect tables cost the publisher a walk of four engine arrays; a
        pass that has stopped asking for them stops being charged for them */
     if ((g_wantFx || g_wantSfx) && frame_counter - g_beatWant > 90) {
         flog("fxown: neither effects pass asked for the packet's tables for 90 frames — they go idle");
         tagpu_fxown_set_want(0, 0, frame_counter);
-    }
-    if (frame_counter - g_last >= 300) {
-        char b[96];
-        g_last = frame_counter;
-        _snprintf(b, sizeof b, "FXOWN skip=%u sfx=%u in=%u", (unsigned)g_fxown_skip,
-                  (unsigned)g_fxown_skipSfx, (unsigned)g_fxown_in);
-        flog(b);
     }
 }

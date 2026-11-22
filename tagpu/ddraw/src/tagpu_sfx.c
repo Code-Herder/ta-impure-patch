@@ -51,7 +51,6 @@
 #include "tagpu_sfx.h"
 #include "tagpu_packet.h"
 #include "tagpu_opt.h"
-#include "tagpu_fxown.h"
 #include "tagpu_log.h"
 
 #define NLAYER        10
@@ -92,7 +91,6 @@ int tagpu_sfx_armed(unsigned frame_counter)
     char buf[128];
     int n = tagpu_opt_read("tagpu_sfx.on", buf, sizeof buf);
     if (n < 0) {
-        tagpu_fxown_set_skip_sfx(0);
         if (was > 0) flog("sfx: disarmed");
         return 0;
     }
@@ -117,7 +115,6 @@ int tagpu_sfx_armed(unsigned frame_counter)
         }
     }
     s_armed = 1;
-    if (s_passive) tagpu_fxown_set_skip_sfx(0);
     if (was != 1) {
         char b[128];
         _snprintf(b, sizeof b, "sfx: ARMED (smoke=%d fire=%d wake=%d nano=%d log=%d passive=%d)",
@@ -203,12 +200,6 @@ void tagpu_sfx_frame_done(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
     if (s_armed != 1) return;
-    /* we gathered this frame: the engine's layer draw may be skipped — but only
-       once the packet says the publisher was filling the particle table for us,
-       or the first armed frames would suppress the engine's ten layer draws
-       against an empty table */
-    if (!s_passive && (pk->fx_want & TAGPU_PK_FXWANT_SFX)) tagpu_fxown_set_skip_sfx(1);
-    tagpu_fxown_beat_sfx(v->frame_counter);
     static unsigned last = 0;
     if (s_log && v->frame_counter - last >= 60) {
         last = v->frame_counter;

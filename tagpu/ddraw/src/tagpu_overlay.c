@@ -18,9 +18,7 @@
 #include "screenshot.h"  /* ss_take_screenshot: `tacli shot`, now on the flip */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
-#include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
-#include "tagpu_featown.h"
 #include "tagpu_terrown.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
@@ -67,26 +65,6 @@ static void say_ready(void)
    reaches and this file does not; it is fed by the packet that file has just
    filled and gated in milliseconds rather than in render frames. */
 
-/* RENDER THREAD: the session goes to GDI, which never enters tagpu_overlay_draw,
-   so no flush below will run again. Every draw this overlay took from the engine
-   goes back now, each through its own setter, terrain before the shadow gate its
-   setter names. */
-void tagpu_overlay_gone(void)
-{
-    tagpu_zoom_render_gone();           /* first: it ends the hold the setters below would obey */
-    tagpu_fxown_set_skip(0);
-    tagpu_fxown_set_skip_sfx(0);
-    tagpu_fxown_set_want(0, 0, 0);
-    tagpu_featown_set_skip(0);
-    tagpu_markown_set_bars(0);
-    tagpu_markown_set_selbox(0);
-    tagpu_markown_set_cursor(0);
-    tagpu_markown_set_orders(0);
-    tagpu_markown_set_digits(0);
-    tagpu_terrown_set_skip(0);
-    tagpu_owndraw_set_structshadow(0, 0);
-}
-
 void tagpu_overlay_draw(const TAGPU_FRAME* f)
 {
     if (!f || f->abi!=TAGPU_ABI) return;
@@ -110,15 +88,12 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_tracer_flush(f->frame_counter);
     /* suppressor flush: no-op unless suppression was armed. */
     tagpu_suppress_flush(f->frame_counter);
-    /* own-the-draw flush: no-op unless armed. */
-    tagpu_owndraw_flush(f->frame_counter);
-    /* effects own-the-draw flush: no-op unless armed at launch. */
+    /* the effect tables' standing request: decays here, as the builds table's below. */
     tagpu_fxown_flush(f->frame_counter);
     /* the build ghost's standing request for the packet's builds table: decays
        here, not in its setter, so a render thread that stops polling stops
        charging the publisher for a walk nothing will read. */
     tagpu_native_flush_want(f->frame_counter);
-    tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
     tagpu_markown_flush(f->frame_counter);
     tagpu_gui_flush(f->frame_counter);

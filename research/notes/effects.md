@@ -245,12 +245,12 @@ game paused):
 | the publisher in play (the posing, once a tick) | `big-battle` at the battle p50 128–182 µs, p99 183–257 µs; `limits-flood`'s first volley, about 1100 models a tick, p50 1.22 ms, p99 1.92 ms ([gpu-status](gpu-status.html) §2.89 has the whole fill and the comparison without models) |
 | the GPU frame, `big-battle` paused, `--maxfps 0`, two launches each | p50 2.40–2.47 ms against 1.83–2.40 ms without the models |
 
-## 5. Owning the draw — `tagpu_fxown.c` [LIVE-VERIFIED]
+## 5. The engine draws no effect on a Vulkan launch — `tagpu_fxown.c` [LIVE-VERIFIED]
 
-Installed once at DllMain when `tagpu_fxown.on` exists (tacli auto-creates it at launch
-when `tagpu_fx.on` is set); all six sites are byte-matched first, all-or-nothing:
+Installed once at DllMain on every launch that is not the `tagpu_gdi.on` oracle, with no
+lever; all seven sites are byte-matched first, all-or-nothing:
 
-| Site | Patch | Effect while the skip byte is set |
+| Site | Patch | Effect |
 |---|---|---|
 | `0x469B22` `call 0x49BE60` | call-site redirect | the projectile pass returns at once (`ret 4`) |
 | `0x469B2C` `call 0x420B00` | call-site redirect | the pass runs (particle updates keep emitting smoke/fire) bracketed by an *inside* byte |
@@ -258,21 +258,22 @@ when `tagpu_fx.on` is set); all six sites are byte-matched first, all-or-nothing
 | `0x4B8EC0` | 6-byte prologue detour | `ret 0x10` — no flashes |
 | `0x4211D0` | 5-byte prologue detour | `ret 0xC` — no flying pieces |
 | `0x4B7F90` `CopyGafToContext` | 6-byte prologue detour, checks the *inside* byte | no explosion sprites; every other caller (features, UI) unaffected |
+| `0x471F90` | 5-byte prologue detour | `ret 8` — no particle layer (§ the particle layers below) |
 
-The skip byte is set by each frame the native effects pass actually gathers (never by
-the file alone), cleared by `passive`, by the file's absence, and by a 90-frame heartbeat
-timeout in `tagpu_fxown_flush` when the pass stops running (overlay off, GL failure) —
-so the engine's draw comes back instead of effects vanishing. The explosion-pass stub
-copies the skip byte into the *inside* byte, so the shared `CopyGafToContext` skips only
-while the skip is on. Log: `fxown: engine effects draw SKIPPED / restored`, `FXOWN skip=
-in=` every 300 frames; an engine-vs-ours A/B is a file flip on one instance, no relaunch.
-Verify install with `fxown: ARMED site.proj=1 site.expl=1 model@0x46BAE0=1
-flash@0x4B8EC0=1 piece@0x4211D0=1 copy@0x4B7F90=1`. tacli drops a stale `fxown.on` at
-launch when `fx.on` is absent.
+The stubs test a byte that is set once and never written, so each leaf returns at once;
+the explosion-pass stub copies it into the *inside* byte around the real pass, so the
+shared `CopyGafToContext` returns at once only inside it. Install line: `fxown: the
+engine's effects draw is removed (Vulkan) site.proj=1 site.expl=1 model@0x46BAE0=1
+flash@0x4B8EC0=1 piece@0x4211D0=1 copy@0x4B7F90=1 sfx@0x471F90=1`; on bytes it does not
+know, `… is KEPT`.
 
-Caveats: the engine's frame reaches no pixel of the screen ([gpu-status](gpu-status.html)
-§2.81), so what `fxown` buys is the engine's CPU, at the price of the golden source's
-effects — which is why it is not a play default. The rendertype-2 refraction ball is
+Why nothing is lost: the engine's frame reaches no pixel of the screen ([gpu-status](gpu-status.html)
+§2.81), so what the removal buys is the engine's CPU, and the golden source `tacli shot`
+reads holds no effect. The picture with the engine's effects in it is GDI's, the oracle.
+The projectile pass draws from the CRT `rand` `0x4E4870`, a stream the meteor tick reads,
+already drawn from a varying number of times a tick by the draw path ([sim](engine/sim.html),
+*The meteor shower and the CRT rand*): removing the pass changes that count and adds no
+write. The rendertype-2 refraction ball is
 dropped while owning. The particle layers have their own
 skip byte and detour (§7.5), armed by `tagpu_sfx.on` independently of `tagpu_fx.on`.
 
@@ -435,14 +436,12 @@ alpha gate mirrored; the fog shader darkens them like everything else. A full sp
 bucket or atlas drops the rest of the frame and says so (`fx: DROPPED this frame …`);
 a full atlas resets at the *next* gather, never mid-frame.
 
-Owning the draw is one more prologue detour in `tagpu_fxown.c`: `0x471F90` starts with
-`mov eax,[0x511DE8]` (five position-independent bytes), so the stub is `cmp byte
-[skipSfx],0; jz stolen; ret 8`. The walker is the only draw path (ten call sites, all in
+The engine's own particle draw is one more prologue detour in `tagpu_fxown.c`: `0x471F90`
+starts with `mov eax,[0x511DE8]` (five position-independent bytes), so the stub is `cmp byte
+[removed],0; jz stolen; ret 8`. The walker is the only draw path (ten call sites, all in
 `DrawGameScreen`; the update lives elsewhere), so skipping it removes exactly the pixels
-we now draw and nothing else. The skip byte follows `tagpu_sfx.on` live (set by a
-successful gather, cleared by `passive`, by the file's absence, and by the 90-frame
-heartbeat), independent of the effects skip; tacli auto-arms `tagpu_fxown.on` at launch
-when either `fx.on` or `sfx.on` exists. Install line: `fxown: ARMED … sfx@0x471F90=1`.
+we now draw and nothing else. It is removed with the effects, on every Vulkan launch
+(§5).
 
 Log every 60 frames: `sfx: layers L2=44(wake:44) L6=26(nano:26) L9=9(smoke2:9) sub=…
 fogged= bad= -> sprites= dots=` (the two last counts are quads actually emitted, so

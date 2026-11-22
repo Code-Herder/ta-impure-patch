@@ -40,8 +40,14 @@ def sim_files(ddraw=DDRAW):
     return out
 
 
+# the name a feature gives the landing's two-player network game (tareplay.multiplayer_group), for code only
+# a network game runs, which no test group's recording plays
+MULTIPLAYER = "multiplayer"
+
+
 def fixture_names():
-    return set(json.loads((HERE / "fixtures.json").read_text())["fixtures"])
+    """the names a feature may give its test groups: fixtures.json's, and the two-player game"""
+    return set(json.loads((HERE / "fixtures.json").read_text())["fixtures"]) | {MULTIPLAYER}
 
 
 # ---- the C parser ---------------------------------------------------------------------------

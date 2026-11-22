@@ -5,7 +5,8 @@
    overlay 0x4848E0 with it (we reproduce the fog rule ourselves,
    and its shade remap would rewrite our key fill into grey blobs).
 
-   Two things make this gate different from featown:
+   Two things make this gate different from the feature and effects removals
+   (tagpu_featown.c, tagpu_fxown.c):
 
    1. The terrain repaint is WHY the engine's offscreen never needs clearing.
       Suppressing it outright would leave last frame's garbage under the

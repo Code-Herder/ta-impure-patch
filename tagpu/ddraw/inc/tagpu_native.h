@@ -2,8 +2,7 @@
 #define TAGPU_NATIVE_H
 #include "tagpu.h"
 /* The native unit pass. Armed by tagpu_native.on (token = type, default
-   armcom). Owned units leave the composite path: writeback must skip+wipe
-   them, the owndraw stub wipes instead of restoring. */
+   armcom). */
 void tagpu_native_frame(const TAGPU_FRAME* f);
 /* Render thread, from render_vk.c, when tagpu_vk_frame presented the frame
    gathered under `frame_counter`: the reach witnesses (`out=`, `nopieces=`)
@@ -11,11 +10,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f);
 void tagpu_native_presented(unsigned int frame_counter);
 /* Is this unit natively owned right now? GAME THREAD ONLY: it reads the unit record and its UnitDef, and the
    publisher is what calls it per unit per frame — the answer travels to the
-   render thread as TAGPU_PK_U_NATIVE in the packet, so the marker pass, the
-   composite wipe and the owndraw classifier all act on one answer instead of
-   three threads' reads of the same bytes. */
+   render thread as TAGPU_PK_U_NATIVE in the packet, so the passes act on one
+   answer instead of two threads' reads of the same bytes. */
 int  tagpu_native_owns_unit(const char* unit);
-int  tagpu_native_owns_obj(unsigned int obj3do);
 int  tagpu_native_wrecks_armed(void);
 
 /* the build ghost's standing request for the packet's builds table: set on the

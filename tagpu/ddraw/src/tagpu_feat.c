@@ -45,7 +45,7 @@
 
    Everything above is READ-ONLY: bodies 2 and 3 of the leaf touch no engine
    state at all, and body 1's writes are into the draw-side scratch unit, so
-   owning the leaf (tagpu_featown.c) changes nothing the sim reads. The
+   removing the engine's leaf (tagpu_featown.c) changes nothing the sim reads. The
    animation frames are advanced by the tick, not by the draw
    (GAFGetCurrentFramePtrAddr is a pure read — see tagpu_gaf.c), so features
    keep animating while we own the draw.
@@ -69,7 +69,6 @@
 #include "tagpu_feat.h"
 #include "tagpu_pal.h"
 #include "tagpu_glsl.h"
-#include "tagpu_featown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_native.h"
@@ -237,7 +236,6 @@ int tagpu_feat_armed(unsigned frame_counter)
     s_armed = 0;
     n = tagpu_opt_read("tagpu_feat.on", buf, sizeof buf);
     if (n < 0) {
-        tagpu_featown_set_skip(0);
         s_mfWant = 0;                  /* nothing will take the map's table */
         if (was > 0) flog("feat: disarmed");
         return 0;
@@ -274,7 +272,6 @@ int tagpu_feat_armed(unsigned frame_counter)
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
     consumer_ask();
-    if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
         _snprintf(b, sizeof b,
@@ -870,16 +867,6 @@ static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
     }
 }
 
-/* Every exit from the gather that draws nothing must also hand the draw back:
-   the skip byte is latched from the previous frame, so returning early with it
-   set would leave the engine's leaf detoured and the map bare of features until
-   the 90-frame watchdog in tagpu_featown_flush notices. */
-static int feat_bail(void)
-{
-    tagpu_featown_set_skip(0);
-    return 0;
-}
-
 /* ---- the map edge's mirror -------------------------------------------------
    Past the map, the view shows the MAP'S OWN features reflected with the
    ground under them (tascene-view.html, buildFeatures): the map as its TNT
@@ -1358,14 +1345,14 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     int onMap, mirror;
     unsigned ai;
     KEYRECT key;
-    if (s_armed != 1) return feat_bail();
-    if (!pk || !pk->in_game) return feat_bail();
+    if (s_armed != 1) return 0;
+    if (!pk || !pk->in_game) return 0;
     /* THE ATLAS IS WHAT THIS PASS NEEDS BEFORE IT CAN GATHER, and it is the
        only thing it needs: set the layout up once, since `made` latches, and
        refuse only if that fails. */
     if (!s_atlas.made) {
         atlas_setup();
-        if (!s_atlas.made) return feat_bail();
+        if (!s_atlas.made) return 0;
         consumer_ask();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
@@ -1401,9 +1388,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     mapH = pk->map_h16;
     nCols = pk->sweep_cols;
     nRows = pk->sweep_rows;
-    if (!ptr_ok(fdefs)) return feat_bail();
-    if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return feat_bail();
-    if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return feat_bail();
+    if (!ptr_ok(fdefs)) return 0;
+    if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return 0;
+    if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return 0;
 
     /* THE MAP CHANGED — tell the atlas its contents are meaningless.
        `repack` makes the atlas keep what it holds, and the wall makes it keep
@@ -1423,7 +1410,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     }
     s_areaW = 2 * tagpu_edge_area(pk->map_pxw, mapW / 2);
     s_areaH = 2 * tagpu_edge_area(pk->map_pxh, mapH / 2);
-    if (s_areaW <= 0 || s_areaH <= 0) return feat_bail();     /* a map under 32 px */
+    if (s_areaW <= 0 || s_areaH <= 0) return 0;     /* a map under 32 px */
 
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
        over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):
@@ -1461,7 +1448,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     /* A VIEW WHOLLY PAST THE MAP has no cell of its own to sweep, and still
        has the mirror to draw. */
     onMap = nRows > 0 && nCols > 0;
-    if (!onMap && !mirror) return feat_bail();
+    if (!onMap && !mirror) return 0;
     /* the map's own keys: the engine's clamped rect, whatever the edge (KEYRECT) */
     key.r0 = r0; key.rows = nRows; key.c0 = c0; key.cols = nCols;
     key.span = (float)nRows * (float)nCols;
@@ -1563,13 +1550,6 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     s_c.outside = outside;
     /* the mirror's, after the map's own: its buckets are drawn last */
     if (mirror) mirror_gather(v, fdefs, nDefs, shadowsOn, &key);
-
-    /* we drew this frame: the engine's feature leaf may be skipped. Body 1
-       (3D wreckage) goes through DrawUnit, which only the native pass's wreck
-       gather replaces — without it, owning the leaf would lose every husk. */
-    if (!s_passive && s_ownable) tagpu_featown_set_skip(1);
-    else tagpu_featown_set_skip(0);
-    tagpu_featown_beat(v->frame_counter);
 
     {
         static unsigned last = 0;

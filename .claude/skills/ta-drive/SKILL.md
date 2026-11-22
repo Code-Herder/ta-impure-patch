@@ -336,12 +336,15 @@ Design and engine recipe: `research/notes/scenario-format.md`.
 ## Observing
 
 - **`tacli shot`** — TA's own 8bpp frame, on every renderer. It is the **golden source**: the
-  engine goes on rasterising its whole frame so our passes can be checked against it, but **no
+  engine goes on rasterising its frame so our passes can be checked against it, but **no
   pixel of it reaches the screen**. So "it is in the shot" never means "it is on the screen" —
   and the replay refuses the engine's **world**, so anything handed back to the engine inside the
-  viewport lands in the shot, not on the window. With the play arm set the shot shows units,
-  minimap, sidebar and cursor but **no terrain** (`terrown` key-fills the viewport), minus what
-  `markown` skips; **`terrown.off mark.on=passive` hands it all back** (`references/levers.md`).
+  viewport lands in the shot, not on the window. **On a Vulkan launch the shot holds no unit**:
+  DllMain removes the engine's unit draw, so units, husks and their shadows are only ever ours.
+  With the play arm set the shot shows minimap, sidebar and cursor but **no terrain** (`terrown`
+  key-fills the viewport), minus what `markown` skips; **`terrown.off mark.on=passive` hands those
+  back** (`references/levers.md`). A reference with the engine's units in it is GDI's
+  (`tagpu_gdi.on`).
 - **The presented frame** is the window: `import -window <id> out.png` with the id from
   `tacli ls --json`. No `tacli` verb captures it in-process.
 - **The census** is the first thing to read when something is missing:
@@ -382,7 +385,7 @@ and your instance does not need focus. Details: `research/notes/input-firewall.m
 ## Arming the passes
 
 ```bash
-tools/tacli arm t1 native.on=all owndraw.on      # one file per lever, the value is its text
+tools/tacli arm t1 native.on=all fx.on           # one file per lever, the value is its text
 tools/tacli arm t1 'native.on=all wrecks'        # several tokens: quote them
 tools/tacli arm t1 native.on=off                 # off | 0 | false | - unlink the file
 ```
@@ -416,14 +419,15 @@ land, and the UI layer. Classic++ (restored true colour, lit, shadowed) is one s
 `ghost.on` is a play default and off this bench line because its posed draws perturb a
 measurement.
 
-- **The code-patching halves are auto-armed and must exist at DLL attach.** `owndraw`,
-  `terrown`, `featown`, `fxown` and `markown` install engine detours once, at attach; `launch`
+- **The code-patching halves are auto-armed and must exist at DLL attach.** `terrown`
+  and `markown` install engine detours once, at attach; `launch`
   and `scenario load` write each when its pass is armed and print `auto-armed … must be
   installed at launch, not after`. Arming one on a running instance does nothing; the same holds
   for every lever whose `ARMED` line prints at launch. The draw tokens re-read live.
-- **The `*own` halves hole the golden source** (they stop the engine drawing what our pass draws),
-  so arm them for a frame-time figure, never for a comparison; a stale `owndraw.on` with
-  `native.on` cleared makes the engine draw no units at all. **`terrown` is a play default**, so
+- **The engine draws no unit, feature or effect on a Vulkan launch** whatever is armed: DllMain
+  removes those draws (`owndraw`, `featown`, `fxown`, no lever), so `native.on`, `feat.on` or
+  `fx.on`/`sfx.on` cleared means none of that kind anywhere, on the window or in `tacli shot`;
+  GDI (`tagpu_gdi.on`) is the picture with them. **`terrown` is a play default**, so
   the reference is key-filled with no terrain until `terrown.off` — which costs the zoomed-out fog.
 - **`<pass>.off` does nothing while `<pass>.on` exists.** Remove the arm instead
   (`classicpp.on=off`).

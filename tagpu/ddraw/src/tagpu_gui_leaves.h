@@ -45,8 +45,8 @@ static const int* ctx_or_back(unsigned ctxArg)
    lands the frame at (x - HotX, y - HotY), clipped to ctx's clip rect
    (composite-buffer.md §3). 0x4B8500 is the shaded twin with the same shape. */
 /* Blits that are not UI although they land in the back buffer: the unit
-   composite blit inside 0x459200 (the engine draws its all-key composites
-   while owndraw skips the rasterisers), and the cursor's draw paths (exe map
+   composite blit inside 0x459200 (reached only under tagpu_gdi.on: a Vulkan
+   launch removes the unit draw, tagpu_owndraw.c), and the cursor's draw paths (exe map
    "the two ways the cursor gets drawn"). Anything recorded while the flip is
    running is the cursor too (s_inFlip). Matched on the return address; the
    ranges are the functions' extents read from the disassembly (2026-09-07):

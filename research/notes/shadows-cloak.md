@@ -38,9 +38,9 @@ cross-checked. **[INFERRED]** = my reading, not yet runtime-confirmed.
    for completed units, bit3 ("TShadow"), minus `noshadow`/`canhover`/`floater`
    unit types. Structures — state bit `0x20000000`, nanoframe or completed —
    instead get a **true slant-projected, RLE-compressed shadow cached at
-   `Object3do+0x14`** (`0x45A790`). *Since G13k that branch is redirected under
-   `owndraw all` and the native pass draws the slant projection itself — see
-   "Structure shadows, owned" below.*
+   `Object3do+0x14`** (`0x45A790`). *On a Vulkan launch the engine's unit draw is
+   removed at `0x45AE73`, so no branch of the blit runs, and the native pass draws
+   the slant projection itself — see "Structure shadows, owned" below.*
 5. **Cloak changes only the final blit**: `unit+0x10E & 4` (actively cloaked) →
    the body goes through `0x4B8500` (50 % blend with the background) instead of
    the plain `CopyGafToContext`; enemies never see it at all
@@ -228,8 +228,8 @@ if (TA+0x37F06 & 4)                        ; option "Shadow"
 tree used to call `UnitID` is `unit+0xA6`, the u16 model index the native pass
 reads as `U_MODELID` — corrected 2026-09-03 off the disassembly at `0x4592D5`.)
 The `je` that enters the STRUCTURE branch — `0x4592C6` (path A) and `0x45952C`
-(path B) — is what `owndraw all` flips to a `jmp` (G13k), so every structure then
-takes the COMPLETED branch and its blank composite blits nothing. Two path
+(path B) — is what `owndraw all` flipped to a `jmp` (G13k), so every structure then
+took the COMPLETED branch and its blank composite blitted nothing. Two path
 asymmetries the tree above flattens: path A tests the structure bit *before*
 `digger` and sends a digger structure to COMPLETED (with the TShadow and
 `canhover`/`floater` tests); path B tests `digger` *first* (`0x4594D0`) and
@@ -474,9 +474,10 @@ failed to coincide.
    `0x45958C`, `0x4594DB`), so the guarantee was an instruction rather than an
    inheritance: `exe-reverse-engineering.md` §"The completed-unit shadow's three
    emit sites", and `gpu-status.md` §2.1.]
-   **Neither wipe runs on a unit today:** the classifier skips no unit's rasterise, so every
-   unit's composite is filled, and the three emit sites keep the engine's bytes (the detour's
-   gate had become the constant 0 with the OpenGL strip, and it is deleted).
+   **Neither wipe exists today:** a Vulkan launch removes the engine's unit draw at
+   `0x45AE73`, so no composite, blit or shadow site runs, and under `tagpu_gdi.on` the
+   engine draws every unit and its shadow as stock; the three emit sites keep the engine's
+   bytes.
    **AND ON THE SHIPPED LANE THIS IS `tagpu_vk_unit.c`'s, not a GL pass's** [2026-09-22]. The
    GL twin described above is deleted; the same stencil pair, the same 5-px shift, the same
    `(gy - ay)` ground shift and the same 50 % blend are two Vulkan pipelines recorded before the
@@ -500,10 +501,11 @@ failed to coincide.
    teal silhouette** (`(0,128,128)`, cyan halved) over our terrain — and, being
    in the engine's frame, at the **1× position whatever the zoom**, so zoomed
    out it sat detached beside the body (reported from play on Two Continents:
-   *"metal extractors casting strange shadows"*). Now: `owndraw all` flips the
+   *"metal extractors casting strange shadows"*). The G13k fix: `owndraw all` flipped the
    two `je`s that enter the STRUCTURE branch (`0x4592C6`, `0x45952C`) to `jmp`,
-   so a building takes the COMPLETED branch, whose composite is blank under
-   `all` and blits nothing; the native pass emits the slant projection itself
+   so a building took the COMPLETED branch, whose composite was blank under
+   `all` and blitted nothing (a Vulkan launch now removes the whole unit draw at
+   `0x45AE73`); the native pass emits the slant projection itself
    from the live posed prims — `(x + y/4, −z − y/4)`, pieces with flags
    bit0|bit1 only, 5 px right, 50 % black, gated by the Shadow option bit alone
    (the engine's cached branch never tests TShadow), `noshadow`, and the

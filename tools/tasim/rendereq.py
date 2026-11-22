@@ -6,9 +6,10 @@ the default (Vulkan) renderer, compared tick by tick.
     rendereq.py --compare GDI_RUN VULKAN_RUN     the comparison alone, of two engine runs' folders
     rendereq.py --pacing nodraw --compare DRAWN_RUN NODRAW_RUN
 
-WHY IT IS A QUESTION. Under the Vulkan backend the game thread skips engine draws that GDI runs
-(tagpu_owndraw.c, tagpu_fxown.c, tagpu_featown.c, tagpu_terrown.c, each armed by the render
-thread's own pass). That those draws write no simulation state is argued site by site, not
+WHY IT IS A QUESTION. Under the Vulkan backend the game thread does not run engine draws that GDI
+runs: the unit composite, the feature leaf and the effects passes, removed at attach on every
+Vulkan launch (tagpu_owndraw.c, tagpu_featown.c, tagpu_fxown.c), and the terrain draw tagpu_terrown.c
+skips while the render thread's terrain pass draws. That those draws write no simulation state is argued site by site, not
 checked; the one consumer named so far is the CRT's `rand` 0x4E4870, whose stream is per thread
 and in neither recorded image (engine/sim.md, *The two random streams*): a draw the Vulkan lane
 skips leaves the game thread's CRT stream elsewhere, which changes the simulation only if a

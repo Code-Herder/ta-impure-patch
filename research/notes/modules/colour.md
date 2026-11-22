@@ -66,8 +66,9 @@ supersample box filter's average at an edge) takes the line between their output
 premultiplied, so the curve is applied to the un-premultiplied colour and the coverage put back;
 a texel with no coverage is additive light (the effects' flashes) and takes the curve as it is.
 
-- **One curve per slot, for the target's own reason**: the composite of frame N samples slot N's
-  curve while frame N+1 may be writing one. Slot `i`'s is rewritten only in slot `i`'s `prepare`,
+- **One curve per slot, because the CPU writes it** (the world target itself is one image, which
+  only the GPU writes): the composite of frame N samples slot N's curve while frame N+1 may be
+  writing one. Slot `i`'s is rewritten only in slot `i`'s `prepare`,
   behind the seam's fence wait on that slot and a write-after-read barrier, and only when the
   factor it holds is not this frame's — a Gamma change reaches the screen on the frame that
   carries it, and a steady factor costs nothing.

@@ -2410,6 +2410,16 @@ class Parser(unittest.TestCase):
         bad = text + 'SIM_UNTESTED(a);\nSIM_UNTESTED(gone, "why");\n'
         self.assertEqual(len(tafeat.untested_problems(bad, "x.c")), 2)
 
+    def test_the_two_player_game_is_a_test_group_name(self):
+        # a feature only a network game runs names the landing's two-player game: a known name,
+        # in no fixtures.json entry, so the landing plays multiplayer_group rather than a recording
+        self.assertIn(tafeat.MULTIPLAYER, tafeat.fixture_names())
+        self.assertNotIn(tafeat.MULTIPLAYER, tareplay.fixtures())
+        feats, problems = tafeat.all_features()
+        self.assertEqual([f["fixtures"] for f in feats if f["name"] == "unit_stream"],
+                         [[tafeat.MULTIPLAYER]])
+        self.assertFalse([p for p in problems if "unit_stream" in p])
+
     def test_blank_comments_keeps_code(self):
         text = '#define A 1 /* x */\n"s/*t" // c\nint x; /* y */\n'
         self.assertEqual(tafeat.blank_comments(text),

@@ -109,6 +109,7 @@
 #include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
+#include "tagpu_turn3.h"     /* the effect models turned as ROTATE3_VA turns them */
 #include "tagpu_fxown.h"     /* whether the render thread wants the effect tables */
 #include "tagpu_fogwide.h"   /* the fog source, packed in THIS draw on this thread */
 #include "tagpu_terrown.h"   /* whether the fog site ran in this draw */
@@ -837,9 +838,8 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
        build fraction, so the unit pass takes the answer from the packet rather
        than calling it from the render thread. It is the same predicate the
-       marker pass, the composite wipe and the owndraw classifier ask on the
-       game thread, so all four agree by construction rather than by two
-       threads reading the same bytes. */
+       marker pass and the zoom's pick ask on the game thread, so they agree by
+       construction rather than by two threads reading the same bytes. */
     if (tagpu_native_owns_unit(u)) e->flags |= TAGPU_PK_U_NATIVE;
     (void)ta;
 }
@@ -2643,12 +2643,14 @@ static int fx_in_reach(const int32_t pos[3], int rad, const FXREACH* rc)
     return hx + m >= rc->l && hx - m <= rc->r && pz + m >= rc->t && pz - m <= rc->b;
 }
 
-/* ONE POSED MODEL: every vertex of the node through the engine's own
-   rotation (ROTATE3_VA, called here as 0x46BB1A and 0x4215EE call it), then
-   offset by the effect's 16.16 position the way the draw offsets it before
-   its shifts: rotated x + X, rotated y + altitude, Y - rotated z. This is the
-   engine's arithmetic on the engine's thread, so it is the engine's answer
-   bit for bit -- the x87 precision it runs at is this thread's own. The eye
+/* ONE POSED MODEL: every vertex of the node turned as the engine's rotation
+   ROTATE3_VA turns it (0x46BB1A and 0x4215EE call it), through tagpu_turn3.h,
+   which takes the triple's sines and cosines once a model and writes what
+   ROTATE3_VA writes bit for bit, then offset by the effect's 16.16 position
+   the way the draw offsets it before its shifts: rotated x + X, rotated y +
+   altitude, Y - rotated z. This is the engine's arithmetic on the engine's
+   thread, so it is the engine's answer bit for bit -- the x87 precision it
+   runs at is this thread's own. The eye
    is NOT taken off here: the consumer projects with the eye it draws with,
    and `(v + X - (eye << 16)) >> 16` is `((v + X) >> 16) - eye` exactly.
 
@@ -2664,8 +2666,7 @@ static int fx_in_reach(const int32_t pos[3], int rad, const FXREACH* rc)
 static unsigned fx_model(const char* node, const short turn[3], const int32_t pos[3],
                          int debris, int logo, const FXREACH* rc)
 {
-    typedef void (__stdcall *ROTATE3)(const int* src, int* dst, const short* turn);
-    const ROTATE3 rot = (ROTATE3)(size_t)ROTATE3_VA;
+    TAGPU_TURN3 t;
     const int* vb;
     int shape, nvert, rad, i;
     if (!ptr_ok(node)) { s_cFxLost++; return FX_LOST; }
@@ -2680,10 +2681,11 @@ static unsigned fx_model(const char* node, const short turn[3], const int32_t po
         !fx_room((void**)&s_fmScratch, &s_fmCap, s_nFm + 1u, sizeof *s_fmScratch) ||
         !fx_room((void**)&s_fvScratch, &s_fvCap, s_nFv + (unsigned)nvert, sizeof *s_fvScratch))
         { s_cFxLost++; return FX_LOST; }
+    if (nvert > 0) tagpu_turn3_prepare(&t, turn);
     for (i = 0; i < nvert; i++) {
         int r[3];
         TAGPU_PK_FXVERT* o = &s_fvScratch[s_nFv + (unsigned)i];
-        rot(vb + i * 3, r, turn);
+        tagpu_turn3_apply(&t, vb + i * 3, r);
         o->x   = (int32_t)((uint32_t)r[0] + (uint32_t)pos[0]);
         o->alt = (int32_t)((uint32_t)r[1] + (uint32_t)pos[1]);
         o->y   = (int32_t)((uint32_t)pos[2] - (uint32_t)r[2]);
@@ -3114,8 +3116,8 @@ static void fog_rec_after(const char* ta)
    Vulkan lane; on the GDI lane nothing reads it, and a pack per sim tick there
    is paid for nothing. The renderer is a property of the session, not of a
    frame: `dd_CreateEx` stores `g_ddraw.renderer` on the game thread before the
-   first draw, and its one later store is render_vk.c's hand-over to GDI, after
-   which no frame is drawn from a packet at all.
+   first draw, and nothing stores it again (a Vulkan lane that cannot draw ends
+   the session, render_vk.c).
 
    WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: every
    in-play draw falls inside the lifetimes of both maps, and each index the

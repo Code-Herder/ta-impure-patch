@@ -132,12 +132,12 @@ class TwoPeers:
         k = len(fields)
         return {i: tuple(v[k * i:k * i + k]) for i in range(RECORDS)}
 
-    def launch(self, host_args=(), join_args=(), registry=None, levers=()):
+    def launch(self, host_args=(), join_args=(), registry=None, levers=(), host_levers=()):
         """Both instances made fresh and launched for a network game on the leased port, with
         recmp_create_begin_test.py's settings (no commander's death ends the game) and `registry`'s
         values for each (`{"H": ["Name=Value", ...], "J": [...]}`), then at their main menus. `levers`
         names the lever files each game folder holds, empty, before its launch: the DLL reads a lever
-        at attach."""
+        at attach; `host_levers` are the host's alone."""
         registry = registry or {}
         for suffix, name, extra in (("H", self.host, host_args), ("J", self.join, join_args)):
             subprocess.run([sys.executable, str(self.cli), "rm", name, "--force"], stdout=self.log,
@@ -149,7 +149,7 @@ class TwoPeers:
             gdi.unlink(missing_ok=True)     # unlinked first: a link is never written through
             if not self.gpu:
                 gdi.write_text("")
-            for lever in levers:
+            for lever in tuple(levers) + (tuple(host_levers) if suffix == "H" else ()):
                 (self.gamedir(name) / lever).unlink(missing_ok=True)
                 (self.gamedir(name) / lever).write_text("")
             self.tacli("registry", name, "MultiCommanderDeath=0", "gamespeed=20", *registry.get(suffix, ()))

@@ -98,11 +98,11 @@ messages remain unchanged. The production adapter and native fixture are describ
 
 | Address | Established fact |
 |---|---|
-| `0x4CA6A0..0x4CA77F` | Native player creation wrapper, stdcall `ret 0x1C`. It takes the interface from context `+0x4C5`, constructs a 16-byte DPNAME with flags zero, copies the two names into context `+0x11/+0x21` through `0x4E4760`, and supplies 21 bytes of initial player data. The first sixteen bytes are copied from its argument; byte `+0x10` is zero and WORDs `+0x11/+0x13` come from arguments. Native CreatePlayer, vtable `+0x18`, is called at `0x4CA762`, event NULL and flags zero. The sole direct E8 caller in retail `.text` is `0x451421`; a native ownership record is not unused recorder storage. |
+| `0x4CA6A0..0x4CA77F` | Native player creation wrapper, stdcall `ret 0x1C`. It takes the interface from context `+0x4C5`, constructs a 16-byte DPNAME with flags zero, copies the two names into context `+0x11/+0x21` through `0x4E4760`, and supplies 21 bytes of initial player data. The first sixteen bytes are copied from its argument; byte `+0x10` is zero and WORDs `+0x11/+0x13` come from arguments (stored at `0x4CA740` and `0x4CA74B`), which the one caller pushes as the constants 0 (`0x451375`) and 0x50 (`0x45135F`): the two words the host's accepted branch tests. Impure's redirect of the call writes its play revision over WORD `+0x11` (*What Impure sends*, below). Native CreatePlayer, vtable `+0x18`, is called at `0x4CA762`, event NULL and flags zero. The sole direct E8 caller in retail `.text` is `0x451421`; a native ownership record is not unused recorder storage. |
 | `0x4513A0..0x45143D`, `0x451421` | Read caller span: PlayerInfo receives values from main `+0x37F1B/+0x37F1F` into `+0x8B/+0x8D`, and main `+1/+2` into `+0xA7/+0xA8`; the call passes main `+0x14` as network context. This partial span does not establish every argument's semantic name. |
 | `0x4C9D30..0x4C9D73` | SetPlayerData wrapper, stdcall `ret 0x10`: context `+0x4C5`, vtable `+0x74` at `0x4C9D5F`, flags 2 (`DPSET_GUARANTEED`). A NULL interface or nonzero HRESULT returns 0; zero returns 1. A whole-`.text` E8/E9 scan found no direct callers; it proves no indirect-call absence. |
 | `0x4C9D80..0x4C9DC3` | GetPlayerData wrapper, stdcall `ret 0x10`: the same interface, vtable `+0x50` at `0x4C9DAF`, flags 0 (`DPGET_REMOTE`), and the same HRESULT-to-BOOL result. No direct E8/E9 caller in the sweep. Adjacent `0x4C9CE0..0x4C9D2D` and the start of `0x4C9DD0..0x4C9E40` were also read; the latter uses `0x4D83B0/0x4D85A0` for session-descriptor storage. Their complete indirect ownership paths were not established here. |
-| `0x453D90..0x453F50`, `0x45413F..0x454425` | Read system dispatch and native-create case. Source 0 selects system handling; source/destination IDs are mapped through ten-row scans. In the create case the native ID is message `+8`, initial-data pointer `+0x10`, and size `+0x14`. The size test runs **on the host alone**: `0x454212..0x454262` finds the first row whose PlayerInfo `+0x97` bit 0 is set (the test at `0x454240`) [INFERRED: the host's row], and `0x456030(row)` (`0x454289`) answers 1 only for an active row (`+0x00` nonzero) of type 1 or 2 — a row this peer controls (`0x456030..0x456048`, DISASSEMBLED). After it, `0x45429F` loads the message into `ebp`, and `0x4542A3..0x4542CC` (the bit test at `0x4542C6`) refuses with reason 3 once the controlled player's PlayerInfo `+0x9B` bit 15 is set [INFERRED: the game has begun]. Retail `0x454315` requires **exactly 21 bytes** before branching to `0x45435B`; another size goes to the rejection at `0x45431B`, which, when the joiner's row (`bl`: the second scan, `0x45419F..0x4541F8`, of rows whose type `+0x73` is nonzero for the one whose `+0x04` is the message's ID, stored at `0x4541F4` and loaded at `0x4541FF`; the first scan `0x45415C..0x454184` only decides whether the lookup `0x44FE40` runs) has a nonzero type (`0x454336`), calls `0x453010(+0x04, 8)` (`0x45434E`): the joiner lands on Select Game with no message (MEASURED on Wine). With no such row (`bl` = 10) it would call `0x453010(-1, 8)` at `0x454415`, which sends nothing (`0x453083`); it does not arise, since `0x450A10` (`0x454143`) has just made the joiner's row, type 3 (`0x450B16`), asking DirectPlay its name through `0x4CA7C0` (GetPlayerName, `0x450B6F`). Impure redirects these six bytes to `mp_join_admit`, which takes only the 301 bytes of the key with 1 to 1024 more of the fingerprint tail and sends everything else to `0x45431B`: stock's 21, and an older Impure's 301 with no tail. Every `CreatePlayer` the engine makes — players and hosted AIs alike — is the one call `0x4CA762` inside `0x4CA6A0`, whose only caller is `0x451421`, so a current peer's AIs carry the tail too. A stock host, or an Impure build from before the tail, likewise refuses a current player: reason 8. The message's DPNAME pointers (`+0x20`, `+0x24`) lead outside the frame the recorder's pump received (MEASURED), so the refused player's name is asked of DirectPlay by its ID. The accepted branch still tests initial-data WORDs `+0x11 == 0` and `+0x13 == 0x50` at `0x45435B/0x454362`. When its password branch is armed, `0x454381` compares the unchanged prefix with main `+0x2BE3` through `0x4F8A70`. Calls `0x450A10`, `0x44FFD0`, `0x44FE40` and `0x456030` were read as part of this case; no new names or guarantees about their unread paths follow. |
+| `0x453D90..0x453F50`, `0x45413F..0x454425` | Read system dispatch and native-create case. Source 0 selects system handling; source/destination IDs are mapped through ten-row scans. In the create case the native ID is message `+8`, initial-data pointer `+0x10`, and size `+0x14`. The size test runs **on the host alone**: `0x454212..0x454262` finds the first row whose PlayerInfo `+0x97` bit 0 is set (the test at `0x454240`) [INFERRED: the host's row], and `0x456030(row)` (`0x454289`) answers 1 only for an active row (`+0x00` nonzero) of type 1 or 2 — a row this peer controls (`0x456030..0x456048`, DISASSEMBLED). After it, `0x45429F` loads the message into `ebp`, and `0x4542A3..0x4542CC` (the bit test at `0x4542C6`) refuses with reason 3 once the controlled player's PlayerInfo `+0x9B` bit 15 is set [INFERRED: the game has begun]. Retail `0x454315` requires **exactly 21 bytes** before branching to `0x45435B`; another size goes to the rejection at `0x45431B`, which, when the joiner's row (`bl`: the second scan, `0x45419F..0x4541F8`, of rows whose type `+0x73` is nonzero for the one whose `+0x04` is the message's ID, stored at `0x4541F4` and loaded at `0x4541FF`; the first scan `0x45415C..0x454184` only decides whether the lookup `0x44FE40` runs) has a nonzero type (`0x454336`), calls `0x453010(+0x04, 8)` (`0x45434E`): the joiner lands on Select Game with no message (MEASURED on Wine). With no such row (`bl` = 10) it would call `0x453010(-1, 8)` at `0x454415`, which sends nothing (`0x453083`); it does not arise, since `0x450A10` (`0x454143`) has just made the joiner's row, type 3 (`0x450B16`), asking DirectPlay its name through `0x4CA7C0` (GetPlayerName, `0x450B6F`). Impure redirects these six bytes to `mp_join_admit`, which takes only the 301 bytes of the key with 1 to 1024 more of the fingerprint tail, and of those only data whose WORD `+0x11` is this build's play revision, and sends everything else to `0x45431B`: stock's 21, an older Impure's 301 with no tail, and an Impure's of another revision. A joiner it takes resumes at `0x454362`, the second of the engine's two tests, since the stub has made the first. Every `CreatePlayer` the engine makes — players and hosted AIs alike — is the one call `0x4CA762` inside `0x4CA6A0`, whose only caller is `0x451421`, so a current peer's AIs carry the tail too. A stock host, or an Impure build from before the tail, likewise refuses a current player: reason 8. The message's DPNAME pointers (`+0x20`, `+0x24`) lead outside the frame the recorder's pump received (MEASURED), so the refused player's name is asked of DirectPlay by its ID. Stock's accepted branch tests initial-data WORDs `+0x11 == 0` and `+0x13 == 0x50` at `0x45435B/0x454362`, each failing to `0x4543DD`, a second copy of the reason-8 refusal (`0x453010(+0x04, 8)` at `0x45440B`); `edi`, the data pointer both read, is loaded from the message's `+0x10` at `0x4542B2`. A host that resumes at `0x45435B` after its size test — stock, and every Impure release through v0.6.1 (v0.4 to v0.6.1 redirect the size test, the earlier ones keep stock's) — therefore refuses any joiner whose WORD `+0x11` is not 0, whatever its size. When its password branch is armed, `0x454381` compares the prefix's password bytes (`+0..+0x10`, which Impure leaves as the engine wrote them) with main `+0x2BE3` through `0x4F8A70`. Calls `0x450A10`, `0x44FFD0`, `0x44FE40` and `0x456030` were read as part of this case; no new names or guarantees about their unread paths follow. |
 | `0x4CA749..0x4CA767` | The 30-byte argument/call span is byte-matched before patching. The redirect at `0x4CA762` replaces `call [ecx+0x18]; xor ecx,ecx` with a stub calling `mp_create_player` on the seven already-pushed stdcall arguments. That helper preserves the original 21 bytes and appends a fixed 280-byte public-key record and the fingerprint's 160-byte tail, or the key alone when the fingerprint could not be made ([mods](../modules/mods.html), *The fingerprint*), or forwards the original arguments when key creation fails. The stub restores `xor ecx,ecx` before resuming at `0x4CA767`; the original `test eax,eax; sete cl; mov eax,ecx` still converts HRESULT zero to BOOL one. The stdcall helper consumes the same 28 argument bytes as the original COM method. |
 | `0x4573D0..0x457539` | Existing 58-byte `0x28` sender (the economy map below owns its fields). Both native-source-preserving targeted sends go through `0x451BC0`: the explicit-target call is `0x4574BC`, the bounded ten-row remote-destination loop calls at `0x457515`. The packet starts at stack `+0x0C`; each call pushes 58. Its direct E8 callers are exactly `0x420524`, `0x457380`, `0x4576E5` and `0x4655A1` in the retail sweep. **Preconditions** (`0x4573DA..0x4573F7`): `[rec]` ≠ 0, `rec.+0x73` 1 or 2, `rec.+0x22` = 0, else it sends nothing; a non-NULL target needs only `+0x22` = 0 (`0x4574A2`); a NULL target sends to every active type-3 record whose PlayerInfo `+0x94` = 1 and `+0x22` = 0 (`0x4574CA..0x45752B`) — remote humans, never a remote AI. The source is always `rec.+0x04`, so for a hosted AI's record the message leaves from the AI's own DPID; every test passes for a type-2 record, and stock already calls it for each local type-1/2 record at `0x4576E5` and from `0x4572A0`. `0x451BC0` needs the network bit (`0x451C87`), an active type-1/2 source with `+0x22` = 0 and an active type-3 destination with `+0x22` = 0 (`0x451C94..0x451CDF`); it sends through the reliable queue `0x4619B0` when `[0x506DBC]` ≠ 0, else native Send `0x4C97B0` [INFERRED: the queue keeps `from` on the wire]. Payload: `[0]` 0x28, `[1]` the flag, then the receiver's fields below. [DISASSEMBLED 2026-11-15] |
 | `0x46555F..0x4655B5` | The row index BL must equal main `+0x2A43` before the minimap/radar work and network mode test. Counter `0x51E53C` increments at `0x46558D..0x465595`; every fourth increment reaches `0x4655A1`, with `(EDI,0,0)`. This is a **viewed-record** resource broadcast, not a periodic sender for every hosted AI; Impure redirects the call to send it for each local AI as well (`ai_economy_send`, [hook map](../modules/hook-map.md)). |
@@ -585,7 +585,21 @@ dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the mo
 (the writer ends the list once the message holds 0x200 bytes, a test made after each entry is
 written, `0x48B7E5..0x48B7FB`, so the last entry, the terminator and the round-robin entry can take a
 message past 0x200), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
-for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
+for slot `GameTime % N` (`0x48B3F0`). The **dirty list's walk** starts at the block's first unit every message
+(`0x48B766`, `mov esi,[edi+0x67]`; the block's end test `0x48B76C`) and an entry's slot is its index
+less the block's first (`[[unit+0x96]+0x6F]`); the receiver places it from the block's first slot
+again (`0x48B985..0x48B99A`: `first + delta × 0x118`, the delta signed and `0xFFFF` the end), so the
+entries may come in any order. At about 15 bytes an entry the 0x200-byte budget (`0x48B7F6`) holds
+about 33 a message, and while more units are dirty the block's high slots wait for the round robin:
+MEASURED 2026-11-20 (`tools/mp_agree.py`, two peers of 1499 kbots on Town & Country paused at GameTime
+5400, `tagpu_netlog.on`; each figure the worse of the two peers, a lag the worst over the runs named):
+with our pathfinder 509 units left dirty after the average message, a unit's entry waiting up to 5266
+ticks and its copy standing up to 1408 world units off its owner's (three runs), worst in the top fifth
+of the slots; with the engine's pathfinder 328 left, 2273 ticks and 296 world units (two runs). Impure
+walks the list in turn, in up to four messages a tick (`tagpu_patches.c`, `unit_stream`; *The size
+of a `0x2C` and the step it drives*, below). In turn with one stock-sized message: 297 left, at most
+42 ticks and 157 world units (one run), the lag the same in every fifth of the slots (90th
+percentile 16 to 30). A dirty entry whose type differs from its slot creates the unit
 (`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
 to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
 0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the
@@ -620,6 +634,93 @@ robin's tail after `0x48B40E` at most 211 (`0x48B4A9..0x48B6F2`); none loops on 
 reader `0x415DC0` also loads the next dword whenever a read reaches the end of one
 (`0x415E0C..0x415E3E`; a read from bit 0 of a dword takes it alone, `0x415DF5`), so 29 + 3 + 8 bytes
 cover it and the padding is 48.
+
+**The size of a `0x2C` and the step it drives** [DISASSEMBLED 2026-11-21].
+
+- **The writer.** `0x48B710` builds the message in a bit writer inside its own frame
+  (`sub esp,0x410`; the struct at `[esp+0xC]`): `0x415B60` sets `{+0 dword index 0, +4 bit index 0,
+  +8 capacity 0x100 dwords, +0xC buffer = the struct's own +0x10}`, a 1024-byte inline buffer.
+  `0x415C10` (thiscall `(value, nbits)`, `ret 8`) writes least significant bit first and, when a
+  write fills the buffer's last dword (the index reaching the capacity, `0x415C72`, `0x415D05`),
+  grows it — wrongly: `push 4; call 0x4B4F10` allocates **four bytes** (`0x415C76..0x415C7B`), the
+  doubled capacity is stored into them and the whole old buffer copied over them
+  (`0x415C8F..0x415CAA`); a value that spans two dwords takes the same growth at `0x415D14`.
+  `0x415BB0` is the same growth with the same four bytes (`0x415BB6`; callers `0x48B87A`, `0x48B2EF`,
+  `0x48B361`, `0x44F505`). So a message of 8192 bits or more writes 1 KB over a
+  4-byte heap block; stock never reaches it (0x200 bytes and one entry's overshoot).
+- **Its end.** After the list: `[16] 0xFFFF` (`0x48B80E`), one flag bit set unconditionally
+  (`0x48B81B..0x48B84C`), the round-robin entry (`0x48B200`), the size — `dword index × 4 +
+  (bit index + 7) / 8` — patched into bytes 1 and 2 (`0x48B8A9..0x48B8E3`: `0x415DA0` at `0x48B8C3` and `0x48B8E3`), and
+  `0x451DF0([rec+4], buffer, size)` (`0x48B903`, stdcall, `ret 0xC`). Nothing in `0x48B710` tests the size.
+- **The queue below.** In the default, queued mode `0x451DF0` hands the message to channel 0
+  (`0x461990` → `0x462710`, the channel at `0x513008`). `0x4628D0` appends it to a pool buffer only
+  while `used + length ≤ 0x42A` (`0x462911`), retries once on a fresh buffer, and otherwise drops it
+  ("out of space in buffer!", `0x462996`). Before that, `0x462710` forces a flush (`0x4624A0(1)`,
+  `0x462716..0x46272C`) when the channel's pending bytes `[ch+0x20]` have reached 0x42A or its ring
+  holds 0x400 entries, and drops the message when the ring is not empty afterwards
+  (`0x462731` → `0x46284B`); the flush sends the ring's entries that share the first entry's key
+  (`0x46250D`, `0x462570`) and puts the others back (`0x4625CE..0x4625EE`) [the key not identified]. **A message is never split: one over 0x42A = 1066
+  bytes is always dropped.** Every message of every local record shares the channel.
+- **The receiver's step.** After a `0x2C`'s list `0x48B920` (stdcall `(rec, message)`, `ret 8`; its
+  one caller the dispatcher's case, `0x4553F4`) walks the sender's whole block
+  (`0x48BA28..0x48BA5C`) and calls, for every live unit with a mover, the movement pass `0x43DD20`
+  and the sight pass `0x48A870`: a remote unit steps **once a message received**, not once a tick
+  of the receiver's own clock. It then reads the flag bit (`0x48BA5E..0x48BA97`): set, the round
+  robin's entry follows (`0x48BA9F`); clear, the message ends (`0x48BAC8`) — a path stock's sender
+  never takes. MEASURED 2026-11-21 (`.data` archive `stream-rate`, the fight battle of
+  `tools/mp_agree.py`): a sender made to send two or four whole `0x2C`s a tick put the other peer's
+  copies up to 842 world units ahead of their owners, with about as many messages received as sent
+  (host to joiner 10 783 sent and 10 794 received, joiner to host 10 799 and 10 781; the two peers'
+  150-tick windows are not aligned, so the counts agree to a few messages and no closer).
+
+**What Impure sends** (`tagpu_patches.c`, `unit_stream`; both sites in the fail-closed table). The
+dirty list is walked in turn, from the unit the last tick stopped at. Before each entry the message
+must have room for the largest entry (`16 + typeBits + 213` bits, the air payload) and the largest
+end after it (`16 + 1 + typeBits + 211`) under 8191 bits; when it has not, the message ends with
+its flag **clear**, is sent, and the list continues in a new message on the same writer, up to
+**four messages a tick a record** (the owner's bound on a tick's traffic, 2026-11-21); the tick's
+last message is the engine's own, flag set, round robin after it. The receiver's sweep is taken only
+for a message whose flag is set (branch at `0x48BA28`), so a tick's messages step the sender's units
+once. The largest message is 1024 bytes: under the writer's growth and under the queue's 0x42A.
+MEASURED 2026-11-21, two peers of 1499 kbots, each army ordered to move as one ten times, 150 ticks
+apart (`mp_agree.py --marches 10`), the worse peer:
+
+| a tick's messages | a unit's longest wait | mean | left dirty, mean | bytes a second | a tick's most |
+|---|---|---|---|---|---|
+| one of 0x200 bytes, in turn | 42 ticks | 17.7 | 854 | 15 KB | 557 B |
+| one of 960 bytes | 22 | 7.8 | 474 | 23 KB | 1005 B |
+| up to four | 4 | 2.2 | 81 | 27 KB | 3.9 KB |
+| up to eight | 2 | 1.2 | 29 | 29 KB | 7.8 KB |
+
+The queue refused none of them and the peers agree in every row. With **two local records a peer**
+— each peer its player and one hosted AI seat, all four with 1499 units ordered onto the centre, so
+that a peer's two streams go through the one channel, up to 3.9 KB a tick each — the queue refused
+none either (0 of 5781 and 5310 messages) and a unit's entry waited 4 ticks at most. **Every peer
+of a game plays one revision.** A receiver without the branch at `0x48BA28` steps the sender's units
+once a message, up to four times a tick, so the sender's format is not one an older build can be
+sent. The join data's WORD `+0x11`, which stock sends and tests as 0, carries Impure's **play
+revision** (`MP_PLAY_REVISION` in `tagpu_recorder.c`, 1 for this format): the host's `mp_join_admit`
+takes only its own, and a host from before the number refuses it — v0.5.1 to v0.6.1 by stock's
+test of the WORD for 0 (`0x45435B`), which they resume at; v0.4, v0.5 and stock before that by the
+data's size — so neither build gets into the other's room. The sender uses its several messages
+only while the process **holds** the revision (`tagpu_rec_mp_revision_held`: the recorder's network
+sites are in, so every player it makes carries the number and its host test asks it; and the test
+lever `tagpu_modprint_stock.on`, under which its players carry stock's data, is off). Otherwise a
+tick is one message with the flag set, which any receiver steps as stock's. A player whose key
+could not be made sends the engine's 21 bytes at the revision, which every host refuses: a current
+one by the size, any other by the WORD. MEASURED 2026-11-21 on Wine (`tools/mods/modmp.py --only
+older|olderhost`, v0.6.1's and v0.5's release DLLs as the older build): a v0.6.1 joiner is refused
+by this build's host, *JOIN refused: older Impure build*, and logged `play revision 0, this build's
+is 1`; this build's joiner lands back on Select Game from a v0.6.1 host and from a v0.5 host; two
+peers of this build join and play (`mp_agree.py --marches 10`, a unit's wait 4 ticks at most, the
+peers agree); with the host under the lever (`--host-as-stock`) the host sent one message a tick at
+most (a unit's wait 21 ticks at most), the joiner up to four, and the peers agree. Not run: a
+launch whose network sites do not go in. **Not
+measured:** a link that
+loses packets (the channel keeps a sent buffer about four seconds for a resend, `0x462860(4000 ms)`
+at `0x460E7F`, and past 0x22 buffers reuses one still inside that window, `0x461BED` — whether a
+burst of four messages a tick meets that under loss is open [INFERRED from the disassembly, not
+run]); more than two peers; aircraft, whose entries are larger.
 
 **Where each stub continues and drops** (DISASSEMBLED 2026-09-25). The span is the stock bytes
 compared before any write; the branch sits at its first clean 5-byte boundary.

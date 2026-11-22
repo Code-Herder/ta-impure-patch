@@ -344,26 +344,28 @@
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },
     {
-      "name": "pass-full-gdi",
-      "about": "The retail game whose lane is rebuilt in a live battle with the driver refusing every allocation: the retries are spent on real refusals and the session goes to GDI, whose screen shows the engine's side panel.",
+      "name": "pass-full-ends",
+      "about": "The retail game whose lane is rebuilt in a live battle with the driver refusing every allocation: the retries are spent on real refusals and the session ends as designed -- the log says the lane cannot draw, Impure's box says the game has to close, and dismissing it ends the process with code 1.",
       "add": [],
       "refuse_in_battle": "keep",
       "device_full": "keep",
       "goal": {
-        "outcome": "impure-active",
-        "tadr_ran": false,
-        "refuse_lever": true
+        "outcome": "impure-ended",
+        "tadr_ran": false
       },
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },
     {
       "name": "pass-card-full",
-      "about": "The retail game in a live battle on a card vkfill has really filled, on Windows only: the lever brings the lane down once and what it gave back is taken. The game has to go on: the lane back if the driver gives it memory, as WDDM does, or GDI with the engine's side panel if the driver refuses.",
+      "about": "The retail game in a live battle on a card vkfill has really filled, on Windows only: the lever brings the lane down once and what it gave back is taken. Either designed road meets the goal: the lane back and the game going on if the driver gives it memory, as WDDM does, or the session's end -- the log's line and Impure's box -- if the driver refuses.",
       "add": [],
-      "refuse_in_battle": "keep",
+      "refuse_in_battle": "once",
       "fill_device": true,
       "goal": {
-        "outcome": "impure-active",
+        "outcome": [
+          "impure-active",
+          "impure-ended"
+        ],
         "tadr_ran": false,
         "refuse_lever": true
       },
@@ -382,14 +384,13 @@
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },
     {
-      "name": "pass-refused-gdi",
-      "about": "The retail game with the UI pass refused its resources every time from a live battle on: the lane's retries are spent, the session goes to GDI, and GDI's screen shows the engine's side panel.",
+      "name": "pass-refused-ends",
+      "about": "The retail game with the UI pass refused its resources every time from a live battle on: the lane's retries are spent and the session ends as designed -- the log says the lane cannot draw, Impure's box says the game has to close, and dismissing it ends the process with code 1.",
       "add": [],
       "refuse_in_battle": "keep",
       "goal": {
-        "outcome": "impure-active",
-        "tadr_ran": false,
-        "refuse_lever": true
+        "outcome": "impure-ended",
+        "tadr_ran": false
       },
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },

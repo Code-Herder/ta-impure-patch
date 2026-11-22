@@ -37,10 +37,9 @@
                  because such a piece still draws in the body range.
 
    The WIRE range is the bake's vertex pairs, one per edge, and VS does not
-   draw it: tagpu_vk_unit.c poses each pair on the CPU into a line record --
-   two line-grid pixels decided by tagpu_line.h's rule, their depth keys one notch
-   nearer (+0.15), their heights -- and `WVS` below draws the records as bands
-   in the nanoframe's animated blue.
+   draw it: `WVS` below draws it, one instance an edge, posing both ends as VS
+   poses a vertex and placing them on the line grid by tagpu_line.h's rule, as
+   bands in the nanoframe's animated blue.
 
    THE SNAP ROUNDS ONTO THE 16.16 GRID FIRST, and that is the whole reason the
    slant can be ported at all. `xi = v[0] >> 16` is an arithmetic FLOOR of the
@@ -55,8 +54,8 @@
    and the wire do not NEED it the way the slant does: their projection is
    affine and continuous in the value, so the same 2 LSB moves a vertex 3e-5
    px. They take it anyway, because it is the vertex's representation -- VS
-   rounds before any range reads the vertex, and tagpu_vk_unit.c rounds the
-   wire's the same way on the CPU.
+   rounds before any range reads the vertex, and WVS rounds the wire's ends the
+   same way.
 
    16.16 is exactly representable in float32 while |model unit| < 128 (128 x
    65536 = 2^23, where the float32 spacing is still 0.5 and `+ 0.5` is exact);
@@ -79,8 +78,7 @@
    unit rather than a size every unit pays. The pass arms only on a device
    that can hold one unit at that ceiling (`tagpu_posedraw_ready`); the
    consumer checks each frame's packed size against the device's own limit.
-   When the pass refuses to arm it says so (`tagpu_posedraw_refused`), and
-   `owndraw` repeats the refusal once in its own words.
+   When the pass refuses to arm it says so, in its own `posedraw:` line.
 
    THE EFFECTS MODELS ARE `FXVS`, the second vertex stage: no attributes and
    no pose, a run of the engine's own rasterisers per six vertices, read out
@@ -113,6 +111,7 @@
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
 #include "tagpu_pal.h"
 #include "tagpu_glsl.h"     /* TAGPU_GLSL_BAND_FN, for WVS */
+#include "tagpu_line.h"     /* TAGPU_LINE_MAXC, for WVS */
 #include "tagpu_posebake.h"
 
 #define STR2(x) #x
@@ -141,18 +140,9 @@ static void plog(const char* s)
    whether it can run at all, which `tagpu_posedraw_ready()` answers, and
    re-asks when the device changes.
 
-   ONE HALF OF THAT ANSWER IS PUBLISHED TO THE GAME THREAD: whether the pass
-   has tried and refused, which `tagpu_owndraw_classify` reads to log the
-   refusal once. `s_state` is one aligned int that only the render thread
-   writes, and the game thread's read decides nothing but whether a log line
-   is written, so a stale value moves that line by a frame and cannot change
-   a draw. */
+   `s_state` is the render thread's alone. */
 static int    s_state;          /* 0 untried, 1 ready, 2 refused, 3 building */
 
-/* 1 only once the pass has TRIED and failed — a driver this build cannot run
-   on. `s_state` is also 0 for the frame or two before the render thread has
-   built anything, and that is not a refusal. */
-int tagpu_posedraw_refused(void) { return s_state == 2; }
 
 /* ---- THE VULKAN LANE'S HAND-OVER -----------------------------------------
    The contract is tagpu_posedraw.h's; this is the state behind it.
@@ -237,13 +227,6 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
     return 1;
 }
 
-/* the consumer's report that it painted at least one structure slant this
-   frame, and the producer's read-and-clear of it -- tagpu_posedraw.h states
-   the ordering that makes the one-frame lag a property of the loop rather than
-   of who happened to run */
-static int s_slantDrew;
-void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
-
 /* NOT GATED ON THE ARM STATE: `tagpu_posedraw_ready` first arms the pass later
    in the same frame than the packet is checked, so a gate here would let the
    arming frame -- the one most likely to be truncated, at load -- through.
@@ -280,7 +263,6 @@ typedef char pd_maxhand_covers[(TAGPU_PD_MAXHAND >= (int)(TAGPU_PK_MAX_UNITS +
     TAGPU_PK_MAX_WRECKS + 1u + TAGPU_PK_MAX_BUILDS + TAGPU_PK_MAX_FXMODEL)) ? 1 : -1];
 typedef char pd_maxfx_covers[(TAGPU_PD_MAXFX >= (int)TAGPU_PK_MAX_FXMODEL) ? 1 : -1];
 typedef char pd_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
-int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; return v; }
 
 /* ---- the shader ---------------------------------------------------------
    NEITHER OF THE TWO BELOW HAS A C REFERENCE, and neither is dead code.
@@ -310,6 +292,8 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
     "uniform float uShNeutral;\n"           /* the neutral shade row          */ \
     "uniform int uDepthPass;\n" \
     "uniform int uPass;\n"                  /* TAGPU_GLSL_PASS_*              */ \
+    "uniform float uLineS;\n"               /* WVS: zoom * ss, one float      */ \
+    "uniform float uLineSs;\n"              /* WVS: the line grid's ss        */ \
     "uniform mat4 uShadowMat;\n" \
     TAGPU_GLSL_UNIT_BLOCK
 
@@ -583,18 +567,39 @@ static const char* FXVS =
 
 /* THE NANOFRAME WIRE'S VERTEX STAGE, paired with tagpu_native::FS as VS and
    FXVS are, and declaring their uniforms and outputs in their order for the
-   same reason. Six vertices a record, a band over one edge (tagpu_glsl.h
-   `taBand`); the fragment stage keeps the line-grid pixels tagpu_line.h's
-   rule lights between the record's two ends (`vLineOn` 1) -- `0x4CC7AB`'s
-   walk on the world target's own pixels, thickened to `ss` of them.
+   same reason. One INSTANCE an edge, six vertices a band over it (tagpu_glsl.h
+   `taBand`); the fragment stage keeps the line-grid pixels tagpu_line.h's rule
+   lights between the two ends (`vLineOn` 1) -- `0x4CC7AB`'s walk on the world
+   target's own pixels, thickened to `ss` of them.
 
-   A RECORD, three vec4 from `uWireBase + 3 * edge` in the pose buffer, made on
-   the CPU by tagpu_vk_unit.c from the bake's WIRE pairs, this unit's pose
-   and its visibility words -- only edges of visible pieces on painted faces
-   are there, so nothing here has to hide a vertex:
-     r0  the two ends' line-grid pixel centres after the zoom (tagpu_line.h)
-     r1  the two ends' depth keys, `uEnc + md + 0.15`, then their heights m.y
-     r2  the two ends' projected offsets from the anchor, (m.x, -m.z - m.y/2)
+   THE EDGE IS THE BAKE'S, READ AS THE BODY READS ITS VERTICES. The unit's
+   geometry and material streams are bound at INSTANCE rate with a stride of
+   two vertices, from the WIRE range's first vertex (tagpu_vk_unit.c
+   `wire_layout`), so instance i is the bake's pair 2i, 2i+1: both rest
+   positions and pieces, and both skip flags.
+
+   AN EDGE IS NOT DRAWN -- its six vertices all land outside the same clip
+   plane -- when either end is on a face the engine paints nothing for
+   (`aSkip`), its piece is hidden (the visibility word under 0.5), or an end
+   lies past tagpu_line.h's TAGPU_LINE_MAXC box. Both ends share a face and a
+   piece, so the first two tests agree for them.
+
+   THE ENDS ARE EXACT, BY CONSTRUCTION, AGAINST tagpu_vk_unit.c `wire_ref`,
+   which computes the same float operations in the same order on the CPU for
+   the A/B frame's line list (tools/line-oracle.py). Everything on the path to
+   the line-grid pixel is `precise` -- no operation is contracted into a fused
+   multiply-add -- and Vulkan rounds an add and a multiply correctly, so each
+   step rounds once, as the CPU's does:
+     the pose     m = ((r.x * x + r.y * y) + r.z * z) + r.w, each row
+     the grid     m = floor(m * 65536 + 0.5) * 2^-16, exact while |m| < 128
+     the offset   q = (m.x, (-m.z) - m.y * 0.5) from the anchor
+     the pixel    uWireKi + floor(uWireKf + q * uLineS)
+   `uWireKi` + `uWireKf` is the anchor's line-grid position ss * Z(anchor),
+   computed once a unit in double and split into whole pixels and a fraction
+   (tagpu_vk_unit.c's `wire_anchor`; `unit_block` copies it into the block), so the float sum carries only an offset of a few hundred
+   pixels and its fraction. tagpu_line.h's rule, floor(ss * Z(anchor + q)),
+   is that sum with Z's affinity taken apart.
+
    THE +0.15 puts the wire one notch NEARER than the surface it traces, so it
    wins against the solid part of the model: md reaches +-1.8 and the bias is
    0.15, against the 2.0 half-gap between depth rows (emit_wire).
@@ -609,6 +614,12 @@ static const char* FXVS =
    segment's depth where the fragment projects onto it. */
 static const char* WVS =
     "#version 330 core\n"
+    "layout(location=0) in vec3 aPosA;\n"
+    "layout(location=1) in float aPieceA;\n"
+    "layout(location=2) in vec3 aPosB;\n"
+    "layout(location=3) in float aPieceB;\n"
+    "layout(location=4) in float aSkipA;\n"
+    "layout(location=5) in float aSkipB;\n"
     "layout(std430) readonly buffer Pose {\n"
     "  vec4 uPose[];\n"
     "};\n"
@@ -618,31 +629,64 @@ static const char* WVS =
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
     TAGPU_GLSL_BAND_FN
-    "void main(){\n"
-    "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
-    /* THE INDEX IS CLAMPED TO THE BOUND RANGE, as VS's are: the consumer
-       sizes the pose buffer to hold every record it writes, so on data that
-       reaches a draw this is a no-op */
+    /* one end, posed and placed: its 16.16 posed vertex `m`, its line-grid
+       pixel `e`, and whether it is drawn. Every index into `uPose` is clamped
+       to the bound range, as VS's are: on data that reaches a draw the clamps
+       are no-ops (the bake's piece index stays below the unit's pose count). */
+    "bool wEnd(vec3 a, float piece, float skip, out vec3 m, out ivec2 e){\n"
     "  int pl = uPose.length() - 1;\n"
-    "  int b = clamp(uWireBase + r * 3, 0, pl - 2);\n"
-    "  vec4 r0 = uPose[b], r1 = uPose[b + 1], r2 = uPose[b + 2];\n"
+    "  int pi = int(piece + 0.5);\n"
+    "  int pb = clamp(uRowBase + pi * 3, 0, pl - 2);\n"
+    "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
+    "  vec4 r0 = uPose[pb], r1 = uPose[pb + 1], r2 = uPose[pb + 2];\n"
+    "  precise vec3 pm = vec3(((r0.x * a.x + r0.y * a.y) + r0.z * a.z) + r0.w,\n"
+    "                         ((r1.x * a.x + r1.y * a.y) + r1.z * a.z) + r1.w,\n"
+    "                         ((r2.x * a.x + r2.y * a.y) + r2.z * a.z) + r2.w);\n"
+    "  precise vec3 pg = floor(pm * 65536.0 + 0.5) * (1.0 / 65536.0);\n"
+    "  precise vec2 pq = vec2(pg.x, (-pg.z) - pg.y * 0.5);\n"
+    "  precise vec2 pu = uWireKf + pq * uLineS;\n"
+    "  m = pg;\n"
+    "  e = uWireKi + ivec2(floor(pu));\n"
+    "  return skip < 0.5 && pvis >= 0.5 &&\n"
+    "         all(lessThanEqual(abs(e), ivec2(" TAGPU_GLSL_STR(TAGPU_LINE_MAXC) ")));\n"
+    "}\n"
+    "void main(){\n"
+    "  int c = gl_VertexID;\n"
+    "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
+    "  vec3 mA, mB;\n"
+    "  ivec2 eA, eB;\n"
+    "  bool okA = wEnd(aPosA, aPieceA, aSkipA, mA, eA);\n"
+    "  bool okB = wEnd(aPosB, aPieceB, aSkipB, mB, eB);\n"
+    "  if (!(okA && okB)) {\n"
+    "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
+    "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vShQ = vec4(0.0); vWorld = vec2(0.0);\n"
+    "    vEnc = 0.0; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0); vShW = vec3(0.0);\n"
+    "    vLine = vec4(0.0); vLineOn = 0;\n"
+    "    return;\n"
+    "  }\n"
+    /* the line grid's pixel centres in game units, (T + 0.5) / ss: the
+       fragment stage takes T back as floor(c * ss), half a pixel from either
+       neighbour, which no float error reaches (tagpu_line.h) */
+    "  vec4 line = (vec4(vec2(eA), vec2(eB)) + 0.5) / uLineSs;\n"
     "  float t;\n"
-    "  vec2 p = taBand(r0.xy, r0.zw, c, t);\n"
-    "  float enc = mix(r1.x, r1.y, t);\n"
-    "  float vy = mix(r1.z, r1.w, t);\n"
+    "  vec2 p = taBand(line.xy, line.zw, c, t);\n"
+    "  float mdA = clamp((2.0 * mA.y - mA.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
+    "  float mdB = clamp((2.0 * mB.y - mB.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
+    "  float enc = mix(uEnc + mdA + 0.15, uEnc + mdB + 0.15, t);\n"
+    "  float vy = mix(mA.y, mB.y, t);\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
     /* the wire's colour is per UNIT (the nanoframe's animated blue), on the
        flat path, on the neutral SHD row the bake gives every wire vertex */
     "  vUV = vec2(-1.0); vFC = vec2(uWire, -1.0);\n"
     "  vShade = uShNeutral / 31.0; vShQ = vec4(vShade);\n"
-    "  vWorld = uAnchor.zw + mix(r2.xy, r2.zw, t);\n"
+    "  vWorld = uAnchor.zw + mix(vec2(mA.x, -mA.z - mA.y * 0.5),\n"
+    "                            vec2(mB.x, -mB.z - mB.y * 0.5), t);\n"
     "  vEnc = enc; vVY = vy; vNrm = vec3(0.0, 1.0, 0.0);\n"
     /* the shadow-space point of a wire is its own height over its own
        world point: the unit's uCast is its body's */
     "  vShW = vec3(vWorld.x, vy, vWorld.y + vy * 0.5);\n"
-    "  vLine = r0; vLineOn = 1;\n"
-    "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
+    "  vLine = line; vLineOn = 1;\n"
     "}\n";
 
 /* the depth stage writes no fragment at all and discards nothing, so a
@@ -676,12 +720,9 @@ int tagpu_posedraw_ready(void)
         }
         return s_state == 1;
     }
-    /* 3 = BUILDING, not 2 = refused. This blocks re-entry exactly as 2
-       would, but `tagpu_posedraw_refused()` stays false while we load entry
-       points and query the block size — a window the GAME thread's owndraw
-       classify runs through many times a frame, in which a 2 here would latch
-       its one-shot "the posed unit program REFUSED to arm" on a perfectly
-       healthy run. Every real refusal below sets 2 before returning. */
+    /* 3 = BUILDING, not 2 = refused: it blocks re-entry exactly as 2 would,
+       while the entry points load and the block size is queried. Every real
+       refusal below sets 2 before returning. */
     s_state = 3;
 
     /* THIS PASS ARMS WITHOUT A PROGRAM OF ITS OWN. It never rasterises

@@ -239,9 +239,11 @@ DECLINE_LEVER = "tagpu_rec.decline"
 EXACT_LEVER = "tagpu_rec.exact"
 # A Worker with `gdi` set launches with this lever in its game folder: the GDI backend, the engine's
 # own stock draw path, and no Vulkan device (tagpu_cfg.c, dd.c). The AI tools' games render so by
-# default, take no GPU tokens and are compared only with other GDI games: the Vulkan lane makes the
-# game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
-# write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
+# default, take no GPU tokens and are compared only with other GDI games: on a Vulkan launch the game
+# thread does not run engine draws that GDI runs (the unit composite, removed at attach by
+# tagpu_owndraw.c; the features and effects, removed by tagpu_featown.c and tagpu_fxown.c), and that those
+# draws write no simulation
+# state is argued per site, not checked (research/notes/modules/impai.md)
 GDI_LEVER = "tagpu_gdi.on"
 # A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_nodraw.c), a test's GDI pacing,
 # accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the turbo's and
@@ -6054,6 +6056,10 @@ def cmd_landing(args):
         say(w_)
     changed = git("diff", "--name-only", f"{base}...HEAD").split()
     multiplayer, mp_impai = wants_multiplayer(changed), wants_impai_multiplayer(changed)
+    if tafeat.MULTIPLAYER in fx:            # a changed feature that only a network game runs
+        fx.discard(tafeat.MULTIPLAYER)
+        multiplayer = True
+        say("tareplay landing: a changed feature names the two-player game")
     if not (gated_any or multiplayer):
         print("tareplay landing: nothing gated changed")
         return 0
@@ -6170,7 +6176,9 @@ def cmd_broad(args):
                    if f["line"] <= fn[1] <= f["end"]]
             if fns and not any(k in reached_fns for k in fns):
                 lines.append(f"UNCOVERED feature {f['name']} ({f['file']}:{f['line']}): none of "
-                             f"{' '.join(f['fixtures'])} reached it")
+                             f"{' '.join(f['fixtures'])} reached it"
+                             + (" (the two-player game is the landing's; this tier does not play it)"
+                                if tafeat.MULTIPLAYER in f["fixtures"] else ""))
     sites, changed, tables = set(), set(), None
     for name, fx in run.fx.items():
         Ts = fx["Ts"]

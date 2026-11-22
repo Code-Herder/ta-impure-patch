@@ -367,7 +367,8 @@ more at 1920 × 1080. The world target at `ss=2` is 3840 × 2160 in three frame 
 pixels, plus the seam's attachment at the swapchain's size; 121 MiB over those is about four
 more bytes a pixel, so the driver lays `D32_SFLOAT_S8_UINT` out at eight bytes a pixel where
 `D24_UNORM_S8_UINT` takes four [INFERRED from the total]. It scales with the target: a 3840 ×
-2160 game at `ss=2` would hold about 380 MiB more for the world target alone. Since the two
+2160 game at `ss=2` holds about 127 MiB more for its world target, which is one depth image for
+every frame slot (it was one a slot when this was measured, three times that). Since the two
 formats draw the same picture (above), what float buys is the one format on every GPU, and the
 price is this memory where D24 exists.
 
@@ -406,7 +407,7 @@ the map of what implements it.
 | `tagpu_line.h` `tagpu_line_nudge` | an end moved by whole game pixels of the ZOOMED frame, `n·ss` line-grid pixels, after `tagpu_line_px` has placed it; re-bounded to `TAGPU_LINE_FAR` after the move. For a line the engine draws a fixed pixel beside another, whose offset belongs to the screen: an end nudged by one and its neighbour differ by exactly `ss` = `w`, so the two bands abut at every zoom, and at 1× `floor(ss·(k + 0.5)) − ss = floor(ss·(k − 0.5))` is the engine's own offset |
 | `tagpu_order.c` `draw_build` | `0x438C00`'s eight lines in integers, in its order (exe-reverse-engineering.md). The colour-B lines are the engine's ends; the colour-A lines are those same ends nudged by the engine's `±1` in zoomed game pixels (`tagpu_mark_emit_line`'s `nudge`), where the engine takes it in 1× pixels. Taken in the 1× frame, that pixel is `zoom` screen pixels, and the pair drew `zoom − 1` pixels apart at a zoom-in (3 px at 4×; at a fractional wheel level the gap differs from edge to edge with each end's own rounding) and on one pixel at a zoom-out. MEASURED 2026-09-25 on `marker-mix` with a queued ARMSOLAR, `ss = 2`, 1024×768: the frame at 1× byte-identical to the build before (0 px in the viewport); at 0.5, 0.8, 1.5, 2, 2.37, 3 and 4 the two lines one contiguous run across every edge, where the build before had a gap of 1–3 px from 2× up |
 | `tagpu_fx.c` `LVS`/`LFS`; `tagpu_vk_fx.c` | the `LINES` bucket holds one record a line at the bucket stride, drawn `vkCmdDraw(6, n, 0, first)`; `uGrid` at 64 of the 80-byte fragment block, `ss` from the hand-over |
-| `tagpu_vk_unit.c` `wire_records`; `tagpu_posedraw.c` `WVS` | the wire posed on the CPU (the body's 16.16 rounding and projection, key + 0.15) into three-vec4 records after the pose words and before the effects runs, each end put on the line grid by `tagpu_line_px`; `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 256 of `tagpu_native::FS`'s 272-byte block |
+| `tagpu_posedraw.c` `WVS`; `tagpu_vk_unit.c` `wire_layout`, `wire_anchor`, `wire_ref` | the wire posed on the device, one instance an edge out of the unit's own geometry and material streams bound at instance rate, two vertices a step: the body's 16.16 rounding and projection, key + 0.15, each end put on the line grid as `uWireKi + floor(uWireKf + q·uLineS)` — the anchor's `ss·Z(anchor)` split in double once a unit, every step after it `precise` and rounded once (units.md, *The nanoframe wire*); `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 208 of `tagpu_native::FS`'s 224-byte block. `wire_ref` places the same ends on the CPU for the A/B frame's list alone |
 | `tagpu_native.c` FS | `vLineOn`/`vLine`: the line test for the wire; 0 from `VS` and `FXVS` |
 
 **The invariant, and why each part holds by construction.** The pixel decision takes only
@@ -455,8 +456,9 @@ G21a's depth clip control also gone, the device asks for no optional extension b
 also writes `tagpu_<pass>_lines.txt` — `# <pass> <grid w> <grid h> <w>`, then `ax ay bx by col`
 a line, the ends as integer LINE-GRID pixels. The marker and effects lists carry the clip rect as
 well (`# <pass> <grid w> <grid h> <w> <L> <T> <R> <B>`, line-grid pixels) and the ends BEFORE
-the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is its records
-as drawn. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
+the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is its ends as
+`tagpu_vk_unit.c` `wire_ref` places them on the CPU, by the float operations `WVS` performs on the
+device, so the oracle holds the device's ends to a reference computed apart from them. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
 walk of that list, clipping first — with `line-band-check.py`'s transcription, not the C —
 thickening to `w`, and dropping what lies outside the rect, as the viewport scissor does. It
 refuses a capture that is not the line grid rather than resampling it.
@@ -699,7 +701,7 @@ every frame, so a refusal is settled once. How depends on what the picture loses
 
 | the pass | what its refusal does | when it comes back |
 |---|---|---|
-| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread) then hands the session to GDI, whose picture is whole. `VK_RETRY_EARNED_FRAMES` (18 000 presented frames since the last failure, five minutes at 60 Hz) earns the spent retries back, so the budget bounds a lane that keeps failing and not the failures of a long session |
+| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread) then ends the session: `vk: the lane cannot draw - the session ends`, a box saying so, and the process terminated (`vk_give_up`). Nothing hands a Vulkan session to GDI; GDI is `tagpu_gdi.on`'s, at launch. `VK_RETRY_EARNED_FRAMES` (18 000 presented frames since the last failure, five minutes at 60 Hz) earns the spent retries back, so the budget bounds a lane that keeps failing and not the failures of a long session |
 | `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down`, or a swapchain rebuild that changes the extent, image count or format |
 | `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the same |
 | the HUD and the wiki | `tagpu_hudstate_refuse` | the same (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
@@ -729,7 +731,7 @@ there; on Windows the same line read 1 326 MB free at start.
 
 `vk_down` gives back everything the process holds on the device, which is the only memory the lane
 can answer for. A GPU that something else has filled stays full: the retries then spend their
-budget in about a second and the session is on GDI, with its slow-renderer warning on screen.
+budget in about a second and the session ends with the box.
 
 **What the lane's return costs the UI.** The store starts empty, and the producer re-seeds it
 empty, since composed pixels do not cross. What the engine redraws comes back at once; the chrome,
@@ -741,13 +743,14 @@ row: `HELP.GUI` open across the reset, 18.2 % of the view changed by opening it 
 closed.
 
 `tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
-suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. `tagpu_vkfull.on` is the driver's
+suite's `pass-refused` (the lane comes back) and `pass-refused-ends` (every rebuild refused: the line, the
+box, the process gone) rows drive it in a battle. `tagpu_vkfull.on` is the driver's
 own no: it sits on the device's `vkAllocateMemory` and on what `gdpa` hands the passes, and refuses with
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` after the file's K allocations (the file is consumed), every one with
-`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-gdi` and
+`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-ends` and
 `wiki-stage-refused` rows use it, so the rebuilt lane's real road has been run: an allocation refused on
-it costs another retry, and the retries end on GDI. MEASURED 2026-11-07: one refusal, the line after
-18 000 presented frames (478 s under Xvfb), then three more refusals and no GDI. Filling the card is how the
+it costs another retry, and the spent retries end the session. MEASURED 2026-11-07: one refusal, the line
+after 18 000 presented frames (478 s under Xvfb), then three more refusals and the lane still up. Filling the card is how the
 real refusal was first met: 18 games at about 900 MiB each reached 11 824 of 12 282 MiB on an RTX 4070
 (MEASURED 2026-11-06, 4 setups of 32 with no UI, 2 on the next run, each from a real refusal). One game
 alone peaks at 917-921 MiB, before and after the mod manager's landings.
@@ -764,7 +767,7 @@ drives the desktop, so the suite never fills it (`fill_device` rows run on Windo
 camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
 from the start of any rebuild, a failure's or the one a changed GPU row or window lifetime asks for, until a
 frame reaches the screen or `LIVE_HELD_FRAMES` (600) have passed, the world stays live and the skip stays
-(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first. MEASURED
+(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`). MEASURED
 2026-11-07: with the eye at x −206 under the mirror, no `terrain restored` line and the same eye across the
 rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there. That was
 measured on a failure's rebuild. The other two cannot start one in a battle: the GPU row is on the front-end's
@@ -828,7 +831,7 @@ loaded or by the window, each with a bound of its own and none tied to free memo
 
 | consumer | sized by | bound |
 |---|---|---|
-| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`², one a frame slot; colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel | `WORLD_MAXDIM` 8192 |
+| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`²; the world target is ONE colour + depth pair for every frame slot (its render pass's entry dependency orders each frame's writes after the earlier frames' reads, and a resize drains the device first); colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel, about 380 MiB for a 3840 × 2160 game at `ss=2` | `WORLD_MAXDIM` 8192 |
 | the sun-shadow map | `shadowres`², one a slot (16 MB a slot at 2048) | `RES_MAX` 4096 |
 | the unit, feature and effects base atlases, their restored twins and mip chains | the art the level uses | 2048² RGBA8 a page (`TAGPU_GAF_DIMMAX`); the feature chains 2 × 11.2 MB |
 | the terrain's base atlas, height grid, tile map and keys | the map | `ATLAS_MAXDIM` 16384, `HEIGHT_MAXDIM` 4096, `TILEMAP_MAXDIM` 2048 |
@@ -847,7 +850,7 @@ neighbourhood atlas in (2026-11-06).
 **What a capped game does.** The neighbourhood atlas falls back to per tile, the log saying `does not
 fit: … left under the … MB cap (impure.cfg gpumem=)`. An allocation refused at the door is logged
 (`vk: gpumem: the cap refuses …`) and takes the road a full device takes (*A pass refused its memory*,
-above): a pass of the first row costs the lane a retry and in the end the session's GDI, any other
+above): a pass of the first row costs the lane a retry and in the end the session, any other
 stays off. Every suite fails the game that logs one, by name -- tareplay (`Log.read`), the wiki
 gate (each mode, its mods and mp lanes), the compatibility suite (`tacompat.py` `DEVICE_REFUSED`)
 and `tools/vramproof.py` -- since it means the cap is too small for that game. The

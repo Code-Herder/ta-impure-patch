@@ -81,6 +81,9 @@ void tagpu_rec_level_end(void);
    explosion and the footprint writers' undo at them. tagpu_rec_hooks_in: all of them are in. */
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
+/* 1 while this process joins and hosts network games at its play revision alone (tagpu_recorder.c, MP_PLAY_REVISION): a sender may then
+   use what only that revision's receivers read right. Settled at attach. */
+int tagpu_rec_mp_revision_held(void);
 /* DllMain's attach, before tagpu_simreg_attach closes the lever list, so a recording's header
    names them: THE TEST LEVERS, honoured only in a test launch (tagpu_regstore_active) and refused
    with a line otherwise.

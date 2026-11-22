@@ -8,8 +8,8 @@
    as the GDI backend's blit does.
 
    `dd.c` dispatches it unless `g_config.gdi` is set (tagpu_cfg.h); GDI is the
-   only other backend, and the one this hands the session to if Vulkan fails
-   -- see render_vk.c's head. */
+   only other backend, a test's oracle, and nothing hands a Vulkan session to
+   it: a lane that cannot draw ends the session (render_vk.c's head). */
 
 #include <windows.h>
 

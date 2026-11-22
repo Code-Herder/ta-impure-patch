@@ -420,28 +420,28 @@ atlas's whole life. `repack` is opt-in per atlas and set only on the feature atl
 header contract is "fills once per map and stays"; the effects atlas, which frees and
 re-allocates sequences, leaves it clear.
 
-## 6. Owning the draw — `tagpu_featown.c` [LIVE-VERIFIED]
+## 6. The engine draws no feature on a Vulkan launch — `tagpu_featown.c` [LIVE-VERIFIED]
 
-One byte-matched prologue detour, installed once at DllMain when `tagpu_featown.on`
-exists then (tacli auto-creates it at launch when `tagpu_feat.on` is set):
+One byte-matched prologue detour, installed once at DllMain on every launch that is not
+the `tagpu_gdi.on` oracle, with no lever:
 
 | Site | Prologue | Stub |
 |---|---|---|
-| `0x46A610` | `8B 4C 24 08 53` = `mov ecx,[esp+8]; push ebx` — five position-independent bytes ending on an instruction boundary | `cmp byte [skip],0; jz stolen; ret 0x10`, else the stolen bytes and `jmp 0x46A615` |
+| `0x46A610` | `8B 4C 24 08 53` = `mov ecx,[esp+8]; push ebx` — five position-independent bytes ending on an instruction boundary | `cmp byte [removed],0; jz stolen; ret 0x10` with a byte that is set once and never written, so the leaf returns at once |
 
-The skip byte is set by each frame the native pass actually gathers — never by the file
-alone — and cleared by `passive`, by the file's absence, and by a 90-frame heartbeat
-timeout in `tagpu_featown_flush` if the pass stops running, so a GL failure brings the
-engine's features back instead of leaving a bare map. An engine-vs-ours A/B is a file
-flip on one instance, no relaunch.
+The engine's features never reach the screen on the Vulkan backend (the world phase
+stamps them and `publish` refuses them), so the removal costs the picture nothing and the
+golden source `tacli shot` reads holds no feature; body 1's 3D wreckage already went with
+`DrawUnit`'s composite (`tagpu_owndraw.c`). The picture with the engine's features in it
+is GDI's, the oracle.
 
-**It also requires `native.on=… wrecks`.** Body 1 draws 3D wreckage through `DrawUnit`,
-which only the native pass's wreck gather replaces; without it, owning the leaf would
-delete every husk on the map. `tagpu_feat.c` checks `tagpu_native_wrecks_armed()` before
-setting the skip and says so in its log line when it refuses.
+**The feature pass draws only with `native.on=… wrecks`.** It draws flats, talls and wrecks
+as one depth-sorted set, and the native pass's wreck gather is the wreck half, so without it
+`tagpu_feat.c` emits nothing and says so in its log line (a completeness test; the play
+defaults carry `wrecks`).
 
-Install line: `featown: ARMED feature@0x46A610=1 (skip follows tagpu_feat.on)`; heartbeat
-`FEATOWN skip=1` every 300 frames.
+Install line: `featown: the engine's feature draw is removed (0x46A610, Vulkan)`; on bytes
+it does not know, `… is KEPT`.
 
 ## 7. Verification (2026-09-02, `scenarios/feat-forest.json` on Two Continents)
 

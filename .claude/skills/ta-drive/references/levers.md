@@ -20,8 +20,7 @@ authority is `tagpu/ddraw/src`; if a lever named here is not read there, delete 
 
 - **The file's presence arms it; its text is the token list** (`tacli arm <i> 'fx.on=log
   passive'`). `off`, `0`, `false` or `-` as the value unlinks the file.
-- **Three read times.** *Attach*: the code-patching halves (`owndraw`, `terrown`, `featown`,
-  `fxown`, `markown`), `zoom`, `vpwide`, `weapons`, `cobtrace`, `reclaim`, `packet`, `hud`,
+- **Three read times.** *Attach*: the code-patching halves (`terrown`, `markown`), `zoom`, `vpwide`, `weapons`, `cobtrace`, `reclaim`, `packet`, `hud`,
   `lerp`, `curs.off`, the `gui` hook tokens and `restoreglsl.on` — arm before the launch that
   matters, and relaunch to change them. *Live* (polled, 250–500 ms, or every frame): the draw
   passes' tokens (`native`, `terr`, `feat`, `fx`, `sfx`, `mark`, `order`), `classicpp` and its
@@ -51,13 +50,11 @@ the arm files count. A dependency turns off with its parent.
 | `classicpp.on` | | |
 | `recorder.on` | | |
 
-Not on the defaults, and why: `owndraw`, `featown`, `fxown` stop the engine drawing what our pass
-draws and so hole the golden source (`tacli` still auto-arms them when the pass is armed, because
-they save the engine's CPU); `hud.on` changes the look of every screen and is the owner's call;
-`scaffold.on` and `fps.on` are instruments.
+Not on the defaults, and why: `hud.on` changes the look of every screen and is the owner's call;
+`scaffold.on` and `fps.on` are instruments. The engine's own unit, feature and effect draws are
+not levers at all: a Vulkan launch removes them at attach (`owndraw`, `featown`, `fxown`).
 
-**`terrown` is the exception and is a default.** It holes the golden source like the other three
-— the viewport arrives key-filled, with no terrain — but it is an **optimisation, not a
+**`terrown` is a default.** It holes the golden source — the viewport arrives key-filled, with no terrain — but it is an **optimisation, not a
 requirement**: the play defaults and the play defaults plus `tagpu_terrown.off` render the same
 picture (`build-facing` at 1024x768: 0.03 % exactly-black viewport and 8898 distinct colours
 either way), and with it off `tacli shot` has terrain again. **`tacli arm <i> terrown.off` is the
@@ -75,17 +72,17 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
 
 | pass | tokens | patch half | verify at launch |
 |---|---|---|---|
-| `native.on` | `all` or a unit-type filter (a name matching nothing keeps the call site alive without drawing units), `wrecks` (3D husks; **required** for the feature pass to own its leaf) | `owndraw.on` | the `owndraw:` line |
+| `native.on` | `all` or a unit-type filter (a name matching nothing arms the pass and draws no unit), `wrecks` (3D husks; **required** for the feature pass to draw) | none: on a Vulkan launch DllMain removes the engine's unit draw | `native: ARMED (type= wrecks= ss= subpix=)` and `owndraw: the engine's unit draw is removed (0x45AE73, Vulkan)` |
 | `terr.on` | `log passive over key=N` | `terrown.on` | `terr: ARMED (log= passive= over= key=254)` |
-| `feat.on` | `log passive noflat notall noshadow nowreck` | `featown.on` | `feat: ARMED (flat= tall= shadow= wreck= log= passive=)` |
-| `fx.on` | `log passive nolines nomodels nosprites noexpl nodebris` | `fxown.on` | `fx: ARMED (lines= models= sprites= expl= debris= log= passive=)` |
-| `sfx.on` | `log passive nosmoke nofire nowake nonano` | `fxown.on` | `sfx: ARMED (smoke= fire= wake= nano= log= passive=)` |
+| `feat.on` | `log passive noflat notall noshadow nowreck` | none: on a Vulkan launch DllMain removes the engine's feature draw | `feat: ARMED (flat= tall= shadow= wreck= log= passive=)` and `featown: the engine's feature draw is removed (0x46A610, Vulkan)` |
+| `fx.on` | `log passive nolines nomodels nosprites noexpl nodebris` | none: on a Vulkan launch DllMain removes the engine's effects draw | `fx: ARMED (lines= models= sprites= expl= debris= log= passive=)` and `fxown: the engine's effects draw is removed (Vulkan) …` |
+| `sfx.on` | `log passive nosmoke nofire nowake nonano` | none: removed with the effects (`fxown`) | `sfx: ARMED (smoke= fire= wake= nano= log= passive=)` |
 
 - **`native.on`** is the unit renderer (`tagpu_posedraw.c` is its posed program; no other
-  lever names it). The engine rasterises every unit whatever `owndraw.on` says; its detours skip
-  only a husk while `wrecks` is armed, the build-state effect of a unit this pass owns, and the
-  cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
-  dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
+  lever names it). **It is the only thing that draws a unit on a Vulkan launch**: DllMain removes
+  DrawUnit's call of the composite (`0x45AE73`), so the engine paints no unit, husk, unit shadow or
+  build-state effect, and a unit this pass does not draw is on neither the window nor the golden
+  source. Under `tagpu_gdi.on` nothing is removed and the engine draws them all. The `native:` heartbeat every 300 frames is `native: vulkan
   lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
   fog=WxH out=N held=N/Mpx paused=N back=N reachheld=N floor=F nopieces=N` — what was handed over to the Vulkan passes, not what
   they drew; the fog fields are below. A model that will not bake (over 256
@@ -149,14 +146,16 @@ hands every marker back to the engine's own drawing (into the golden source) whi
 phase stamps everything the engine draws between `0x468DB0`–`0x468E3A` and `0x469849`–`0x469F36`
 and `publish` refuses it, so **every configuration that leaves a world draw to the engine shows it
 in `tacli shot` and not on the window**: `mark.on=passive|nobars|noselbox|nocursor|nodigits`,
-`fx.on=passive`, `sfx.on=passive`, and equally any pass left unarmed while its `*own` half is also
-absent — no `native.on` without `owndraw.on` loses the **units** (`DrawUnit 0x45AC20` at
-`0x469A00`/`0x469BA3`), no `terr.on` without `terrown.on` loses the terrain, no `feat.on` without
-`featown.on` loses the trees. At the play defaults our own passes draw all of it and nothing is
+and equally `terr.on` unarmed while `terrown.on` is also absent, which loses the terrain. The
+**units, features and effects** are not in that list: on a Vulkan launch the engine paints none
+(`DrawUnit 0x45AC20`'s composite call `0x45AE73`, the feature leaf `0x46A610` and the effects
+passes are removed at attach), so with no `native.on`, `feat.on` or `fx.on`/`sfx.on`, or under
+their `passive`, they are missing from the window and from the shot alike. At the play defaults our own passes draw all of it and nothing is
 lost, and it is all still in the shot — which is what `passive` is *for*. But as a way of
 **forcing engine pixels onto the screen** every one of those is blunted: with `noselbox` and a
 unit selected the box is in the golden source and absent from the window. The lever for that job
-is **`worldphase.off`**, which turns the phase off wholesale and restores all of them at once.
+is **`worldphase.off`**, which turns the phase off wholesale and restores all of them at once
+(the units, features and effects excepted: the engine paints none to restore).
 (The marker row is the measured one; the others follow from the same mechanism and the call sites
 — gpu-status.md §2.81 has the table.)
 
@@ -490,7 +489,7 @@ that map's size.
 - `tagpu_modbase.on`: its contents are a download server's address, standing in for every catalog entry's `base_url`; read at each open of the Mods screen, it also has Explore and Updates offer every entry.
 - `tagpu_modcatalog.on`: its contents replace the catalog packed in the DLL, read once at attach; the patch pack stays the DLL's. For test mutators.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
-- `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the session goes to GDI.
+- `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the lane fails every retry and the session ends: `vk: the lane cannot draw - the session ends`, the box titled `Total Annihilation: Impure cannot draw`, then the process ends with code 1.
 - `tagpu_vkfull.on`: the driver's own no, `VK_ERROR_OUT_OF_DEVICE_MEMORY` from `vkAllocateMemory`. A number K (or nothing, 0): K allocations pass, one is refused, the file is consumed. `keep`: every one. `wiki`: only while the wiki's stage is being prepared. An allocation is what it needs to meet, so a rebuild is the usual way in: write it beside `tagpu_passrefuse.on`.
 - `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print, so a current host refuses it. `--old-dll` is an Impure build from before the fingerprint (v0.5's release DLL), which a current host refuses as an older build; `stock` and `older` check the refusal and the host's battle-room line.
 - `tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]` plays the screen on a private display and holds the run lock. `hosted` alone downloads from the real hosts, so it runs only when named.

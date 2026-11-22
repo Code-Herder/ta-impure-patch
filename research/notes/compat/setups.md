@@ -13,8 +13,8 @@ suppressed does not imply those conveniences survive; each needs Impure's own im
 
 Twenty-six setups: seventeen game folders as a player has them — the retail 3.1 game, what a mod or
 patch install puts next to it, and Impure's `ddraw.dll` — and nine checks of the harness and the renderer
-(`retail+tadr1-recorder`, `mayhem-11.3.0-net`, `gui-stress`, `pass-refused`, `pass-refused-gdi`,
-`pass-full`, `pass-full-gdi`, `pass-card-full`, `wiki-stage-refused`).
+(`retail+tadr1-recorder`, `mayhem-11.3.0-net`, `gui-stress`, `pass-refused`, `pass-refused-ends`,
+`pass-full`, `pass-full-ends`, `pass-card-full`, `wiki-stage-refused`).
 
 **Fifteen of the sixteen player setups measured on both platforms meet the goal in full there:
 Impure runs, and none of TADR's code runs.** The seventeenth, `tazero-wildhunt` (TA Zero on 6P

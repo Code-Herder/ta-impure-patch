@@ -712,6 +712,14 @@ repeat (`tagpu_nodraw.c`, THE REPOSE). With `edi = main+0x141FB`:
   argument. The composite pops its own two arguments, so DrawUnit's next instructions are its
   epilogue (`0x45AE78..0x45AE7C` pops, `ret 8` at `0x45AE7D..0x45AE7F`). Of what the composite writes, only `o3+4` belongs to
   the pose cache, and only the composite reads it (`0x458870`, `0x4589AA`).
+  **Callers, both functions** [DISASSEMBLED 2026-11-21, every `E8` and every dword of the image]:
+  `0x45AC20` is called from `0x469A00`, `0x469BA3` (the sweeps) and `0x46A762` (the 3D-wreck draw,
+  through the scratch feature unit) and nowhere else; `0x458810` only from `0x45AE73`; neither
+  address is stored as a datum. The composite's own calls: `0x4586A0`, the blit `0x459200`
+  (`0x458948`), `0x4584D0`, `0x458310` twice, `0x4B8A80`, `0x4B7F90` twice and the build-state
+  effect `0x458DD0` (`0x458D0E`), with `ret 8` at `0x458957`, `0x4589B8` and `0x458D1A`. Every
+  Vulkan launch removes the call at `0x45AE73` (`tagpu_owndraw.c`, hook map §2.1); what that costs
+  and saves is in [units](../modules/units.html), *The engine draws no unit on a Vulkan launch*.
 - **The pieces.** An Object3do's `+0` is its piece count: its build `0x45AEC0` places piece `i` at
   `o3+0x22+i·0x36` with `i` read from `+0` (`0x45AECA..0x45AED9`) and increments `+0` for each
   (`0x45AF35..0x45AF38`). The SweetSpot point `0x43E0B0(unit, out, piece)` is stdcall,
@@ -1110,11 +1118,10 @@ process). Per husk, `0x46A721` fills it in and draws:
 ```
 
 `DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
-`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites.** Which one
-depends on us: the scratch's permanent `0x20000000` puts both silhouette sites on the *bit-clear*
-side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two branches
-`tagpu_owndraw.c` takes over under target `all` (flipped to `EB` until 2026-09-18, detoured from
-`0x4592BF`/`0x459522` behind a runtime flag since). **Unpatched, a husk reaches only `0x4594DB`**
+`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites** under
+`tagpu_gdi.on` (a Vulkan launch removes that call, hook map §2.1). The scratch's permanent
+`0x20000000` puts both silhouette sites on the *bit-clear* side of the `je`s at `0x4592C6` and
+`0x45952C`, so **a husk reaches only `0x4594DB`**
 (itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
 `[main+0x1439B]`, the UnitInfo array base, copied in once at feature init by `0x422003`
 (`mov ecx,[eax+0x1439B]`) and `0x422009` (`mov [edx+0x92],ecx`) — so that test reads `UnitInfo[0]`'s flags, an
@@ -1130,8 +1137,7 @@ live-unit analogue is `0x485E14 mov [eax+0xc],esi`.
 `Object3do` (`0x485DCC` / `0x485E0E`), a recogniser testing only `*(scratch+0x9E) == obj3do`
 matches that live unit and goes on matching until the next 3D-wreck draw. Testing
 `*(obj3do+0x0C) == *(main+0x1420F)` as well closes it, because a block that has become a live
-unit's carries that unit's own record at `+0x0C`. `tagpu_owndraw.c`'s `is_wreck_draw()` tests
-both. Residual, not closed: the constructor path `0x485DCC` / `0x45A950` was not observed writing
+unit's carries that unit's own record at `+0x0C`. What that test leaves open: the constructor path `0x485DCC` / `0x45A950` was not observed writing
 `+0x0C` within the first 0x60 bytes, so a reused block taken down that path could still carry a
 stale scratch there.
 
@@ -2157,16 +2163,16 @@ tree, drawn before the body. Every site in it:
 | --- | --- | --- |
 | `0x45928E` `mov ax,[ecx+0x37F06]` | `0x4594A2` | the graphics-option word; `test al,4` (Shadow) right after, `je` to the body |
 | `0x4592A0..0x4592AC` | `0x4594B4..0x4594C0` | `unit+0x92 → UnitDefStruct`, `+0x241` type mask, `test …,0x2000000` = `noshadow` → skip |
-| **`0x4592BF`** `test byte [ecx+0x113],0x20` | **`0x459522`** `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` — and, since 2026-09-18, the two addresses `owndraw all` **detours** (5-byte `E9` + `nop` fill over the `test`+`je`: 9 bytes at A, 12 at B) |
-| `0x4592C6` `74 5C` `je 0x459324` | `0x45952C` `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. Until 2026-09-18 `owndraw all` rewrote both to `EB` (`jmp`) for the life of the process; they are now inside the stolen range and the stub re-emits the `je` behind a runtime flag, so the suppression is per draw and stands down on a lane that never paints. Still verified byte-for-byte before the write, still installed as a pair or not at all |
-| — | `0x4594D6` `74 4A` `je 0x459522` | **the only branch in the image into either stolen range** (a path-B instruction, hence the column), and it lands on the FIRST byte — our `E9` — so the detour is transparent to it. [MEASURED 2026-09-18: `objdump -d -M intel` over the whole image, every byte of `0x4592BF..0x4592C7` and `0x459522..0x45952D` searched for an incoming `j*`/`call`; and each of the four addresses searched through the raw image as a little-endian 32-bit datum, **0 occurrences**, so no jump table points at one either. A `je` flip is immune to an incoming branch and a detour is not, which is why this row exists] |
+| **`0x4592BF`** `test byte [ecx+0x113],0x20` | **`0x459522`** `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110`; with its `je` below, 9 bytes at A and 12 at B |
+| `0x4592C6` `74 5C` `je 0x459324` | `0x45952C` `74 4A` `je 0x459578` | not a structure → the COMPLETED branch |
+| — | `0x4594D6` `74 4A` `je 0x459522` | **the only branch in the image into either `test`+`je` pair** (a path-B instruction, hence the column), and it lands on the FIRST byte. [MEASURED 2026-09-18: `objdump -d -M intel` over the whole image, every byte of `0x4592BF..0x4592C7` and `0x459522..0x45952D` searched for an incoming `j*`/`call`; and each of the four addresses searched through the raw image as a little-endian 32-bit datum, **0 occurrences**, so no jump table points at one either. A `je` flip is immune to an incoming branch and a detour is not, which is why this row exists] |
 | `0x4592C8` `test [esp+0x10],0x40000000` (after the structure test) | `0x4594D0` `shr edx,0x1E; test dl,1` (**before** the structure test) | `digger`. Path A sends it to the COMPLETED branch, TShadow and `canhover`/`floater` tests included. Path B takes an **inline** branch `0x4594D8..0x45951D` — `0x45A470` silhouette, `0x4BA1B0(scratch, 0x7D)` ground clip, then `jmp 0x4595E9` to the shared blit — and applies neither test. So a digger never reaches the cached branch in either path |
 | `0x4592D5` `cmp word [eax+0xA6],0` | `0x45952E` | `unit+0xA6` — the **model index** (`U_MODELID` in the native pass), not a unit id. Zero → |
 | `0x4592E4` `movzx cx,byte [eax+0x1427F]` | `0x45953D` | sea level; `cmp word [esp+0x42],cx ; jl` skips the shadow for a model-0 unit below it |
 | `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
 | **`0x459319`** `call 0x4B8500` | `0x459576` `jmp 0x4595E9` → **`0x4595E9`** | blit the cached shadow, at `sx + 0x85` (`add edx,0x85` at `0x45930B` / `0x45956C`). Path B shares one call site between the digger, structure and completed branches; path A has one per branch |
 | `0x459324` `shr al,3; test al,1` | `0x459578` | the COMPLETED branch: TShadow bit, then `test …,0x81000` (`canhover`/`floater`), `0x45A470` (scratch := composite silhouette), blit at `0x459353` / `0x4595E9` |
-| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at the shadow takes the BODY with it whenever the wipe's predicate says yes and the pass drawing the replacement says no |
+| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at a shadow site takes the BODY with it |
 
 So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey above are:
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
@@ -2252,42 +2258,32 @@ What that settles for a renderer of our own: honouring the player's toggle is ho
 Testing bit3 for the silhouette, as `0x459324` does, reproduces the engine's branch and can never
 disagree with the player's intent, because the two bits cannot be set differently through the UI.
 
-**Why the branch flip is safe.** Both `je`s are 2-byte short jumps whose fall-through and
-target both continue with `eax` still holding the option word the target tests (`shr al,3`),
-and the COMPLETED branch is the engine's own path for every non-structure unit; under
-`owndraw all` its composite is blank, so `0x45A470` builds an all-key silhouette and the blit
-writes nothing. Nothing else reads `Object3do+0x14`; it is simply never allocated. Without
-`all` the bytes are left alone and structures keep the engine's cached shadow.
+**The two `je`s, for a patch that would flip them.** Both are 2-byte short jumps whose fall-through
+and target both continue with `eax` still holding the option word the target tests (`shr al,3`),
+and the COMPLETED branch is the engine's own path for every non-structure unit. Nothing else reads
+`Object3do+0x14`. Neither is patched: a Vulkan launch never reaches the blit (`0x45AE73`, hook map
+§2.1), and under `tagpu_gdi.on` structures keep the engine's cached shadow.
 
-**The two rasterisers `owndraw` already detours**, for completeness of this map: `0x459830`
+**The two rasterisers the composite calls**, for completeness of this map: `0x459830`
 (opaque, `thiscall`, `ret 0x10`; called from the builder `0x45878B` and from the blit's
-build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder `0x458765`).
-Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
-evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
+build-state path `0x459641`) and `0x459C70` (the Gouraud-lit one, called from the builder
+`0x458765`). Both open `mov eax,imm32` (5 bytes) before `call __chkstk`. Neither is patched;
+the evidence gathered while a detour classified there is in `own-the-draw.md`.
 
-**The completed-unit shadow's three emit sites — `owndraw`'s fourth detour until 2026-09-23.**
-[MEASURED 2026-09-13, from play: the commander kept one teal silhouette on its own body from
-map entry until it first moved. Read here off `objdump` of the pristine build.]
+**The completed-unit shadow's three emit sites.** [MEASURED 2026-09-13, from play: the commander
+kept one teal silhouette on its own body from map entry until it first moved. Read here off
+`objdump` of the pristine build.] **Not patched**: the three sites keep the engine's bytes, and a
+Vulkan launch never reaches them (hook map §2.1).
 
-**We no longer patch `0x459338`, `0x45958C`, `0x4594DB` or touch `0x45A470`'s callers:** the
-detour's wipe was gated on `tagpu_posedraw_live()`, which is the constant 0, so it replayed the
-engine's call and did nothing else — the three sites keep the engine's original bytes. The
-engine facts below stand; the detour paragraphs are its record.
-
-Under `owndraw all` the engine's completed-unit shadow is supposed to be nothing: the
-COMPLETED branch is the one every unit takes after the two `je`s are flipped, and with the
-composite blank `0x45A470` builds an all-key silhouette. That last clause is the whole
-guarantee, and it is not maintained by the composite being blank on every frame. Instrumented
-for one session: **not one of 7047 wipes in a 60-frame window found the plane already empty**
-(an empty plane reads 0 NON-Key bytes — the wipe fills it with the ColorKey, palette index 1 —
-and reading the same plane back right after the wipe's own `memset` read 0), and the plane each
-window's last wipe sampled held **557 non-Key bytes, all of them palette indices rather than the
-zeros a blackened shadow leaves**. That 557 is also the number of teal pixels the silhouette
-measured on screen; whether the two counts are the same shape is NOT established — the
-instrumented plane and the drawn silhouette are read at different places. So the shadow was being built from a
-real sprite while the classifier was skipping the rasterise that would have painted it. What
-refills the plane that way is not settled by this reading and is left open here; the detour
-below removes the dependency instead of answering it.
+An all-key silhouette needs a blank composite on every frame, and a blank composite at the
+rasterise is not that. Instrumented for one session, under a classifier that skipped the
+rasterise and wiped the composite ([own-the-draw](../own-the-draw.html)): **not one of 7047 wipes
+in a 60-frame window found the plane already empty** (an empty plane reads 0 NON-Key bytes — the
+wipe fills it with the ColorKey, palette index 1 — and reading the same plane back right after the
+wipe's own `memset` read 0), and the plane each window's last wipe sampled held **557 non-Key
+bytes, all of them palette indices rather than the zeros a blackened shadow leaves**. That 557 is
+also the number of teal pixels the silhouette measured on screen; whether the two counts are the
+same shape is NOT established. What refills the plane that way is not settled.
 
 The sites, one per branch — all three are the same two instructions and a call:
 
@@ -2303,9 +2299,8 @@ rewrites every non-ColorKey texel to palette index 0 — the unit's own silhouet
 Each site then blits the scratch at `sx + 0x85` (`0x459353`, `0x4595E9`) through the ALP blend
 `0x4B8500`, after the path-B clips. **The composite is read, never written, so emptying it at
 the call is the whole silhouette** — and the blit draws its BODY from the composite too
-(`0x459373` `mov esi,[ebp+0x10]`), which is why the wipe is gated on `tagpu_posedraw_live()`:
-on the frames the engine is the only renderer, emptying the composite would take the body with
-the shadow.
+(`0x459373` `mov esi,[ebp+0x10]`), so emptying the composite at a site takes the body with the
+shadow.
 
 `ebp` carries the blit's Object3do — the blit's **second** stack argument (`0x459205
 mov ebp,[esp+0x30]`, before the remaining two pushes, so entry esp + 8; `[ebp+0xc]` is the unit
@@ -2320,10 +2315,9 @@ cargo loop at `0x459649` walks the same list in **esi** (`8b b2 8a 00 00 00`
 = `mov esi,[edx+0x8A]`), not `ebp`; this note called it a second `ebp` reload until the
 2026-09-14 review disassembled it. The corrected fact is the stronger one: `ebp` is loaded
 once at `0x459205` and no path in the function reloads it before a site. (`0x4593FC push ebp` is an argument to the pose helper
-`0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) Because "it
-happens to survive" is not an argument, the stub passes `ebp` and the helper checks it:
-`*(Object3do+0x10)` must be the very composite the site is about to read, and a mismatch is a
-no-op.
+`0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) A patch at a site
+would still check it rather than rely on it: `*(Object3do+0x10)` must be the very composite the
+site is about to read.
 
 Two facts about the blit's own rasterise call, `0x459641` — and the first corrects an earlier
 reading of this note. **It is taken for every MOBILE unit, every frame.** The gate is
@@ -2334,26 +2328,10 @@ does `0x45961C fld [ecx+0x104]` / `0x459622 fcomp [0x4FD4C0]` (the constant is `
 which `fcomp` CLEARS on inequality, so ZF is set by *not* equal and the `je` is taken for an
 under-construction structure. **Its first argument is not the composite**: `0x459639
 mov ecx,[edi+0x10]` takes the blit's own frame — `edi` is the blit's `this`, which is not `ebp`
-(the Object3do) — so this call and the builder's pass DIFFERENT planes, and the classify stub is
-therefore called on two planes per unit per frame. The second fact: the only things that write a
+(the Object3do) — so this call and the builder's pass DIFFERENT planes: a detour on the rasteriser sees two
+planes per unit per frame. The second fact: the only things that write a
 composite's planes are the rasterisers and the allocators `0x437B50` / `0x437BE0` (chosen at
 `0x458702` / `0x458719`) — `0x4581E0` and `0x4584D0`, the AABB/pose helpers, call neither.
-
-The one case where the wipe's predicate and the classifier's differ is a husk: the classifier
-recognises a 3D-wreck draw by the scratch feature-unit `*(main+0x1420F)` holding this Object3do
-at `+0x9E` `[documented where the wreck path is: features.md §1 and its table, terrain-depth.md
-§3.4]`, and hands it to the engine unless the `wrecks` token is armed; the detour asks the same
-question, in the same order. A/B'd on `one-wreck` with `native.on` = `all` and no `wrecks` token:
-with the clause disabled in a test build the husk rendered either way, so the unit predicate does
-not answer yes to a husk there — the clause is an invariant, not a fix for a measured blanking.
-
-The detour empties the composite at the site, before the replayed `0x45A470`, so the silhouette
-is all-key on every frame our pass draws the unit; the engine cannot repaint it in between,
-because the two are adjacent instructions of one call. Measured 2026-09-13 on a fresh skirmish, the same map and
-the same starting spot either side: one 129-frame `glshot` burst spanning the load, the GL
-context change and the first seconds of play — **no `(0,128,128)` pixel in any frame**. Before
-the change the same burst found **557 in nearly every in-play frame**, and 0 in every frame
-once the commander was ordered to move — the latch the play report describes.
 
 **`0x459228..0x45927A` — where the body and the shadow are placed, register by register.**
 [BINARY-VERIFIED 2026-09-04, read for the aircraft work.] `[ebp+0xc]` is the unit; `+0x6A`,
@@ -2437,17 +2415,15 @@ The whole nanoframe look — the height-threshold recolour `0x458D30` and the wi
 | `0x458DEA..0x458E06` | `8b 44 24 18 / 8b 50 0c / d9 82 04 01 00 00 / d8 1d c0 d4 4f 00` | `obj+0x0C` → unit, `fld [unit+0x104]`, `fcomp ds:0x4FD4C0` (0.0f) — **`Nanoframe == 0` returns 0**, so this function only ever does anything for a unit under construction |
 | `0x458E11..0x458E1F` | `66 8b 8a a8 00 00 00` | `unit+0xA8` (the slot index) into the oscillator maths |
 
-Our detour (`tagpu_owndraw.c`, the third one) replays those six bytes after `popad` — at the
-entry `esp`, so the esp-relative `mov` reads what it always read — and takes `xor eax,0; ret 8`
-for units the native pass owns, which is the callee's own "did nothing" return. Call sites:
+Call sites:
 `0x458D0E` (the last `call` in `0x4589C0`, followed by that function's own
 `pop edi/esi/ebp/ebx; add esp,0x68; ret 8` — a plain call, not a tail call) for the unit's own
-scratch, and `0x459686` for each cargo composite, so a factory's unit-in-progress is covered by
-the same skip. Both call sites discard `eax`, so the stub's `xor eax,eax` cannot be observed even
-where the real function would have returned 1 (`0x458F88`).
+scratch, and `0x459686` for each cargo composite, a factory's unit-in-progress. Both call sites
+discard `eax`, so a skip returning 0 cannot be observed even where the real function would have
+returned 1 (`0x458F88`). Not patched: a Vulkan launch removes the composite call both sit under
+(hook map §2.1).
 
-The resume address is **`0x458DD6`**; the six stolen bytes end exactly on an instruction
-boundary there.
+The six entry bytes end exactly on an instruction boundary, at **`0x458DD6`**.
 
 ## `0x459646..0x4596DD` — the cargo loop, and `0x4B90A0` the z-merge — mapped by us
 
@@ -2755,11 +2731,12 @@ design and the measurements). Nothing here is patched; `fxown`'s detours on `0x4
 
 | Address | What it is, and how it was established |
 | --- | --- |
-| `0x4B6CC0` | **the rotation by a triple**, `void __stdcall (const int32 src[3], int32 dst[3], const int16 turn[3])`, `ret 0xc`. Three calls of the pair rotator: `turn[0]` on `(x, y)` (`0x4B6CE3`), then `turn[2]` on `(y', z)` (`0x4B6D04`), then `turn[1]` on `(x', z')` (`0x4B6D29`); `dst[1]` is stored after the second, `dst[0]` and `dst[2]` after the third. **Pure**: it reads its two inputs and the constant below and writes `dst` alone, so the publisher calls it with a `dst` of its own. DISASSEMBLED (`0x4B6CC0..0x4B6D43`) |
-| `0x4B7173` | the pair rotator (`0x4B7176..0x4B71A2`), `cdecl (int16 angle, int32 pair[2])`: a zero angle returns untouched (`cmp word [ebp+8],0 / je`); otherwise `a' = a·cos − b·sin`, `b' = a·sin + b·cos` in x87 (`fild`, `fsincos`) and stored back with `fistp`, so the result is rounded by the thread's control word. The angle is `fild word` — signed. The `fmul` by `[0x509EF8]` before `fsincos` rounds by the word's precision too, and `fsincos` sees only the 65 536 angle words. Its parts: the zero test `0x4B7176..0x4B717B`, the loads of `p1`, `p0` and a copy of each `0x4B717D..0x4B7188`, the angle and `fsincos` `0x4B7189..0x4B7193`, the products, sums and stores `0x4B7194..0x4B71A4`, `leave; ret` `0x4B71A5..0x4B71A6`. Nine call sites: three in `0x4B6CC0` (the piece transform's three-angle turn, [cob](cob.md): `0x4B6CE3`, `0x4B6D04`, `0x4B6D29`), one in each of the three functions after it (`0x4B6D6F`, `0x4B6DBF`, `0x4B6E10`), and `0x43D173`, `0x44EB0F`, `0x48A527`. It keeps every register but `eax` and calls nothing. DISASSEMBLED. Impure takes its cosine and sine from a table built by these instructions at attach ([engine patches](../modules/engine-patches.md), §2.6c) |
+| `0x4B6CC0` | **the rotation by a triple**, `void __stdcall (const int32 src[3], int32 dst[3], const int16 turn[3])`, `ret 0xc`. Three calls of the pair rotator: `turn[0]` on `(x, y)` (`0x4B6CE3`), then `turn[2]` on `(y', z)` (`0x4B6D04`), then `turn[1]` on `(x', z')` (`0x4B6D29`); `dst[1]` is stored after the second, `dst[0]` and `dst[2]` after the third. **Pure**: it reads its two inputs and the constant below and writes `dst` alone, so the publisher calls it with a `dst` of its own. Seven calls in `.text`; the piece transform's vertex loop (`0x45B199`) no longer reaches it, since Impure's `repose_rotate` runs that loop ([cob](cob.md), the piece transform). DISASSEMBLED (`0x4B6CC0..0x4B6D43`) |
+| `0x4B7173` | the pair rotator (`0x4B7176..0x4B71A2`), `cdecl (int16 angle, int32 pair[2])`: a zero angle returns untouched (`cmp word [ebp+8],0 / je`); otherwise `a' = a·cos − b·sin`, `b' = a·sin + b·cos` in x87 (`fild`, `fsincos`) and stored back with `fistp`, so the result is rounded by the thread's control word. The angle is `fild word` — signed. Nine calls in `.text` (`0x43D173`, `0x44EB0F`, `0x48A527`, three in `0x4B6CC0`, three in `0x4B6D50..0x4B6E10`). It touches only `eax` and the x87 stack, which it leaves empty. Its stages: the pair loaded twice (`0x4B7180..0x4B7187`: `fild` the second word, `fild` the first, two `fld st(1)`), the angle scaled and turned (`0x4B7189..0x4B7192`: `fild word`, `fmul [0x509EF8]`, `fsincos`), then the products into two `fistp`. The status word: the game's own `fnstsw` (314 in `.text`) each follow the `fcom` that sets the condition codes they test; the only reads of the exception flags (`and $0x20`) are the CRT's, at `0x4E5000` and above. Its arithmetic after `fsincos` (`0x4B7194..0x4B71A4`, `dc cd de cc dc ca de c9 de c3 de e9 db 18 db 58 04`) is what `repose_rotate`'s per-vertex sequence assembles to, byte for byte (the build's disassembly). The `fmul` by `[0x509EF8]` rounds by the control word's precision too, and `fsincos` sees only the 65 536 angle words. Its parts: the zero test `0x4B7176..0x4B717B`, the loads `0x4B717D..0x4B7188`, the angle and `fsincos` `0x4B7189..0x4B7193`, the products, sums and stores `0x4B7194..0x4B71A4`, `leave; ret` `0x4B71A5..0x4B71A6`. The nine call sites: `0x4B6CE3`, `0x4B6D04`, `0x4B6D29` in `0x4B6CC0`, `0x4B6D6F`, `0x4B6DBF`, `0x4B6E10`, and `0x43D173`, `0x44EB0F`, `0x48A527`. DISASSEMBLED. Impure takes its cosine and sine from a table built by these instructions at attach ([engine patches](../modules/engine-patches.md), §2.6c) |
 | `0x509EF8` | the double the angle is scaled by (`fmul qword [0x509EF8]` at `0x4B718C`): `0x3F1921FB54442C5A`, the decimal literal 9.587379924285e-05, 190 ulp below the double nearest 2π/65536 (MEASURED 2026-11-12, the bytes read from the file). The x87 sequence `fild`, `fmul`, `fsincos`, the four products, `faddp`, `fsubp`, two `fistp` under the game's control word (53-bit precision) was MEASURED 2026-11-12 equal to the shared core's SSE2 rotator (`ts_rotate`, fdlibm sin and cos) on 10⁶ of 10⁶ random calls. DISASSEMBLED |
-| `0x46BAE0` | **the model draw** of the projectile and explosion passes, `stdcall (ctx, pos[3], node, turn[3])`, `ret 0x10`. `pos` is EYE-RELATIVE: its callers subtract `eye << 16` from x and y first (`0x49C0A1..0x49C0CE` for rendertype 1). Per vertex (`0x46BB0F..0x46BB74`) it rotates `node+0x24` into the scratch `*(main+0x14383)` (12 bytes a vertex, **200 of them**) and projects into `*(main+0x14387)` (8 bytes, **200**), with no test of the node's count against either (the three blocks are sized below, `main+0x14383` row): `sx = (int16)((v.x + P.x) >> 16) + 0x80`, `sy = (int16)((P.y − v.z) >> 16) − ((int16)((v.y + P.alt) >> 16) >> 1) + 0x20` — the `(int16)` the `movsx` at `0x46BB3B`, `0x46BB43`, `0x46BB51`, so a vertex 32 768 px or more from the eye lands modulo 65 536. A vertex count of 0 or less skips the rotation and the projection (`test ecx,ecx / jle 0x46BB76` at `0x46BB07`) and still walks the faces, over whatever the scratch holds. Then the faces (`0x46BB76..0x46BC4E`): face 0 skipped when `node+0x0C != −1`; each face's vertices gathered by its `u16` indices into `*(main+0x1438B)` **with no bound on the index, nor on the count against the block's 20 points**; flag bit 0 → `0x4C0310(ctx, xy, n, face+0x00)`; otherwise only a 4-vertex face draws, `0x4C7580(ctx, frame, xy, NULL)`, the frame `face+0x10` or, with flag bit 1, `0x4B7EE0(face+0x10)`. No shade table anywhere. DISASSEMBLED |
+| `0x46BAE0` | **the model draw** of the projectile and explosion passes, `stdcall (ctx, pos[3], node, turn[3])`, `ret 0x10`. `pos` is EYE-RELATIVE: its callers subtract `eye << 16` from x and y first (`0x49C0A1..0x49C0CE` for rendertype 1). Per vertex (`0x46BB0F..0x46BB74`) it rotates `node+0x24` into the scratch `*(main+0x14383)` (12 bytes a vertex, **200 of them**) and projects into `*(main+0x14387)` (8 bytes, **200**), with no test of the node's count against either (the three blocks are sized below, `main+0x14383` row): `sx = (int16)((v.x + P.x) >> 16) + 0x80`, `sy = (int16)((P.y − v.z) >> 16) − ((int16)((v.y + P.alt) >> 16) >> 1) + 0x20` — the `(int16)` the `movsx` at `0x46BB3B`, `0x46BB43`, `0x46BB51`, so a vertex 32 768 px or more from the eye lands modulo 65 536. A vertex count of 0 or less skips the rotation and the projection (`test ecx,ecx / jle 0x46BB76` at `0x46BB07`) and still walks the faces, over whatever the scratch holds. Then the faces (`0x46BB76..0x46BC4E`): face 0 skipped when `node+0x0C != −1`; each face's vertices gathered by its `u16` indices into `*(main+0x1438B)` **with no bound on the index, nor on the count against the block's 20 points**; flag bit 0 → `0x4C0310(ctx, xy, n, face+0x00)`; otherwise only a 4-vertex face draws, `0x4C7580(ctx, frame, xy, NULL)`, the frame `face+0x10` or, with flag bit 1, `0x4B7EE0(face+0x10)`. No shade table anywhere. DISASSEMBLED Its per-vertex rotation is the call of `0x4B6CC0` at `0x46BB1A`. |
 | `0x420B00` | **the explosion draw**, `stdcall (ctx)`, `ret 4`, called only from DrawGameScreen at `0x469B2C`, so every draw of the effects -- the frame's `0x4969CD` and the screenshot function `0x495A30`'s DrawGameScreen(1,1) at `0x495C76` and `0x495E66` -- passes its entry; the movie recorder's DrawGameScreen(0,1) at `0x4962C2` skips the effects (`0x469B09`: `test ebx,ebx; je 0x469BD0`). Prologue `sub esp,0x14; push ebx; push ebp` (`0x420B00..0x420B04`), then `push esi; push edi` and `mov esi,0x511DF0` (`0x420B07`); the first read of a register it did not write is `mov eax,[esi]` at `0x420B0C`, so `eax`, `ecx` and `edx` are free at entry. Its debris loop calls the piece update `0x421550` at `0x420B18`. Impure's flying-piece latch replaces the five prologue bytes and returns to `0x420B05` ([engine patches](../modules/engine-patches.html), the flying pieces' emission). DISASSEMBLED |
+| `0x4B8EC0` | **the flash blit**, `stdcall`, `ret 0x10`: the explosion pass's flash loop draws each live explosion's flash frame through it (`0x420BC6`), `dst = LHT[(src − 0x4F)·256 + dst]`, gated by `TAProgram+0xF0` bit 7; its only other caller is itself (`0x4B8F3A`). Removed on a Vulkan launch with the effects' other leaves (`fxown`, a 6-byte prologue detour; [hook map](../modules/hook-map.md)); [effects](../effects.md) §1 has the loop. DISASSEMBLED (the call scan of `.text`) |
 | `0x4211D0` | **the debris piece draw**, `stdcall (ctx, sys, piece)`, `ret 0xC`, reached only from `0x421550`. It takes the eye off the piece's own position (`main+0x1431F`/`+0x14323`), draws nothing unless that point is in the viewport rect (`0x4B6720(main+0x37E27, sx, sy)` at `0x42123F`), and projects the vertices `0x421550` already rotated into `piece+0x22` with the same arithmetic as `0x46BAE0`, into **its own stack frame** of `0x3F58` bytes (the stack probe `0x4E4B20` allocates it with `eax = 0x3F58`, then four pushes, so the locals are `esp+0x10..0x3F68` and the return address is at `esp+0x3F68`): the projected vertices from `esp+0xE8` at 8 bytes each (the `lea` at `0x421256` is vertex 0's y at `esp+0xEC`; the face gather reads `[esp+8·i+0xE8]` and `[+0xEC]`, `0x4212EC`), room for **exactly 2000**, the next one over the return address; and one face's gathered points at `esp+0x20..0xE8` (`0x4212DC`), **25 of them** before the vertices begin — no push between the two `lea`s, so a face of 26 points or more writes over the node's first projected vertex. Neither count is tested; a count of 0 or less skips the projection (`test edx,edx / jle 0x4212A3` at `0x421252`) and still walks the faces. The face rules are `0x46BAE0`'s, plus flag bits 1 **and** 2: `0x4B7F30(face+0x18, logo)` with the logo colour reached as `sys+0` (the unit the piece flew off) `→ +0x96` (its PlayerStruct) `→ +0x27` (PlayerInfo) `→ +0x96` (`0x42132F..0x421346`), every link unchecked. DISASSEMBLED |
 | `0x421550` | the piece's update and draw, `stdcall (ctx, sys)`, `ret 8`, from the explosion pass's slot loop: smoke (`0x472810`) and fire (`0x472AB0`) by `sys+0x28` bits 1 and 0, then the triple built **reversed** as `{w14, w12, w10}` (`0x4215AF..0x4215C5`), every vertex of `*(piece+0)` rotated into `piece+0x22` from the last to the first (`0x4215EE`), then `0x4211D0`. The tick `0x4213B0` spins exactly those three words (`0x421509..0x421519`). **Both emissions are on layer 9** (`push 9` at `0x42156A` and `0x421591`), at the piece's position `piece+0x16`, and stock makes them **on every call, so once a DRAW**: the smoke `call 0x472810` at `0x421583` (returning to `0x421588`), the fire `call 0x472AB0` at `0x4215AA` (returning to `0x4215AF`), while the piece moves only in the tick. With the engine's frame loop free of the flip, that is 4 to 29 puffs a burning piece a tick onto one point (MEASURED, `fx-rockets` at 1024x768) and as many as the draw rate gives (*the draw rate*, [sim](sim.html)). Impure sends both calls through a stub that emits only when GameTime `main+0x38A47` moved since the previous explosion draw, latched at `0x420B00`'s entry (DeltaTime cannot be the test: a skirmish pause skips the scheduler and leaves it at the last count). Of the direct calls into the emitter set of [effects](../modules/effects.html) these two are the only ones DrawGameScreen `0x468CF0` reaches (a direct-call sweep) ([engine patches](../modules/engine-patches.html), the flying pieces' emission). DISASSEMBLED |
 | `0x421620` | a piece off a dying unit (callers `0x420F14`, `0x48123C`): with `sys+0x28` bit 2 it hands the piece to `0x421700`; otherwise it takes a free flying-piece slot, allocates the system with room for the rotated vertices (`0x66 + 12·nverts`), copies the 0x30-byte header (its `+0x00`, the unit, at `0x4216AA`) and the 0x36-byte piece, points `piece+0x22` at the vertices behind it and adds the unit's position. DISASSEMBLED |

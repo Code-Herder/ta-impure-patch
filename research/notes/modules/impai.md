@@ -530,14 +530,18 @@ keep only results of the renderer asked for. GDI is the ground truth for the AI'
 made on the default renderer (A2a's calibration among them) are not compared with GDI ones until
 they are made again under GDI.
 
-**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread skips
-engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
-`tagpu_terrown.c`, each armed by the render thread's own pass), and that those draws write no
-simulation state is argued per site, not checked. **On the exact scenarios it does not:**
+**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread does
+not run engine draws that GDI runs: the unit composite, removed at attach on every Vulkan launch
+(`tagpu_owndraw.c`), the feature leaf and the effects passes, removed the same way
+(`tagpu_featown.c`, `tagpu_fxown.c`), and the terrain draw `tagpu_terrown.c` skips while the render
+thread's terrain pass draws. That those draws write no simulation state is argued
+per site, not checked. **On the exact scenarios it does not:**
 `tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
 and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the
 renderers agree (3 GDI runs, 3 Vulkan runs)`), so GDI-made references hold for players on the
-Vulkan renderer there. The image digest differed at GameTime 0, in the player records or the
+Vulkan renderer there. Again on the build that removes the engine's features and effects on a
+Vulkan launch (MEASURED 2026-11-21, the same scenario, three runs a side): the 108 lines equal on
+every run and the recorded images equal at every tick. The image digest differed at GameTime 0, in the player records or the
 projectile pool; the tool reports that as information, since the trace is what a reference grades.
 Calibration's start check R4 sees the scoreboard rank, player record `+0x148`, move between runs
 under GDI (MEASURED 2026-11-13: 32 runs) and not in the earlier Vulkan runs; its one writer in play

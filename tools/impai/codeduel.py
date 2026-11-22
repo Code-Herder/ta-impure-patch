@@ -8,6 +8,7 @@ own ddraw.dll and playing the one computer seat it added.
 One game of two instances (twopeers.py: a private display, a DirectPlay port leased for the game), under the run
 lock for two game lanes on GDI, no GPU memory (tools/runlock.py). The host H runs DLL_A and the joiner J DLL_B,
 both launched with `--netai impai`; in the battle room the host adds a computer seat, A, and the joiner one, B.
+The two DLLs are of one play revision (tagpu_recorder.c, MP_PLAY_REVISION): a host refuses a joiner of another.
 The game plays until an AI seat holds no unit, its level ends or the host's GameTime reaches the cap, each peer
 then leaves through its menus (THE LEAVE), so its teardown writes ImpAI's level-end lines, and DIR/result.json
 is the game's result in bar.py's shape (`outcome` A, B or cap, `draw`, `end_tick`, `value`), so bar.outcome_of

@@ -352,25 +352,36 @@ reads, type CRCs and the two stops; what makes Escalation's tail four times reta
 established. Speed 20 would halve the 30 s, but a network game cannot turbo and plays variable
 batches at speed 20, so the suite keeps speed 10: that is the owner's call, not taken.
 
-**The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
+**The `pass-refused` and `pass-refused-ends` rows** refuse the UI pass in a live battle by
 `refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup
 with a lever plays no battle. `once`: the panel is opened, the lane is refused and has to come back and
 present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
-the side panel has to pass. `keep`: the session has to reach GDI, and GDI's screen has to come to show
-the engine's side panel within 60 s. `pass-refused` also opens `HELP.GUI` from the in-game menu across a
-second refusal (`dialog_after_reset`): the view has to change when it opens and be back when it closes.
-`pass-full` and `pass-full-gdi` are the same two roads with the
-driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and `wiki-stage-refused` refuses the
-wiki's stage alone: the page loses its 3D image, and the lane has to stay up.
+the side panel has to pass. `keep`: the retries are spent and the session has to end as the DLL ends it
+(`vk_give_up`, render_vk.c), since GDI is the `tagpu_gdi.on` oracle and never a fallback: the log says
+`vk: the lane cannot draw - the session ends`, a box titled `Total Annihilation: Impure cannot draw` comes up, and once
+it is dismissed (Return on the game's private display, `xdotool`) the process is gone with code 1, its
+own `TerminateProcess` and not the suite's kill. The box is the evidence: `classify` makes it the
+outcome `impure-ended`, which only a row whose goal names it accepts, so the same box anywhere else is an
+UNEXPECTED. The game's code is read before the lever (`exe_hooks`), as the process is gone by the end.
+`pass-refused` also opens `HELP.GUI` from the in-game menu across a second refusal (`dialog_after_reset`):
+the view has to change when it opens and be back when it closes. `pass-full` and `pass-full-ends` are the
+same two roads with the driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and
+`wiki-stage-refused` refuses the wiki's stage alone: the page loses its 3D image, and the lane has to
+stay up. `wine --refuse once|keep` puts either road into every named setup's battle.
 
 **On Windows** the refusal rows run only under `--smoke`, whose battle is where the refusal happens
-(`refuse_lane`): the log has to say the lane came back, or that the session went to GDI, and the game has
-to stay alive through the watch. On GDI the screen's side panel has to be the engine's (`win-shot.ps1`, the window
-letterboxed back to the engine's size, against a shot from before the lever): 0.003 % of the strip differs, MEASURED
-2026-11-07. A Vulkan picture is not judged there: on that setup's AMD card a copy from the screen and `PrintWindow`
-read black, and desktop duplication gets no frame. `pass-card-full` is the card filled for real (`vkfill`), Windows only, as the Wine
-path's GPU is the desktop's as well. `wiki-stage-refused` is left out: that path has no way to open the page. A setup with a lever
-plays no smoke, by the rule above.
+(`refuse_lane`): `once` has the log say the lane came back and the game stay alive through the watch;
+`keep` has the log say the session ends and the watcher (`win-watch.ps1`) find the box, after which the
+game is stopped as every smoke game is and has to be gone. Nothing in the logged-on session dismisses a
+box from there, so the box's own end of the process is the Wine run's to see. The smoke's boxes are the
+run's, so the outcome is `impure-ended` there too. No picture is judged on Windows: on that setup's AMD
+card a copy from the screen and `PrintWindow` read a Vulkan swapchain black, and desktop duplication gets
+no frame. `pass-card-full` is the card filled for real (`vkfill`), Windows only, as the Wine path's GPU is
+the desktop's as well; filled by another process a card may refuse nothing (WDDM pages), so its goal
+names both designed endings, `impure-active` with the lane back and `impure-ended` where the driver
+refuses, and the rest of the goal is judged on the one that happened (`goal_met_by`).
+`wiki-stage-refused` is left out: that path has no way to open the page. A setup with a lever plays no
+smoke, by the rule above.
 
 **Test mode's attach line is judged on every Windows smoke row** (`store_misses`): a folder DLL started before Impure
 fails it, but for the last one named on a route where TADR's `DllMain` loads Impure (`tadr_started`), and a row's `store_covers` names DLLs no import table reaches, such as the forwarder's `tplayx`. `store_loaded`

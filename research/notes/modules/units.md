@@ -55,7 +55,7 @@ the frame packet (§2.89), so `tagpu_native.c` builds no vertices at all.
 | **the ground does NOT cast** (2026-09-09) | **Since 2026-09-23 nothing builds a ground caster at all — `build_hills` and `tagpu_terr_hills_draw` are deleted and `terrainshadow=` is parsed and logged only.** The record: `terrainshadow` now defaults to **0** (`tagpu_classicpp.c` `shadow_defaults`), so `tagpu_shadow.c:398` returns before `tagpu_terr_hills_draw` and the heightfield contributes nothing to the depth map. Units are unaffected — this is the caster's own gate, not the shared bias. The ground casting on itself darkened open water in the caster's own 16-unit lattice and got worse as `Shadow quality` went up; seven candidate fixes were swept and costed and every one removed the artifact and the terrain-shadow feature together, because a cell's own relief *is* the terrain shadow ([renderers](../renderers.html) §2.7b). `terrainshadow=1` in the cfg still turns it on and is the fixture the eventual fix is measured in; the render-options screen has no row for the key and never writes it, so nothing a player can click re-enables it. The hills mesh is still BUILT at map load (6.4 MB + 12.9 MB on Two Continents) — it is simply never drawn, which is an **open TODO**: `build_hills` is unconditional where the draw is gated, and the fix is a lazy build on first draw rather than gating the build (the flag is live, and `terrainshadow=1` mid-session is the fixture the shadow fix is measured in). See [roadmap](../roadmap.html) |
 | **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
 | **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
-| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. Since step 8 there is no CPU emitter to leave those units to, so the refusal is *published* and `owndraw` stops skipping the engine's own unit rasterise — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
+| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. There is no CPU emitter to leave those units to, and the engine paints none on a Vulkan launch, so a refusal draws no unit — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
 | **the topology** | consumed from the bake entry's `parent[]` — `pose_accum_body`'s per-unit sibling scan is gone from the posed path, which is what §2.10 cached it for |
 | **the VAO** | one per material stream, built at bake time, binding the geometry buffer (locations 0-3) and the material stream (4-6) together, so a draw is one bind |
 | **the model top** | `s_emitTop` is gone; the top was each piece's baked BODY-range rest AABB through its pose matrix (`tagpu_posedraw_top`), an over-estimate that fed wrecks only. **Deleted 2026-09-23, with the AABB the bake kept for it (`pmn`/`pmx`/`pbody`): nothing called it once the Vulkan lane took the units** |
@@ -100,17 +100,10 @@ same picture, but bounded, deliberate and visible in the log, rather than a race
 48-slot arena it reads `rest=6900` with the **same unit and triangle counts** as the healthy build:
 every unit still drawn, nothing dropped.
 
-**When it cannot arm at all** (step 8, decision B). `owndraw`'s detours skip the engine's own unit
-rasterisers and are installed at DLL attach, so with no CPU emitter left "draw nothing" would be
-the default failure — every unit in the game invisible. So `tagpu_owndraw_classify` **asks before
-it skips**: it reads a readiness word this pass publishes, and hands the draw back to the engine
-(8bpp, composited through the terrain key) when the pass is not live. That read crosses threads and
-is safe by **direction**, not by timing: the word is one aligned `int`, written only by the render
-thread, set to "live" only after the programs have linked, and cleared by `tagpu_posedraw_glreset()`
-*before* a new context is used. A stale "not ready" costs a one-frame double draw; a stale "ready"
-is the unsafe direction and no write order produces it. The log line fires only once the pass has
-**tried and failed**, not during the ordinary first frames before the render thread has built
-anything.
+**When it cannot arm at all**, nothing else draws the units: on a Vulkan launch the engine's own
+unit draw is removed at attach (*The engine draws no unit on a Vulkan launch*, below). The pass
+logs its refusal once, in its own `posedraw: refused — …` line, when it has tried and failed, not
+during the first frames before the render thread has built anything.
 
 **What `MAXNV` stopping applying to units actually looks like.** The claim used to be a design
 note; `scenarios/crowd-static.json` (256 units of 16 types, one owner, no orders — the large scene
@@ -345,10 +338,10 @@ pays what it draws.
 
 ### A unit's block, and the frame's (`tagpu_glsl.h` `TAGPU_GLSL_UNIT_BLOCK`, `tagpu_vk_unit.c` `unit_block`)
 
-**A unit owns one uniform block, 112 bytes, and every draw of it binds that block.** Both stages of
+**A unit owns one uniform block, 128 bytes, and every draw of it binds that block.** Both stages of
 the unit program declare `Unit` (std140; `tagpu_glsl.h` lists the offsets, which are `unit_block`'s
-word indices): the anchor, the cast's three numbers, the depth key base, the three pose bases and
-the wire base, the fog switch, the waterline and build-state numbers, alpha. Its body, its hard
+word indices): the anchor, the cast's three numbers, the depth key base, the three pose bases, the
+fog switch, the waterline and build-state numbers, alpha, and the anchor on the wire's line grid. Its body, its hard
 shadow, its nanoframe wire and its cast all bind the same bytes, written once a unit.
 
 **What every unit of a frame shares is the frame's.** Each stage's default block is written once a
@@ -367,6 +360,88 @@ name that is a default uniform in one stage and a block member in the other link
 and `tools/tascene-render.js` feeds the block from a uniform buffer whose member offsets it reads
 from the linked program. A change to the block is checked there by the wiki gate's `units` lane
 (`stage3dcheck`: the game's stage against the mockup).
+
+### The nanoframe wire: one instance an edge, posed on the device (`tagpu_posedraw.c` `WVS`, `tagpu_vk_unit.c`)
+
+**A nanoframe costs the CPU one draw, as its body does.** The bake's WIRE range is vertex pairs,
+one an edge, in the unit's own geometry and material streams. The wire's draw binds both streams
+again from the range's first vertex at INSTANCE rate, two vertices a step (`wire_layout`), so
+instance `i` is the pair `2i, 2i+1`: both rest positions and pieces, both skip flags.
+`vkCmdDraw(6, wireCount / 2)`. `WVS` poses each end as `VS` poses a vertex, puts it on the line
+grid by `tagpu_line.h`'s rule, and draws the band the fragment stage cuts to `0x4CC7AB`'s walk.
+An edge on a skipped face, on a hidden piece, or with an end past `TAGPU_LINE_MAXC` collapses
+outside the clip volume.
+
+**The ends are exact by construction against a CPU reference.** `tagpu_line.h`'s rule is
+`floor(ss·Z(anchor + q))`, `q` the posed end's offset from the anchor. `Z` is affine, so the rule
+is `floor(K + q·S)` with `K = ss·Z(anchor)` and `S = zoom·ss`. `wire_anchor` computes `K` in
+double once a unit and splits it into whole pixels and a fraction (`uWireKi`, `uWireKf` in `Unit`);
+`S` is one float a frame (`uLineS`, beside `uLineSs` in the vertex block's padding). The float sum
+then carries a few hundred pixels and a fraction, not a map coordinate. Every step after the split
+is `precise` in `WVS` (26 `NoContraction` decorations in its SPIR-V), and Vulkan rounds an add and
+a multiply correctly, so each operation rounds once; `wire_ref` performs the same operations in the
+same order on the CPU, each rounded to single through a store (the file builds for the x87, whose
+64-bit significand makes one rounding to single the correctly rounded result). `wire_ref` runs only
+on the A/B frame, for the line list `tools/line-oracle.py` walks; the bake keeps the WIRE range
+and the skip flags for it (*Vertex streams*, below).
+
+MEASURED 2026-11-21, `scenarios/nanoframe-ladder`, 1024×768, `ss = 2`, `--defaults`, a diagnostic
+build that drew the wire alone into the world target: 1 384 edges at four zooms (1×, 0.877×, 0.59×,
+and 1.6×), **0 px** between the capture and the oracle's walk of `wire_ref`'s list in every view
+(27 776, 23 877, 14 365 and 53 393 px lit). The build before, its ends placed in double on the CPU,
+gave the same four lists end for end and the same four captures pixel for pixel.
+
+MEASURED 2026-11-21, `scenarios/zombie-kingdom-13k` (`tools/battle13k.py`'s battle, 13 500 units
+falling, about 870 of them nanoframes), 1920×1080, a private Xvfb with the RTX 4070, the render
+lane's `unit_upload` span:
+
+| | default zoom | the floor, 0.088 |
+|---|---|---|
+| the wire posed on the CPU (the build before) | 0.2–2.4 ms a frame | 167–188 ms a frame |
+| the wire posed on the device | 0.04–0.08 ms | 0.5–0.7 ms |
+
+At the floor the render lane went from 3.3–3.7 to 14–15 frames a second there, the rest of each
+frame now Xvfb's present. The GPU's own time a frame, `tagpu_ftime`'s p50, stayed 10–13 ms at the
+floor.
+
+**Not covered.** The oracle views did not include the floor; the precision argument is weakest
+where `|q·S|` is largest, which is the zoomed-in view, and that one was measured. The device was
+the RTX 4070 alone.
+
+### The engine draws no unit on a Vulkan launch (`tagpu_owndraw.c` `remove_composite`)
+
+**Every unit and husk on the screen is the unit pass's, so the engine no longer paints its own.**
+DrawUnit `0x45AC20` reposes its unit and then calls the composite `0x458810` at `0x45AE73`: the
+8bpp picture, its blit with the shadow, the build-state effect. On a Vulkan launch that call is
+replaced at attach by `add esp,8`, the composite's own `ret 8` (hook map §2.1), after
+`0x45AE5C..0x45AE7F` are checked. The repose before it stays: the pose cache is the one thing under
+DrawUnit the simulation reads. What is removed is draw-only by the census in
+[render](../engine/render.html), *Every store family*, and the cursor's pick reads the model's box
+(`0x48C6A0`). Nor does it move the game thread's CRT stream, the one channel by which a draw could
+reach the simulation ([sim](../engine/sim.html), *The two random streams*): `rand` `0x4E4870` is not
+among the 125 functions `0x458810` reaches by direct calls and jumps [DISASSEMBLED 2026-11-21; indirect
+calls not followed]. `tools/tasim/rendereq.py`'s "the renderers agree" (2026-11-13) was measured
+with the composite still running on both renderers and has not been run since. A launch is one backend for its life: `tagpu_gdi.on` is the only way to GDI, read
+at attach, and a Vulkan lane that cannot draw ends the session rather than handing it to GDI
+([vulkan-backend](vulkan-backend.html)). Under `tagpu_gdi.on` the engine draws every unit, as stock.
+
+MEASURED 2026-11-21, a scratch build whose gate followed a lever file each frame, 1280×1024 on a
+private display with the RTX 4070, `--defaults`, the game paused: `crowd-static`, `nanoframe-ladder`
+and `one-wreck`, each at the scenario's zoom and two notches out, captured twice with the engine's
+draw off, twice on, once off again. **0 px differ** between off and on in five of the six views; in
+the sixth 247 px changed between the second "off" and the first "on" capture and stayed changed
+with the draw off again: a piece that moved once.
+
+MEASURED 2026-11-21, `zombie-kingdom-13k` (13 500 units), 1920×1080, the profiler's game lane, the
+same two 20-s windows a zoom as *The nanoframe wire* above:
+
+| | `sweep` near / at the floor, ms a frame | game frames a second, near / at the floor |
+|---|---|---|
+| the engine's draw in | 9.9–10.4 / 28.4–46.8 | 4.9–11.8 / 5.8–10.1 |
+| removed | 6.0–7.2 / 13.0–22.6 | 4.9–18.0 / 7.2–14.9 |
+
+What is left of `sweep` is DrawUnit's repose and the sort: the engine transforms every posed piece
+of every unit in view into the pose cache, which the simulation's SweetSpot and EXPLODE read.
 
 ### Vertex streams: bounded on the way up, and held only until sent (`tagpu_vk_unit.c`, `tagpu_posebake.c`, `tagpu_vk_stage.c`)
 
@@ -406,9 +481,10 @@ the entry's pointer and serial as the accessors do; a stale one does nothing.
   away is left out of the hand-over (`tagpu_native.c`'s gather, as for a type that will not bake)
   and drawn from the frame that bakes it. An owed stream that the frame just ended did not ask
   for has no consumer left to send it, and its entry is dropped.
-- **What is read every frame stays in the bake**: a geometry stream's WIRE range, four floats a
-  vertex, and a material stream's skip flags, a byte a vertex. The nanoframe wire's records are
-  posed from the two (`tagpu_posebake_geom_wire`, `_mat_skip`).
+- **What the A/B frame's wire list is placed from stays in the bake**: a geometry stream's WIRE
+  range, four floats a vertex, and a material stream's skip flags, a byte a vertex
+  (`tagpu_posebake_geom_wire`, `_mat_skip`). The device reads the same pairs out of the uploaded
+  streams; the CPU places them only for that list (`wire_ref`, *The nanoframe wire* below).
 - **The wiki's instance keeps its streams** (`TAGPU_PB_KEEPSTREAMS` 1, `tagpu_scene.h`): the tech
   tree's view poses its picture from them every frame, and its stage bounds how many there are.
 
@@ -553,7 +629,7 @@ to NONE:
   closed hull. Culling would lighten every ghost to 0.40, and it shows both skins of a
   back-to-back pair blended.
 - **the effects models' `s_pipeFx` and the nanoframe wire's `s_pipeWire`**: a run is a rectangle
-  and a wire record is a band, and neither's winding says anything about a face.
+  and a wire edge is a band, and neither's winding says anything about a face.
 
 The sun-shadow map's `s_pipeCast` keeps its own NONE (a caster's back faces write depth too).
 
@@ -575,7 +651,7 @@ body's argument above.
 - **The nanoframe wire still outlines faces seen from behind.** The engine's wire walk `0x4C0820`
   drops them like the fills do; ours draws every face's edges and relies on the body's depth, which
   hides them behind a closed hull but not on a single-sided face seen from behind. Not new with this
-  change. Closing it needs each wire record to carry its face's winding (a third vertex) so the
+  change. Closing it needs each wire pair to carry its face's winding (a third vertex) so the
   wire's vertex stage can drop the edges of back faces.
 - Whether the engine's face-0 skip (`0x459AA2`) meets the file's selection primitive or a real face
   is open (engine map, the same section); `tagpu_posebake.c` keeps face 0 in the body and wire

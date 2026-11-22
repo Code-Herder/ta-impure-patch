@@ -186,25 +186,20 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            exists next to the exe; all detours are byte-match guarded. */
         tagpu_tracer_init();
 
-        /* tagpu: Phase B own-the-draw — skip the engine's software rasterise of
-           the per-unit composite for chosen types (GPU thread paints instead).
-           No-op unless "tagpu_owndraw.on" exists; byte-match guarded. Five sites,
-           all disjoint from the suppress/tracer detours: the two rasterisers
-           0x459830/0x459C70, the build-state effect 0x458DD0, and the two
-           structure-shadow branches 0x4592BF/0x459522. EVERY ONE OF THEM
-           DECIDES PER DRAW against a flag a live lane sets — installing them
-           suppresses nothing. */
+        /* tagpu: on a Vulkan launch the engine draws no unit -- DrawUnit's call
+           of the composite at 0x45AE73 is removed, byte-match guarded; after
+           cfg_load, whose tagpu_gdi.on decides the backend. Disjoint from the
+           suppress/tracer detours on DrawUnit's entry 0x45AC20. */
         tagpu_owndraw_init();
 
-        /* tagpu: own the effects draw — redirect the two effects-pass call sites
-           in DrawGameScreen and detour four draw leaves (0x46BAE0/0x4B8EC0/
-           0x4211D0/0x4B7F90), all disjoint from the detours above. No-op unless
-           "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
+        /* tagpu: on a Vulkan launch the engine draws no effect -- the two
+           effects-pass call sites in DrawGameScreen redirected and five draw
+           leaves (0x46BAE0/0x4B8EC0/0x4211D0/0x4B7F90/0x471F90) detoured, all
+           disjoint from the detours above; byte-match guarded. */
         tagpu_fxown_init();
 
-        /* tagpu: own the engine's feature draw. No-op unless
-           "tagpu_featown.on" exists; byte-match guarded; one leaf,
-           0x46A610, disjoint from every other detour. */
+        /* tagpu: on a Vulkan launch the engine draws no feature -- one leaf,
+           0x46A610, disjoint from every other detour; byte-match guarded. */
         tagpu_featown_init();
 
         /* tagpu: own the engine's terrain draw and, with it, the fog overlay.
@@ -365,7 +360,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            engine's scheduler 0x464F92 sent to ours, the step's call 0x4955E5 sent to the join that
            applies a tick's results, and set goal 0x44F2A0 observed -- the join and the observer
            inert unless the scheduler is ours -- byte-matched with the three engine functions ours
-           calls. It then makes up to three threads that search beside the game thread; made under
+           calls; a failure is refused at the first DirectDraw call (tagpu_pathfind_report). It
+           then makes up to three threads that search beside the game thread; made under
            the loader lock, they start when this attach returns and wait until the scheduler wakes
            them. With "tagpu_pathverify.on" the
            engine's scheduler stays and four observers at 0x40EB70, 0x40D900, 0x40E050 and 0x440BE0
@@ -653,6 +649,7 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
     TRACE("-> %s(lpGUID=%p, lplpDD=%p, pUnkOuter=%p) [%p]\n", __FUNCTION__, lpGUID, lplpDD, pUnkOuter, _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_pathfind_report();
     tagpu_modload_check();
     tagpu_takeover_verify_image();
 
@@ -702,6 +699,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
         _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_pathfind_report();
     tagpu_modload_check();
     tagpu_takeover_verify_image();
 

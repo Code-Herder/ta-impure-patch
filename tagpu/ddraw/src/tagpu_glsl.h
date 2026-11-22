@@ -100,16 +100,17 @@
      52 int   uRowBase   its first row in `uPose`, in vec4; a model's first run
      56 int   uFlagBase  its first shaded word
      60 int   uVisBase   its first visibility word
-     64 int   uWireBase  its first wire record
-     68 int   uFog
-     72 int   uWaterMode 1 erase (enemy), 2 tint (own)
-     76 int   uNanoOn    build-state staging on
-     80 float uAlpha
-     84 float uWaterT    vy <= this is under water
-     88 float uDigT      vy <= this is below ground
-     92 float uNanoT     height threshold, depth bytes
+     64 int   uFog
+     68 int   uWaterMode 1 erase (enemy), 2 tint (own)
+     72 int   uNanoOn    build-state staging on
+     76 float uAlpha
+     80 float uWaterT    vy <= this is under water
+     84 float uDigT      vy <= this is below ground
+     88 float uNanoT     height threshold, depth bytes
      96 vec3  uNanoC     cAbove, cBand, cBelow
-    112 bytes */
+    112 ivec2 uWireKi    the anchor on the line grid, whole pixels (WVS)
+    120 vec2  uWireKf    ...and the fraction, [0, 1)
+    128 bytes */
 #define TAGPU_GLSL_UNIT_BLOCK \
     "layout(std140) uniform Unit {\n" \
     "  vec4 uAnchor;\n" \
@@ -123,7 +124,6 @@
     "  int uRowBase;\n" \
     "  int uFlagBase;\n" \
     "  int uVisBase;\n" \
-    "  int uWireBase;\n" \
     "  int uFog;\n" \
     "  int uWaterMode;\n" \
     "  int uNanoOn;\n" \
@@ -132,6 +132,8 @@
     "  float uDigT;\n" \
     "  float uNanoT;\n" \
     "  vec3 uNanoC;\n" \
+    "  ivec2 uWireKi;\n" \
+    "  vec2 uWireKf;\n" \
     "};\n"
 /* the draw kinds `uPass` names, in both stages: the vertex stage reads only
    whether it is the hard shadow */

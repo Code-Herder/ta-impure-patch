@@ -50,7 +50,6 @@
 #include "tagpu_terrown.h"
 #include "tagpu_zoom.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
-#include "tagpu_owndraw.h"
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_detour.h"
@@ -271,28 +270,14 @@ void tagpu_terrown_set_skip(int on)
 {
     /* A LANE BEING REBUILT STILL OWNS THE GROUND. The camera's range past the map's edge holds only
        while this skip does (tagpu_zoom.c, "the camera's range"), and the frames in the gap reach no
-       screen, so the engine's terrain would be drawn for nobody and the eye moved for everybody.
-       `tagpu_zoom_render_gone` ends the hold on the road to GDI, before the overlay comes here. */
+       screen, so the engine's terrain would be drawn for nobody and the eye moved for everybody. */
     if (!on && tagpu_zoom_live_held()) return;
     unsigned char v = (unsigned char)(on && g_installed);
     if (v != g_terrown_skip) {
-        /* THE STRUCTURE-SHADOW GATE GOES UP BEFORE THE SKIP, AND DOWN AFTER IT.
-           Once the skip is visible the GAME thread key-fills the viewport, and
-           from that moment anything the engine blits into its own surface --
-           its cached slant shadow above all -- reaches the screen as opaque
-           teal through the composite's inversion. Raising the gate first is an
-           ordering (x86 does not reorder these two stores, and the game
-           thread's unit blits come after its own terrain blit), so no draw can
-           key-fill under a lowered gate. Lowering it after the skip is the
-           benign direction: one frame of a missing shadow rather than one of
-           teal. (The unit pass publishing `tagpu_terrown_filled()` a frame
-           later instead gives up to two teal frames on every acquisition.) */
-        if (v) tagpu_owndraw_set_structshadow_terr(1);
         /* the engine's surface still holds a real terrain blit at this instant;
            the composite must not invert until a filled frame has gone through */
         g_filled = 0;
         g_terrown_skip = v;
-        if (!v) tagpu_owndraw_set_structshadow_terr(0);
         flog(v ? "terrown: engine terrain + fog overlay SKIPPED (ours live)"
                : "terrown: engine terrain + fog overlay restored");
     }

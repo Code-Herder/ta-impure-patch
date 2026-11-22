@@ -221,7 +221,7 @@ def main():
     for name, utype, run_s, after_s in todo:
         run_one(a.instance, name, utype, run_s, after_s, out)
     if not a.keep:
-        tacli("arm", a.instance, "cobtrace.on=off", "native.on=off", "owndraw.on=off", "posedump.on=off")
+        tacli("arm", a.instance, "cobtrace.on=off", "native.on=off", "posedump.on=off")
     print(f"fixtures in {out}")
 
 

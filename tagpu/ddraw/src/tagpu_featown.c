@@ -1,4 +1,4 @@
-/* tagpu_featown.c — own the engine's feature draw.
+/* tagpu_featown.c — the engine draws no feature on a Vulkan launch.
 
    Every feature pixel in the 8bpp frame comes from ONE leaf:
 
@@ -9,19 +9,23 @@
    pre-pass (0x469920 gated, 0x46992F plain) and the deferred row sweep
    (0x469ABB). Detouring the leaf rather than the two loops is the narrow cut:
    the loops keep running, so the pre-pass still clears tile->flags bit2 and
-   sets it for tall defs, which is the state the row sweep reads — we remove
-   the pixels and nothing else.
+   sets it for tall defs, which is the state the row sweep reads — the pixels
+   go and nothing else.
 
    The leaf is pure draw. Its decompile shows bodies 2 and 3 writing no
    engine state at all, and body 1 (3D wreckage) writing only the DRAW-side
    scratch feature-unit *(main+0x1420F) before calling DrawUnit. Animation is
    advanced by the sim tick, not here: GAFGetCurrentFramePtrAddr only reads
-   the anim state's frame index. So skipping it is invisible to the sim.
+   the anim state's frame index. So removing it is invisible to the sim.
 
-   Because body 1 goes through DrawUnit, skipping the leaf removes 3D
-   wreckage too — tagpu_feat.c therefore only sets the skip while the native
-   pass's wreck gather is armed (native.on="… wrecks"), which draws those
-   husks natively.
+   WHY NOTHING IS LOST. The engine's features never reach the presented frame
+   on the Vulkan backend: the world phase stamps them and `publish` refuses
+   them (tagpu_gui_hook.c), so they land only in the golden source `tacli shot`
+   reads, and every feature on screen is the Vulkan feature pass's. Body 1's
+   3D wreckage went with DrawUnit's composite already (tagpu_owndraw.c). The
+   picture with every engine draw in it is GDI's, the tagpu_gdi.on oracle,
+   where nothing here installs; a launch is Vulkan or GDI for its life, so the
+   detour installs at attach or never.
 
    Prologue: 8B 4C 24 08 53 = `mov ecx,[esp+8]; push ebx` — five
    position-independent bytes ending on an instruction boundary, so the steal
@@ -31,63 +35,26 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_featown.h"
-#include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "config.h"         /* g_config.gdi: the renderer chosen at attach */
 #include "tagpu_log.h"
 
 #define LEAF_FEAT_VA  0x0046A610u   /* ret 0x10 */
 static const unsigned char FEAT_STOLEN[5] = { 0x8B, 0x4C, 0x24, 0x08, 0x53 };
 
-volatile unsigned char g_featown_skip = 0;
-static int g_installed = 0;
-static unsigned g_beat = 0, g_last = 0;
-
-static void flog(const char* s)
-{
-    tagpu_log(s);
-}
+/* THE BYTE THE STUB TESTS, AND IT IS NEVER WRITTEN: tagpu_detour's leaf stub
+   is `cmp byte [flag],0; jz resume; ret N`, so the leaf returns at once. */
+static volatile unsigned char s_removed = 1;
 
 void tagpu_featown_init(void)
 {
-    char b[160];
-    if (!tagpu_opt_on("tagpu_featown.on")) return;
+    int installed;
+    if (g_config.gdi) return;
     if (memcmp((void*)LEAF_FEAT_VA, FEAT_STOLEN, 5) != 0) {
-        flog("featown: NOT armed — engine bytes differ at 0x46A610");
+        tagpu_log("featown: the engine's feature draw is KEPT — engine bytes differ at 0x46A610");
         return;
     }
-    g_installed = tagpu_detour_leaf(LEAF_FEAT_VA, FEAT_STOLEN, 5, &g_featown_skip, 0x10);
-    _snprintf(b, sizeof b,
-        "featown: %s feature@0x46A610=%d (skip follows tagpu_feat.on)",
-        g_installed ? "ARMED" : "FAILED", g_installed);
-    flog(b);
-}
-
-void tagpu_featown_set_skip(int on)
-{
-    unsigned char v = (unsigned char)(on && g_installed);
-    if (v != g_featown_skip) {
-        g_featown_skip = v;
-        flog(v ? "featown: engine feature draw SKIPPED (ours live)"
-               : "featown: engine feature draw restored");
-    }
-}
-
-void tagpu_featown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
-
-void tagpu_featown_flush(unsigned int frame_counter)
-{
-    if (!g_installed) return;
-    /* if the native pass stops running (overlay off, a frame path that never
-       reaches it) the engine's features come back rather than the map going
-       bare */
-    if (g_featown_skip && frame_counter - g_beat > 90) {
-        flog("featown: feature pass silent for 90 frames");
-        tagpu_featown_set_skip(0);
-    }
-    if (frame_counter - g_last >= 300) {
-        char b[64];
-        g_last = frame_counter;
-        _snprintf(b, sizeof b, "FEATOWN skip=%u", (unsigned)g_featown_skip);
-        flog(b);
-    }
+    installed = tagpu_detour_leaf(LEAF_FEAT_VA, FEAT_STOLEN, 5, &s_removed, 0x10);
+    tagpu_log(installed ? "featown: the engine's feature draw is removed (0x46A610, Vulkan)"
+                        : "featown: the engine's feature draw is KEPT — 0x46A610 could not be written");
 }

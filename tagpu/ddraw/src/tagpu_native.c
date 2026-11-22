@@ -25,8 +25,8 @@
        engine blits one blackened copy of the composite, so a pixel the model
        covers twice is still darkened once (see the shadow loop). A mobile
        unit's is its body silhouette; a structure's is the engine's cached
-       SLANT projection, which owndraw "all" stops the engine from blitting
-       and emit_slant draws from the live posed prims by the engine's
+       SLANT projection, which the engine no longer blits on a Vulkan launch
+       (tagpu_owndraw.c) and emit_slant draws from the live posed prims by the engine's
        own raster rules -- every face, flat, no waterline erase. A 3DO
        wreck keeps the engine's FShadow feature shadow. FBI
        noshadow/canhover/floater gates mirror the engine;
@@ -48,8 +48,8 @@
        walking the sweep-rect FeatureStruct tiles (flags bit0 -> wreck record
        *(main+0x1420B)+idx*0x30; only defs with FeatureMask bit0 CLEAR are 3D)
        and emitted at FEATURE depth (3+rel*4). The engine's own wreck draw
-       (scratch fake-unit *(main+0x1420F) -> DrawUnit) is suppressed by the
-       owndraw classifier when tagpu_native_wrecks_armed().
+       (scratch fake-unit *(main+0x1420F) -> DrawUnit) paints nothing on a
+       Vulkan launch (tagpu_owndraw.c).
      - 2x SUPERSAMPLING (the Supersampling row, tagpu_settings_ss; tagpu_ss.off
        is its lever): geometry renders into a 2x-game-res world target,
        resolved onto the frame through a LINEAR sampler (DVS/DFS below, drawn
@@ -86,7 +86,6 @@
 #include "tagpu_range.h"
 #include "tagpu_icon.h"     /* the strategic icons: which unit is one, which model hides */
 #include "tagpu_order.h"
-#include "tagpu_owndraw.h"   /* tagpu_owndraw_set_structshadow */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* the per-type geometry bake and its caches */
 #include "tagpu_vk_unit.h"   /* tagpu_vk_unit_fx_ready: whether the models can be drawn */
@@ -670,10 +669,8 @@ static int type_match(const char* def)
    because the composite scales OUR fragments and passes its frame through 1:1.
    A nanoframe left on the composite path therefore sits at its 1x pixels while
    the world moves under it — it slides away from the factory or the commander
-   building it the moment the zoom is not 1, and
-   with owndraw "all" in force it is not even the engine's own look:
-   the rasterise is skipped, so 0x458DD0 recolours an empty composite and only
-   its wireframe survives. */
+   building it the moment the zoom is not 1. (On a Vulkan launch the engine
+   paints no unit at all: tagpu_owndraw.c.) */
 /* Is this unit's ModelId one model_root() will resolve? The bound is
    UNITINFOCount, the count 0x42DBCA itself loops to. Factored out so
    `tagpu_native_owns_unit` and `model_root` cannot drift apart about it —
@@ -718,42 +715,12 @@ int tagpu_native_owns_unit(const char* u)
         const char* ta = *(const char* const*)TA_MAINPP;
         if (!model_id_ok(ta, u, NULL)) return 0;
     }
-    /* A UNIT UNDER CONSTRUCTION IS OWNED LIKE ANY OTHER, unconditionally --
-       whether or not the build-effect detour on 0x458DD0 (tagpu_owndraw.c) is
-       present, and whatever `tagpu_nano.off` says. "The engine owns
-       nanoframes" is no fallback: the engine's frame reaches no pixel of the
-       screen, and `owndraw` is off the play defaults, so a nanoframe declined
-       here would draw nothing but its health bar.
-
-       Nothing is lost by owning one with `owndraw` unarmed, the play default:
-       the engine's scaffold then lands in its own frame, which is the golden
-       source and is exactly what the 1997 rasteriser draws. (With `owndraw`
-       armed and its 0x458DD0 detour refused, the classifier wipes the owned
-       composite and the engine's effect runs on the empty copy, so the golden
-       source holds a stripped nanoframe. The screen is unaffected either way.) `tagpu_nano.off` means "draw it
-       UNSTAGED", a finished-looking unit, rather than "hand it to nobody". */
+    /* A UNIT UNDER CONSTRUCTION IS OWNED LIKE ANY OTHER, unconditionally, and
+       whatever `tagpu_nano.off` says: the engine paints no unit on a Vulkan
+       launch (tagpu_owndraw.c), so a nanoframe declined here would draw nothing
+       but its health bar. `tagpu_nano.off` means "draw it UNSTAGED", a
+       finished-looking unit, rather than "hand it to nobody". */
     return 1;
-}
-
-int tagpu_native_owns_obj(unsigned int obj3do)
-{
-    if (s_armed != 1) return 0;
-    if (!ptr_ok((const void*)(size_t)obj3do)) return 0;
-    const char* u = *(const char* const*)((size_t)obj3do + O3_THISUNIT);
-    if (!ptr_ok(u)) return 0;
-    int own = tagpu_native_owns_unit(u);
-    static int diag = 0;
-    if (own && diag < 6) {
-        diag++;
-        const char* def = *(const char* const*)(u + U_TYPE);
-        char b[160];
-        _snprintf(b, sizeof b, "native OWNS: u=%p def=%p \"%.12s\"/\"%.12s\"/\"%.12s\" type=%s",
-                  (const void*)u, (const void*)def,
-                  ptr_ok(def) ? def + 0x00 : "?", ptr_ok(def) ? def + 0x20 : "?",
-                  ptr_ok(def) ? def + 0x80 : "?", s_type);
-        nlog(b);
-    }
-    return own;
 }
 
 /* THE UNIT'S MODEL TEMPLATE, BOUNDS-CHECKED — and the bound is the whole
@@ -1914,10 +1881,6 @@ static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int 
 }
 
 
-/* Lower the structure-shadow gate on the way out of a frame this pass will not
-   draw, stamping the heartbeat as it goes. See the one place it is RAISED,
-   below the viewport bound. */
-#define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0, f->frame_counter)
 
 void tagpu_native_presented(unsigned int frame_counter)
 {
@@ -1968,15 +1931,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
     /* THIS PASS GATHERS AND HANDS OVER; it draws nothing itself. The arm
        poll, the view, the fog and palette COPIES, the four gathers and the
-       vertex emission are the pass.
-
-       A PASS PAINTING NOTHING MUST LEAVE THE ENGINE DRAWING ITS OWN SLANT
-       SHADOWS rather than leave every building without one: every return from
-       this function that precedes the structure-shadow publication reaches it
-       through `SSHADOW_NONE()` (seven of them), the two that follow it cannot
-       strand a raised gate because it has already been published, and the gate
-       is read-and-clear besides -- so a frame that never reaches the painters
-       lowers it anyway. */
+       vertex emission are the pass. */
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `tagpu_native_owns_unit()`
@@ -2082,7 +2037,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        asking for them: the walk costs it four engine arrays.
        Raised every frame, PASSIVE OR NOT — a passive pass still counts what it
        would have drawn — and dropped by fxown's watchdog after 90 silent
-       frames, the same one the two skip bytes stand on. */
+       frames. */
     tagpu_fxown_set_want(fxOn, sfxOn, f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
     /* THE MAP'S OWN FEATURES ARE ASKED FOR HERE, before the first early
@@ -2096,22 +2051,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        engine's driver back from its own disarm path, and it can only do that
        if it is still being asked */
     tagpu_order_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) { SSHADOW_NONE(); return; }
+    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
     /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, and
        are asked unconditionally: the unit pass needs the atlas laid out and the
        LUT mirrored, and the atlas's existence is its `made` flag
        (tagpu_gaf.h). */
-    if (!tagpu_r3d_ensure()) { SSHADOW_NONE(); return; }
+    if (!tagpu_r3d_ensure()) return;
 
     char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) { SSHADOW_NONE(); return; }
+    if (!ptr_ok(ta)) return;
     /* THE ENGINE'S TABLE, which every world colour source is built from --
        the Gamma factor is applied once, to the finished world image
        (tagpu_pal.h). No frame is drawn before a packet has carried it: every
        consumer of this pass's hand-overs refuses a NULL table anyway, and
        skipping here keeps the gathers from building work nothing can draw. */
     const unsigned char* pal = tagpu_pal_engine();
-    if (!pal) { SSHADOW_NONE(); return; }
+    if (!pal) return;
     /* the unit atlas's allowance frame, before any face asks it for a UV (a
        full atlas was recycled above, before the generation latch) */
     tagpu_r3d_atlas_frame();
@@ -2145,7 +2100,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        one, is no world to draw. The composite key rect (uVp), the zoom's
        published view and the effective gather below all mean this rect. */
     const TAGPU_PACKET* pk = f->packet;
-    if (!pk || !pk->in_game) { SSHADOW_NONE(); return; }
+    if (!pk || !pk->in_game) return;
     /* A PACKET THAT DROPPED UNITS, PIECES OR WRECKS is a frame with units this
        pass cannot see, so the unit hand-over is refused whole: a frame drawn
        with some units missing is a different frame, not a slightly worse one. */
@@ -2154,56 +2109,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         tagpu_posedraw_uncarried();
     int vpL = pk->vp[0], vpT = pk->vp[1], vw = pk->vp[2], vh = pk->vp[3];
     int eyeX, eyeY;
-    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) { SSHADOW_NONE(); return; }
+    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
        viewport is read out of engine memory and everything below sizes itself
        from it, so a garbage pair must not be believed — but nothing here
        assumes a number: the world target is the game's own size and the gather
        rect is the viewport over the zoom. 16384 is the largest 2D image common hardware will
        hold, which is the real ceiling on the target the frame is drawn into. */
-    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
-/* The macro captures `f` from its expansion site, so it is confined to the one
-   function that has an `f` to capture. This is its last use. */
-#undef SSHADOW_NONE
+    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) return;
 
-    /* THE STRUCTURE-SHADOW GATE, AND THIS IS THE ONLY PLACE IT IS RAISED. The
-       blit's two branches are detoured rather than flipped, and this is the
-       word they read: set, the engine draws no cached slant shadow and every
-       structure's is ours.
-
-       IT SITS AFTER EVERY EARLY RETURN ABOVE ON PURPOSE. The flag's two stale
-       directions are not symmetric -- stale 0 is a double shadow for a frame,
-       stale 1 is NO shadow -- so it may only be raised at a point the pass has
-       committed to drawing. Published from the top of the function it would
-       stay raised through every `return` here: a frame with no packet (the
-       whole shell), an atlas that would not allocate, a map the probes
-       refused. Each of those lowers it on the way out, which is the
-       `SSHADOW_NONE()` above them, and this is the one line that raises it.
-
-       ONE WRITE PER FRAME, so there is no window: a shell frame writes 0 and
-       only 0, a drawing frame writes 1 and only 1, and the value changes only
-       when the pass's own state does.
-
-       IT IS OBSERVED, NOT PREDICTED. The question is "did anything actually
-       paint a structure's slant", and the honest answer is a report from the
-       painter rather than a guess assembled up here from its levers. The
-       painter is the Vulkan unit pass: `tagpu_posedraw_slant_take()` is the
-       CONSUMER reporting, after it has recorded its shadow stage, that it
-       painted at least one slant. The read here CLEARS it, so every frame must
-       earn the gate again. That is what makes the stale directions bounded by
-       construction rather than by argument: any path that does not reach the
-       painter -- the seven `SSHADOW_NONE(); return;` sites above, a refused
-       map -- leaves 0 behind and the next frame lowers the gate.
-
-       THE COST IS ONE FRAME, IN BOTH DIRECTIONS: the report is one render-loop
-       iteration old by construction, so when a painter starts, the engine and we both
-       draw for one frame; when it stops, one frame has no structure shadow and
-       then the gate falls. Neither can persist. */
-    {
-        const int suppress = tagpu_posedraw_slant_take();   /* read AND clear */
-        tagpu_owndraw_set_structshadow(s_armed == 1 && suppress,
-                                       f->frame_counter);
-    }
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
@@ -2497,10 +2411,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->yaw = pu->rot[1];
         n2->shadow = 0; n2->slant = 0; n2->lit = 0;
         /* build state: the engine's own staging for a unit under construction
-           (build-state.md), shared with the composite path so the two cannot
-           drift. The blit-time effect that would otherwise draw this at the 1x
-           projection is skipped for every unit this pass owns — the third
-           owndraw detour, on 0x458DD0. */
+           (build-state.md), the formulas of its blit-time effect 0x458DD0. */
         n2->nanoOn = s_nano &&
                      tagpu_r3d_nano_state(pu->nano, pu->id, pk->tick,
                                           &n2->nanoT, n2->nanoC, &n2->nanoWire);
@@ -2510,14 +2421,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (pu->type_row != 0xFFFFu) {
                 /* mirror the engine's shadow branch in the blit 0x459200
                    (shadows-cloak.md §3). ST_STRUCT units take the CACHED
-                   SLANT SHADOW branch (Object3do+0x14): while owndraw "all"
-                   has redirected that branch the engine draws nothing for them
-                   and the slant shadow is ours, under that branch's own gates
-                   -- noshadow, and the model-0-under-water skip at 0x4592D5;
-                   canhover/floater are NOT tested there. The rest get a
-                   composite-derived silhouette the wipe emptied -- ours, under
-                   the engine's FBI gates. Without the redirect a structure keeps the
-                   engine's cached shadow. */
+                   SLANT SHADOW branch (Object3do+0x14), under that branch's
+                   own gates -- noshadow, and the model-0-under-water skip at
+                   0x4592D5; canhover/floater are NOT tested there. The rest
+                   get the composite-derived silhouette, under the engine's FBI
+                   gates. Both are ours: the engine blits neither on a Vulkan
+                   launch (tagpu_owndraw.c). */
                 mask = pu->def_mask;
                 /* a digger never reaches the cached branch: path A tests the
                    structure bit first and then sends a digger to the
@@ -2657,8 +2566,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- gather 3D wrecks from the sweep-rect tiles ----
        anchor tile: flags bit0 + live def with FeatureMask bit0 CLEAR ->
        wreck record holds the husk's Object3do + world pos; drawn at FEATURE
-       depth (3+rel*4). The engine's own scratch-fake-unit draw is suppressed
-       by the owndraw classifier while this pass is armed. */
+       depth (3+rel*4). The engine's own scratch-fake-unit draw paints nothing
+       on a Vulkan launch (tagpu_owndraw.c). */
     if (s_armed && s_wrecks) {
         int mapW = pk->map_w16, mapH = pk->map_h16;
         const TAGPU_PK_WRECK* pkWrecks = tagpu_pk_wrecks(pk);
@@ -3385,8 +3294,8 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
     }
 }
 
-/* game-thread readable flag: the owndraw classifier suppresses the engine's
-   scratch-fake-unit wreck rasterise only while the native husk pass is armed */
+/* game-thread readable: the native husk pass is armed (tagpu_feat.c's wreck
+   gates ask it) */
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_wrecks;

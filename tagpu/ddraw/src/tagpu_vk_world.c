@@ -34,6 +34,7 @@
     X(vkCreateRenderPass) X(vkDestroyRenderPass) \
     X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
+    X(vkDeviceWaitIdle) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetBlendConstants) \
@@ -105,24 +106,28 @@ static VkSampler             s_samp;
 static VkBuffer              s_vbuf;
 static VkDeviceMemory        s_vmem;
 
+/* THE TARGET, ONE FOR EVERY SLOT (tagpu_vk_world.h, *ONE TARGET*): every
+   frame in flight may be writing or sampling it, so it is replaced only behind
+   a drain of the device (`tgt_size`). */
 typedef struct {
     VkImage         col,  dep;
     VkDeviceMemory  cmem, dmem;
     VkImageView     cview, dview;
     VkFramebuffer   fb;
-    VkDescriptorSet dset;
-    int             w, h;               /* what this slot is sized for, 0 = nothing */
-} SLOT;
-static SLOT s_slot[TAGPU_VK_SLOTS];
+    int             w, h;               /* what it is sized for, 0 = nothing */
+} TARGET;
+static TARGET s_tgt;
+/* ONE DESCRIPTOR SET A SLOT, because binding 41 is the slot's own Gamma curve
+   (below); binding 40 of every set names the one target. */
+static VkDescriptorSet s_dset[TAGPU_VK_SLOTS];
 
-/* THE GAMMA CURVE, ONE PER SLOT, and that is the same lifetime argument as the
-   target's: the composite of frame N samples slot N's curve while frame N+1
-   may be uploading a new one, so a shared image would be rewritten under a
-   read. Slot `i`'s curve is rewritten only in slot `i`'s `prepare`, behind the
+/* THE GAMMA CURVE, ONE PER SLOT, because the CPU writes it: the composite of
+   frame N samples slot N's curve while frame N+1 may be uploading a new one, so
+   a shared image would be rewritten under a read. Slot `i`'s curve is rewritten only in slot `i`'s `prepare`, behind the
    seam's fence wait on that slot, and only when the factor it holds is not
    this frame's -- so a change of Gamma reaches the screen on the frame that
    carries it, and a steady factor costs nothing. They live as long as the
-   module, not as long as a target size: `slot_size` never touches them. */
+   module, not as long as a target size: `tgt_size` never touches them. */
 typedef struct {
     VkImage         img;                /* 256 x 1 R8: texel e = the engine's output for e */
     VkDeviceMemory  mem;
@@ -282,9 +287,10 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
     return 1;
 }
 
-static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
+static void tgt_free(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
+    TARGET* s = &s_tgt;
     if (s->fb)    { vkDestroyFramebuffer(dev, s->fb, NULL); s->fb = VK_NULL_HANDLE; }
     if (s->cview) { vkDestroyImageView(dev, s->cview, NULL); s->cview = VK_NULL_HANDLE; }
     if (s->col)   { vkDestroyImage(dev, s->col, NULL); s->col = VK_NULL_HANDLE; }
@@ -295,22 +301,38 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     s->w = s->h = 0;
 }
 
-/* Make slot `s` carry a `w` x `h` target. Safe because the caller owns this
-   slot: the seam waited on fence[slot] at the top of the frame, so the submit
-   that last drew into these images and sampled them has completed. */
-static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
+/* Make the target `w` x `h`.
+
+   THE DRAIN IS THE LIFETIME ARGUMENT. Every frame still in flight may be
+   writing the target or sampling it, and the seam's fence wait at the top of
+   this frame proves only this slot's last submit complete, so the images are
+   given back only once `vkDeviceWaitIdle` has said no submit names them. It
+   runs only when the size changes, and not at all for the first build, when
+   nothing has been submitted against a target. The game's instance changes
+   size with the resolution, the Supersampling row and, under
+   `tagpu_devres.on`, the window's width (tagpu_native.c); the in-game wiki's
+   instance of this file (TAGPU_SCENE_WIKI) with the map size of the scene a
+   page shows (tagpu_wikiworld.c), so a page whose map differs from the last
+   one drains. A zoom never resizes either. Its cost is tagpu_vk_fps.c's:
+   the render thread stalls for the frames in flight, unbounded on a wedged
+   device. A failed drain is not a resize: the old images stay, and the frame
+   reports a refusal. */
+static int tgt_size(const TAGPU_VKPASS* d, int w, int h)
 {
     VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     VkImageView att[2];
     VkDescriptorImageInfo ii;
     VkWriteDescriptorSet wr;
+    TARGET* s = &s_tgt;
+    uint32_t i;
 
     if (s->w == w && s->h == h) return 1;
-    slot_free(d, s);
+    if (s->w && vkDeviceWaitIdle(d->dev) != VK_SUCCESS) return 0;
+    tgt_free(d);
 
-    if (!mk_att(d, w, h, d->fmt, 0, &s->col, &s->cmem, &s->cview)) { slot_free(d, s); return 0; }
+    if (!mk_att(d, w, h, d->fmt, 0, &s->col, &s->cmem, &s->cview)) { tgt_free(d); return 0; }
     s_colFmt = d->fmt;
-    if (!mk_att(d, w, h, d->dfmt, 1, &s->dep, &s->dmem, &s->dview)) { slot_free(d, s); return 0; }
+    if (!mk_att(d, w, h, d->dfmt, 1, &s->dep, &s->dmem, &s->dview)) { tgt_free(d); return 0; }
 
     att[0] = s->cview; att[1] = s->dview;
     fci.renderPass = s_rp;
@@ -319,22 +341,28 @@ static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
     fci.width = (uint32_t)w;
     fci.height = (uint32_t)h;
     fci.layers = 1;
-    if (vkCreateFramebuffer(d->dev, &fci, NULL, &s->fb) != VK_SUCCESS) { slot_free(d, s); return 0; }
+    if (vkCreateFramebuffer(d->dev, &fci, NULL, &s->fb) != VK_SUCCESS) { tgt_free(d); return 0; }
 
-    /* THE COMPOSITE'S DESCRIPTOR FOLLOWS THE IMAGE, written here and nowhere
-       else: the set is allocated once and re-pointed whenever the image behind
-       it is replaced, so a set in hand always names the CURRENT image. A resize
-       that rebuilt the image and left the set is how a pass samples freed
-       memory, and it is the one thing this function exists to make impossible. */
-    memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
-    ii.sampler = s_samp;
-    ii.imageView = s->cview;
-    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr.dstSet = s->dset; wr.dstBinding = 40; wr.descriptorCount = 1;
-    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wr.pImageInfo = &ii;
-    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    /* THE COMPOSITE'S DESCRIPTORS FOLLOW THE IMAGE, written here and nowhere
+       else: the sets are allocated once and re-pointed whenever the image behind
+       them is replaced, so a set in hand always names the CURRENT image. A resize
+       that rebuilt the image and left a set is how a pass samples freed memory,
+       and it is the one thing this function exists to make impossible. No
+       pending submit binds a set here: after the drain none is pending, and
+       before the first build no submit has bound one. This frame's command
+       buffer binds its set only in `record`, after this. */
+    for (i = 0; i < TAGPU_VK_SLOTS; i++) {
+        if (!s_dset[i]) continue;
+        memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+        ii.sampler = s_samp;
+        ii.imageView = s->cview;
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = s_dset[i]; wr.dstBinding = 40; wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr.pImageInfo = &ii;
+        vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    }
 
     s->w = w; s->h = h;
     s_nBuilds++;
@@ -400,20 +428,21 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     memset(dep, 0, sizeof dep);
     dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dep[0].dstSubpass = 0;
-    /* THE SOURCE SCOPE IS EVERY WAY THIS SLOT'S IMAGES WERE LAST USED, not
-       just the sampling. The previous frame in this slot ended its colour
-       writes at COLOR_ATTACHMENT_OUTPUT and its depth writes at
-       LATE_FRAGMENT_TESTS, and this frame's LOAD_OP_CLEAR -- which the
-       destination scope below DOES name -- is a write-after-write against both.
-       Between two submits on one queue the ordering is submission order, but
-       the ACCESS still has to be made visible. tagpu_vk.c's own render pass
-       states this argument in terms and carries these masks; leaving them off
-       here is the class of omission a validation layer catches and a correct
-       picture does not -- and the fence wait making it work in practice is
-       safety by timing, which CLAUDE.md refuses as an argument. */
+    /* THE SOURCE SCOPE IS EVERY WAY THE TARGET WAS LAST USED, and this is the
+       ordering that lets one target serve every frame in flight. An external
+       dependency's first scope is every command submitted before this one on
+       the queue -- the previous frames' too -- so this frame's LOAD_OP_CLEAR
+       and its writes wait for: the previous frame's composite sampling the
+       colour (FRAGMENT_SHADER, a write-after-read), its colour and depth writes
+       (COLOR_ATTACHMENT_OUTPUT, LATE_FRAGMENT_TESTS, write-after-write, made
+       visible by the access masks), and a capture's copy out of the colour and
+       its layout transition back (TRANSFER: tagpu_vk_shot.c ends that barrier
+       at TRANSFER so the transition chains into this scope). tagpu_vk.c's own
+       render pass states the same argument for the swapchain images. */
     dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                          VK_PIPELINE_STAGE_TRANSFER_BIT;
     dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -709,10 +738,10 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     dai.descriptorSetCount = d->slots;
     dai.pSetLayouts = lay;
     if (vkAllocateDescriptorSets(d->dev, &dai, sets) != VK_SUCCESS) return 0;
-    /* THE SETS ARE ALLOCATED HERE AND POINTED AT AN IMAGE IN `slot_size`. They
+    /* THE SETS ARE ALLOCATED HERE AND POINTED AT THE TARGET IN `tgt_size`. They
        are deliberately left UNWRITTEN until then: there is no image yet, and a
-       set written with a stale view is exactly the fault `slot_size` closes. */
-    for (i = 0; i < d->slots; i++) s_slot[i].dset = sets[i];
+       set written with a stale view is exactly the fault `tgt_size` closes. */
+    for (i = 0; i < d->slots; i++) s_dset[i] = sets[i];
     return 1;
 }
 
@@ -794,7 +823,7 @@ static int build_gamma(const TAGPU_VKPASS* d)
         ii.imageView = g->view;
         ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wr.dstSet = s_slot[i].dset; wr.dstBinding = 41; wr.descriptorCount = 1;
+        wr.dstSet = s_dset[i]; wr.dstBinding = 41; wr.descriptorCount = 1;
         wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr.pImageInfo = &ii;
         vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
@@ -1016,10 +1045,9 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         }
         s_state = ST_READY;
     }
-    if (!slot_size(d, &s_slot[slot], w, h)) {
-        plog(d, "world: slot %u would not take a %dx%d target - the world stays "
-                "on the swapchain image and the seam tears this down",
-             (unsigned)slot, w, h);
+    if (!tgt_size(d, w, h)) {
+        plog(d, "world: the device would not take a %dx%d target - the world stays "
+                "on the swapchain image and the seam tears this down", w, h);
         /* LATCHED, for tagpu_vk_surf.c's reason: a slot that will not size is a
            device that will not give us the memory, and retrying it every frame
            is a stall per frame rather than a recovery. */
@@ -1065,7 +1093,7 @@ void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     VkClearValue cv[2];
 
     if (s_state != ST_READY || !s_drawThis) return;
-    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].fb) return;
+    if (slot >= TAGPU_VK_SLOTS || !s_tgt.fb) return;
 
     memset(cv, 0, sizeof cv);
     /* TRANSPARENT, and the header says why: the composite blends this over TA's
@@ -1076,9 +1104,9 @@ void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     cv[1].depthStencil.stencil = 0;
 
     rbi.renderPass = s_rp;
-    rbi.framebuffer = s_slot[slot].fb;
-    rbi.renderArea.extent.width = (uint32_t)s_slot[slot].w;
-    rbi.renderArea.extent.height = (uint32_t)s_slot[slot].h;
+    rbi.framebuffer = s_tgt.fb;
+    rbi.renderArea.extent.width = (uint32_t)s_tgt.w;
+    rbi.renderArea.extent.height = (uint32_t)s_tgt.h;
     rbi.clearValueCount = 2;
     rbi.pClearValues = cv;
     vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
@@ -1109,7 +1137,7 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     (void)d;
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
-    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].w) return;
+    if (slot >= TAGPU_VK_SLOTS || !s_tgt.w || !s_dset[slot]) return;
 
     /* THE SCISSOR IS CLAMPED TO THE RENDER AREA WE ARE HANDED, for
        tagpu_vk_surf.c's reason: the rect was published by the gather at the top
@@ -1169,7 +1197,7 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_gamOn ? s_pipeG : s_pipe);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1,
-                            &s_slot[slot].dset, 0, NULL);
+                            &s_dset[slot], 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s_vbuf, &off);
     vkCmdDraw(cb, NV, 1, 0, 0);
 }
@@ -1245,7 +1273,8 @@ static void target_down(const TAGPU_VKPASS* d)
     uint32_t i;
     if (!d || !d->dev) return;
     if (!vkDestroyImageView) return;        /* never resolved: nothing was made */
-    for (i = 0; i < TAGPU_VK_SLOTS; i++) slot_free(d, &s_slot[i]);
+    tgt_free(d);
+    memset(s_dset, 0, sizeof s_dset);       /* freed with the pool below */
     for (i = 0; i < TAGPU_VK_SLOTS; i++) gamma_free(d, &s_gam[i]);
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipe)  { vkDestroyPipeline(d->dev, s_pipe, NULL); s_pipe = VK_NULL_HANDLE; }
@@ -1290,19 +1319,18 @@ int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
                         VkFormat* fmt)
 {
     if (!img || !w || !h || !fmt) return 0;
-    /* THE SLOT THE WORLD WENT INTO, AND NO OTHER. Every other slot's image is
-       an earlier frame's picture, still allocated because the slots are
-       long-lived -- so a capture read out of one would be a real image of the
-       wrong frame, which is the single worst thing an oracle can hand back.
-       `s_drewSlot` is set where the render pass is opened, so this is a
-       question about the command buffer. */
+    /* ONLY WHEN THIS FRAME'S COMMAND BUFFER DREW THE WORLD INTO THE TARGET.
+       The target outlives the frames that draw into it, so on a frame whose
+       world went to the swapchain image it still holds an earlier frame's
+       picture -- a real image of the wrong frame, which is the single worst
+       thing an oracle can hand back. `s_drewSlot` is set where the render pass
+       is opened, so this is a question about the command buffer. */
     if (s_drewSlot < 0 || (uint32_t)s_drewSlot != slot) return 0;
-    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].col ||
-        s_slot[slot].w <= 0 || s_slot[slot].h <= 0) return 0;
+    if (slot >= TAGPU_VK_SLOTS || !s_tgt.col || s_tgt.w <= 0 || s_tgt.h <= 0) return 0;
     if (s_colFmt == VK_FORMAT_UNDEFINED) return 0;
-    *img = s_slot[slot].col;
-    *w = (uint32_t)s_slot[slot].w;
-    *h = (uint32_t)s_slot[slot].h;
+    *img = s_tgt.col;
+    *w = (uint32_t)s_tgt.w;
+    *h = (uint32_t)s_tgt.h;
     *fmt = s_colFmt;
     return 1;
 }

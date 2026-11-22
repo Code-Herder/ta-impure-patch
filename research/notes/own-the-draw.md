@@ -1,5 +1,10 @@
 # Own the draw — skipping ONLY the composite rasterisation (Gate G7)
 
+**The owndraw detours this note designed are deleted, `tagpu_owndraw.on` with them: a Vulkan
+launch removes the engine's whole unit draw, DrawUnit's composite call at `0x45AE73`, and under
+`tagpu_gdi.on` nothing is patched** ([units](modules/units.html), *The engine draws no unit on a
+Vulkan launch*). The engine map below stands; the detour design is its record.
+
 *Instruction-level map of the per-unit draw path
 `DrawUnit 0x45AC20 → 0x458810 → builder 0x4586A0 → blit 0x459200`, produced to
 answer one question precisely: **how do we make TA keep doing pose-sync, AABB,
@@ -38,8 +43,8 @@ sites — 2 patches cover all 3 rasterise-into-composite sites, and it matches
 
 ## The arming rule — every code-patching pass, not just this one
 
-`tagpu_owndraw.c` was the first of what are now five passes that install engine-code
-detours through the shared `tagpu_detour.c`: **`owndraw`** (unit rasterisers),
+`tagpu_owndraw.c` was the first of the passes that install engine-code
+detours through the shared `tagpu_detour.c`: **`owndraw`** (unit rasterisers, deleted),
 **`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`), **`terrown`**
 (the terrain pass `0x483FA0` *and* the fog overlay `0x4848E0`, G13b) and **`markown`**
 (the world-space UI markers, G13d). They all obey one rule, and it has cost time in
@@ -51,19 +56,19 @@ five separate gates:
 
 Consequences worth stating plainly:
 
-- `tacli arm <inst> owndraw.on` **after** launch does nothing at all. The GL/behaviour
+- `tacli arm <inst> terrown.on` **after** launch does nothing at all. The GL/behaviour
   triggers (`native.on`, `fx.on`, `feat.on`, `sfx.on`, and the `.off` toggles) *are*
   re-read every frame and can be flipped live — that asymmetry is the trap, because the
   same `arm` verb behaves differently depending on which trigger you name.
 - **A stale own-draw trigger is worse than none.** With `owndraw.on` present but
-  `native.on` cleared, the engine's rasterisers are skipped and *nothing* draws the units
+  `native.on` cleared, the engine's rasterisers were skipped and *nothing* drew the units
   — only health bars. An engine-side A/B then silently measures nothing. The shape of it
-  in the log is `OWND … repaint=0 miss=<everything>` with no `native:` lines. `tacli
-  launch` now drops a stale `owndraw.on` when native is off and says so.
+  in the log is `OWND … repaint=0 miss=<everything>` with no `native:` lines.
 - Because of both of the above, `tacli launch` / `scenario load` **auto-arm the patching
-  companion to match its GL pass** — `owndraw` from `native.on`, `fxown` from `fx.on` or
-  `sfx.on`, `featown` from `feat.on`, `terrown` from `terr.on`, `markown` from `mark.on` —
-  and print `auto-armed …`. **Any new pass must be added to that list** (`tools/tacli`,
+  companion to match its GL pass** — `terrown` from `terr.on`, `markown` from `mark.on` —
+  and print `auto-armed …`. (The engine's units, features and effects are not levers: a
+  Vulkan launch removes those draws at attach, `tagpu_owndraw.c`, `tagpu_featown.c`,
+  `tagpu_fxown.c`.) **Any new pass must be added to that list** (`tools/tacli`,
   near `_ensure_terrown_for_terr`), or it will appear to work for whoever wrote it and
   fail for everyone else.
 - **A GL pass must also refuse to draw when its patch is absent**, not just log about it.
@@ -74,8 +79,8 @@ Consequences worth stating plainly:
   quad and prints `NOTHING EMITTED: terrown.on must exist at DLL attach`. `tagpu_feat.c`
   has the same shape for a different reason (it needs `native.on` to carry `wrecks`).
 - Verify from the log, never from the trigger file: each pass prints an ARMED line naming
-  the sites it patched, e.g. `featown: ARMED feature@0x46A610=1`, plus a per-window skip
-  counter. No ARMED line means no patch, whatever the filesystem says.
+  the sites it patched, e.g. `terrown: ARMED …` or `featown: the engine's feature draw is
+  removed (0x46A610, Vulkan)`, plus a per-window skip counter where the skip is live. No ARMED line means no patch, whatever the filesystem says.
 
 ## The second rule — a skip path is not always empty (G13b)
 
@@ -543,7 +548,7 @@ same type.
 
 ## Implemented & proven live — 2026-08-31 (same session)
 
-`tagpu/ddraw/src/tagpu_owndraw.c` implements exactly the recommended plan: two
+`tagpu/ddraw/src/tagpu_owndraw.c` implemented exactly the recommended plan: two
 classify-then-`ret 0x10` stubs (the `tagpu_suppress.c` shape — pushad → cdecl classifier →
 popad → skip or stolen-bytes+resume) detouring `0x459830` and `0x459C70` at their
 `mov eax,imm32` prologue boundaries, byte-match guarded, armed by `tagpu_owndraw.on`

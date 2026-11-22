@@ -2386,9 +2386,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                game's, so a refusal here is a surface on the game window
                being refused -- measured to work on wine 9.0 and Proton 11
                (roadmap §G19a), which makes a driver that refuses it new
-               information. The backend then falls back to GDI, which route F
-               measured as still reaching the screen after a surface has been
-               attempted here. */
+               information, and a lane that cannot come up ends the session
+               (render_vk.c). */
             vklog("vkCreateWin32SurfaceKHR on the game window: %s (%d) - the "
                   "lane stays down", res_name(r), (int)r);
             goto fail;
@@ -2758,8 +2757,8 @@ static int vk_present(void)
        features, and nothing recovers it: the driver has said no once, and a pass that
        asked again every frame would stall every frame. So the lane comes down, which
        gives back this process's device memory, and the retry rebuilds every pass on the
-       new device. render_vk.c bounds the retries and then hands the session to GDI, whose
-       picture is whole. So every frame after this is one of two complete pictures.
+       new device. render_vk.c bounds the retries and then ends the session, so no frame
+       after this is a picture with a hole in it.
        The drain is vk_down's own, and no command names anything yet: `cb` is reset below.
        ASKED, because a lost device can answer a signalled fence with success and show itself
        first as a refused allocation: the wait vk_down's caller makes tells a lost device from a

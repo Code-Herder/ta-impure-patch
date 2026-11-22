@@ -37,7 +37,7 @@
    frames (raw or TA-RLE, sub-frame lists) are decoded into a private atlas.
    ALP alpha = 50% blend; the LHT flash = additive, per-level colour derived
    from the live table. Armed by tagpu_fx.on; tokens: log, nolines, nomodels,
-   nosprites, noexpl, nodebris, passive (gather + log, engine draws).
+   nosprites, noexpl, nodebris, passive (gather + log, nothing drawn).
    The particle sfx pass (tagpu_sfx.c, armed by tagpu_sfx.on) rides the same
    buckets and shaders: layers 0..6 are emitted before the projectiles so the
    engine's order (smoke under weapon sprites) survives, layers 7..9 after
@@ -52,7 +52,6 @@
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_fx.h"
 #include "tagpu_pal.h"
-#include "tagpu_fxown.h"
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
 #include "tagpu_line.h"
@@ -148,7 +147,6 @@ static void read_arm(unsigned frame_counter)
     int n = tagpu_opt_read("tagpu_fx.on", buf, sizeof buf);
     s_log = 0; s_lines = s_models = s_sprites = s_expl = s_debris = 1; s_passive = 0;
     if (n < 0) {
-        tagpu_fxown_set_skip(0);
         if (was > 0) flog("fx: disarmed");
         return;
     }
@@ -177,9 +175,6 @@ static void read_arm(unsigned frame_counter)
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
     consumer_ask();
-    /* the engine skip is armed by a successful gather (below), never by the
-       file alone; passive turns it off here */
-    if (s_passive) tagpu_fxown_set_skip(0);
     if (was != 1) {
         char b[128];
         _snprintf(b, sizeof b, "fx: ARMED (lines=%d models=%d sprites=%d expl=%d debris=%d log=%d passive=%d)",
@@ -833,14 +828,6 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     char lb[288];
 
     s_mute = s_passive;                /* passive: count + log, emit nothing */
-    /* WE ARE DRAWING THIS FRAME ONLY IF THE PACKET WAS FILLED FOR US. The
-       request travels render -> game and the fill comes back game -> render, so
-       the first frames after `tagpu_fx.on` appears carry empty tables — and
-       claiming the engine's draw there suppresses its projectile pass and its
-       explosion leaves against nothing of ours: a handful of frames with no
-       fire, explosions or debris at all. The skip follows the tables. */
-    if (!s_passive && (pk->fx_want & TAGPU_PK_FXWANT_FX)) tagpu_fxown_set_skip(1);
-    tagpu_fxown_beat(v->frame_counter);
 
     /* ---- projectiles (the engine's 0x49BE60 rules) ---- */
     for (i = 0; i < pk->n_proj; i++) {
