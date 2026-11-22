@@ -12942,8 +12942,8 @@ static void patch_loader_defects(void)
                "drawn by the rule, emissions and objects outside the pool at 0x%08X 0x%08X 0x%08X",
                fix_state(prnd), fix_state(pdiv), (unsigned int)(size_t)&s_prand.draws,
                (unsigned int)(size_t)&s_prand.emissions, (unsigned int)(size_t)&s_prand.outside);
-    tagpu_logf("particles: the nano spray %s (0x47212B 0x47225B: no object, an event the GPU "
-               "draws)%s", pevt_live() ? "is drawn from emitter events" :
+    tagpu_logf("particles: the nano spray %s%s", pevt_live() ? "is drawn from emitter events "
+               "(0x47212B 0x47225B: no object, an event the GPU draws)" :
                s_pevtOn ? "keeps the engine's objects: the particle walk is not in" :
                "keeps the engine's objects (GDI)",
                s_pevtCheck && pevt_live() ? "; tagpu_particlecheck.on: the engine's objects are "

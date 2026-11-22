@@ -539,8 +539,12 @@ starts with `mov eax,[0x511DE8]` (five position-independent bytes), so the stub 
 we now draw and nothing else. It is removed with the effects, on every Vulkan launch
 (§5).
 
+**On a Vulkan launch the nano spray is not gathered**: it has no engine object to gather, its
+emitters record events instead, and the effects pass draws those (§7.8); the `nonano` and `passive`
+tokens apply to them.
+
 Log every 60 frames: `sfx: layers L2=44(wake:44) L6=26(nano:26) L9=9(smoke2:9) sub=…
-fogged= bad= -> sprites= dots=` (the two last counts are quads actually emitted, so
+fogged= bad= -> sprites= dots= nano-events=` (the two last counts are quads actually emitted, so
 `passive` reports zero); with `log`, the first objects per sample (`sfx: L5 obj=
 vt=004fd618 smoke2 type=2 end= tick= n= p0 pos=(x,alt,y) frame= seq="smoke 1"`) and the
 first three of the pass's own sprite emissions (`fx: emit b= mode= at= …`).
@@ -644,6 +648,83 @@ Its counters (draws answered, emissions, objects outside the pool) are in the in
 `Counters:` and logged for each level at the next level's load. MEASURED 2026-11-22: Two Continents'
 load makes six emissions (the vents' `SmokeInfinite`), and 1 274 values were drawn by the rule by
 the first `peek` in play, none outside the pool.
+
+### 7.8 The nano spray from emitter events — the GPU computes the particles [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
+
+On a Vulkan launch the nano emitters `0x4720D0` and `0x472200` make **no engine object**. The pool
+alloc `0x470EB0`'s stub (`fix_particle_rand`) asks `pevt_pre` first: called from either emitter's
+alloc (return address `0x47212B` / `0x47225B`), it copies what the init `0x473B50` will take out of
+the emitter's frame and answers "no object"; the emitter then skips its init, its layer trim and its
+append exactly as for a full pool. The emission is still counted where every other one is
+(`prand_alloc`), so n and every later seed are what they would be with the object made, and the
+event is recorded there with its seed (`tagpu_patches.c`, *The nano spray as events*). GDI is
+untouched: the engine's objects are made, walked and drawn as before.
+
+**The event** (`inc/tagpu_pevt.h`, 80 B): the seed, T, the layer with two flags, the init's two
+boxes as it cuts them (per axis base `min + 4d/11`, extent `7d/11 − 4d/11`, `0x473B80..0x473D34`),
+and each of the ten particles' step count. The step count is the one value that is not integer
+arithmetic in the engine — the int16 high word of `(len << 16) / 0x40000`, `len` the x87 length of
+the particle's path through `_ftol 0x4E43A0` (`0x473E75..0x473ED9`) — so the game thread computes it
+at emission with the spawn's own instruction sequence, and the GPU never takes a square root.
+
+**The closed form** (`tagpu_pevt_nano_at`): burst 1 (particles 0..4) is born at T and first moved by
+the walk of T; burst 2 (5..9) exists only when the object is updated at T+1, born then after that
+walk's moves and first moved at T+2 (weapons engine map, *Two bursts an emission*). After the walk
+of GameTime P a particle of `s ≠ 0` steps that has had `u` updates is at `start + u·step` per axis
+(`step = (end − start) / s`, `idiv`), colour `0xA0 | ((place + u) mod 7 + 1)`, and is removed by the
+first walk past `born + s` (`0x473B30`, signed). Its start and end are tagpu_prand's draws 0..2 and
+3..5 against the two boxes (`base + r·extent / 0x8000`, the 64-bit product toward zero). An event
+emitted after its GameTime's walk — a replay's frame visit re-firing an emitter between two steps —
+is `LATE`: its first update is T+1, and its burst 2 always exists. `tagpu_pevt_nano_finish` gives
+the GameTime D whose walk destroys the object (slot 3 `0x472FD0` finds the sub-vector empty), which
+is how long the event stays.
+
+**The list** is presentation state on the game thread (`SIM_PRIVATE`): emitted at the alloc, purged
+after each particle walk (`particle_walk` → `pevt_walked`), cleared at a seek (`tagpu_effects_clear`)
+and at each level's start. **The layer's cap** (`0x47219F`) is applied to the events as the emitter
+applies it to the objects: a layer holding more than `TAGPU_LIM_SFX` events loses its oldest. That is
+the engine's count only while no engine object shares an event's layer — every caller files nano in
+layer 6 and nothing else does (§7.1, §7.4). The list holds two layers' caps (`2·(TAGPU_LIM_SFX+1)`
+rows, about 3.8 MB in the raised build); only nano filed in a third layer could fill it, and then it
+drops its oldest sixteenth whole and logs once.
+
+**Publishing**: the frame packet's fill copies the live events whose particles can reach the view
+(each event's box of world x and `y − alt/2`, widened by the reach slack) into the slot, newest kept
+when the slot runs out (`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line); the acquire
+validates the table and every layer. The packet's GameTime is the P the GPU computes at. The `packet:`
+heartbeat's `pevt=last/most/truncated`. No new cross-thread read: the render thread reads only the
+packet it holds.
+
+**The draw** (`tagpu_fx.c` NVS/NFS, `tagpu_vk_fx.c` `s_pipeEvt`): one draw of `60·n` vertices with
+no vertex input after the under bucket (layers 0..6, sorted first) and one after the sprites for an
+event in layers 7..9; vertex v is corner `v mod 6` of particle `(v / 6) mod 10` of event `v / 60`,
+read from a storage buffer at binding 1. The vertex stage is `tagpu_pevt_nano_at` in GLSL, statement
+for statement (`umulExtended` for the 64-bit product, a sign-split division toward zero); a particle
+not in the engine's object is a degenerate quad. The dot is `DrawBar`'s 2×2 at the projection
+`tagpu_fx_emit_dot` takes, at its layer's key — the same keys §7.5's gather gave nano (layer 6
+`fxKey − 2`). The fragment stage applies **the engine's sight test exactly** (`0x473A00`): the tile
+`(hi(x) >> 5, (hi(y) − (hi(alt) >> 1)) >> 5)` read from the slot's fog source (`inc/tagpu_fogsrc.h`:
+bit 1 out of LOS in true-LOS mode, else bit 0 never explored), off the map hidden — not the smoothed
+fog sample of the other effects. Smooth motion (`tagpu_lerp.on`) blends only unit piece poses, so the
+spray is drawn at the packet's tick, as the gathered nano was.
+
+**The oracle, `tagpu_particlecheck.on`** (read at install): the pool is asked as in stock, the object
+is made and walked and drawn, and an event is recorded only for an object the pool gave, so both sides
+hold the same emissions. After each walk every live object of the nano class is matched to its event
+by seed and every sub-particle's position (both words), end, step, colour, end tick and the count are
+held to the closed form. A line a tick: `pcheck: T= objects N (missing extra) particles M differing D
+[seed count pos end step colour tick] level: …`, the first eight differences of a level in detail, and
+the level's totals at the next level's start. Under the oracle the gather draws the engine's objects
+as well as the events, over each other.
+
+**MEASURED 2026-11-22**, the 13 500-unit battle (`tools/battle13k.py`'s game, 1920×1080, the oracle
+armed): GameTime 1 to 3 622, **159 512 073 sub-particles compared, 0 differing, 0 objects missing,
+0 extra**, up to 8 362 live nano objects and 73 455 sub-particles in a tick. The packet carried at
+most 753 events in view, never truncated.
+
+**Not covered here**: an event's particles are culled by their event's box, not each by its own; a
+frame whose packet carries no fog source draws the dots without the tile test; the other classes
+(fire, flare, wake, bubbles, smoke) are still the engine's objects, gathered as in §7.5.
 
 ## Appendix — addresses
 

@@ -27,7 +27,18 @@ two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and sp
 (`0x473D50`, called at `0x473D39`). The spawn's six draws a particle were the CRT's `rand 0x4E4870`
 in stock; under Impure they come from the particles' own keyed rule ([effects](../effects.html) §7.7),
 never from a CRT stream or the sim RNG `0x4B6C30`, so an emission writes no simulation state and
-moves no stream a meteor shower or a start reads ([sim](sim.md), *The two random streams*). `0x4732E0` appends the object to the
+moves no stream a meteor shower or a start reads ([sim](sim.md), *The two random streams*). **The
+emitters' alloc and their frame** [DISASSEMBLED 2026-11-22]: the pool alloc is called at
+`0x472126` / `0x472256` (`mov ecx,0x51E610`, `push 0x4C`) and returns to `0x47212B` / `0x47225B`,
+which is how Impure's alloc stub tells a nano emission from any other. A NULL answer (`0x47213E` /
+`0x47226E`, `cmp eax,ebx`) jumps past the init, the layer's trim and the append (`0x472163` /
+`0x472293 je`), so an emitter whose pool gave nothing makes no object and leaves no trace. At the
+alloc the emitter's esp is the alloc's esp + 8: its arguments at `+0x2C` and `+0x30`, the layer's
+word at `+0x34` (read `movsx` at `0x47217C`, unbounded), and the degenerate box at `+0x10`
+(`0x4720E1..0x472108`; `0x472211..0x472238`). The forward emitter inits box1 = that box, box2 = its
+box argument (`0x472169..0x472179`); the reverse box1 = its box argument, box2 = that box
+(`0x472299..0x4722A9`). On a Vulkan launch Impure answers NULL here and records an emitter event
+instead ([effects](../effects.html) §7.8). `0x4732E0` appends the object to the
 layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
 emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
 limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
@@ -368,9 +379,11 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
 - **The spawn `0x473D50`**: five particles a call (`[esp+0x18] = 5` at `0x473DA5`, the loop back
   at `0x474109`); for each, six draws of the CRT `rand 0x4E4870` (Impure's keyed rule instead, above: the
   particle's draws 0 to 5) in the order start x, y, z (box1) and end x, y, z (box2), each `base + rand·extent / 0x8000`, the product 64-bit (`imul`) and the
-  division `_alldiv 0x4E4440`, toward zero (`0x473DAD..0x473E54`). The six draws are made whatever
+  division `_alldiv 0x4E4440`, toward zero, then a 32-bit add of the base (`0x473DB2..0x473DC3`
+  for the first; `0x473DAD..0x473E54` all six). The six draws are made whatever
   the extents. Then d = end − start, len = `_ftol` (`0x4E43A0`) of the x87 `fsqrt` of the sum of
-  the squares (`0x473E6D..0x473EB1`), and **steps = the high word, as int16, of (len << 16) /
+  the squares (`0x473E6D..0x473EB1`; the x87 sequence from `fild` at `0x473E75` to `_ftol`, which
+  Impure's event recorder runs as is on the game thread), and **steps = the high word, as int16, of (len << 16) /
   0x40000** (`_allshl 0x4E44F0` by 16, `_alldiv` by `0x40000`, the word at `[esp+0x16]`;
   `0x473EB6..0x473ED9`), which for len ≥ 0 is `(int16)(len >> 18)`: a quarter of the length in
   world units. **A particle of 0 steps is not made** (`0x473EDE..0x473EE1 je 0x4740F7`), its draws

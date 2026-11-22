@@ -167,10 +167,25 @@ Vulkan in the event.
    - meteors and start positions no longer depend on particles: the same seed with the particle code
      disabled through the console `SFX` toggle `0x51E608` gives the same strike points and starts;
    - a GDI A/B for the look.
-2. **The event list, the GPU path, and the nano spray.** The emitter events, the wind table, the
-   instanced draw and the oracle lever, for the nano class first. It is the commonest particle in a
-   battle, already recorded, and its closed form is the simplest. The engine's pool still runs for every
-   other class. Check: the oracle reports 0 differences over a battle; a GDI A/B.
+2. **The event list, the GPU path, and the nano spray.** *Landed locally 2026-11-22.* The emitter
+   events, the instanced draw and the oracle lever, for the nano class first. It is the commonest
+   particle in a battle, already recorded, and its closed form is the simplest. The engine's pool still
+   runs for every other class. Check: the oracle reports 0 differences over a battle; a GDI A/B.
+   - **What it built** ([effects](effects.md) §7.8): the event `inc/tagpu_pevt.h` (80 B: seed, T, layer
+     and flags, the init's two cut boxes, ten step counts) and its closed form, written once in C and
+     ported statement for statement to the vertex stage; the step count computed at emission with the
+     spawn's own x87 sequence, the one inexact operation, so the GPU takes no square root; the list on
+     the game thread with the layer's cap, purged after each walk, cleared at a seek; the packet's event
+     table; one draw of 60 vertices an event, no vertex input; the engine's exact tile sight test from
+     the fog source; `tagpu_particlecheck.on`.
+   - **Moved to landing 5**: the wind table. Nano has no wind; smoke is the first class that needs it.
+   - **Learned**: the emission must keep counting n where the pool alloc is (`prand_alloc`), so the
+     event is recorded inside the alloc's stub, which skips the pool for a nano caller; an emitter
+     whose pool answers NULL skips its init, trim and append with no other trace (engine map,
+     *The emitters' alloc and their frame*). An event re-fired between two steps (a replay's frame
+     visit) is `LATE`: its first update is a tick later and its second burst always exists.
+   - **MEASURED**: the oracle in the 13 500-unit battle, GameTime 1 to 3 622, 159 512 073
+     sub-particles, 0 differing, 0 objects missing or extra.
 3. **Fire and the flare.** Check: the oracle; a teleport and a burning-debris scene against GDI.
 4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
    shore and submarines against GDI.
@@ -184,6 +199,20 @@ Vulkan in the event.
 Each landing is a local landing on this branch. The feature lands on main once, through the replay gate.
 
 ## Open
+
+- **The layer cap's count of events is exact only while nano shares its layer with nothing.** Every
+  caller files nano in layer 6 and no other emitter does; fire shares layers 7 and 9 with smoke, so
+  landing 3's trim must count the events and the engine's objects of a layer together until every
+  class of that layer is drawn from events.
+- **The shared pool no longer holds nano on Vulkan.** The stock build's pool of 1 000 objects counted
+  nano with every other class; with nano as events, a pool that was full in stock has room for
+  another class's object, and a nano emission is never refused for a full pool. Presentation only
+  (no simulation value reads a particle since landing 1), and gone once every class is an event.
+- **An event is culled by its box, not each particle by its own**: one particle's quad can be
+  computed for nothing, never one missed (the box holds both ends and a step's slack).
+- **A frame whose packet carries no fog source** (a copy that failed) draws the event dots without the
+  tile test, off-map ones included, where the units fail closed; the engine tests every dot. Every other
+  frame takes the engine's rule exactly.
 
 - **The emitter rates, measured** (2026-11-22). The 13 500-unit battle (`tools/battle13k.py`'s game:
   Total Mayhem on Zombie Kingdom, 1920x1080, Vulkan, `--defaults`, a private X display, this branch's
