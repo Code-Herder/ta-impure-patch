@@ -118,6 +118,15 @@ The `particles` span (the tick's walker, Impure's `particle_walk`), 5 to 8 ms a 
 busy, and half of it is the first read of each particle object. A prefetch of the next objects keeps the
 same calls in the same order.
 
+BUILT in `particle_walk`: each object 8 places ahead, its first two lines. MEASURED 2026-11-21, the battle
+zoomed out at 1080p, the prefetch on in alternate 64-tick blocks of one game: the particle tick
+3.32 → 1.90 ms, every one of the 20 blocks faster than both neighbours; `units` beside it unchanged
+(9 of 20, ratio 1.005). The prefetch runs only where the processor reports SSE at install. The
+committed form against the build before, in two runs back to back: `particles` 15.8 → 10.2, 8.8 → 4.6,
+5.7 → 2.2 and 4.0 → 1.6 ms a frame (near busy, far busy, near thin, far thin). The sampler put `particles` at 11 % of the game thread zoomed out, `particle_walk`
+44 % of that and the engine's particle updates (`0x474580`, `0x4739B0`, `0x475340`, the height lookup
+`0x485070`) most of the rest.
+
 ## After the list
 
 - **The simulation's own spans.** `units` (the engine's per-unit tick) is the largest span while the

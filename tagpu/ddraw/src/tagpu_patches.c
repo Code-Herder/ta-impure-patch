@@ -9859,8 +9859,29 @@ SIM_FEATURE(particle_walk, SIM_PUPPET_INDEPENDENT, "battle");
    reached from slots 0, 1, 3, 4 or 5 of the seven vtables 0x4FD588..0x4FD638 by direct calls,
    whose indirect calls inside the classes are the same vtables' slots. The draws run from
    DrawGameScreen, never inside the step.
+   THE FIRST READ OF AN OBJECT is most of the walk's own time, a cache miss on a heap block, so the
+   walk prefetches the object PW_AHEAD places ahead, its first two lines. A prefetch is a hint: it
+   writes nothing and does not fault on any address, so the walk's calls, their order and the
+   layer it leaves are as above whatever the address. The pointer it reads, read[PW_AHEAD], lies
+   between the visited place and the end, which the walk has not written (it writes only at
+   `keep`, at or behind the visited place) and nothing the three slots reach writes (above).
+   MEASURED 2026-11-21, the 13 500-unit battle zoomed out at 1080p, the prefetch on in alternate
+   64-tick blocks of one game: the particle tick 3.32 -> 1.90 ms, faster in 20 of 20 blocks than
+   both neighbours (`units` beside it: 9 of 20, ratio 1.005). `prefetcht0` is SSE: pw_prefetch is
+   the only code compiled for it, and it runs only where the processor reported SSE at install
+   (s_pwSse); elsewhere the walk is the same without the hint.
    CLASS: local. Without it the engine's own walker runs. */
+#define PW_AHEAD 8
 typedef struct FxLayer { unsigned int unused; void** begin; void** end; void** cap; } FxLayer;
+static unsigned char s_pwSse;                   /* IsProcessorFeaturePresent(SSE), at install */
+SIM_VAR(s_pwSse, SIM_INSTALL);
+
+__attribute__((target("sse"), noipa))   /* noipa: kept as a call, never judged pure */
+static void pw_prefetch(const char* object)
+{
+    __builtin_prefetch(object);
+    __builtin_prefetch(object + 64);
+}
 
 static void __cdecl particle_walk(void)
 {
@@ -9874,6 +9895,7 @@ static void __cdecl particle_walk(void)
         void** keep = read;
         for (; read != layer->end; read++) {
             void* object = *read;
+            if (s_pwSse && layer->end - read > PW_AHEAD) pw_prefetch((const char*)read[PW_AHEAD]);
             if (((PFN_FxEmpty)(*(void***)object)[3])(object)) {
                 ((PFN_FxDestroy)(*(void***)object)[0])(object, 1);
                 continue;
@@ -9891,6 +9913,7 @@ static int fix_particle_walk(void)
         { 0x004955BFu, 5, { 0xE8, 0xEC, 0xC8, 0xFD, 0xFF }, { 0 } },    /* call 0x471EB0 */
     };
     if (!fix_match(site, 1)) return FIX_BYTES;
+    s_pwSse = (unsigned char)(IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE) != 0);
     fix_branch(&site[0], 0xE8, particle_walk);
     return fix_write(site, 1);
 }
