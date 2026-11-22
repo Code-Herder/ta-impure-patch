@@ -63,6 +63,13 @@ the trace. Its state is a tail of the object (`CobTail`: the VM, bound at the ob
 and the script's name), sized at `0x485D74` and zeroed at `0x485D78`; a saved game's records pass
 `tagpu_cobvm_loaded`, and a fault is `cob_fault` with the VM's reason.
 
+Two starts the guarded engine ran, the VM does not. A start by index with `argc` outside 0..4 is
+refused as a full pool refuses (counted, its completion called with 0): only a malformed
+script-start message carries one, since the `0x10` receiver passes the message's byte as `argc`
+(`0x455544`) and every other caller of `0x4B0B00` and `0x4B0A70` passes 0 to 2. A record that runs
+2^24 instructions without blocking is a fault (`STEP_BUDGET`) where the engine finishes it, however
+long the game then stands still; the corpus gate meets it in none of its runs.
+
 **Its oracle, `tagpu_cobverify.on`.** The engine's interpreter runs the game through trampolines
 of the entries; around each entry call the oracle copies the object and logs what the engine's
 interpreter asked and did outside it -- getter answers, draws, effects with the posed-model words

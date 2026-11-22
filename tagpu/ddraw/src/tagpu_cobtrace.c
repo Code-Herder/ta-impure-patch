@@ -376,7 +376,7 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
 #ifndef TAGPU_LIMITS_STOCK
 int tagpu_cobtrace_armed(void) { return s_on; }
 
-/* The game's COB host runs the core (tagpu_cobgame.c), which writes the oracle's events itself and
+/* The game's COB host runs the core (tagpu_patches.c, THE GAME'S COB INTERPRETER), which writes the oracle's events itself and
    latches a start until its arguments are on the record, as the hooks above do; each event becomes
    the same line. H: the core reports every step whose record holds more than 32 words, and the line
    is written at a new peak of that unit's slot, as tagpu_cobtrace_step writes it. */

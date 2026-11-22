@@ -34,8 +34,9 @@ SIM_FEATURE(cob_vm, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decline
 #define MODEL_CHANGED 0x08u  /* 1 when a position or angle changes */
 #define MODEL_COMPOSE 0x10u  /* zeroed by CACHE/DONT_CACHE and SHADE/DONT_SHADE */
 
-/* The longest a record runs without blocking before the VM refuses it. The engine has no
-   bound -- such a script hangs the game -- so no script the game runs reaches it. */
+/* The longest a record runs without blocking before the VM refuses it. The engine has no bound:
+   a script that never blocks hangs it, and one that blocks after more than this many steps it
+   finishes, the game standing still meanwhile, where the VM faults (cob-compat.md). */
 #define STEP_BUDGET (1u << 24)
 
 typedef char cobvm_record_at_engine_offset[(OBJ_RECORDS == 28u) ? 1 : -1];

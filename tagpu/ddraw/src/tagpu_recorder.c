@@ -7228,7 +7228,7 @@ static int __cdecl sink_cob(void* E)
 }
 
 #ifndef TAGPU_LIMITS_STOCK
-/* The game's COB host (tagpu_cobgame.c) allocates in tagpu_cobvm.c, where 0x4B08C0's sink never
+/* The game's COB host (tagpu_patches.c, THE GAME'S COB INTERPRETER) allocates in tagpu_cobvm.c, where 0x4B08C0's sink never
    runs: it reports each allocation here with the key the sink would have counted -- the START and
    CALL keys, or the return address of the entry's own call of the allocator. */
 void tagpu_rec_cob_alloc(const char* cob, int script, unsigned caller)

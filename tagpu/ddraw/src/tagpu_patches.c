@@ -13153,8 +13153,9 @@ SIM_FEATURE(cob_verify, SIM_PUPPET_INDEPENDENT, "cob-verify");
    the logged one, and the copy must equal the object: the rate, the flag, the records and the count,
    the statics, the animation and the posed model. What an engine call out of the interpreter writes to
    the posed model -- EXPLODE hides its piece (0x421639, in 0x421620, which 0x481140 calls at 0x48123C),
-   EMIT_SFX's repose 0x45AB10 sets the dirty flag +8 and
-   copies the unit's turn into the cached body turn +0x18..+0x1C (0x45AB65) -- is the engine's own, and the swap makes the same call: the oracle takes the model
+   EMIT_SFX's repose 0x45AB10, when an axis of the unit's turn is 8 or more from the cached body turn
+   (0x45AB30..0x45AB5D), copies it into +0x18..+0x1C (0x45AB65) and sets the dirty flag +8 -- is the
+   engine's own, and the swap makes the same call: the oracle takes the model
    bytes each such call changed with its entry, and the replay writes them into the copy where that entry
    is answered. The first difference is logged with the unit, the call, the field and the kinds logged.
    The oracle writes no engine memory but those seven vtable slots and the two sites, and decides
@@ -13195,9 +13196,10 @@ typedef struct CvCtx {
 /* the oracle's records: nothing in the simulation reads them */
 static struct {
     CvCtx    ctx[CV_DEPTH];
-    int      depth;
-    DWORD    tid;
-    unsigned calls, equal, different, full[CV_FULLS], foreign, reported, period;
+    int      depth;                 /* written only by the thread `owner` names */
+    volatile LONG owner;            /* the thread whose outermost call is in progress, or 0 */
+    volatile LONG foreign;          /* calls run unverified: another thread's, or no room */
+    unsigned calls, equal, different, full[CV_FULLS], reported, period;
     unsigned seen[10];              /* the entries the equal calls carried, by kind (CV_KINDS) */
     unsigned effects[8];            /* their effects by vtable slot, 0x30 to 0x4C */
 } s_cv;
@@ -13223,7 +13225,7 @@ typedef void (__attribute__((thiscall)) *CvTick)(char*, int32_t);
 
 static CvCtx* cv_top(void)
 {
-    return s_cv.depth > 0 && s_cv.tid == GetCurrentThreadId() ? &s_cv.ctx[s_cv.depth - 1] : NULL;
+    return s_cv.owner == (LONG)GetCurrentThreadId() && s_cv.depth > 0 ? &s_cv.ctx[s_cv.depth - 1] : NULL;
 }
 
 /* the call in progress on `cob`, when its own interpreter is the code running */
@@ -13260,12 +13262,18 @@ static unsigned char* cv_model_before(const CvCtx* c, const char* cob, unsigned*
 static void cv_model_after(CvCtx* c, CvEntry* e, const char* cob, unsigned char* before, unsigned bytes)
 {
     const unsigned char* now = *(const unsigned char* const*)(cob + TAGPU_COB_MODEL_OFFSET);
+    /* the replay's copy holds the model of the program's bound pieces, which can be fewer than the
+       live model's count: a changed word past it cannot be written there, and is not compared */
+    unsigned room = TAGPU_COBVM_MODEL_BYTES(((const CobTail*)COB_TAIL(cob))->vm.program->model_pieces);
     unsigned i;
     if (!before) return;
     if (e) e->d0 = c->nd;
     for (i = 0; e && i < bytes; i++) {
         if (now[i] == before[i]) continue;
-        if (c->nd == CV_DELTA || i + 4u > bytes || i > 0xFFFFu) { c->full = CV_FULL_MODEL; break; }
+        if (c->nd == CV_DELTA || i + 4u > bytes || i + 4u > room || i > 0xFFFFu) {
+            c->full = CV_FULL_MODEL;
+            break;
+        }
         c->doff[c->nd] = (unsigned short)i;
         memcpy(&c->dval[c->nd++], now + i, 4);
         e->nd++;
@@ -13774,11 +13782,12 @@ static void cv_report(char* cob, const CvCall* k, const TagpuCobProgram* prog, C
     if (tick / 300u != s_cv.period) {
         s_cv.period = tick / 300u;
         tagpu_logf("cobverify: tick %u: %u calls, %u equal, %u different, %u not compared (%u past %u entries, "
-                   "%u past %u model words, %u at a RETURN's stack out of bounds), %u on another thread", tick,
+                   "%u past %u model words, %u at a RETURN's stack out of bounds), "
+                   "%u unverified (another thread's, or past the depth)", tick,
                    s_cv.calls, s_cv.equal, s_cv.different,
                    s_cv.full[CV_FULL_LOG] + s_cv.full[CV_FULL_MODEL] + s_cv.full[CV_FULL_STACK],
                    s_cv.full[CV_FULL_LOG], CV_LOG, s_cv.full[CV_FULL_MODEL], CV_DELTA, s_cv.full[CV_FULL_STACK],
-                   s_cv.foreign);
+                   (unsigned)s_cv.foreign);
         tagpu_logf("cobverify: tick %u: the equal calls carried %u stock getters, %u world units, %u callers, "
                    "%u allied and %u local tests, %u draws, %u cargo and %u carrier reads, %u completions, "
                    "%u nested entries; effects EMIT_SFX %u, EXPLODE %u, ATTACH %u, DROP %u, SET %u", tick,
@@ -13801,19 +13810,28 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
     TAGPU_COBVM_RUN run;
     unsigned char* copy;
     int32_t io[4];
-    int r, cr, i;
+    int r, cr, i, claimed;
+    LONG me = (LONG)GetCurrentThreadId();
     char reason[160];
     if (outer && outer->cob == cob) return cv_nested_engine(outer, cob, k, name, p);
-    if ((s_cv.depth && s_cv.tid != GetCurrentThreadId()) || s_cv.depth >= CV_DEPTH ||
+    /* The contexts, the counts and the report belong to one thread from its outermost call's claim
+       to the end of that call's replay: only the owner writes `owner` back, so a thread that reads
+       its own id owns them, and any other runs unverified. */
+    claimed = s_cv.owner != me;
+    if (claimed && InterlockedCompareExchange(&s_cv.owner, me, 0) != 0) {
+        InterlockedIncrement(&s_cv.foreign);
+        return cv_engine(cob, k, name, p);
+    }
+    if (s_cv.depth >= CV_DEPTH ||
         !(copy = (unsigned char*)tagpu_sim_scratch(TAGPU_COB_OBJECT_BYTES + stat + anim + model))) {
-        s_cv.foreign++;
+        if (claimed) InterlockedExchange(&s_cv.owner, 0);
+        InterlockedIncrement(&s_cv.foreign);
         return cv_engine(cob, k, name, p);
     }
     memcpy(copy, cob, TAGPU_COB_OBJECT_BYTES);
     if (stat) memcpy(copy + TAGPU_COB_OBJECT_BYTES, *(const void* const*)(cob + 0x10), stat);
     if (anim) memcpy(copy + TAGPU_COB_OBJECT_BYTES + stat, *(const void* const*)(cob + 0x14), anim);
     memcpy(copy + TAGPU_COB_OBJECT_BYTES + stat + anim, *(const void* const*)(cob + TAGPU_COB_MODEL_OFFSET), model);
-    if (!s_cv.depth) s_cv.tid = GetCurrentThreadId();
     c = &s_cv.ctx[s_cv.depth++];
     c->cob = cob;
     c->in_host = c->full = 0;
@@ -13853,6 +13871,7 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
     }
     cv_report(cob, k, prog, c, rp.bad);
     tagpu_sim_scratch_free(copy);
+    if (claimed) InterlockedExchange(&s_cv.owner, 0);
     return r;
 }
 
@@ -13910,6 +13929,8 @@ static void cv_install(const unsigned char* by_name, const unsigned char* by_idx
               "calls on a copy of the object");
 }
 
+SIM_FEATURE(cob_game_entries, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decline cob-getters resource-core-upgrade stock-resource-mex contest-waves teleport transport-turn");
+
 /* 0x4B0940(name, cb, now), ret 0xC: the first script of that name (0x4B0957..0x4B0993; none, -1,
    which the allocator refuses), its completion stored, and with `now` every record at dt 0 when one
    is busy, then the stepper; 1 started, 0 refused */
@@ -13943,6 +13964,14 @@ static int __attribute__((thiscall)) cg_start_idx(char* cob, int idx, uint32_t c
         return cv_verified(cob, &v, NULL, NULL);
     }
     cg_call(&k, cob, 0x004B0B0Du);
+    if (argc < 0 || argc > 4) {
+        /* Only a malformed script-start message reaches this: the 0x10 receiver passes the
+           message's byte as argc (0x455544), every other caller 0 to 2. The core would refuse it
+           as a fault; it is refused as a full pool refuses, on every peer alike. */
+        cg_alloc(&k, idx, TAGPU_COBVM_FROM_ENGINE);
+        if (cb) cg_done(&k, cb, 0);
+        return 0;
+    }
     args[0] = a0; args[1] = a1; args[2] = a2; args[3] = a3;
     return cg_done_call(cob, &k, tagpu_cobvm_start(vm, &k.run, idx, cb, now, 1, argc, args));
 }
