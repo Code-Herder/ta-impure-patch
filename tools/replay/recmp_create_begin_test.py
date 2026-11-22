@@ -281,6 +281,12 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 shutil.copyfile(dll, game / "ddraw.dll")
                 if reproduce:
                     shutil.copyfile(output / "zzrepro.ufo", game / "zzrepro.ufo")
+                # the two diagnostics only a network game reaches, armed so the landing's reach check sees
+                # them run: the unit stream's measurement (stream_sent, stream_recv, stream_log in
+                # tagpu_patches.c) and the wire predicates' unit tests at attach (wire_selfcheck). Both
+                # log and change nothing the game does.
+                for lever in ("tagpu_netlog.on", "tagpu_wirecheck.on"):
+                    (game / lever).touch()
                 if suffix == "H":
                     (game / "tagpu_recorder.on").touch()
                 elif (game / "tagpu_recorder.on").exists():
