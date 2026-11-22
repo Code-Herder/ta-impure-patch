@@ -5024,6 +5024,192 @@ static int fix_flak_divides(void)
     return fix_write(site, 3);
 }
 
+SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
+
+/* THE REPOSE'S TRIGONOMETRY, ONCE A PIECE. [DISASSEMBLED] The piece transform 0x45B150 (callers
+   0x45B12C, and itself at 0x45B219 for a piece's children) turns every vertex of a piece in place
+   by the loop 0x45B179..0x45B1AA, one call of the turn 0x4B6CC0(v, v, turn) a vertex, from the
+   last vertex down to the first. 0x4B6CC0 turns three pairs through 0x4B7173(angle, pair): (x, y)
+   by turn[0], then (y, z) by turn[2], then (x, z) by turn[1]. 0x4B7173 does nothing for a zero
+   angle (0x4B717B); otherwise it filds the pair, filds the int16 angle, multiplies it by the
+   double at 0x509EF8, takes fsincos, and runs a fixed sequence of multiplies and adds to two
+   fistp. So every vertex of a piece takes the same three fsincos of the same three arguments,
+   which is four fifths of the repose's time (zoom-out-speed-plan.md, item 3).
+
+   The posed vertices are simulation state: SweetSpot 0x43E0B0 takes the box of a piece's posed
+   vertices as AutoAim's target point. So the loop is not skipped; it is made to give the same
+   bits faster. THE FIX: the loop's first five bytes jump to a stub that calls repose_rotate(prim,
+   turn) and resumes at 0x45B1AC, where stock leaves the loop. repose_rotate takes each nonzero
+   angle's fsincos once -- the same filds, the same fmull of the same memory operand, the same
+   fsincos -- and keeps both results at the x87's own 80 bits (fstpt, fldt: exact), then for every
+   vertex, last to first, runs 0x4B7173's sequence with the two loads in place of the three
+   instructions that made them, in 0x4B6CC0's order, skipping a zero angle as 0x4B717B does.
+
+   THE INVARIANT: every vertex the loop writes is bit-identical to stock's. It rests on:
+     - the same operations on the same operands: each fsincos argument is the product stock
+       forms, under the same control word, since nothing between the trig and the vertices calls
+       out or touches the control word; fsincos is a function of its argument and that control
+       word, so stock's three a vertex are the one result taken here; the per-vertex instructions
+       are stock's, byte for byte in their arithmetic (the build's disassembly of repose_turn is
+       compared with 0x4B7194..0x4B71A4, research/notes/engine/render.md);
+     - the engine code it stands for being stock's: the loop, 0x4B6CC0 and 0x4B7173 are each
+       matched byte for byte before anything is written, and on any difference nothing is;
+     - the vertices being the only memory the loop writes: the dead store of the counter into
+       the frame's second argument (0x45B188, [esp+0x1C]) is not repeated, and that slot is read
+       only at 0x45B155, before the loop, and dropped by 0x45B150's `ret 0xC`.
+   THE X87 STATUS WORD comes out the same too. Its exception flags are sticky, the OR of what each
+   instruction raised: each fsincos here is stock's operation on stock's operand, so it raises
+   what each of stock's raised, and it runs only where stock's run, for a nonzero angle of a
+   piece with a vertex; the per-vertex instructions are stock's. The stack ends empty in both.
+   The condition codes are not carried: every fnstsw in the game's code follows the fcom that
+   sets them (the 314 in .text; the reads of exception flags, `and $0x20`, are the CRT's, at
+   0x4E5000 and above). The registers at 0x45B1AC: stock leaves eax, ecx, edx and ebx as the
+   loop's scratch, and 0x45B1AC..0x45B1C9 reloads all four before reading them. */
+
+/* the x87's 80-bit register format, as fstpt stores it */
+typedef struct { unsigned char b[10]; } X87_EXT;
+
+/* THE ORACLE, `tagpu_reposecheck.on` (read at install): every vertex is also turned by stock's
+   0x4B6CC0 on a copy, and the two compared. A difference is logged with its piece's angles. */
+typedef void (__stdcall *TURN3_FN)(const int* in, int* out, const short* turn);
+static unsigned char s_rtrigCheck;
+SIM_VAR(s_rtrigCheck, SIM_INSTALL);
+static struct { volatile unsigned int pieces, verts, differ; } s_rtrigDiag;   /* GAME THREAD */
+SIM_VAR(s_rtrigDiag, SIM_PRIVATE);
+
+static void repose_check(const int* stock, const int* ours, const short* turn)
+{
+    unsigned int n;
+    s_rtrigDiag.verts++;
+    if (memcmp(stock, ours, 12) != 0) {
+        n = ++s_rtrigDiag.differ;
+        if (n <= 8 || !(n & (n - 1u)))
+            tagpu_logf("enginefix: repose check: DIFFERS (%u so far) turn %d %d %d: stock %d %d %d, "
+                       "ours %d %d %d", n, turn[0], turn[1], turn[2], stock[0], stock[1], stock[2],
+                       ours[0], ours[1], ours[2]);
+    }
+}
+
+/* fsincos of the int16 angle times the double at 0x509EF8, as 0x4B7189..0x4B7192 forms it */
+static void repose_trig(short angle, X87_EXT* c, X87_EXT* s)
+{
+    __asm__ __volatile__("filds %2\n\t"
+                         "fmull 0x509EF8\n\t"
+                         "fsincos\n\t"
+                         "fstpt %0\n\t"
+                         "fstpt %1\n\t"
+                         : "=m"(*c), "=m"(*s)
+                         : "m"(angle)
+                         : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
+}
+
+/* 0x4B7173 on the pair p[0], p[1] with its sine and cosine already taken: 0x4B7180..0x4B7187,
+   the two loads, then 0x4B7194..0x4B71A4. AT&T operand order, as objdump prints the engine's. */
+static void repose_turn(int* p, const X87_EXT* c, const X87_EXT* s)
+{
+    __asm__ __volatile__("fildl 4(%0)\n\t"
+                         "fildl (%0)\n\t"
+                         "fld %%st(1)\n\t"
+                         "fld %%st(1)\n\t"
+                         "fldt %2\n\t"
+                         "fldt %1\n\t"
+                         "fmul %%st, %%st(5)\n\t"
+                         "fmulp %%st, %%st(4)\n\t"
+                         "fmul %%st, %%st(2)\n\t"
+                         "fmulp %%st, %%st(1)\n\t"
+                         "faddp %%st, %%st(3)\n\t"
+                         "fsubrp %%st, %%st(1)\n\t"
+                         "fistpl (%0)\n\t"
+                         "fistpl 4(%0)\n\t"
+                         :
+                         : "a"(p), "m"(*c), "m"(*s)
+                         : "memory", "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)",
+                           "st(7)");
+}
+
+/* The loop 0x45B179..0x45B1AA: prim's vertex count is (*prim)+4, its vertices at prim+0x22,
+   12 bytes each; `turn` is the three int16 angles 0x45B150 was handed. */
+static void __cdecl repose_rotate(const unsigned char* prim, const short* turn)
+{
+    const unsigned char* node;
+    int* v;
+    int n, i, k, pair[2];
+    X87_EXT c[3], s[3];
+
+    memcpy(&node, prim, 4);
+    memcpy(&n, node + 4, 4);
+    memcpy(&v, prim + 0x22, 4);
+    if (n <= 0) return;                     /* stock's `dec; js` at 0x45B17E: no turn taken */
+    for (k = 0; k < 3; k++)
+        if (turn[k]) repose_trig(turn[k], &c[k], &s[k]);
+    if (s_rtrigCheck) {
+        unsigned int np = ++s_rtrigDiag.pieces;
+        if (!(np & (np - 1u)))
+            tagpu_logf("enginefix: repose check: %u pieces, %u vertices, %u differ", np,
+                       s_rtrigDiag.verts, s_rtrigDiag.differ);
+    }
+    for (i = n - 1; i >= 0; i--) {
+        int* p = v + 3 * i;
+        int stock[3];
+        if (s_rtrigCheck) {
+            memcpy(stock, p, 12);
+            ((TURN3_FN)0x004B6CC0)(stock, stock, turn);
+        }
+        if (turn[0]) repose_turn(p, &c[0], &s[0]);              /* (x, y)            */
+        if (turn[2]) repose_turn(p + 1, &c[2], &s[2]);          /* (y, z)            */
+        if (turn[1]) {                                          /* (x, z), via a pair */
+            pair[0] = p[0];
+            pair[1] = p[2];
+            repose_turn(pair, &c[1], &s[1]);
+            p[0] = pair[0];
+            p[2] = pair[1];
+        }
+        if (s_rtrigCheck) repose_check(stock, p, turn);
+    }
+}
+
+/* 0x4B6CC0 and 0x4B7173 as stock has them: what repose_rotate reproduces */
+static const unsigned char k_turn3[0x86] = {
+    0x83,0xEC,0x10,0x56,0x8B,0x74,0x24,0x18,0x57,0x8B,0x7C,0x24,0x24,0x8B,0x06,0x8B,
+    0x4E,0x04,0x89,0x44,0x24,0x08,0x66,0x8B,0x07,0x8D,0x54,0x24,0x08,0x89,0x4C,0x24,
+    0x0C,0x52,0x50,0xE8,0x8B,0x04,0x00,0x00,0x8B,0x4C,0x24,0x14,0x8B,0x56,0x08,0x83,
+    0xC4,0x08,0x89,0x4C,0x24,0x10,0x66,0x8B,0x4F,0x04,0x8D,0x44,0x24,0x10,0x50,0x51,
+    0x89,0x54,0x24,0x1C,0xE8,0x6A,0x04,0x00,0x00,0x8B,0x74,0x24,0x28,0x8B,0x54,0x24,
+    0x18,0x8B,0x44,0x24,0x1C,0x83,0xC4,0x08,0x89,0x56,0x04,0x66,0x8B,0x57,0x02,0x8D,
+    0x4C,0x24,0x08,0x89,0x44,0x24,0x0C,0x51,0x52,0xE8,0x45,0x04,0x00,0x00,0x8B,0x44,
+    0x24,0x10,0x8B,0x4C,0x24,0x14,0x83,0xC4,0x08,0x89,0x06,0x89,0x4E,0x08,0x5F,0x5E,
+    0x83,0xC4,0x10,0xC2,0x0C,0x00 };
+static const unsigned char k_turn2[0x34] = {
+    0x55,0x8B,0xEC,0x66,0x83,0x7D,0x08,0x00,0x74,0x28,0x8B,0x45,0x0C,0xDB,0x40,0x04,
+    0xDB,0x00,0xD9,0xC1,0xD9,0xC1,0xDF,0x45,0x08,0xDC,0x0D,0xF8,0x9E,0x50,0x00,0xD9,
+    0xFB,0xDC,0xCD,0xDE,0xCC,0xDC,0xCA,0xDE,0xC9,0xDE,0xC3,0xDE,0xE9,0xDB,0x18,0xDB,
+    0x58,0x04,0xC9,0xC3 };
+
+static int fix_repose_trig(void)
+{
+    FIXSITE site[3] = {
+        { 0x0045B179, 20, { 0x8B,0x0E,0x8B,0x41,0x04,0x48,0x78,0x2B,0x8D,0x1C,0x40,0xC1,0xE3,0x02,
+                            0x40,0x89,0x44,0x24,0x1C,0x8B }, { 0 } },
+        { 0x0045B18D, 20, { 0x56,0x22,0x8B,0x4C,0x24,0x18,0x51,0x8D,0x04,0x1A,0x50,0x50,0xE8,0x22,
+                            0xBB,0x05,0x00,0x83,0xEB,0x0C }, { 0 } },
+        { 0x0045B1A1, 11, { 0x8B,0x44,0x24,0x1C,0x48,0x89,0x44,0x24,0x1C,0x75,0xE0 }, { 0 } },
+    };
+    unsigned char* p;
+    if (!fix_match(site, 3) ||
+        memcmp((const void*)0x004B6CC0, k_turn3, sizeof k_turn3) != 0 ||
+        memcmp((const void*)0x004B7173, k_turn2, sizeof k_turn2) != 0) return FIX_BYTES;
+    if (!(p = fix_code(24))) return FIX_STUB;
+    s_rtrigCheck = (unsigned char)(tagpu_sim_lever("tagpu_reposecheck.on") != 0);
+    fix_branch(&site[0], 0xE9, p);
+    *p++ = 0x8B; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18;          /* mov eax,[esp+0x18]: turn */
+    *p++ = 0x50;                                                /* push eax            */
+    *p++ = 0x56;                                                /* push esi: the prim  */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)repose_rotate); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                      /* add esp,8           */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045B1AC);
+    return fix_write(site, 1);
+}
+
 SIM_FEATURE(shatter_rng, SIM_PUPPET_RUNS, "battle");
 
 /* THE SHATTER'S RANDOM NUMBERS, a SIMULATION fix. COB's EXPLODE with SHATTER (0x481140, reached
@@ -10547,11 +10733,15 @@ static void patch_engine_defects(void)
     int aitax  = fix_ai_untaxed();
     int aishr  = fix_ai_autoshare();
     int ustream = fix_unit_stream();
+    int rtrig = fix_repose_trig();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
     if (tagpu_sim_lever("tagpu_wirecheck.on"))
         wire_selfcheck();
+    tagpu_logf("enginefix: the repose takes its trigonometry once a piece (0x45B179, the vertex "
+               "loop of 0x45B150; 0x4B6CC0 and 0x4B7173 matched) %s%s", fix_state(rtrig),
+               s_rtrigCheck ? "; the oracle compares every vertex with stock's" : "");
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "

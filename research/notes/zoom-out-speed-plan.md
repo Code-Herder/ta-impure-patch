@@ -86,7 +86,16 @@ as AutoAim's target point (scouted 2026-11-21 from the disassembly; the chain up
 made to give the same bits faster: the three `fsincos` results once a piece, kept at 80 bits (precision
 control does not touch `fsincos`, and a tbyte store and load are exact), then the engine's own per-vertex
 multiply-add sequence. THE INVARIANT: every vertex the repose writes is bit-identical to the engine's.
-The replay test groups are the check.
+
+BUILT as the always-on engine fix `repose_trig` (`tagpu_patches.c`): the vertex loop `0x45B179` jumps to
+`repose_rotate`, which takes each nonzero angle's `fsincos` once a piece with the engine's own operands
+and control word and runs `0x4B7173`'s per-vertex arithmetic, byte for byte the engine's; the loop,
+`0x4B6CC0` and `0x4B7173` are byte-matched first. The oracle `tagpu_reposecheck.on` turns a copy of every
+vertex through the engine's `0x4B6CC0` too and compares. MEASURED 2026-11-21 in the battle at 1080p, near
+and zoomed out: 201 247 580 vertices of 16 777 216 pieces compared, 0 differ. The build before and after,
+back to back (load about 9 both): `sweep` 13.97 → 5.45 ms a frame far and busy, 6.06 → 3.23 far and
+thin, near unchanged (1.3, 0.9); game frames 9.2 → 12.2 and 14.7 → 17.4 a second far. The replay test
+groups are the landing's check of the outcome.
 
 ### 4. Impure's packet publish
 
