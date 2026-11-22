@@ -777,16 +777,18 @@ engine's integer arithmetic; only the wind's history is not in the event.
 **The smoke's timing and the wind's sums.** A puff moves by the wind and the rise its walk reads,
 and puff 0's first walk is whichever walk runs first after the emission: the same tick's in the
 step, the next tick's for an emission after the walk (the explosion draw's pieces, a replay's frame
-visit), and the level's first walk for a vent's `SmokeInfinite` at the map's load — which the level
-init follows by storing GameTime 0 (`0x491979`), so such an object's second puff waits for GameTime
-to reach the last level's end + 5, as in stock. So the start of every particle walk
+visit), and the level's first walk for a vent's `SmokeInfinite` at the map's load — an emission that
+sees GameTime 0 (the loader stores it at `0x4971BB` before the map load) while its first walk comes
+only after the load and the catch-up ticks. So the start of every particle walk
 (`pevt_walk_begin`, before the engine's slots run) sets the timing of the smoke events emitted since
 the last walk — `first` that walk, `again` the first walk from it at or past `T + interval` (the again
 tests' unsigned compare), Smoke2's puff count and D — and notes the wind's x and y and the rise into a
 ring of prefix sums, one row a walk (`TAGPU_PEVT_WIND`, 1 024 rows). A puff first moved at walk F is,
-after the walk of P, at its start plus row P less row F − 1. A walk whose previous row is not the
-tick before it (the level's first, after a seek) starts the sums again, and no row from before it is
-read: a puff that needed one is not drawn (none can be: a seek clears the events). The frame
+after the walk of P, at its start plus row P less row F − 1. A walk with no held row for the tick
+before it (the level's first; after a seek, when the ring holds none for the target's tick) starts the
+sums again, and no row from before it is read: a puff that needed one is not drawn (none can be: a
+seek clears the events). A row kept from before a seek is a consistent base, since the ticks before
+the seek's target are the same on both sides of it. The frame
 packet carries the rows its smoke events reach back to, and an event whose puff could outlive the
 ring is not made.
 

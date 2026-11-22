@@ -760,9 +760,11 @@ Two particle classes of the same shape, object `0x38` (Smoke2) / `0x34` (Smoke1)
   [ecx],0x4FD5A8; ret`), and with flag 1 the object back to the pool through `0x471D50(obj)`
   (stdcall, `0x470ED0(0x51E610, obj)`).
 - **Where the emitters run**: see [effects](../effects.md) §7.4. `0x472C50` is also called on the
-  loader thread at the map's load (`SpawnFeatureOnMap 0x423FE3`), and the level init then stores
-  GameTime 0 at `0x491979`, after the map load `0x4918C0`: such an object's `+8` holds the last
-  level's GameTime + 5, so its second puff waits for GameTime to reach that.
+  loader thread at the map's load (`SpawnFeatureOnMap 0x423FE3`): the loader body `0x497180` zeroes
+  esi (`0x4971A2`) and stores it as GameTime (`0x4971BB`, [map](map.md)) before it calls `0x4917D0`
+  (`0x497581`), whose map load `0x4918C0` reaches SpawnFeatureOnMap. So such an emission sees
+  GameTime 0 (its `+8` is 5), and its object's first walk is the level's first, after the load and
+  the catch-up ticks; the level init's store of 0 at `0x491979` comes after the map load too.
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 

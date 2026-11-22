@@ -253,13 +253,14 @@ Vulkan in the event.
      (`scenarios/replay-smoke.json`) for both classes.
    - **The timing at the next walk.** A puff's first move is the first walk after its emission, which
      the emission cannot know: the same tick's, the next tick's for a late emission, or the level's
-     first for a vent's `SmokeInfinite`, emitted on the loader thread before the level init stores
-     GameTime 0 (`0x491979`). So an emission records its timing as pending and the start of the next
+     first for a vent's `SmokeInfinite`, emitted on the loader thread at GameTime 0 (the loader's store
+     at `0x4971BB`, before the map load) and first walked only after the load and the catch-up ticks.
+     So an emission records its timing as pending and the start of the next
      walk sets it. Smoke1 never ends: its row is skipped by the purge and goes with its proxy (a trim,
      the teardown).
    - **Learned**: the smoke constructors overwrite `+0xC` with a byte of a pointer, so the layer is
-     read from the emitter's frame. A vent's second puff waits for GameTime to pass the previous
-     level's end + 5 (stock). A puff's ordinal survives the 8-bit (Smoke2) / 10-bit (Smoke1) carrier
+     read from the emitter's frame. A vent's emission sees GameTime 0, so its second puff is due at 5,
+     though its first walk comes after the catch-up ticks. A puff's ordinal survives the 8-bit (Smoke2) / 10-bit (Smoke1) carrier
      because an emission whose puffs could overlap past it is refused (none in stock content).
    - **MEASURED** (`.data/gpu-particles/l5/`): the oracle across a live rewind on the vents (3 323
      ticks, about 335 puffs a vent, at least three wind changes) and on the battle beside one (3 458 ticks),
