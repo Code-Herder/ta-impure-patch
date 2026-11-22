@@ -11811,12 +11811,19 @@ static struct {
     unsigned cTicks, cObjs, cSubs, cDiff, cMissing, cExtra, cSaid;   /* the oracle, this level */
     unsigned cField[7];
 } s_pevt;
+/* PRIVATE, not STATE, although the screen shows it: the list stands in for the engine's particle
+   pool, which the recorder leaves as presentation (replay-globals.tsv, the `particlepool` row
+   0x51E610: `leave`), and a replay makes its events anew by re-firing the emitters as its replayed
+   simulation reaches them, as it makes the pool's objects. The class is the owner's to settle. */
 SIM_VAR(s_pevt, SIM_PRIVATE);
 static unsigned char s_pevtOn, s_pevtCheck;       /* a Vulkan launch; the oracle lever        */
+static const char* s_pevtOff;                     /* why a Vulkan launch draws no events      */
+SIM_VAR(s_pevtOff, SIM_INSTALL);
 SIM_VAR(s_pevtOn, SIM_INSTALL);
 SIM_VAR(s_pevtCheck, SIM_INSTALL);
 
-static int pevt_live(void) { return s_pevtOn && s_pwOn; }
+/* the events need the alloc's stub (the table, written all or nothing) and the walk's hook */
+static int pevt_live(void) { return s_pevtOn && s_pwOn && s_limState > 0; }
 
 /* len = _ftol(fsqrt((dx*dx + dalt*dalt) + dy*dy)): the spawn's own x87 sequence and its own _ftol
    0x4E43A0 (0x473E75..0x473EB6), on the game thread whose control word the spawn computes under. */
@@ -12130,6 +12137,19 @@ unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int
 /* the events are drawn (a Vulkan launch with the walk and the alloc's stub in) */
 int tagpu_pevt_on(void) { return pevt_live(); }
 
+/* said once the table's answer is known (tagpu_limits_install), since the alloc's stub is its */
+static void pevt_report(void)
+{
+    tagpu_logf("particles: the nano spray %s%s", pevt_live() ? "is drawn from emitter events "
+               "(0x47212B 0x47225B: no object, an event the GPU draws)" :
+               s_pevtOff ? s_pevtOff :
+               g_config.gdi ? "keeps the engine's objects (GDI)" :
+               s_limState <= 0 ? "keeps the engine's objects: the table is not in" :
+               "keeps the engine's objects: the particle walk is not in",
+               s_pevtCheck && pevt_live() ? "; tagpu_particlecheck.on: the engine's objects are "
+               "made as well and held to the events every tick" : "");
+}
+
 /* the pool's alloc 0x470EB0 returned `obj` (NULL: the pool was full, or a nano call drawn from
    events was not given one) */
 static void __cdecl prand_alloc(unsigned obj)
@@ -12282,12 +12302,62 @@ static int fix_particle_rand(void)
         lim_no_stub();
         return FIX_TABLE;
     }
+    /* WHAT pevt_pre READS OUT OF A NANO EMITTER'S FRAME is laid out by the emitter's own code from
+       its entry to its layer's read (0x4720D0..0x472187, 0x472200..0x4722B7: the frame, the
+       degenerate box, the SFX test, the alloc call whose return address names the caller, the
+       NULL test that skips the init, the init's arguments and the layer's word), so those bytes are
+       held to stock with the table, all or nothing. The first 7 of each are the recorder's
+       observer (tagpu_recorder.c OBSERVE_SITES, which byte-matches them itself and runs them as
+       stock) and would read as a rewrite at the table's verify, so they are compared here, before
+       the recorder installs: other bytes there leave the events off and the engine's objects on. */
     s_pevtOn = (unsigned char)!g_config.gdi;
+    {
+    static const unsigned char fwd[0xB8] = {   /* 0x4720D0..0x472187 */
+        0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x1C, 0x53, 0x8B, 0xC8, 0x55, 0x33, 0xDB, 0x56, 0x8B, 0x11,
+        0x57, 0x89, 0x54, 0x24, 0x10, 0x8B, 0x51, 0x04, 0x89, 0x54, 0x24, 0x14, 0x8B, 0x10, 0x8B, 0x49,
+        0x08, 0x89, 0x54, 0x24, 0x1C, 0x8B, 0x50, 0x08, 0x89, 0x4C, 0x24, 0x18, 0x8B, 0x48, 0x04, 0xA1,
+        0xE8, 0x1D, 0x51, 0x00, 0x89, 0x4C, 0x24, 0x20, 0x89, 0x54, 0x24, 0x24, 0x8B, 0xA8, 0x77, 0x8D,
+        0x03, 0x00, 0xA0, 0x08, 0xE6, 0x51, 0x00, 0x3A, 0xC3, 0x74, 0x04, 0x33, 0xC0, 0xEB, 0x1F, 0x6A,
+        0x4C, 0xB9, 0x10, 0xE6, 0x51, 0x00, 0xE8, 0x85, 0xED, 0xFF, 0xFF, 0x8B, 0xD0, 0x3B, 0xD3, 0x74,
+        0x0B, 0xB9, 0x13, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3, 0xAB, 0x8B, 0xC2, 0x3B, 0xC3,
+        0x74, 0x1D, 0x8A, 0x4C, 0x24, 0x34, 0x89, 0x58, 0x04, 0x88, 0x48, 0x0C, 0x89, 0x58, 0x10, 0x89,
+        0x58, 0x14, 0x89, 0x58, 0x18, 0xC7, 0x00, 0xB8, 0xD5, 0x4F, 0x00, 0x8B, 0xF0, 0xEB, 0x02, 0x33,
+        0xF6, 0x3B, 0xF3, 0x0F, 0x84, 0x86, 0x00, 0x00, 0x00, 0x8B, 0x44, 0x24, 0x30, 0x8B, 0x16, 0x6A,
+        0x01, 0x8D, 0x4C, 0x24, 0x14, 0x50, 0x51, 0x8B, 0xCE, 0xFF, 0x52, 0x18, 0x0F, 0xBF, 0x54, 0x24,
+        0x34, 0xC1, 0xE2, 0x04, 0x89, 0x74, 0x24, 0x2C,
+    };
+    static const unsigned char rev[0xB8] = {   /* 0x472200..0x4722B7 */
+        0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x20, 0x53, 0x8B, 0xC8, 0x55, 0x33, 0xDB, 0x56, 0x8B, 0x11,
+        0x57, 0x89, 0x54, 0x24, 0x10, 0x8B, 0x51, 0x04, 0x89, 0x54, 0x24, 0x14, 0x8B, 0x10, 0x8B, 0x49,
+        0x08, 0x89, 0x54, 0x24, 0x1C, 0x8B, 0x50, 0x08, 0x89, 0x4C, 0x24, 0x18, 0x8B, 0x48, 0x04, 0xA1,
+        0xE8, 0x1D, 0x51, 0x00, 0x89, 0x4C, 0x24, 0x20, 0x89, 0x54, 0x24, 0x24, 0x8B, 0xA8, 0x77, 0x8D,
+        0x03, 0x00, 0xA0, 0x08, 0xE6, 0x51, 0x00, 0x3A, 0xC3, 0x74, 0x04, 0x33, 0xC0, 0xEB, 0x1F, 0x6A,
+        0x4C, 0xB9, 0x10, 0xE6, 0x51, 0x00, 0xE8, 0x55, 0xEC, 0xFF, 0xFF, 0x8B, 0xD0, 0x3B, 0xD3, 0x74,
+        0x0B, 0xB9, 0x13, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3, 0xAB, 0x8B, 0xC2, 0x3B, 0xC3,
+        0x74, 0x1D, 0x8A, 0x4C, 0x24, 0x34, 0x89, 0x58, 0x04, 0x88, 0x48, 0x0C, 0x89, 0x58, 0x10, 0x89,
+        0x58, 0x14, 0x89, 0x58, 0x18, 0xC7, 0x00, 0xB8, 0xD5, 0x4F, 0x00, 0x8B, 0xF0, 0xEB, 0x02, 0x33,
+        0xF6, 0x3B, 0xF3, 0x0F, 0x84, 0x86, 0x00, 0x00, 0x00, 0x8B, 0x4C, 0x24, 0x2C, 0x8B, 0x16, 0x8D,
+        0x44, 0x24, 0x10, 0x6A, 0x01, 0x50, 0x51, 0x8B, 0xCE, 0xFF, 0x52, 0x18, 0x0F, 0xBF, 0x54, 0x24,
+        0x34, 0xC1, 0xE2, 0x04, 0x89, 0x74, 0x24, 0x30,
+    };
+        for (i = 0; i < 0xB8 - 7; i += LIM_MAXB) {
+            const int n = 0xB8 - 7 - i < LIM_MAXB ? 0xB8 - 7 - i : LIM_MAXB;
+            lim_same(0x004720D7u + (unsigned)i, n, fwd + 7 + i,
+                     "particles: the forward nano emitter's frame, read by the events");
+            lim_same(0x00472207u + (unsigned)i, n, rev + 7 + i,
+                     "particles: the reverse nano emitter's frame, read by the events");
+        }
+        if (!tagpu_detour_bytes_ok(0x004720D0u, fwd, 7) || !tagpu_detour_bytes_ok(0x00472200u, rev, 7))
+            s_pevtOff = "keeps the engine's objects: the nano emitters' entries hold other bytes";
+    }
+    if (s_pevtOff) s_pevtOn = 0;
     s_pevtCheck = (unsigned char)(s_pevtOn && tagpu_sim_lever("tagpu_particlecheck.on"));
     /* the alloc: first whether the pool is asked at all (pevt_pre: a nano call drawn from events
        is not, and answers NULL), then the engine's own body on the engine's arguments, then the
-       count. Its registers on return are the body's (popad), or the entry's with eax 0, as its
-       callers find them in stock after a full pool */
+       count. Its registers on return are the body's (popad); on the skip path the entry's with
+       eax 0, which differs from stock's full pool in edx alone (stock leaves [ecx+0x20] there):
+       the skip path serves only the two nano emitters, and both overwrite edx at once with the
+       answer (0x47212B / 0x47225B `mov edx,eax`) */
     p = a;
     *p++ = 0x60;                                                /* pushad                   */
     *p++ = 0x54;                                                /* push esp: the registers  */
@@ -12942,12 +13012,6 @@ static void patch_loader_defects(void)
                "drawn by the rule, emissions and objects outside the pool at 0x%08X 0x%08X 0x%08X",
                fix_state(prnd), fix_state(pdiv), (unsigned int)(size_t)&s_prand.draws,
                (unsigned int)(size_t)&s_prand.emissions, (unsigned int)(size_t)&s_prand.outside);
-    tagpu_logf("particles: the nano spray %s%s", pevt_live() ? "is drawn from emitter events "
-               "(0x47212B 0x47225B: no object, an event the GPU draws)" :
-               s_pevtOn ? "keeps the engine's objects: the particle walk is not in" :
-               "keeps the engine's objects (GDI)",
-               s_pevtCheck && pevt_live() ? "; tagpu_particlecheck.on: the engine's objects are "
-               "made as well and held to the events every tick" : "");
     tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
                "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
                s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
@@ -16059,10 +16123,19 @@ int tagpu_limits_in(void)
     return s_limState > 0;
 }
 
+static int lim_install(void);
 int tagpu_limits_install(void)
 {
-    int i, bad = 0, written, haveFile, noFile = 0, marked = 0, modBad = 0;
+    int in;
     if (s_limState) return s_limState > 0;
+    in = lim_install();
+    pevt_report();
+    return in;
+}
+
+static int lim_install(void)
+{
+    int i, bad = 0, written, haveFile, noFile = 0, marked = 0, modBad = 0;
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
 #endif

@@ -661,15 +661,21 @@ int tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, i
 
 void tagpu_fx_set_mute(int on) { s_mute = on; }
 
-/* THE NANO EVENTS OF THIS FRAME: a pointer into the packet the render thread holds until the
-   frame ends, so the hand-over that carries it is consumed inside its life (tagpu_fx.h). */
+/* THE NANO EVENTS OF THIS FRAME, copied out of the packet while the gather holds it: the
+   Vulkan pass prepares after tagpu_packet_frame_end, past which no packet pointer may be read,
+   so the hand-over carries this copy, as it carries s_verts and the LHT. Sized to the packet's
+   own bound on the table (TAGPU_PK_MAX_PEVT, which the acquire has checked n against). */
+static TAGPU_PEVT s_evtBuf[TAGPU_PK_MAX_PEVT];
 static const TAGPU_PEVT* s_evt;
 static int      s_nEvt;
 static unsigned s_evtTick;
 void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick)
 {
-    s_evt = n > 0 ? e : NULL;
-    s_nEvt = s_evt ? n : 0;
+    if (!e || n < 1) n = 0;
+    if (n > (int)TAGPU_PK_MAX_PEVT) n = (int)TAGPU_PK_MAX_PEVT;
+    if (n) memcpy(s_evtBuf, e, (size_t)n * sizeof *s_evtBuf);
+    s_evt = n ? s_evtBuf : NULL;
+    s_nEvt = n;
     s_evtTick = tick;
 }
 

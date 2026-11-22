@@ -309,8 +309,8 @@ typedef struct TAGPU_FXHAND {
     int   scissorOn;                  /* the native pass clips this frame     */
     int   ss;                         /* the world target's supersample factor */
 
-    /* THE NANO SPRAY'S EMITTER EVENTS (inc/tagpu_pevt.h; tagpu_sfx.c hands them in): the
-       packet's own table, which the render thread holds for this whole frame, drawn by the NVS/NFS
+    /* THE NANO SPRAY'S EMITTER EVENTS (inc/tagpu_pevt.h; tagpu_sfx.c hands them in): tagpu_fx.c's
+       copy of the packet's table, made while the gather held the packet, drawn by the NVS/NFS
        program at `pevtTick`, the packet's GameTime, from the eye the gather projected with and
        each layer's depth key. NULL / 0 when the frame draws none. */
     const TAGPU_PEVT* pevt;

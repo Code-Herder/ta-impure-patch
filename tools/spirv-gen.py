@@ -92,10 +92,13 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
   6. FRAGMENT OUTPUTS take locations in declaration order, unless the source
      already gives one a `layout(location=)`.
   7. `gl_VertexID` / `gl_InstanceID` become `gl_VertexIndex` /
-     `gl_InstanceIndex`. `firstVertex` is 0 in every draw that reads
-     `gl_VertexID`, and `firstInstance` is 0 in the one draw whose shader reads
-     `gl_InstanceID` (the terrain, tagpu_vk_terr.c), so the two names mean the
-     same value there. The line draws (tagpu_vk_mark.c, tagpu_vk_fx.c) pass a
+     `gl_InstanceIndex`. `gl_VertexIndex` counts from the draw's `firstVertex`
+     as GL's `gl_VertexID` counts from `first`, so the two mean the same value
+     in every draw: the effects pass's event draws (tagpu_vk_fx.c) pass a
+     nonzero `firstVertex` and read the index as a place in the whole event
+     buffer. `firstInstance` is 0 in the one draw whose shader reads
+     `gl_InstanceID` (the terrain, tagpu_vk_terr.c), where GL's does not count
+     from it and Vulkan's does, so the two names mean the same value there. The line draws (tagpu_vk_mark.c, tagpu_vk_fx.c) pass a
      nonzero `firstInstance`, which only moves the fetch of their per-instance
      attributes; their shaders do not read `gl_InstanceID`, and one that did
      would be offset by it under Vulkan.

@@ -651,7 +651,12 @@ the first `peek` in play, none outside the pool.
 
 ### 7.8 The nano spray from emitter events — the GPU computes the particles [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
 
-On a Vulkan launch the nano emitters `0x4720D0` and `0x472200` make **no engine object**. The pool
+On a Vulkan launch the nano emitters `0x4720D0` and `0x472200` make **no engine object**. What
+`pevt_pre` reads out of an emitter's frame is laid out by the emitter's own code, so its bytes from
+the entry to the layer's read (`0x4720D7..0x472187`, `0x472207..0x4722B7`) are rows of the limits
+table, held to stock all or nothing with the alloc's stub; the first seven of each are the
+recorder's observer, compared before it installs. A table not in, or an entry that differs, leaves
+the events off and the engine's objects on, and the install line says which. The pool
 alloc `0x470EB0`'s stub (`fix_particle_rand`) asks `pevt_pre` first: called from either emitter's
 alloc (return address `0x47212B` / `0x47225B`), it copies what the init `0x473B50` will take out of
 the emitter's frame and answers "no object"; the emitter then skips its init, its layer trim and its
@@ -692,8 +697,11 @@ drops its oldest sixteenth whole and logs once.
 (each event's box of world x and `y − alt/2`, widened by the reach slack) into the slot, newest kept
 when the slot runs out (`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line); the acquire
 validates the table and every layer. The packet's GameTime is the P the GPU computes at. The `packet:`
-heartbeat's `pevt=last/most/truncated`. No new cross-thread read: the render thread reads only the
-packet it holds.
+heartbeat's `pevt=last/most/truncated`. **The thread split**: the game thread alone reads and
+writes the list; the render thread's gather copies the packet's table into `tagpu_fx.c`'s own
+storage (`tagpu_fx_set_events`, sized to `TAGPU_PK_MAX_PEVT`) while it holds the packet, before
+`tagpu_packet_frame_end`, and the Vulkan pass, which prepares after that, reads only the copy — the
+ordering every other part of the effects hand-over (`s_verts`, the LHT) rests on.
 
 **The draw** (`tagpu_fx.c` NVS/NFS, `tagpu_vk_fx.c` `s_pipeEvt`): one draw of `60·n` vertices with
 no vertex input after the under bucket (layers 0..6, sorted first) and one after the sprites for an
