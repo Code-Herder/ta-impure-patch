@@ -874,7 +874,7 @@ typedef struct TAGPU_PK_PART {
    half times that. 24 576 entries is 384 KB per slot. */
 #define TAGPU_PK_MAX_PART    24576u
 /* The events a packet carries, in view: two layers' caps of them. The publisher's list holds
-   four (tagpu_patches.c, PEVT_CAP), but a packet takes only the events whose particles can reach
+   six (tagpu_patches.c, PEVT_CAP), but a packet takes only the events whose particles can reach
    the view, and keeps the newest with TAGPU_PK_TRUNC_PEVT past this. */
 #define TAGPU_PK_MAX_PEVT    (2u * ((unsigned)TAGPU_LIM_SFX + 1u))
 

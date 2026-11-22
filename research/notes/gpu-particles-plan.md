@@ -240,8 +240,32 @@ Vulkan in the event.
      left dot 0 (or the emission was late), as nano's second burst.
    - **MEASURED** (`.data/gpu-particles/l4/`): see effects §7.8's *MEASURED* for the oracle, the
      sea-level changes, the GDI pair, the replay groups and the battle's spans.
-5. **Smoke1 and Smoke2,** with the wind table and the countdowns. Check: the oracle; feature smoke, impact
-   smoke, rocket trails and damaged-unit smoke against GDI.
+5. **Smoke1 and Smoke2,** with the wind table and the countdowns. *Landed locally 2026-11-22.* Check:
+   the oracle; feature smoke, impact smoke, rocket trails and damaged-unit smoke against GDI.
+   - **What it built** ([effects](effects.md) §7.8): the smoke classes in the event (point,
+     interval, reset, frame cap, sequence, end, and the timing words), each puff's position, frame and
+     countdown in closed form in C and GLSL (the frame found by walking the countdown draws, at most
+     the 64 frames of the table), a ring of the wind's and the rise's prefix sums, one row a walk,
+     carried in the packet as far back as its smoke events reach, the frame table widened to the
+     flare sequence, "smoke 1" and "smoke 2"; both classes on the proxy path, so every layer's count,
+     order and pool share stay the engine's; the events drawn in layer order, which with every class
+     an event is the engine's painter order; the oracle and the `particle-check-smoke` test group
+     (`scenarios/replay-smoke.json`) for both classes.
+   - **The timing at the next walk.** A puff's first move is the first walk after its emission, which
+     the emission cannot know: the same tick's, the next tick's for a late emission, or the level's
+     first for a vent's `SmokeInfinite`, emitted on the loader thread before the level init stores
+     GameTime 0 (`0x491979`). So an emission records its timing as pending and the start of the next
+     walk sets it. Smoke1 never ends: its row is skipped by the purge and goes with its proxy (a trim,
+     the teardown).
+   - **Learned**: the smoke constructors overwrite `+0xC` with a byte of a pointer, so the layer is
+     read from the emitter's frame. A vent's second puff waits for GameTime to pass the previous
+     level's end + 5 (stock). A puff's ordinal survives the 8-bit (Smoke2) / 10-bit (Smoke1) carrier
+     because an emission whose puffs could overlap past it is refused (none in stock content).
+   - **MEASURED** (`.data/gpu-particles/l5/`): the oracle across a live rewind on the vents (3 323
+     ticks, about 335 puffs a vent, at least three wind changes) and on the battle beside one (3 458 ticks),
+     every particle of both classes equal; the replay groups 343 pass; a GDI pair; in the 13 500-unit
+     battle `particles` 0.86 → 1.20 ms, `publish` 1.76 → 1.45, `gather` 3.33 → 1.95 ([effects](effects.md)
+     §7.8's *MEASURED*).
 6. **The engine's particles off on Vulkan.** The pool capacity 0, the walker's call and the packet's
    particle copy removed on Vulkan, and `tagpu_sfx.c`'s gather of the layers retired. Measure in the
    battle at 1080p and at 4K live: the `particles` span, `publish`, `gather`, the GPU's frame time, and
@@ -254,8 +278,8 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 - **The layer cap's count of events is exact only while its class shares its layer with nothing.**
   Every caller files nano in layer 6 and the wake in layer 2, and no other emitter files there. Fire,
   the flare and the bubbles, which share layers 5, 7 and 9 with smoke or with each other, keep a proxy
-  object in the engine's layer (landings 3 and 4), so the engine counts and trims them itself;
-  landing 5 can give smoke the same proxy, and landing 6 retires the proxies with the pool.
+  object in the engine's layer (landings 3 to 5; smoke's too, Smoke1 alone in layer 4 included), so
+  the engine counts and trims them itself; landing 6 retires the proxies with the pool.
 - **The sea level is a level constant to the recorder, a cheat to the console.** The wake's death
   walks follow a change of `main+0x1427F` (the `SeaLevel` cheat, mask 4): each walk compares the byte
   and finds every live dot's death again (`pevt_wake_resea`, MEASURED across two typed changes). But
@@ -271,10 +295,6 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   another class's object, and a nano emission is never refused for a full pool. Presentation only
   (no simulation value reads a particle since landing 1), and gone once every class is an event.
   Fire's and the flare's proxies take their pool slots as the real objects did.
-- **The blend order inside a layer run** is the events' emission order after every gathered object
-  of the run (0..6 or 7..9), not the engine's layer-then-vector order: a fire sprite draws over the
-  layer-9 smoke beside it whatever their ages ([effects](effects.md) §7.8). It goes when smoke is
-  an event too (landing 5), if the events are then drawn in layer order.
 - **An event is culled by its box, not each particle by its own**: one particle's quad can be
   computed for nothing, never one missed (the box holds both ends and a step's slack).
 - **A frame whose packet carries no fog source** (a copy that failed) draws the event dots without the

@@ -539,9 +539,11 @@ starts with `mov eax,[0x511DE8]` (five position-independent bytes), so the stub 
 we now draw and nothing else. It is removed with the effects, on every Vulkan launch
 (§5).
 
-**On a Vulkan launch the nano spray, fire and the teleport flare are not gathered**: the nano
-emitters make no object and fire and the flare a proxy with no particle; their emissions are events,
-and the effects pass draws those (§7.8); the `nonano`, `nofire` and `passive` tokens apply to them.
+**On a Vulkan launch no class is gathered**: the nano and wake emitters make no object and every
+other class a proxy with no particle; their emissions are events, and the effects pass draws those
+(§7.8); the `nonano`, `nofire`, `nowake`, `nosmoke` and `passive` tokens apply to them. The gather
+still walks the layers and draws what holds particles: an emission an event could not hold (§7.8,
+none in stock content) and, under the oracle, the engine's own objects.
 
 Log every 60 frames: `sfx: layers L2=44(wake:44) L6=26(nano:26) L9=9(smoke2:9) sub=…
 fogged= bad= -> sprites= dots= events=` (sprites and dots are quads actually emitted, so
@@ -651,13 +653,15 @@ the first `peek` in play, none outside the pool.
 
 ### 7.8 The particles from emitter events — the GPU computes them [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
 
-On a Vulkan launch four classes are drawn from **emitter events**: the nano spray (`0x4720D0`,
+On a Vulkan launch every class is drawn from **emitter events**: the nano spray (`0x4720D0`,
 `0x472200`), fire (`0x472330` COB `EMIT_SFX` 0 and 1, `0x472AB0` the flying pieces), the teleport
-flare (`0x471FD0`) and the wake with the submarines' bubbles (`0x472430` COB `EMIT_SFX` 2..5,
-`0x472530` `EMIT_SFX 0x103`). Each emission records one event on the game thread with its seed, the
-frame packet carries the live ones, and the GPU computes every particle from its event and the
-packet's GameTime. GDI is untouched: the engine's objects are made, walked and drawn as before.
-Smoke is still the engine's objects, gathered as in §7.5.
+flare (`0x471FD0`), the wake with the submarines' bubbles (`0x472430` COB `EMIT_SFX` 2..5,
+`0x472530` `EMIT_SFX 0x103`), Smoke2 (`0x472630`, `0x472810`, `0x4728F0`, `0x4729D0`) and Smoke1
+(`0x472C50`). Each emission records one event on the game thread (Smoke1's at a map's load on the
+loader thread) with its seed, the frame packet carries the live ones, and the GPU computes every
+particle from its event and the packet's GameTime. GDI is untouched: the engine's objects are made,
+walked and drawn as before. The engine's pool, walker and layer caps still run on Vulkan, holding the
+proxies below; landing 6 of the plan retires them.
 
 **The nano spray and the wake make no engine object.** Each is its layer's only class (nano layer
 6, the wake layer 2: `EMIT_SFX` 2..5's four callers all push 2), so the emitter's layer cap is
@@ -675,32 +679,42 @@ is still counted where every other one is (`prand_alloc`), so n and every later 
 would be with the object made, and the event is recorded there with its seed (`tagpu_patches.c`,
 *The particles as events*).
 
-**Fire, the flare and the bubbles keep a proxy object.** They share their layers with classes still
-drawn from the engine's objects or with each other (COB fire and the bubbles layer 7, the pieces'
-fire layer 9 with every weapon's smoke, the flare layer 5 with a burning feature's smoke), and the
-layer's cap trims its oldest object whatever its class (§7.1), so a count of events could not trim
-the engine's way. The pool's alloc and the emitter run as in stock; the class's init — fire's
+**Fire, the flare, the bubbles and both smokes keep a proxy object.** They share their layers with
+each other (COB fire and the bubbles layer 7, the pieces' fire layer 9 with every weapon's smoke, the
+flare layer 5 with a burning feature's smoke), and the layer's cap trims its oldest object whatever
+its class (§7.1), so a count of events could not trim the engine's way; Smoke1, alone in layer 4,
+keeps one too, so that every layer's count, order and pool share stay the engine's until the pool
+goes. The pool's alloc and the emitter run as in stock; the class's init — fire's
 `0x4742C0`, the flare's `0x4736E0`, the wake's `0x474760` called by the bubbles' emitter (its return
-address `0x4725B1`), each reached only through slot 6 by its emitters straight after the alloc — is
-hooked at its entry (`pevt_fire`, `pevt_flare`, `pevt_wake`): it records the event from the init's own arguments, the
-object's seed (`prand_alloc` has just filed it by pool slot) and the layer byte the emitter stored
-at `+0xC`, and turns the object into a **proxy**: a vtable that is the class's own with Impure's destroy,
+address `0x4725B1`), Smoke2's `0x474D50` and Smoke1's `0x475150`, each reached only through slot 6
+by its emitters straight after the alloc — is
+hooked at its entry (`pevt_fire`, `pevt_flare`, `pevt_wake`, `pevt_smoke2`, `pevt_smoke1`): it records the event from the init's own arguments, the
+object's seed (`prand_alloc` has just filed it by pool slot) and the layer — the byte the emitter
+stored at `+0xC`, or for smoke, whose constructors overwrite that byte, the emitter's own layer word
+in its frame (`[esp+0x38]`, `[esp+0x30]` or `[esp+0x28]` at the init's entry, by the return address)
+— and turns the object into a **proxy**: a vtable that is the class's own with Impure's destroy,
 update and empty in slots 0, 1 and 3 (the class's draw walks an empty sub-vector and draws nothing;
 its spawn, again and init are called only by its update and its emitter, before the proxy exists),
 `+4` D (below), `+8` its event's serial, no sub-vector. The emitter then trims and appends the proxy where the real object would go;
-the walker calls its slot 3, which answers "empty" from the walk of D on (a bubbles proxy asks its
-event's row for D, which a change of the sea level moves), so it is destroyed at the walk that would
-destroy the real object; its slot 0 (the trim's, the teardown's, the walker's)
+the walker calls its slot 3, which answers "empty" from the walk of D on (a bubbles or Smoke2 proxy
+asks its event's row for D, which a change of the sea level or the smoke's timing moves; a Smoke1
+proxy never answers empty, as its class's `0x475330` never does), so it is destroyed at the walk
+that would destroy the real object; its slot 0 (the trim's, the teardown's, the walker's)
 removes its event and does what the classes' destructors do to an empty object, the object back to
 the pool by `0x470ED0`. So the layer's count, its front-trim order, the pool's count and, in the
 stock build, the pool's fullness are the engine's own, by construction. The emitters' bytes from the
 alloc's return to the init's call (`0x471FFA..0x47204D`, `0x47235A..0x4723B2`, `0x472B7F..0x472BCE`,
-`0x47255A..0x4725B0`: the NULL skip, the layer byte, the vtable, the init's arguments) are compared
-rows of the table. An emission the event cannot hold keeps its real init and its engine object, drawn
+`0x47255A..0x4725B0`: the NULL skip, the layer byte, the vtable, the init's arguments; the smoke
+emitters' `0x472657..0x4726A1`, `0x472837..0x47287B`, `0x472917..0x47295B`, `0x4729F7..0x472A3B`,
+`0x472C77..0x472CBA`: the NULL skip, the constructor, the init's arguments and the layer's movsx
+after it) are compared rows of the table. An emission the event cannot hold keeps its real init and its engine object, drawn
 by the gather and counted in the level's `kept`: more than ten particles, a fire life or period under
 1 (stock divides by zero on them), no flare sequence, a bubbles life other than 1 or period outside
-1..1024 (the wake's emitter, which keeps no object, refuses such an emission). No stock caller makes
-one: `EMIT_SFX` passes life 1 and periods 8 and 16.
+1..1024 (the wake's emitter, which keeps no object, refuses such an emission), a smoke interval under
+1 or reset under 2, a smoke frame cap past the 64-row frame table, a puff life past the wind ring,
+a Smoke2 object of more than 1 024 puffs, or smoke whose puffs could be drawn with another puff's
+ordinal. No stock caller makes one: `EMIT_SFX` passes life 1 and periods 8 and 16, and the smoke
+emitters intervals 1, 5, 7 and 15, resets 7 and 30.
 
 **The event** (`inc/tagpu_pevt.h`, 80 B): the seed, T, the layer, two flags and the class.
 - *Nano*: the init's two boxes as it cuts them (per axis base `min + 4d/11`, extent `7d/11 − 4d/11`,
@@ -716,6 +730,9 @@ one: `EMIT_SFX` passes life 1 and periods 8 and 16.
   `2^32 / (len · 2)` with len by the same x87 sequence: half a world unit a tick), the period, the
   dot count (0 when `len · 2` is 0 in its low dword: the divide's fix makes no dot), the colour's
   direction, and **each dot's death walk**.
+- *Smoke*: the init's point, the spawn interval, the countdown's reset, the frame cap, the sequence,
+  Smoke2's end `T + life`, and three timing words: puff 0's first walk, puff 1's walk and the puff
+  count (Smoke1 endless); the longest puff life its reset and cap allow.
 
 **The closed forms.** *Nano* (`tagpu_pevt_nano_at`): burst 1 (particles 0..4) is born at T and
 first moved by the walk of T; burst 2 (5..9) exists only when the object is updated at T+1, born
@@ -741,8 +758,37 @@ the x, altitude and y high words, is at `start + u·step` after `u` moves, its c
 period) mod 7` rising (the wake) or `0x67 − (u / period) mod 7` falling (the bubbles), and is in the
 object from its birth to its death walk. D, the walk that destroys the object (slot 3 finds the
 sub-vector empty), is `tagpu_pevt_nano_finish` / `tagpu_pevt_sprite_finish` /
-`tagpu_pevt_wake_finish`: for fire T + life + 2, for the flare the last particle's birth + its step
-count + 2, for the wake its last dot's death walk + 1, the first walk when nothing was made.
+`tagpu_pevt_wake_finish` / `tagpu_pevt_smoke_finish`: for fire T + life + 2, for the flare the last
+particle's birth + its step count + 2, for the wake its last dot's death walk + 1, the first walk
+when nothing was made; for Smoke2 the later of the walk after its last puff's removal and T + life
++ 1 (its empty also wants `+4` past); Smoke1 has none.
+
+*Smoke* (`tagpu_pevt_puff_*`; the engine map's *Smoke2 and Smoke1*): puff j is the object's spawn
+ordinal — puff 0 at the emission, puff j ≥ 1 by the update of `again + (j − 1) · interval`, after
+that update's moves, while Smoke2's `+8 ≤ T + life` holds — and is first moved at the walk after its
+spawn (puff 0 at `first`). It starts at the point with j's low bits in its position's low bits
+(§7.7), its frame count `2 + draw 0 · (cap − 2) / 0x8000`; after u updates it has moved by the sums of
+the wind (`<< 3`) and the rise (`<< 2` Smoke2, `<< 4` Smoke1) over the walks of those updates, and its
+frame is found by walking its countdowns: frame 0 lasts `reset` updates, frame f `h + draw f · h /
+0x8000` (h = reset / 2), and the update that reaches `nframes` removes it — at most the frame cap's
+draws, so the walk is bounded. Its countdown is what is left of the frame's. All of it is the
+engine's integer arithmetic; only the wind's history is not in the event.
+
+**The smoke's timing and the wind's sums.** A puff moves by the wind and the rise its walk reads,
+and puff 0's first walk is whichever walk runs first after the emission: the same tick's in the
+step, the next tick's for an emission after the walk (the explosion draw's pieces, a replay's frame
+visit), and the level's first walk for a vent's `SmokeInfinite` at the map's load — which the level
+init follows by storing GameTime 0 (`0x491979`), so such an object's second puff waits for GameTime
+to reach the last level's end + 5, as in stock. So the start of every particle walk
+(`pevt_walk_begin`, before the engine's slots run) sets the timing of the smoke events emitted since
+the last walk — `first` that walk, `again` the first walk from it at or past `T + interval` (the again
+tests' unsigned compare), Smoke2's puff count and D — and notes the wind's x and y and the rise into a
+ring of prefix sums, one row a walk (`TAGPU_PEVT_WIND`, 1 024 rows). A puff first moved at walk F is,
+after the walk of P, at its start plus row P less row F − 1. A walk whose previous row is not the
+tick before it (the level's first, after a seek) starts the sums again, and no row from before it is
+read: a puff that needed one is not drawn (none can be: a seek clears the events). The frame
+packet carries the rows its smoke events reach back to, and an event whose puff could outlive the
+ring is not made.
 
 **The wake's death, found at emission.** The engine removes a wake dot at the first update past its
 birth + 6 · period, or at the first whose move leaves it where the ground's height `0x485070(&pos)` is
@@ -772,9 +818,14 @@ and then it drops its oldest sixteenth whole and logs once.
 **Publishing**: the frame packet's fill copies the live events whose particles can reach the view
 (each event's box of world x and `y − alt/2`, widened by the reach slack and, for a sprite, 128
 world pixels for its frame) into the slot, newest kept when the slot runs out
-(`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line), and the flare sequence's frame
-handles (`pevt_frame`, its first 64); the acquire validates the table, every layer and class, and a
-sprite event's particle count, frame modulus and period, and a wake event's dot count and period. The
+(`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line), the frame handles of the three
+sprite sequences (`pevt_frame`: the flare sequence, "smoke 1", "smoke 2", the first 64 of each),
+and the wind's rows. A smoke event is copied once for every ten of its puffs that can be alive at the
+packet's GameTime, each copy naming its first puff (`pbase`); its reach is its point widened by the
+least and most the wind and the rise have carried a puff over the level's longest puff life. The
+acquire validates the table, every layer and class, a
+sprite event's particle count, frame modulus and period, a wake event's dot count and period, and a
+smoke event's interval, reset, frame cap, sequence and puff count. The
 packet's GameTime is the P the GPU
 computes at. The `packet:` heartbeat's `pevt=last/most/truncated`. **The thread split**: the game
 thread alone reads and writes the list; the render thread's gather copies the packet's table into
@@ -789,20 +840,22 @@ are not drawn, as the native pass drops such a sprite.
 **The draw** (`tagpu_fx.c` NVS/NFS, `tagpu_vk_fx.c` `s_pipeEvt`): one draw of `60·n` vertices with
 no vertex input after the under bucket (layers 0..6, sorted first) and one after the sprites for an
 event in layers 7..9; vertex v is corner `v mod 6` of particle `(v / 6) mod 10` of event `v / 60`,
-read from a storage buffer at binding 1 that holds the frame table (64 rows of 8 words) and then
-the events. The vertex stage is `tagpu_pevt_nano_at` and `tagpu_pevt_sprite_at` in GLSL, statement
+read from a storage buffer at binding 1 that holds the frame table (three sequences of 64 rows of 8
+words), the wind's rows (a header and 1 024 rows of 4 words) and then the events. The vertex stage is `tagpu_pevt_nano_at`, `tagpu_pevt_sprite_at`, `tagpu_pevt_wake_at`
+and the puff's closed form in GLSL, statement
 for statement (`umulExtended` for the 64-bit product, a sign-split division toward zero); a particle
 not in the engine's object is a degenerate quad. A nano dot is `DrawBar`'s 2×2 at the projection
-`tagpu_fx_emit_dot` takes; a fire or flare particle is its frame's quad at that point less the
-hotspot, the quad `emit_sprite` makes, at 50 % alpha through FS's alpha path (the base atlas's key,
-the restored twin where it is painted); both at their layer's key — the keys §7.5's gather gave
-those layers (5 and 6 `fxKey − 2`, 7 `fxKey + 5`, 9 `airKey + 5`). The fragment stage applies **the
-engine's sight test exactly** (`0x473A00`, `0x474170`, `0x473590`): the tile `(hi(x) >> 5, (hi(y) −
+`tagpu_fx_emit_dot` takes; a fire, flare or smoke particle is its frame's quad at that point less
+the hotspot, the quad `emit_sprite` makes, at 50 % alpha through FS's alpha path (the base atlas's
+key, the restored twin where it is painted); all at their layer's key — the keys §7.5's gather gave
+those layers (0..4 `0.5`, 5 and 6 `fxKey − 2`, 7 `fxKey + 5`, 9 `airKey + 5`). The fragment stage
+applies **the engine's sight test exactly** (`0x473A00`, `0x474170`, `0x473590`, Smoke2's
+`0x475470`; Smoke1's draw `0x475700` has none, and nor has its event): the tile `(hi(x) >> 5, (hi(y) −
 (hi(alt) >> 1)) >> 5)` read from the slot's fog source (`inc/tagpu_fogsrc.h`: bit 1 out of LOS in
 true-LOS mode, else bit 0 never explored), off the map hidden — not the smoothed fog sample of the
 other effects. Smooth motion (`tagpu_lerp.on`) blends only unit piece poses, so particles are drawn
 at the packet's tick, as the gathered ones were. The `sfx.on` tokens apply: `nonano` the nano
-events, `nofire` fire and the flare, `passive` all.
+events, `nofire` fire and the flare, `nowake` the wake, `nosmoke` both smokes, `passive` all.
 
 **The oracle, `tagpu_particlecheck.on`** (read at install): the pool is asked as in stock and the
 init runs, so every object is made in full, walked and drawn, and an event is recorded only for an
@@ -810,11 +863,12 @@ object the pool gave: both sides hold the same emissions. After each walk every 
 three classes is paired with its layer's next event of its class, by seed, and every sub-particle's
 record is held to the closed form: nano's position (both words), end, step, colour and end tick;
 fire's and the flare's position (both words), step, frame modulus, frame, end tick and fire's
-counter and period; and the count. An event whose object is gone while a later one is there is
+counter and period; a smoke puff's sequence, position (both words), frame count, frame, reset and
+countdown; and the count. An event whose object is gone while a later one is there is
 *missing*, unless a walk found its layer past the cap that level (a trim by any emitter, which no
 event sees), when it is *trimmed*. A line a tick: `pcheck: T= objects N (missing extra trimmed)
 particles M differing D [seed count pos end step colour tick frame] nano a/b fire c/d flare e/f
-wake g/h level: …, wake dots dead over ground w`, the first eight differences of a level in detail, and the level's totals by class at the
+wake g/h smoke2 i/j smoke1 k/l level: …, wake dots dead over ground w`, the first eight differences of a level in detail, and the level's totals by class at the
 next level's start. Under the oracle the gather draws the engine's objects as well as the events,
 over each other. The replay test group `particle-check` plays the battle under the lever and ends
 with `tools/replay/particlecheck_check.py`, which fails the test on a differing particle, a missing
@@ -822,7 +876,10 @@ or extra object, an oracle that did not arm, or no fire particle compared. The t
 `particle-check-sea` plays ships and submarines patrolling beside Anteer Strait's shore
 (`scenarios/replay-wake-shore.json`) under the same lever and fails, by the same rules, when no wake
 particle was compared (`--classes wake`). The wake's oracle compares each dot's both words of its
-position, step, colour bounds, colour, delta, counter, period and end tick.
+position, step, colour bounds, colour, delta, counter, period and end tick. The test group
+`particle-check-smoke` plays a battle on Two Continents beside one of its six vents
+(`scenarios/replay-smoke.json`: rockets, hammers, burning trees, units left at health 12 on hold)
+and fails when no Smoke2 or no Smoke1 particle was compared (`--classes smoke2,smoke1`).
 
 **MEASURED 2026-11-22.** *Nano*, the 13 500-unit battle (`tools/battle13k.py`'s game, 1920×1080, the
 oracle armed): GameTime 1 to 3 622, 159 512 073 sub-particles compared, 0 differing, 0 objects
@@ -862,19 +919,39 @@ one-pixel dots, the same rising colour and the same spacing behind each boat
 0.84/0.86 ms a frame, `publish` 2.50/2.54 → 1.73/1.77, the render thread's gather median 4.74/4.74
 → 3.41/2.85 ms, 18.2/18.4 → 19.6/19.7 frames a second.
 
+*Smoke* (`scenarios/sfx-smoke.json` on Two Continents, its six vents and damaged units, the oracle
+armed): a live rewind opened at 1 677, sought to 1 377 and forked at 1 200, to GameTime 2 838: 3 323
+ticks, 54 172 Smoke1 and 23 314 Smoke2 particles compared, 0 differing, 0 missing, extra or trimmed;
+the vents ran 1 677 ticks before the rewind, so each made about 335 puffs (past the 256 of a bare
+8-bit ordinal) across at least three changes of the wind (sampled 551 to 1 677: 747, 960, 1 366). `replay-smoke` (the battle beside a vent), a live
+rewind opened at 1 750, sought to 1 450, forked at 1 200, to GameTime 2 900: 3 458 ticks, 373 928
+Smoke2 and 56 713 Smoke1 particles, 0 differing, 0 missing, extra or trimmed. A seek clears the
+layers, so the vents' smoke, made at the map's load, is gone after a rewind on both sides of the
+oracle. `tareplay.py run battle teleport particle-check particle-check-sea particle-check-smoke
+--cover`: 343 tests pass, 0 fail (`particle-check-smoke`: 1 400 ticks, 197 173 Smoke2 and 45 176
+Smoke1 particles, 0 differing; `particle-check`'s battle: 554 856 Smoke2 and 31 517 Smoke1 beside its
+fire). Against `tagpu_gdi.on` (the same scenario at zoom 1, GameTime about 830): the vent's column
+stands where GDI's does, with the same puffs and frames; the battle's smoke has GDI's sprites and
+blend (`.data/gpu-particles/l5/smoke-pair-vent.png`, `smoke-pair-battle.png`, uncommitted; the two
+battles are not the same frame). In the 13 500-unit battle (1920×1080, the base 9266b98d and this
+build alternated, two runs each): the game thread's `particles` 0.86/0.87 → 1.20/1.21 ms a frame (the
+smoke inits now record events and each walk notes the wind), `publish` 1.73/1.80 → 1.45/1.46, the
+render thread's gather median 3.27/3.39 → 1.94/1.96 ms, 19.6/19.2 → 20.0/19.8 frames a second; no
+packet truncated.
+
+**The blend order is the engine's.** The engine draws layer by layer, each in its vector's order,
+and every emission appends to its layer's vector; the upload puts the events in layer order and in
+emission order inside a layer (`tagpu_vk_fx.c`), and no effect writes depth, so the particles blend
+in the engine's painter order. Each layer's depth key still puts it over or under everything else as
+before.
+
 **Not covered here**: an event's particles are culled by their event's box, not each by its own; a
-frame whose packet carries no fog source draws the particles without the tile test. The order of
-the blend differs from the engine's painter order: the engine draws layer by layer and each layer
-in vector order, while the events of layers 0..6 draw after every gathered object of those layers,
-and those of 7..9 after every gathered object of 7..9, in emission order among themselves — so a
-fire sprite draws over the layer-9 smoke beside it whatever their ages, and a flare (layer 5) over
-the burning-feature smoke of layer 5 and over nano dots emitted before it. No effect writes depth,
-so each layer's depth key still puts it over or under everything else as before; the wake (layer 2)
-draws after every gathered object of layers 0..6, the bubbles (layer 7) after those of 7..9. A wake
+frame whose packet carries no fog source draws the particles without the tile test. A wake
 dot dies on the terrain its death walk found at emission: a sea level changed later (the `SeaLevel`
 console command) marches every live dot's walk again at the next tick, which no replay test group
-can reach, since the recorder leaves the sea byte. The remaining class, smoke, is still the
-engine's objects, gathered as in §7.5.
+can reach, since the recorder leaves the sea byte. Smoke drawn from events stands at the sight
+test's tile of its own puff, and a puff whose wind rows a seek has cleared is not drawn, but a seek
+clears the events too, so no live puff meets that.
 
 ## Appendix — addresses
 

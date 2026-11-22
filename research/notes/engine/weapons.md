@@ -703,6 +703,67 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   at a ground point lives its whole range and detonates on the first step whose altitude is below
   the ground past the point: up to `weaponvelocity / 30` along its line past it, and that far below
   the ground times the line's slope [DISASSEMBLED 2026-11-13].
+### Smoke2 and Smoke1: emitters, inits, spawns, updates, draws [DISASSEMBLED 2026-11-22]
+
+Two particle classes of the same shape, object `0x38` (Smoke2) / `0x34` (Smoke1) bytes, puff stride
+`0x20` (`seq*`, x, alt, y, nframes, frame, reset, countdown). Smoke2 vtable `0x4FD618`: destroy
+`0x474D10`, update `0x475340`, draw `0x475470`, empty `0x474F80`, spawn `0x474DF0`, again
+`0x475440`, init `0x474D50`. Smoke1 `0x4FD638`: `0x475110`, `0x475600`, `0x475700`, `0x475330`,
+`0x4751C0`, `0x4750F0`, `0x475150`. Read for Impure's events ([effects](../effects.md) §7.8).
+
+- **The emitters**, stdcall, `push ebx; push esi; push edi`, the layer table into ebx, the SFX test,
+  `push 0x38` (`0x34`); `call 0x470EB0`, whose return (`0x472657`, `0x472837`, `0x472917`,
+  `0x4729F7`, `0x472C77`) starts the bytes Impure holds to stock: on NULL nothing; else `0xE` (`0xD`)
+  dwords zeroed, the constructor (`0x474CD0` / `0x4750B0`), the init through slot 6 (`call [edx+0x18]` at
+  `0x47269A`, `0x472874`, `0x472954`, `0x472A34`, `0x472CB3`), then `movsx ecx,word [esp+N]`, the
+  layer's word, at the init's return (`0x47269D`, `0x472877`, `0x472957`, `0x472A37`, `0x472CB6`;
+  the movsx ends `0x4726A1`, `0x47287B`, `0x47295B`, `0x472A3B`, `0x472CBA`), the cap and the
+  append. `0x472630(pos, interval, life, layer)` `ret 0x10` inits (pos, 0, interval, 0, life, 0);
+  `0x472810(pos, layer)` (pos, 0, 1, 0, 0, 0), `0x4728F0` (pos, 0, 1, 0, 0, 1), `0x4729D0` (pos, 3, 1,
+  30, 0, 0), all `ret 8`; `0x472C50(pos, layer)` `ret 8` inits Smoke1 (pos, 5, 0, 150). Seen from the
+  init's entry the layer's word is at `[esp+0x38]` for `0x472630`, `[esp+0x30]` for the three
+  one-puff emitters and `[esp+0x28]` for `0x472C50`. `0x472720` is a dead copy of `0x472630` with
+  seqsel 1 (*Eight of the twenty compares*, below), `0x471820` and `0x471A50` call the constructors
+  from dead copies too.
+- **The constructors** `0x474CD0` / `0x4750B0` set the vtable, `+0x10..+0x18` 0 and `+8` = GameTime,
+  and store `[esp+7]` at `+0xC` (`0x474CD9`, `0x4750B9`): a byte of the spilled object pointer, not
+  the layer, so the smoke objects carry no layer of their own.
+- **The inits.** `0x474D50(pos, fcap, interval, countdown, life, seqsel)` thiscall `ret 0x18`:
+  `0x471D70(this, life)`, so `+4` = T + life; `+0x2C..+0x34` pos; `+0x1C` interval; `+0x28` seqsel;
+  the sequence `*(main+0x147D3)` ("smoke 2") when seqsel, else `*(main+0x147CF)` ("smoke 1")
+  (`0x474D7F..0x474DA0`); `+0x24` = `0x4B7F60(seq)` − 1, capped by fcap when fcap is nonzero and
+  smaller (`cmp ecx,eax; jge`, `0x474DA1..0x474DB8`); `+0x20` = countdown, or 7 when it is 0
+  (`0x474DC7`, `0x474DD5`); then the spawn through slot 4. `0x475150(pos, interval, countdown,
+  life)` `ret 0x10`: the same with the point at `+0x28` and always "smoke 1", no cap.
+- **The spawns** `0x474DF0` / `0x4751C0`: `(+4 − T + interval) / interval` by `idiv` (`0x474E10`; an
+  interval of 0 divides by zero) sizes a reserve of the puff vector; one puff `{seq, pos, nframes =
+  rand · (+0x24 − 2) / 0x8000 + 2 (0x474F1C..0x474F3A, 0x4752D4..0x4752EF), frame 0, reset =
+  countdown = +0x20}` inserted at the end (`0x476210`, `0x476490`); `+8` = T + interval
+  (`0x474F71`, `0x475327`).
+- **The again tests**: Smoke2's `0x475440` is `+8 <= +4` signed (`0x475446`, `jg`) and `+8 <=
+  GameTime` unsigned (`ja`); Smoke1's `0x4750F0` is `GameTime >= +8` unsigned with no end test.
+  **The empties**: Smoke2's `0x474F80` is "the puff vector empty and `+4` < GameTime" (`jae`);
+  Smoke1's `0x475330` is `xor eax,eax; ret`. So Smoke2 makes a puff at T and one at every T + k ·
+  interval up to T + life, and Smoke1 one every 5 ticks for the rest of the level.
+- **The updates** `0x475340` / `0x475600`, each puff in turn: `x += main+0x37ECC << 3`, `alt +=
+  main+0x14263 << 2` (`<< 4` for Smoke1), `y += main+0x37ED4 << 3`; `--countdown`, and at 0 `frame++`
+  and countdown = h + rand · h / 0x8000, h = reset / 2 toward zero (`cdq; sub eax,edx; sar`,
+  `0x4753A6..0x4753D0`, `0x475668..0x475690`); then `frame >= nframes` (`0x4753D3`, `jl` keeps)
+  removes the puff by shifting the rest down without advancing. After the loop, slot 5 then slot 4
+  (`0x475422`): a puff spawned there is first moved at the next walk. The wind and the rise are
+  read at every puff from the main block; nothing the walker reaches writes them.
+- **The draws**: Smoke2's `0x475470` is LOS-gated at the puff's exact tile (the projectile's rule)
+  and blits `0x4B7F30(seq, frame)` (`0x4755BB`) with `0x4B8500`; Smoke1's `0x475700` has no gate
+  (`0x475750`).
+- **The destroys** `0x474D10` / `0x475110`: `MEM_Free 0x4B4F20`(`+0x10`), `+0x10..+0x18` zeroed
+  (`0x474D14..0x474D3E`, `0x475114..0x47513E`), the base vtable through `0x471D00` (`mov dword
+  [ecx],0x4FD5A8; ret`), and with flag 1 the object back to the pool through `0x471D50(obj)`
+  (stdcall, `0x470ED0(0x51E610, obj)`).
+- **Where the emitters run**: see [effects](../effects.md) §7.4. `0x472C50` is also called on the
+  loader thread at the map's load (`SpawnFeatureOnMap 0x423FE3`), and the level init then stores
+  GameTime 0 at `0x491979`, after the map load `0x4918C0`: such an object's `+8` holds the last
+  level's GameTime + 5, so its second puff waits for GameTime to reach that.
+
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
 Recording format 25 carries a stream block's projectile records as the *pool frame*
