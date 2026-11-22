@@ -783,7 +783,9 @@ event sees), when it is *trimmed*. A line a tick: `pcheck: T= objects N (missing
 particles M differing D [seed count pos end step colour tick frame] nano a/b fire c/d flare e/f
 level: …`, the first eight differences of a level in detail, and the level's totals by class at the
 next level's start. Under the oracle the gather draws the engine's objects as well as the events,
-over each other.
+over each other. The replay test group `particle-check` plays the battle under the lever and ends
+with `tools/replay/particlecheck_check.py`, which fails the test on a differing particle, a missing
+or extra object, an oracle that did not arm, or no fire particle compared.
 
 **MEASURED 2026-11-22.** *Nano*, the 13 500-unit battle (`tools/battle13k.py`'s game, 1920×1080, the
 oracle armed): GameTime 1 to 3 622, 159 512 073 sub-particles compared, 0 differing, 0 objects
