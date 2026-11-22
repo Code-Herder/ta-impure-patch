@@ -185,8 +185,15 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     b.newLayout = layout;
     b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     b.dstAccessMask = 0;
+    /* THE SECOND SCOPE IS TRANSFER, NOT BOTTOM_OF_PIPE, so the layout transition
+       back chains into a later dependency that names TRANSFER in its first
+       scope. The world target is one image for every frame in flight, and the
+       next frame's world pass orders its writes after this copy and this
+       transition through exactly such a dependency (tagpu_vk_world.c, dep[0]);
+       BOTTOM_OF_PIPE in a second scope is waited on by nothing. For a swapchain
+       image the present's semaphore orders it, as before. */
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
 
     s_w = w; s_h = h;
     return 1;

@@ -539,7 +539,9 @@ per site, not checked. **On the exact scenarios it does not:**
 `tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
 and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the
 renderers agree (3 GDI runs, 3 Vulkan runs)`), so GDI-made references hold for players on the
-Vulkan renderer there. The image digest differed at GameTime 0, in the player records or the
+Vulkan renderer there. Again on the build that removes the engine's features and effects on a
+Vulkan launch (MEASURED 2026-11-21, the same scenario, three runs a side): the 108 lines equal on
+every run and the recorded images equal at every tick. The image digest differed at GameTime 0, in the player records or the
 projectile pool; the tool reports that as information, since the trace is what a reference grades.
 Calibration's start check R4 sees the scoreboard rank, player record `+0x148`, move between runs
 under GDI (MEASURED 2026-11-13: 32 runs) and not in the earlier Vulkan runs; its one writer in play

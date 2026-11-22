@@ -61,9 +61,18 @@ zoomed out).
   reader; a barrier at the start of frame N+1's world pass (first scope: the fragment-shader read, second:
   the attachment writes) orders it after every command submitted before it on the one queue. The cost is
   the overlap of N's composite with N+1's world pass.
-- **To check first**: `tagpu_vk_world_shot` reads the slot just drawn, after the frame.
-- The header's argument (`tagpu_vk_world.h`, *THE TWO IMAGES ARE PER SLOT*) says the present reads the
-  image; the present reads the swapchain image only.
+- **The capture**: `tagpu_vk_world_shot` copies out of the colour after the frame's composite, so the
+  copy and its layout transition back must be in the next world pass's first scope too.
+
+BUILT (`tagpu_vk_world.c`): one target; one descriptor set a slot still, since each slot's Gamma curve
+is written by the CPU; the render pass's entry dependency carries TRANSFER and the capture's closing
+barrier ends at TRANSFER, so the copy chains in; a resize drains the device before the images are given
+back. MEASURED 2026-11-21, the battle at 3840x2160 on the private display (3 frame slots there), the
+build before and after: the game's GPU memory high water 2576 → 1808 MiB, the card 3904 → 3134 MiB
+zoomed out; Supersampling flipped off and on live, two resizes through the drain, no refusal, the
+picture whole after both. On the reference setup's live display, 4 slots, that is three pairs, about
+1.1 GiB. The cost, the overlap of one frame's composite with the next frame's world pass, is not
+measured: the private display's 4K present is a software copy that hides it.
 
 ### 3. The repose's trigonometry, once a piece
 

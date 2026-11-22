@@ -367,7 +367,8 @@ more at 1920 × 1080. The world target at `ss=2` is 3840 × 2160 in three frame 
 pixels, plus the seam's attachment at the swapchain's size; 121 MiB over those is about four
 more bytes a pixel, so the driver lays `D32_SFLOAT_S8_UINT` out at eight bytes a pixel where
 `D24_UNORM_S8_UINT` takes four [INFERRED from the total]. It scales with the target: a 3840 ×
-2160 game at `ss=2` would hold about 380 MiB more for the world target alone. Since the two
+2160 game at `ss=2` holds about 127 MiB more for its world target, which is one depth image for
+every frame slot (it was one a slot when this was measured, three times that). Since the two
 formats draw the same picture (above), what float buys is the one format on every GPU, and the
 price is this memory where D24 exists.
 
@@ -830,7 +831,7 @@ loaded or by the window, each with a bound of its own and none tied to free memo
 
 | consumer | sized by | bound |
 |---|---|---|
-| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`², one a frame slot; colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel | `WORLD_MAXDIM` 8192 |
+| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`²; the world target is ONE colour + depth pair for every frame slot (its render pass's entry dependency orders each frame's writes after the earlier frames' reads, and a resize drains the device first); colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel, about 380 MiB for a 3840 × 2160 game at `ss=2` | `WORLD_MAXDIM` 8192 |
 | the sun-shadow map | `shadowres`², one a slot (16 MB a slot at 2048) | `RES_MAX` 4096 |
 | the unit, feature and effects base atlases, their restored twins and mip chains | the art the level uses | 2048² RGBA8 a page (`TAGPU_GAF_DIMMAX`); the feature chains 2 × 11.2 MB |
 | the terrain's base atlas, height grid, tile map and keys | the map | `ATLAS_MAXDIM` 16384, `HEIGHT_MAXDIM` 4096, `TILEMAP_MAXDIM` 2048 |

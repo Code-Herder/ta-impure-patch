@@ -15,14 +15,21 @@
    into rather than assuming `ss` -- the lines' test maps that extent onto its
    line grid (tagpu_line.h).
 
-   THE TWO IMAGES ARE PER SLOT, and that is a lifetime argument rather than a
-   convenience. The composite SAMPLES the colour image in the same command
-   buffer that wrote it, but frame N+1's writes may begin while frame N is still
-   in flight; one shared image would be written by the next frame while the
-   present of this one still reads it. The seam's fence wait at the top of the
-   frame is what proves slot `i` is free, and it is the only thing that does --
-   so there is one colour+depth pair per slot, exactly like every other per-slot
-   resource in this tree.
+   ONE TARGET, NOT ONE A FRAME SLOT, and the argument is an ordering. Only the
+   GPU touches the two images: the world passes write them and the composite,
+   in the same command buffer, samples the colour; no CPU write ever lands in
+   them, which is what the per-slot resources elsewhere in this tree are for.
+   Frame N+1's world pass must not write while frame N's composite (or a
+   capture's copy) still reads, and the render pass's entry dependency says
+   exactly that: its first scope is every command submitted before it on the
+   one queue, the earlier frames' included (tagpu_vk_world.c, dep[0]). Nothing
+   reads the depth after the pass at all. So one colour+depth pair serves every
+   frame in flight, and what was four of them is one: at 3840x2160 and ss=2,
+   127 MiB of colour and 253 MiB of D32_SFLOAT_S8_UINT, about 380 MiB where four
+   pairs held 1.5 GiB. THE COST is the overlap of frame N's composite with
+   frame N+1's world pass, which no longer run at once. THE LIFETIME: the target
+   is replaced only behind a drain of the device, since any frame in flight may
+   be using it and the seam's fence wait proves only one slot free.
 
    THE RENDER PASS IS COMPATIBLE WITH THE SEAM'S BY CONSTRUCTION, WHICH IS WHY
    NO PASS FILE CHANGED. Vulkan render-pass compatibility ignores load/store ops
@@ -93,7 +100,7 @@
    this path whenever `prepare` returns 0. The target is refused for good on an
    sRGB surface, with no depth format (where the depth-testing passes stand
    down and the markers are all the world there is), on a format the device
-   will not both render and filter, and on a slot the device will not give the
+   will not both render and filter, and on a target the device will not give the
    memory for. A frame whose size is past WORLD_MAXDIM, or whose gather
    published no geometry for it, has no target for that frame alone.
 
@@ -138,7 +145,7 @@ void tagpu_vk_world_record_direct(const TAGPU_VKPASS* d, VkCommandBuffer cb,
    world render pass was opened on this frame; 0 when there is no target, when
    the slot is a different one, or before `begin` has run. The image is in
    SHADER_READ_ONLY_OPTIMAL -- the offscreen pass's `finalLayout` -- and `fmt`
-   comes back as the format `slot_size` ACTUALLY built it with rather than as
+   comes back as the format `tgt_size` ACTUALLY built it with rather than as
    `d->fmt`, because a caller that decides a channel order needs the format of
    the image in its hand: `s_pass.fmt` is copied from `s_vk.fmt` once at bring-up
    while `vk_resize` re-picks `s_vk.fmt` and refreshes only `s_pass.slots`.
