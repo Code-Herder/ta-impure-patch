@@ -720,7 +720,17 @@ as well as the events, over each other.
 **MEASURED 2026-11-22**, the 13 500-unit battle (`tools/battle13k.py`'s game, 1920×1080, the oracle
 armed): GameTime 1 to 3 622, **159 512 073 sub-particles compared, 0 differing, 0 objects missing,
 0 extra**, up to 8 362 live nano objects and 73 455 sub-particles in a tick. The packet carried at
-most 753 events in view, never truncated.
+most 753 events in view, never truncated. Across a live rewind (`nano-factory`, the plant building and the
+commander guarding it; rewind opened at 1 184, sought to 884, forked): 1 783 ticks checked, 0
+differing, 0 missing or extra; at the seek the events and the engine's objects are both gone (the
+paused frame draws neither) and both come back once play resumes. The `battle` replay test group on
+the coverage build: 131 pass, 0 fail, the puppets drawing their re-fired sprays as events. **The cost**, MEASURED 2026-11-22 in the same battle
+(`tools/battle13k.py`, 1080p on a private display, the profiler's 125 s, two runs of each DLL, the base
+being the commit before the events): the game lane's `particles` span 3.46 and 3.92 ms a frame →
+2.01 and 2.01; `publish` 2.82 and 3.03 → 2.47 and 2.49; the game thread's frame 55.5 and 56.1 →
+50.4 and 54.3 ms; the render lane's `gather` 5.94 and 5.52 → 5.70 and 5.62 and `prepare` 1.53 and
+1.50 → 1.54 and 1.54 (the native gather still walks the packet's full particle table, now of the
+other classes, and the events' draw adds its upload).
 
 **Not covered here**: an event's particles are culled by their event's box, not each by its own; a
 frame whose packet carries no fog source draws the dots without the tile test; the other classes

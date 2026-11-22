@@ -185,7 +185,11 @@ Vulkan in the event.
      *The emitters' alloc and their frame*). An event re-fired between two steps (a replay's frame
      visit) is `LATE`: its first update is a tick later and its second burst always exists.
    - **MEASURED**: the oracle in the 13 500-unit battle, GameTime 1 to 3 622, 159 512 073
-     sub-particles, 0 differing, 0 objects missing or extra.
+     sub-particles, 0 differing, 0 objects missing or extra. Across a live rewind, 1 783 ticks, 0
+     differing. The `battle` replay test group on the coverage build: 131 pass, 0 fail. A GDI pair on
+     `nano-factory` at 1×: the spray at the same places on both.
+     The battle at 1080p, two runs each: `particles` 3.46/3.92 → 2.01/2.01 ms a frame, `publish`
+     2.82/3.03 → 2.47/2.49, `gather` 5.94/5.52 → 5.70/5.62 ([effects](effects.md) §7.8).
 3. **Fire and the flare.** Check: the oracle; a teleport and a burning-debris scene against GDI.
 4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
    shore and submarines against GDI.
