@@ -748,12 +748,14 @@ count + 2, for the wake its last dot's death walk + 1, the first walk when nothi
 birth + 6 · period, or at the first whose move leaves it where the ground's height `0x485070(&pos)` is
 at or above the sea level `main+0x1427F`. A dot moves on a straight line, so the game thread finds
 that walk once, when the event is made: it asks `0x485070` itself for every walk the engine would
-until one answers death (`pevt_wake_gone`, at most 6 · period + 2 lookups a dot, as many as the
+until one answers death (`pevt_wake_gone`, at most 6 · period + 1 lookups a dot, as many as the
 engine makes for it over its life), and the event carries it, so no renderer needs the terrain. That
 rests on the terrain not changing in play: the heights are written only by the map's load, and the
 sea level by the load and by the console's `SeaLevel` cheat; after each walk the byte is compared
 with the one the live dots were marched at, and a change finds every live dot's death walk again
-from that walk on (`pevt_wake_resea`) before the walk's purge ([map](engine/map.md), *The two lookups
+from that walk on, and for an event emitted that tick whether its dot 1 exists (dot 0 surviving the
+walk of its own tick decides it), before the walk's purge (`pevt_wake_resea`, marked `SIM_UNTESTED`:
+no test group can change the sea level, since the recorder leaves the byte) ([map](engine/map.md), *The two lookups
 bound themselves*).
 
 **The list** is presentation state on the game thread (`SIM_PRIVATE`): emitted at the alloc or the

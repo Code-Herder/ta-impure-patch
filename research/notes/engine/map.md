@@ -239,8 +239,9 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
   the extremes `+5`/`+6` through `0x483210`, nothing the height. The sea level `main+0x1427F` is
   written by LoadMap (`0x483877`, the header's `+0x24`) and by the console's `SeaLevel` command
   `0x416A90` (`.data` row `0x5020E4` = {`"SeaLevel"`, `0x416A90`, mask 4}; its store `0x416AA3`),
-  a cheat that runs outside the step. Impure's wake events march `0x485070` itself at emission and
-  find every live dot's death again when that byte changes ([effects](../effects.md) §7.8).
+  a cheat (where its dispatch runs relative to the particle walk was not traced). Impure's wake events
+  march `0x485070` itself at emission and find every live dot's death again, and dot 1's existence
+  for a dot emitted that tick, when that byte changes ([effects](../effects.md) §7.8).
 - **The destructor's arguments.** It passes `level` as the death record's `+0xA` low nibble, so
   1..15, and `smoke` as 1 unless the high nibble is 7 (`0x486D55..0x486D6E`: `test al,0xF` at
   `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four

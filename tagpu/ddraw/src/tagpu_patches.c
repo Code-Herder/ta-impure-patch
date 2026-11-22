@@ -12041,10 +12041,11 @@ static PevtRow* pevt_find(uint32_t serial)
    heights are written only by the map's load (0x483A19, 0x483AC1): no other store to a cell's +4
    is in any function that addresses the grid (each read of main+0x14287 and each caller of the
    cell lookups 0x481550, 0x4815A0, 0x4815F0 and 0x485330). The sea level is written by the load
-   (0x483877) and by the console's SeaLevel command (0x416A90, its store 0x416AA3), which runs
-   outside the step; so each walk compares the byte with the one the live dots were marched at, and
-   on a change finds every live dot's death walk again from that walk on (pevt_wake_resea), before
-   the walk's purge reads them. */
+   (0x483877) and by the console's SeaLevel command (0x416A90, its store 0x416AA3), at a point the
+   walk is not ordered against: it can land between an emission and the walk of the same tick. So
+   each walk compares the byte with the one the live dots were marched at, and on a change finds
+   every live dot's death walk again from that walk on, and for a dot emitted that tick whether dot
+   1 exists (pevt_wake_resea), before the walk's purge reads them. */
 typedef int (__stdcall* PFN_Ground)(const int32_t* pos);
 
 static int pevt_sea_now(void)
@@ -12053,7 +12054,7 @@ static int pevt_sea_now(void)
 }
 
 /* dot k's death walk: the first walk from `from` on (and from its first move on) whose update
-   removes it. At most 6 * period + 2 lookups: the walk past its end tick removes it anyway. */
+   removes it. At most 6 * period + 1 lookups: the walk past its end tick removes it anyway. */
 static uint32_t pevt_wake_gone(const TAGPU_PEVT* e, unsigned k, uint32_t from, int sea)
 {
     const uint32_t first = tagpu_pevt_wake_first(e, k);
@@ -12119,7 +12120,10 @@ static void pevt_path(const TAGPU_PEVT* e, int32_t umax, int* lo, int* hi)
 }
 
 /* the sea level changed before the walk of T: every live dot's death walk from T on found again,
-   and its event's D with it (a wake proxy asks its row for D: pevt_proxy_wake_empty) */
+   and its event's D with it (a wake proxy asks its row for D: pevt_proxy_wake_empty). A row emitted
+   at T, not late, decided dot 1 at emission from dot 0 surviving the walk of T at the old level:
+   that walk has not run yet, so dot 1 is decided again from the new gone[0], as pevt_wake_fill
+   does. */
 static void pevt_wake_resea(uint32_t T, int sea)
 {
     unsigned i, k, live = 0, moved = 0;
@@ -12134,12 +12138,19 @@ static void pevt_wake_resea(uint32_t T, int sea)
             moved += g != r->e.gone[k];
             r->e.gone[k] = g;
         }
+        if (r->e.nsub >= 1 && r->e.t0 == T && !(r->e.flags & TAGPU_PEVT_LATE)) {
+            const int32_t nsub = (int32_t)(r->e.gone[0] - T) > 0 ? 2 : 1;
+            if (nsub == 2 && r->e.nsub < 2) r->e.gone[1] = pevt_wake_gone(&r->e, 1, r->e.t0, sea);
+            moved += nsub != r->e.nsub;
+            r->e.nsub = nsub;
+        }
         r->gone = tagpu_pevt_wake_finish(&r->e);
     }
     s_pevt.resea++;
     tagpu_logf("particles: the sea level is %d from the walk of %u (was %d): %u live wake dots' "
                "death walks found again, %u of them moved", sea, T, s_pevt.sea, live, moved);
 }
+SIM_UNTESTED(pevt_wake_resea, "the sea level changes only by the SeaLevel cheat, and the recorder leaves the sea byte (replay-globals.tsv sealevel leave): no test group can change it");
 
 /* the wake call pevt_pre took (no object): the init's event, its D and the layer's cap */
 static void pevt_emit_wake(unsigned seed)
@@ -13042,12 +13053,12 @@ static int fix_particle_rand(void)
     }
     if (s_pevtOff) s_pevtOn = 0;
     s_pevtCheck = (unsigned char)(s_pevtOn && tagpu_sim_lever("tagpu_particlecheck.on"));
-    /* the alloc: first whether the pool is asked at all (pevt_pre: a nano call drawn from events
-       is not, and answers NULL), then the engine's own body on the engine's arguments, then the
-       count. Its registers on return are the body's (popad); on the skip path the entry's with
+    /* the alloc: first whether the pool is asked at all (pevt_pre: a nano or wake call drawn from
+       events is not, and answers NULL), then the engine's own body on the engine's arguments, then
+       the count. Its registers on return are the body's (popad); on the skip path the entry's with
        eax 0, which differs from stock's full pool in edx alone (stock leaves [ecx+0x20] there):
-       the skip path serves only the two nano emitters, and both overwrite edx at once with the
-       answer (0x47212B / 0x47225B `mov edx,eax`) */
+       the skip path serves only the two nano emitters and the wake, and each overwrites edx at
+       once with the answer (0x47212B / 0x47225B / 0x47245A `mov edx,eax`) */
     p = a;
     *p++ = 0x60;                                                /* pushad                   */
     *p++ = 0x54;                                                /* push esp: the registers  */

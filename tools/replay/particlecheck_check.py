@@ -9,12 +9,14 @@ effects.md §7.8): on a Vulkan launch the engine's nano, fire, flare and wake ob
 full beside their events and held to them after every particle walk. The DLL's install line says
 `tagpu_particlecheck.on: the engine's objects are made in full`, and each checked tick logs
 `pcheck: T=N objects O (missing M extra E trimmed R) particles P differing D [...] nano a/b fire c/d
-flare e/f wake g/h level: ...`, a/b the particles compared and differing in each class. A fixture
-step runs this before the level ends.
+flare e/f wake g/h level: ..., wake dots dead over ground w`, a/b the particles compared and
+differing in each class, w the level's wake dots whose death walk is the ground's, not their end
+tick's. A fixture step runs this before the level ends.
 
 It passes when the oracle armed, no tick had a differing particle, a missing or an extra object,
 and the run compared particles of every class the fixture names (`--classes`, default nano and fire)
--- an oracle that compared nothing proves nothing. Exit 0 pass, 1 fail, 2 the log could not be read.
+-- an oracle that compared nothing proves nothing -- and, when the classes include the wake, some
+wake dot died over ground, so the ground's branch of the death walk was held to the engine. Exit 0 pass, 1 fail, 2 the log could not be read.
 """
 
 import argparse
@@ -28,6 +30,7 @@ import talog  # noqa: E402
 TICK = re.compile(r"pcheck: T=(\d+) objects \d+ \(missing (\d+) extra (\d+) trimmed \d+\) particles \d+ "
                   r"differing (\d+) .*?nano (\d+)/(\d+) fire (\d+)/(\d+) flare (\d+)/(\d+) "
                   r"wake (\d+)/(\d+)")
+GROUND = re.compile(r"wake dots dead over ground (\d+)")
 ARMED = "tagpu_particlecheck.on: the engine's objects are made in full"
 CLASSES = ("nano", "fire", "flare", "wake")
 
@@ -38,6 +41,7 @@ def check(text, want):
         return False, "the oracle did not arm (no install line naming tagpu_particlecheck.on)"
     ticks = 0
     compared = dict.fromkeys(CLASSES, 0)
+    ground = 0
     for ln in text.splitlines():
         m = TICK.search(ln)
         if not m:
@@ -47,6 +51,9 @@ def check(text, want):
         if missing or extra or differing or any(g[5 + 2 * i] for i in range(len(CLASSES))):
             return False, ln.strip()
         ticks += 1
+        gm = GROUND.search(ln)
+        if gm:
+            ground = max(ground, int(gm.group(1)))
         for i, c in enumerate(CLASSES):
             compared[c] += g[4 + 2 * i]
     if not ticks:
@@ -54,8 +61,11 @@ def check(text, want):
     none = [c for c in want if not compared[c]]
     if none:
         return False, f"{ticks} ticks checked, but no particle of {', '.join(none)} was compared"
+    if "wake" in want and not ground:
+        return False, f"{ticks} ticks checked, but no wake dot died over ground"
     return True, (f"{ticks} ticks, " + ", ".join(f"{c} {compared[c]}" for c in CLASSES)
-                  + " particles compared, 0 differing, 0 missing or extra")
+                  + " particles compared, 0 differing, 0 missing or extra"
+                  + (f", {ground} wake dots dead over ground" if "wake" in want else ""))
 
 
 def main() -> int:
