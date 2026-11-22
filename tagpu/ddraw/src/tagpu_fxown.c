@@ -18,7 +18,10 @@
      0x471F90  particle-layer draw walker (ctx, n) — the ONLY draw path of
                the smoke/fire/wake/nanolathe objects (ten DrawGameScreen
                sites, pure draw: the sim tick updates them through vtbl+4,
-               this walker calls vtbl+8); stdcall, ret 8.
+               this walker calls vtbl+8); stdcall, ret 8. Without
+               tagpu_particlecheck.on the layers are empty on Vulkan (every
+               particle is an event, tagpu_patches.c); under it the engine's
+               objects are made in full, and this keeps them off the screen.
 
    WHY NOTHING IS LOST. The engine's world draws never reach the presented
    frame on the Vulkan backend: the world phase stamps them and `publish`

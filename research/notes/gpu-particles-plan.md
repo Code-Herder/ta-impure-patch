@@ -133,10 +133,11 @@ fog sample, whose edges differ from the engine's. The layer order and depth keys
 
 ### The pool (Vulkan)
 
-The pool's capacity operand `0x471C83` is written 0 at attach on a Vulkan launch, in both builds. The
-stock build has no `lim_dword`, so it needs its own write. Any emitter call that reaches the engine
-anyway makes no particle. The walker's call `0x4955BF` and the particle part of the frame packet are
-removed on Vulkan once the last class is drawn from events.
+The pool's capacity operand `0x471C83` is written 0 at attach on a Vulkan launch, in both builds, a
+row of the particles' fail-closed table (`fix_particle_rand`); the raised build's 204 800 is written by
+the same row otherwise. Every emission is recorded at the alloc and answered NULL, so no emitter makes
+a particle. The walk at `0x4955BF` walks no layer, its event hooks still timed there, and the frame
+packet carries no engine particle.
 
 ### The oracle
 
@@ -276,11 +277,11 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 
 ## Open
 
-- **The layer cap's count of events is exact only while its class shares its layer with nothing.**
-  Every caller files nano in layer 6 and the wake in layer 2, and no other emitter files there. Fire,
-  the flare and the bubbles, which share layers 5, 7 and 9 with smoke or with each other, keep a proxy
-  object in the engine's layer (landings 3 to 5; smoke's too, Smoke1 alone in layer 4 included), so
-  the engine counts and trims them itself; landing 6 retires the proxies with the pool.
+- **An emission an event cannot hold draws nothing on Vulkan** (a layer outside 0..9, a fire life
+  under 1, a puff life past the wind ring, ...: [effects](effects.md) §7.8), where the engine would
+  draw it. Every stock caller pushes constants an event holds, so none is made in stock content; a mod
+  that emits one through COB's `EMIT_SFX` reaches only the constants of `0x480EB0`'s cases. Counted in
+  the level's `refused`.
 - **The sea level is a level constant to the recorder, a cheat to the console.** The wake's death
   walks follow a change of `main+0x1427F` (the `SeaLevel` cheat, mask 4): each walk compares the byte
   and finds every live dot's death again (`pevt_wake_resea`, MEASURED across two typed changes). But
@@ -289,13 +290,14 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   feature. Until it is settled no replay test group types the cheat, so `pevt_wake_resea` carries
   `SIM_UNTESTED` (the owner's decision); the recorder's row is still open.
 - **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
-  eight degenerate quads an event, whose vertex stage skips the draws. Landing 6, with every class an
-  event, can give each class its own vertex count.
-- **The shared pool no longer holds nano on Vulkan.** The stock build's pool of 1 000 objects counted
-  nano with every other class; with nano as events, a pool that was full in stock has room for
-  another class's object, and a nano emission is never refused for a full pool. Presentation only
-  (no simulation value reads a particle since landing 1), and gone once every class is an event.
-  Fire's and the flare's proxies take their pool slots as the real objects did.
+  eight degenerate quads an event, whose vertex stage skips the draws. A vertex count of each class's
+  own would need a draw a class.
+- **Fire and the flare are a clean yellow on Vulkan, orange on GDI.** The sprites take the restored
+  twin's colour, which predates this feature (the same scene on fd7d5a86 draws the same yellow); GDI
+  shows the palette's dithered frame. A colour item of its own, not this feature's.
+- **The 4K measurement on the owner's live display** (the `particles` span, `publish`, `gather`, the
+  GPU's frame time at 3840×2160) waits for the owner's word; every number here is 1080p on a private
+  display.
 - **An event is culled by its box, not each particle by its own**: one particle's quad can be
   computed for nothing, never one missed (the box holds both ends and a step's slack).
 - **A frame whose packet carries no fog source** (a copy that failed) draws the event dots without the
@@ -329,15 +331,14 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   median 13 013, most 16 118; layer 6 (nano) 4 245, 8 217; layer 9 6 195, 15 888; layer 4 55; layer 7
   at most 18; **all layers median 21 692, most 35 903**. Sub-particles were not counted: the frame
   packet's 24 576 particle entries were full in 1 665 of 1 712 gathers (the packet line's
-  `part=24575/24575 thin=1665`), so today's native draw thins through nearly the whole battle and the
-  live total is above 24 576. The bound from the classes ([effects](effects.md) §7.3): two dots a wake object,
+  `part=24575/24575 thin=1665`), so the layers' native draw of then thinned through nearly the whole
+  battle and the live total is above 24 576. The bound from the classes ([effects](effects.md) §7.3): two dots a wake object,
   ten a nano object, one to four a layer-9 object — about 32 000 + 82 000 + 64 000 at the sampled
   maxima, which do not coincide. So the event list holds about 36 000 live events at the most seen and
-  takes up to about 1 300 new ones a tick; the instance buffer is sized in sub-particles, past 24 576.
-  A full buffer thins as `tagpu_sfx.c` does today and says so, never silently.
+  takes up to about 1 300 new ones a tick.
 - What the network start shuffle's order at `main+0x29FC` decides is not established. It draws the game
   thread's stream, which carries no particle draw since landing 1; the two-player game
   (`recmp_create_begin_test.py`) passes on both builds with the rule in (2026-11-22).
 - Whether any saver dumps the main block raw is not established. The layer-table pointer would be a
-  dead value there. A save and a load with particles alive play on, on Vulkan and on GDI
-  (2026-11-22, `sfx-strait`): the loaded level makes its particles anew.
+  dead value there. A save and a load with particles alive play on, on Vulkan and on GDI, and on Vulkan
+  with the pool at 0 (2026-11-22, `sfx-strait`): the loaded level makes its particles anew.

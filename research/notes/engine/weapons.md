@@ -413,7 +413,8 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   `0x471FD9`..`0x472C58`. None of those functions is reached by direct calls from slots 0, 1, 3,
   4 or 5 of the seven vtables, and the indirect calls inside the classes are those vtables' own
   slots: an object's methods never see the layer they are in. Impure calls its own walker from
-  `0x4955BF` instead (`tagpu_patches.c`, `particle_walk`; [engine patches](../modules/engine-patches.md)).
+  `0x4955BF` instead (`tagpu_patches.c`, `particle_walk`; [engine patches](../modules/engine-patches.md)),
+  which on a Vulkan launch walks no layer: the pool holds no object there (*The pool*).
 - **Two bursts an emission.** At tick T the handler's emitter makes burst 1 in the unit's turn; the
   walker of the same tick moves it (the update) and the spawn-again test fails (`+0x08` = T + 1 >
   T). At T + 1 the object is not empty (a particle of burst 1 has steps ≥ 1 and so dies at T +
@@ -536,9 +537,17 @@ slots in order: destroy, update, draw, empty?, spawn, again?, init ([effects](..
   teleport's life is 30, so up to four, ten ticks apart; a shorter jump makes one. Each record moves
   from the update after its birth (particle 0 from the update of T, or of T + 1 when emitted after
   that tick's walk, as the pieces' fire is from the explosion draw).
-- **Impure**: on a Vulkan launch both inits' entries are hooked and turn the object into a proxy
-  that holds the emission's place in its layer and pool ([effects](../effects.md) §7.8, [hook
-  map](../modules/hook-map.md)).
+- **Impure**: on a Vulkan launch the pool holds no object, and the alloc's stub reads each emission
+  out of the emitter's frame instead of the init's arguments. With f the emitter's `esp` once the
+  alloc has returned (`ret 4`), which is also its `esp` at the layer's `movsx` after the init (the
+  init pops its own arguments): the flare's from\* `f+0x14`, to\* `f+0x18`, life `f+0x1C`, layer
+  `f+0x20` (`0x47204E`); COB fire's from\*, to\*, period, life `f+0x14..f+0x20`, layer `f+0x24`
+  (`0x4723B3`); the pieces' fire's jittered point L on the emitter's own stack at `f+0x10` (from =
+  to = &L), period 1, life in `ebp`, layer `f+0x24` (`0x472BCF`). The three `movsx` end at `0x472052`,
+  `0x4723B7` and `0x472BD3`, so the bytes held to stock run from the alloc's return to there. The
+  pieces' fire's NULL path jumps to its epilogue `0x472C43` (`pop edi; pop esi; pop ebp; pop ebx; add
+  esp,0xC; ret 8`), which drops L with the frame [DISASSEMBLED 2026-11-22]
+  ([effects](../effects.md) §7.8, [hook map](../modules/hook-map.md)).
 
 ### The wake and the bubbles: emitters, init, spawn, update, death, draw [DISASSEMBLED 2026-11-22]
 
@@ -610,9 +619,11 @@ sub-particle stride `0x44`) drawn as 2×2 dots. Read for Impure's events ([effec
   walk of T + 1 destroys the empty object first) or the emission was late; each removed by the first
   update past its birth + 6 · period, or by the first whose move leaves it over ground at sea level;
   the object destroyed by the walk after its last dot's removal.
-- **Impure**: on a Vulkan launch the wake's alloc answers NULL and the bubbles' init makes a proxy;
-  each emission is an event whose dots' death walks are found on the game thread at emission
-  ([effects](../effects.md) §7.8, [hook map](../modules/hook-map.md)).
+- **Impure**: on a Vulkan launch both emitters' allocs answer NULL; each emission is an event whose
+  dots' death walks are found on the game thread at emission. The bubbles' emitter is read at the
+  alloc's return (f its `esp` then, as at the layer's `movsx` `0x4725B1..0x4725B5`): a\* `f+0x14`, b\* `f+0x18`,
+  period `f+0x1C`, layer `f+0x20`; the init's life is the constant 1 and its direction 0
+  [DISASSEMBLED 2026-11-22] ([effects](../effects.md) §7.8, [hook map](../modules/hook-map.md)).
 
 ### The projectile tick's steps: a burst parent, guidance, steer and the wind [DISASSEMBLED 2026-11-12]
 
@@ -722,7 +733,10 @@ Two particle classes of the same shape, object `0x38` (Smoke2) / `0x34` (Smoke1)
   `0x472810(pos, layer)` (pos, 0, 1, 0, 0, 0), `0x4728F0` (pos, 0, 1, 0, 0, 1), `0x4729D0` (pos, 3, 1,
   30, 0, 0), all `ret 8`; `0x472C50(pos, layer)` `ret 8` inits Smoke1 (pos, 5, 0, 150). Seen from the
   init's entry the layer's word is at `[esp+0x38]` for `0x472630`, `[esp+0x30]` for the three
-  one-puff emitters and `[esp+0x28]` for `0x472C50`. `0x472720` is a dead copy of `0x472630` with
+  one-puff emitters and `[esp+0x28]` for `0x472C50`; at the alloc's return (`esp` then f, the same as
+  at the movsx) `0x472630`'s pos\* is `f+0x10`, interval `f+0x14`, life `f+0x18`, layer `f+0x1C`, and
+  the other four's pos\* `f+0x10`, layer `f+0x14`, which is where Impure reads a Vulkan emission (the
+  pool holds no object there). `0x472720` is a dead copy of `0x472630` with
   seqsel 1 (*Eight of the twenty compares*, below), `0x471820` and `0x471A50` call the constructors
   from dead copies too.
 - **The constructors** `0x474CD0` / `0x4750B0` set the vtable, `+0x10..+0x18` 0 and `+8` = GameTime,
@@ -2075,10 +2089,14 @@ the C runtime's `rand` (`0x4E4870`) in stock, come from Impure's keyed particle 
   NULL stack (`0x470B92`) and frees NULL, which the engine's free `0x4B4F20 → 0x4D8670 → 0x4D85A0 →
   0x4D85B0` tests (`0x4D85B5`). Nothing divides by the capacity (`0x470C10` uses `imul` and
   compares). An emitter that finds the pool empty has still run up to the alloc: `0x472AB0` has
-  drawn its four `rand`s. Order: the DLL's attach, which writes `0x471C83` (`lim_dword`, all or
-  nothing, `tagpu_limits_install`), runs before the exe's entry `0x4E6FA0` → `_cinit 0x4E45D0` →
-  `_initterm(0x501000, 0x50104C)` at `0x4E45F7`, whose table holds `0x471C80` at `0x501024`; the
-  stock-limits build has no `lim_dword`.
+  drawn its four `rand`s. Order: the DLL's attach, which writes `0x471C83` (a row of the fail-closed
+  table, `fix_particle_rand`), runs before the exe's entry `0x4E6FA0` → `_cinit 0x4E45D0` →
+  `_initterm(0x501000, 0x50104C)` at `0x4E45F7`, whose table holds `0x471C80` at `0x501024`.
+  **Impure writes 0 there on a Vulkan launch** without `tagpu_particlecheck.on`, in both builds, and
+  records every emission as an event at the alloc instead ([effects](../effects.md) §7.8); otherwise
+  204 800 in the raised build, and the stock-limits build leaves stock's 1000. MEASURED 2026-11-22
+  with the pool at 0: games, saves and loads, live rewinds and the replay test groups play on, every
+  emitter's NULL path taken.
 - **Every other particle allocation is the object's own.** Each object's sub-vector
   (`+0x10/+0x14/+0x18`) comes from the engine heap (`MEM_Alloc 0x4B4F10` in the spawns' reserve
   and the inserts `0x476210`, `0x476490`, `0x4758C0`, `0x475BD0`, `0x475EF0`) and is freed by the

@@ -3,7 +3,8 @@
 /* tagpu_pevt -- a particle EMITTER EVENT, and the closed form a renderer draws it by
    (gpu-particles-plan.md, *The emitter event*; effects.md §7.8).
 
-   On a Vulkan launch every particle class is drawn from events: the nano spray (emitters
+   On a Vulkan launch every particle is drawn from events and the engine makes no particle
+   object: the nano spray (emitters
    0x4720D0, 0x472200), fire (0x472330, 0x472AB0), the teleport flare (0x471FD0), the wake
    with the submarines' bubbles (0x472430, 0x472530), Smoke2 (0x472630, 0x472810, 0x4728F0,
    0x4729D0) and Smoke1 (0x472C50). The game
@@ -117,7 +118,7 @@
    the wind's sums over the walks of those updates, which the closed form takes as the difference
    of two prefix sums (TAGPU_PEVT_WIND below). Its draws are those of its own ordinal j while the
    object has spawned fewer than 256 (Smoke2) or 1024 (Smoke1) puffs since it, which the game
-   thread holds every smoke event to (an emission it cannot hold keeps its engine object). */
+   thread holds every smoke event to (an emission it cannot hold is refused: tagpu_patches.c). */
 #include <stdint.h>
 #include "tagpu_prand.h"
 
@@ -128,10 +129,6 @@
 /* The object is updated at T+1, so its second burst exists (tagpu_pevt_nano_finish). */
 #define TAGPU_PEVT_BURST2    0x20u
 #define TAGPU_PEVT_CLASS(f)  (((f) >> 8) & 0xFu)
-/* The event's object is the engine's, which the layer's cap trims itself: a proxy (or, under the
-   oracle, the real object) of a class sharing its layer with the engine's objects. An event
-   without it stands for an object nobody made, and the emitter's cap is applied to its events. */
-#define TAGPU_PEVT_PROXY     0x40u
 /* A smoke event whose timing words wait for the next particle walk, which an emission cannot
    know: the same tick's, the next tick's, or after a map's load the level's first (tagpu_patches.c
    THE SMOKE'S TIMING) */
@@ -362,7 +359,7 @@ static inline uint32_t tagpu_pevt_sprite_finish(const TAGPU_PEVT* e)
 
 /* the wake's colour range (0x474A8C, 0x474A91) and the most moves its period lets a dot have
    before its end tick: the game thread marches at most that many terrain lookups a dot, and an
-   emission of a longer period keeps its engine object or is refused (tagpu_patches.c) */
+   emission of a longer period is refused (tagpu_patches.c) */
 #define TAGPU_PEVT_WAKE_LO     0x61
 #define TAGPU_PEVT_WAKE_HI     0x67
 #define TAGPU_PEVT_WAKE_PERIOD 1024
