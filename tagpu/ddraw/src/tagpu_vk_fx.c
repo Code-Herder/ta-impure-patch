@@ -1362,14 +1362,18 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     }
 
     /* THE PARTICLE EVENTS, after the sprites' frame table and the wind's rows (NVS reads an event
-       at word TAGPU_PEVT_EVT_AT + 20 e: tagpu_pevt.h), the layers the engine draws before its
-       projectiles (0..6) first and the rest after them, so `record` draws each run at its own
-       place in the bucket order with one pipeline: NVS finds its event by gl_VertexIndex, which
-       counts from the run's firstVertex. */
+       at word TAGPU_PEVT_EVT_AT + 20 e: tagpu_pevt.h), in layer order and in emission order
+       inside a layer, which is the engine's painter order: it draws layer by layer, each in its
+       vector's order, and appends every emission (no effect writes depth, so the blend order is
+       the draw order). The layers it draws before its projectiles (0..6) form the first run and
+       the rest the second, so `record` draws each run at its own place in the bucket order with
+       one pipeline: NVS finds its event by gl_VertexIndex, which counts from the run's
+       firstVertex. The packet's acquire bounds every event's layer below TAGPU_PK_NLAYER. */
     s_nEvtUnder = s_nEvtOver = 0;
     if (h.npevt > 0) {
         TAGPU_PEVT* o;
-        int i, pass;
+        int i;
+        unsigned layer;
         const size_t frameB = sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME;
         uint32_t* wind;
         if (!slot_evts(d, s, (VkDeviceSize)TAGPU_PEVT_EVT_AT * 4u +
@@ -1385,12 +1389,11 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         else
             memset(wind, 0, 16u);
         o = (TAGPU_PEVT*)(void*)(s->emap + (size_t)TAGPU_PEVT_EVT_AT * 4u);
-        for (pass = 0; pass < 2; pass++)
+        for (layer = 0; layer < TAGPU_PK_NLAYER; layer++)
             for (i = 0; i < h.npevt; i++) {
-                const int under = TAGPU_PEVT_LAYER(h.pevt[i].flags) <= 6u;
-                if (under != (pass == 0)) continue;
+                if (TAGPU_PEVT_LAYER(h.pevt[i].flags) != layer) continue;
                 *o++ = h.pevt[i];
-                if (pass == 0) s_nEvtUnder++; else s_nEvtOver++;
+                if (layer <= 6u) s_nEvtUnder++; else s_nEvtOver++;
             }
     }
 
