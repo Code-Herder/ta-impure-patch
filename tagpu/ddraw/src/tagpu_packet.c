@@ -811,20 +811,16 @@ static const char* frame_valid(const void* rec)
             if (w[k].base_piece != 0xFFFFu && w[k].base_piece >= w[k].nparts) return "wreck base piece";
         }
     }
-    /* THE FOUR EFFECT TABLES. Each count is bounded by what the
+    /* THE THREE EFFECT TABLES. Each count is bounded by what the
        ENGINE's own array allows — 300 projectile slots, 300 explosion records,
        100 debris slots — so a consumer's loop can never run past the array the
-       publisher walked even if the record were corrupt. The particle table's
-       cap is ours, and its per-layer counts have to add up to it or the
-       consumer's layer walk would read another layer's entries. */
+       publisher walked even if the record were corrupt. */
     if (!table_ok(p, p->off_proj,   p->n_proj,   sizeof(TAGPU_PK_PROJ)))   return "projectiles table";
     if (!table_ok(p, p->off_expl,   p->n_expl,   sizeof(TAGPU_PK_EXPL)))   return "explosions table";
     if (!table_ok(p, p->off_debris, p->n_debris, sizeof(TAGPU_PK_DEBRIS))) return "debris table";
-    if (!table_ok(p, p->off_part,   p->n_part,   sizeof(TAGPU_PK_PART)))   return "particles table";
     if (p->n_proj   > TAGPU_PK_MAX_PROJ)   return "more projectiles than slots";
     if (p->n_expl   > TAGPU_PK_MAX_EXPL)   return "more explosions than records";
     if (p->n_debris > TAGPU_PK_MAX_DEBRIS) return "more debris than slots";
-    if (p->n_part   > TAGPU_PK_MAX_PART)   return "more particles than the cap";
     /* THE PARTICLE EVENTS: whole records, at most the packet's cap; every value in one is used
        as data by the shader (tagpu_pevt.h), and what it indexes or divides by is bounded here:
        the layer, the class, a sprite event's particle count, frame modulus and period (its
@@ -902,25 +898,6 @@ static const char* frame_valid(const void* rec)
             if (m[k].shape >= p->n_fxshape) return "fx model shape";
             if (m[k].vert > p->n_fxvert || sh[m[k].shape].nvert > p->n_fxvert - m[k].vert)
                 return "fx model vertex run";
-        }
-    }
-    {
-        unsigned k, sum = 0;
-        for (k = 0; k < TAGPU_PK_NLAYER; k++) {
-            if (p->part_n[k] > p->n_part) return "particle layer count";
-            sum += p->part_n[k];
-        }
-        if (sum != p->n_part) return "particle layer counts do not sum";
-    }
-    /* THE PARTICLE TABLE'S TWO INDEX BYTES. `kind` indexes a consumer's
-       six-row class table and `layer` a ten-row one; every index a consumer
-       forms out of this packet is bounded here, these two included. */
-    {
-        const TAGPU_PK_PART* q = tagpu_pk_part(p);
-        unsigned k;
-        for (k = 0; k < p->n_part; k++) {
-            if (q[k].kind >= TAGPU_PK_NPARTKIND) return "particle kind";
-            if (q[k].layer >= TAGPU_PK_NLAYER) return "particle layer";
         }
     }
     /* THE FOG SOURCE. The bound a consumer needs is that every word it can

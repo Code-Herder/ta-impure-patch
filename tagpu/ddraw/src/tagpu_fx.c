@@ -189,29 +189,26 @@ int tagpu_fx_armed(unsigned frame_counter)
     return s_armed > 0;
 }
 
-/* four buckets, drawn in this order: the particle layers the engine draws
-   BEFORE its projectile pass (0..6: wake foam, feature smoke, trail puffs,
-   nanolathe), lines, flashes (additive), sprites (weapon sprites, explosions,
-   then particle layers 7..9) — so lasers and flashes sit over trail smoke and
-   explosion sprites over their flash like the engine; no per-run segment
-   table, so nothing is ever dropped for alternating too often */
+/* three buckets, drawn in this order: lines, flashes (additive), sprites (weapon sprites,
+   explosions) -- the particle events of layers 0..6 before them and of 7..9 after them
+   (tagpu_vk_fx.c) -- so lasers and flashes sit over trail smoke and explosion sprites over
+   their flash like the engine; no per-run segment table, so nothing is ever dropped for
+   alternating too often */
 /* the bucket names are tagpu_fx.h's too, for the same reason: the Vulkan lane
-   concatenates the four arrays in this order and draws them with three
+   concatenates the three arrays in this order and draws them with three
    different pipelines, so the order is part of the contract */
-#define B_UNDER   TAGPU_FXB_UNDER
 #define B_LINES   TAGPU_FXB_LINES
 #define B_FLASH   TAGPU_FXB_FLASH
 #define B_SPRITES TAGPU_FXB_SPRITES
 #define NBUCKET   TAGPU_FXB_N
 /* one array a bucket, each at its own cap (tagpu_fx.h) */
-static float  s_vUnder[TAGPU_FX_MAXV_UNDER * FXST], s_vLines[TAGPU_FX_MAXV * FXST],
-              s_vFlash[TAGPU_FX_MAXV * FXST], s_vSprites[TAGPU_FX_MAXV_SPRITES * FXST];
+static float  s_vLines[TAGPU_FX_MAXV * FXST], s_vFlash[TAGPU_FX_MAXV * FXST],
+              s_vSprites[TAGPU_FX_MAXV_SPRITES * FXST];
 static float* const s_verts[NBUCKET] = {
-    [B_UNDER] = s_vUnder, [B_LINES] = s_vLines, [B_FLASH] = s_vFlash, [B_SPRITES] = s_vSprites
+    [B_LINES] = s_vLines, [B_FLASH] = s_vFlash, [B_SPRITES] = s_vSprites
 };
 static int    s_nv[NBUCKET];
 static float  s_encCur;                /* depth key of what is being emitted  */
-static int    s_under = 0;             /* emit sprites/dots into B_UNDER      */
 static int    s_mute = 0;              /* passive: count, emit nothing        */
 static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
@@ -284,8 +281,8 @@ static const char* FS =
     "void main(){\n"
     "  int mode = int(vCM.y + 0.5);\n"
     "  vec3 rgb; float a = 1.0;\n"
-    /* scaffold occlusion, the unit shader's rule: only the B_UNDER draw
-       (particle layers below every row key) turns uScafOn on */
+    /* scaffold occlusion, the unit shader's rule; no draw of the Vulkan pass turns uScafOn on
+       (tagpu_vk_fx.c) */
     TAGPU_GLSL_SCAF_TEST
     /* effects are transient: the engine's own passes are LOS-gated, so they
        vanish in grey rather than darkening (uFog bit1 is set for this pass) */
@@ -377,7 +374,7 @@ static const char* LFS =
    toward zero: umulExtended) and its step (toward zero), the updates a particle has had, its
    position and its colour or frame. A particle not in the engine's object then is a degenerate
    quad; a wake dot is in it from its birth to its death walk, which the event carries. A nano or
-   wake dot is DrawBar's 2 x 2 game pixels at the projection tagpu_fx_emit_dot takes (sx =
+   wake dot is DrawBar's 2 x 2 game pixels at the engine's projection (sx =
    hi(x) - eyeX + vpL, sy = hi(y) - hi(alt) / 2 - eyeY + vpT); a sprite is its frame's quad at
    that point less the hotspot, the quad emit_sprite makes, with the frame's atlas rect; both at
    the layer's key. EDIT tagpu_pevt.h WITH IT. NVS declares VS's uniforms first, in their order,
@@ -699,7 +696,7 @@ static void emit_sprite_r(const unsigned char* g, int sx, int sy, int mode, floa
         }
         return;
     }
-    int b = (mode == MODE_FLASH) ? B_FLASH : (s_under ? B_UNDER : B_SPRITES);
+    int b = (mode == MODE_FLASH) ? B_FLASH : B_SPRITES;
     if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
     if (s_mute) return;
     const unsigned dN = s_atlas.deferN;
@@ -736,35 +733,6 @@ static void fx_sprite(const unsigned char* g, int sx, int sy, int mode, float wx
 {
     if (s_sprites) emit_sprite(g, sx, sy, mode, wx, wz, 0);
 }
-
-/* ---- the particle pass emits through the same buckets, at its own key;
-   under = the engine draws this layer before its projectile pass. The frame
-   is the packet's, already resolved on the game thread. ---- */
-int tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
-                        float wx, float wz, float enc, int under)
-{
-    if (!g) return 0;
-    float keep = s_encCur; int keepU = s_under, before = s_cQuads;
-    s_encCur = enc; s_under = under;
-    emit_sprite(g, sx, sy, mode, wx, wz, 0);
-    s_encCur = keep; s_under = keepU;
-    return s_cQuads > before;
-}
-
-/* DrawBar 0x4BF6F0 of the rect (x, y, x+1, y+1): a 2x2 flat dot */
-int tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under)
-{
-    if (s_mute) return 0;
-    float keep = s_encCur; int before = s_cQuads;
-    float x0 = (float)x, y0 = (float)y;
-    s_encCur = enc;
-    put_quad(under ? B_UNDER : B_SPRITES, x0, y0, x0 + 2.0f, y0 + 2.0f,
-             -1, -1, -1, -1, (float)colidx / 255.0f, MODE_FLAT, wx, wz);
-    s_encCur = keep;
-    return s_cQuads > before;
-}
-
-void tagpu_fx_set_mute(int on) { s_mute = on; }
 
 /* THE PARTICLE EVENTS OF THIS FRAME, copied out of the packet while the gather holds it: the
    Vulkan pass prepares after tagpu_packet_frame_end, past which no packet pointer may be read,
@@ -1388,22 +1356,22 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         s_rv.clipL = v->packet->vp_addr[0]; s_rv.clipT = v->packet->vp_addr[1];
         s_rv.clipR = v->packet->vp_addr[2]; s_rv.clipB = v->packet->vp_addr[3];
     }
-    s_encCur = key_after(0); s_under = 0; s_mute = 0;
+    s_encCur = key_after(0); s_mute = 0;
     tagpu_fx_set_events(NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0);
-    if (sfxOn) tagpu_sfx_gather(v, 0, 6);
+    if (sfxOn) tagpu_sfx_gather(v);
     if (fxOn) gather_fx(v);
-    if (sfxOn) { tagpu_sfx_gather(v, 7, 9); tagpu_sfx_frame_done(v); }
+    if (sfxOn) tagpu_sfx_frame_done(v);
     if (s_cOverflow || s_cAtlasFail) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 60) {
             char b[160];
             last = v->frame_counter;
-            _snprintf(b, sizeof b, "fx: DROPPED this frame: bucket-full=%d atlas-fail=%d (under=%d lines=%d flash=%d sprites=%d verts)",
-                      s_cOverflow, s_cAtlasFail, s_nv[B_UNDER], s_nv[B_LINES], s_nv[B_FLASH], s_nv[B_SPRITES]);
+            _snprintf(b, sizeof b, "fx: DROPPED this frame: bucket-full=%d atlas-fail=%d (lines=%d flash=%d sprites=%d verts)",
+                      s_cOverflow, s_cAtlasFail, s_nv[B_LINES], s_nv[B_FLASH], s_nv[B_SPRITES]);
             flog(b);
         }
     }
-    return s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm + s_nEvt;
+    return s_nv[B_LINES] + s_nv[B_FLASH] + s_nv[B_SPRITES] + s_nm + s_nEvt;
 }
 
 /* EVERY MODEL THE GATHER COULD ASK FOR, before any of its gates: a
@@ -1539,7 +1507,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
     /* the models count: a frame whose effects are all models still hands
        over, because the posed pass draws them only on a frame this pass has
        taken (tagpu_fx.h `nmodels`) */
-    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm + s_nEvt;
+    int total = s_nv[B_LINES] + s_nv[B_FLASH] + s_nv[B_SPRITES] + s_nm + s_nEvt;
     int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's

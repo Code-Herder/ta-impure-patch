@@ -36,9 +36,9 @@
    bytes, and the view (the addressable rect, the palette and gamma, the
    command acknowledgement); the four world tables — units, pieces, wrecks and
    feature anchors — with the header fields they need (the GUI colours, the
-   mouse and the build cursor, the engine's shade table); the four effect
-   tables — projectiles, explosions, flying debris and the ten particle
-   layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
+   mouse and the build cursor, the engine's shade table); the three effect
+   tables — projectiles, explosions and flying debris — and the particles'
+   emitter events, with the LHT ramp, the ALP/LHT capability bits and
    the whole 256-byte GUI colour LUT they need; the fog of war's source bits; the UI
    layer's render half; and a playback's overlays, its recorded cursors and
    clicks with each recorded player's colour; the sites a multi-building
@@ -655,17 +655,18 @@ typedef struct TAGPU_PK_BDMARK {
                                    most this many records carry either           */
 #define TAGPU_PK_MAX_BDMARK (256u + TAGPU_PK_BD_CURSORS + TAGPU_PK_BD_RECENT)
 
-/* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
-   The engine's four per-frame effect arrays, copied by the thread that owns
-   them. All four are SIM STATE — the tick moves a projectile, advances an
-   explosion's anim frame and walks every particle's update leaf, and the two
+/* ---- THE EFFECTS AND THE PARTICLE EVENTS --------------------------------
+   The engine's three per-frame effect arrays, copied by the thread that owns
+   them, and the particles' emitter events (tagpu_patches.c). All are SIM
+   STATE — the tick moves a projectile and advances an explosion's anim
+   frame, and the two
    engine draw passes (0x49BE60 projectiles, 0x420B00 explosions) read and
    write nothing — so the gather is taken ONCE PER TICK and every packet of
    that tick carries the same table, exactly as the anchor scan is.
 
    EVERY ENGINE POINTER IS RESOLVED HERE, ON THE GAME THREAD. A sprite's GAF
    frame is looked up through its sequence and its frame number at copy time
-   (the sequence is the one the particle names, live while the thread that
+   (the sequence is the one the effect names, live while the thread that
    wrote it is the thread reading it); a weapon's colour number goes through
    the GUI colour LUT here. An effect's 3DO MODEL crosses as data, not as an
    address: the publisher poses it with the engine's own rotation and copies
@@ -830,49 +831,16 @@ typedef struct TAGPU_PK_FXMODEL {
 #define TAGPU_PK_MAX_FXMODEL (2u * (unsigned)TAGPU_LIM_PROJ + (unsigned)TAGPU_LIM_PSYS + \
                               (unsigned)TAGPU_LIM_EXPL)
 
-/* 16 B, one per drawable SUB-PARTICLE, in layer order (the layer IS the draw
-   depth: the engine calls 0x471F90(ctx, n) for n = 0..9 at ten fixed points
-   of its frame). The projection is done here because it is all the consumer
-   needs: `x` is hi(world x) and `zp` is hi(world y) - hi(altitude)/2, the
-   space both the screen transform and the fog grid are in. */
-typedef struct TAGPU_PK_PART {
-    int32_t  x, zp;
-    uint32_t frame;          /* the resolved GAF frame; 0 = a 2x2 dot in
-                                `col`, which is what the wake and nanolathe
-                                classes draw (DrawBar 0x4BF6F0)               */
-    uint8_t  layer;          /* 0..9                                          */
-    uint8_t  kind;           /* TAGPU_PK_PK_* below: which lever mutes it and
-                                whether the engine's LOS gate applies         */
-    uint8_t  col;            /* the dot's palette index (frame == 0)          */
-    uint8_t  pad;
-} TAGPU_PK_PART;
-
-/* the particle classes, by vtable, as tagpu_sfx.c's own enum had them */
-#define TAGPU_PK_PK_SMOKE1  0u   /* grey smoke, NOT LOS-gated by the engine   */
-#define TAGPU_PK_PK_SMOKE2  1u   /* dark smoke                                */
-#define TAGPU_PK_PK_FIRE    2u
-#define TAGPU_PK_PK_FLARE   3u
-#define TAGPU_PK_PK_WAKE    4u   /* wake / bubbles: a dot                     */
-#define TAGPU_PK_PK_NANO    5u   /* nanolathe spray: a dot                    */
-#define TAGPU_PK_NPARTKIND  6u
-
 #define TAGPU_PK_FXWANT_FX   0x1u    /* projectiles, explosions, debris        */
-#define TAGPU_PK_FXWANT_SFX  0x2u    /* the ten particle layers                */
+#define TAGPU_PK_FXWANT_SFX  0x2u    /* the particle events                    */
 
+/* the engine's particle layers, the draw depth an event names */
 #define TAGPU_PK_NLAYER     10u
 
 /* the engine's own array sizes, so a table holds every record the engine can */
 #define TAGPU_PK_MAX_PROJ    ((unsigned)TAGPU_LIM_PROJ)
 #define TAGPU_PK_MAX_EXPL    ((unsigned)TAGPU_LIM_EXPL)
 #define TAGPU_PK_MAX_DEBRIS  ((unsigned)TAGPU_LIM_PSYS)
-/* The particle table's ceiling. The engine allows 10 layers of TAGPU_LIM_SFX + 1
-   objects and every object carries a sub-particle vector it grows as it burns,
-   so no engine count bounds this one: it is OUR cap, with a truncation bit and
-   a counter, and the heartbeat's `part=last/max` says how close a fight came.
-   Sized from the raised limits' tier-1 battle (4 x 1500 units): 14 510
-   sub-particles in one frame at the opening volley, and this holds one and a
-   half times that. 24 576 entries is 384 KB per slot. */
-#define TAGPU_PK_MAX_PART    24576u
 /* The events a packet carries, in view: two layers' caps of them. The publisher's list holds
    six (tagpu_patches.c, PEVT_CAP), but a packet takes only the events whose particles can reach
    the view, and keeps the newest with TAGPU_PK_TRUNC_PEVT past this. */
@@ -948,7 +916,6 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_PROJ    0x80u
 #define TAGPU_PK_TRUNC_EXPL    0x100u
 #define TAGPU_PK_TRUNC_DEBRIS  0x200u
-#define TAGPU_PK_TRUNC_PART    0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOGSRC  0x1000u
 #define TAGPU_PK_TRUNC_PEVT    0x2000u    /* the particle events, or the wind rows they reach: the oldest left out */
@@ -1404,15 +1371,11 @@ typedef struct TAGPU_PACKET {
     uint32_t n_fxface,  off_fxface;   /* PK_FXFACE                              */
     uint32_t n_fxidx,   off_fxidx;    /* u16 vertex indices                     */
     uint32_t n_fxvert,  off_fxvert;   /* PK_FXVERT                              */
-    uint32_t n_part,   off_part;      /* PK_PART,   every drawable sub-particle,
-                                         IN LAYER ORDER                          */
-    /* THE PARTICLES' EMITTER EVENTS (inc/tagpu_pevt.h): on a launch that draws the nano spray,
-       fire and the teleport flare from events (`pevt_on`), the live ones whose particles can
-       reach this packet's reach, in emission order, the newest when the slot holds fewer than met
-       it (TAGPU_PK_TRUNC_PEVT). The particles are drawn at `tick`, the GameTime whose walk the
-       engine's objects would have had last. Those classes' engine objects then hold no particle,
-       so the particle table above holds none of them -- but under the oracle lever, which makes
-       them in full. `pevt_frame` row s * TAGPU_PEVT_NFRAME + i is frame i of sequence s (the
+    /* THE PARTICLES' EMITTER EVENTS (inc/tagpu_pevt.h): on a Vulkan launch that draws the
+       particles from events (`pevt_on`), the live ones whose particles can reach this packet's
+       reach, in emission order, the newest when the slot holds fewer than met it
+       (TAGPU_PK_TRUNC_PEVT). The particles are drawn at `tick`, the GameTime whose walk the
+       engine's objects would have had last. `pevt_frame` row s * TAGPU_PEVT_NFRAME + i is frame i of sequence s (the
        flare sequence fire and the flare draw from, "smoke 1", "smoke 2": tagpu_pevt.h), resolved
        here for the first `pevt_nframe[s]` of its frames, opaque handles like `shadow_frame`.
        `pwind` the wind's prefix sums from tick `pwind_base` on that the smoke events reach back
@@ -1423,25 +1386,18 @@ typedef struct TAGPU_PACKET {
     uint32_t pevt_frame[TAGPU_PEVT_NSEQ * TAGPU_PEVT_NFRAME];
     uint32_t n_pwind,  off_pwind;     /* int32[4] rows, <= TAGPU_PEVT_WIND       */
     uint32_t pwind_base;
-    uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
-                                         a consumer walks 0..6, then the two
-                                         effect passes, then 7..9 as the engine
-                                         does — the counts sum to n_part        */
-    uint32_t part_obj[TAGPU_PK_NLAYER];   /* the OBJECTS each layer held, a
-                                         diagnostic: the sub-particle table can
-                                         be truncated, this count never is       */
     uint32_t fx_caps;                 /* TAProgram+0xF0: bit5 the ALP alpha
                                          table is enabled, bit7 the LHT one      */
     uint32_t fx_want;                 /* what the gather actually ran with: bit0
                                          the three effect tables, bit1 the
-                                         particle one. A consumer must not claim
+                                         particle events. A consumer must not claim
                                          the engine's draw until this says the
                                          publisher was filling for it — the
                                          request crosses on the render thread's
                                          clock and the fill on the game
                                          thread's, so the first armed frames see
                                          empty tables                            */
-    uint32_t fx_gen;                  /* bumped whenever any of the four tables
+    uint32_t fx_gen;                  /* bumped whenever any of the three tables
                                          was re-gathered (once per sim tick):
                                          the consumer's own "is this the same
                                          gather" test, and the heartbeat's       */
@@ -1673,8 +1629,6 @@ static __inline const uint16_t* tagpu_pk_fxidx(const TAGPU_PACKET* p)
 { return p->n_fxidx ? (const uint16_t*)(const void*)((const unsigned char*)p + p->off_fxidx) : (const uint16_t*)0; }
 static __inline const TAGPU_PK_FXVERT* tagpu_pk_fxvert(const TAGPU_PACKET* p)
 { return p->n_fxvert ? (const TAGPU_PK_FXVERT*)(const void*)((const unsigned char*)p + p->off_fxvert) : (const TAGPU_PK_FXVERT*)0; }
-static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
-{ return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
 static __inline const TAGPU_PEVT* tagpu_pk_pevt(const TAGPU_PACKET* p)
 { return p->n_pevt ? (const TAGPU_PEVT*)(const void*)((const unsigned char*)p + p->off_pevt) : (const TAGPU_PEVT*)0; }
 static __inline const int32_t* tagpu_pk_pwind(const TAGPU_PACKET* p)

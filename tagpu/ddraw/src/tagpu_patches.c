@@ -9885,7 +9885,12 @@ SIM_FEATURE(particle_walk, SIM_PUPPET_INDEPENDENT, "battle");
    both neighbours (`units` beside it: 9 of 20, ratio 1.005). `prefetcht0` is SSE: pw_prefetch is
    the only code compiled for it, and it runs only where the processor reported SSE at install
    (s_pwSse); elsewhere the walk is the same without the hint.
-   CLASS: local. Without it the engine's own walker runs. */
+   ON A VULKAN LAUNCH WITHOUT THE ORACLE the engine holds no particle object: the pool's capacity
+   is 0 and every emission is an event (*The particles as events*), so every layer is empty and the
+   walk is only the events' start and end of a walk (pevt_walk_begin, pevt_walked), at this same
+   point of the step. Every object of a layer comes from the pool (its 28 references are its own
+   code, engine/weapons.md), so skipping the layers there skips nothing.
+   CLASS: local. Without it the engine's own walker runs, and the events stay off. */
 #define PW_AHEAD 8
 typedef struct FxLayer { unsigned int unused; void** begin; void** end; void** cap; } FxLayer;
 static unsigned char s_pwSse;                   /* IsProcessorFeaturePresent(SSE), at install */
@@ -9894,7 +9899,7 @@ static unsigned char s_pwOn;                    /* this walk replaces 0x4955BF's
 SIM_VAR(s_pwOn, SIM_INSTALL);
 static void pevt_walked(void);
 static void pevt_walk_begin(void);
-static void pevt_layer_seen(int L, unsigned n);
+static int pevt_own(void);
 
 __attribute__((target("sse"), noipa))   /* noipa: kept as a call, never judged pure */
 static void pw_prefetch(const char* object)
@@ -9911,10 +9916,9 @@ static void __cdecl particle_walk(void)
     FxLayer* layer = *(FxLayer* const*)(*(char* const*)0x00511DE8u + 0x38D77);
     int i;
     pevt_walk_begin();
-    for (i = 0; i < 10; i++, layer++) {
+    for (i = 0; i < 10 && !pevt_own(); i++, layer++) {
         void** read = layer->begin;
         void** keep = read;
-        pevt_layer_seen(i, (unsigned)(layer->end - read));
         for (; read != layer->end; read++) {
             void* object = *read;
             if (s_pwSse && layer->end - read > PW_AHEAD) pw_prefetch((const char*)read[PW_AHEAD]);
@@ -11765,86 +11769,87 @@ static PrandObj* prand_row(unsigned obj)
     return &s_prand.obj[off / PRAND_OBJ];
 }
 
-/* THE PARTICLES AS EVENTS (Vulkan) [DISASSEMBLED]. gpu-particles-plan.md, landings 2 and 3; the
-   event and its closed forms are inc/tagpu_pevt.h. On a Vulkan launch the two nano emitters, 0x4720D0 (point to
-   box) and 0x472200 (box to point), make no object: their call of the pool's alloc 0x470EB0 (from
-   0x472126 and 0x472256) answers NULL without asking the pool, so the emitter skips its init, its
-   layer's trim and its append exactly as it does for a full pool (0x47213E..0x472163,
-   0x47226E..0x472293), and the alloc records an event instead. The emission is still counted where
-   every other one is (prand_alloc), so n and every later seed are what they are when the object is
-   made.
-   WHAT THE EVENT TAKES, AND WHERE. At the alloc the emitter's frame is the alloc's esp + 8 (its four
-   pushes done; `push 0x4C` and the call's return address above them): its arguments at +0x2C and
-   +0x30, the layer's word at +0x34, and the point copied into a degenerate box {x, alt, y, x, alt, y}
-   at +0x10 (0x4720E1..0x472108; 0x472211..0x472238). 0x4720D0 inits box1 = that box and box2 = its
-   box argument (0x472169..0x472179); 0x472200 box1 = its box argument and box2 = that box
-   (0x472299..0x4722A9). The layer is the word sign-extended and unbounded (0x47217C); one outside
-   0..9 indexes past the layer table in stock, and here it makes no event (counted).
-   THE LAYER'S CAP, as the emitter applies it after the init (0x47219F, `cmp eax,cap / jbe`, the cap
-   TAGPU_LIM_SFX): a layer holding more than the cap loses its front, the oldest object in it. A
-   layer's events are its objects in the same order, and an event stays until the walk that would
-   destroy its object (tagpu_pevt_nano_finish), so the count is the object count. It counts events
-   only, which is exact while no engine object shares an event's layer: every caller files nano in
-   layer 6 and no other emitter does (effects.md §7.1); the wake (below) is counted the same way in
-   layer 2.
+/* THE PARTICLES AS EVENTS (Vulkan) [DISASSEMBLED]. gpu-particles-plan.md; the event and its closed
+   forms are inc/tagpu_pevt.h. On a Vulkan launch the engine makes no particle object at all: every
+   emission of the twelve live emitters is recorded as an event at the emitter's call of the pool's
+   alloc 0x470EB0, and the GPU draws its particles from the event (tagpu_fx.c NVS).
+   AT THE ALLOC. Its stub asks pevt_pre first, which knows the emitter by the call's return address
+   and copies out of the emitter's frame what the class's init would take; the stub then answers
+   NULL without asking the pool, so the emitter skips its init, its layer's trim and its append
+   exactly as it does for an empty pool (engine/weapons.md, *The emitters' alloc and their frame*),
+   and the emission is counted where every emission is (prand_alloc), which records the event with
+   the seed the object would have had. The pool itself holds nothing: its capacity operand 0x471C83
+   is written 0 at attach (pevt_pool_none, in both builds), so no emitter that reached it anyway
+   could make an object either, and the pool's 15.6 MB block and 0.8 MB stack are never allocated.
+   WHAT THE EVENT TAKES, AND WHERE. At the alloc the emitter's frame is the stub's esp past the
+   return address and the size argument (the alloc's `ret 4`): what the emitter's bytes from the
+   alloc's return to its init's call push for the init, and the layer's word it reads after the
+   init for its cap and its append -- those bytes are held to stock with the table, so the frame
+   offsets below are the init's arguments by construction. Per emitter (f the frame):
+     - nano 0x4720D0 / 0x472200: the point's degenerate box at f+0x10, the box argument at f+0x30 /
+       f+0x2C, the layer f+0x34 (0x4720E1..0x472187, 0x472211..0x4722B7);
+     - the wake 0x472430 and the bubbles 0x472530: a*, b*, period at f+0x14, +0x18, +0x1C, the
+       layer f+0x20; the init's life 1 and dir 1 / 0 are the emitters' own pushes (0x4724A2
+       `push 1; push 1`, 0x4725A2 `push ebx`, ebx 0);
+     - the flare 0x471FD0: from*, to*, life at f+0x14, +0x18, +0x1C, the layer f+0x20 (0x47204E);
+     - COB fire 0x472330: from*, to*, period, life at f+0x14..+0x20, the layer f+0x24 (0x4723B3);
+     - the pieces' fire 0x472AB0: its jittered point L at f+0x10 as from and to, the period 1
+       (`push 1`) and the life in ebp (`push ebp`, 0x472BBD; nothing between the alloc and the
+       init writes ebp, which the alloc preserves), the layer f+0x24 (0x472BCF);
+     - Smoke2 0x472630: pos*, interval, life at f+0x10, +0x14, +0x18 (the init's other three are
+       pushed 0), the layer f+0x1C; 0x472810, 0x4728F0, 0x4729D0: pos* at f+0x10 and the pushed
+       constants (0, 1, 0, 0, 0), (0, 1, 0, 0, 1), (3, 1, 30, 0, 0), the layer f+0x14;
+     - Smoke1 0x472C50: pos* at f+0x10 and (5, 0, 150), the layer f+0x14.
+   The layer is the word sign-extended and unbounded (0x47217C and its kin); one outside 0..9
+   indexes past the layer table in stock, and here it makes no event (counted, `refused`).
+   THE LAYER'S CAP, as the emitters apply it after the init (`cmp eax,cap / jbe`, the cap
+   TAGPU_LIM_SFX): a layer holding more than the cap loses its front, the oldest object in it,
+   whatever its class. A layer's events are its objects in the same order -- every object of every
+   layer is now an event, appended in emission order as the emitter appends it, and an event stays
+   until the walk that would destroy its object (its D) -- so the layer's count of events is its
+   object count and the front event is the front object, exactly, and the cap trims events
+   (pevt_trim) as the emitter trims objects.
+   THE POOL'S COUNT. Stock's pool answers NULL once it holds TAGPU_LIM_SFXPOOL objects, which a layer
+   cap does not prevent in the stock build (six layers of 401 against 1 000): the emission then
+   makes no object, takes no trim and is not appended. Every live object is in exactly one layer
+   (the alloc is followed by the append, and every free is a destroy that removes it), so the
+   pool's count is the sum of the layers' counts, and an emission meeting TAGPU_LIM_SFXPOOL live
+   events makes no event (counted, `full`), before its trim, as the alloc refuses before the init.
    THE LIST is presentation state the simulation never reads, on the game thread: emitted here, purged
    at the end of each particle walk (pevt_walked), cleared at a seek (tagpu_effects_clear) and at each
    level's start (prand_level_begin, on the loader thread before the game thread's first tick: THREADS
-   AND ORDER above), read by the frame packet's fill (tagpu_pevt_copy). It holds five layers' caps
-   (PEVT_CAP); only events in a sixth layer could fill it, and then it drops its oldest events whole
-   and says so.
-   THE ORACLE, tagpu_particlecheck.on (a lever, read at install): the pool is asked as in stock, the
-   object is made and walked, and an event is recorded only for an object the pool gave, so both sides
-   hold the same emissions; after each walk every object of an event class is held to its event's
-   closed form (pevt_check).
-   FIRE AND THE FLARE (gpu-particles-plan.md, landing 3) share their layers with classes still drawn
-   from the engine's objects: COB fire layer 7 with the submarines' bubbles, the flying pieces' fire
-   layer 9 with every weapon's smoke, the teleport flare layer 5 with a burning feature's smoke. The
-   layer's cap trims the oldest object of the layer, whatever its class, so a count of events alone
-   would be wrong there. These classes therefore keep an engine object, a PROXY: the pool's alloc
-   and the emitter run as in stock, and the class's init (0x4742C0 fire, 0x4736E0 the flare; reached
-   only through slot 6, by the three emitters, straight after the alloc) records the event and turns
-   the object into a proxy instead of building particles (pevt_fire, pevt_flare). The emitter then
-   trims and appends it as it would the real object, the walker destroys it at the walk that would
-   destroy the real object (its slot 3 answers D, tagpu_pevt_sprite_finish), and every count the
-   engine keeps -- the layer's, its front trim order, the pool's, and in the stock build the pool's
-   fullness -- is the engine's own, by construction. A proxy has no sub-vector, so nothing draws or
-   moves it; a trim (the emitter's slot 0 call) removes its event (pevt_proxy_destroy). The init's
-   arguments are its contract (the emitters push them, 0x4723A2..0x4723B0, 0x472BBD..0x472BCC,
-   0x472042..0x47204B); the layer is the byte the emitter stores at +0xC before the init; those
-   emitters' bytes from the alloc's return to the init's call are held to stock with the table.
-   THE WAKE AND THE BUBBLES (landing 4) are one class, the init 0x474760, and take one path each by
-   their layer. The wake's emitter 0x472430 files into layer 2, which nothing else files into
-   (EMIT_SFX 2..5, all four callers `push 2`: 0x48103E, 0x48105B, 0x481078, 0x481095), so it makes
-   no object, as nano: its alloc (from 0x472455) answers NULL, its frame gives the init's points
-   and period, and the layer's cap is applied to its events. The bubbles' emitter 0x472530 files
-   into layer 7 (`push 7` at 0x4810F4) beside COB fire's proxies, so it keeps a proxy: the init's
-   entry, called from that emitter (the return address 0x4725B1), records the event and makes the
-   object a proxy. Both emitters' bytes are held to stock with the table. Each dot's death walk
-   is found at emission (THE WAKE'S DEATH, below).
-   THE SMOKE (landing 5), Smoke2 and Smoke1, keeps a proxy too: Smoke2 shares layer 9 with the
-   pieces' fire and layer 5 with the flare, and Smoke1, alone in layer 4, is a proxy with the rest
-   so that every layer's count stays the engine's until the pool goes. The class's init (0x474D50,
-   0x475150; reached only through slot 6, by the five live emitters straight after the alloc and
-   the constructor) records the event and makes the object a proxy (THE SMOKE, below). */
-#define PEVT_NANO_FWD   0x0047212Bu      /* 0x4720D0's alloc call returns here                 */
-#define PEVT_NANO_REV   0x0047225Bu      /* 0x472200's                                         */
-#define PEVT_WAKE_FWD   0x0047245Au      /* 0x472430's                                         */
-#define PEVT_BUBBLES    0x004725B1u      /* 0x472530's call of the init 0x474760 returns here  */
+   AND ORDER above), read by the frame packet's fill (tagpu_pevt_copy) while the level's layer table
+   stands. It holds six layers' caps (PEVT_CAP); only events in a seventh layer could fill it, and
+   then it drops its oldest events whole and says so.
+   WHAT AN EVENT CANNOT HOLD is refused and counted (`refused`), drawing nothing: a fire life or
+   period under 1 (stock divides by zero) or more than ten particles, a wake period outside
+   1..TAGPU_PEVT_WAKE_PERIOD, no sprite sequence, and the smoke's limits (THE SMOKE). Every caller in
+   the retail exe pushes constants an event holds (engine/weapons.md: the flare's life 30, COB
+   fire's period 1 and life 6 or 7, the pieces' life 1..3, the wake's periods 16 and 8, Smoke2's
+   interval 15 and life 7 or 900); a refusal means an exe whose callers differ.
+   THE ORACLE, tagpu_particlecheck.on (a lever, read at install): the pool keeps its capacity, the
+   alloc asks it as in stock, the object is made by its own init and walked, and an event is
+   recorded only for an object the pool gave, so both sides hold the same emissions; after each walk
+   every object is held to its event's closed form, and the layers' objects to the events' count and
+   order (pevt_check). */
+#define PEVT_NANO_FWD   0x0047212Bu      /* the alloc's return in 0x4720D0                     */
+#define PEVT_NANO_REV   0x0047225Bu      /*   0x472200                                         */
+#define PEVT_WAKE_FWD   0x0047245Au      /*   0x472430, the wake                               */
+#define PEVT_BUBBLES    0x0047255Au      /*   0x472530, the bubbles                            */
+#define PEVT_FLARE_A    0x00471FFAu      /*   0x471FD0, the teleport flare                     */
+#define PEVT_COBFIRE    0x0047235Au      /*   0x472330, COB fire                               */
+#define PEVT_PIECEFIRE  0x00472B7Fu      /*   0x472AB0, the flying pieces' fire                */
+#define PEVT_SMOKE_630  0x00472657u      /*   0x472630, explosion and corpse smoke (Smoke2)    */
+#define PEVT_SMOKE_810  0x00472837u      /*   0x472810, grey smoke (Smoke2)                    */
+#define PEVT_SMOKE_8F0  0x00472917u      /*   0x4728F0, black smoke (Smoke2)                   */
+#define PEVT_SMOKE_9D0  0x004729F7u      /*   0x4729D0, the shot trail (Smoke2)                */
+#define PEVT_SMOKE_C50  0x00472C77u      /*   0x472C50, endless smoke (Smoke1)                 */
 #define PEVT_VT_NANO    0x004FD5B8u
 #define PEVT_VT_FIRE    0x004FD5D8u
 #define PEVT_VT_FLARE   0x004FD588u
 #define PEVT_VT_WAKE    0x004FD5F8u
 #define PEVT_VT_SMOKE2  0x004FD618u
 #define PEVT_VT_SMOKE1  0x004FD638u
-#define PEVT_VT_BASE    0x004FD5A8u      /* the destructors leave this vtable                  */
-/* the smoke inits' calls return here: 0x472630's, then the three one-puff emitters', then
-   0x472C50's (THE SMOKE, below) */
-#define PEVT_SMOKE_630  0x0047269Du
-#define PEVT_SMOKE_810  0x00472877u
-#define PEVT_SMOKE_8F0  0x00472957u
-#define PEVT_SMOKE_9D0  0x00472A37u
-#define PEVT_SMOKE_C50  0x00472CB6u
 #define PEVT_FLARESEQ   0x147F3          /* main+: the flare sequence both sprite classes draw */
 #define PEVT_SMOKESEQ1  0x147CF          /* main+: "smoke 1"                                   */
 #define PEVT_SMOKESEQ2  0x147D3          /* main+: "smoke 2", BlackSmoke's                     */
@@ -11852,12 +11857,13 @@ static PrandObj* prand_row(unsigned obj)
 #define PEVT_WINDY      0x37ED4
 #define PEVT_RISE       0x14263
 #define PEVT_SEA        0x1427F          /* main+: the sea level, a byte                       */
+#define PEVT_LAYERS     0x38D77          /* main+: the layer table, NULL between levels        */
 #define PEVT_PUFFS      1024             /* the most puffs a Smoke2 event's object can make    */
 /* The rows a level can hold at once: each layer an event can be in (2 the wake, 4 Smoke1, 5 the
    flare and a burning feature's smoke, 6 nano, 7 COB fire and the bubbles, 9 the pieces' fire and
    every weapon's smoke; every caller pushes its layer as a constant) holds at most the cap plus
-   one objects, and a proxy's row is made before its emitter trims the layer, so one more. */
-#define PEVT_CAP        (6u * ((unsigned)TAGPU_LIM_SFX + 1u) + 1u)
+   one, the trim coming before the add. */
+#define PEVT_CAP        (6u * ((unsigned)TAGPU_LIM_SFX + 1u))
 #define PEVT_SLACK      16               /* world px past the boxes a particle can reach: one step
                                             past its end, under 8 (tagpu_pevt.h)                 */
 #define PEVT_SPRITE     128              /* world px a sprite's frame can reach past its point  */
@@ -11874,17 +11880,17 @@ static struct {
     PevtRow  row[PEVT_CAP];
     unsigned head, tail;                 /* the rows in use, oldest first                      */
     unsigned layer[10];                  /* rows not removed, a layer                          */
+    unsigned live;                       /*   and in all: the pool's count                     */
     unsigned front[10];                  /* no counted row of the layer lies before this one   */
     uint32_t walked;                     /* the GameTime of the last particle walk             */
-    uint32_t serial;                     /* rows made this process: a proxy names its row by it */
-    unsigned capped;                     /* the oracle: layers a walk found at their cap + 1   */
+    uint32_t serial;                     /* rows made this process                             */
     int      sea;                        /* the sea level the wake's death walks were found at */
     int      pend;                       /* an emitter's alloc is in progress: its class + 1   */
     int      player;                     /*   the layer                                        */
-    int32_t  box1[6], box2[6];           /*   nano: the boxes it passes the init, uncut;       */
-                                         /*   wake: a and b at box1[0..2], box2[0..2]          */
-    int32_t  period;                     /*   wake: the colour's period                        */
-    unsigned emitted[TAGPU_PEVT_NCLASS], refused, trimmed, dropped, kept;
+    int32_t  box1[6], box2[6];           /*   nano: the boxes it passes the init, uncut; the   */
+                                         /*   others: the first and second point at [0..2]     */
+    int32_t  arg[5];                     /*   the init's other arguments, by class (pevt_pre)  */
+    unsigned emitted[TAGPU_PEVT_NCLASS], refused, trimmed, full, dropped;
     uint32_t pendSerial;                 /* rows past this serial wait for a walk: THE SMOKE   */
     struct { uint32_t tick; int32_t s[3]; } wind[TAGPU_PEVT_WIND];   /* THE WIND'S SUMS, by tick */
     uint32_t windFrom;                   /*   the first tick of the current chain              */
@@ -11892,7 +11898,7 @@ static struct {
     int32_t  smokeLmax;                  /* the longest puff life of this level's smoke events */
     int32_t  copyLmax;                   /*   of the smoke events the last packet copy took    */
     unsigned shore, resea;               /* wake dots dead over ground; sea level changes seen */
-    unsigned cTicks, cMissing, cExtra, cTrimmed, cSaid;              /* the oracle, this level */
+    unsigned cTicks, cMissing, cExtra, cSaid;                        /* the oracle, this level */
     unsigned cObjs[TAGPU_PEVT_NCLASS], cSubs[TAGPU_PEVT_NCLASS];     /*   by class             */
     unsigned cDiff[TAGPU_PEVT_NCLASS];
     unsigned cField[8];
@@ -11900,7 +11906,7 @@ static struct {
 /* PRIVATE, not STATE, although the screen shows it: the list stands in for the engine's particle
    pool, which the recorder leaves as presentation (replay-globals.tsv, the `particlepool` row
    0x51E610: `leave`), and a replay makes its events anew by re-firing the emitters as its replayed
-   simulation reaches them, as it makes the pool's objects. The class is the owner's to settle. */
+   simulation reaches them, as it made the pool's objects. The class is the owner's to settle. */
 SIM_VAR(s_pevt, SIM_PRIVATE);
 static unsigned char s_pevtOn, s_pevtCheck;       /* a Vulkan launch; the oracle lever        */
 static const char* s_pevtOff;                     /* why a Vulkan launch draws no events      */
@@ -11910,6 +11916,10 @@ SIM_VAR(s_pevtCheck, SIM_INSTALL);
 
 /* the events need the alloc's stub (the table, written all or nothing) and the walk's hook */
 static int pevt_live(void) { return s_pevtOn && s_pwOn && s_limState > 0; }
+/* the pool is empty and the engine holds no particle object: the events are live and the oracle
+   is not armed (the capacity's row, pevt_pool_none, is in the same table as the alloc's stub) */
+static int pevt_pool_none(void) { return s_pevtOn && s_pwOn && !s_pevtCheck; }
+static int pevt_own(void) { return pevt_pool_none() && s_limState > 0; }
 
 /* len = _ftol(fsqrt((dx*dx + dalt*dalt) + dy*dy)): the spawn's own x87 sequence and its own _ftol
    0x4E43A0 (0x473E75..0x473EB6), on the game thread whose control word the spawn computes under. */
@@ -11972,27 +11982,26 @@ static void pevt_clear(void)
     s_pevt.head = s_pevt.tail = 0;
     memset(s_pevt.layer, 0, sizeof s_pevt.layer);
     memset(s_pevt.front, 0, sizeof s_pevt.front);
+    s_pevt.live = 0;
     s_pevt.pend = 0;
 }
 
-/* a row's object is gone: removed from its layer's count, once */
+/* a row's object is gone: removed from its layer's count and the pool's, once */
 static void pevt_drop(PevtRow* r)
 {
     if (!r->gone) return;
     r->gone = 0;
     s_pevt.layer[TAGPU_PEVT_LAYER(r->e.flags)]--;
+    s_pevt.live--;
 }
 
-/* the layer's front event goes, as the emitter destroys its front object. Only the events with
-   no engine object are counted (nano in layer 6, the wake in layer 2, each its layer's only
-   class); a proxy's layer is trimmed by the engine, proxies and all. */
+/* the layer's front event goes, as the emitter destroys its front object, whatever its class */
 static void pevt_trim(int L)
 {
     unsigned i = s_pevt.front[L] > s_pevt.head ? s_pevt.front[L] : s_pevt.head;
     for (; i < s_pevt.tail; i++) {
         PevtRow* r = &s_pevt.row[i];
-        if (!r->gone || (int)TAGPU_PEVT_LAYER(r->e.flags) != L || (r->e.flags & TAGPU_PEVT_PROXY))
-            continue;
+        if (!r->gone || (int)TAGPU_PEVT_LAYER(r->e.flags) != L) continue;
         pevt_drop(r);
         s_pevt.trimmed++;
         s_pevt.front[L] = i + 1u;
@@ -12001,7 +12010,7 @@ static void pevt_trim(int L)
 }
 
 /* room for one more row at the tail: the removed rows squeezed out, and when the list is still
-   full -- only events in a sixth layer could fill it, which no caller files -- its oldest
+   full -- only events in a seventh layer could fill it, which no caller files -- its oldest
    sixteenth dropped whole */
 static void pevt_room(void)
 {
@@ -12021,10 +12030,9 @@ static void pevt_room(void)
     s_pevt.dropped += n;
 }
 
-/* a new row at the tail, its reach box set from the hi-word spans x (xl..xh), alt (al..ah) and
-   y (yl..yh) widened by `slack` */
-static PevtRow* pevt_add(const TAGPU_PEVT* e, uint32_t gone, int xl, int xh, int al, int ah,
-                         int yl, int yh, int slack)
+/* a new row at the tail, its reach box set from the hi-word spans lo..hi of x, alt and y widened
+   by `slack` */
+static void pevt_add(const TAGPU_PEVT* e, uint32_t gone, const int* lo, const int* hi, int slack)
 {
     PevtRow* r;
     if (s_pevt.tail >= PEVT_CAP) pevt_room();
@@ -12032,26 +12040,13 @@ static PevtRow* pevt_add(const TAGPU_PEVT* e, uint32_t gone, int xl, int xh, int
     r->e = *e;
     r->gone = gone;
     r->serial = ++s_pevt.serial;
-    r->x0 = pevt_clamp16(xl - slack);
-    r->x1 = pevt_clamp16(xh + slack);
-    r->z0 = pevt_clamp16(yl - (ah >> 1) - slack);
-    r->z1 = pevt_clamp16(yh - (al >> 1) + slack);
+    r->x0 = pevt_clamp16(lo[0] - slack);
+    r->x1 = pevt_clamp16(hi[0] + slack);
+    r->z0 = pevt_clamp16(lo[2] - (hi[1] >> 1) - slack);
+    r->z1 = pevt_clamp16(hi[2] - (lo[1] >> 1) + slack);
     s_pevt.layer[TAGPU_PEVT_LAYER(e->flags)]++;
+    s_pevt.live++;
     s_pevt.emitted[TAGPU_PEVT_CLASS(e->flags) < TAGPU_PEVT_NCLASS ? TAGPU_PEVT_CLASS(e->flags) : 0]++;
-    return r;
-}
-
-/* the row of a serial, or NULL when it is no longer listed: the rows lie in serial order */
-static PevtRow* pevt_find(uint32_t serial)
-{
-    unsigned lo = s_pevt.head, hi = s_pevt.tail;
-    while (lo < hi) {
-        unsigned mid = lo + (hi - lo) / 2u;
-        uint32_t m = s_pevt.row[mid].serial;
-        if (m == serial) return &s_pevt.row[mid];
-        if ((int32_t)(m - serial) < 0) lo = mid + 1u; else hi = mid;
-    }
-    return NULL;
 }
 
 /* THE WAKE'S DEATH [DISASSEMBLED]. The wake's update 0x473170 moves each dot (0x474580) and
@@ -12148,7 +12143,7 @@ static void pevt_path(const TAGPU_PEVT* e, int32_t umax, int* lo, int* hi)
 }
 
 /* the sea level changed before the walk of T: every live dot's death walk from T on found again,
-   and its event's D with it (a wake proxy asks its row for D: pevt_proxy_wake_empty). A row emitted
+   and its event's D with it, which the purge reads from the row. A row emitted
    at T, not late, decided dot 1 at emission from dot 0 surviving the walk of T at the old level:
    that walk has not run yet, so dot 1 is decided again from the new gone[0], as pevt_wake_fill
    does. */
@@ -12180,176 +12175,9 @@ static void pevt_wake_resea(uint32_t T, int sea)
 }
 SIM_UNTESTED(pevt_wake_resea, "the sea level changes only by the SeaLevel cheat, and the recorder leaves the sea byte (replay-globals.tsv sealevel leave): no test group can change it");
 
-/* the wake call pevt_pre took (no object): the init's event, its D and the layer's cap */
-static void pevt_emit_wake(unsigned seed)
-{
-    TAGPU_PEVT e;
-    int L = s_pevt.player, lo[3], hi[3];
-    uint32_t gone;
-    if ((unsigned)L >= 10u || s_pevt.period < 1 || s_pevt.period > TAGPU_PEVT_WAKE_PERIOD) {
-        s_pevt.refused++;
-        return;
-    }
-    memset(&e, 0, sizeof e);
-    e.seed = seed;
-    e.t0 = s_prand.tick;
-    e.flags = (unsigned)L | (s_pevt.walked == e.t0 ? TAGPU_PEVT_LATE : 0u) |
-              (unsigned)TAGPU_PEVT_C_WAKE << 8;
-    pevt_wake_fill(&e, s_pevt.box1, s_pevt.box2, s_pevt.period, 1);
-    gone = tagpu_pevt_wake_finish(&e);
-    if (s_pevt.layer[L] > (unsigned)TAGPU_LIM_SFX) pevt_trim(L);
-    pevt_path(&e, 6 * e.period + 2, lo, hi);
-    pevt_add(&e, gone, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], PEVT_SLACK);
-}
-
-/* the call pevt_pre took (`cls` its class), as the init and the spawn would make it */
-static void pevt_emit(unsigned seed, int cls)
-{
-    TAGPU_PEVT e;
-    int L = s_pevt.player, k, xl, xh, al, ah, yl, yh;
-    uint32_t gone;
-    if (cls == TAGPU_PEVT_C_WAKE) { pevt_emit_wake(seed); return; }
-    if ((unsigned)L >= 10u) { s_pevt.refused++; return; }
-    memset(&e, 0, sizeof e);
-    e.seed = seed;
-    e.t0 = s_prand.tick;
-    e.flags = (unsigned)L | (s_pevt.walked == e.t0 ? TAGPU_PEVT_LATE : 0u);
-    pevt_cut(s_pevt.box1, e.box1);
-    pevt_cut(s_pevt.box2, e.box2);
-    for (k = 0; k < (int)TAGPU_PEVT_NPART; k++) {
-        int32_t s[3], t[3], len;
-        int64_t q;
-        tagpu_pevt_ends(&e, (unsigned)k, s, t);
-        len = pevt_len((int32_t)((uint32_t)t[0] - (uint32_t)s[0]),
-                       (int32_t)((uint32_t)t[1] - (uint32_t)s[1]),
-                       (int32_t)((uint32_t)t[2] - (uint32_t)s[2]));
-        q = ((int64_t)len * 65536) / 0x40000;       /* _allshl 16, _alldiv 0x40000 */
-        e.steps[k] = (int16_t)(uint16_t)((uint32_t)q >> 16);
-    }
-    gone = tagpu_pevt_nano_finish(&e);
-    if (s_pevt.layer[L] > (unsigned)TAGPU_LIM_SFX) pevt_trim(L);
-    pevt_span(&e, 0, &xl, &xh);
-    pevt_span(&e, 1, &al, &ah);
-    pevt_span(&e, 2, &yl, &yh);
-    pevt_add(&e, gone, xl, xh, al, ah, yl, yh, PEVT_SLACK);
-}
-
-/* Before the pool's alloc: 1 when the pool is not to be asked (a nano or wake emitter's call
-   drawn from events). `regs` is the stub's pushad block, the alloc's return address and argument
-   above it; the emitter's esp after its four pushes is past them both. The wake's (0x472430):
-   a and b, pointers, at +0x14 and +0x18, the period at +0x1C, the layer's word at +0x20, which it
-   passes the init and reads for the cap (0x472498..0x4724B2). */
-static int __cdecl pevt_pre(const unsigned* regs)
-{
-    const unsigned char* frame;
-    const int32_t* arg;
-    unsigned site = regs[PR_RET];
-    s_pevt.pend = 0;
-    if ((site != PEVT_NANO_FWD && site != PEVT_NANO_REV && site != PEVT_WAKE_FWD) || !pevt_live())
-        return 0;
-    frame = (const unsigned char*)(regs + PR_RET + 2);
-    if (site == PEVT_WAKE_FWD) {
-        s_pevt.player = (int)*(const int16_t*)(frame + 0x20);
-        memcpy(&arg, frame + 0x14, sizeof arg);
-        memcpy(s_pevt.box1, arg, 3 * sizeof *arg);
-        memcpy(&arg, frame + 0x18, sizeof arg);
-        memcpy(s_pevt.box2, arg, 3 * sizeof *arg);
-        memcpy(&s_pevt.period, frame + 0x1C, sizeof s_pevt.period);
-        s_pevt.pend = 1 + TAGPU_PEVT_C_WAKE;
-        return !s_pevtCheck;
-    }
-    s_pevt.player = (int)*(const int16_t*)(frame + 0x34);
-    memcpy(&arg, frame + (site == PEVT_NANO_FWD ? 0x30 : 0x2C), sizeof arg);
-    if (site == PEVT_NANO_FWD) {
-        memcpy(s_pevt.box1, frame + 0x10, sizeof s_pevt.box1);
-        memcpy(s_pevt.box2, arg, sizeof s_pevt.box2);
-    } else {
-        memcpy(s_pevt.box1, arg, sizeof s_pevt.box1);
-        memcpy(s_pevt.box2, frame + 0x10, sizeof s_pevt.box2);
-    }
-    s_pevt.pend = 1;
-    return !s_pevtCheck;
-}
-
-/* THE PROXY, the engine object a sprite event keeps in its layer (THE PARTICLES AS EVENTS above):
-   +4 D, the walk that destroys it, +8 its row's serial; +0xC the layer byte and +0x10..+0x18 the
-   empty sub-vector, as the emitter left them. Its seven slots, thiscall as the engine calls them:
-   destroy(flags) ret 4, update, draw(ctx) ret 4, empty?, spawn, again?, init. A layer object is
-   called by the walker (slot 3, then slot 1 while not empty, slot 0 once empty: at D for a proxy),
-   the emitters' trims, the level's teardown 0x471DE0 and tagpu_effects_clear (slot 0), and the
-   draw walker 0x471F90 (slot 2, not run on a Vulkan launch). So only slots 0, 1 and 3 are the
-   proxy's own; the rest are the class's own entries, copied from its vtable at install: its draw
-   (0x4730F0, 0x472E30) walks the sub-vector +0x10..+0x14, empty here, and draws nothing; spawn,
-   again and init are called only by the class's update, which the proxy's replaces, and by the
-   emitter before the init makes the object a proxy. */
-static void* __thiscall pevt_proxy_destroy(void* self, int flags)
-{
-    typedef void (__thiscall* PFN_PoolPush)(void* pool, void* object);
-    unsigned char* o = (unsigned char*)self;
-    uint32_t serial, D;
-    PevtRow* r;
-    memcpy(&D, o + 4, 4);
-    memcpy(&serial, o + 8, 4);
-    r = pevt_find(serial);
-    if (r && r->gone) pevt_drop(r);
-    /* what the classes' deleting destructors 0x4716A0 / 0x471430 do to an object whose
-       sub-vector is empty: the vector words zeroed, the base vtable, and with flag 1 the
-       object back to the pool by 0x470ED0 */
-    memset(o + 0x10, 0, 12);
-    *(uint32_t*)(void*)o = PEVT_VT_BASE;
-    if (flags & 1) ((PFN_PoolPush)0x00470ED0u)((void*)(size_t)PRAND_POOL, self);
-    return self;
-}
-static void __thiscall pevt_proxy_update(void* self) { (void)self; }
-static int __thiscall pevt_proxy_empty(void* self)
-{
-    uint32_t D;
-    memcpy(&D, (const unsigned char*)self + 4, 4);
-    return (int32_t)(prand_gametime() - D) >= 0;
-}
-/* A wake or Smoke2 proxy's D is its row's: a change of the sea level moves a wake's dots' death
-   walks (pevt_wake_resea), and a smoke event's timing is found at the walk after its emission
-   (THE SMOKE). Its +4 stands when the row is gone. */
-static int __thiscall pevt_proxy_row_empty(void* self)
-{
-    uint32_t D, serial;
-    const PevtRow* r;
-    memcpy(&D, (const unsigned char*)self + 4, 4);
-    memcpy(&serial, (const unsigned char*)self + 8, 4);
-    if ((r = pevt_find(serial)) != NULL && r->gone) D = r->gone;
-    return (int32_t)(prand_gametime() - D) >= 0;
-}
-/* Smoke1's own empty 0x475330 is `xor eax,eax; ret`: only a trim or the teardown removes it */
-static int __thiscall pevt_proxy_never_empty(void* self) { (void)self; return 0; }
-static uint32_t s_proxyFire[7];
-SIM_VAR(s_proxyFire, SIM_INSTALL);
-static uint32_t s_proxyFlare[7];
-SIM_VAR(s_proxyFlare, SIM_INSTALL);
-static uint32_t s_proxyWake[7];
-SIM_VAR(s_proxyWake, SIM_INSTALL);
-static uint32_t s_proxySmoke2[7];
-SIM_VAR(s_proxySmoke2, SIM_INSTALL);
-static uint32_t s_proxySmoke1[7];
-SIM_VAR(s_proxySmoke1, SIM_INSTALL);
-/* the class's vtable with the proxy's destroy, update and empty in slots 0, 1, 3. The wake's
-   destroy 0x4717E0 and the smoke classes' 0x474D10 / 0x475110 do what the other two do (MEM_Free
-   +0x10, the vector zeroed, the base vtable -- the smokes' through 0x471D00 -- and the pool push on
-   flag 1, the smokes' through 0x471D50: 0x4717E4..0x471813, 0x474D14..0x474D3E,
-   0x475114..0x47513E). */
-static void pevt_proxy_vtable(uint32_t* vt, uint32_t classVt)
-{
-    memcpy(vt, (const void*)(size_t)classVt, 7u * sizeof *vt);
-    vt[0] = (uint32_t)(size_t)pevt_proxy_destroy;
-    vt[1] = (uint32_t)(size_t)pevt_proxy_update;
-    vt[3] = (uint32_t)(size_t)(classVt == PEVT_VT_WAKE || classVt == PEVT_VT_SMOKE2 ?
-                               pevt_proxy_row_empty :
-                               classVt == PEVT_VT_SMOKE1 ? pevt_proxy_never_empty :
-                               pevt_proxy_empty);
-}
-
-/* the flare sequence's frame count - 1, the modulus both classes' spawns store (0x4B7F60 - 1:
-   the u16 at the sequence's start, which the spawn this replaces reads unconditionally);
-   0 when there is no sequence */
+/* the flare sequence's frame count - 1, the modulus both sprite classes' spawns store (0x4B7F60 -
+   1: the u16 at the sequence's start, which the spawn reads unconditionally); 0 when there is no
+   sequence */
 static int32_t pevt_nseq1(void)
 {
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
@@ -12359,153 +12187,230 @@ static int32_t pevt_nseq1(void)
     return seq ? (int32_t)*(const uint16_t*)seq - 1 : 0;
 }
 
-/* An event of a proxy class, `e` filled, listed with its D and its reach (the hi-word spans
-   lo..hi of x, alt and y, `slack` past them), and the object made the proxy `vt` (or, under the
-   oracle, left to its real init) */
-static int pevt_keep(unsigned char* obj, TAGPU_PEVT* e, uint32_t D, const int* lo, const int* hi,
-                     int slack, const uint32_t* vt)
+/* THE FILLS, one a class: from the init's arguments pevt_pre copied (s_pevt.box1, box2, arg), the
+   event `e` -- its seed, T and flags set -- as the class's init and spawn would make its object;
+   *D the walk that would destroy that object; lo..hi the hi-word spans of x, alt and y its
+   particles can reach, `slack` past them. 0 when an event cannot hold the emission. */
+
+/* nano, the init 0x473B50 and the spawn 0x473D50: the boxes as the init cuts them, and each
+   particle's step count by the spawn's own x87 length (_allshl 16, _alldiv 0x40000) */
+static int pevt_fill_nano(TAGPU_PEVT* e, uint32_t* D, int* lo, int* hi, int* slack)
 {
-    PevtRow* r;
-    e->flags |= TAGPU_PEVT_PROXY;
-    r = pevt_add(e, D, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], slack);
-    if (s_pevtCheck) return 0;
-    *(uint32_t*)(void*)obj = (uint32_t)(size_t)vt;
-    memcpy(obj + 4, &D, 4);
-    memcpy(obj + 8, &r->serial, 4);
+    int k;
+    pevt_cut(s_pevt.box1, e->box1);
+    pevt_cut(s_pevt.box2, e->box2);
+    for (k = 0; k < (int)TAGPU_PEVT_NPART; k++) {
+        int32_t s[3], t[3], len;
+        int64_t q;
+        tagpu_pevt_ends(e, (unsigned)k, s, t);
+        len = pevt_len((int32_t)((uint32_t)t[0] - (uint32_t)s[0]),
+                       (int32_t)((uint32_t)t[1] - (uint32_t)s[1]),
+                       (int32_t)((uint32_t)t[2] - (uint32_t)s[2]));
+        q = ((int64_t)len * 65536) / 0x40000;
+        e->steps[k] = (int16_t)(uint16_t)((uint32_t)q >> 16);
+    }
+    *D = tagpu_pevt_nano_finish(e);
+    for (k = 0; k < 3; k++) pevt_span(e, k, &lo[k], &hi[k]);
+    *slack = PEVT_SLACK;
     return 1;
 }
 
-/* the same for a class whose particles move on a straight line, `umax` moves at the most */
-static int pevt_hold(unsigned char* obj, TAGPU_PEVT* e, uint32_t D, int32_t umax, int slack,
-                     const uint32_t* vt)
+/* the wake's and the bubbles' init 0x474760(a, b, period, 1, dir): the two dots pevt_wake_fill
+   finds. A period under 1 (the move divides by it, 0x4745A7) or past TAGPU_PEVT_WAKE_PERIOD is not
+   held. */
+static int pevt_fill_wake(TAGPU_PEVT* e, uint32_t* D, int* lo, int* hi, int* slack)
 {
-    int lo[3], hi[3];
-    pevt_path(e, umax, lo, hi);
-    return pevt_keep(obj, e, D, lo, hi, slack, vt);
-}
-
-static int pevt_sprite(unsigned char* obj, TAGPU_PEVT* e, int32_t umax)
-{
-    return pevt_hold(obj, e, tagpu_pevt_sprite_finish(e), umax, PEVT_SLACK + PEVT_SPRITE,
-                     TAGPU_PEVT_CLASS(e->flags) == TAGPU_PEVT_C_FIRE ? s_proxyFire : s_proxyFlare);
-}
-
-/* the event's seed, T, layer L and LATE, from the object the pool just gave (prand_alloc set
-   its seed); 0 when the object keeps its real init */
-static int pevt_head_in(const unsigned char* obj, unsigned cls, unsigned L, TAGPU_PEVT* e)
-{
-    const PrandObj* pr = prand_row((unsigned)(size_t)obj);
-    memset(e, 0, sizeof *e);
-    if (!pr || L >= 10u) return 0;
-    e->seed = pr->seed;
-    e->t0 = prand_gametime();
-    e->flags = L | (s_pevt.walked == e->t0 ? TAGPU_PEVT_LATE : 0u) | cls << 8;
+    const int32_t period = s_pevt.arg[0];
+    if (period < 1 || period > TAGPU_PEVT_WAKE_PERIOD) return 0;
+    pevt_wake_fill(e, s_pevt.box1, s_pevt.box2, period, s_pevt.arg[1]);
+    *D = tagpu_pevt_wake_finish(e);
+    pevt_path(e, 6 * period + 2, lo, hi);
+    *slack = PEVT_SLACK;
     return 1;
 }
 
-/* ... in the layer byte its emitter stored at +0xC */
-static int pevt_head(const unsigned char* obj, unsigned cls, TAGPU_PEVT* e)
+/* the fire init 0x4742C0(from, to, period, life): +4 end = T + life (0x4742CB), +0x1C period,
+   step = (d * q) >> 16 per axis with q the low dword, sign-extended, of 2^32 / (life << 16)
+   (_alldiv 0x4E4440, _allmul 0x4E4400, _allshr 0x4E43D0: 0x47432C..0x47438B), then the spawn of
+   particle 0 at `from`, frame 0 and counter 0; a particle a tick while the next spawn tick T + k
+   is at most the end (0x4730C0: `+8 <= +4` signed, `+8 <= T`), so life + 1 of them. A life or
+   period under 1, which stock divides by zero on, or more than ten particles, is not held. */
+static int pevt_fill_fire(TAGPU_PEVT* e, uint32_t* D, int* lo, int* hi, int* slack)
 {
-    return pevt_head_in(obj, cls, obj[0x0C], e);
-}
-
-/* the fire init 0x4742C0(from, to, period, life), thiscall `ret 0x10`, at its entry: 1 when the
-   object became a proxy (the stub returns past the init), 0 to run the init. What it would make:
-   +4 end = T + life (0x4742CB), +0x1C period, step = (d * q) >> 16 per axis with q the low dword,
-   sign-extended, of 2^32 / (life << 16) (_alldiv 0x4E4440, _allmul 0x4E4400, _allshr 0x4E43D0:
-   0x47432C..0x47438B), then the spawn of particle 0 at `from`, frame 0 and counter 0; a particle
-   a tick while the next spawn tick T + k is at most the end (0x4730C0: `+8 <= +4` signed, `+8 <=
-   T`), so life + 1 of them. An emission the event cannot hold -- life or period under 1, which
-   stock divides by zero on, more than ten particles, no sequence -- keeps its real init. */
-static int __cdecl pevt_fire(unsigned* regs)
-{
-    unsigned char* obj = (unsigned char*)(size_t)regs[PR_ECX];
-    const int32_t* from = (const int32_t*)(size_t)regs[PR_RET + 1];
-    const int32_t* to = (const int32_t*)(size_t)regs[PR_RET + 2];
-    const int32_t period = (int32_t)regs[PR_RET + 3], life = (int32_t)regs[PR_RET + 4];
-    TAGPU_PEVT e;
+    const int32_t period = s_pevt.arg[0], life = s_pevt.arg[1];
     int32_t q, k;
     int a;
-    if (!pevt_live() || !pevt_head(obj, TAGPU_PEVT_C_FIRE, &e)) return 0;
-    if (life < 1 || period < 1 || (e.nseq1 = pevt_nseq1()) < 1) { s_pevt.kept++; return 0; }
-    for (k = 1; k <= TAGPU_PEVT_NPART && (int32_t)(e.t0 + (uint32_t)k) <= (int32_t)(e.t0 + (uint32_t)life); k++)
+    if (life < 1 || period < 1 || (e->nseq1 = pevt_nseq1()) < 1) return 0;
+    for (k = 1; k <= TAGPU_PEVT_NPART && (int32_t)(e->t0 + (uint32_t)k) <= (int32_t)(e->t0 + (uint32_t)life); k++)
         ;
-    if (k > TAGPU_PEVT_NPART) { s_pevt.kept++; return 0; }
-    e.nsub = k;
-    e.period = period;
-    e.life = life;
+    if (k > TAGPU_PEVT_NPART) return 0;
+    e->nsub = k;
+    e->period = period;
+    e->life = life;
     q = (int32_t)(0x100000000LL / (int64_t)(int32_t)((uint32_t)life << 16));
     for (a = 0; a < 3; a++) {
-        int32_t d = (int32_t)((uint32_t)to[a] - (uint32_t)from[a]);
-        e.from[a] = from[a];
-        e.step[a] = (int32_t)(((int64_t)d * q) >> 16);
+        int32_t d = (int32_t)((uint32_t)s_pevt.box2[a] - (uint32_t)s_pevt.box1[a]);
+        e->from[a] = s_pevt.box1[a];
+        e->step[a] = (int32_t)(((int64_t)d * q) >> 16);
     }
-    return pevt_sprite(obj, &e, life + 1);
+    *D = tagpu_pevt_sprite_finish(e);
+    pevt_path(e, life + 1, lo, hi);
+    *slack = PEVT_SLACK + PEVT_SPRITE;
+    return 1;
 }
 
-/* the flare's init 0x4736E0(from, to, life), thiscall `ret 0xC`, likewise. What it would make:
-   +4 end = T + life, steps = the int16 high word of (len << 16) / 0x50000 with len the init's own
-   x87 length of d = to - from (0x473744..0x473788; pevt_len is that sequence), step = d / steps
-   per axis (idiv, 0x47378E..0x4737A2), and the spawn of particle 0 at `from`; then one particle at
-   each update of T + 10k while T + 10k is at most the end (0x472E00), the object alive only while
-   its last particle is: the walk of T + 10k finds it empty unless that particle, born at T + 10(k-1)
-   and removed by the update past its end, lives to T + 10k - 1, i.e. steps >= 9. Steps 0 makes no
-   particle (the divide's fix ends the init there). */
-static int __cdecl pevt_flare(unsigned* regs)
+/* the flare's init 0x4736E0(from, to, life): +4 end = T + life, steps = the int16 high word of
+   (len << 16) / 0x50000 with len the init's own x87 length of d = to - from (0x473744..0x473788;
+   pevt_len is that sequence), step = d / steps per axis (idiv, 0x47378E..0x4737A2), and the spawn
+   of particle 0 at `from`; then one particle at each update of T + 10k while T + 10k is at most
+   the end (0x472E00), the object alive only while its last particle is: the walk of T + 10k finds
+   it empty unless that particle, born at T + 10(k-1) and removed by the update past its end, lives
+   to T + 10k - 1, i.e. steps >= 9. Steps 0 makes no particle (the divide's fix ends the init
+   there). */
+static int pevt_fill_flare(TAGPU_PEVT* e, uint32_t* D, int* lo, int* hi, int* slack)
 {
-    unsigned char* obj = (unsigned char*)(size_t)regs[PR_ECX];
-    const int32_t* from = (const int32_t*)(size_t)regs[PR_RET + 1];
-    const int32_t* to = (const int32_t*)(size_t)regs[PR_RET + 2];
-    const int32_t life = (int32_t)regs[PR_RET + 3];
-    TAGPU_PEVT e;
+    const int32_t life = s_pevt.arg[1];
     int32_t d[3], len, steps, k;
     int64_t q;
     int a;
-    if (!pevt_live() || !pevt_head(obj, TAGPU_PEVT_C_FLARE, &e)) return 0;
-    if ((e.nseq1 = pevt_nseq1()) < 1) { s_pevt.kept++; return 0; }
-    for (a = 0; a < 3; a++) d[a] = (int32_t)((uint32_t)to[a] - (uint32_t)from[a]);
+    if ((e->nseq1 = pevt_nseq1()) < 1) return 0;
+    for (a = 0; a < 3; a++) d[a] = (int32_t)((uint32_t)s_pevt.box2[a] - (uint32_t)s_pevt.box1[a]);
     len = pevt_len(d[0], d[1], d[2]);
-    q = ((int64_t)len * 65536) / 0x50000;                    /* _allshl 16, _alldiv 0x50000 */
+    q = ((int64_t)len * 65536) / 0x50000;
     steps = (int16_t)(uint16_t)((uint32_t)q >> 16);
     if (steps) {
         for (k = 1; k <= TAGPU_PEVT_NPART && steps >= 9 &&
-                    (int32_t)(e.t0 + 10u * (uint32_t)k) <= (int32_t)(e.t0 + (uint32_t)life); k++)
+                    (int32_t)(e->t0 + 10u * (uint32_t)k) <= (int32_t)(e->t0 + (uint32_t)life); k++)
             ;
-        if (k > TAGPU_PEVT_NPART) { s_pevt.kept++; return 0; }
+        if (k > TAGPU_PEVT_NPART) return 0;
     } else {
         k = 0;
     }
-    e.nsub = k;
-    e.life = steps;
+    e->nsub = k;
+    e->life = steps;
     for (a = 0; a < 3; a++) {
-        e.from[a] = from[a];
-        e.step[a] = steps ? d[a] / steps : 0;
+        e->from[a] = s_pevt.box1[a];
+        e->step[a] = steps ? d[a] / steps : 0;
     }
-    return pevt_sprite(obj, &e, steps + 1);
+    *D = tagpu_pevt_sprite_finish(e);
+    pevt_path(e, steps + 1, lo, hi);
+    *slack = PEVT_SLACK + PEVT_SPRITE;
+    return 1;
 }
 
-/* the wake's init 0x474760(a, b, period, life, dir), thiscall `ret 0x14`, at its entry: called by
-   the bubbles' emitter (its return address PEVT_BUBBLES), 1 when the object became a proxy;
-   every other call runs the init (the wake's own emitter makes no object, but under the oracle).
-   What it would make: +4 = T + life (0x47476B), the dot of T by its spawn (0x474872) and, while
-   +8 = T + 1 is at most +4, the dot of T + 1 (again 0x473220): with the life of 1 both emitters
-   pass, the two dots pevt_wake_fill finds. An emission the event cannot hold -- another life, a
-   period under 1 (the move divides by it, 0x4745A7) or past TAGPU_PEVT_WAKE_PERIOD -- keeps its
-   real init. */
-static int __cdecl pevt_wake(unsigned* regs)
+static int pevt_fill_smoke(TAGPU_PEVT* e, int cls, uint32_t* D, int* lo, int* hi, int* slack);
+
+/* The call pevt_pre took (`cls` its class) as its object would be: no event for a layer outside
+   0..9 or a full pool, as the emitter's alloc refuses; the class's fill; then the layer's cap
+   (the emitter's trim) and the row (its append). */
+static void pevt_emit(unsigned seed, int cls)
 {
-    unsigned char* obj = (unsigned char*)(size_t)regs[PR_ECX];
-    const int32_t* a = (const int32_t*)(size_t)regs[PR_RET + 1];
-    const int32_t* b = (const int32_t*)(size_t)regs[PR_RET + 2];
-    const int32_t period = (int32_t)regs[PR_RET + 3], life = (int32_t)regs[PR_RET + 4];
-    const int32_t dir = (int32_t)regs[PR_RET + 5];
     TAGPU_PEVT e;
-    if (regs[PR_RET] != PEVT_BUBBLES || !pevt_live() || !pevt_head(obj, TAGPU_PEVT_C_WAKE, &e))
-        return 0;
-    if (life != 1 || period < 1 || period > TAGPU_PEVT_WAKE_PERIOD) { s_pevt.kept++; return 0; }
-    pevt_wake_fill(&e, a, b, period, dir);
-    return pevt_hold(obj, &e, tagpu_pevt_wake_finish(&e), 6 * period + 2, PEVT_SLACK, s_proxyWake);
+    const int L = s_pevt.player;
+    int lo[3], hi[3], slack = PEVT_SLACK, ok = 0;
+    uint32_t D = 0;
+    if ((unsigned)L >= 10u) { s_pevt.refused++; return; }
+    if (s_pevt.live >= (unsigned)TAGPU_LIM_SFXPOOL) { s_pevt.full++; return; }
+    memset(&e, 0, sizeof e);
+    e.seed = seed;
+    e.t0 = s_prand.tick;
+    e.flags = (unsigned)L | (s_pevt.walked == e.t0 ? TAGPU_PEVT_LATE : 0u) | (unsigned)cls << 8;
+    switch (cls) {
+    case TAGPU_PEVT_C_NANO:  ok = pevt_fill_nano(&e, &D, lo, hi, &slack); break;
+    case TAGPU_PEVT_C_FIRE:  ok = pevt_fill_fire(&e, &D, lo, hi, &slack); break;
+    case TAGPU_PEVT_C_FLARE: ok = pevt_fill_flare(&e, &D, lo, hi, &slack); break;
+    case TAGPU_PEVT_C_WAKE:  ok = pevt_fill_wake(&e, &D, lo, hi, &slack); break;
+    default:                 ok = pevt_fill_smoke(&e, cls, &D, lo, hi, &slack); break;
+    }
+    if (!ok) { s_pevt.refused++; return; }
+    if (s_pevt.layer[L] > (unsigned)TAGPU_LIM_SFX) pevt_trim(L);
+    pevt_add(&e, D, lo, hi, slack);
 }
+
+/* the two points an init takes by pointer, from the frame's words at `a` and `b` */
+static void pevt_points(const unsigned char* a, const unsigned char* b)
+{
+    const int32_t* p;
+    memcpy(&p, a, sizeof p);
+    memcpy(s_pevt.box1, p, 3 * sizeof *p);
+    memcpy(&p, b, sizeof p);
+    memcpy(s_pevt.box2, p, 3 * sizeof *p);
+}
+
+/* Before the pool's alloc: the emitter by the call's return address, what its init would take out
+   of its frame (THE PARTICLES AS EVENTS: WHAT THE EVENT TAKES) and its layer; 1 when the pool is not
+   to be asked, the stub then answering NULL. `regs` is the stub's pushad block, the alloc's return
+   address and argument above it; the emitter's esp after the alloc's `ret 4` is past them both.
+   Smoke's arg[] is the init's (fcap, interval, countdown, life, seqsel), the others' (period, life)
+   and the wake's (period, dir). */
+static int __cdecl pevt_pre(const unsigned* regs)
+{
+    static const int32_t smoke810[5] = { 0, 1, 0, 0, 0 }, smoke8F0[5] = { 0, 1, 0, 0, 1 };
+    static const int32_t smoke9D0[5] = { 3, 1, 30, 0, 0 }, smokeC50[5] = { 0, 5, 0, 150, 0 };
+    const unsigned char* f = (const unsigned char*)(regs + PR_RET + 2);
+    const unsigned site = regs[PR_RET];
+    const int32_t* box;
+    int cls, at;
+    s_pevt.pend = 0;
+    if (!pevt_live()) return 0;
+    memset(s_pevt.arg, 0, sizeof s_pevt.arg);
+    switch (site) {
+    case PEVT_NANO_FWD:
+    case PEVT_NANO_REV:
+        memcpy(&box, f + (site == PEVT_NANO_FWD ? 0x30 : 0x2C), sizeof box);
+        memcpy(site == PEVT_NANO_FWD ? s_pevt.box1 : s_pevt.box2, f + 0x10, sizeof s_pevt.box1);
+        memcpy(site == PEVT_NANO_FWD ? s_pevt.box2 : s_pevt.box1, box, sizeof s_pevt.box1);
+        cls = TAGPU_PEVT_C_NANO; at = 0x34;
+        break;
+    case PEVT_WAKE_FWD:
+    case PEVT_BUBBLES:
+        pevt_points(f + 0x14, f + 0x18);
+        memcpy(&s_pevt.arg[0], f + 0x1C, 4);
+        s_pevt.arg[1] = site == PEVT_WAKE_FWD;
+        cls = TAGPU_PEVT_C_WAKE; at = 0x20;
+        break;
+    case PEVT_FLARE_A:
+        pevt_points(f + 0x14, f + 0x18);
+        memcpy(&s_pevt.arg[1], f + 0x1C, 4);
+        cls = TAGPU_PEVT_C_FLARE; at = 0x20;
+        break;
+    case PEVT_COBFIRE:
+        pevt_points(f + 0x14, f + 0x18);
+        memcpy(s_pevt.arg, f + 0x1C, 8);
+        cls = TAGPU_PEVT_C_FIRE; at = 0x24;
+        break;
+    case PEVT_PIECEFIRE:
+        memcpy(s_pevt.box1, f + 0x10, 12);
+        memcpy(s_pevt.box2, f + 0x10, 12);
+        s_pevt.arg[0] = 1;
+        s_pevt.arg[1] = (int32_t)regs[PR_EBP];
+        cls = TAGPU_PEVT_C_FIRE; at = 0x24;
+        break;
+    case PEVT_SMOKE_630:
+        memcpy(&box, f + 0x10, sizeof box);
+        memcpy(s_pevt.box1, box, 12);
+        memcpy(&s_pevt.arg[1], f + 0x14, 4);
+        memcpy(&s_pevt.arg[3], f + 0x18, 4);
+        cls = TAGPU_PEVT_C_SMOKE2; at = 0x1C;
+        break;
+    case PEVT_SMOKE_810:
+    case PEVT_SMOKE_8F0:
+    case PEVT_SMOKE_9D0:
+    case PEVT_SMOKE_C50:
+        memcpy(&box, f + 0x10, sizeof box);
+        memcpy(s_pevt.box1, box, 12);
+        memcpy(s_pevt.arg, site == PEVT_SMOKE_810 ? smoke810 : site == PEVT_SMOKE_8F0 ? smoke8F0 :
+                           site == PEVT_SMOKE_9D0 ? smoke9D0 : smokeC50, sizeof s_pevt.arg);
+        cls = site == PEVT_SMOKE_C50 ? TAGPU_PEVT_C_SMOKE1 : TAGPU_PEVT_C_SMOKE2; at = 0x14;
+        break;
+    default:
+        return 0;
+    }
+    s_pevt.player = (int)*(const int16_t*)(f + at);
+    s_pevt.pend = 1 + cls;
+    return !s_pevtCheck;
+}
+
 
 /* THE SMOKE [DISASSEMBLED]. Smoke2 (vtable 0x4FD618) and Smoke1 (0x4FD638) are made by five live
    emitters, each `alloc 0x470EB0, zero, constructor, init through slot 6, layer's cap, append`:
@@ -12514,13 +12419,10 @@ static int __cdecl pevt_wake(unsigned* regs)
    and (pos, 3, 1, 30, 0, 0) from 0x472874, 0x472954 and 0x472A34; 0x472C50(pos, layer) inits
    Smoke1 (pos, 5, 0, 150) from 0x472CB3 (the dead copies 0x471820, 0x471A50 and 0x472720 have no
    caller). The constructors 0x474CD0 and 0x4750B0 overwrite +0xC with a byte of the spilled
-   object pointer (0x474CD9), so the layer is read where the emitter reads it for its cap, its
-   frame's layer word: at the init's entry [esp + 0x38] for 0x472630 (the init's return address,
-   six arguments, three saved registers, the emitter's return, three arguments), [esp + 0x30] for
-   the one-puff three, [esp + 0x28] for 0x472C50 (four arguments) -- the movsx after each init
-   call (0x47269D, 0x472877, 0x472957, 0x472A37, 0x472CB6). Those bytes, from the alloc's return
-   to that movsx, are held to stock with the table; the return address names the emitter, and
-   any other caller of an init runs it.
+   object pointer (0x474CD9): the layer is the emitter's frame's word that the movsx after each
+   init call reads for the cap (0x47269D, 0x472877, 0x472957, 0x472A37, 0x472CB6). Those bytes,
+   from the alloc's return to that movsx, are held to stock with the table (pevt_pre reads the
+   frame at the alloc).
    THE SMOKE'S TIMING. A puff moves at every walk after its spawn, by the wind and the rise that
    walk reads (tagpu_pevt.h). Puff 0's first move is the first walk after the emission, whenever
    that runs: in the step, the same tick's; after it (the explosion draw's pieces, a replay's
@@ -12532,7 +12434,7 @@ static int __cdecl pevt_wake(unsigned* regs)
    timing words wait for that walk (TAGPU_PEVT_PEND): pevt_walk_begin, at the start of every walk,
    sets them for the rows emitted since the last one -- `first` that walk, `again` the first walk
    from it on at or past +8 = T + ival (the again tests' unsigned compare), Smoke2's puff count
-   and D -- before the walk reads a proxy's D. Until then they hold what the next walk would give
+   and D -- before the walk's purge reads D. Until then they hold what the next walk would give
    in the step (T, or T + 1 for an emission after the tick's walk), which only a frame drawn
    before that walk reads.
    THE WIND'S SUMS: the same start of the walk notes wind_x, the rise and wind_y as the walk's
@@ -12544,11 +12446,15 @@ static int __cdecl pevt_wake(unsigned* regs)
    both sides of it. A row outside the chain is not read: a puff that would need one is not drawn (the GPU) or is a
    difference (the oracle). The ring holds TAGPU_PEVT_WIND walks, and an event whose puffs could
    live longer is not made (`lmax`).
-   WHAT AN EVENT CANNOT HOLD keeps its real init and engine object, counted in `kept`: an interval
-   under 1 (the spawn divides by it, 0x474E10), a reset under 2 (a countdown of 0 then never
-   comes again), a frame cap past the frame table, a puff life past the wind ring, a Smoke2 object
-   of more than PEVT_PUFFS puffs, or one whose puffs could be drawn with another puff's ordinal
-   (more than 255 or 1023 spawns while a puff lives, tagpu_pevt.h). No stock emitter makes one. */
+   SMOKE1 HAS NO END: its empty? 0x475330 is `xor eax,eax; ret`, so no walk destroys its object,
+   and its row's D is "never" (0xFFFFFFFF, which the purge skips). It goes as its object goes: by
+   the layer's cap (pevt_trim) or the level's end (the next level's prand_level_begin clears the
+   list, and no copy is taken while the level's layer table is gone: tagpu_pevt_copy).
+   WHAT AN EVENT CANNOT HOLD is refused (THE PARTICLES AS EVENTS): no sequence, an interval under 1
+   (the spawn divides by it, 0x474E10), a reset under 2 (a countdown of 0 then never comes again),
+   a frame cap past the frame table, a puff life past the wind ring, a Smoke2 object of more than
+   PEVT_PUFFS puffs, or one whose puffs could be drawn with another puff's ordinal (more than 255
+   or 1023 spawns while a puff lives, tagpu_pevt.h). No caller in the retail exe makes one. */
 static uint32_t pevt_smoke_timing(TAGPU_PEVT* e, uint32_t Q)
 {
     const uint32_t plus8 = e->t0 + (uint32_t)e->ival;
@@ -12620,72 +12526,50 @@ static void pevt_walk_begin(void)
     s_pevt.pendSerial = s_pevt.serial;
 }
 
-/* a smoke init at its entry (THE SMOKE): 1 when the object became a proxy. `cls` the class; the
-   arguments Smoke2's (pos, fcap, interval, countdown, life, seqsel) or Smoke1's (pos, interval,
-   countdown, life); the layer the emitter's word at `layerAt` words past the return address. */
-static int pevt_smoke(unsigned* regs, unsigned cls, int layerAt)
+/* the smoke inits, Smoke2's 0x474D50(pos, fcap, interval, countdown, life, seqsel) and Smoke1's
+   0x475150(pos, interval, countdown, life) (THE SMOKE): the event with its timing words pending
+   until the next walk. On the game thread in play, on the loader thread at the map's load (THE
+   LEVEL'S PARTICLE SEED's THREADS AND ORDER: the loader's writes to the list come before the store
+   the game thread waits for, 0x497C62 / 0x498342). */
+static int pevt_fill_smoke(TAGPU_PEVT* e, int cls, uint32_t* D, int* lo, int* hi, int* slack)
 {
-    unsigned char* obj = (unsigned char*)(size_t)regs[PR_ECX];
-    const int32_t* pos = (const int32_t*)(size_t)regs[PR_RET + 1];
     const int s2 = cls == TAGPU_PEVT_C_SMOKE2;
-    const int32_t fcap = s2 ? (int32_t)regs[PR_RET + 2] : 0;
-    const int32_t ival = (int32_t)regs[PR_RET + (s2 ? 3 : 2)];
-    const int32_t countdown = (int32_t)regs[PR_RET + (s2 ? 4 : 3)];
-    const int32_t life = (int32_t)regs[PR_RET + (s2 ? 5 : 4)];
-    const int32_t seqsel = s2 ? (int32_t)regs[PR_RET + 6] : 0;
+    const int32_t fcap = s2 ? s_pevt.arg[0] : 0, ival = s_pevt.arg[1];
+    const int32_t countdown = s_pevt.arg[2], life = s_pevt.arg[3];
+    const int32_t seqsel = s2 ? s_pevt.arg[4] : 0;
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
     const unsigned char* seq;
-    TAGPU_PEVT e;
     int32_t n, span, most;
-    int lo[3], hi[3], a;
-    uint32_t D;
-    if (!pevt_live() || !ta ||
-        !pevt_head_in(obj, cls, (unsigned)(int)*(const int16_t*)&regs[PR_RET + layerAt], &e))
-        return 0;
+    int a;
+    if (!ta) return 0;
     memcpy(&seq, ta + (seqsel ? PEVT_SMOKESEQ2 : PEVT_SMOKESEQ1), sizeof seq);
-    if (!seq) { s_pevt.kept++; return 0; }
+    if (!seq) return 0;
     n = (int32_t)*(const uint16_t*)seq - 1;              /* 0x4B7F60 - 1 */
     if (fcap && fcap < n) n = fcap;
-    memcpy(e.at, pos, sizeof e.at);
-    e.ival = ival;
-    e.reset = countdown ? countdown : 7;
-    e.ncap = n;
-    e.seqsel = seqsel != 0;
-    e.endT = e.t0 + (uint32_t)life;
-    e.npuff = TAGPU_PEVT_ENDLESS;
-    if (ival < 1 || e.reset < 2 || n > TAGPU_PEVT_SMOKE_NCAP) { s_pevt.kept++; return 0; }
-    e.lmax = tagpu_pevt_smoke_lmax(&e);
+    memcpy(e->at, s_pevt.box1, sizeof e->at);
+    e->ival = ival;
+    e->reset = countdown ? countdown : 7;
+    e->ncap = n;
+    e->seqsel = seqsel != 0;
+    e->endT = e->t0 + (uint32_t)life;
+    e->npuff = TAGPU_PEVT_ENDLESS;
+    if (ival < 1 || e->reset < 2 || n > TAGPU_PEVT_SMOKE_NCAP) return 0;
+    e->lmax = tagpu_pevt_smoke_lmax(e);
     span = s2 ? 256 : 1024;
-    most = e.lmax / ival + 2;
+    most = e->lmax / ival + 2;
     if (s2) {
-        const int32_t d = (int32_t)(e.endT - (e.t0 + (uint32_t)ival));
+        const int32_t d = (int32_t)(e->endT - (e->t0 + (uint32_t)ival));
         const int32_t np = d < 0 ? 1 : 2 + d / ival;
-        if (np > PEVT_PUFFS) { s_pevt.kept++; return 0; }
+        if (np > PEVT_PUFFS) return 0;
         if (np < most) most = np;
     }
-    if (e.lmax + 2 > (int32_t)TAGPU_PEVT_WIND || most >= span) { s_pevt.kept++; return 0; }
-    e.flags |= TAGPU_PEVT_PEND;
-    D = pevt_smoke_timing(&e, e.flags & TAGPU_PEVT_LATE ? e.t0 + 1u : e.t0);
-    if (e.lmax > s_pevt.smokeLmax) s_pevt.smokeLmax = e.lmax;
-    for (a = 0; a < 3; a++) lo[a] = hi[a] = e.at[a] >> 16;
-    return pevt_keep(obj, &e, D, lo, hi, PEVT_SLACK + PEVT_SPRITE, s2 ? s_proxySmoke2 : s_proxySmoke1);
-}
-
-/* Smoke2's init 0x474D50, thiscall `ret 0x18`, at its entry */
-static int __cdecl pevt_smoke2(unsigned* regs)
-{
-    const unsigned ret = regs[PR_RET];
-    const int at = ret == PEVT_SMOKE_630 ? 14 :
-                   ret == PEVT_SMOKE_810 || ret == PEVT_SMOKE_8F0 || ret == PEVT_SMOKE_9D0 ? 12 : 0;
-    return at ? pevt_smoke(regs, TAGPU_PEVT_C_SMOKE2, at) : 0;
-}
-
-/* Smoke1's init 0x475150, thiscall `ret 0x10`, at its entry: on the game thread in play, on the
-   loader thread at the map's load (THE LEVEL'S PARTICLE SEED's THREADS AND ORDER: the loader's
-   writes to the list come before the store the game thread waits for, 0x497C62 / 0x498342) */
-static int __cdecl pevt_smoke1(unsigned* regs)
-{
-    return regs[PR_RET] == PEVT_SMOKE_C50 ? pevt_smoke(regs, TAGPU_PEVT_C_SMOKE1, 10) : 0;
+    if (e->lmax + 2 > (int32_t)TAGPU_PEVT_WIND || most >= span) return 0;
+    e->flags |= TAGPU_PEVT_PEND;
+    *D = pevt_smoke_timing(e, e->flags & TAGPU_PEVT_LATE ? e->t0 + 1u : e->t0);
+    if (e->lmax > s_pevt.smokeLmax) s_pevt.smokeLmax = e->lmax;
+    for (a = 0; a < 3; a++) lo[a] = hi[a] = e->at[a] >> 16;
+    *slack = PEVT_SLACK + PEVT_SPRITE;
+    return 1;
 }
 
 /* the end of each particle walk: the events whose object this walk destroyed go, and the oracle
@@ -12701,7 +12585,7 @@ static void pevt_walked(void)
         if (s_pevt.sea >= 0 && sea != s_pevt.sea) pevt_wake_resea(T, sea);
         s_pevt.sea = sea;
     }
-    /* a Smoke1 row has no D: its object goes by a trim or the teardown, through its proxy */
+    /* a Smoke1 row has no D: it goes by the layer's cap or the level's end (THE SMOKE) */
     for (i = s_pevt.head; i < s_pevt.tail; i++) {
         PevtRow* r = &s_pevt.row[i];
         if (r->gone && TAGPU_PEVT_CLASS(r->e.flags) != TAGPU_PEVT_C_SMOKE1 &&
@@ -12720,12 +12604,9 @@ static void pevt_walked(void)
    thread, inside the step, from the layers it walked: the objects are live and their sub-vectors
    this thread's own; a vector longer than an object can hold (ten) is a count difference and only
    its first ten records are read.
-   A LAYER AT ITS CAP can have lost its front object to any emitter's trim, which no event sees
-   (only nano counts its own; fire and the flare share layers with smoke and bubbles). The walk
-   marks a layer it finds holding more than the cap (particle_walk: an emission's trim leaves the
-   cap plus one until the next walk), and an event of such a layer whose object is gone while a
-   later one is there is counted as trimmed, not missing. A layer under its cap all level has every
-   event held to an object. */
+   EVERY OBJECT IS PAIRED: the events' own layer cap and pool count stand for the emitters' trims
+   and the pool's refusals, so an event whose object is gone, or an object with no event, is a
+   difference (missing, extra) whatever the layer's fill. */
 enum { PF_SEED, PF_COUNT, PF_POS, PF_END, PF_STEP, PF_COLOUR, PF_TICK, PF_FRAME };
 static const char* const PF_NAME[8] = { "seed", "count", "pos", "end", "step", "colour", "tick",
                                         "frame" };
@@ -12753,11 +12634,6 @@ static unsigned pevt_next(unsigned i, int L, int c)
     return i;
 }
 
-/* the walker found layer L holding n objects */
-static void pevt_layer_seen(int L, unsigned n)
-{
-    if (s_pevtCheck && n > (unsigned)TAGPU_LIM_SFX) s_pevt.capped |= 1u << L;
-}
 
 static void pevt_said(uint32_t P, int L, int c, unsigned obj, int k, int f, const int32_t* a,
                       const int32_t* b, int n)
@@ -12923,7 +12799,7 @@ static void pevt_check(uint32_t P)
 {
     const FxLayer* layer = *(const FxLayer* const*)(*(char* const*)0x00511DE8u + 0x38D77);
     unsigned objs[TAGPU_PEVT_NCLASS] = { 0 }, subs[TAGPU_PEVT_NCLASS] = { 0 };
-    unsigned diff[TAGPU_PEVT_NCLASS] = { 0 }, missing = 0, extra = 0, trimmed = 0;
+    unsigned diff[TAGPU_PEVT_NCLASS] = { 0 }, missing = 0, extra = 0;
     unsigned field[8] = { 0 }, sObjs = 0, sSubs = 0, sDiff = 0, lSubs = 0, lDiff = 0;
     int L, c, f;
     if (!layer) return;
@@ -12948,7 +12824,7 @@ static void pevt_check(uint32_t P)
                 if (j < s_pevt.tail) {
                     unsigned skipped = 0, m;
                     for (m = i; m < j; m = pevt_next(m + 1u, L, c)) skipped++;
-                    if (s_pevt.capped & (1u << L)) trimmed += skipped; else missing += skipped;
+                    missing += skipped;
                     i = j;
                 }
             }
@@ -12976,13 +12852,13 @@ static void pevt_check(uint32_t P)
         sObjs += objs[c]; sSubs += subs[c]; sDiff += diff[c];
         lSubs += s_pevt.cSubs[c]; lDiff += s_pevt.cDiff[c];
     }
-    s_pevt.cMissing += missing; s_pevt.cExtra += extra; s_pevt.cTrimmed += trimmed;
+    s_pevt.cMissing += missing; s_pevt.cExtra += extra;
     for (f = 0; f < 8; f++) s_pevt.cField[f] += field[f];
-    tagpu_logf("pcheck: T=%u objects %u (missing %u extra %u trimmed %u) particles %u differing %u "
+    tagpu_logf("pcheck: T=%u objects %u (missing %u extra %u) particles %u differing %u "
                "[seed %u count %u pos %u end %u step %u colour %u tick %u frame %u] nano %u/%u "
                "fire %u/%u flare %u/%u wake %u/%u smoke2 %u/%u smoke1 %u/%u level: ticks %u "
                "particles %u differing %u, wake dots dead over ground %u", P, sObjs, missing,
-               extra, trimmed, sSubs, sDiff, field[0], field[1], field[2], field[3], field[4],
+               extra, sSubs, sDiff, field[0], field[1], field[2], field[3], field[4],
                field[5], field[6], field[7], subs[0], diff[0], subs[1], diff[1], subs[2], diff[2],
                subs[3], diff[3], subs[4], diff[4], subs[5], diff[5], s_pevt.cTicks, lSubs,
                lDiff + s_pevt.cMissing + s_pevt.cExtra, s_pevt.shore);
@@ -12996,7 +12872,11 @@ static void pevt_check(uint32_t P)
    moved at walk F has moved by row P less row F - 1, F - 1 within the last lmax + 1 walks, so the
    least and most of that difference over the walks the level's longest puff life reaches back
    bound them all (in world pixels, one more for the hi word's carry). Answers how many records
-   meet it; `*wrote` how many were copied. */
+   meet it; `*wrote` how many were copied.
+   ONLY WHILE THE LEVEL'S LAYER TABLE STANDS: the teardown 0x471DE0 destroys every object and nulls
+   *(main+0x38D77) (0x471E97), so a level's events end there for the picture as its objects do,
+   Smoke1's included; the next level's prand_level_begin empties the list before its table is
+   made (0x4918B1). */
 static int pevt_meets(const PevtRow* q, int l, int t, int r, int b, const int* dr)
 {
     if (!q->gone) return 0;
@@ -13046,9 +12926,10 @@ unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int
     const uint32_t P = prand_gametime();
     unsigned i, n = 0, skip, w = 0;
     int dr[4];
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
     *wrote = 0;
     s_pevt.copyLmax = 0;
-    if (!pevt_live()) return 0;
+    if (!pevt_live() || !ta || !*(void* const*)(ta + PEVT_LAYERS)) return 0;
     pevt_drift_reach(P, dr);
     for (i = s_pevt.head; i < s_pevt.tail; i++) {
         const PevtRow* q = &s_pevt.row[i];
@@ -13107,10 +12988,10 @@ static void pevt_report(void)
 {
     tagpu_logf("particles: the nano spray, fire, the teleport flare, the wake, the bubbles and the "
                "smoke %s%s",
-               pevt_live() ?
-               "are drawn from emitter events (nano 0x47212B 0x47225B and the wake 0x47245A: no "
-               "object; fire 0x4742C0, the flare 0x4736E0, the bubbles 0x474760, Smoke2 0x474D50 "
-               "and Smoke1 0x475150: a proxy object in the layer; an event the GPU draws)" :
+               pevt_own() ?
+               "are drawn from emitter events, recorded at the pool's alloc 0x470EB0; the pool "
+               "holds no object (0x471C83 = 0) and the particle walk 0x4955BF walks no layer" :
+               pevt_live() ? "are drawn from emitter events, recorded at the pool's alloc 0x470EB0" :
                s_pevtOff ? s_pevtOff :
                g_config.gdi ? "keep the engine's objects (GDI)" :
                s_limState <= 0 ? "keep the engine's objects: the table is not in" :
@@ -13119,8 +13000,8 @@ static void pevt_report(void)
                "made in full and held to the events every tick" : "");
 }
 
-/* the pool's alloc 0x470EB0 returned `obj` (NULL: the pool was full, or a nano call drawn from
-   events was not given one) */
+/* the pool's alloc 0x470EB0 returned `obj` (NULL: the pool was full, or a call drawn from events
+   was not given one) */
 static void __cdecl prand_alloc(unsigned obj)
 {
     unsigned seed = prand_pending();
@@ -13225,34 +13106,31 @@ static void __cdecl prand_level_begin(void)
     if (s_prand.levels && pevt_live())
         tagpu_logf("particles: the last level's events: nano %u, fire %u, flare %u, wake %u, "
                    "smoke2 %u, smoke1 %u emitted (the longest puff life %d updates); %u trimmed by "
-                   "the layer cap (nano, wake: the engine trims the "
-                   "proxies), %u refused (a layer outside 0..9, a wake period outside 1..%d), %u "
-                   "dropped (the list full), %u emissions kept their engine object; %u wake dots "
-                   "die over ground; %u sea level changes", s_pevt.emitted[0], s_pevt.emitted[1],
-                   s_pevt.emitted[2], s_pevt.emitted[3], s_pevt.emitted[4], s_pevt.emitted[5],
-                   s_pevt.smokeLmax, s_pevt.trimmed, s_pevt.refused,
-                   TAGPU_PEVT_WAKE_PERIOD, s_pevt.dropped, s_pevt.kept, s_pevt.shore,
-                   s_pevt.resea);
+                   "the layer cap, %u not made for a full pool (%d), %u refused (a layer outside "
+                   "0..9, or arguments an event cannot hold), %u dropped (the list full); %u wake "
+                   "dots die over ground; %u sea level changes", s_pevt.emitted[0],
+                   s_pevt.emitted[1], s_pevt.emitted[2], s_pevt.emitted[3], s_pevt.emitted[4],
+                   s_pevt.emitted[5], s_pevt.smokeLmax, s_pevt.trimmed, s_pevt.full,
+                   TAGPU_LIM_SFXPOOL, s_pevt.refused, s_pevt.dropped, s_pevt.shore, s_pevt.resea);
     if (s_prand.levels && s_pevtCheck && pevt_live())
         tagpu_logf("pcheck: the last level: %u ticks; nano %u objects %u particles %u differing; "
                    "fire %u objects %u particles %u differing; flare %u objects %u particles %u "
                    "differing; wake %u objects %u particles %u differing; smoke2 %u objects %u "
                    "particles %u differing; smoke1 %u objects %u particles %u differing; %u "
                    "events with no "
-                   "object, %u objects with no event, %u trimmed in a layer at its cap (mask %03X) "
-                   "[seed %u count %u pos %u end %u step %u colour %u tick %u frame %u]",
+                   "object, %u objects with no event [seed %u count %u pos %u end %u step %u colour %u tick %u frame %u]",
                    s_pevt.cTicks, s_pevt.cObjs[0], s_pevt.cSubs[0], s_pevt.cDiff[0],
                    s_pevt.cObjs[1], s_pevt.cSubs[1], s_pevt.cDiff[1], s_pevt.cObjs[2],
                    s_pevt.cSubs[2], s_pevt.cDiff[2], s_pevt.cObjs[3], s_pevt.cSubs[3],
                    s_pevt.cDiff[3], s_pevt.cObjs[4], s_pevt.cSubs[4], s_pevt.cDiff[4],
-                   s_pevt.cObjs[5], s_pevt.cSubs[5], s_pevt.cDiff[5], s_pevt.cMissing, s_pevt.cExtra, s_pevt.cTrimmed,
-                   s_pevt.capped, s_pevt.cField[0], s_pevt.cField[1], s_pevt.cField[2],
+                   s_pevt.cObjs[5], s_pevt.cSubs[5], s_pevt.cDiff[5], s_pevt.cMissing, s_pevt.cExtra,
+                   s_pevt.cField[0], s_pevt.cField[1], s_pevt.cField[2],
                    s_pevt.cField[3], s_pevt.cField[4], s_pevt.cField[5], s_pevt.cField[6],
                    s_pevt.cField[7]);
     pevt_clear();
     s_pevt.walked = 0xFFFFFFFFu;        /* no walk of this level yet */
     s_pevt.sea = -1;                    /* the map's sea level is loaded after this (0x4918C0) */
-    s_pevt.refused = s_pevt.trimmed = s_pevt.dropped = s_pevt.kept = s_pevt.capped = 0;
+    s_pevt.refused = s_pevt.trimmed = s_pevt.full = s_pevt.dropped = 0;
     s_pevt.shore = s_pevt.resea = 0;
     s_pevt.windOn = 0;                  /* the level's first walk starts the wind's sums */
     s_pevt.smokeLmax = s_pevt.copyLmax = 0;
@@ -13260,7 +13138,7 @@ static void __cdecl prand_level_begin(void)
     memset(s_pevt.cObjs, 0, sizeof s_pevt.cObjs);
     memset(s_pevt.cSubs, 0, sizeof s_pevt.cSubs);
     memset(s_pevt.cDiff, 0, sizeof s_pevt.cDiff);
-    s_pevt.cTicks = s_pevt.cMissing = s_pevt.cExtra = s_pevt.cTrimmed = s_pevt.cSaid = 0;
+    s_pevt.cTicks = s_pevt.cMissing = s_pevt.cExtra = s_pevt.cSaid = 0;
     memset(s_pevt.cField, 0, sizeof s_pevt.cField);
     s_prand.level = (unsigned)(seed_mix(&st) >> 32);
     s_prand.tick = 0xFFFFFFFFu;
@@ -13365,45 +13243,44 @@ static int fix_particle_rand(void)
             s_pevtOff = "keep the engine's objects: the wake emitter's entry holds other bytes";
     }
     {
-    /* THE SPRITE EMITTERS' BYTES the proxies rest on, from the alloc's return to the init's call:
-       the NULL test that skips the init, the zeroing, the layer's byte at +0xC, the class's vtable
-       and the init's arguments (THE PARTICLES AS EVENTS). None is another hook's: the recorder's
-       sinks take the entries (0x471FD0, 0x472330, 0x472AB0, 0x472530), the limits the caps after
-       the init. */
-    static const unsigned char flareE[0x54] = {   /* 0x471FFA..0x47204D */
+    /* THE OTHER EMITTERS' BYTES pevt_pre reads their frames by, from the alloc's return to the
+       movsx of the layer's word after the init: the NULL test that skips the init, the zeroing,
+       the class's vtable, the init's arguments and its call, the layer's read (THE PARTICLES AS
+       EVENTS). None is another hook's: the recorder's sinks take the entries (0x471FD0, 0x472330,
+       0x472AB0, 0x472530), the limits the caps after the layer's read. */
+    static const unsigned char flareE[0x59] = {   /* 0x471FFA..0x472052 */
             0x8B, 0xD0, 0x3B, 0xD3, 0x74, 0x0B, 0xB9, 0x11, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3,
             0xAB, 0x8B, 0xC2, 0x3B, 0xC3, 0x74, 0x1D, 0x8A, 0x4C, 0x24, 0x20, 0x89, 0x58, 0x04, 0x88, 0x48,
             0x0C, 0x89, 0x58, 0x10, 0x89, 0x58, 0x14, 0x89, 0x58, 0x18, 0xC7, 0x00, 0x88, 0xD5, 0x4F, 0x00,
             0x8B, 0xF0, 0xEB, 0x02, 0x33, 0xF6, 0x3B, 0xF3, 0x0F, 0x84, 0x89, 0x00, 0x00, 0x00, 0x8B, 0x44,
             0x24, 0x1C, 0x8B, 0x4C, 0x24, 0x18, 0x8B, 0x16, 0x50, 0x8B, 0x44, 0x24, 0x18, 0x51, 0x50, 0x8B,
-            0xCE, 0xFF, 0x52, 0x18
+            0xCE, 0xFF, 0x52, 0x18, 0x0F, 0xBF, 0x4C, 0x24, 0x20
     };
-    static const unsigned char cobE[0x59] = {     /* 0x47235A..0x4723B2 */
+    static const unsigned char cobE[0x5E] = {     /* 0x47235A..0x4723B7 */
             0x8B, 0xD0, 0x3B, 0xD3, 0x74, 0x0B, 0xB9, 0x11, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3,
             0xAB, 0x8B, 0xC2, 0x3B, 0xC3, 0x74, 0x1D, 0x8A, 0x4C, 0x24, 0x24, 0x89, 0x58, 0x04, 0x88, 0x48,
             0x0C, 0x89, 0x58, 0x10, 0x89, 0x58, 0x14, 0x89, 0x58, 0x18, 0xC7, 0x00, 0xD8, 0xD5, 0x4F, 0x00,
             0x8B, 0xF0, 0xEB, 0x02, 0x33, 0xF6, 0x3B, 0xF3, 0x0F, 0x84, 0x8E, 0x00, 0x00, 0x00, 0x8B, 0x44,
             0x24, 0x20, 0x8B, 0x4C, 0x24, 0x1C, 0x8B, 0x16, 0x50, 0x8B, 0x44, 0x24, 0x1C, 0x51, 0x8B, 0x4C,
-            0x24, 0x1C, 0x50, 0x51, 0x8B, 0xCE, 0xFF, 0x52, 0x18
+            0x24, 0x1C, 0x50, 0x51, 0x8B, 0xCE, 0xFF, 0x52, 0x18, 0x0F, 0xBF, 0x54, 0x24, 0x24
     };
-    static const unsigned char pieceE[0x50] = {   /* 0x472B7F..0x472BCE */
+    static const unsigned char pieceE[0x55] = {   /* 0x472B7F..0x472BD3 */
             0x8B, 0xF0, 0x3B, 0xF7, 0x74, 0x2C, 0xB9, 0x11, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFE, 0xF3,
             0xAB, 0x33, 0xFF, 0x3B, 0xF7, 0x74, 0x1B, 0x8A, 0x54, 0x24, 0x24, 0x89, 0x7E, 0x04, 0x88, 0x56,
             0x0C, 0x89, 0x7E, 0x10, 0x89, 0x7E, 0x14, 0x89, 0x7E, 0x18, 0xC7, 0x06, 0xD8, 0xD5, 0x4F, 0x00,
             0xEB, 0x02, 0x33, 0xF6, 0x3B, 0xF7, 0x0F, 0x84, 0x88, 0x00, 0x00, 0x00, 0x8B, 0x06, 0x55, 0x8D,
-            0x4C, 0x24, 0x14, 0x6A, 0x01, 0x8D, 0x54, 0x24, 0x18, 0x51, 0x52, 0x8B, 0xCE, 0xFF, 0x50, 0x18
+            0x4C, 0x24, 0x14, 0x6A, 0x01, 0x8D, 0x54, 0x24, 0x18, 0x51, 0x52, 0x8B, 0xCE, 0xFF, 0x50, 0x18,
+            0x0F, 0xBF, 0x44, 0x24, 0x24
     };
-    static const unsigned char bubbleE[0x57] = {  /* 0x47255A..0x4725B0 */
+    static const unsigned char bubbleE[0x5C] = {  /* 0x47255A..0x4725B5 */
             0x8B, 0xD0, 0x3B, 0xD3, 0x74, 0x0B, 0xB9, 0x12, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3,
             0xAB, 0x8B, 0xC2, 0x3B, 0xC3, 0x74, 0x1D, 0x8A, 0x4C, 0x24, 0x20, 0x89, 0x58, 0x04, 0x88, 0x48,
             0x0C, 0x89, 0x58, 0x10, 0x89, 0x58, 0x14, 0x89, 0x58, 0x18, 0xC7, 0x00, 0xF8, 0xD5, 0x4F, 0x00,
             0x8B, 0xF0, 0xEB, 0x02, 0x33, 0xF6, 0x3B, 0xF3, 0x0F, 0x84, 0x8C, 0x00, 0x00, 0x00, 0x8B, 0x44,
             0x24, 0x1C, 0x8B, 0x4C, 0x24, 0x18, 0x8B, 0x16, 0x53, 0x6A, 0x01, 0x50, 0x8B, 0x44, 0x24, 0x20,
-            0x51, 0x50, 0x8B, 0xCE, 0xFF, 0x52, 0x18
+            0x51, 0x50, 0x8B, 0xCE, 0xFF, 0x52, 0x18, 0x0F, 0xBF, 0x4C, 0x24, 0x20
     };
-    /* the smoke emitters, from the alloc's return to the movsx of the layer's word after the
-       init (THE SMOKE): the NULL skip, the zeroing, the constructor, the init's arguments, its
-       call, and the frame offset the hook reads the layer at */
+    /* the smoke emitters likewise (THE SMOKE), the constructor's call among them */
     static const unsigned char smoke630[0x4B] = {   /* 0x472657..0x4726A1 */
             0x8B, 0xD0, 0x85, 0xD2, 0x74, 0x0B, 0xB9, 0x0E, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x8B, 0xFA, 0xF3,
             0xAB, 0x8B, 0xCA, 0x85, 0xC9, 0x74, 0x09, 0xE8, 0x5D, 0x26, 0x00, 0x00, 0x8B, 0xF0, 0xEB, 0x02,
@@ -13439,75 +13316,54 @@ static int fix_particle_rand(void)
             0x68, 0x96, 0x00, 0x00, 0x00, 0x6A, 0x00, 0x6A, 0x05, 0x50, 0x8B, 0xCE, 0xFF, 0x52, 0x18, 0x0F,
             0xBF, 0x4C, 0x24, 0x14,
     };
-    static const unsigned char fireInit[6] = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x18 };
-    static const unsigned char flareInit[5] = { 0x8B, 0x44, 0x24, 0x0C, 0x53 };
-    static const unsigned char wakeInit[5] = { 0x8B, 0x44, 0x24, 0x10, 0x53 };
-    static const unsigned char smoke2Init[5] = { 0x8B, 0x44, 0x24, 0x14, 0x56 };
-    static const unsigned char smoke1Init[5] = { 0x8B, 0x44, 0x24, 0x10, 0x56 };
-    static const struct {
-        unsigned va; const unsigned char* stolen; int n; void* hook; unsigned char ret;
-    } inits[5] = {
-        { 0x004742C0u, fireInit, 6, (void*)pevt_fire, 0x10 },    /* push ebx; push ebp;
-                                                                      mov ebp,[esp+0x18]      */
-        { 0x004736E0u, flareInit, 5, (void*)pevt_flare, 0x0C },  /* mov eax,[esp+0xC]; push ebx */
-        { 0x00474760u, wakeInit, 5, (void*)pevt_wake, 0x14 },    /* mov eax,[esp+0x10]; push ebx */
-        { 0x00474D50u, smoke2Init, 5, (void*)pevt_smoke2, 0x18 }, /* mov eax,[esp+0x14]; push esi */
-        { 0x00475150u, smoke1Init, 5, (void*)pevt_smoke1, 0x10 }, /* mov eax,[esp+0x10]; push esi */
-    };
         lim_same_run(0x00471FFAu, sizeof flareE, flareE,
-                     "particles: the flare emitter's call of its init, read by the proxy");
+                     "particles: the flare emitter's frame, read by the events");
         lim_same_run(0x0047235Au, sizeof cobE, cobE,
-                     "particles: the COB fire emitter's call of its init, read by the proxy");
+                     "particles: the COB fire emitter's frame, read by the events");
         lim_same_run(0x00472B7Fu, sizeof pieceE, pieceE,
-                     "particles: the pieces' fire emitter's call of its init, read by the proxy");
+                     "particles: the pieces' fire emitter's frame, read by the events");
         lim_same_run(0x0047255Au, sizeof bubbleE, bubbleE,
-                     "particles: the bubbles emitter's call of its init, read by the proxy");
+                     "particles: the bubbles emitter's frame, read by the events");
         lim_same_run(0x00472657u, sizeof smoke630, smoke630,
-                     "particles: the explosion and corpse smoke's init and layer, read by the proxy");
+                     "particles: the explosion and corpse smoke's frame, read by the events");
         lim_same_run(0x00472837u, sizeof smoke810, smoke810,
-                     "particles: the grey smoke's init and layer, read by the proxy");
+                     "particles: the grey smoke's frame, read by the events");
         lim_same_run(0x00472917u, sizeof smoke8F0, smoke8F0,
-                     "particles: the black smoke's init and layer, read by the proxy");
+                     "particles: the black smoke's frame, read by the events");
         lim_same_run(0x004729F7u, sizeof smoke9D0, smoke9D0,
-                     "particles: the shot trail's init and layer, read by the proxy");
+                     "particles: the shot trail's frame, read by the events");
         lim_same_run(0x00472C77u, sizeof smokeC50, smokeC50,
-                     "particles: the endless smoke's init and layer, read by the proxy");
-        pevt_proxy_vtable(s_proxyFire, PEVT_VT_FIRE);
-        pevt_proxy_vtable(s_proxyFlare, PEVT_VT_FLARE);
-        pevt_proxy_vtable(s_proxyWake, PEVT_VT_WAKE);
-        pevt_proxy_vtable(s_proxySmoke2, PEVT_VT_SMOKE2);
-        pevt_proxy_vtable(s_proxySmoke1, PEVT_VT_SMOKE1);
-        /* the init at its entry: the event and the proxy first (pevt_fire, pevt_flare, pevt_wake);
-           1 returns past the init with its own `ret`, 0 runs it from its stolen bytes */
-        for (i = 0; i < 5; i++) {
-            unsigned char* s = fix_code(40);
-            if (!s) {
-                lim_no_stub();
-                return FIX_TABLE;
-            }
-            p = s;
-            *p++ = 0x60;                                        /* pushad                   */
-            *p++ = 0x54;                                        /* push esp: the registers  */
-            *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)inits[i].hook); p += 4;
-            *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;              /* add esp,4                */
-            *p++ = 0x85; *p++ = 0xC0;                           /* test eax,eax             */
-            *p++ = 0x61;                                        /* popad: the flags kept    */
-            *p++ = 0x75; *p++ = (unsigned char)(inits[i].n + 5); /* jnz proxy               */
-            memcpy(p, inits[i].stolen, (size_t)inits[i].n); p += inits[i].n;
-            *p++ = 0xE9; tagpu_detour_rel(p, inits[i].va + (unsigned)inits[i].n); p += 4;
-            *p++ = 0xC2; *p++ = inits[i].ret; *p++ = 0x00;      /* proxy: ret N             */
-            lim_branch(inits[i].va, inits[i].n, inits[i].stolen, 0xE9, (unsigned int)(size_t)s,
-                       "particles: a proxy class's init records its event");
-        }
+                     "particles: the endless smoke's frame, read by the events");
     }
     if (s_pevtOff) s_pevtOn = 0;
     s_pevtCheck = (unsigned char)(s_pevtOn && tagpu_sim_lever("tagpu_particlecheck.on"));
-    /* the alloc: first whether the pool is asked at all (pevt_pre: a nano or wake call drawn from
-       events is not, and answers NULL), then the engine's own body on the engine's arguments, then
-       the count. Its registers on return are the body's (popad); on the skip path the entry's with
-       eax 0, which differs from stock's full pool in edx alone (stock leaves [ecx+0x20] there):
-       the skip path serves only the two nano emitters and the wake, and each overwrites edx at
-       once with the answer (0x47212B / 0x47225B / 0x47245A `mov edx,eax`) */
+    /* THE POOL'S CAPACITY, the operand of the C runtime initializer's `push 0x3E8` (0x471C83), which
+       the constructor 0x470A90 allocates the pool by: 0 when the events hold every particle, so the
+       pool allocates nothing (engine/weapons.md, *A capacity of 0 is safe and allocates nothing*);
+       otherwise the raised build's TAGPU_LIM_SFXPOOL and the stock build's own 1 000. DllMain runs
+       before that initializer (0x471C80, _initterm at 0x4E45F7), and the renderer, the walk's hook
+       and the lever are all final here. In the table, so the pool is empty exactly when the alloc's
+       stub and the frames' bytes are in. */
+    {
+        const unsigned stock = 1000u, none = 0u;
+#ifndef TAGPU_LIMITS_STOCK
+        const unsigned ours = pevt_pool_none() ? none : (unsigned)TAGPU_LIM_SFXPOOL;
+        lim_add(0x00471C83u, 4, (const unsigned char*)&stock, (const unsigned char*)&ours,
+                "particle pool");
+#else
+        if (pevt_pool_none())
+            lim_add(0x00471C83u, 4, (const unsigned char*)&stock, (const unsigned char*)&none,
+                    "particle pool");
+#endif
+    }
+    /* the alloc: first whether the pool is asked at all (pevt_pre: a call drawn from events is not,
+       and answers NULL), then the engine's own body on the engine's arguments, then the count. Its
+       registers on return are the body's (popad); on the skip path the entry's with eax 0, which
+       differs from stock's full pool in edx alone (stock leaves [ecx+0x20] there): every emitter
+       the skip path serves overwrites edx at once with the answer (`mov edx,eax` at 0x47212B,
+       0x47225B, 0x47245A, 0x47255A, 0x471FFA, 0x47235A and the five smoke returns) but the pieces'
+       fire, which takes it into esi (0x472B7F) and on NULL reaches its epilogue 0x472C43 without
+       reading edx */
     p = a;
     *p++ = 0x60;                                                /* pushad                   */
     *p++ = 0x54;                                                /* push esp: the registers  */
@@ -17048,12 +16904,11 @@ static void lim_sites(void)
        object and appends anyway, so a layer holds TAGPU_LIM_SFX + 1. Nineteen compares are
        `3D imm32` (operand at +1), one is `81 F9 imm32` against ecx (operand at +2): the
        twenty are every 0x190 compare in the emitters. The objects come from ONE pool,
-       0x51E610, built by the C runtime's static initializer at 0x471C80 (`push 0x4C; push
-       0x3E8; ... call 0x470A90`), which allocates its whole capacity once; its alloc 0x470EB0
-       returns 0 when the pool is empty and every emitter then skips the particle. DllMain
-       runs before that initializer, so the pool is built at the raised capacity. Visual
-       only: the emitters draw the particles' own keyed rule (*The particles' own random rule*;
-       effects.md 7.7), never a CRT stream or the simulation's generator. */
+       0x51E610, built by the C runtime's static initializer at 0x471C80, whose capacity row
+       0x471C83 is the events' (fix_particle_rand: TAGPU_LIM_SFXPOOL, or 0 when the events hold
+       every particle). Visual only: the emitters draw the particles' own keyed rule (*The
+       particles' own random rule*; effects.md 7.7), never a CRT stream or the simulation's
+       generator. */
     {
         static const unsigned int cmpEax[19] = {
             0x00471183, 0x004713D8, 0x00471508, 0x0047163D, 0x00471782, 0x004718B1, 0x00471AD7,
@@ -17063,7 +16918,6 @@ static void lim_sites(void)
         for (k = 0; k < 19; k++)
             lim_dword(cmpEax[k] + 1, 400, TAGPU_LIM_SFX, "particle layer cap");
         lim_dword(0x00472BF2 + 2, 400, TAGPU_LIM_SFX, "particle layer cap");
-        lim_dword(0x00471C83, 1000, TAGPU_LIM_SFXPOOL, "particle pool");
     }
 
     /* ---- the composite scratch frame. The composite draw context *(main+0x1437B), made once a
@@ -17772,10 +17626,12 @@ static int fix_effect_pools(void)
 /* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
    steps, after the rebuild's kills and creates: what was in flight before the seek and what the
    creates' Create scripts made both go, and nothing that names a unit outlives the kills.
-   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
-     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
-     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
-     is kept (its second loop, which frees it, is not run).
+   - The particles: the event list emptied (pevt_clear), and each of the 10 layers of
+     *(main+0x38D77), 16 bytes each, its vector from +4 to +8: every object destroyed by its own
+     [vtable+0](1) and removed from the front, as the teardown 0x471DE0's first loop does
+     (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage is kept (its second loop, which frees
+     it, is not run). A Vulkan launch without the oracle holds no object (the pool is empty: *The
+     particles as events*), so there the layers are empty and the list is all there is.
    - The explosions, the debris records and the flying-piece slots, emptied as a level load empties
      them (fx_pools_empty), after the particles: the pools then hold what a fresh process playing
      the same level would hold at its start, whatever this process played before the seek.

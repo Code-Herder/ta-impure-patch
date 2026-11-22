@@ -11,12 +11,11 @@
 
    ---- WHAT THIS PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
-   1. THREE PIPELINES, TWO PROGRAMS. The gather fills four buckets:
+   1. THREE PIPELINES, TWO PROGRAMS. The gather fills three buckets:
 
-        B_UNDER    TRIANGLES, blend ONE / ONE_MINUS_SRC_ALPHA
-        B_LINES    line records, the same blend, the LVS/LFS program
+        B_LINES    line records, blend ONE / ONE_MINUS_SRC_ALPHA, the LVS/LFS program
         B_FLASH    TRIANGLES, blend ONE / ONE -- pure additive light
-        B_SPRITES  TRIANGLES, back to the first blend
+        B_SPRITES  TRIANGLES, back to the first blend, the VS/FS program
 
       Program, vertex rate and blend are all baked into a VkPipeline, so that
       is three objects off one layout: `s_pipeTri`, `s_pipeLine`,
@@ -223,7 +222,7 @@ static int            s_rjTried;           /* the device refused; do not ask aga
 static unsigned       s_rjEpoch;           /* ...in this restorer epoch            */
 static VkImageView    s_rjSrcView;
 
-/* what `record` was left to draw: the four buckets, in bucket order, and the particle events --
+/* what `record` was left to draw: the three buckets, in bucket order, and the particle events --
    those of layers 0..6 first in the slot's event buffer, then those of 7..9 */
 static int s_n[TAGPU_FXB_N];
 static int s_nEvtUnder, s_nEvtOver;
@@ -1352,7 +1351,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
 
     vbytes = (VkDeviceSize)total * VST * sizeof(float);
     if (!slot_verts(d, s, vbytes)) goto refuse;
-    /* the four buckets, contiguous and in bucket order -- which is also the
+    /* the three buckets, contiguous and in bucket order -- which is also the
        order `record` draws them in, walking `first` across them */
     off = 0;
     for (b = 0; b < TAGPU_FXB_N; b++) {
@@ -1499,9 +1498,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     ub.i[2] = fogW; ub.i[3] = fogH;                    /* uFogSize   ivec2 @8  */
     ub.i[4] = h.fog;                                   /* uFog         int @16 */
     /* uScafOn @20 IS ALWAYS 0: the scaffold test is not run by this pass (see
-       the file header). Running it would need the B_UNDER draw's own block --
-       a second offset in this buffer and a second descriptor -- because the
-       test applies to that one draw of the frame only. */
+       the file header). */
     ub.i[5] = 0;                                       /* uScafOn      int @20 */
     ub.f[8]  = h.scafP[0]; ub.f[9]  = h.scafP[1];      /* uScafP      vec4 @32 */
     ub.f[10] = h.scafP[2]; ub.f[11] = h.scafP[3];
@@ -1625,11 +1622,16 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
                             &s_slot[slot].dset, 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s_slot[slot].vbuf, &off);
 
-    /* THE FOUR BUCKETS IN BUCKET ORDER, each with the pipeline its
-       fixed-function state lives in. Two of them share one: the particle
-       layers under everything and the sprites over it differ only in WHERE
-       they are in this sequence, which is what makes the engine's own layering
-       survive (smoke under weapon sprites, explosions over their flash). */
+    /* THE PARTICLE EVENTS OF LAYERS 0..6 FIRST, where the engine draws those layers, before its
+       projectile pass; then THE THREE BUCKETS IN BUCKET ORDER, each with the pipeline its
+       fixed-function state lives in; then the events of layers 7..9 after the sprites. Where
+       they are in this sequence is what makes the engine's own layering survive (smoke under
+       weapon sprites, explosions over their flash). Sixty vertices an event, ten particles of
+       two triangles. */
+    if (s_nEvtUnder) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
+        vkCmdDraw(cb, 60u * (uint32_t)s_nEvtUnder, 1, 0, 0);
+    }
     for (b = 0; b < TAGPU_FXB_N; b++) {
         VkPipeline pipe;
         if (s_n[b]) {
@@ -1641,13 +1643,6 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
             if (b == TAGPU_FXB_LINES) vkCmdDraw(cb, 6, (uint32_t)s_n[b], 0, first);
             else                      vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
             first += (uint32_t)s_n[b];
-        }
-        /* THE PARTICLE EVENTS where their layers' particles stand in the engine's frame: 0..6
-           right after the under bucket, 7..9 after the sprites. Sixty vertices an event, ten
-           particles of two triangles. */
-        if (b == TAGPU_FXB_UNDER && s_nEvtUnder) {
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
-            vkCmdDraw(cb, 60u * (uint32_t)s_nEvtUnder, 1, 0, 0);
         }
         if (b == TAGPU_FXB_SPRITES && s_nEvtOver) {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);

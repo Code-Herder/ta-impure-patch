@@ -371,29 +371,6 @@
 #define OFF_SHADOWSEQ      0x1480F     /* the projectile ground-shadow blob     */
 #define OFF_SPRSEQ0        0x147BB     /* 5 sprite-weapon sequences (rt 4)      */
 #define OFF_FLARESEQ       0x147F3     /* rt 5                                  */
-/* the ten particle layers: {u8 flag, void** begin @4, end @8, cap @0xC} x 10,
-   allocated per game by 0x471D90 and freed AND NULLED by 0x471DE0 in the
-   teardown cascade. Every emitter caps a layer at TAGPU_LIM_SFX + 1 objects
-   (tagpu_limits.h): it takes the size, `cmp eax,0x190 / jbe append` (0x472071,
-   0x47219F, ... twenty sites, the operand raised by the limits), and past the
-   cap destroys the FRONT object, shifts the vector down by one and appends
-   anyway — so cap + 1 is the steady state and the cap is not the bound. */
-#define OFF_LAYERS         0x38D77
-#define LAYER_STRIDE       0x10
-#define LAYER_BEGIN        0x04
-#define LAYER_END          0x08
-#define PO_END             0x04        /* the object: end tick                 */
-#define PO_TICK            0x08
-#define PO_LAYER           0x0C        /* u8, the layer it was emitted into    */
-#define PO_SUB0            0x10        /* its sub-particle vector {begin,end}  */
-#define PO_SUB1            0x14
-#define VT_SMOKE1          0x004FD638u /* grey smoke, NOT LOS-gated            */
-#define VT_SMOKE2          0x004FD618u /* dark smoke                           */
-#define VT_FIRE            0x004FD5D8u
-#define VT_FLARE           0x004FD588u
-#define VT_WAKE            0x004FD5F8u /* wake / bubbles: a 2x2 dot            */
-#define VT_NANO            0x004FD5B8u /* nanolathe spray: a 2x2 dot           */
-#define VT_BASE            0x004FD5A8u /* destroyed: draws nothing             */
 /* TAProgram (the graphics globals' owner, TA_GFX_PP) */
 #define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
 #define PROG_GREY          0x0CC       /* u8[256] the grey remap: 0x4BFE10      */

@@ -8,7 +8,7 @@ THE ORACLE (`tagpu_particlecheck.on`, tagpu_patches.c THE PARTICLES AS EVENTS; r
 effects.md §7.8): on a Vulkan launch the engine's nano, fire, flare, wake and smoke objects are
 made in full beside their events and held to them after every particle walk. The DLL's install line
 says `tagpu_particlecheck.on: the engine's objects are made in full`, and each checked tick logs
-`pcheck: T=N objects O (missing M extra E trimmed R) particles P differing D [...] nano a/b fire c/d
+`pcheck: T=N objects O (missing M extra E) particles P differing D [...] nano a/b fire c/d
 flare e/f wake g/h smoke2 i/j smoke1 k/l level: ..., wake dots dead over ground w`, a/b the
 particles compared and differing in each class, w the level's wake dots whose death walk is the
 ground's, not their end tick's. A fixture step runs this before the level ends.
@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import talog  # noqa: E402
 
-TICK = re.compile(r"pcheck: T=(\d+) objects \d+ \(missing (\d+) extra (\d+) trimmed \d+\) particles \d+ "
+TICK = re.compile(r"pcheck: T=(\d+) objects \d+ \(missing (\d+) extra (\d+)\) particles \d+ "
                   r"differing (\d+) .*?nano (\d+)/(\d+) fire (\d+)/(\d+) flare (\d+)/(\d+) "
                   r"wake (\d+)/(\d+) smoke2 (\d+)/(\d+) smoke1 (\d+)/(\d+)")
 GROUND = re.compile(r"wake dots dead over ground (\d+)")

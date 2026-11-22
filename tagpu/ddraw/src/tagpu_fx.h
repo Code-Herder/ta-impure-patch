@@ -139,13 +139,6 @@ const TAGPU_FXMODEL* tagpu_fx_model(int i);
    uses its own program/VAO; leaves program/VAO/texture bindings dirty */
 void tagpu_fx_render(const TAGPU_FXVIEW* v);
 
-/* emission API for the particle pass (tagpu_sfx.c): a GAF frame the PACKET
-   resolved, or a DrawBar 2x2 dot, into the shared buckets at an explicit
-   depth key. `g` is an opaque handle: only tagpu_gaf.c ever reads it. */
-int  tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
-                         float wx, float wz, float enc, int under);
-int  tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under);
-void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing */
 /* this frame's particle events, the packet's table (tagpu_sfx.c): drawn by the Vulkan pass at
    the packet's GameTime `tick`; `n` 0 draws none. `frames` the packet's sprite frames, sequence s
    at row s * TAGPU_PEVT_NFRAME (`nframe[s]` of them); `wind` the wind's prefix-sum rows from tick
@@ -207,28 +200,22 @@ int  tagpu_fog_at(const TAGPU_FOGSRC* f, int wx, int wzp);
 /* VERTICES PER BUCKET PER FRAME -- the gather's own caps, shared so that the
    Vulkan pass can re-check a handed-over count against the very number that
    produced it rather than against a second copy of it. SIZED FOR THE TABLES
-   THEY DRAW as those usually fill: a particle is one quad, into UNDER for the
-   layers the engine draws before its projectiles (0..6) and into SPRITES for
-   the rest (7..9), so each of the two holds the whole particle table; SPRITES
-   holds a projectile's two quads (its shadow blob and its own frame) and an
-   explosion's one besides. Lines (in records) and flashes keep
-   TAGPU_FX_MAXV. IT IS NOT A BOUND BY CONSTRUCTION: a composite GAF frame
+   THEY DRAW as those usually fill: SPRITES holds a projectile's two quads
+   (its shadow blob and its own frame) and an explosion's one. Lines (in
+   records) and flashes keep TAGPU_FX_MAXV. IT IS NOT A BOUND BY CONSTRUCTION: a composite GAF frame
    makes one quad per subframe and a lightning bolt up to 1 022 lines. A quad
    or line that does not
    fit its bucket is dropped and counted (`fx: DROPPED ... bucket-full` in the
    log), never written past it. */
 #define TAGPU_FX_MAXV         65536
-#define TAGPU_FX_MAXV_UNDER   (6 * (int)TAGPU_PK_MAX_PART)
-#define TAGPU_FX_MAXV_SPRITES (6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL + (int)TAGPU_PK_MAX_PART))
+#define TAGPU_FX_MAXV_SPRITES (6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL))
 
-/* THE FOUR BUCKETS, IN DRAW ORDER, which is the order they are concatenated
-   into one vertex buffer in. They are not four draws of one
+/* THE THREE BUCKETS, IN DRAW ORDER, which is the order they are concatenated
+   into one vertex buffer in. They are not three draws of one
    pipeline: the lines are instanced bands with a program of their own
    (tagpu_fx.c LVS/LFS) and the flashes blend additively. */
-enum { TAGPU_FXB_UNDER = 0, TAGPU_FXB_LINES = 1,
-       TAGPU_FXB_FLASH = 2, TAGPU_FXB_SPRITES = 3, TAGPU_FXB_N = 4 };
-#define TAGPU_FX_MAXV_OF(b) ((b) == TAGPU_FXB_UNDER   ? TAGPU_FX_MAXV_UNDER   : \
-                             (b) == TAGPU_FXB_SPRITES ? TAGPU_FX_MAXV_SPRITES : TAGPU_FX_MAXV)
+enum { TAGPU_FXB_LINES = 0, TAGPU_FXB_FLASH = 1, TAGPU_FXB_SPRITES = 2, TAGPU_FXB_N = 3 };
+#define TAGPU_FX_MAXV_OF(b) ((b) == TAGPU_FXB_SPRITES ? TAGPU_FX_MAXV_SPRITES : TAGPU_FX_MAXV)
 
 typedef struct TAGPU_FXHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_fx_handover` refuses any other --

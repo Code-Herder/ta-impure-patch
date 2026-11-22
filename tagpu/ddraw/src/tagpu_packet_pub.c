@@ -2138,9 +2138,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 static TAGPU_PK_PROJ   s_pScratch[TAGPU_PK_MAX_PROJ];
 static TAGPU_PK_EXPL   s_eScratch[TAGPU_PK_MAX_EXPL];
 static TAGPU_PK_DEBRIS s_dScratch[TAGPU_PK_MAX_DEBRIS];
-static TAGPU_PK_PART   s_partScratch[TAGPU_PK_MAX_PART];
-static unsigned s_nProj, s_nExpl, s_nDebris, s_nPart;
-static unsigned s_partN[TAGPU_PK_NLAYER], s_partObj[TAGPU_PK_NLAYER];
+static unsigned s_nProj, s_nExpl, s_nDebris;
 /* THE WORLD RECT THE MODELS' CULL KEEPS: the tables' reach (table_reach) of the
    packet being filled -- every world point a frame drawn from it can gather
    in, x across and `y - altitude / 2` down, the space the effects pass
@@ -2148,11 +2146,10 @@ static unsigned s_partN[TAGPU_PK_NLAYER], s_partObj[TAGPU_PK_NLAYER];
 typedef struct { int l, r, t, b; } FXREACH;
 static unsigned s_fxTick, s_fxGen, s_fxLevel, s_fxWant;
 static FXREACH  s_fxReach;
-static int      s_fxHave, s_fxPartTrunc;
-static volatile unsigned s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartMax, s_cLayerBad, s_cSubBad;
-#define PART_SUBCAP 4096u   /* sub-particles per object: a containment filter */
-static volatile unsigned s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart;
-/* the nano events (fill_pevt): last copied, most copied, slots too small for all that met it */
+static int      s_fxHave;
+static volatile unsigned s_cFxScan, s_cFxReuse;
+static volatile unsigned s_cLastProj, s_cLastExpl, s_cLastDebris;
+/* the particle events (fill_pevt): last copied, most copied, slots too small for all that met it */
 static volatile unsigned s_cLastPevt, s_cPevtMax, s_cPevtTrunc;
 
 /* the LHT lighten table, latched exactly like the shade table */
@@ -2168,7 +2165,6 @@ typedef char pk_fxvert_size [(sizeof(TAGPU_PK_FXVERT)  == 12) ? 1 : -1];
 typedef char pk_fxface_size [(sizeof(TAGPU_PK_FXFACE)  == 12) ? 1 : -1];
 typedef char pk_fxshape_size[(sizeof(TAGPU_PK_FXSHAPE) ==  8) ? 1 : -1];
 typedef char pk_fxmodel_size[(sizeof(TAGPU_PK_FXMODEL) ==  8) ? 1 : -1];
-typedef char pk_part_size  [(sizeof(TAGPU_PK_PART)   == 16) ? 1 : -1];
 
 static void lht_snapshot(void)
 {
@@ -2184,159 +2180,6 @@ static void lht_snapshot(void)
        and a copy of that size reads what the blit reads and nothing more. */
     tagpu_pk_copy(s_lht, t, sizeof s_lht);
     s_lhtPtr = t; s_lhtOk = 1; s_cLhtCopies++;
-}
-
-/* the particle class, by vtable — the engine's own dispatch, as a row number */
-static int part_kind(unsigned vt)
-{
-    switch (vt) {
-    case VT_SMOKE1: return (int)TAGPU_PK_PK_SMOKE1;
-    case VT_SMOKE2: return (int)TAGPU_PK_PK_SMOKE2;
-    case VT_FIRE:   return (int)TAGPU_PK_PK_FIRE;
-    case VT_FLARE:  return (int)TAGPU_PK_PK_FLARE;
-    case VT_WAKE:   return (int)TAGPU_PK_PK_WAKE;
-    case VT_NANO:   return (int)TAGPU_PK_PK_NANO;
-    default:        return -1;                 /* VT_BASE and anything else */
-    }
-}
-
-/* each class's sub-particle record, from the engine's own draw leaves:
-   stride, the 16.16 triple's offset, the frame index's (sprites) or the
-   colour byte's (dots), and whether the engine LOS-gates the class */
-static const struct { short stride, pos, frame, col; char sprite; }
-PART_FMT[TAGPU_PK_NPARTKIND] = {
-    { 0x20, 4, 0x14,    0, 1 },   /* smoke 1 */
-    { 0x20, 4, 0x14,    0, 1 },   /* smoke 2 */
-    { 0x3C, 4, 0x2C,    0, 1 },   /* fire    */
-    { 0x34, 4, 0x2C,    0, 1 },   /* flare   */
-    { 0x44, 4,    0, 0x30, 0 },   /* wake    */
-    { 0x30, 0,    0, 0x28, 0 }    /* nano    */
-};
-
-/* One layer's object vector, [*b, *b + n): 0 when the layer is empty, and
-   `*bad` when it is larger than the engine's own rule allows. */
-static unsigned layer_objs(const char* layers, int L, const char* const** b, int* bad)
-{
-    const char* lay = layers + (size_t)L * LAYER_STRIDE;
-    const char* const* e = *(const char* const* const*)(lay + LAYER_END);
-    unsigned n;
-    *b = *(const char* const* const*)(lay + LAYER_BEGIN);
-    *bad = 0;
-    if (!ptr_ok(*b) || !ptr_ok(e) || e <= *b) return 0;
-    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is the cap
-       plus ONE. Every emitter reads the layer's size and `cmp eax,cap / jbe
-       append` (0x472071 and nineteen more across 0x471183..0x472CD9; 0x472BF2
-       compares ecx), the cap being TAGPU_LIM_SFX, which the limits write into
-       all twenty: at the cap or fewer it appends, and past that it destroys the
-       FRONT object, shifts the vector down by one and appends anyway. So a
-       layer at cap + 1 is the engine's steady state, and a walk that stopped at
-       the cap would drop the whole layer every time it filled — measured
-       2026-09-12 at stock's 400: that bound refused 86 layers in one fx-mix
-       run. The pair itself is sound because this thread is the one that runs
-       those emitters; a count past cap + 1 is a fact worth counting, not a walk
-       worth attempting. */
-    n = (unsigned)(e - *b);
-    if (n > (unsigned)TAGPU_LIM_SFX + 1u) { *bad = 1; return 0; }
-    return n;
-}
-
-/* One object's drawable sub-particles: their count, 0 when the object draws
-   nothing, with its class and vector. `*bad` when the count fails the filter. */
-static unsigned obj_subs(const char* o, int* kind, const char** sb, int* bad)
-{
-    const char* se;
-    unsigned ns;
-    *bad = 0;
-    if (!ptr_ok(o)) return 0;
-    *kind = part_kind(*(const unsigned*)o);
-    if (*kind < 0) return 0;                   /* the base class draws nothing */
-    *sb = *(const char* const*)(o + PO_SUB0);
-    se = *(const char* const*)(o + PO_SUB1);
-    if (!ptr_ok(*sb) || !ptr_ok(se) || se <= *sb) return 0;
-    ns = (unsigned)(se - *sb) / (unsigned)PART_FMT[*kind].stride;
-    /* A SANITY FILTER ON A VALUE, not the safety argument — the argument is
-       that this thread is the one that grows these vectors. What it buys is
-       containment: without it one object with a wild `end` fills the whole
-       table and truncates every layer after it, and with it that object is
-       skipped and the frame is otherwise complete. */
-    if (ns > PART_SUBCAP) { *bad = 1; return 0; }
-    return ns;
-}
-
-/* Every layer's drawable sub-particles, counted by the walk's own rules. */
-static unsigned count_subs(const char* layers)
-{
-    unsigned total = 0, n, i;
-    const char* const* b;
-    const char* sb;
-    int L, k, bad;
-    for (L = 0; L < (int)TAGPU_PK_NLAYER; L++) {
-        n = layer_objs(layers, L, &b, &bad);
-        for (i = 0; i < n; i++) total += obj_subs(b[i], &k, &sb, &bad);
-    }
-    return total;
-}
-
-/* THINNED, NOT TRUNCATED. The layers are walked bottom to top, so a table
-   that simply filled would lose the TOP layers whole — the trails and smoke
-   the engine draws last, layer 9 among them. When the frame holds more than
-   the table, every layer keeps the same share instead: the sub-particles are
-   counted first, and a 16.16 accumulator keeps `s_partKeep` of each run,
-   which by construction totals at most TAGPU_PK_MAX_PART. The table's own
-   check stays as the bound; the share is only what makes it rare. */
-static unsigned s_partKeep, s_partAcc;
-static volatile unsigned s_cPartThin;
-
-/* one layer's objects into the particle table */
-static void gather_layer(const char* layers, int L)
-{
-    const char* const* b;
-    unsigned n, i;
-    int bad;
-    n = layer_objs(layers, L, &b, &bad);
-    if (bad) { s_cLayerBad++; return; }
-    s_partObj[L] = n;
-    for (i = 0; i < n; i++) {
-        int k, sub;
-        unsigned ns, j;
-        const char* sb;
-        ns = obj_subs(b[i], &k, &sb, &bad);
-        if (bad) s_cSubBad++;
-        if (!ns) continue;
-        sub = PART_FMT[k].sprite;
-        for (j = 0; j < ns; j++) {
-            const char* q = sb + (size_t)j * (size_t)PART_FMT[k].stride;
-            TAGPU_PK_PART* pe;
-            int X, A, Y;
-            if (s_partKeep < 0x10000u) {
-                s_partAcc += s_partKeep;
-                if (s_partAcc < 0x10000u) continue;
-                s_partAcc -= 0x10000u;
-            }
-            if (s_nPart >= TAGPU_PK_MAX_PART) { s_fxPartTrunc = 1; return; }
-            X = *(const int*)(q + PART_FMT[k].pos);
-            A = *(const int*)(q + PART_FMT[k].pos + 4);
-            Y = *(const int*)(q + PART_FMT[k].pos + 8);
-            pe = &s_partScratch[s_nPart];
-            pe->x  = X >> 16;
-            pe->zp = (Y >> 16) - ((A >> 16) >> 1);
-            pe->layer = (unsigned char)L;
-            pe->kind  = (unsigned char)k;
-            pe->col   = 0;
-            pe->pad   = 0;
-            if (sub) {
-                /* the sequence the sub-particle names, indexed by its own
-                   frame number: resolved HERE, where the object is live */
-                pe->frame = (unsigned)(size_t)tagpu_gaf_seq_frame(
-                    *(const char* const*)q, *(const int*)(q + PART_FMT[k].frame));
-                if (!pe->frame) continue;          /* nothing to draw: drop it */
-            } else {
-                pe->frame = 0;
-                pe->col = *(const unsigned char*)(q + PART_FMT[k].col);
-            }
-            s_nPart++; s_partN[L]++;
-        }
-    }
 }
 
 /* THE TEAM COLOUR OF A DEBRIS PIECE, as 0x4211D0 takes it: the piece's unit
@@ -2883,9 +2726,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
 static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREACH* rc)
 {
     FXREACH grown;
-    const char* layers;
     unsigned want = (tagpu_fxown_want_fx() ? 1u : 0u) | (tagpu_fxown_want_sfx() ? 2u : 0u);
-    int L;
     /* THE KEY IS (LEVEL, TICK), not the tick alone. A new level restarts
        GameTime, and some of the GAF frames in the tables belong to the level
        that produced them (an explosion's sprite and flash, below): a cache
@@ -2906,37 +2747,18 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREA
         { if (!s_fillAgain) s_cFxReuse++; return; }
     grown.l = rc->l - FX_REACH_SLACK; grown.r = rc->r + FX_REACH_SLACK;
     grown.t = rc->t - FX_REACH_SLACK; grown.b = rc->b + FX_REACH_SLACK;
-    s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
+    s_nProj = s_nExpl = s_nDebris = 0;
     fx_models_reset();
-    s_fxPartTrunc = 0;
-    tagpu_pk_fill(s_partN, 0, (unsigned)sizeof s_partN);
-    tagpu_pk_fill(s_partObj, 0, (unsigned)sizeof s_partObj);
-    if (want & 2u) {
-        /* the layer TABLE is per game (0x471D90 allocates it, 0x471DE0 frees
-           and NULLS it in the teardown), which is the refusal after a level
-           ends; the vectors inside it are this thread's own */
-        layers = *(const char* const*)(ta + OFF_LAYERS);
-        if (ptr_ok(layers)) {
-            unsigned total = count_subs(layers);
-            s_partKeep = total > TAGPU_PK_MAX_PART
-                ? (unsigned)(((unsigned long long)TAGPU_PK_MAX_PART << 16) / total) : 0x10000u;
-            s_partAcc = 0;
-            if (s_partKeep < 0x10000u) s_cPartThin++;
-            for (L = 0; L < (int)TAGPU_PK_NLAYER; L++) gather_layer(layers, L);
-        }
-    }
     if (want & 1u) {
         const unsigned char* coltab = (const unsigned char*)(ta + OFF_GUICOL);
         gather_effects(ta, (int)tick, coltab, &grown);
     }
-    if (s_fxPartTrunc) s_cPartTrunc++;
-    if (s_nPart > s_cPartMax) s_cPartMax = s_nPart;
     s_fxTick = tick; s_fxLevel = level; s_fxWant = want; s_fxReach = grown;
     s_fxHave = 1; s_fxGen++;
     s_cFxScan++;
 }
 
-/* THE NANO SPRAY'S EVENTS (tagpu_patches.c, *The nano spray as events*): the live ones whose
+/* THE PARTICLES' EVENTS (tagpu_patches.c, *The particles as events*): the live ones whose
    particles can reach the packet's reach, grown as the models' cull grows it, written straight
    into the slot. The list is this thread's, read here between two of its walks. A slot that holds
    fewer than met the reach takes the newest ones, says so in its truncation bit and the
@@ -2997,7 +2819,7 @@ static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
     return PKT_ALIGN4(at + met * (unsigned)sizeof(TAGPU_PEVT)) + wneed * 16u;
 }
 
-/* the four tables into the record, after the world's; the models' five go
+/* the three tables and the particle events into the record, after the world's; the models' five go
    last of the fill (fill_fxmodels) */
 static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
@@ -3014,7 +2836,6 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        a frame rather than once a projectile */
     p->shadow_frame = (unsigned)(size_t)tagpu_gaf_seq_frame(
         *(const char* const*)(ta + OFF_SHADOWSEQ), 0);
-    if (s_fxPartTrunc) p->truncated |= TAGPU_PK_TRUNC_PART;
     e = append_table(p, cursor, s_pScratch, s_nProj, (unsigned)sizeof(TAGPU_PK_PROJ),
                      &p->off_proj, &p->n_proj, TAGPU_PK_TRUNC_PROJ);
     if (e > need) need = e;
@@ -3024,16 +2845,6 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     e = append_table(p, cursor, s_dScratch, s_nDebris, (unsigned)sizeof(TAGPU_PK_DEBRIS),
                      &p->off_debris, &p->n_debris, TAGPU_PK_TRUNC_DEBRIS);
     if (e > need) need = e;
-    e = append_table(p, cursor, s_partScratch, s_nPart, (unsigned)sizeof(TAGPU_PK_PART),
-                     &p->off_part, &p->n_part, TAGPU_PK_TRUNC_PART);
-    if (e > need) need = e;
-    /* the per-layer counts describe the table that LANDED: a truncated
-       particle table carries none of them, because the consumer walks the
-       layers by these counts and a stale set would name another layer's rows */
-    if (p->n_part) {
-        tagpu_pk_copy(p->part_n, s_partN, (unsigned)sizeof p->part_n);
-        tagpu_pk_copy(p->part_obj, s_partObj, (unsigned)sizeof p->part_obj);
-    }
     e = fill_pevt(p, cursor, &rc);
     if (e > need) need = e;
     lht_snapshot();
@@ -3044,7 +2855,7 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     }
     s_cLastProj = s_nProj; s_cLastExpl = s_nExpl;
     s_cLastFm = s_nFm; s_cLastFv = s_nFv;
-    s_cLastDebris = s_nDebris; s_cLastPart = s_nPart;
+    s_cLastDebris = s_nDebris;
     return need;
 }
 
@@ -4205,7 +4016,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     /* the anchor cache names cells of the level that is going away, and the
        effect cache names its model templates */
     s_aHave = 0; s_aN = 0; s_aTrunc = 0;
-    s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
+    s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = 0;
     /* the next level's picture is a different picture, and it has not been sent */
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
     /* and its features are a different map's (keyed on the level either way) */
@@ -4742,13 +4553,13 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u models=%u/%uv lost=%u part=%u/%u pevt=%u/%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
+                  " | fx: proj=%u expl=%u deb=%u models=%u/%uv lost=%u pevt=%u/%u/%u scan=%u/%u lht=%u want=%d/%d"
                   " | fog: %dx%d/%u recodd=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u"
                   " | mapfeat=%u%s carried=%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastFm, s_cLastFv, s_cFxLost,
-                  s_cLastPart, s_cPartMax, s_cLastPevt, s_cPevtMax, s_cPevtTrunc,
-                  s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
+                  s_cLastPevt, s_cPevtMax, s_cPevtTrunc,
+                  s_cFxScan, s_cFxReuse, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogW, s_lastFogH, s_cFogSeen, s_cFogRecOdd,
                   s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
