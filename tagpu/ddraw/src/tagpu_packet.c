@@ -827,8 +827,9 @@ static const char* frame_valid(const void* rec)
     if (p->n_part   > TAGPU_PK_MAX_PART)   return "more particles than the cap";
     /* THE PARTICLE EVENTS: whole records, at most the packet's cap; every value in one is used
        as data by the shader (tagpu_pevt.h), and what it indexes or divides by is bounded here:
-       the layer, the class, and a sprite event's particle count, frame modulus and period (its
-       frame then lies in 0..nseq1-1, which the shader bounds again by the frame table) */
+       the layer, the class, a sprite event's particle count, frame modulus and period (its
+       frame then lies in 0..nseq1-1, which the shader bounds again by the frame table), and a
+       wake event's dot count and period (its death walks are data the shader compares) */
     if (!table_ok(p, p->off_pevt, p->n_pevt, sizeof(TAGPU_PEVT))) return "particle event table";
     if (p->n_pevt > TAGPU_PK_MAX_PEVT) return "more particle events than the cap";
     if (p->pevt_nframe > TAGPU_PEVT_NFRAME) return "more flare frames than the table";
@@ -838,8 +839,12 @@ static const char* frame_valid(const void* rec)
         for (k = 0; k < p->n_pevt; k++) {
             const unsigned c = TAGPU_PEVT_CLASS(q[k].flags);
             if (TAGPU_PEVT_LAYER(q[k].flags) >= TAGPU_PK_NLAYER) return "particle event layer";
-            if (c > TAGPU_PEVT_C_FLARE) return "particle event class";
-            if (c != TAGPU_PEVT_C_NANO &&
+            if (c > TAGPU_PEVT_C_WAKE) return "particle event class";
+            if (c == TAGPU_PEVT_C_WAKE) {
+                if (q[k].nsub < 0 || q[k].nsub > 2 || q[k].period < 1 ||
+                    q[k].period > TAGPU_PEVT_WAKE_PERIOD)
+                    return "wake event fields";
+            } else if (c != TAGPU_PEVT_C_NANO &&
                 (q[k].nsub < 0 || q[k].nsub > (int)TAGPU_PEVT_NPART || q[k].nseq1 < 1 ||
                  (c == TAGPU_PEVT_C_FIRE && q[k].period < 1)))
                 return "sprite event fields";

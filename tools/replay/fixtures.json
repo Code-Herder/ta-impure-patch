@@ -156,6 +156,12 @@
              [850, "run", ["tools/replay/particlecheck_check.py", "{gamedir}", "--classes", "fire"]]],
    "end": 900
   },
+  "particle-check-sea": {
+   "load": "replay-wake-shore.json",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_particlecheck.on"], "files": ["tagpu_particlecheck.on"]},
+   "steps": [[1150, "run", ["tools/replay/particlecheck_check.py", "{gamedir}", "--classes", "wake"]]],
+   "end": 1200
+  },
   "stock-fp-verify": {
    "load": "replay-battle-load.json",
    "dll": "stock",

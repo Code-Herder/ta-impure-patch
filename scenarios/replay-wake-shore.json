@@ -1,0 +1,176 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The particle-check-sea test group's game (tools/replay/fixtures.json): ships patrolling beside Anteer Strait's shore (sea level 75; south of the central island the shore runs north-south at about x = 3390 for y 1500 to 1950, land east of it), so their wake dots drift over shallow ground and die there, one ship driving at the shore, one in deeper water, and two submarines patrolling under water (EMIT_SFX 0x103, the bubbles). Every unit is the human seat's, so every emission is in its sight; a CORE solar inland keeps the AI seat alive.",
+ "seed": 20261122,
+ "on_error": "abort",
+ "setup": {
+  "map": "Anteer Strait",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "shore_pt1",
+   "type": "ARMPT",
+   "owner": 0,
+   "pos": [
+    3330,
+    1500
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3330,
+      1950
+     ]
+    }
+   ]
+  },
+  {
+   "id": "shore_pt2",
+   "type": "ARMPT",
+   "owner": 0,
+   "pos": [
+    3340,
+    1950
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3340,
+      1500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "shore_pt3",
+   "type": "ARMPT",
+   "owner": 0,
+   "pos": [
+    2900,
+    1800
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3500,
+      1800
+     ]
+    }
+   ]
+  },
+  {
+   "id": "shore_roy",
+   "type": "ARMROY",
+   "owner": 0,
+   "pos": [
+    3300,
+    1700
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3300,
+      1950
+     ]
+    }
+   ]
+  },
+  {
+   "id": "deep_pt",
+   "type": "ARMPT",
+   "owner": 0,
+   "pos": [
+    2750,
+    2000
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3200,
+      2000
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sub1",
+   "type": "ARMSUB",
+   "owner": 0,
+   "pos": [
+    2800,
+    1950
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3200,
+      1950
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sub2",
+   "type": "ARMSUB",
+   "owner": 0,
+   "pos": [
+    3200,
+    1850
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      2800,
+      1850
+     ]
+    }
+   ]
+  },
+  {
+   "id": "spare",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    3300,
+    900
+   ]
+  }
+ ],
+ "camera": {
+  "center_on": "shore_pt1"
+ }
+}

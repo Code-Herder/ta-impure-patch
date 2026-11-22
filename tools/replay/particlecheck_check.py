@@ -5,12 +5,12 @@ event classes equal to its event's closed form, read from the game's log.
     tools/replay/particlecheck_check.py GAMEDIR
 
 THE ORACLE (`tagpu_particlecheck.on`, tagpu_patches.c THE PARTICLES AS EVENTS; research/notes/
-effects.md §7.8): on a Vulkan launch the engine's nano, fire and flare objects are made in full
-beside their events and held to them after every particle walk. The DLL's install line says
+effects.md §7.8): on a Vulkan launch the engine's nano, fire, flare and wake objects are made in
+full beside their events and held to them after every particle walk. The DLL's install line says
 `tagpu_particlecheck.on: the engine's objects are made in full`, and each checked tick logs
 `pcheck: T=N objects O (missing M extra E trimmed R) particles P differing D [...] nano a/b fire c/d
-flare e/f level: ...`, a/b the particles compared and differing in each class. A fixture step runs
-this before the level ends.
+flare e/f wake g/h level: ...`, a/b the particles compared and differing in each class. A fixture
+step runs this before the level ends.
 
 It passes when the oracle armed, no tick had a differing particle, a missing or an extra object,
 and the run compared particles of every class the fixture names (`--classes`, default nano and fire)
@@ -26,9 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import talog  # noqa: E402
 
 TICK = re.compile(r"pcheck: T=(\d+) objects \d+ \(missing (\d+) extra (\d+) trimmed \d+\) particles \d+ "
-                  r"differing (\d+) .*?nano (\d+)/(\d+) fire (\d+)/(\d+) flare (\d+)/(\d+)")
+                  r"differing (\d+) .*?nano (\d+)/(\d+) fire (\d+)/(\d+) flare (\d+)/(\d+) "
+                  r"wake (\d+)/(\d+)")
 ARMED = "tagpu_particlecheck.on: the engine's objects are made in full"
-CLASSES = ("nano", "fire", "flare")
+CLASSES = ("nano", "fire", "flare", "wake")
 
 
 def check(text, want):
@@ -43,7 +44,7 @@ def check(text, want):
             continue
         g = [int(x) for x in m.groups()]
         t, missing, extra, differing = g[:4]
-        if missing or extra or differing or g[5] or g[7] or g[9]:
+        if missing or extra or differing or any(g[5 + 2 * i] for i in range(len(CLASSES))):
             return False, ln.strip()
         ticks += 1
         for i, c in enumerate(CLASSES):

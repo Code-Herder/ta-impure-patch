@@ -159,12 +159,13 @@ void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
     /* THE PARTICLE EVENTS, once a frame: the Vulkan pass computes their particles itself
        (tagpu_fx.c NVS), the events of layers 0..6 after this pass's layers 0..6 and those of 7..9
        after its 7..9. The `nonano` lever draws no nano event, `nofire` no fire or flare event,
-       `passive` none. */
+       `nowake` no wake or bubbles event, `passive` none. */
     if (from == 0) {
         const int n = (int)pk->n_pevt;
         s_nEvt += n;
         tagpu_fx_set_events(tagpu_pk_pevt(pk), n, pk->tick, pk->pevt_frame, (int)pk->pevt_nframe,
-                            s_passive ? 0u : (s_nano ? 1u : 0u) | (s_fire ? 2u : 0u));
+                            s_passive ? 0u : (s_nano ? 1u : 0u) | (s_fire ? 2u : 0u) |
+                                             (s_wake ? 4u : 0u));
     }
     if (!tab) return;
     tagpu_fx_set_mute(s_passive);          /* passive: count + log, emit nothing */

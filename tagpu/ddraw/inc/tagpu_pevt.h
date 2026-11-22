@@ -3,8 +3,9 @@
 /* tagpu_pevt -- a particle EMITTER EVENT, and the closed form a renderer draws it by
    (gpu-particles-plan.md, *The emitter event*; effects.md §7.8).
 
-   On a Vulkan launch three particle classes are drawn from events: the nano spray (emitters
-   0x4720D0, 0x472200), fire (0x472330, 0x472AB0) and the teleport flare (0x471FD0). The game
+   On a Vulkan launch four particle classes are drawn from events: the nano spray (emitters
+   0x4720D0, 0x472200), fire (0x472330, 0x472AB0), the teleport flare (0x471FD0) and the wake
+   with the submarines' bubbles (0x472430, 0x472530). The game
    thread records one event per emission (tagpu_patches.c, *The particles as events*), the frame
    packet carries the live ones, and the GPU computes every particle from its event and the
    packet's GameTime (tagpu_fx.c NVS). The engine's object is a pure function of the event, so
@@ -50,7 +51,31 @@
    update of T (T + 1 when LATE), and is removed by the first update past its end (0x4742A0,
    0x4736C0: `GameTime > end`, signed). Fire's frame advances every `period` moves, cycling
    0..nseq1-1 from 0 (0x474130); the flare's every move, from draw 0 of tagpu_prand(seed, k, 0)
-   times nseq1 / 0x8000 (0x47395F, 0x473560). */
+   times nseq1 / 0x8000 (0x47395F, 0x473560).
+
+   A WAKE EVENT (the wake and the bubbles, one class: init 0x474760(a, b, period, 1, dir)) takes
+   the sprite layout's from, step, period and nsub, and three words of its own:
+     from    a, the init's first point, 16.16 (0x474778..0x47478D);
+     step    the low dword of (d * q) >> 16 per axis, d = b - a and q the low dword, sign-extended,
+             of 2^32 / (int32)(len * 2), len the x87 length of d (0x4747CC..0x474868): half a world
+             unit a tick toward b. The emitter computes it with the init's own instruction sequence;
+     period  the colour's period: it steps every `period` moves (0x474580);
+     nsub    the dots the object makes, 0..2: none when len * 2 is 0 in its low dword (the divide's
+             fix ends the init before the spawn), the second only when the object is updated at
+             T + 1;
+     dir     1: the colour starts at 0x61 and rises, 0: it starts at 0x67 and falls (0x474A85);
+     gone    each dot's DEATH WALK, the GameTime of the particle walk whose update removes it
+             (0x474720): the first walk past its end tick, or the first whose move puts it over
+             ground at or above the sea level (0x485070(&pos) >= the byte main+0x1427F). The game
+             thread finds it at emission by marching the dot's straight path against the terrain,
+             which does not change in play (tagpu_patches.c, THE WAKE'S DEATH), so no renderer
+             needs the terrain.
+   Dot k is spawned at T + k (k = 0 by the init's spawn 0x474880, k = 1 by the update of T + 1
+   through again 0x473220) at a + its jitter: draws 0..2 of tagpu_prand(seed, k, d), each adding
+   rand * 7 / 0x8000 - 3 to the x, altitude and y high words (0x4749D9..0x474A4B). It moves at every
+   update of its object from the next one on (dot 0 from the update of T, T + 1 when LATE): pos +=
+   step, counter = (counter + 1) % period, and at counter 0 the colour one step on, 0x61..0x67
+   wrapping (0x474580); its end tick is its birth + 6 * period (0x4749AE..0x4749C3). */
 #include <stdint.h>
 #include "tagpu_prand.h"
 
@@ -61,13 +86,20 @@
 /* The object is updated at T+1, so its second burst exists (tagpu_pevt_nano_finish). */
 #define TAGPU_PEVT_BURST2    0x20u
 #define TAGPU_PEVT_CLASS(f)  (((f) >> 8) & 0xFu)
-enum { TAGPU_PEVT_C_NANO = 0, TAGPU_PEVT_C_FIRE = 1, TAGPU_PEVT_C_FLARE = 2 };
+/* The event's object is the engine's, which the layer's cap trims itself: a proxy (or, under the
+   oracle, the real object) of a class sharing its layer with the engine's objects. An event
+   without it stands for an object nobody made, and the emitter's cap is applied to its events. */
+#define TAGPU_PEVT_PROXY     0x40u
+enum { TAGPU_PEVT_C_NANO = 0, TAGPU_PEVT_C_FIRE = 1, TAGPU_PEVT_C_FLARE = 2,
+       TAGPU_PEVT_C_WAKE = 3 };
+#define TAGPU_PEVT_NCLASS    4u
 
 #define TAGPU_PEVT_NPART     10u
 #define TAGPU_PEVT_WORDS     20u     /* the GLSL reads the record as 20 uints */
 
 /* 80 B, the frame packet's record and the game thread's alike; the GLSL reads a nano event's
-   boxes at words 3..14 and its steps at 15..19, a sprite event's fields at words 3..12 */
+   boxes at words 3..14 and its steps at 15..19, a sprite event's fields at words 3..12, a wake
+   event's at 3..10 and 13..15 */
 typedef struct TAGPU_PEVT {
     uint32_t seed;
     uint32_t t0;
@@ -78,13 +110,15 @@ typedef struct TAGPU_PEVT {
             int32_t  box2[6];
             int16_t  steps[TAGPU_PEVT_NPART];
         };
-        struct {                        /* TAGPU_PEVT_C_FIRE, _C_FLARE        */
+        struct {                        /* TAGPU_PEVT_C_FIRE, _C_FLARE, _C_WAKE */
             int32_t  from[3];
             int32_t  step[3];
             int32_t  period;
             int32_t  nsub;
-            int32_t  nseq1;
-            int32_t  life;
+            int32_t  nseq1;             /* fire, flare                        */
+            int32_t  life;              /* fire, flare                        */
+            int32_t  dir;               /* wake                               */
+            uint32_t gone[2];           /* wake                               */
         };
     };
 } TAGPU_PEVT;
@@ -257,6 +291,88 @@ static inline uint32_t tagpu_pevt_sprite_finish(const TAGPU_PEVT* e)
     if (e->nsub < 1) return first;
     if (TAGPU_PEVT_CLASS(e->flags) == TAGPU_PEVT_C_FIRE) return e->t0 + (uint32_t)e->life + 2u;
     return e->t0 + 10u * (uint32_t)(e->nsub - 1) + (uint32_t)e->life + 2u;
+}
+
+/* the wake's colour range (0x474A8C, 0x474A91) and the most moves its period lets a dot have
+   before its end tick: the game thread marches at most that many terrain lookups a dot, and an
+   emission of a longer period keeps its engine object or is refused (tagpu_patches.c) */
+#define TAGPU_PEVT_WAKE_LO     0x61
+#define TAGPU_PEVT_WAKE_HI     0x67
+#define TAGPU_PEVT_WAKE_PERIOD 1024
+
+/* one sub-particle record of the engine's wake object (stride 0x44): pos @4, b @0x10, step @0x1C,
+   colour min @0x28 and max @0x2C, colour @0x30, its step @0x34, counter @0x38, period @0x3C,
+   end tick @0x40 */
+typedef struct TAGPU_PEVT_WAKE {
+    int32_t  pos[3], step[3];
+    int32_t  colour, delta, counter, period;
+    uint32_t endTick;
+} TAGPU_PEVT_WAKE;
+
+/* dot k's start: a with draws 0..2 of tagpu_prand(seed, k, d) added to the high words, each
+   rand * 7 / 0x8000 - 3 (the 64-bit imul and _alldiv 0x4E4440, toward zero; then a 16-bit add to
+   the high word, which is the 32-bit add of the value shifted 16) */
+static inline void tagpu_pevt_wake_start(const TAGPU_PEVT* e, unsigned k, int32_t s[3])
+{
+    unsigned a;
+    for (a = 0; a < 3; a++) {
+        int32_t j = (int32_t)(((int64_t)tagpu_prand(e->seed, k, a) * 7) / 0x8000) - 3;
+        s[a] = (int32_t)((uint32_t)e->from[a] + ((uint32_t)j << 16));
+    }
+}
+
+/* dot k's birth and the walk of its first move */
+static inline uint32_t tagpu_pevt_wake_born(const TAGPU_PEVT* e, unsigned k)
+{
+    return e->t0 + k;
+}
+static inline uint32_t tagpu_pevt_wake_first(const TAGPU_PEVT* e, unsigned k)
+{
+    return k ? e->t0 + 2u : (e->flags & TAGPU_PEVT_LATE) ? e->t0 + 1u : e->t0;
+}
+
+/* dot k after u moves (u >= 0): its position, colour, counter and end tick */
+static inline void tagpu_pevt_wake_after(const TAGPU_PEVT* e, unsigned k, int32_t u,
+                                         TAGPU_PEVT_WAKE* o)
+{
+    int32_t s[3], c;
+    unsigned a;
+    tagpu_pevt_wake_start(e, k, s);
+    for (a = 0; a < 3; a++) {
+        o->step[a] = e->step[a];
+        o->pos[a] = (int32_t)((uint32_t)s[a] + (uint32_t)u * (uint32_t)e->step[a]);
+    }
+    c = (u / e->period) % 7;
+    o->colour = e->dir ? TAGPU_PEVT_WAKE_LO + c : TAGPU_PEVT_WAKE_HI - c;
+    o->delta = e->dir ? 1 : -1;
+    o->counter = u % e->period;
+    o->period = e->period;
+    o->endTick = tagpu_pevt_wake_born(e, k) + 6u * (uint32_t)e->period;
+}
+
+/* Dot k as the engine's object holds it after the particle walk of GameTime P (P >= T): 1 and *o
+   when it is in the object's sub-vector then -- born, and not yet removed by its death walk --
+   0 when it is not. */
+static inline int tagpu_pevt_wake_at(const TAGPU_PEVT* e, unsigned k, uint32_t P,
+                                     TAGPU_PEVT_WAKE* o)
+{
+    int32_t u;
+    if ((int32_t)k >= e->nsub || k > 1u) return 0;
+    if ((int32_t)(P - tagpu_pevt_wake_born(e, k)) < 0 || (int32_t)(P - e->gone[k]) >= 0) return 0;
+    u = (int32_t)(P - tagpu_pevt_wake_first(e, k)) + 1;
+    tagpu_pevt_wake_after(e, k, u < 0 ? 0 : u, o);
+    return 1;
+}
+
+/* D, the walk that destroys a wake event's object: the walk after its last dot's death walk
+   (slot 3 0x473290 finds the sub-vector empty), or the first walk after its call when it made
+   none. */
+static inline uint32_t tagpu_pevt_wake_finish(const TAGPU_PEVT* e)
+{
+    uint32_t D = e->gone[0];
+    if (e->nsub < 1) return (e->flags & TAGPU_PEVT_LATE) ? e->t0 + 1u : e->t0;
+    if (e->nsub > 1 && (int32_t)(e->gone[1] - D) > 0) D = e->gone[1];
+    return D + 1u;
 }
 
 #endif

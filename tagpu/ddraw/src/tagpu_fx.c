@@ -368,12 +368,14 @@ static const char* LFS =
    No vertex attribute: the storage block `pe` holds the sprites' frame table (TAGPU_PEVT_NFRAME
    rows of 8 words: ox, oy, w, h, u0, v0, u1, v1) and then the events as 20 uints each; vertex v
    is corner v % 6 of particle (v / 6) % 10 of event v / 60, and the shader computes the particle
-   at GameTime `uTick` -- tagpu_pevt.h's tagpu_pevt_nano_at and tagpu_pevt_sprite_at, statement
-   for statement, in 32-bit integer arithmetic, which wraps in GLSL as it does in C: the keyed
+   at GameTime `uTick` -- tagpu_pevt.h's tagpu_pevt_nano_at, tagpu_pevt_sprite_at and
+   tagpu_pevt_wake_at, statement for statement, in 32-bit integer arithmetic, which wraps in GLSL
+   as it does in C: the keyed
    draws (tagpu_prand.h), a nano particle's start and end out of the cut boxes (64-bit product,
    toward zero: umulExtended) and its step (toward zero), the updates a particle has had, its
    position and its colour or frame. A particle not in the engine's object then is a degenerate
-   quad. A nano dot is DrawBar's 2 x 2 game pixels at the projection tagpu_fx_emit_dot takes (sx =
+   quad; a wake dot is in it from its birth to its death walk, which the event carries. A nano or
+   wake dot is DrawBar's 2 x 2 game pixels at the projection tagpu_fx_emit_dot takes (sx =
    hi(x) - eyeX + vpL, sy = hi(y) - hi(alt) / 2 - eyeY + vpT); a sprite is its frame's quad at
    that point less the hotspot, the quad emit_sprite makes, with the frame's atlas rect; both at
    the layer's key. EDIT tagpu_pevt.h WITH IT. NVS declares VS's uniforms first, in their order,
@@ -436,6 +438,22 @@ static const char* NVS =
     "      pos[a] = int(uint(st) + uint(u) * uint(stp));\n"
     "    }\n"
     "    uint col = 0xA0u | ((k % 5u + uint(u)) % 7u + 1u);\n"
+    "    vCM = vec2(float(col) / 255.0, 0.0);\n"
+    "  } else if (cls == 3u) {\n"
+    "    int per = int(pe[b + 9u]), nsub = int(pe[b + 10u]);\n"
+    "    uint gone = k < 2u ? pe[b + 14u + k] : 0u;\n"
+    "    uint born = t0 + k;\n"
+    "    uint first = k != 0u ? t0 + 2u : ((fl & 16u) != 0u ? t0 + 1u : t0);\n"
+    "    on = k < 2u && int(k) < nsub && per >= 1 && int(P - born) >= 0 && int(P - gone) < 0;\n"
+    "    int u = max(int(P - first) + 1, 0);\n"
+    "    pos = ivec3(0);\n"
+    "    if (on)\n"                         /* a third..tenth particle: no dot, no draws */
+    "      for (int a = 0; a < 3; a++) {\n"
+    "        int j = ((taRand(seed, k, uint(a)) * 7) >> 15) - 3;\n"
+    "        pos[a] = int(pe[b + 3u + uint(a)] + (uint(j) << 16u) + uint(u) * pe[b + 6u + uint(a)]);\n"
+    "      }\n"
+    "    int cc = (u / max(per, 1)) % 7;\n"
+    "    int col = pe[b + 13u] != 0u ? 0x61 + cc : 0x67 - cc;\n"
     "    vCM = vec2(float(col) / 255.0, 0.0);\n"
     "  } else {\n"
     "    bool fire = cls == 1u;\n"
@@ -705,7 +723,8 @@ void tagpu_fx_set_mute(int on) { s_mute = on; }
    Vulkan pass prepares after tagpu_packet_frame_end, past which no packet pointer may be read,
    so the hand-over carries this copy, as it carries s_verts and the LHT. Sized to the packet's
    own bound on the table (TAGPU_PK_MAX_PEVT, which the acquire has checked n against). `classes`
-   says which to draw: bit 0 nano, bit 1 the sprites (fire, flare); the rest are left out.
+   says which to draw: bit 0 nano, bit 1 the sprites (fire, flare), bit 2 the wake; the rest are
+   left out.
    THE SPRITES' FRAMES: frame i of the flare sequence, as the packet resolved it, put through the
    atlas here, the same lookup emit_sprite makes for a sprite the native pass draws: its size, its
    hotspot and its atlas rect, for the GPU to index by the frame it computes. A frame not drawn
@@ -725,7 +744,8 @@ void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick, const unsign
     if (!e || n < 1) n = 0;
     if (n > (int)TAGPU_PK_MAX_PEVT) n = (int)TAGPU_PK_MAX_PEVT;
     for (i = 0; i < n; i++) {
-        const unsigned bit = TAGPU_PEVT_CLASS(e[i].flags) == TAGPU_PEVT_C_NANO ? 1u : 2u;
+        const unsigned c = TAGPU_PEVT_CLASS(e[i].flags);
+        const unsigned bit = c == TAGPU_PEVT_C_NANO ? 1u : c == TAGPU_PEVT_C_WAKE ? 4u : 2u;
         if (classes & bit) s_evtBuf[w++] = e[i];
     }
     s_evt = w ? s_evtBuf : NULL;
