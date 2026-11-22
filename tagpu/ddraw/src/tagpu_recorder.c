@@ -5294,6 +5294,7 @@ static int slice_has(const char* cob)
     return 1;
 }
 
+#ifdef TAGPU_LIMITS_STOCK
 /* 0x4B0B00 and 0x4B0940's entries: their ecx is the COB object a start is made on, a key here,
    never dereferenced */
 static int __cdecl ob_cob_start(void* E)
@@ -5301,6 +5302,7 @@ static int __cdecl ob_cob_start(void* E)
     if (ev_rec()) slice_note(PTR(REG_ECX(E)));
     return 0;
 }
+#endif
 
 int tagpu_rec_slice(const char* unit, const char* cob)
 {
@@ -7165,10 +7167,13 @@ static const ObserveSite OBSERVE_SITES[] = {
     /* the attach's `mov edx,[0x511DE8]`: no rel8/rel32 in the file branches into
        0x48AB71..0x48AB75 (DISASSEMBLED) */
     { 0x0048AB70u, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ob_link, NULL },
+#ifdef TAGPU_LIMITS_STOCK
     /* the COB start entries (THE SLICE MARKERS): no relative instruction in either span, and no
-       branch into bytes 1-4 of either (DISASSEMBLED, a rel8/rel32 scan of the whole file) */
+       branch into bytes 1-4 of either (DISASSEMBLED, a rel8/rel32 scan of the whole file). The
+       raised build's entries are the COB host's, which calls tagpu_rec_cob_started itself. */
     { 0x004B0B00u, 5, { 0x8B, 0x44, 0x24, 0x04, 0x57 }, ob_cob_start, NULL },
     { 0x004B0940u, 5, { 0x51, 0x53, 0x55, 0x56, 0x57 }, ob_cob_start, NULL },
+#endif
 };
 #define OBSERVE_SITE_COUNT (sizeof OBSERVE_SITES / sizeof OBSERVE_SITES[0])
 
@@ -7198,14 +7203,11 @@ static void cnt_name(unsigned aux, const char* name, unsigned n)
    The engine's own reads, no further, on the unit's live COB object inside the engine's call on
    it: idx bounded by the header's count as the function bounds it (0x4B08C5..0x4B08D0), the name
    at [[hdr+0x1C] + 4 idx] as Name2Index reads it (0x4B07C0..0x4B07D3), to its NUL, at most 31 bytes. */
-static int __cdecl sink_cob(void* E)
+static void cob_alloc_count(const char* cob, int idx, unsigned caller)
 {
-    const char* cob = PTR(REG_ECX(E));
     const char* hdr;
     const char* name;
-    int idx = (int)ARG(E, 4);
     unsigned h = 0x811C9DC5u, n = 0;
-    if (!cnt_on()) return 0;
     if (cob && (hdr = *(const char* const*)(cob + 8)) != NULL && idx >= 0 &&
         idx < *(const int*)(hdr + 4) &&
         (name = (*(const char* const* const*)(hdr + 0x1C))[idx]) != NULL) {
@@ -7214,9 +7216,33 @@ static int __cdecl sink_cob(void* E)
     } else {
         h = 0;
     }
-    cnt_add(0x004B08C0u, s_cnt.child_caller ? s_cnt.child_caller : cnt_caller(ARG(E, 0)), h);
+    cnt_add(0x004B08C0u, caller, h);
+}
+
+static int __cdecl sink_cob(void* E)
+{
+    if (!cnt_on()) return 0;
+    cob_alloc_count(PTR(REG_ECX(E)), (int)ARG(E, 4),
+                    s_cnt.child_caller ? s_cnt.child_caller : cnt_caller(ARG(E, 0)));
     return 0;
 }
+
+#ifndef TAGPU_LIMITS_STOCK
+/* The game's COB host (tagpu_cobgame.c) allocates in tagpu_cobvm.c, where 0x4B08C0's sink never
+   runs: it reports each allocation here with the key the sink would have counted -- the START and
+   CALL keys, or the return address of the entry's own call of the allocator. */
+void tagpu_rec_cob_alloc(const char* cob, int script, unsigned caller)
+{
+    if (cnt_on()) cob_alloc_count(cob, script, caller);
+}
+
+/* The host's 0x4B0B00 and 0x4B0940 entries, whose bytes the observers below take in the stock
+   build: the same note of a start on `cob`, a key, never dereferenced. */
+void tagpu_rec_cob_started(const char* cob)
+{
+    if (ev_rec()) slice_note(cob);
+}
+#endif
 
 static int __cdecl sink_420A30(void* E) { return sink_count(E, 0x00420A30u, 0); }
 /* 0x47F1A0 calls 0x47F0C0 at 0x47F1FA on every call, so that call is the same sound counted once */

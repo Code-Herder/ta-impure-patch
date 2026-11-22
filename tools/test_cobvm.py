@@ -422,7 +422,10 @@ class Core(unittest.TestCase):
         self.assertEqual(C.sizeof(tacob._Record), tacob.RECORD_BYTES)
 
     def test_the_core_has_no_writable_static(self):
-        written = [ln for ln in self.symbols.splitlines() if ln.split()[-2:-1] and ln.split()[-2] in "BbDdGgSsVv"]
+        # the feature's descriptor and its registry pointer are const, in the registry's own section,
+        # which the native toolchain places in writable data (tagpu_simreg.h, SIM_FEATURE)
+        written = [ln for ln in self.symbols.splitlines() if ln.split()[-2:-1] and ln.split()[-2] in "BbDdGgSsVv"
+                   and not ln.split()[-1].startswith(("simfeat_", "simfeatreg_"))]
         self.assertEqual(written, [])
 
     def test_two_vms_on_two_threads(self):

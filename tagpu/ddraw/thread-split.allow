@@ -144,3 +144,9 @@ src/tagpu_guardgeo.c     engine-free         sim           # the guard's seats, 
 src/tagpu_scattergeo.c   engine-free         sim           # the way off a build site tagpu_scatter.c sends a unit by
 src/tasim_sweep.c        engine-free         sim           # the reclaim rules: ImpAI's reclaim, the sweep UI's ring and commit
 src/tagpu_sweepgeo.c     engine-free         sim           # the ring's test, the split and the reclaim countdown the reclaim rules use
+
+# The COB VM the game runs (tagpu_patches.c, THE GAME'S COB INTERPRETER): its whole state is the blocks
+# and the VM its host hands it, and it has no static at all; the same C builds natively for tacob,
+# the wiki's host and the tests. Its validator, tagpu_cob_safe.c, allocates each program at the
+# script's load and stays outside (tools/sim-state-check.sh names that gap).
+src/tagpu_cobvm.c        engine-free         sim           # the COB VM: the game's runner, stepper and entries on the unit's own object

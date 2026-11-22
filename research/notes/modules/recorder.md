@@ -102,12 +102,14 @@ entry), a file that is not a recording and a 3-byte file, −1 for a missing fil
 harness held open exclusively. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
-**Its events have 68 sites of their own** (the attach log's `recorder: 68 event sites in`,
-MEASURED 2026-10-23), byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any
+**Its events have 66 sites of their own** in the raised build, 68 in the stock-limits build (the
+attach log's `recorder: 66 event sites in`, MEASURED 2026-11-21), byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any
 lands; no recording starts without them, so a patch or mod holding other bytes at any of them --
 Teleport's set-position call `0x406BC0` among them -- leaves the recorder off, the log naming the
-site. Thirty-one observers run a handler and then the stolen bytes: the COB start entries
-`0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor
+site. Twenty-nine observers run a handler and then the stolen bytes -- thirty-one in the
+stock-limits build, whose COB start entries `0x4B0B00` and `0x4B0940` are two more (the slice
+markers' start set, below; the raised build's entries are the COB host's, which makes the same
+note itself, `tagpu_rec_cob_started`): the constructor
 reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
 the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
 `0x41B8D0`, the state setter `0x48B090`, YARD_OPEN's write `0x47DAF1` (mid-function, its
@@ -160,6 +162,10 @@ projectile init `0x49C740`, the shot paths `0x49CDE0`, `0x49CC20` and `0x49C9C0`
 `0x499EB0`, and the particle emitters `0x471FD0`, `0x472330`, `0x472430`, `0x472530`, `0x472630`,
 `0x472810`, `0x4728F0`, `0x4729D0`, `0x472AB0` and `0x472C50`. Each reads its return address and,
 for `0x4B08C0`, the script's name through the engine's own bound; none writes anything. The
+raised build runs the game's COB scripts in Impure's VM (the COB module note), where `0x4B08C0` is no
+longer reached: its host reports every allocation the VM is asked for, refused ones and unknown
+scripts included, and `tagpu_rec_cob_alloc` counts it as the sink would have, keyed by the START or
+CALL opcode or by the entry's own allocator call (`0x4B09A4`, `0x4B0B0D`, `0x4B0C4D`). The
 existing observers count too (the roots: the create's exit, the destructor, the build done, the
 state setter, the replies, the nano emitters and the seven feature functions). Prologues and why
 each is a sink:
@@ -179,8 +185,8 @@ tick's 17-byte script call `0x48ADDF..0x48ADF0` jumps to `pushad; push esi; call
 esp,4; popad; jmp 0x48ADF0`, which gives the unit's slice from C (`tagpu_slice_give`,
 `DoScriptsNow 0x4B0D60` with `dt` 1, counted at `0x48ADEB` by where it was given). On a recording
 level it first writes `RK_EV_SLICE` when the unit's COB object had an engine start since the
-capture point -- the start set the two observers on `0x4B0B00` and `0x4B0940` fill, keyed by the
-COB's address and emptied by an epoch at every capture point -- and on a level that plays a
+capture point -- the start set each start at `0x4B0B00` and `0x4B0940` fills (the two observers
+in the stock-limits build, the COB host's entries in the raised one), keyed by the COB's address and emptied by an epoch at every capture point -- and on a level that plays a
 recording the replay may defer the slice to its marker (§2.6f). Site facts:
 [the engine map](../engine/cob.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12).
 

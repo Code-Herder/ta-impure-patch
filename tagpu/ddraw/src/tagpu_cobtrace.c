@@ -58,6 +58,7 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
+#include "tagpu_cobvm.h"
 
 SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle resource-core-upgrade stock-resource-mex");
 
@@ -368,6 +369,74 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
             emit(line);
         }
     }
+    LeaveCriticalSection(&s_lock);
+}
+#endif
+
+#ifndef TAGPU_LIMITS_STOCK
+int tagpu_cobtrace_armed(void) { return s_on; }
+
+/* The game's COB host runs the core (tagpu_cobgame.c), which writes the oracle's events itself and
+   latches a start until its arguments are on the record, as the hooks above do; each event becomes
+   the same line. H: the core reports every step whose record holds more than 32 words, and the line
+   is written at a new peak of that unit's slot, as tagpu_cobtrace_step writes it. */
+void tagpu_cobtrace_core(char* cob, const TAGPU_COBVM_TRACE* t)
+{
+    char line[REC_WORDS * 12 + 512], ty[40], args[REC_WORDS * 12 + 4];
+    char* u;
+    int index, i, n = 0;
+    if (!s_on) return;
+    EnterCriticalSection(&s_lock);
+    u = cob_unit(cob);
+    index = unit_index(u);
+    if (!wanted(u)) { LeaveCriticalSection(&s_lock); return; }
+    line[0] = 0;
+    switch (t->kind) {
+    case 'S':
+        args[0] = 0;
+        for (i = 0; i < t->argc && i < REC_WORDS; i++)
+            n += _snprintf(args + n, sizeof args - (size_t)n, "%s%d", i ? "," : "", t->args[i]);
+        unit_type(u, ty, sizeof ty);
+        if (index >= 0 && (unsigned)t->slot < REC_THREADS) s_traceDiag.peak[index][t->slot] = 0;
+        if (t->from == 'E')
+            _snprintf(line, sizeof line, "S\t%d\t%d\t%s\t%s\t%d\tE\t%s", (int)t->tick, index, ty,
+                      script_name(cob, t->script), t->slot, args);
+        else
+            _snprintf(line, sizeof line, "S\t%d\t%d\t%s\t%s\t%d\t%c:%d\t%s", (int)t->tick, index, ty,
+                      script_name(cob, t->script), t->slot, t->from, t->parent, args);
+        break;
+    case 'R':
+        if (t->has_value)
+            _snprintf(line, sizeof line, "R\t%d\t%d\t%d\t%s\t%d", (int)t->tick, index, t->slot,
+                      script_of_pc(cob, t->pc), t->value);
+        else
+            _snprintf(line, sizeof line, "R\t%d\t%d\t%d\t%s\t?", (int)t->tick, index, t->slot,
+                      script_of_pc(cob, t->pc));
+        break;
+    case 'K':
+        _snprintf(line, sizeof line, "K\t%d\t%d\t%d\t%s\t%d", (int)t->tick, index, t->slot,
+                  script_of_pc(cob, t->pc), t->parent);
+        break;
+    case 'D':
+        _snprintf(line, sizeof line, "D\t%d\t%d\t%d\t%d", (int)t->tick, index, t->slot, t->value);
+        break;
+    case 'X':
+        _snprintf(line, sizeof line, "X\t%d\t%d\t%s\t%c", (int)t->tick, index, script_name(cob, t->script),
+                  t->from == 'E' ? 'E' : t->from);
+        break;
+    case 'H':
+        if (index >= 0 && (unsigned)t->slot < REC_THREADS && t->value > s_traceDiag.peak[index][t->slot] &&
+            t->value <= REC_WORDS) {
+            s_traceDiag.peak[index][t->slot] = (unsigned char)t->value;
+            _snprintf(line, sizeof line, "H\t%d\t%d\t%d\t%s\t%d\t%d", (int)t->tick, index, t->slot,
+                      script_of_pc(cob, t->pc), t->pc, t->value);
+        }
+        break;
+    default:
+        break;
+    }
+    line[sizeof line - 1] = 0;
+    if (line[0]) emit(line);
     LeaveCriticalSection(&s_lock);
 }
 #endif

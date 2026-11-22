@@ -18,4 +18,9 @@ void tagpu_cobtrace_init(void);      /* DllMain: arm if the flag file exists */
 void tagpu_cobtrace_destroy(char* cob);
 void tagpu_cobtrace_vm_context(char* cob, int parent, int argc, int call);
 void tagpu_cobtrace_step(char* cob, unsigned slot);
+/* The raised build's COB host: 1 when armed, and one line from the core's event on `cob`
+   (tagpu_cobvm.h, TAGPU_COBVM_TRACE; H: a step past 32 words, written at a new peak). */
+struct TAGPU_COBVM_TRACE;
+int tagpu_cobtrace_armed(void);
+void tagpu_cobtrace_core(char* cob, const struct TAGPU_COBVM_TRACE* t);
 #endif

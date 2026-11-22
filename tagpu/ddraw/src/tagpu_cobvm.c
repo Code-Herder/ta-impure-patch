@@ -6,6 +6,9 @@
 #include "tagpu_cobvm.h"
 #include <stdio.h>
 #include <string.h>
+#include "tagpu_simreg.h"
+
+SIM_FEATURE(cob_vm, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decline cob-getters resource-core-upgrade stock-resource-mex contest-waves teleport transport-turn cob-verify");
 
 #define ST_RUN       0x01000000u
 #define ST_WAIT_TURN 0x02100000u
@@ -194,6 +197,7 @@ static int alloc(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, char from, i
 {
     unsigned slot;
     tagpu_cobvm_flush(vm, run);
+    if (run->host && run->host->alloc) run->host->alloc(run->host->ctx, script, from);
     if (script < 0 || (uint32_t)script >= vm->program->scripts) return -1;
     for (slot = 0; slot < vm->threads; ++slot) {
         TagpuCobRecord* r = tagpu_cobvm_record(vm, slot);
@@ -306,10 +310,19 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
     int32_t* anim = vm->anim;
     int32_t rate = (int32_t)obj32(vm, OBJ_RATE);
     const unsigned char* guard = vm->checked ? NULL : vm->program->guard;
+    const int tracing = run->host && run->host->trace;
     unsigned steps;
     for (steps = 0; steps < STEP_BUDGET; ++steps) {
         uint32_t pc, word, op, next;
         int checked = 1;
+        if (tracing && r->sp + 1 > 32) {    /* the oracle's H: a step past the retail stack's 32 words */
+            TAGPU_COBVM_TRACE t;
+            tagpu_cobvm_flush(vm, run);
+            memset(&t, 0, sizeof t);
+            t.kind = 'H'; t.tick = run->tick; t.slot = (int32_t)slot; t.script = -1; t.pc = (int32_t)r->pc;
+            t.parent = -1; t.value = r->sp + 1;
+            trace(run, &t);
+        }
         if (!guard || guard[r->pc])
             checked = tagpu_cob_check_step(vm->program, r, run->reason, sizeof run->reason);
 #ifdef TAGPU_COBVM_PROVE_CHECK
@@ -677,7 +690,7 @@ static void step_anim(TAGPU_COBVM* vm, int32_t dt)
 
 /* ---- the entries ---- */
 
-int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+int tagpu_cobvm_bind(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
                      unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
                      char* reason, unsigned capacity)
 {
@@ -695,6 +708,14 @@ int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned r
     vm->rules = rules;
     vm->threads = rules == TAGPU_COBVM_IMPURE ? TAGPU_COB_THREADS : TAGPU_COB_LEGACY_THREADS;
     vm->checked = rules != TAGPU_COBVM_IMPURE || !program->guard;   /* the proof is IMPURE's */
+    return 1;
+}
+
+int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
+                     char* reason, unsigned capacity)
+{
+    if (!tagpu_cobvm_bind(vm, program, rules, object, statics, anim, model, reason, capacity)) return 0;
     memset(object + OBJ_RECORDS, 0, TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES + 4u);
     obj32_set(vm, OBJ_RATE, 30);
     obj32_set(vm, OBJ_DIRTY, 0);

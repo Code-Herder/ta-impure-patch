@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "tagpu_scatter.h"
 #include "tagpu_patches.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
@@ -20,6 +21,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_cob_safe.h"
+#include "tagpu_cobvm.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_simreg.h"
 #include "tagpu_recorder.h"
@@ -12616,6 +12618,22 @@ typedef int (__attribute__((thiscall)) *CobAxisGet)(char*, unsigned, unsigned);
 typedef void (__attribute__((thiscall)) *CobPieceSet)(char*, unsigned, int);
 typedef void (__attribute__((thiscall)) *CobAxisSet)(char*, unsigned, unsigned, int);
 
+/* The game host's state after Impure's COB object (THE GAME'S COB INTERPRETER, below). */
+typedef struct CobTail {
+    TAGPU_COBVM vm;
+    const char* name;
+    int         bound;
+} CobTail;
+#define COB_TAIL(cob) ((CobTail*)(void*)((cob) + TAGPU_COB_OBJECT_BYTES))
+#define COB_GAME_BYTES (TAGPU_COB_OBJECT_BYTES + (unsigned)sizeof(CobTail))
+typedef char cob_tail_aligned[(TAGPU_COB_OBJECT_BYTES % 4u == 0) ? 1 : -1];
+static void cob_game_loaded(char* cob);
+static void cob_game_sites(void);
+/* the oracle's (THE ORACLE, below): armed, and cob_get's verified half */
+static int s_cvOn;
+SIM_VAR(s_cvOn, SIM_INSTALL);
+static int cv_get(char* cob, int key, int a, int b, int c, int d, int32_t* value);
+
 static CobFile* cob_owned_file(char* cob)
 {
     CobFile* f;
@@ -12729,6 +12747,7 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
     }
     *(unsigned*)(cob + 24) = 1;
     tagpu_sim_scratch_free(data);
+    cob_game_loaded(cob);
     return 1;
 }
 
@@ -12779,7 +12798,7 @@ static void cob_runtime_sites(void)
     unsigned char* original;
     const unsigned char native_slots = 8, expanded_slots = TAGPU_COB_THREADS;
     InitializeCriticalSection(&s_cobLock);
-    lim_dword(0x00485D74u, 0x544, TAGPU_COB_OBJECT_BYTES, "COB object allocation");
+    lim_dword(0x00485D74u, 0x544, COB_GAME_BYTES, "COB object allocation, the game host's tail included");
     for (i = 0; i < sizeof model / sizeof *model; ++i)
         lim_dword(model[i], 0x540, TAGPU_COB_MODEL_OFFSET, "COB model field");
     for (i = 0; i < sizeof count / sizeof *count; ++i)
@@ -12823,6 +12842,7 @@ static void cob_runtime_sites(void)
                    (unsigned)(size_t)cob_piece_center, "COB bounded SweetSpot piece");
     }
     lim_branch(0x00496A4Fu, sizeof chat_frame, chat_frame, 0xE8, (unsigned)(size_t)cob_chat_frame, "COB entry diagnostics");
+    cob_game_sites();
 }
 
 /* Interpreter callbacks run on the game thread in play, and on the loader thread
@@ -12908,23 +12928,29 @@ static int cob_world_local(void* ctx, uint32_t owner)
     return kind == 1 || kind == 2;
 }
 
+static void cob_world_fill(char* cob, CobGetCtx* ctx, TagpuCobWorld* w)
+{
+    const unsigned* file = *(const unsigned**)(cob + 8);
+    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    ctx->ta = *(char**)0x00511DE8u;
+    ctx->cob = cob;
+    w->ctx = ctx;
+    w->slots = ctx->ta ? *(const unsigned short*)(ctx->ta + 0x14351) : 0;
+    w->script_pieces = file ? file[2] : 0;
+    w->model_pieces = model ? model[0] : 0;
+    w->unit = cob_world_unit;
+    w->caller = cob_world_caller;
+    w->allied = cob_world_allied;
+    w->local = cob_world_local;
+}
+
 static int __attribute__((thiscall)) cob_get(char* cob, int key, int a, int b, int c, int d)
 {
     CobGetCtx ctx;
     TagpuCobWorld w;
-    const unsigned* file = *(const unsigned**)(cob + 8);
-    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
     int32_t value;
-    ctx.ta = *(char**)0x00511DE8u;
-    ctx.cob = cob;
-    w.ctx = &ctx;
-    w.slots = ctx.ta ? *(const unsigned short*)(ctx.ta + 0x14351) : 0;
-    w.script_pieces = file ? file[2] : 0;
-    w.model_pieces = model ? model[0] : 0;
-    w.unit = cob_world_unit;
-    w.caller = cob_world_caller;
-    w.allied = cob_world_allied;
-    w.local = cob_world_local;
+    if (cv_get(cob, key, a, b, c, d, &value)) return value;
+    cob_world_fill(cob, &ctx, &w);
     if (tagpu_cob_getter(&w, key, a, &value)) return value;
     return s_cobNativeGet(cob, key, a, b, c, d);
 }
@@ -12944,6 +12970,1048 @@ static void cob_get_sites(void)
     s_cobNativeGet = (CobNativeGet)(void*)original;
     lim_branch(0x00480770u, sizeof entry, entry, 0xE9,
                (unsigned int)(size_t)&cob_get, "COB bounded unit getters");
+}
+
+SIM_FEATURE(cob_game, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decline cob-getters resource-core-upgrade stock-resource-mex contest-waves teleport transport-turn");
+
+/* THE GAME'S COB INTERPRETER (research/notes/cob-speed-plan.md, L2). The entries 0x4B0940 (start by
+   name), 0x4B0B00 (start by index), 0x4B0C40 (the query) and 0x4B0D60 (DoScriptsNow) jump here, and
+   tagpu_cobvm.c runs the unit's own COB object under IMPURE's rules: the records, the count and the
+   flag in the object as the guarded engine keeps them, the statics at *(cob+0x10), the animation at
+   *(cob+0x14), the posed model at TAGPU_COB_MODEL_OFFSET. 0x4B0A70 and 0x4B0BC0 stay the engine's:
+   they find the name themselves and call 0x4B0B00 and 0x4B0C40 (0x4B0AEE, 0x4B0C2F). The runner
+   0x4B0DA0, the stepper 0x4B1C00 and the allocator 0x4B08C0 are no longer reached, nor the guard's
+   stubs inside them.
+   EVERY EFFECT GOES THROUGH THE ENGINE'S OWN FUNCTION, called through the object's vtable as the
+   stepper calls it (0x4B12D8, 0x4B1B3A, 0x4B1B8D, 0x4B1BB4, 0x4B1BD2, with the operands in the same
+   order), so its side effects are the engine's by construction: SET's +0xBA bit and its state setter
+   0x48B090, which starts scripts on this object run-later -- the core advances a SET's pc after the
+   commit, as the engine does at 0x4B1BD5 -- the puppet gates, the COB_WRITES keys, the transport
+   messages, the sight-tested emits, EXPLODE's draws. GET's stock half is 0x480770's trampoline after
+   the core's own tagpu_cob_getter, which is cob_get's rule; RAND is 0x4B6C30(hi - lo + 1), called for
+   every draw as 0x4B15E0 calls it; a completion is its object's slot 0 (0x4B19E5, 0x4B0B1D).
+   WHAT ONLY THE ENGINE'S INTERPRETER MADE, the host makes: the allocator's counts (the core reports
+   every allocation it is asked for, and tagpu_rec_cob_alloc counts it with the key 0x4B08C0's sink
+   would have had: the START and CALL keys, else the return address of the entry's own allocator
+   call, 0x4B09A4, 0x4B0B0D, 0x4B0C4D); the slice markers' note of a start (tagpu_rec_cob_started, at
+   the entries whose bytes the recorder's observers held); cobtrace's lines, from the core's events.
+   THE TAIL. Each object carries the host's state after Impure's COB object (CobTail): its VM, bound
+   at its first entry, and its script's name. 0x485D74 asks for both, and the allocation at 0x485D78
+   is zeroed, so a tail starts unbound by construction: the constructor 0x4B0610 at 0x485D88 is the
+   only one (DISASSEMBLED, its only caller), and that allocation its only memory.
+   THREADS. An entry runs on the thread the engine calls it on: the game thread in play, the loader
+   for the Create of a level's units (0x485DE6). An object is the one unit's, entered by one thread at
+   a time, and the core keeps no state outside it. */
+
+/* 0x485D78's call: MEM_Alloc 0x4B4F10(size), cdecl (`add esp,4` at 0x485D7F); NULL is the engine's
+   failure, tested at 0x485D82 */
+static void* __cdecl cob_object_alloc(unsigned size)
+{
+    void* p = ((void* (__cdecl*)(unsigned))0x004B4F10u)(size);
+    if (p) memset(p, 0, size);
+    return p;
+}
+
+/* One entry call: the host, its run, the getter world. */
+typedef struct CobCall {
+    char*            cob;
+    unsigned         key;
+    CobGetCtx        gctx;
+    TagpuCobWorld    world;
+    TAGPU_COBVM_HOST host;
+    TAGPU_COBVM_RUN  run;
+} CobCall;
+
+typedef int32_t (__attribute__((thiscall)) *CobVtCargo)(char*, int32_t);
+typedef int32_t (__attribute__((thiscall)) *CobVtCarrier)(char*);
+typedef void (__attribute__((thiscall)) *CobVt1)(char*, int32_t);
+typedef void (__attribute__((thiscall)) *CobVt2)(char*, int32_t, int32_t);
+typedef void (__attribute__((thiscall)) *CobVt3)(char*, int32_t, int32_t, int32_t);
+typedef void (__attribute__((thiscall)) *CobDone)(void*, int32_t);
+#define COB_VT(cob, off) ((*(void***)(cob))[(off) / 4u])
+
+static int32_t cg_get(void* c, int32_t id, int32_t a, int32_t b, int32_t cc, int32_t d)
+{
+    return s_cobNativeGet(((CobCall*)c)->cob, id, a, b, cc, d);
+}
+
+static int32_t cg_rand(void* c, int32_t n, int32_t lo)
+{
+    (void)c; (void)lo;
+    return ((int32_t (__stdcall*)(int32_t))0x004B6C30u)(n);
+}
+
+static int32_t cg_cargo(void* c, int32_t id)
+{
+    char* cob = ((CobCall*)c)->cob;
+    return ((CobVtCargo)COB_VT(cob, 0x48))(cob, id);
+}
+
+static int32_t cg_carrier(void* c)
+{
+    char* cob = ((CobCall*)c)->cob;
+    return ((CobVtCarrier)COB_VT(cob, 0x4C))(cob);
+}
+
+static int cg_alive(void* c, int32_t id)
+{
+    (void)c;
+    return cob_live_unit(*(char**)0x00511DE8u, id) != NULL;
+}
+
+static void cg_done(void* c, uint32_t cb, int32_t value)
+{
+    void* object = (void*)(uintptr_t)cb;
+    (void)c;
+    ((CobDone)(**(void***)object))(object, value);
+}
+
+static void cg_commit(void* c, const TAGPU_COBVM_EFFECT* e)
+{
+    char* cob = ((CobCall*)c)->cob;
+    switch (e->op) {
+    case 0x10082000u: ((CobVt2)COB_VT(cob, 0x40))(cob, e->v[0], e->v[1]); break;      /* SET id value */
+    case 0x1000F000u: ((CobVt2)COB_VT(cob, 0x30))(cob, e->piece, e->v[0]); break;     /* EMIT_SFX */
+    case 0x10071000u: ((CobVt2)COB_VT(cob, 0x34))(cob, e->piece, e->v[0]); break;     /* EXPLODE */
+    case 0x10083000u: ((CobVt3)COB_VT(cob, 0x38))(cob, e->v[0], e->v[1], e->v[2]); break; /* ATTACH */
+    case 0x10084000u: ((CobVt1)COB_VT(cob, 0x3C))(cob, e->v[0]); break;               /* DROP */
+    default: cob_fault(COB_TAIL(cob)->name, (unsigned)e->pc, "the COB VM committed an unknown effect");
+    }
+}
+
+static void cg_alloc(void* c, int script, char from)
+{
+    CobCall* k = (CobCall*)c;
+    tagpu_rec_cob_alloc(k->cob, script, from == TAGPU_COBVM_FROM_START ? 0x004B18C0u :
+                                        from == TAGPU_COBVM_FROM_CALL ? 0x004B192Du : k->key);
+}
+
+static void cg_trace(void* c, const TAGPU_COBVM_TRACE* t)
+{
+    tagpu_cobtrace_core(((CobCall*)c)->cob, t);
+}
+
+/* The object's VM, bound at its first entry: the program cob_owned_file validated (and bound to the
+   model at the script's load), the blocks 0x4B0720 and 0x480D40 made before Create ran (0x485DAC,
+   0x485DD2, then 0x485DE6). */
+static TAGPU_COBVM* cg_vm(char* cob)
+{
+    CobTail* t = COB_TAIL(cob);
+    if (!t->bound) {
+        CobFile* f = cob_owned_file(cob);
+        char reason[160];
+        if (!tagpu_cobvm_bind(&t->vm, f->program, TAGPU_COBVM_IMPURE, (unsigned char*)cob,
+                              *(int32_t**)(cob + 0x10), *(int32_t**)(cob + 0x14),
+                              *(unsigned char**)(cob + TAGPU_COB_MODEL_OFFSET), reason, sizeof reason))
+            cob_fault(f->name, 0, reason);
+        t->name = f->name;
+        t->bound = 1;
+    }
+    return &t->vm;
+}
+
+static void cg_call(CobCall* k, char* cob, unsigned key)
+{
+    char* ta = *(char**)0x00511DE8u;
+    memset(k, 0, sizeof *k);
+    k->cob = cob;
+    k->key = key;
+    cob_world_fill(cob, &k->gctx, &k->world);
+    k->host.ctx = k;
+    k->host.get = cg_get;
+    k->host.world = &k->world;
+    k->host.rand = cg_rand;
+    k->host.cargo = cg_cargo;
+    k->host.carrier = cg_carrier;
+    k->host.alive = cg_alive;
+    k->host.callback = cg_done;
+    k->host.commit = cg_commit;
+    k->host.alloc = cg_alloc;
+    if (tagpu_cobtrace_armed()) k->host.trace = cg_trace;
+    k->run.host = &k->host;
+    k->run.tick = ta ? *(const uint32_t*)(ta + 0x38A47) : 0xFFFFFFFFu;   /* cobtrace's tick(), -1 with no game */
+}
+
+static int cg_done_call(char* cob, CobCall* k, int r)
+{
+    if (r < 0) cob_fault(COB_TAIL(cob)->name, 0, k->run.reason);
+    return r;
+}
+
+SIM_FEATURE(cob_verify, SIM_PUPPET_INDEPENDENT, "cob-verify");
+
+/* THE ORACLE, `tagpu_cobverify.on` (research/notes/cob-speed-plan.md, L2). The engine's interpreter goes
+   on running the game: each entry above calls the engine's own through a trampoline of the five bytes
+   the swap took. Around each entry call on an object -- a turn, a start, a query -- the oracle copies
+   the object, its statics, its animation and its posed model, and logs, in order, what the engine's
+   interpreter asked outside the object and what it did there: each getter world's answer and each stock
+   getter's (cob_get, cv_get), each draw (the call at 0x4B15E0), each effect and each cargo or carrier
+   read (the vtable's slots 0x30..0x4C, sent through logging thunks), each completion (the RETURN handler
+   0x4B19D0; a refused 0x4B0B00's when that call returns), and each entry on the same object made inside
+   one of those, with its answer (the run-later starts SET's state setter 0x48B090 makes). Then the core
+   runs the same call on the copy over a host that answers from that log, each question checked against
+   the logged one, and the copy must equal the object: the rate, the flag, the records and the count,
+   the statics, the animation and the posed model. What an engine call out of the interpreter writes to
+   the posed model -- EXPLODE hides its piece (0x421639, in 0x421620, which 0x481140 calls at 0x48123C),
+   EMIT_SFX's repose 0x45AB10 sets the dirty flag +8 and
+   copies the unit's turn into the cached body turn +0x18..+0x1C (0x45AB65) -- is the engine's own, and the swap makes the same call: the oracle takes the model
+   bytes each such call changed with its entry, and the replay writes them into the copy where that entry
+   is answered. The first difference is logged with the unit, the call, the field and the kinds logged.
+   The oracle writes no engine memory but those seven vtable slots and the two sites, and decides
+   nothing.
+   WHAT IT DOES NOT SEE: ATTACH's and DROP's live-unit test (cob_live_unit) is asked again after the
+   engine's call, as the swap asks it; an entry made from inside a call on another object's entry is
+   verified on its own, not as part of the outer call; a refused start's completion is logged when the
+   start returns, after anything the completion itself did; an entry on a thread other than the one
+   whose call is in progress runs unverified, and is counted. */
+#define CV_DEPTH 8                  /* entry calls in progress, one inside another's effect */
+#define CV_LOG   1024               /* entries one call may log before it is not compared */
+#define CV_DELTA 4096               /* model words the engine's calls out of the interpreter may change, a call */
+enum { CV_FULL_LOG = 1, CV_FULL_MODEL, CV_FULL_STACK, CV_FULLS };
+enum { CV_GET = 'G', CV_UNIT = 'U', CV_CALLER = 'C', CV_ALLIED = 'A', CV_LOCAL = 'O', CV_RAND = 'R',
+       CV_EFFECT = 'E', CV_CARGO = 'Y', CV_CARRIER = 'Z', CV_DONE = 'B', CV_NESTED = 'N' };
+/* the summary's columns, the effects aside (by vtable slot) */
+static const char CV_KINDS[] = "GUCAORYZBN";
+typedef struct CvEntry {
+    char    kind;                   /* CV_* */
+    char    sub;                    /* E: the vtable offset; N: the entry, CvCall's kind */
+    int32_t a[5];                   /* the question's words; N: idx, cb, now, argc, the query's mask */
+    int32_t ret;                    /* the answer */
+    int32_t io[4], out[4];          /* N: the four words in, and the query's four words back */
+    TagpuCobUnitFacts facts;        /* U, C: the facts answered */
+    unsigned d0, nd;                /* G, E, Y, Z: the posed model's words the call changed, in the pool */
+} CvEntry;
+typedef struct CvCtx {
+    char*    cob;
+    int      in_host;               /* inside a call the interpreter made out of the object */
+    int      full;                  /* CV_FULL_*: the call is not compared */
+    unsigned n, at;                 /* entries logged; consumed by the replay */
+    unsigned nd;                    /* model words in the pool */
+    unsigned short doff[CV_DELTA];  /* a word's byte offset in the posed model */
+    uint32_t dval[CV_DELTA];        /* and what the engine's call left there */
+    char     why[240];              /* the replay's first disagreement */
+    CvEntry  log[CV_LOG];
+} CvCtx;
+/* the oracle's records: nothing in the simulation reads them */
+static struct {
+    CvCtx    ctx[CV_DEPTH];
+    int      depth;
+    DWORD    tid;
+    unsigned calls, equal, different, full[CV_FULLS], foreign, reported, period;
+    unsigned seen[10];              /* the entries the equal calls carried, by kind (CV_KINDS) */
+    unsigned effects[8];            /* their effects by vtable slot, 0x30 to 0x4C */
+} s_cv;
+SIM_VAR(s_cv, SIM_PRIVATE);
+static void* s_cvVt[0x50 / 4];       /* the vtable's stock slots the thunks call */
+SIM_VAR(s_cvVt, SIM_INSTALL);
+static void* s_cvEntry[4];           /* the engine's entries: trampolines of the stolen bytes */
+SIM_VAR(s_cvEntry, SIM_INSTALL);
+
+/* one entry call: 'n' 0x4B0940, 'i' 0x4B0B00, 'q' 0x4B0C40, 't' 0x4B0D60 */
+typedef struct CvCall {
+    char     kind;
+    int      idx;
+    uint32_t cb;
+    int      now, argc, mask;       /* mask: a query's non-NULL pointers */
+    int32_t  io[4];
+    int32_t  dt;
+} CvCall;
+typedef int (__attribute__((thiscall)) *CvByName)(char*, const char*, uint32_t, int);
+typedef int (__attribute__((thiscall)) *CvByIdx)(char*, int, uint32_t, int, int, int32_t, int32_t, int32_t, int32_t);
+typedef int (__attribute__((thiscall)) *CvQuery)(char*, int, int32_t*, int32_t*, int32_t*, int32_t*);
+typedef void (__attribute__((thiscall)) *CvTick)(char*, int32_t);
+
+static CvCtx* cv_top(void)
+{
+    return s_cv.depth > 0 && s_cv.tid == GetCurrentThreadId() ? &s_cv.ctx[s_cv.depth - 1] : NULL;
+}
+
+/* the call in progress on `cob`, when its own interpreter is the code running */
+static CvCtx* cv_logging(const char* cob)
+{
+    CvCtx* c = cv_top();
+    return c && c->cob == cob && !c->in_host && !c->full ? c : NULL;
+}
+
+static CvEntry* cv_add(CvCtx* c, char kind)
+{
+    CvEntry* e;
+    if (c->n >= CV_LOG) { c->full = CV_FULL_LOG; return NULL; }
+    e = &c->log[c->n++];
+    memset(e, 0, sizeof *e);
+    e->kind = kind;
+    return e;
+}
+
+/* ---- the engine's side: the log ---- */
+
+/* the posed model before an engine call out of the interpreter; NULL when not logging */
+static unsigned char* cv_model_before(const CvCtx* c, const char* cob, unsigned* bytes)
+{
+    const unsigned* model = *(const unsigned* const*)(cob + TAGPU_COB_MODEL_OFFSET);
+    unsigned char* copy;
+    if (!c || !model) return NULL;
+    *bytes = TAGPU_COBVM_MODEL_BYTES(model[0]);
+    if ((copy = (unsigned char*)tagpu_sim_scratch(*bytes)) != NULL) memcpy(copy, model, *bytes);
+    return copy;
+}
+
+/* the words that call changed, onto its entry */
+static void cv_model_after(CvCtx* c, CvEntry* e, const char* cob, unsigned char* before, unsigned bytes)
+{
+    const unsigned char* now = *(const unsigned char* const*)(cob + TAGPU_COB_MODEL_OFFSET);
+    unsigned i;
+    if (!before) return;
+    if (e) e->d0 = c->nd;
+    for (i = 0; e && i < bytes; i++) {
+        if (now[i] == before[i]) continue;
+        if (c->nd == CV_DELTA || i + 4u > bytes || i > 0xFFFFu) { c->full = CV_FULL_MODEL; break; }
+        c->doff[c->nd] = (unsigned short)i;
+        memcpy(&c->dval[c->nd++], now + i, 4);
+        e->nd++;
+        i += 3;
+    }
+    tagpu_sim_scratch_free(before);
+}
+
+static void cv_effect(char* cob, unsigned off, int32_t a0, int32_t a1, int32_t a2)
+{
+    CvCtx* c = cv_logging(cob);
+    CvEntry* e = c ? cv_add(c, CV_EFFECT) : NULL;
+    unsigned at = e ? (unsigned)(e - c->log) : 0, bytes = 0;
+    unsigned char* before = cv_model_before(c, cob, &bytes);
+    if (e) { e->sub = (char)off; e->a[0] = a0; e->a[1] = a1; e->a[2] = a2; }
+    if (c) c->in_host++;
+    if (off == 0x3C) ((CobVt1)s_cvVt[off / 4])(cob, a0);
+    else if (off == 0x38) ((CobVt3)s_cvVt[off / 4])(cob, a0, a1, a2);
+    else ((CobVt2)s_cvVt[off / 4])(cob, a0, a1);
+    if (c) { c->in_host--; cv_model_after(c, e ? &c->log[at] : NULL, cob, before, bytes); }
+}
+
+static void __attribute__((thiscall)) cv_vt30(char* cob, int32_t a, int32_t b) { cv_effect(cob, 0x30, a, b, 0); }
+static void __attribute__((thiscall)) cv_vt34(char* cob, int32_t a, int32_t b) { cv_effect(cob, 0x34, a, b, 0); }
+static void __attribute__((thiscall)) cv_vt38(char* cob, int32_t a, int32_t b, int32_t d) { cv_effect(cob, 0x38, a, b, d); }
+static void __attribute__((thiscall)) cv_vt3c(char* cob, int32_t a) { cv_effect(cob, 0x3C, a, 0, 0); }
+static void __attribute__((thiscall)) cv_vt40(char* cob, int32_t a, int32_t b) { cv_effect(cob, 0x40, a, b, 0); }
+
+static int32_t cv_read(char* cob, char kind, int32_t id)
+{
+    CvCtx* c = cv_logging(cob);
+    CvEntry* e = c ? cv_add(c, kind) : NULL;
+    unsigned at = e ? (unsigned)(e - c->log) : 0, bytes = 0;
+    unsigned char* before = cv_model_before(c, cob, &bytes);
+    int32_t r;
+    if (c) c->in_host++;
+    r = kind == CV_CARGO ? ((CobVtCargo)s_cvVt[0x48 / 4])(cob, id) : ((CobVtCarrier)s_cvVt[0x4C / 4])(cob);
+    if (c) { c->in_host--; cv_model_after(c, e ? &c->log[at] : NULL, cob, before, bytes); }
+    if (e) { e = &c->log[at]; e->a[0] = id; e->ret = r; }
+    return r;
+}
+
+static int32_t __attribute__((thiscall)) cv_vt48(char* cob, int32_t id) { return cv_read(cob, CV_CARGO, id); }
+static int32_t __attribute__((thiscall)) cv_vt4c(char* cob) { return cv_read(cob, CV_CARRIER, 0); }
+
+/* 0x4B15E0's call, stdcall like 0x4B6C30: only the running interpreter's RAND makes it */
+static int32_t __stdcall cv_rand(int32_t n)
+{
+    int32_t r = ((int32_t (__stdcall*)(int32_t))0x004B6C30u)(n);
+    CvCtx* c = cv_top();
+    CvEntry* e = c && !c->in_host && !c->full ? cv_add(c, CV_RAND) : NULL;
+    if (e) { e->a[0] = n; e->ret = r; }
+    return r;
+}
+
+/* 0x4B19D0, RETURN: ESI the record, EDI the object (the observer's pushad frame: ESI at -0x20, EDI at
+   -0x24); with a completion it pops stack[sp] and calls the completion's slot 0 with it (0x4B19D7) */
+static int __cdecl cv_return(void* entry)
+{
+    const char* rec = *(const char* const*)((const char*)entry - 0x20);
+    const char* cob = *(const char* const*)((const char*)entry - 0x24);
+    CvCtx* c = cv_logging(cob);
+    CvEntry* e;
+    uint32_t cb;
+    int32_t sp;
+    if (!c) return 0;
+    cb = *(const uint32_t*)(rec + 0x20);
+    sp = *(const int32_t*)(rec + 8);
+    if (!cb) return 0;
+    if (sp < -1 || sp >= (int32_t)TAGPU_COB_WORDS) { c->full = CV_FULL_STACK; return 0; }
+    e = cv_add(c, CV_DONE);
+    if (e) { e->a[0] = (int32_t)cb; e->a[1] = *(const int32_t*)(rec + 0x24 + 4 * sp); }
+    return 0;
+}
+
+static int cv_world_unit(void* ctx, int32_t id, TagpuCobUnitFacts* out)
+{
+    int r = cob_world_unit(ctx, id, out);
+    CvCtx* c = cv_top();
+    CvEntry* e = c && !c->full ? cv_add(c, CV_UNIT) : NULL;
+    if (e) { e->a[0] = id; e->ret = r; if (r) e->facts = *out; }
+    return r;
+}
+
+static int cv_world_caller(void* ctx, TagpuCobUnitFacts* out)
+{
+    int r = cob_world_caller(ctx, out);
+    CvCtx* c = cv_top();
+    CvEntry* e = c && !c->full ? cv_add(c, CV_CALLER) : NULL;
+    if (e) { e->ret = r; if (r) e->facts = *out; }
+    return r;
+}
+
+static int cv_world_allied(void* ctx, uint32_t own, uint32_t owner)
+{
+    int r = cob_world_allied(ctx, own, owner);
+    CvCtx* c = cv_top();
+    CvEntry* e = c && !c->full ? cv_add(c, CV_ALLIED) : NULL;
+    if (e) { e->a[0] = (int32_t)own; e->a[1] = (int32_t)owner; e->ret = r; }
+    return r;
+}
+
+static int cv_world_local(void* ctx, uint32_t owner)
+{
+    int r = cob_world_local(ctx, owner);
+    CvCtx* c = cv_top();
+    CvEntry* e = c && !c->full ? cv_add(c, CV_LOCAL) : NULL;
+    if (e) { e->a[0] = (int32_t)owner; e->ret = r; }
+    return r;
+}
+
+/* cob_get's verified half: the getter rule over a world that logs its answers, then the stock half */
+static int cv_get(char* cob, int key, int a, int b, int c, int d, int32_t* value)
+{
+    CvCtx* x = s_cvOn ? cv_logging(cob) : NULL;
+    CobGetCtx ctx;
+    TagpuCobWorld w;
+    if (!x) return 0;
+    cob_world_fill(cob, &ctx, &w);
+    w.unit = cv_world_unit;
+    w.caller = cv_world_caller;
+    w.allied = cv_world_allied;
+    w.local = cv_world_local;
+    if (tagpu_cob_getter(&w, key, a, value)) return 1;
+    {
+        CvEntry* e = cv_add(x, CV_GET);
+        unsigned at = e ? (unsigned)(e - x->log) : 0, bytes = 0;
+        unsigned char* before = cv_model_before(x, cob, &bytes);
+        x->in_host++;
+        *value = s_cobNativeGet(cob, key, a, b, c, d);
+        x->in_host--;
+        cv_model_after(x, e ? &x->log[at] : NULL, cob, before, bytes);
+        if (e) {
+            e = &x->log[at];
+            e->a[0] = key; e->a[1] = a; e->a[2] = b; e->a[3] = c; e->a[4] = d; e->ret = *value;
+        }
+    }
+    return 1;
+}
+
+static int cv_engine(char* cob, const CvCall* k, const char* name, int32_t* const* p)
+{
+    switch (k->kind) {
+    case 'n': return ((CvByName)s_cvEntry[0])(cob, name, k->cb, k->now);
+    case 'i': return ((CvByIdx)s_cvEntry[1])(cob, k->idx, k->cb, k->now, k->argc,
+                                               k->io[0], k->io[1], k->io[2], k->io[3]);
+    case 'q': return ((CvQuery)s_cvEntry[2])(cob, k->idx, p[0], p[1], p[2], p[3]);
+    default:  ((CvTick)s_cvEntry[3])(cob, k->dt); return 1;
+    }
+}
+
+/* 0x4B0B11: a refused start by index calls its completion with 0 at once */
+static void cv_refused(CvCtx* c, const CvCall* k, int r)
+{
+    CvEntry* e;
+    if (k->kind != 'i' || r || !k->cb || c->full) return;
+    if ((e = cv_add(c, CV_DONE)) != NULL) { e->a[0] = (int32_t)k->cb; e->a[1] = 0; }
+}
+
+/* an entry on the object whose call is in progress, from inside a call its interpreter made: logged in
+   that call, with its own interpreter's entries after it */
+static int cv_nested_engine(CvCtx* c, char* cob, const CvCall* k, const char* name, int32_t* const* p)
+{
+    CvEntry* e = c->full ? NULL : cv_add(c, CV_NESTED);
+    unsigned at = e ? (unsigned)(e - c->log) : 0;
+    int saved = c->in_host, r, i;
+    if (e) {
+        e->sub = k->kind;
+        e->a[0] = k->idx; e->a[1] = (int32_t)k->cb; e->a[2] = k->now; e->a[3] = k->argc; e->a[4] = k->mask;
+        memcpy(e->io, k->io, sizeof e->io);
+    }
+    c->in_host = 0;
+    r = cv_engine(cob, k, name, p);
+    cv_refused(c, k, r);
+    c->in_host = saved;
+    if (e) {
+        e = &c->log[at];
+        e->ret = r;
+        for (i = 0; i < 4; i++) e->out[i] = p && p[i] ? *p[i] : 0;
+    }
+    return r;
+}
+
+/* ---- the core's side: the replay ---- */
+
+typedef struct CvReplay {
+    CvCtx*           c;
+    TAGPU_COBVM      vm;
+    TagpuCobWorld    world;
+    TAGPU_COBVM_HOST host;
+    int              bad;
+} CvReplay;
+
+static void cvr_bad(CvReplay* rp, const char* fmt, ...)
+{
+    va_list ap;
+    if (rp->bad) return;
+    rp->bad = 1;
+    va_start(ap, fmt);
+    vsnprintf(rp->c->why, sizeof rp->c->why, fmt, ap);
+    va_end(ap);
+}
+
+static CvEntry* cvr_take(CvReplay* rp, char kind)
+{
+    CvCtx* c = rp->c;
+    CvEntry* e;
+    if (rp->bad) return NULL;
+    if (c->at >= c->n) {
+        cvr_bad(rp, "the core asked %c after the engine's last entry (%u)", kind, c->n);
+        return NULL;
+    }
+    e = &c->log[c->at];
+    if (e->kind != kind) {
+        cvr_bad(rp, "the core asked %c where the engine's entry %u is %c", kind, c->at, e->kind);
+        return NULL;
+    }
+    c->at++;
+    return e;
+}
+
+static int cv_core(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, const CvCall* k, int32_t io[4])
+{
+    switch (k->kind) {
+    case 'n': return tagpu_cobvm_start(vm, run, k->idx, k->cb, k->now, 0, 0, NULL);
+    case 'i': return tagpu_cobvm_start(vm, run, k->idx, k->cb, k->now, 1, k->argc, k->io);
+    case 'q': return tagpu_cobvm_query(vm, run, k->idx, io);
+    default:  return tagpu_cobvm_tick(vm, run, k->dt);
+    }
+}
+
+/* the entries the engine made on this object inside the call just answered, run on the copy as the
+   swap runs them: inside that call, on the same VM; first the posed model's words that call wrote */
+static void cvr_nested(CvReplay* rp)
+{
+    CvCtx* c = rp->c;
+    const CvEntry* done = c->at ? &c->log[c->at - 1] : NULL;
+    unsigned i;
+    for (i = done ? done->d0 : 0; done && !rp->bad && i < done->d0 + done->nd; i++)
+        memcpy(rp->vm.model + c->doff[i], &c->dval[i], 4);
+    while (!rp->bad && c->at < c->n && c->log[c->at].kind == CV_NESTED) {
+        unsigned at = c->at++;
+        CvCall k;
+        TAGPU_COBVM_RUN run;
+        int32_t io[4];
+        int r, i;
+        memset(&k, 0, sizeof k);
+        k.kind = c->log[at].sub;
+        k.idx = c->log[at].a[0]; k.cb = (uint32_t)c->log[at].a[1]; k.now = c->log[at].a[2];
+        k.argc = c->log[at].a[3];
+        memcpy(k.io, c->log[at].io, sizeof k.io);
+        memcpy(io, k.io, sizeof io);
+        memset(&run, 0, sizeof run);
+        run.host = &rp->host;
+        r = cv_core(&rp->vm, &run, &k, io);
+        if (r < 0) { cvr_bad(rp, "the core refused the nested %c call (entry %u): %s", k.kind, at, run.reason); return; }
+        if (rp->bad) return;
+        if (k.kind != 't' && r != c->log[at].ret) {
+            cvr_bad(rp, "the nested %c call (entry %u) answered %d, the engine's %d", k.kind, at, r, c->log[at].ret);
+            return;
+        }
+        if (k.kind == 'q' && r == 1)
+            for (i = 0; i < 4; i++)
+                if ((c->log[at].a[4] >> i & 1) && io[i] != c->log[at].out[i]) {
+                    cvr_bad(rp, "the nested query (entry %u) gave word %d %d, the engine's %d", at, i, io[i],
+                            c->log[at].out[i]);
+                    return;
+                }
+    }
+}
+
+static int32_t cvr_get(void* x, int32_t id, int32_t a, int32_t b, int32_t c, int32_t d)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_GET);
+    int32_t r;
+    if (!e) return 0;
+    if (e->a[0] != id || e->a[1] != a || e->a[2] != b || e->a[3] != c || e->a[4] != d) {
+        cvr_bad(rp, "GET %d(%d,%d,%d,%d) where the engine's was GET %d(%d,%d,%d,%d)", id, a, b, c, d,
+                e->a[0], e->a[1], e->a[2], e->a[3], e->a[4]);
+        return 0;
+    }
+    r = e->ret;
+    cvr_nested(rp);
+    return r;
+}
+
+static int32_t cvr_rand(void* x, int32_t n, int32_t lo)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_RAND);
+    (void)lo;
+    if (!e) return 0;
+    if (e->a[0] != n) { cvr_bad(rp, "RAND of %d where the engine's drew of %d", n, e->a[0]); return 0; }
+    return e->ret;
+}
+
+static int32_t cvr_read(CvReplay* rp, char kind, int32_t id)
+{
+    CvEntry* e = cvr_take(rp, kind);
+    int32_t r;
+    if (!e) return 0;
+    if (e->a[0] != id) { cvr_bad(rp, "%c of %d where the engine's was of %d", kind, id, e->a[0]); return 0; }
+    r = e->ret;
+    cvr_nested(rp);
+    return r;
+}
+
+static int32_t cvr_cargo(void* x, int32_t id) { return cvr_read((CvReplay*)x, CV_CARGO, id); }
+static int32_t cvr_carrier(void* x) { return cvr_read((CvReplay*)x, CV_CARRIER, 0); }
+static int cvr_alive(void* x, int32_t id) { (void)x; return cob_live_unit(*(char**)0x00511DE8u, id) != NULL; }
+
+static void cvr_callback(void* x, uint32_t cb, int32_t value)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_DONE);
+    if (!e) return;
+    if ((uint32_t)e->a[0] != cb || e->a[1] != value) {
+        cvr_bad(rp, "a completion %08X(%d) where the engine's was %08X(%d)", cb, value, (uint32_t)e->a[0], e->a[1]);
+        return;
+    }
+    cvr_nested(rp);
+}
+
+static void cvr_commit(void* x, const TAGPU_COBVM_EFFECT* ef)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_EFFECT);
+    int32_t w[3] = {0, 0, 0};
+    unsigned off;
+    if (!e) return;
+    switch (ef->op) {    /* as cg_commit calls them */
+    case 0x10082000u: off = 0x40; w[0] = ef->v[0]; w[1] = ef->v[1]; break;
+    case 0x1000F000u: off = 0x30; w[0] = ef->piece; w[1] = ef->v[0]; break;
+    case 0x10071000u: off = 0x34; w[0] = ef->piece; w[1] = ef->v[0]; break;
+    case 0x10083000u: off = 0x38; w[0] = ef->v[0]; w[1] = ef->v[1]; w[2] = ef->v[2]; break;
+    case 0x10084000u: off = 0x3C; w[0] = ef->v[0]; break;
+    default: cvr_bad(rp, "the core committed op %08X, no effect the engine makes", ef->op); return;
+    }
+    if ((unsigned)(unsigned char)e->sub != off || e->a[0] != w[0] || e->a[1] != w[1] || e->a[2] != w[2]) {
+        cvr_bad(rp, "pc %d: vt+0x%02X(%d,%d,%d) where the engine's was vt+0x%02X(%d,%d,%d)", ef->pc, off,
+                w[0], w[1], w[2], (unsigned char)e->sub, e->a[0], e->a[1], e->a[2]);
+        return;
+    }
+    cvr_nested(rp);
+}
+
+static int cvr_unit(void* x, int32_t id, TagpuCobUnitFacts* out)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_UNIT);
+    if (!e) return 0;
+    if (e->a[0] != id) { cvr_bad(rp, "the world's unit %d where the engine's asked %d", id, e->a[0]); return 0; }
+    if (e->ret) *out = e->facts;
+    return e->ret;
+}
+
+static int cvr_caller(void* x, TagpuCobUnitFacts* out)
+{
+    CvEntry* e = cvr_take((CvReplay*)x, CV_CALLER);
+    if (!e) return 0;
+    if (e->ret) *out = e->facts;
+    return e->ret;
+}
+
+static int cvr_allied(void* x, uint32_t own, uint32_t owner)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_ALLIED);
+    if (!e) return 0;
+    if ((uint32_t)e->a[0] != own || (uint32_t)e->a[1] != owner) {
+        cvr_bad(rp, "allied(%u,%u) where the engine's asked allied(%d,%d)", own, owner, e->a[0], e->a[1]);
+        return 0;
+    }
+    return e->ret;
+}
+
+static int cvr_local(void* x, uint32_t owner)
+{
+    CvReplay* rp = (CvReplay*)x;
+    CvEntry* e = cvr_take(rp, CV_LOCAL);
+    if (!e) return 0;
+    if ((uint32_t)e->a[0] != owner) { cvr_bad(rp, "local(%u) where the engine's asked local(%d)", owner, e->a[0]); return 0; }
+    return e->ret;
+}
+
+static int cv_first(const unsigned char* a, const unsigned char* b, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n; i++)
+        if (a[i] != b[i]) return (int)i;
+    return -1;
+}
+
+static void cvr_field(CvReplay* rp, const char* what, unsigned off, const unsigned char* core, const unsigned char* engine)
+{
+    unsigned w = off & ~3u;
+    int32_t cw, ew;
+    memcpy(&cw, core + w, 4);
+    memcpy(&ew, engine + w, 4);
+    cvr_bad(rp, "%s +0x%X: the core 0x%08X, the engine 0x%08X", what, w, (uint32_t)cw, (uint32_t)ew);
+}
+
+/* the copy the core ran against the object the engine ran */
+static void cvr_compare(CvReplay* rp, char* cob, const unsigned char* copy, unsigned stat, unsigned anim, unsigned model)
+{
+    const unsigned char* live = (const unsigned char*)cob;
+    const unsigned char* lm = *(const unsigned char* const*)(cob + TAGPU_COB_MODEL_OFFSET);
+    char what[64];
+    int d;
+    if ((d = cv_first(copy + 4, live + 4, 4)) >= 0) { cvr_field(rp, "the object", 4u + (unsigned)d, copy, live); return; }
+    if ((d = cv_first(copy + 0x18, live + 0x18, TAGPU_COB_MODEL_OFFSET - 0x18u)) >= 0) {
+        unsigned off = 0x18u + (unsigned)d;
+        if (off >= 0x1Cu && off < TAGPU_COB_COUNT_OFFSET)
+            snprintf(what, sizeof what, "record %u", (off - 0x1Cu) / TAGPU_COB_RECORD_BYTES);
+        else
+            snprintf(what, sizeof what, "%s", off < 0x1Cu ? "the animating flag" : "the count");
+        if (off >= 0x1Cu && off < TAGPU_COB_COUNT_OFFSET) {
+            unsigned base = 0x1Cu + (off - 0x1Cu) / TAGPU_COB_RECORD_BYTES * TAGPU_COB_RECORD_BYTES;
+            cvr_field(rp, what, off - base, copy + base, live + base);
+        } else {
+            cvr_field(rp, what, 0, copy + (off & ~3u), live + (off & ~3u));
+        }
+        return;
+    }
+    if (stat && (d = cv_first(copy + TAGPU_COB_OBJECT_BYTES, *(const unsigned char* const*)(cob + 0x10), stat)) >= 0) {
+        cvr_field(rp, "the statics", (unsigned)d, copy + TAGPU_COB_OBJECT_BYTES, *(const unsigned char* const*)(cob + 0x10));
+        return;
+    }
+    if (anim && (d = cv_first(copy + TAGPU_COB_OBJECT_BYTES + stat, *(const unsigned char* const*)(cob + 0x14), anim)) >= 0) {
+        snprintf(what, sizeof what, "piece %u's animation", (unsigned)d / (TAGPU_COBVM_ANIM * 4u));
+        cvr_field(rp, what, (unsigned)d % (TAGPU_COBVM_ANIM * 4u),
+                  copy + TAGPU_COB_OBJECT_BYTES + stat + (unsigned)d / (TAGPU_COBVM_ANIM * 4u) * TAGPU_COBVM_ANIM * 4u,
+                  *(const unsigned char* const*)(cob + 0x14) + (unsigned)d / (TAGPU_COBVM_ANIM * 4u) * TAGPU_COBVM_ANIM * 4u);
+        return;
+    }
+    {
+        const unsigned char* cm = copy + TAGPU_COB_OBJECT_BYTES + stat + anim;
+        if ((d = cv_first(cm, lm, model)) >= 0) {
+            unsigned off = (unsigned)d;
+            if (off < TAGPU_COBVM_PRIM_BASE) {
+                cvr_field(rp, "the model's header", off, cm, lm);
+            } else {
+                unsigned piece = (off - TAGPU_COBVM_PRIM_BASE) / TAGPU_COBVM_PRIM_BYTES;
+                unsigned base = TAGPU_COBVM_PRIM_BASE + piece * TAGPU_COBVM_PRIM_BYTES;
+                snprintf(what, sizeof what, "piece %u's PrimitiveStruct", piece);
+                cvr_field(rp, what, off - base, cm + base, lm + base);
+            }
+        }
+    }
+}
+
+static void cvr_host(CvReplay* rp, char* cob)
+{
+    char* ta = *(char**)0x00511DE8u;
+    const unsigned* file = *(const unsigned**)(cob + 8);
+    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    rp->world.ctx = rp;
+    rp->world.slots = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
+    rp->world.script_pieces = file ? file[2] : 0;
+    rp->world.model_pieces = model ? model[0] : 0;
+    rp->world.unit = cvr_unit;
+    rp->world.caller = cvr_caller;
+    rp->world.allied = cvr_allied;
+    rp->world.local = cvr_local;
+    rp->host.ctx = rp;
+    rp->host.get = cvr_get;
+    rp->host.world = &rp->world;
+    rp->host.rand = cvr_rand;
+    rp->host.cargo = cvr_cargo;
+    rp->host.carrier = cvr_carrier;
+    rp->host.alive = cvr_alive;
+    rp->host.callback = cvr_callback;
+    rp->host.commit = cvr_commit;
+}
+
+static void cv_report(char* cob, const CvCall* k, const TagpuCobProgram* prog, CvCtx* c, int bad)
+{
+    char* ta = *(char**)0x00511DE8u;
+    char* unit = cob_caller(ta, cob);
+    unsigned tick = ta ? *(const unsigned*)(ta + 0x38A47) : 0;
+    const char* script = k->kind == 't' ? "a turn" :
+                         k->idx >= 0 && (unsigned)k->idx < prog->scripts ? prog->names[k->idx] : "no script";
+    s_cv.calls++;
+    if (c->full) {
+        s_cv.full[c->full]++;
+    } else if (bad) {
+        s_cv.different++;
+        if (s_cv.reported < 40) {
+            s_cv.reported++;
+            char kinds[33];
+            unsigned i;
+            for (i = 0; i < c->n && i < sizeof kinds - 1; i++) kinds[i] = c->log[i].kind;
+            kinds[i] = 0;
+            tagpu_logf("cobverify: DIFFERENT at tick %u, unit %d, %c call (%.40s), %u entries (%s): %s", tick,
+                       unit ? (int)*(const unsigned short*)(unit + 0xA8) : -1, k->kind, script, c->n, kinds, c->why);
+        }
+    } else {
+        unsigned i;
+        const char* at;
+        s_cv.equal++;
+        for (i = 0; i < c->n; i++)
+            if (c->log[i].kind == CV_EFFECT) s_cv.effects[((unsigned char)c->log[i].sub - 0x30u) / 4u & 7u]++;
+            else if ((at = strchr(CV_KINDS, c->log[i].kind)) != NULL) s_cv.seen[at - CV_KINDS]++;
+    }
+    if (tick / 300u != s_cv.period) {
+        s_cv.period = tick / 300u;
+        tagpu_logf("cobverify: tick %u: %u calls, %u equal, %u different, %u not compared (%u past %u entries, "
+                   "%u past %u model words, %u at a RETURN's stack out of bounds), %u on another thread", tick,
+                   s_cv.calls, s_cv.equal, s_cv.different,
+                   s_cv.full[CV_FULL_LOG] + s_cv.full[CV_FULL_MODEL] + s_cv.full[CV_FULL_STACK],
+                   s_cv.full[CV_FULL_LOG], CV_LOG, s_cv.full[CV_FULL_MODEL], CV_DELTA, s_cv.full[CV_FULL_STACK],
+                   s_cv.foreign);
+        tagpu_logf("cobverify: tick %u: the equal calls carried %u stock getters, %u world units, %u callers, "
+                   "%u allied and %u local tests, %u draws, %u cargo and %u carrier reads, %u completions, "
+                   "%u nested entries; effects EMIT_SFX %u, EXPLODE %u, ATTACH %u, DROP %u, SET %u", tick,
+                   s_cv.seen[0], s_cv.seen[1], s_cv.seen[2], s_cv.seen[3], s_cv.seen[4], s_cv.seen[5],
+                   s_cv.seen[6], s_cv.seen[7], s_cv.seen[8], s_cv.seen[9], s_cv.effects[0], s_cv.effects[1],
+                   s_cv.effects[2], s_cv.effects[3], s_cv.effects[4]);
+    }
+}
+
+/* One entry call in the oracle: the engine runs it on the object, the core on a copy of it. */
+static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* const* p)
+{
+    TAGPU_COBVM* tail = cg_vm(cob);
+    const TagpuCobProgram* prog = tail->program;
+    unsigned stat = prog->statics * 4u, anim = prog->pieces * TAGPU_COBVM_ANIM * 4u;
+    unsigned model = TAGPU_COBVM_MODEL_BYTES(prog->model_pieces);
+    CvCtx* outer = cv_top();
+    CvCtx* c;
+    CvReplay rp;
+    TAGPU_COBVM_RUN run;
+    unsigned char* copy;
+    int32_t io[4];
+    int r, cr, i;
+    char reason[160];
+    if (outer && outer->cob == cob) return cv_nested_engine(outer, cob, k, name, p);
+    if ((s_cv.depth && s_cv.tid != GetCurrentThreadId()) || s_cv.depth >= CV_DEPTH ||
+        !(copy = (unsigned char*)tagpu_sim_scratch(TAGPU_COB_OBJECT_BYTES + stat + anim + model))) {
+        s_cv.foreign++;
+        return cv_engine(cob, k, name, p);
+    }
+    memcpy(copy, cob, TAGPU_COB_OBJECT_BYTES);
+    if (stat) memcpy(copy + TAGPU_COB_OBJECT_BYTES, *(const void* const*)(cob + 0x10), stat);
+    if (anim) memcpy(copy + TAGPU_COB_OBJECT_BYTES + stat, *(const void* const*)(cob + 0x14), anim);
+    memcpy(copy + TAGPU_COB_OBJECT_BYTES + stat + anim, *(const void* const*)(cob + TAGPU_COB_MODEL_OFFSET), model);
+    if (!s_cv.depth) s_cv.tid = GetCurrentThreadId();
+    c = &s_cv.ctx[s_cv.depth++];
+    c->cob = cob;
+    c->in_host = c->full = 0;
+    c->n = c->at = c->nd = 0;
+    c->why[0] = 0;
+    r = cv_engine(cob, k, name, p);
+    cv_refused(c, k, r);
+    s_cv.depth--;
+    memset(&rp, 0, sizeof rp);
+    rp.c = c;
+    if (!c->full) {
+        cvr_host(&rp, cob);
+        if (!tagpu_cobvm_bind(&rp.vm, prog, TAGPU_COBVM_IMPURE, copy,
+                              stat ? (int32_t*)(void*)(copy + TAGPU_COB_OBJECT_BYTES) : NULL,
+                              anim ? (int32_t*)(void*)(copy + TAGPU_COB_OBJECT_BYTES + stat) : NULL,
+                              copy + TAGPU_COB_OBJECT_BYTES + stat + anim, reason, sizeof reason)) {
+            cvr_bad(&rp, "the copy could not be bound: %s", reason);
+        } else {
+            rp.vm.checked = tail->checked;
+            memset(&run, 0, sizeof run);
+            run.host = &rp.host;
+            memcpy(io, k->io, sizeof io);
+            cr = cv_core(&rp.vm, &run, k, io);
+            if (cr < 0) cvr_bad(&rp, "the core refused: %s", run.reason);
+            else if (k->kind != 't' && cr != r) cvr_bad(&rp, "the core answered %d, the engine %d", cr, r);
+            if (k->kind == 'q' && r == 1 && cr == 1)
+                for (i = 0; i < 4; i++)
+                    if (p[i] && io[i] != *p[i]) {
+                        cvr_bad(&rp, "the query's word %d: the core %d, the engine %d", i, io[i], *p[i]);
+                        break;
+                    }
+            if (c->at != c->n)
+                cvr_bad(&rp, "the engine logged %u entries the core never asked (the next %c)", c->n - c->at,
+                        c->log[c->at].kind);
+            if (!rp.bad) cvr_compare(&rp, cob, copy, stat, anim, model);
+        }
+    }
+    cv_report(cob, k, prog, c, rp.bad);
+    tagpu_sim_scratch_free(copy);
+    return r;
+}
+
+static void* cv_trampoline(unsigned va, const unsigned char* stolen)
+{
+    unsigned char* t = tagpu_detour_stub();
+    if (!t) return NULL;
+    memcpy(t, stolen, 5);
+    t[5] = 0xE9;
+    tagpu_detour_rel(t + 6, va + 5);
+    return t;
+}
+
+static void cv_install(const unsigned char* by_name, const unsigned char* by_idx, const unsigned char* tick)
+{
+    static const unsigned char ret_stolen[5] = {0x8B, 0x4E, 0x20, 0x85, 0xC9};   /* 0x4B19D0 */
+    static const unsigned off[7] = {0x30, 0x34, 0x38, 0x3C, 0x40, 0x48, 0x4C};
+    static const unsigned stock[7] = {0x480EB0u, 0x481140u, 0x481340u, 0x4813B0u, 0x480B20u, 0x481430u, 0x481470u};
+    const void* thunk[7] = {(const void*)cv_vt30, (const void*)cv_vt34, (const void*)cv_vt38, (const void*)cv_vt3c,
+                            (const void*)cv_vt40, (const void*)cv_vt48, (const void*)cv_vt4c};
+    const unsigned* vt = (const unsigned*)0x004FD698u;
+    int i;
+    if (tagpu_cobtrace_armed()) {
+        tagpu_log("cobverify: NOT armed - tagpu_cobtrace.on holds the sites it needs; the game runs the core");
+        return;
+    }
+    for (i = 0; i < 7; i++)
+        if (vt[off[i] / 4] != stock[i]) {
+            tagpu_logf("cobverify: NOT armed - the COB vtable's slot +0x%02X is not stock; the game runs the core", off[i]);
+            return;
+        }
+    if (!tagpu_detour_redirect_ok(0x004B15E0u, 0x004B6C30u) || !tagpu_detour_bytes_ok(0x004B19D0u, ret_stolen, 5)) {
+        tagpu_log("cobverify: NOT armed - RAND's call 0x4B15E0 or RETURN 0x4B19D0 is not stock; the game runs the core");
+        return;
+    }
+    s_cvEntry[0] = cv_trampoline(0x004B0940u, by_name);
+    s_cvEntry[1] = cv_trampoline(0x004B0B00u, by_idx);
+    s_cvEntry[2] = cv_trampoline(0x004B0C40u, by_idx);
+    s_cvEntry[3] = cv_trampoline(0x004B0D60u, tick);
+    for (i = 0; i < 4; i++)
+        if (!s_cvEntry[i]) { tagpu_log("cobverify: NOT armed - no stub memory; the game runs the core"); return; }
+    for (i = 0; i < 7; i++) s_cvVt[off[i] / 4] = (void*)(uintptr_t)stock[i];
+    for (i = 0; i < 7; i++)
+        if (!tagpu_detour_write(0x004FD698u + off[i], (const unsigned char*)&thunk[i], 4)) {
+            tagpu_log("cobverify: NOT armed - a vtable slot could not be written; the game runs the core");
+            return;
+        }
+    if (!tagpu_detour_redirect(0x004B15E0u, 0x004B6C30u, (void*)cv_rand) ||
+        !tagpu_detour_observe(0x004B19D0u, ret_stolen, 5, cv_return, NULL)) {
+        tagpu_log("cobverify: NOT armed - RAND's call or RETURN could not be hooked; the game runs the core");
+        return;
+    }
+    s_cvOn = 1;
+    tagpu_log("cobverify: ARMED - the engine's interpreter runs the game, and the core replays each of its entry "
+              "calls on a copy of the object");
+}
+
+/* 0x4B0940(name, cb, now), ret 0xC: the first script of that name (0x4B0957..0x4B0993; none, -1,
+   which the allocator refuses), its completion stored, and with `now` every record at dt 0 when one
+   is busy, then the stepper; 1 started, 0 refused */
+static int __attribute__((thiscall)) cg_start_name(char* cob, const char* name, uint32_t cb, int now)
+{
+    CobCall k;
+    TAGPU_COBVM* vm;
+    tagpu_rec_cob_started(cob);
+    vm = cg_vm(cob);
+    if (s_cvOn) {
+        CvCall v = {.kind = 'n', .idx = tagpu_cobvm_index(vm->program, name), .cb = cb, .now = now};
+        return cv_verified(cob, &v, name, NULL);
+    }
+    cg_call(&k, cob, 0x004B09A4u);
+    return cg_done_call(cob, &k, tagpu_cobvm_start(vm, &k.run, tagpu_cobvm_index(vm->program, name), cb,
+                                                   now, 0, 0, NULL));
+}
+
+/* 0x4B0B00(idx, cb, now, argc, a0..a3), ret 0x20: a refusal calls the completion with 0 (0x4B0B11);
+   the four words written, sp = argc - 1 */
+static int __attribute__((thiscall)) cg_start_idx(char* cob, int idx, uint32_t cb, int now, int argc,
+                                                  int32_t a0, int32_t a1, int32_t a2, int32_t a3)
+{
+    CobCall k;
+    TAGPU_COBVM* vm;
+    int32_t args[4];
+    tagpu_rec_cob_started(cob);
+    vm = cg_vm(cob);
+    if (s_cvOn) {
+        CvCall v = {.kind = 'i', .idx = idx, .cb = cb, .now = now, .argc = argc, .io = {a0, a1, a2, a3}};
+        return cv_verified(cob, &v, NULL, NULL);
+    }
+    cg_call(&k, cob, 0x004B0B0Du);
+    args[0] = a0; args[1] = a1; args[2] = a2; args[3] = a3;
+    return cg_done_call(cob, &k, tagpu_cobvm_start(vm, &k.run, idx, cb, now, 1, argc, args));
+}
+
+/* 0x4B0C40(idx, &a0..&a3), ret 0x14: a NULL pointer gives 0 and takes nothing back
+   (0x4B0C64..0x4B0D11); a refusal touches none (0x4B0C51) */
+static int __attribute__((thiscall)) cg_query(char* cob, int idx, int32_t* p0, int32_t* p1, int32_t* p2,
+                                              int32_t* p3)
+{
+    CobCall k;
+    TAGPU_COBVM* vm;
+    int32_t io[4];
+    int r;
+    vm = cg_vm(cob);
+    if (s_cvOn) {
+        int32_t* p[4] = {p0, p1, p2, p3};
+        CvCall v = {.kind = 'q', .idx = idx, .mask = (p0 != NULL) | (p1 != NULL) << 1 | (p2 != NULL) << 2 | (p3 != NULL) << 3,
+                    .io = {p0 ? *p0 : 0, p1 ? *p1 : 0, p2 ? *p2 : 0, p3 ? *p3 : 0}};
+        return cv_verified(cob, &v, NULL, p);
+    }
+    cg_call(&k, cob, 0x004B0C4Du);
+    io[0] = p0 ? *p0 : 0; io[1] = p1 ? *p1 : 0; io[2] = p2 ? *p2 : 0; io[3] = p3 ? *p3 : 0;
+    r = cg_done_call(cob, &k, tagpu_cobvm_query(vm, &k.run, idx, io));
+    if (r == 1) {
+        if (p0) *p0 = io[0];
+        if (p1) *p1 = io[1];
+        if (p2) *p2 = io[2];
+        if (p3) *p3 = io[3];
+    }
+    return r;
+}
+
+/* 0x4B0D60(dt), ret 4: every record with dt, then the stepper */
+static void __attribute__((thiscall)) cg_tick(char* cob, int32_t dt)
+{
+    CobCall k;
+    TAGPU_COBVM* vm = cg_vm(cob);
+    if (s_cvOn) {
+        CvCall v = {.kind = 't', .dt = dt};
+        cv_verified(cob, &v, NULL, NULL);
+        return;
+    }
+    cg_call(&k, cob, 0);
+    cg_done_call(cob, &k, tagpu_cobvm_tick(vm, &k.run, dt));
+}
+
+/* cob_load wrote the records: the proof covers them, or every opcode of this object is checked */
+static void cob_game_loaded(char* cob)
+{
+    tagpu_cobvm_loaded(cg_vm(cob));
+}
+
+static void cob_game_sites(void)
+{
+    static const unsigned char alloc[] = {0xE8, 0x93, 0xF1, 0x02, 0x00};     /* call 0x4B4F10 */
+    static const unsigned char by_name[] = {0x51, 0x53, 0x55, 0x56, 0x57};
+    static const unsigned char by_idx[] = {0x8B, 0x44, 0x24, 0x04, 0x57};
+    static const unsigned char tick[] = {0x53, 0x8B, 0x5C, 0x24, 0x08};
+    lim_branch(0x00485D78u, sizeof alloc, alloc, 0xE8, (unsigned)(size_t)cob_object_alloc,
+               "COB object allocation, zeroed for the host's tail");
+    lim_branch(0x004B0940u, sizeof by_name, by_name, 0xE9, (unsigned)(size_t)cg_start_name,
+               "COB start by name: the game's VM");
+    lim_branch(0x004B0B00u, sizeof by_idx, by_idx, 0xE9, (unsigned)(size_t)cg_start_idx,
+               "COB start by index: the game's VM");
+    lim_branch(0x004B0C40u, sizeof by_idx, by_idx, 0xE9, (unsigned)(size_t)cg_query,
+               "COB query: the game's VM");
+    lim_branch(0x004B0D60u, sizeof tick, tick, 0xE9, (unsigned)(size_t)cg_tick,
+               "COB DoScriptsNow: the game's VM");
+    if (tagpu_sim_lever("tagpu_cobverify.on")) cv_install(by_name, by_idx, tick);
 }
 
 SIM_FEATURE(limits_sites, SIM_PUPPET_RUNS, "battle");

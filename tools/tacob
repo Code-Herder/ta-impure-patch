@@ -1812,11 +1812,14 @@ _COMMIT = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Effect))
 _TRACE = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Trace))
 
 
+_ALLOC = _C.CFUNCTYPE(None, _C.c_void_p, _C.c_int, _C.c_char)
+
+
 class _Host(_C.Structure):
     _fields_ = [("ctx", _C.c_void_p), ("get", _GET), ("world", _C.POINTER(_World)),
                 ("rand", _RAND), ("cargo", _CARGO),
                 ("carrier", _CARRIER), ("alive", _ALIVE), ("callback", _CALLBACK),
-                ("commit", _COMMIT), ("trace", _TRACE)]
+                ("commit", _COMMIT), ("trace", _TRACE), ("alloc", _ALLOC)]
 
 
 class _Run(_C.Structure):
@@ -2187,6 +2190,9 @@ class CobVM:
     def _trace(self, ctx, t):
         t = t.contents
         kind = t.kind.decode("latin-1")
+
+        if kind == "H":                 # the game's stack peaks; no fixture line carries them
+            return
 
         def line():
             if kind == "S":

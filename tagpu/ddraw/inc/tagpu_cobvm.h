@@ -3,9 +3,10 @@
 /* tagpu_cobvm -- the COB virtual machine, engine-free: the engine's runner 0x4B0DA0, its stepper
    0x4B1C00 and its entries 0x4B0940 / 0x4B0B00 / 0x4B0C40 / 0x4B0D60, opcode for opcode, on memory
    laid out as Impure's game lays it out (research/notes/ingame-wiki-cob-plan.md, "The core";
-   exe-reverse-engineering.md, "The COB engine"). The one COB VM outside the engine: tools/tacob
-   runs it; the in-game wiki and its mockup's server (L3) are to, and the game's own interpreter is
-   to be replaced by it.
+   exe-reverse-engineering.md, "The COB engine"). The one COB VM: the raised build's game runs it
+   on each unit's own COB object in place of the engine's (tagpu_patches.c, THE GAME'S COB
+   INTERPRETER), and tools/tacob, the in-game wiki and the coarse simulator's fire probe run it on
+   blocks of their own.
 
    ITS MEMORY IS THE ENGINE'S, in four blocks the caller owns:
      object   TAGPU_COB_OBJECT_BYTES, the COB object (tagpu_cob_safe.h): +0x04 the sim rate (30),
@@ -74,7 +75,8 @@ typedef struct TAGPU_COBVM_EFFECT {
 
 /* One line of the cobtrace oracle (tacob-design.md, "The trace contract"), as fields. */
 typedef struct TAGPU_COBVM_TRACE {
-    char           kind;        /* 'S' start, 'R' return, 'K' kill, 'D' draw, 'X' refused start */
+    char           kind;        /* 'S' start, 'R' return, 'K' kill, 'D' draw, 'X' refused start,
+                                   'H' a step whose record holds more than 32 words (value: sp + 1) */
     uint32_t       tick;
     int32_t        slot;        /* S, R, K, D: the record; K: the killed one */
     int32_t        script;      /* S, X: the script's index; R, K: -1 (the host maps `pc`) */
@@ -110,6 +112,9 @@ typedef struct TAGPU_COBVM_HOST {
     void (*commit)(void* ctx, const TAGPU_COBVM_EFFECT* e);
     /* the oracle's lines; NULL for none */
     void (*trace)(void* ctx, const TAGPU_COBVM_TRACE* t);
+    /* every allocation 0x4B08C0 is asked for, before it is tried: `script` as asked (an unknown
+       script and a full pool included), `from` TAGPU_COBVM_FROM_*; NULL for none */
+    void (*alloc)(void* ctx, int script, char from);
 } TAGPU_COBVM_HOST;
 
 /* One call's context: the host, the effect log (when the host has no commit), the tick the trace
@@ -141,6 +146,14 @@ typedef struct TAGPU_COBVM {
    the caller's to fill (the model builder's initial flags, 0x45AEC0). `program` must have had
    tagpu_cob_bind_model with the model's piece count. Returns 1, or 0 with the reason. */
 int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                     unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
+                     char* reason, unsigned capacity);
+
+/* Bind blocks the engine has already made and filled -- the game's own COB object after its
+   constructor 0x4B0610 and the script's attach 0x4B0720 -- without clearing them. The model's
+   piece count must be bound into `program` (tagpu_cob_bind_model). Returns 1, or 0 with the
+   reason. */
+int tagpu_cobvm_bind(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
                      unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
                      char* reason, unsigned capacity);
 
