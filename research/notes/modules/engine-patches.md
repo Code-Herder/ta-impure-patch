@@ -335,8 +335,10 @@ engine defects we patch".
 path with one whose every result is the engine's on the same machine. The piece rotation `0x4B7173`
 takes its cosine and sine from a table that the player's own `fsincos` fills at attach, under the
 control word the call runs under (any other word runs the engine's code: x87 `fsincos` differs between
-CPU makes, so nothing is precomputed and shipped), and installs it only when every processor the
-process may run on, each pinned in turn, fills it identically (a machine of performance and efficiency
+CPU makes, so nothing is precomputed and shipped), and installs it only when every processor of
+the machine, each pinned in turn, fills it identically (the process is widened to all of them for the
+build, as Impure widens it at the first DirectDraw call; a machine with more processors than one
+affinity mask names is refused; processors brought online later are not compared) (a machine of performance and efficiency
 cores holds two designs, whose `fsincos` nothing documents as equal); `_hypot` `0x4FB440` runs the engine's operations
 with one control-word switch each way instead of four or five. Each is written alone, and a mismatch
 leaves the engine's code. `tagpu_fpverify.on` at launch runs both beside the engine's code and counts

@@ -15344,8 +15344,8 @@ SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-res
    call, and fld of a stored 80-bit value is exact. Nothing is shipped precomputed: x87 fsincos
    differs between CPU makes, so a table made elsewhere could disagree with this machine's engine.
    One machine can hold processors of more than one kind (performance and efficiency cores), whose
-   fsincos nothing documents as equal; the table is therefore built on every processor the process may
-   run on, each pinned in turn, and installed only when every one fills it identically
+   fsincos nothing documents as equal; the table is therefore built on every processor of the machine,
+   each pinned in turn, and installed only when every one fills it identically
    (rot_build_everywhere). Where they differ the engine's code stays, and with it stock's own
    dependence on which core ran the call.
    `tagpu_fpverify.on` at launch runs both on every call and counts the calls whose results differ
@@ -15490,10 +15490,21 @@ static void rot_emit_verify(unsigned char* p)
 
 typedef void (__cdecl *RotBuild)(RotEntry* out, const uint16_t* cw, unsigned first, unsigned end);
 
-/* s_rot filled on every processor in the process's affinity mask, the thread pinned to each in turn and
-   confirmed there before and after: 1 when every processor's fill equals the first's, else 0 with the
-   reason logged. The thread's own affinity is restored. A thread pinned to one processor cannot run on
-   another, so the comparison is between processors and not between scheduling accidents. */
+/* s_rot filled on every processor of the machine, the thread pinned to each in turn and confirmed there
+   before and after: 1 when every processor's fill equals the first's, else 0 with the reason logged. A
+   thread pinned to one processor cannot run on another, so the comparison is between processors and
+   not between scheduling accidents.
+   Every processor, not the process's affinity mask: dd_CreateEx widens the mask to the system's at the
+   first DirectDraw call (singlecpu is off), and a tool can widen it too, so a process started on one core
+   still runs on all of them. A narrower mask is widened for the build and restored after it; every later
+   mask is a subset of the system's. The system mask names only one processor group, and at most 32
+   processors in a 32-bit process, so a machine with more active processors than it names is refused.
+   Processors brought online while the game runs are not compared. */
+#ifndef ALL_PROCESSOR_GROUPS
+#define ALL_PROCESSOR_GROUPS 0xffff
+#endif
+WINBASEAPI DWORD WINAPI GetActiveProcessorCount(WORD GroupNumber);
+
 static int rot_build_everywhere(void)
 {
     const RotBuild build = (RotBuild)(void*)s_rotCode;
@@ -15502,15 +15513,27 @@ static int rot_build_everywhere(void)
     DWORD_PTR proc = 0, sys = 0, saved = 0;
     unsigned cpu, n = 0, f;
     int ok = 1;
-    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) || !proc) {
-        tagpu_log("fprot: NOT installed: the process's processors could not be read");
+    unsigned named = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) || !sys) {
+        tagpu_log("fprot: NOT installed: the machine's processors could not be read");
         return 0;
     }
-    for (cpu = 0; ok && cpu < 8 * sizeof proc; cpu++) {
+    for (cpu = 0; cpu < 8 * sizeof sys; cpu++)
+        named += (unsigned)((sys >> cpu) & 1);
+    if (GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) != named) {
+        tagpu_logf("fprot: NOT installed: %lu active processors, %u in the system mask",
+                   (unsigned long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS), named);
+        return 0;
+    }
+    if (proc != sys && !SetProcessAffinityMask(GetCurrentProcess(), sys)) {
+        tagpu_log("fprot: NOT installed: the process could not be widened to every processor");
+        return 0;
+    }
+    for (cpu = 0; ok && cpu < 8 * sizeof sys; cpu++) {
         const DWORD_PTR bit = (DWORD_PTR)1 << cpu;
         DWORD_PTR was;
         int tries;
-        if (!(proc & bit))
+        if (!(sys & bit))
             continue;
         if (!(was = SetThreadAffinityMask(th, bit))) {
             tagpu_logf("fprot: NOT installed: the thread could not be pinned to processor %u", cpu);
@@ -15546,6 +15569,8 @@ static int rot_build_everywhere(void)
     }
     if (saved)
         SetThreadAffinityMask(th, saved);
+    if (proc != sys)
+        SetProcessAffinityMask(GetCurrentProcess(), proc);
     if (ok)
         tagpu_logf("fprot: the table is the same on all %u processors", n);
     return ok;
