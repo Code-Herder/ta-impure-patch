@@ -156,13 +156,15 @@ void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
     unsigned base = 0;
     int L;
     if (s_armed != 1) return;
-    /* THE NANO SPRAY'S EVENTS, once a frame: the Vulkan pass computes their particles itself
-       (tagpu_fx.c NVS), after this pass's layers 0..6 -- the spray's layer 6 is their top. The
-       `nonano` and `passive` levers draw none of them. */
+    /* THE PARTICLE EVENTS, once a frame: the Vulkan pass computes their particles itself
+       (tagpu_fx.c NVS), the events of layers 0..6 after this pass's layers 0..6 and those of 7..9
+       after its 7..9. The `nonano` lever draws no nano event, `nofire` no fire or flare event,
+       `passive` none. */
     if (from == 0) {
         const int n = (int)pk->n_pevt;
         s_nEvt += n;
-        tagpu_fx_set_events(tagpu_pk_pevt(pk), (s_nano && !s_passive) ? n : 0, pk->tick);
+        tagpu_fx_set_events(tagpu_pk_pevt(pk), n, pk->tick, pk->pevt_frame, (int)pk->pevt_nframe,
+                            s_passive ? 0u : (s_nano ? 1u : 0u) | (s_fire ? 2u : 0u));
     }
     if (!tab) return;
     tagpu_fx_set_mute(s_passive);          /* passive: count + log, emit nothing */
@@ -221,7 +223,7 @@ void tagpu_sfx_frame_done(const TAGPU_FXVIEW* v)
         sappend(b, sizeof b, &p, " kinds");
         for (k = 0; k < NKIND; k++)
             if (s_nKind[k]) sappend(b, sizeof b, &p, " %s:%d", KNAME[k], s_nKind[k]);
-        sappend(b, sizeof b, &p, " sub=%d fogged=%d -> sprites=%d dots=%d nano-events=%d%s%s%s",
+        sappend(b, sizeof b, &p, " sub=%d fogged=%d -> sprites=%d dots=%d events=%d%s%s%s",
                 s_nSub, s_nFogged, s_nSprites, s_nDots, s_nEvt,
                 (pk->truncated & TAGPU_PK_TRUNC_PEVT) ? " EVENTS-TRUNCATED" : "",
                 (pk->truncated & TAGPU_PK_TRUNC_PART) ? " TRUNCATED" : "",

@@ -873,8 +873,9 @@ typedef struct TAGPU_PK_PART {
    sub-particles in one frame at the opening volley, and this holds one and a
    half times that. 24 576 entries is 384 KB per slot. */
 #define TAGPU_PK_MAX_PART    24576u
-/* The events' ceiling: the publisher's list holds two layers' caps of them (tagpu_patches.c,
-   PEVT_CAP), each layer trimmed to its cap plus one as the engine trims its objects. */
+/* The events a packet carries, in view: two layers' caps of them. The publisher's list holds
+   four (tagpu_patches.c, PEVT_CAP), but a packet takes only the events whose particles can reach
+   the view, and keeps the newest with TAGPU_PK_TRUNC_PEVT past this. */
 #define TAGPU_PK_MAX_PEVT    (2u * ((unsigned)TAGPU_LIM_SFX + 1u))
 
 /* The engine's LHT "lighten" table, TAProgram+0xC8: 32 rows of 256 bytes, the
@@ -1405,14 +1406,19 @@ typedef struct TAGPU_PACKET {
     uint32_t n_fxvert,  off_fxvert;   /* PK_FXVERT                              */
     uint32_t n_part,   off_part;      /* PK_PART,   every drawable sub-particle,
                                          IN LAYER ORDER                          */
-    /* THE NANO SPRAY'S EMITTER EVENTS (inc/tagpu_pevt.h): on a launch that draws the spray from
-       events (`pevt_on`), the live ones whose particles can reach this packet's reach, in
-       emission order, the newest when the slot holds fewer than met it (TAGPU_PK_TRUNC_PEVT).
-       The particles are drawn at `tick`, the GameTime whose walk the engine's objects would
-       have had last. The spray's engine objects are then not made, so the particle table above
-       holds none of them -- but under the oracle lever, which makes them as well. */
+    /* THE PARTICLES' EMITTER EVENTS (inc/tagpu_pevt.h): on a launch that draws the nano spray,
+       fire and the teleport flare from events (`pevt_on`), the live ones whose particles can
+       reach this packet's reach, in emission order, the newest when the slot holds fewer than met
+       it (TAGPU_PK_TRUNC_PEVT). The particles are drawn at `tick`, the GameTime whose walk the
+       engine's objects would have had last. Those classes' engine objects then hold no particle,
+       so the particle table above holds none of them -- but under the oracle lever, which makes
+       them in full. `pevt_frame` is frame i of the flare sequence both sprite classes draw from,
+       resolved here for the first `pevt_nframe` of its frames, opaque handles like
+       `shadow_frame`. */
     uint32_t n_pevt,   off_pevt;      /* TAGPU_PEVT                              */
-    uint32_t pevt_on;                 /* 1: the nano spray is drawn from events  */
+    uint32_t pevt_on;                 /* 1: those classes are drawn from events  */
+    uint32_t pevt_nframe;             /* <= TAGPU_PEVT_NFRAME                    */
+    uint32_t pevt_frame[TAGPU_PEVT_NFRAME];
     uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
                                          a consumer walks 0..6, then the two
                                          effect passes, then 7..9 as the engine

@@ -2944,9 +2944,20 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREA
 static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
 {
     unsigned at = PKT_ALIGN4(*cursor), room, met, wrote;
-    p->n_pevt = 0; p->off_pevt = 0;
+    p->n_pevt = 0; p->off_pevt = 0; p->pevt_nframe = 0;
     p->pevt_on = tagpu_pevt_on() ? 1u : 0u;
     if (!p->pevt_on || !(s_fxWant & 2u)) return *cursor;
+    {
+        /* the flare sequence's frames, as the sprite classes' draw leaves index it (0x474286,
+           0x4736A6: 0x4B7F30 of the frame), one session asset resolved once a frame */
+        const char* ta = *(const char* const*)TA_MAIN_PP;
+        const char* seq = ta ? *(const char* const*)(ta + OFF_FLARESEQ) : NULL;
+        int nf = tagpu_gaf_seq_nframes(seq), i;
+        if (nf > (int)TAGPU_PEVT_NFRAME) nf = (int)TAGPU_PEVT_NFRAME;
+        for (i = 0; i < nf; i++)
+            p->pevt_frame[i] = (unsigned)(size_t)tagpu_gaf_seq_frame(seq, i);
+        p->pevt_nframe = nf > 0 ? (unsigned)nf : 0u;
+    }
     room = at < p->cap_bytes ? (p->cap_bytes - at) / (unsigned)sizeof(TAGPU_PEVT) : 0u;
     if (room > TAGPU_PK_MAX_PEVT) room = TAGPU_PK_MAX_PEVT;
     met = tagpu_pevt_copy((TAGPU_PEVT*)(void*)((unsigned char*)p + at), room,

@@ -223,7 +223,7 @@ static int            s_rjTried;           /* the device refused; do not ask aga
 static unsigned       s_rjEpoch;           /* ...in this restorer epoch            */
 static VkImageView    s_rjSrcView;
 
-/* what `record` was left to draw: the four buckets, in bucket order, and the nano events --
+/* what `record` was left to draw: the four buckets, in bucket order, and the particle events --
    those of layers 0..6 first in the slot's event buffer, then those of 7..9 */
 static int s_n[TAGPU_FXB_N];
 static int s_nEvtUnder, s_nEvtOver;
@@ -244,7 +244,7 @@ typedef struct {
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's upload, when due */
 
-    VkBuffer        ebuf;                  /* the frame's nano events, binding 1 */
+    VkBuffer        ebuf;                  /* the frame table and events, binding 1 */
     VkDeviceMemory  emem;
     unsigned char*  emap;
     VkDeviceSize    ecap;
@@ -544,9 +544,10 @@ static int slot_verts(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
     return 1;
 }
 
-/* Room for `bytes` of nano events in this slot, grown by doubling, and binding 1 naming the
-   buffer -- written here because this is the slot's own `prepare`, after the seam's wait on its
-   fence, the same ownership `fog_bind` writes binding 43 under. Made with the slot's fixed half
+/* Room for `bytes` of the sprite frame table and the particle events in this slot, grown by
+   doubling, and binding 1 naming the buffer -- written here because this is the slot's own
+   `prepare`, after the seam's wait on its fence, the same ownership `fog_bind` writes binding 43
+   under. Made with the slot's fixed half
    too (`slot_build`), so the binding names a buffer on every frame the set is bound. */
 static int slot_evts(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
 {
@@ -654,7 +655,7 @@ static int build_pipelines(const TAGPU_VKPASS* d)
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    /* binding 1, NVS's storage block: the nano events (tagpu_fx.c) */
+    /* binding 1, NVS's storage block: the sprite frame table and the particle events (tagpu_fx.c) */
     b[8].binding = 1; b[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[8].descriptorCount = 1; b[8].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     dli.bindingCount = 9; dli.pBindings = b;
@@ -769,14 +770,14 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     st[0].module = vs; st[1].module = fs;
     if (r != VK_SUCCESS) { plog(d, "fx: the line pipeline was refused (%d)", (int)r); goto out; }
 
-    /* THE NANO EVENTS: no vertex input at all -- NVS computes each vertex from gl_VertexIndex
+    /* THE PARTICLE EVENTS: no vertex input at all -- NVS computes each vertex from gl_VertexIndex
        and the storage block -- with the triangle pipeline's blend, depth and dynamic state */
     gp.pVertexInputState = &vin;
     st[0].module = nvs; st[1].module = nfs;
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeEvt);
     gp.pVertexInputState = &vi;
     st[0].module = vs; st[1].module = fs;
-    if (r != VK_SUCCESS) { plog(d, "fx: the nano event pipeline was refused (%d)", (int)r); goto out; }
+    if (r != VK_SUCCESS) { plog(d, "fx: the particle event pipeline was refused (%d)", (int)r); goto out; }
 
     /* THE FLASHES ARE PURE ADDITIVE LIGHT: ONE / ONE, and the shader gives
        them alpha 0 so the target keeps its own. */
@@ -943,7 +944,7 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_descriptors(d)) return 0;
 
     plog(d, "fx: the Vulkan edition is up - %u frame slots, uniform stride %u, "
-            "four pipelines (tri, line, flash, nano events)",
+            "four pipelines (tri, line, flash, particle events)",
          (unsigned)d->slots, (unsigned)s_ustride);
     return 1;
 }
@@ -1311,10 +1312,10 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         return 0;
     }
     s_saidModels = 0;
-    /* THE NANO EVENTS' COUNT, BOUNDED BY THE PACKET'S OWN CAP: it sizes the event buffer and the
-       copy into it, and the acquire held the table to it (tagpu_packet.c) */
+    /* THE PARTICLE EVENTS' COUNT, BOUNDED BY THE PACKET'S OWN CAP: it sizes the event buffer and
+       the copy into it, and the acquire held the table to it (tagpu_packet.c) */
     if (h.npevt < 0 || h.npevt > (int)TAGPU_PK_MAX_PEVT || (h.npevt > 0 && !h.pevt)) {
-        plog(d, "fx: the hand-over reports %d nano events, outside 0..%u - nothing drawn",
+        plog(d, "fx: the hand-over reports %d particle events, outside 0..%u - nothing drawn",
              h.npevt, TAGPU_PK_MAX_PEVT);
         return 0;
     }
@@ -1360,15 +1361,21 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         off += (size_t)h.n[b] * VST * sizeof(float);
     }
 
-    /* THE NANO EVENTS, the layers the engine draws before its projectiles (0..6) first and the
-       rest after them, so `record` draws each run at its own place in the bucket order with one
-       pipeline: NVS finds its event by gl_VertexIndex, which counts from the run's firstVertex. */
+    /* THE PARTICLE EVENTS, after the sprites' frame table (TAGPU_PEVT_NFRAME rows: NVS reads an
+       event at word 8 * TAGPU_PEVT_NFRAME + 20 e), the layers the engine draws before its
+       projectiles (0..6) first and the rest after them, so `record` draws each run at its own
+       place in the bucket order with one pipeline: NVS finds its event by gl_VertexIndex, which
+       counts from the run's firstVertex. */
     s_nEvtUnder = s_nEvtOver = 0;
     if (h.npevt > 0) {
         TAGPU_PEVT* o;
         int i, pass;
-        if (!slot_evts(d, s, (VkDeviceSize)h.npevt * sizeof(TAGPU_PEVT))) goto refuse;
-        o = (TAGPU_PEVT*)(void*)s->emap;
+        if (!slot_evts(d, s, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME +
+                             (VkDeviceSize)h.npevt * sizeof(TAGPU_PEVT)))
+            goto refuse;
+        if (h.pevtFrame) memcpy(s->emap, h.pevtFrame, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
+        else memset(s->emap, 0, sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
+        o = (TAGPU_PEVT*)(void*)(s->emap + sizeof(TAGPU_PEVT_FRAME) * TAGPU_PEVT_NFRAME);
         for (pass = 0; pass < 2; pass++)
             for (i = 0; i < h.npevt; i++) {
                 const int under = TAGPU_PEVT_LAYER(h.pevt[i].flags) <= 6u;
@@ -1623,9 +1630,9 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
             else                      vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
             first += (uint32_t)s_n[b];
         }
-        /* THE NANO EVENTS where their layers' particles stand in the engine's frame: 0..6 right
-           after the under bucket (the spray's layer 6 is its top), 7..9 after the sprites. Sixty
-           vertices an event, ten particles of two triangles. */
+        /* THE PARTICLE EVENTS where their layers' particles stand in the engine's frame: 0..6
+           right after the under bucket, 7..9 after the sprites. Sixty vertices an event, ten
+           particles of two triangles. */
         if (b == TAGPU_FXB_UNDER && s_nEvtUnder) {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
             vkCmdDraw(cb, 60u * (uint32_t)s_nEvtUnder, 1, 0, 0);
