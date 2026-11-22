@@ -76,6 +76,16 @@ int tagpu_wpn_replay_intercept(const unsigned char* point, unsigned int weapon);
      triple, the hit delay queue's bounds and the ghost sweep's count. Nothing but C code may run
      between the two (the air pool's lock is held). It returns what it repaired. */
 int tagpu_effects_clear(void);
+
+/* THE NANO SPRAY'S EMITTER EVENTS (tagpu_patches.c, *The nano spray as events*; inc/tagpu_pevt.h),
+   game thread only. tagpu_pevt_on: 1 on a launch that draws the nano spray from events (Vulkan,
+   the particle walk and the pool's alloc stub in). tagpu_pevt_copy: the live events whose reach
+   box meets [l, r] x [t, b] (world x, y - alt / 2), in emission order, the newest `max` of them
+   when more meet it, into `dst`; answers how many met it, `*wrote` how many were copied. */
+struct TAGPU_PEVT;
+int tagpu_pevt_on(void);
+unsigned tagpu_pevt_copy(struct TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int b,
+                         unsigned* wrote);
 void tagpu_patches_restore_begin(void);
 unsigned int tagpu_patches_restored(void);
 

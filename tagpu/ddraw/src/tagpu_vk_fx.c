@@ -114,7 +114,7 @@
 #include "spirv/tagpu_fx.spv.h"
 
 #define VST    TAGPU_FX_VST                /* floats per vertex, the gather's  */
-#define UBLK_VS 32                         /* std140 bytes, the generated header */
+#define UBLK_VS 112                        /* std140 bytes: NVS's, which begins with VS's 32 */
 #define UBLK_FS 80                         /* LFS's: FS's 64, then uGrid */
 
 /* ---- the entry points ----------------------------------------------------
@@ -164,7 +164,7 @@ static int s_saidLht;                      /* ...the light table's              
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
-static VkPipeline            s_pipeTri, s_pipeLine, s_pipeFlash;
+static VkPipeline            s_pipeTri, s_pipeLine, s_pipeFlash, s_pipeEvt;
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp;
 
@@ -223,8 +223,10 @@ static int            s_rjTried;           /* the device refused; do not ask aga
 static unsigned       s_rjEpoch;           /* ...in this restorer epoch            */
 static VkImageView    s_rjSrcView;
 
-/* what `record` was left to draw: the four buckets, in bucket order */
+/* what `record` was left to draw: the four buckets, in bucket order, and the nano events --
+   those of layers 0..6 first in the slot's event buffer, then those of 7..9 */
 static int s_n[TAGPU_FXB_N];
+static int s_nEvtUnder, s_nEvtOver;
 static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer px */
 /* The scissor's INPUTS, kept as numbers rather than as a copy of the hand-over.
    TAGPU_FXHAND is full of pointers into the gather's own frame memory, and a
@@ -241,6 +243,11 @@ typedef struct {
     VkDeviceSize    vcap;
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's upload, when due */
+
+    VkBuffer        ebuf;                  /* the frame's nano events, binding 1 */
+    VkDeviceMemory  emem;
+    unsigned char*  emap;
+    VkDeviceSize    ecap;
 
     VkImage         pal, lht;              /* the two small per-slot images    */
     VkDeviceMemory  palMem, lhtMem;
@@ -449,6 +456,10 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->vbuf)  { vkDestroyBuffer(dev, s->vbuf, NULL); s->vbuf = VK_NULL_HANDLE; }
     if (s->vmem)  { vkFreeMemory(dev, s->vmem, NULL); s->vmem = VK_NULL_HANDLE; }
     s->vcap = 0;
+    if (s->emap)  { vkUnmapMemory(dev, s->emem); s->emap = NULL; }
+    if (s->ebuf)  { vkDestroyBuffer(dev, s->ebuf, NULL); s->ebuf = VK_NULL_HANDLE; }
+    if (s->emem)  { vkFreeMemory(dev, s->emem, NULL); s->emem = VK_NULL_HANDLE; }
+    s->ecap = 0;
     tagpu_vk_stage_drop(d, &s->stage);
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
@@ -459,8 +470,10 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     s->built = 0;
 }
 
+static int slot_evts(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes);
+
 /* The fixed-size half of a slot: the palette and light-table images, their
-   staging, and the descriptor writes that never change again. */
+   staging, the descriptor writes that never change again, and the first event buffer. */
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
     VkDescriptorImageInfo ii[2];
@@ -484,6 +497,7 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &ii[0];
     wr[1] = wr[0]; wr[1].dstBinding = 41; wr[1].pImageInfo = &ii[1];   /* uLht    */
     vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+    if (!slot_evts(d, s, 1)) return 0;
     s->built = 1;
     return 1;
 }
@@ -530,6 +544,34 @@ static int slot_verts(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
     return 1;
 }
 
+/* Room for `bytes` of nano events in this slot, grown by doubling, and binding 1 naming the
+   buffer -- written here because this is the slot's own `prepare`, after the seam's wait on its
+   fence, the same ownership `fog_bind` writes binding 43 under. Made with the slot's fixed half
+   too (`slot_build`), so the binding names a buffer on every frame the set is bound. */
+static int slot_evts(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
+{
+    VkDeviceSize want = 65536;
+    VkDescriptorBufferInfo bi;
+    VkWriteDescriptorSet wr;
+    if (s->ecap >= bytes && s->ebuf) return 1;
+    while (want < bytes) want *= 2;
+    if (s->emap) { vkUnmapMemory(d->dev, s->emem); s->emap = NULL; }
+    if (s->ebuf) { vkDestroyBuffer(d->dev, s->ebuf, NULL); s->ebuf = VK_NULL_HANDLE; }
+    if (s->emem) { vkFreeMemory(d->dev, s->emem, NULL); s->emem = VK_NULL_HANDLE; }
+    s->ecap = 0;
+    if (!mk_buffer(d, want, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s->ebuf, &s->emem, &s->emap)) return 0;
+    s->ecap = want;
+    memset(&bi, 0, sizeof bi); memset(&wr, 0, sizeof wr);
+    bi.buffer = s->ebuf; bi.offset = 0; bi.range = VK_WHOLE_SIZE;
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = s->dset; wr.dstBinding = 1; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    return 1;
+}
+
 /* ---- building ----------------------------------------------------------- */
 
 static int build_sampler(const TAGPU_VKPASS* d)
@@ -571,7 +613,7 @@ static int build_sampler(const TAGPU_VKPASS* d)
 static int build_pipelines(const TAGPU_VKPASS* d)
 {
     static const struct { int loc, n, off; } at[TAGPU_FX_NATTR] = TAGPU_FX_ATTRS;
-    VkDescriptorSetLayoutBinding b[8];
+    VkDescriptorSetLayoutBinding b[9];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -590,6 +632,8 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     VkShaderModule lvs = VK_NULL_HANDLE, lfs = VK_NULL_HANDLE;
+    VkShaderModule nvs = VK_NULL_HANDLE, nfs = VK_NULL_HANDLE;
+    VkPipelineVertexInputStateCreateInfo vin = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VkResult r;
     int i, ok = 0;
 
@@ -610,7 +654,10 @@ static int build_pipelines(const TAGPU_VKPASS* d)
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    dli.bindingCount = 8; dli.pBindings = b;
+    /* binding 1, NVS's storage block: the nano events (tagpu_fx.c) */
+    b[8].binding = 1; b[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[8].descriptorCount = 1; b[8].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    dli.bindingCount = 9; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -624,7 +671,11 @@ static int build_pipelines(const TAGPU_VKPASS* d)
                     sizeof tagpu_spv_tagpu_fx_LVS / sizeof(uint32_t));
     lfs = mk_module(d, tagpu_spv_tagpu_fx_LFS,
                     sizeof tagpu_spv_tagpu_fx_LFS / sizeof(uint32_t));
-    if (!vs || !fs || !lvs || !lfs) { plog(d, "fx: a shader module was refused"); goto out; }
+    nvs = mk_module(d, tagpu_spv_tagpu_fx_NVS,
+                    sizeof tagpu_spv_tagpu_fx_NVS / sizeof(uint32_t));
+    nfs = mk_module(d, tagpu_spv_tagpu_fx_NFS,
+                    sizeof tagpu_spv_tagpu_fx_NFS / sizeof(uint32_t));
+    if (!vs || !fs || !lvs || !lfs || !nvs || !nfs) { plog(d, "fx: a shader module was refused"); goto out; }
 
     memset(st, 0, sizeof st);
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -718,6 +769,15 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     st[0].module = vs; st[1].module = fs;
     if (r != VK_SUCCESS) { plog(d, "fx: the line pipeline was refused (%d)", (int)r); goto out; }
 
+    /* THE NANO EVENTS: no vertex input at all -- NVS computes each vertex from gl_VertexIndex
+       and the storage block -- with the triangle pipeline's blend, depth and dynamic state */
+    gp.pVertexInputState = &vin;
+    st[0].module = nvs; st[1].module = nfs;
+    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeEvt);
+    gp.pVertexInputState = &vi;
+    st[0].module = vs; st[1].module = fs;
+    if (r != VK_SUCCESS) { plog(d, "fx: the nano event pipeline was refused (%d)", (int)r); goto out; }
+
     /* THE FLASHES ARE PURE ADDITIVE LIGHT: ONE / ONE, and the shader gives
        them alpha 0 so the target keeps its own. */
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -731,12 +791,14 @@ out:
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
     if (lvs) vkDestroyShaderModule(d->dev, lvs, NULL);
     if (lfs) vkDestroyShaderModule(d->dev, lfs, NULL);
+    if (nvs) vkDestroyShaderModule(d->dev, nvs, NULL);
+    if (nfs) vkDestroyShaderModule(d->dev, nfs, NULL);
     return ok;
 }
 
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
-    VkDescriptorPoolSize ps[2];
+    VkDescriptorPoolSize ps[3];
     VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
     VkDescriptorSet sets[TAGPU_VK_SLOTS];
@@ -746,8 +808,9 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 6;
+    ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[2].descriptorCount = d->slots;
     dpi.maxSets = d->slots;
-    dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
+    dpi.poolSizeCount = 3; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
 
     for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
@@ -864,13 +927,12 @@ static int build(const TAGPU_VKPASS* d)
     /* TWO BLOCKS PER SLOT, EACH AT AN OFFSET THE DEVICE ACCEPTS.
        `minUniformBufferOffsetAlignment` is 16 on some devices and 256 on
        others, and a bound buffer offset that is not a multiple of it is
-       undefined behaviour rather than a slow path. The larger block is the
-       fragment stage's, so each block takes that size ROUNDED UP to the
-       alignment -- 80 bytes is a multiple of 16 but not of 64 -- and the
-       stride is two of them. */
+       undefined behaviour rather than a slow path. Each block takes the larger
+       of the two stages' sizes ROUNDED UP to the alignment -- 112 bytes is a
+       multiple of 16 but not of 64 -- and the stride is two of them. */
     ualign = props.limits.minUniformBufferOffsetAlignment;
     if (ualign < 1) ualign = 1;
-    s_ublock = ((UBLK_FS + ualign - 1) / ualign) * ualign;
+    s_ublock = (((UBLK_VS > UBLK_FS ? UBLK_VS : UBLK_FS) + ualign - 1) / ualign) * ualign;
     s_ustride = s_ublock * 2;
 
     if (!mk_buffer(d, s_ustride * d->slots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -881,7 +943,7 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_descriptors(d)) return 0;
 
     plog(d, "fx: the Vulkan edition is up - %u frame slots, uniform stride %u, "
-            "three pipelines (tri, line, flash)",
+            "four pipelines (tri, line, flash, nano events)",
          (unsigned)d->slots, (unsigned)s_ustride);
     return 1;
 }
@@ -1167,7 +1229,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
        uFog. */
-    union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
+    union { float f[UBLK_VS / 4]; int i[UBLK_VS / 4]; } ub;
     int fogW = 0, fogH = 0;
     int b, total = 0;
     size_t off;
@@ -1249,9 +1311,16 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         return 0;
     }
     s_saidModels = 0;
+    /* THE NANO EVENTS' COUNT, BOUNDED BY THE PACKET'S OWN CAP: it sizes the event buffer and the
+       copy into it, and the acquire held the table to it (tagpu_packet.c) */
+    if (h.npevt < 0 || h.npevt > (int)TAGPU_PK_MAX_PEVT || (h.npevt > 0 && !h.pevt)) {
+        plog(d, "fx: the hand-over reports %d nano events, outside 0..%u - nothing drawn",
+             h.npevt, TAGPU_PK_MAX_PEVT);
+        return 0;
+    }
     /* nothing of this pass's own to draw, and nothing against the models:
        they are drawn */
-    if (total < 1) { s_modelsFrame = d->frame; return 0; }
+    if (total < 1 && h.npevt < 1) { s_modelsFrame = d->frame; return 0; }
 
     /* A FLASH WITHOUT ITS LIGHT TABLE has nothing to be lit from -- the
        producer has never built the table -- so the pass stands down rather
@@ -1289,6 +1358,24 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         if (!h.n[b]) continue;
         memcpy(s->vmap + off, h.vert[b], (size_t)h.n[b] * VST * sizeof(float));
         off += (size_t)h.n[b] * VST * sizeof(float);
+    }
+
+    /* THE NANO EVENTS, the layers the engine draws before its projectiles (0..6) first and the
+       rest after them, so `record` draws each run at its own place in the bucket order with one
+       pipeline: NVS finds its event by gl_VertexIndex, which counts from the run's firstVertex. */
+    s_nEvtUnder = s_nEvtOver = 0;
+    if (h.npevt > 0) {
+        TAGPU_PEVT* o;
+        int i, pass;
+        if (!slot_evts(d, s, (VkDeviceSize)h.npevt * sizeof(TAGPU_PEVT))) goto refuse;
+        o = (TAGPU_PEVT*)(void*)s->emap;
+        for (pass = 0; pass < 2; pass++)
+            for (i = 0; i < h.npevt; i++) {
+                const int under = TAGPU_PEVT_LAYER(h.pevt[i].flags) <= 6u;
+                if (under != (pass == 0)) continue;
+                *o++ = h.pevt[i];
+                if (pass == 0) s_nEvtUnder++; else s_nEvtOver++;
+            }
     }
 
     /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
@@ -1383,6 +1470,10 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     ub.f[2] = h.zoom;                                  /* uZoom      float @8  */
     ub.f[4] = h.zoomCx; ub.f[5] = h.zoomCy;            /* uZoomC      vec2 @16 */
     ub.f[6] = h.depthScale;                            /* uDepthScale float @24 */
+    ub.i[8] = h.eyeX; ub.i[9] = h.eyeY;                /* uEye       ivec4 @32 */
+    ub.i[10] = h.vpL; ub.i[11] = h.vpT;
+    ub.i[12] = (int)h.pevtTick;                        /* uTick        int @48 */
+    memcpy(&ub.f[16], h.encLayer, sizeof h.encLayer);  /* uEncA/B/C        @64 */
     memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
     memset(&ub, 0, sizeof ub);
     ub.i[0] = h.restored;                              /* uRestored    int @0  */
@@ -1522,15 +1613,27 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        survive (smoke under weapon sprites, explosions over their flash). */
     for (b = 0; b < TAGPU_FXB_N; b++) {
         VkPipeline pipe;
-        if (!s_n[b]) continue;
-        pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
-             : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-        /* the lines bucket holds records, one six-vertex band an instance,
-           at the same stride as every other bucket's vertices */
-        if (b == TAGPU_FXB_LINES) vkCmdDraw(cb, 6, (uint32_t)s_n[b], 0, first);
-        else                      vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
-        first += (uint32_t)s_n[b];
+        if (s_n[b]) {
+            pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
+                 : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+            /* the lines bucket holds records, one six-vertex band an instance,
+               at the same stride as every other bucket's vertices */
+            if (b == TAGPU_FXB_LINES) vkCmdDraw(cb, 6, (uint32_t)s_n[b], 0, first);
+            else                      vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
+            first += (uint32_t)s_n[b];
+        }
+        /* THE NANO EVENTS where their layers' particles stand in the engine's frame: 0..6 right
+           after the under bucket (the spray's layer 6 is its top), 7..9 after the sprites. Sixty
+           vertices an event, ten particles of two triangles. */
+        if (b == TAGPU_FXB_UNDER && s_nEvtUnder) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
+            vkCmdDraw(cb, 60u * (uint32_t)s_nEvtUnder, 1, 0, 0);
+        }
+        if (b == TAGPU_FXB_SPRITES && s_nEvtOver) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
+            vkCmdDraw(cb, 60u * (uint32_t)s_nEvtOver, 1, 60u * (uint32_t)s_nEvtUnder, 0);
+        }
     }
 }
 
@@ -1590,6 +1693,7 @@ void tagpu_vk_fx_down(const TAGPU_VKPASS* d)
     if (s_pipeTri)   { vkDestroyPipeline(dev, s_pipeTri, NULL);   s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeLine)  { vkDestroyPipeline(dev, s_pipeLine, NULL);  s_pipeLine = VK_NULL_HANDLE; }
     if (s_pipeFlash) { vkDestroyPipeline(dev, s_pipeFlash, NULL); s_pipeFlash = VK_NULL_HANDLE; }
+    if (s_pipeEvt) { vkDestroyPipeline(dev, s_pipeEvt, NULL); s_pipeEvt = VK_NULL_HANDLE; }
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }

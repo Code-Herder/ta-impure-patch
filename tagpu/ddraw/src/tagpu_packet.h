@@ -52,6 +52,7 @@
 #include "tagpu_limits.h"   /* the effect pools' sizes: the tables hold every record */
 #include "tagpu_wikipk.h"   /* the in-game wiki's record and its part of the command record */
 #include "tagpu_fogsrc.h"   /* the fog source's format and TAGPU_FOG_MAXDIM */
+#include "tagpu_pevt.h"     /* the nano spray's emitter event, the packet's record of it */
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
    engine's own blitter 0x4CCF60 accepts: [rows][0][yoff][code][u16 6][w][bits]
@@ -872,6 +873,9 @@ typedef struct TAGPU_PK_PART {
    sub-particles in one frame at the opening volley, and this holds one and a
    half times that. 24 576 entries is 384 KB per slot. */
 #define TAGPU_PK_MAX_PART    24576u
+/* The events' ceiling: the publisher's list holds two layers' caps of them (tagpu_patches.c,
+   PEVT_CAP), each layer trimmed to its cap plus one as the engine trims its objects. */
+#define TAGPU_PK_MAX_PEVT    (2u * ((unsigned)TAGPU_LIM_SFX + 1u))
 
 /* The engine's LHT "lighten" table, TAProgram+0xC8: 32 rows of 256 bytes, the
    explosion flash's colour ramp. Copied whole, like the shade table. */
@@ -946,6 +950,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_PART    0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOGSRC  0x1000u
+#define TAGPU_PK_TRUNC_PEVT    0x2000u    /* the nano events: the oldest left out */
 #define TAGPU_PK_TRUNC_PLACE   0x4000u    /* the placement's sites did not fit:
                                              they still replace the square   */
 #define TAGPU_PK_TRUNC_MM      0x8000u
@@ -1400,6 +1405,14 @@ typedef struct TAGPU_PACKET {
     uint32_t n_fxvert,  off_fxvert;   /* PK_FXVERT                              */
     uint32_t n_part,   off_part;      /* PK_PART,   every drawable sub-particle,
                                          IN LAYER ORDER                          */
+    /* THE NANO SPRAY'S EMITTER EVENTS (inc/tagpu_pevt.h): on a launch that draws the spray from
+       events (`pevt_on`), the live ones whose particles can reach this packet's reach, in
+       emission order, the newest when the slot holds fewer than met it (TAGPU_PK_TRUNC_PEVT).
+       The particles are drawn at `tick`, the GameTime whose walk the engine's objects would
+       have had last. The spray's engine objects are then not made, so the particle table above
+       holds none of them -- but under the oracle lever, which makes them as well. */
+    uint32_t n_pevt,   off_pevt;      /* TAGPU_PEVT                              */
+    uint32_t pevt_on;                 /* 1: the nano spray is drawn from events  */
     uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
                                          a consumer walks 0..6, then the two
                                          effect passes, then 7..9 as the engine
@@ -1652,6 +1665,8 @@ static __inline const TAGPU_PK_FXVERT* tagpu_pk_fxvert(const TAGPU_PACKET* p)
 { return p->n_fxvert ? (const TAGPU_PK_FXVERT*)(const void*)((const unsigned char*)p + p->off_fxvert) : (const TAGPU_PK_FXVERT*)0; }
 static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
 { return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
+static __inline const TAGPU_PEVT* tagpu_pk_pevt(const TAGPU_PACKET* p)
+{ return p->n_pevt ? (const TAGPU_PEVT*)(const void*)((const unsigned char*)p + p->off_pevt) : (const TAGPU_PEVT*)0; }
 /* the queued builds the order pass is showing site rects for, or NULL */
 static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
 { return p->n_builds ? (const TAGPU_PK_BUILD*)(const void*)((const unsigned char*)p + p->off_builds) : (const TAGPU_PK_BUILD*)0; }

@@ -146,6 +146,9 @@ int  tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
                          float wx, float wz, float enc, int under);
 int  tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under);
 void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing */
+/* this frame's nano events, the packet's table (tagpu_sfx.c): drawn by the Vulkan pass at the
+   packet's GameTime `tick`; `n` 0 draws none */
+void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick);
 unsigned tagpu_fx_caps(void);                   /* the PACKET's copy of TAProgram+0xF0:
                                                    bit5 ALP built, bit7 LHT built      */
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */
@@ -305,6 +308,16 @@ typedef struct TAGPU_FXHAND {
     int   vpL, vpT, vw, vh;
     int   scissorOn;                  /* the native pass clips this frame     */
     int   ss;                         /* the world target's supersample factor */
+
+    /* THE NANO SPRAY'S EMITTER EVENTS (inc/tagpu_pevt.h; tagpu_sfx.c hands them in): the
+       packet's own table, which the render thread holds for this whole frame, drawn by the NVS/NFS
+       program at `pevtTick`, the packet's GameTime, from the eye the gather projected with and
+       each layer's depth key. NULL / 0 when the frame draws none. */
+    const TAGPU_PEVT* pevt;
+    int      npevt;
+    unsigned pevtTick;
+    int      eyeX, eyeY;
+    float    encLayer[10];
 
     /* 1 on the ONE frame `tagpu_fx.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane

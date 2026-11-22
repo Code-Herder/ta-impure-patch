@@ -138,7 +138,7 @@ typedef char sfx_kind_agrees[(K_SMOKE1 == (int)TAGPU_PK_PK_SMOKE1 &&
                               NLAYER   == (int)TAGPU_PK_NLAYER) ? 1 : -1];
 
 /* ---- per-frame counters ---- */
-static int s_nSub, s_nSprites, s_nDots, s_nFogged;
+static int s_nSub, s_nSprites, s_nDots, s_nFogged, s_nEvt;
 static int s_nObj[NLAYER], s_nKind[NKIND];
 
 /* THE LAYERS COME OUT OF THE PACKET. The publisher walks the engine's vectors
@@ -155,7 +155,16 @@ void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
     const TAGPU_PK_PART* tab = tagpu_pk_part(pk);
     unsigned base = 0;
     int L;
-    if (s_armed != 1 || !tab) return;
+    if (s_armed != 1) return;
+    /* THE NANO SPRAY'S EVENTS, once a frame: the Vulkan pass computes their particles itself
+       (tagpu_fx.c NVS), after this pass's layers 0..6 -- the spray's layer 6 is their top. The
+       `nonano` and `passive` levers draw none of them. */
+    if (from == 0) {
+        const int n = (int)pk->n_pevt;
+        s_nEvt += n;
+        tagpu_fx_set_events(tagpu_pk_pevt(pk), (s_nano && !s_passive) ? n : 0, pk->tick);
+    }
+    if (!tab) return;
     tagpu_fx_set_mute(s_passive);          /* passive: count + log, emit nothing */
     for (L = 0; L < NLAYER; L++) {
         unsigned n = pk->part_n[L], i;
@@ -212,12 +221,13 @@ void tagpu_sfx_frame_done(const TAGPU_FXVIEW* v)
         sappend(b, sizeof b, &p, " kinds");
         for (k = 0; k < NKIND; k++)
             if (s_nKind[k]) sappend(b, sizeof b, &p, " %s:%d", KNAME[k], s_nKind[k]);
-        sappend(b, sizeof b, &p, " sub=%d fogged=%d -> sprites=%d dots=%d%s%s",
-                s_nSub, s_nFogged, s_nSprites, s_nDots,
+        sappend(b, sizeof b, &p, " sub=%d fogged=%d -> sprites=%d dots=%d nano-events=%d%s%s%s",
+                s_nSub, s_nFogged, s_nSprites, s_nDots, s_nEvt,
+                (pk->truncated & TAGPU_PK_TRUNC_PEVT) ? " EVENTS-TRUNCATED" : "",
                 (pk->truncated & TAGPU_PK_TRUNC_PART) ? " TRUNCATED" : "",
                 s_passive ? " (passive: nothing emitted)" : "");
         flog(b);
     }
     memset(s_nObj, 0, sizeof s_nObj); memset(s_nKind, 0, sizeof s_nKind);
-    s_nSub = s_nSprites = s_nDots = s_nFogged = 0;
+    s_nSub = s_nSprites = s_nDots = s_nFogged = s_nEvt = 0;
 }

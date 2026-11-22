@@ -2152,6 +2152,8 @@ static int      s_fxHave, s_fxPartTrunc;
 static volatile unsigned s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartMax, s_cLayerBad, s_cSubBad;
 #define PART_SUBCAP 4096u   /* sub-particles per object: a containment filter */
 static volatile unsigned s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart;
+/* the nano events (fill_pevt): last copied, most copied, slots too small for all that met it */
+static volatile unsigned s_cLastPevt, s_cPevtMax, s_cPevtTrunc;
 
 /* the LHT lighten table, latched exactly like the shade table */
 static unsigned char s_lht[TAGPU_PK_LHT_BYTES];
@@ -2934,6 +2936,36 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREA
     s_cFxScan++;
 }
 
+/* THE NANO SPRAY'S EVENTS (tagpu_patches.c, *The nano spray as events*): the live ones whose
+   particles can reach the packet's reach, grown as the models' cull grows it, written straight
+   into the slot. The list is this thread's, read here between two of its walks. A slot that holds
+   fewer than met the reach takes the newest ones, says so in its truncation bit and the
+   heartbeat's count, and grows by the shortfall for the next fill, as every table's does. */
+static unsigned fill_pevt(TAGPU_PACKET* p, unsigned* cursor, const FXREACH* rc)
+{
+    unsigned at = PKT_ALIGN4(*cursor), room, met, wrote;
+    p->n_pevt = 0; p->off_pevt = 0;
+    p->pevt_on = tagpu_pevt_on() ? 1u : 0u;
+    if (!p->pevt_on || !(s_fxWant & 2u)) return *cursor;
+    room = at < p->cap_bytes ? (p->cap_bytes - at) / (unsigned)sizeof(TAGPU_PEVT) : 0u;
+    if (room > TAGPU_PK_MAX_PEVT) room = TAGPU_PK_MAX_PEVT;
+    met = tagpu_pevt_copy((TAGPU_PEVT*)(void*)((unsigned char*)p + at), room,
+                          rc->l - FX_REACH_SLACK, rc->t - FX_REACH_SLACK,
+                          rc->r + FX_REACH_SLACK, rc->b + FX_REACH_SLACK, &wrote);
+    if (wrote) {
+        p->off_pevt = at; p->n_pevt = wrote;
+        *cursor = at + wrote * (unsigned)sizeof(TAGPU_PEVT);
+    }
+    if (met > wrote) {
+        p->truncated |= TAGPU_PK_TRUNC_PEVT;
+        s_fillShort += (met - wrote) * (unsigned)sizeof(TAGPU_PEVT);
+        s_cPevtTrunc++;
+    }
+    s_cLastPevt = wrote;
+    if (wrote > s_cPevtMax) s_cPevtMax = wrote;
+    return at + met * (unsigned)sizeof(TAGPU_PEVT);
+}
+
 /* the four tables into the record, after the world's; the models' five go
    last of the fill (fill_fxmodels) */
 static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
@@ -2971,6 +3003,8 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
         tagpu_pk_copy(p->part_n, s_partN, (unsigned)sizeof p->part_n);
         tagpu_pk_copy(p->part_obj, s_partObj, (unsigned)sizeof p->part_obj);
     }
+    e = fill_pevt(p, cursor, &rc);
+    if (e > need) need = e;
     lht_snapshot();
     if (s_lhtOk) {
         e = append_area(p, cursor, s_lht, (unsigned)sizeof s_lht, &p->lht_off, &p->lht_len,
@@ -4677,12 +4711,12 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u models=%u/%uv lost=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
+                  " | fx: proj=%u expl=%u deb=%u models=%u/%uv lost=%u part=%u/%u pevt=%u/%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
                   " | fog: %dx%d/%u recodd=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u"
                   " | mapfeat=%u%s carried=%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastFm, s_cLastFv, s_cFxLost,
-                  s_cLastPart, s_cPartMax,
+                  s_cLastPart, s_cPartMax, s_cLastPevt, s_cPevtMax, s_cPevtTrunc,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogW, s_lastFogH, s_cFogSeen, s_cFogRecOdd,

@@ -218,6 +218,8 @@ PROGRAMS = [
     ("fx",           "tagpu_fx::VS",            "tagpu_fx::FS"),
     # ...and the effects lines (lasers, lightning) the same way
     ("fx_line",      "tagpu_fx::LVS",           "tagpu_fx::LFS"),
+    # ...and the nano spray, computed from its emitter events (inc/tagpu_pevt.h)
+    ("fx_evt",       "tagpu_fx::NVS",           "tagpu_fx::NFS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
     # tagpu_range.c (paired in tagpu_vk_range.c) -- the weapon range rings: the
     # union's discs and the rings' bands share one fragment stage; the sensor

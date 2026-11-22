@@ -825,6 +825,17 @@ static const char* frame_valid(const void* rec)
     if (p->n_expl   > TAGPU_PK_MAX_EXPL)   return "more explosions than records";
     if (p->n_debris > TAGPU_PK_MAX_DEBRIS) return "more debris than slots";
     if (p->n_part   > TAGPU_PK_MAX_PART)   return "more particles than the cap";
+    /* THE NANO EVENTS: whole records, at most the publisher's list; every value in one is used
+       as data by the shader (tagpu_pevt.h), and its layer, the one index taken out of it, is
+       bounded here */
+    if (!table_ok(p, p->off_pevt, p->n_pevt, sizeof(TAGPU_PEVT))) return "nano event table";
+    if (p->n_pevt > TAGPU_PK_MAX_PEVT) return "more nano events than the list";
+    {
+        const TAGPU_PEVT* q = tagpu_pk_pevt(p);
+        unsigned k;
+        for (k = 0; k < p->n_pevt; k++)
+            if (TAGPU_PEVT_LAYER(q[k].flags) >= TAGPU_PK_NLAYER) return "nano event layer";
+    }
     if (p->lht_len && (p->lht_len != TAGPU_PK_LHT_BYTES || !area_ok(p, p->lht_off, p->lht_len)))
         return "lighten table area";
     /* THE EFFECTS MODELS. Every index the rasteriser follows out of them is

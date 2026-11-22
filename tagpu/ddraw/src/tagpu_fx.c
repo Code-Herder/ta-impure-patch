@@ -364,6 +364,109 @@ static const char* LFS =
     TAGPU_GLSL_FOG_DISCARD
     "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
     "}\n";
+/* THE NANO SPRAY FROM ITS EMITTER EVENTS (inc/tagpu_pevt.h; gpu-particles-plan.md, *The draw*).
+   No vertex attribute: vertex v is corner v % 6 of particle (v / 6) % 10 of event v / 60 in
+   `pe`, the events as 20 uints each, and the shader computes the particle at GameTime `uTick` --
+   tagpu_pevt.h's tagpu_pevt_nano_at, statement for statement, in 32-bit integer arithmetic,
+   which wraps in GLSL as it does in C: the keyed draws (tagpu_prand.h), the start and end out of
+   the cut boxes (64-bit product, toward zero: umulExtended), the step (toward zero), the updates
+   it has had, the position and the colour; a particle not in the engine's object then is a
+   degenerate quad. The dot is DrawBar's 2 x 2 game pixels at the projection tagpu_fx_emit_dot
+   takes (sx = hi(x) - eyeX + vpL, sy = hi(y) - hi(alt) / 2 - eyeY + vpT), at its layer's key.
+   EDIT tagpu_pevt.h WITH IT. NVS declares VS's uniforms first, in their order, so the two share
+   the pass's vertex block; NFS declares FS's samplers and uniforms in theirs. */
+static const char* NVS =
+    "#version 330 core\n"
+    "uniform vec2 uGame;\n"
+    "uniform float uZoom;\n"
+    "uniform vec2 uZoomC;\n"
+    "uniform float uDepthScale;\n"
+    "uniform ivec4 uEye;\n"                  /* eyeX, eyeY, vpL, vpT          */
+    "uniform int uTick;\n"                   /* the packet's GameTime         */
+    "uniform vec4 uEncA;\n"                  /* layer keys 0..3, 4..7, 8..9   */
+    "uniform vec4 uEncB;\n"
+    "uniform vec2 uEncC;\n"
+    "layout(std430) readonly buffer PEvt { uint pe[]; };\n"
+    "flat out vec2 vCM; flat out ivec2 vTile;\n"
+    "uint taMix(uint x){\n"
+    "  x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;\n"
+    "  return x;\n"
+    "}\n"
+    "int taRand(uint seed, uint p, uint d){ return int(taMix(taMix(seed ^ p) ^ d) >> 17u); }\n"
+    "int taCoord(int base, int ext, int r){\n"
+    "  uint m = ext < 0 ? 0u - uint(ext) : uint(ext);\n"
+    "  uint hi, lo;\n"
+    "  umulExtended(uint(r), m, hi, lo);\n"
+    "  uint q = (hi << 17u) | (lo >> 15u);\n"
+    "  return int(uint(base) + (ext < 0 ? 0u - q : q));\n"
+    "}\n"
+    "int taDivZ(int a, int b){\n"
+    "  uint ua = a < 0 ? 0u - uint(a) : uint(a);\n"
+    "  uint ub = b < 0 ? 0u - uint(b) : uint(b);\n"
+    "  uint q = ua / ub;\n"
+    "  return int((a < 0) != (b < 0) ? 0u - q : q);\n"
+    "}\n"
+    "void main(){\n"
+    "  uint vid = uint(gl_VertexID);\n"
+    "  uint k = (vid / 6u) % 10u, c = vid % 6u, b = (vid / 60u) * 20u;\n"
+    "  uint seed = pe[b], t0 = pe[b + 1u], fl = pe[b + 2u];\n"
+    "  uint sw = pe[b + 15u + k / 2u];\n"
+    "  int s = (k & 1u) == 0u ? int(sw << 16u) >> 16 : int(sw) >> 16;\n"
+    "  uint P = uint(uTick);\n"
+    "  uint born = k < 5u ? t0 : t0 + 1u;\n"
+    "  uint first = k < 5u ? ((fl & 16u) != 0u ? t0 + 1u : t0) : t0 + 2u;\n"
+    "  bool on = s != 0 && (k < 5u || (fl & 32u) != 0u) && int(P - born) >= 0 &&\n"
+    "            !(int(P - first) >= 0 && int(P - (born + uint(s))) > 0);\n"
+    "  int u = max(int(P - first) + 1, 0);\n"
+    "  ivec3 pos;\n"
+    "  for (int a = 0; a < 3; a++) {\n"
+    "    int st = taCoord(int(pe[b + 3u + uint(a)]), int(pe[b + 6u + uint(a)]), taRand(seed, k, uint(a)));\n"
+    "    int en = taCoord(int(pe[b + 9u + uint(a)]), int(pe[b + 12u + uint(a)]), taRand(seed, k, uint(a) + 3u));\n"
+    "    int stp = taDivZ(int(uint(en) - uint(st)), s != 0 ? s : 1);\n"
+    "    pos[a] = int(uint(st) + uint(u) * uint(stp));\n"
+    "  }\n"
+    "  int hx = pos.x >> 16, ha = pos.y >> 16, hy = pos.z >> 16;\n"
+    "  int zp = hy - (ha >> 1);\n"
+    "  uint col = 0xA0u | ((k % 5u + uint(u)) % 7u + 1u);\n"
+    "  int L = int(fl & 15u);\n"
+    "  float enc = L < 4 ? uEncA[L] : L < 8 ? uEncB[L - 4] : uEncC[L - 8];\n"
+    "  vec2 q = vec2(float(hx - uEye.x + uEye.z), float(zp - uEye.y + uEye.w));\n"
+    "  q += 2.0 * vec2((c == 1u || c == 3u || c == 4u) ? 1.0 : 0.0,\n"
+    "                  (c == 2u || c == 4u || c == 5u) ? 1.0 : 0.0);\n"
+    "  vec2 p = (q - uZoomC) * uZoom + uZoomC;\n"
+    "  gl_Position = on ? vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
+    "                          clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0)\n"
+    "                   : vec4(-2.0, -2.0, 0.0, 1.0);\n"
+    "  vCM = vec2(float(col) / 255.0, 0.0);\n"
+    "  vTile = ivec2(hx >> 5, zp >> 5);\n"
+    "}\n";
+/* THE ENGINE'S OWN SIGHT TEST, at the particle's exact tile (0x473A00: `(hi(x) >> 5, (hi(y) -
+   hi(alt) / 2) >> 5)`, off the map hidden; in true-LOS mode the viewed player's LOS counter, else
+   its mapped bit), against the slot's fog source, whose two bits are exactly those
+   (inc/tagpu_fogsrc.h: bit 1 out of LOS, set only in true-LOS mode; bit 0 never explored). The
+   smoothed fog the other effects take is not applied: a dot is all there or not at all, as the
+   engine draws it. */
+static const char* NFS =
+    "#version 330 core\n"
+    "flat in vec2 vCM; flat in ivec2 vTile;\n"
+    "out vec4 frag;\n"
+    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uLht;\n"
+    "uniform sampler2D uAtlasRGB;\n"
+    "uniform int uRestored;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
+    TAGPU_GLSL_SCAF_UNIFORMS
+    "uniform sampler2D uBase;\n"
+    TAGPU_GLSL_FOG_FN
+    "void main(){\n"
+    "  if ((uFog & 1) == 1) {\n"
+    "    if (vTile.x < 0 || vTile.y < 0 || vTile.x >= uFogSize.x || vTile.y >= uFogSize.y)\n"
+    "      discard;\n"
+    "    int c = taFogCell(vTile.x, vTile.y);\n"
+    "    if ((uFog & 4) == 4 ? (c & 2) != 0 : (c & 1) != 0) discard;\n"
+    "  }\n"
+    "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
+    "}\n";
 #pragma GCC diagnostic pop
 
 /* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
@@ -557,6 +660,18 @@ int tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, i
 }
 
 void tagpu_fx_set_mute(int on) { s_mute = on; }
+
+/* THE NANO EVENTS OF THIS FRAME: a pointer into the packet the render thread holds until the
+   frame ends, so the hand-over that carries it is consumed inside its life (tagpu_fx.h). */
+static const TAGPU_PEVT* s_evt;
+static int      s_nEvt;
+static unsigned s_evtTick;
+void tagpu_fx_set_events(const TAGPU_PEVT* e, int n, unsigned tick)
+{
+    s_evt = n > 0 ? e : NULL;
+    s_nEvt = s_evt ? n : 0;
+    s_evtTick = tick;
+}
 
 /* TAProgram capability bits (+0xF0): bit5 ALP alpha table built, bit7 LHT.
    Read by the publisher; this is the frame's copy, latched at gather. */
@@ -1101,6 +1216,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         s_rv.clipR = v->packet->vp_addr[2]; s_rv.clipB = v->packet->vp_addr[3];
     }
     s_encCur = key_after(0); s_under = 0; s_mute = 0;
+    tagpu_fx_set_events(NULL, 0, 0);
     if (sfxOn) tagpu_sfx_gather(v, 0, 6);
     if (fxOn) gather_fx(v);
     if (sfxOn) { tagpu_sfx_gather(v, 7, 9); tagpu_sfx_frame_done(v); }
@@ -1114,7 +1230,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
             flog(b);
         }
     }
-    return s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm;
+    return s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm + s_nEvt;
 }
 
 /* EVERY MODEL THE GATHER COULD ASK FOR, before any of its gates: a
@@ -1173,8 +1289,12 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore
        route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
-    /* bit1 set as well: effects hide in grey rather than darkening */
-    s_pub.fog = (v->fogMode & 1) | 2;
+    /* bit1 set as well: effects hide in grey rather than darkening; bit2 the true-LOS mode, which
+       the nano events' tile test takes (NFS) */
+    s_pub.fog = (v->fogMode & 1) | 2 | ((v->fogMode & 2) << 1);
+    s_pub.pevt = s_evt; s_pub.npevt = s_nEvt; s_pub.pevtTick = s_evtTick;
+    s_pub.eyeX = v->eyeX; s_pub.eyeY = v->eyeY;
+    memcpy(s_pub.encLayer, v->encLayer, sizeof s_pub.encLayer);
     s_pub.scafP[0] = (float)v->vpL; s_pub.scafP[1] = (float)v->vpT;
     s_pub.scafP[2] = (float)v->vw;  s_pub.scafP[3] = (float)v->vh;
     s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
@@ -1244,7 +1364,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
     /* the models count: a frame whose effects are all models still hands
        over, because the posed pass draws them only on a frame this pass has
        taken (tagpu_fx.h `nmodels`) */
-    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm;
+    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm + s_nEvt;
     int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
