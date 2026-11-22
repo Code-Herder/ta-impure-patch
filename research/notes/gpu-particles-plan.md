@@ -211,7 +211,8 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   takes up to about 1 300 new ones a tick; the instance buffer is sized in sub-particles, past 24 576.
   A full buffer thins as `tagpu_sfx.c` does today and says so, never silently.
 - What the network start shuffle's order at `main+0x29FC` decides is not established. It draws the game
-  thread's stream, whose particle draws landing 1 removes, so it is checked in landing 1's
-  two-player game.
+  thread's stream, which carries no particle draw since landing 1; the two-player game
+  (`recmp_create_begin_test.py`) passes on both builds with the rule in (2026-11-22).
 - Whether any saver dumps the main block raw is not established. The layer-table pointer would be a
-  dead value there, and landing 1's checks include a save and a load.
+  dead value there. A save and a load with particles alive play on, on Vulkan and on GDI
+  (2026-11-22, `sfx-strait`): the loaded level makes its particles anew.
