@@ -39,8 +39,12 @@ and particle into a frame nothing presents. MEASURED 2026-11-21, the battle at 1
 4 to 8 ms a frame saved (near, busy: 7.7; far, settled: 4.8). The particle layers are the larger half of
 it; `markers` is almost all particle layers 8 and 9.
 
-The shape the unit draw took: removed at attach on every Vulkan launch, GDI (the `tagpu_gdi.on` oracle)
-keeping every engine draw, no lever.
+BUILT in that shape, the unit draw's: removed at attach on every Vulkan launch, GDI (the `tagpu_gdi.on`
+oracle) keeping every engine draw, no lever (`tagpu_featown.c`, `tagpu_fxown.c`). MEASURED 2026-11-21,
+the battle at 1080p, the build before and the build after back to back (load 15 and 12.5, so the frame
+rates are loose): `sweep` 7.9 → 1.3, 23.7 → 11.2, 5.8 → 0.9 and 10.7 → 5.6 ms a frame (near busy, far
+busy, near thin, far thin), `markers` 1.0 to 2.5 → 0.0 to 0.1; game frames 4.6 → 5.1, 6.8 → 10.1,
+12.2 → 19.7 and 13.1 → 15.4 a second.
 
 ### 2. One world target, not one a frame slot
 

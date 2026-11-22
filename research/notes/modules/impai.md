@@ -532,8 +532,9 @@ they are made again under GDI.
 
 **Whether the renderer changes the simulation.** Under the Vulkan backend the game thread does
 not run engine draws that GDI runs: the unit composite, removed at attach on every Vulkan launch
-(`tagpu_owndraw.c`), and the draws `tagpu_fxown.c`, `tagpu_featown.c` and `tagpu_terrown.c` skip,
-each armed by the render thread's own pass. That those draws write no simulation state is argued
+(`tagpu_owndraw.c`), the feature leaf and the effects passes, removed the same way
+(`tagpu_featown.c`, `tagpu_fxown.c`), and the terrain draw `tagpu_terrown.c` skips while the render
+thread's terrain pass draws. That those draws write no simulation state is argued
 per site, not checked. **On the exact scenarios it does not:**
 `tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
 and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the

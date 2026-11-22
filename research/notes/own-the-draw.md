@@ -56,7 +56,7 @@ five separate gates:
 
 Consequences worth stating plainly:
 
-- `tacli arm <inst> fxown.on` **after** launch does nothing at all. The GL/behaviour
+- `tacli arm <inst> terrown.on` **after** launch does nothing at all. The GL/behaviour
   triggers (`native.on`, `fx.on`, `feat.on`, `sfx.on`, and the `.off` toggles) *are*
   re-read every frame and can be flipped live — that asymmetry is the trap, because the
   same `arm` verb behaves differently depending on which trigger you name.
@@ -65,9 +65,10 @@ Consequences worth stating plainly:
   — only health bars. An engine-side A/B then silently measures nothing. The shape of it
   in the log is `OWND … repaint=0 miss=<everything>` with no `native:` lines.
 - Because of both of the above, `tacli launch` / `scenario load` **auto-arm the patching
-  companion to match its GL pass** — `fxown` from `fx.on` or
-  `sfx.on`, `featown` from `feat.on`, `terrown` from `terr.on`, `markown` from `mark.on` —
-  and print `auto-armed …`. **Any new pass must be added to that list** (`tools/tacli`,
+  companion to match its GL pass** — `terrown` from `terr.on`, `markown` from `mark.on` —
+  and print `auto-armed …`. (The engine's units, features and effects are not levers: a
+  Vulkan launch removes those draws at attach, `tagpu_owndraw.c`, `tagpu_featown.c`,
+  `tagpu_fxown.c`.) **Any new pass must be added to that list** (`tools/tacli`,
   near `_ensure_terrown_for_terr`), or it will appear to work for whoever wrote it and
   fail for everyone else.
 - **A GL pass must also refuse to draw when its patch is absent**, not just log about it.
@@ -78,8 +79,8 @@ Consequences worth stating plainly:
   quad and prints `NOTHING EMITTED: terrown.on must exist at DLL attach`. `tagpu_feat.c`
   has the same shape for a different reason (it needs `native.on` to carry `wrecks`).
 - Verify from the log, never from the trigger file: each pass prints an ARMED line naming
-  the sites it patched, e.g. `featown: ARMED feature@0x46A610=1`, plus a per-window skip
-  counter. No ARMED line means no patch, whatever the filesystem says.
+  the sites it patched, e.g. `terrown: ARMED …` or `featown: the engine's feature draw is
+  removed (0x46A610, Vulkan)`, plus a per-window skip counter where the skip is live. No ARMED line means no patch, whatever the filesystem says.
 
 ## The second rule — a skip path is not always empty (G13b)
 

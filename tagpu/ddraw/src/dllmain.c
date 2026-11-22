@@ -191,15 +191,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            suppress/tracer detours on DrawUnit's entry 0x45AC20. */
         tagpu_owndraw_init();
 
-        /* tagpu: own the effects draw — redirect the two effects-pass call sites
-           in DrawGameScreen and detour four draw leaves (0x46BAE0/0x4B8EC0/
-           0x4211D0/0x4B7F90), all disjoint from the detours above. No-op unless
-           "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
+        /* tagpu: on a Vulkan launch the engine draws no effect -- the two
+           effects-pass call sites in DrawGameScreen redirected and five draw
+           leaves (0x46BAE0/0x4B8EC0/0x4211D0/0x4B7F90/0x471F90) detoured, all
+           disjoint from the detours above; byte-match guarded. */
         tagpu_fxown_init();
 
-        /* tagpu: own the engine's feature draw. No-op unless
-           "tagpu_featown.on" exists; byte-match guarded; one leaf,
-           0x46A610, disjoint from every other detour. */
+        /* tagpu: on a Vulkan launch the engine draws no feature -- one leaf,
+           0x46A610, disjoint from every other detour; byte-match guarded. */
         tagpu_featown_init();
 
         /* tagpu: own the engine's terrain draw and, with it, the fog overlay.

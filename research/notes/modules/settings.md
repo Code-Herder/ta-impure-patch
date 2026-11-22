@@ -34,11 +34,10 @@ the parsers, the polls, the `*own` install-at-attach rule.
 Nothing on it changes the simulation: the extra weapons are always on, in the fail-closed table
 ([extra weapons](../extra-weapons.html), *Layer 1*). The formation move is input: it chooses where
 each selected unit is sent and gives those orders through the engine's own roots, as a click does
-([formation](formation.html)). `tagpu_featown` and `tagpu_fxown` are not on it either: each
-stops the engine drawing something, which holes the reference frame the golden source is taken
-from (`tagpu_opt.c` has the argument and the numbers). The engine's units are not a lever at all:
-a Vulkan launch removes their draw outright ([units](units.html), *The engine draws no unit on a
-Vulkan launch*), and the reference with them in it is GDI's, under `tagpu_gdi.on`.
+([formation](formation.html)). The engine's units, features and effects are not levers at all:
+a Vulkan launch removes their draws outright (`tagpu_owndraw.c`, `tagpu_featown.c`,
+`tagpu_fxown.c`; [units](units.html), *The engine draws no unit on a Vulkan launch*), and the
+reference with them in it is GDI's, under `tagpu_gdi.on`.
 
 The rules, in precedence: a `tagpu_<x>.on` that exists wins, tokens and all, as ever; a
 `tagpu_<x>.off` (and no `.on`) turns a default-on pass off; `tagpu_defaults.off` turns the table

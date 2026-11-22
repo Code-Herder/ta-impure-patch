@@ -419,15 +419,15 @@ land, and the UI layer. Classic++ (restored true colour, lit, shadowed) is one s
 `ghost.on` is a play default and off this bench line because its posed draws perturb a
 measurement.
 
-- **The code-patching halves are auto-armed and must exist at DLL attach.** `terrown`,
-  `featown`, `fxown` and `markown` install engine detours once, at attach; `launch`
+- **The code-patching halves are auto-armed and must exist at DLL attach.** `terrown`
+  and `markown` install engine detours once, at attach; `launch`
   and `scenario load` write each when its pass is armed and print `auto-armed … must be
   installed at launch, not after`. Arming one on a running instance does nothing; the same holds
   for every lever whose `ARMED` line prints at launch. The draw tokens re-read live.
-- **The `*own` halves hole the golden source** (they stop the engine drawing what our pass draws),
-  so arm them for a frame-time figure, never for a comparison. **The engine draws no unit on a
-  Vulkan launch** whatever is armed: DllMain removes its unit draw, so `native.on` cleared means
-  no units anywhere, on the window or in `tacli shot`. **`terrown` is a play default**, so
+- **The engine draws no unit, feature or effect on a Vulkan launch** whatever is armed: DllMain
+  removes those draws (`owndraw`, `featown`, `fxown`, no lever), so `native.on`, `feat.on` or
+  `fx.on`/`sfx.on` cleared means none of that kind anywhere, on the window or in `tacli shot`;
+  GDI (`tagpu_gdi.on`) is the picture with them. **`terrown` is a play default**, so
   the reference is key-filled with no terrain until `terrown.off` — which costs the zoomed-out fog.
 - **`<pass>.off` does nothing while `<pass>.on` exists.** Remove the arm instead
   (`classicpp.on=off`).

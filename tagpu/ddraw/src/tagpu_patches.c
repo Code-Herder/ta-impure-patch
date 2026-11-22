@@ -5744,8 +5744,8 @@ SIM_FEATURE(projectile_view, SIM_PUPPET_RUNS, "battle");
    sight (0x49BEE8..0x49BF0F, ebp the point, eax the player; read 0x49BF10, not visible
    0x49BF29), through PositionInPlayerMapped 0x408090 otherwise (0x49BF2F, fixed with the
    shear above). A projectile high up near the north edge is not drawn, and a model projectile
-   is not posed (0x49C127). The pass still runs: fxown, which would stop it, is not a play
-   default, because the engine's frame is the golden source (tagpu_opt.c).
+   is not posed (0x49C127). The pass runs under the tagpu_gdi.on oracle; a Vulkan launch removes
+   its call (tagpu_fxown.c), so there the fix is installed and never reached.
    THE FIX: the own row when the sheared one is off the grid and the own one is on it, as for
    units, counted under LOS_PROJ. ecx leaves as the row read, or unread past 0x49C058 on the
    not-visible exit. ebx is dead on both exits: the read at 0x49BF10 writes it, and the

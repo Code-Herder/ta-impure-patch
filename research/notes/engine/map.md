@@ -1903,9 +1903,9 @@ from a position along a heading it draws; and `0x49BF2F` in the projectile draw 
 the local player's view of a projectile. Each of the two has an inline copy of the True-mode read
 beside the call, with the same shear: `0x407F74..0x407F9B` (esi the point, ecx the player; read
 `0x407F9C`, not visible `0x407FB7`) and `0x49BEE8..0x49BF0F` (ebp the point, eax the player; read
-`0x49BF10`, not visible `0x49BF29`). The projectile pass still runs in play: `fxown`, which would
-stop it, is not a play default, because the engine's frame is the golden source (`tagpu_opt.c`); it
-also poses each model projectile it lets through (`0x49C127`).
+`0x49BF10`, not visible `0x49BF29`). The projectile pass runs under the `tagpu_gdi.on` oracle and
+not on a Vulkan launch, which removes its call (`tagpu_fxown.c`); where it runs it also poses each
+model projectile it lets through (`0x49C127`).
 
 **The defect.** The row is the box's north edge less half the box's absolute top, so a unit whose
 top is more than twice its distance from the north edge — an aircraft at cruise altitude a few

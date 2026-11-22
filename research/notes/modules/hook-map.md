@@ -47,14 +47,14 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x45AE73` | `DrawUnit`'s call of the composite `0x458810` (`E8 98 D9 FF FF`): the unit's 8bpp picture (the rasterisers `0x459830`/`0x459C70`), its blit with the unit's shadows `0x459200` and the build-state effect `0x458DD0` | `owndraw` (`tagpu_owndraw.c`, `remove_composite`), **every Vulkan launch**; never under `tagpu_gdi.on`, where `nodraw`'s gate (§2.4) may take the site | byte patch at attach, `83 C4 08 90 90` (`add esp,8`: the composite's `ret 8`), written after `0x45AE5C..0x45AE7F` match. On a Vulkan launch none of the composite's callees runs, the rows below included |
 | `0x459338` | `call 0x45A470` in the blit `0x459200`, path A — the completed-unit **silhouette shadow**: `0x45A470(this, composite)` fills the scratch with the unit's own composite blackened (every non-ColorKey texel → index 0, `0x4B96A0`) and the ALP blend `0x4B8500` writes it at `sx+0x85`. Inside `terrown`'s key-filled viewport its destination is palette 254, so a shadow built from a NON-empty composite lands as an OPAQUE TEAL `(0,128,128)` silhouette on the unit. Measured 2026-09-13: at map entry the commander keeps one until it first moves ([exe-reverse-engineering](../exe-reverse-engineering.html) §"The completed-unit shadow") | — | **not patched**: the site keeps the engine's bytes, and a Vulkan launch never reaches it (`0x45AE73` above) |
 | `0x45958C` `0x4594DB` | the same three instructions in path B (colour+depth) and in its inline digger branch | — | **not patched**, with the site above |
-| `0x469B22` | `call 0x49BE60` — projectile pass | `fxown` (`fxown.on`) | call-site redirect |
+| `0x469B22` | `call 0x49BE60` — projectile pass | `fxown` (every Vulkan launch) | call-site redirect |
 | `0x469B2C` | `call 0x420B00` — explosions/particles pass | `fxown` | call-site redirect |
 | `0x46BAE0` | model-projectile leaf (`ret 0x10`) | `fxown` | prologue detour, 5 stolen |
 | `0x4B8EC0` | muzzle-flash leaf (`ret 0x10`) | `fxown` | prologue detour, 6 stolen |
 | `0x4211D0` | debris-piece leaf (`ret 0x0C`) | `fxown` | prologue detour, 5 stolen |
 | `0x4B7F90` | GAF-frame blit (`ret 0x10`) — **shared, see below** | `fxown` | prologue detour, 6 stolen, on a SCOPED flag |
 | `0x471F90` | particle layer-draw walker (`ret 8`) | `fxown` | prologue detour, 5 stolen |
-| `0x46A610` | feature draw leaf (`ret 0x10`) | `featown` (`featown.on`) | prologue detour, 5 stolen |
+| `0x46A610` | feature draw leaf (`ret 0x10`) | `featown` (every Vulkan launch) | prologue detour, 5 stolen |
 | `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, the marker block's end ([markers](markers.html) §2.2 has the block's other sites) | `markown` (`markown.on`) | call-site redirect: closes the order arena's block, then, while the marker pass does not draw the cursor layer (`g_cursor` clear), blits the formation move's dots into the engine's frame (`tagpu_formation_gdi`, `0x4B8500` per dot), before the layer-9 particles |
 | `0x483FA0` | terrain tile blit (`ret 4`) | `terrown` (`terrown.on`) | `leaf_call` — the skip path key-fills the viewport |
 | `0x4848E0` | fog overlay (`ret 4`) | `terrown` | `leaf_call` — the skip path replicates only the lazy grid rebuild |
@@ -65,8 +65,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 > **`0x4B7F90` is not an effects function** — it is the engine's generic GAF-frame blit, and the
 > mouse cursor goes through it too (`0x4C2870` → `0x4C297E`). It is detoured on **`g_fxown_in`**,
 > which the explosion pass's own call-site stub sets on entry and clears on exit, *not* on the
-> global `g_fxown_skip`. Detouring a shared leaf on a global flag would have silently eaten the
-> cursor whenever `fx.on` was armed. **When a leaf turns out to be shared, scope the flag to the
+> byte the other leaves test, which is always set. Detouring a shared leaf on that byte would
+> silently eat the cursor on every Vulkan launch. **When a leaf turns out to be shared, scope the flag to the
 > pass rather than the session.**
 
 ### The view: zoom and the widened viewport

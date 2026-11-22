@@ -2037,7 +2037,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        asking for them: the walk costs it four engine arrays.
        Raised every frame, PASSIVE OR NOT — a passive pass still counts what it
        would have drawn — and dropped by fxown's watchdog after 90 silent
-       frames, the same one the two skip bytes stand on. */
+       frames. */
     tagpu_fxown_set_want(fxOn, sfxOn, f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
     /* THE MAP'S OWN FEATURES ARE ASKED FOR HERE, before the first early
