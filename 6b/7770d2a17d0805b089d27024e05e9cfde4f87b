@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=medium range=94ca0f9a..6b7770d2 findings=3 acted=3 rejected=0 date=2026-11-22
+the tail after the local landing's review: 047ae134 (every processor of the machine) and the merge of main (doc conflicts in render.md, engine-patches.md, roadmap.md; rot_install/hyp_install moved after the engine fixes so repose_trig's byte check of 0x4B7173 sees stock). No code defect. Acted (docs, next commit): repose_trig's flags and oracle claims scoped beside the table; the rotator's call count dated before repose_trig; a doubled parenthesis.
