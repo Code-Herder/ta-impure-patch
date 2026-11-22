@@ -18,8 +18,9 @@ cannot answer an id differently. The replay test group `cob-getters` judges the 
 against the engine's state. The guarded runner's pop and attachment rules are likewise
 `tagpu_cob_parent_pops` and `tagpu_cob_attach_piece_ok` there. ID 111 remains native/inactive.
 The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
-ten-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
-in use; unsupported types are unavailable with an entry warning, while required-unit creation
+ten-record waits and old/new saved state. In the raised build the game's scripts run in Impure's
+COB VM (*The game's COB interpreter*, below); the engine's scheduling -- the unit tick's slice --
+remains. Unsupported types are unavailable with an entry warning, while required-unit creation
 and unrecoverable execution faults refuse with diagnostics.
 
 | VA / inventory | Mechanism |
@@ -34,10 +35,44 @@ and unrecoverable execution faults refuse with diagnostics.
 | existing held-create wrapper at `0x488462` | check required mission types before the wrapper hides the native caller behind its own frame; no new patch site or engine-state field |
 | `0x497F5E`, `0x49842F`, `0x496A4F` | reuse load reset/in-play ordering; deliver local chat through `0x46BC70` after native frame work |
 | `0x4B06B0`, `0x4B06F0` | optional trace invalidates deferred starts at both COB destructor entries before free |
+| `0x485D74`, `0x485D78`; `0x4B0940`, `0x4B0B00`, `0x4B0C40`, `0x4B0D60` | the object sized and zeroed for the host's tail; the four entries jump to the game's COB VM (raised build) |
+| `0x4FD6C8..0x4FD6E4`, `0x4B15E0`, `0x4B19D0` | `tagpu_cobverify.on` only: the oracle's logging thunks in seven vtable slots, RAND's draw, RETURN's completion |
 
 The trace keeps a lock-ordered per-thread pending start, logs every transferred argument and
 new stack peaks (`H`); capacity failures invalidate its evidence with `INCOMPLETE`. It writes
-no engine state. The allocation/runner/return/signal/random observers in §2.4 remain its seams.
+no engine state. In the stock-limits build the allocation/runner/return/signal/random observers in
+§2.4 are its seams; in the raised build the engine's interpreter no longer runs, and the COB VM's
+trace events are (`tagpu_cobtrace_core`, the same lines, `H` from the VM's report of a step past
+32 words); the destructor observers stay in both.
+
+**The game's COB interpreter** (`tagpu_patches.c`, THE GAME'S COB INTERPRETER; the raised build
+only). The entries `0x4B0940`, `0x4B0B00`, `0x4B0C40` and `0x4B0D60` jump to the game host, which
+runs `tagpu_cobvm.c` under its IMPURE rules on the unit's own object: the records, count and flag
+in place, the statics at `*(cob+0x10)`, the animation at `*(cob+0x14)`, the posed model. `0x4B0A70`
+and `0x4B0BC0` stay the engine's and reach `0x4B0B00` and `0x4B0C40`; the runner `0x4B0DA0`, the
+stepper `0x4B1C00` and the allocator `0x4B08C0` are no longer reached, nor the guard's stubs inside
+them, whose checks the VM makes itself (`tagpu_cob_check_step`, wherever the stack proof does not
+show the check would pass). Everything a script reaches outside its unit is the engine's own
+function: each effect through the object's vtable slot, as the stepper calls it -- so SET's state
+setter, the puppet gates, the transport messages and EXPLODE's draws are the engine's by
+construction -- GET's stock half through `0x480770`'s trampoline after the shared getter rule,
+RAND through `0x4B6C30`, a completion through its object's slot 0. What only the engine's
+interpreter made, the host makes: the recorder's allocation counts (`tagpu_rec_cob_alloc`, keyed
+as `0x4B08C0`'s sink keyed them), the slice markers' note of a start (`tagpu_rec_cob_started`) and
+the trace. Its state is a tail of the object (`CobTail`: the VM, bound at the object's first entry,
+and the script's name), sized at `0x485D74` and zeroed at `0x485D78`; a saved game's records pass
+`tagpu_cobvm_loaded`, and a fault is `cob_fault` with the VM's reason.
+
+**Its oracle, `tagpu_cobverify.on`.** The engine's interpreter runs the game through trampolines
+of the entries; around each entry call the oracle copies the object and logs what the engine's
+interpreter asked and did outside it -- getter answers, draws, effects with the posed-model words
+each wrote, cargo and carrier reads, completions, the same object's entries made inside those --
+then runs the VM on the copy over a host that answers from the log, and requires each question to
+match and the copy to equal the object byte for byte. The test group `cob-verify` (slice-walkers'
+game) plays it and `tools/replay/cobverify_check.py` judges its log. MEASURED 2026-11-21 on six
+groups' games (slice-walkers, the battle, transport-turn, teleport, tenseat, cob-getters): 6.1
+million entry calls on the live lanes and 7.8 million on the puppet lanes, every one equal. DROP, the cargo and carrier
+reads were not among them.
 
 The CORE advanced-kbot upgrade reproduction needs a ninth script slot while its old
 Stop/close chain overlaps the new StartBuilding callback. The guarded pool on this branch is ten

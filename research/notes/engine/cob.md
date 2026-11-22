@@ -44,7 +44,10 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `0x481422`), which has no owner test: it sends a `0x0A` from the DirectPlay id `0x44FDB0`
   returns (the first active type-1/2 record) and applies it locally through `0x48AB70`
   (`0x48AB58`, `0x48AB62`). EXPLODE, `vt+0x34` = `0x481140`, without flag `0x20` draws the sim RNG
-  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`); its flag bits 8..13
+  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`), which clears the piece's
+  visible bit in the posed model (`and word [o3 + piece × 0x36 + 0x4A], 0xFFFE` at `0x421639`: the
+  flags word `+0x28` of the piece's `PrimitiveStruct`; MEASURED 2026-11-21 by the COB oracle, a
+  `Killed` query's piece 0 going from `…07` to `…06` in the effect); its flag bits 8..13
   add explosions through `0x420A30`. EMIT_SFX, `vt+0x30` = `0x480EB0`, emits particles only, and
   only when the unit is in the viewed player's sight (`0x465AC0`, `0x480EC5..0x480EEC`).
   PLAY_SOUND `0x10072000` kills its own thread (`0x4B1B60`).
@@ -230,7 +233,12 @@ the file for each entry's address as a dword.
 | `0x4B1928` | the VM's CALL | inside a slice (the caller key `0x4B192D`) |
 
 The start by name with arguments `0x4B0A70` calls `0x4B0B00` (`0x4B0AEE`). A start by name of a
-script the COB lacks still reaches the allocator, with -1 (`0x4B0995..0x4B099F`), which refuses it
+script the COB lacks still reaches the allocator, with -1 (`0x4B0995..0x4B099F`; the name is found
+by the start's own first-match byte compare over the file's names, `0x4B0957..0x4B0993`, not by
+Name2Index `0x4B07C0`), which refuses it; the allocator's return address there is `0x4B09A4`, the
+start by index's `0x4B0B0D` and the query's `0x4B0C4D`, the keys the recorder counts each by. The
+query takes nothing back when the allocator refuses (`0x4B0C51`) and pushes 0 for a NULL pointer
+(`0x4B0C64..`)
 (`0x4B08C5..0x4B08D0`). No dword in the file holds `0x4B0B00`, `0x4B0940`, `0x4B0A70`, `0x4B08C0`,
 `0x4B0BC0`, `0x4B0C40` or `0x4B0D60`.
 
@@ -275,8 +283,11 @@ which the raised build sets to `TAGPU_COB_THREADS`), then the piece stepper `0x4
 one caller is the unit tick's `0x48ADEB`, with `dt` 1, and `dt` is the only amount a sleep counts
 down by (`0x4B0DEF..0x4B0E01`): a unit's COB clock is the number of slices it has had.
 
-**The object's life.** The setup `0x485D40` allocates `0x544` bytes (`0x4B4F10` at `0x485D78`),
-constructs (`0x4B0610` at `0x485D88`), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
+**The object's life.** The setup `0x485D40` allocates `0x544` bytes (`push` at `0x485D73`, its
+size at `0x485D74`; `MEM_Alloc 0x4B4F10` at `0x485D78`, `cdecl`: `add esp,4` at `0x485D7F`, the NULL
+test at `0x485D82` skipping the constructor), and the raised build makes the call zeroed and the
+size its own (the COB module note, *The game's COB interpreter*);
+constructs (`0x4B0610` at `0x485D88`, the constructor's one caller in the file), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
 reference in the file), stores the object at `+0x9A` (`0x485D9F`), loads the script (`0x4B0720`
 at `0x485DAC`), makes the model (`0x45A950` at `0x485DC0`), binds it (`0x480D40` at `0x485DD2`),
 and then starts Create through `0x4B0940("Create" 0x508BE0, 0, run-now 1)` at `0x485DE6`
@@ -859,7 +870,7 @@ value; the handler follows each compare):
 | MOVE `0x10001000` / TURN `0x10002000` | `0x4B0E83` / `0x4B0E71` | piece and axis inline; pops target then speed; speed `/ (cob+4)` per tick; `vt+0x14` for the current value (sign of travel); sets `cob+0x18` |
 | SPIN `…3000` / STOP_SPIN `…4000` | `0x4B0FFE` / `0x4B0FEC` | |
 | SHOW/HIDE/CACHE/DONT_CACHE/MOVE_NOW/TURN_NOW/SHADE/DONT_SHADE | `0x4B10DD` `0x4B10D3` `0x4B1112` `0x4B1108` `0x4B11AA` `0x4B119C` `0x4B127C` `0x4B1272` | |
-| EMIT_SFX `0x1000F000` | `0x4B12B1` | pops type; piece inline; `vt+0x30(piece, type)` → `0x480EB0`; pc += 2 |
+| EMIT_SFX `0x1000F000` | `0x4B12B1` | pops type; piece inline; `vt+0x30(piece, type)` → `0x480EB0` (the call at `0x4B12D8`); pc += 2 |
 | WAIT_TURN `0x10011000` / WAIT_MOVE `…12000` | `0x4B12A7` / `0x4B1317` | piece, axis inline into `+0x10`/`+0x14`; status `0x2100000` / `0x2200000`; stop |
 | SLEEP `0x10013000` | `0x4B130D` | pops ms; **`+0x0C = ms × (cob+4) / 1000`** (the `0x10624DD3` magic, truncating: `sleep 150` = 4 ticks); status `0x2400000`; stop |
 | PUSH_* `0x10021xxx` | `0x4B1390` | `op & 7`: 1 constant inline, 2 `stack[inline]` (a local), 4 `statics[inline]` |
@@ -869,15 +880,15 @@ value; the handler follows each compare):
 | RAND `0x10041000` | `0x4B15BD` | pops hi, lo; **`call 0x4B6C30(hi − lo + 1)` at `0x4B15E0`** — the sim RNG (stdcall; returns 0 for `n < 2`; state at `0x51FC88`; 129 call sites across the sim), pushes `lo + result` |
 | GET_UNIT_VALUE `…42000` / GET `…43000` / `…44000` / `…45000` | `0x4B15B3` `0x4B1630` `0x4B1622` `0x4B16B8` | `vt+0x44(id, 0, 0, 0, 0)` for the first |
 | SET_LESS … LOGICAL_NOT | `0x4B16AE` `0x4B1707` `0x4B16FD` `0x4B1761` `0x4B1757` `0x4B17BB` `0x4B17B1` `0x4B181D` `0x4B1813` `0x4B188A` | |
-| START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
+| START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order (`0x4B18C8..0x4B18E9`) **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
 | CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool leaves the caller dormant until it is killed** |
 | `0x10063000` | `0x4B1903` (body `0x4B1984`) | pops `[pc+2]` words into the runner's own frame `[esp+0x20..]`, pc += 3 `[unknown use]` |
 | JUMP `0x10064000` | `0x4B19BB` | pc = inline |
-| RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`) | if `+0x20`: pop → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
+| RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`: `esi` the record, `edi` the object) | if `+0x20`: pop (`0x4B19D7`) → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
 | JUMP_NOT_EQUAL `0x10066000` | `0x4B1A40` | pops; jumps to the inline target when the value is **zero** |
 | SIGNAL `0x10067000` | `0x4B1A32` (body `0x4B1A75`) | pops mask; for each busy record with `+0x1C & mask`: status `0` (`0x4B1A99`), count--, its blocked callers woken, and if it is the running thread, stop — **no callback is called for a killed thread**, so an aim script killed by the next `AimPrimary`'s signal never reports |
 | SET_SIGNAL_MASK `0x10068000` | `0x4B1B00` | `+0x1C = pop` |
-| EXPLODE `0x10071000` | `0x4B1AF6` (body `0x4B1B1F`) | pops flags; piece inline; `vt+0x34(piece, flags)` → `0x481140` |
+| EXPLODE `0x10071000` | `0x4B1AF6` (body `0x4B1B1F`) | pops flags; piece inline; `vt+0x34(piece, flags)` → `0x481140` (the call at `0x4B1B3A`) |
 | SET `0x10082000` / ATTACH `…83000` / DROP `…84000` | `0x4B1B48` `0x4B1B50` `0x4B1B58` | `vt+0x40` (2 pops) / `vt+0x38` (3 pops) / `vt+0x3C` (1 pop) |
 | anything else | `0x4B1B60` | **the thread is killed silently** (status `0`, count--) |
 
@@ -1111,7 +1122,7 @@ mechanism behind the one-frame pose pop the native pass showed on a walking comm
 | site | when |
 |---|---|
 | `0x45AC89` (inside `DrawUnit 0x45AC20`) | the cached body turn `o3+0x18/+0x1A/+0x1C` differs from the live `unit+0x64/+0x66/+0x68` by ≥ 8 on any axis |
-| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above |
+| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above; it first copies the unit's turn into the cached body turn (`0x45AB65`, `+0x18..+0x1B`, then `+0x1C`), so an EMIT_SFX rewrites both the cached turn and the flag |
 | `0x45ADA5` | the same test again, for each attached unit in `DrawUnit`'s cargo chain |
 | `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
 | `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |

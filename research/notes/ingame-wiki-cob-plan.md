@@ -215,9 +215,9 @@ is marked `sim` (*Gaps*, below).
   `tagpu_cob_safe.c` so that any change to the rules runs it.
 - **A landing that adds a COB feature to the game** adds a cobtrace fixture that exercises it. Until
   the core matches, that fixture fails by name.
-- **The swap program's entry gate** is the recorder as oracle: load a recorded COB object into the
-  core, step it, compare the next recorded tick byte for byte. It needs the host reads recorded too,
-  which is recorder work, so it is not this program's.
+- **The swap's oracle** is in process: the engine's interpreter runs the game and the core replays
+  each entry call on a copy, answered from what the engine asked (`tagpu_cobverify.on`; the
+  [COB speed plan](cob-speed-plan.html), L2), since two runs of one build are not one game.
 
 ## The wiki host
 
@@ -790,14 +790,13 @@ L4b starts when the wiki shows a unit that emits.
 - **The spray was not compared with a game capture of the same build**, the gate the plan's L4
   row named.
 
-- **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
-  (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`
-  does not mark it `sim`, so the replay gate checks no function of it for coverage, and the build's
-  writable-static check does not reach it or `tagpu_cobvm.c`. The `sources` binding of
-  `cob-getters` and `resource-core-upgrade` makes any change to it run those groups, and
-  `test_cobvm.py` checks both objects for written statics. Marking them `sim` needs the program
-  validator's `malloc`/`free` routed through the registry's wrappers, which the swap program does
-  when the core becomes the game's interpreter.
+- **`tagpu_cob_safe.c` is not `sim`.** It holds rules the game's simulation runs (the step guard,
+  the getters, the parent's pops, the attachment bound), but its validator allocates each program
+  with `malloc` at the script's load, which the sim scope refuses, so the replay gate checks no
+  function of it for coverage and the build's writable-static check does not reach it. The
+  `sources` binding of `cob-getters` and `resource-core-upgrade` makes any change to it run those
+  groups, and `test_cobvm.py` checks it for written statics. `tagpu_cobvm.c`, which has no static
+  and allocates nothing, is an `engine-free sim` file since the game runs it.
 
 - **The sound has no place.** An event carries no position, where L5's plan gave it the unit's
   point and decision 12 an attenuation by the stage's camera: the engine plays a reply and a named

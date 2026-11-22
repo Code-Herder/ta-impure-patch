@@ -178,6 +178,30 @@ new skirmish's init, or from a recording. Simulation.
 |---|---|---|---|
 | `0x46555A` | `call 0x401360`, the players phase's call of the economy pass, its only one (`E8 01 BE F9 FF`) | `tagpu_income.c` (`tagpu_impai_income.on` arms seats in a test launch on a new skirmish; the redirect is always in) | rel32 redirect (`tagpu_detour_redirect`) to `econ_pass` (stdcall, `ret 4`): for a seat whose row is set, adds (m − 1) × the units' production of its previous pass to the player's ledger's produced floats, calls `0x401360`, which folds them in as production, then keeps this pass's units' production; a seat with no row, every seat with no lever, gets the stock call alone. It runs where the players phase runs: the GAME thread in play, and once the LOADER thread during a load (`0x497C10`), before the game thread's first step |
 
+### The game's COB interpreter (`tagpu_patches.c`, the raised build)
+
+The game's COB scripts run in Impure's VM `tagpu_cobvm.c` on each unit's own COB object
+([the COB module](cob-compat.md), *The game's COB interpreter*): the four entries jump to the game
+host, which calls every effect through the object's own vtable slot. All six sites are in the
+fail-closed table, byte-matched with the rest of it; the stock-limits build writes none and runs
+the engine's interpreter. With `tagpu_cobverify.on` the oracle's sites, the last three rows, go in
+as well. Simulation.
+
+| VA | What it is | Module (arm file) | Mechanism |
+|---|---|---|---|
+| `0x485D74` | the COB object's size, `push 0x544` at `0x485D73` before the setup's `MEM_Alloc` ([cob](../engine/cob.md), *The object's life*) | `tagpu_patches.c` (always in) | immediate `0x544` → `TAGPU_COB_OBJECT_BYTES` and the host's tail (`COB_GAME_BYTES`) |
+| `0x485D78` | `call 0x4B4F10` (`E8 93 F1 02 00`), the setup's allocation of the object, its one | `tagpu_patches.c` (always in) | rel32 redirect to `cob_object_alloc` (`cdecl`), which zeroes what `MEM_Alloc` returns, so a new object's tail starts unbound |
+| `0x4B0940` | the start by name's entry (`51 53 55 56 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_start_name` (`thiscall`, `ret 0xC`) |
+| `0x4B0B00` | the start by index's entry (`8B 44 24 04 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_start_idx` (`ret 0x20`) |
+| `0x4B0C40` | the query's entry (`8B 44 24 04 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_query` (`ret 0x14`) |
+| `0x4B0D60` | DoScriptsNow's entry (`53 8B 5C 24 08`) | `tagpu_patches.c` (always in) | `E9` to `cg_tick` (`ret 4`) |
+| `0x4FD6C8`, `0x4FD6CC`, `0x4FD6D0`, `0x4FD6D4`, `0x4FD6D8`, `0x4FD6E0`, `0x4FD6E4` | **with `tagpu_cobverify.on` only**: the COB vtable `0x4FD698`'s slots `+0x30` EMIT_SFX, `+0x34` EXPLODE, `+0x38` ATTACH, `+0x3C` DROP, `+0x40` SET, `+0x48` cargo, `+0x4C` carrier in `.rdata`, each checked for its stock handler first | `tagpu_patches.c` (the oracle) | dword writes (`tagpu_detour_write`) of logging thunks that call the stock handler |
+| `0x4B15E0` | **with `tagpu_cobverify.on` only**: RAND's `call 0x4B6C30` | `tagpu_patches.c` (the oracle) | rel32 redirect (`tagpu_detour_redirect`) to `cv_rand` (`stdcall`, `ret 4`), which calls `0x4B6C30` and logs the draw |
+| `0x4B19D0` | **with `tagpu_cobverify.on` only**: RETURN's body (`8B 4E 20 85 C9`) | `tagpu_patches.c` (the oracle) | observer (`tagpu_detour_observe`, no `after`): logs a completion's object and value from the record `esi` and the object `edi` |
+
+The demo recorder's observers on `0x4B0B00` and `0x4B0940` (the slice markers) are the
+stock-limits build's only; in the raised build the host makes the same note at those entries.
+
 ### 2.5 State we read, and the fields we write
 
 **COB port additions, verification in progress:** the loader clears rejected types' availability
@@ -190,7 +214,10 @@ script-executing thread, the guarded adapter owns ten 128-word records (`cob+0x1
 `0x224`), busy count `+0x1584`, and relocated model pointer `+0x1588`; it initializes stacks,
 transfers bounded child arguments, retains a refused CALL's arguments and dormant
 child `-1` sentinel, and restores validated records/statics/animation and piece
-state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
+state on load. In the raised build that writer is Impure's COB VM, on the thread the engine calls
+the COB entries on (the game thread in play, the loader for a level's Create starts), and it also
+writes the object's tail past `+0x158C` (the host's VM). These are simulation writes, not
+renderer-owned state. Local entry chat uses
 the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
 and [the engine map](../engine/cob.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).
 

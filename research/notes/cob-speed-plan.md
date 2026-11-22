@@ -52,59 +52,87 @@ untouched: it still runs the engine's interpreter under the guard at `0x4B0E5D`.
 ### L2 — The swap
 
 The entries `0x4B0940` (start by name, no words), `0x4B0B00` (start by index, four words), `0x4B0C40`
-(the query) and `0x4B0D60` (`DoScriptsNow`) jump to the game host's functions, which run the core on
-the unit's object. `0x4B0A70` and `0x4B0BC0` stay the engine's: they look the name up themselves, with the
-first-match loop `0x4B07C0` also runs (`0x4B0A85..0x4B0AC1`, `0x4B0BD5..`), and call `0x4B0B00`
-(`0x4B0AEE`) / `0x4B0C40` (`0x4B0C2F`). The runner, the stepper and the allocator `0x4B08C0` are no longer
-reached. Every caller of the entries — the engine's 15 + 21 + 5 + 14 sites, the recorder's start and
-query stubs, `tagpu_replay.c`, `tagpu_weapons.c`, `dtor_killed` — keeps calling the same addresses.
+(the query) and `0x4B0D60` (`DoScriptsNow`) jump to the game host (`tagpu_patches.c`, THE GAME'S COB
+INTERPRETER), which runs the core on the unit's object; the stock-limits build keeps the engine's
+interpreter. `0x4B0A70` and `0x4B0BC0` stay the engine's: they find the name with a first-match loop
+of their own (`0x4B0A85..0x4B0AC1`, `0x4B0BD5..`) and call `0x4B0B00` (`0x4B0AEE`) / `0x4B0C40`
+(`0x4B0C2F`). The runner, the stepper and the allocator `0x4B08C0` are no longer reached. Every caller
+of the entries -- the engine's, the recorder's start and query stubs, `tagpu_replay.c`,
+`tagpu_weapons.c`, `dtor_killed` -- keeps calling the same addresses.
 
 **What a script reaches outside its unit goes through the engine's own functions**, so every side
 effect the engine has is kept by construction (DISASSEMBLED, the scout's inventory of 2026-11-21):
 
 | the core asks | the game host calls | what that keeps |
 |---|---|---|
-| SET | the object's vt+0x40, `0x480B20` | `+0xBA` bit 2 for every id; the state setter `0x48B090`, which starts Activate, Deactivate, StartBuilding, StopBuilding **run-later** on the same object (`push 0, push 0` at `0x48B0FD..0x48B169`) — the engine advances the SET's pc only after the call (`0x4B1BD5`), as the core does after its commit; the puppet gate at `0x480B26`; the COB_WRITES keys |
-| EMIT_SFX, EXPLODE | vt+0x30 `0x480EB0`, vt+0x34 `0x481140` | the viewer's sight test and the repose `0x45AB10`; the six sim-RNG draws and the debris |
+| SET | the object's vt+0x40, `0x480B20` | `+0xBA` bit 2 for every id; the state setter `0x48B090`, which starts Activate, Deactivate, StartBuilding, StopBuilding **run-later** on the same object (`push 0, push 0` at `0x48B0FD..0x48B169`) -- the engine advances the SET's pc only after the call (`0x4B1BD5`), as the core does after its commit; the puppet gate at `0x480B26`; the COB_WRITES keys |
+| EMIT_SFX, EXPLODE | vt+0x30 `0x480EB0`, vt+0x34 `0x481140` | the viewer's sight test and the repose `0x45AB10`; the six sim-RNG draws, the debris and the piece it hides (`0x421639`) |
 | ATTACH, DROP | vt+0x38 `0x481340`, vt+0x3C `0x4813B0` | the transport messages; the puppet gates |
-| GET, GET_UNIT_VALUE | `cob_get`, the function `0x480770` jumps to | the getter rule `tagpu_cob_getter`, then the stock handler |
+| GET, GET_UNIT_VALUE | the getter rule `tagpu_cob_getter` over the world `cob_get` builds, then `0x480770`'s trampoline | `cob_get`'s answer, by construction the same function |
 | cargo, carrier | vt+0x48 `0x481430`, vt+0x4C `0x481470` | |
-| RAND | `0x4B6C30` | the sim RNG's order |
+| RAND | `0x4B6C30(hi - lo + 1)`, every draw | the sim RNG's order: `0x4B6C30` returns 0 for n < 2 without stepping it, and is still called |
 | a RETURN's completion, a refused start's | the completion object's slot 0 | the weapon slot's `+8` (`0x481490`) |
 
 The piece setters (vt+0x00..+0x10) write only the `PrimitiveStruct`, its `+0x26` and the model's
 header words `+0x04/+0x08/+0x10`, which the core writes directly the same way (DISASSEMBLED
-`0x480C50..0x480E2B`).
+`0x480C50..0x480E2B`); the stepper's other slots are the getters `+0x14`, `+0x18` and two empty
+`ret`s, `+0x28` and `+0x2C`.
 
 **What only the engine's interpreter produced, the host produces itself**:
 
-- the recorder's allocator counts (COB_CHILD_ALLOC): the core reports every allocation it attempts,
-  refused ones and unknown scripts included, and the host counts it with the key the sink at `0x4B08C0`
-  would have used (`0x4B18C0` START, `0x4B192D` CALL, and the return address of each engine entry's
-  own call of the allocator);
-- the slice-marker observers on the `0x4B0B00` and `0x4B0940` entries, whose bytes the swap takes:
-  the host's entries call the same observation;
-- cobtrace: from the core's trace callback, which writes the oracle's lines already.
+- the recorder's allocator counts (COB_CHILD_ALLOC): the core reports every allocation it is asked
+  for, refused ones and unknown scripts included (`TAGPU_COBVM_HOST.alloc`), and `tagpu_rec_cob_alloc`
+  counts it with the key the sink at `0x4B08C0` would have used (`0x4B18C0` START, `0x4B192D` CALL, the
+  entries' own `0x4B09A4`, `0x4B0B0D`, `0x4B0C4D`);
+- the slice markers' note of a start at `0x4B0B00` and `0x4B0940`, whose observers are the stock
+  build's only now: the host's entries call `tagpu_rec_cob_started`;
+- cobtrace: `tagpu_cobtrace_core` writes the same lines from the core's trace events, and the core
+  reports a step whose record holds more than 32 words (`H`).
 
-**The unit's VM state** (the program, the "every opcode checked" flag, the trace latch) is a tail of the
-COB object, which Impure sizes already (`0x485D74`); the allocation at `0x485D78` is zeroed so the tail
-starts empty. A fault is the guarded interpreter's refusal: `cob_fault` with the core's reason. A
-saved game's records pass `tagpu_cobvm_loaded` after `cob_load`.
+**The unit's VM state** (`CobTail`: the bound VM and the script's name) is a tail of the COB object,
+which `0x485D74` sizes; the allocation at `0x485D78` is zeroed, the constructor `0x4B0610` has that
+one caller, so a tail starts unbound by construction and is bound at the object's first entry
+(`tagpu_cobvm_bind`, the engine's blocks as they are). A fault is the guarded interpreter's refusal,
+`cob_fault` with the core's reason. A saved game's records pass `tagpu_cobvm_loaded` after
+`cob_load`. `tagpu_cobvm.c` is an `engine-free sim` file (no static at all); `tagpu_cob_safe.c` is
+not, because its validator allocates each program at the script's load (`tools/sim-state-check.sh`
+names that gap).
 
-**The oracle is the COB plan's: the recorder's, in process.** Two runs of one build are not one game,
-so two builds' dumps cannot be compared (MEASURED 2026-11-21: `slice-walkers` played twice on one DLL,
-both passing every test, differ by tick 961 in unit positions and records, and their recordings end at
-4 464 763 and 5 037 891 bytes; the parallel pathfinder's carried searches are one known source). So
-behind a lever the engine's interpreter goes on running the game, and around each entry call — a turn,
-a start, a query — the host takes the object's records, count, flag, statics, animation and model
-before it, and logs what the engine read and did during it: each getter's id and answer, each draw,
-each effect with its operands and the starts it nested (SET ACTIVATION's), each completion. Then the
-core runs the same call on the copy over a host that answers from that log in order and compares each
-effect with the next one logged, and the copy must equal the object byte for byte. A difference names
-the unit, the script, the pc and the field. Then the replay gate's groups that name COB
-(`"cob": "exact"`: slice-walkers, battle, tenseat, codec-decline; and cob-getters,
-resource-core-upgrade, stock-resource-mex, contest-waves, teleport, transport-turn) and the
-compatibility suite run on the swap.
+**The oracle is the recorder's, in process** (`tagpu_cobverify.on`, THE ORACLE). Two runs of one
+build are not one game, so two builds' dumps cannot be compared (MEASURED 2026-11-21: `slice-walkers`
+played twice on one DLL, both passing every test, differ by tick 961 in unit positions and records,
+and their recordings end at 4 464 763 and 5 037 891 bytes; the parallel pathfinder's carried searches
+are one known source). Behind the lever the engine's interpreter runs the game through trampolines of
+the entries, and around each entry call the oracle copies the object, its statics, animation and
+posed model and logs what the engine's interpreter asked and did outside the object, in order: the
+getter world's answers and the stock getter's, each draw, each effect with the posed-model words it
+wrote (EXPLODE's hide, the repose's dirty flag and cached body turn `0x45AB65`), cargo and carrier
+reads, completions, and the same object's entries made inside one of those with their answers. Then
+the core runs the same call on the copy over a host that answers from that log, each question
+checked against the logged one, and the copy must equal the object byte for byte; a difference
+names the unit, the call, the field and the kinds logged. The test group `cob-verify` plays
+slice-walkers' game under it and `tools/replay/cobverify_check.py` judges the log.
+
+MEASURED 2026-11-21 on the live lane L of each game; its puppet lanes P, R and Q compared 7.8 million
+calls more, every one equal too:
+
+| game | entry calls compared | equal | effects among them |
+|---|---|---|---|
+| slice-walkers (`cob-verify`) | 246 678 (L) | all | EMIT_SFX 1103, EXPLODE 539, SET 49; 1620 completions, 1103 draws |
+| the battle | 5 738 749 (L) | all | EMIT_SFX 2073, EXPLODE 4202, SET 44; 8 nested entries |
+| transport-turn | 65 470 (L) | all | EXPLODE 600, ATTACH 80, SET 81 |
+| teleport, tenseat, cob-getters | 33 759, 45 710, 3 045 (L) | all | the getter world's units, callers, allied and local tests |
+
+The swap itself plays slice-walkers and cob-getters to a pass on every test: record, puppet, round
+trips, seeks, and the counts with the COB children exact.
+
+**What it costs** (MEASURED 2026-11-21, the 13 500-unit battle on the reference setup, one game: a
+scratch build whose odd 64-tick blocks call the engine's entries through the oracle's trampolines and
+whose even blocks run the core; the main checkout's `.data/prof/2026-11-21-cobswap/ab-battle/`): the
+unit tick takes 8.72 ms a tick on the core against 9.73 on the engine's guarded interpreter, the core
+0.96 ± 0.09 ms faster than its neighbouring blocks, in 30 of 32. The other spans are unchanged within
+their noise. That is about the guard's measured 1.20 ms, most of which the stack proof removes; the
+records' visits, which L3 and L4 address, are unchanged.
 
 ### L3 — A turn only when something is due
 
@@ -127,13 +155,13 @@ gets a block of 128-word stacks. The unit loop prefetches the header line of the
 
 ## Gaps open
 
-- **The oracle sees what the engine logs**: a getter whose answer the same call's own SET changes is
-  answered from the log as the engine saw it, which is the comparison's point; a host read the oracle
-  does not log (cargo, carrier) is read again after the engine's call, where an ATTACH or DROP in that
-  call could have changed it.
-- **`tagpu_cobvm.c` and `tagpu_cob_safe.c` are not `sim` files**: once the game runs them, they need
-  their `thread-split.allow` lines and the program validator's `malloc` through the registry's
-  wrappers (the COB plan, *Gaps open*). L2.
+- **What the oracle does not see**: ATTACH's and DROP's live-unit test is asked again after the
+  engine's call; an entry made inside a call on another object's entry is verified on its own, not as
+  part of the outer call; a refused start's completion is logged when the start returns. No game has
+  yet given it a DROP, a cargo or a carrier read.
+- **`tagpu_cob_safe.c` is not a `sim` file**: its validator allocates each program with `malloc` at
+  the script's load, which the sim scope refuses; the programs are content of the loaded files, and
+  `tools/sim-state-check.sh` names the gap.
 - **The core's other hosts** (the wiki, tacob, the mockup) run engine-layout blocks: L4 either gives
   the core a layout description or moves every host to the block.
 - **Not disassembled**: whether `0x43E060` (getters 7 and 8, EXPLODE's positions) and `0x47DB70`
