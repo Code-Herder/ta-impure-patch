@@ -157,13 +157,13 @@ static const char* const HIT_NAMES[H__N] =
       "loader", "violation", "stock_splice", "mismatch", "ground", "cob_full",
       "hold_fire", "crc", "candidates", "candidates_differ" };
 /* cob_full: AimFromWeaponN/QueryWeaponN resolved to no piece. COBEngine_QueryScript
-   (0x4B0BC0 -> 0x4B0C40) opens with a thread-slot allocation (0x4B08C0) that scans
-   a fixed EIGHT records of 0xA4 bytes at cob+0x1C and returns -1 when they are all
-   busy; on -1 it returns without touching the caller's out-parameter. So a unit
-   already running eight scripts gets silence, not an error, and the aim origin
-   falls back to piece 0 -- every starved slot then computes the same wrong
-   solution from the hull's first piece and stops tracking. Nonzero here means the
-   unit's scripts are over that cap; see research/notes/extra-weapons.md.
+   (0x4B0BC0 -> 0x4B0C40) opens with a thread-slot allocation that returns -1 when every
+   record is busy -- the engine's eight (0x4B08C0) in the stock-limits build, the COB VM's
+   ten in the raised build -- and on -1 returns without touching the caller's
+   out-parameter. So a unit already running that many scripts gets silence, not an
+   error, and the aim origin falls back to piece 0 -- every starved slot then computes
+   the same wrong solution from the hull's first piece and stops tracking. Nonzero here
+   means the unit's scripts are over that cap; see research/notes/extra-weapons.md.
    hold_fire: shots withheld because the barrel had not slewed onto the target. */
 /* stock_splice counts splice stubs taken for slots 0-2 (the stock path); mismatch
    counts the times the pointer-derived index disagreed with the engine's own

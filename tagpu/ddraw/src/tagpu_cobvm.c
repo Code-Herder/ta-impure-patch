@@ -819,8 +819,19 @@ void tagpu_cobvm_settle(TAGPU_COBVM* vm)
     vm->owed = 0;
 }
 
+void tagpu_cobvm_settled(const TAGPU_COBVM* vm, unsigned char* out)
+{
+    unsigned s;
+    memcpy(out, vm->object, TAGPU_COB_OBJECT_BYTES);
+    for (s = 0; s < vm->threads; ++s) {
+        TagpuCobRecord* r = (TagpuCobRecord*)(void*)(out + OBJ_RECORDS + s * TAGPU_COB_RECORD_BYTES);
+        if (r->status == ST_SLEEP) r->sleep = wrap_sub(r->sleep, vm->owed);
+    }
+}
+
 /* After a turn that ran: quiet when every busy record sleeps or waits on a CALL; `due` the smallest
-   sleep, INT32_MAX with no sleeper (nothing then is owed) */
+   sleep, INT32_MAX with no sleeper -- the owed dt then reaches it after 2^31 turns, and that turn
+   runs and settles */
 static void schedule(TAGPU_COBVM* vm)
 {
     unsigned s;
@@ -840,7 +851,7 @@ int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt)
     if (!entered(vm, run)) return -1;
     if (vm->quiet && dt > 0 && (int64_t)vm->owed + dt < (int64_t)vm->due) {
         tagpu_cobvm_flush(vm, run);
-        if (vm->due != INT32_MAX) vm->owed += dt;
+        vm->owed += dt;
         step_anim(vm, dt);
         return 1;
     }

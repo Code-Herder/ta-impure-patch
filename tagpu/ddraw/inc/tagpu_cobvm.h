@@ -185,14 +185,18 @@ int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t
    is owed to the sleepers and only the stepper runs. That is the engine's turn exactly: such a
    turn takes dt off each sleeper and wakes none (0x4B0DEF..0x4B0E01: runnable only at 0 or
    below), a CALL record runs only when its child's RETURN or a signal wakes it, and both of those
-   run inside a turn or an entry, which settles the owed dt first. Outside the core only the save
-   reads a record's sleep (cob_save, which settles first): the engine's record accesses are the
-   COB module's own, every one inventoried in cob_runtime_sites. */
+   run inside a turn or an entry, which settles the owed dt first. Outside the core a record's
+   sleep is read only settled: the save settles first (cob_save), a hash reads
+   tagpu_cobvm_settled, and the engine's record accesses are the COB module's own, every one
+   inventoried in cob_runtime_sites. */
 int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt);
 
 /* Take the owed dt off the sleepers, as the turns that owed it would have. Every entry does it
    first; a host that reads the records itself (a save) calls it before. */
 void tagpu_cobvm_settle(TAGPU_COBVM* vm);
+/* The object's TAGPU_COB_OBJECT_BYTES as tagpu_cobvm_settle would leave them, into `out`: the state
+   a hash or a comparison compares, whatever dt is still owed. */
+void tagpu_cobvm_settled(const TAGPU_COBVM* vm, unsigned char* out);
 
 /* Write the latched start's trace line now (the oracle's last line of a run). */
 void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run);

@@ -223,39 +223,64 @@ class Core(unittest.TestCase):
     Sig() { set-signal-mask 2; sleep 1000; s2 = s2 + 100; }
     Killer() { while(1) { sleep 700; signal 2; start-script Sig(); } }
     Lazy() { sleep 2000; s2 = s2 + 1; }
+    Kick() { signal 2; start-script Sig(); sleep 40; s1 = s1 + 1000; }
+    Probe(a, b, c, d) { a = s1; b = s2; signal 2; start-script Sig(); start-script Lazy(); sleep 30; }
     Create() { start-script Walk(); start-script Parent(); start-script Killer(); start-script Lazy(); }
     """
+    ST_SLEEP = 0x02400000
 
-    def _scheduled_against_every_turn(self, source, ticks, entry_at=()):
-        """(turns the schedule left unvisited): one VM scheduled, one made to visit its records on
-        every turn, both given the same turns and the same entries, equal after each turn once the
-        first's owed dt is taken off"""
+    def _settled(self, v):
+        """the object's bytes with the owed dt taken off each sleeper, worked out here"""
+        buf = bytearray(v._object)
+        for s in range(v._vm.threads):
+            at = 28 + s * tacob.RECORD_BYTES
+            if struct.unpack_from("<I", buf, at)[0] == self.ST_SLEEP:
+                sleep = struct.unpack_from("<i", buf, at + 12)[0] - v._vm.owed
+                struct.pack_into("<i", buf, at + 12, (sleep + 2**31) % 2**32 - 2**31)
+        return bytes(buf)
+
+    def _scheduled_against_every_turn(self, source, ticks, entry_at=(), query_at=()):
+        """(turns the schedule left unvisited, entries made while more than one turn's dt was owed):
+        one VM scheduled and never settled but by its own entries, one made to visit its records on
+        every turn, both given the same turns, starts and queries; after each turn the second equals
+        the first with its owed dt taken off, and the core's own settled copy says the same"""
         a = self.vm(source, rules=tacob.RULES_IMPURE)
         b = self.vm(source, rules=tacob.RULES_IMPURE)
         for v in (a, b):
             v.start_script("Create", run_now=True)
-        skipped = 0
+        self.lib.tagpu_cobvm_settled.argtypes = [C.POINTER(tacob._Vm), C.c_void_p]
+        self.lib.tagpu_cobvm_settled.restype = None
+        out = (C.c_ubyte * tacob.OBJECT_BYTES)()
+        skipped = owed_entries = 0
         for t in range(ticks):
+            if t in entry_at or t in query_at:
+                owed_entries += a._vm.owed > 1
             if t in entry_at:
                 for v in (a, b):
-                    v.start_script("Waiter", run_now=False)
+                    v.start_script("Kick" if t & 1 else "Waiter", run_now=bool(t & 1))
+            if t in query_at:
+                self.assertEqual(a.query_script("Probe", [0, 0, 0, 0]), b.query_script("Probe", [0, 0, 0, 0]),
+                                 f"the query at turn {t}")
             b._vm.quiet = 0
             skipped += bool(a._vm.quiet) and a._vm.owed + 1 < a._vm.due
             a.do_scripts_now(1)
             b.do_scripts_now(1)
-            self.lib.tagpu_cobvm_settle(C.byref(a._vm))
-            self.assertEqual(bytes(a._object), bytes(b._object), f"the records after turn {t}")
+            self.assertEqual(self._settled(a), bytes(b._object), f"the records after turn {t}")
+            self.lib.tagpu_cobvm_settled(C.byref(a._vm), out)
+            self.assertEqual(bytes(out), bytes(b._object), f"the core's settled copy after turn {t}")
             self.assertEqual(a.statics, b.statics, f"the statics after turn {t}")
             self.assertEqual(list(a.anim), list(b.anim), f"the animation after turn {t}")
             self.assertEqual(bytes(a._model), bytes(b._model), f"the model after turn {t}")
-        return skipped
+        return skipped, owed_entries
 
     def test_a_turn_with_nothing_due_is_owed_and_exact(self):
-        skipped = self._scheduled_against_every_turn(self.SCHEDULE, 900, entry_at=(37, 400, 401, 655))
-        self.assertGreater(skipped, 100)
+        skipped, owed_entries = self._scheduled_against_every_turn(
+            self.SCHEDULE, 2500, entry_at=(37, 400, 401, 655, 1333), query_at=(90, 433, 1201, 1802, 2222))
+        self.assertGreater(skipped, 300)
+        self.assertGreaterEqual(owed_entries, 4)  # the entries' own settles took off more than one turn
 
     def test_an_object_only_animating_steps_its_pieces_and_nothing_else(self):
-        skipped = self._scheduled_against_every_turn(
+        skipped, _ = self._scheduled_against_every_turn(
             "Create() { turn base to y-axis <180> speed <10>; move arm to x-axis [20] speed [1]; }", 300)
         self.assertGreater(skipped, 200)
 

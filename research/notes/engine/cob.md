@@ -709,14 +709,14 @@ vtable handler takes (`0x480770`, `0x480C30`, `0x480EB0` all open with it).
 | `+0x04` | sim rate (30) — `sleep` ticks = `ms × rate / 1000`, MOVE/TURN speeds `/ rate` | `0x4B0641`; `0x4B1363..0x4B1370`; `0x4B0EDE`, `0x4B0F7B` |
 | `+0x08` | the loaded `.cob`: `+4` script count, `+8` piece count, `+0x10` static count, `+0x18` entry table (word indices), `+0x1C` name pointers, `+0x24` code words — the on-disk header (`file-formats.md` §2.1) with the offsets relocated to pointers | `0x4B072A`, `0x4B08CA`, `0x4B0900`, `0x4B07D0`, `0x4B0E5D`, `0x4B073B`, `0x4B0759` |
 | `+0x0C` | `0x4B26F0(scriptfile)` result `[unknown]` | `0x4B0735` |
-| `+0x10` | static variables, `count × 4`, zero-filled | `0x4B076E`; read by `PUSH_STATIC` `0x4B13AA` |
+| `+0x10` | static variables, `count × 4`, **not filled**: `0x4B0720` takes it from the realloc `0x4D84A0` and writes nothing into it (`0x4B0769..0x4B0795`; only the animation block gets the `rep stos`), and the allocator does not zero | `0x4B076E`; read by `PUSH_STATIC` `0x4B13AA` |
 | `+0x14` | piece animation array, `19` dwords per piece, zero-filled | `0x4B0756`, `0x4B0777..0x4B0791` |
 | `+0x18` | "something is animating" — set by MOVE/TURN, cleared by the stepper | `0x4B0F1A`, `0x4B1C21` |
 | `+0x1C` | **eight thread records × `0xA4`** (below) | `0x4B08D4..0x4B08E6` |
 | `+0x53C` | running-thread count | `0x4B0921`, `0x4B19F9`, `0x4B1AAB` |
 | `+0x540` | the posed model `Object3do` (`unit+0x9E`); `+0xC` of it is the unit | `0x480D44`, `0x480EBB..0x480EC1` |
 
-**Vtable `0x4FD698`** (22 slots; the base `0x4FDB00` has slots 0–6 = `0x4E6110` (pure), 7–13 =
+**Vtable `0x4FD698`** (21 slots, `+0x00..+0x50`; the base `0x4FDB00` has slots 0–6 = `0x4E6110` (pure), 7–13 =
 `0x4B1E50..0x4B1EB0`, 14–20 = `0x4B0650..0x4B06B0`, the no-op bases, and `0x4B06B0` is the base
 destructor: frees `+0x14`, `+0x10`, then the object when the flag argument has bit 0). The
 slots the VM calls, with the handler each opcode reaches — this closes the "unidentified opcode

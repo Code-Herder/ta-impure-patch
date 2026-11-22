@@ -3624,8 +3624,9 @@ static void slice_finish(unsigned now)
 
 /* RK_EV_START: the 0x10 case's call (0x455528..0x455551), made here rather than through the case,
    which scales the unit's u16 unbounded. 0x4B0B00 bounds the index itself (0x4B08C5..0x4B08D0)
-   but not argc: its thread's stack pointer becomes argc - 1 (0x4B0B76), so argc is at most the
-   four arguments there are. */
+   but not argc: the engine's thread's stack pointer becomes argc - 1 (0x4B0B76), so the
+   stock-limits build plays at most the four arguments there are; the raised build's entry
+   (tagpu_patches.c, cg_start_idx) refuses any other count as a full pool, as the owner's did. */
 static int ev_start(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t id;
@@ -3637,7 +3638,10 @@ static int ev_start(const Lv* L, const unsigned char* b, unsigned len)
     memcpy(&idx, b + 4, 4);
     memcpy(&argc, b + 8, 4);
     memcpy(a, b + 12, 16);
-    if (!(u = live_unit(L, id)) || argc < 0 || argc > 4 || !(cob = cob_of(u))) return 0;
+#ifdef TAGPU_LIMITS_STOCK
+    if (argc < 0 || argc > 4) return 0;
+#endif
+    if (!(u = live_unit(L, id)) || !(cob = cob_of(u))) return 0;
     E_StartIdx(cob, idx, NULL, 0, argc, a[0], a[1], a[2], a[3]);
     return 1;
 }

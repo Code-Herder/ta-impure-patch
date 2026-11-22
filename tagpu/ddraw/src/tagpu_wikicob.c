@@ -673,7 +673,9 @@ uint64_t tagpu_wikicob_hash(const WIKICOB* w, uint64_t h)
         h = fnv32(h, u->block != NULL);
         if (u->block) {
             const TagpuCobProgram* p = w->type[u->type].prog;
-            h = fnv(h, u->block, TAGPU_COB_OBJECT_BYTES);
+            unsigned char settled[TAGPU_COB_OBJECT_BYTES];
+            tagpu_cobvm_settled(&u->vm, settled);
+            h = fnv(h, settled, TAGPU_COB_OBJECT_BYTES);
             h = fnv(h, u->block + OBJ_BYTES, (size_t)p->statics * 4);
             h = fnv(h, u->vm.anim, (size_t)p->pieces * TAGPU_COBVM_ANIM * 4);
             h = fnv(h, u->model, TAGPU_COBVM_MODEL_BYTES((size_t)w->type[u->type].nodes));

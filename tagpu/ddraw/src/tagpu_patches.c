@@ -13853,6 +13853,7 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
                               anim ? (int32_t*)(void*)(copy + TAGPU_COB_OBJECT_BYTES + stat) : NULL,
                               copy + TAGPU_COB_OBJECT_BYTES + stat + anim, reason, sizeof reason)) {
             cvr_bad(&rp, "the copy could not be bound: %s", reason);
+            tail->quiet = 0;
         } else {
             rp.vm.checked = tail->checked;
             rp.vm.quiet = tail->quiet;
@@ -13977,8 +13978,16 @@ static int __attribute__((thiscall)) cg_start_idx(char* cob, int idx, uint32_t c
     if (argc < 0 || argc > 4) {
         /* Only a malformed script-start message reaches this: the 0x10 receiver passes the
            message's byte as argc (0x455544), every other caller 0 to 2. The core would refuse it
-           as a fault; it is refused as a full pool refuses, on every peer alike. */
+           as a fault; it is refused as a full pool refuses, on every peer alike: counted, traced,
+           its completion called with 0. */
         cg_alloc(&k, idx, TAGPU_COBVM_FROM_ENGINE);
+        if (k.host.trace) {
+            TAGPU_COBVM_TRACE t;
+            memset(&t, 0, sizeof t);
+            t.kind = 'X'; t.tick = k.run.tick; t.slot = -1; t.script = idx; t.pc = -1;
+            t.from = TAGPU_COBVM_FROM_ENGINE; t.parent = -1;
+            k.host.trace(&k, &t);
+        }
         if (cb) cg_done(&k, cb, 0);
         return 0;
     }

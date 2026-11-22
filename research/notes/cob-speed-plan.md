@@ -150,15 +150,22 @@ unscheduled.
 The owed dt is counted in the core from the turns it is given, so it is the engine's count by
 construction: a puppet's turns, a paused game's and a seat's whose units get none are exactly the
 calls of `0x4B0D60` that are or are not made. The schedule's three words live in the unit's VM, in
-the tail of its COB object, and nothing outside the core reads them. A recording needs nothing new:
+the tail of its COB object; outside the core only the oracle reads them, to carry the schedule
+through its replay copy, and a hash of a VM's state hashes it settled (`tagpu_cobvm_settled`). A recording needs nothing new:
 the recorder keeps no COB state (a unit's scripts are rebuilt by its create), and the save, which
 does keep it, writes settled sleeps.
 
-`tools/test_cobvm.py` plays each schedule against a VM made to visit its records every turn, both
-given the same turns and starts, and requires the records, statics, animation and posed model equal
-after every turn. In the game the oracle's replay runs the scheduled core against the engine's
-interpreter, which visits every record every turn: MEASURED 2026-11-21, `cob-verify` 259 206 entry
-calls equal, and slice-walkers and cob-getters pass on the scheduled core.
+`tools/test_cobvm.py` is the proof of the owed dt: a scheduled VM, settled by nothing but its own
+entries, plays against one made to visit its records every turn, both given the same turns, starts
+and queries -- starts that run at once and put a thread to sleep inside the call, queries that
+signal a sleeper away and start others, made while several turns' dt is owed -- and after every turn
+the second must equal the first with its owed dt taken off (worked out in the test, and by
+`tagpu_cobvm_settled`), with the statics, animation and posed model. Removing the settle from the
+start or the query, or dropping the owed dt from the skip test, fails it. The oracle checks each
+turn's decision in the game: its replay copy starts from the engine's state, which owes nothing, and
+the scheduled core must leave it as the engine's every-turn interpreter does (MEASURED 2026-11-21,
+`cob-verify` 259 206 entry calls equal). It cannot see dt owed across turns, nor can the replay
+groups, whose recording and puppets both run the scheduled core.
 
 **What it saves** (MEASURED 2026-11-21, the 13 500-unit battle on the reference setup, one game: a
 scratch build whose odd 64-tick blocks clear `quiet` before every turn, the main checkout's
