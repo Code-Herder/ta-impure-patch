@@ -822,7 +822,8 @@ and then it drops its oldest sixteenth whole and logs once.
 world pixels for its frame) into the slot, newest kept when the slot runs out
 (`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line), the frame handles of the three
 sprite sequences (`pevt_frame`: the flare sequence, "smoke 1", "smoke 2", the first 64 of each),
-and the wind's rows. A smoke event is copied once for every ten of its puffs that can be alive at the
+and the wind's rows, the newest kept when the slot cuts them (the same bit; the rows cut are counted
+in the fill's need, so the slot grows and the refill fits them). A smoke event is copied once for every ten of its puffs that can be alive at the
 packet's GameTime, each copy naming its first puff (`pbase`); its reach is its point widened by the
 least and most the wind and the rise have carried a puff over the level's longest puff life. The
 acquire validates the table, every layer and class, a
