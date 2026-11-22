@@ -5047,8 +5047,10 @@ SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
    sines and cosines once and turns every vertex, last to first, through tagpu_turn3.h, which
    writes what 0x4B6CC0 writes, bit for bit (its header states the argument).
 
-   THE INVARIANT: every vertex the loop writes is bit-identical to stock's, and so are the x87's
-   exception flags, since the trig is taken only for a piece with a vertex, where stock takes it.
+   THE INVARIANT: every vertex the loop writes is bit-identical to stock's, and so are the x87
+   exception flags the loop itself raises, since the trig is taken only for a piece with a vertex,
+   where stock takes it. (The rotation's table, fp_exact below, skips fsincos elsewhere, so the
+   sticky flags of the process are not stock's; nothing reads them for a value.)
    Beyond tagpu_turn3.h's argument it rests on:
      - the engine code it stands for being stock's: the loop, 0x4B6CC0 and 0x4B7173 are each
        matched byte for byte before anything is written, and on any difference nothing is;
@@ -5062,7 +5064,8 @@ SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
        0x45B1AC..0x45B1C9 reloads all four before reading them. */
 
 /* THE ORACLE, `tagpu_reposecheck.on` (read at install): every vertex is also turned by stock's
-   0x4B6CC0 on a copy, and the two compared. A difference is logged with its piece's angles. */
+   0x4B6CC0 on a copy, and the two compared. 0x4B6CC0's three calls of 0x4B7173 reach the rotation's
+   table when fp_exact is installed, which tagpu_fpverify.on compares with the engine's fsincos. A difference is logged with its piece's angles. */
 typedef void (__stdcall *TURN3_FN)(const int* in, int* out, const short* turn);
 static unsigned char s_rtrigCheck;
 SIM_VAR(s_rtrigCheck, SIM_INSTALL);

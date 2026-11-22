@@ -20,9 +20,10 @@
        byte for byte (the build's disassembly against 0x4B7194..0x4B71A4);
      - the engine code it stands for being stock's: a caller that replaces the engine's own calls
        byte-matches 0x4B6CC0 and 0x4B7173 first (tagpu_patches.c, repose_trig).
-   The x87's exception flags come out as stock's when the caller prepares only where stock would take
-   at least one fsincos (a triple with a vector to turn): they are sticky, and each fsincos here is
-   stock's operation on stock's operand.
+   The x87 exception flags this raises are stock's when the caller prepares only where stock would
+   take at least one fsincos (a triple with a vector to turn): they are sticky, and each fsincos here
+   is stock's operation on stock's operand. (The rotation's table skips fsincos at 0x4B7173's other
+   calls, so the process's flags are not stock's; nothing reads them for a value.)
 
    THE ASM LEAVES ARE NOT INSTRUMENTED (no_instrument_function): the coverage build instruments the
    simulation files (Makefile, THE COVERAGE BUILD), and these carry inline assembly. Their callers are
