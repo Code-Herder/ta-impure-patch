@@ -18,10 +18,12 @@
      0x471F90  particle-layer draw walker (ctx, n) — the ONLY draw path of
                the smoke/fire/wake/nanolathe objects (ten DrawGameScreen
                sites, pure draw: the sim tick updates them through vtbl+4,
-               this walker calls vtbl+8); stdcall, ret 8. Without
-               tagpu_particlecheck.on the layers are empty on Vulkan (every
-               particle is an event, tagpu_patches.c); under it the engine's
-               objects are made in full, and this keeps them off the screen.
+               this walker calls vtbl+8); stdcall, ret 8. On Vulkan every
+               particle is drawn from its event (tagpu_patches.c, which
+               refuses a launch that cannot record them); without
+               tagpu_particlecheck.on the pool holds no object, and under it
+               the engine's objects are made in full and this keeps them off
+               the screen.
 
    WHY NOTHING IS LOST. The engine's world draws never reach the presented
    frame on the Vulkan backend: the world phase stamps them and `publish`
@@ -175,7 +177,7 @@ int tagpu_fxown_want_sfx(void) { return g_wantSfx != 0; }
 
 void tagpu_fxown_flush(unsigned int frame_counter)
 {
-    /* the effect tables cost the publisher a walk of four engine arrays; a
+    /* the effect tables cost the publisher a walk of the engine's effect arrays; a
        pass that has stopped asking for them stops being charged for them */
     if ((g_wantFx || g_wantSfx) && frame_counter - g_beatWant > 90) {
         flog("fxown: neither effects pass asked for the packet's tables for 90 frames — they go idle");

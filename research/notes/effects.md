@@ -493,9 +493,11 @@ On a Vulkan launch the engine holds no particle object (§7.8), so there are no 
 (`tagpu_fx_set_events`), and the pass draws every particle from its event (§7.8): layers 0..6 before
 the lines and flashes (the engine draws those layers before its projectile pass, so a laser or a
 flash sits over trail smoke), 7..9 after the sprites, so the draw order reproduces the engine's. Per-frame
-keys from the native pass (nothing absolute): layers 0..4 at `0.5` (under every row key), 5 and 6 at
-`fxKey − 2` (above the last row key `fxKey − 2.2`, below the fx models at `fxKey ± 1.8`), 7 at
-`fxKey + 5` (above the fx sprites), 8 at `airKey + 3`, 9 at `airKey + 5`. The tokens choose the
+keys from the native pass (`tagpu_native.c`, nothing absolute): layers 0..2 at `0.30` and 3..4 at `0.60`
+(the engine draws 0..2 before its flat-feature pre-pass and 3..4 after it, so the flat band 0.40..0.50
+sits between them; all under every row key), 5 and 6 at `fxKey − 2` (above the last row key
+`fxKey − 2.2`, below the fx models at `fxKey ± 1.8`), 7 at `encFx + fxBand + 0.5` (above the fx
+sprites), 8 at `airKey + 3`, 9 at `airKey + 5`. The tokens choose the
 classes drawn: `nonano` no nano event, `nofire` no fire or flare, `nowake` no wake or bubbles,
 `nosmoke` no smoke, `passive` none. Log every 60 frames with `log`: `sfx: events=N (W wind rows)`,
 `EVENTS-TRUNCATED` when the packet cut the table, `(passive: nothing drawn)`.
@@ -614,8 +616,10 @@ stub: the nano emitters' from the entry to the layer's read (`0x4720D7..0x472187
 return to the layer's `movsx` after its init (`0x47255A..0x4725B5`, `0x471FFA..0x472052`,
 `0x47235A..0x4723B7`, `0x472B7F..0x472BD3`, `0x472657..0x4726A1`, `0x472837..0x47287B`,
 `0x472917..0x47295B`, `0x4729F7..0x472A3B`, `0x472C77..0x472CBA`). The first seven bytes of each nano
-emitter and the wake's first five are the recorder's, compared before it installs. A table not in
-ends the process before the game starts ([engine patches](modules/engine-patches.md) §2.6c).
+emitter and the wake's first five are the recorder's, compared before it installs; on a Vulkan launch
+other bytes there, or a walk hook `0x4955BF` not installed, refuse the table by name as a differing
+row does, since the events are the only particle draw there. A table not in ends the process before
+the game starts ([engine patches](modules/engine-patches.md) §2.6c).
 
 **The layer's cap and the pool's count are applied to the events.** Every object the engine would
 have made is an event, so a layer's events are its objects: an emission into a layer that holds more
@@ -731,8 +735,9 @@ as the engine's object, which never answers empty, does. Its layer table pointer
 NULLed by the teardown `0x471DE0`, and the packet copies no event while it is NULL, so a level's
 vents are not drawn over the next level's loading screen. The list holds `6·(TAGPU_LIM_SFX + 1)`
 rows of 96 B (about 11.8 MB in the raised build): the six layers the stock callers use, each at its cap plus the
-one the trim leaves; only events in a seventh layer could fill it, which no caller makes, and then an
-emission is dropped and counted.
+one the trim leaves; only events in a seventh layer could fill it, which no caller makes, and then
+`pevt_room` drops the oldest sixteenth of the list (`PEVT_CAP / 16` rows) at once, counts them in the
+level's `dropped` and logs once.
 
 **Publishing**: the frame packet's fill copies the live events whose particles can reach the view
 (each event's box of world x and `y − alt/2`, widened by the reach slack and, for a sprite, 128
@@ -767,8 +772,8 @@ for statement (`umulExtended` for the 64-bit product, a sign-split division towa
 not in the engine's object is a degenerate quad. A nano dot is `DrawBar`'s 2×2 at the engine's
 projection; a fire, flare or smoke particle is its frame's quad at that point less
 the hotspot, the quad `emit_sprite` makes, at 50 % alpha through FS's alpha path (the base atlas's
-key, the restored twin where it is painted); all at their layer's key (§7.5: 0..4 `0.5`, 5 and 6
-`fxKey − 2`, 7 `fxKey + 5`, 9 `airKey + 5`). The fragment stage
+key, the restored twin where it is painted); all at their layer's key (§7.5: 0..2 `0.30`, 3..4
+`0.60`, 5 and 6 `fxKey − 2`, 7 `encFx + fxBand + 0.5`, 8 `airKey + 3`, 9 `airKey + 5`). The fragment stage
 applies **the engine's sight test exactly** (`0x473A00`, `0x474170`, `0x473590`, Smoke2's
 `0x475470`; Smoke1's draw `0x475700` has none, and nor has its event): the tile `(hi(x) >> 5, (hi(y) −
 (hi(alt) >> 1)) >> 5)` read from the slot's fog source (`inc/tagpu_fogsrc.h`: bit 1 out of LOS in

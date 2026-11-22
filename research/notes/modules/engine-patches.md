@@ -142,7 +142,8 @@ events, past every layer's cap; the events also count the pool (`TAGPU_LIM_SFXPO
 refuse an emission, as the engine's alloc does), so a stock-limits game refuses what stock's pool of
 1000 refuses.
 The effects pass's three vertex buckets do not share one cap (`tagpu_fx.h`): `SPRITES` (projectiles,
-explosions) holds 6 × (2 × projectiles + explosions) vertices, lines and flashes 65 536. At 65 536
+explosions) holds 6 × (2 × projectiles + explosions + 24 576) vertices, the 24 576 quads an allowance
+for composite frames, whose subframes no engine limit counts; lines and flashes 65 536. At 65 536
 for all of them, tier 1's opening volley filled `SPRITES` and refused 169 quads
 (`fx: DROPPED … bucket-full`, which counts quads and lines, not vertices). **What that costs in
 address space**, in a process that is not large-address-aware (the exe's characteristics are

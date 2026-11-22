@@ -323,6 +323,13 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   battle, at every quantile, in three runs alternated with two of the base; what the landing removed
   from the gather (an empty particle table's walk) cannot cost it, so its cause is not established.
   The game thread gained 0.86 ms a frame in the same runs, and the frame rate is unchanged.
+- **A Vulkan launch whose exe differs at the events' sites is refused.** The particle events read the
+  emitters' frames and are timed at the walk's hook, and on Vulkan they are the only particle draw, so
+  their preconditions are part of the table's all-or-nothing: the nano emitters' entries
+  `0x4720D0`/`0x472200`, the wake's `0x472430` and the walk `0x4955BF` refuse the table there by name,
+  as every other differing row does. A mod whose exe differs at one of them fell back to the engine's
+  particles before and is now refused: the compatibility suite (`tacompat.py`) must run before the next
+  `v*` tag. GDI is unchanged.
 - **The 4K measurement on the owner's live display** (the `particles` span, `publish`, `gather`, the
   GPU's frame time at 3840×2160) waits for the owner's word; every number here is 1080p on a private
   display.

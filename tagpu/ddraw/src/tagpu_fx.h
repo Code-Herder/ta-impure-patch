@@ -38,7 +38,7 @@ typedef struct TAGPU_FXVIEW {
     float encFx, encStep;
     int   modelCap, modelsOn;
     float depthScale;            /* the vertex stages' depth scale             */
-    float encLayer[10];          /* particle layer n -> depth key (tagpu_sfx)  */
+    float encLayer[10];          /* particle layer n -> depth key (the events) */
     int r0, rows;                /* the row sweep's base row and count: a row  */
                                  /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
     int vw, vh, scafOn;          /* viewport size; scene-depth scaffold armed  */
@@ -201,14 +201,19 @@ int  tagpu_fog_at(const TAGPU_FOGSRC* f, int wx, int wzp);
    Vulkan pass can re-check a handed-over count against the very number that
    produced it rather than against a second copy of it. SIZED FOR THE TABLES
    THEY DRAW as those usually fill: SPRITES holds a projectile's two quads
-   (its shadow blob and its own frame) and an explosion's one. Lines (in
-   records) and flashes keep TAGPU_FX_MAXV. IT IS NOT A BOUND BY CONSTRUCTION: a composite GAF frame
-   makes one quad per subframe and a lightning bolt up to 1 022 lines. A quad
+   (its shadow blob and its own frame) and an explosion's one, and
+   TAGPU_FX_COMPOUND more quads for the composite frames, which make one quad
+   per subframe (24 576 quads: the slack the bucket had when it also held
+   the particles, under which tier 1's opening volley dropped none). Lines
+   (in records) and flashes keep TAGPU_FX_MAXV. IT IS NOT A BOUND BY
+   CONSTRUCTION: a composite frame's subframes and a lightning bolt's up to
+   1 022 lines are not counted by any engine limit. A quad
    or line that does not
    fit its bucket is dropped and counted (`fx: DROPPED ... bucket-full` in the
    log), never written past it. */
 #define TAGPU_FX_MAXV         65536
-#define TAGPU_FX_MAXV_SPRITES (6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL))
+#define TAGPU_FX_COMPOUND     24576
+#define TAGPU_FX_MAXV_SPRITES (6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL + TAGPU_FX_COMPOUND))
 
 /* THE THREE BUCKETS, IN DRAW ORDER, which is the order they are concatenated
    into one vertex buffer in. They are not three draws of one

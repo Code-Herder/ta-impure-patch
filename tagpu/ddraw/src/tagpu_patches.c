@@ -205,6 +205,14 @@ static void lim_needs(const char* fix, const char* needs, const char* state)
     s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
 
+/* a precondition of a table fix that is not met, said in full: nothing of the table is written,
+   and the report names it */
+static void lim_refuse(const char* why)
+{
+    _snprintf(s_limNeeds, sizeof s_limNeeds, "%s", why);
+    s_limNeeds[sizeof s_limNeeds - 1] = 0;
+}
+
 /* one site's bytes, without trusting the page to be readable */
 static int lim_read(unsigned int va, unsigned char* out, int n)
 {
@@ -11909,8 +11917,6 @@ static struct {
    simulation reaches them, as it made the pool's objects. The class is the owner's to settle. */
 SIM_VAR(s_pevt, SIM_PRIVATE);
 static unsigned char s_pevtOn, s_pevtCheck;       /* a Vulkan launch; the oracle lever        */
-static const char* s_pevtOff;                     /* why a Vulkan launch draws no events      */
-SIM_VAR(s_pevtOff, SIM_INSTALL);
 SIM_VAR(s_pevtOn, SIM_INSTALL);
 SIM_VAR(s_pevtCheck, SIM_INSTALL);
 
@@ -12992,10 +12998,8 @@ static void pevt_report(void)
                "are drawn from emitter events, recorded at the pool's alloc 0x470EB0; the pool "
                "holds no object (0x471C83 = 0) and the particle walk 0x4955BF walks no layer" :
                pevt_live() ? "are drawn from emitter events, recorded at the pool's alloc 0x470EB0" :
-               s_pevtOff ? s_pevtOff :
                g_config.gdi ? "keep the engine's objects (GDI)" :
-               s_limState <= 0 ? "keep the engine's objects: the table is not in" :
-               "keep the engine's objects: the particle walk is not in",
+               "are not drawn: the table is not in, which ends the launch",
                s_pevtCheck && pevt_live() ? "; tagpu_particlecheck.on: the engine's objects are "
                "made in full and held to the events every tick" : "");
 }
@@ -13180,7 +13184,10 @@ static int fix_particle_rand(void)
        held to stock with the table, all or nothing. The first 7 of each are the recorder's
        observer (tagpu_recorder.c OBSERVE_SITES, which byte-matches them itself and runs them as
        stock) and would read as a rewrite at the table's verify, so they are compared here, before
-       the recorder installs: other bytes there leave the events off and the engine's objects on. */
+       the recorder installs. On a Vulkan launch other bytes there refuse the table, as a differing
+       row would: the events are the only particle draw there (the engine's walker 0x471F90 is
+       skipped, tagpu_fxown.c), so a launch that cannot record them must not start. GDI draws the
+       engine's objects and reads no frame. */
     s_pevtOn = (unsigned char)!g_config.gdi;
     {
     static const unsigned char fwd[0xB8] = {   /* 0x4720D0..0x472187 */
@@ -13219,13 +13226,16 @@ static int fix_particle_rand(void)
                      "particles: the reverse nano emitter's frame, read by the events");
         }
         if (!tagpu_detour_bytes_ok(0x004720D0u, fwd, 7) || !tagpu_detour_bytes_ok(0x00472200u, rev, 7))
-            s_pevtOff = "keep the engine's objects: the nano emitters' entries hold other bytes";
+            if (s_pevtOn)
+                lim_refuse("the particle events (a Vulkan launch) read the nano emitters' frames, "
+                           "and their entries 0x4720D0 and 0x472200 hold other bytes");
     }
     {
     /* THE WAKE EMITTER'S FRAME, read by pevt_pre likewise, from its entry to its layer's read
        (0x472430..0x4724B6: the SFX test, the alloc call, the NULL skip, the init's arguments --
        the life 1 and dir 1 the event assumes -- and the layer's word). Its first 5 bytes are the
-       recorder's sink (OBSERVE_SITES), compared here before it installs. */
+       recorder's sink (OBSERVE_SITES), compared here before it installs, refusing the table on a
+       Vulkan launch as the nano emitters' do. */
     static const unsigned char wakeE[0x87] = {   /* 0x472430..0x4724B6 */
             0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x53, 0x55, 0x33, 0xDB, 0x8B, 0xA8, 0x77, 0x8D, 0x03, 0x00, 0xA0,
             0x08, 0xE6, 0x51, 0x00, 0x56, 0x3A, 0xC3, 0x57, 0x74, 0x04, 0x33, 0xC0, 0xEB, 0x1F, 0x6A, 0x48,
@@ -13240,7 +13250,9 @@ static int fix_particle_rand(void)
         lim_same_run(0x00472435u, (int)sizeof wakeE - 5, wakeE + 5,
                      "particles: the wake emitter's frame, read by the events");
         if (!tagpu_detour_bytes_ok(0x00472430u, wakeE, 5))
-            s_pevtOff = "keep the engine's objects: the wake emitter's entry holds other bytes";
+            if (s_pevtOn)
+                lim_refuse("the particle events (a Vulkan launch) read the wake emitter's frame, "
+                           "and its entry 0x472430 holds other bytes");
     }
     {
     /* THE OTHER EMITTERS' BYTES pevt_pre reads their frames by, from the alloc's return to the
@@ -13335,7 +13347,12 @@ static int fix_particle_rand(void)
         lim_same_run(0x00472C77u, sizeof smokeC50, smokeC50,
                      "particles: the endless smoke's frame, read by the events");
     }
-    if (s_pevtOff) s_pevtOn = 0;
+    /* the events are timed and purged at the particle walk (pevt_walk_begin, pevt_walked), so a
+       Vulkan launch without the walk's hook (fix_particle_walk, armed before this) records none,
+       and refuses the table as for the frames' bytes */
+    if (s_pevtOn && !s_pwOn)
+        lim_needs("the particle events (a Vulkan launch)", "the particle walk at 0x4955BF",
+                  "not installed");
     s_pevtCheck = (unsigned char)(s_pevtOn && tagpu_sim_lever("tagpu_particlecheck.on"));
     /* THE POOL'S CAPACITY, the operand of the C runtime initializer's `push 0x3E8` (0x471C83), which
        the constructor 0x470A90 allocates the pool by: 0 when the events hold every particle, so the
@@ -17235,20 +17252,21 @@ static int lim_install(void)
     /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
     tagpu_logf("limits: installed %d sites, the simulation fixes' included -- projectiles %d, "
                "explosions %d at 0x%08X, flying pieces %d at 0x%08X, debris records %d at 0x%08X, "
-               "units %d a player, pathfinding %d, particles %d a layer from a pool of %d, "
+               "units %d a player, pathfinding %d, particles %d a layer from a pool of %u, "
                "composite %d, wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
                TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
+               TAGPU_LIM_SFX, pevt_pool_none() ? 0u : (unsigned)TAGPU_LIM_SFXPOOL,
+               TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
                TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
     return 1;
 #else
     tagpu_logf("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
                "flying pieces 100, debris records 300, units 250 a player up to 500, "
-               "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
+               "pathfinding 1333, particles 400 a layer from a pool of %u, composite 600, "
                "wreck records 2048, unit types 511); the simulation fixes' %d sites installed",
-               s_nlim);
+               pevt_pool_none() ? 0u : 1000u, s_nlim);
     return 1;
 #endif
 }
@@ -17390,7 +17408,8 @@ void tagpu_limits_report(void)
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limNeeds[0])
         why = "Part of Impure could not be installed on this TotalA.exe (the log says why), and "
-              "a change that keeps every player's game the same relies on it.";
+              "another part relies on it: one that keeps every player's game the same, or the "
+              "particles' draw.";
     else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
