@@ -1325,19 +1325,34 @@ Helpers the ids reach, all read this session:
 - **`0x4FB440`** is MSVC's `_hypot(double x, double y)` (cdecl; `0x4FB480(x, y, 0x18)`, the
   `0x18` an operation code only the error paths read), DISASSEMBLED `0x4FB480..0x4FB6A8`: it
   switches the x87 to a 64-bit significand for its own body (`_ctrlfp(0x133F)` at `0x4FB487`,
-  `0x4EC4C0`), takes M = max(|x|, |y|) (ties take x; 0 returns 0), then x' = x / M and
-  y' = y / M (`fdiv`, `fstp qword`, `0x4FB55F..0x4FB577`), s = x'² + y'² (`fmul`, `fmul`,
+  `0x4EC4C0`), refuses an infinity or NaN by exponent (`0x4FB4A1..0x4FB4C5`), takes |x| and |y| by
+  `fcomp` with 0 and `fchs` and M = |y| when |y| > |x|, else |x| (`test ah,0x41` at `0x4FB50B`;
+  `0x4FB4CB..0x4FB52A`; M = 0 returns 0), then x' = x / M and
+  y' = y / M (`fdiv`, `fstp qword`, `0x4FB55B..0x4FB577`), s = x'² + y'² (`fmul`, `fmul`,
   `faddp`, `fstp qword`, `0x4FB57B..0x4FB58D`), the
   CRT `sqrt 0x4FB7B4`, which keeps the 64-bit precision (`0x4EC9A5`), its result stored to a
   double, and the product of the mantissas of that root and M (`0x4EC380` twice, `fmul` at
-  `0x4FB5B0`, `fstp qword`) with the exponents added back exactly (`0x4EC290`, `0x4EC250`). It is **not
+  `0x4FB5B0`, `fstp qword` at `0x4FB5B7`) with the exponents added back exactly (`0x4EC290`, `0x4EC250`). It is **not
   correctly rounded**: MEASURED 2026-11-12, the shared core's emulation of this sequence equals
   the sequence run on the x87 under the same control word in 3 003 686 of 3 003 686 pairs, and
   among the 3 686 pairs 0 < a ≤ b < 3000 whose distance c is an integer it lands below c in
   359, so `_ftol` gives c − 1 ((20, 99) → 100), the same pairs in 16.16. `.text` calls it from
   39 sites, among them the ground step's `0x43CDA7` (on the `fild`ed dx and dz,
   `0x43CD98..0x43CDA7`) and `0x43CDF4`
-  (`tasim_fixed.h`, `ts_hypot`).
+  (`tasim_fixed.h`, `ts_hypot`). **Its cost is the mode switches**, DISASSEMBLED 2026-11-21: the
+  set loads exactly `0x133F` (mask `0xFFFF`, `0x4FB491`) and the normal exit restores the caller's
+  word (`0x4FB695`) only when that word masks the precision exception (`test bl,0x20`, `0x4FB68A`);
+  the CRT's `sqrt` (`0x4FB7D0`) loads its caller's precision with every exception masked and
+  nearest rounding (`and 0x300; or 0x7F`, `0x4EC9A5..0x4EC9B7`), `0x37F` inside hypot, and its exit
+  `0x4ECA3B`, finding a saved word other than `0x27F` that masks the precision exception, takes
+  `0x4EC947` → `_87except` `0x4F59C0` → `_ctrlfp` at `0x4F5A56` when the sticky precision flag is
+  set (`fstsw`, `and ax,0x20` at `0x4ECA4B`), else `fldcw` at `0x4ECA60`. Nothing clears that
+  flag in play (`fnclex` only at `0x4E4334` in the CRT's start, `_clearfp` `0x4E8C87`, which has no
+  caller, and `_clrfp` `0x4EC4A7` inside the report path), so under the game's `0x027F` a call does
+  four or five `fldcw`. The result does not depend on the caller's word, only on the 64-bit
+  precision of the body. `0x4FB480`'s other caller is `_cabs` `0x4FB460` (op `0x11`), which nothing
+  calls. Impure runs the same operations under one switch each way
+  ([engine patches](../modules/engine-patches.md), §2.6c).
 - **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
   (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
   the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell. It is stdcall

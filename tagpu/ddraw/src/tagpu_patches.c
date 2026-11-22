@@ -15326,7 +15326,7 @@ unsigned int tagpu_patches_restored(void)
 }
 
 
-SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "battle slice-walkers cob-getters transport-turn teleport stock-resource-mex");
+SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-resource-mex");
 
 /* THE PIECE ROTATION FROM A TABLE (research/notes/engine/cob.md, the piece matrix). 0x4B7173(angle,
    pair), cdecl, rotates the int pair at `pair` by the signed 16-bit angle word, the low word of its
@@ -15362,7 +15362,7 @@ static unsigned char* s_rotOrig;       /* the engine's code: its prologue and co
 SIM_CODE(s_rotOrig);
 static unsigned char* s_rotCode;       /* the builder, then the verify entry */
 SIM_CODE(s_rotCode);
-static struct { volatile LONG calls, table, differ; } s_rotDiag;
+static struct { volatile LONG calls, zero, table, differ; } s_rotDiag;
 SIM_VAR(s_rotDiag, SIM_PRIVATE);
 static int s_fpVerify;                  /* tagpu_fpverify.on, read once by rot_install for both */
 SIM_VAR(s_fpVerify, SIM_INSTALL);
@@ -15455,13 +15455,16 @@ static void __cdecl rot_verify(int angle, int32_t* pair)
     ((RotFn)(void*)s_rotFast)(angle, mine);
     ((RotFn)(void*)s_rotOrig)(angle, pair);
     n = InterlockedIncrement(&s_rotDiag.calls);
+    if (!(angle & 0xFFFF))
+        InterlockedIncrement(&s_rotDiag.zero);
     if (mine[0] != pair[0] || mine[1] != pair[1]) {
         if (InterlockedIncrement(&s_rotDiag.differ) == 1)
             tagpu_logf("fprot: DIFFER: angle 0x%04X gives (%d,%d) from the table, (%d,%d) from the engine",
                       angle & 0xFFFF, mine[0], mine[1], pair[0], pair[1]);
     }
-    if (!(n & 0xFFFFF))
-        tagpu_logf("fprot: %ld calls, %ld on the table, %ld differ", n, s_rotDiag.table, s_rotDiag.differ);
+    if (n >= 0x10000 && !(n & (n - 1)))     /* at every power of two from 65 536 */
+        tagpu_logf("fprot: %ld calls, %ld of angle 0, %ld on the table, %ld differ", n, s_rotDiag.zero,
+                   s_rotDiag.table, s_rotDiag.differ);
 }
 
 /* The verify entry, as the engine's function keeps every register but eax: push ecx; push edx;
@@ -15618,7 +15621,7 @@ static double __cdecl hyp_hook(double x, double y)
             tagpu_logf("fphyp: DIFFER: hypot(%.17g, %.17g) = %.17g here, %.17g from the engine",
                       x, y, mine, theirs);
     }
-    if (!(n & 0xFFFFF))
+    if (n >= 0x10000 && !(n & (n - 1)))
         tagpu_logf("fphyp: %ld calls, %ld fast, %ld differ", n, s_hypDiag.fast, s_hypDiag.differ);
     return theirs;
 }
