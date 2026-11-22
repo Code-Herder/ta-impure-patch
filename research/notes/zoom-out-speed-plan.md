@@ -50,9 +50,15 @@ at `0x49EC47`. A probe in `fake_PeekMessageA` (2026-11-21, game thread, QPC a ca
 15 to 26 % of the game thread's wall time in that call there, nearly all of it in calls that began while
 the render thread was inside `vkQueuePresentKHR`, which on Xvfb is X's software copy (45 to 58 ms). The
 same probe on the reference setup's live display (the battle at 3840x2160 fullscreen, `--defaults`,
-vsync on): 0.0 to 0.3 % of the game thread's time in play, the longest call 2.9 ms, no call blocked
-behind a present, and `present` 0.08 ms a frame. Nothing to change in the message pump. A game-thread
-figure measured on the private display carries this stall in `outside` and nowhere else.
+vsync on, the card otherwise idle): 0.2 % of the game thread's time in play on average (57 two-second
+windows), 13 of 1921 calls begun during a present, `present` 0.1 ms a frame and `outside` 0.9 to
+2.5 ms a frame against 13 to 16 on the private display in the same battle. Nothing to change in the
+message pump. A game-thread figure measured on the private display carries this stall in `outside`
+and nowhere else.
+
+The same live run puts the engine's draw higher at 4K than at 1080p: `sweep` 17.5 ms a frame far and
+settled (9.5 at 1080p), 39.8 far and busy (20.4), `markers` up by half. Items 1 and 2 are worth
+about twice as much at the owner's resolution.
 
 ### 4. Impure's packet publish
 
