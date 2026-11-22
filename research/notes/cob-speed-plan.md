@@ -228,8 +228,6 @@ the object keeps the engine's layout, which its interpreter needs.
 - **`tagpu_cob_safe.c` is not a `sim` file**: its validator allocates each program with `malloc` at
   the script's load, which the sim scope refuses; the programs are content of the loaded files, and
   `tools/sim-state-check.sh` names the gap.
-- **The core's other hosts** (the wiki, tacob, the mockup) run engine-layout blocks: L4 either gives
-  the core a layout description or moves every host to the block.
 - **Not disassembled**: whether `0x43E060` (getters 7 and 8, EXPLODE's positions) and `0x47DB70`
   (DROP's site test) write anything.
 - **The bench's limits**: the engine's getters were answered by a hash, only turns were stepped (no

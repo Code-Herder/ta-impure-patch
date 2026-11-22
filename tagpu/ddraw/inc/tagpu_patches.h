@@ -6,6 +6,12 @@
    left untouched. The exe on disk is never modified. */
 void tagpu_apply_patches(void);
 
+#ifndef TAGPU_LIMITS_STOCK
+/* Where a COB object keeps its model pointer this session: the block's +0x20, or the engine's
+   TAGPU_COB_MODEL_OFFSET with the COB oracle armed (tagpu_patches.c, THE BLOCK). */
+unsigned tagpu_cob_model_offset(void);
+#endif
+
 /* The wire-robustness landing's heartbeat section (sim-fixes.md B3): records accepted per
    receiver, drops, the morph/recreate/ghost oracles (evidence §10) and the sender-block observe.
    DLL counters only; returns _snprintf's count. */

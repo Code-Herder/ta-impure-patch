@@ -1833,13 +1833,12 @@ class _Pend(_C.Structure):
 
 
 class _Vm(_C.Structure):
-    _fields_ = [("program", _C.c_void_p), ("object", _C.c_void_p), ("statics", _C.c_void_p),
-                ("anim", _C.c_void_p), ("model", _C.c_void_p),
+    _fields_ = [("quiet", _C.c_int32), ("due", _C.c_int32), ("owed", _C.c_int32), ("faulted", _C.c_int),
+                ("object", _C.c_void_p), ("pend", _Pend), ("program", _C.c_void_p),
+                ("statics", _C.c_void_p), ("anim", _C.c_void_p), ("model", _C.c_void_p),
                 ("heads", _C.c_void_p), ("stacks", _C.c_void_p), ("count", _C.c_void_p),
                 ("head_stride", _C.c_uint32), ("stack_stride", _C.c_uint32), ("words", _C.c_uint32),
-                ("threads", _C.c_uint),
-                ("rules", _C.c_uint), ("faulted", _C.c_int), ("checked", _C.c_int), ("pend", _Pend),
-                ("quiet", _C.c_int32), ("due", _C.c_int32), ("owed", _C.c_int32)]
+                ("threads", _C.c_uint), ("rules", _C.c_uint), ("checked", _C.c_int)]
 
 
 def _cob_source_root():

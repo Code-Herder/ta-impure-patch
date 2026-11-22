@@ -12479,9 +12479,48 @@ static unsigned __cdecl cob_reloaded_model_check(unsigned* regs)
     return 0x0042D29Fu;
 }
 
+/* THE BLOCK (research/notes/cob-speed-plan.md, L4). A unit's COB object is a block sized by its
+   program, 64-aligned, from the process heap (whose free lists are kept by size):
+     +0x00 the engine's header line: the vtable, the rate +0x04, the script +0x08, its checksum
+           +0x0C, the statics +0x10 and animation +0x14 pointers, "something is animating" +0x18
+     +0x1C the running count, +0x20 the model pointer -- the offsets the guard's count and model
+           sites take (cob_runtime_sites), at every engine site that reads them
+     +0x24 CobTail: `bound`, then the VM, whose schedule, fault, object and latch words come first,
+           so a turn with nothing due (tagpu_cobvm_rest) reads this one line of the block
+     then the ten record headers packed, then ten stacks of the program's proven depth.
+   The engine reads the object through those header words and pointers only, and writes its
+   records only in the constructor 0x4B0610 (the engine map, cob), whose record loop the block's
+   constructor replaces; the destructor 0x485E30's free at 0x485E40 is the block's. Statics and
+   animation stay the engine's allocations (0x4B0720, freed by 0x4B06F0). With the oracle armed
+   (tagpu_cobverify.on) every object keeps the engine's layout, which its interpreter needs. */
+#define COB_BLOCK_COUNT 0x1Cu
+#define COB_BLOCK_MODEL 0x20u
+#define COB_BLOCK_TAIL  0x24u
+static int s_cobBlock;
+SIM_VAR(s_cobBlock, SIM_INSTALL);
+static unsigned s_cobModelOff = TAGPU_COB_MODEL_OFFSET;
+SIM_VAR(s_cobModelOff, SIM_INSTALL);
+static unsigned s_cobCountOff = TAGPU_COB_COUNT_OFFSET;
+SIM_VAR(s_cobCountOff, SIM_INSTALL);
+static unsigned s_cobTailOff = TAGPU_COB_OBJECT_BYTES;
+SIM_VAR(s_cobTailOff, SIM_INSTALL);
+#define COB_MODEL(cob) (*(unsigned char**)(void*)((cob) + s_cobModelOff))
+
+/* the layout every object of this session has, chosen before the first site that reads it */
+static void cob_layout_choose(void)
+{
+    s_cobBlock = !tagpu_sim_lever("tagpu_cobverify.on");
+    if (!s_cobBlock) return;
+    s_cobModelOff = COB_BLOCK_MODEL;
+    s_cobCountOff = COB_BLOCK_COUNT;
+    s_cobTailOff = COB_BLOCK_TAIL;
+}
+
+unsigned tagpu_cob_model_offset(void) { return s_cobModelOff; }
+
 static void cob_model_bound(char* cob, const CobFile* f)
 {
-    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    const unsigned* model = (const unsigned*)(void*)COB_MODEL(cob);
     /* The unit owns its posed model until after COB destruction (0x486D8A,
        then 0x486D9E). Interpreter and save callbacks run on that owning thread. */
     if (!model || f->program->model_pieces > model[0])
@@ -12620,15 +12659,31 @@ typedef void (__attribute__((thiscall)) *CobAxisSet)(char*, unsigned, unsigned, 
 
 /* The game host's state after Impure's COB object (THE GAME'S COB INTERPRETER, below). */
 typedef struct CobTail {
+    int         bound;
     TAGPU_COBVM vm;
     const char* name;
-    int         bound;
+    uint32_t    words;      /* a record's stack in the block: the program's depth */
+    int32_t*    side;       /* stacks of TAGPU_COB_WORDS for a loaded record the proof does not cover */
 } CobTail;
-#define COB_TAIL(cob) ((CobTail*)(void*)((cob) + TAGPU_COB_OBJECT_BYTES))
+#define COB_TAIL(cob) ((CobTail*)(void*)((cob) + s_cobTailOff))
 #define COB_GAME_BYTES (TAGPU_COB_OBJECT_BYTES + (unsigned)sizeof(CobTail))
+#define COB_BLOCK_HEADS ((COB_BLOCK_TAIL + (unsigned)sizeof(CobTail) + 3u) & ~3u)
+#define COB_BLOCK_BYTES(words) \
+    (COB_BLOCK_HEADS + TAGPU_COB_THREADS * ((unsigned)sizeof(TagpuCobHead) + 4u * (words)))
 typedef char cob_tail_aligned[(TAGPU_COB_OBJECT_BYTES % 4u == 0) ? 1 : -1];
+typedef char cob_block_line[(COB_BLOCK_TAIL + offsetof(CobTail, vm) + offsetof(TAGPU_COBVM, pend) +
+                             sizeof(int) <= 64u) ? 1 : -1];
+/* tools/cob_legacy_save_probe.py finds a block's records through its VM at +0x28: the object
+   pointer at +0x38, which names the block itself, then the headers, stacks, strides and words */
+typedef char cob_block_probe[(COB_BLOCK_TAIL + offsetof(CobTail, vm) == 0x28u &&
+                              offsetof(TAGPU_COBVM, object) == 0x10u && offsetof(TAGPU_COBVM, heads) == 0x40u &&
+                              offsetof(TAGPU_COBVM, stacks) == 0x44u && offsetof(TAGPU_COBVM, head_stride) == 0x4Cu &&
+                              offsetof(TAGPU_COBVM, stack_stride) == 0x50u &&
+                              offsetof(TAGPU_COBVM, words) == 0x54u) ? 1 : -1];
 static void cob_game_loaded(char* cob);
 static void cob_game_settle(char* cob);
+static void cob_records_get(char* cob, TagpuCobRecord* out);
+static void cob_records_put(char* cob, const CobFile* f, const TagpuCobRecord* in, unsigned busy);
 static void cob_game_sites(void);
 /* the oracle's (THE ORACLE, below): armed, and cob_get's verified half */
 static int s_cvOn;
@@ -12674,9 +12729,11 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
     unsigned i, axis;
     void** vtable = *(void***)cob;
     char reason[256];
+    TagpuCobRecord records[TAGPU_COB_THREADS];
     cob_game_settle(cob);                   /* the sleeps the skipped turns owe, taken off first */
     if (!data) cob_fault(f->name, 0, "saved script allocation failed");
-    if (!tagpu_cob_save_records(program, *(unsigned*)(cob + 12), cob_record(cob, 0),
+    cob_records_get(cob, records);
+    if (!tagpu_cob_save_records(program, *(unsigned*)(cob + 12), records,
                                 data, TAGPU_COB_SAVE_BYTES, reason, sizeof reason))
         cob_fault(f->name, 0, reason);
     if (statics) memcpy(data + TAGPU_COB_SAVE_BYTES, *(void**)(cob + 16), statics);
@@ -12728,8 +12785,7 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
         for (axis = 0; axis < 3; ++axis)
             if (pieces[i * 27u + 24u + axis] > 1u)
                 cob_fault(f->name, 0, "saved piece flag is not boolean");
-    memcpy(cob_record(cob, 0), records, sizeof records);
-    *(unsigned*)(cob + TAGPU_COB_COUNT_OFFSET) = busy;
+    cob_records_put(cob, f, records, busy);
     if (statics) memcpy(*(void**)(cob + 16), data + records_size, statics);
     /* The constructor zeroes every animation row (0x4B0783..0x4B0791).
        Leave excess declarations inert, including when importing a native save
@@ -12802,9 +12858,9 @@ static void cob_runtime_sites(void)
     InitializeCriticalSection(&s_cobLock);
     lim_dword(0x00485D74u, 0x544, COB_GAME_BYTES, "COB object allocation, the game host's tail included");
     for (i = 0; i < sizeof model / sizeof *model; ++i)
-        lim_dword(model[i], 0x540, TAGPU_COB_MODEL_OFFSET, "COB model field");
+        lim_dword(model[i], 0x540, s_cobModelOff, "COB model field");
     for (i = 0; i < sizeof count / sizeof *count; ++i)
-        lim_dword(count[i], 0x53C, TAGPU_COB_COUNT_OFFSET, "COB active-thread count");
+        lim_dword(count[i], 0x53C, s_cobCountOff, "COB active-thread count");
     for (i = 0; i < sizeof stride / sizeof *stride; ++i)
         lim_dword(stride[i], 0xA4, TAGPU_COB_RECORD_BYTES, "COB record iteration stride");
     for (i = 0; i < sizeof slots_dword / sizeof *slots_dword; ++i)
@@ -12877,7 +12933,7 @@ static char* cob_live_unit(char* ta, int id)
 
 static char* cob_caller(char* ta, char* cob)
 {
-    char* model = *(char**)(cob + TAGPU_COB_MODEL_OFFSET);
+    char* model = (char*)COB_MODEL(cob);
     char* unit;
     char* base;
     uintptr_t delta;
@@ -12933,7 +12989,7 @@ static int cob_world_local(void* ctx, uint32_t owner)
 static void cob_world_fill(char* cob, CobGetCtx* ctx, TagpuCobWorld* w)
 {
     const unsigned* file = *(const unsigned**)(cob + 8);
-    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    const unsigned* model = (const unsigned*)(void*)COB_MODEL(cob);
     ctx->ta = *(char**)0x00511DE8u;
     ctx->cob = cob;
     w->ctx = ctx;
@@ -12964,7 +13020,7 @@ static void cob_get_sites(void)
     if (!original) return;
     memcpy(original, entry, sizeof entry);
     {
-        unsigned model_offset = TAGPU_COB_MODEL_OFFSET;
+        unsigned model_offset = s_cobModelOff;
         memcpy(original + 2, &model_offset, sizeof model_offset);
     }
     original[sizeof entry] = 0xE9;
@@ -13012,6 +13068,57 @@ static void* __cdecl cob_object_alloc(unsigned size)
     void* p = ((void* (__cdecl*)(unsigned))0x004B4F10u)(size);
     if (p) memset(p, 0, size);
     return p;
+}
+
+/* The block of the unit 0x485D40 makes (esi there, 0x485D48; the stub below passes it), sized by
+   its script's program -- the file 0x485D64 found, its program validated at the script's load --
+   64-aligned, zeroed, the raw pointer kept in the four bytes before it. A script with no program
+   gets stacks of TAGPU_COB_WORDS; its first entry faults as before (cob_owned_file). */
+static void* __cdecl cob_block_alloc(unsigned size, const char* unit)
+{
+    const char* def;
+    void* script;
+    CobFile* f = NULL;
+    unsigned words, bytes;
+    unsigned char *raw, *p;
+    if (!s_cobBlock) return cob_object_alloc(size);
+    def = *(const char* const*)(unit + 0x92);
+    script = def ? *(void* const*)(def + 0x18E) : NULL;
+    if (script) {
+        EnterCriticalSection(&s_cobLock);
+        f = cob_find(script);
+        LeaveCriticalSection(&s_cobLock);
+    }
+    words = f ? f->program->depth : TAGPU_COB_WORDS;
+    bytes = COB_BLOCK_BYTES(words);
+    if (!(raw = (unsigned char*)tagpu_sim_scratch(bytes + 68u))) return NULL;
+    p = (unsigned char*)(((uintptr_t)raw + 4u + 63u) & ~(uintptr_t)63u);
+    memcpy(p - 4, &raw, sizeof raw);
+    COB_TAIL((char*)p)->words = words;
+    return p;
+}
+
+/* 0x4B0610 for the block: what it writes but the record loop, whose 0xA4-stride words lie past a
+   block's end (0x4B061A..0x4B0641), into a block already zero. Returns the object, as it does. */
+static char* __attribute__((thiscall)) cob_block_construct(char* cob)
+{
+    *(uint32_t*)(void*)cob = 0x004FDB00u;          /* the base vtable; 0x485D8D writes 0x4FD698 */
+    *(uint32_t*)(void*)(cob + 0x08) = 0;
+    *(uint32_t*)(void*)(cob + 0x10) = 0;
+    *(uint32_t*)(void*)(cob + 0x14) = 0;
+    *(uint32_t*)(void*)(cob + COB_BLOCK_COUNT) = 0;
+    *(uint32_t*)(void*)(cob + 0x04) = ((uint32_t (*)(void))0x004B6330u)();   /* the sim rate */
+    return cob;
+}
+
+/* 0x485E40's call, the free of 0x4B4F20(object): the block's stacks of its own and its raw pointer */
+static void __cdecl cob_block_free(char* cob)
+{
+    unsigned char* raw;
+    if (!cob) return;
+    tagpu_sim_scratch_free(COB_TAIL(cob)->side);
+    memcpy(&raw, cob - 4, sizeof raw);
+    tagpu_sim_scratch_free(raw);
 }
 
 /* One entry call: the host, its run, the getter world. */
@@ -13096,20 +13203,86 @@ static void cg_trace(void* c, const TAGPU_COBVM_TRACE* t)
 /* The object's VM, bound at its first entry: the program cob_owned_file validated (and bound to the
    model at the script's load), the blocks 0x4B0720 and 0x480D40 made before Create ran (0x485DAC,
    0x485DD2, then 0x485DE6). */
+static void cob_bind(char* cob, CobTail* t, const CobFile* f)
+{
+    char reason[160];
+    int ok;
+    if (!s_cobBlock)
+        ok = tagpu_cobvm_bind(&t->vm, f->program, TAGPU_COBVM_IMPURE, (unsigned char*)cob,
+                              *(int32_t**)(cob + 0x10), *(int32_t**)(cob + 0x14), COB_MODEL(cob),
+                              reason, sizeof reason);
+    else {
+        TAGPU_COBVM_LAYOUT l;
+        l.heads = (unsigned char*)cob + COB_BLOCK_HEADS;
+        l.head_stride = sizeof(TagpuCobHead);
+        if (t->side) {
+            l.stacks = t->side;
+            l.stack_stride = l.words = TAGPU_COB_WORDS;
+        } else {
+            l.stacks = (int32_t*)(void*)(l.heads + TAGPU_COB_THREADS * sizeof(TagpuCobHead));
+            l.stack_stride = l.words = t->words;
+        }
+        l.count = (uint32_t*)(void*)(cob + COB_BLOCK_COUNT);
+        ok = tagpu_cobvm_bind_layout(&t->vm, f->program, TAGPU_COBVM_IMPURE, (unsigned char*)cob, &l,
+                                     *(int32_t**)(cob + 0x10), *(int32_t**)(cob + 0x14), COB_MODEL(cob),
+                                     reason, sizeof reason);
+    }
+    if (!ok) cob_fault(f->name, 0, reason);
+    t->name = f->name;
+    t->bound = 1;
+}
+
 static TAGPU_COBVM* cg_vm(char* cob)
 {
     CobTail* t = COB_TAIL(cob);
-    if (!t->bound) {
-        CobFile* f = cob_owned_file(cob);
-        char reason[160];
-        if (!tagpu_cobvm_bind(&t->vm, f->program, TAGPU_COBVM_IMPURE, (unsigned char*)cob,
-                              *(int32_t**)(cob + 0x10), *(int32_t**)(cob + 0x14),
-                              *(unsigned char**)(cob + TAGPU_COB_MODEL_OFFSET), reason, sizeof reason))
-            cob_fault(f->name, 0, reason);
-        t->name = f->name;
-        t->bound = 1;
-    }
+    if (!t->bound) cob_bind(cob, t, cob_owned_file(cob));
     return &t->vm;
+}
+
+/* The object's records in the save's form (TAGPU_COB_WORDS a stack): in the block, a stack's words
+   past the program's depth, which no record of it touches, are zero. */
+static void cob_records_get(char* cob, TagpuCobRecord* out)
+{
+    TAGPU_COBVM* vm;
+    unsigned s;
+    if (!s_cobBlock) {
+        memcpy(out, cob_record(cob, 0), TAGPU_COB_THREADS * sizeof *out);
+        return;
+    }
+    vm = cg_vm(cob);
+    memset(out, 0, TAGPU_COB_THREADS * sizeof *out);
+    for (s = 0; s < TAGPU_COB_THREADS; ++s) {
+        memcpy(&out[s], tagpu_cobvm_record(vm, s), sizeof(TagpuCobHead));
+        memcpy(out[s].stack, tagpu_cobvm_stack(vm, s), vm->words * sizeof(int32_t));
+    }
+}
+
+/* A saved game's records into the object. In the block a record the stack proof covers fits the
+   program's depth; one it does not cover gets stacks of TAGPU_COB_WORDS of the object's own, which
+   the block's free releases with it. */
+static void cob_records_put(char* cob, const CobFile* f, const TagpuCobRecord* in, unsigned busy)
+{
+    CobTail* t;
+    TAGPU_COBVM* vm;
+    unsigned s;
+    if (!s_cobBlock) {
+        memcpy(cob_record(cob, 0), in, TAGPU_COB_THREADS * sizeof *in);
+        *(unsigned*)(cob + TAGPU_COB_COUNT_OFFSET) = busy;
+        return;
+    }
+    t = COB_TAIL(cob);
+    for (s = 0; s < TAGPU_COB_THREADS && !t->side && t->words < TAGPU_COB_WORDS; ++s)
+        if (!tagpu_cob_record_proven(f->program, (const TagpuCobHead*)(const void*)&in[s])) {
+            t->side = (int32_t*)tagpu_sim_scratch(TAGPU_COB_THREADS * TAGPU_COB_WORDS * sizeof(int32_t));
+            if (!t->side) cob_fault(f->name, 0, "saved script stacks allocation failed");
+        }
+    cob_bind(cob, t, f);
+    vm = &t->vm;
+    for (s = 0; s < TAGPU_COB_THREADS; ++s) {
+        memcpy(tagpu_cobvm_record(vm, s), &in[s], sizeof(TagpuCobHead));
+        memcpy(tagpu_cobvm_stack(vm, s), in[s].stack, vm->words * sizeof(int32_t));
+    }
+    *vm->count = busy;
 }
 
 static void cg_call(CobCall* k, char* cob, unsigned key)
@@ -14055,8 +14228,23 @@ static void cob_game_sites(void)
     static const unsigned char by_name[] = {0x51, 0x53, 0x55, 0x56, 0x57};
     static const unsigned char by_idx[] = {0x8B, 0x44, 0x24, 0x04, 0x57};
     static const unsigned char tick[] = {0x53, 0x8B, 0x5C, 0x24, 0x08};
-    lim_branch(0x00485D78u, sizeof alloc, alloc, 0xE8, (unsigned)(size_t)cob_object_alloc,
-               "COB object allocation, zeroed for the host's tail");
+    static const unsigned char construct[] = {0xE8, 0x83, 0xA8, 0x02, 0x00};  /* call 0x4B0610 */
+    static const unsigned char release[] = {0xE8, 0xDB, 0xF0, 0x02, 0x00};    /* call 0x4B4F20 */
+    unsigned char* stub = lim_code(16);
+    if (!stub) return;
+    stub[0] = 0x56;                                         /* push esi: the unit (0x485D48) */
+    stub[1] = 0xFF; stub[2] = 0x74; stub[3] = 0x24; stub[4] = 0x08;   /* push [esp+8]: the size */
+    stub[5] = 0xE8; tagpu_detour_rel(stub + 6, (unsigned)(size_t)cob_block_alloc);
+    stub[10] = 0x83; stub[11] = 0xC4; stub[12] = 0x08;      /* add esp,8 */
+    stub[13] = 0xC3;                                        /* ret */
+    lim_branch(0x00485D78u, sizeof alloc, alloc, 0xE8, (unsigned)(size_t)stub,
+               "COB object allocation: the block, or the engine's object zeroed for the host's tail");
+    if (s_cobBlock) {
+        lim_branch(0x00485D88u, sizeof construct, construct, 0xE8, (unsigned)(size_t)cob_block_construct,
+                   "COB object constructor: the block's");
+        lim_branch(0x00485E40u, sizeof release, release, 0xE8, (unsigned)(size_t)cob_block_free,
+                   "COB object free: the block's");
+    }
     lim_branch(0x004B0940u, sizeof by_name, by_name, 0xE9, (unsigned)(size_t)cg_start_name,
                "COB start by name: the game's VM");
     lim_branch(0x004B0B00u, sizeof by_idx, by_idx, 0xE9, (unsigned)(size_t)cg_start_idx,
@@ -14134,6 +14322,7 @@ static void lim_sites(void)
 
     if (!probe || !seqtab || !saveMax || !missionMax) { s_limNoStub = 1; return; }
 
+    cob_layout_choose();
     cob_get_sites();
     cob_runtime_sites();
     {

@@ -81,7 +81,18 @@ def record_state(read, words, indices=None):
         state = []
         record_count = 8 if words == 32 else probe.COB_THREADS
         stride = 36 + 4 * words
-        pool = read(cob + 28, record_count * stride)
+        if words != 32 and word(cob + 0x38) == cob:
+            # the raised build's block (tagpu_patches.c, THE BLOCK): its VM at +0x28 names the
+            # object at +0x38 -- where the engine's layout keeps record 0's mask -- and keeps the
+            # headers, the stacks, their strides and a stack's words (cob_block_probe pins them)
+            heads, stacks = word(cob + 0x68), word(cob + 0x6C)
+            hstride, sstride, held = word(cob + 0x74), word(cob + 0x78), word(cob + 0x7C)
+            if hstride < 36 or not 0 < held <= words or sstride < held:
+                raise RuntimeError('block layout outside its bounds')
+            pool = b''.join(read(heads + slot * hstride, 36) + read(stacks + slot * sstride * 4, held * 4)
+                            + bytes(4 * (words - held)) for slot in range(record_count))
+        else:
+            pool = read(cob + 28, record_count * stride)
         for slot in range(record_count):
             data = list(struct.unpack_from(f'<{words + 9}I', pool, slot * stride))
             if data[0]:

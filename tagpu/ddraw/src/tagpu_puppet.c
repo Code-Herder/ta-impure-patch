@@ -4,6 +4,7 @@
 #include <string.h>
 #include "tagpu_puppet.h"
 #include "tagpu_cob_safe.h"
+#include "tagpu_patches.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
@@ -137,12 +138,12 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 #define UNIT_STRIDE   0x118
 #define U_OWNER       0xFF
 #define U_STATEBYTE   0x10E         /* the state byte: the setter 0x48B090's */
-/* this+COB_MODEL: the block whose +0xC is the script's unit; the raised limits grow the COB
-   object and move the field, at every site that reads it (tagpu_patches.c, cob_runtime_sites) */
+/* this+COB_MODEL: the block whose +0xC is the script's unit; the raised limits move the field, at
+   every site that reads it (tagpu_patches.c, cob_runtime_sites and THE BLOCK) */
 #ifdef TAGPU_LIMITS_STOCK
 #define COB_MODEL     0x540u
 #else
-#define COB_MODEL     TAGPU_COB_MODEL_OFFSET
+#define COB_MODEL     tagpu_cob_model_offset()
 #endif
 #define COB_UNIT      0x0C
 

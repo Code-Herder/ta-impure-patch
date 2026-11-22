@@ -182,15 +182,18 @@ new skirmish's init, or from a recording. Simulation.
 
 The game's COB scripts run in Impure's VM `tagpu_cobvm.c` on each unit's own COB object
 ([the COB module](cob-compat.md), *The game's COB interpreter*): the four entries jump to the game
-host, which calls every effect through the object's own vtable slot. All six sites are in the
-fail-closed table, byte-matched with the rest of it; the stock-limits build writes none and runs
+host, which calls every effect through the object's own vtable slot. All eight sites are in the
+fail-closed table, byte-matched with the rest of it (the block's two, `0x485D88` and `0x485E40`,
+only with the oracle unarmed); the stock-limits build writes none and runs
 the engine's interpreter. With `tagpu_cobverify.on` the oracle's sites, the last three rows, go in
 as well. Simulation.
 
 | VA | What it is | Module (arm file) | Mechanism |
 |---|---|---|---|
 | `0x485D74` | the COB object's size, `push 0x544` at `0x485D73` before the setup's `MEM_Alloc` ([cob](../engine/cob.md), *The object's life*) | `tagpu_patches.c` (always in) | immediate `0x544` → `TAGPU_COB_OBJECT_BYTES` and the host's tail (`COB_GAME_BYTES`) |
-| `0x485D78` | `call 0x4B4F10` (`E8 93 F1 02 00`), the setup's allocation of the object, its one | `tagpu_patches.c` (always in) | rel32 redirect to `cob_object_alloc` (`cdecl`), which zeroes what `MEM_Alloc` returns, so a new object's tail starts unbound |
+| `0x485D78` | `call 0x4B4F10` (`E8 93 F1 02 00`), the setup's allocation of the object, its one | `tagpu_patches.c` (always in) | rel32 redirect to a 14-byte stub (`push esi`, the unit; `push [esp+8]`, the size; `call cob_block_alloc`; `add esp,8`; `ret`): the block sized by the unit's script's program (`unit+0x92` → def `+0x18E`), 64-aligned from the process heap, zeroed; with the oracle armed the engine's `MEM_Alloc` of the size, zeroed, so a new object's tail starts unbound |
+| `0x485D88` | **the block only (the oracle unarmed)**: `call 0x4B0610` (`E8 83 A8 02 00`), the object's constructor, its one call from the setup | `tagpu_patches.c` (always in) | rel32 redirect to `cob_block_construct` (`thiscall`, returns the object): the constructor's header words (`+0` = `0x4FDB00`, `+8`/`+0x10`/`+0x14` = 0, `+4` = `0x4B6330()`) and the block's count, without its record loop, whose `0xA4`-stride status words lie past a block's end |
+| `0x485E40` | **the block only (the oracle unarmed)**: `call 0x4B4F20` (`E8 DB F0 02 00`), the destructor `0x485E30`'s free of the object when its flag bit 0 is set | `tagpu_patches.c` (always in) | rel32 redirect to `cob_block_free` (`cdecl`, the caller's `add esp,4`): frees a loaded save's 128-word stacks of the object's own, then the block by the raw pointer kept before it |
 | `0x4B0940` | the start by name's entry (`51 53 55 56 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_start_name` (`thiscall`, `ret 0xC`) |
 | `0x4B0B00` | the start by index's entry (`8B 44 24 04 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_start_idx` (`ret 0x20`) |
 | `0x4B0C40` | the query's entry (`8B 44 24 04 57`) | `tagpu_patches.c` (always in) | `E9` to `cg_query` (`ret 0x14`) |
@@ -210,13 +213,18 @@ their use. The model-binding seam publishes a validated script (or NULL for a re
 at `UnitDef+0x18E`. Save/load access only model-backed pieces and zero excess animation rows.
 Before allocating a saved level, the saved `Summary/maxunits` is validated and written
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
-script-executing thread, the guarded adapter owns ten 128-word records (`cob+0x1C`, stride
-`0x224`), busy count `+0x1584`, and relocated model pointer `+0x1588`; it initializes stacks,
+script-executing thread, the guarded adapter owns ten records; with the oracle armed
+(`tagpu_cobverify.on`) they are the engine's layout grown to 128 words (`cob+0x1C`, stride
+`0x224`), busy count `+0x1584`, relocated model pointer `+0x1588`; otherwise the object is the
+block (`tagpu_patches.c`, THE BLOCK): busy count `+0x1C`, model pointer `+0x20`, the host's tail
+from `+0x24`, then ten packed record headers and ten stacks of the program's proven depth; it
+initializes stacks,
 transfers bounded child arguments, retains a refused CALL's arguments and dormant
 child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. In the raised build that writer is Impure's COB VM, on the thread the engine calls
 the COB entries on (the game thread in play, the loader for a level's Create starts), and it also
-writes the object's tail past `+0x158C` (the host's VM). These are simulation writes, not
+writes the object's tail (the host's VM: past `+0x158C` in the engine's layout, `+0x24` in the
+block). These are simulation writes, not
 renderer-owned state. Local entry chat uses
 the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
 and [the engine map](../engine/cob.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).

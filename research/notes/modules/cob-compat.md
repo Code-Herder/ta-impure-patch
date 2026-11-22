@@ -60,8 +60,27 @@ RAND through `0x4B6C30`, a completion through its object's slot 0. What only the
 interpreter made, the host makes: the recorder's allocation counts (`tagpu_rec_cob_alloc`, keyed
 as `0x4B08C0`'s sink keyed them), the slice markers' note of a start (`tagpu_rec_cob_started`) and
 the trace. Its state is a tail of the object (`CobTail`: the VM, bound at the object's first entry,
-and the script's name), sized at `0x485D74` and zeroed at `0x485D78`; a saved game's records pass
-`tagpu_cobvm_loaded`, and a fault is `cob_fault` with the VM's reason. A unit's turn visits its
+and the script's name), zeroed at `0x485D78`; a saved game's records pass `tagpu_cobvm_loaded`, and
+a fault is `cob_fault` with the VM's reason.
+
+**The block** (`tagpu_patches.c`, THE BLOCK; the [speed plan](../cob-speed-plan.html), L4). Unless
+the oracle is armed, a unit's COB object is one block sized by its script's program: the engine's
+header line (`+0x00..+0x1B`), the running count `+0x1C`, the model pointer `+0x20`, the tail from
+`+0x24` -- the VM's schedule, fault, object and latch words first, so a turn with nothing due reads
+one cache line -- then the ten record headers packed (`TagpuCobHead`, 36 bytes) and ten stacks of
+the program's proven depth (`TagpuCobProgram.depth`, 128 words when the proof bounds none). The
+stub at `0x485D78` passes the unit (`esi`) to `cob_block_alloc`, which finds the program through
+the def's script (`unit+0x92` → `+0x18E`) and takes the block 64-aligned from the process heap,
+whose free lists are kept by size; the constructor at `0x485D88` is the block's (the engine's
+header words without its record loop) and so is the destructor's free at `0x485E40`. The guard's
+model and count operands take the block's offsets, and the trace and the puppet read the model
+through `tagpu_cob_model_offset()`. The statics and the animation stay the engine's allocations,
+which its destructor frees. A save writes the 128-word format, a stack's words past the depth as
+zero (`cob_records_get`); a load whose record the stack proof does not cover gives the object
+stacks of 128 words of its own, freed with the block (`cob_records_put`). With the oracle armed
+every object keeps the engine's layout (`0x544` raised to `TAGPU_COB_OBJECT_BYTES` and the tail at
+`0x485D74`), which the engine's interpreter needs. `tools/cob_legacy_save_probe.py` reads a block's
+records through its VM, whose offsets `cob_block_probe` pins at build time. A unit's turn visits its
 records only when one can run: while every busy record sleeps or waits on a CALL and none wakes in
 this turn's dt, the VM owes the dt to the sleepers and runs only the animation stepper, and every
 other entry and the save take the owed dt off first (`tagpu_cobvm_tick`, `tagpu_cobvm_settle`; the

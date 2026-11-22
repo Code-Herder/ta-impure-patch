@@ -130,8 +130,17 @@ typedef struct TAGPU_COBVM_RUN {
 /* One unit's VM. The pointers are the caller's; the latch is the trace's start held until the
    next event, as the oracle writes it (the callers push a start's arguments after it returns). */
 typedef struct TAGPU_COBVM {
-    const TagpuCobProgram* program;
+    /* THE TURN SCHEDULE (tagpu_cobvm_tick): `quiet` when every busy record sleeps or waits on a
+       CALL, `due` then the dt after which the first sleeper wakes (its sleep), `owed` the dt the
+       sleepers have been given and not yet taken off (tagpu_cobvm_settle). It, `faulted`, `object`
+       and the latch's `on` come first: they are all a turn with nothing due reads of the VM
+       (tagpu_cobvm_rest), so a host that keeps the VM beside the object's header line keeps that
+       turn to one line. */
+    int32_t                quiet, due, owed;
+    int                    faulted;
     unsigned char*         object;
+    struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
+    const TagpuCobProgram* program;
     int32_t*               statics;
     int32_t*               anim;
     unsigned char*         model;
@@ -143,13 +152,7 @@ typedef struct TAGPU_COBVM {
     uint32_t*              count;
     uint32_t               head_stride, stack_stride, words;
     unsigned               threads, rules;
-    int                    faulted;
     int                    checked;    /* every opcode through tagpu_cob_check_step */
-    struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
-    /* THE TURN SCHEDULE (tagpu_cobvm_tick): `quiet` when every busy record sleeps or waits on a
-       CALL, `due` then the dt after which the first sleeper wakes (its sleep), `owed` the dt the
-       sleepers have been given and not yet taken off (tagpu_cobvm_settle) */
-    int32_t                quiet, due, owed;
 } TAGPU_COBVM;
 
 /* Bind the blocks and clear them as the engine's constructor and allocations leave them: the

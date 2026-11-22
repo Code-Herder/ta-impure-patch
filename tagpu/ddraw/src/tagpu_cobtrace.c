@@ -58,6 +58,7 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
+#include "tagpu_patches.h"
 #include "tagpu_cobvm.h"
 
 SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle resource-core-upgrade stock-resource-mex");
@@ -75,7 +76,7 @@ SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle resource-core-upgrade sto
 #define REC_WORDS     32
 #define REC_THREADS   8
 #else
-#define COB_O3(c)     (*(char**)((c) + TAGPU_COB_MODEL_OFFSET))
+#define COB_O3(c)     (*(char**)((c) + tagpu_cob_model_offset()))
 #define COB_REC(c, i) ((c) + 0x1C + (i) * TAGPU_COB_RECORD_BYTES)
 #define REC_WORDS     TAGPU_COB_WORDS
 #define REC_THREADS   TAGPU_COB_THREADS

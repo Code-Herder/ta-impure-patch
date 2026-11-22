@@ -285,15 +285,23 @@ down by (`0x4B0DEF..0x4B0E01`): a unit's COB clock is the number of slices it ha
 
 **The object's life.** The setup `0x485D40` allocates `0x544` bytes (`push` at `0x485D73`, its
 size at `0x485D74`; `MEM_Alloc 0x4B4F10` at `0x485D78`, `cdecl`: `add esp,4` at `0x485D7F`, the NULL
-test at `0x485D82` skipping the constructor), and the raised build makes the call zeroed and the
-size its own (the COB module note, *The game's COB interpreter*);
+test at `0x485D82` skipping the constructor; `esi` is the unit from `0x485D48` through the whole
+setup, and at `0x485D73..0x485D78` `ecx` is the def's script `def+0x18E`), and the raised build makes
+the call zeroed and the size its own (the COB module note, *The game's COB interpreter*) -- with
+the oracle unarmed, a block sized by the script's program, whose constructor and free are its own
+(`0x485D88`, `0x485E40`; the COB module note, *The block*);
 constructs (`0x4B0610` at `0x485D88`, the constructor's one caller in the file), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
 reference in the file), stores the object at `+0x9A` (`0x485D9F`), loads the script (`0x4B0720`
 at `0x485DAC`), makes the model (`0x45A950` at `0x485DC0`), binds it (`0x480D40` at `0x485DD2`),
 and then starts Create through `0x4B0940("Create" 0x508BE0, 0, run-now 1)` at `0x485DE6`
 unconditionally: every new COB object has a start. A type with no script takes `0x485DFE`, which
 stores NULL at `+0x9A` (`0x485DFF`). The vtable holds the VM's engine callbacks (`0x480770` ..
-`0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`. The unit destructor `0x4866D0`
+`0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`: `0x4B06F0` frees the animation
+`+0x14` then the statics `+0x10` (`MEM_Free 0x4D85A0`), and with the flag's bit 0
+(`test byte [esp+8],1` at `0x485E3A`) `push esi; call 0x4B4F20` at `0x485E40` frees the object
+(`0x4B4F20`, `cdecl`, wraps `0x4D8670`; `add esp,4` at `0x485E45`); it returns the object, `ret 4`.
+The constructor reads the sim rate from `0x4B6330`, which takes no argument and returns
+`[[0x51FBD0]+0xE8]` (`0x4B6330..0x4B633B`, 9 callers). The unit destructor `0x4866D0`
 deletes the object through `call [eax+0x50]` with flag 1 (`0x486D8A`) and stores NULL at `+0x9A`
 (`0x486D8D`), both on the game thread in play. `+0x9A` has two more stores in `.text`, `0x4A9FFE`
 and `0x4AA88D`, in GUI code beside `+0x96`, of elapsed times from `0x4B6340` [INFERRED: not a unit
@@ -846,7 +854,7 @@ the name table; `0x4B07C0 Name2Index` is the standalone copy):
 | VA | Convention | What | Callers (`E8` scan) |
 |---|---|---|---|
 | `0x4B0A70` `COBEngine_StartScript` | `thiscall(cob, name, cb, runNow, argc, a0, a1, a2, a3)`, `ret 0x20` | name → index → `0x4B0B00` | 21: `0x406834` `0x4069BF` `0x4113EF` `0x437902` `0x43795E` `0x43798A` `0x43DBE8` `0x486877` `0x489898` `0x489948` `0x489F43` `0x489F8E` `0x48A149` `0x48A2E0` `0x499C5C` `0x49CBEB` `0x49CDA6` `0x49CFCA` `0x49E186` (`UNITS_StartWeaponsScripts`) `0x49E31C` `0x49E386` (`AutoAim`) |
-| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index) `0x4B0AEE` |
+| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index as a word `+3` and its byte `+5` as `argc` unchecked, `mov dl,[eax+5]` at `0x455544`, with the four dwords `+6..+0x12` as `a0..a3` and no callback) `0x4B0AEE` |
 | `0x4B0940` | `thiscall(cob, name, cb, runNow)`, `ret 0xC` | no-argument start, same shape; refused → returns 0 *without* calling the callback | 15: `0x40F433` `0x41148D` `0x411794` `0x411DA1` `0x411E2B` `0x43DAF2` `0x43DB27` `0x485DE6` (`Create`) `0x48B106` `0x48B12B` `0x48B14E` `0x48B169` (`UNITS_SetStateMask`) `0x49CB94` `0x49CD4F` `0x49CF73` (the fire paths) |
 | `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`0x43E400`, `QueryNanoPiece`) `0x4865C3` |
 | `0x4B0C40` | `thiscall(cob, idx, p0..p3)` | alloc; **refused → returns 0 leaving `*p0..*p3` untouched** (the silent failure); else callback `0`, pushes `*p0..*p3` (`0` for a null pointer), **sp = 3**, runs that thread now (`0x4B0DA0(cob, slot, 0)`), then copies `stack[0..3]` back through the non-null pointers — a `Query*` script answers by assigning its parameter | `0x4B0C2F` |
@@ -1122,7 +1130,7 @@ mechanism behind the one-frame pose pop the native pass showed on a walking comm
 | site | when |
 |---|---|
 | `0x45AC89` (inside `DrawUnit 0x45AC20`) | the cached body turn `o3+0x18/+0x1A/+0x1C` differs from the live `unit+0x64/+0x66/+0x68` by ≥ 8 on any axis |
-| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above; it first copies the unit's turn into the cached body turn (`0x45AB65`, `+0x18..+0x1B`, then `+0x1C`), so an EMIT_SFX rewrites both the cached turn and the flag |
+| `0x45AB6C` (`0x45AB10`, the same test -- `\|o3+0x1C - unit+0x68\| < 8` at `0x45AB30`, then `+0x1A`/`+0x66`, then `+0x18`/`+0x64` at `0x45AB5D`, any axis at 8 or more going to the rewrite at `0x45AB5F`, all three under 8 to `0x45AB8E` -- called from the COB at `0x480EFC`) | as above; it first copies the unit's turn into the cached body turn (`0x45AB65`, `+0x18..+0x1B`, then `+0x1C`), so an EMIT_SFX rewrites both the cached turn and the flag |
 | `0x45ADA5` | the same test again, for each attached unit in `DrawUnit`'s cargo chain |
 | `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
 | `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |
@@ -1586,6 +1594,14 @@ byte-checked before replacement; the owning functions retain their native call s
 |---|---|---|
 | model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1588` |
 | model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1588` |
+
+With the oracle unarmed the model and count operands take the block's offsets instead, `0x20` and
+`0x1C` (`tagpu_patches.c`, `cob_layout_choose`, before `cob_get_sites` relocates `0x480770`'s
+first instruction with the same offset); the stride and record-count operands keep their raised
+values but belong to code the game no longer reaches (the interpreter is the host's).
+
+| Field or loop | Operand addresses | Native operation and raised value |
+|---|---|---|
 | active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x1584` |
 | active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x1584` |
 | record iteration | `0x4B062F`, `0x4B08DF`, `0x4B0D4C`, `0x4B1A1E`, `0x4B1AD0`, `0x4B1AE8` | constructor/free-slot search/runner cleanup/return/signal advance a record pointer by `0xA4`; stride becomes `0x224` |
