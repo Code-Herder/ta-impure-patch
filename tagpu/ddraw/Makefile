@@ -64,8 +64,9 @@ WINDRES  ?= i686-w64-mingw32-windres
 # hook the first time it runs and tests one byte after that, which keeps the games at speed
 # (with every call and return hooked, the forest fixtures' live games missed their deadlines).
 # The DLL is linked unstripped with a map, ddraw-cover.map, which turns an address that ran into
-# its function. No instrumented file holds a naked function or inline assembly, which the hook's
-# call on entry would break. Its objects carry their own suffix, as the stock-limits build's do, and
+# its function. No instrumented function holds a naked function or inline assembly, which the hook's
+# call on entry would break: tagpu_turn3.h's assembly leaves, included by tagpu_patches.c, are
+# no_instrument_function. Its objects carry their own suffix, as the stock-limits build's do, and
 # `make LIMITS=stock COVER=1` is the stock-limits build's coverage twin.
 ifeq ($(LIMITS),stock)
 TARGET   := ddraw-stocklimits.dll

@@ -25,6 +25,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_replay.h"
 #include "tagpu_recfmt.h"   /* REC_PHASE_*: the step's phases */
+#include "tagpu_turn3.h"
 #include "git.h"
 
 SIM_FEATURE(patch_helpers, SIM_PUPPET_RUNS, "battle");
@@ -5039,35 +5040,23 @@ SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
    The posed vertices are simulation state: SweetSpot 0x43E0B0 takes the box of a piece's posed
    vertices as AutoAim's target point. So the loop is not skipped; it is made to give the same
    bits faster. THE FIX: the loop's first five bytes jump to a stub that calls repose_rotate(prim,
-   turn) and resumes at 0x45B1AC, where stock leaves the loop. repose_rotate takes each nonzero
-   angle's fsincos once -- the same filds, the same fmull of the same memory operand, the same
-   fsincos -- and keeps both results at the x87's own 80 bits (fstpt, fldt: exact), then for every
-   vertex, last to first, runs 0x4B7173's sequence with the two loads in place of the three
-   instructions that made them, in 0x4B6CC0's order, skipping a zero angle as 0x4B717B does.
+   turn) and resumes at 0x45B1AC, where stock leaves the loop. repose_rotate takes the triple's
+   sines and cosines once and turns every vertex, last to first, through tagpu_turn3.h, which
+   writes what 0x4B6CC0 writes, bit for bit (its header states the argument).
 
-   THE INVARIANT: every vertex the loop writes is bit-identical to stock's. It rests on:
-     - the same operations on the same operands: each fsincos argument is the product stock
-       forms, under the same control word, since nothing between the trig and the vertices calls
-       out or touches the control word; fsincos is a function of its argument and that control
-       word, so stock's three a vertex are the one result taken here; the per-vertex instructions
-       are stock's, byte for byte in their arithmetic (the build's disassembly of repose_turn is
-       compared with 0x4B7194..0x4B71A4, research/notes/engine/render.md);
+   THE INVARIANT: every vertex the loop writes is bit-identical to stock's, and so are the x87's
+   exception flags, since the trig is taken only for a piece with a vertex, where stock takes it.
+   Beyond tagpu_turn3.h's argument it rests on:
      - the engine code it stands for being stock's: the loop, 0x4B6CC0 and 0x4B7173 are each
        matched byte for byte before anything is written, and on any difference nothing is;
      - the vertices being the only memory the loop writes: the dead store of the counter into
        the frame's second argument (0x45B188, [esp+0x1C]) is not repeated, and that slot is read
-       only at 0x45B155, before the loop, and dropped by 0x45B150's `ret 0xC`.
-   THE X87 STATUS WORD comes out the same too. Its exception flags are sticky, the OR of what each
-   instruction raised: each fsincos here is stock's operation on stock's operand, so it raises
-   what each of stock's raised, and it runs only where stock's run, for a nonzero angle of a
-   piece with a vertex; the per-vertex instructions are stock's. The stack ends empty in both.
-   The condition codes are not carried: every fnstsw in the game's code follows the fcom that
-   sets them (the 314 in .text; the reads of exception flags, `and $0x20`, are the CRT's, at
-   0x4E5000 and above). The registers at 0x45B1AC: stock leaves eax, ecx, edx and ebx as the
-   loop's scratch, and 0x45B1AC..0x45B1C9 reloads all four before reading them. */
-
-/* the x87's 80-bit register format, as fstpt stores it */
-typedef struct { unsigned char b[10]; } X87_EXT;
+       only at 0x45B155, before the loop, and dropped by 0x45B150's `ret 0xC`;
+     - the status word's condition codes not being carried: every fnstsw in the game's code
+       follows the fcom that sets them (the 314 in .text; the reads of exception flags,
+       `and $0x20`, are the CRT's, at 0x4E5000 and above). The stack ends empty in both;
+     - the registers at 0x45B1AC: stock leaves eax, ecx, edx and ebx as the loop's scratch, and
+       0x45B1AC..0x45B1C9 reloads all four before reading them. */
 
 /* THE ORACLE, `tagpu_reposecheck.on` (read at install): every vertex is also turned by stock's
    0x4B6CC0 on a copy, and the two compared. A difference is logged with its piece's angles. */
@@ -5090,58 +5079,20 @@ static void repose_check(const int* stock, const int* ours, const short* turn)
     }
 }
 
-/* fsincos of the int16 angle times the double at 0x509EF8, as 0x4B7189..0x4B7192 forms it */
-static void repose_trig(short angle, X87_EXT* c, X87_EXT* s)
-{
-    __asm__ __volatile__("filds %2\n\t"
-                         "fmull 0x509EF8\n\t"
-                         "fsincos\n\t"
-                         "fstpt %0\n\t"
-                         "fstpt %1\n\t"
-                         : "=m"(*c), "=m"(*s)
-                         : "m"(angle)
-                         : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
-}
-
-/* 0x4B7173 on the pair p[0], p[1] with its sine and cosine already taken: 0x4B7180..0x4B7187,
-   the two loads, then 0x4B7194..0x4B71A4. AT&T operand order, as objdump prints the engine's. */
-static void repose_turn(int* p, const X87_EXT* c, const X87_EXT* s)
-{
-    __asm__ __volatile__("fildl 4(%0)\n\t"
-                         "fildl (%0)\n\t"
-                         "fld %%st(1)\n\t"
-                         "fld %%st(1)\n\t"
-                         "fldt %2\n\t"
-                         "fldt %1\n\t"
-                         "fmul %%st, %%st(5)\n\t"
-                         "fmulp %%st, %%st(4)\n\t"
-                         "fmul %%st, %%st(2)\n\t"
-                         "fmulp %%st, %%st(1)\n\t"
-                         "faddp %%st, %%st(3)\n\t"
-                         "fsubrp %%st, %%st(1)\n\t"
-                         "fistpl (%0)\n\t"
-                         "fistpl 4(%0)\n\t"
-                         :
-                         : "a"(p), "m"(*c), "m"(*s)
-                         : "memory", "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)",
-                           "st(7)");
-}
-
 /* The loop 0x45B179..0x45B1AA: prim's vertex count is (*prim)+4, its vertices at prim+0x22,
    12 bytes each; `turn` is the three int16 angles 0x45B150 was handed. */
 static void __cdecl repose_rotate(const unsigned char* prim, const short* turn)
 {
     const unsigned char* node;
     int* v;
-    int n, i, k, pair[2];
-    X87_EXT c[3], s[3];
+    int n, i;
+    TAGPU_TURN3 t;
 
     memcpy(&node, prim, 4);
     memcpy(&n, node + 4, 4);
     memcpy(&v, prim + 0x22, 4);
     if (n <= 0) return;                     /* stock's `dec; js` at 0x45B17E: no turn taken */
-    for (k = 0; k < 3; k++)
-        if (turn[k]) repose_trig(turn[k], &c[k], &s[k]);
+    tagpu_turn3_prepare(&t, turn);
     if (s_rtrigCheck) {
         unsigned int np = ++s_rtrigDiag.pieces;
         if (!(np & (np - 1u)))
@@ -5155,15 +5106,7 @@ static void __cdecl repose_rotate(const unsigned char* prim, const short* turn)
             memcpy(stock, p, 12);
             ((TURN3_FN)0x004B6CC0)(stock, stock, turn);
         }
-        if (turn[0]) repose_turn(p, &c[0], &s[0]);              /* (x, y)            */
-        if (turn[2]) repose_turn(p + 1, &c[2], &s[2]);          /* (y, z)            */
-        if (turn[1]) {                                          /* (x, z), via a pair */
-            pair[0] = p[0];
-            pair[1] = p[2];
-            repose_turn(pair, &c[1], &s[1]);
-            p[0] = pair[0];
-            p[2] = pair[1];
-        }
+        tagpu_turn3_apply(&t, p, p);
         if (s_rtrigCheck) repose_check(stock, p, turn);
     }
 }

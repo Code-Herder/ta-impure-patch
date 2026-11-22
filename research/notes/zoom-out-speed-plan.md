@@ -101,8 +101,16 @@ groups are the landing's check of the outcome.
 
 `publish_world` + `publish`, 6 to 8 ms a frame at 1080p, 10 to 14 live at 4K: `fill_world` walks every
 unit slot each publish, `fill_pieces` copies every piece of every unit in reach (all of them, zoomed out),
-and `fx_model` poses each effect model through `0x4B6CC0`, the trigonometry of item 3 (its fix applies
-here too).
+and `fx_model` poses each effect model through `0x4B6CC0`, the trigonometry of item 3.
+
+The sampler, zoomed out (MEASURED 2026-11-21, 1080p): the publish is 7.6 % of the game thread (`publish`
+4.1, `publish_world` 3.5); a third of `publish` was the engine's trigonometry under `fx_model`;
+`publish_world` is `fill_world` 63 % and `fill_pieces` 24 %. BUILT for `fx_model`: item 3's rotation is
+one header, `tagpu_turn3.h`, shared by the engine fix and `fx_model`, which takes the triple's trig once
+a model. A test build compared every `fx_model` vertex with `0x4B6CC0`'s own answer: 8 388 608, 0 differ;
+the repose oracle on the shared header, 99 488 808, 0 differ. `publish` 4.77 → 3.71, 4.62 → 3.16,
+3.44 → 2.75 and 1.81 → 1.61 ms a frame (near busy, far busy, near thin, far thin), the build before and
+after back to back. `fill_world` and `fill_pieces` are not changed.
 
 ### 5. The particle update
 
