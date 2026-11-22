@@ -44,10 +44,15 @@ The replay test groups are the check.
 
 ### 3. The message pump under Wine
 
-`outside`, the time between the engine's frames, is 14 to 23 ms a frame, and 93 % of its samples are
-inside one call, WinMain's `PeekMessageA` at `0x49EC47`. Whether that is idle time before the next tick
-is due or Wine's own work is not established; in the busy battle, behind schedule at 18 ticks a second,
-it is still 15 ms a frame.
+CLOSED: a cost of the private display, not of the game. On the private display `outside`, the time
+between the engine's frames, is 14 to 23 ms a frame, 93 % of its samples inside WinMain's `PeekMessageA`
+at `0x49EC47`. A probe in `fake_PeekMessageA` (2026-11-21, game thread, QPC a call, 2 s windows) put
+15 to 26 % of the game thread's wall time in that call there, nearly all of it in calls that began while
+the render thread was inside `vkQueuePresentKHR`, which on Xvfb is X's software copy (45 to 58 ms). The
+same probe on the reference setup's live display (the battle at 3840x2160 fullscreen, `--defaults`,
+vsync on): 0.0 to 0.3 % of the game thread's time in play, the longest call 2.9 ms, no call blocked
+behind a present, and `present` 0.08 ms a frame. Nothing to change in the message pump. A game-thread
+figure measured on the private display carries this stall in `outside` and nowhere else.
 
 ### 4. Impure's packet publish
 
