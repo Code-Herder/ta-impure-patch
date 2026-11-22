@@ -222,7 +222,12 @@ engine's allocations: the bench valued moving them in at 0.08 ms, and the engine
 them. The save translates to and from the 128-word format; a loaded record the proof does not cover
 gets stacks of 128 words of its own. With the oracle armed the object keeps the engine's layout,
 which its interpreter needs. Not built: grouping the blocks of one program together (the bench's
-last 0.15 ms), which needs an allocator of its own.
+last 0.15 ms), which needs an allocator of its own. MEASURED 2026-11-21 in the battle, four games
+alternating the tree before it and the block (it is chosen at install, so it cannot be A/B'd inside
+one game; the main checkout's `.data/prof/2026-11-21-cobl4/block-battle/`): over the GameTime range
+all four cover, in matched 100-tick buckets, the unit tick is 1.22 ms a tick less with the block,
+faster in 18 of 18 buckets and in every pairing of games (0.57 to 1.87 ms); the two games before it
+differ by 0.96 ms from each other, so the spread between games bounds it at about 1.2 ± 0.5 ms.
 
 ## Gaps open
 
