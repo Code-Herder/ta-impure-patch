@@ -139,6 +139,10 @@ typedef struct TAGPU_COBVM {
     int                    faulted;
     int                    checked;    /* every opcode through tagpu_cob_check_step */
     struct { int on, slot, script, parent, argc; char from; uint32_t tick; } pend;
+    /* THE TURN SCHEDULE (tagpu_cobvm_tick): `quiet` when every busy record sleeps or waits on a
+       CALL, `due` then the dt after which the first sleeper wakes (its sleep), `owed` the dt the
+       sleepers have been given and not yet taken off (tagpu_cobvm_settle) */
+    int32_t                quiet, due, owed;
 } TAGPU_COBVM;
 
 /* Bind the blocks and clear them as the engine's constructor and allocations leave them: the
@@ -175,8 +179,20 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
    io. Returns 1, 0 refused (io untouched), -1 fault. */
 int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t io[4]);
 
-/* DoScriptsNow 0x4B0D60: every record with dt, then the stepper. Returns 1, or -1 fault. */
+/* DoScriptsNow 0x4B0D60: every record with dt, then the stepper. Returns 1, or -1 fault.
+   A TURN ONLY WHEN SOMETHING IS DUE: when the last turn left every busy record asleep or waiting
+   on a CALL, and none of the sleepers reaches 0 in this one, the records are not visited: the dt
+   is owed to the sleepers and only the stepper runs. That is the engine's turn exactly: such a
+   turn takes dt off each sleeper and wakes none (0x4B0DEF..0x4B0E01: runnable only at 0 or
+   below), a CALL record runs only when its child's RETURN or a signal wakes it, and both of those
+   run inside a turn or an entry, which settles the owed dt first. Outside the core only the save
+   reads a record's sleep (cob_save, which settles first): the engine's record accesses are the
+   COB module's own, every one inventoried in cob_runtime_sites. */
 int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt);
+
+/* Take the owed dt off the sleepers, as the turns that owed it would have. Every entry does it
+   first; a host that reads the records itself (a save) calls it before. */
+void tagpu_cobvm_settle(TAGPU_COBVM* vm);
 
 /* Write the latched start's trace line now (the oracle's last line of a run). */
 void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run);

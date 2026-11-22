@@ -61,7 +61,11 @@ interpreter made, the host makes: the recorder's allocation counts (`tagpu_rec_c
 as `0x4B08C0`'s sink keyed them), the slice markers' note of a start (`tagpu_rec_cob_started`) and
 the trace. Its state is a tail of the object (`CobTail`: the VM, bound at the object's first entry,
 and the script's name), sized at `0x485D74` and zeroed at `0x485D78`; a saved game's records pass
-`tagpu_cobvm_loaded`, and a fault is `cob_fault` with the VM's reason.
+`tagpu_cobvm_loaded`, and a fault is `cob_fault` with the VM's reason. A unit's turn visits its
+records only when one can run: while every busy record sleeps or waits on a CALL and none wakes in
+this turn's dt, the VM owes the dt to the sleepers and runs only the animation stepper, and every
+other entry and the save take the owed dt off first (`tagpu_cobvm_tick`, `tagpu_cobvm_settle`; the
+[speed plan](../cob-speed-plan.html), L3).
 
 Two starts the guarded engine ran, the VM does not. A start by index with `argc` outside 0..4 is
 refused as a full pool refuses (counted, its completion called with 0): only a malformed

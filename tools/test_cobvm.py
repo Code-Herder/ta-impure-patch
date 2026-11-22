@@ -214,6 +214,54 @@ class Core(unittest.TestCase):
         vm = self.vm("Create() { s1 = 1; }")
         self.assertEqual(vm._vm.checked, 1)
 
+    # -- a turn only when something is due --------------------------------------
+    SCHEDULE = """
+    Walk() { while(1) { move arm to y-axis [5] speed [10]; sleep 500; turn base to y-axis <90> speed <45>; sleep 200; s1 = s1 + 1; } }
+    Waiter() { turn arm to x-axis <30> speed <60>; wait-for-turn arm around x-axis; sleep 100; turn arm to x-axis <0> speed <60>; wait-for-turn arm around x-axis; }
+    Child() { sleep 300; return(5); }
+    Parent() { while(1) { call-script Child(); sleep 50; } }
+    Sig() { set-signal-mask 2; sleep 1000; s2 = s2 + 100; }
+    Killer() { while(1) { sleep 700; signal 2; start-script Sig(); } }
+    Lazy() { sleep 2000; s2 = s2 + 1; }
+    Create() { start-script Walk(); start-script Parent(); start-script Killer(); start-script Lazy(); }
+    """
+
+    def _scheduled_against_every_turn(self, source, ticks, entry_at=()):
+        """(turns the schedule left unvisited): one VM scheduled, one made to visit its records on
+        every turn, both given the same turns and the same entries, equal after each turn once the
+        first's owed dt is taken off"""
+        a = self.vm(source, rules=tacob.RULES_IMPURE)
+        b = self.vm(source, rules=tacob.RULES_IMPURE)
+        for v in (a, b):
+            v.start_script("Create", run_now=True)
+        skipped = 0
+        for t in range(ticks):
+            if t in entry_at:
+                for v in (a, b):
+                    v.start_script("Waiter", run_now=False)
+            b._vm.quiet = 0
+            skipped += bool(a._vm.quiet) and a._vm.owed + 1 < a._vm.due
+            a.do_scripts_now(1)
+            b.do_scripts_now(1)
+            self.lib.tagpu_cobvm_settle(C.byref(a._vm))
+            self.assertEqual(bytes(a._object), bytes(b._object), f"the records after turn {t}")
+            self.assertEqual(a.statics, b.statics, f"the statics after turn {t}")
+            self.assertEqual(list(a.anim), list(b.anim), f"the animation after turn {t}")
+            self.assertEqual(bytes(a._model), bytes(b._model), f"the model after turn {t}")
+        return skipped
+
+    def test_a_turn_with_nothing_due_is_owed_and_exact(self):
+        skipped = self._scheduled_against_every_turn(self.SCHEDULE, 900, entry_at=(37, 400, 401, 655))
+        self.assertGreater(skipped, 100)
+
+    def test_an_object_only_animating_steps_its_pieces_and_nothing_else(self):
+        skipped = self._scheduled_against_every_turn(
+            "Create() { turn base to y-axis <180> speed <10>; move arm to x-axis [20] speed [1]; }", 300)
+        self.assertGreater(skipped, 200)
+
+    def test_a_sleep_of_zero_wakes_the_next_turn(self):
+        self._scheduled_against_every_turn("Create() { while(1) { sleep 0; s1 = s1 + 1; } }", 50)
+
     # -- the rules of the two builds ------------------------------------------
     POOL = """
     sleeper() { while(1) { sleep 1000; } }

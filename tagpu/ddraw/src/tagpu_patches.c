@@ -12628,6 +12628,7 @@ typedef struct CobTail {
 #define COB_GAME_BYTES (TAGPU_COB_OBJECT_BYTES + (unsigned)sizeof(CobTail))
 typedef char cob_tail_aligned[(TAGPU_COB_OBJECT_BYTES % 4u == 0) ? 1 : -1];
 static void cob_game_loaded(char* cob);
+static void cob_game_settle(char* cob);
 static void cob_game_sites(void);
 /* the oracle's (THE ORACLE, below): armed, and cob_get's verified half */
 static int s_cvOn;
@@ -12673,6 +12674,7 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
     unsigned i, axis;
     void** vtable = *(void***)cob;
     char reason[256];
+    cob_game_settle(cob);                   /* the sleeps the skipped turns owe, taken off first */
     if (!data) cob_fault(f->name, 0, "saved script allocation failed");
     if (!tagpu_cob_save_records(program, *(unsigned*)(cob + 12), cob_record(cob, 0),
                                 data, TAGPU_COB_SAVE_BYTES, reason, sizeof reason))
@@ -13820,12 +13822,14 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
     claimed = s_cv.owner != me;
     if (claimed && InterlockedCompareExchange(&s_cv.owner, me, 0) != 0) {
         InterlockedIncrement(&s_cv.foreign);
+        tail->quiet = 0;
         return cv_engine(cob, k, name, p);
     }
     if (s_cv.depth >= CV_DEPTH ||
         !(copy = (unsigned char*)tagpu_sim_scratch(TAGPU_COB_OBJECT_BYTES + stat + anim + model))) {
         if (claimed) InterlockedExchange(&s_cv.owner, 0);
         InterlockedIncrement(&s_cv.foreign);
+        tail->quiet = 0;
         return cv_engine(cob, k, name, p);
     }
     memcpy(copy, cob, TAGPU_COB_OBJECT_BYTES);
@@ -13851,6 +13855,8 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
             cvr_bad(&rp, "the copy could not be bound: %s", reason);
         } else {
             rp.vm.checked = tail->checked;
+            rp.vm.quiet = tail->quiet;
+            rp.vm.due = tail->due;
             memset(&run, 0, sizeof run);
             run.host = &rp.host;
             memcpy(io, k->io, sizeof io);
@@ -13866,9 +13872,13 @@ static int cv_verified(char* cob, const CvCall* k, const char* name, int32_t* co
             if (c->at != c->n)
                 cvr_bad(&rp, "the engine logged %u entries the core never asked (the next %c)", c->n - c->at,
                         c->log[c->at].kind);
+            tagpu_cobvm_settle(&rp.vm);
             if (!rp.bad) cvr_compare(&rp, cob, copy, stat, anim, model);
+            tail->quiet = rp.bad ? 0 : rp.vm.quiet;
+            tail->due = rp.vm.due;
         }
     }
+    if (c->full) tail->quiet = 0;
     cv_report(cob, k, prog, c, rp.bad);
     tagpu_sim_scratch_free(copy);
     if (claimed) InterlockedExchange(&s_cv.owner, 0);
@@ -14022,6 +14032,11 @@ static void __attribute__((thiscall)) cg_tick(char* cob, int32_t dt)
 static void cob_game_loaded(char* cob)
 {
     tagpu_cobvm_loaded(cg_vm(cob));
+}
+
+static void cob_game_settle(char* cob)
+{
+    tagpu_cobvm_settle(cg_vm(cob));
 }
 
 static void cob_game_sites(void)

@@ -730,6 +730,7 @@ unsigned tagpu_cobvm_size(void) { return (unsigned)sizeof(TAGPU_COBVM); }
 void tagpu_cobvm_loaded(TAGPU_COBVM* vm)
 {
     unsigned s;
+    vm->quiet = vm->owed = 0;               /* the records are new: the next turn runs them */
     for (s = 0; s < vm->threads && !vm->checked; ++s)
         if (!tagpu_cob_record_proven(vm->program, tagpu_cobvm_record(vm, s))) vm->checked = 1;
 }
@@ -759,6 +760,8 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
 {
     TagpuCobRecord* r;
     int slot, i;
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     if (!entered(vm, run)) return -1;
     if (argwords && (argc < 0 || argc > 4 || !args)) {
         snprintf(run->reason, sizeof run->reason, "%s", "an engine start passes 0 to 4 words");
@@ -790,6 +793,8 @@ int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t
 {
     TagpuCobRecord* r;
     int slot, i;
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     if (!entered(vm, run)) return -1;
     slot = alloc(vm, run, script, TAGPU_COBVM_FROM_ENGINE, -1, -1);
     if (slot < 0) return 0;                 /* the silent failure: io stays untouched */
@@ -802,12 +807,48 @@ int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t
     return 1;
 }
 
+void tagpu_cobvm_settle(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    if (!vm->owed) return;
+    for (s = 0; s < vm->threads; ++s) {
+        TagpuCobRecord* r = tagpu_cobvm_record(vm, s);
+        if (r->status == ST_SLEEP) r->sleep = wrap_sub(r->sleep, vm->owed);
+    }
+    vm->due = wrap_sub(vm->due, vm->owed);
+    vm->owed = 0;
+}
+
+/* After a turn that ran: quiet when every busy record sleeps or waits on a CALL; `due` the smallest
+   sleep, INT32_MAX with no sleeper (nothing then is owed) */
+static void schedule(TAGPU_COBVM* vm)
+{
+    unsigned s;
+    vm->quiet = 1;
+    vm->due = INT32_MAX;
+    for (s = 0; s < vm->threads; ++s) {
+        const TagpuCobRecord* r = tagpu_cobvm_record(vm, s);
+        if (!r->status || r->status == ST_CALL) continue;
+        if (r->status != ST_SLEEP) { vm->quiet = 0; return; }
+        if (r->sleep < vm->due) vm->due = r->sleep;
+    }
+}
+
 int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt)
 {
     unsigned s;
     if (!entered(vm, run)) return -1;
+    if (vm->quiet && dt > 0 && (int64_t)vm->owed + dt < (int64_t)vm->due) {
+        tagpu_cobvm_flush(vm, run);
+        if (vm->due != INT32_MAX) vm->owed += dt;
+        step_anim(vm, dt);
+        return 1;
+    }
+    tagpu_cobvm_settle(vm);
+    vm->quiet = 0;
     for (s = 0; s < vm->threads; ++s)
         if (run_thread(vm, run, s, dt) < 0) return -1;
     step_anim(vm, dt);
+    schedule(vm);
     return 1;
 }

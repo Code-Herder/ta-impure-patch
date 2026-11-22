@@ -136,13 +136,37 @@ records' visits, which L3 and L4 address, are unchanged.
 
 ### L3 — A turn only when something is due
 
-A unit's turn runs the core only when a thread is due: a wake slice per unit (the earliest sleeper's,
-or now for a runnable thread or a cleared wait), the sleep decrements it is owed, and an animating
-flag for the animation-only step. The owed decrements count **turns given** (`tagpu_slice_give`),
-never game ticks: a puppet gives turns at recorded places and at the step's end, a type-4 seat's units
-get none, a paused game none. Every entry into the object (a start, a query, the save) applies them
-first. That is exact because the unit was not due: every sleeper still has at least one tick left
-afterwards, as the engine would have left it.
+`tagpu_cobvm_tick` visits the records only when one of them can run. After a turn that ran, the VM
+notes whether every busy record sleeps or waits on a CALL (`quiet`) and the smallest sleep (`due`).
+While it is quiet, a turn whose dt does not bring that sleep to 0 visits no record: its dt is added
+to what the sleepers are owed (`owed`) and only the animation stepper runs. That is the engine's
+turn exactly: such a turn takes dt off each sleeper and makes none runnable (`0x4B0DEF..0x4B0E01`,
+runnable only at 0 or below), a CALL record waits until its child's RETURN or a signal wakes it,
+and both of those happen inside a turn or an entry. Every other entry -- a start, a query, a turn
+that runs -- first takes the owed dt off the sleepers (`tagpu_cobvm_settle`) and leaves the next
+turn to schedule again; the save settles before it reads the records, and a loaded object starts
+unscheduled.
+
+The owed dt is counted in the core from the turns it is given, so it is the engine's count by
+construction: a puppet's turns, a paused game's and a seat's whose units get none are exactly the
+calls of `0x4B0D60` that are or are not made. The schedule's three words live in the unit's VM, in
+the tail of its COB object, and nothing outside the core reads them. A recording needs nothing new:
+the recorder keeps no COB state (a unit's scripts are rebuilt by its create), and the save, which
+does keep it, writes settled sleeps.
+
+`tools/test_cobvm.py` plays each schedule against a VM made to visit its records every turn, both
+given the same turns and starts, and requires the records, statics, animation and posed model equal
+after every turn. In the game the oracle's replay runs the scheduled core against the engine's
+interpreter, which visits every record every turn: MEASURED 2026-11-21, `cob-verify` 259 206 entry
+calls equal, and slice-walkers and cob-getters pass on the scheduled core.
+
+**What it saves** (MEASURED 2026-11-21, the 13 500-unit battle on the reference setup, one game: a
+scratch build whose odd 64-tick blocks clear `quiet` before every turn, the main checkout's
+`.data/prof/2026-11-21-cobl3/`): the unit tick takes 8.12 ms a tick scheduled against 9.15 visiting
+every record, 1.08 ± 0.09 ms less than its neighbouring blocks, in 31 of 32. The other spans are
+unchanged within their noise. The bench's ~2.2 ms for this step counted the turns it no longer makes
+at all; in the game each unit's turn is still a call through `0x4B0D60` that reads the VM in the
+object's tail, which L4's block and prefetch address.
 
 ### L4 — The block
 
