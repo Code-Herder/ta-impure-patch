@@ -101,7 +101,9 @@ and the game 19 ticks a second.
 
 The target search in both spans was one function, the candidates in range `0x40AD80`, and the
 particle shift is the walker `0x471EB0`'s; both are replaced ([orders](../engine/orders.md),
-[engine patches](engine-patches.md)). After the first, in a second run of the same battle whose
+[engine patches](engine-patches.md)). So are two math paths the samples found in the unit tick: the
+engine's piece rotation `0x4B7173` with its `fsincos`, and the CRT's `_hypot` `0x4FB440` with its
+control-word switches, each by a path whose every result is the engine's on the same machine. After the first, in a second run of the same battle whose
 window reached further into it: the unit tick 15 ms, the players phase 9.4, the step 31, 26 ticks
 a second.
 

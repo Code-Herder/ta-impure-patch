@@ -142,6 +142,21 @@
    "end": 3000,
    "cob": "exact"
   },
+  "fp-verify": {
+   "load": "replay-battle-load.json",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_fpverify.on"], "files": ["tagpu_fpverify.on"]},
+   "steps": [[1, "apply", "replay-battle-units.json"],
+             [850, "run", ["tools/replay/fpverify_check.py", "{gamedir}"]]],
+   "end": 900
+  },
+  "stock-fp-verify": {
+   "load": "replay-battle-load.json",
+   "dll": "stock",
+   "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_fpverify.on"], "files": ["tagpu_fpverify.on"]},
+   "steps": [[1, "apply", "replay-battle-units.json"],
+             [850, "run", ["tools/replay/fpverify_check.py", "{gamedir}"]]],
+   "end": 900
+  },
   "path-verify": {
    "load": "replay-battle-load.json",
    "content": {"run": ["tools/replay/write_lever.py", "{gamedir}", "tagpu_pathverify.on"], "files": ["tagpu_pathverify.on"]},

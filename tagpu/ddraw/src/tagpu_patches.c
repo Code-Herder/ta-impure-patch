@@ -5047,8 +5047,10 @@ SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
    sines and cosines once and turns every vertex, last to first, through tagpu_turn3.h, which
    writes what 0x4B6CC0 writes, bit for bit (its header states the argument).
 
-   THE INVARIANT: every vertex the loop writes is bit-identical to stock's, and so are the x87's
-   exception flags, since the trig is taken only for a piece with a vertex, where stock takes it.
+   THE INVARIANT: every vertex the loop writes is bit-identical to stock's, and so are the x87
+   exception flags the loop itself raises, since the trig is taken only for a piece with a vertex,
+   where stock takes it. (The rotation's table, fp_exact below, skips fsincos elsewhere, so the
+   sticky flags of the process are not stock's; nothing reads them for a value.)
    Beyond tagpu_turn3.h's argument it rests on:
      - the engine code it stands for being stock's: the loop, 0x4B6CC0 and 0x4B7173 are each
        matched byte for byte before anything is written, and on any difference nothing is;
@@ -5062,7 +5064,8 @@ SIM_FEATURE(repose_trig, SIM_PUPPET_RUNS, "battle");
        0x45B1AC..0x45B1C9 reloads all four before reading them. */
 
 /* THE ORACLE, `tagpu_reposecheck.on` (read at install): every vertex is also turned by stock's
-   0x4B6CC0 on a copy, and the two compared. A difference is logged with its piece's angles. */
+   0x4B6CC0 on a copy, and the two compared. 0x4B6CC0's three calls of 0x4B7173 reach the rotation's
+   table when fp_exact is installed, which tagpu_fpverify.on compares with the engine's fsincos. A difference is logged with its piece's angles. */
 typedef void (__stdcall *TURN3_FN)(const int* in, int* out, const short* turn);
 static unsigned char s_rtrigCheck;
 SIM_VAR(s_rtrigCheck, SIM_INSTALL);
@@ -12301,8 +12304,12 @@ static void patch_duel_lever(void)
 
 SIM_FEATURE(apply_patches, SIM_PUPPET_RUNS, "battle");
 
+static void rot_install(void);
+static void hyp_install(void);
+
 void tagpu_apply_patches(void)
 {
+
     /* Skip the startup "installed version of Microsoft DirectX may not function
        properly with Total Annihilation" warning dialog. TA's version check at
        0x004B5070 returns 0 under wine/modern DirectX, so the branch at 0x004266A7
@@ -12443,6 +12450,10 @@ void tagpu_apply_patches(void)
     patch_loader_defects();
     patch_sight_cap();
     patch_duel_lever();
+    /* After the engine fixes: repose_trig byte-matches stock's 0x4B7173 before it writes, and the
+       rotation's jmp would make it skip itself. */
+    rot_install();
+    hyp_install();
 }
 
 SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");
@@ -15820,4 +15831,440 @@ unsigned int tagpu_patches_restored(void)
         repaired++;
     }
     return repaired;
+}
+
+
+SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify stock-fp-verify battle slice-walkers stock-resource-mex");
+
+/* THE PIECE ROTATION FROM A TABLE (research/notes/engine/cob.md, the piece matrix). 0x4B7173(angle,
+   pair), cdecl, rotates the int pair at `pair` by the signed 16-bit angle word, the low word of its
+   first argument: it returns at once on a zero word (0x4B7176..0x4B717B), else loads p1, p0 and a
+   copy of each (0x4B717D..0x4B7188), the angle in radians (fild word, fmul qword [0x509EF8]) and its
+   cosine and sine (fsincos, 0x4B7189..0x4B7193), and from those the products, sums and two bare fistp
+   (0x4B7194..0x4B71A4). It preserves every register but eax. Its fsincos sees only 65 536 inputs.
+   THE INVARIANT: a call's result is, bit for bit, the one the engine's code computes on the same
+   machine. The table holds, for every angle word, the 80-bit cosine and sine that this machine's
+   fsincos returns on fild word; fmul qword [0x509EF8] under the control word s_rotCw, computed by
+   those instructions at install (rot_emit_build). A call under s_rotCw loads the pair from the table and
+   runs the engine's own instructions around it, copied from the exe after byte-matching all of it;
+   a call under any other control word runs the engine's code. The fmul's precision and rounding are
+   the control word's and fsincos's result the CPU's, both the same for an entry as for the engine's
+   call, and fld of a stored 80-bit value is exact. Nothing is shipped precomputed: x87 fsincos
+   differs between CPU makes, so a table made elsewhere could disagree with this machine's engine.
+   One machine can hold processors of more than one kind (performance and efficiency cores), whose
+   fsincos nothing documents as equal; the table is therefore built on every processor of the machine,
+   each pinned in turn, and installed only when every one fills it identically
+   (rot_build_everywhere). Where they differ the engine's code stays, and with it stock's own
+   dependence on which core ran the call.
+   `tagpu_fpverify.on` at launch runs both on every call and counts the calls whose results differ
+   (rot_verify): it must stay 0. */
+#define ROT_VA       0x004B7173u
+#define ROT_AFTER    0x004B717Bu    /* the je after the zero-angle compare */
+#define ROT_LOADS    0x004B717Du    /* mov eax,[ebp+0xC] .. fld st(1): 12 bytes */
+#define ROT_SINCOS   0x004B7189u    /* fild word, fmul, fsincos: 11 bytes the table replaces */
+#define ROT_TAIL     0x004B7194u    /* the products and the stores: 17 bytes */
+#define ROT_END      0x004B71A7u
+typedef struct RotEntry { unsigned char cos[10], sin[10]; } RotEntry;
+static RotEntry s_rot[65536];
+SIM_ROWS(s_rot, SIM_INSTALL, SIM_ID_NONE, NULL);
+#define ROT_CHUNK 1024
+static RotEntry s_rotCheck[ROT_CHUNK];  /* another processor's fill of one chunk, compared to s_rot */
+SIM_ROWS(s_rotCheck, SIM_INSTALL, SIM_ID_NONE, NULL);
+static uint16_t s_rotCw;
+SIM_VAR(s_rotCw, SIM_INSTALL);
+static unsigned char* s_rotFast;       /* the table's entry, which checks the control word */
+SIM_CODE(s_rotFast);
+static unsigned char* s_rotOrig;       /* the engine's code: its prologue and compare, then 0x4B717B */
+SIM_CODE(s_rotOrig);
+static unsigned char* s_rotCode;       /* the builder, then the verify entry */
+SIM_CODE(s_rotCode);
+static struct { volatile LONG calls, zero, table, differ; } s_rotDiag;
+SIM_VAR(s_rotDiag, SIM_PRIVATE);
+static int s_fpVerify;                  /* tagpu_fpverify.on, read once by rot_install for both */
+SIM_VAR(s_fpVerify, SIM_INSTALL);
+
+typedef void (__cdecl *RotFn)(int angle, int32_t* pair);
+
+/* The engine's function from its own bytes: 0x4B7173..0x4B71A6, every byte, so the copies below are
+   the engine's instructions and the slow path's jump lands in code that is still the engine's. */
+static const unsigned char ROT_BYTES[] = {
+    0x55,0x8B,0xEC,0x66,0x83,0x7D,0x08,0x00,0x74,0x28,0x8B,0x45,0x0C,0xDB,0x40,0x04,0xDB,0x00,0xD9,0xC1,
+    0xD9,0xC1,0xDF,0x45,0x08,0xDC,0x0D,0xF8,0x9E,0x50,0x00,0xD9,0xFB,0xDC,0xCD,0xDE,0xCC,0xDC,0xCA,0xDE,
+    0xC9,0xDE,0xC3,0xDE,0xE9,0xDB,0x18,0xDB,0x58,0x04,0xC9,0xC3 };
+typedef char rot_bytes_whole[(sizeof ROT_BYTES == ROT_END - ROT_VA) ? 1 : -1];
+
+/* The table entry, with `count` (verify mode) incremented on the table path:
+     push ebp; mov ebp,esp; push eax; fnstcw [ebp-4]; cmp word [ebp-4],s_rotCw; pop eax; jne slow
+     cmp word [ebp+8],0; je done; push ecx; movzx ecx,word [ebp+8]; lea ecx,[ecx+ecx*4]
+     <0x4B717D..0x4B7188>; fld tbyte [ecx*4+sin]; fld tbyte [ecx*4+cos]; <0x4B7194..0x4B71A4>; pop ecx
+   done: leave; ret
+   slow: cmp word [ebp+8],0; jmp 0x4B717B
+   The control word goes through eax's slot: eax is cdecl's scratch register, which the engine's
+   function writes on every non-zero angle and none of its nine call sites reads after the call;
+   pop changes no flag. fsincos leaves the cosine on top and the sine below it, as the two loads do. */
+static void rot_emit(unsigned char* p, volatile LONG* count)
+{
+    unsigned char *jslow, *jdone;
+    unsigned at;
+    *p++ = 0x55; *p++ = 0x8B; *p++ = 0xEC; *p++ = 0x50;
+    *p++ = 0xD9; *p++ = 0x7D; *p++ = 0xFC;
+    *p++ = 0x66; *p++ = 0x81; *p++ = 0x7D; *p++ = 0xFC;
+    *p++ = (unsigned char)s_rotCw; *p++ = (unsigned char)(s_rotCw >> 8);
+    *p++ = 0x58;
+    *p++ = 0x75; jslow = p++;
+    *p++ = 0x66; *p++ = 0x83; *p++ = 0x7D; *p++ = 0x08; *p++ = 0x00;
+    *p++ = 0x74; jdone = p++;
+    *p++ = 0x51;
+    if (count) {
+        *p++ = 0xF0; *p++ = 0xFF; *p++ = 0x05;
+        memcpy(p, &count, 4); p += 4;
+    }
+    *p++ = 0x0F; *p++ = 0xB7; *p++ = 0x4D; *p++ = 0x08;
+    *p++ = 0x8D; *p++ = 0x0C; *p++ = 0x89;
+    memcpy(p, ROT_BYTES + (ROT_LOADS - ROT_VA), ROT_SINCOS - ROT_LOADS); p += ROT_SINCOS - ROT_LOADS;
+    *p++ = 0xDB; *p++ = 0x2C; *p++ = 0x8D;
+    at = (unsigned)(uintptr_t)s_rot[0].sin; memcpy(p, &at, 4); p += 4;
+    *p++ = 0xDB; *p++ = 0x2C; *p++ = 0x8D;
+    at = (unsigned)(uintptr_t)s_rot[0].cos; memcpy(p, &at, 4); p += 4;
+    memcpy(p, ROT_BYTES + (ROT_TAIL - ROT_VA), ROT_END - 2 - ROT_TAIL); p += ROT_END - 2 - ROT_TAIL;
+    *p++ = 0x59;
+    *jdone = (unsigned char)(p - (jdone + 1));
+    *p++ = 0xC9; *p++ = 0xC3;
+    *jslow = (unsigned char)(p - (jslow + 1));
+    *p++ = 0x66; *p++ = 0x83; *p++ = 0x7D; *p++ = 0x08; *p++ = 0x00;
+    *p++ = 0xE9; tagpu_detour_rel(p, ROT_AFTER);
+}
+
+/* The engine's code as an entry of its own: its prologue and zero-angle compare, then 0x4B717B. */
+static void rot_emit_orig(unsigned char* p)
+{
+    memcpy(p, ROT_BYTES, ROT_AFTER - ROT_VA); p += ROT_AFTER - ROT_VA;
+    *p++ = 0xE9; tagpu_detour_rel(p, ROT_AFTER);
+}
+
+/* The builder, cdecl (RotEntry* out, const uint16_t* cw, unsigned first, unsigned end): under *cw, for
+   the angle words first..end-1, the engine's fild word; fmul qword [0x509EF8]; fsincos, the cosine and
+   then the sine stored whole from out on:
+     push ebp; mov ebp,esp; push ebx; push ecx; push ecx; fnstcw [ebp-8]; mov eax,[ebp+0xC]; fldcw [eax]
+     mov ebx,[ebp+8]; mov ecx,[ebp+0x10]
+   loop: mov [ebp-0xC],cx; fild word [ebp-0xC]; fmul qword [0x509EF8]; fsincos
+     fstp tbyte [ebx]; fstp tbyte [ebx+10]; add ebx,20; inc ecx; cmp ecx,[ebp+0x14]; jb loop
+     fldcw [ebp-8]; pop ecx; pop ecx; pop ebx; leave; ret */
+static void rot_emit_build(unsigned char* p)
+{
+    static const unsigned char head[] = { 0x55,0x8B,0xEC,0x53,0x51,0x51,0xD9,0x7D,0xF8,0x8B,0x45,0x0C,
+                                          0xD9,0x28,0x8B,0x5D,0x08,0x8B,0x4D,0x10 };
+    static const unsigned char body[] = { 0x66,0x89,0x4D,0xF4,0xDF,0x45,0xF4,0xDC,0x0D,0xF8,0x9E,0x50,0x00,
+                                          0xD9,0xFB,0xDB,0x3B,0xDB,0x7B,0x0A,0x83,0xC3,0x14,0x41,
+                                          0x3B,0x4D,0x14,0x72 };
+    static const unsigned char tail[] = { 0xD9,0x6D,0xF8,0x59,0x59,0x5B,0xC9,0xC3 };
+    memcpy(p, head, sizeof head); p += sizeof head;
+    memcpy(p, body, sizeof body); p += sizeof body;
+    *p = (unsigned char)(-(int)(sizeof body + 1)); p++;
+    memcpy(p, tail, sizeof tail);
+}
+
+static void __cdecl rot_verify(int angle, int32_t* pair)
+{
+    int32_t mine[2];
+    LONG n;
+    mine[0] = pair[0];
+    mine[1] = pair[1];
+    ((RotFn)(void*)s_rotFast)(angle, mine);
+    ((RotFn)(void*)s_rotOrig)(angle, pair);
+    n = InterlockedIncrement(&s_rotDiag.calls);
+    if (!(angle & 0xFFFF))
+        InterlockedIncrement(&s_rotDiag.zero);
+    if (mine[0] != pair[0] || mine[1] != pair[1]) {
+        if (InterlockedIncrement(&s_rotDiag.differ) == 1)
+            tagpu_logf("fprot: DIFFER: angle 0x%04X gives (%d,%d) from the table, (%d,%d) from the engine",
+                      angle & 0xFFFF, mine[0], mine[1], pair[0], pair[1]);
+    }
+    if (n >= 0x10000 && !(n & (n - 1)))     /* at every power of two from 65 536 */
+        tagpu_logf("fprot: %ld calls, %ld of angle 0, %ld on the table, %ld differ", n, s_rotDiag.zero,
+                   s_rotDiag.table, s_rotDiag.differ);
+}
+
+/* The verify entry, as the engine's function keeps every register but eax: push ecx; push edx;
+   push dword [esp+0x10]; push dword [esp+0x10]; call rot_verify; add esp,8; pop edx; pop ecx; ret */
+static void rot_emit_verify(unsigned char* p)
+{
+    static const unsigned char head[] = { 0x51,0x52,0xFF,0x74,0x24,0x10,0xFF,0x74,0x24,0x10,0xE8 };
+    static const unsigned char tail[] = { 0x83,0xC4,0x08,0x5A,0x59,0xC3 };
+    memcpy(p, head, sizeof head); p += sizeof head;
+    tagpu_detour_rel(p, (unsigned)(uintptr_t)rot_verify); p += 4;
+    memcpy(p, tail, sizeof tail);
+}
+
+typedef void (__cdecl *RotBuild)(RotEntry* out, const uint16_t* cw, unsigned first, unsigned end);
+
+/* s_rot filled on every processor of the machine, the thread pinned to each in turn and confirmed there
+   before and after: 1 when every processor's fill equals the first's, else 0 with the reason logged. A
+   thread pinned to one processor cannot run on another, so the comparison is between processors and
+   not between scheduling accidents.
+   Every processor, not the process's affinity mask: dd_CreateEx widens the mask to the system's at the
+   first DirectDraw call (singlecpu is off), and a tool can widen it too, so a process started on one core
+   still runs on all of them. A narrower mask is widened for the build and restored after it; every later
+   mask is a subset of the system's. The system mask names only one processor group, and at most 32
+   processors in a 32-bit process, so a machine with more active processors than it names is refused.
+   Processors brought online while the game runs are not compared. */
+#ifndef ALL_PROCESSOR_GROUPS
+#define ALL_PROCESSOR_GROUPS 0xffff
+#endif
+WINBASEAPI DWORD WINAPI GetActiveProcessorCount(WORD GroupNumber);
+
+static int rot_build_everywhere(void)
+{
+    const RotBuild build = (RotBuild)(void*)s_rotCode;
+    DWORD (WINAPI *const here)(void) = GetCurrentProcessorNumber;
+    const HANDLE th = GetCurrentThread();
+    DWORD_PTR proc = 0, sys = 0, saved = 0;
+    unsigned cpu, n = 0, f;
+    int ok = 1;
+    unsigned named = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) || !sys) {
+        tagpu_log("fprot: NOT installed: the machine's processors could not be read");
+        return 0;
+    }
+    for (cpu = 0; cpu < 8 * sizeof sys; cpu++)
+        named += (unsigned)((sys >> cpu) & 1);
+    if (GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) != named) {
+        tagpu_logf("fprot: NOT installed: %lu active processors, %u in the system mask",
+                   (unsigned long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS), named);
+        return 0;
+    }
+    if (proc != sys && !SetProcessAffinityMask(GetCurrentProcess(), sys)) {
+        tagpu_log("fprot: NOT installed: the process could not be widened to every processor");
+        return 0;
+    }
+    for (cpu = 0; ok && cpu < 8 * sizeof sys; cpu++) {
+        const DWORD_PTR bit = (DWORD_PTR)1 << cpu;
+        DWORD_PTR was;
+        int tries;
+        if (!(sys & bit))
+            continue;
+        if (!(was = SetThreadAffinityMask(th, bit))) {
+            tagpu_logf("fprot: NOT installed: the thread could not be pinned to processor %u", cpu);
+            ok = 0;
+            break;
+        }
+        if (!saved)
+            saved = was;
+        for (tries = 0; tries < 4 && here() != cpu; tries++)
+            Sleep(tries);
+        if (here() != cpu) {
+            tagpu_logf("fprot: NOT installed: processor %u could not be confirmed", cpu);
+            ok = 0;
+            break;
+        }
+        if (!n) {
+            build(s_rot, &s_rotCw, 0, 0x10000);
+        } else {
+            for (f = 0; ok && f < 0x10000; f += ROT_CHUNK) {
+                build(s_rotCheck, &s_rotCw, f, f + ROT_CHUNK);
+                if (memcmp(s_rotCheck, s_rot + f, sizeof s_rotCheck)) {
+                    tagpu_logf("fprot: NOT installed: processor %u's fsincos differs from the first's "
+                               "in angles 0x%04X..0x%04X", cpu, f, f + ROT_CHUNK - 1);
+                    ok = 0;
+                }
+            }
+        }
+        if (ok && here() != cpu) {
+            tagpu_logf("fprot: NOT installed: the thread left processor %u", cpu);
+            ok = 0;
+        }
+        n++;
+    }
+    if (saved)
+        SetThreadAffinityMask(th, saved);
+    if (proc != sys)
+        SetProcessAffinityMask(GetCurrentProcess(), proc);
+    if (ok)
+        tagpu_logf("fprot: the table is the same on all %u processors", n);
+    return ok;
+}
+
+static void rot_install(void)
+{
+    const int verify = s_fpVerify = tagpu_sim_lever("tagpu_fpverify.on");
+    unsigned char jmp[5];
+    uint16_t cw;
+    if (!tagpu_detour_bytes_ok(ROT_VA, ROT_BYTES, (int)sizeof ROT_BYTES)) {
+        tagpu_log("fprot: NOT installed: 0x4B7173..0x4B71A6 is not the retail rotation");
+        return;
+    }
+    if (!(s_rotFast = tagpu_detour_stub()) || !(s_rotOrig = tagpu_detour_stub()) ||
+        !(s_rotCode = tagpu_detour_stub())) {
+        tagpu_detour_stub_free(s_rotFast); tagpu_detour_stub_free(s_rotOrig); tagpu_detour_stub_free(s_rotCode);
+        s_rotFast = s_rotOrig = s_rotCode = NULL;
+        tagpu_log("fprot: NOT installed: no stub memory");
+        return;
+    }
+    /* The table is made under this thread's control word at install; a call under another word
+       takes the engine's code. The word is read by a three-instruction routine after the builder
+       (mov eax,[esp+4]; fnstcw [eax]; ret), the builder being 57 bytes. */
+    rot_emit_build(s_rotCode);
+    {
+        static const unsigned char rd[] = { 0x8B,0x44,0x24,0x04,0xD9,0x38,0xC3 };
+        memcpy(s_rotCode + 0x60, rd, sizeof rd);
+        cw = 0;
+        ((void (__cdecl*)(uint16_t*))(void*)(s_rotCode + 0x60))(&cw);
+    }
+    s_rotCw = cw;
+    if (!rot_build_everywhere()) {
+        tagpu_detour_stub_free(s_rotFast); tagpu_detour_stub_free(s_rotOrig); tagpu_detour_stub_free(s_rotCode);
+        s_rotFast = s_rotOrig = s_rotCode = NULL;
+        return;
+    }
+    rot_emit(s_rotFast, verify ? &s_rotDiag.table : NULL);
+    rot_emit_orig(s_rotOrig);
+    if (verify) rot_emit_verify(s_rotCode);
+    {
+        const unsigned target = (unsigned)(uintptr_t)(verify ? s_rotCode : s_rotFast);
+        const unsigned rel = target - (ROT_VA + 5u);     /* against the site, not this buffer */
+        jmp[0] = 0xE9;
+        memcpy(jmp + 1, &rel, 4);
+    }
+    if (!tagpu_detour_write(ROT_VA, jmp, 5)) {
+        tagpu_log("fprot: NOT installed: 0x4B7173 could not be written");
+        return;
+    }
+    tagpu_logf("fprot: installed: the piece rotation 0x4B7173 from a table under control word 0x%04X%s",
+              s_rotCw, verify ? " (tagpu_fpverify.on: both run, differences counted)" : "");
+}
+
+
+/* HYPOT WITH ONE MODE SWITCH EACH WAY (research/notes/engine/cob.md, 0x4FB440). The CRT's _hypot
+   0x4FB440 calls _hypothlp 0x4FB480(x, y, 0x18), which sets the x87 control word to 0x133F (64-bit
+   significand, round to nearest; _ctrlfp 0x4EC4C0 at 0x4FB491), takes |x| and |y| and M, the larger
+   (ties take x; 0x4FB4CB..0x4FB52A), then x/M and y/M each stored to a double (0x4FB55B..0x4FB577),
+   their squares' sum stored (0x4FB57B..0x4FB58D), its root through the CRT's sqrt 0x4FB7B4 (fsqrt
+   under 0x37F, the same precision and rounding) stored, and the product of that root's and M's
+   significands stored (0x4FB5B0, 0x4FB5B7) with the exponents added back exactly (0x4EC290,
+   0x4EC250); when the caller's word masks the precision exception (0x4FB68A) it restores that word
+   and returns the stored double (0x4FB695..0x4FB6A8). Under the game's 0x27F that is four or five
+   fldcw a call: the set, sqrt's switch to 0x37F and back (and _87except's when the sticky inexact
+   flag is set, 0x4EC947), and the restore.
+   THE INVARIANT: the result is, bit for bit, the engine's. hyp_core runs the same operations in the
+   same order on the same values under 0x133F, one fldcw each way: each fdiv, fmul, faddp and fsqrt
+   rounds to the 64-bit significand and each store to a double, as the engine's do -- IEEE basic
+   operations, the same bits on every x87 at one control word. The last step multiplies the root by
+   M where the engine multiplies their significands and sets the exponent: scaling by a power of two
+   changes no rounding while the result is a normal double, which M within 2^-1000..2^1000 and a root
+   in [1, 2) guarantee. Every other input -- both zero, a NaN or infinity, M outside that range, a caller
+   whose word unmasks any exception (the engine's -fpufussy does, 0x4DF1B1) -- goes to the engine's
+   0x4FB480. The sticky exception flags may then differ from the engine's, whose sqrt can take the
+   CRT's report path: nothing reads them for a value. Of the exe's 314 status-word reads, 282 test
+   condition codes and the rest the stack top, C0, fprem's condition codes, or the precision flag and
+   _statfp 0x4EC490 inside the CRT's report path, which choose how a result is reported and not the
+   result (DISASSEMBLED).
+   `tagpu_fpverify.on` at launch runs both on every call and counts the results that differ. */
+#define HYP_VA      0x004FB440u
+#define HYP_HELP_VA 0x004FB480u
+static const unsigned char HYP_BYTES[] = { 0x8B,0x44,0x24,0x10,0x8B,0x4C,0x24,0x0C,0x8B,0x54,0x24,0x08,0x6A,0x18,
+                                           0x50,0x8B,0x44,0x24,0x0C,0x51,0x52,0x50,0xE8,0x25,0x00,0x00,0x00,
+                                           0x83,0xC4,0x14,0xC3 };
+static unsigned char* s_hypCode;        /* hyp_core, then the control-word reader at +0x60 */
+SIM_CODE(s_hypCode);
+static struct { volatile LONG calls, fast, differ; } s_hypDiag;
+SIM_VAR(s_hypDiag, SIM_PRIVATE);
+
+/* The two doubles travel as their bits: the engine's _hypot moves them with integer moves, and a
+   copy through the x87 would quiet a signalling NaN on its way to 0x4FB480. The stack layout and
+   the result in st(0) are the same as for (double, double). */
+typedef double (__cdecl *HypHelp)(uint64_t x, uint64_t y, int op);
+
+/* hyp_core, cdecl (const double in[3] = {|x|, |y|, M}, double out[5], const uint16_t* cw):
+     push ebp; mov ebp,esp; push ecx; fnstcw [ebp-4]; mov eax,[ebp+0x10]; fldcw [eax]
+     mov eax,[ebp+8]; mov ecx,[ebp+0xC]
+     fld [eax]; fdiv [eax+16]; fstp [ecx]           x/M
+     fld [eax+8]; fdiv [eax+16]; fstp [ecx+8]       y/M
+     fld [ecx]; fmul [ecx]; fld [ecx+8]; fmul [ecx+8]; faddp st(1),st; fstp [ecx+16]
+     fld [ecx+16]; fsqrt; fstp [ecx+24]
+     fld [ecx+24]; fmul [eax+16]; fstp [ecx+32]
+     fldcw [ebp-4]; pop ecx; leave; ret */
+static const unsigned char HYP_CORE[] = {
+    0x55,0x8B,0xEC,0x51,0xD9,0x7D,0xFC,0x8B,0x45,0x10,0xD9,0x28,0x8B,0x45,0x08,0x8B,0x4D,0x0C,
+    0xDD,0x00,0xDC,0x70,0x10,0xDD,0x19,
+    0xDD,0x40,0x08,0xDC,0x70,0x10,0xDD,0x59,0x08,
+    0xDD,0x01,0xDC,0x09,0xDD,0x41,0x08,0xDC,0x49,0x08,0xDE,0xC1,0xDD,0x59,0x10,
+    0xDD,0x41,0x10,0xD9,0xFA,0xDD,0x59,0x18,
+    0xDD,0x41,0x18,0xDC,0x48,0x10,0xDD,0x59,0x20,
+    0xD9,0x6D,0xFC,0x59,0xC9,0xC3 };
+/* push ecx; fnstcw [esp]; pop eax; movzx eax,ax; ret */
+static const unsigned char HYP_CW[] = { 0x51,0xD9,0x3C,0x24,0x58,0x0F,0xB7,0xC0,0xC3 };
+
+static uint64_t hyp_bits(double d) { uint64_t b; memcpy(&b, &d, sizeof b); return b; }
+
+/* 1 and *out when the input is one hyp_core computes as the engine does */
+static int hyp_fast(uint64_t x, uint64_t y, double* out)
+{
+    static const uint16_t cw133f = 0x133F;
+    const uint64_t bx = x & 0x7FFFFFFFFFFFFFFFull, by = y & 0x7FFFFFFFFFFFFFFFull;
+    double in[3], tmp[5];
+    uint64_t bm;
+    unsigned em;
+    if ((((unsigned (__cdecl*)(void))(void*)(s_hypCode + 0x60))() & 0x3F) != 0x3F) return 0;
+    if ((bx >> 52) == 0x7FF || (by >> 52) == 0x7FF) return 0;
+    memcpy(&in[0], &bx, 8);
+    memcpy(&in[1], &by, 8);
+    /* the engine's compare: M is |y| when |y| > |x|, else |x| (finite doubles order as their bits) */
+    bm = by > bx ? by : bx;
+    em = (unsigned)(bm >> 52);
+    if (em < 0x3FFu - 1000u || em >= 0x3FFu + 1000u) return 0;    /* 2^-1000 <= M < 2^1000 */
+    memcpy(&in[2], &bm, 8);
+    ((void (__cdecl*)(const double*, double*, const uint16_t*))(void*)s_hypCode)(in, tmp, &cw133f);
+    *out = tmp[4];
+    return 1;
+}
+
+static double __cdecl hyp_hook(uint64_t x, uint64_t y)
+{
+    double mine, theirs;
+    LONG n;
+    if (!s_fpVerify) {
+        if (hyp_fast(x, y, &mine)) return mine;
+        return ((HypHelp)HYP_HELP_VA)(x, y, 0x18);
+    }
+    n = InterlockedIncrement(&s_hypDiag.calls);
+    theirs = ((HypHelp)HYP_HELP_VA)(x, y, 0x18);
+    if (hyp_fast(x, y, &mine)) {
+        InterlockedIncrement(&s_hypDiag.fast);
+        if (hyp_bits(mine) != hyp_bits(theirs) && InterlockedIncrement(&s_hypDiag.differ) == 1)
+        {
+            double dx, dy;
+            memcpy(&dx, &x, 8);
+            memcpy(&dy, &y, 8);
+            tagpu_logf("fphyp: DIFFER: hypot(%.17g, %.17g) = %.17g here, %.17g from the engine",
+                       dx, dy, mine, theirs);
+        }
+    }
+    if (n >= 0x10000 && !(n & (n - 1)))
+        tagpu_logf("fphyp: %ld calls, %ld fast, %ld differ", n, s_hypDiag.fast, s_hypDiag.differ);
+    return theirs;
+}
+
+static void hyp_install(void)
+{
+    unsigned char jmp[5];
+    unsigned rel;
+    if (!tagpu_detour_bytes_ok(HYP_VA, HYP_BYTES, (int)sizeof HYP_BYTES)) {
+        tagpu_log("fphyp: NOT installed: 0x4FB440 is not the retail _hypot");
+        return;
+    }
+    if (!(s_hypCode = tagpu_detour_stub())) {
+        tagpu_log("fphyp: NOT installed: no stub memory");
+        return;
+    }
+    memcpy(s_hypCode, HYP_CORE, sizeof HYP_CORE);
+    memcpy(s_hypCode + 0x60, HYP_CW, sizeof HYP_CW);
+    rel = (unsigned)(uintptr_t)hyp_hook - (HYP_VA + 5u);    /* against the site */
+    jmp[0] = 0xE9;
+    memcpy(jmp + 1, &rel, 4);
+    if (!tagpu_detour_write(HYP_VA, jmp, 5)) {
+        tagpu_log("fphyp: NOT installed: 0x4FB440 could not be written");
+        return;
+    }
+    tagpu_logf("fphyp: installed: _hypot 0x4FB440 under one control-word switch%s",
+              s_fpVerify ? " (tagpu_fpverify.on: both run, differences counted)" : "");
 }

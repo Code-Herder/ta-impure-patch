@@ -172,6 +172,37 @@ counters** (DISASSEMBLED inventory; MEASURED by the two sums, in which nothing e
 DirectPlay and DirectSound threads write [INFERRED: nothing of TotalA's, which hands them no buffer of
 its images].
 
+### The x87 control word, and the CRT's `_ctrlfp` `0x4EC4C0` [DISASSEMBLED 2026-11-21; MEASURED 2026-11-21]
+
+**The word play runs under is the CRT's, set once.** The CRT's start calls `0x4EA5B0`
+(`0x4E432F`), which is `_controlfp(0x10000, 0x30000)` (`_PC_53`, `_MCW_PC`; the public `_controlfp`
+is `0x4E8CE0`), then `fnclex` (`0x4E4334`). The engine's own code holds no `fldcw`, `fnstcw` or
+`fninit` (the one match below `0x4E0000`, `0x40425C`, is a jump table read as code); its other
+`_controlfp` calls change only the invalid and zero-divide masks (`0x18`): three around what looks
+like a DirectSound buffer's creation (`0x4CF3F3`, `0x4CF401`, `0x4CF423`) [INFERRED], and the
+`-fpufussy` switch's two (`0x4DF1B1` unmasks them when the byte `0x5292BC` is set, `0x4DF1BC` masks
+them). `_ftol` `0x4E43A0` switches to truncation only around its `fistp`. MEASURED: `0x027F` at
+Impure's attach, and on the game thread at every call of the rotator in the 13.5k battle up to its last summary: of the first
+268 435 456 (2^28) calls, 163 405 054 of angle 0 and the other 105 030 402 all under the word the table was built under.
+
+**`0x4EC4C0` is the CRT's internal `_ctrlfp(new, mask)`**: `fstcw`, merge, `fldcw`, return the old
+word. Its 23 call sites are all in the CRT: `floor` `0x4E5050` (`0x173F`, round down, read from
+`0x50DED0`; `0x4E5061`, `0x4E50B7`, `0x4E5116`), `_hypothlp` `0x4FB480` (`0x133F`; `0x4FB491`,
+`0x4FB545`, `0x4FB695`, `0x4FB766`, [cob](cob.md), `0x4FB440`), `_logb` `0x4F5B60`, `_nextafter`
+`0x4F5C80` and `ldexp` `0x4F9420` (each `0x133F`; nothing calls, jumps to or stores a pointer to the
+first two, and `ldexp`'s one caller is `_scalb` `0x4F5B40`, which nothing reaches), and the error paths that restore a saved word: `_handle_qnan1` (`0x4EB853`),
+`_handle_qnan2` (`0x4EB8C3`), `_except1` (`0x4EB98A`), `_except2` (`0x4EBA77`), `_umatherr`
+(`0x4EC15B`, `0x4EC190`) and `_87except` `0x4F59C0` (`0x4F5A56`). The names are MSVC's [INFERRED
+from the code's shape].
+
+**Nothing in the engine reads a sticky exception flag for a value.** Of the exe's 314 status-word
+reads, 282 test condition codes (`test ah`/`sahf`); the rest test the stack top (`and eax,0x3800`,
+`0x4F521D..0x4F53D9`), C0 (`0x4F558A`, `0x4F5842`), `fprem`'s condition codes (`and eax,0x4300`,
+`0x4F561B`, `0x4F58D3`), the precision flag at the `_CI*` exits (`0x4ECA4B`, `0x4ECAA4`), which
+chooses the report path and not the result, and `_statfp` `0x4EC490`, read only by the CRT's
+exception record (`0x4EBB8B`); `_statusfp` `0x4E8C60` has no caller. This is what lets a replacement
+that skips an instruction (an `fsincos`, the report path) leave other flags than the engine's.
+
 ### The in-play publish point, the loader thread and the load flags `main+0x38D75` [VERIFIED by disassembly 2026-09-12; the order MEASURED the same day]
 
 [This project — `objdump -d -M intel` of the pristine build for every reference to
