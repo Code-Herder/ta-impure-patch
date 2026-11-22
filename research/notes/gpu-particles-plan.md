@@ -190,7 +190,34 @@ Vulkan in the event.
      `nano-factory` at 1×: the spray at the same places on both.
      The battle at 1080p, two runs each: `particles` 3.46/3.92 → 2.01/2.01 ms a frame, `publish`
      2.82/3.03 → 2.47/2.49, `gather` 5.94/5.52 → 5.70/5.62 ([effects](effects.md) §7.8).
-3. **Fire and the flare.** Check: the oracle; a teleport and a burning-debris scene against GDI.
+3. **Fire and the flare.** *Landed locally 2026-11-22.* Check: the oracle; a teleport and a
+   burning-debris scene against GDI.
+   - **What it built** ([effects](effects.md) §7.8): the event's class field and its sprite
+     layout, `tagpu_pevt_sprite_at`/`_finish` in C and GLSL; the flare sequence's frames in the
+     packet, put through the effects atlas by the render thread into a 64-row table the vertex
+     stage indexes; one program for the three classes (the class bits pick the closed form); the
+     oracle extended to fire and the flare, pairing by seed.
+   - **The layer cap, exact by construction: a proxy object.** Fire and the flare share layers 5, 7
+     and 9 with classes still drawn from the engine's objects, and the engine trims the oldest of a
+     layer whatever its class. So these two classes keep their pool object: the class's init
+     (`0x4742C0`, `0x4736E0`) is hooked and turns it into a proxy with no particle that the emitter
+     trims and appends as stock, the walker destroys at the walk of D (its slot 3), and whose
+     destroy removes its event. The layer's count and order, the pool's count and the stock build's
+     pool fullness are the engine's. Landing 6, which empties the pool, must move them to nano's
+     no-object path, with event-only counting, once no engine class is left in their layers.
+   - **Learned**: the flare makes its second particle with 9 steps, not 10 (the walk of T + 10
+     destroys the object only when particle 0, removed by the update past T + steps, is gone by the
+     walk of T + 9). The pieces' fire is emitted from the explosion draw, after its tick's walk:
+     `LATE` covers it with no special case. COB fire in stock content is the Atlas's and the
+     Valkyrie's `ProcessFlames` (`EMIT_SFX` 0); the 13 500-unit battle has none.
+   - **MEASURED**: the oracle in the 13 500-unit battle, GameTime 1 to 2 885: 1 066 702 fire and
+     118 192 278 nano particles, 0 differing, 0 missing, extra or trimmed; `nano-factory` with eight
+     Atlases flying, across a live rewind, 3 139 ticks: 15 522 fire (COB, layer 7) and 466 122 nano
+     particles, 0 differing; `replay-teleport`, eighteen teleports of four riders, 3 684 ticks:
+     35 008 flare particles, 0 differing. `tareplay.py run battle teleport --cover` passes (184 checks). Against GDI, fire and the flare
+     at GDI's places and frames, in the restored twin's colour as before. Battle13k, two runs each:
+     particles 2.27/1.84 → 1.99/2.10 ms, publish 2.55/2.35 → 2.36/2.41, gather median 4.39/3.78 →
+     4.76/4.74 (open: noise or a cost, below).
 4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
    shore and submarines against GDI.
 5. **Smoke1 and Smoke2,** with the wind table and the countdowns. Check: the oracle; feature smoke, impact
@@ -205,13 +232,23 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 ## Open
 
 - **The layer cap's count of events is exact only while nano shares its layer with nothing.** Every
-  caller files nano in layer 6 and no other emitter does; fire shares layers 7 and 9 with smoke, so
-  landing 3's trim must count the events and the engine's objects of a layer together until every
-  class of that layer is drawn from events.
+  caller files nano in layer 6 and no other emitter does. Fire and the flare, which share layers 5, 7
+  and 9 with smoke and bubbles, keep a proxy object in the engine's layer since landing 3, so the
+  engine counts and trims them itself; landings 4 and 5 can give wake, bubbles and smoke the same
+  proxy, and landing 6 retires the proxies with the pool.
 - **The shared pool no longer holds nano on Vulkan.** The stock build's pool of 1 000 objects counted
   nano with every other class; with nano as events, a pool that was full in stock has room for
   another class's object, and a nano emission is never refused for a full pool. Presentation only
   (no simulation value reads a particle since landing 1), and gone once every class is an event.
+  Fire's and the flare's proxies take their pool slots as the real objects did.
+- **The gather's median rose 0.4 to 1 ms in landing 3's battle13k runs** (4.39/3.78 → 4.76/4.74);
+  the base's own two runs differ by 0.6 ms, and the landing's additions to the gather (64 frame
+  lookups, the event copy) are microseconds. A third pair, or a timer around `tagpu_fx_set_events`,
+  settles it.
+- **The blend order inside a layer run** is the events' emission order after every gathered object
+  of the run (0..6 or 7..9), not the engine's layer-then-vector order: a fire sprite draws over the
+  layer-9 smoke beside it whatever their ages ([effects](effects.md) §7.8). It goes when smoke is
+  an event too (landing 5), if the events are then drawn in layer order.
 - **An event is culled by its box, not each particle by its own**: one particle's quad can be
   computed for nothing, never one missed (the box holds both ends and a step's slack).
 - **A frame whose packet carries no fog source** (a copy that failed) draws the event dots without the

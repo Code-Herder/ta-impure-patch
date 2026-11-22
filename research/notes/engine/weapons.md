@@ -25,7 +25,7 @@ nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is em
 (`0x472126`). The object's vtable is `0x4FD5B8`. Its init, slot `+0x18` = `0x473B50`, copies the
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
 (`0x473D50`, called at `0x473D39`). The spawn's six draws a particle were the CRT's `rand 0x4E4870`
-in stock; under Impure they come from the particles' own keyed rule ([effects](../effects.html) §7.7),
+in stock; under Impure they come from the particles' own keyed rule ([effects](../effects.md) §7.7),
 never from a CRT stream or the sim RNG `0x4B6C30`, so an emission writes no simulation state and
 moves no stream a meteor shower or a start reads ([sim](sim.md), *The two random streams*). **The
 emitters' alloc and their frame** [DISASSEMBLED 2026-11-22]: the pool alloc is called at
@@ -38,7 +38,7 @@ word at `+0x34` (read `movsx` at `0x47217C`, unbounded), and the degenerate box 
 (`0x4720E1..0x472108`; `0x472211..0x472238`). The forward emitter inits box1 = that box, box2 = its
 box argument (`0x472169..0x472179`); the reverse box1 = its box argument, box2 = that box
 (`0x472299..0x4722A9`). On a Vulkan launch Impure answers NULL here and records an emitter event
-instead ([effects](../effects.html) §7.8). `0x4732E0` appends the object to the
+instead ([effects](../effects.md) §7.8). `0x4732E0` appends the object to the
 layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
 emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
 limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
@@ -454,6 +454,83 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   231, 127), (131, 211, 91), (103, 191, 63), (75, 171, 43), (67, 151, 43), (55, 135, 39), (47, 119,
   27), a light-to-dark green ramp. Whether the palette in play equals the file at those indices was
   not checked.
+
+### Fire and the teleport flare: emitters, inits, spawns, updates, draws [DISASSEMBLED 2026-11-22]
+
+Two particle classes drawn as sprites of the flare sequence `*(main+0x147F3)`: fire (vtable
+`0x4FD5D8`, sub-particle stride `0x3C`) and the teleport flare (`0x4FD588`, stride `0x34`). The
+slots in order: destroy, update, draw, empty?, spawn, again?, init ([effects](../effects.md) §7.2).
+
+- **The emitters**, stdcall, each `push ebx; push ebp; push esi; push edi` and the SFX test
+  `0x51E608` before `push 0x44; call 0x470EB0`: the flare's `0x471FD0(from, to, life, layer)` `ret
+  0x10` (the alloc at `0x471FF5`), COB fire's `0x472330(from, to, period, life, layer)` `ret 0x14`
+  (`0x472355`), and the flying pieces' fire `0x472AB0(pos, layer)` `ret 8` (`0x472B7A`), which
+  first copies the point into a local L (`sub esp,0xC`, `0x472AB3..0x472ACB`) and jitters it with
+  its four draws. From the alloc's return to the init's call (`0x471FFA..0x47204D`,
+  `0x47235A..0x4723B2`, `0x472B7F..0x472BCE`) each skips everything on NULL, zeroes `0x11` dwords,
+  stores 0 at `+4`, **the layer argument's low byte at `+0xC`** (`0x472018`, `0x472378`,
+  `0x472B9D`), 0 at `+0x10..+0x18` and the class's vtable, and calls the init through slot 6
+  (`call [edx+0x18]` at `0x47204B`, `0x4723B0`; `call [eax+0x18]` at `0x472BCC`) with (from, to,
+  life), (from, to, period, life) and (&L, &L, 1, life), pushed last argument first from `0x472042`,
+  `0x4723A2` and `0x472BBD` (`push ebp`, the life) — the pieces' life in ebp, `rand·3/0x8000 +
+  1` (`0x472B5D`, `0x472B64`). Then the layer's cap (`0x472071`, `0x4723D6`, `0x472BF2`: past it the
+  front object's slot 0 with 1, the rest shifted down) and the append `0x4732E0`.
+- **Fire's init `0x4742C0(from, to, period, life)`**, thiscall `ret 0x10`: `0x471D70(this, life)`
+  (`0x4742CB`), so `+4` = T + life; `+0x1C` period (`0x4742D8`); `+0x20` from, `+0x2C` to, `+0x38` d = to − from;
+  q = the low dword, sign-extended, of `_alldiv 0x4E4440`(2^32, (int64)(life << 16))
+  (`0x47432C..0x47433E`); each axis's step = the low dword of `_allshr 0x4E43D0`(`_allmul
+  0x4E4400`(d, q), 16) (`0x474340..0x47438B`), over `+0x38..+0x40`; the spawn through slot 4
+  (`0x474392`). A life of 0 divides by zero; every caller passes 1 or more (COB 6 and 7, the pieces
+  1..3).
+- **Fire's spawn `0x4743A0`**: reserves room for (`+4` − T + 1) records (`MEM_Alloc 0x4B4F10`,
+  the old ones copied, `0x4B4F20`), builds one record — `+0` the flare sequence, `+4` pos = from,
+  `+0x10` to, `+0x1C` step, `+0x28` the sequence's count − 1 (`0x4B7F60`, `0x474537..0x474544`),
+  `+0x2C` frame 0, `+0x30` counter 0, `+0x34` period, `+0x38` end = the object's `+4` (`0x47454A`) — appends it
+  (`0x475BD0` at `0x474556`) and sets `+8` = T + 1 (`0x47456A..0x474571`). No draw.
+- **Fire's again `0x4730C0`**: `+8 <= +4` (signed, `jg` at `0x4730C8`) and `+8 <= T` (unsigned,
+  `ja` at `0x4730D6`). So a particle a tick, from the spawns of T + 1 … T + life: life + 1 in all.
+- **Fire's update `0x473010`** (slot 1): for each record, the move `0x474130` (`0x473030`), then
+  the death test `0x4742A0`(T) (`0x473043`: `T > +0x38`, signed `setg`); a dead record is removed
+  by shifting the rest down `0xF` dwords at a time (`0x473055..0x473069`); after the walk, again →
+  spawn (`0x47309C..0x4730A8`). **The move `0x474130`**: pos += step on each axis; counter =
+  (counter + 1) % period (`idiv [+0x34]`, `0x474156`); at 0, frame = (frame + 1) % count−1
+  (`idiv [+0x28]`, `0x474165`). **Empty `0x473130`** (slot 3): no record ((end − begin) / `0x3C`
+  by `0x88888889`). **The draw** (slot 2) `0x4730F0(ctx)` `ret 4` calls the leaf `0x474170(ctx,
+  eyeX, eyeY)` per record with the words `main+0x1431F`, `main+0x14323` (`0x47311B`); the leaf
+  projects and tests sight as the nano's `0x473A00` does, then `0x4B8500(ctx, 0x4B7F30(seq, frame),
+  sx, sy)` (`0x474286..0x474291`). **Destroy** (slot 0) `0x4716A0(flags)` `ret 4`: `MEM_Free [+0x10]`
+  (`0x4716AC`), `+0x10..+0x18` zeroed, the base vtable `0x4FD5A8`, and with flag 1 `0x470ED0(0x51E610,
+  this)` back to the pool.
+- **The flare's init `0x4736E0(from, to, life)`**, thiscall `ret 0xC`: `+4` = T + life; `+0x20`
+  from, `+0x2C` to, `+0x38` d; the length `_ftol 0x4E43A0`(√(dx² + dalt² + dy²)) by the x87
+  (`0x473744..0x47375E`, the nano spawn's sequence), `cdq`, `_allshl 0x4E44F0` by 16, `_alldiv` by
+  `0x50000`; the step count is the int16 at `[esp+0x1A]`, the quotient's high word (`0x473788`),
+  stored at `+0x1C` (`0x473790`); each axis's step d / count by `idiv` (`0x47378E`, `0x473799`,
+  `0x4737A2`, the last stored at `0x4737A8`); the spawn through slot 4 (`0x4737AB`). (A count of 0 divides by zero: *the particle
+  pool* below.)
+- **The flare's spawn `0x4737C0`**: reserves ((`+4` − T) + 10) / 10 records (`0x4737C3..0x4737EE`),
+  builds one — `+0` the sequence, `+4` from, `+0x10` to, `+0x1C` step, `+0x28` count − 1, `+0x2C`
+  frame = rand · (count − 1) / `0x8000` (`0x47395F..0x473971`; the product at `0x473964`), `+0x30` end = T + the step count
+  (`0x473937..0x473940`) — appends it (`0x4758C0` at `0x473987`) and sets `+8` = T + 10
+  (`0x473999..0x4739A4`). **Again `0x472E00`** is fire's test. **Update `0x472D50`**: fire's shape
+  with the move `0x473560` (`0x472D70`; pos += step; frame = (frame + 1) % count−1, `0x473586`), the death
+  `0x4736C0` (`0x472D83`; `T > +0x30`, signed) and stride `0x34` (`0xD` dwords). **Empty `0x472E70`** ((end −
+  begin) / `0x34` by `0x4EC4EC4F`), **draw** `0x472E30` → leaf `0x473590`, which draws the
+  frame `0x4B7F30(seq, frame)` at `0x4736A6`, **destroy** `0x471430`
+  (fire's, with `MEM_Free [+0x10]` at `0x47143C`).
+- **What an emission makes**, from these and the walker (LIVE-VERIFIED 2026-11-22 by Impure's oracle,
+  [effects](../effects.md) §7.8): fire's particle k is spawned by the update of T + k, k = 0 …
+  life (particle 0 by the init); every one ends at T + life and is removed by the update of T +
+  life + 1; the object is destroyed by the walk of T + life + 2. The flare's particle k is spawned
+  by the update of T + 10k while 10k ≤ life — but the walk of T + 10k first destroys an object with
+  no record, so particle k exists only when particle k − 1, born at T + 10(k − 1) and removed by the
+  update past its end, is alive after the walk of T + 10k − 1: a step count of **9 or more**. The
+  teleport's life is 30, so up to four, ten ticks apart; a shorter jump makes one. Each record moves
+  from the update after its birth (particle 0 from the update of T, or of T + 1 when emitted after
+  that tick's walk, as the pieces' fire is from the explosion draw).
+- **Impure**: on a Vulkan launch both inits' entries are hooked and turn the object into a proxy
+  that holds the emission's place in its layer and pool ([effects](../effects.md) §7.8, [hook
+  map](../modules/hook-map.md)).
 
 ### The projectile tick's steps: a burst parent, guidance, steer and the wind [DISASSEMBLED 2026-11-12]
 
@@ -1825,7 +1902,7 @@ operands are patched with the rest.
 **Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
 emitter range `0x470F00..0x472F00` never draws the simulation's generator; its random values,
 the C runtime's `rand` (`0x4E4870`) in stock, come from Impure's keyed particle rule
-([effects](../effects.html) §7.7).
+([effects](../effects.md) §7.7).
 
 - **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
   `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
@@ -1884,13 +1961,13 @@ the C runtime's `rand` (`0x4E4870`) in stock, come from Impure's keyed particle 
   to the epilogue, so the init spawns nothing and the walk destroys the empty object
   ([engine patches](../modules/engine-patches.md), *two particle divides*).
 - **The particle code draws the C runtime's per-thread `rand` at twenty sites** in stock
-  ([effects](../effects.html) §7.3–§7.4, and the feature tick's two, `0x424345`, `0x424379`): the
+  ([effects](../effects.md) §7.3–§7.4, and the feature tick's two, `0x424345`, `0x424379`): the
   fire emitter's `0x472ACF`, `0x472AF4`, `0x472B17`, `0x472B3A`; the flare spawn's `0x47395F`; the
   nano spawn's six `0x473DAD`, `0x473DCA`, `0x473DE7`, `0x473E04`, `0x473E21`, `0x473E3E`; the
   wake spawn's three `0x4749D9`, `0x474A00`, `0x474A27`; the smoke spawns' `0x474F1C`, `0x4752D4`;
   the smoke updates' `0x4753B9`, `0x475679`. Their game-thread stream is the meteor shower's and
   their loader-thread stream the skirmish start positions' ([sim](sim.md), *The two random
-  streams*). **Impure** redirects all twenty to its own keyed rule ([effects](../effects.html) §7.7),
+  streams*). **Impure** redirects all twenty to its own keyed rule ([effects](../effects.md) §7.7),
   counting emissions at the alloc `0x470EB0`, whose body it runs through a trampoline back to
   `0x470EB7`, and indexing its seed table by pool slot from the block vector's begin and end
   `0x51E618`/`0x51E61C` and the capacity `0x51E62C`, all written once by the constructor. Nothing
