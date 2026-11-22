@@ -12495,8 +12495,10 @@ static void patch_loader_defects(void)
     int pdiv = fix_particle_divides();
     tagpu_logf("enginefix: the particles draw by their own rule, not the CRT's rand (0x470EB0 "
                "0x4918B1 and twenty draws 0x424345..0x475679) %s; a flare or a wake whose divisor "
-               "is zero makes no particle (0x473788 0x47480A) %s", fix_state(prnd),
-               fix_state(pdiv));
+               "is zero makes no particle (0x473788 0x47480A) %s. Counters: this level's values "
+               "drawn by the rule, emissions and objects outside the pool at 0x%08X 0x%08X 0x%08X",
+               fix_state(prnd), fix_state(pdiv), (unsigned int)(size_t)&s_prand.draws,
+               (unsigned int)(size_t)&s_prand.emissions, (unsigned int)(size_t)&s_prand.outside);
     tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
                "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
                s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
