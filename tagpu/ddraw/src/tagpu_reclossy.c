@@ -114,9 +114,10 @@
    WHAT IS NOT KEPT, a loosening the owner approved on 2026-10-11 (OD5): the order of the sprays
    inside one iteration -- an implied spray comes after the iteration's events, slots ascending.
    The emissions are the same sprays at the same points in the same iteration, and the emitters
-   0x4720D0 and 0x472200 change no simulation state: their spawn 0x473D50 draws only the C
-   runtime's rand 0x4E4870, which a playing does not reproduce in any order (tagpu_replay.c, THE
-   TURBO). What the order decides is, first, their particles' order in the layer's vector: the
+   0x4720D0 and 0x472200 change no simulation state: their spawn 0x473D50 draws only the
+   particles' own keyed rule (tagpu_patches.c, *The particles' own random rule*; effects.md 7.7),
+   keyed by the emission's place among its GameTime's emissions, so a playing's order gives its
+   particles other values and nothing else. What the order decides is, first, their particles' order in the layer's vector: the
    order they are drawn in and, past the layer's cap (0x190 in stock), the order they are
    destroyed in (each emitter destroys the vector's front and shifts it down before it appends,
    the trim 0x47219F..0x4721DA and 0x4722CF..0x47230A); and second, when the particle pool

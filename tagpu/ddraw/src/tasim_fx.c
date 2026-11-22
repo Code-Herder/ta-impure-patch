@@ -42,7 +42,8 @@ static uint32_t spray_key(const char* id, int nemit)
     return mix32(h + (uint32_t)nemit * 0x9E3779B9u);
 }
 
-/* THE WIKI'S GENERATOR, in place of the CRT rand 0x4E4870 the spawn draws from: draw k (0..5) of
+/* THE WIKI'S GENERATOR, in place of the draws the spawn makes (the particles' keyed rule in the
+   game, tagpu_prand.h; the CRT rand 0x4E4870 in stock): draw k (0..5) of
    particle i of the burst made on `tick`, 0..0x7FFF as rand's */
 static int32_t spray_draw(uint32_t key, int tick, int i, int k)
 {

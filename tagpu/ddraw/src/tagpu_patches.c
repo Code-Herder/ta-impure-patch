@@ -2015,9 +2015,9 @@ SIM_FEATURE(debris_emission, SIM_PUPPET_INDEPENDENT, "battle");
    nothing; a frame that ran k ticks emits once, as it did in stock; a load or a replay seek that
    moves GameTime emits once. THE STUBS TAIL-JUMP: the emitters see their stock return addresses
    (0x421588, 0x4215AF) and the explosion draw its stock one, so the recorder's sink keys
-   (replay-absent.tsv) are unchanged. Visual only: the emitters draw the C runtime's rand, never
-   the simulation's, and the particle pool is a presentation row (replay-globals.tsv,
-   particlepool). Both latch words are SIM_PRIVATE on that ground: written and read by the
+   (replay-absent.tsv) are unchanged. Visual only: the emitters draw the particles' own keyed rule
+   (*The particles' own random rule*; effects.md 7.7), never a CRT stream or the simulation's,
+   and the particle pool is a presentation row (replay-globals.tsv, particlepool). Both latch words are SIM_PRIVATE on that ground: written and read by the
    explosion draw only, never by the simulation -- the same class as tagpu_impai.c's GameTime
    last logged. Game thread only: 0x420B00's callers all run there. */
 static volatile int           s_debrisTick;   /* the GameTime the last explosion draw saw     */
@@ -11649,13 +11649,19 @@ SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport");
      - the PARTICLE is the object's own count of the particles it began: the flare's spawn, the
        nano's and the wake's first draw of a particle advance it, so a nano emission's first burst
        is particles 0..4 and its second 5..9, the wake's two dots 0 and 1, the flare's four 0..3;
-     - a SMOKE PUFF's particle is its spawn's ordinal modulo 256, which the puff itself carries: the
-       spawn writes it into the low bits of the puff's position (x bits 0..2, y bits 0..2, alt bits
-       0..1), which the updates only ever add multiples of 8 (x += wind << 3, y += wind << 3) and of
-       4 (alt += rise << 2, Smoke1's << 4) to, and every copy (the compaction's and the reserve's
-       `rep movs` of 8 dwords) keeps. A smoke record (0x20 bytes) has no other free field. A puff's
-       frame count is draw 0 and each frame advance's countdown draw is the frame it advances to,
-       1 or more.
+     - a SMOKE PUFF's particle is its spawn's ordinal k, the object's spawn count when it spawned.
+       A smoke record (0x20 bytes) has no free field, so the puff carries k's low bits in the low
+       bits of its position: x bits 0..2, y bits 0..2 and alt bits 0..1 (Smoke2, 8 bits) or 0..3
+       (Smoke1, 10 bits), to which the updates only ever add multiples of 8 (x += wind << 3, y +=
+       wind << 3) and of 4 (Smoke2's alt += rise << 2) or 16 (Smoke1's << 4), and which every copy
+       (the compaction's and the reserve's `rep movs` of 8 dwords) keeps. An update's draw takes k
+       back as the newest ordinal the object has spawned, last = next - 1, less (last - low bits)
+       modulo the carrier's span: k itself for a puff fewer than 256 (Smoke2) or 1024 (Smoke1)
+       spawns old. A Smoke2 object spawns at most life / interval + 1 = 61 puffs (the corpse's 900 /
+       15), and a Smoke1 puff that old would have lived 5 120 ticks; whatever the data, the recovered ordinal is that function of the
+       puff's spawn ordinal and the object's spawn count at the draw, both known at the emission's
+       event. A puff's frame count is draw 0 and each frame advance's countdown draw is the frame it
+       advances to, 1 or more.
    THE PICTURE IS STOCK'S: every reader of a position takes its high word (the leaves 0x475700,
    0x475470; the frame packet's gather), and a value under 8 added to a multiple of 8 never crosses
    a multiple of 0x10000, so the high word of each later position is the one the unmarked puff
@@ -11668,7 +11674,10 @@ SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport");
    made of: in a network game the session's GUID and the map, so every peer holds the same; under
    the harness's switch the fixed seed and the map; otherwise the performance counter. A viewer sees
    the emissions its own sight allows (COB's EMIT_SFX tests the viewed player's sight, 0x480EC5),
-   so the particles are a function of the game and the viewer, on GDI and on Vulkan alike.
+   so the emissions of the simulation step are a function of the game and the viewer, on GDI and
+   on Vulkan alike. The flying pieces' smoke and fire are not: the explosion DRAW emits them
+   (0x421583, 0x4215AA), once a frame that ran ticks (fix_debris_emission), so whether they exist,
+   and the ordinal n of every emission after them in their GameTime, also follow the frames drawn.
    THREADS AND ORDER: the loader thread draws only during the level load (the map's endless smoke),
    the game thread only in play; the loader's writes come before its last store, bit 1 of
    main+0x38D75 (0x497C62), which the game thread waits for before its first tick (0x498342).
@@ -11681,9 +11690,10 @@ SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport");
 #define PRAND_POOL      0x0051E610u      /* ParticleBase: +8 its block vector, +0x1C capacity */
 #define PRAND_OBJ       0x4Cu            /* a pool slot's bytes                               */
 #define PRAND_SALT      0x7061727469636C65ull   /* the particles' seed apart from the wind's  */
-#define PRAND_PUFF_KEYS 0xFFu            /* the bits a smoke puff carries                      */
 
 enum { PRK_EMIT, PRK_FLARE, PRK_NANO, PRK_WAKE, PRK_PUFF, PRK_FRAME };
+/* a smoke site's code carries, in place of a draw number, how many alt bits its puff carries */
+enum { PRAND_ALT_SMOKE2 = 2, PRAND_ALT_SMOKE1 = 4 };
 
 typedef struct PrandObj { unsigned seed; unsigned next; } PrandObj;   /* next: particles begun */
 
@@ -11751,7 +11761,8 @@ static void __cdecl prand_alloc(unsigned obj)
     row->next = 0;
 }
 
-/* one draw at a redirected site: `code` is PRK_* << 8 | the draw's number, regs the pushad block */
+/* one draw at a redirected site: `code` is PRK_* << 8 | the draw's number (a smoke site's: its
+   PRAND_ALT_*), regs the pushad block */
 static void __cdecl prand_site(unsigned code, unsigned* regs)
 {
     unsigned kind = code >> 8, draw = code & 0xFFu, particle, seed;
@@ -11768,26 +11779,28 @@ static void __cdecl prand_site(unsigned code, unsigned* regs)
         seed = row->seed;
         if (kind == PRK_FRAME) {
             unsigned char* puff = (unsigned char*)(size_t)regs[PR_EBX];
-            unsigned x, alt, y;
+            unsigned x, alt, y, low, span = 1u << (6 + draw), last = row->next - 1u;
             memcpy(&x, puff + 0x04, 4);
             memcpy(&alt, puff + 0x08, 4);
             memcpy(&y, puff + 0x0C, 4);
-            particle = (x & 7u) | (y & 7u) << 3 | (alt & 3u) << 6;
+            low = (x & 7u) | (y & 7u) << 3 | (alt & (span / 64u - 1u)) << 6;
+            particle = last - ((last - low) & (span - 1u));
             memcpy(&draw, puff + 0x14, 4);
         } else if (kind == PRK_PUFF) {
             /* the caller's frame: esp at the call, past the return address the call pushed */
             unsigned char* local = (unsigned char*)(size_t)(regs[PR_ESP] + 4u + 0x18u);
-            unsigned x, alt, y;
-            particle = row->next++ & PRAND_PUFF_KEYS;
+            unsigned x, alt, y, altmask = (1u << draw) - 1u;
+            particle = row->next++;
             memcpy(&x, local + 0x04, 4);
             memcpy(&alt, local + 0x08, 4);
             memcpy(&y, local + 0x0C, 4);
             x = (x & ~7u) | (particle & 7u);
             y = (y & ~7u) | (particle >> 3 & 7u);
-            alt = (alt & ~3u) | (particle >> 6 & 3u);
+            alt = (alt & ~altmask) | (particle >> 6 & altmask);
             memcpy(local + 0x04, &x, 4);
             memcpy(local + 0x08, &alt, 4);
             memcpy(local + 0x0C, &y, 4);
+            draw = 0;
         } else {
             particle = draw == 0 ? row->next++ : row->next - 1u;
         }
@@ -11849,8 +11862,8 @@ static int fix_particle_rand(void)
         { 0x00473E21, PRK_NANO << 8 | 4 }, { 0x00473E3E, PRK_NANO << 8 | 5 },
         { 0x004749D9, PRK_WAKE << 8 | 0 }, { 0x00474A00, PRK_WAKE << 8 | 1 },
         { 0x00474A27, PRK_WAKE << 8 | 2 },
-        { 0x00474F1C, PRK_PUFF << 8 | 0 }, { 0x004752D4, PRK_PUFF << 8 | 0 },
-        { 0x004753B9, PRK_FRAME << 8 | 0 }, { 0x00475679, PRK_FRAME << 8 | 0 },
+        { 0x00474F1C, PRK_PUFF << 8 | PRAND_ALT_SMOKE2 }, { 0x004752D4, PRK_PUFF << 8 | PRAND_ALT_SMOKE1 },
+        { 0x004753B9, PRK_FRAME << 8 | PRAND_ALT_SMOKE2 }, { 0x00475679, PRK_FRAME << 8 | PRAND_ALT_SMOKE1 },
     };
     static const unsigned char alloc[7] = { 0x8B, 0x51, 0x20, 0x56, 0x8B, 0x71, 0x1C };
     static const unsigned char layers[5] = { 0xE8, 0xDA, 0x04, 0xFE, 0xFF };   /* call 0x471D90 */
@@ -11921,8 +11934,10 @@ static int fix_particle_rand(void)
      at sea level, 0x481102).
    THE FIX tests the divisor first. Zero ends the init where it ends anyway, at its epilogue (the
    flare's pops at 0x4737AE, `ret 0xC`; the wake's at 0x474875, `ret 0x14`), the stack and the x87
-   stack there as at the test: every call between is callee-cleaned (0x471D70 `ret 4`, _allmul and
-   _alldiv `ret 0x10`, _allshr none) and the three `fstp` have emptied the x87 stack. The init then
+   stack there as at the test: every call between is callee-cleaned or takes registers (both: 0x471D70
+   `ret 4` and _ftol 0x4E43A0, which pops the x87 top; the flare: _allshl 0x4E44F0 and _alldiv
+   0x4E4440 `ret 0x10`; the wake: _allmul 0x4E4400 `ret 0x10` and _allshr 0x4E43D0) and the three
+   `fstp` have emptied the x87 stack. The init then
    makes no spawn, so the object holds no particle, and the walk destroys it as empty before it
    updates it (slot 3 first: particle_walk). Nothing else changes: a non-zero divisor runs stock's
    instructions.
@@ -15389,7 +15404,8 @@ static void lim_sites(void)
        0x3E8; ... call 0x470A90`), which allocates its whole capacity once; its alloc 0x470EB0
        returns 0 when the pool is empty and every emitter then skips the particle. DllMain
        runs before that initializer, so the pool is built at the raised capacity. Visual
-       only: the emitters draw the C runtime's rand, never the simulation's generator. */
+       only: the emitters draw the particles' own keyed rule (*The particles' own random rule*;
+       effects.md 7.7), never a CRT stream or the simulation's generator. */
     {
         static const unsigned int cmpEax[19] = {
             0x00471183, 0x004713D8, 0x00471508, 0x0047163D, 0x00471782, 0x004718B1, 0x00471AD7,

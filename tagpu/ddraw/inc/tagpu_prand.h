@@ -10,7 +10,8 @@
    - seed      the emission's: tagpu_prand_seed(level, GameTime, n), n the emission's ordinal
                among the emitter calls of that GameTime (0, 1, 2 ... in call order);
    - particle  the particle's ordinal within its object (TAGPU_PRAND_EMIT for a draw an emitter
-               makes before its object exists; a smoke puff's ordinal modulo 256);
+               makes before its object exists; a smoke puff's spawn ordinal, recovered from
+               the low bits its position carries and the object's spawn count);
    - draw      the draw's number within that particle (a smoke frame advance: the frame number).
 
    32-bit unsigned integer arithmetic only, wrapping, so a GLSL `uint` port computes the same
