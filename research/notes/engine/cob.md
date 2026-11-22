@@ -298,7 +298,7 @@ unconditionally: every new COB object has a start. A type with no script takes `
 stores NULL at `+0x9A` (`0x485DFF`). The vtable holds the VM's engine callbacks (`0x480770` ..
 `0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`: `0x4B06F0` frees the animation
 `+0x14` then the statics `+0x10` (`MEM_Free 0x4D85A0`), and with the flag's bit 0
-(`test byte [esp+8],1` at `0x485E3A`) `push esi; call 0x4B4F20` at `0x485E40` frees the object
+(`test byte [esp+8],1` at `0x485E38`, `je` at `0x485E3D`) `push esi; call 0x4B4F20` at `0x485E40` frees the object
 (`0x4B4F20`, `cdecl`, wraps `0x4D8670`; `add esp,4` at `0x485E45`); it returns the object, `ret 4`.
 The constructor reads the sim rate from `0x4B6330`, which takes no argument and returns
 `[[0x51FBD0]+0xE8]` (`0x4B6330..0x4B633B`, 9 callers). The unit destructor `0x4866D0`

@@ -12480,7 +12480,7 @@ static unsigned __cdecl cob_reloaded_model_check(unsigned* regs)
 }
 
 /* THE BLOCK (research/notes/cob-speed-plan.md, L4). A unit's COB object is a block sized by its
-   program, 64-aligned, from the process heap (whose free lists are kept by size):
+   program, 64-aligned, from the engine's MEM_Alloc 0x4B4F10 as the engine's object was:
      +0x00 the engine's header line: the vtable, the rate +0x04, the script +0x08, its checksum
            +0x0C, the statics +0x10 and animation +0x14 pointers, "something is animating" +0x18
      +0x1C the running count, +0x20 the model pointer -- the offsets the guard's count and model
@@ -12490,7 +12490,9 @@ static unsigned __cdecl cob_reloaded_model_check(unsigned* regs)
      then the ten record headers packed, then ten stacks of the program's proven depth.
    The engine reads the object through those header words and pointers only, and writes its
    records only in the constructor 0x4B0610 (the engine map, cob), whose record loop the block's
-   constructor replaces; the destructor 0x485E30's free at 0x485E40 is the block's. Statics and
+   constructor replaces; the destructor 0x485E30's free at 0x485E40 is the block's, through
+   MEM_Free 0x4B4F20. All of it is memory of the engine's allocator, which the object's life
+   bounds (from 0x485D40 to the unit destructor's delete at 0x486D8A). Statics and
    animation stay the engine's allocations (0x4B0720, freed by 0x4B06F0). With the oracle armed
    (tagpu_cobverify.on) every object keeps the engine's layout, which its interpreter needs. */
 #define COB_BLOCK_COUNT 0x1Cu
@@ -13034,9 +13036,10 @@ SIM_FEATURE(cob_game, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decli
 
 /* THE GAME'S COB INTERPRETER (research/notes/cob-speed-plan.md, L2). The entries 0x4B0940 (start by
    name), 0x4B0B00 (start by index), 0x4B0C40 (the query) and 0x4B0D60 (DoScriptsNow) jump here, and
-   tagpu_cobvm.c runs the unit's own COB object under IMPURE's rules: the records, the count and the
-   flag in the object as the guarded engine keeps them, the statics at *(cob+0x10), the animation at
-   *(cob+0x14), the posed model at TAGPU_COB_MODEL_OFFSET. 0x4B0A70 and 0x4B0BC0 stay the engine's:
+   tagpu_cobvm.c runs the unit's own COB object under IMPURE's rules: the records and the count where
+   the object's layout keeps them (THE BLOCK, above, or the guarded engine's with the oracle armed),
+   the flag at +0x18, the statics at *(cob+0x10), the animation at *(cob+0x14), the posed model at
+   the layout's model offset. 0x4B0A70 and 0x4B0BC0 stay the engine's:
    they find the name themselves and call 0x4B0B00 and 0x4B0C40 (0x4B0AEE, 0x4B0C2F). The runner
    0x4B0DA0, the stepper 0x4B1C00 and the allocator 0x4B08C0 are no longer reached, nor the guard's
    stubs inside them.
@@ -13053,27 +13056,43 @@ SIM_FEATURE(cob_game, SIM_PUPPET_RUNS, "slice-walkers battle tenseat codec-decli
    would have had: the START and CALL keys, else the return address of the entry's own allocator
    call, 0x4B09A4, 0x4B0B0D, 0x4B0C4D); the slice markers' note of a start (tagpu_rec_cob_started, at
    the entries whose bytes the recorder's observers held); cobtrace's lines, from the core's events.
-   THE TAIL. Each object carries the host's state after Impure's COB object (CobTail): its VM, bound
-   at its first entry, and its script's name. 0x485D74 asks for both, and the allocation at 0x485D78
-   is zeroed, so a tail starts unbound by construction: the constructor 0x4B0610 at 0x485D88 is the
-   only one (DISASSEMBLED, its only caller), and that allocation its only memory.
+   THE TAIL. Each object carries the host's state (CobTail): its VM, bound at its first entry, and
+   its script's name -- in the block at +0x24, in the engine's layout after Impure's COB object, which
+   0x485D74 then sizes. The allocation at 0x485D78 is zeroed and the setup 0x485D40 is the object's
+   only maker (0x485D88 is the constructor's only caller, DISASSEMBLED), so a tail starts unbound by
+   construction; a block's only other memory is a loaded save's stacks (cob_records_put).
    THREADS. An entry runs on the thread the engine calls it on: the game thread in play, the loader
    for the Create of a level's units (0x485DE6). An object is the one unit's, entered by one thread at
    a time, and the core keeps no state outside it. */
 
-/* 0x485D78's call: MEM_Alloc 0x4B4F10(size), cdecl (`add esp,4` at 0x485D7F); NULL is the engine's
-   failure, tested at 0x485D82 */
-static void* __cdecl cob_object_alloc(unsigned size)
+/* MEM_Alloc 0x4B4F10(size), cdecl (`add esp,4` at 0x485D7F), zeroed. While the heap answers NULL,
+   0x4D83C0 calls the new handler at [0x5289BC] and asks again (0x4D8409..0x4D841F): with the
+   engine's 0x49E700 installed it never returns NULL, and without one a NULL is a fault here, since
+   the setup's NULL test at 0x485D82 skips only the constructor and 0x4B0720 then writes through it. */
+static void* cob_engine_alloc(unsigned size)
 {
     void* p = ((void* (__cdecl*)(unsigned))0x004B4F10u)(size);
-    if (p) memset(p, 0, size);
+    if (!p) cob_fault("unknown", 0, "COB object allocation failed");
+    memset(p, 0, size);
     return p;
+}
+
+static void cob_engine_free(void* p)
+{
+    if (p) ((void (__cdecl*)(void*))0x004B4F20u)(p);
+}
+
+/* 0x485D78's call with the oracle armed: the engine's object, zeroed for the host's tail */
+static void* __cdecl cob_object_alloc(unsigned size)
+{
+    return cob_engine_alloc(size);
 }
 
 /* The block of the unit 0x485D40 makes (esi there, 0x485D48; the stub below passes it), sized by
    its script's program -- the file 0x485D64 found, its program validated at the script's load --
-   64-aligned, zeroed, the raw pointer kept in the four bytes before it. A script with no program
-   gets stacks of TAGPU_COB_WORDS; its first entry faults as before (cob_owned_file). */
+   64-aligned, zeroed, the engine allocation's pointer kept in the four bytes before it. A script
+   with no program gets stacks of TAGPU_COB_WORDS; its first entry faults as before
+   (cob_owned_file). */
 static void* __cdecl cob_block_alloc(unsigned size, const char* unit)
 {
     const char* def;
@@ -13091,15 +13110,16 @@ static void* __cdecl cob_block_alloc(unsigned size, const char* unit)
     }
     words = f ? f->program->depth : TAGPU_COB_WORDS;
     bytes = COB_BLOCK_BYTES(words);
-    if (!(raw = (unsigned char*)tagpu_sim_scratch(bytes + 68u))) return NULL;
+    raw = (unsigned char*)cob_engine_alloc(bytes + 68u);
     p = (unsigned char*)(((uintptr_t)raw + 4u + 63u) & ~(uintptr_t)63u);
     memcpy(p - 4, &raw, sizeof raw);
     COB_TAIL((char*)p)->words = words;
     return p;
 }
 
-/* 0x4B0610 for the block: what it writes but the record loop, whose 0xA4-stride words lie past a
-   block's end (0x4B061A..0x4B0641), into a block already zero. Returns the object, as it does. */
+/* 0x4B0610 for the block: what it writes but the record loop (0x4B061A..0x4B0641), whose status
+   words at the guard's 0x224 stride would land in the block's tail and headers and past its end,
+   into a block already zero. Returns the object, as it does. */
 static char* __attribute__((thiscall)) cob_block_construct(char* cob)
 {
     *(uint32_t*)(void*)cob = 0x004FDB00u;          /* the base vtable; 0x485D8D writes 0x4FD698 */
@@ -13111,14 +13131,15 @@ static char* __attribute__((thiscall)) cob_block_construct(char* cob)
     return cob;
 }
 
-/* 0x485E40's call, the free of 0x4B4F20(object): the block's stacks of its own and its raw pointer */
+/* 0x485E40's call, the free of 0x4B4F20(object): the block's stacks of its own, then the block by
+   the engine allocation's pointer */
 static void __cdecl cob_block_free(char* cob)
 {
     unsigned char* raw;
     if (!cob) return;
-    tagpu_sim_scratch_free(COB_TAIL(cob)->side);
+    cob_engine_free(COB_TAIL(cob)->side);
     memcpy(&raw, cob - 4, sizeof raw);
-    tagpu_sim_scratch_free(raw);
+    cob_engine_free(raw);
 }
 
 /* One entry call: the host, its run, the getter world. */
@@ -13273,8 +13294,7 @@ static void cob_records_put(char* cob, const CobFile* f, const TagpuCobRecord* i
     t = COB_TAIL(cob);
     for (s = 0; s < TAGPU_COB_THREADS && !t->side && t->words < TAGPU_COB_WORDS; ++s)
         if (!tagpu_cob_record_proven(f->program, (const TagpuCobHead*)(const void*)&in[s])) {
-            t->side = (int32_t*)tagpu_sim_scratch(TAGPU_COB_THREADS * TAGPU_COB_WORDS * sizeof(int32_t));
-            if (!t->side) cob_fault(f->name, 0, "saved script stacks allocation failed");
+            t->side = (int32_t*)cob_engine_alloc(TAGPU_COB_THREADS * TAGPU_COB_WORDS * sizeof(int32_t));
         }
     cob_bind(cob, t, f);
     vm = &t->vm;
@@ -14253,7 +14273,7 @@ static void cob_game_sites(void)
                "COB query: the game's VM");
     lim_branch(0x004B0D60u, sizeof tick, tick, 0xE9, (unsigned)(size_t)cg_tick,
                "COB DoScriptsNow: the game's VM");
-    if (tagpu_sim_lever("tagpu_cobverify.on")) cv_install(by_name, by_idx, tick);
+    if (!s_cobBlock) cv_install(by_name, by_idx, tick);     /* the lever, read once (cob_layout_choose) */
 }
 
 SIM_FEATURE(limits_sites, SIM_PUPPET_RUNS, "battle");
