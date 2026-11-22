@@ -806,8 +806,9 @@ flare stand where GDI puts them, frame for frame of the sequence; their colour i
 twin's, as the gathered sprites' was, where GDI shows the palette's dithered frame. In the 13 500-unit battle
 (battle13k, 1920×1080, two runs each, the base fd7d5a86 against `7c4eb930`): the game thread's
 `particles` 2.27/1.84 → 1.99/2.10 ms a tick, `publish` 2.55/2.35 → 2.36/2.41; the render thread's
-gather median 4.39/3.78 → 4.76/4.74 ms (the base's two runs differ by 0.6 ms themselves; no work
-the landing adds to the gather is of that size).
+gather median 4.39/3.78/3.80/4.36 → 4.76/4.74/4.75/4.73 ms in alternated runs, but
+`tagpu_fx_set_events` itself costs 3 to 4 µs a call in that battle and a lone run of this build
+gathered at 3.55 ms, so the gap follows the run order, not the code.
 
 **Not covered here**: an event's particles are culled by their event's box, not each by its own; a
 frame whose packet carries no fog source draws the particles without the tile test. The order of

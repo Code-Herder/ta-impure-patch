@@ -217,7 +217,11 @@ Vulkan in the event.
      35 008 flare particles, 0 differing. `tareplay.py run battle teleport --cover` passes (184 checks). Against GDI, fire and the flare
      at GDI's places and frames, in the restored twin's colour as before. Battle13k, two runs each:
      particles 2.27/1.84 → 1.99/2.10 ms, publish 2.55/2.35 → 2.36/2.41, gather median 4.39/3.78 →
-     4.76/4.74 (open: noise or a cost, below).
+     4.76/4.74, and with a second pair each 3.80/4.36 → 4.75/4.73; but `tagpu_fx_set_events`,
+     timed in the same battle, costs 3 to 4 µs a call (1 µs the frame table's 8.5 lookups, about
+     200 events copied), and a lone run of this build gathered at a median of 3.55 ms, under every
+     base run: the run order, not the landing's code. The fire colour against GDI (a clean yellow on
+     Vulkan) is the base's too: the same scene on fd7d5a86 draws the same yellow.
 4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
    shore and submarines against GDI.
 5. **Smoke1 and Smoke2,** with the wind table and the countdowns. Check: the oracle; feature smoke, impact
@@ -241,10 +245,6 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   another class's object, and a nano emission is never refused for a full pool. Presentation only
   (no simulation value reads a particle since landing 1), and gone once every class is an event.
   Fire's and the flare's proxies take their pool slots as the real objects did.
-- **The gather's median rose 0.4 to 1 ms in landing 3's battle13k runs** (4.39/3.78 → 4.76/4.74);
-  the base's own two runs differ by 0.6 ms, and the landing's additions to the gather (64 frame
-  lookups, the event copy) are microseconds. A third pair, or a timer around `tagpu_fx_set_events`,
-  settles it.
 - **The blend order inside a layer run** is the events' emission order after every gathered object
   of the run (0..6 or 7..9), not the engine's layer-then-vector order: a fire sprite draws over the
   layer-9 smoke beside it whatever their ages ([effects](effects.md) §7.8). It goes when smoke is
