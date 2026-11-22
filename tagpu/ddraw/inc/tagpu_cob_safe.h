@@ -20,6 +20,14 @@
 #define TAGPU_COB_SAVE_BYTES (24u + TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES)
 #define TAGPU_COB_LEGACY_SAVE_BYTES (24u + TAGPU_COB_LEGACY_THREADS * TAGPU_COB_RECORD_BYTES)
 
+/* A record's header: the words a record holds before its stack, in TagpuCobRecord's order. */
+typedef struct TagpuCobHead {
+    uint32_t status, pc;
+    int32_t sp, sleep, piece, axis, child;
+    uint32_t mask, callback;
+} TagpuCobHead;
+
+/* The engine's record, the save's too: the header and TAGPU_COB_WORDS of stack. */
 typedef struct TagpuCobRecord {
     uint32_t status, pc;
     int32_t sp, sleep, piece, axis, child;
@@ -57,8 +65,13 @@ int32_t tagpu_cob_build_left(float remaining);
    validated instruction with sp + 1 inside its bounds (a CALL refused on child -1, which nothing
    ever runs again, needs only sp + 1 within `depth`). A record the VM did not make itself -- a
    saved game's -- is run under the full check unless every record of its object passes. */
-int tagpu_cob_record_proven(const TagpuCobProgram* program, const TagpuCobRecord* record);
-/* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. */
+int tagpu_cob_record_proven(const TagpuCobProgram* program, const TagpuCobHead* record);
+/* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. A record's stack holds
+   `words` (at most TAGPU_COB_WORDS); the engine's record holds TAGPU_COB_WORDS. */
+int tagpu_cob_check_head_step(const TagpuCobProgram* program, const TagpuCobHead* head,
+                              const int32_t* stack, uint32_t words, char* reason, size_t capacity);
+int tagpu_cob_check_head(const TagpuCobProgram* program, const TagpuCobHead* head, uint32_t words,
+                         char* reason, size_t capacity);
 int tagpu_cob_check_step(const TagpuCobProgram* program, const TagpuCobRecord* record,
                          char* reason, size_t capacity);
 int tagpu_cob_check_record(const TagpuCobProgram* program, const TagpuCobRecord* record,

@@ -254,7 +254,7 @@ done:
     return bounded;
 }
 
-int tagpu_cob_record_proven(const TagpuCobProgram* p, const TagpuCobRecord* r)
+int tagpu_cob_record_proven(const TagpuCobProgram* p, const TagpuCobHead* r)
 {
     if (!p->guard) return 0;
     if (!r->status) return 1;
@@ -283,10 +283,11 @@ int tagpu_cob_bind_model(TagpuCobProgram* p, uint32_t pieces, char* reason, size
     return 1;
 }
 
-int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
-                           char* reason, size_t capacity)
+int tagpu_cob_check_head(const TagpuCobProgram* p, const TagpuCobHead* r, uint32_t words,
+                         char* reason, size_t capacity)
 {
-    if (r->sp < -1 || r->sp >= (int32_t)TAGPU_COB_WORDS)
+    if (words > TAGPU_COB_WORDS) return fault(reason, capacity, "record stack exceeds the engine's");
+    if (r->sp < -1 || r->sp >= (int32_t)words)
         return fault(reason, capacity, "stack pointer exceeds allocation");
     if (!r->status) return 1;
     if (r->pc > p->words || p->starts[r->pc] != 1)
@@ -308,13 +309,26 @@ int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
     return 1;
 }
 
+int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
+                           char* reason, size_t capacity)
+{
+    return tagpu_cob_check_head(p, (const TagpuCobHead*)(const void*)r, TAGPU_COB_WORDS, reason, capacity);
+}
+
 int tagpu_cob_check_step(const TagpuCobProgram* p, const TagpuCobRecord* r,
                          char* reason, size_t capacity)
+{
+    return tagpu_cob_check_head_step(p, (const TagpuCobHead*)(const void*)r, r->stack, TAGPU_COB_WORDS,
+                                     reason, capacity);
+}
+
+int tagpu_cob_check_head_step(const TagpuCobProgram* p, const TagpuCobHead* r, const int32_t* stack,
+                              uint32_t words, char* reason, size_t capacity)
 {
     CobOp o;
     unsigned need;
     const char* error;
-    if (!tagpu_cob_check_record(p, r, reason, capacity)) return 0;
+    if (!tagpu_cob_check_head(p, r, words, reason, capacity)) return 0;
     if (r->status != 0x01000000)
         return fault(reason, capacity, "attempt to execute a non-running record");
     if (r->pc == p->words) return p->terminal_zero ? 2 : fault(reason, capacity, "code exhausted");
@@ -325,11 +339,11 @@ int tagpu_cob_check_step(const TagpuCobProgram* p, const TagpuCobRecord* r,
     if (o.kind == 0x10061000 || o.kind == 0x10062000) need = p->code[r->pc + 2];
     if (o.kind == 0x10065000) need = !!r->callback;
     if ((unsigned)(r->sp + 1) < need) return fault(reason, capacity, "operand stack underflow");
-    if ((unsigned)(r->sp + 1) - need + o.put > TAGPU_COB_WORDS)
+    if ((unsigned)(r->sp + 1) - need + o.put > words)
         return fault(reason, capacity, "operand stack capacity exceeded");
     if (o.kind == 0x10034000) {
-        if (!r->stack[r->sp]) return fault(reason, capacity, "integer division by zero");
-        if (r->stack[r->sp - 1] == INT32_MIN && r->stack[r->sp] == -1)
+        if (!stack[r->sp]) return fault(reason, capacity, "integer division by zero");
+        if (stack[r->sp - 1] == INT32_MIN && stack[r->sp] == -1)
             return fault(reason, capacity, "integer division overflow");
     }
     return 1;

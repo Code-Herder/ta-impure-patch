@@ -287,6 +287,60 @@ class Core(unittest.TestCase):
     def test_a_sleep_of_zero_wakes_the_next_turn(self):
         self._scheduled_against_every_turn("Create() { while(1) { sleep 0; s1 = s1 + 1; } }", 50)
 
+    # -- a layout of the host's own ---------------------------------------------
+    class Layout(C.Structure):
+        _fields_ = [("heads", C.c_void_p), ("head_stride", C.c_uint32), ("stacks", C.c_void_p),
+                    ("stack_stride", C.c_uint32), ("words", C.c_uint32), ("count", C.c_void_p)]
+
+    def _rebind(self, v, words, stride):
+        """`v` rebound with packed 36-byte headers and stacks of `words`, `stride` words apart; the
+        blocks it is bound to are kept on the VM so they live as long as it does"""
+        lib = self.lib
+        lib.tagpu_cobvm_bind_layout.argtypes = [C.POINTER(tacob._Vm), C.c_void_p, C.c_uint, C.c_void_p,
+                                                C.POINTER(self.Layout), C.c_void_p, C.c_void_p, C.c_void_p,
+                                                C.c_char_p, C.c_uint]
+        v._heads = (C.c_ubyte * (36 * 10))()
+        v._stacks = (C.c_int32 * (stride * 10))()
+        v._count = C.c_uint32(0)
+        lay = self.Layout(C.addressof(v._heads), 36, C.addressof(v._stacks), stride, words, C.addressof(v._count))
+        why = C.create_string_buffer(256)
+        ok = lib.tagpu_cobvm_bind_layout(C.byref(v._vm), v._program, tacob.RULES_IMPURE, v._object, C.byref(lay),
+                                         v._statics, v.anim, v._model, why, 256)
+        return ok, why.value.decode()
+
+    def test_a_packed_layout_runs_as_the_engine_layout_does(self):
+        a = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        b = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        depth = self.program(b).depth
+        self.assertLess(depth, 128)
+        ok, why = self._rebind(b, depth, depth)
+        self.assertTrue(ok, why)
+        for v in (a, b):
+            v.start_script("Create", run_now=True)
+        for t in range(1500):
+            if t in (37, 401, 900):
+                for v in (a, b):
+                    v.start_script("Kick" if t & 1 else "Waiter", run_now=bool(t & 1))
+            if t in (433, 1201):
+                self.assertEqual(a.query_script("Probe", [0, 0, 0, 0]), b.query_script("Probe", [0, 0, 0, 0]))
+            a.do_scripts_now(1)
+            b.do_scripts_now(1)
+            for s in range(10):
+                at = 28 + s * tacob.RECORD_BYTES
+                self.assertEqual(bytes(a._object[at:at + 36]), bytes(b._heads[36 * s:36 * s + 36]),
+                                 f"record {s}'s header after turn {t}")
+                self.assertEqual(list(struct.unpack_from(f"<{depth}i", a._object, at + 36)),
+                                 list(b._stacks[depth * s:depth * s + depth]), f"record {s}'s stack after turn {t}")
+            self.assertEqual(a.running, b._count.value)
+            self.assertEqual((a.statics, list(a.anim), bytes(a._model)), (b.statics, list(b.anim), bytes(b._model)))
+
+    def test_stacks_smaller_than_the_programs_depth_are_refused(self):
+        b = self.vm(self.SCHEDULE, rules=tacob.RULES_IMPURE)
+        depth = self.program(b).depth
+        ok, why = self._rebind(b, depth - 1, depth)
+        self.assertFalse(ok)
+        self.assertIn("depth", why)
+
     # -- the rules of the two builds ------------------------------------------
     POOL = """
     sleeper() { while(1) { sleep 1000; } }

@@ -177,12 +177,47 @@ object's tail, which L4's block and prefetch address.
 
 ### L4 — The block
 
-A unit's COB memory becomes one block sized by its program, made with the unit: a header line (the
-fields the engine reads, the scheduling data), the ten record headers packed, ten stacks of the
-program's `depth`, the statics, the animation block. The posed model stays the engine's allocation.
-Blocks of one size come from a free list of their own. The save translates to and from the 128-word
-format, a dead record's leftover heap bytes written as zeros; a saved record the proof does not cover
-gets a block of 128-word stacks. The unit loop prefetches the header line of the units ahead.
+**A turn with nothing due builds no host** (built): `tagpu_cobvm_rest` makes the turn
+`tagpu_cobvm_tick` makes for a quiet unit -- the owed dt and the animation step -- without a host,
+and the game host calls it before it fills the getter world and the call's host
+(`cob_world_fill`, which reads the posed model's piece count, a line of its own for each unit). It
+answers 0 whenever the records must be visited, a start's trace line is latched, the VM has faulted
+or dt or the rate is not positive, and the tick then makes the turn as before. MEASURED 2026-11-21
+in the battle (a scratch build whose odd 64-tick blocks skip it; the main checkout's
+`.data/prof/2026-11-21-cobl4/rest-battle/`): the unit tick 7.60 ms a tick against 7.99, 0.35 ± 0.08 less,
+in 27 of 32 blocks.
+
+**The records' layout is the host's** (built): the VM addresses the record headers and the stacks
+through a layout -- headers `head_stride` bytes apart, stacks `stack_stride` words apart, `words` a
+stack, the count where the host keeps it (`TAGPU_COBVM_LAYOUT`, `tagpu_cobvm_bind_layout`) -- and
+`tagpu_cobvm_init` and `tagpu_cobvm_bind` describe the engine's, so the wiki, tacob and tasim's fire
+probe run as before. A stack must hold the program's `depth`, which the stack proof shows no record
+of it exceeds; the validator checks a record against its own stack (`tagpu_cob_check_head`,
+`tagpu_cob_check_head_step`). `tools/test_cobvm.py` runs a program on packed 36-byte headers and
+stacks of its depth against the engine's layout, every header and stack word equal after every
+turn, and refuses stacks smaller than the depth.
+
+**Not built: the prefetch.** MEASURED 2026-11-21 in the battle on the L3 tree (64-tick blocks cycling
+off, the header line and the tail of the unit 8 slots ahead, off, those and each record's first
+line; `.data/prof/2026-11-21-cobl4/pf-battle/`): -0.09 ± 0.21 and -0.02 ± 0.12 ms a tick, within
+noise. The prototype's -0.5 ms was measured when every unit visited its records every turn.
+
+**What is left** (MEASURED 2026-11-21, the battle's sampled window with the rest turn): the core's
+functions are about 30 % of the unit tick -- `run_thread` 9.8 % (the ten record headers, 548 bytes
+apart), `cg_vm` 6.0 % (the VM in the object's tail, 5.5 KB past its header), `step_anim` 4.9 % and
+`tagpu_cobvm_rest` 4.4 % (the header line and the tail) -- each a read of a line the unit's turn
+does not share with another.
+
+**The block** (to build): a unit's COB object becomes one block sized by its program -- the engine's
+header line, the running count and the model pointer after it, the VM, the ten record headers
+packed and ten stacks of the program's `depth` -- so a quiet unit's turn reads two adjacent lines
+and an active one's headers six. The engine reads the object only through its header words, the
+model pointer and the statics and animation pointers, and writes the records only in its
+constructor (the scout's map of 2026-11-21, the engine map's COB page), so the block needs the
+model and count offsets the guard already patches moved, its own constructor in place of
+`0x4B0610`'s record loop, and its own free. The save translates to and from the 128-word format; a
+loaded record the proof does not cover gets stacks of 128 words of its own. With the oracle armed
+the object keeps the engine's layout, which its interpreter needs.
 
 ## Gaps open
 

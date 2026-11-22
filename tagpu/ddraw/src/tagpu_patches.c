@@ -14033,6 +14033,7 @@ static void __attribute__((thiscall)) cg_tick(char* cob, int32_t dt)
         cv_verified(cob, &v, NULL, NULL);
         return;
     }
+    if (tagpu_cobvm_rest(vm, dt)) return;  /* nothing due: no host to build, no getter world to fill */
     cg_call(&k, cob, 0);
     cg_done_call(cob, &k, tagpu_cobvm_tick(vm, &k.run, dt));
 }

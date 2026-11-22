@@ -135,6 +135,13 @@ typedef struct TAGPU_COBVM {
     int32_t*               statics;
     int32_t*               anim;
     unsigned char*         model;
+    /* THE RECORDS: their headers from `heads`, `head_stride` bytes apart; their stacks from
+       `stacks`, `stack_stride` words apart, `words` a stack; the running count at `count`. In the
+       engine's layout (tagpu_cobvm_init, tagpu_cobvm_bind) all of it is in the object. */
+    unsigned char*         heads;
+    int32_t*               stacks;
+    uint32_t*              count;
+    uint32_t               head_stride, stack_stride, words;
     unsigned               threads, rules;
     int                    faulted;
     int                    checked;    /* every opcode through tagpu_cob_check_step */
@@ -160,6 +167,24 @@ int tagpu_cobvm_init(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned r
 int tagpu_cobvm_bind(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
                      unsigned char* object, int32_t* statics, int32_t* anim, unsigned char* model,
                      char* reason, unsigned capacity);
+
+/* A layout of the host's own for the records and the count (tagpu_cobvm_bind_layout). */
+typedef struct TAGPU_COBVM_LAYOUT {
+    unsigned char* heads;          /* TagpuCobHead of slot 0, 4-aligned */
+    uint32_t       head_stride;    /* bytes, at least sizeof(TagpuCobHead), a multiple of 4 */
+    int32_t*       stacks;         /* slot 0's stack */
+    uint32_t       stack_stride;   /* words, at least `words` */
+    uint32_t       words;          /* a stack: the program's `depth` up to TAGPU_COB_WORDS */
+    uint32_t*      count;          /* the running count */
+} TAGPU_COBVM_LAYOUT;
+
+/* tagpu_cobvm_bind with the records and the count where `layout` says; the object still holds the
+   rate at +0x04 and the flag at +0x18. A stack must hold the program's `depth` (the stack proof
+   shows no record of it touches more), so a record the proof does not cover -- a saved game's --
+   needs stacks of TAGPU_COB_WORDS. Nothing is cleared. Returns 1, or 0 with the reason. */
+int tagpu_cobvm_bind_layout(TAGPU_COBVM* vm, const TagpuCobProgram* program, unsigned rules,
+                            unsigned char* object, const TAGPU_COBVM_LAYOUT* layout, int32_t* statics,
+                            int32_t* anim, unsigned char* model, char* reason, unsigned capacity);
 
 /* The host wrote the object's records itself (a saved game's): the VM checks every opcode from
    now on unless every record is one the stack proof covers (tagpu_cob_record_proven). */
@@ -191,11 +216,17 @@ int tagpu_cobvm_query(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, int32_t
    inventoried in cob_runtime_sites. */
 int tagpu_cobvm_tick(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t dt);
 
+/* The turn tagpu_cobvm_tick makes when nothing is due, without a host: 1 when it owed the dt and
+   stepped the animations, 0 when the records must be visited -- by tagpu_cobvm_tick, which is the
+   engine's turn in either case. It answers 0 too with a start's trace line still latched, a
+   fault, a rate not positive, or dt not positive, so a host may call it first on every turn. */
+int tagpu_cobvm_rest(TAGPU_COBVM* vm, int32_t dt);
+
 /* Take the owed dt off the sleepers, as the turns that owed it would have. Every entry does it
    first; a host that reads the records itself (a save) calls it before. */
 void tagpu_cobvm_settle(TAGPU_COBVM* vm);
 /* The object's TAGPU_COB_OBJECT_BYTES as tagpu_cobvm_settle would leave them, into `out`: the state
-   a hash or a comparison compares, whatever dt is still owed. */
+   a hash or a comparison compares, whatever dt is still owed. The engine's layout only. */
 void tagpu_cobvm_settled(const TAGPU_COBVM* vm, unsigned char* out);
 
 /* Write the latched start's trace line now (the oracle's last line of a run). */
@@ -204,8 +235,9 @@ void tagpu_cobvm_flush(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run);
 /* sizeof(TAGPU_COBVM), for a host that allocates the struct through a mirror of it (tacob's ctypes). */
 unsigned tagpu_cobvm_size(void);
 
-/* The records and the count, read from the object. */
-TagpuCobRecord* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot);
-uint32_t        tagpu_cobvm_running(const TAGPU_COBVM* vm);
+/* A record's header and stack, and the running count, where the layout keeps them. */
+TagpuCobHead* tagpu_cobvm_record(const TAGPU_COBVM* vm, unsigned slot);
+int32_t*      tagpu_cobvm_stack(const TAGPU_COBVM* vm, unsigned slot);
+uint32_t      tagpu_cobvm_running(const TAGPU_COBVM* vm);
 
 #endif
