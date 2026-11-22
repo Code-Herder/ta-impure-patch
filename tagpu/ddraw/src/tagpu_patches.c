@@ -24,6 +24,7 @@
 #include "tagpu_cobvm.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_simreg.h"
+#include "tagpu_prand.h"
 #include "tagpu_recorder.h"
 #include "tagpu_puppet.h"
 #include "tagpu_replay.h"
@@ -11614,6 +11615,348 @@ void tagpu_seed_run(unsigned int seed)
                now ? "now" : "on the next step", wind, next);
 }
 
+SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport");
+
+/* THE PARTICLES' OWN RANDOM RULE [DISASSEMBLED]. The particle code draws the C runtime's rand
+   0x4E4870 at twenty sites, and that rand keeps one stream per thread (*A harness's random
+   streams*): on the game thread the meteor shower draws after the particles, on the loader thread
+   the skirmish's random starts (0x4979E7, 0x497A32) draw after a smoking map feature's endless smoke
+   spawned at the map load (engine/sim.md, *The two random streams*). So what was on screen moved
+   where meteors fell and where commanders started. Each of the twenty `call 0x4E4870` now calls a
+   stub that answers from tagpu_prand.h's rule instead, and no CRT stream sees a particle draw:
+     - the fire emitter 0x472AB0: x, alt, y jitter and the life (0x472ACF, 0x472AF4, 0x472B17,
+       0x472B3A), drawn before its pool test;
+     - the feature tick 0x424050: a burning feature's smoke point (0x424345, 0x424379), drawn
+       straight before its `call 0x472810` at 0x4243CF;
+     - the flare's spawn 0x4737C0 (0x47395F, the start frame; the object in ebx);
+     - the nano spawn 0x473D50 (0x473DAD, 0x473DCA, 0x473DE7: the start x, alt, y; 0x473E04,
+       0x473E21, 0x473E3E: the end; the object in ebp);
+     - the wake's spawn 0x474880 (0x4749D9, 0x474A00, 0x474A27: x, alt, y; the object in ebx);
+     - the smoke spawns 0x474DF0 and 0x4751C0 (0x474F1C, 0x4752D4: a puff's frame count; the
+       object in ebx, the puff being built on the caller's stack at +0x18: seq, x +0x1C, alt +0x20,
+       y +0x24, appended at the vector's end by 0x476210 / 0x476490);
+     - the smoke updates 0x475340 and 0x475600 (0x4753B9, 0x475679: a frame's countdown; the object
+       in edi, the puff in ebx, its frame +0x14 already advanced).
+   No other code calls these functions with another register layout: the spawns are slot 4 of their
+   vtables and the updates slot 1, each reached only through the vtable or the class's own init.
+   THE RULE. A value is tagpu_prand(seed, particle, draw), a pure function in rand's range:
+     - the SEED is the emission's: the level's particle seed, the GameTime and the emission's
+       ordinal among the GameTime's emitter calls, counted at the pool's alloc 0x470EB0, which every
+       live emitter calls exactly once a call, after its SFX test (0x51E608) and whatever the pool
+       answers. An emission's object keeps its seed in a table indexed by its pool slot. A draw made
+       before the object exists (the fire emitter's four, the feature's two) takes the seed the
+       next alloc will give and the particle TAGPU_PRAND_EMIT;
+     - the PARTICLE is the object's own count of the particles it began: the flare's spawn, the
+       nano's and the wake's first draw of a particle advance it, so a nano emission's first burst
+       is particles 0..4 and its second 5..9, the wake's two dots 0 and 1, the flare's four 0..3;
+     - a SMOKE PUFF's particle is its spawn's ordinal modulo 256, which the puff itself carries: the
+       spawn writes it into the low bits of the puff's position (x bits 0..2, y bits 0..2, alt bits
+       0..1), which the updates only ever add multiples of 8 (x += wind << 3, y += wind << 3) and of
+       4 (alt += rise << 2, Smoke1's << 4) to, and every copy (the compaction's and the reserve's
+       `rep movs` of 8 dwords) keeps. A smoke record (0x20 bytes) has no other free field. A puff's
+       frame count is draw 0 and each frame advance's countdown draw is the frame it advances to,
+       1 or more.
+   THE PICTURE IS STOCK'S: every reader of a position takes its high word (the leaves 0x475700,
+   0x475470; the frame packet's gather), and a value under 8 added to a multiple of 8 never crosses
+   a multiple of 0x10000, so the high word of each later position is the one the unmarked puff
+   would have had. Only the draws' values differ from stock, as any other draw order would.
+   THE SEED'S TABLE IS BOUNDED: the slot is (object - the pool's one block) / 0x4C, taken only when
+   the object lies in the block on a slot's start and the slot is below the pool's capacity and the
+   table's rows; anything else draws from seed 0 and is counted, never indexed.
+   THE LEVEL'S PARTICLE SEED is made at the layer table's allocation (0x4918B1, `call 0x471D90`),
+   on the loader thread before the map load spawns any feature (0x4918C0), from what the wind's is
+   made of: in a network game the session's GUID and the map, so every peer holds the same; under
+   the harness's switch the fixed seed and the map; otherwise the performance counter. A viewer sees
+   the emissions its own sight allows (COB's EMIT_SFX tests the viewed player's sight, 0x480EC5),
+   so the particles are a function of the game and the viewer, on GDI and on Vulkan alike.
+   THREADS AND ORDER: the loader thread draws only during the level load (the map's endless smoke),
+   the game thread only in play; the loader's writes come before its last store, bit 1 of
+   main+0x38D75 (0x497C62), which the game thread waits for before its first tick (0x498342).
+   ON A PUPPET the rule runs as on a live host; it changes nothing a recording carries: the meteor
+   shower is refused on a puppet and its stones recorded, the starts recorded, and nothing of the
+   simulation reads a particle.
+   THE STATE is particle state, which the simulation never reads (replay-globals.tsv leaves the
+   pool, `particlepool`): one SIM_PRIVATE struct, as the debris latch's.
+   CLASS: simulation, fail closed: without it meteors and random starts follow the screen. */
+#define PRAND_POOL      0x0051E610u      /* ParticleBase: +8 its block vector, +0x1C capacity */
+#define PRAND_OBJ       0x4Cu            /* a pool slot's bytes                               */
+#define PRAND_SALT      0x7061727469636C65ull   /* the particles' seed apart from the wind's  */
+#define PRAND_PUFF_KEYS 0xFFu            /* the bits a smoke puff carries                      */
+
+enum { PRK_EMIT, PRK_FLARE, PRK_NANO, PRK_WAKE, PRK_PUFF, PRK_FRAME };
+
+typedef struct PrandObj { unsigned seed; unsigned next; } PrandObj;   /* next: particles begun */
+
+static struct {
+    unsigned level;                     /* the level's particle seed                         */
+    unsigned tick;                      /* the GameTime the emission ordinal counts in        */
+    unsigned n;                         /* emissions counted in it                            */
+    unsigned levels;                    /* level loads seeded                                 */
+    unsigned draws;                     /* this level: values answered by the rule            */
+    unsigned emissions;                 /*   allocs counted                                   */
+    unsigned outside;                   /*   objects outside the pool's block (drawn from 0)  */
+    PrandObj obj[TAGPU_LIM_SFXPOOL];    /* by pool slot                                       */
+} s_prand;
+SIM_VAR(s_prand, SIM_PRIVATE);
+
+static unsigned prand_gametime(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    unsigned t = 0;
+    if (ta) memcpy(&t, ta + 0x38A47, 4);
+    return t;
+}
+
+/* the seed the next emission takes */
+static unsigned prand_pending(void)
+{
+    unsigned t = prand_gametime();
+    if (t != s_prand.tick) {
+        s_prand.tick = t;
+        s_prand.n = 0;
+    }
+    return tagpu_prand_seed(s_prand.level, t, s_prand.n);
+}
+
+/* the object's row, or NULL when it is not a slot of the pool's block (see THE SEED'S TABLE) */
+static PrandObj* prand_row(unsigned obj)
+{
+    unsigned begin, end, base, cap, off;
+    memcpy(&begin, (const void*)(size_t)(PRAND_POOL + 0x08), 4);
+    memcpy(&end,   (const void*)(size_t)(PRAND_POOL + 0x0C), 4);
+    memcpy(&cap,   (const void*)(size_t)(PRAND_POOL + 0x1C), 4);
+    if (!begin || end <= begin) return NULL;
+    memcpy(&base, (const void*)(size_t)begin, 4);
+    if (obj < base) return NULL;
+    off = obj - base;
+    if (off % PRAND_OBJ || off / PRAND_OBJ >= cap || off / PRAND_OBJ >= TAGPU_LIM_SFXPOOL)
+        return NULL;
+    return &s_prand.obj[off / PRAND_OBJ];
+}
+
+/* the pool's alloc 0x470EB0 returned `obj` (NULL: the pool was full) */
+static void __cdecl prand_alloc(unsigned obj)
+{
+    unsigned seed = prand_pending();
+    PrandObj* row;
+    s_prand.n++;
+    s_prand.emissions++;
+    if (!obj) return;
+    row = prand_row(obj);
+    if (!row) {
+        s_prand.outside++;
+        return;
+    }
+    row->seed = seed;
+    row->next = 0;
+}
+
+/* one draw at a redirected site: `code` is PRK_* << 8 | the draw's number, regs the pushad block */
+static void __cdecl prand_site(unsigned code, unsigned* regs)
+{
+    unsigned kind = code >> 8, draw = code & 0xFFu, particle, seed;
+    PrandObj none = { 0, 0 };
+    PrandObj* row = &none;
+    if (kind == PRK_EMIT) {
+        seed = prand_pending();
+        particle = TAGPU_PRAND_EMIT;
+    } else {
+        unsigned obj = regs[kind == PRK_NANO ? PR_EBP : kind == PRK_FRAME ? PR_EDI : PR_EBX];
+        PrandObj* r = prand_row(obj);
+        if (r) row = r;
+        else s_prand.outside++;
+        seed = row->seed;
+        if (kind == PRK_FRAME) {
+            unsigned char* puff = (unsigned char*)(size_t)regs[PR_EBX];
+            unsigned x, alt, y;
+            memcpy(&x, puff + 0x04, 4);
+            memcpy(&alt, puff + 0x08, 4);
+            memcpy(&y, puff + 0x0C, 4);
+            particle = (x & 7u) | (y & 7u) << 3 | (alt & 3u) << 6;
+            memcpy(&draw, puff + 0x14, 4);
+        } else if (kind == PRK_PUFF) {
+            /* the caller's frame: esp at the call, past the return address the call pushed */
+            unsigned char* local = (unsigned char*)(size_t)(regs[PR_ESP] + 4u + 0x18u);
+            unsigned x, alt, y;
+            particle = row->next++ & PRAND_PUFF_KEYS;
+            memcpy(&x, local + 0x04, 4);
+            memcpy(&alt, local + 0x08, 4);
+            memcpy(&y, local + 0x0C, 4);
+            x = (x & ~7u) | (particle & 7u);
+            y = (y & ~7u) | (particle >> 3 & 7u);
+            alt = (alt & ~3u) | (particle >> 6 & 3u);
+            memcpy(local + 0x04, &x, 4);
+            memcpy(local + 0x08, &alt, 4);
+            memcpy(local + 0x0C, &y, 4);
+        } else {
+            particle = draw == 0 ? row->next++ : row->next - 1u;
+        }
+    }
+    s_prand.draws++;
+    regs[PR_EAX] = (unsigned)tagpu_prand(seed, particle, draw);
+}
+
+/* the LOADER thread, at 0x4918B1: this level's particle seed (THE LEVEL'S PARTICLE SEED) */
+static void __cdecl prand_level_begin(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    const char* gs;
+    const char* from;
+    char stem[48];
+    int mode;
+    unsigned map;
+    unsigned long long st;
+    /* GameingState is not NULL here: the loader body dereferenced it at 0x4971CD, as `this` for
+       0x435100, on the only path into 0x4917D0 (0x497CA1 -> 0x497581) */
+    memcpy(&gs, ta + B6_TNT, sizeof gs);
+    memcpy(&mode, gs, sizeof mode);
+    map = wind_map_hash(gs, stem, sizeof stem);
+    if (mode == B6_NETWORK) {
+        st = s_windSource != WIND_NONE ? wind_session_seed(&s_windSession, map) : map;
+        from = "the session and the map";
+    } else if (s_testSeeds) {
+        st = TEST_SEED_WIND ^ ((unsigned long long)map << 32);
+        from = "the harness's fixed seed and the map";
+    } else {
+        LARGE_INTEGER c;
+        QueryPerformanceCounter(&c);
+        st = (unsigned long long)c.QuadPart ^ ((unsigned long long)map << 32);
+        from = "the performance counter";
+    }
+    st ^= PRAND_SALT;
+    if (s_prand.levels)
+        tagpu_logf("enginefix: particles: the last level drew %u values by the rule over %u "
+                   "emissions, %u of them outside the pool", s_prand.draws, s_prand.emissions,
+                   s_prand.outside);
+    s_prand.level = (unsigned)(seed_mix(&st) >> 32);
+    s_prand.tick = 0xFFFFFFFFu;
+    s_prand.n = 0;
+    s_prand.draws = s_prand.emissions = s_prand.outside = 0;
+    s_prand.levels++;
+    tagpu_logf("enginefix: particles: level %u draws from seed 0x%08X (%s, map \"%s\")",
+               s_prand.levels, s_prand.level, from, stem);
+}
+
+static int fix_particle_rand(void)
+{
+    static const struct { unsigned int va; unsigned short code; } draws[20] = {
+        { 0x00472ACF, PRK_EMIT << 8 | 0 }, { 0x00472AF4, PRK_EMIT << 8 | 1 },
+        { 0x00472B17, PRK_EMIT << 8 | 2 }, { 0x00472B3A, PRK_EMIT << 8 | 3 },
+        { 0x00424345, PRK_EMIT << 8 | 0 }, { 0x00424379, PRK_EMIT << 8 | 1 },
+        { 0x0047395F, PRK_FLARE << 8 | 0 },
+        { 0x00473DAD, PRK_NANO << 8 | 0 }, { 0x00473DCA, PRK_NANO << 8 | 1 },
+        { 0x00473DE7, PRK_NANO << 8 | 2 }, { 0x00473E04, PRK_NANO << 8 | 3 },
+        { 0x00473E21, PRK_NANO << 8 | 4 }, { 0x00473E3E, PRK_NANO << 8 | 5 },
+        { 0x004749D9, PRK_WAKE << 8 | 0 }, { 0x00474A00, PRK_WAKE << 8 | 1 },
+        { 0x00474A27, PRK_WAKE << 8 | 2 },
+        { 0x00474F1C, PRK_PUFF << 8 | 0 }, { 0x004752D4, PRK_PUFF << 8 | 0 },
+        { 0x004753B9, PRK_FRAME << 8 | 0 }, { 0x00475679, PRK_FRAME << 8 | 0 },
+    };
+    static const unsigned char alloc[7] = { 0x8B, 0x51, 0x20, 0x56, 0x8B, 0x71, 0x1C };
+    static const unsigned char layers[5] = { 0xE8, 0xDA, 0x04, 0xFE, 0xFF };   /* call 0x471D90 */
+    unsigned char *a, *l, *p;
+    int i;
+    if (!(a = fix_code(48)) || !(l = fix_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    /* the alloc: the engine's own body on the engine's arguments, then the count. Its registers
+       on return are the body's (popad), as its callers find them in stock */
+    p = a;
+    *p++ = 0x51;                                                /* push ecx: the pool       */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;         /* push [esp+8]: its size   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)(a + 32)); p += 4;
+    *p++ = 0x59;                                                /* pop ecx                  */
+    *p++ = 0x60;                                                /* pushad                   */
+    *p++ = 0x50;                                                /* push eax: the object     */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)prand_alloc); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                      /* add esp,4                */
+    *p++ = 0x61;                                                /* popad                    */
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                      /* ret 4                    */
+    p = a + 32;                                                 /* the body: stolen bytes   */
+    memcpy(p, alloc, sizeof alloc); p += sizeof alloc;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00470EB7);
+    lim_branch(0x00470EB0, sizeof alloc, alloc, 0xE9, (unsigned int)(size_t)a,
+               "particles: the pool's alloc counts the emission");
+    p = l;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)prand_level_begin); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00471D90);
+    lim_branch(0x004918B1, sizeof layers, layers, 0xE8, (unsigned int)(size_t)l,
+               "particles: the level's seed, before the map's features");
+    for (i = 0; i < 20; i++) {
+        unsigned char call[5];
+        unsigned int rel = 0x004E4870u - (draws[i].va + 5u);    /* call 0x4E4870, the CRT's rand */
+        unsigned int code = draws[i].code;
+        unsigned char* s = fix_code(24);
+        if (!s) {
+            lim_no_stub();
+            return FIX_TABLE;
+        }
+        p = s;
+        *p++ = 0x60;                                            /* pushad                   */
+        *p++ = 0x54;                                            /* push esp: the registers  */
+        *p++ = 0x68; memcpy(p, &code, 4); p += 4;               /* push code                */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)prand_site); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8                */
+        *p++ = 0x61;                                            /* popad: eax the value     */
+        *p++ = 0xC3;
+        call[0] = 0xE8;
+        memcpy(call + 1, &rel, 4);
+        lim_branch(draws[i].va, sizeof call, call, 0xE8, (unsigned int)(size_t)s,
+                   "particles: a draw by their own rule");
+    }
+    return FIX_TABLE;
+}
+
+/* TWO PARTICLE INITS THAT DIVIDE BY ZERO [DISASSEMBLED].
+   - The teleport flare's init 0x4736E0 takes steps = the int16 high word of (len << 16) / 0x50000,
+     len the 16.16 distance's _ftol'd length, and divides each axis by it (0x473788: `movsx ecx,
+     word [esp+0x1A]; cdq; idiv ecx`, then 0x473799, 0x4737A2): a teleport shorter than 5 world
+     units faults.
+   - The wake's init 0x474760 divides 2^32 by the sign-extended low dword of len * 2 (0x47480A:
+     `cdq; push edx; push eax; push 1; push 0; call _alldiv 0x4E4440`): two equal points fault, as
+     bubbles emitted exactly at sea level are (EMIT_SFX 0x103 passes the point and the same point
+     at sea level, 0x481102).
+   THE FIX tests the divisor first. Zero ends the init where it ends anyway, at its epilogue (the
+   flare's pops at 0x4737AE, `ret 0xC`; the wake's at 0x474875, `ret 0x14`), the stack and the x87
+   stack there as at the test: every call between is callee-cleaned (0x471D70 `ret 4`, _allmul and
+   _alldiv `ret 0x10`, _allshr none) and the three `fstp` have emptied the x87 stack. The init then
+   makes no spawn, so the object holds no particle, and the walk destroys it as empty before it
+   updates it (slot 3 first: particle_walk). Nothing else changes: a non-zero divisor runs stock's
+   instructions.
+   CLASS: local. Without it the engine faults on such an emission. */
+static int fix_particle_divides(void)
+{
+    FIXSITE site[2] = {
+        { 0x00473788, 8, { 0x0F, 0xBF, 0x4C, 0x24, 0x1A, 0x99, 0xF7, 0xF9 }, { 0 } },
+        { 0x0047480A, 12, { 0x99, 0x52, 0x50, 0x6A, 0x01, 0x6A, 0x00,
+                            0xE8, 0x2A, 0xFC, 0x06, 0x00 }, { 0 } },   /* ... call 0x4E4440 */
+    };
+    unsigned char *f, *w, *p;
+    if (!fix_match(site, 2)) return FIX_BYTES;
+    if (!(f = fix_code(24)) || !(w = fix_code(32))) return FIX_STUB;
+    p = f;
+    memcpy(p, site[0].was, 5); p += 5;                          /* movsx ecx,word [esp+0x1A] */
+    *p++ = 0x85; *p++ = 0xC9;                                   /* test ecx,ecx             */
+    *p++ = 0x74; *p++ = 0x08;                                   /* jz none                  */
+    *p++ = 0x99; *p++ = 0xF7; *p++ = 0xF9;                      /* cdq; idiv ecx            */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00473790); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004737AE);               /* none: the epilogue       */
+    p = w;
+    *p++ = 0x85; *p++ = 0xC0;                                   /* test eax,eax             */
+    *p++ = 0x74; *p++ = 0x11;                                   /* jz none                  */
+    memcpy(p, site[1].was, 7); p += 7;                          /* cdq; push edx; push eax;
+                                                                   push 1; push 0          */
+    *p++ = 0xE8; tagpu_detour_rel(p, 0x004E4440); p += 4;       /* call _alldiv             */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00474816); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00474875);               /* none: the epilogue       */
+    fix_branch(&site[0], 0xE9, f);
+    fix_branch(&site[1], 0xE9, w);
+    return fix_write(site, 2);
+}
+
 SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");
 
 /* A YARDMAP PARSED PAST ITS STRING [DISASSEMBLED]. For a def whose BMcode is 0 ([def+0x22F],
@@ -12148,6 +12491,12 @@ static void patch_loader_defects(void)
     int qsit = fix_queued_site();
     int seed = fix_test_seeds();
     int mstr = fix_meteor_stream();
+    int prnd = fix_particle_rand();
+    int pdiv = fix_particle_divides();
+    tagpu_logf("enginefix: the particles draw by their own rule, not the CRT's rand (0x470EB0 "
+               "0x4918B1 and twenty draws 0x424345..0x475679) %s; a flare or a wake whose divisor "
+               "is zero makes no particle (0x473788 0x47480A) %s", fix_state(prnd),
+               fix_state(pdiv));
     tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
                "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
                s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
