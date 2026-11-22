@@ -109,8 +109,9 @@ the explosions and the players phase, in this order:
    zeroed; below the sea level `main+0x1427F` it sinks, `+0x14` 0, `+0x18` `−0x2CCC`, `+0x1C` 0;
    otherwise it falls by the gravity `main+0x14263` (`0x424253..0x4242B0`). One without a velocity
    moves to the settled list (`0x4242B8..0x4242C0`). A GAF record, while burning (`+0x2F` bit 0) and
-   on every third tick (`GameTime % 3`, `0x4241AE..0x4241CB`), makes its smoke, which draws the
-   CRT's `rand` (`0x4E4870`, `0x424345`, `0x424379`) and calls the emitter `0x472810`
+   on every third tick (`GameTime % 3`, `0x4241AE..0x4241CB`), makes its smoke, whose point's two
+   draws (`0x424345`, `0x424379`; the CRT's `rand` `0x4E4870` in stock) come from Impure's keyed
+   particle rule ([effects](../effects.html) §7.7), and calls the emitter `0x472810`
    (`0x4243CF`) — presentation; its sequences step (`0x4B8B90`: `0x4243DC`, `0x4243EB`,
    `0x42446E`, `0x42447D`); a burn ends with the destroy `0x42442F` and the burnt feature's spawn
    `0x424443`, the spread `0x4239C0` runs when the countdown `+0x2E` runs out (`0x424463`), and the

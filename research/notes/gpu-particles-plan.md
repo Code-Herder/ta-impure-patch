@@ -78,11 +78,19 @@ no longer depend on particles on either renderer, whatever was on screen.
   Every live emitter calls the alloc exactly once a call, after its SFX test, whatever the pool
   answers, so an event recorder at the same point counts the same n with the pool emptied. Unit-script
   smoke, fire and wake are emitted only while the unit is in the viewed player's sight (`0x480EC5`), so
-  emission depends on the viewer, as it does in stock.
+  emission depends on the viewer, as it does in stock. That makes the simulation step's emissions a
+  function of the game and the viewer on either renderer. The flying pieces' smoke and fire are not:
+  the explosion DRAW emits them (`0x421583`, `0x4215AA`), once a frame that ran ticks, so whether they
+  exist, and n for every emission after them in their GameTime, also follow the frames drawn.
+  **For the GPU path** this changes nothing: those emissions are made by the CPU at draw time and
+  recorded as events like the others, with the seed the CPU gave them, so the GPU reproduces whatever
+  the CPU emitted. Only the claim "the same game on GDI and on Vulkan shows the same particles" is
+  weaker for them, as it is in stock.
 - **The particle** is the object's count of the particles it began (nano 0..4 then 5..9, wake 0 and 1,
-  flare 0..3). A smoke puff's is its spawn ordinal modulo 256, which the puff carries in its
-  position's low bits; its frame count is draw 0 and each frame advance's countdown draw is the frame
-  it advances to. Draws an emitter makes before its object exists use the particle `0xFFFFFFFF`.
+  flare 0..3). A smoke puff's is its spawn ordinal, whose low 8 (Smoke2) or 10 (Smoke1) bits the puff
+  carries in its position's low bits; an update recovers it from those bits and the object's spawn
+  count. Its frame count is draw 0 and each frame advance's countdown draw is the frame it advances
+  to. Draws an emitter makes before its object exists use the particle `0xFFFFFFFF`.
 - **Where it lives:** on GDI and in the engine's code on Vulkan, a side table by pool slot, particle
   state the simulation never reads. On Vulkan's GPU path, the emitter event will carry the seed.
 - **This is a simulation change:** start positions and meteors move compared with stock for a given

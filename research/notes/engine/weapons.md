@@ -24,9 +24,10 @@ box to the point (`0x472203..0x4722A9`). Neither makes a particle while the byte
 nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is empty
 (`0x472126`). The object's vtable is `0x4FD5B8`. Its init, slot `+0x18` = `0x473B50`, copies the
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
-(`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
-`0x4B6C30`, so an emission writes no simulation state; it does advance the game thread's CRT
-stream, which a player's meteor shower reads later ([sim](sim.md), *The two random streams*). `0x4732E0` appends the object to the
+(`0x473D50`, called at `0x473D39`). The spawn's six draws a particle were the CRT's `rand 0x4E4870`
+in stock; under Impure they come from the particles' own keyed rule ([effects](../effects.html) §7.7),
+never from a CRT stream or the sim RNG `0x4B6C30`, so an emission writes no simulation state and
+moves no stream a meteor shower or a start reads ([sim](sim.md), *The two random streams*). `0x4732E0` appends the object to the
 layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
 emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
 limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
@@ -1809,8 +1810,9 @@ anywhere in the image; nor do `0x421150`, `0x421170` and `0x4211A0`, three slot 
 operands are patched with the rest.
 
 **Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
-emitter range `0x470F00..0x472F00` draws the C runtime's `rand` (`0x4E4870`) and never the
-simulation's generator.
+emitter range `0x470F00..0x472F00` never draws the simulation's generator; its random values,
+the C runtime's `rand` (`0x4E4870`) in stock, come from Impure's keyed particle rule
+([effects](../effects.html) §7.7).
 
 - **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
   `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
@@ -1863,8 +1865,9 @@ simulation's generator.
   0x4E4440` at `0x474811`), rejoining at `0x474816`; its epilogue is `0x474875` (`ret 0x14`). A wake
   or bubbles call whose two points are equal faults, as `EMIT_SFX 0x103` from a piece exactly at sea
   level would. In both the stack and the x87 stack at the divide are those of the epilogue: every
-  call between is callee-cleaned (`0x471D70` `ret 4`, `_allmul`/`_alldiv` `ret 0x10`, `_allshr`
-  none) and three `fstp` empty the x87 stack. **Impure** tests each divisor first and on zero jumps
+  call between is callee-cleaned or takes registers (both: `0x471D70` `ret 4` and `_ftol`
+  `0x4E43A0`, which pops the x87 top; the flare: `_allshl 0x4E44F0` and `_alldiv` `ret 0x10`; the
+  wake: `_allmul 0x4E4400` `ret 0x10` and `_allshr 0x4E43D0`) and three `fstp` empty the x87 stack. **Impure** tests each divisor first and on zero jumps
   to the epilogue, so the init spawns nothing and the walk destroys the empty object
   ([engine patches](../modules/engine-patches.md), *two particle divides*).
 - **The particle code draws the C runtime's per-thread `rand` at twenty sites** in stock

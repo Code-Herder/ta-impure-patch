@@ -619,11 +619,16 @@ engine's particle code computes:
     ordinal spent);
   - wake and bubbles (`0x474880`): the dot at T is 0, at T+1 is 1; draws 0..2 the x, alt, y jitter;
   - flare (`0x4737C0`): the sprite at T + 10k is k; draw 0 its start frame;
-  - smoke (`0x474DF0`, `0x4751C0`): a puff is its spawn's ordinal **modulo 256**; draw 0 its frame
-    count, and each frame advance's countdown (`0x475340`, `0x475600`) draw f, f the frame it
-    advances to (1 or more). The puff carries the ordinal in its position's low bits (x bits 0..2,
-    y bits 0..2, alt bits 0..1), which the updates only ever add multiples of 8 and 4 to, so every
-    high word, the only part the leaves and the packet read, is stock's;
+  - smoke (`0x474DF0`, `0x4751C0`): a puff is its spawn's ordinal k (the object's spawn count when
+    it spawned: 0, 1, 2 ... for the object's life); draw 0 its frame count, and each frame
+    advance's countdown (`0x475340`, `0x475600`) draw f, f the frame it advances to (1 or more).
+    The puff carries k's low bits in its position's low bits (x bits 0..2, y bits 0..2, alt bits
+    0..1 for Smoke2, 0..3 for Smoke1: 8 or 10 bits), which the updates only ever add multiples of 8
+    and 4 (16) to, so every high word, the only part the leaves and the packet read, is stock's. An
+    update recovers k as `last − ((last − low) mod span)`, last = the object's spawn count − 1 at the
+    draw, span 256 (Smoke2) or 1024 (Smoke1): k itself for a puff fewer than span spawns old. A
+    Smoke2 object spawns at most 61 puffs; a Smoke1 puff 1024 spawns old would have lived 5 120
+    ticks. A closed form computes the same recovered value from k and the spawn count at the tick;
   - draws made before the object exists take the seed the next alloc gives and p = `0xFFFFFFFF`:
     the fire emitter `0x472AB0`'s four (d 0..2 the x, alt, y jitter, 3 the life) and the feature
     tick's two (d 0, 1, the smoke point's jitter), then the Smoke2 object it emits.
@@ -653,7 +658,7 @@ the first `peek` in play, none outside the pool.
 | `0x4B7F30` / `0x4B7EE0` | `GAF_SequenceIndex2Frame` / `GAFGetCurrentFramePtrAddr` |
 | `0x4B6CC0` / `0x4B7173` | vertex rotate by triple / 2D rotate |
 | `0x4BE950` / `0x4BEA20` / `0x4CC7AB` | `DrawLine` / clip / Bresenham |
-| `0x4E4870` | `rand2` = CRT `rand()` (per-thread `_getptd` seed): the lightning jitter here, eighteen particle sites (§7.3, §7.4), 61 sites in all ([sim](engine/sim.html), *The two random streams*) |
+| `0x4E4870` | `rand2` = CRT `rand()` (per-thread `_getptd` seed): the lightning jitter here, and in stock twenty particle sites (§7.3, §7.4, the feature tick's two), which Impure answers from its keyed rule instead (§7.7); 61 sites in all ([sim](engine/sim.html), *The two random streams*) |
 | `main+0x141F3/0x141F7` | projectile count / array (stride 0x6B) |
 | `main+0x1491B/0x1491F` | explosion count / inline array (stride 0x54, 300) |
 | `main+0x38A47` | game tick |
