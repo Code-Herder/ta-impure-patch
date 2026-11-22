@@ -268,10 +268,34 @@ Vulkan in the event.
      every particle of both classes equal; the replay groups 343 pass; a GDI pair; in the 13 500-unit
      battle `particles` 0.86 → 1.20 ms, `publish` 1.76 → 1.45, `gather` 3.33 → 1.95 ([effects](effects.md)
      §7.8's *MEASURED*).
-6. **The engine's particles off on Vulkan.** The pool capacity 0, the walker's call and the packet's
-   particle copy removed on Vulkan, and `tagpu_sfx.c`'s gather of the layers retired. Measure in the
-   battle at 1080p and at 4K live: the `particles` span, `publish`, `gather`, the GPU's frame time, and
-   the process's address space and GPU memory.
+6. **The engine's particles off on Vulkan.** *Built 2026-11-22.* The pool capacity 0, the walker's call
+   and the packet's particle copy removed on Vulkan, and `tagpu_sfx.c`'s gather of the layers retired.
+   Measure in the battle at 1080p and at 4K live: the `particles` span, `publish`, `gather`, the GPU's
+   frame time, and the process's address space and GPU memory.
+   - **What it built** ([effects](effects.md) §7.8): `0x471C83` = 0 on a Vulkan launch without the
+     oracle, a row of the particles' fail-closed table in both builds; every class recorded at the alloc
+     `0x470EB0` from the emitter's frame (the bytes from the alloc's return to the layer's `movsx` held
+     to stock), the five init hooks and the proxies deleted; the layer cap applied to the events of
+     every class and the pool's count to all of them, so a stock-limits game refuses what stock's pool
+     of 1000 refuses; Smoke1's events ended by the trim or the level, the packet copying none while the
+     layer table is NULL; the walk at `0x4955BF` walking no layer, its event hooks kept; the packet's
+     particle table, its gather, the `sfx:` layer draw and the effects pass's under bucket deleted.
+   - **Learned**: once every object is an event, the event side's trim and pool count are the engine's
+     by construction, so the oracle needs no `trimmed` excuse: any trim or pool difference reads as
+     *missing* or *extra*. An emission an event cannot hold now draws nothing (none in stock content).
+   - **MEASURED** (`.data/gpu-particles/l6/`): the oracle groups and the replay groups (493 pass, 0
+     fail), save and load, a live rewind and the address space: [effects](effects.md) §7.8. The 13 500-unit
+     battle at 1920×1080 (`tools/battle13k.py`, a private display, 125 s profiled), the base 5a820806 and
+     this build alternated, two runs each: the game thread's `particles` 1.14/1.15 → 0.37/0.38 ms a
+     frame, `publish` 1.40/1.40 → 1.31/1.31, the render thread's gather median 1.95/1.97 → 2.31/2.29 ms,
+     20.3/19.9 → 20.3/20.4 frames a second. The gather's 0.34 ms is at every quantile and in every
+     quarter of the run (p10 1.65 → 1.98), not explained by the code removed (the gather's part of the
+     particles was an empty table on both): open below. GPU memory and the GPU's frame time were not
+     measured (`battle13k.py` records neither).
+   - **The feature's whole gain**, main c3ddc579 against this build, one run each, the same battle:
+     `particles` 3.19 → 0.36 ms a frame, `publish` 2.91 → 1.33, gather median 5.27 → 2.31, 17.8 → 19.8
+     frames a second (56.3 → 50.5 ms a frame); the process's `VmData` 715.5 → 704.9 MB at the same point
+     of `replay-smoke`, the base 5a820806's 731 MB.
 
 Each landing is a local landing on this branch. The feature lands on main once, through the replay gate.
 
@@ -295,6 +319,10 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 - **Fire and the flare are a clean yellow on Vulkan, orange on GDI.** The sprites take the restored
   twin's colour, which predates this feature (the same scene on fd7d5a86 draws the same yellow); GDI
   shows the palette's dithered frame. A colour item of its own, not this feature's.
+- **The render thread's gather is 0.34 ms a frame slower than at 5a820806** in the 13 500-unit
+  battle, at every quantile, in three runs alternated with two of the base; what the landing removed
+  from the gather (an empty particle table's walk) cannot cost it, so its cause is not established.
+  The game thread gained 0.86 ms a frame in the same runs, and the frame rate is unchanged.
 - **The 4K measurement on the owner's live display** (the `particles` span, `publish`, `gather`, the
   GPU's frame time at 3840×2160) waits for the owner's word; every number here is 1080p on a private
   display.

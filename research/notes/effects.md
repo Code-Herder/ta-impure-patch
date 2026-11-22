@@ -863,7 +863,13 @@ packet truncated.
 groups on the coverage build: `particle-check` 1 080 ticks, 106 607 fire, 610 978 Smoke2 and 40 274
 Smoke1 particles; `particle-check-sea` 1 380 ticks, 254 593 wake particles, 10 dots dead over ground;
 `particle-check-smoke` 1 620 ticks, 203 783 Smoke2 and 52 212 Smoke1; 0 differing, 0 missing or extra
-in each, now that no object is excused as trimmed. `tareplay.py run particle-check particle-check-sea
+in each, now that no object is excused as trimmed. Under the oracle on the other classes:
+`nano-factory` with eight Atlases flying (COB fire, layer 7), a live rewind opened at 1 793, sought to
+1 492, forked at 1 200, to 2 545: 3 143 ticks, 450 854 nano, 15 186 fire and 57 969 Smoke1
+particles; `replay-teleport`, twelve teleports: 2 550 ticks, 23 600 flare particles; `replay-smoke`
+on the stock-limits build (its pool of 1000, its layers of 400), a live rewind opened at 1 378, sought
+to 1 077, forked at 900, to 2 238: 2 725 ticks, 321 413 Smoke2 and 44 542 Smoke1 particles; 0
+differing, 0 missing or extra in each. `tareplay.py run particle-check particle-check-sea
 particle-check-smoke battle teleport stock-limits --cover`: 493 pass, 0 fail, every Vulkan lane's
 install line naming the empty pool. Without the oracle on Vulkan: a save and a load on `sfx-strait`
 (GameTime 803, loaded at 1 440) and a live rewind on `replay-smoke` (opened at 1 220, sought to 919,
@@ -875,7 +881,12 @@ MB less — the pool's 15.6 MB block and 0.8 MB stack never allocated, and the e
 bucket, the sprite bucket's particle share and the packet's particle scratch gone (11.0 MB of static
 arrays: 2 × 6 × 24 576 vertices of 36 B, and 24 576 × 16 B); `VmSize` 22.6 MB less; the resident set the same (607 MB), since a pool the game never
 fills is mostly untouched pages. The largest free range below 4 GiB moved between runs of one build
-by more than between builds (332 to 348 MiB), so it is not a measure of this change.
+by more than between builds (332 to 348 MiB), so it is not a measure of this change. In the 13 500-unit
+battle (1920×1080, the base 5a820806 and this build alternated, two runs each): the game thread's
+`particles` 1.14/1.15 → 0.37/0.38 ms a frame, `publish` 1.40/1.40 → 1.31/1.31, the render thread's
+gather median 1.95/1.97 → 2.31/2.29 ms (open: [the plan](gpu-particles-plan.md)), 20.3/19.9 →
+20.3/20.4 frames a second; against main c3ddc579, the feature's whole: `particles` 3.19 → 0.36,
+`publish` 2.91 → 1.33, gather 5.27 → 2.31, 17.8 → 19.8 frames a second.
 
 **The blend order is the engine's.** The engine draws layer by layer, each in its vector's order,
 and every emission appends to its layer's vector; the upload puts the events in layer order and in
