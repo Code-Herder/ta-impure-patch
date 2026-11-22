@@ -1,0 +1,177 @@
+# GPU-only particles: the plan
+
+On a Vulkan launch, the engine's particles stop being simulated, stored and copied on the CPU. Each of
+the twelve live emitters records an **emitter event**, and the GPU draws every particle as a function of
+its event and the game time. The engine's particle walker, its updates and its pool stop running, and
+the pool's memory is given back. GDI, the oracle, keeps the engine's particle code. **Both renderers
+draw particles from one random rule of their own**, so a GDI game and a Vulkan game of the same seed show
+the same particles, and no simulation value depends on particles any more.
+
+Owner's decisions, 2026-11-22: GPU-only particles from emitter events, all emitters; the vertex shader
+over the pixel shader; option A for the random rule (below); recover the pool's memory.
+
+## Why
+
+In the 13 500-unit battle at 1080p ([zoom-out speed plan](zoom-out-speed-plan.md), item 5), the
+particle tick costs 10.2 / 4.6 / 2.2 / 1.6 ms a frame (near busy, far busy, near thin, far thin) after
+its prefetch. It is the walker `particle_walk` and the engine's updates `0x474580`, `0x4739B0`,
+`0x475340` and the height lookup `0x485070`. On top of it, every frame the game thread copies the
+particles into the frame packet (inside `publish`) and the render thread uploads them (inside `gather`).
+Neither copy has been timed on its own. The pool is 204 800 objects of 76 bytes under the raised
+limits: 15.6 MB, plus a 0.8 MB pointer stack, held for the whole process in the 32-bit address space.
+
+## What the scout established
+
+The facts behind this plan, every address cited, are in the scout's report
+(`.data/gpu-particles/scout.md` in this worktree, gitignored; its corrections reach the engine map in
+landing 0). The ones the design rests on:
+
+- **The random stream is shared, and that is why the rule is option A.** The C runtime's `rand`
+  `0x4E4870` keeps one seed per thread (`_tiddata+0x14`, TLS). The particle code draws from it at
+  eighteen sites:
+  - fire `0x472AB0`: `0x472ACF`, `0x472AF4`, `0x472B17`, `0x472B3A`;
+  - flare spawn: `0x47395F`;
+  - nano spawn: `0x473DAD`, `0x473DCA`, `0x473DE7`, `0x473E04`, `0x473E21`, `0x473E3E`;
+  - wake spawn: `0x4749D9`, `0x474A00`, `0x474A27`;
+  - the smoke spawns `0x474F1C` and `0x4752D4`;
+  - the smoke updates `0x4753B9` and `0x475679`.
+
+  The feature tick draws two more for a burning feature's smoke point (`0x424345`, `0x424379`). Two
+  simulation values come later in the same streams:
+  - the meteor strike points, on the game thread;
+  - the random skirmish start positions, on the loader thread. A smoking map feature's endless smoke
+    draws once at load (`0x472C50` → `0x4751C0` → `0x4752D4`) before the start shuffle
+    (`0x4979E7`, `0x497A32`). That order is read from the static call sequence and is not yet measured.
+
+  Stopping or changing the particle code therefore moves meteors and starts, unless particles stop
+  drawing that stream.
+- **Nothing else reads particle state.** No simulation, AI, network, save or sound code reads the pool,
+  the layer table or the objects; scans of every reference show none. The recorder leaves the pool
+  (`replay-globals.tsv`, `leave particlepool`) and has no row for the layer table. It records only the two
+  nano emitters as `RK_EV_SPRAY` and re-makes the teleport flare from the recorded move. The replayed
+  simulation fires the other ten emitters again. A seek empties the layers (`tagpu_effects_clear`).
+- **The update is closed-form for four classes:**
+  - fire, flare and nano particles move by a fixed step a tick and die at a fixed tick;
+  - wake also dies where the ground under it reaches sea level, a terrain lookup along a straight path;
+  - smoke drifts with the wind and draws one random number per frame advance, so it is closed-form
+    given the wind's history and that random rule.
+- **The pool can be emptied safely.** Our attach runs before the C runtime's initializer `0x471C80`
+  builds the pool, and the renderer is final at attach. A capacity of 0 makes the constructor
+  `0x470A90` skip the block allocation. The pool's alloc `0x470EB0` then answers 0, and every emitter
+  skips its particle on that.
+
+## The design
+
+### The random rule (both renderers)
+
+Every particle `rand` site above is redirected to `particle_rand`, which answers in the CRT's range (0 to
+0x7FFF) from a hash of the object's seed, the sub-particle and the draw's number within that
+sub-particle. The engine's particle code, which still runs on GDI, and the GPU's closed form therefore
+compute the same values by construction. Neither draws the CRT stream, so meteors and start positions no
+longer depend on particles on either renderer, whatever was on screen.
+
+- **The seed** of an object is a hash of the level's seed, the GameTime and the emission's ordinal in
+  that tick, which is the same on both renderers for the same game and the same viewer. Unit-script
+  smoke, fire and wake are emitted only while the unit is in the viewed player's sight (`0x480EC5`), so
+  emission depends on the viewer, as it does in stock.
+- **Where it lives:** on GDI, a side table indexed by the object's pool slot, presentation state. On
+  Vulkan, the emitter event.
+- **This is a simulation change:** start positions and meteors move compared with stock for a given
+  seed. It is a `SIM_FEATURE` and is landed through the replay gate.
+
+### The emitter event (Vulkan)
+
+On a Vulkan launch each emitter entry records `{class, layer, start tick, end tick, seed, parameters}`
+into a game-thread event list instead of allocating an object:
+
+- **parameters:** point, box, from/to, period, life, sequence choice, frame cap and countdown, as the
+  emitter's arguments and init give them;
+- **end tick:** computed at emission from the same rule the GPU uses, including smoke's frame
+  countdowns and the wake's death over shallow ground, which is found once on the CPU from the
+  terrain's height `0x485070`;
+- **endless feature smoke (`0x472C50`)** lives until the level's teardown or the layer cap trims it,
+  as in the engine.
+
+The list keeps the engine's layer cap (front trimmed when a layer passes its cap), so a layer never
+holds more than the engine's would. It is published in the frame packet. The list is presentation
+state; a seek clears it, as it clears the layers today.
+
+### The draw (Vulkan)
+
+One instanced draw per layer group. An instance is (event, particle index). Its vertex shader computes:
+
+- **Position:** start + step × ticks for fire, flare, nano and wake. Smoke adds the wind's prefix sum
+  between birth and now (a small per-tick table, uploaded as it grows) and its rise.
+- **Frame or colour:** periodic in ticks for fire, flare, nano and wake. Smoke's frame advances by the
+  random rule's countdowns, at most the sequence's frames per puff.
+- **Life:** born at the spawn's tick (nano's second burst at T+1, flare particles at T+10/20/30,
+  smoke's repeat every `interval`); dead past its end tick or below the wake's death tick. A dead
+  instance emits a degenerate quad.
+
+Sprites use the existing effects atlas and program. Dots stay 2×2 game pixels. The line-of-sight test
+becomes the engine's own tile rule, the exact tile `(hi(x)>>5, (hi(y) − hi(alt)/2)>>5)` against the
+viewed player's sight or mapped bit. Smoke1 is ungated as in the engine. That replaces today's smoothed
+fog sample, whose edges differ from the engine's. The layer order and depth keys stay those of
+`tagpu_sfx.c`.
+
+### The pool (Vulkan)
+
+The pool's capacity operand `0x471C83` is written 0 at attach on a Vulkan launch, in both builds. The
+stock build has no `lim_dword`, so it needs its own write. Any emitter call that reaches the engine
+anyway makes no particle. The walker's call `0x4955BF` and the particle part of the frame packet are
+removed on Vulkan once the last class is drawn from events.
+
+### The oracle
+
+`tagpu_particlecheck.on` keeps the engine's pool and walker running on a Vulkan launch, under the
+random rule. Each tick it compares every live sub-particle's position, frame or colour and death with
+the closed form, as the repose oracle compares vertices, and logs any difference by class and site. A
+GDI game of the same scenario at zoom 1.0 remains the picture's ground truth.
+
+### Fixed on both renderers
+
+The engine divides by zero for a teleport shorter than 5 world units (`0x47378E`) and for bubbles
+emitted exactly at sea level (`0x474811`). Both become no particle, on GDI as an engine fix and on
+Vulkan in the event.
+
+## The landings
+
+0. **The scout's facts into the engine map, the notes corrected.**
+   - `effects.md` §7: `0x472630` makes Smoke2 ("smoke 1"), not a flare; weapon smoke is layer 9 and
+     layer 5 is burning-feature smoke and the teleport flare; Smoke1 re-puffs every 5 ticks for ever;
+     `0x4729D0` takes a layer; both smoke classes use "smoke 1" except BlackSmoke.
+   - `engine/weapons.md` and `engine/sim.md`: the 61 `rand` sites classified, the loader-thread order.
+   - The recorder's comment that calls `0x472630` a flare.
+   - Measure each emitter's calls per tick in the battle from the recorder's sink counts, to size the
+     event list and the instance buffer.
+1. **The random rule on both renderers** (simulation). The particle `rand` sites go to `particle_rand`,
+   with the seed side table on GDI, and the two engine divide-by-zero fixes land. Checks:
+   - the replay gate;
+   - meteors and start positions no longer depend on particles: the same seed with the particle code
+     disabled through the console `SFX` toggle `0x51E608` gives the same strike points and starts;
+   - a GDI A/B for the look.
+2. **The event list, the GPU path, and the nano spray.** The emitter events, the wind table, the
+   instanced draw and the oracle lever, for the nano class first. It is the commonest particle in a
+   battle, already recorded, and its closed form is the simplest. The engine's pool still runs for every
+   other class. Check: the oracle reports 0 differences over a battle; a GDI A/B.
+3. **Fire and the flare.** Check: the oracle; a teleport and a burning-debris scene against GDI.
+4. **Wake and bubbles,** with the death tick from the terrain at emission. Check: the oracle; ships on a
+   shore and submarines against GDI.
+5. **Smoke1 and Smoke2,** with the wind table and the countdowns. Check: the oracle; feature smoke, impact
+   smoke, rocket trails and damaged-unit smoke against GDI.
+6. **The engine's particles off on Vulkan.** The pool capacity 0, the walker's call and the packet's
+   particle copy removed on Vulkan, and `tagpu_sfx.c`'s gather of the layers retired. Measure in the
+   battle at 1080p and at 4K live: the `particles` span, `publish`, `gather`, the GPU's frame time, and
+   the process's address space and GPU memory.
+
+Each landing is a local landing on this branch. The feature lands on main once, through the replay gate.
+
+## Open
+
+- The per-emitter rates (landing 0) size the event list and the instance buffer. A full buffer thins
+  as `tagpu_sfx.c` does today and says so, never silently.
+- What the network start shuffle's order at `main+0x29FC` decides is not established. It draws the game
+  thread's stream, whose particle draws landing 1 removes, so it is checked in landing 1's
+  two-player game.
+- Whether any saver dumps the main block raw is not established. The layer-table pointer would be a
+  dead value there, and landing 1's checks include a save and a load.
