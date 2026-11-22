@@ -15337,7 +15337,7 @@ SIM_FEATURE(fp_exact, SIM_PUPPET_RUNS, "fp-verify battle slice-walkers stock-res
    THE INVARIANT: a call's result is, bit for bit, the one the engine's code computes on the same
    machine. The table holds, for every angle word, the 80-bit cosine and sine that this machine's
    fsincos returns on fild word; fmul qword [0x509EF8] under the control word s_rotCw, computed by
-   those instructions at install (rot_build). A call under s_rotCw loads the pair from the table and
+   those instructions at install (rot_emit_build). A call under s_rotCw loads the pair from the table and
    runs the engine's own instructions around it, copied from the exe after byte-matching all of it;
    a call under any other control word runs the engine's code. The fmul's precision and rounding are
    the control word's and fsincos's result the CPU's, both the same for an entry as for the engine's
@@ -15559,7 +15559,10 @@ SIM_CODE(s_hypCode);
 static struct { volatile LONG calls, fast, differ; } s_hypDiag;
 SIM_VAR(s_hypDiag, SIM_PRIVATE);
 
-typedef double (__cdecl *HypHelp)(double x, double y, int op);
+/* The two doubles travel as their bits: the engine's _hypot moves them with integer moves, and a
+   copy through the x87 would quiet a signalling NaN on its way to 0x4FB480. The stack layout and
+   the result in st(0) are the same as for (double, double). */
+typedef double (__cdecl *HypHelp)(uint64_t x, uint64_t y, int op);
 
 /* hyp_core, cdecl (const double in[3] = {|x|, |y|, M}, double out[5], const uint16_t* cw):
      push ebp; mov ebp,esp; push ecx; fnstcw [ebp-4]; mov eax,[ebp+0x10]; fldcw [eax]
@@ -15584,10 +15587,10 @@ static const unsigned char HYP_CW[] = { 0x51,0xD9,0x3C,0x24,0x58,0x0F,0xB7,0xC0,
 static uint64_t hyp_bits(double d) { uint64_t b; memcpy(&b, &d, sizeof b); return b; }
 
 /* 1 and *out when the input is one hyp_core computes as the engine does */
-static int hyp_fast(double x, double y, double* out)
+static int hyp_fast(uint64_t x, uint64_t y, double* out)
 {
     static const uint16_t cw133f = 0x133F;
-    const uint64_t bx = hyp_bits(x) & 0x7FFFFFFFFFFFFFFFull, by = hyp_bits(y) & 0x7FFFFFFFFFFFFFFFull;
+    const uint64_t bx = x & 0x7FFFFFFFFFFFFFFFull, by = y & 0x7FFFFFFFFFFFFFFFull;
     double in[3], tmp[5];
     uint64_t bm;
     unsigned em;
@@ -15598,14 +15601,14 @@ static int hyp_fast(double x, double y, double* out)
     /* the engine's compare: M is |y| when |y| > |x|, else |x| (finite doubles order as their bits) */
     bm = by > bx ? by : bx;
     em = (unsigned)(bm >> 52);
-    if (em < 0x3FFu - 1000u || em > 0x3FFu + 1000u) return 0;
+    if (em < 0x3FFu - 1000u || em >= 0x3FFu + 1000u) return 0;    /* 2^-1000 <= M < 2^1000 */
     memcpy(&in[2], &bm, 8);
     ((void (__cdecl*)(const double*, double*, const uint16_t*))(void*)s_hypCode)(in, tmp, &cw133f);
     *out = tmp[4];
     return 1;
 }
 
-static double __cdecl hyp_hook(double x, double y)
+static double __cdecl hyp_hook(uint64_t x, uint64_t y)
 {
     double mine, theirs;
     LONG n;
@@ -15618,8 +15621,13 @@ static double __cdecl hyp_hook(double x, double y)
     if (hyp_fast(x, y, &mine)) {
         InterlockedIncrement(&s_hypDiag.fast);
         if (hyp_bits(mine) != hyp_bits(theirs) && InterlockedIncrement(&s_hypDiag.differ) == 1)
+        {
+            double dx, dy;
+            memcpy(&dx, &x, 8);
+            memcpy(&dy, &y, 8);
             tagpu_logf("fphyp: DIFFER: hypot(%.17g, %.17g) = %.17g here, %.17g from the engine",
-                      x, y, mine, theirs);
+                       dx, dy, mine, theirs);
+        }
     }
     if (n >= 0x10000 && !(n & (n - 1)))
         tagpu_logf("fphyp: %ld calls, %ld fast, %ld differ", n, s_hypDiag.fast, s_hypDiag.differ);
