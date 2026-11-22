@@ -11806,7 +11806,7 @@ static PrandObj* prand_row(unsigned obj)
    destroy the real object (its slot 3 answers D, tagpu_pevt_sprite_finish), and every count the
    engine keeps -- the layer's, its front trim order, the pool's, and in the stock build the pool's
    fullness -- is the engine's own, by construction. A proxy has no sub-vector, so nothing draws or
-   moves it; a trim (the emitter's slot 0 call) removes its event (pevt_unlist). The init's
+   moves it; a trim (the emitter's slot 0 call) removes its event (pevt_proxy_destroy). The init's
    arguments are its contract (the emitters push them, 0x4723A2..0x4723B0, 0x472BBD..0x472BCC,
    0x472042..0x47204B); the layer is the byte the emitter stores at +0xC before the init; those
    emitters' bytes from the alloc's return to the init's call are held to stock with the table. */
