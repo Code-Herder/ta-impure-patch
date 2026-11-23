@@ -1277,7 +1277,7 @@ static void refuse_job(const TAGPU_VKPASS* d)
    (`s_flashAlpha`). This atlas never repacks, so there is no move. */
 static int s_rect[TAGPU_VK_STAGE_MAXRECT][4];      /* render thread only */
 static unsigned s_upFrame;                         /* the frame base_upload last ran in */
-static unsigned s_saidSkip;                        /* the skip's line, once a 300 frames */
+static unsigned s_saidSkip;                        /* the staging's line, once a 300 frames */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FXHAND* h)
 {
@@ -1323,20 +1323,23 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     /* THE INDEX ATLAS RIDES WITH IT (*The ALP blend*): the same rects at a byte a texel, each
        rect's bytes on four, or the whole when it holds nothing yet */
     if (s_iImg && keep && s_iHave) bytes += bytes / 4 + (VkDeviceSize)n * 4 + 4;
+    /* NO STAGING THAT HOLDS THEM -- the device refused FX_STAGE_CAP and `begin_to` settled for
+       less: the page goes whole through the bands, which need one row's staging, so a refusal
+       costs this frame a wait rather than every frame its effects. Not even a row mapped, the
+       banded path answers 0 and the frame is skipped; that is the one residual case, a device
+       that will not map `atlasDim * 4` bytes (8 KB at 2048) of host-visible memory. */
+    if (keep && n > 0 &&
+        (!tagpu_vk_stage_begin_to(d, &s->stage,
+                                  bytes + (VkDeviceSize)TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H * 4 + 16,
+                                  (VkDeviceSize)h->atlasDim * 4, FX_STAGE_CAP) ||
+         !tagpu_vk_stage_fits(&s->stage, bytes))) {
+        keep = 0;
+        why = "no staging holds this frame's tiles";
+        n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, 0,
+                                h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
+        bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    }
     if (keep) {
-        if (n > 0 && (!tagpu_vk_stage_begin_to(d, &s->stage,
-                                               bytes + (VkDeviceSize)TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H * 4 + 16,
-                                               (VkDeviceSize)h->atlasDim * 4,
-                                               FX_STAGE_CAP) ||
-                      !tagpu_vk_stage_fits(&s->stage, bytes))) {
-            if (!s_saidSkip || d->frame - s_saidSkip >= 300u) {
-                s_saidSkip = d->frame ? d->frame : 1u;
-                plog(d, "fx: %u KB of tiles due and no staging that holds them - the "
-                        "frame is skipped and they go on the next; nothing waited on",
-                     (unsigned)(bytes >> 10));
-            }
-            return 0;
-        }
         if (n > 0 &&
             !tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
                                          h->atlasDim, (const int (*)[4])s_rect, n, h->pal,
@@ -1348,8 +1351,11 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
             s_iHave = 0;                   /* the whole goes next frame */
         if (n == 0) tagpu_vk_stage_drop(d, &s->stage);
     } else {
-        plog(d, "fx: the whole base atlas, %u KB, through the banded path - %s",
-             (unsigned)(bytes >> 10), why);
+        if (!s_saidSkip || d->frame - s_saidSkip >= 300u) {
+            s_saidSkip = d->frame ? d->frame : 1u;
+            plog(d, "fx: the whole base atlas, %u KB, through the banded path - %s",
+                 (unsigned)(bytes >> 10), why);
+        }
         if (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4))
             return 0;
         rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,

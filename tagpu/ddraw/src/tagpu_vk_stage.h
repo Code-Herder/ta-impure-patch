@@ -21,7 +21,8 @@
        MADE. `tagpu_vk_stage_expand_rects` -- the tiles an atlas painted since
        the copy the device holds -- records one copy into `cb` when its bytes
        fit what the slot mapped, and otherwise records nothing and answers 0:
-       the caller skips the frame and asks again, and nothing waits. The atlas
+       the caller skips the frame and asks again, and nothing waits (the effects
+       pass sends its page through the bands instead, tagpu_vk_fx.c). The atlas
        side is what makes it fit: an atlas with an allowance (tagpu_gaf.h
        `budget`) never has more tiles due than TAGPU_VK_STAGE_CAP holds, and
        defers a paint past it to a later frame. A repack's move is recorded
@@ -91,10 +92,13 @@
    everything an atlas may have due at once. The largest single-frame paint
    measured in play is 1.20 MB, a camera jump at 4K (gpu-status §2.88).
    THE BOUND, IN ADDRESS SPACE: a pass holds at most one of these per frame
-   slot, and only on frames that send -- the four world passes (units,
-   features, effects, terrain) map at most 24 MiB at the three slots the
-   swapchain gives and 64 MiB at the TAGPU_VK_SLOTS ceiling of eight, whatever
-   the atlases. A frame with nothing to send maps nothing. The unit pass's
+   slot, and only on frames that send. Units, features and terrain map at most
+   this cap a slot; the effects pass maps at most its own FX_STAGE_CAP
+   (tagpu_vk_fx.c: this cap, a quarter more for the ALP blend's index atlas,
+   4 B a rect and the ALP table, 2 888 724 B), so the four world passes map at
+   most about 26.3 MiB at the three slots the swapchain gives and 70.0 MiB at
+   the TAGPU_VK_SLOTS ceiling of eight, whatever the atlases. A frame with
+   nothing to send maps nothing. The unit pass's
    vertex staging is a second one a slot, and its band buffer one for the
    pass, to a cap of its own (tagpu_vk_unit.c `s_band`). */
 #define TAGPU_VK_STAGE_CAP ((VkDeviceSize)2 << 20)
@@ -113,9 +117,10 @@ typedef struct {
 int  tagpu_vk_stage_begin(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                           VkDeviceSize want, VkDeviceSize floor);
 
-/* The same with a cap of the caller's in place of TAGPU_VK_STAGE_CAP, for bytes that are not
-   an atlas's and that no allowance bounds: the unit pass's banded vertex streams
-   (tagpu_vk_unit.c `s_band`, which carries the figure and what a band costs). */
+/* The same with a cap of the caller's in place of TAGPU_VK_STAGE_CAP: the unit pass's banded
+   vertex streams, which no allowance bounds (tagpu_vk_unit.c `s_band`, which carries the
+   figure and what a band costs), and the effects pass's atlas tiles with their palette
+   indices beside them (tagpu_vk_fx.c FX_STAGE_CAP). */
 int  tagpu_vk_stage_begin_to(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                              VkDeviceSize want, VkDeviceSize floor, VkDeviceSize cap);
 
