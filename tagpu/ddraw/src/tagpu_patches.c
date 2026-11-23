@@ -12628,7 +12628,8 @@ static void pevt_walked(void)
     while (s_pevt.head < s_pevt.tail && !s_pevt.row[s_pevt.head].gone) s_pevt.head++;
     if (s_pevt.head == s_pevt.tail) pevt_clear();
     /* AFTER A WALK THE LIST HOLDS AT MOST AS MANY REMOVED ROWS AS LIVE ONES. A row ends anywhere
-       in it (the D's differ by class, and a Smoke1 row at its front never ends), so the head alone
+       in it (the D's differ by class, and no walk ends a Smoke1 row at its front: only the layer
+       cap's trim or the level's end does), so the head alone
        does not keep it short: it is squeezed when it holds more, which copies each live row once
        where at least as many rows were removed since the last squeeze, so it costs at most one
        row's copy a removal. Every walk over the list (this purge, the packet's copy) is then at most

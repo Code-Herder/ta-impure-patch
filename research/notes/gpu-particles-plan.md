@@ -337,9 +337,21 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 - **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
   eight degenerate quads an event, whose vertex stage skips the draws. A vertex count of each class's
   own would need a draw a class.
-- **Fire and the flare are a clean yellow on Vulkan, orange on GDI.** The sprites take the restored
-  twin's colour, which predates this feature (the same scene on fd7d5a86 draws the same yellow); GDI
-  shows the palette's dithered frame. A colour item of its own, not this feature's.
+- **Fire and the flare are yellow on Vulkan, orange on GDI** (predates this feature: fd7d5a86 draws
+  the same yellow). The cause is the blend, not the art: the engine's `0x4B8500` writes the palette
+  entry `ALP[src·256 + dst]`, and retail's table answers orange (209) for the flame's yellow (208)
+  over its orange and for the orange over the yellow, so stacked flames converge to orange; Vulkan
+  mixes 50 % in RGB, which stays between them (effects.md §7.6 has the table's tie and the measured
+  means, warm pixels' G 212.8 on Vulkan against 175.9 on GDI). **No exact rule is available on
+  Vulkan**: the table needs the destination's palette index, and the world target is RGB (5.3 % of
+  its world pixels palette colours under Classic++). What an exact rule would need, and the
+  look-alikes, wait for the owner's choice:
+  - the destination read: overlapping sprites of one draw must read-modify-write in primitive
+    order, which needs `VK_EXT_fragment_shader_interlock` (ordered) or rasterization-order
+    attachment access (both on the reference setup's GPU, neither on llvmpipe, not on every
+    device), or a per-pixel ordered list resolved after the layer;
+  - the destination's index: exact only where the target holds a palette colour; elsewhere the
+    nearest entry (a quantisation of the restored or lit colour, a look-alike).
 - **The render thread's gather read 0.34 ms a frame slower than at 5a820806** in the 13 500-unit
   battle (three runs of this build against two of the base). Split by temporary spans (2026-11-22,
   this build, four runs, nothing of it landed), the gather's median a frame is the packet's acquire

@@ -561,6 +561,17 @@ Only **three call sites read the LUT** at all: `0x4CBF2C` from `0x4B8499` and `0
 neighbouring function that takes its table from its own argument and never reads
 `[globals+0xC0]`.
 
+**The RLE arm reads the destination too** [DISASSEMBLED 2026-11-22]. `0x4B8500` takes the raw
+arm (`0x4CBF2C`, frame `+0x9 == 0`) or the RLE arm `0x4CC057` (`+0x9 != 0`, `add esp,0x18` at
+`0x4B86AF`); both run arms of `0x4CC057` (`0x4CC131..0x4CC14C` and the clipped one from
+`0x4CC150`) load the source byte, `shl edx,8`, add the table `[ebp+0x1C]`, and index it with the
+destination byte (`mov al,[edi]`, `add eax,edx`, `mov al,[eax]`, `mov [edi],al`): every blended
+pixel is `tab[(src << 8) + dst]` on either arm. With bit 5 clear the function returns at
+`0x4B851C` before any write, so the sprite is not drawn at all. The particles' four leaves call
+it for every sprite: fire `0x474291`, the flare `0x4736B1`, Smoke2 `0x4755C6`, Smoke1 `0x475757`,
+each after `0x4B7F30` picks the frame. What the table makes of the flame's two colours, against a
+mix in RGB: [effects](../effects.html) §7.6.
+
 **The LUT's lifetime — the reason a pointer of ours must never outlive one call.**
 
 | VA | What it does to `[globals+0xC0]` |

@@ -115,7 +115,7 @@ Shadow blob = `AlphaCompsteBuf2OFFScreen` of frame 0 of `*(main+0x1480F)` at
 | Function | Rule |
 |---|---|
 | `CopyGafToContext 0x4B7F90` | colour-keyed copy (`ColorKey @+8`); sub-frame lists recurse, a sub-frame with `+0x0B != 0` goes through the alpha blit instead. `ret 0x10` |
-| `AlphaCompsteBuf2OFFScreen 0x4B8500` | `dst = ALP[src·256 + dst]` (50 % blend, `TAProgram+0xC0`), gated by `+0xF0` bit 5 |
+| `AlphaCompsteBuf2OFFScreen 0x4B8500` | `dst = ALP[src·256 + dst]` (`TAProgram+0xC0`, `palettes\PALETTE.ALP`: on retail the palette entry nearest the two colours' mean, a 50 % blend quantised to the palette, §7.6), on the raw and the RLE arm alike; gated by `+0xF0` bit 5 (clear: nothing drawn) |
 | `0x4B8EC0` | LHT lighten as above, gated by bit 7. `ret 0x10` |
 | `0x46BAE0(ctx, pos16.16[3], node, turn[3])` | `pos` eye-relative (the callers take `eye << 16` off x and y). Rotate `node+0x24` verts by the triple, project `sx = (int16)hi(vx+px) + 0x80`, `sy = (int16)hi(py − vz) − ((int16)hi(vy+palt) >> 1) + 0x20`; faces `node+0x28` (stride 0x20): skip face 0 when `node+0x0C` (selection primitive) `!= −1`; indices unbounded; flag bit 0 → flat fill `0x4C0310` in the colour word's low byte, any vertex count; else **only 4-vertex faces** → `GAF_DrawTransformed 0x4C7580` with `uv = NULL` (texel copy, **no shade table**; bit 1 → current anim frame of `face+0x10` through `0x4B7EE0`, unbounded). `ret 0x10` |
 | `0x4211D0` | the same face rules for a debris piece, drawn only when its anchor is in the viewport rect, from the vertices `0x421550` rotated into `piece+0x22`; with bits 1 **and** 2 the frame is `0x4B7F30(face+0x18, logo)`, the logo colour of the unit the piece flew off (`sys+0 → +0x96 → +0x27 → +0x96`). `ret 0xC` |
@@ -526,8 +526,19 @@ Gaps: layer 8 has no caller at all (§7.1); the teleport flare `0x4FD588`, unsee
 held to its closed form under the oracle since 2026-11-22 (§7.8); `DrawBar`'s
 rect `{x, y, x+1, y+1}` is taken as 2×2 from the panels, not from its fill routine
 (`0x4CCDEA`); sub-pixel motion for puffs is not used (engine parity: integer anchors);
-particles are drawn at 50 % alpha like the engine's ALP blend, so they look identical to
-the engine's rather than better — a translucency slider is a G13 freedom.
+the sprites (fire, flare, smoke) are drawn at 50 % alpha in RGB, which is **not** the engine's
+rule: `0x4B8500` writes `ALP[src·256 + dst]`, a palette entry, and on the flame that differs
+visibly. The flare sequence `*(main+0x147F3)` is `flamestream` (pushed at `0x429A05`, found by
+`0x4B8D40` at `0x429A11`, stored at `0x429A22`), whose twenty frames hold two indices only, 208
+(255, 255, 0) and 209 (255, 191, 0); retail's table answers 209 for either over the other
+(`ALP[208][209] = ALP[209][208] = 209`: the mean (255, 223, 0) is equidistant from 208, 209 and 251,
+and `0x4BA9D0`'s walk over the list sorted by R+G+B meets 209 first), so a stack of flames
+converges to orange, where an RGB mix stays between the two. MEASURED 2026-11-22 on ten frame
+pairs of eight Atlases taking off (`b2-stack-atlas.json`, zoom 1, Vulkan at `--defaults` against
+`tagpu_gdi.on`): warm pixels' mean (231.3, 212.8, 4.9) on Vulkan, (247.8, 175.9, 8.7) on GDI. An
+exact rule needs the destination's palette index, which the Vulkan world target does not hold
+(5.3 % of that frame's world pixels are palette colours under Classic++, 100 % on GDI); the plan's
+*Open* has the choice.
 
 ### 7.7 The random rule — the same particles on both renderers [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
 
@@ -740,7 +751,8 @@ one the trim leaves; only events in a seventh layer could fill it, which no call
 `pevt_room` drops the oldest sixteenth of the list (`PEVT_CAP / 16` rows) at once, counts them in the
 level's `dropped` and logs once. **A removed row stays in place until the list is squeezed**
 (`pevt_squeeze`: the live rows moved down in order, with their boxes): events end anywhere in the
-list, and a Smoke1 event near its front never ends, so the head alone does not shorten it. After
+list, and no walk ends a Smoke1 event near its front (only the layer cap's trim or the level's end
+does), so the head alone does not shorten it. After
 each walk's purge the list is squeezed when it holds more removed rows than live ones, which copies
 each live row once for at least as many removals, so every walk over it (the purge, the packet's
 copy) is at most twice the live rows plus what was emitted since. In the 13 500-unit battle the
