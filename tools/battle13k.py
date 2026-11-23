@@ -9,7 +9,7 @@
 
 THE MAP is a third party's and is not in the repository: `--map` or TA_BATTLE13K_MAP names a copy of
 `[M] Zombie Kingdom.ufo`. The mod's folder is the compatibility suite's (tools/compat/tacompat.py, mayhem-11.3.0).
-THE DISPLAY: the client is 1920x1080. A measurement belongs on a private X server
+THE DISPLAY: the client is 1920x1080 (TA_BATTLE13K_RES names another, e.g. 3840x2160). A measurement belongs on a private X server
 (`Xvfb :391 -screen 0 1920x1080x24 -noreset -nolisten tcp`), never on a desktop in use.
 THE RUN LOCK: a measurement holds two lanes of it (tools/runlock.py) while its game plays -- the game thread, the
 render thread and the pathfinder's helpers are busy at once. A shown game is a person's own play and holds none.
@@ -31,7 +31,7 @@ import tacompat     # noqa: E402
 
 SETUP = "mayhem-11.3.0"
 SCENARIO = "zombie-kingdom-13k"
-RES = "1920x1080"
+RES = os.environ.get("TA_BATTLE13K_RES", "1920x1080")   # the client's size; the X server must hold it
 TACLI = str(TREE / "tools" / "tacli")
 # what a measurement arms in the game's folder, and a shown game must not find there
 LEVERS = ("tagpu_prof.on", "tagpu_prof_sample.on", "tagpu_pathlog.on", "tagpu_pathverify.on", "tagpu_candverify.on")
@@ -58,8 +58,8 @@ def start(name, *launch_flags):
     for lever in ("fx", "feat"):
         tacli("arm", name, f"{lever}.off=off")
     tacli("launch", name, "--defaults", "--res", RES, *launch_flags)
-    tacli("scenario", "load", name, SCENARIO, "--defaults", "--restart", "--load-timeout", "300",
-          "--timeout", "600")
+    tacli("scenario", "load", name, SCENARIO, "--defaults", "--restart", "--res", RES,
+          "--load-timeout", "300", "--timeout", "600")
 
 
 def measure(name, gamedir, out, seconds, verify):

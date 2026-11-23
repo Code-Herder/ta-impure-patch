@@ -189,6 +189,15 @@ static int            s_iHave, s_tHave;
    cannot overwrite texels a frame in flight still reads. No frame recorded while `s_iHave` is 0
    samples it: `s_ordThis` asks for `s_iHave`. Cleared only where the image is made. */
 static int            s_iWritten;
+/* THE PASS'S STAGING HOLDS ONE FRAME'S WHOLE SHARE, so the rects chosen and the staging they need
+   agree by construction: the base atlas's tiles due, at most the allowance's TAGPU_VK_STAGE_CAP
+   (TAGPU_GAF_BUDGET's tiles at 4 bytes a texel), the index atlas's same rects at a byte a texel
+   with each rect's bytes on four (a quarter of that, 4 bytes a rect and the first rect's own
+   alignment at most), and the ALP table with its alignment. A partial upload the allowance
+   admitted therefore always fits, and the frame is never skipped for it. */
+#define FX_STAGE_CAP (TAGPU_VK_STAGE_CAP + TAGPU_VK_STAGE_CAP / 4 +                       \
+                      (VkDeviceSize)TAGPU_VK_STAGE_MAXRECT * 4 + 4 +                      \
+                      (VkDeviceSize)TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H * 4 + 16)
 static unsigned       s_tSerial;
 static int            s_ordThis;            /* `prepare` left an ordered draw    */
 static unsigned       s_cOrd, s_cMix;       /* frames drawn each way, for the log */
@@ -1302,11 +1311,23 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, keep,
                             h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
     bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    /* PAST WHAT ONE FRAME SENDS, which the allowance rules out while this pass is the atlas's one
+       consumer: the page goes whole (banded), never a partial upload no staging can hold */
+    if (keep && bytes > TAGPU_VK_STAGE_CAP) {
+        keep = 0;
+        why = "the tiles due since this copy pass what one frame sends";
+        n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, 0,
+                                h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
+        bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    }
     /* THE INDEX ATLAS RIDES WITH IT (*The ALP blend*): the same rects at a byte a texel, each
        rect's bytes on four, or the whole when it holds nothing yet */
-    if (s_iImg && keep && s_iHave) bytes += bytes / 4 + (VkDeviceSize)n * 4;
+    if (s_iImg && keep && s_iHave) bytes += bytes / 4 + (VkDeviceSize)n * 4 + 4;
     if (keep) {
-        if (n > 0 && (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4) ||
+        if (n > 0 && (!tagpu_vk_stage_begin_to(d, &s->stage,
+                                               bytes + (VkDeviceSize)TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H * 4 + 16,
+                                               (VkDeviceSize)h->atlasDim * 4,
+                                               FX_STAGE_CAP) ||
                       !tagpu_vk_stage_fits(&s->stage, bytes))) {
             if (!s_saidSkip || d->frame - s_saidSkip >= 300u) {
                 s_saidSkip = d->frame ? d->frame : 1u;

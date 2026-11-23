@@ -551,7 +551,18 @@ install's PALETTE.ALP or the generator put there, so a mod's table is a mod's.
   underneath, in the ordered pixel interlock`).
 - **What it reads**: the sprite's palette index from an index atlas beside the base atlas (the
   same texels, unexpanded), the table and the sorted palette from one 256 × 257 image
-  (`tagpu_fx.c` `s_alpT`).
+  (`tagpu_fx.c` `s_alpT`). The index atlas's tiles ride in the same frame's staging as the base
+  atlas's, so the pass's staging is sized for both (`tagpu_vk_fx.c` `FX_STAGE_CAP`: the
+  allowance's 2 MiB of base tiles, a quarter of that for their indices, and the table): a partial
+  upload the allowance admitted always fits. Sized for the base alone, a full allowance's tiles
+  (2048 KB, 2560 KB with their indices) could never be staged: the frame was skipped without
+  acknowledging the copy, so the same tiles came due on every frame and no effect was drawn until
+  the atlas was reset (seen for minutes in the 13 500-unit battle at 3840×2160; reproduced on
+  2026-11-22 by a test build that made every upload of 300 frames a full allowance: the
+  2560 KB skip with the base atlas's staging alone, none with this one). A skip is still how the
+  pass answers staging the device refuses: a frame's sprites may sample tiles painted since the
+  last copy, so the frame is not drawn from it [INFERRED from the gather emitting every painted
+  frame; not measured].
 - **Where it falls back** to the 50 % mix in RGB: a device without the interlock, an instance
   without `VK_KHR_get_physical_device_properties2`, a swapchain colour format without storage or
   (where the device reports it per format) without storage read and write without a format, a frame before the table has reached the device, and
