@@ -297,6 +297,26 @@ Vulkan in the event.
      frames a second (56.3 → 50.5 ms a frame); the process's `VmData` 715.5 → 704.9 MB at the same point
      of `replay-smoke`, the base 5a820806's 731 MB (measured on da3415e4; the sprite bucket's allowance
      for composite frames, restored after the review, takes 5.3 MB of it back).
+7. **The publish's event copy made cheap** (follow-up). *Built 2026-11-22.* `fill_pevt` cost 0.46–0.47
+   ms a frame of the game thread in the battle: by temporary sub-spans (two runs) the count walk 0.25
+   and the copy walk 0.21 ms, the sequence frames and the wind rows under 0.01. Both walked the list's
+   96-B rows, about 70 000 of them for 18 000–30 000 live and 2 000–5 000 in view: a removed row stayed
+   in place until the list filled, and the map's endless Smoke1 rows at its front kept the head still.
+   - **What it built** ([effects](effects.md) §7.8, *The list* and *Publishing*): the cull boxes in an
+     array of their own (10 B with the kind), the copy reading a row only when its box meets the view,
+     one walk unless the slot is too small, and the list squeezed after a walk's purge when it holds
+     more removed rows than live ones. The published events and wind rows are unchanged.
+   - **MEASURED** (`.data/gpu-particles/l7/`): the old copy and the new over the same list, 1 800
+     fills of the battle and 1 800 cut to half of what met, 7.05 M records, 0 differing; the six
+     replay groups with `--cover` (`particle-check`, `-sea`, `-smoke`, `battle`, `teleport`,
+     `stock-limits`) 493 pass, 0 fail, the oracle 819 322 / 251 485 / 189 100 particles, 0 differing,
+     missing or extra; battle13k
+     alternated with c2da35ee, two pairs: `fill_pevt` 0.471/0.472 → 0.165/0.162 ms a frame, `publish`
+     with it 1.30/1.29 → 1.00/1.01, `particles` (the purge's walk) 0.38/0.38 → 0.20/0.19, the gather
+     and the frame rate unchanged.
+   - **Not done**: the cull still reads every live event's box each frame; the 0.16 ms left is that
+     walk and the copies of the rows in view, not split further. A spatial index of the boxes would
+     make the walk the events in view, at the cost of keeping the list's order across its cells.
 
 Each landing is a local landing on this branch. The feature lands on main once, through the replay gate.
 
@@ -330,7 +350,7 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   (2.08 against 2.09, 1.92 against 1.39). So the gap is within the gather's run-to-run spread and the
   particles' own part is under 0.2 ms; no code of this landing is found to cost it. The publish, by
   the same spans, a frame: `fill_world` 2.9–3.2 ms (its own span, `publish_world`), and of the rest
-  (1.3–1.5 ms) the particle events' copy `fill_pevt` 0.46–0.54, the placement, sweep, board,
+  (1.3–1.5 ms) the particle events' copy `fill_pevt` 0.46–0.54 (0.16 since landing 7), the placement, sweep, board,
   formation, range, ImpAI, builds and overlay fills together 0.35–0.43, the effects' fill without the
   events 0.23–0.27, the fog, GUI, models and map features 0.03 together, and the hand-over and the
   smaller areas 0.22–0.25.

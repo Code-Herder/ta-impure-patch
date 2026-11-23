@@ -734,15 +734,27 @@ layer cap's trim, cleared at a seek (`tagpu_effects_clear`) and at each level's 
 as the engine's object, which never answers empty, does. Its layer table pointer `main+0x38D77` is
 NULLed by the teardown `0x471DE0`, and the packet copies no event while it is NULL, so a level's
 vents are not drawn over the next level's loading screen. The list holds `6·(TAGPU_LIM_SFX + 1)`
-rows of 96 B (about 11.8 MB in the raised build): the six layers the stock callers use, each at its cap plus the
+rows of 88 B, each with its 10-B box beside it in an array of its own (about 12.0 MB in the raised
+build): the six layers the stock callers use, each at its cap plus the
 one the trim leaves; only events in a seventh layer could fill it, which no caller makes, and then
 `pevt_room` drops the oldest sixteenth of the list (`PEVT_CAP / 16` rows) at once, counts them in the
-level's `dropped` and logs once.
+level's `dropped` and logs once. **A removed row stays in place until the list is squeezed**
+(`pevt_squeeze`: the live rows moved down in order, with their boxes): events end anywhere in the
+list, and a Smoke1 event near its front never ends, so the head alone does not shorten it. After
+each walk's purge the list is squeezed when it holds more removed rows than live ones, which copies
+each live row once for at least as many removals, so every walk over it (the purge, the packet's
+copy) is at most twice the live rows plus what was emitted since. In the 13 500-unit battle the
+list had spanned about 70 000 rows for 18 000–30 000 live ones (MEASURED 2026-11-22).
 
 **Publishing**: the frame packet's fill copies the live events whose particles can reach the view
 (each event's box of world x and `y − alt/2`, widened by the reach slack and, for a sprite, 128
-world pixels for its frame) into the slot, newest kept when the slot runs out
-(`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line), the frame handles of the three
+world pixels for its frame) into the slot, in the list's order, newest kept when the slot runs out
+(`TAGPU_PK_TRUNC_PEVT`, `EVENTS-TRUNCATED` in the `sfx:` line). The boxes are made at the event's
+emission and kept apart from the rows (`PevtBox`, 10 B: the box and its kind, plain, smoke or
+removed), so the cull walks the boxes and reads a row only when its box meets the view; a smoke box
+is tested against the view moved back by the drift's reach, which is the same test. One walk writes
+the records it meets and counts them; only when they are more than the slot holds does a second walk
+skip the oldest (`tagpu_pevt_copy`). The fill also carries the frame handles of the three
 sprite sequences (`pevt_frame`: the flare sequence, "smoke 1", "smoke 2", the first 64 of each),
 and the wind's rows, the newest kept when the slot cuts them (the same bit; the rows cut are counted
 in the fill's need, so the slot grows and the refill fits them). A smoke event is copied once for every ten of its puffs that can be alive at the
