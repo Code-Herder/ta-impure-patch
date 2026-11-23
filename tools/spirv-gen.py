@@ -223,6 +223,11 @@ PROGRAMS = [
     ("fx_line",      "tagpu_fx::LVS",           "tagpu_fx::LFS"),
     # ...and the nano spray, computed from its emitter events (inc/tagpu_pevt.h)
     ("fx_evt",       "tagpu_fx::NVS",           "tagpu_fx::NFS"),
+    # ...and their ordered editions, which read and write the pixel underneath inside the pixel
+    # interlock (tagpu_vk_fx.c, *The ALP blend*)
+    ("fx_o",         "tagpu_fx::VS",            "tagpu_fx::FSO"),
+    ("fx_line_o",    "tagpu_fx::LVS",           "tagpu_fx::LFSO"),
+    ("fx_evt_o",     "tagpu_fx::NVS",           "tagpu_fx::NFSO"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
     # tagpu_range.c (paired in tagpu_vk_range.c) -- the weapon range rings: the
     # union's discs and the rings' bands share one fragment stage; the sensor

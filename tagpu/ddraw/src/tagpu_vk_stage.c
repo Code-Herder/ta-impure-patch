@@ -458,6 +458,50 @@ int tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     return 1;
 }
 
+int tagpu_vk_stage_copy_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                              TAGPU_VKSTAGE* st, VkImage img, int had,
+                              const unsigned char* src, int pitch, const int (*r)[4], int n,
+                              int bpp)
+{
+    VkDeviceSize o, total = 0;
+    int i, m = 0, y;
+
+    (void)d;
+    if (!src || bpp < 1 || n < 0 || n > TAGPU_VK_STAGE_MAXRECT) return 0;
+    if (!st->buf || !st->map || !img) return 0;
+    for (i = 0; i < n; i++) {
+        const int w = r[i][2] - r[i][0], h = r[i][3] - r[i][1];
+        if (w > 0 && h > 0) total += ALIGN4((VkDeviceSize)w * (VkDeviceSize)h * (VkDeviceSize)bpp);
+    }
+    if (total == 0) return 1;
+    if (!tagpu_vk_stage_fits(st, total)) return 0;
+    o = ALIGN4(st->used);
+    for (i = 0; i < n; i++) {
+        const int x = r[i][0], y0 = r[i][1], w = r[i][2] - x, h = r[i][3] - y0;
+        VkBufferImageCopy* rg = &s_reg[m];
+        if (w <= 0 || h <= 0) continue;
+        for (y = 0; y < h; y++)
+            memcpy(st->map + o + (size_t)y * (size_t)w * (size_t)bpp,
+                   src + (size_t)(y0 + y) * (size_t)pitch + (size_t)x * (size_t)bpp,
+                   (size_t)w * (size_t)bpp);
+        memset(rg, 0, sizeof *rg);
+        rg->bufferOffset = o;
+        rg->imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg->imageSubresource.layerCount = 1;
+        rg->imageOffset.x = x; rg->imageOffset.y = y0;
+        rg->imageExtent.width = (uint32_t)w; rg->imageExtent.height = (uint32_t)h;
+        rg->imageExtent.depth = 1;
+        o += ALIGN4((VkDeviceSize)w * (VkDeviceSize)h * (VkDeviceSize)bpp);
+        m++;
+    }
+    barrier_in(cb, img, 0, had);
+    vkCmdCopyBufferToImage(cb, st->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           (uint32_t)m, s_reg);
+    barrier_out(cb, img, 0);
+    st->used = o;
+    return 1;
+}
+
 int tagpu_vk_stage_fits(const TAGPU_VKSTAGE* st, VkDeviceSize bytes)
 {
     return st->buf && st->map && ALIGN4(st->used) + bytes <= st->cap;

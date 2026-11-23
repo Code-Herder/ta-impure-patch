@@ -108,6 +108,7 @@
 #include "tagpu_fx.h"
 #include "tagpu_line.h"       /* tagpu_line_grid, the line test's uGrid */
 #include "tagpu_vk_fog.h"     /* the slot's fog image, binding 43 */
+#include "tagpu_vk_world.h"   /* the ordered pass the ALP sprites draw in */
 #include "tagpu_gaf.h"                     /* tagpu_gaf_rects_due              */
 #include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
 #include "spirv/tagpu_fx.spv.h"
@@ -160,6 +161,31 @@ static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
 static int s_saidNoMirror;                 /* ...and the mirror's, likewise     */
 static int s_saidLht;                      /* ...the light table's              */
+
+/* ---- THE ALP BLEND ---------------------------------------------------------
+   The engine draws its translucent sprites (fire, the teleport flare, both smokes, a
+   projectile's ALP sprites and ground shadow: mode 2 of FS, modes 2 and 3 of NFS) through
+   `0x4B8500`, which writes `T[src << 8 | dst]` -- a table lookup on the sprite's palette index
+   and the destination's (effects.md §3, §7.6). On a device with the ordered pixel interlock
+   (tagpu_vk_pass.h `pixlock`) the pass draws in the world's ORDERED render pass
+   (tagpu_vk_world.c `build_ordered`, depth alone) with the ordered editions FSO, LFSO and
+   NFSO, which read the pixel under the fragment, apply the table to an ALP texel or the fixed
+   function's blend to any other, and write it back, inside the interlock (tagpu_fx.c
+   TAGPU_FX_ALP_FN); they read the sprite's index from `s_iImg` (binding 46: the base atlas's
+   texels, unexpanded), the table and the sorted palette from `s_tImg` (binding 47) and read
+   and write the pixel through the world target's colour view (binding 48, a storage image in
+   GENERAL). On any other frame -- a device without the interlock, no table yet, the world
+   drawn straight into the swapchain image -- the ALP sprites keep FS's and NFS's 50 % mix in
+   RGB. */
+static VkPipeline     s_pipeOTri, s_pipeOLine, s_pipeOFlash, s_pipeOEvt;
+static int            s_ordBuilt;           /* the ordered pipelines and bindings exist */
+static VkImage        s_iImg, s_tImg;
+static VkDeviceMemory s_iMem, s_tMem;
+static VkImageView    s_iView, s_tView;
+static int            s_iHave, s_tHave;
+static unsigned       s_tSerial;
+static int            s_ordThis;            /* `prepare` left an ordered draw    */
+static unsigned       s_cOrd, s_cMix;       /* frames drawn each way, for the log */
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -257,6 +283,9 @@ typedef struct {
     unsigned        fogGen;                /* the fog image binding 43 names
                                               (tagpu_vk_fog_view's generation);
                                               0 = none written                 */
+    unsigned        ordGen;                /* the world view binding 48 names
+                                              (tagpu_vk_world_order_view's
+                                              generation); 0 = none written    */
 
     VkDescriptorSet dset;
     int             built;                 /* the fixed-size half is made      */
@@ -613,7 +642,7 @@ static int build_sampler(const TAGPU_VKPASS* d)
 static int build_pipelines(const TAGPU_VKPASS* d)
 {
     static const struct { int loc, n, off; } at[TAGPU_FX_NATTR] = TAGPU_FX_ATTRS;
-    VkDescriptorSetLayoutBinding b[9];
+    VkDescriptorSetLayoutBinding b[12];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -658,6 +687,21 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     b[8].binding = 1; b[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[8].descriptorCount = 1; b[8].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     dli.bindingCount = 9; dli.pBindings = b;
+    /* THE ORDERED EDITIONS' THREE (FSO, LFSO, NFSO): 46 the index atlas and 47 the ALP table,
+       both samplers, and 48 the world target's colour as a storage image. Only where they can
+       be drawn: no other pipeline names them. */
+    s_ordBuilt = 0;
+    if (d->pixlock && tagpu_vk_world_order_rp()) {
+        for (i = 9; i < 11; i++) {
+            b[i].binding = (uint32_t)(46 + (i - 9));
+            b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        b[11].binding = 48; b[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[11].descriptorCount = 1; b[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        dli.bindingCount = 12;
+    }
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -786,6 +830,47 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     if (r != VK_SUCCESS) { plog(d, "fx: the flash pipeline was refused (%d)", (int)r); goto out; }
     ok = 1;
 
+    /* THE ORDERED SET: the same four against the world's ordered pass, every program in its
+       ordered edition. That pass has no colour attachment -- each fragment reads and writes the
+       pixel itself, the blend included (TAGPU_FX_ALP_STORE) -- so there is no blend state to
+       give, and the flash and triangle pipelines are the same state twice, kept as two so
+       `record` picks by bucket as it does on the other path. A refusal here costs the ordered
+       path, not the pass. */
+    if (dli.bindingCount == 12) {
+        VkShaderModule fso = mk_module(d, tagpu_spv_tagpu_fx_FSO,
+                                       sizeof tagpu_spv_tagpu_fx_FSO / sizeof(uint32_t));
+        VkShaderModule nfso = mk_module(d, tagpu_spv_tagpu_fx_NFSO,
+                                        sizeof tagpu_spv_tagpu_fx_NFSO / sizeof(uint32_t));
+        VkShaderModule lfso = mk_module(d, tagpu_spv_tagpu_fx_LFSO,
+                                        sizeof tagpu_spv_tagpu_fx_LFSO / sizeof(uint32_t));
+        int got = fso && nfso && lfso;
+        gp.renderPass = tagpu_vk_world_order_rp();
+        cb.attachmentCount = 0;
+        cb.pAttachments = NULL;
+        st[0].module = vs; st[1].module = fso;
+        if (got)
+            got = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeOFlash) == VK_SUCCESS;
+        if (got)
+            got = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeOTri) == VK_SUCCESS;
+        if (got) {
+            gp.pVertexInputState = &vin;
+            st[0].module = nvs; st[1].module = nfso;
+            got = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeOEvt) == VK_SUCCESS;
+            gp.pVertexInputState = &vi;
+        }
+        if (got) {
+            vb.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+            st[0].module = lvs; st[1].module = lfso;
+            got = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeOLine) == VK_SUCCESS;
+            vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        }
+        if (fso) vkDestroyShaderModule(d->dev, fso, NULL);
+        if (nfso) vkDestroyShaderModule(d->dev, nfso, NULL);
+        if (lfso) vkDestroyShaderModule(d->dev, lfso, NULL);
+        s_ordBuilt = got;
+        if (!got) plog(d, "fx: the ordered pipelines were refused - the ALP sprites keep a 50 %% mix");
+    }
+
 out:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
@@ -798,7 +883,7 @@ out:
 
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
-    VkDescriptorPoolSize ps[3];
+    VkDescriptorPoolSize ps[4];
     VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
     VkDescriptorSet sets[TAGPU_VK_SLOTS];
@@ -807,10 +892,11 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 6;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 8;
     ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[2].descriptorCount = d->slots;
+    ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;       ps[3].descriptorCount = d->slots;
     dpi.maxSets = d->slots;
-    dpi.poolSizeCount = 3; dpi.pPoolSizes = ps;
+    dpi.poolSizeCount = 4; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
 
     for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
@@ -828,6 +914,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
         VkWriteDescriptorSet w[2];
         s_slot[i].dset = sets[i];
         s_slot[i].fogGen = 0;                 /* a new set names no fog image */
+        s_slot[i].ordGen = 0;                 /* ...and no world view          */
         memset(bi, 0, sizeof bi); memset(w, 0, sizeof w);
         bi[0].buffer = s_ubuf; bi[0].offset = i * s_ustride;            bi[0].range = UBLK_VS;
         bi[1].buffer = s_ubuf; bi[1].offset = i * s_ustride + s_ublock; bi[1].range = UBLK_FS;
@@ -837,6 +924,74 @@ static int build_descriptors(const TAGPU_VKPASS* d)
         w[1] = w[0]; w[1].dstBinding = 32; w[1].pBufferInfo = &bi[1];
         vkUpdateDescriptorSets(d->dev, 2, w, 0, NULL);
     }
+    return 1;
+}
+
+/* THE ORDERED EDITIONS' TWO IMAGES (*The ALP blend*), with the atlas and for its square: the
+   index atlas (R8_UINT, the base atlas's texels as palette indices, uploaded beside it by
+   `base_upload`) and the ALP table with the sorted palette (R32_UINT, TAGPU_FX_ALPT_W x
+   TAGPU_FX_ALPT_H, `alp_upload`), and bindings 46 and 47 naming them. Either refused, the
+   ordered path stays off and the ALP sprites keep their 50 % mix. */
+static void ord_images(const TAGPU_VKPASS* d, int dim)
+{
+    uint32_t i;
+    kill_image(d, &s_iImg, &s_iMem, &s_iView);
+    kill_image(d, &s_tImg, &s_tMem, &s_tView);
+    s_iHave = 0; s_tHave = 0; s_tSerial = 0;
+    if (!mk_image(d, dim, dim, VK_FORMAT_R8_UINT, IMG_SAMPLED, &s_iImg, &s_iMem, &s_iView) ||
+        !mk_image(d, TAGPU_FX_ALPT_W, TAGPU_FX_ALPT_H, VK_FORMAT_R32_UINT, IMG_SAMPLED,
+                  &s_tImg, &s_tMem, &s_tView)) {
+        kill_image(d, &s_iImg, &s_iMem, &s_iView);
+        kill_image(d, &s_tImg, &s_tMem, &s_tView);
+        s_ordBuilt = 0;
+        plog(d, "fx: no device images for the ALP table and the index atlas - the ALP "
+                "sprites keep a 50 %% mix");
+        return;
+    }
+    for (i = 0; i < TAGPU_VK_SLOTS; i++) {
+        VkDescriptorImageInfo ii[2];
+        VkWriteDescriptorSet wr[2];
+        if (!s_slot[i].dset) continue;
+        memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
+        ii[0].sampler = s_samp; ii[0].imageView = s_iView;
+        ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ii[1] = ii[0]; ii[1].imageView = s_tView;
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 46; wr[0].descriptorCount = 1;
+        wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr[0].pImageInfo = &ii[0];
+        wr[1] = wr[0]; wr[1].dstBinding = 47; wr[1].pImageInfo = &ii[1];
+        vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+    }
+}
+
+/* THE ALP TABLE, when the gather's moved (tagpu_fx.c `s_alpT`): through the slot's staging
+   after `base_upload`'s copies -- a buffer this frame has not begun is begun here, one it has
+   is added to -- and only whole. 1 the image holds the hand-over's table, 0 not this frame. */
+static int alp_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s, const TAGPU_FXHAND* h)
+{
+    const VkDeviceSize bytes = (VkDeviceSize)TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H * 4;
+    VkDeviceSize off;
+    unsigned char* m;
+    if (!h->alpT || !s_tImg) return 0;
+    if (s_tHave && s_tSerial == h->alpSerial) return 1;
+    if ((!s->stage.buf || s->stage.used == 0) &&
+        !tagpu_vk_stage_begin(d, &s->stage, bytes, bytes)) return 0;
+    m = tagpu_vk_stage_take(&s->stage, bytes, 16, &off);
+    if (!m) return 0;
+    memcpy(m, h->alpT, (size_t)bytes);
+    /* the earlier frames that sample it are before this write (the barrier's first scope is
+       every command submitted before it on the queue) */
+    img_barrier(cb, s_tImg, s_tHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, s_tHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    copy_rect(cb, s->stage.buf, off, s_tImg, TAGPU_FX_ALPT_W, TAGPU_FX_ALPT_H);
+    img_barrier(cb, s_tImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    s_tHave = 1; s_tSerial = h->alpSerial;
     return 1;
 }
 
@@ -902,6 +1057,7 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         wr[2] = wr[0]; wr[2].dstBinding = 44;
         vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
     }
+    if (s_ordBuilt) ord_images(d, dim);
     return 1;
 }
 
@@ -943,8 +1099,10 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_descriptors(d)) return 0;
 
     plog(d, "fx: the Vulkan edition is up - %u frame slots, uniform stride %u, "
-            "four pipelines (tri, line, flash, particle events)",
-         (unsigned)d->slots, (unsigned)s_ustride);
+            "four pipelines (tri, line, flash, particle events)%s",
+         (unsigned)d->slots, (unsigned)s_ustride,
+         s_ordBuilt ? " and their ordered set (the ALP blend by the engine's table)"
+                    : " (the ALP blend a 50 % mix)");
     return 1;
 }
 
@@ -1123,7 +1281,7 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                 "flight are using", s_atDim, h->atlasDim);
         return -1;
     }
-    if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
+    if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial && (!s_iImg || s_iHave)) {
         tagpu_vk_stage_drop(d, &s->stage);
         tagpu_fx_atlas_ack(s_bSerial, 1);
         return 1;
@@ -1138,6 +1296,9 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, keep,
                             h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
     bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
+    /* THE INDEX ATLAS RIDES WITH IT (*The ALP blend*): the same rects at a byte a texel, each
+       rect's bytes on four, or the whole when it holds nothing yet */
+    if (s_iImg && keep && s_iHave) bytes += bytes / 4 + (VkDeviceSize)n * 4;
     if (keep) {
         if (n > 0 && (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4) ||
                       !tagpu_vk_stage_fits(&s->stage, bytes))) {
@@ -1154,6 +1315,10 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                                          h->atlasDim, (const int (*)[4])s_rect, n, h->pal,
                                          s_flashAlpha))
             return 0;
+        if (s_iImg && n > 0 && s_iHave &&
+            !tagpu_vk_stage_copy_rects(d, cb, &s->stage, s_iImg, 1, h->atlas, h->atlasDim,
+                                       (const int (*)[4])s_rect, n, 1))
+            s_iHave = 0;                   /* the whole goes next frame */
         if (n == 0) tagpu_vk_stage_drop(d, &s->stage);
     } else {
         plog(d, "fx: the whole base atlas, %u KB, through the banded path - %s",
@@ -1163,6 +1328,20 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
                                    h->atlasDim, 0, 0, h->atlasDim, rows, h->pal, s_flashAlpha);
         if (rc <= 0) return rc;
+        if (s_iImg) s_iHave = 0;
+    }
+    /* THE INDEX ATLAS WHOLE when it holds nothing of this atlas yet: the used rows, a byte a
+       texel, in-frame or banded as the base's whole page goes. A device failure mid-band is the
+       base's answer too: the pass comes down. */
+    if (s_iImg && !s_iHave) {
+        if (!s->stage.buf && !tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)h->atlasDim * rows,
+                                                   (VkDeviceSize)h->atlasDim))
+            rc = 0;
+        else
+            rc = tagpu_vk_stage_copy(d, cb, &s->stage, s_iImg, 0, h->atlas, h->atlasDim,
+                                     h->atlasDim, rows, 1);
+        if (rc < 0) return rc;
+        s_iHave = rc > 0;
     }
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;
@@ -1403,6 +1582,10 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     case 0:  return 0;
     default: break;
     }
+    /* THE ALP BLEND'S PATH FOR THIS FRAME (*The ALP blend*): ordered when its pipelines, its
+       index atlas and the engine's table are all on the device; otherwise the 50 % mix. The
+       world's own half -- whether its target is open to be suspended -- is `record`'s. */
+    s_ordThis = s_ordBuilt && s_iHave && alp_upload(d, cb, s, &h);
 
     /* THE RESTORE, AFTER THE UPLOAD IT READS AND BEFORE ANY DRAW THAT SAMPLES
        WHAT IT PAINTS. The draws themselves are issued by the seam, from
@@ -1580,9 +1763,43 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     uint32_t first = 0;
     int b;
 
-    (void)d;
+    VkPipeline pTri = s_pipeTri, pLine = s_pipeLine, pFlash = s_pipeFlash, pEvt = s_pipeEvt;
+    int ord = 0;
+
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
+
+    /* THE ORDERED PASS, when `prepare` left an ordered draw and the world is in its target
+       (*The ALP blend*). Binding 48 names the world's colour view of this generation: written
+       here, before this frame binds the set, which no submit still pending uses (the seam
+       waited on this slot's fence). Then the world pass is suspended for the ordered one, which
+       `tagpu_vk_world_order_close` below ends. */
+    if (s_ordBuilt) {
+        VkImageView wv;
+        unsigned gen;
+        if (tagpu_vk_world_order_view(&wv, &gen) && gen) {
+            if (s_slot[slot].ordGen != gen) {
+                VkDescriptorImageInfo ii;
+                VkWriteDescriptorSet wr;
+                memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+                ii.imageView = wv;
+                ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr.dstSet = s_slot[slot].dset; wr.dstBinding = 48; wr.descriptorCount = 1;
+                wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                wr.pImageInfo = &ii;
+                vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+                s_slot[slot].ordGen = gen;
+            }
+            ord = s_ordThis && tagpu_vk_world_order_open(d, cb);
+        }
+    }
+    if (ord) { pTri = s_pipeOTri; pLine = s_pipeOLine; pFlash = s_pipeOFlash; pEvt = s_pipeOEvt; s_cOrd++; }
+    else s_cMix++;
+    if ((s_cOrd + s_cMix) % 600u == 1u)
+        plog(d, "fx: the ALP blend: %u frame(s) by the engine's table in the pixel interlock, %u by "
+                "the 50 %% mix%s", s_cOrd, s_cMix,
+             s_ordBuilt ? "" : " (no ordered pipelines on this device)");
 
     /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
        This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
@@ -1629,14 +1846,14 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        weapon sprites, explosions over their flash). Sixty vertices an event, ten particles of
        two triangles. */
     if (s_nEvtUnder) {
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pEvt);
         vkCmdDraw(cb, 60u * (uint32_t)s_nEvtUnder, 1, 0, 0);
     }
     for (b = 0; b < TAGPU_FXB_N; b++) {
         VkPipeline pipe;
         if (s_n[b]) {
-            pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
-                 : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
+            pipe = (b == TAGPU_FXB_LINES) ? pLine
+                 : (b == TAGPU_FXB_FLASH) ? pFlash : pTri;
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
             /* the lines bucket holds records, one six-vertex band an instance,
                at the same stride as every other bucket's vertices */
@@ -1645,10 +1862,11 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
             first += (uint32_t)s_n[b];
         }
         if (b == TAGPU_FXB_SPRITES && s_nEvtOver) {
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeEvt);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pEvt);
             vkCmdDraw(cb, 60u * (uint32_t)s_nEvtOver, 1, 60u * (uint32_t)s_nEvtUnder, 0);
         }
     }
+    if (ord) tagpu_vk_world_order_close(d, cb);
 }
 
 /* READY as well as stamped: `atlas_owed` runs after `prepare_draw` in the same
@@ -1708,6 +1926,13 @@ void tagpu_vk_fx_down(const TAGPU_VKPASS* d)
     if (s_pipeLine)  { vkDestroyPipeline(dev, s_pipeLine, NULL);  s_pipeLine = VK_NULL_HANDLE; }
     if (s_pipeFlash) { vkDestroyPipeline(dev, s_pipeFlash, NULL); s_pipeFlash = VK_NULL_HANDLE; }
     if (s_pipeEvt) { vkDestroyPipeline(dev, s_pipeEvt, NULL); s_pipeEvt = VK_NULL_HANDLE; }
+    if (s_pipeOTri)   { vkDestroyPipeline(dev, s_pipeOTri, NULL);   s_pipeOTri = VK_NULL_HANDLE; }
+    if (s_pipeOLine)  { vkDestroyPipeline(dev, s_pipeOLine, NULL);  s_pipeOLine = VK_NULL_HANDLE; }
+    if (s_pipeOFlash) { vkDestroyPipeline(dev, s_pipeOFlash, NULL); s_pipeOFlash = VK_NULL_HANDLE; }
+    if (s_pipeOEvt)   { vkDestroyPipeline(dev, s_pipeOEvt, NULL);   s_pipeOEvt = VK_NULL_HANDLE; }
+    kill_image(d, &s_iImg, &s_iMem, &s_iView);
+    kill_image(d, &s_tImg, &s_tMem, &s_tView);
+    s_iHave = 0; s_tHave = 0; s_tSerial = 0; s_ordBuilt = 0; s_ordThis = 0;
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }

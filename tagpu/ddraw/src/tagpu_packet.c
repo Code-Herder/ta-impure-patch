@@ -860,6 +860,8 @@ static const char* frame_valid(const void* rec)
     }
     if (p->lht_len && (p->lht_len != TAGPU_PK_LHT_BYTES || !area_ok(p, p->lht_off, p->lht_len)))
         return "lighten table area";
+    if (p->alp_len && (p->alp_len != TAGPU_PK_ALP_BYTES || !area_ok(p, p->alp_off, p->alp_len)))
+        return "blend table area";
     /* THE EFFECTS MODELS. Every index the rasteriser follows out of them is
        bounded here -- a model's vertex run and its shape, a shape's face run,
        a face's index run and every index against its shape's vertex count --

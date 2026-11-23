@@ -583,6 +583,7 @@ typedef struct {
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              budgetok;             /* VK_EXT_memory_budget is offered   */
+    int              pixlock;              /* the ordered pixel interlock        */
     /* the budget query's entry point, from THIS lane's instance, NULL where
        VK_KHR_get_physical_device_properties2 is not offered: lane state, so it
        is written before ST_READY and cleared with the rest at teardown */
@@ -2414,8 +2415,20 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[2] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL };
+        const char* dexts[3] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL };
         uint32_t ndext = 1;
+        /* THE ORDERED PIXEL INTERLOCK, for the one blend whose rule reads the pixel underneath:
+           the engine's ALP table (tagpu_vk_fx.c, *The ALP blend*). VK_EXT_fragment_shader_interlock
+           with its pixel-interlock feature, and reading and writing a storage image without a
+           format (the world target is the swapchain's format, which no GLSL format qualifier
+           names): asked for together where the device offers all three, and a device that refuses
+           them is created again without. Without them the effects' translucent sprites keep a
+           50 % mix in RGB. */
+        int ilOffer = 0;
+        VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT il;
+        memset(&il, 0, sizeof il);
+        il.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+        il.fragmentShaderPixelInterlock = VK_TRUE;
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         VkPhysicalDeviceFeatures feat;      /* must outlive every vkCreateDevice below */
@@ -2473,6 +2486,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            enabled: the device needs nothing for it */
                         if (!strcmp(ext[k].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
                             s_vk.budgetok = 1;
+                        if (!strcmp(ext[k].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME))
+                            ilOffer = 1;
                     }
                 free(ext);
             }
@@ -2510,7 +2525,35 @@ static DWORD WINAPI up_worker(LPVOID arg)
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
-        r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        if (ilOffer) {
+            VkPhysicalDeviceFeatures have;
+            memset(&have, 0, sizeof have);
+            vkGetPhysicalDeviceFeatures(s_vk.pd, &have);
+            if (!have.shaderStorageImageReadWithoutFormat || !have.shaderStorageImageWriteWithoutFormat)
+                ilOffer = 0;
+        }
+        if (ilOffer) {
+            dexts[ndext] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME;
+            dci.enabledExtensionCount = ndext + 1;
+            dci.pNext = &il;
+            feat.shaderStorageImageReadWithoutFormat = VK_TRUE;
+            feat.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+            if (r == VK_SUCCESS) s_vk.pixlock = 1;
+            else {
+                vklog("vkCreateDevice refused the pixel interlock (%s) - retrying without it",
+                      res_name(r));
+                dci.pNext = NULL;
+                dci.enabledExtensionCount = ndext;
+                feat.shaderStorageImageReadWithoutFormat = VK_FALSE;
+                feat.shaderStorageImageWriteWithoutFormat = VK_FALSE;
+                r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+            }
+        } else
+            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        vklog("the effects' ALP blend: %s", s_vk.pixlock
+              ? "the engine's table against the pixel underneath, in the ordered pixel interlock"
+              : "a 50 % mix in RGB (no fragment shader pixel interlock on this device)");
         if (r != VK_SUCCESS && s_vk.flipok) {
             /* THE ONE RUNG: the flip, which costs every ported pass. One retry, so
                this is a real fallback and not a loop. */
@@ -2580,6 +2623,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
     s_pass.anisook = s_vk.anisook;
+    s_pass.pixlock = s_vk.pixlock;
     s_pass.maxAniso = s_vk.maxAniso;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = full_gdpa;

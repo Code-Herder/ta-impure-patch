@@ -155,6 +155,14 @@ int  tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                  int pitch, const int (*r)[4], int n,
                                  const unsigned char* pal, const unsigned char* alpha);
 
+/* The same `n` rects copied from `src` as they are, `bpp` bytes a texel (row pitch `pitch`
+   bytes), into an image of that texel size: an atlas's palette indices, unexpanded. Each
+   rect's bytes start on four. Same answers as above. */
+int  tagpu_vk_stage_copy_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                               TAGPU_VKSTAGE* st, VkImage img, int had,
+                               const unsigned char* src, int pitch, const int (*r)[4], int n,
+                               int bpp);
+
 /* 1 when `bytes` more would go in-frame through the slot's buffer as it
    stands -- the test tagpu_vk_stage_expand_rects makes, so a caller that must
    know which path its rects take asks the same question. */

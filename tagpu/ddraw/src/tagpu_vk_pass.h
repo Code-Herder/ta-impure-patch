@@ -102,6 +102,12 @@ typedef struct {
        pass, and a flip both share cancels. The screen is the only check for
        this one. */
     int                       flipok;
+    /* THE ORDERED PIXEL INTERLOCK (VK_EXT_fragment_shader_interlock, pixel interlock, and storage
+       images read and written without a format) was enabled: a fragment may read and write the
+       world target as a storage image inside a critical section that runs in primitive order on
+       each pixel. The effects pass's ALP blend is its one user (tagpu_vk_fx.c, tagpu_vk_world.c's
+       ordered pass); 0, and that blend is a 50 % mix in RGB. */
+    int                       pixlock;
     /* NO LINE FEATURE IS HERE, AND NONE IS NEEDED: no pass rasterises a line
        primitive. Every line is two triangles whose fragment stage keeps the
        game pixels `0x4CC7AB` would plot (tagpu_line.h, tagpu_glsl.h), so a

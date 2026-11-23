@@ -122,6 +122,10 @@ typedef struct TAGPU_FXMODEL {
    texel (224..255, so the hole test every reader makes, alpha < 0.5, is
    exact) and 0 at the frame's key (tagpu_pal_expand). The fragment stage
    reads it back as 255 - alpha. */
+/* The ALP image's shape (tagpu_fx.c `s_alpT`): 256 rows of the engine's table and one row of
+   the sorted palette. */
+#define TAGPU_FX_ALPT_W 256
+#define TAGPU_FX_ALPT_H 257
 #define TAGPU_FX_FLASH_LO 0x4F
 #define TAGPU_FX_FLASH_ALPHA(i) \
     (255 - ((i) < TAGPU_FX_FLASH_LO ? 0 : (i) > TAGPU_FX_FLASH_LO + 31 ? 31 : (i) - TAGPU_FX_FLASH_LO))
@@ -298,6 +302,11 @@ typedef struct TAGPU_FXHAND {
        flash vertices is refused rather than drawn with no colour for its
        flashes. */
     const unsigned char*  lht;        /* 32 x 3 bytes, or NULL                */
+    /* THE ALP BLEND TABLE AND THE SORTED PALETTE (tagpu_fx.c `s_alpT`), TAGPU_FX_ALPT_W x
+       TAGPU_FX_ALPT_H words, or NULL while the engine has none; `alpSerial` moves whenever
+       its words do. Only the ordered path reads it (tagpu_vk_fx.c). */
+    const uint32_t*       alpT;
+    unsigned              alpSerial;
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame. tagpu_vk_feat.c has the argument for

@@ -851,6 +851,10 @@ typedef struct TAGPU_PK_FXMODEL {
 #define TAGPU_PK_LHT_ROWS    32u
 #define TAGPU_PK_LHT_BYTES   (TAGPU_PK_LHT_ROWS * 256u)
 
+/* The engine's ALP blend table, TAProgram+0xC0: 256 rows of 256, `0x4B8500`'s
+   dst = T[src << 8 | dst] for the translucent sprites. Copied whole. */
+#define TAGPU_PK_ALP_BYTES   65536u
+
 /* ---- THE FOG SOURCE -----------------------------------------------------
    The fog of war as the bits the engine's builder 0x4843C0 tests per map cell,
    for the WHOLE map: two bits a 32-px LOS cell, sixteen cells a word, `stride =
@@ -916,6 +920,7 @@ typedef struct TAGPU_PK_FXMODEL {
 #define TAGPU_PK_TRUNC_PROJ    0x80u
 #define TAGPU_PK_TRUNC_EXPL    0x100u
 #define TAGPU_PK_TRUNC_DEBRIS  0x200u
+#define TAGPU_PK_TRUNC_ALP     0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOGSRC  0x1000u
 #define TAGPU_PK_TRUNC_PEVT    0x2000u    /* the particle events, or the wind rows they reach: the oldest left out */
@@ -1407,6 +1412,9 @@ typedef struct TAGPU_PACKET {
     uint32_t lht_off, lht_len;        /* the engine's 32x256 LHT lighten table
                                          (TAProgram+0xC8), the explosion flash's
                                          colour ramp                             */
+    uint32_t alp_off, alp_len;        /* the engine's 256x256 ALP blend table
+                                         (TAProgram+0xC0), the translucent
+                                         sprites' rule                           */
 
     /* ---- the fog source ---- */
     int32_t  fogsrc_w, fogsrc_h;      /* cells; 0 = none this frame: the module is
@@ -1598,6 +1606,9 @@ static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
 /* The LHT lighten table, same shape, or NULL. */
 static __inline const unsigned char* tagpu_pk_lht(const TAGPU_PACKET* p)
 { return p->lht_len == TAGPU_PK_LHT_BYTES ? (const unsigned char*)p + p->lht_off : (const unsigned char*)0; }
+/* The ALP blend table, row-major by source index, or NULL. */
+static __inline const unsigned char* tagpu_pk_alp(const TAGPU_PACKET* p)
+{ return p->alp_len == TAGPU_PK_ALP_BYTES ? (const unsigned char*)p + p->alp_off : (const unsigned char*)0; }
 /* ---- the fog source: NULL, or `fogsrc_stride * fogsrc_h` words -- the acquire
    proved they lie inside the record and that the stride is the width's, so every
    word tagpu_fog_cell reads for a cell of the map is inside the bytes. ---- */

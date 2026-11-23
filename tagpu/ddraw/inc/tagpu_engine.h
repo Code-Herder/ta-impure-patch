@@ -372,6 +372,10 @@
 #define OFF_SPRSEQ0        0x147BB     /* 5 sprite-weapon sequences (rt 4)      */
 #define OFF_FLARESEQ       0x147F3     /* rt 5                                  */
 /* TAProgram (the graphics globals' owner, TA_GFX_PP) */
+#define PROG_ALP           0x0C0       /* u8[256][256] the blend table: 0x4B8500 */
+                                       /* writes dst = T[src << 8 | dst]; filled */
+                                       /* once a process (0x42E140 from         */
+                                       /* UIPipelinesInit), behind caps bit 5   */
 #define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
 #define PROG_GREY          0x0CC       /* u8[256] the grey remap: 0x4BFE10      */
                                        /* writes dst = T[dst] through it; built */

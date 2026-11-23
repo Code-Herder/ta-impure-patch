@@ -129,6 +129,21 @@ int  tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb);
 
+#ifndef TAGPU_SCENE_WIKI
+/* THE ORDERED PASS (tagpu_vk_world.c `build_ordered`), the game's instance only: the render
+   pass a pipeline that reads and writes the world's colour as a storage image is built against
+   (VK_NULL_HANDLE when the device or the driver gave none; it has the depth attachment alone),
+   the colour view that storage image is, in GENERAL, and a generation that moves whenever the view does (0 = no ordered framebuffer
+   now), and the suspension itself. `_open` ends the world pass and opens the ordered one
+   (1), or does nothing (0: the world is not in its target this frame, or there is no
+   ordered pass); `_close` resumes the world pass where `_open` opened, and does nothing
+   otherwise. Inside `begin`/`end`, on the render thread. */
+VkRenderPass tagpu_vk_world_order_rp(void);
+int  tagpu_vk_world_order_view(VkImageView* view, unsigned* gen);
+int  tagpu_vk_world_order_open(const TAGPU_VKPASS* d, VkCommandBuffer cb);
+void tagpu_vk_world_order_close(const TAGPU_VKPASS* d, VkCommandBuffer cb);
+#endif
+
 /* The composite, inside the seam's render pass, after TA's own frame and
    before the UI. `w`/`h` are the swapchain extent, for clamping the rect. */
 void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,

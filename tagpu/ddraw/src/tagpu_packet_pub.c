@@ -2157,6 +2157,10 @@ static unsigned char s_lht[TAGPU_PK_LHT_BYTES];
 static const unsigned char* s_lhtPtr;
 static int s_lhtOk;
 static volatile unsigned s_cLhtCopies;
+/* the ALP blend table, latched the same way */
+static unsigned char s_alp[TAGPU_PK_ALP_BYTES];
+static const unsigned char* s_alpPtr;
+static int s_alpOk;
 
 typedef char pk_proj_size  [(sizeof(TAGPU_PK_PROJ)   == 44) ? 1 : -1];
 typedef char pk_expl_size  [(sizeof(TAGPU_PK_EXPL)   == 24) ? 1 : -1];
@@ -2180,6 +2184,25 @@ static void lht_snapshot(void)
        and a copy of that size reads what the blit reads and nothing more. */
     tagpu_pk_copy(s_lht, t, sizeof s_lht);
     s_lhtPtr = t; s_lhtOk = 1; s_cLhtCopies++;
+}
+
+/* THE ALP BLEND TABLE, latched like the lighten table: once a pointer. Its bytes
+   are written once a process, by 0x42E140 (the file) or the generator 0x4BA750,
+   both from UIPipelinesInit before the first level (engine/ui.md, *The colour
+   tables a mod brings*), so a table seen in play is final. THE BOUND IS THE
+   FORMAT: 0x4B8500 indexes it with two bytes, so the table is exactly 256 x 256
+   and a copy of that size reads what the blit reads. */
+static void alp_snapshot(void)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    const unsigned char* t;
+    if (!ptr_ok(g)) return;
+    if (!(RDU16(g, PROG_CAPS) & 0x20u)) return;        /* no table: no ALP blit draws */
+    t = *(const unsigned char* const*)(g + PROG_ALP);
+    if (!ptr_ok(t)) return;
+    if (t == s_alpPtr && s_alpOk) return;
+    tagpu_pk_copy(s_alp, t, sizeof s_alp);
+    s_alpPtr = t; s_alpOk = 1;
 }
 
 /* THE TEAM COLOUR OF A DEBRIS PIECE, as 0x4211D0 takes it: the piece's unit
@@ -2851,6 +2874,12 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     if (s_lhtOk) {
         e = append_area(p, cursor, s_lht, (unsigned)sizeof s_lht, &p->lht_off, &p->lht_len,
                         TAGPU_PK_TRUNC_LHT);
+        if (e > need) need = e;
+    }
+    alp_snapshot();
+    if (s_alpOk) {
+        e = append_area(p, cursor, s_alp, (unsigned)sizeof s_alp, &p->alp_off, &p->alp_len,
+                        TAGPU_PK_TRUNC_ALP);
         if (e > need) need = e;
     }
     s_cLastProj = s_nProj; s_cLastExpl = s_nExpl;

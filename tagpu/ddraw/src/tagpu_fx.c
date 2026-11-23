@@ -35,7 +35,9 @@
    gathered here and drawn by tagpu_vk_fx.c right after the unit bodies,
    at a depth band above every ground row and below the airborne band. GAF
    frames (raw or TA-RLE, sub-frame lists) are decoded into a private atlas.
-   ALP alpha = 50% blend; the LHT flash = additive, per-level colour derived
+   ALP sprites take the engine's table against the pixel underneath where the
+   device has the ordered pixel interlock (TAGPU_FX_ALP_FN), a 50 % mix in RGB where it
+   cannot; the LHT flash = additive, per-level colour derived
    from the live table. Armed by tagpu_fx.on; tokens: log, nolines, nomodels,
    nosprites, noexpl, nodebris, passive (gather + log, nothing drawn).
    The particle sfx pass (tagpu_sfx.c, armed by tagpu_sfx.on) rides the same
@@ -237,6 +239,34 @@ static unsigned char s_lhtRGB[32 * 3];
 static unsigned s_lhtPal;
 static unsigned char s_lhtSrc[TAGPU_PK_LHT_BYTES];
 
+/* THE ALP BLEND TABLE AS THE VULKAN PASS READS IT (TAGPU_FX_ALPT_W x TAGPU_FX_ALPT_H words,
+   tagpu_fx.h): rows 0..255 the engine's table, row = source index, column = destination
+   index; row 256 the palette sorted as 0x4BA920 sorts it, each entry `R+G+B << 8 | index`,
+   which the fragment stage's nearest-entry search 0x4BA9D0 walks. Rebuilt when the packet's
+   table or the engine palette moves, as the light table is; `s_alpInit` 0 until the first. */
+static uint32_t      s_alpT[TAGPU_FX_ALPT_W * TAGPU_FX_ALPT_H];
+static unsigned char s_alpSrc[TAGPU_PK_ALP_BYTES];
+static unsigned      s_alpPal, s_alpSerial;
+static int           s_alpInit;
+
+/* 0x4BA920: each entry's R+G+B and its index, exchange-sorted by the sum with a strict `>` --
+   not a stable order, so the loop is the engine's as it stands: entries of equal sum keep the
+   order this loop leaves them in, and the search's tie rule (the first strict minimum in this
+   order) depends on it (effects.md §7.6: the flame's own colours tie). */
+static void alp_build(const unsigned char* alp, const unsigned char* pal)
+{
+    int sum[256], idx[256], i, j;
+    for (i = 0; i < 256 * 256; i++) s_alpT[i] = alp[i];
+    for (i = 0; i < 256; i++) { sum[i] = pal[4 * i] + pal[4 * i + 1] + pal[4 * i + 2]; idx[i] = i; }
+    for (i = 0; i < 256; i++)
+        for (j = i + 1; j < 256; j++)
+            if (sum[i] > sum[j]) {
+                int t = sum[i]; sum[i] = sum[j]; sum[j] = t;
+                t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+            }
+    for (i = 0; i < 256; i++) s_alpT[256 * 256 + i] = ((uint32_t)sum[i] << 8) | (uint32_t)idx[i];
+}
+
 /* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD CODE, and no C in this file
    references it -- `tools/spirv-gen.py` reads both strings
    out of the PREPROCESSED translation unit and generates the SPIR-V that
@@ -263,53 +293,137 @@ static const char* VS =
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vCM = aCM; vWorld = aWorld; vEnc = aPos.z;\n"
     "}\n";
+/* THE ENGINE'S ALP RULE, FOR THE ORDERED EDITIONS FSO, NFSO AND LFSO (tagpu_vk_fx.c, *The ALP
+   blend*). `0x4B8500` writes `T[src << 8 | dst]`, a palette entry chosen by the source's and the
+   destination's indices (effects.md §3, §7.6). The ordered editions draw in the world's ordered
+   pass, which has no colour attachment: each fragment reads and writes the world target's pixel
+   itself (`uDst`, a storage image) inside the pixel interlock, which runs the critical sections
+   of every fragment on one pixel in primitive order -- so a stack of sprites applies the table
+   one after another, as the engine's blits do -- and the depth test is early, so a fragment the
+   depth hides never reaches its write. The source's index is the index atlas's texel (`uIdx`,
+   the base atlas's texels unexpanded); the destination's index is the palette entry the
+   engine's own search 0x4BA9D0 picks for the pixel -- the entries whose R+G+B lies within 40 of
+   the pixel's, walked in 0x4BA920's sorted order (row 256 of `uAlpT`), the first strict minimum
+   of the squared RGB distance, else the entry where the walk stopped. The result is the pixel
+   moved by what the table does to its index, `dst + pal[T[src][i]] - pal[i]`: the engine's
+   pixel exactly where the destination is a palette colour, and the destination's own detail
+   kept where it is not (Classic++). The target is premultiplied; an ALP pixel is opaque, as the
+   engine's is. `taStore` is every other mode's blend as the pipelines' fixed function does it
+   (`ONE, ONE_MINUS_SRC_ALPHA`; a flash, alpha 0, adds), so the edition draws every bucket. */
+#define TAGPU_FX_ALP_EXT \
+    "#extension GL_ARB_fragment_shader_interlock : require\n" \
+    "#extension GL_EXT_shader_image_load_formatted : require\n" \
+    "layout(pixel_interlock_ordered) in;\n" \
+    "layout(early_fragment_tests) in;\n"
+#define TAGPU_FX_ALP_DECL \
+    "uniform usampler2D uIdx;\n" \
+    "uniform usampler2D uAlpT;\n" \
+    "uniform image2D uDst;\n"
+#define TAGPU_FX_ALP_FN \
+    "vec3 taAlp(vec4 d, uint s){\n" \
+    "  ivec3 c = ivec3(round(clamp(d.rgb, 0.0, 1.0) * 255.0));\n" \
+    "  int want = c.r + c.g + c.b;\n" \
+    "  int lo = 0, hi = 256;\n" \
+    "  while (lo < hi) {\n" \
+    "    int m = (lo + hi) >> 1;\n" \
+    "    if (int(texelFetch(uAlpT, ivec2(m, 256), 0).r >> 8) < want - 40) lo = m + 1; else hi = m;\n" \
+    "  }\n" \
+    "  int best = 1000000000, hit = -1, k = lo;\n" \
+    "  for (; k < 256; k++) {\n" \
+    "    uint e = texelFetch(uAlpT, ivec2(k, 256), 0).r;\n" \
+    "    if (int(e >> 8) > want + 40) break;\n" \
+    "    ivec3 q = ivec3(round(texelFetch(uPal, ivec2(int(e & 255u), 0), 0).rgb * 255.0)) - c;\n" \
+    "    int dd = q.x * q.x + q.y * q.y + q.z * q.z;\n" \
+    "    if (dd < best) { best = dd; hit = k; }\n" \
+    "  }\n" \
+    "  int di = int(texelFetch(uAlpT, ivec2(hit >= 0 ? hit : (k & 255), 256), 0).r & 255u);\n" \
+    "  int o = int(texelFetch(uAlpT, ivec2(di, int(s)), 0).r);\n" \
+    "  vec3 po = texelFetch(uPal, ivec2(o, 0), 0).rgb;\n" \
+    "  vec3 pd = texelFetch(uPal, ivec2(di, 0), 0).rgb;\n" \
+    "  return clamp(d.rgb + (po - pd), 0.0, 1.0);\n" \
+    "}\n"
+/* the critical section: `alp` 1 for an ALP texel, else `src` premultiplied over the pixel
+   (`add` 1: a flash's light added). At the top level of main, after every discard. */
+#define TAGPU_FX_ALP_STORE(alp, add, src) \
+    "  ivec2 px = ivec2(gl_FragCoord.xy);\n" \
+    "  beginInvocationInterlockARB();\n" \
+    "  vec4 d = imageLoad(uDst, px);\n" \
+    "  vec4 o = " src ";\n" \
+    "  if (" alp ") o = vec4(taAlp(d, sIdx), 1.0);\n" \
+    "  else if (" add ") o = vec4(d.rgb + o.rgb, d.a);\n" \
+    "  else o = o + d * (1.0 - o.a);\n" \
+    "  imageStore(uDst, px, clamp(o, 0.0, 1.0));\n" \
+    "  endInvocationInterlockARB();\n"
+
+/* THE SPRITE PROGRAM'S FRAGMENT STAGE, IN TWO EDITIONS: FS blends an ALP sprite (mode 2) at
+   50 % in RGB, FSO computes the engine's ALP rule against the pixel underneath (TAGPU_FX_ALP_FN).
+   Every other line is one text, the macros below. */
+#define FX_FS_DECL \
+    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; in float vEnc;\n" \
+    "out vec4 frag;\n" \
+    "uniform sampler2D uPal;\n"              /* the engine's table: mode 0's colour */ \
+    "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */ \
+    "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin */ \
+    "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */ \
+    TAGPU_GLSL_FOG_UNIFORMS \
+    TAGPU_GLSL_SCAF_UNIFORMS \
+    /* the base atlas: the same texels expanded through the engine's table, \
+       alpha 0 at the frame's key and 255 - the flash level elsewhere \
+       (tagpu_fx.h TAGPU_FX_FLASH_ALPHA, tagpu_vk_fx.c) */ \
+    "uniform sampler2D uBase;\n" \
+    TAGPU_GLSL_FOG_FN
+#define FX_FS_MAIN \
+    "void main(){\n" \
+    "  int mode = int(vCM.y + 0.5);\n" \
+    "  vec3 rgb; float a = 1.0;\n" \
+    /* scaffold occlusion, the unit shader's rule; no draw of the Vulkan pass turns uScafOn on \
+       (tagpu_vk_fx.c) */ \
+    TAGPU_GLSL_SCAF_TEST \
+    /* effects are transient: the engine's own passes are LOS-gated, so they \
+       vanish in grey rather than darkening (uFog bit1 is set for this pass) */ \
+    TAGPU_GLSL_FOG_DISCARD \
+    /* mode 0 is a flat colour, and the vertex carries its palette index */ \
+    "  if (mode == 0) {\n" \
+    "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n" \
+    "  } else {\n" \
+    /* colour-keyed: the base's alpha is 0 exactly where the frame's index is \
+       its key (NEAREST, the texel the index was) */ \
+    "    vec4 b = texture(uBase, vUV);\n" \
+    "    if (b.a < 0.5) discard;\n" \
+    "    if (mode == 3) {\n" \
+    "      int lv = 255 - int(b.a * 255.0 + 0.5);\n" \
+    "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n" \
+    "    } else {\n" \
+    /* the twin's colour where the lazy restore has painted it (alpha 1 -- \
+       tagpu_gaf.h), the base atlas's otherwise; the flash mode above keeps \
+       its level-driven light table. Effects hide in grey, so no RGB fog rule \
+       is needed here */ \
+    "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n" \
+    "      rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
+#define FX_FS_CLOSE \
+    "    }\n" \
+    "  }\n"
+#define FX_FS_TAIL \
+    FX_FS_CLOSE \
+    /* premultiplied target: flashes are pure additive light (alpha 0) */ \
+    "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n" \
+    "}\n"
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; in float vEnc;\n"
-    "out vec4 frag;\n"
-    "uniform sampler2D uPal;\n"              /* the engine's table: mode 0's colour */
-    "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
-    "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin */
-    "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
-    TAGPU_GLSL_FOG_UNIFORMS
-    TAGPU_GLSL_SCAF_UNIFORMS
-    /* the base atlas: the same texels expanded through the engine's table,
-       alpha 0 at the frame's key and 255 - the flash level elsewhere
-       (tagpu_fx.h TAGPU_FX_FLASH_ALPHA, tagpu_vk_fx.c) */
-    "uniform sampler2D uBase;\n"
-    TAGPU_GLSL_FOG_FN
-    "void main(){\n"
-    "  int mode = int(vCM.y + 0.5);\n"
-    "  vec3 rgb; float a = 1.0;\n"
-    /* scaffold occlusion, the unit shader's rule; no draw of the Vulkan pass turns uScafOn on
-       (tagpu_vk_fx.c) */
-    TAGPU_GLSL_SCAF_TEST
-    /* effects are transient: the engine's own passes are LOS-gated, so they
-       vanish in grey rather than darkening (uFog bit1 is set for this pass) */
-    TAGPU_GLSL_FOG_DISCARD
-    /* mode 0 is a flat colour, and the vertex carries its palette index */
-    "  if (mode == 0) {\n"
-    "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
-    "  } else {\n"
-    /* colour-keyed: the base's alpha is 0 exactly where the frame's index is
-       its key (NEAREST, the texel the index was) */
-    "    vec4 b = texture(uBase, vUV);\n"
-    "    if (b.a < 0.5) discard;\n"
-    "    if (mode == 3) {\n"
-    "      int lv = 255 - int(b.a * 255.0 + 0.5);\n"
-    "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n"
-    "    } else {\n"
-    /* the twin's colour where the lazy restore has painted it (alpha 1 --
-       tagpu_gaf.h), the base atlas's otherwise; the flash mode above keeps
-       its level-driven light table. Effects hide in grey, so no RGB fog rule
-       is needed here */
-    "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "      rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
+    FX_FS_DECL
+    FX_FS_MAIN
     "      if (mode == 2) a = 0.5;\n"
-    "    }\n"
-    "  }\n"
-    /* premultiplied target: flashes are pure additive light (alpha 0) */
-    "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n"
+    FX_FS_TAIL;
+static const char* FSO =
+    "#version 330 core\n"
+    TAGPU_FX_ALP_EXT
+    FX_FS_DECL
+    TAGPU_FX_ALP_DECL
+    TAGPU_FX_ALP_FN
+    FX_FS_MAIN
+    FX_FS_CLOSE
+    "  uint sIdx = texture(uIdx, vUV).r;\n"
+    TAGPU_FX_ALP_STORE("mode == 2", "mode == 3", "vec4(rgb * a, a)")
     "}\n";
 /* THE LINES' PROGRAM: lasers and lightning by tagpu_line.h's one rule --
    `0x4CC7AB`'s walk on the line grid, thickened to ss pixels; tagpu_mark.c's
@@ -360,6 +474,33 @@ static const char* LFS =
     "    discard;\n"
     TAGPU_GLSL_FOG_DISCARD
     "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
+    "}\n";
+/* LFS's ordered edition: the same test, the colour stored opaque inside the interlock, for the
+   ordered pass that has no colour attachment (TAGPU_FX_ALP_FN) */
+static const char* LFSO =
+    "#version 330 core\n"
+    TAGPU_FX_ALP_EXT
+    "in vec2 vWorld; flat in vec2 vCM; flat in vec4 vLine;\n"
+    "out vec4 frag;\n"
+    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uLht;\n"
+    "uniform sampler2D uAtlasRGB;\n"
+    "uniform int uRestored;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
+    TAGPU_GLSL_SCAF_UNIFORMS
+    "uniform sampler2D uBase;\n"
+    "uniform ivec4 uGrid;\n"
+    TAGPU_FX_ALP_DECL
+    TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_LINE_FN
+    TAGPU_FX_ALP_FN
+    "void main(){\n"
+    "  if (!taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
+    "    discard;\n"
+    TAGPU_GLSL_FOG_DISCARD
+    "  uint sIdx = 0u;\n"
+    TAGPU_FX_ALP_STORE("false", "false",
+        "vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0)")
     "}\n";
 /* THE PARTICLES FROM THEIR EMITTER EVENTS (inc/tagpu_pevt.h; gpu-particles-plan.md, *The draw*).
    No vertex attribute: the storage block `pe` holds the sprites' frame table (TAGPU_PEVT_NSEQ *
@@ -537,38 +678,63 @@ static const char* NVS =
    exactly those (inc/tagpu_fogsrc.h: bit 1 out of LOS, set only in true-LOS mode; bit 0 never
    explored). The smoothed fog the other effects take is not applied: a particle is all there or
    not at all, as the engine draws it. A dot is its palette colour; a sprite (mode 2) is FS's
-   alpha path: the base atlas's key test, the restored twin where it is painted, 50 % alpha. A
-   Smoke1 puff (mode 3) is a sprite with no sight test, as its leaf 0x475700 has none. */
+   alpha path: the base atlas's key test, then NFS's 50 % mix in RGB, or NFSO's engine table
+   against the pixel underneath (TAGPU_FX_ALP_FN). A Smoke1 puff (mode 3) is a sprite with no
+   sight test, as its leaf 0x475700 has none. */
+#define FX_NFS_DECL \
+    "flat in vec2 vCM; flat in ivec2 vTile; in vec2 vUV;\n" \
+    "out vec4 frag;\n" \
+    "uniform sampler2D uPal;\n" \
+    "uniform sampler2D uLht;\n" \
+    "uniform sampler2D uAtlasRGB;\n" \
+    "uniform int uRestored;\n" \
+    TAGPU_GLSL_FOG_UNIFORMS \
+    TAGPU_GLSL_SCAF_UNIFORMS \
+    "uniform sampler2D uBase;\n" \
+    TAGPU_GLSL_FOG_FN
+#define FX_NFS_FOG \
+    "void main(){\n" \
+    "  int mode = int(vCM.y + 0.5);\n" \
+    "  if ((uFog & 1) == 1 && mode != 3) {\n" \
+    "    if (vTile.x < 0 || vTile.y < 0 || vTile.x >= uFogSize.x || vTile.y >= uFogSize.y)\n" \
+    "      discard;\n" \
+    "    int c = taFogCell(vTile.x, vTile.y);\n" \
+    "    if ((uFog & 4) == 4 ? (c & 2) != 0 : (c & 1) != 0) discard;\n" \
+    "  }\n"
+#define FX_NFS_MAIN \
+    FX_NFS_FOG \
+    "  if (mode >= 2) {\n" \
+    "    vec4 b = texture(uBase, vUV);\n" \
+    "    if (b.a < 0.5) discard;\n" \
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n" \
+    "    vec3 rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
+#define FX_NFS_TAIL \
+    "  } else {\n" \
+    "    frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n" \
+    "  }\n" \
+    "}\n"
+/* NFSO's main after the fog test: the key test for a sprite, then the store; a dot is its
+   palette colour, opaque */
+#define FX_NFSO_TAIL \
+    "  if (mode >= 2 && texture(uBase, vUV).a < 0.5) discard;\n" \
+    "  uint sIdx = texture(uIdx, vUV).r;\n" \
+    TAGPU_FX_ALP_STORE("mode >= 2", "false", \
+        "vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0)") \
+    "}\n"
 static const char* NFS =
     "#version 330 core\n"
-    "flat in vec2 vCM; flat in ivec2 vTile; in vec2 vUV;\n"
-    "out vec4 frag;\n"
-    "uniform sampler2D uPal;\n"
-    "uniform sampler2D uLht;\n"
-    "uniform sampler2D uAtlasRGB;\n"
-    "uniform int uRestored;\n"
-    TAGPU_GLSL_FOG_UNIFORMS
-    TAGPU_GLSL_SCAF_UNIFORMS
-    "uniform sampler2D uBase;\n"
-    TAGPU_GLSL_FOG_FN
-    "void main(){\n"
-    "  int mode = int(vCM.y + 0.5);\n"
-    "  if ((uFog & 1) == 1 && mode != 3) {\n"
-    "    if (vTile.x < 0 || vTile.y < 0 || vTile.x >= uFogSize.x || vTile.y >= uFogSize.y)\n"
-    "      discard;\n"
-    "    int c = taFogCell(vTile.x, vTile.y);\n"
-    "    if ((uFog & 4) == 4 ? (c & 2) != 0 : (c & 1) != 0) discard;\n"
-    "  }\n"
-    "  if (mode >= 2) {\n"
-    "    vec4 b = texture(uBase, vUV);\n"
-    "    if (b.a < 0.5) discard;\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
+    FX_NFS_DECL
+    FX_NFS_MAIN
     "    frag = vec4(rgb * 0.5, 0.5);\n"
-    "  } else {\n"
-    "    frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
-    "  }\n"
-    "}\n";
+    FX_NFS_TAIL;
+static const char* NFSO =
+    "#version 330 core\n"
+    TAGPU_FX_ALP_EXT
+    FX_NFS_DECL
+    TAGPU_FX_ALP_DECL
+    TAGPU_FX_ALP_FN
+    FX_NFS_FOG
+    FX_NFSO_TAIL;
 #pragma GCC diagnostic pop
 
 /* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
@@ -1274,6 +1440,21 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         }
     }
 
+    /* ---- the ALP blend table, when the engine has one (bit 5: without it 0x4B8500 draws
+       nothing, and neither does this pass) ---- */
+    if (alphaOn) {
+        const unsigned char* alp = tagpu_pk_alp(pk);
+        const unsigned char* pal = tagpu_pal_engine();
+        if (pal && alp && (!s_alpInit || s_alpPal != tagpu_pal_engine_serial() ||
+                           memcmp(alp, s_alpSrc, sizeof s_alpSrc) != 0)) {
+            alp_build(alp, pal);
+            memcpy(s_alpSrc, alp, sizeof s_alpSrc);
+            s_alpPal = tagpu_pal_engine_serial();
+            s_alpSerial++;
+            s_alpInit = 1;
+        }
+    }
+
     static unsigned last = 0;
     if (v->frame_counter - last >= 60) {
         last = v->frame_counter;
@@ -1454,6 +1635,8 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
        and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
        rather than guess one. */
     s_pub.lht = s_lhtInit ? s_lhtRGB : NULL;
+    s_pub.alpT = s_alpInit ? s_alpT : NULL;
+    s_pub.alpSerial = s_alpSerial;
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass decides it (tagpu_native.c `s_scissorOn`). */

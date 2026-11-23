@@ -97,6 +97,20 @@ static int s_lastW, s_lastH, s_lastSS, s_lastDevres;
 static VkFormat              s_colFmt = VK_FORMAT_UNDEFINED;
 
 static VkRenderPass          s_rp;      /* the OFFSCREEN pass, not the seam's */
+/* THE ORDERED PASS AND THE RESUMING ONE (`build_ordered`): the effects pass's ALP sprites
+   read the pixel they draw over, so it suspends the world pass, draws in `s_rpO` -- the depth
+   attachment alone, the colour image read and written as a storage image inside the pixel
+   interlock -- and the rest of the world resumes in `s_rpR`, compatible with `s_rp`. The
+   game's instance only, and only on a device with the interlock whose colour format takes
+   storage (`s_ordFmt`). */
+static VkRenderPass          s_rpO, s_rpR;
+static int                   s_ordOpen;   /* `s_rpO` is the open pass */
+#ifdef TAGPU_SCENE_WIKI
+#define WORLD_ORDERED(d) 0
+#else
+static int                   s_ordFmt;    /* the colour format takes storage */
+#define WORLD_ORDERED(d) ((d)->pixlock && s_ordFmt)
+#endif
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipe;    /* the composite, built against d->rp */
@@ -114,6 +128,7 @@ typedef struct {
     VkDeviceMemory  cmem, dmem;
     VkImageView     cview, dview;
     VkFramebuffer   fb;
+    VkFramebuffer   fbO;                /* the same two views, for `s_rpO`   */
     int             w, h;               /* what it is sized for, 0 = nothing */
 } TARGET;
 static TARGET s_tgt;
@@ -256,6 +271,8 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
                       : (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                          VK_IMAGE_USAGE_SAMPLED_BIT |
                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    /* the ordered pass reads and writes the colour image as a storage image */
+    if (!depth && WORLD_ORDERED(d)) ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(d->dev, &ici, NULL, img) != VK_SUCCESS) return 0;
@@ -292,6 +309,7 @@ static void tgt_free(const TAGPU_VKPASS* d)
     VkDevice dev = d->dev;
     TARGET* s = &s_tgt;
     if (s->fb)    { vkDestroyFramebuffer(dev, s->fb, NULL); s->fb = VK_NULL_HANDLE; }
+    if (s->fbO)   { vkDestroyFramebuffer(dev, s->fbO, NULL); s->fbO = VK_NULL_HANDLE; }
     if (s->cview) { vkDestroyImageView(dev, s->cview, NULL); s->cview = VK_NULL_HANDLE; }
     if (s->col)   { vkDestroyImage(dev, s->col, NULL); s->col = VK_NULL_HANDLE; }
     if (s->cmem)  { vkFreeMemory(dev, s->cmem, NULL); s->cmem = VK_NULL_HANDLE; }
@@ -342,6 +360,17 @@ static int tgt_size(const TAGPU_VKPASS* d, int w, int h)
     fci.height = (uint32_t)h;
     fci.layers = 1;
     if (vkCreateFramebuffer(d->dev, &fci, NULL, &s->fb) != VK_SUCCESS) { tgt_free(d); return 0; }
+    /* THE ORDERED PASS'S FRAMEBUFFER: the depth view alone. Refused, the effects keep their
+       50 % mix. */
+    if (s_rpO) {
+        fci.renderPass = s_rpO;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &att[1];
+        if (vkCreateFramebuffer(d->dev, &fci, NULL, &s->fbO) != VK_SUCCESS) s->fbO = VK_NULL_HANDLE;
+        fci.renderPass = s_rp;
+        fci.attachmentCount = 2;
+        fci.pAttachments = att;
+    }
 
     /* THE COMPOSITE'S DESCRIPTORS FOLLOW THE IMAGE, written here and nowhere
        else: the sets are allocated once and re-pointed whenever the image behind
@@ -405,6 +434,12 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    /* ...EXCEPT WHEN THE PASS MAY BE SUSPENDED: the ordered pass and the resuming one go on
+       testing against what this one wrote (`build_ordered`). */
+    if (WORLD_ORDERED(d)) {
+        at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
     at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -483,6 +518,101 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     rpi.dependencyCount = 2;
     rpi.pDependencies = dep;
     return vkCreateRenderPass(d->dev, &rpi, NULL, &s_rp) == VK_SUCCESS;
+}
+
+/* THE ORDERED PASS AND THE RESUMING ONE.
+
+   `s_rpO` is `s_rp`'s depth attachment LOADED and nothing else: its pipelines (the effects
+   pass's ordered set, tagpu_vk_fx.c) test depth early and read and write the world target's
+   colour as a storage image, in GENERAL, each fragment's read and write inside the ordered
+   pixel interlock -- the extension's guarantee that the critical sections on one pixel run in
+   primitive order, within one draw, which is what makes a stack of overlapping sprites apply
+   the table one after another as the engine's blits do. A colour attachment of its own would
+   be the same image written two ways in one subpass, which Vulkan leaves undefined, so there
+   is none. `s_rpR` loads both again and ends as `s_rp` ends; its subpass is `s_rp`'s, so
+   `s_tgt.fb` and every world pipeline serve it.
+
+   THE TRANSITIONS BETWEEN THE THREE ARE EXPLICIT BARRIERS (`tagpu_vk_world_order_open`,
+   `_close`), not only these external dependencies: hardware-portability.md §3 found a driver
+   that dropped render-pass dependencies between passes; a barrier recorded between them is
+   ordering no render pass can drop. Each pass starts in the layout its subpass uses, so neither
+   makes a transition of its own on entry. 1 built, 0 not (the effects keep their 50 % mix). */
+static int build_ordered(const TAGPU_VKPASS* d)
+{
+    VkAttachmentDescription at[2];
+    VkAttachmentReference cr, dr;
+    VkSubpassDescription sp;
+    VkSubpassDependency dep[2];
+    VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    const VkPipelineStageFlags fragAll = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    const VkAccessFlags rwAll = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    if (!WORLD_ORDERED(d)) return 0;
+    memset(at, 0, sizeof at);
+    at[0].format = d->dfmt;
+    at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[0].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[0].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    memset(&cr, 0, sizeof cr); memset(&dr, 0, sizeof dr);
+    dr.attachment = 0; dr.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    memset(&sp, 0, sizeof sp);
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.pDepthStencilAttachment = &dr;
+    /* GLOBAL, NOT BY-REGION: `build_renderpass` has the argument, and these sit beside barriers
+       of the same scope */
+    memset(dep, 0, sizeof dep);
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL; dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = fragAll; dep[0].srcAccessMask = rwAll;
+    dep[0].dstStageMask = fragAll; dep[0].dstAccessMask = rwAll;
+    dep[1].srcSubpass = 0; dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = fragAll; dep[1].srcAccessMask = rwAll;
+    dep[1].dstStageMask = fragAll; dep[1].dstAccessMask = rwAll;
+    rpi.attachmentCount = 1; rpi.pAttachments = at;
+    rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+    rpi.dependencyCount = 2; rpi.pDependencies = dep;
+    if (vkCreateRenderPass(d->dev, &rpi, NULL, &s_rpO) != VK_SUCCESS) { s_rpO = VK_NULL_HANDLE; return 0; }
+
+    /* the resuming pass: `s_rp`'s two attachments and subpass, loaded, the colour one out of
+       GENERAL into what the composite samples, as `s_rp` leaves it */
+    at[0].format = d->fmt;
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    at[1].format = d->dfmt;
+    at[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    cr.attachment = 0; cr.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    dr.attachment = 1;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &cr;
+    /* and its way out is `s_rp`'s: the composite samples the colour */
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    rpi.attachmentCount = 2;
+    if (vkCreateRenderPass(d->dev, &rpi, NULL, &s_rpR) != VK_SUCCESS) {
+        vkDestroyRenderPass(d->dev, s_rpO, NULL);
+        s_rpO = s_rpR = VK_NULL_HANDLE;
+        return 0;
+    }
+    return 1;
 }
 
 static int build_sampler(const TAGPU_VKPASS* d)
@@ -903,7 +1033,22 @@ static int build(const TAGPU_VKPASS* d)
         return 0;
     }
     if (!resolve(d)) { plog(d, "world: an entry point is missing"); return 0; }
+#ifndef TAGPU_SCENE_WIKI
+    /* THE ORDERED PASS WRITES THE COLOUR AS A STORAGE IMAGE, which the swapchain's format must
+       take; asked before anything is made, since the colour image's usage follows the answer */
+    {
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(d->pd, d->fmt, &fp);
+        s_ordFmt = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        if (d->pixlock && !s_ordFmt)
+            plog(d, "world: colour format %d takes no storage - the effects' ALP sprites keep "
+                    "a 50 %% mix in RGB", (int)d->fmt);
+    }
+#endif
     if (!build_renderpass(d)) { plog(d, "world: the offscreen render pass was refused"); return 0; }
+    if (WORLD_ORDERED(d) && !build_ordered(d))
+        plog(d, "world: the ordered render passes were refused - the effects' ALP sprites "
+                "keep a 50 %% mix in RGB");
     if (!build_sampler(d)) return 0;
     if (!build_pipeline(d)) return 0;
     if (!build_descriptors(d)) return 0;
@@ -1115,6 +1260,77 @@ void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     (void)d;
 }
 
+#ifndef TAGPU_SCENE_WIKI
+VkRenderPass tagpu_vk_world_order_rp(void)
+{
+    return s_rpO;
+}
+
+int tagpu_vk_world_order_view(VkImageView* view, unsigned* gen)
+{
+    if (!s_tgt.fbO) return 0;
+    *view = s_tgt.cview;
+    *gen = s_nBuilds;
+    return 1;
+}
+
+/* THE BARRIER BETWEEN TWO OF THE THREE PASSES: every fragment-stage access of the one before
+   (colour and depth writes, storage reads and writes) before every one of the next. The colour image moves
+   from `from` to `to` here, so the pass after it starts in its subpass's layout. */
+static void order_barrier(VkCommandBuffer cb, VkImageLayout from, VkImageLayout to)
+{
+    const VkPipelineStageFlags fragAll = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    const VkAccessFlags rwAll = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    VkImageMemoryBarrier ib = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    mb.srcAccessMask = rwAll; mb.dstAccessMask = rwAll;
+    ib.srcAccessMask = rwAll; ib.dstAccessMask = rwAll;
+    ib.oldLayout = from; ib.newLayout = to;
+    ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.image = s_tgt.col;
+    ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ib.subresourceRange.levelCount = 1;
+    ib.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cb, fragAll, fragAll, 0, 1, &mb, 0, NULL, 1, &ib);
+}
+
+static void order_begin(VkCommandBuffer cb, VkRenderPass rp, VkFramebuffer fb)
+{
+    VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    rbi.renderPass = rp;
+    rbi.framebuffer = fb;
+    rbi.renderArea.extent.width = (uint32_t)s_tgt.w;
+    rbi.renderArea.extent.height = (uint32_t)s_tgt.h;
+    vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+}
+
+int tagpu_vk_world_order_open(const TAGPU_VKPASS* d, VkCommandBuffer cb)
+{
+    (void)d;
+    if (s_openSlot < 0 || s_ordOpen || !s_rpO || !s_rpR || !s_tgt.fbO) return 0;
+    vkCmdEndRenderPass(cb);
+    order_barrier(cb, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    order_begin(cb, s_rpO, s_tgt.fbO);
+    s_ordOpen = 1;
+    return 1;
+}
+
+void tagpu_vk_world_order_close(const TAGPU_VKPASS* d, VkCommandBuffer cb)
+{
+    (void)d;
+    if (!s_ordOpen) return;
+    s_ordOpen = 0;
+    vkCmdEndRenderPass(cb);
+    order_barrier(cb, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+    order_begin(cb, s_rpR, s_tgt.fb);
+}
+#endif
+
 void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb)
 {
     (void)d;
@@ -1283,6 +1499,9 @@ static void target_down(const TAGPU_VKPASS* d)
     if (s_dsl)   { vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
     if (s_samp)  { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
     if (s_rp)    { vkDestroyRenderPass(d->dev, s_rp, NULL); s_rp = VK_NULL_HANDLE; }
+    if (s_rpO)   { vkDestroyRenderPass(d->dev, s_rpO, NULL); s_rpO = VK_NULL_HANDLE; }
+    if (s_rpR)   { vkDestroyRenderPass(d->dev, s_rpR, NULL); s_rpR = VK_NULL_HANDLE; }
+    s_ordOpen = 0;
     if (s_vbuf)  { vkDestroyBuffer(d->dev, s_vbuf, NULL); s_vbuf = VK_NULL_HANDLE; }
     if (s_vmem)  { vkFreeMemory(d->dev, s_vmem, NULL); s_vmem = VK_NULL_HANDLE; }
     s_drawThis = 0;
