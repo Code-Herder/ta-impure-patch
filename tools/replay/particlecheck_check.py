@@ -15,7 +15,9 @@ ground's, not their end tick's. A fixture step runs this before the level ends.
 
 It passes when the oracle armed, no tick had a differing particle, a missing or an extra object,
 and the run compared particles of every class the fixture names (`--classes`, default nano and fire)
--- an oracle that compared nothing proves nothing -- and, when the classes include the wake, some
+-- an oracle that compared nothing proves nothing --, the oracle's own test found its planted
+difference at each level's first check (`pcheck: the oracle's own test: a planted difference is
+found`: an oracle that cannot tell a difference proves nothing either), and, when the classes include the wake, some
 wake dot died over ground, so the ground's branch of the death walk was held to the engine. Exit 0 pass, 1 fail, 2 the log could not be read.
 """
 
@@ -32,6 +34,7 @@ TICK = re.compile(r"pcheck: T=(\d+) objects \d+ \(missing (\d+) extra (\d+)\) pa
                   r"wake (\d+)/(\d+) smoke2 (\d+)/(\d+) smoke1 (\d+)/(\d+)")
 GROUND = re.compile(r"wake dots dead over ground (\d+)")
 ARMED = "tagpu_particlecheck.on: the engine's objects are made in full"
+SELF_TEST = "pcheck: the oracle's own test: a planted difference "
 CLASSES = ("nano", "fire", "flare", "wake", "smoke2", "smoke1")
 
 
@@ -58,6 +61,12 @@ def check(text, want):
             compared[c] += g[4 + 2 * i]
     if not ticks:
         return False, "no pcheck line: the oracle checked no tick"
+    tests = [ln.strip() for ln in text.splitlines() if SELF_TEST in ln]
+    if not tests:
+        return False, "no line of the oracle's own test: its comparison was never shown a difference"
+    failed = [t for t in tests if not t.endswith(SELF_TEST + "is found")]
+    if failed:
+        return False, failed[0]
     none = [c for c in want if not compared[c]]
     if none:
         return False, f"{ticks} ticks checked, but no particle of {', '.join(none)} was compared"

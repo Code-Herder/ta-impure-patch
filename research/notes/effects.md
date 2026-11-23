@@ -880,10 +880,15 @@ countdown; and the count. An event whose object is gone while a later one is the
 event, so either is a difference. A line a tick: `pcheck: T= objects N (missing extra)
 particles M differing D [seed count pos end step colour tick frame] nano a/b fire c/d flare e/f
 wake g/h smoke2 i/j smoke1 k/l level: …, wake dots dead over ground w`, the first eight differences of a level in detail, and the level's totals by class at the
-next level's start. Under the oracle the events are drawn and the engine's objects are not (the
+next level's start. At a level's first check **the oracle tests itself**: a planted word unlike its
+form goes through the comparison every record goes through (`pevt_self_test`), which must count it
+and detail it (as object 0, which is no object's), and logs `pcheck: the oracle's own test: a planted
+difference is found` (or `IS NOT FOUND`); it spends one of the level's eight detail lines. Under the oracle the events are drawn and the engine's objects are not (the
 `0x471F90` detour, §7.5). The replay test group `particle-check` plays the battle under the lever and ends
 with `tools/replay/particlecheck_check.py`, which fails the test on a differing particle, a missing
-or extra object, an oracle that did not arm, or no fire particle compared. The test group
+or extra object, an oracle that did not arm, an own test that is missing or did not find its planted
+difference, or no fire particle compared; `stock-particle-check` plays the same game on the
+stock-limits build, where the layer cap (400) trims and the oracle holds the trims too. The test group
 `particle-check-sea` plays ships and submarines patrolling beside Anteer Strait's shore
 (`scenarios/replay-wake-shore.json`) under the same lever and fails, by the same rules, when no wake
 particle was compared (`--classes wake`). The wake's oracle compares each dot's both words of its

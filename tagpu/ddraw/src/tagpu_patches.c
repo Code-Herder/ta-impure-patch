@@ -12713,6 +12713,21 @@ static int pevt_triple(uint32_t P, int L, int c, unsigned obj, int k, int f, con
     return 1;
 }
 
+/* THE ORACLE'S OWN TEST, at a level's first check: a planted word unlike its form goes through the
+   comparison every record goes through and must be counted and detailed, so a level whose ticks all
+   compare equal has also shown that the comparison tells a difference
+   (tools/replay/particlecheck_check.py requires the line). Object 0 is no object's: they count
+   from 1. It spends one of the level's PEVT_DETAIL lines. */
+static void pevt_self_test(uint32_t P)
+{
+    static const int32_t planted = 1;
+    unsigned field[8] = { 0 };
+    const int found = pevt_word(P, 0, TAGPU_PEVT_C_NANO, 0u, -1, PF_TICK,
+                                (const unsigned char*)&planted, 2, field);
+    tagpu_logf("pcheck: the oracle's own test: a planted difference %s",
+               found && field[PF_TICK] == 1u ? "is found" : "IS NOT FOUND");
+}
+
 /* a smoke event's puffs that can be alive after the walk of P: from *lo, the count answered.
    Puff j >= 1 is alive only while P - again - (j - 1) * ival < lmax, and puff 0 is dead whenever
    puff 1 is past that (first <= again), so the puffs below d / ival, d = P - lmax - again, are
@@ -12844,6 +12859,7 @@ static void pevt_check(uint32_t P)
     unsigned field[8] = { 0 }, sObjs = 0, sSubs = 0, sDiff = 0, lSubs = 0, lDiff = 0;
     int L, c, f;
     if (!layer) return;
+    if (!s_pevt.cTicks) pevt_self_test(P);
     for (L = 0; L < 10; L++) {
         unsigned cur[TAGPU_PEVT_NCLASS];
         void* const* o;
