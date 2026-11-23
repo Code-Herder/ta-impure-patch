@@ -11648,7 +11648,7 @@ void tagpu_seed_run(unsigned int seed)
                now ? "now" : "on the next step", wind, next);
 }
 
-SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport particle-check particle-check-sea particle-check-smoke");
+SIM_FEATURE(particle_rand, SIM_PUPPET_INDEPENDENT, "battle meteor teleport particle-check stock-particle-check particle-check-sea particle-check-smoke");
 
 /* THE PARTICLES' OWN RANDOM RULE [DISASSEMBLED]. The particle code draws the C runtime's rand
    0x4E4870 at twenty sites, and that rand keeps one stream per thread (*A harness's random
