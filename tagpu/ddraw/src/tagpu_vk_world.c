@@ -107,8 +107,9 @@ static VkRenderPass          s_rpO, s_rpR;
 static int                   s_ordOpen;   /* `s_rpO` is the open pass */
 /* `s_rp` (and `s_rpR`) leave the colour in COLOR_ATTACHMENT_OPTIMAL, and `tagpu_vk_world_end`
    moves it to what the composite samples in an explicit barrier: set where the world may be
-   suspended (`build_ordered`, *THE TRANSITIONS*), so no layout change of the three passes is
-   made by a render pass */
+   suspended (`build_ordered`, *THE TRANSITIONS*), so no layout change between `s_rp`'s end and
+   that barrier is made by a render pass. `s_rp`'s own entry from UNDEFINED is ordered by its
+   `dep[0]`, which keeps the previous frame's composite read before this frame's clear */
 static int                   s_endBarrier;
 #ifdef TAGPU_SCENE_WIKI
 #define WORLD_ORDERED(d) 0
@@ -547,7 +548,8 @@ static int build_renderpass(const TAGPU_VKPASS* d)
    back to COLOR_ATTACHMENT_OPTIMAL, `s_rpR` starts and ends there, and `tagpu_vk_world_end` moves
    it to SHADER_READ_ONLY_OPTIMAL for the composite. The depth attachment stays in
    DEPTH_STENCIL_ATTACHMENT_OPTIMAL from `s_rp`'s end to `s_rpR`'s. Each pass starts and ends in
-   the layouts its subpass uses, so none makes a transition of its own. 1 built, 0 not (the effects keep their 50 % mix). */
+   the layouts its subpass uses, so none makes a transition of its own between `s_rp`'s end and
+   that last barrier; `s_rp`'s entry from UNDEFINED stays its `dep[0]`'s. 1 built, 0 not (the effects keep their 50 % mix). */
 static int build_ordered(const TAGPU_VKPASS* d)
 {
     VkAttachmentDescription at[2];

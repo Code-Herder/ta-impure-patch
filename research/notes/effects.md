@@ -539,7 +539,9 @@ install's PALETTE.ALP or the generator put there, so a mod's table is a mod's.
   passes in `GENERAL` ([vulkan-backend](modules/vulkan-backend.html) §2.95): every colour layout
   change of the three passes is in a barrier (the world pass ends in COLOR_ATTACHMENT_OPTIMAL
   where it may be suspended, the ordered pass's way in and out move it to GENERAL and back, and
-  the world's end moves it to what the composite samples), so no render pass makes one.
+  the world's end moves it to what the composite samples), so no render pass makes one between
+  the world pass's end and that last barrier. The world pass's own entry from UNDEFINED is still
+  ordered by its first dependency, which keeps the previous frame's composite read before the clear.
 - **Why the interlock and not rasterization-order attachment access**
   (`VK_EXT_`/`VK_ARM_rasterization_order_attachment_access`), which would read the colour as an
   input attachment of the same subpass and leave the other modes' blend to the fixed function:
