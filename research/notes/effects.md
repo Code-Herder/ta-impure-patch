@@ -811,7 +811,12 @@ rows of 88 B, each with its 10-B box beside it in an array of its own (about 12.
 build): the six layers the stock callers use, each at its cap plus the
 one the trim leaves; only events in a seventh layer could fill it, which no caller makes, and then
 `pevt_room` drops the oldest sixteenth of the list (`PEVT_CAP / 16` rows) at once, counts them in the
-level's `dropped` and logs once. **A removed row stays in place until the list is squeezed**
+level's `dropped` and logs once. **The layer cap's trim and the full list's squeeze run only on the
+stock-limits build** (`pevt_trim`, `pevt_room`, each asked before every add): no game of the raised
+build reaches its cap of 20 480 objects in one layer, nor the about 61 000 live events that fill its
+list with the walk's squeeze (the 13 500-unit battle peaks at 16 118 in one layer and 35 903 in all,
+MEASURED 2026-11-22), so the replay test groups hold them on the stock-limits build alone, from the
+same source. **A removed row stays in place until the list is squeezed**
 (`pevt_squeeze`: the live rows moved down in order, with their boxes): events end anywhere in the
 list, and no walk ends a Smoke1 event near its front (only the layer cap's trim or the level's end
 does), so the head alone does not shorten it. After

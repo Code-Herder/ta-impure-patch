@@ -334,6 +334,15 @@ Each landing is a local landing on this branch. The feature lands on main once, 
   which the cheat was typed plays its puppet at the old sea level: a recorder gap that predates this
   feature. Until it is settled no replay test group types the cheat, so `pevt_wake_resea` carries
   `SIM_UNTESTED` (the owner's decision); the recorder's row is still open.
+- **The cap's trim and the full list run only on the stock-limits build.** `pevt_trim` and `pevt_room`
+  are asked before every add, but their trim and squeeze run only past the caps: the stock-limits
+  build's 400 a layer, which its battle passes, and never the raised build's 20 480 a layer or the
+  about 61 000 live events that fill its list (the 13 500-unit battle peaks at 16 118 in one layer and
+  35 903 in all). The replay test groups hold them on the stock-limits build only, from the same source.
+- **The emitters' refusal of a modified exe is unreached** (`lim_refuse`, the nano and wake emitters'
+  entry bytes): only an exe whose bytes there differ from stock reaches it, and no retail exe's do, so
+  it carries `SIM_UNTESTED` (the owner's decision); a mod exe that differs there meets it in the
+  compatibility suite.
 - **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
   eight degenerate quads an event, whose vertex stage skips the draws. A vertex count of each class's
   own would need a draw a class.

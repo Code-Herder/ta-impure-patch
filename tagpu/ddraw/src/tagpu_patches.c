@@ -205,14 +205,14 @@ static void lim_needs(const char* fix, const char* needs, const char* state)
     s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
 
-/* a precondition of a table fix, asked at every install: when it is not met nothing of the table
-   is written, and the report names it in full */
-static void lim_require(int met, const char* why)
+/* a precondition of a table fix that is not met, said in full: nothing of the table is written,
+   and the report names it */
+static void lim_refuse(const char* why)
 {
-    if (met) return;
     _snprintf(s_limNeeds, sizeof s_limNeeds, "%s", why);
     s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
+SIM_UNTESTED(lim_refuse, "only an exe whose particle emitters' entry bytes differ from stock reaches it, and no retail exe's do: no test group can reach it");
 
 /* one site's bytes, without trusting the page to be readable */
 static int lim_read(unsigned int va, unsigned char* out, int n)
@@ -12015,7 +12015,9 @@ static void pevt_drop(PevtRow* r)
 }
 
 /* asked before every emission's add: past the cap the layer's front event goes, as the emitter
-   destroys its front object, whatever its class */
+   destroys its front object, whatever its class. The trim runs only on the stock-limits build (a cap
+   of 400): no game of the raised build fills a layer past its 20 480 (the 13 500-unit battle peaks at
+   16 118 in one layer), so there only the test above runs */
 static void pevt_trim(int L)
 {
     unsigned i;
@@ -12048,7 +12050,9 @@ static void pevt_squeeze(void)
 
 /* room for one more row at the tail, asked before every add: a full list squeezed, and when it
    is still full -- only events in a seventh layer could fill it, which no caller files -- its
-   oldest sixteenth dropped whole */
+   oldest sixteenth dropped whole. The squeeze here runs only on the stock-limits build: with the
+   walk's squeeze the raised build's 6 x 20 481 rows fill only past about 61 000 live events, and
+   the 13 500-unit battle peaks at 35 903 */
 static void pevt_room(void)
 {
     unsigned i, n;
@@ -13302,10 +13306,10 @@ static int fix_particle_rand(void)
             lim_same(0x00472207u + (unsigned)i, n, rev + 7 + i,
                      "particles: the reverse nano emitter's frame, read by the events");
         }
-        lim_require(!s_pevtOn || (tagpu_detour_bytes_ok(0x004720D0u, fwd, 7) &&
-                                  tagpu_detour_bytes_ok(0x00472200u, rev, 7)),
-                    "the particle events (a Vulkan launch) read the nano emitters' frames, "
-                    "and their entries 0x4720D0 and 0x472200 hold other bytes");
+        if (!tagpu_detour_bytes_ok(0x004720D0u, fwd, 7) || !tagpu_detour_bytes_ok(0x00472200u, rev, 7))
+            if (s_pevtOn)
+                lim_refuse("the particle events (a Vulkan launch) read the nano emitters' frames, "
+                           "and their entries 0x4720D0 and 0x472200 hold other bytes");
     }
     {
     /* THE WAKE EMITTER'S FRAME, read by pevt_pre likewise, from its entry to its layer's read
@@ -13326,9 +13330,10 @@ static int fix_particle_rand(void)
     };
         lim_same_run(0x00472435u, (int)sizeof wakeE - 5, wakeE + 5,
                      "particles: the wake emitter's frame, read by the events");
-        lim_require(!s_pevtOn || tagpu_detour_bytes_ok(0x00472430u, wakeE, 5),
-                    "the particle events (a Vulkan launch) read the wake emitter's frame, "
-                    "and its entry 0x472430 holds other bytes");
+        if (!tagpu_detour_bytes_ok(0x00472430u, wakeE, 5))
+            if (s_pevtOn)
+                lim_refuse("the particle events (a Vulkan launch) read the wake emitter's frame, "
+                           "and its entry 0x472430 holds other bytes");
     }
     {
     /* THE OTHER EMITTERS' BYTES pevt_pre reads their frames by, from the alloc's return to the
