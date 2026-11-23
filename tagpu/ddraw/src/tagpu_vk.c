@@ -584,6 +584,8 @@ typedef struct {
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              budgetok;             /* VK_EXT_memory_budget is offered   */
     int              pixlock;              /* the ordered pixel interlock        */
+    int              props2;               /* the instance has VK_KHR_get_physical_device_properties2 */
+    int              fmt3;                 /* VK_KHR_format_feature_flags2 is offered */
     /* the budget query's entry point, from THIS lane's instance, NULL where
        VK_KHR_get_physical_device_properties2 is not offered: lane state, so it
        is written before ST_READY and cleared with the rest at teardown */
@@ -1192,8 +1194,9 @@ static int vk_load(void)
    and the bring-up worker; each destroys its own. */
 /* A new instance, and in `*mp2` (when asked) the memory-budget query's entry
    point resolved from THAT instance, or NULL where the loader does not offer
-   VK_KHR_get_physical_device_properties2. */
-static VkInstance vk_instance(PFN_vkGetPhysicalDeviceMemoryProperties2KHR* mp2)
+   VK_KHR_get_physical_device_properties2, and in `*p2` (when asked) whether the
+   instance has that extension. */
+static VkInstance vk_instance(PFN_vkGetPhysicalDeviceMemoryProperties2KHR* mp2, int* p2)
 {
     const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, NULL };
     uint32_t niext = 2;
@@ -1242,6 +1245,7 @@ static VkInstance vk_instance(PFN_vkGetPhysicalDeviceMemoryProperties2KHR* mp2)
         r = vkCreateInstance(&ici, NULL, &inst);
     }
     if (r != VK_SUCCESS) { vklog("vkCreateInstance: %s (%d)", res_name(r), (int)r); return VK_NULL_HANDLE; }
+    if (p2) *p2 = props2;
     if (mp2)
         *mp2 = props2 ? (PFN_vkGetPhysicalDeviceMemoryProperties2KHR)
                         s_gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR")
@@ -1472,7 +1476,7 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 
     (void)arg;
     if (!vk_load())            { lane_release(); return 0; }
-    inst = vk_instance(NULL);
+    inst = vk_instance(NULL, NULL);
     if (!inst)                 { lane_release(); return 0; }
 
     /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. Unchecked, `n = 0`
@@ -2374,7 +2378,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     if (!vk_load()) goto fail;
     va_log("before bring-up");
 
-    s_vk.inst = vk_instance(&s_vk.mp2);
+    s_vk.inst = vk_instance(&s_vk.mp2, &s_vk.props2);
     if (!s_vk.inst) goto fail;
 
     {
@@ -2488,6 +2492,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
                             s_vk.budgetok = 1;
                         if (!strcmp(ext[k].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME))
                             ilOffer = 1;
+                        /* a physical-device query too: the format's own storage-read bit */
+                        if (!strcmp(ext[k].extensionName, VK_KHR_FORMAT_FEATURE_FLAGS_2_EXTENSION_NAME))
+                            s_vk.fmt3 = 1;
                     }
                 free(ext);
             }
@@ -2525,6 +2532,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
+        /* a 1.0 instance enables a device extension's feature structure only with
+           VK_KHR_get_physical_device_properties2 */
+        if (!s_vk.props2) ilOffer = 0;
         if (ilOffer) {
             VkPhysicalDeviceFeatures have;
             memset(&have, 0, sizeof have);
@@ -2624,6 +2634,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.flipok = s_vk.flipok;
     s_pass.anisook = s_vk.anisook;
     s_pass.pixlock = s_vk.pixlock;
+    s_pass.fmtProps2 = s_vk.pixlock && s_vk.fmt3
+        ? (PFN_vkGetPhysicalDeviceFormatProperties2KHR)s_gipa(s_vk.inst, "vkGetPhysicalDeviceFormatProperties2KHR")
+        : NULL;
     s_pass.maxAniso = s_vk.maxAniso;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = full_gdpa;

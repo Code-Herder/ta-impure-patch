@@ -183,6 +183,12 @@ static VkImage        s_iImg, s_tImg;
 static VkDeviceMemory s_iMem, s_tMem;
 static VkImageView    s_iView, s_tView;
 static int            s_iHave, s_tHave;
+/* `s_iImg` has been written once, so it is in SHADER_READ_ONLY_OPTIMAL and earlier frames may
+   be sampling it: a whole re-upload then comes in from that layout, its barrier's first scope
+   every fragment read submitted before it on the queue (tagpu_vk_stage.c `barrier_in`), so it
+   cannot overwrite texels a frame in flight still reads. No frame recorded while `s_iHave` is 0
+   samples it: `s_ordThis` asks for `s_iHave`. Cleared only where the image is made. */
+static int            s_iWritten;
 static unsigned       s_tSerial;
 static int            s_ordThis;            /* `prepare` left an ordered draw    */
 static unsigned       s_cOrd, s_cMix;       /* frames drawn each way, for the log */
@@ -937,7 +943,7 @@ static void ord_images(const TAGPU_VKPASS* d, int dim)
     uint32_t i;
     kill_image(d, &s_iImg, &s_iMem, &s_iView);
     kill_image(d, &s_tImg, &s_tMem, &s_tView);
-    s_iHave = 0; s_tHave = 0; s_tSerial = 0;
+    s_iHave = 0; s_iWritten = 0; s_tHave = 0; s_tSerial = 0;
     if (!mk_image(d, dim, dim, VK_FORMAT_R8_UINT, IMG_SAMPLED, &s_iImg, &s_iMem, &s_iView) ||
         !mk_image(d, TAGPU_FX_ALPT_W, TAGPU_FX_ALPT_H, VK_FORMAT_R32_UINT, IMG_SAMPLED,
                   &s_tImg, &s_tMem, &s_tView)) {
@@ -1338,10 +1344,11 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                                                    (VkDeviceSize)h->atlasDim))
             rc = 0;
         else
-            rc = tagpu_vk_stage_copy(d, cb, &s->stage, s_iImg, 0, h->atlas, h->atlasDim,
+            rc = tagpu_vk_stage_copy(d, cb, &s->stage, s_iImg, s_iWritten, h->atlas, h->atlasDim,
                                      h->atlasDim, rows, 1);
         if (rc < 0) return rc;
         s_iHave = rc > 0;
+        if (s_iHave) s_iWritten = 1;
     }
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;
@@ -1932,7 +1939,7 @@ void tagpu_vk_fx_down(const TAGPU_VKPASS* d)
     if (s_pipeOEvt)   { vkDestroyPipeline(dev, s_pipeOEvt, NULL);   s_pipeOEvt = VK_NULL_HANDLE; }
     kill_image(d, &s_iImg, &s_iMem, &s_iView);
     kill_image(d, &s_tImg, &s_tMem, &s_tView);
-    s_iHave = 0; s_tHave = 0; s_tSerial = 0; s_ordBuilt = 0; s_ordThis = 0;
+    s_iHave = 0; s_iWritten = 0; s_tHave = 0; s_tSerial = 0; s_ordBuilt = 0; s_ordThis = 0;
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }

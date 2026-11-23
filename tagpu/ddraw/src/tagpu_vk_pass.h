@@ -108,6 +108,10 @@ typedef struct {
        each pixel. The effects pass's ALP blend is its one user (tagpu_vk_fx.c, tagpu_vk_world.c's
        ordered pass); 0, and that blend is a 50 % mix in RGB. */
     int                       pixlock;
+    /* vkGetPhysicalDeviceFormatProperties2KHR where the interlock is on and the device offers
+       VK_KHR_format_feature_flags2, so a format's own STORAGE_READ_WITHOUT_FORMAT bit can be
+       asked (tagpu_vk_world.c); NULL otherwise, and the feature bit alone answers */
+    PFN_vkGetPhysicalDeviceFormatProperties2KHR fmtProps2;
     /* NO LINE FEATURE IS HERE, AND NONE IS NEEDED: no pass rasterises a line
        primitive. Every line is two triangles whose fragment stage keeps the
        game pixels `0x4CC7AB` would plot (tagpu_line.h, tagpu_glsl.h), so a

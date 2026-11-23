@@ -105,6 +105,11 @@ static VkRenderPass          s_rp;      /* the OFFSCREEN pass, not the seam's */
    storage (`s_ordFmt`). */
 static VkRenderPass          s_rpO, s_rpR;
 static int                   s_ordOpen;   /* `s_rpO` is the open pass */
+/* `s_rp` (and `s_rpR`) leave the colour in COLOR_ATTACHMENT_OPTIMAL, and `tagpu_vk_world_end`
+   moves it to what the composite samples in an explicit barrier: set where the world may be
+   suspended (`build_ordered`, *THE TRANSITIONS*), so no layout change of the three passes is
+   made by a render pass */
+static int                   s_endBarrier;
 #ifdef TAGPU_SCENE_WIKI
 #define WORLD_ORDERED(d) 0
 #else
@@ -423,6 +428,8 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    s_endBarrier = WORLD_ORDERED(d);
+    if (s_endBarrier) at[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     at[1].format = d->dfmt;
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -535,8 +542,12 @@ static int build_renderpass(const TAGPU_VKPASS* d)
    THE TRANSITIONS BETWEEN THE THREE ARE EXPLICIT BARRIERS (`tagpu_vk_world_order_open`,
    `_close`), not only these external dependencies: hardware-portability.md §3 found a driver
    that dropped render-pass dependencies between passes; a barrier recorded between them is
-   ordering no render pass can drop. Each pass starts in the layout its subpass uses, so neither
-   makes a transition of its own on entry. 1 built, 0 not (the effects keep their 50 % mix). */
+   ordering no render pass can drop. Every colour layout change of the three is in a barrier:
+   `s_rp` ends in COLOR_ATTACHMENT_OPTIMAL (`s_endBarrier`), `_open` moves it to GENERAL, `_close`
+   back to COLOR_ATTACHMENT_OPTIMAL, `s_rpR` starts and ends there, and `tagpu_vk_world_end` moves
+   it to SHADER_READ_ONLY_OPTIMAL for the composite. The depth attachment stays in
+   DEPTH_STENCIL_ATTACHMENT_OPTIMAL from `s_rp`'s end to `s_rpR`'s. Each pass starts and ends in
+   the layouts its subpass uses, so none makes a transition of its own. 1 built, 0 not (the effects keep their 50 % mix). */
 static int build_ordered(const TAGPU_VKPASS* d)
 {
     VkAttachmentDescription at[2];
@@ -580,13 +591,13 @@ static int build_ordered(const TAGPU_VKPASS* d)
     rpi.dependencyCount = 2; rpi.pDependencies = dep;
     if (vkCreateRenderPass(d->dev, &rpi, NULL, &s_rpO) != VK_SUCCESS) { s_rpO = VK_NULL_HANDLE; return 0; }
 
-    /* the resuming pass: `s_rp`'s two attachments and subpass, loaded, the colour one out of
-       GENERAL into what the composite samples, as `s_rp` leaves it */
+    /* the resuming pass: `s_rp`'s two attachments and subpass, loaded, the colour one in
+       COLOR_ATTACHMENT_OPTIMAL at both ends, as `s_rp` leaves it when it may be suspended */
     at[0].format = d->fmt;
     at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-    at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    at[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    at[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     at[1].format = d->dfmt;
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -599,7 +610,7 @@ static int build_ordered(const TAGPU_VKPASS* d)
     dr.attachment = 1;
     sp.colorAttachmentCount = 1;
     sp.pColorAttachments = &cr;
-    /* and its way out is `s_rp`'s: the composite samples the colour */
+    /* and its way out is `s_rp`'s, which `tagpu_vk_world_end`'s barrier repeats */
     dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
@@ -1040,9 +1051,20 @@ static int build(const TAGPU_VKPASS* d)
         VkFormatProperties fp;
         vkGetPhysicalDeviceFormatProperties(d->pd, d->fmt, &fp);
         s_ordFmt = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        /* ...and reads one without a format, where the device can say so per format
+           (VK_KHR_format_feature_flags2); elsewhere the feature bit the device was created
+           with is the answer for every storage format */
+        if (s_ordFmt && d->fmtProps2) {
+            VkFormatProperties3 f3 = { VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 };
+            VkFormatProperties2 f2 = { VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2 };
+            f2.pNext = &f3;
+            d->fmtProps2(d->pd, d->fmt, &f2);
+            s_ordFmt = (f3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT) &&
+                       (f3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT);
+        }
         if (d->pixlock && !s_ordFmt)
-            plog(d, "world: colour format %d takes no storage - the effects' ALP sprites keep "
-                    "a 50 %% mix in RGB", (int)d->fmt);
+            plog(d, "world: colour format %d takes no storage read and written without a format - "
+                    "the effects' ALP sprites keep a 50 %% mix in RGB", (int)d->fmt);
     }
 #endif
     if (!build_renderpass(d)) { plog(d, "world: the offscreen render pass was refused"); return 0; }
@@ -1314,7 +1336,7 @@ int tagpu_vk_world_order_open(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     (void)d;
     if (s_openSlot < 0 || s_ordOpen || !s_rpO || !s_rpR || !s_tgt.fbO) return 0;
     vkCmdEndRenderPass(cb);
-    order_barrier(cb, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    order_barrier(cb, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
     order_begin(cb, s_rpO, s_tgt.fbO);
     s_ordOpen = 1;
     return 1;
@@ -1326,7 +1348,7 @@ void tagpu_vk_world_order_close(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     if (!s_ordOpen) return;
     s_ordOpen = 0;
     vkCmdEndRenderPass(cb);
-    order_barrier(cb, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+    order_barrier(cb, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     order_begin(cb, s_rpR, s_tgt.fb);
 }
 #endif
@@ -1340,6 +1362,25 @@ void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     if (s_openSlot < 0) return;
     s_openSlot = -1;
     vkCmdEndRenderPass(cb);
+    /* THE COMPOSITE'S LAYOUT, where the world pass may have been suspended (`s_endBarrier`):
+       `s_rp`'s own exit dependency, as a barrier -- this frame's colour writes before the
+       composite's sample, the colour into SHADER_READ_ONLY_OPTIMAL */
+    if (s_endBarrier) {
+        VkImageMemoryBarrier ib = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        ib.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        ib.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        ib.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ib.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.image = s_tgt.col;
+        ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ib.subresourceRange.levelCount = 1;
+        ib.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &ib);
+    }
 }
 
 void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
