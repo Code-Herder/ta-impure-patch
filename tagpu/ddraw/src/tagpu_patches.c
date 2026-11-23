@@ -11881,11 +11881,22 @@ typedef struct PevtRow {
     TAGPU_PEVT e;
     uint32_t   gone;                     /* D, the walk that destroys its object; 0 = removed  */
     uint32_t   serial;                   /* the level's emission count at the row: increasing  */
-    int16_t    x0, x1, z0, z1;           /* where its particles can be: world x, y - alt / 2   */
 } PevtRow;
+
+/* WHERE A ROW'S PARTICLES CAN BE, apart from the row: world x and y - alt / 2, set at its add and
+   constant over its life, and its kind. The packet's copy tests these 10 bytes a row and reads the
+   row's 88 only when its box meets the view (tagpu_pevt_copy): in the 13 500-unit battle at 1080p
+   the view met 2 100 to 5 000 of 17 600 to 29 800 live rows (MEASURED 2026-11-22, means of 600
+   fills). box[i] is row[i]'s, and every move of a row moves its box with it. */
+enum { PEVT_BOX_GONE, PEVT_BOX_PLAIN, PEVT_BOX_SMOKE };
+typedef struct PevtBox {
+    int16_t  x0, x1, z0, z1;
+    uint16_t kind;                       /* GONE once dropped; SMOKE: widened by the drift      */
+} PevtBox;
 
 static struct {
     PevtRow  row[PEVT_CAP];
+    PevtBox  box[PEVT_CAP];
     unsigned head, tail;                 /* the rows in use, oldest first                      */
     unsigned layer[10];                  /* rows not removed, a layer                          */
     unsigned live;                       /*   and in all: the pool's count                     */
@@ -11997,6 +12008,7 @@ static void pevt_drop(PevtRow* r)
 {
     if (!r->gone) return;
     r->gone = 0;
+    s_pevt.box[r - s_pevt.row].kind = PEVT_BOX_GONE;
     s_pevt.layer[TAGPU_PEVT_LAYER(r->e.flags)]--;
     s_pevt.live--;
 }
@@ -12015,20 +12027,32 @@ static void pevt_trim(int L)
     }
 }
 
-/* room for one more row at the tail: the removed rows squeezed out, and when the list is still
-   full -- only events in a seventh layer could fill it, which no caller files -- its oldest
-   sixteenth dropped whole */
-static void pevt_room(void)
+/* the removed rows squeezed out, the rest kept in their order with their boxes. Nothing holds a
+   row's index across a walk but head, tail and front[], which this resets: a layer's front is then
+   found again from the head, the same row (the first counted one of the layer). */
+static void pevt_squeeze(void)
 {
     unsigned i, n = 0;
     for (i = s_pevt.head; i < s_pevt.tail; i++)
-        if (s_pevt.row[i].gone) s_pevt.row[n++] = s_pevt.row[i];
+        if (s_pevt.row[i].gone) {
+            s_pevt.row[n] = s_pevt.row[i];
+            s_pevt.box[n++] = s_pevt.box[i];
+        }
     s_pevt.head = 0; s_pevt.tail = n;
     memset(s_pevt.front, 0, sizeof s_pevt.front);
-    if (n < PEVT_CAP) return;
+}
+
+/* room for one more row at the tail: the list squeezed, and when it is still full -- only events
+   in a seventh layer could fill it, which no caller files -- its oldest sixteenth dropped whole */
+static void pevt_room(void)
+{
+    unsigned i, n;
+    pevt_squeeze();
+    if (s_pevt.tail < PEVT_CAP) return;
     n = PEVT_CAP / 16u;
     for (i = 0; i < n; i++) pevt_drop(&s_pevt.row[i]);
     memmove(s_pevt.row, s_pevt.row + n, (PEVT_CAP - n) * sizeof(PevtRow));
+    memmove(s_pevt.box, s_pevt.box + n, (PEVT_CAP - n) * sizeof(PevtBox));
     s_pevt.tail = PEVT_CAP - n;
     if (!s_pevt.dropped)
         tagpu_logf("particles: the event list is full (%u events): its oldest %u dropped "
@@ -12041,15 +12065,18 @@ static void pevt_room(void)
 static void pevt_add(const TAGPU_PEVT* e, uint32_t gone, const int* lo, const int* hi, int slack)
 {
     PevtRow* r;
+    PevtBox* x;
     if (s_pevt.tail >= PEVT_CAP) pevt_room();
+    x = &s_pevt.box[s_pevt.tail];
     r = &s_pevt.row[s_pevt.tail++];
     r->e = *e;
     r->gone = gone;
     r->serial = ++s_pevt.serial;
-    r->x0 = pevt_clamp16(lo[0] - slack);
-    r->x1 = pevt_clamp16(hi[0] + slack);
-    r->z0 = pevt_clamp16(lo[2] - (hi[1] >> 1) - slack);
-    r->z1 = pevt_clamp16(hi[2] - (lo[1] >> 1) + slack);
+    x->x0 = pevt_clamp16(lo[0] - slack);
+    x->x1 = pevt_clamp16(hi[0] + slack);
+    x->z0 = pevt_clamp16(lo[2] - (hi[1] >> 1) - slack);
+    x->z1 = pevt_clamp16(hi[2] - (lo[1] >> 1) + slack);
+    x->kind = TAGPU_PEVT_SMOKE(TAGPU_PEVT_CLASS(e->flags)) ? PEVT_BOX_SMOKE : PEVT_BOX_PLAIN;
     s_pevt.layer[TAGPU_PEVT_LAYER(e->flags)]++;
     s_pevt.live++;
     s_pevt.emitted[TAGPU_PEVT_CLASS(e->flags) < TAGPU_PEVT_NCLASS ? TAGPU_PEVT_CLASS(e->flags) : 0]++;
@@ -12600,6 +12627,13 @@ static void pevt_walked(void)
     }
     while (s_pevt.head < s_pevt.tail && !s_pevt.row[s_pevt.head].gone) s_pevt.head++;
     if (s_pevt.head == s_pevt.tail) pevt_clear();
+    /* AFTER A WALK THE LIST HOLDS AT MOST AS MANY REMOVED ROWS AS LIVE ONES. A row ends anywhere
+       in it (the D's differ by class, and a Smoke1 row at its front never ends), so the head alone
+       does not keep it short: it is squeezed when it holds more, which copies each live row once
+       where at least as many rows were removed since the last squeeze, so it costs at most one
+       row's copy a removal. Every walk over the list (this purge, the packet's copy) is then at most
+       twice the live rows plus what was emitted since the walk. */
+    else if (s_pevt.tail - s_pevt.head > 2u * s_pevt.live) pevt_squeeze();
     if (s_pevtCheck && pevt_live()) pevt_check(T);
 }
 
@@ -12870,27 +12904,6 @@ static void pevt_check(uint32_t P)
                lDiff + s_pevt.cMissing + s_pevt.cExtra, s_pevt.shore);
 }
 
-/* THE FRAME PACKET'S COPY (tagpu_packet_pub.c, game thread): the live events whose reach box
-   meets [l, r] x [t, b], in list order, the newest `max` records of them when more meet it.
-   A smoke event is copied once for every ten of its puffs that can be alive at P, the GameTime
-   the packet is drawn at (pevt_smoke_span), each copy's `pbase` its first puff; its reach is its
-   point widened by how far the wind and the rise have carried any puff alive at P: a puff first
-   moved at walk F has moved by row P less row F - 1, F - 1 within the last lmax + 1 walks, so the
-   least and most of that difference over the walks the level's longest puff life reaches back
-   bound them all (in world pixels, one more for the hi word's carry). Answers how many records
-   meet it; `*wrote` how many were copied.
-   ONLY WHILE THE LEVEL'S LAYER TABLE STANDS: the teardown 0x471DE0 destroys every object and nulls
-   *(main+0x38D77) (0x471E97), so a level's events end there for the picture as its objects do,
-   Smoke1's included; the next level's prand_level_begin empties the list before its table is
-   made (0x4918B1). */
-static int pevt_meets(const PevtRow* q, int l, int t, int r, int b, const int* dr)
-{
-    if (!q->gone) return 0;
-    if (TAGPU_PEVT_SMOKE(TAGPU_PEVT_CLASS(q->e.flags)))
-        return q->x1 + dr[1] >= l && q->x0 + dr[0] <= r && q->z1 + dr[3] >= t && q->z0 + dr[2] <= b;
-    return q->x1 >= l && q->x0 <= r && q->z1 >= t && q->z0 <= b;
-}
-
 static uint32_t pevt_records(const PevtRow* q, uint32_t P, uint32_t* lo)
 {
     uint32_t n;
@@ -12926,28 +12939,27 @@ static void pevt_drift_reach(uint32_t P, int* dr)
     dr[0] -= 2; dr[2] -= 2; dr[1] += 2; dr[3] += 2;
 }
 
-unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int b,
-                         unsigned* wrote)
+/* the cull's rect a box kind: GONE meets nothing; SMOKE's box meets the view widened by the
+   drift's reach dr exactly when it meets the view moved back by it (x1 + dr[1] >= l is
+   x1 >= l - dr[1], and so on) */
+typedef struct { int l, r, t, b; } PevtRect;
+
+/* one walk of the list: every record whose row's box meets its kind's rect, the first `skip`
+   passed over and the next ones written while fewer than `max` are; answers the records met */
+static unsigned pevt_copy_walk(TAGPU_PEVT* dst, unsigned max, unsigned skip, const PevtRect* rc,
+                               uint32_t P, unsigned* wrote)
 {
-    const uint32_t P = prand_gametime();
-    unsigned i, n = 0, skip, w = 0;
-    int dr[4];
-    const char* ta = *(const char* const*)(size_t)B6_MAIN;
-    *wrote = 0;
-    s_pevt.copyLmax = 0;
-    if (!pevt_live() || !ta || !*(void* const*)(ta + PEVT_LAYERS)) return 0;
-    pevt_drift_reach(P, dr);
+    unsigned i, n = 0, w = 0;
     for (i = s_pevt.head; i < s_pevt.tail; i++) {
-        const PevtRow* q = &s_pevt.row[i];
-        uint32_t lo;
-        if (pevt_meets(q, l, t, r, b, dr)) n += pevt_records(q, P, &lo);
-    }
-    skip = n > max ? n - max : 0;
-    for (i = s_pevt.head; i < s_pevt.tail && w < max; i++) {
-        const PevtRow* q = &s_pevt.row[i];
+        const PevtBox* x = &s_pevt.box[i];
+        const PevtRect* R = &rc[x->kind];
+        const PevtRow* q;
         uint32_t lo, m, k;
-        if (!pevt_meets(q, l, t, r, b, dr)) continue;
+        if (x->x1 < R->l || x->x0 > R->r || x->z1 < R->t || x->z0 > R->b) continue;
+        q = &s_pevt.row[i];
+        if (!q->gone) continue;
         m = pevt_records(q, P, &lo);
+        n += m;
         for (k = 0; k < m && w < max; k++) {
             if (skip) { skip--; continue; }
             dst[w] = q->e;
@@ -12959,6 +12971,48 @@ unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int
         }
     }
     *wrote = w;
+    return n;
+}
+
+/* THE FRAME PACKET'S COPY (tagpu_packet_pub.c, game thread): the live events whose reach box
+   meets [l, r] x [t, b], in list order, the newest `max` records of them when more meet it.
+   A smoke event is copied once for every ten of its puffs that can be alive at P, the GameTime
+   the packet is drawn at (pevt_smoke_span), each copy's `pbase` its first puff; its reach is its
+   point widened by how far the wind and the rise have carried any puff alive at P: a puff first
+   moved at walk F has moved by row P less row F - 1, F - 1 within the last lmax + 1 walks, so the
+   least and most of that difference over the walks the level's longest puff life reaches back
+   bound them all (in world pixels, one more for the hi word's carry). Answers how many records
+   meet it; `*wrote` how many were copied.
+   ONLY WHILE THE LEVEL'S LAYER TABLE STANDS: the teardown 0x471DE0 destroys every object and nulls
+   *(main+0x38D77) (0x471E97), so a level's events end there for the picture as its objects do,
+   Smoke1's included; the next level's prand_level_begin empties the list before its table is
+   made (0x4918B1).
+   ONE WALK WHEN THE SLOT HOLDS THEM ALL, which a slot does after the fill that grows it: the walk
+   writes the oldest `max` records it meets and counts them all, so only a fill that meets more
+   than `max` walks again, passing over the oldest n - max. */
+unsigned tagpu_pevt_copy(TAGPU_PEVT* dst, unsigned max, int l, int t, int r, int b,
+                         unsigned* wrote)
+{
+    const uint32_t P = prand_gametime();
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    PevtRect rc[3];
+    unsigned n;
+    int dr[4];
+    *wrote = 0;
+    s_pevt.copyLmax = 0;
+    if (!pevt_live() || !ta || !*(void* const*)(ta + PEVT_LAYERS)) return 0;
+    pevt_drift_reach(P, dr);
+    rc[PEVT_BOX_GONE].l = 0x7FFFFFFF; rc[PEVT_BOX_GONE].r = -0x7FFFFFFF - 1;
+    rc[PEVT_BOX_GONE].t = 0x7FFFFFFF; rc[PEVT_BOX_GONE].b = -0x7FFFFFFF - 1;
+    rc[PEVT_BOX_PLAIN].l = l; rc[PEVT_BOX_PLAIN].r = r;
+    rc[PEVT_BOX_PLAIN].t = t; rc[PEVT_BOX_PLAIN].b = b;
+    rc[PEVT_BOX_SMOKE].l = l - dr[1]; rc[PEVT_BOX_SMOKE].r = r - dr[0];
+    rc[PEVT_BOX_SMOKE].t = t - dr[3]; rc[PEVT_BOX_SMOKE].b = b - dr[2];
+    n = pevt_copy_walk(dst, max, 0, rc, P, wrote);
+    if (n > max) {
+        s_pevt.copyLmax = 0;
+        pevt_copy_walk(dst, max, n - max, rc, P, wrote);
+    }
     return n;
 }
 
