@@ -570,7 +570,10 @@ pixel is `tab[(src << 8) + dst]` on either arm. With bit 5 clear the function re
 `0x4B851C` before any write, so the sprite is not drawn at all. The particles' four leaves call
 it for every sprite: fire `0x474291`, the flare `0x4736B1`, Smoke2 `0x4755C6`, Smoke1 `0x475757`,
 each after `0x4B7F30` picks the frame. What the table makes of the flame's two colours, against a
-mix in RGB: [effects](../effects.html) §7.6.
+mix in RGB: [effects](../effects.html) §7.6. Impure reads the table, never writes it:
+`tagpu_packet_pub.c`'s `alp_snapshot` copies its 65 536 bytes on the game thread once a pointer
+while bit 5 is set (the format is the bound: two byte indices), and the Vulkan effects pass applies
+it to the pixel under each ALP sprite (effects §7.5, *The ALP blend*).
 
 **The LUT's lifetime — the reason a pointer of ours must never outlive one call.**
 

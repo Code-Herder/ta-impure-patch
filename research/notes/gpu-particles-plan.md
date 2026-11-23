@@ -337,21 +337,22 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 - **A wake event draws 60 vertices for its two dots** (the draw's one shape, ten particles an event):
   eight degenerate quads an event, whose vertex stage skips the draws. A vertex count of each class's
   own would need a draw a class.
-- **Fire and the flare are yellow on Vulkan, orange on GDI** (predates this feature: fd7d5a86 draws
-  the same yellow). The cause is the blend, not the art: the engine's `0x4B8500` writes the palette
-  entry `ALP[src·256 + dst]`, and retail's table answers orange (209) for the flame's yellow (208)
-  over its orange and for the orange over the yellow, so stacked flames converge to orange; Vulkan
-  mixes 50 % in RGB, which stays between them (effects.md §7.6 has the table's tie and the measured
-  means, warm pixels' G 212.8 on Vulkan against 175.9 on GDI). **No exact rule is available on
-  Vulkan**: the table needs the destination's palette index, and the world target is RGB (5.3 % of
-  its world pixels palette colours under Classic++). What an exact rule would need, and the
-  look-alikes, wait for the owner's choice:
-  - the destination read: overlapping sprites of one draw must read-modify-write in primitive
-    order, which needs `VK_EXT_fragment_shader_interlock` (ordered) or rasterization-order
-    attachment access (both on the reference setup's GPU, neither on llvmpipe, not on every
-    device), or a per-pixel ordered list resolved after the layer;
-  - the destination's index: exact only where the target holds a palette colour; elsewhere the
-    nearest entry (a quantisation of the restored or lit colour, a look-alike).
+- **Fire and the flare were yellow on Vulkan, orange on GDI — CLOSED 2026-11-22** (it predated this
+  feature: fd7d5a86 drew the same yellow). The cause was the blend: the engine's `0x4B8500` writes
+  the palette entry `ALP[src·256 + dst]`, and retail's table answers orange (209) for the flame's
+  yellow (208) over its orange and the other way round, so stacked flames converge to orange; the
+  50 % mix in RGB stayed between them. The owner's choice, built: the engine's table against the
+  pixel underneath, read in the ordered pixel interlock (`VK_EXT_fragment_shader_interlock`; the
+  reference setup's GPU has no rasterization-order attachment access), the destination's index by
+  the engine's own nearest search and the result `dst + pal[ALP] − pal[dst_idx]`, the 50 % mix
+  kept on a device without the interlock (effects.md §7.5, *The ALP blend*). The flame's warm
+  pixels (246.3, 169.8, 16.4) against GDI's (247.8, 175.9, 8.7), the flare's (235.4, 153.8, 26.4)
+  against (236.6, 153.8, 23.4) (effects.md §7.6 has the before and the method). Its cost, MEASURED
+  in the 13 500-unit battle at 1920×1080, alternated with b0b8e18f, two pairs, the new build drawing
+  every frame but the first two by the table: 20.6 and 19.7 frames a second against 20.3 and 19.3;
+  the render thread's median gather 1.96 and 1.98 ms against 2.34 and 2.35, its record 0.23 and
+  0.20 ms against 0.19 and 0.21. No cost shows above the runs' spread; the GPU's own time is not
+  split out (the frame waits at present).
 - **The render thread's gather read 0.34 ms a frame slower than at 5a820806** in the 13 500-unit
   battle (three runs of this build against two of the base). Split by temporary spans (2026-11-22,
   this build, four runs, nothing of it landed), the gather's median a frame is the packet's acquire

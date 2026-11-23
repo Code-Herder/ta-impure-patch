@@ -448,9 +448,15 @@ visible pixels stay where the unclipped line puts them.
 `VK_EXT_line_rasterization` and without `wideLines`; `lineok`, `wideok`, `maxLineWidth`,
 `vkCmdSetLineWidth` and `tagpu_vk_world_scale` are gone, and nothing logs a line refusal. Every
 pipeline keeps `lineWidth = 1.0`, which the specification requires without `wideLines`. With
-G21a's depth clip control also gone, the device asks for no optional extension but
-`VK_KHR_maintenance1`, its retry ladder is that one rung, and the instance no longer asks for
-`VK_KHR_get_physical_device_properties2`, which only those two extensions depended on.
+G21a's depth clip control also gone, the device asks for two optional extensions:
+`VK_KHR_maintenance1`, and `VK_EXT_fragment_shader_interlock` with its pixel-interlock feature
+chained in and `shaderStorageImageReadWithoutFormat`/`WriteWithoutFormat`, which only the effects
+pass's ALP blend uses ([effects](../effects.html) §7.5, *The ALP blend*) and which is asked for
+only where the device lists the extension and both features. Each has its rung on the retry
+ladder: a device that refuses the interlock is created again without it, and the log names the
+blend's path (`vk: the effects' ALP blend: …`). The instance no longer asks for
+`VK_KHR_get_physical_device_properties2`: the interlock's feature is asked for, not queried, and a
+refusal is the answer.
 
 **The A/B's line list.** A frame claimed by `tagpu_mark.ab`, `tagpu_fx.ab` or `tagpu_posedraw.ab`
 also writes `tagpu_<pass>_lines.txt` — `# <pass> <grid w> <grid h> <w>`, then `ax ay bx by col`
@@ -831,7 +837,7 @@ loaded or by the window, each with a bound of its own and none tied to free memo
 
 | consumer | sized by | bound |
 |---|---|---|
-| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`²; the world target is ONE colour + depth pair for every frame slot (its render pass's entry dependency orders each frame's writes after the earlier frames' reads, and a resize drains the device first); colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel, about 380 MiB for a 3840 × 2160 game at `ss=2` | `WORLD_MAXDIM` 8192 |
+| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`²; the world target is ONE colour + depth pair for every frame slot (its render pass's entry dependency orders each frame's writes after the earlier frames' reads, and a resize drains the device first); on a device with the pixel interlock the colour is also a storage image, which the effects pass reads and writes between the world's two halves ([effects](../effects.html) §7.5, *The ALP blend*); colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel, about 380 MiB for a 3840 × 2160 game at `ss=2` | `WORLD_MAXDIM` 8192 |
 | the sun-shadow map | `shadowres`², one a slot (16 MB a slot at 2048) | `RES_MAX` 4096 |
 | the unit, feature and effects base atlases, their restored twins and mip chains | the art the level uses | 2048² RGBA8 a page (`TAGPU_GAF_DIMMAX`); the feature chains 2 × 11.2 MB |
 | the terrain's base atlas, height grid, tile map and keys | the map | `ATLAS_MAXDIM` 16384, `HEIGHT_MAXDIM` 4096, `TILEMAP_MAXDIM` 2048 |

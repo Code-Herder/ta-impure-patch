@@ -196,7 +196,8 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
 - **Lines and sprites** are the module's own program: a private 2048² atlas (raw, RLE
   and sub-frame frames decoded on first use, `tagpu_gaf.c`), four modes — flat colour
   (lines, Bresenham on the Vulkan lane, [gpu-status](gpu-status.html) §2.31), opaque
-  colour-keyed, 50 % alpha (the ALP blend in RGB), and **flash** = additive with a
+  colour-keyed, **ALP** (the engine's table against the pixel underneath, §7.5 *The ALP
+  blend*; a 50 % mix in RGB on a device that cannot read it in order), and **flash** = additive with a
   per-level colour derived from the live LHT table (mean palette delta of each of the 32
   rows; an RGB approximation of a palette-space remap). Depth tested and never written, at
   the keys above, drawn after the unit pass; the same fog rule as units (unexplored
@@ -218,7 +219,8 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
   8`, so any viewport keeps the order ground → effects → aircraft.
 - **The world target is premultiplied** for the additive flash (blend `ONE,
   ONE_MINUS_SRC_ALPHA`; the unit program outputs `rgb·a`), so the unit pass's half-alpha
-  draws (shadows, cloak) land at the engine's 50 %, the ALP-table blend.
+  draws (shadows, cloak) land at 50 %, an RGB stand-in for the ALP table that this pass's
+  sprites no longer use where the device allows (§7.5).
 
 Log every 60 frames: `fx: proj=N (laser= model= sprite= flare= light= ball= fogged=)
 expl=K flash= debris= -> lines= sprites= flashq= models= runs= (lost= why= of cap )
@@ -510,6 +512,47 @@ we draw and nothing else. It is removed with the effects, on every Vulkan launch
 (§5); without the oracle it walks ten empty layers when it runs, and under `tagpu_particlecheck.on`,
 which makes the engine's objects in full, it is what keeps them off the screen.
 
+**The ALP blend** [MEASURED 2026-11-22]. Every sprite the engine draws through `0x4B8500` —
+fire, the teleport flare, Smoke1, Smoke2 (all four leaves, §3), and a projectile's ALP sprites,
+its ground shadow and an alpha sub-frame (mode 2 of the sprite program) — is drawn by the
+engine's rule: the destination's palette index `i` is the entry the engine's own search
+`0x4BA9D0` picks for the pixel underneath (R+G+B within 40, walked in `0x4BA920`'s sorted
+order, the first strict minimum of the squared distance), the table answers `T[src][i]`, and
+the pixel becomes `dst + pal[T[src][i]] − pal[i]`, clamped. Where the destination is a palette
+colour that is the engine's pixel exactly; under Classic++ the ground's restored detail stays
+and moves by what the table does to its nearest entry. The table is the engine's own,
+`[0x51FBD0]+0xC0`, copied once a pointer by the packet's publisher (`alp_snapshot`) — what the
+install's PALETTE.ALP or the generator put there, so a mod's table is a mod's.
+- **How the pixel underneath is read**: in the ordered pixel interlock
+  (`VK_EXT_fragment_shader_interlock`, `pixel_interlock_ordered`), which runs the critical
+  sections of every fragment on one pixel in primitive order, so a stack of overlapping
+  sprites in one draw applies the table one sprite after another, as the engine's blits do.
+  The world target is bound as a storage image (in GENERAL, read and written without a
+  format, since the swapchain's format is BGRA and no GLSL qualifier names it), and each
+  fragment of the effects pass loads the pixel, blends — the table for an ALP texel, the fixed
+  function's premultiplied rule or a flash's addition for every other — and stores it inside
+  the interlock; the depth test runs early, so a hidden fragment never stores. The effects
+  pass suspends the world render pass, draws in an ordered pass with the depth attachment
+  alone (the colour written two ways in one subpass would be undefined), and resumes the world
+  after it (`tagpu_vk_world.c` `build_ordered`); the passes are separated by explicit pipeline
+  barriers as well as by their dependencies, which one driver dropped between the restorer's
+  passes in `GENERAL` ([vulkan-backend](modules/vulkan-backend.html) §2.95).
+- **Why the interlock and not rasterization-order attachment access**
+  (`VK_EXT_`/`VK_ARM_rasterization_order_attachment_access`), which would read the colour as an
+  input attachment of the same subpass and leave the other modes' blend to the fixed function:
+  the reference setup's GPU (an RTX 4070) offers the interlock and not that extension, so the
+  access would have left the reference setup on the fallback. llvmpipe is the other way round
+  (the access, no interlock), so it draws the fallback.
+- **What it reads**: the sprite's palette index from an index atlas beside the base atlas (the
+  same texels, unexpanded), the table and the sorted palette from one 256 × 257 image
+  (`tagpu_fx.c` `s_alpT`).
+- **Where it falls back** to the 50 % mix in RGB: a device without the interlock or without
+  storage on the swapchain's colour format, a frame before the table has reached the device, and
+  a world drawn straight into the swapchain image. No setting chooses it. The log names the path
+  at device creation (`vk: the effects' ALP blend: …`) and counts the frames of each every 600
+  (`fx: the ALP blend: N frame(s) by the engine's table in the pixel interlock, M by the 50 %
+  mix`).
+
 Caveat, the same as the effects pass's: with `sfx.on` but no `native.on=all`, the layers
 the engine draws under its units (0..4, wake foam above all) composite over the
 engine-drawn hulls in the 8bpp frame, because nothing wrote depth for those hulls.
@@ -526,19 +569,31 @@ Gaps: layer 8 has no caller at all (§7.1); the teleport flare `0x4FD588`, unsee
 held to its closed form under the oracle since 2026-11-22 (§7.8); `DrawBar`'s
 rect `{x, y, x+1, y+1}` is taken as 2×2 from the panels, not from its fill routine
 (`0x4CCDEA`); sub-pixel motion for puffs is not used (engine parity: integer anchors);
-the sprites (fire, flare, smoke) are drawn at 50 % alpha in RGB, which is **not** the engine's
-rule: `0x4B8500` writes `ALP[src·256 + dst]`, a palette entry, and on the flame that differs
-visibly. The flare sequence `*(main+0x147F3)` is `flamestream` (pushed at `0x429A05`, found by
-`0x4B8D40` at `0x429A11`, stored at `0x429A22`), whose twenty frames hold two indices only, 208
-(255, 255, 0) and 209 (255, 191, 0); retail's table answers 209 for either over the other
-(`ALP[208][209] = ALP[209][208] = 209`: the mean (255, 223, 0) is equidistant from 208, 209 and 251,
-and `0x4BA9D0`'s walk over the list sorted by R+G+B meets 209 first), so a stack of flames
-converges to orange, where an RGB mix stays between the two. MEASURED 2026-11-22 on ten frame
-pairs of eight Atlases taking off (`b2-stack-atlas.json`, zoom 1, Vulkan at `--defaults` against
-`tagpu_gdi.on`): warm pixels' mean (231.3, 212.8, 4.9) on Vulkan, (247.8, 175.9, 8.7) on GDI. An
-exact rule needs the destination's palette index, which the Vulkan world target does not hold
-(5.3 % of that frame's world pixels are palette colours under Classic++, 100 % on GDI); the plan's
-*Open* has the choice.
+the sprites (fire, flare, smoke) take the engine's table only on a device with the pixel
+interlock (§7.5, *The ALP blend*), and the 50 % mix in RGB elsewhere differs visibly on the flame.
+The flare sequence `*(main+0x147F3)` is `flamestream` (pushed at `0x429A05`, found by `0x4B8D40` at
+`0x429A11`, stored at `0x429A22`), whose twenty frames hold two indices only, 208 (255, 255, 0) and
+209 (255, 191, 0); retail's table answers 209 for either over the other (`ALP[208][209] =
+ALP[209][208] = 209`: the mean (255, 223, 0) is equidistant from 208, 209 and 251, and `0x4BA9D0`'s
+walk over the list sorted by R+G+B meets 209 first), so a stack of flames converges to orange,
+where an RGB mix stays between the two. Where the destination is not a palette colour (Classic++'s
+ground, 5.3 % of the eight Atlases' world pixels are palette colours against 100 % on GDI) the
+table is applied to its nearest entry and the difference carried over, so the result is the
+engine's colour moved by the ground's own detail, not the engine's pixel.
+
+MEASURED 2026-11-22, the warm pixels' mean (R ≥ 200, G ≥ 100, B ≤ 60, pure yellow excluded), zoom 1,
+`--defaults`, against `tagpu_gdi.on` on the same scenario:
+
+| sample | 50 % mix | the engine's table | GDI |
+|---|---|---|---|
+| eight Atlases taking off (`b2-stack-atlas.json`), ten frames | (231.3, 212.8, 4.9) | (246.3, 169.8, 16.4) | (247.8, 175.9, 8.7) |
+| the teleport flare (`replay-teleport`, four riders), eight and sixteen frames | (204.9, 178.5, 12.3) | (235.4, 153.8, 26.4) | (236.6, 153.8, 23.4) |
+
+The mix's row is the same on the build with the interlock forced off: (231.4, 212.6, 4.9).
+Smoke shows no such contrast in the captures: on `replay-smoke`'s battle the grey pixels' mean
+(channel spread under 25, mean 100..220) is (142.2, 144.7, 138.7) with the table, (146.9, 150.1, 146.8) with the mix and
+(148.6, 148.6, 148.7) on GDI — a battle that is not the same frame in the three, so the figures
+bound the difference rather than measure it.
 
 ### 7.7 The random rule — the same particles on both renderers [DISASSEMBLED, LIVE-VERIFIED 2026-11-22]
 
