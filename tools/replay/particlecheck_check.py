@@ -15,9 +15,10 @@ ground's, not their end tick's. A fixture step runs this before the level ends.
 
 It passes when the oracle armed, no tick had a differing particle, a missing or an extra object,
 and the run compared particles of every class the fixture names (`--classes`, default nano and fire)
--- an oracle that compared nothing proves nothing --, the oracle's own test found its planted
-difference at each level's first check (`pcheck: the oracle's own test: a planted difference is
-found`: an oracle that cannot tell a difference proves nothing either), and, when the classes include the wake, some
+-- an oracle that compared nothing proves nothing --, the log holds at least one line of the
+oracle's own test and every such line found its planted difference (`pcheck: the oracle's own
+test: a planted difference is found`: an oracle that cannot tell a difference proves nothing
+either; one line per level is not required, and every fixture plays one level), and, when the classes include the wake, some
 wake dot died over ground, so the ground's branch of the death walk was held to the engine. Exit 0 pass, 1 fail, 2 the log could not be read.
 """
 
