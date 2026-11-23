@@ -295,7 +295,8 @@ Vulkan in the event.
    - **The feature's whole gain**, main c3ddc579 against this build, one run each, the same battle:
      `particles` 3.19 → 0.36 ms a frame, `publish` 2.91 → 1.33, gather median 5.27 → 2.31, 17.8 → 19.8
      frames a second (56.3 → 50.5 ms a frame); the process's `VmData` 715.5 → 704.9 MB at the same point
-     of `replay-smoke`, the base 5a820806's 731 MB.
+     of `replay-smoke`, the base 5a820806's 731 MB (measured on da3415e4; the sprite bucket's allowance
+     for composite frames, restored after the review, takes 5.3 MB of it back).
 
 Each landing is a local landing on this branch. The feature lands on main once, through the replay gate.
 
@@ -319,10 +320,20 @@ Each landing is a local landing on this branch. The feature lands on main once, 
 - **Fire and the flare are a clean yellow on Vulkan, orange on GDI.** The sprites take the restored
   twin's colour, which predates this feature (the same scene on fd7d5a86 draws the same yellow); GDI
   shows the palette's dithered frame. A colour item of its own, not this feature's.
-- **The render thread's gather is 0.34 ms a frame slower than at 5a820806** in the 13 500-unit
-  battle, at every quantile, in three runs alternated with two of the base; what the landing removed
-  from the gather (an empty particle table's walk) cannot cost it, so its cause is not established.
-  The game thread gained 0.86 ms a frame in the same runs, and the frame rate is unchanged.
+- **The render thread's gather read 0.34 ms a frame slower than at 5a820806** in the 13 500-unit
+  battle (three runs of this build against two of the base). Split by temporary spans (2026-11-22,
+  this build, four runs, nothing of it landed), the gather's median a frame is the packet's acquire
+  0.14–0.16 ms, the particle hand-over (`tagpu_sfx_gather`) 0.03–0.04, the effects' gather 0.12–0.14,
+  the reclaim bracket and the frame's end under 0.01, and the other passes' gathers the rest, 1.39 to
+  2.09 ms — and two runs of the same build differed there by 0.70 ms, twice the gap. A 0.8 ms spin in
+  `particle_walk` (the game thread's particles back to 1.6–1.8 ms) did not bring the gather back
+  (2.08 against 2.09, 1.92 against 1.39). So the gap is within the gather's run-to-run spread and the
+  particles' own part is under 0.2 ms; no code of this landing is found to cost it. The publish, by
+  the same spans, a frame: `fill_world` 2.9–3.2 ms (its own span, `publish_world`), and of the rest
+  (1.3–1.5 ms) the particle events' copy `fill_pevt` 0.46–0.54, the placement, sweep, board,
+  formation, range, ImpAI, builds and overlay fills together 0.35–0.43, the effects' fill without the
+  events 0.23–0.27, the fog, GUI, models and map features 0.03 together, and the hand-over and the
+  smaller areas 0.22–0.25.
 - **A Vulkan launch whose exe differs at the events' sites is refused.** The particle events read the
   emitters' frames and are timed at the walk's hook, and on Vulkan they are the only particle draw, so
   their preconditions are part of the table's all-or-nothing: the nano emitters' entries

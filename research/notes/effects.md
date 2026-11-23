@@ -884,7 +884,9 @@ point (`replay-smoke`, 30 s after the load, GameTime 950 to 960, `/proc/<pid>/st
 Wine process): `VmData` 730.6/731.8 MB on the base 5a820806 against 704.9/704.8 on this build, 26.4
 MB less — the pool's 15.6 MB block and 0.8 MB stack never allocated, and the effects pass's under
 bucket, the sprite bucket's particle share and the packet's particle scratch gone (11.0 MB of static
-arrays: 2 × 6 × 24 576 vertices of 36 B, and 24 576 × 16 B); `VmSize` 22.6 MB less; the resident set the same (607 MB), since a pool the game never
+arrays: 2 × 6 × 24 576 vertices of 36 B, and 24 576 × 16 B; measured on da3415e4, before the sprite
+bucket took back 5.3 MB as its allowance for composite frames, so about 21 MB at this build); `VmSize`
+22.6 MB less; the resident set the same (607 MB), since a pool the game never
 fills is mostly untouched pages. The largest free range below 4 GiB moved between runs of one build
 by more than between builds (332 to 348 MiB), so it is not a measure of this change. In the 13 500-unit
 battle (1920×1080, the base 5a820806 and this build alternated, two runs each): the game thread's
