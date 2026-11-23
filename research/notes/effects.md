@@ -536,18 +536,23 @@ install's PALETTE.ALP or the generator put there, so a mod's table is a mod's.
   alone (the colour written two ways in one subpass would be undefined), and resumes the world
   after it (`tagpu_vk_world.c` `build_ordered`); the passes are separated by explicit pipeline
   barriers as well as by their dependencies, which one driver dropped between the restorer's
-  passes in `GENERAL` ([vulkan-backend](modules/vulkan-backend.html) §2.95).
+  passes in `GENERAL` ([vulkan-backend](modules/vulkan-backend.html) §2.95): every colour layout
+  change of the three passes is in a barrier (the world pass ends in COLOR_ATTACHMENT_OPTIMAL
+  where it may be suspended, the ordered pass's way in and out move it to GENERAL and back, and
+  the world's end moves it to what the composite samples), so no render pass makes one.
 - **Why the interlock and not rasterization-order attachment access**
   (`VK_EXT_`/`VK_ARM_rasterization_order_attachment_access`), which would read the colour as an
   input attachment of the same subpass and leave the other modes' blend to the fixed function:
   the reference setup's GPU (an RTX 4070) offers the interlock and not that extension, so the
-  access would have left the reference setup on the fallback. llvmpipe is the other way round
-  (the access, no interlock), so it draws the fallback.
+  access would have left the reference setup on the fallback. llvmpipe offers both, and draws by
+  the table (its log: `vk: the effects' ALP blend: the engine's table against the pixel
+  underneath, in the ordered pixel interlock`).
 - **What it reads**: the sprite's palette index from an index atlas beside the base atlas (the
   same texels, unexpanded), the table and the sorted palette from one 256 × 257 image
   (`tagpu_fx.c` `s_alpT`).
-- **Where it falls back** to the 50 % mix in RGB: a device without the interlock or without
-  storage on the swapchain's colour format, a frame before the table has reached the device, and
+- **Where it falls back** to the 50 % mix in RGB: a device without the interlock, an instance
+  without `VK_KHR_get_physical_device_properties2`, a swapchain colour format without storage or
+  (where the device reports it per format) without storage read and write without a format, a frame before the table has reached the device, and
   a world drawn straight into the swapchain image. No setting chooses it. The log names the path
   at device creation (`vk: the effects' ALP blend: …`) and counts the frames of each every 600
   (`fx: the ALP blend: N frame(s) by the engine's table in the pixel interlock, M by the 50 %

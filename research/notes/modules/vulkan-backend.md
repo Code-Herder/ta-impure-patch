@@ -454,9 +454,13 @@ chained in and `shaderStorageImageReadWithoutFormat`/`WriteWithoutFormat`, which
 pass's ALP blend uses ([effects](../effects.html) §7.5, *The ALP blend*) and which is asked for
 only where the device lists the extension and both features. Each has its rung on the retry
 ladder: a device that refuses the interlock is created again without it, and the log names the
-blend's path (`vk: the effects' ALP blend: …`). The instance no longer asks for
-`VK_KHR_get_physical_device_properties2`: the interlock's feature is asked for, not queried, and a
-refusal is the answer.
+blend's path (`vk: the effects' ALP blend: …`). The interlock is asked for only where the instance
+has `VK_KHR_get_physical_device_properties2` (enabled when the loader offers it, for the memory
+budget's query), which a 1.0 instance needs to take a device extension's feature structure; the
+feature is asked for, not queried, and a refusal is the answer. Where the device also offers
+`VK_KHR_format_feature_flags2`, the world target's colour format must report reading and writing a
+storage image without a format (`VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` and its write
+twin), or the blend falls back (`tagpu_vk_world.c`).
 
 **The A/B's line list.** A frame claimed by `tagpu_mark.ab`, `tagpu_fx.ab` or `tagpu_posedraw.ab`
 also writes `tagpu_<pass>_lines.txt` — `# <pass> <grid w> <grid h> <w>`, then `ax ay bx by col`
